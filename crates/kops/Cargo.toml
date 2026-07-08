@@ -1,6 +1,6 @@
 [package]
 name = "kops"
-description = "Kernel layer 3 intersection foundation: bounded line/line intersections"
+description = "Kernel layer 3 intersection foundation: bounded analytic curve intersections"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

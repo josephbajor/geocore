@@ -120,10 +120,11 @@ small-loop detection. Extrude/revolve land here too (they need edge geometry but
 booleans) — first "real modeling" demo.
 
 **STARTED (`crates/kops`):** parameter-rich curve/curve result contracts distinguish
-proven misses, isolated contacts, and coincident intervals. The first complete analytic
-case, bounded line/line intersection, handles transverse contacts, endpoint touches,
-parallel misses, and same/reversed overlaps deterministically. General curve/curve,
-curve/surface, and SSI remain.
+proven misses, isolated contacts, and coincident intervals. Bounded line/line handles
+transverse contacts, endpoint touches, parallel misses, and same/reversed overlaps.
+Bounded 3D line/circle handles coplanar secants and tangencies, transverse plane
+crossings, periodic arc filtering, and tolerance-aware near contacts. Circle/circle,
+ellipse cases, general curve/curve, curve/surface, and SSI remain.
 
 **Exit:** SSI test battery including tangent cylinders, near-tangent tori, and
 NURBS-vs-quadric cases; every intersection curve usable as edge geometry and
