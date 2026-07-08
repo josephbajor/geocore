@@ -51,12 +51,14 @@ impl<T> fmt::Debug for Handle<T> {
     }
 }
 
+#[derive(Clone)]
 struct Slot<T> {
     generation: u32,
     value: Option<T>,
 }
 
 /// A typed generational arena.
+#[derive(Clone)]
 pub struct Arena<T> {
     slots: Vec<Slot<T>>,
     free: Vec<u32>,
@@ -220,5 +222,23 @@ mod tests {
         arena.remove(h[3]);
         let values: Vec<i32> = arena.iter().map(|(_, &v)| v).collect();
         assert_eq!(values, vec![0, 2, 4]);
+    }
+
+    #[test]
+    fn clone_preserves_handles_and_allocator_state() {
+        let mut arena: Arena<i32> = Arena::new();
+        let live = arena.insert(1);
+        let removed = arena.insert(2);
+        arena.remove(removed);
+
+        let mut cloned = arena.clone();
+        assert_eq!(cloned.get(live), Some(&1));
+        let original_next = arena.insert(3);
+        let cloned_next = cloned.insert(3);
+        assert_eq!(original_next, cloned_next);
+
+        *cloned.get_mut(live).unwrap() = 4;
+        assert_eq!(arena.get(live), Some(&1));
+        assert_eq!(cloned.get(live), Some(&4));
     }
 }

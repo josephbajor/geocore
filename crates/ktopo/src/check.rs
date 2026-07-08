@@ -1,0 +1,1315 @@
+//! The body checker (PK_BODY_check analog), v1.
+//!
+//! [`check_body`] walks a body and reports every violated invariant as a
+//! [`Fault`] — it never panics and never stops at the first fault, because
+//! downstream (import diagnostics, boolean failure reports) wants the full
+//! list. Traversal follows the store's deterministic orders, so the fault
+//! list is deterministic too. Stale references are faults attached to the
+//! *referring* entity, never errors.
+//!
+//! **Structural checks:** parent/child back-pointer agreement at every
+//! level, entity-kind consistency (region kinds, wire/acorn content rules),
+//! loop ring closure, fin pairing and opposed traversal on manifold edges,
+//! edge bounds sanity, ring-edge conventions, zero-loop faces only on
+//! closed surfaces, and the Euler–Poincaré identity (below).
+//!
+//! **Geometric checks:** vertices on their edges' curves and edge curves on
+//! their adjacent faces' surfaces (within `max(entity tolerance, session
+//! resolution)`), coordinates inside the ±500 m size box, and loop
+//! orientation (outer counterclockwise w.r.t. the face normal).
+//!
+//! # The Euler identity enforced
+//!
+//! Per shell of a solid body, with cells that may be circles and
+//! punctured disks, the Euler characteristic is
+//!
+//! ```text
+//! χ = Σ_vertices 1  −  Σ_edges χ(edge)  +  Σ_faces χ(face)
+//! χ(edge) = 1 for a vertex-bounded edge, 0 for a ring edge (a circle)
+//! χ(face) = 2 − L for a face with L ≥ 1 loops (disk with L−1 holes)
+//!           2 for a zero-loop sphere face, 0 for a zero-loop torus face
+//! ```
+//!
+//! and a closed orientable boundary requires `χ = 2 − 2G`, i.e. **χ even
+//! and ≤ 2**. A block gives 8 − 12 + 6 = 2; a solid cylinder gives
+//! 0 − 0 + (0 + 1 + 1) = 2; sphere and torus bodies give 2 and 0.
+//!
+//! # v1 limits (documented deferrals)
+//!
+//! - Loop orientation is verified only on planes, cylinders, and cones
+//!   (analytic UV inversion), and only for loops that do not wind a
+//!   periodic direction (seam-wrapping loops are skipped).
+//! - A zero-loop face on a NURBS surface is faulted: closed NURBS
+//!   surfaces land with periodic NURBS (M3).
+//! - Edges without curve geometry are faulted; tolerant curve-less edges
+//!   arrive with M3c.
+//! - Shells containing unclassifiable faces are exempt from the Euler
+//!   identity (they still get all local checks).
+
+use crate::entity::{
+    Body, BodyId, BodyKind, EdgeId, EntityRef, Face, FaceId, FinId, LoopId, RegionKind, ShellId,
+    VertexId,
+};
+use crate::geom::SurfaceGeom;
+use crate::store::{Entity, Store};
+use kcore::arena::Handle;
+use kcore::error::Result;
+use kcore::math;
+use kcore::tolerance::{LINEAR_RESOLUTION, SIZE_BOX_HALF, Tolerances};
+use kgeom::project::project_to_surface;
+use kgeom::vec::Point3;
+
+/// What is wrong, attached to the offending entity in a [`Fault`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FaultKind {
+    /// A child's parent pointer disagrees with the parent's child list,
+    /// or an entity is referenced from two owners.
+    BackPointerMismatch,
+    /// The entity references a removed or unknown handle.
+    StaleReference,
+    /// The body has no regions.
+    NoRegions,
+    /// `regions[0]` (the infinite exterior) is not a void region.
+    ExteriorNotVoid,
+    /// A solid body has no solid region.
+    NoSolidRegion,
+    /// Entity content is inconsistent with its body's kind (faces on a
+    /// wire body, a sheet body with a solid region, an acorn shell
+    /// without its vertex, …).
+    KindMismatch,
+    /// A loop has no fins.
+    EmptyLoop,
+    /// A loop's fins do not form a closed ring.
+    OpenLoop,
+    /// A ring edge appears in a loop with more than one fin.
+    RingEdgeInLongRing,
+    /// A ring edge's curve is not periodic.
+    RingEdgeNotPeriodic,
+    /// A vertex-bearing edge has no parameter bounds.
+    MissingBounds,
+    /// A bounded edge is missing one or both vertices.
+    MissingVertices,
+    /// An edge has no curve geometry (tolerant curve-less edges are
+    /// deferred to M3c).
+    MissingCurve,
+    /// Edge bounds are not finite, not increasing, outside the curve's
+    /// range, or wider than its period.
+    BadBounds,
+    /// An edge has the wrong number of fins for its body kind.
+    BadFinCount,
+    /// The two fins of a manifold edge traverse it in the same direction.
+    FinsNotOpposed,
+    /// A face with zero loops sits on a surface that is not closed.
+    ZeroLoopFaceOnOpenSurface,
+    /// A loop winds the wrong way for its position (outer loops run
+    /// counterclockwise w.r.t. the face normal; holes clockwise).
+    WrongLoopOrientation,
+    /// An edge endpoint does not lie on the edge's curve at its bound
+    /// parameter, within tolerance.
+    VertexOffCurve,
+    /// A sampled edge point does not lie on an adjacent face's surface,
+    /// within tolerance.
+    EdgeOffSurface,
+    /// A coordinate is not finite or lies outside the ±500 m size box.
+    OutsideSizeBox,
+    /// An entity tolerance is below session resolution or not finite.
+    BadTolerance,
+    /// The Euler–Poincaré identity fails for a shell (see module docs).
+    EulerViolation,
+}
+
+/// One checker finding.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fault {
+    /// The offending entity.
+    pub entity: EntityRef,
+    /// The violated invariant.
+    pub kind: FaultKind,
+}
+
+/// Check a body, returning every fault found (empty = clean).
+///
+/// Errors only if `body` itself is a stale handle; everything else —
+/// including stale references *inside* the body — is reported as faults.
+pub fn check_body(store: &Store, body: BodyId) -> Result<Vec<Fault>> {
+    let b = store.get(body)?;
+    let mut checker = Checker {
+        store,
+        tol: Tolerances::default(),
+        faults: Vec::new(),
+    };
+    checker.run(body, b);
+    Ok(checker.faults)
+}
+
+/// Number of interior samples when verifying an edge lies on its faces.
+const EDGE_SAMPLES: usize = 5;
+/// Sample points per fin when computing a loop's UV winding.
+const ORIENTATION_SAMPLES: usize = 8;
+
+struct Checker<'a> {
+    store: &'a Store,
+    tol: Tolerances,
+    faults: Vec<Fault>,
+}
+
+/// One edge reachable from the body, with the faces using it.
+struct EdgeUse {
+    edge: EdgeId,
+    faces: Vec<FaceId>,
+    /// True if the edge was found only in a shell's wireframe list.
+    wire_only: bool,
+}
+
+impl<'a> Checker<'a> {
+    fn fault(&mut self, entity: EntityRef, kind: FaultKind) {
+        self.faults.push(Fault { entity, kind });
+    }
+
+    /// Borrow a live entity or record a stale-reference fault against the
+    /// *referring* entity `at`.
+    fn live<T: Entity>(&mut self, handle: Handle<T>, at: EntityRef) -> Option<&'a T> {
+        match self.store.get(handle) {
+            Ok(v) => Some(v),
+            Err(_) => {
+                self.fault(at, FaultKind::StaleReference);
+                None
+            }
+        }
+    }
+
+    fn run(&mut self, body_id: BodyId, body: &Body) {
+        // Regions and their kinds.
+        if body.regions.is_empty() {
+            self.fault(EntityRef::Body(body_id), FaultKind::NoRegions);
+        }
+        let mut has_solid_region = false;
+        let mut shells: Vec<ShellId> = Vec::new();
+        for (i, &rid) in body.regions.iter().enumerate() {
+            let Some(region) = self.live(rid, EntityRef::Region(rid)) else {
+                continue;
+            };
+            if region.body != body_id {
+                self.fault(EntityRef::Region(rid), FaultKind::BackPointerMismatch);
+            }
+            if i == 0 && region.kind != RegionKind::Void {
+                self.fault(EntityRef::Region(rid), FaultKind::ExteriorNotVoid);
+            }
+            if region.kind == RegionKind::Solid {
+                has_solid_region = true;
+                if body.kind == BodyKind::Sheet || body.kind == BodyKind::Wire {
+                    self.fault(EntityRef::Region(rid), FaultKind::KindMismatch);
+                }
+            }
+            for &sid in &region.shells {
+                let Some(shell) = self.live(sid, EntityRef::Shell(sid)) else {
+                    continue;
+                };
+                if shell.region != rid {
+                    self.fault(EntityRef::Shell(sid), FaultKind::BackPointerMismatch);
+                }
+                if shells.contains(&sid) {
+                    self.fault(EntityRef::Shell(sid), FaultKind::BackPointerMismatch);
+                    continue;
+                }
+                shells.push(sid);
+                self.check_shell_kind(sid, shell, body.kind);
+            }
+        }
+        if body.kind == BodyKind::Solid && !has_solid_region {
+            self.fault(EntityRef::Body(body_id), FaultKind::NoSolidRegion);
+        }
+
+        // Faces, loops, and the edge/vertex closure.
+        let mut seen_faces: Vec<FaceId> = Vec::new();
+        let mut seen_loops: Vec<LoopId> = Vec::new();
+        let mut seen_fins: Vec<FinId> = Vec::new();
+        let mut edge_uses: Vec<EdgeUse> = Vec::new();
+        let mut shell_faces: Vec<(ShellId, Vec<FaceId>)> = Vec::new();
+        for &sid in &shells {
+            let Ok(shell) = self.store.get(sid) else {
+                continue;
+            };
+            let mut faces_here: Vec<FaceId> = Vec::new();
+            for &fid in &shell.faces {
+                let Some(face) = self.live(fid, EntityRef::Face(fid)) else {
+                    continue;
+                };
+                if seen_faces.contains(&fid) {
+                    self.fault(EntityRef::Face(fid), FaultKind::BackPointerMismatch);
+                    continue;
+                }
+                seen_faces.push(fid);
+                faces_here.push(fid);
+                self.check_face(
+                    fid,
+                    face,
+                    sid,
+                    &mut seen_loops,
+                    &mut seen_fins,
+                    &mut edge_uses,
+                );
+            }
+            for &eid in &shell.edges {
+                if self.live(eid, EntityRef::Shell(sid)).is_some()
+                    && !edge_uses.iter().any(|u| u.edge == eid)
+                {
+                    edge_uses.push(EdgeUse {
+                        edge: eid,
+                        faces: Vec::new(),
+                        wire_only: true,
+                    });
+                }
+            }
+            shell_faces.push((sid, faces_here));
+        }
+
+        // Edges (deduplicated), then vertices (deduplicated).
+        let mut vertices: Vec<VertexId> = Vec::new();
+        for use_ in &edge_uses {
+            self.check_edge(use_, body.kind);
+            if let Ok(edge) = self.store.get(use_.edge) {
+                for v in edge.vertices.into_iter().flatten() {
+                    if !vertices.contains(&v) {
+                        vertices.push(v);
+                    }
+                }
+            }
+        }
+        for &sid in &shells {
+            if let Ok(shell) = self.store.get(sid)
+                && let Some(v) = shell.vertex
+                && !vertices.contains(&v)
+            {
+                vertices.push(v);
+            }
+        }
+        for &vid in &vertices {
+            self.check_vertex(vid);
+        }
+
+        // Loop orientation, then the Euler identity per shell.
+        for &fid in &seen_faces {
+            self.check_face_orientation(fid);
+        }
+        if body.kind == BodyKind::Solid {
+            for (sid, faces) in &shell_faces {
+                self.check_euler(*sid, faces);
+            }
+        }
+    }
+
+    /// Kind rules for one shell (see module docs for what v1 enforces).
+    fn check_shell_kind(&mut self, sid: ShellId, shell: &crate::entity::Shell, kind: BodyKind) {
+        let at = EntityRef::Shell(sid);
+        match kind {
+            BodyKind::Acorn => {
+                if shell.vertex.is_none() || !shell.faces.is_empty() || !shell.edges.is_empty() {
+                    self.fault(at, FaultKind::KindMismatch);
+                }
+            }
+            BodyKind::Wire => {
+                if shell.vertex.is_some() || !shell.faces.is_empty() {
+                    self.fault(at, FaultKind::KindMismatch);
+                }
+            }
+            BodyKind::Sheet => {
+                if shell.vertex.is_some() {
+                    self.fault(at, FaultKind::KindMismatch);
+                }
+            }
+            BodyKind::Solid => {
+                if shell.vertex.is_some() || shell.faces.is_empty() {
+                    self.fault(at, FaultKind::KindMismatch);
+                }
+            }
+        }
+        if let Some(v) = shell.vertex {
+            let _ = self.live(v, at);
+        }
+    }
+
+    fn check_face(
+        &mut self,
+        fid: FaceId,
+        face: &'a Face,
+        sid: ShellId,
+        seen_loops: &mut Vec<LoopId>,
+        seen_fins: &mut Vec<FinId>,
+        edge_uses: &mut Vec<EdgeUse>,
+    ) {
+        if face.shell != sid {
+            self.fault(EntityRef::Face(fid), FaultKind::BackPointerMismatch);
+        }
+        let surface = self.live(face.surface, EntityRef::Face(fid));
+        if face.loops.is_empty()
+            && !matches!(
+                surface,
+                Some(SurfaceGeom::Sphere(_)) | Some(SurfaceGeom::Torus(_)) | None
+            )
+        {
+            // Closed NURBS surfaces are accepted once periodic NURBS land
+            // (M3); until then a zero-loop NURBS face is a fault too.
+            self.fault(EntityRef::Face(fid), FaultKind::ZeroLoopFaceOnOpenSurface);
+        }
+        for &lid in &face.loops {
+            let Some(lp) = self.live(lid, EntityRef::Face(fid)) else {
+                continue;
+            };
+            if lp.face != fid {
+                self.fault(EntityRef::Loop(lid), FaultKind::BackPointerMismatch);
+            }
+            if seen_loops.contains(&lid) {
+                self.fault(EntityRef::Loop(lid), FaultKind::BackPointerMismatch);
+                continue;
+            }
+            seen_loops.push(lid);
+            self.check_loop(lid, lp, fid, seen_fins, edge_uses);
+        }
+    }
+
+    fn check_loop(
+        &mut self,
+        lid: LoopId,
+        lp: &'a crate::entity::Loop,
+        fid: FaceId,
+        seen_fins: &mut Vec<FinId>,
+        edge_uses: &mut Vec<EdgeUse>,
+    ) {
+        if lp.fins.is_empty() {
+            self.fault(EntityRef::Loop(lid), FaultKind::EmptyLoop);
+            return;
+        }
+        // (tail, head) per fin; None where the fin or its edge is unusable.
+        let mut ends: Vec<Option<(Option<VertexId>, Option<VertexId>)>> = Vec::new();
+        let mut ring_in_long_ring = false;
+        for &fin_id in &lp.fins {
+            let Some(fin) = self.live(fin_id, EntityRef::Loop(lid)) else {
+                ends.push(None);
+                continue;
+            };
+            if fin.parent != lid {
+                self.fault(EntityRef::Fin(fin_id), FaultKind::BackPointerMismatch);
+            }
+            if seen_fins.contains(&fin_id) {
+                self.fault(EntityRef::Fin(fin_id), FaultKind::BackPointerMismatch);
+            } else {
+                seen_fins.push(fin_id);
+            }
+            let Some(edge) = self.live(fin.edge, EntityRef::Fin(fin_id)) else {
+                ends.push(None);
+                continue;
+            };
+            if !edge.fins.contains(&fin_id) {
+                self.fault(EntityRef::Fin(fin_id), FaultKind::BackPointerMismatch);
+            }
+            match edge_uses.iter_mut().find(|u| u.edge == fin.edge) {
+                Some(use_) => {
+                    use_.wire_only = false;
+                    if !use_.faces.contains(&fid) {
+                        use_.faces.push(fid);
+                    }
+                }
+                None => edge_uses.push(EdgeUse {
+                    edge: fin.edge,
+                    faces: vec![fid],
+                    wire_only: false,
+                }),
+            }
+            let is_ring = edge.bounds.is_none() && edge.vertices == [None, None];
+            if is_ring && lp.fins.len() > 1 {
+                ring_in_long_ring = true;
+            }
+            let (tail, head) = if fin.sense.is_forward() {
+                (edge.vertices[0], edge.vertices[1])
+            } else {
+                (edge.vertices[1], edge.vertices[0])
+            };
+            ends.push(Some((tail, head)));
+        }
+        if ring_in_long_ring {
+            self.fault(EntityRef::Loop(lid), FaultKind::RingEdgeInLongRing);
+            return;
+        }
+        // Ring closure.
+        if lp.fins.len() == 1 {
+            if let Some(Some((tail, head))) = ends.first() {
+                let ring = tail.is_none() && head.is_none();
+                let closed_through_vertex = tail.is_some() && tail == head;
+                if !ring && !closed_through_vertex {
+                    self.fault(EntityRef::Loop(lid), FaultKind::OpenLoop);
+                }
+            }
+            return;
+        }
+        for i in 0..ends.len() {
+            let next = (i + 1) % ends.len();
+            let (Some((_, head)), Some((tail, _))) = (&ends[i], &ends[next]) else {
+                continue;
+            };
+            if head.is_none() || *head != *tail {
+                self.fault(EntityRef::Loop(lid), FaultKind::OpenLoop);
+                return;
+            }
+        }
+    }
+
+    fn check_edge(&mut self, use_: &EdgeUse, kind: BodyKind) {
+        let eid = use_.edge;
+        let at = EntityRef::Edge(eid);
+        let Ok(edge) = self.store.get(eid) else {
+            // The stale reference was already recorded where it was found.
+            return;
+        };
+        if let Some(t) = edge.tolerance
+            && self.tol.entity_tolerance(t).is_err()
+        {
+            self.fault(at, FaultKind::BadTolerance);
+        }
+        let curve = match edge.curve {
+            None => {
+                self.fault(at, FaultKind::MissingCurve);
+                None
+            }
+            Some(c) => self.live(c, at),
+        };
+
+        // Bounds / vertices / ring classification.
+        let mut bounds_ok = false;
+        match (edge.bounds, edge.vertices) {
+            (None, [None, None]) => {
+                if let Some(g) = curve
+                    && g.as_curve().periodicity().is_none()
+                {
+                    self.fault(at, FaultKind::RingEdgeNotPeriodic);
+                }
+            }
+            (None, _) => self.fault(at, FaultKind::MissingBounds),
+            (Some((t0, t1)), verts) => {
+                if !t0.is_finite() || !t1.is_finite() || t0 >= t1 {
+                    self.fault(at, FaultKind::BadBounds);
+                } else if let Some(g) = curve {
+                    let c = g.as_curve();
+                    let in_range = match c.periodicity() {
+                        Some(period) => t1 - t0 <= period,
+                        None => c.param_range().contains(t0) && c.param_range().contains(t1),
+                    };
+                    if in_range {
+                        bounds_ok = true;
+                    } else {
+                        self.fault(at, FaultKind::BadBounds);
+                    }
+                }
+                if verts[0].is_none() || verts[1].is_none() {
+                    self.fault(at, FaultKind::MissingVertices);
+                }
+            }
+        }
+
+        // Fin back-pointers, count, and opposed traversal.
+        for &fin_id in &edge.fins {
+            let Some(fin) = self.live(fin_id, at) else {
+                continue;
+            };
+            if fin.edge != eid {
+                self.fault(EntityRef::Fin(fin_id), FaultKind::BackPointerMismatch);
+            }
+            match self.store.get(fin.parent) {
+                Ok(lp) => {
+                    if !lp.fins.contains(&fin_id) {
+                        self.fault(EntityRef::Fin(fin_id), FaultKind::BackPointerMismatch);
+                    }
+                }
+                Err(_) => self.fault(EntityRef::Fin(fin_id), FaultKind::StaleReference),
+            }
+        }
+        if !use_.wire_only {
+            let count_ok = match kind {
+                BodyKind::Solid => edge.fins.len() == 2,
+                _ => (1..=2).contains(&edge.fins.len()),
+            };
+            if !count_ok {
+                self.fault(at, FaultKind::BadFinCount);
+            }
+        }
+        if edge.fins.len() == 2
+            && let (Ok(a), Ok(b)) = (self.store.get(edge.fins[0]), self.store.get(edge.fins[1]))
+            && a.sense == b.sense
+        {
+            self.fault(at, FaultKind::FinsNotOpposed);
+        }
+
+        // Geometry: endpoints on the curve, samples on adjacent surfaces,
+        // and the size box.
+        let Some(g) = curve else {
+            return;
+        };
+        let c = g.as_curve();
+        let edge_tol = edge.tolerance.unwrap_or(0.0).max(LINEAR_RESOLUTION);
+        if bounds_ok {
+            let (t0, t1) = edge.bounds.expect("bounds_ok implies Some");
+            for (vh, t) in [(edge.vertices[0], t0), (edge.vertices[1], t1)] {
+                let Some(vid) = vh else { continue };
+                let Ok(pos) = self.store.vertex_position(vid) else {
+                    continue;
+                };
+                let vtol = self
+                    .store
+                    .get(vid)
+                    .ok()
+                    .and_then(|v| v.tolerance)
+                    .unwrap_or(0.0);
+                if (c.eval(t) - pos).norm() > edge_tol.max(vtol) {
+                    self.fault(at, FaultKind::VertexOffCurve);
+                }
+            }
+        }
+        let window = match (edge.bounds, edge.vertices) {
+            (Some((t0, t1)), _) if bounds_ok => Some((t0, t1)),
+            (None, [None, None]) => {
+                let r = c.param_range();
+                r.is_finite().then_some((r.lo, r.hi))
+            }
+            _ => None,
+        };
+        let Some((a, b)) = window else {
+            return;
+        };
+        let mut boxed = true;
+        let mut off_faces: Vec<FaceId> = Vec::new();
+        for i in 0..EDGE_SAMPLES {
+            let t = a + (b - a) * (i as f64) / ((EDGE_SAMPLES - 1) as f64);
+            let p = c.eval(t);
+            if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite())
+                || p.x.abs() > SIZE_BOX_HALF
+                || p.y.abs() > SIZE_BOX_HALF
+                || p.z.abs() > SIZE_BOX_HALF
+            {
+                if boxed {
+                    self.fault(at, FaultKind::OutsideSizeBox);
+                    boxed = false;
+                }
+                continue;
+            }
+            for &fid in &use_.faces {
+                if off_faces.contains(&fid) {
+                    continue;
+                }
+                let Ok(face) = self.store.get(fid) else {
+                    continue;
+                };
+                let Ok(sg) = self.store.get(face.surface) else {
+                    continue;
+                };
+                if let Some(d) = surface_distance(sg, p)
+                    && d > edge_tol
+                {
+                    self.fault(at, FaultKind::EdgeOffSurface);
+                    off_faces.push(fid);
+                }
+            }
+        }
+    }
+
+    fn check_vertex(&mut self, vid: VertexId) {
+        let at = EntityRef::Vertex(vid);
+        let Ok(vertex) = self.store.get(vid) else {
+            return;
+        };
+        if let Some(t) = vertex.tolerance
+            && self.tol.entity_tolerance(t).is_err()
+        {
+            self.fault(at, FaultKind::BadTolerance);
+        }
+        let Some(&p) = self.live(vertex.point, at) else {
+            return;
+        };
+        if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite())
+            || p.x.abs() > SIZE_BOX_HALF
+            || p.y.abs() > SIZE_BOX_HALF
+            || p.z.abs() > SIZE_BOX_HALF
+        {
+            self.fault(at, FaultKind::OutsideSizeBox);
+        }
+    }
+
+    /// Loop-orientation check for one face (v1: planes, cylinders, cones;
+    /// loops that wind a periodic direction are skipped).
+    fn check_face_orientation(&mut self, fid: FaceId) {
+        let Ok(face) = self.store.get(fid) else {
+            return;
+        };
+        let Ok(sg) = self.store.get(face.surface) else {
+            return;
+        };
+        for (li, &lid) in face.loops.iter().enumerate() {
+            let Some(area) = self.loop_uv_area(lid, sg) else {
+                continue;
+            };
+            if area == 0.0 {
+                continue;
+            }
+            // Counterclockwise in UV = counterclockwise around the
+            // *surface* normal; the face normal flips with face.sense.
+            let expect_positive = (li == 0) == face.sense.is_forward();
+            if (area > 0.0) != expect_positive {
+                self.fault(EntityRef::Loop(lid), FaultKind::WrongLoopOrientation);
+            }
+        }
+    }
+
+    /// Signed UV area of a loop, or `None` when it cannot be computed
+    /// robustly (unsupported surface class, unusable edges, seam-winding
+    /// loop).
+    fn loop_uv_area(&mut self, lid: LoopId, sg: &SurfaceGeom) -> Option<f64> {
+        let period = match sg {
+            SurfaceGeom::Plane(_) => None,
+            SurfaceGeom::Cylinder(_) | SurfaceGeom::Cone(_) => Some(core::f64::consts::TAU),
+            _ => return None,
+        };
+        let lp = self.store.get(lid).ok()?;
+        let mut pts: Vec<(f64, f64)> = Vec::new();
+        for &fin_id in &lp.fins {
+            let fin = self.store.get(fin_id).ok()?;
+            let edge = self.store.get(fin.edge).ok()?;
+            let g = self.store.get(edge.curve?).ok()?;
+            let c = g.as_curve();
+            let (a, b) = match edge.bounds {
+                Some((t0, t1)) if t0 < t1 => (t0, t1),
+                Some(_) => return None,
+                None => {
+                    let r = c.param_range();
+                    if !r.is_finite() {
+                        return None;
+                    }
+                    (r.lo, r.hi)
+                }
+            };
+            for i in 0..ORIENTATION_SAMPLES {
+                let s = (i as f64) / (ORIENTATION_SAMPLES as f64);
+                let t = if fin.sense.is_forward() {
+                    a + (b - a) * s
+                } else {
+                    b - (b - a) * s
+                };
+                let (mut u, v) = invert_uv(sg, c.eval(t))?;
+                if let (Some(p), Some(&(prev, _))) = (period, pts.last()) {
+                    u += p * ((prev - u) / p).round();
+                }
+                pts.push((u, v));
+            }
+        }
+        if pts.len() < 3 {
+            return None;
+        }
+        // A loop that winds the periodic direction cannot close in UV.
+        if let Some(p) = period {
+            let (first, _) = pts[0];
+            let (last, _) = pts[pts.len() - 1];
+            let closing = first + p * ((last - first) / p).round();
+            if (closing - first).abs() > p / 2.0 {
+                return None;
+            }
+        }
+        let mut area = 0.0;
+        for i in 0..pts.len() {
+            let (x0, y0) = pts[i];
+            let (x1, y1) = pts[(i + 1) % pts.len()];
+            area += x0 * y1 - x1 * y0;
+        }
+        Some(area / 2.0)
+    }
+
+    /// The Euler–Poincaré identity for one shell (see module docs).
+    fn check_euler(&mut self, sid: ShellId, faces: &[FaceId]) {
+        if faces.is_empty() {
+            return;
+        }
+        let mut chi: i64 = 0;
+        let mut edges: Vec<EdgeId> = Vec::new();
+        let mut verts: Vec<VertexId> = Vec::new();
+        for &fid in faces {
+            let Ok(face) = self.store.get(fid) else {
+                return;
+            };
+            if face.loops.is_empty() {
+                match self.store.get(face.surface) {
+                    Ok(SurfaceGeom::Sphere(_)) => chi += 2,
+                    Ok(SurfaceGeom::Torus(_)) => chi += 0,
+                    // Unclassifiable face: exempt the shell (v1 limit).
+                    _ => return,
+                }
+                continue;
+            }
+            chi += 2 - face.loops.len() as i64;
+            for &lid in &face.loops {
+                let Ok(lp) = self.store.get(lid) else { return };
+                for &fin_id in &lp.fins {
+                    let Ok(fin) = self.store.get(fin_id) else {
+                        return;
+                    };
+                    if !edges.contains(&fin.edge) {
+                        edges.push(fin.edge);
+                    }
+                }
+            }
+        }
+        for &eid in &edges {
+            let Ok(edge) = self.store.get(eid) else {
+                return;
+            };
+            if edge.bounds.is_some() {
+                chi -= 1; // interval edge; ring edges (circles) contribute 0
+            }
+            for v in edge.vertices.into_iter().flatten() {
+                if !verts.contains(&v) {
+                    verts.push(v);
+                }
+            }
+        }
+        chi += verts.len() as i64;
+        // Closed orientable boundary: χ = 2 − 2G, G ≥ 0.
+        if chi > 2 || chi.rem_euclid(2) != 0 {
+            self.fault(EntityRef::Shell(sid), FaultKind::EulerViolation);
+        }
+    }
+}
+
+/// Exact distance from a point to an analytic surface; NURBS falls back to
+/// projection. `None` when it cannot be evaluated.
+fn surface_distance(sg: &SurfaceGeom, p: Point3) -> Option<f64> {
+    match sg {
+        SurfaceGeom::Plane(s) => Some(s.frame().to_local(p).z.abs()),
+        SurfaceGeom::Cylinder(s) => {
+            let l = s.frame().to_local(p);
+            Some(((l.x * l.x + l.y * l.y).sqrt() - s.radius()).abs())
+        }
+        SurfaceGeom::Cone(s) => {
+            // In the (ρ, z) half-plane the cone is the line through (r, 0)
+            // with unit direction (sin α, cos α); perpendicular distance in
+            // that half-plane is the 3D distance to the cone.
+            let l = s.frame().to_local(p);
+            let rho = (l.x * l.x + l.y * l.y).sqrt();
+            let (sin_a, cos_a) = math::sincos(s.half_angle());
+            Some(((rho - s.radius()) * cos_a - l.z * sin_a).abs())
+        }
+        SurfaceGeom::Sphere(s) => Some((s.frame().to_local(p).norm() - s.radius()).abs()),
+        SurfaceGeom::Torus(s) => {
+            let l = s.frame().to_local(p);
+            let ring = (l.x * l.x + l.y * l.y).sqrt() - s.major_radius();
+            Some(((ring * ring + l.z * l.z).sqrt() - s.minor_radius()).abs())
+        }
+        SurfaceGeom::Nurbs(s) => {
+            let [ur, vr] = kgeom::surface::Surface::param_range(s);
+            if !ur.is_finite() || !vr.is_finite() {
+                return None;
+            }
+            project_to_surface(s, p, [ur, vr]).map(|proj| proj.dist)
+        }
+    }
+}
+
+/// Analytic UV inversion for the surface classes the orientation check
+/// supports. Periodic `u` is returned in the base branch; callers unwrap.
+fn invert_uv(sg: &SurfaceGeom, p: Point3) -> Option<(f64, f64)> {
+    match sg {
+        SurfaceGeom::Plane(s) => {
+            let l = s.frame().to_local(p);
+            Some((l.x, l.y))
+        }
+        SurfaceGeom::Cylinder(s) => {
+            let l = s.frame().to_local(p);
+            Some((math::atan2(l.y, l.x), l.z))
+        }
+        SurfaceGeom::Cone(s) => {
+            let l = s.frame().to_local(p);
+            let cos_a = math::cos(s.half_angle());
+            Some((math::atan2(l.y, l.x), l.z / cos_a))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity::{Body, Edge, Face, Fin, Loop, Region, Sense, Shell, Vertex};
+    use crate::geom::CurveGeom;
+    use crate::make::{block, solid_body_scaffold};
+    use kgeom::curve::{Circle, Line};
+    use kgeom::frame::Frame;
+    use kgeom::surface::{Cylinder, Plane, Sphere};
+    use kgeom::vec::Vec3;
+
+    fn kinds(faults: &[Fault]) -> Vec<FaultKind> {
+        faults.iter().map(|f| f.kind).collect()
+    }
+
+    fn assert_has(faults: &[Fault], kind: FaultKind) {
+        assert!(
+            faults.iter().any(|f| f.kind == kind),
+            "expected {kind:?} in {:?}",
+            kinds(faults)
+        );
+    }
+
+    fn clean_block(store: &mut Store) -> BodyId {
+        block(store, &Frame::world(), [2.0, 3.0, 4.0]).unwrap()
+    }
+
+    /// Hand-built solid cylinder r=1, h=2: two ring edges, a two-loop side
+    /// face, two single-ring-fin caps. Exercises every ring convention.
+    fn cylinder_body(store: &mut Store) -> BodyId {
+        let (body, shell) = solid_body_scaffold(store);
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        let bot_frame = Frame::world();
+        let top_frame = Frame::new(Point3::new(0.0, 0.0, 2.0), z, x).unwrap();
+
+        let bot_curve = store.add(CurveGeom::Circle(Circle::new(bot_frame, 1.0).unwrap()));
+        let top_curve = store.add(CurveGeom::Circle(Circle::new(top_frame, 1.0).unwrap()));
+        let ring_edge = |store: &mut Store, curve| {
+            store.add(Edge {
+                curve: Some(curve),
+                vertices: [None, None],
+                bounds: None,
+                fins: Vec::new(),
+                tolerance: None,
+            })
+        };
+        let e_bot = ring_edge(store, bot_curve);
+        let e_top = ring_edge(store, top_curve);
+
+        let side_surf = store.add(SurfaceGeom::Cylinder(
+            Cylinder::new(Frame::world(), 1.0).unwrap(),
+        ));
+        let bot_surf = store.add(SurfaceGeom::Plane(Plane::new(
+            Frame::new(Point3::new(0.0, 0.0, 0.0), -z, x).unwrap(),
+        )));
+        let top_surf = store.add(SurfaceGeom::Plane(Plane::new(
+            Frame::new(Point3::new(0.0, 0.0, 2.0), z, x).unwrap(),
+        )));
+
+        let face_with_ring_loops = |store: &mut Store, surface, rings: &[(EdgeId, Sense)]| {
+            let face = store.add(Face {
+                shell,
+                loops: Vec::new(),
+                surface,
+                sense: Sense::Forward,
+            });
+            store.get_mut(shell).unwrap().faces.push(face);
+            for &(edge, sense) in rings {
+                let lp = store.add(Loop {
+                    face,
+                    fins: Vec::new(),
+                });
+                store.get_mut(face).unwrap().loops.push(lp);
+                let fin = store.add(Fin {
+                    parent: lp,
+                    edge,
+                    sense,
+                });
+                store.get_mut(lp).unwrap().fins.push(fin);
+                store.get_mut(edge).unwrap().fins.push(fin);
+            }
+            face
+        };
+        face_with_ring_loops(
+            store,
+            side_surf,
+            &[(e_bot, Sense::Forward), (e_top, Sense::Reversed)],
+        );
+        face_with_ring_loops(store, bot_surf, &[(e_bot, Sense::Reversed)]);
+        face_with_ring_loops(store, top_surf, &[(e_top, Sense::Forward)]);
+        body
+    }
+
+    /// Hand-built solid sphere: one zero-loop face.
+    fn sphere_body(store: &mut Store) -> BodyId {
+        let (body, shell) = solid_body_scaffold(store);
+        let surf = store.add(SurfaceGeom::Sphere(
+            Sphere::new(Frame::world(), 1.0).unwrap(),
+        ));
+        let face = store.add(Face {
+            shell,
+            loops: Vec::new(),
+            surface: surf,
+            sense: Sense::Forward,
+        });
+        store.get_mut(shell).unwrap().faces.push(face);
+        body
+    }
+
+    /// Hand-built open sheet: one planar unit square.
+    fn sheet_square(store: &mut Store) -> BodyId {
+        let body = store.add(Body {
+            kind: BodyKind::Sheet,
+            regions: Vec::new(),
+        });
+        let void = store.add(Region {
+            body,
+            kind: RegionKind::Void,
+            shells: Vec::new(),
+        });
+        store.get_mut(body).unwrap().regions.push(void);
+        let shell = store.add(Shell {
+            region: void,
+            faces: Vec::new(),
+            edges: Vec::new(),
+            vertex: None,
+        });
+        store.get_mut(void).unwrap().shells.push(shell);
+
+        let surf = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
+        let face = store.add(Face {
+            shell,
+            loops: Vec::new(),
+            surface: surf,
+            sense: Sense::Forward,
+        });
+        store.get_mut(shell).unwrap().faces.push(face);
+        let lp = store.add(Loop {
+            face,
+            fins: Vec::new(),
+        });
+        store.get_mut(face).unwrap().loops.push(lp);
+
+        let corners = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ];
+        let vids: Vec<VertexId> = corners
+            .iter()
+            .map(|&p| {
+                let point = store.add(p);
+                store.add(Vertex {
+                    point,
+                    tolerance: None,
+                })
+            })
+            .collect();
+        for k in 0..4 {
+            let a = corners[k];
+            let b = corners[(k + 1) % 4];
+            let curve = store.add(CurveGeom::Line(Line::new(a, b - a).unwrap()));
+            let edge = store.add(Edge {
+                curve: Some(curve),
+                vertices: [Some(vids[k]), Some(vids[(k + 1) % 4])],
+                bounds: Some((0.0, (b - a).norm())),
+                fins: Vec::new(),
+                tolerance: None,
+            });
+            let fin = store.add(Fin {
+                parent: lp,
+                edge,
+                sense: Sense::Forward,
+            });
+            store.get_mut(lp).unwrap().fins.push(fin);
+            store.get_mut(edge).unwrap().fins.push(fin);
+        }
+        body
+    }
+
+    #[test]
+    fn clean_bodies_have_zero_faults() {
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        assert_eq!(check_body(&store, body).unwrap(), Vec::new());
+
+        let frame = Frame::new(
+            Point3::new(0.3, -1.2, 2.1),
+            Vec3::new(1.0, 2.0, 3.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap();
+        let tilted = block(&mut store, &frame, [1.0, 2.0, 0.5]).unwrap();
+        assert_eq!(check_body(&store, tilted).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn clean_cylinder_with_ring_edges_is_clean() {
+        let mut store = Store::new();
+        let body = cylinder_body(&mut store);
+        assert_eq!(check_body(&store, body).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn clean_sphere_with_zero_loop_face_is_clean() {
+        let mut store = Store::new();
+        let body = sphere_body(&mut store);
+        assert_eq!(check_body(&store, body).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn clean_sheet_square_is_clean() {
+        let mut store = Store::new();
+        let body = sheet_square(&mut store);
+        assert_eq!(check_body(&store, body).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn flipped_fin_sense_opens_the_loop() {
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        let face = store.faces_of_body(body).unwrap()[0];
+        let lp = store.get(face).unwrap().loops[0];
+        let fin = store.get(lp).unwrap().fins[0];
+        let s = store.get(fin).unwrap().sense;
+        store.get_mut(fin).unwrap().sense = s.flipped();
+        let faults = check_body(&store, body).unwrap();
+        assert_has(&faults, FaultKind::OpenLoop);
+        assert_has(&faults, FaultKind::FinsNotOpposed);
+    }
+
+    #[test]
+    fn reversed_loop_has_wrong_orientation() {
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        let face = store.faces_of_body(body).unwrap()[0];
+        let lp = store.get(face).unwrap().loops[0];
+        let mut fins = store.get(lp).unwrap().fins.clone();
+        fins.reverse();
+        for &fin in &fins {
+            let s = store.get(fin).unwrap().sense;
+            store.get_mut(fin).unwrap().sense = s.flipped();
+        }
+        store.get_mut(lp).unwrap().fins = fins;
+        let faults = check_body(&store, body).unwrap();
+        assert_has(&faults, FaultKind::WrongLoopOrientation);
+        assert_has(&faults, FaultKind::FinsNotOpposed);
+    }
+
+    #[test]
+    fn moved_vertex_is_off_curve() {
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        let v = store.vertices_of_body(body).unwrap()[0];
+        let point = store.get(v).unwrap().point;
+        *store.get_mut(point).unwrap() += Vec3::new(1e-4, 0.0, 0.0);
+        let faults = check_body(&store, body).unwrap();
+        assert_has(&faults, FaultKind::VertexOffCurve);
+    }
+
+    #[test]
+    fn oversized_coordinate_leaves_size_box() {
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        let v = store.vertices_of_body(body).unwrap()[0];
+        let point = store.get(v).unwrap().point;
+        *store.get_mut(point).unwrap() = Point3::new(600.0, 0.0, 0.0);
+        let faults = check_body(&store, body).unwrap();
+        assert_has(&faults, FaultKind::OutsideSizeBox);
+        assert_has(&faults, FaultKind::VertexOffCurve);
+    }
+
+    #[test]
+    fn region_kind_faults() {
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        let exterior = store.get(body).unwrap().regions[0];
+        store.get_mut(exterior).unwrap().kind = RegionKind::Solid;
+        assert_has(
+            &check_body(&store, body).unwrap(),
+            FaultKind::ExteriorNotVoid,
+        );
+        store.get_mut(exterior).unwrap().kind = RegionKind::Void;
+
+        let solid = store.get(body).unwrap().regions[1];
+        store.get_mut(solid).unwrap().kind = RegionKind::Void;
+        assert_has(&check_body(&store, body).unwrap(), FaultKind::NoSolidRegion);
+    }
+
+    #[test]
+    fn body_without_regions_faults() {
+        let mut store = Store::new();
+        let body = store.add(Body {
+            kind: BodyKind::Solid,
+            regions: Vec::new(),
+        });
+        let faults = check_body(&store, body).unwrap();
+        assert_has(&faults, FaultKind::NoRegions);
+        assert_has(&faults, FaultKind::NoSolidRegion);
+    }
+
+    #[test]
+    fn fin_missing_from_loop_list_opens_ring() {
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        let face = store.faces_of_body(body).unwrap()[0];
+        let lp = store.get(face).unwrap().loops[0];
+        store.get_mut(lp).unwrap().fins.remove(1);
+        let faults = check_body(&store, body).unwrap();
+        assert_has(&faults, FaultKind::OpenLoop);
+        assert_has(&faults, FaultKind::BackPointerMismatch);
+    }
+
+    #[test]
+    fn reversed_bounds_are_bad() {
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        let e = store.edges_of_body(body).unwrap()[0];
+        let (t0, t1) = store.get(e).unwrap().bounds.unwrap();
+        store.get_mut(e).unwrap().bounds = Some((t1, t0));
+        assert_has(&check_body(&store, body).unwrap(), FaultKind::BadBounds);
+    }
+
+    #[test]
+    fn vertex_bearing_edge_without_bounds_faults() {
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        let e = store.edges_of_body(body).unwrap()[0];
+        store.get_mut(e).unwrap().bounds = None;
+        assert_has(&check_body(&store, body).unwrap(), FaultKind::MissingBounds);
+    }
+
+    #[test]
+    fn zero_loop_face_on_plane_faults() {
+        let mut store = Store::new();
+        let body = sphere_body(&mut store);
+        let face = store.faces_of_body(body).unwrap()[0];
+        let plane = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
+        store.get_mut(face).unwrap().surface = plane;
+        assert_has(
+            &check_body(&store, body).unwrap(),
+            FaultKind::ZeroLoopFaceOnOpenSurface,
+        );
+    }
+
+    #[test]
+    fn sub_resolution_tolerance_faults() {
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        let v = store.vertices_of_body(body).unwrap()[0];
+        store.get_mut(v).unwrap().tolerance = Some(1e-12);
+        assert_has(&check_body(&store, body).unwrap(), FaultKind::BadTolerance);
+    }
+
+    #[test]
+    fn removed_face_breaks_euler_and_fin_counts() {
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        let face = store.faces_of_body(body).unwrap()[0];
+        let shell = store.get(face).unwrap().shell;
+        let lp = store.get(face).unwrap().loops[0];
+        let fins = store.get(lp).unwrap().fins.clone();
+        for fin in fins {
+            let e = store.get(fin).unwrap().edge;
+            store.get_mut(e).unwrap().fins.retain(|&f| f != fin);
+            store.remove(fin).unwrap();
+        }
+        store.remove(lp).unwrap();
+        store.get_mut(shell).unwrap().faces.retain(|&f| f != face);
+        store.remove(face).unwrap();
+        let faults = check_body(&store, body).unwrap();
+        assert_has(&faults, FaultKind::EulerViolation);
+        assert_has(&faults, FaultKind::BadFinCount);
+    }
+
+    #[test]
+    fn loop_with_foreign_parent_mismatches() {
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        let faces = store.faces_of_body(body).unwrap();
+        let lp = store.get(faces[0]).unwrap().loops[0];
+        store.get_mut(lp).unwrap().face = faces[1];
+        assert_has(
+            &check_body(&store, body).unwrap(),
+            FaultKind::BackPointerMismatch,
+        );
+    }
+
+    #[test]
+    fn stale_surface_reference_faults() {
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        let face = store.faces_of_body(body).unwrap()[0];
+        let surface = store.get(face).unwrap().surface;
+        store.remove(surface).unwrap();
+        assert_has(
+            &check_body(&store, body).unwrap(),
+            FaultKind::StaleReference,
+        );
+    }
+
+    #[test]
+    fn wire_body_with_faces_mismatches_kind() {
+        let mut store = Store::new();
+        let body = sheet_square(&mut store);
+        store.get_mut(body).unwrap().kind = BodyKind::Wire;
+        assert_has(&check_body(&store, body).unwrap(), FaultKind::KindMismatch);
+    }
+
+    #[test]
+    fn extra_fin_breaks_manifold_count() {
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        let e = store.edges_of_body(body).unwrap()[0];
+        let some_loop = {
+            let face = store.faces_of_body(body).unwrap()[0];
+            store.get(face).unwrap().loops[0]
+        };
+        let fin = store.add(Fin {
+            parent: some_loop,
+            edge: e,
+            sense: Sense::Forward,
+        });
+        store.get_mut(e).unwrap().fins.push(fin);
+        let faults = check_body(&store, body).unwrap();
+        assert_has(&faults, FaultKind::BadFinCount);
+        assert_has(&faults, FaultKind::BackPointerMismatch);
+    }
+
+    #[test]
+    fn shifted_curve_leaves_adjacent_surfaces() {
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        let e = store.edges_of_body(body).unwrap()[0];
+        let curve = store.get(e).unwrap().curve.unwrap();
+        let CurveGeom::Line(line) = *store.get(curve).unwrap() else {
+            panic!("block edges are lines");
+        };
+        let shifted = Line::new(line.origin() + Vec3::new(1e-4, 1e-4, 0.0), line.dir()).unwrap();
+        *store.get_mut(curve).unwrap() = CurveGeom::Line(shifted);
+        let faults = check_body(&store, body).unwrap();
+        assert_has(&faults, FaultKind::EdgeOffSurface);
+        assert_has(&faults, FaultKind::VertexOffCurve);
+    }
+
+    #[test]
+    fn ring_edge_on_non_periodic_curve_faults() {
+        let mut store = Store::new();
+        let body = cylinder_body(&mut store);
+        let e = store.edges_of_body(body).unwrap()[0];
+        let line = store.add(CurveGeom::Line(
+            Line::new(Point3::new(0.0, 1.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+        ));
+        store.get_mut(e).unwrap().curve = Some(line);
+        let faults = check_body(&store, body).unwrap();
+        assert_has(&faults, FaultKind::RingEdgeNotPeriodic);
+    }
+
+    #[test]
+    fn ring_edge_inside_long_ring_faults() {
+        let mut store = Store::new();
+        let body = cylinder_body(&mut store);
+        // Splice a second fin (over the top ring edge) into the bottom
+        // cap's single-fin loop.
+        let faces = store.faces_of_body(body).unwrap();
+        let cap = faces[1];
+        let lp = store.get(cap).unwrap().loops[0];
+        let edges = store.edges_of_body(body).unwrap();
+        let e_top = edges[1];
+        let fin = store.add(Fin {
+            parent: lp,
+            edge: e_top,
+            sense: Sense::Forward,
+        });
+        store.get_mut(lp).unwrap().fins.push(fin);
+        store.get_mut(e_top).unwrap().fins.push(fin);
+        let faults = check_body(&store, body).unwrap();
+        assert_has(&faults, FaultKind::RingEdgeInLongRing);
+    }
+}

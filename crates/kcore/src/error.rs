@@ -29,6 +29,14 @@ pub enum Error {
         /// What made the inputs unusable.
         reason: &'static str,
     },
+    /// An algorithm exhausted a deterministic work or refinement limit
+    /// before it could establish the requested result.
+    AlgorithmLimit {
+        /// The operation and stage that reached its limit.
+        operation: &'static str,
+        /// The configured limit.
+        limit: usize,
+    },
 }
 
 impl fmt::Display for Error {
@@ -45,6 +53,9 @@ impl fmt::Display for Error {
             ),
             Error::InvalidGeometry { reason } => {
                 write!(f, "invalid geometry construction: {reason}")
+            }
+            Error::AlgorithmLimit { operation, limit } => {
+                write!(f, "{operation} exceeded its limit of {limit}")
             }
         }
     }

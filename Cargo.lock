@@ -12,3 +12,28 @@ version = "0.1.0"
 dependencies = [
  "kcore",
 ]
+
+[[package]]
+name = "kops"
+version = "0.1.0"
+dependencies = [
+ "kcore",
+ "kgeom",
+]
+
+[[package]]
+name = "ktopo"
+version = "0.1.0"
+dependencies = [
+ "kcore",
+ "kgeom",
+]
+
+[[package]]
+name = "kxt"
+version = "0.1.0"
+dependencies = [
+ "kcore",
+ "kgeom",
+ "ktopo",
+]

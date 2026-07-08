@@ -198,7 +198,7 @@ pub struct FaceMesh {
 /// Refinement pass cap; each pass halves offending edges so this bounds
 /// boundary-to-interior resolution ratios of about 2^24.
 const MAX_REFINE_PASSES: usize = 24;
-/// Hard triangle-count backstop; hitting it returns the mesh as-is.
+/// Hard triangle-count backstop; hitting it returns an error.
 const MAX_TRIANGLES: usize = 200_000;
 /// Recursion cap for boundary edge refinement (2^16 segments per edge).
 const MAX_BOUNDARY_DEPTH: usize = 16;
@@ -232,7 +232,7 @@ pub fn tessellate(face: &TrimmedSurface<'_>, opts: &TessOptions) -> Result<FaceM
     let mut positions: Vec<Point3> = Vec::new();
     let mut boundary: Vec<Vec<u32>> = Vec::new();
     for l in &face.loops {
-        let refined = refine_loop(&ctx, &l.points);
+        let refined = refine_loop(&ctx, &l.points)?;
         let start = uvs.len();
         let mut indices = Vec::with_capacity(refined.len());
         for (uv, p) in refined {
@@ -252,10 +252,7 @@ pub fn tessellate(face: &TrimmedSurface<'_>, opts: &TessOptions) -> Result<FaceM
     let mut triangles = earclip(&uvs, &merged)?;
 
     // Stage 3: conforming interior refinement.
-    for _ in 0..MAX_REFINE_PASSES {
-        if triangles.len() >= MAX_TRIANGLES {
-            break;
-        }
+    for pass in 0..=MAX_REFINE_PASSES {
         let mut marked: BTreeSet<(u32, u32)> = BTreeSet::new();
         let mut centroid_tris: Vec<usize> = Vec::new();
         for tri in &triangles {
@@ -299,6 +296,18 @@ pub fn tessellate(face: &TrimmedSurface<'_>, opts: &TessOptions) -> Result<FaceM
         if marked.is_empty() && centroid_tris.is_empty() {
             break;
         }
+        if pass == MAX_REFINE_PASSES {
+            return Err(Error::AlgorithmLimit {
+                operation: "tessellation interior refinement passes",
+                limit: MAX_REFINE_PASSES,
+            });
+        }
+        if triangles.len() >= MAX_TRIANGLES {
+            return Err(Error::AlgorithmLimit {
+                operation: "tessellation triangle count",
+                limit: MAX_TRIANGLES,
+            });
+        }
 
         // Allocate midpoint vertices (sorted edge order → deterministic ids).
         let mut midpoint: BTreeMap<(u32, u32), u32> = BTreeMap::new();
@@ -318,6 +327,12 @@ pub fn tessellate(face: &TrimmedSurface<'_>, opts: &TessOptions) -> Result<FaceM
             } else {
                 subdivide_triangle(*tri, &midpoint, &uvs, &mut next);
             }
+        }
+        if next.len() > MAX_TRIANGLES {
+            return Err(Error::AlgorithmLimit {
+                operation: "tessellation triangle count",
+                limit: MAX_TRIANGLES,
+            });
         }
         triangles = next;
     }
@@ -363,7 +378,7 @@ fn point_segment_dist(p: Point3, a: Point3, b: Point3) -> f64 {
 /// Refine one loop: every edge is midpoint-split until the surface point at
 /// the parameter midpoint is within tolerance of the 3D chord (and the chord
 /// respects `max_len`).
-fn refine_loop(ctx: &RefineCtx<'_>, points: &[Vec2]) -> Vec<(Vec2, Point3)> {
+fn refine_loop(ctx: &RefineCtx<'_>, points: &[Vec2]) -> Result<Vec<(Vec2, Point3)>> {
     let n = points.len();
     let mut out: Vec<(Vec2, Point3)> = Vec::with_capacity(n);
     for i in 0..n {
@@ -372,9 +387,9 @@ fn refine_loop(ctx: &RefineCtx<'_>, points: &[Vec2]) -> Vec<(Vec2, Point3)> {
         let pa = ctx.surface.eval([a.x, a.y]);
         let pb = ctx.surface.eval([b.x, b.y]);
         out.push((a, pa));
-        refine_edge(ctx, (a, pa), (b, pb), 0, &mut out);
+        refine_edge(ctx, (a, pa), (b, pb), 0, &mut out)?;
     }
-    out
+    Ok(out)
 }
 
 /// Append the interior refinement points of edge `(a, b)` (exclusive) in
@@ -385,20 +400,23 @@ fn refine_edge(
     b: (Vec2, Point3),
     depth: usize,
     out: &mut Vec<(Vec2, Point3)>,
-) {
-    if depth >= MAX_BOUNDARY_DEPTH {
-        return;
-    }
+) -> Result<()> {
     let mid_uv = (a.0 + b.0) / 2.0;
     let mid_p = ctx.surface.eval([mid_uv.x, mid_uv.y]);
     let deviation = point_segment_dist(mid_p, a.1, b.1);
     if deviation <= ctx.tol && a.1.dist(b.1) <= ctx.max_len {
-        return;
+        return Ok(());
+    }
+    if depth >= MAX_BOUNDARY_DEPTH {
+        return Err(Error::AlgorithmLimit {
+            operation: "tessellation boundary refinement depth",
+            limit: MAX_BOUNDARY_DEPTH,
+        });
     }
     let m = (mid_uv, mid_p);
-    refine_edge(ctx, a, m, depth + 1, out);
+    refine_edge(ctx, a, m, depth + 1, out)?;
     out.push(m);
-    refine_edge(ctx, m, b, depth + 1, out);
+    refine_edge(ctx, m, b, depth + 1, out)
 }
 
 fn edge_needs_split(
@@ -798,6 +816,33 @@ mod tests {
         assert_eq!(mesh.positions.len(), 4);
         assert!((mesh_area(&mesh) - 6.0).abs() < 1e-12);
         assert_watertight(&mesh);
+    }
+
+    #[test]
+    fn boundary_refinement_limit_is_an_error() {
+        let cylinder = Cylinder::new(Frame::world(), 1.0).unwrap();
+        let ctx = RefineCtx {
+            surface: &cylinder,
+            tol: 1e-12,
+            max_len: f64::INFINITY,
+        };
+        let a_uv = Vec2::new(0.0, 0.0);
+        let b_uv = Vec2::new(core::f64::consts::PI, 0.0);
+        let mut out = Vec::new();
+        assert_eq!(
+            refine_edge(
+                &ctx,
+                (a_uv, cylinder.eval([a_uv.x, a_uv.y])),
+                (b_uv, cylinder.eval([b_uv.x, b_uv.y])),
+                MAX_BOUNDARY_DEPTH,
+                &mut out,
+            ),
+            Err(Error::AlgorithmLimit {
+                operation: "tessellation boundary refinement depth",
+                limit: MAX_BOUNDARY_DEPTH,
+            })
+        );
+        assert!(out.is_empty());
     }
 
     #[test]

@@ -2,6 +2,10 @@
 
 Status: draft v0.1 (2026-07-06)
 
+This document defines the target contract. Implemented status and known
+limitations are tracked in [kernel-roadmap.md](kernel-roadmap.md); a roadmap
+milestone is not conformant until its stated exit criterion is met.
+
 ## 1. Mission and scope
 
 Build an open, performant boundary-representation (B-rep) geometric modeling kernel
@@ -152,7 +156,9 @@ layer), and attribute propagation rules.
 - Bounding boxes/hierarchies, minimum distance, clash detection.
 - Tessellation: watertight, crack-free faceting with chordal + angular tolerance control,
   per-face parallel, incremental re-tessellation of changed faces (feeds rendering, STL,
-  and mesh-based downstream consumers).
+  and mesh-based downstream consumers). If configured refinement or mesh-size limits
+  prevent satisfying the requested tolerance, return a typed error rather than silently
+  emitting an under-refined mesh.
 - Ray firing, silhouette computation (needed later for drawings).
 
 ### L5 — Interchange

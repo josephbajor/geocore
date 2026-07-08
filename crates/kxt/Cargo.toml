@@ -1,0 +1,15 @@
+[package]
+name = "kxt"
+description = "Modern-schema Parasolid XT reader and deterministic analytic text writer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kcore = { path = "../kcore" }
+kgeom = { path = "../kgeom" }
+ktopo = { path = "../ktopo" }
+
+[lints]
+workspace = true

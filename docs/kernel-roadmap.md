@@ -43,13 +43,15 @@ insertion/refinement, splitting, Bezier extraction, global interpolation; exact
 rational-Bezier circles verified to 1e-12); closest-point projection (multi-start
 damped Newton); trimmed-face tessellation (boundary chordal refinement, hole
 bridging + ear clipping over robust predicates, conforming interior edge-split
-refinement, watertight-with-boundary invariant tested). Deferred, first needed
-in M6: knot removal, degree elevation, periodic NURBS (M3), degenerate-patch
-reporting (M2 checker). Deferred within tessellation: triangle quality
-optimization. All 123 tests green in debug and release; determinism goldens
-pinned for both crates.
+refinement, watertight-with-boundary invariant tested). Tessellation returns a
+typed `AlgorithmLimit` error rather than an under-refined mesh when boundary
+depth, interior pass, or triangle-count limits prevent satisfying the request.
+Deferred, first needed in M6: knot removal and degree elevation; periodic NURBS
+remain part of M3c/Tier-2 fidelity, and degenerate-patch reporting remains checker
+work. Triangle quality optimization is also deferred. Determinism goldens are
+pinned for both `kcore` and `kgeom`.
 
-## M2 — Topology + primitives (≈ 6–8 weeks)
+## M2 — Topology + primitives (≈ 6–8 weeks) — ✅ COMPLETE
 Full Parasolid entity hierarchy, Euler operators, body types, tolerant entity plumbing.
 The checker, v1. Primitive body constructors. Whole-body watertight tessellation
 (cross-face crack elimination at shared edges).
@@ -57,23 +59,71 @@ The checker, v1. Primitive body constructors. Whole-body watertight tessellation
 **Exit:** primitives construct checker-clean; Euler invariant property tests pass;
 a primitive body renders watertight in a throwaway viewer.
 
-## M3 — XT interchange (starts with M2, runs long)
+**As built (`crates/ktopo`):** entity hierarchy over generational arenas with a
+uniform typed store; ring-edge and zero-loop-face conventions fixed in the data
+model (revolved primitives carry no artificial seam edges, matching Parasolid);
+the full ten-operator Euler set with a randomized 300-step Euler–Poincaré
+property harness (which caught a real `mef` fin-leak during development);
+primitives block/cylinder/cone-frustum/sphere/torus, all checker-clean; checker
+v1 with 24 fault kinds — structural back-pointer/ring/pairing/kind checks, a
+per-shell Euler identity that counts ring edges and zero-loop faces correctly,
+and geometric checks (vertex-on-curve, edge-on-surface by exact analytic
+distances, size box, loop orientation); whole-body tessellation with edge-once
+discretization, seam-cutting for periodic faces, pole collapse for spheres, and
+index-mapped assembly — watertightness (every mesh edge in exactly two opposed
+triangles) and enclosed-volume accuracy verified per primitive, plus OBJ export
+in lieu of a viewer. Deferred: full cones with apex vertices, tolerant
+curve-less edges (M3c), Euler identity for shells with unclassifiable faces.
+Failure-atomicity hardening has begun: `kev` preflights its known late-failure
+path before mutation. Complete transactional modeling operations and journaling
+remain M5/M8 work.
+
+## M3 — XT interchange (starts with M2, runs long) — IN PROGRESS
 - **M3a Read (Tier 0):** text + neutral-binary parser, schema versioning, topology and
   Tier-0 geometry reconstruction, tessellate-and-view arbitrary real-world XT files.
   Begin harvesting the corpus (GrabCAD, vendor samples, Solid Edge CE exports).
+
+  **Modern-schema subset implemented (`crates/kxt`), as built:** both wire
+  encodings behind one cursor abstraction; the embedded-schema mechanism decodes
+  C/D/I/A/Z edit scripts against base schema 13006 without external schema files.
+  Reconstruction maps the supported topology and geometry subset into
+  checker-clean `ktopo` bodies, including sense encodings, ring edges, and
+  void-exterior-shell dropping; the corpus includes a hand-authored block in both
+  encodings + real-world V27/V28 parts, provenance in
+  `crates/kxt/tests/fixtures/README.md`); end-to-end tests import real files
+  and tessellate them watertight. Reconstruction is atomic with respect to the
+  caller's `Store`: failure leaves existing entities, handles, and subsequent
+  handle allocation unchanged. This does not yet satisfy the broader Tier-0
+  "any well-formed XT" criterion because pre-13006 schemas, procedural
+  geometry, SP-curves, tolerant edges, and assemblies remain unsupported.
+  Deferred to M3b/M3c: broader writing and procedural
+  geometry, SP-curves, tolerant edges, assemblies, pre-13006 schemas;
+  B-surface pole ordering is flagged provisional until the M3b round-trip.
 - **M3b Write (Tier 1):** emit XT for self-authored analytic bodies; round-trip
   ourselves; validate empirically in Solid Edge CE (import, checker, re-export, diff).
+
+  **IN PROGRESS:** deterministic base-schema-13006 text output now covers every
+  self-authored analytic primitive (block, cylinder, expanding/shrinking cone
+  frustum, sphere, torus). Each case round-trips through our reader, checker, and
+  watertight tessellator. Neutral-binary output and the required Solid Edge CE
+  checker/re-export validation remain before M3b can be marked complete.
 - **M3c Tier 2/3 fidelity:** procedural surfaces, SP-curves, intersection curves,
   attributes, assemblies — extends through M6.
 
 **Exit (M3b):** 100% of self-authored analytic bodies import into Solid Edge with zero
 errors and survive a there-and-back round trip.
 
-## M4 — Intersections (≈ 10–14 weeks, hardest math)
+## M4 — Intersections (≈ 10–14 weeks, hardest math) — STARTED
 Curve/curve, curve/surface, then SSI: quadric/quadric closed forms, marching with
 adaptive stepping, subdivision start-point discovery, tangent/singular handling,
 small-loop detection. Extrude/revolve land here too (they need edge geometry but not
 booleans) — first "real modeling" demo.
+
+**STARTED (`crates/kops`):** parameter-rich curve/curve result contracts distinguish
+proven misses, isolated contacts, and coincident intervals. The first complete analytic
+case, bounded line/line intersection, handles transverse contacts, endpoint touches,
+parallel misses, and same/reversed overlaps deterministically. General curve/curve,
+curve/surface, and SSI remain.
 
 **Exit:** SSI test battery including tangent cylinders, near-tangent tori, and
 NURBS-vs-quadric cases; every intersection curve usable as edge geometry and

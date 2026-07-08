@@ -18,7 +18,8 @@
 //! - [`nurbs`] — B-spline/NURBS engine (basis, evaluation, knot operations,
 //!   fitting) per Piegl & Tiller, *The NURBS Book*.
 //! - [`project`] — closest-point projection onto curves and surfaces.
-//! - [`tess`] — tolerance-driven tessellation of (trimmed) faces.
+//! - [`tess`] — deterministic, tolerance-driven tessellation of trimmed faces,
+//!   with typed errors when refinement limits prevent meeting the request.
 //! - [`conformance`] — the evaluator conformance harness (finite-difference
 //!   derivative checks, periodicity, degeneracy); used by tests here and by
 //!   every future geometry class.
