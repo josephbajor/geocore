@@ -103,6 +103,74 @@ fn dispatches_line_nurbs_both_orders() {
 }
 
 #[test]
+fn dispatches_circle_nurbs_both_orders() {
+    let circle = Circle::new(Frame::world(), 1.0).unwrap();
+    let curve = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![Point3::new(-2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0)],
+        None,
+    )
+    .unwrap();
+    let hit = intersect_bounded_curves(
+        &circle,
+        full_range(&circle),
+        &curve,
+        full_range(&curve),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.points.len(), 2);
+    assert!(hit.points[0].t_a.abs() < 1e-8);
+    assert!((hit.points[0].t_b - 0.75).abs() < 1e-8);
+    assert!((hit.points[1].t_a - core::f64::consts::PI).abs() < 1e-8);
+    assert!((hit.points[1].t_b - 0.25).abs() < 1e-8);
+
+    let reversed = intersect_bounded_curves(
+        &curve,
+        full_range(&curve),
+        &circle,
+        full_range(&circle),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(reversed.points.len(), 2);
+    assert!((reversed.points[0].t_a - 0.25).abs() < 1e-8);
+    assert!((reversed.points[0].t_b - core::f64::consts::PI).abs() < 1e-8);
+    assert!((reversed.points[1].t_a - 0.75).abs() < 1e-8);
+    assert!(reversed.points[1].t_b.abs() < 1e-8);
+
+    let quarter = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ],
+        Some(vec![1.0, core::f64::consts::FRAC_1_SQRT_2, 1.0]),
+    )
+    .unwrap();
+    let hit = intersect_bounded_curves(
+        &quarter,
+        full_range(&quarter),
+        &circle,
+        ParamRange::new(0.0, core::f64::consts::FRAC_PI_4),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.overlaps.len(), 1);
+    assert!(hit.overlaps[0].a.lo.abs() < 1e-8);
+    assert!((hit.overlaps[0].a.hi - 0.5).abs() < 1e-8);
+    assert_eq!(
+        hit.overlaps[0].b,
+        ParamRange::new(0.0, core::f64::consts::FRAC_PI_4)
+    );
+    assert_eq!(hit.overlaps[0].orientation, ParamOrientation::Same);
+}
+
+#[test]
 fn reversed_dispatch_recanonicalizes_in_first_curve_order() {
     let circle = Circle::new(Frame::world(), 1.0).unwrap();
     let line = line([-2.0, 0.0, 0.0], [1.0, 0.0, 0.0]);

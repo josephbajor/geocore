@@ -128,9 +128,10 @@ contacts. Bounded 3D circle/circle, circle/ellipse, and ellipse/ellipse handle
 coplanar secants/tangencies, skew-plane contacts, periodic arc filtering,
 tolerance-aware near tangencies, and coincident overlaps where applicable.
 The public curve/curve dispatcher now routes every line/circle/ellipse ordered
-pair to those exact solvers, plus an initial fixed-grid line/NURBS bridge for
-isolated contacts and finite contained overlaps, while rejecting unsupported
-NURBS/procedural pairs explicitly. Curve/surface has begun with bounded
+pair to those exact solvers, plus initial fixed-grid line/NURBS and
+circle/NURBS bridges for isolated contacts and finite contained overlaps,
+while rejecting unsupported NURBS/procedural pairs explicitly. Curve/surface
+has begun with bounded
 line/plane, line/cylinder,
 line/cone, line/sphere, line/torus, circle/plane, ellipse/plane, and
 circle/cylinder, circle/cone, circle/sphere, circle/torus, ellipse/sphere,
