@@ -7,6 +7,7 @@ use super::cylinder_sphere::intersect_bounded_cylinder_sphere;
 use super::cylinder_torus::intersect_bounded_cylinder_torus;
 use super::plane_cone::intersect_bounded_plane_cone;
 use super::plane_cylinder::intersect_bounded_plane_cylinder;
+use super::plane_nurbs_surface::intersect_bounded_plane_nurbs_surface;
 use super::plane_plane::intersect_bounded_planes;
 use super::plane_sphere::intersect_bounded_plane_sphere;
 use super::plane_torus::intersect_bounded_plane_torus;
@@ -16,14 +17,15 @@ use super::sphere_torus::intersect_bounded_sphere_torus;
 use super::torus_torus::intersect_bounded_tori;
 use kcore::error::{Error, Result};
 use kcore::tolerance::Tolerances;
+use kgeom::nurbs::NurbsSurface;
 use kgeom::param::ParamRange;
 use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 
 /// Intersect two surfaces over finite parameter windows.
 ///
 /// This SSI dispatcher routes supported bounded analytic pairs. Unsupported
-/// classes fail explicitly; broader closed forms and marching/subdivision SSI
-/// remain later M4 work.
+/// classes fail explicitly; broader closed forms and adaptive
+/// marching/subdivision SSI remain later M4 work.
 pub fn intersect_bounded_surfaces(
     a: &dyn Surface,
     a_range: [ParamRange; 2],
@@ -166,6 +168,17 @@ pub fn intersect_bounded_surfaces(
         return intersect_bounded_plane_torus(plane, b_range, torus, a_range, tolerances)
             .map(SurfaceSurfaceIntersections::swapped);
     }
+    if let Some(plane) = as_plane(a)
+        && let Some(nurbs) = as_nurbs_surface(b)
+    {
+        return intersect_bounded_plane_nurbs_surface(plane, a_range, nurbs, b_range, tolerances);
+    }
+    if let Some(nurbs) = as_nurbs_surface(a)
+        && let Some(plane) = as_plane(b)
+    {
+        return intersect_bounded_plane_nurbs_surface(plane, b_range, nurbs, a_range, tolerances)
+            .map(SurfaceSurfaceIntersections::swapped);
+    }
 
     Err(Error::InvalidGeometry {
         reason: "unsupported surface/surface intersection class",
@@ -189,5 +202,9 @@ fn as_sphere(surface: &dyn Surface) -> Option<&Sphere> {
 }
 
 fn as_torus(surface: &dyn Surface) -> Option<&Torus> {
+    surface.as_any().downcast_ref()
+}
+
+fn as_nurbs_surface(surface: &dyn Surface) -> Option<&NurbsSurface> {
     surface.as_any().downcast_ref()
 }
