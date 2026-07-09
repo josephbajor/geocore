@@ -1,6 +1,7 @@
 use super::circle_ellipse::intersect_bounded_circle_ellipse;
 use super::circle_nurbs::intersect_bounded_circle_nurbs;
 use super::ellipse_ellipse::intersect_bounded_ellipses;
+use super::ellipse_nurbs::intersect_bounded_ellipse_nurbs;
 use super::line_circle::intersect_bounded_line_circle;
 use super::line_ellipse::intersect_bounded_line_ellipse;
 use super::line_line::intersect_bounded_lines;
@@ -15,9 +16,9 @@ use kgeom::param::ParamRange;
 /// Intersect two curves restricted to finite parameter ranges where needed.
 ///
 /// This dispatches the currently supported analytic curve classes plus the
-/// initial line/NURBS and circle/NURBS bridges. Unsupported curve classes fail
-/// explicitly; the general subdivision/Newton curve-curve solver remains later
-/// M4 work.
+/// initial line/NURBS, circle/NURBS, and ellipse/NURBS bridges. Unsupported
+/// curve classes fail explicitly; the general subdivision/Newton curve-curve
+/// solver remains later M4 work.
 pub fn intersect_bounded_curves(
     a: &dyn Curve,
     range_a: ParamRange,
@@ -68,6 +69,13 @@ pub fn intersect_bounded_curves(
     }
     if let (Some(a), Some(b)) = (as_ellipse(a), as_ellipse(b)) {
         return intersect_bounded_ellipses(a, range_a, b, range_b, tolerances);
+    }
+    if let (Some(a), Some(b)) = (as_ellipse(a), as_nurbs(b)) {
+        return intersect_bounded_ellipse_nurbs(a, range_a, b, range_b, tolerances);
+    }
+    if let (Some(a), Some(b)) = (as_nurbs(a), as_ellipse(b)) {
+        return intersect_bounded_ellipse_nurbs(b, range_b, a, range_a, tolerances)
+            .and_then(reverse_intersections);
     }
 
     Err(Error::InvalidGeometry {

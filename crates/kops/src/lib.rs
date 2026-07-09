@@ -3,8 +3,8 @@
 //! Currently implements parameter-rich curve/curve result contracts and
 //! deterministic, tolerance-aware bounded line/line, 3D line/circle, 3D
 //! line/ellipse, line/NURBS, 3D circle/circle, circle/NURBS, 3D
-//! circle/ellipse, and 3D ellipse/ellipse intersections, plus a dispatcher
-//! over those classes.
+//! circle/ellipse, ellipse/NURBS, and 3D ellipse/ellipse intersections, plus
+//! a dispatcher over those classes.
 //! Curve/surface has started with bounded line/plane, line/cylinder,
 //! line/cone, line/sphere, and line/torus plus bounded circle/plane and
 //! ellipse/plane, circle/cylinder, circle/cone, circle/sphere, and
