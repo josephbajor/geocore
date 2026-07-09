@@ -25,6 +25,7 @@ mod line_torus;
 mod planar_curve_plane;
 mod plane_sphere;
 mod result;
+mod sphere_sphere;
 mod surface_surface;
 
 pub use circle_circle::intersect_bounded_circles;
@@ -57,4 +58,5 @@ pub use result::{
     SurfaceSurfacePoint, accept_curve_curve_candidate, accept_curve_surface_candidate,
     accept_surface_surface_candidate,
 };
+pub use sphere_sphere::intersect_bounded_spheres;
 pub use surface_surface::intersect_bounded_surfaces;

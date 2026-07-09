@@ -1,5 +1,6 @@
 use super::plane_sphere::intersect_bounded_plane_sphere;
 use super::result::SurfaceSurfaceIntersections;
+use super::sphere_sphere::intersect_bounded_spheres;
 use kcore::error::{Error, Result};
 use kcore::tolerance::Tolerances;
 use kgeom::param::ParamRange;
@@ -17,6 +18,11 @@ pub fn intersect_bounded_surfaces(
     b_range: [ParamRange; 2],
     tolerances: Tolerances,
 ) -> Result<SurfaceSurfaceIntersections> {
+    if let Some(sphere_a) = as_sphere(a)
+        && let Some(sphere_b) = as_sphere(b)
+    {
+        return intersect_bounded_spheres(sphere_a, a_range, sphere_b, b_range, tolerances);
+    }
     if let Some(plane) = as_plane(a)
         && let Some(sphere) = as_sphere(b)
     {
