@@ -31,9 +31,9 @@ parametric CAD application; feature history and regeneration are later layers.
   intersections behind a general analytic dispatcher. Curve/surface has begun
   with bounded line/plane, line/cylinder, line/cone, line/sphere, line/torus,
   circle/plane, ellipse/plane, circle/cylinder, circle/cone, circle/sphere, and
-  circle/torus plus ellipse/sphere, ellipse/cylinder, and ellipse/cone. General
-  NURBS/procedural curve/curve cases, broader curve/surface, surface/surface
-  intersections, and imprinting remain.
+  circle/torus plus ellipse/sphere, ellipse/cylinder, ellipse/cone, and
+  ellipse/torus. General NURBS/procedural curve/curve cases, broader
+  curve/surface, surface/surface intersections, and imprinting remain.
 
 Immediate work per the roadmap: broaden analytic curve/curve intersections,
 then curve/surface and SSI; complete M3b external XT validation in parallel.
