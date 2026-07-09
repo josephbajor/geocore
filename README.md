@@ -29,9 +29,9 @@ parametric CAD application; feature history and regeneration are later layers.
 - M4 has started in `kops` with bounded line/line, 3D line/circle, 3D
   line/ellipse, 3D circle/circle, 3D circle/ellipse, and 3D ellipse/ellipse
   intersections behind a general analytic dispatcher. Curve/surface has begun
-  with bounded line/plane and line/sphere. General NURBS/procedural
-  curve/curve cases, broader curve/surface, surface/surface intersections, and
-  imprinting remain.
+  with bounded line/plane, line/cylinder, and line/sphere. General
+  NURBS/procedural curve/curve cases, broader curve/surface, surface/surface
+  intersections, and imprinting remain.
 
 Immediate work per the roadmap: broaden analytic curve/curve intersections,
 then curve/surface and SSI; complete M3b external XT validation in parallel.

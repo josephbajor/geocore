@@ -5,11 +5,11 @@ use kcore::tolerance::Tolerances;
 use kgeom::curve::Line;
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
-use kgeom::surface::{Cylinder, Plane, Sphere, Surface};
+use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface};
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
-    ContactKind, intersect_bounded_curve_surface, intersect_bounded_line_plane,
-    intersect_bounded_line_sphere,
+    ContactKind, intersect_bounded_curve_surface, intersect_bounded_line_cylinder,
+    intersect_bounded_line_plane, intersect_bounded_line_sphere,
 };
 
 fn make_line(origin: [f64; 3], direction: [f64; 3]) -> Line {
@@ -18,6 +18,13 @@ fn make_line(origin: [f64; 3], direction: [f64; 3]) -> Line {
 
 fn plane_window() -> [ParamRange; 2] {
     [ParamRange::new(-1.0, 1.0), ParamRange::new(-0.5, 0.5)]
+}
+
+fn cylinder_window() -> [ParamRange; 2] {
+    [
+        ParamRange::new(0.0, core::f64::consts::TAU),
+        ParamRange::new(-1.0, 1.0),
+    ]
 }
 
 #[test]
@@ -131,6 +138,109 @@ fn line_sphere_surface_range_filters_contacts() {
 }
 
 #[test]
+fn line_cylinder_secant_and_tangent_contacts() {
+    let cylinder = Cylinder::new(Frame::world(), 1.0).unwrap();
+    let secant = make_line([-2.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    let hit = intersect_bounded_line_cylinder(
+        &secant,
+        ParamRange::new(0.0, 4.0),
+        &cylinder,
+        cylinder_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert_eq!(hit.points.len(), 2);
+    assert_eq!(hit.points[0].kind, ContactKind::Transverse);
+    assert!(hit.points[0].point.dist(Point3::new(-1.0, 0.0, 0.0)) < 1e-12);
+    assert!((hit.points[0].t_curve - 1.0).abs() < 1e-12);
+    assert!((hit.points[0].uv_surface[0] - core::f64::consts::PI).abs() < 1e-12);
+    assert!(hit.points[1].point.dist(Point3::new(1.0, 0.0, 0.0)) < 1e-12);
+    assert!((hit.points[1].t_curve - 3.0).abs() < 1e-12);
+    assert_eq!(hit.points[1].uv_surface, [0.0, 0.0]);
+
+    for (height, tolerances) in [
+        (1.0, Tolerances::default()),
+        (1.0 + 5e-7, Tolerances::with_linear(1e-6).unwrap()),
+    ] {
+        let tangent = make_line([-2.0, height, 0.0], [1.0, 0.0, 0.0]);
+        let hit = intersect_bounded_line_cylinder(
+            &tangent,
+            ParamRange::new(0.0, 4.0),
+            &cylinder,
+            cylinder_window(),
+            tolerances,
+        )
+        .unwrap();
+        assert_eq!(hit.points.len(), 1);
+        assert_eq!(hit.points[0].kind, ContactKind::Tangent);
+        assert!((hit.points[0].t_curve - 2.0).abs() < 1e-12);
+        assert!(hit.points[0].residual <= tolerances.linear());
+    }
+}
+
+#[test]
+fn line_cylinder_surface_range_filters_contacts() {
+    let cylinder = Cylinder::new(Frame::world(), 1.0).unwrap();
+    let line = make_line([-2.0, 0.0, 0.25], [1.0, 0.0, 0.0]);
+    let hit = intersect_bounded_line_cylinder(
+        &line,
+        ParamRange::new(0.0, 4.0),
+        &cylinder,
+        [
+            ParamRange::new(0.0, core::f64::consts::FRAC_PI_2),
+            ParamRange::new(-1.0, 1.0),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert_eq!(hit.points.len(), 1);
+    assert!(hit.points[0].point.dist(Point3::new(1.0, 0.0, 0.25)) < 1e-12);
+    assert!((hit.points[0].t_curve - 3.0).abs() < 1e-12);
+    assert_eq!(hit.points[0].uv_surface, [0.0, 0.25]);
+}
+
+#[test]
+fn line_on_cylinder_ruling_clips_to_surface_window_overlap() {
+    let cylinder = Cylinder::new(Frame::world(), 1.0).unwrap();
+    let ruling = make_line([1.0, 0.0, -2.0], [0.0, 0.0, 1.0]);
+    let hit = intersect_bounded_line_cylinder(
+        &ruling,
+        ParamRange::new(0.0, 4.0),
+        &cylinder,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(-0.5, 0.75),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.overlaps.len(), 1);
+    assert_eq!(hit.overlaps[0].curve, ParamRange::new(1.5, 2.75));
+    assert_eq!(hit.overlaps[0].uv_start, [0.0, -0.5]);
+    assert_eq!(hit.overlaps[0].uv_end, [0.0, 0.75]);
+
+    let endpoint = intersect_bounded_line_cylinder(
+        &ruling,
+        ParamRange::new(0.0, 1.5),
+        &cylinder,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(-0.5, 0.75),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(endpoint.points.len(), 1);
+    assert_eq!(endpoint.points[0].kind, ContactKind::Tangent);
+    assert_eq!(endpoint.points[0].uv_surface, [0.0, -0.5]);
+    assert!(endpoint.overlaps.is_empty());
+}
+
+#[test]
 fn curve_surface_dispatches_supported_cases_and_rejects_unsupported() {
     let line = make_line([0.0, 0.0, -1.0], [0.0, 0.0, 1.0]);
     let plane = Plane::new(Frame::world());
@@ -156,10 +266,21 @@ fn curve_surface_dispatches_supported_cases_and_rejects_unsupported() {
     assert_eq!(hit.points.len(), 2);
 
     let cylinder = Cylinder::new(Frame::world(), 1.0).unwrap();
-    let err = intersect_bounded_curve_surface(
+    let hit = intersect_bounded_curve_surface(
         &line,
         ParamRange::new(0.0, 2.0),
         &cylinder,
+        cylinder_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(hit.is_empty());
+
+    let cone = Cone::new(Frame::world(), 1.0, 0.25).unwrap();
+    let err = intersect_bounded_curve_surface(
+        &line,
+        ParamRange::new(0.0, 2.0),
+        &cone,
         [
             ParamRange::new(0.0, core::f64::consts::TAU),
             ParamRange::new(-1.0, 1.0),

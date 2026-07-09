@@ -1,3 +1,4 @@
+use super::line_cylinder::intersect_bounded_line_cylinder;
 use super::line_plane::intersect_bounded_line_plane;
 use super::line_sphere::intersect_bounded_line_sphere;
 use super::result::CurveSurfaceIntersections;
@@ -5,11 +6,12 @@ use kcore::error::{Error, Result};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Curve, Line};
 use kgeom::param::ParamRange;
-use kgeom::surface::{Plane, Sphere, Surface};
+use kgeom::surface::{Cylinder, Plane, Sphere, Surface};
 
 /// Intersect a curve with a surface over finite curve and surface windows.
 ///
-/// This currently dispatches line/plane and line/sphere analytic cases.
+/// This currently dispatches line/plane, line/cylinder, and line/sphere
+/// analytic cases.
 /// Unsupported curve or surface classes fail explicitly; broader analytic
 /// cases and the general subdivision/Newton curve/surface solver remain later
 /// M4 work.
@@ -26,6 +28,15 @@ pub fn intersect_bounded_curve_surface(
                 line,
                 curve_range,
                 plane,
+                surface_range,
+                tolerances,
+            );
+        }
+        if let Some(cylinder) = as_cylinder(surface) {
+            return intersect_bounded_line_cylinder(
+                line,
+                curve_range,
+                cylinder,
                 surface_range,
                 tolerances,
             );
@@ -51,6 +62,10 @@ fn as_line(curve: &dyn Curve) -> Option<&Line> {
 }
 
 fn as_plane(surface: &dyn Surface) -> Option<&Plane> {
+    surface.as_any().downcast_ref()
+}
+
+fn as_cylinder(surface: &dyn Surface) -> Option<&Cylinder> {
     surface.as_any().downcast_ref()
 }
 
