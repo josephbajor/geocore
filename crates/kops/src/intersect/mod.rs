@@ -45,6 +45,7 @@ mod sphere_nurbs_surface;
 mod sphere_sphere;
 mod sphere_torus;
 mod surface_surface;
+mod torus_nurbs_surface;
 mod torus_torus;
 
 pub use circle_circle::intersect_bounded_circles;
@@ -96,4 +97,5 @@ pub use sphere_nurbs_surface::intersect_bounded_sphere_nurbs_surface;
 pub use sphere_sphere::intersect_bounded_spheres;
 pub use sphere_torus::intersect_bounded_sphere_torus;
 pub use surface_surface::intersect_bounded_surfaces;
+pub use torus_nurbs_surface::intersect_bounded_torus_nurbs_surface;
 pub use torus_torus::intersect_bounded_tori;

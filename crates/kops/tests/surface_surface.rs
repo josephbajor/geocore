@@ -19,6 +19,7 @@ use kops::intersect::{
     intersect_bounded_plane_sphere, intersect_bounded_plane_torus, intersect_bounded_planes,
     intersect_bounded_sphere_nurbs_surface, intersect_bounded_sphere_torus,
     intersect_bounded_spheres, intersect_bounded_surfaces, intersect_bounded_tori,
+    intersect_bounded_torus_nurbs_surface,
 };
 
 fn plane_window() -> [ParamRange; 2] {
@@ -361,6 +362,21 @@ fn assert_cone_nurbs_branch_endpoints(
     }
 }
 
+fn assert_torus_nurbs_branch_endpoints(
+    hit: &SurfaceSurfaceIntersections,
+    torus: &Torus,
+    surface: &NurbsSurface,
+) {
+    for branch in &hit.curves {
+        let start = branch.curve.eval(branch.curve_range.lo);
+        let end = branch.curve.eval(branch.curve_range.hi);
+        assert!(torus.eval(branch.uv_a_start).dist(start) < 1e-7);
+        assert!(torus.eval(branch.uv_a_end).dist(end) < 1e-7);
+        assert!(surface.eval(branch.uv_b_start).dist(start) < 1e-7);
+        assert!(surface.eval(branch.uv_b_end).dist(end) < 1e-7);
+    }
+}
+
 fn total_curve_width(hit: &SurfaceSurfaceIntersections) -> f64 {
     hit.curves
         .iter()
@@ -495,6 +511,37 @@ fn quarter_cone_nurbs_surface(cone: &Cone, v0: f64, v1: f64) -> NurbsSurface {
             Point3::new(0.0, rho1, z1),
         ],
         Some(vec![1.0, 1.0, weight, weight, 1.0, 1.0]),
+    )
+    .unwrap()
+}
+
+fn quarter_torus_nurbs_surface(torus: &Torus) -> NurbsSurface {
+    let weight = core::f64::consts::FRAC_1_SQRT_2;
+    let u_controls = [(1.0, 0.0, 1.0), (1.0, 1.0, weight), (0.0, 1.0, 1.0)];
+    let v_controls = [
+        (torus.major_radius() + torus.minor_radius(), 0.0, 1.0),
+        (
+            torus.major_radius() + torus.minor_radius(),
+            torus.minor_radius(),
+            weight,
+        ),
+        (torus.major_radius(), torus.minor_radius(), 1.0),
+    ];
+    let mut points = Vec::new();
+    let mut weights = Vec::new();
+    for (ux, uy, wu) in u_controls {
+        for (rho, z, wv) in v_controls {
+            points.push(Point3::new(rho * ux, rho * uy, z));
+            weights.push(wu * wv);
+        }
+    }
+    NurbsSurface::new(
+        2,
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        points,
+        Some(weights),
     )
     .unwrap()
 }
@@ -900,6 +947,105 @@ fn cone_nurbs_surface_dispatches_both_orders() {
 }
 
 #[test]
+fn torus_nurbs_surface_marches_planar_patch_arc() {
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let surface = bilinear_nurbs_surface_rect(1.75, 2.5, 0.0, 1.75, 0.0);
+    let hit = intersect_bounded_torus_nurbs_surface(
+        &torus,
+        torus_window(),
+        &surface,
+        surface.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 1);
+    assert_eq!(hit.curves[0].kind, ContactKind::Transverse);
+    assert_torus_nurbs_branch_endpoints(&hit, &torus, &surface);
+
+    let SurfaceIntersectionCurve::Nurbs(curve) = &hit.curves[0].curve else {
+        panic!("marched torus/NURBS-surface cut should be carried by a NURBS polyline");
+    };
+    assert_eq!(curve.degree(), 1);
+    assert!(curve.points().len() >= 2);
+    for point in curve.points() {
+        let radial = (point.x * point.x + point.y * point.y).sqrt();
+        let tube = ((radial - torus.major_radius()).powi(2) + point.z * point.z).sqrt();
+        assert!((tube - torus.minor_radius()).abs() < 1e-7);
+        assert!(point.z.abs() < 1e-12);
+    }
+
+    let branch = &hit.curves[0];
+    assert!(branch.uv_a_start[1].abs() < 1e-7);
+    assert!(branch.uv_a_end[1].abs() < 1e-7);
+    let u_min = branch.uv_a_start[0].min(branch.uv_a_end[0]);
+    let u_max = branch.uv_a_start[0].max(branch.uv_a_end[0]);
+    let outer_radius = torus.major_radius() + torus.minor_radius();
+    let expected_u_max = math::atan2(1.75, (outer_radius * outer_radius - 1.75_f64 * 1.75).sqrt());
+    assert!(u_min.abs() < 1e-7);
+    assert!((u_max - expected_u_max).abs() < 1e-7);
+
+    let miss_surface = bilinear_nurbs_surface_rect(0.0, 1.0, 0.0, 1.0, 0.0);
+    let miss = intersect_bounded_torus_nurbs_surface(
+        &torus,
+        torus_window(),
+        &miss_surface,
+        miss_surface.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(miss.is_empty());
+
+    let coincident = quarter_torus_nurbs_surface(&torus);
+    let err = intersect_bounded_torus_nurbs_surface(
+        &torus,
+        [
+            ParamRange::new(0.0, core::f64::consts::FRAC_PI_2),
+            ParamRange::new(0.0, core::f64::consts::FRAC_PI_2),
+        ],
+        &coincident,
+        coincident.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "coincident torus/nurbs-surface intersection is a surface overlap"
+        }
+    );
+}
+
+#[test]
+fn torus_nurbs_surface_dispatches_both_orders() {
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let surface = bilinear_nurbs_surface_rect(1.75, 2.5, 0.0, 1.75, 0.0);
+    let hit = intersect_bounded_surfaces(
+        &torus,
+        torus_window(),
+        &surface,
+        surface.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.curves.len(), 1);
+    assert_torus_nurbs_branch_endpoints(&hit, &torus, &surface);
+
+    let swapped = intersect_bounded_surfaces(
+        &surface,
+        surface.param_range(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(swapped.curves.len(), 1);
+    assert_eq!(swapped.curves[0].uv_a_start, hit.curves[0].uv_b_start);
+    assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
+}
+
+#[test]
 fn plane_plane_transverse_returns_bounded_line_branch() {
     let a = horizontal_plane(0.0);
     let b = vertical_plane_x(0.0);
@@ -1153,12 +1299,12 @@ fn surface_surface_dispatches_plane_sphere_and_rejects_unsupported() {
     assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
 
     let nurbs = bilinear_nurbs_surface();
-    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let other_nurbs = sloped_bilinear_nurbs_surface();
     let err = intersect_bounded_surfaces(
         &nurbs,
         nurbs.param_range(),
-        &torus,
-        torus_window(),
+        &other_nurbs,
+        other_nurbs.param_range(),
         Tolerances::default(),
     )
     .unwrap_err();

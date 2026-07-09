@@ -17,6 +17,7 @@ use super::result::SurfaceSurfaceIntersections;
 use super::sphere_nurbs_surface::intersect_bounded_sphere_nurbs_surface;
 use super::sphere_sphere::intersect_bounded_spheres;
 use super::sphere_torus::intersect_bounded_sphere_torus;
+use super::torus_nurbs_surface::intersect_bounded_torus_nurbs_surface;
 use super::torus_torus::intersect_bounded_tori;
 use kcore::error::{Error, Result};
 use kcore::tolerance::Tolerances;
@@ -217,6 +218,17 @@ pub fn intersect_bounded_surfaces(
         && let Some(cone) = as_cone(b)
     {
         return intersect_bounded_cone_nurbs_surface(cone, b_range, nurbs, a_range, tolerances)
+            .map(SurfaceSurfaceIntersections::swapped);
+    }
+    if let Some(torus) = as_torus(a)
+        && let Some(nurbs) = as_nurbs_surface(b)
+    {
+        return intersect_bounded_torus_nurbs_surface(torus, a_range, nurbs, b_range, tolerances);
+    }
+    if let Some(nurbs) = as_nurbs_surface(a)
+        && let Some(torus) = as_torus(b)
+    {
+        return intersect_bounded_torus_nurbs_surface(torus, b_range, nurbs, a_range, tolerances)
             .map(SurfaceSurfaceIntersections::swapped);
     }
 
