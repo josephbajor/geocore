@@ -30,6 +30,7 @@ mod line_plane;
 mod line_sphere;
 mod line_torus;
 mod nurbs_plane;
+mod nurbs_surface_march;
 mod planar_curve_plane;
 mod plane_cone;
 mod plane_cylinder;
@@ -38,6 +39,7 @@ mod plane_plane;
 mod plane_sphere;
 mod plane_torus;
 mod result;
+mod sphere_nurbs_surface;
 mod sphere_sphere;
 mod sphere_torus;
 mod surface_surface;
@@ -86,6 +88,7 @@ pub use result::{
     SurfaceSurfacePoint, accept_curve_curve_candidate, accept_curve_surface_candidate,
     accept_surface_surface_candidate,
 };
+pub use sphere_nurbs_surface::intersect_bounded_sphere_nurbs_surface;
 pub use sphere_sphere::intersect_bounded_spheres;
 pub use sphere_torus::intersect_bounded_sphere_torus;
 pub use surface_surface::intersect_bounded_surfaces;

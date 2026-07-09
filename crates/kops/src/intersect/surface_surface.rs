@@ -12,6 +12,7 @@ use super::plane_plane::intersect_bounded_planes;
 use super::plane_sphere::intersect_bounded_plane_sphere;
 use super::plane_torus::intersect_bounded_plane_torus;
 use super::result::SurfaceSurfaceIntersections;
+use super::sphere_nurbs_surface::intersect_bounded_sphere_nurbs_surface;
 use super::sphere_sphere::intersect_bounded_spheres;
 use super::sphere_torus::intersect_bounded_sphere_torus;
 use super::torus_torus::intersect_bounded_tori;
@@ -177,6 +178,17 @@ pub fn intersect_bounded_surfaces(
         && let Some(plane) = as_plane(b)
     {
         return intersect_bounded_plane_nurbs_surface(plane, b_range, nurbs, a_range, tolerances)
+            .map(SurfaceSurfaceIntersections::swapped);
+    }
+    if let Some(sphere) = as_sphere(a)
+        && let Some(nurbs) = as_nurbs_surface(b)
+    {
+        return intersect_bounded_sphere_nurbs_surface(sphere, a_range, nurbs, b_range, tolerances);
+    }
+    if let Some(nurbs) = as_nurbs_surface(a)
+        && let Some(sphere) = as_sphere(b)
+    {
+        return intersect_bounded_sphere_nurbs_surface(sphere, b_range, nurbs, a_range, tolerances)
             .map(SurfaceSurfaceIntersections::swapped);
     }
 
