@@ -11,7 +11,7 @@ use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
-    intersect_bounded_cone_cylinder, intersect_bounded_cone_sphere,
+    intersect_bounded_cone_cylinder, intersect_bounded_cone_sphere, intersect_bounded_cone_torus,
     intersect_bounded_cylinder_sphere, intersect_bounded_cylinder_torus,
     intersect_bounded_cylinders, intersect_bounded_plane_cone, intersect_bounded_plane_cylinder,
     intersect_bounded_plane_sphere, intersect_bounded_plane_torus, intersect_bounded_planes,
@@ -240,6 +240,21 @@ fn assert_cone_cylinder_branch_endpoints(
         assert!(cone.eval(branch.uv_a_end).dist(end) < 1e-12);
         assert!(cylinder.eval(branch.uv_b_start).dist(start) < 1e-12);
         assert!(cylinder.eval(branch.uv_b_end).dist(end) < 1e-12);
+    }
+}
+
+fn assert_cone_torus_branch_endpoints(
+    hit: &SurfaceSurfaceIntersections,
+    cone: &Cone,
+    torus: &Torus,
+) {
+    for branch in &hit.curves {
+        let start = branch.curve.eval(branch.curve_range.lo);
+        let end = branch.curve.eval(branch.curve_range.hi);
+        assert!(cone.eval(branch.uv_a_start).dist(start) < 1e-12);
+        assert!(cone.eval(branch.uv_a_end).dist(end) < 1e-12);
+        assert!(torus.eval(branch.uv_b_start).dist(start) < 1e-12);
+        assert!(torus.eval(branch.uv_b_end).dist(end) < 1e-12);
     }
 }
 
@@ -611,12 +626,22 @@ fn surface_surface_dispatches_plane_sphere_and_rejects_unsupported() {
     assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
 
     let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
-    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let other_cone = Cone::new(
+        Frame::new(
+            Point3::new(0.25, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        1.0,
+        core::f64::consts::PI / 5.0,
+    )
+    .unwrap();
     let err = intersect_bounded_surfaces(
         &cone,
         cone_window(),
-        &torus,
-        torus_window(),
+        &other_cone,
+        cone_window(),
         Tolerances::default(),
     )
     .unwrap_err();
@@ -1571,6 +1596,216 @@ fn surface_surface_dispatches_cone_cylinder_both_orders() {
         let end = branch.curve.eval(branch.curve_range.hi);
         assert!(cylinder.eval(branch.uv_a_start).dist(start) < 1e-12);
         assert!(cylinder.eval(branch.uv_a_end).dist(end) < 1e-12);
+        assert!(cone.eval(branch.uv_b_start).dist(start) < 1e-12);
+        assert!(cone.eval(branch.uv_b_end).dist(end) < 1e-12);
+    }
+}
+
+#[test]
+fn cone_torus_coaxial_secant_returns_latitude_circles() {
+    let cone = Cone::new(Frame::world(), 2.0, core::f64::consts::FRAC_PI_4).unwrap();
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let hit = intersect_bounded_cone_torus(
+        &cone,
+        cone_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 2);
+    assert!((total_curve_width(&hit) - 2.0 * core::f64::consts::TAU).abs() < 1e-12);
+    assert_cone_torus_branch_endpoints(&hit, &cone, &torus);
+
+    let h = core::f64::consts::FRAC_1_SQRT_2 / 2.0;
+    let mut centers = Vec::new();
+    let mut radii = Vec::new();
+    for branch in &hit.curves {
+        assert_eq!(branch.kind, ContactKind::Transverse);
+        let SurfaceIntersectionCurve::Circle(circle) = &branch.curve else {
+            panic!("coaxial cone/torus cut should be carried by latitude circles");
+        };
+        centers.push(circle.frame().origin().z);
+        radii.push(circle.radius());
+    }
+    centers.sort_by(f64::total_cmp);
+    radii.sort_by(f64::total_cmp);
+    assert!((centers[0] + h).abs() < 1e-12);
+    assert!((centers[1] - h).abs() < 1e-12);
+    assert!((radii[0] - (2.0 - h)).abs() < 1e-12);
+    assert!((radii[1] - (2.0 + h)).abs() < 1e-12);
+}
+
+#[test]
+fn cone_torus_surface_windows_clip_latitude_circle() {
+    let cone = Cone::new(Frame::world(), 2.0, core::f64::consts::FRAC_PI_4).unwrap();
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let hit = intersect_bounded_cone_torus(
+        &cone,
+        [
+            ParamRange::new(0.0, core::f64::consts::PI),
+            ParamRange::new(0.0, 1.0),
+        ],
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 1);
+    assert!((total_curve_width(&hit) - core::f64::consts::PI).abs() < 1e-12);
+    assert_cone_torus_branch_endpoints(&hit, &cone, &torus);
+    assert!(hit.curves[0].curve_range.lo.abs() < 1e-12);
+    assert!((hit.curves[0].curve_range.hi - core::f64::consts::PI).abs() < 1e-12);
+}
+
+#[test]
+fn cone_torus_accepts_antiparallel_coaxial_axes() {
+    let cone = Cone::new(
+        Frame::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        2.0,
+        core::f64::consts::FRAC_PI_4,
+    )
+    .unwrap();
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let hit = intersect_bounded_cone_torus(
+        &cone,
+        cone_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 2);
+    assert!((total_curve_width(&hit) - 2.0 * core::f64::consts::TAU).abs() < 1e-12);
+    assert_cone_torus_branch_endpoints(&hit, &cone, &torus);
+}
+
+#[test]
+fn cone_torus_tangent_miss_and_unsupported_cases() {
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let tangent_cone = Cone::new(
+        Frame::world(),
+        2.0 + core::f64::consts::FRAC_1_SQRT_2,
+        core::f64::consts::FRAC_PI_4,
+    )
+    .unwrap();
+    let tangent = intersect_bounded_cone_torus(
+        &tangent_cone,
+        cone_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(tangent.points.is_empty());
+    assert_eq!(tangent.curves.len(), 1);
+    assert_eq!(tangent.curves[0].kind, ContactKind::Tangent);
+    assert_cone_torus_branch_endpoints(&tangent, &tangent_cone, &torus);
+
+    let miss_cone = Cone::new(Frame::world(), 3.0, core::f64::consts::FRAC_PI_4).unwrap();
+    let miss = intersect_bounded_cone_torus(
+        &miss_cone,
+        cone_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(miss.is_empty());
+
+    let shifted_cone = Cone::new(
+        Frame::new(
+            Point3::new(0.25, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        2.0,
+        core::f64::consts::FRAC_PI_4,
+    )
+    .unwrap();
+    let err = intersect_bounded_cone_torus(
+        &shifted_cone,
+        cone_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "cone/torus intersection currently supports only coaxial circular cuts"
+        }
+    );
+
+    let tilted_cone = Cone::new(
+        Frame::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.5, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        2.0,
+        core::f64::consts::FRAC_PI_4,
+    )
+    .unwrap();
+    let err = intersect_bounded_cone_torus(
+        &tilted_cone,
+        cone_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "cone/torus intersection currently supports only coaxial circular cuts"
+        }
+    );
+}
+
+#[test]
+fn surface_surface_dispatches_cone_torus_both_orders() {
+    let cone = Cone::new(Frame::world(), 2.0, core::f64::consts::FRAC_PI_4).unwrap();
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let hit = intersect_bounded_surfaces(
+        &cone,
+        cone_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.curves.len(), 2);
+    assert_cone_torus_branch_endpoints(&hit, &cone, &torus);
+
+    let swapped = intersect_bounded_surfaces(
+        &torus,
+        torus_window(),
+        &cone,
+        cone_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(swapped.curves.len(), hit.curves.len());
+    for branch in &swapped.curves {
+        let start = branch.curve.eval(branch.curve_range.lo);
+        let end = branch.curve.eval(branch.curve_range.hi);
+        assert!(torus.eval(branch.uv_a_start).dist(start) < 1e-12);
+        assert!(torus.eval(branch.uv_a_end).dist(end) < 1e-12);
         assert!(cone.eval(branch.uv_b_start).dist(start) < 1e-12);
         assert!(cone.eval(branch.uv_b_end).dist(end) < 1e-12);
     }

@@ -11,9 +11,9 @@
 //! ellipse/torus. These cover transverse and tangent contacts, periodic arc
 //! filtering, misses, and oriented coincident overlaps. Bounded surface/surface
 //! intersections have started with plane/plane, plane/sphere, plane/cylinder,
-//! plane/cone circular and elliptic slices, coaxial cylinder/sphere and
-//! cylinder/torus, cone/cylinder, cone/sphere, and sphere/torus circles,
-//! parallel cylinder/cylinder rulings, plane/torus latitude and meridian
+//! plane/cone circular and elliptic slices, coaxial cylinder/sphere,
+//! cylinder/torus, cone/cylinder, cone/sphere, cone/torus, and sphere/torus
+//! circles, parallel cylinder/cylinder rulings, plane/torus latitude and meridian
 //! circles, and sphere/sphere closed forms. General
 //! NURBS/procedural curve/curve, broader curve/surface, broader SSI, imprinting,
 //! and body operations remain future M4 work; SSI branch results can carry exact
