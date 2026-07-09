@@ -143,7 +143,7 @@ circular and elliptic slices, coaxial cylinder/sphere, cylinder/torus,
 cone/cone, cone/cylinder, cone/sphere, cone/torus, sphere/torus, and torus/torus
 circles, parallel cylinder/cylinder rulings, plane/torus latitude and meridian
 circles, sphere/sphere closed form branches, and initial fixed-grid
-plane/sphere/cylinder/NURBS-surface marching over finite windows, including
+plane/sphere/cylinder/cone/NURBS-surface marching over finite windows, including
 tangent point contacts, singular apex contacts, ruling branches, and branch clipping.
 SSI branch result geometry now supports exact NURBS curves in addition to
 line/circle/ellipse branches, clearing the result-contract path for broader

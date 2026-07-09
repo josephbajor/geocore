@@ -1,5 +1,6 @@
 use super::cone_cone::intersect_bounded_cones;
 use super::cone_cylinder::intersect_bounded_cone_cylinder;
+use super::cone_nurbs_surface::intersect_bounded_cone_nurbs_surface;
 use super::cone_sphere::intersect_bounded_cone_sphere;
 use super::cone_torus::intersect_bounded_cone_torus;
 use super::cylinder_cylinder::intersect_bounded_cylinders;
@@ -206,6 +207,17 @@ pub fn intersect_bounded_surfaces(
             cylinder, b_range, nurbs, a_range, tolerances,
         )
         .map(SurfaceSurfaceIntersections::swapped);
+    }
+    if let Some(cone) = as_cone(a)
+        && let Some(nurbs) = as_nurbs_surface(b)
+    {
+        return intersect_bounded_cone_nurbs_surface(cone, a_range, nurbs, b_range, tolerances);
+    }
+    if let Some(nurbs) = as_nurbs_surface(a)
+        && let Some(cone) = as_cone(b)
+    {
+        return intersect_bounded_cone_nurbs_surface(cone, b_range, nurbs, a_range, tolerances)
+            .map(SurfaceSurfaceIntersections::swapped);
     }
 
     Err(Error::InvalidGeometry {
