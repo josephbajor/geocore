@@ -128,11 +128,6 @@ impl Plan {
         let mut dummy_fin_specs = Vec::new();
         for &edge in &edge_handles {
             let e = store.get(edge)?;
-            if e.tolerance.is_some() {
-                return Err(XtError::Unsupported {
-                    what: "tolerant edges",
-                });
-            }
             validate_edge_fin_count(e, b.kind)?;
             push_dummy_fins(&mut dummy_fin_specs, edge, e, b.kind);
             let curve = e.curve.ok_or(XtError::Unsupported {
@@ -161,11 +156,6 @@ impl Plan {
         let mut point_handles = Vec::new();
         for &vertex in &vertex_handles {
             let v = store.get(vertex)?;
-            if v.tolerance.is_some() {
-                return Err(XtError::Unsupported {
-                    what: "tolerant vertices",
-                });
-            }
             check_in_size_box(store.get(v.point)?.to_array())?;
             push_interned(&mut point_handles, v.point);
         }
@@ -427,7 +417,7 @@ impl Plan {
                 values: vec![
                     int(index),
                     ptr(0),
-                    Value::Null,
+                    optional_double(edge.tolerance),
                     ptr(first_fin),
                     ptr(adjacent(&self.edges, position, -1)),
                     ptr(adjacent(&self.edges, position, 1)),
@@ -459,7 +449,7 @@ impl Plan {
                     ptr(adjacent(&self.vertices, position, -1)),
                     ptr(adjacent(&self.vertices, position, 1)),
                     ptr(id_of(&self.points, vertex.point)),
-                    Value::Null,
+                    optional_double(vertex.tolerance),
                     ptr(1),
                 ],
             });
@@ -1465,6 +1455,10 @@ fn int(value: u32) -> Value {
 
 fn ptr(value: u32) -> Value {
     Value::Ptr(value)
+}
+
+fn optional_double(value: Option<f64>) -> Value {
+    value.map_or(Value::Null, Value::Double)
 }
 
 fn sense(value: Sense) -> Value {

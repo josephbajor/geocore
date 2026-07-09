@@ -1,5 +1,6 @@
 //! M3b writer round trips for self-authored primitives and supported imports.
 
+use kcore::tolerance::LINEAR_RESOLUTION;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::frame::Frame;
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
@@ -475,6 +476,47 @@ fn all_analytic_primitives_round_trip() {
         let body = constructor(&mut store, &frame);
         assert_roundtrip(&store, body);
     }
+}
+
+#[test]
+fn exact_tolerant_edge_and_vertex_round_trip() {
+    let mut store = Store::new();
+    let body = make::block(&mut store, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
+    let edge = first_bounded_edge(&store, body);
+    let vertex = store.get(edge).unwrap().vertices[0].unwrap();
+    store.get_mut(edge).unwrap().tolerance = Some(LINEAR_RESOLUTION * 10.0);
+    store.get_mut(vertex).unwrap().tolerance = Some(LINEAR_RESOLUTION * 20.0);
+
+    let (text, imported, imported_body) = assert_checker_roundtrip(&store, body);
+    let parsed = kxt::read_xt(text.as_bytes()).unwrap();
+    assert!(
+        parsed
+            .nodes
+            .values()
+            .filter(|node| node.code == code::EDGE)
+            .any(|node| matches!(parsed.field(node, "tolerance").unwrap().as_f64(), Some(t) if t == LINEAR_RESOLUTION * 10.0))
+    );
+    assert!(
+        parsed
+            .nodes
+            .values()
+            .filter(|node| node.code == code::VERTEX)
+            .any(|node| matches!(parsed.field(node, "tolerance").unwrap().as_f64(), Some(t) if t == LINEAR_RESOLUTION * 20.0))
+    );
+    assert!(
+        imported
+            .edges_of_body(imported_body)
+            .unwrap()
+            .into_iter()
+            .any(|edge| imported.get(edge).unwrap().tolerance == Some(LINEAR_RESOLUTION * 10.0))
+    );
+    assert!(
+        imported
+            .vertices_of_body(imported_body)
+            .unwrap()
+            .into_iter()
+            .any(|vertex| imported.get(vertex).unwrap().tolerance == Some(LINEAR_RESOLUTION * 20.0))
+    );
 }
 
 #[test]
