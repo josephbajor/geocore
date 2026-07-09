@@ -241,6 +241,10 @@ impl NurbsCurve {
 }
 
 impl Curve for NurbsCurve {
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
     // Index-based loops mirror the book algorithms (A3.2 / A4.2), where
     // derivative order k is the semantic object, not a slice position.
     #[allow(clippy::needless_range_loop)]

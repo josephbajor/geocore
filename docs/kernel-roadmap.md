@@ -127,7 +127,9 @@ transverse plane crossings, periodic arc filtering, and tolerance-aware near
 contacts. Bounded 3D circle/circle, circle/ellipse, and ellipse/ellipse handle
 coplanar secants/tangencies, skew-plane contacts, periodic arc filtering,
 tolerance-aware near tangencies, and coincident overlaps where applicable.
-General curve/curve, curve/surface, and SSI remain.
+The public curve/curve dispatcher now routes every line/circle/ellipse ordered
+pair to those exact solvers and rejects unsupported NURBS/procedural curves
+explicitly. General NURBS/procedural curve/curve, curve/surface, and SSI remain.
 
 **Exit:** SSI test battery including tangent cylinders, near-tangent tori, and
 NURBS-vs-quadric cases; every intersection curve usable as edge geometry and

@@ -12,6 +12,8 @@
 //! - [`Ellipse`]: `P(t) = c + r₁ cos t · X + r₂ sin t · Y`, `r₁ ≥ r₂ > 0`,
 //!   `t ∈ [0, 2π)`, periodic. (Note: `t` is *not* arc angle.)
 
+use core::any::Any;
+
 use crate::aabb::Aabb3;
 use crate::frame::Frame;
 use crate::param::ParamRange;
@@ -34,7 +36,10 @@ pub struct CurveDerivs {
 /// and deterministic. Parameters outside the periodic base range are wrapped;
 /// parameters outside a bounded range are a caller bug (debug-asserted, then
 /// clamped).
-pub trait Curve {
+pub trait Curve: Any {
+    /// Runtime type view for dispatch layers that need exact analytic cases.
+    fn as_any(&self) -> &dyn Any;
+
     /// Position at `t`.
     fn eval(&self, t: f64) -> Point3 {
         self.eval_derivs(t, 0).d[0]
@@ -82,6 +87,10 @@ impl Line {
 }
 
 impl Curve for Line {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn eval_derivs(&self, t: f64, order: usize) -> CurveDerivs {
         let mut d = CurveDerivs::default();
         d.d[0] = self.origin + self.dir * t;
@@ -136,6 +145,10 @@ impl Circle {
 }
 
 impl Curve for Circle {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn eval_derivs(&self, t: f64, order: usize) -> CurveDerivs {
         let (sin, cos) = math::sincos(t);
         let radial = self.frame.x() * cos + self.frame.y() * sin;
@@ -226,6 +239,10 @@ impl Ellipse {
 }
 
 impl Curve for Ellipse {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn eval_derivs(&self, t: f64, order: usize) -> CurveDerivs {
         let (sin, cos) = math::sincos(t);
         let radial = self.frame.x() * (self.r1 * cos) + self.frame.y() * (self.r2 * sin);
