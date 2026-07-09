@@ -40,6 +40,7 @@ struct Plan {
     edges: Vec<(EdgeId, u32)>,
     vertices: Vec<(VertexId, u32)>,
     surfaces: Vec<(SurfaceId, u32)>,
+    trimmed_curves: Vec<(EdgeId, u32)>,
     curves: Vec<(CurveId, u32)>,
     points: Vec<(PointId, u32)>,
     shell_id: u32,
@@ -127,6 +128,7 @@ impl Plan {
             }
         }
         let mut curve_handles = Vec::new();
+        let mut trimmed_curve_edges = Vec::new();
         let mut dummy_fin_specs = Vec::new();
         for &edge in &edge_handles {
             let e = store.get(edge)?;
@@ -140,6 +142,9 @@ impl Plan {
             let curve = e.curve.ok_or(XtError::Unsupported {
                 what: "curve-less edges",
             })?;
+            if e.bounds.is_some() {
+                trimmed_curve_edges.push(edge);
+            }
             push_unique(&mut curve_handles, curve, "curve shared by multiple edges")?;
             match (store.get(curve)?, e.vertices, e.bounds) {
                 (CurveGeom::Line(_), [Some(_), Some(_)], Some(_)) => {}
@@ -191,6 +196,7 @@ impl Plan {
         let edges = assign(&edge_handles, &mut next);
         let vertices = assign(&vertex_handles, &mut next);
         let surfaces = assign(&surface_handles, &mut next);
+        let trimmed_curves = assign(&trimmed_curve_edges, &mut next);
         let curves = assign(&curve_handles, &mut next);
         let points = assign(&point_handles, &mut next);
         let first_aux_id = next;
@@ -204,6 +210,7 @@ impl Plan {
             edges,
             vertices,
             surfaces,
+            trimmed_curves,
             curves,
             points,
             shell_id: scaffold.shell_id,
@@ -238,7 +245,7 @@ impl Plan {
                 Value::Int(1),
                 ptr(self.shell_id),
                 ptr(first_id(&self.surfaces)),
-                ptr(first_id(&self.curves)),
+                ptr(self.first_curve_id()),
                 ptr(first_id(&self.points)),
                 ptr(2),
                 ptr(first_id(&self.edges)),
@@ -432,7 +439,9 @@ impl Plan {
                     ptr(first_fin),
                     ptr(adjacent(&self.edges, position, -1)),
                     ptr(adjacent(&self.edges, position, 1)),
-                    ptr(id_of(&self.curves, edge.curve.expect("validated curve"))),
+                    ptr(self.trimmed_curve_id(edge_id).unwrap_or_else(|| {
+                        id_of(&self.curves, edge.curve.expect("validated curve"))
+                    })),
                     ptr(0),
                     ptr(0),
                     ptr(1),
@@ -486,6 +495,15 @@ impl Plan {
             };
             out.push(surface_node(store.get(surface_id)?, index, common, aux));
         }
+        for (position, &(edge_id, index)) in self.trimmed_curves.iter().enumerate() {
+            let common = geom_common(
+                index,
+                id_of(&self.edges, edge_id),
+                self.adjacent_curve_node(position, 1),
+                self.adjacent_curve_node(position, -1),
+            );
+            out.push(self.trimmed_curve_node(store, edge_id, index, common)?);
+        }
         for (position, &(curve_id, index)) in self.curves.iter().enumerate() {
             let edge = self
                 .edges
@@ -494,11 +512,15 @@ impl Plan {
                     (store.get(edge).ok()?.curve == Some(curve_id)).then_some(edge)
                 })
                 .expect("validated curve owner");
+            let owner = self
+                .trimmed_curve_id(edge)
+                .unwrap_or_else(|| id_of(&self.edges, edge));
+            let chain_position = self.trimmed_curves.len() + position;
             let common = geom_common(
                 index,
-                id_of(&self.edges, edge),
-                adjacent(&self.curves, position, 1),
-                adjacent(&self.curves, position, -1),
+                owner,
+                self.adjacent_curve_node(chain_position, 1),
+                self.adjacent_curve_node(chain_position, -1),
             );
             let aux = if matches!(store.get(curve_id)?, CurveGeom::Nurbs(_)) {
                 let ids = CurveAuxIds::allocate(&mut next_aux);
@@ -545,6 +567,66 @@ impl Plan {
     fn dummy_fin_id(&self, edge: EdgeId, role: DummyFinRole) -> Option<u32> {
         self.dummy_fins.iter().find_map(|&(candidate, id)| {
             (candidate.edge == edge && candidate.role == role).then_some(id)
+        })
+    }
+
+    fn trimmed_curve_id(&self, edge: EdgeId) -> Option<u32> {
+        self.trimmed_curves
+            .iter()
+            .find_map(|&(candidate, id)| (candidate == edge).then_some(id))
+    }
+
+    fn first_curve_id(&self) -> u32 {
+        self.trimmed_curves
+            .first()
+            .map_or_else(|| first_id(&self.curves), |&(_, id)| id)
+    }
+
+    fn curve_node_id(&self, position: usize) -> Option<u32> {
+        if position < self.trimmed_curves.len() {
+            return Some(self.trimmed_curves[position].1);
+        }
+        self.curves
+            .get(position.checked_sub(self.trimmed_curves.len())?)
+            .map(|&(_, id)| id)
+    }
+
+    fn adjacent_curve_node(&self, position: usize, direction: i8) -> u32 {
+        match direction {
+            -1 if position > 0 => self.curve_node_id(position - 1).unwrap_or(0),
+            1 => self.curve_node_id(position + 1).unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    fn trimmed_curve_node(
+        &self,
+        store: &Store,
+        edge_id: EdgeId,
+        index: u32,
+        mut values: Vec<Value>,
+    ) -> Result<OutNode> {
+        let edge = store.get(edge_id)?;
+        let (t0, t1) = edge.bounds.ok_or(XtError::InvalidModel {
+            what: "trimmed curve edge has no parameter bounds",
+        })?;
+        let start = edge.vertices[0].ok_or(XtError::InvalidModel {
+            what: "trimmed curve edge has no start vertex",
+        })?;
+        let end = edge.vertices[1].ok_or(XtError::InvalidModel {
+            what: "trimmed curve edge has no end vertex",
+        })?;
+        values.extend([
+            ptr(id_of(&self.curves, edge.curve.expect("validated curve"))),
+            vector(store.vertex_position(start)?),
+            vector(store.vertex_position(end)?),
+            Value::Double(t0),
+            Value::Double(t1),
+        ]);
+        Ok(OutNode {
+            code: code::TRIMMED_CURVE,
+            index,
+            values,
         })
     }
 

@@ -449,6 +449,12 @@ fn nurbs_curve_edge_round_trips_as_b_curve() {
         parsed
             .nodes
             .values()
+            .any(|node| node.code == code::TRIMMED_CURVE)
+    );
+    assert!(
+        parsed
+            .nodes
+            .values()
             .any(|node| node.code == code::BSPLINE_VERTICES)
     );
     assert!(
@@ -563,6 +569,12 @@ fn sheet_semicircle_arc_round_trips() {
     let (text, imported, imported_body) = assert_checker_roundtrip(&store, body);
     let parsed = kxt::read_xt(text.as_bytes()).unwrap();
     assert!(parsed.nodes.values().any(|node| node.code == code::CIRCLE));
+    assert!(
+        parsed
+            .nodes
+            .values()
+            .any(|node| node.code == code::TRIMMED_CURVE)
+    );
     let edges = imported.edges_of_body(imported_body).unwrap();
     assert_eq!(edges.len(), 2);
     let arc = edges
@@ -617,6 +629,12 @@ fn wire_ellipse_arc_round_trips() {
     let (text, imported, imported_body) = assert_checker_roundtrip(&store, body);
     let parsed = kxt::read_xt(text.as_bytes()).unwrap();
     assert!(parsed.nodes.values().any(|node| node.code == code::ELLIPSE));
+    assert!(
+        parsed
+            .nodes
+            .values()
+            .any(|node| node.code == code::TRIMMED_CURVE)
+    );
     let edges = imported.edges_of_body(imported_body).unwrap();
     assert_eq!(edges.len(), 1);
     let edge = imported.get(edges[0]).unwrap();
