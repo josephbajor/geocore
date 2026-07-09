@@ -8,8 +8,8 @@
 //! line/cone, line/sphere, and line/torus plus bounded circle/plane and
 //! ellipse/plane, circle/cylinder, circle/cone, circle/sphere, and
 //! circle/torus plus ellipse/sphere, ellipse/cylinder, ellipse/cone, and
-//! ellipse/torus plus NURBS/plane, NURBS/sphere, NURBS/cylinder, and
-//! NURBS/cone. These cover transverse and tangent contacts, periodic arc
+//! ellipse/torus plus NURBS/plane, NURBS/sphere, NURBS/cylinder, NURBS/cone,
+//! and NURBS/torus. These cover transverse and tangent contacts, periodic arc
 //! filtering, misses, and oriented coincident overlaps. Bounded surface/surface
 //! intersections have started with plane/plane,
 //! plane/sphere, plane/cylinder,

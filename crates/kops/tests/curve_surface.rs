@@ -17,7 +17,7 @@ use kops::intersect::{
     intersect_bounded_ellipse_torus, intersect_bounded_line_cone, intersect_bounded_line_cylinder,
     intersect_bounded_line_plane, intersect_bounded_line_sphere, intersect_bounded_line_torus,
     intersect_bounded_nurbs_cone, intersect_bounded_nurbs_cylinder, intersect_bounded_nurbs_plane,
-    intersect_bounded_nurbs_sphere,
+    intersect_bounded_nurbs_sphere, intersect_bounded_nurbs_torus,
 };
 
 fn make_line(origin: [f64; 3], direction: [f64; 3]) -> Line {
@@ -155,6 +155,40 @@ fn crossing_cone_nurbs() -> NurbsCurve {
 
 fn tangent_cone_nurbs() -> NurbsCurve {
     tangent_cylinder_nurbs()
+}
+
+fn crossing_torus_nurbs() -> NurbsCurve {
+    NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![Point3::new(-3.0, 0.0, 0.0), Point3::new(3.0, 0.0, 0.0)],
+        None,
+    )
+    .unwrap()
+}
+
+fn tangent_torus_nurbs() -> NurbsCurve {
+    NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![Point3::new(-0.37, 2.5, 0.0), Point3::new(0.63, 2.5, 0.0)],
+        None,
+    )
+    .unwrap()
+}
+
+fn outer_torus_quarter_circle_nurbs(radius: f64) -> NurbsCurve {
+    NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(radius, 0.0, 0.0),
+            Point3::new(radius, radius, 0.0),
+            Point3::new(0.0, radius, 0.0),
+        ],
+        Some(vec![1.0, core::f64::consts::FRAC_1_SQRT_2, 1.0]),
+    )
+    .unwrap()
 }
 
 #[test]
@@ -1992,6 +2026,127 @@ fn nurbs_contained_in_cone_reports_overlap() {
 }
 
 #[test]
+fn nurbs_torus_crossing_tangent_and_range_filtering() {
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let crossing = crossing_torus_nurbs();
+    let hit = intersect_bounded_nurbs_torus(
+        &crossing,
+        crossing.param_range(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.points.len(), 4);
+    let expected = [
+        (
+            Point3::new(-2.5, 0.0, 0.0),
+            1.0 / 12.0,
+            core::f64::consts::PI,
+            0.0,
+        ),
+        (
+            Point3::new(-1.5, 0.0, 0.0),
+            0.25,
+            core::f64::consts::PI,
+            core::f64::consts::PI,
+        ),
+        (Point3::new(1.5, 0.0, 0.0), 0.75, 0.0, core::f64::consts::PI),
+        (Point3::new(2.5, 0.0, 0.0), 11.0 / 12.0, 0.0, 0.0),
+    ];
+    for (point, (expected_point, expected_t, expected_u, expected_v)) in
+        hit.points.iter().zip(expected)
+    {
+        assert_eq!(point.kind, ContactKind::Transverse);
+        assert!(point.point.dist(expected_point) < 1e-8);
+        assert!((point.t_curve - expected_t).abs() < 1e-8);
+        assert!((point.uv_surface[0] - expected_u).abs() < 1e-8);
+        assert!((point.uv_surface[1] - expected_v).abs() < 1e-8);
+    }
+
+    let range_miss = intersect_bounded_nurbs_torus(
+        &crossing,
+        ParamRange::new(0.0, 0.05),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(range_miss.is_empty());
+
+    let u_filtered = intersect_bounded_nurbs_torus(
+        &crossing,
+        crossing.param_range(),
+        &torus,
+        [
+            ParamRange::new(0.0, core::f64::consts::FRAC_PI_2),
+            ParamRange::new(0.0, core::f64::consts::TAU),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(u_filtered.points.len(), 2);
+    assert!(u_filtered.points[0].point.dist(Point3::new(1.5, 0.0, 0.0)) < 1e-8);
+    assert!(u_filtered.points[1].point.dist(Point3::new(2.5, 0.0, 0.0)) < 1e-8);
+
+    let v_filtered = intersect_bounded_nurbs_torus(
+        &crossing,
+        crossing.param_range(),
+        &torus,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(0.0, core::f64::consts::FRAC_PI_2),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(v_filtered.points.len(), 2);
+    assert!(v_filtered.points[0].point.dist(Point3::new(-2.5, 0.0, 0.0)) < 1e-8);
+    assert!(v_filtered.points[1].point.dist(Point3::new(2.5, 0.0, 0.0)) < 1e-8);
+
+    let tangent = tangent_torus_nurbs();
+    let hit = intersect_bounded_nurbs_torus(
+        &tangent,
+        tangent.param_range(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.points.len(), 1);
+    assert_eq!(hit.points[0].kind, ContactKind::Tangent);
+    assert!(
+        hit.points[0].point.dist(Point3::new(0.0, 2.5, 0.0)) < 5e-8,
+        "{:?}",
+        hit.points[0]
+    );
+    assert!((hit.points[0].t_curve - 0.37).abs() < 5e-8);
+    assert!((hit.points[0].uv_surface[0] - core::f64::consts::FRAC_PI_2).abs() < 2e-8);
+    assert!(hit.points[0].uv_surface[1].abs() < 2e-8);
+}
+
+#[test]
+fn nurbs_contained_in_torus_reports_overlap() {
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let curve = outer_torus_quarter_circle_nurbs(torus.major_radius() + torus.minor_radius());
+    let hit = intersect_bounded_nurbs_torus(
+        &curve,
+        curve.param_range(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.overlaps.len(), 1);
+    assert_eq!(hit.overlaps[0].curve, ParamRange::new(0.0, 1.0));
+    assert_eq!(hit.overlaps[0].uv_start, [0.0, 0.0]);
+    assert!((hit.overlaps[0].uv_end[0] - core::f64::consts::FRAC_PI_2).abs() < 1e-12);
+    assert!(hit.overlaps[0].uv_end[1].abs() < 1e-12);
+}
+
+#[test]
 fn curve_surface_dispatches_supported_cases_and_rejects_unsupported() {
     let line = make_line([0.0, 0.0, -1.0], [0.0, 0.0, 1.0]);
     let plane = Plane::new(Frame::world());
@@ -2207,4 +2362,15 @@ fn curve_surface_dispatches_supported_cases_and_rejects_unsupported() {
     )
     .unwrap();
     assert_eq!(hit.points.len(), 2);
+
+    let nurbs = crossing_torus_nurbs();
+    let hit = intersect_bounded_curve_surface(
+        &nurbs,
+        nurbs.param_range(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.points.len(), 4);
 }
