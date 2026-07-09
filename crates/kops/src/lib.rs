@@ -11,9 +11,9 @@
 //! ellipse/torus. These cover transverse and tangent contacts, periodic arc
 //! filtering, misses, and oriented coincident overlaps. Bounded surface/surface
 //! intersections have started with plane/plane, plane/sphere, plane/cylinder,
-//! and sphere/sphere closed forms. General NURBS/procedural curve/curve,
-//! broader curve/surface, broader SSI, imprinting, and body operations remain
-//! future M4 work; SSI branch results can carry exact NURBS curves for broader
-//! intersection edge geometry.
+//! plane/cone circular slices, and sphere/sphere closed forms. General
+//! NURBS/procedural curve/curve, broader curve/surface, broader SSI, imprinting,
+//! and body operations remain future M4 work; SSI branch results can carry exact
+//! NURBS curves for broader intersection edge geometry.
 
 pub mod intersect;

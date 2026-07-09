@@ -1,3 +1,4 @@
+use super::plane_cone::intersect_bounded_plane_cone;
 use super::plane_cylinder::intersect_bounded_plane_cylinder;
 use super::plane_plane::intersect_bounded_planes;
 use super::plane_sphere::intersect_bounded_plane_sphere;
@@ -6,7 +7,7 @@ use super::sphere_sphere::intersect_bounded_spheres;
 use kcore::error::{Error, Result};
 use kcore::tolerance::Tolerances;
 use kgeom::param::ParamRange;
-use kgeom::surface::{Cylinder, Plane, Sphere, Surface};
+use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface};
 
 /// Intersect two surfaces over finite parameter windows.
 ///
@@ -42,6 +43,17 @@ pub fn intersect_bounded_surfaces(
             .map(SurfaceSurfaceIntersections::swapped);
     }
     if let Some(plane) = as_plane(a)
+        && let Some(cone) = as_cone(b)
+    {
+        return intersect_bounded_plane_cone(plane, a_range, cone, b_range, tolerances);
+    }
+    if let Some(cone) = as_cone(a)
+        && let Some(plane) = as_plane(b)
+    {
+        return intersect_bounded_plane_cone(plane, b_range, cone, a_range, tolerances)
+            .map(SurfaceSurfaceIntersections::swapped);
+    }
+    if let Some(plane) = as_plane(a)
         && let Some(sphere) = as_sphere(b)
     {
         return intersect_bounded_plane_sphere(plane, a_range, sphere, b_range, tolerances);
@@ -63,6 +75,10 @@ fn as_plane(surface: &dyn Surface) -> Option<&Plane> {
 }
 
 fn as_cylinder(surface: &dyn Surface) -> Option<&Cylinder> {
+    surface.as_any().downcast_ref()
+}
+
+fn as_cone(surface: &dyn Surface) -> Option<&Cone> {
     surface.as_any().downcast_ref()
 }
 

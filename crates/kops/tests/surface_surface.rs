@@ -6,12 +6,12 @@ use kgeom::curve::Curve;
 use kgeom::frame::Frame;
 use kgeom::nurbs::NurbsCurve;
 use kgeom::param::ParamRange;
-use kgeom::surface::{Cylinder, Plane, Sphere, Surface};
+use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface};
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
-    intersect_bounded_plane_cylinder, intersect_bounded_plane_sphere, intersect_bounded_planes,
-    intersect_bounded_spheres, intersect_bounded_surfaces,
+    intersect_bounded_plane_cone, intersect_bounded_plane_cylinder, intersect_bounded_plane_sphere,
+    intersect_bounded_planes, intersect_bounded_spheres, intersect_bounded_surfaces,
 };
 
 fn plane_window() -> [ParamRange; 2] {
@@ -23,6 +23,13 @@ fn wide_plane_window() -> [ParamRange; 2] {
 }
 
 fn cylinder_window() -> [ParamRange; 2] {
+    [
+        ParamRange::new(0.0, core::f64::consts::TAU),
+        ParamRange::new(-1.0, 1.0),
+    ]
+}
+
+fn cone_window() -> [ParamRange; 2] {
     [
         ParamRange::new(0.0, core::f64::consts::TAU),
         ParamRange::new(-1.0, 1.0),
@@ -80,6 +87,17 @@ fn oblique_cylinder_plane() -> Plane {
     )
 }
 
+fn oblique_cone_plane() -> Plane {
+    Plane::new(
+        Frame::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.5, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+    )
+}
+
 fn assert_plane_cylinder_branch_endpoints(
     hit: &SurfaceSurfaceIntersections,
     plane: &Plane,
@@ -92,6 +110,21 @@ fn assert_plane_cylinder_branch_endpoints(
         assert!(plane.eval(branch.uv_a_end).dist(end) < 1e-12);
         assert!(cylinder.eval(branch.uv_b_start).dist(start) < 1e-12);
         assert!(cylinder.eval(branch.uv_b_end).dist(end) < 1e-12);
+    }
+}
+
+fn assert_plane_cone_branch_endpoints(
+    hit: &SurfaceSurfaceIntersections,
+    plane: &Plane,
+    cone: &Cone,
+) {
+    for branch in &hit.curves {
+        let start = branch.curve.eval(branch.curve_range.lo);
+        let end = branch.curve.eval(branch.curve_range.hi);
+        assert!(plane.eval(branch.uv_a_start).dist(start) < 1e-12);
+        assert!(plane.eval(branch.uv_a_end).dist(end) < 1e-12);
+        assert!(cone.eval(branch.uv_b_start).dist(start) < 1e-12);
+        assert!(cone.eval(branch.uv_b_end).dist(end) < 1e-12);
     }
 }
 
@@ -636,6 +669,135 @@ fn surface_surface_dispatches_plane_cylinder_both_orders() {
     assert_eq!(swapped.curves.len(), 1);
     assert_eq!(swapped.curves[0].uv_a_start, hit.curves[0].uv_b_start);
     assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
+}
+
+#[test]
+fn plane_cone_perpendicular_cut_returns_circle_branch() {
+    let plane = horizontal_plane(0.0);
+    let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
+    let hit = intersect_bounded_plane_cone(
+        &plane,
+        wide_plane_window(),
+        &cone,
+        cone_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 1);
+    assert_eq!(hit.curves[0].kind, ContactKind::Transverse);
+    assert!(hit.curves[0].curve_range.lo.abs() < 1e-12);
+    assert!((hit.curves[0].curve_range.hi - core::f64::consts::TAU).abs() < 1e-12);
+    assert_plane_cone_branch_endpoints(&hit, &plane, &cone);
+
+    let SurfaceIntersectionCurve::Circle(circle) = &hit.curves[0].curve else {
+        panic!("axis-perpendicular plane/cone cut should be a circle");
+    };
+    assert!(circle.frame().origin().dist(Point3::new(0.0, 0.0, 0.0)) < 1e-12);
+    assert!((circle.radius() - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn plane_cone_surface_windows_clip_circle_branch() {
+    let plane = horizontal_plane(0.0);
+    let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
+    let hit = intersect_bounded_plane_cone(
+        &plane,
+        wide_plane_window(),
+        &cone,
+        [
+            ParamRange::new(0.0, core::f64::consts::PI),
+            ParamRange::new(-1.0, 1.0),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 1);
+    assert!((total_curve_width(&hit) - core::f64::consts::PI).abs() < 1e-12);
+    assert_plane_cone_branch_endpoints(&hit, &plane, &cone);
+    assert_eq!(hit.curves[0].uv_b_start, [0.0, 0.0]);
+    assert!((hit.curves[0].uv_b_end[0] - core::f64::consts::PI).abs() < 1e-12);
+    assert_eq!(hit.curves[0].uv_b_end[1], 0.0);
+}
+
+#[test]
+fn plane_cone_apex_contact_and_v_window_filtering() {
+    let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
+    let plane = horizontal_plane(cone.apex().z);
+    let apex_window = [
+        ParamRange::new(0.0, core::f64::consts::TAU),
+        ParamRange::new(cone.apex_v(), cone.apex_v()),
+    ];
+    let hit = intersect_bounded_plane_cone(
+        &plane,
+        plane_window(),
+        &cone,
+        apex_window,
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.curves.is_empty());
+    assert_eq!(hit.points.len(), 1);
+    assert_eq!(hit.points[0].kind, ContactKind::Singular);
+    assert!(hit.points[0].point.dist(cone.apex()) < 1e-12);
+    assert_eq!(hit.points[0].uv_a, [0.0, 0.0]);
+    assert_eq!(hit.points[0].uv_b, [0.0, cone.apex_v()]);
+
+    let miss = intersect_bounded_plane_cone(
+        &plane,
+        plane_window(),
+        &cone,
+        cone_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(miss.is_empty());
+}
+
+#[test]
+fn surface_surface_dispatches_plane_cone_circles_and_rejects_oblique() {
+    let plane = horizontal_plane(0.0);
+    let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
+    let hit = intersect_bounded_surfaces(
+        &plane,
+        wide_plane_window(),
+        &cone,
+        cone_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.curves.len(), 1);
+
+    let swapped = intersect_bounded_surfaces(
+        &cone,
+        cone_window(),
+        &plane,
+        wide_plane_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(swapped.curves.len(), 1);
+    assert_eq!(swapped.curves[0].uv_a_start, hit.curves[0].uv_b_start);
+    assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
+
+    let err = intersect_bounded_surfaces(
+        &oblique_cone_plane(),
+        wide_plane_window(),
+        &cone,
+        cone_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "plane/cone intersection currently supports only axis-perpendicular circular cuts"
+        }
+    );
 }
 
 #[test]
