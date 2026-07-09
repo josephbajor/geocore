@@ -11,8 +11,9 @@ use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
-    intersect_bounded_cone_sphere, intersect_bounded_cylinder_sphere, intersect_bounded_cylinders,
-    intersect_bounded_plane_cone, intersect_bounded_plane_cylinder, intersect_bounded_plane_sphere,
+    intersect_bounded_cone_cylinder, intersect_bounded_cone_sphere,
+    intersect_bounded_cylinder_sphere, intersect_bounded_cylinders, intersect_bounded_plane_cone,
+    intersect_bounded_plane_cylinder, intersect_bounded_plane_sphere,
     intersect_bounded_plane_torus, intersect_bounded_planes, intersect_bounded_sphere_torus,
     intersect_bounded_spheres, intersect_bounded_surfaces,
 };
@@ -209,6 +210,21 @@ fn assert_cone_sphere_branch_endpoints(
         assert!(cone.eval(branch.uv_a_end).dist(end) < 1e-12);
         assert!(sphere.eval(branch.uv_b_start).dist(start) < 1e-12);
         assert!(sphere.eval(branch.uv_b_end).dist(end) < 1e-12);
+    }
+}
+
+fn assert_cone_cylinder_branch_endpoints(
+    hit: &SurfaceSurfaceIntersections,
+    cone: &Cone,
+    cylinder: &Cylinder,
+) {
+    for branch in &hit.curves {
+        let start = branch.curve.eval(branch.curve_range.lo);
+        let end = branch.curve.eval(branch.curve_range.hi);
+        assert!(cone.eval(branch.uv_a_start).dist(start) < 1e-12);
+        assert!(cone.eval(branch.uv_a_end).dist(end) < 1e-12);
+        assert!(cylinder.eval(branch.uv_b_start).dist(start) < 1e-12);
+        assert!(cylinder.eval(branch.uv_b_end).dist(end) < 1e-12);
     }
 }
 
@@ -580,12 +596,12 @@ fn surface_surface_dispatches_plane_sphere_and_rejects_unsupported() {
     assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
 
     let cylinder = Cylinder::new(Frame::world(), 1.0).unwrap();
-    let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
     let err = intersect_bounded_surfaces(
         &cylinder,
         cylinder_window(),
-        &cone,
-        cone_window(),
+        &torus,
+        torus_window(),
         Tolerances::default(),
     )
     .unwrap_err();
@@ -1189,6 +1205,190 @@ fn surface_surface_dispatches_cylinder_cylinder_both_orders() {
     .unwrap();
     assert_eq!(swapped.curves.len(), 2);
     assert_cylinder_cylinder_branch_endpoints(&swapped, &b, &a);
+}
+
+#[test]
+fn cone_cylinder_coaxial_secant_returns_circle_branches() {
+    let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
+    let cylinder = Cylinder::new(Frame::world(), 0.5).unwrap();
+    let cone_range = [
+        ParamRange::new(0.0, core::f64::consts::TAU),
+        ParamRange::new(-4.0, 0.0),
+    ];
+    let cylinder_range = [
+        ParamRange::new(0.0, core::f64::consts::TAU),
+        ParamRange::new(-3.0, 0.0),
+    ];
+    let hit = intersect_bounded_cone_cylinder(
+        &cone,
+        cone_range,
+        &cylinder,
+        cylinder_range,
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 3);
+    assert!((total_curve_width(&hit) - 2.0 * core::f64::consts::TAU).abs() < 1e-12);
+    assert_cone_cylinder_branch_endpoints(&hit, &cone, &cylinder);
+
+    let mut centers = Vec::new();
+    for branch in &hit.curves {
+        assert_eq!(branch.kind, ContactKind::Transverse);
+        let SurfaceIntersectionCurve::Circle(circle) = &branch.curve else {
+            panic!("coaxial cone/cylinder cut should be carried by circles");
+        };
+        assert!((circle.radius() - 0.5).abs() < 1e-12);
+        if !centers
+            .iter()
+            .any(|z: &f64| (*z - circle.frame().origin().z).abs() < 1e-12)
+        {
+            centers.push(circle.frame().origin().z);
+        }
+    }
+    centers.sort_by(f64::total_cmp);
+    assert_eq!(centers.len(), 2);
+    let c = cos_pi_over_six();
+    assert!((centers[0] + 3.0 * c).abs() < 1e-12);
+    assert!((centers[1] + c).abs() < 1e-12);
+}
+
+#[test]
+fn cone_cylinder_surface_windows_clip_circle_branch() {
+    let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
+    let cylinder = Cylinder::new(Frame::world(), 0.5).unwrap();
+    let hit = intersect_bounded_cone_cylinder(
+        &cone,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(-1.5, -0.5),
+        ],
+        &cylinder,
+        [
+            ParamRange::new(0.0, core::f64::consts::PI),
+            ParamRange::new(-1.0, 0.0),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 1);
+    assert!((total_curve_width(&hit) - core::f64::consts::PI).abs() < 1e-12);
+    assert_cone_cylinder_branch_endpoints(&hit, &cone, &cylinder);
+    assert!(hit.curves[0].curve_range.lo.abs() < 1e-12);
+    assert!((hit.curves[0].curve_range.hi - core::f64::consts::PI).abs() < 1e-12);
+}
+
+#[test]
+fn cone_cylinder_window_miss_and_unsupported_cases() {
+    let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
+    let cylinder = Cylinder::new(Frame::world(), 0.5).unwrap();
+    let miss = intersect_bounded_cone_cylinder(
+        &cone,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(0.0, 1.0),
+        ],
+        &cylinder,
+        cylinder_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(miss.is_empty());
+
+    let shifted_cylinder = Cylinder::new(
+        Frame::new(
+            Point3::new(0.25, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        0.5,
+    )
+    .unwrap();
+    let err = intersect_bounded_cone_cylinder(
+        &cone,
+        cone_window(),
+        &shifted_cylinder,
+        cylinder_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "cone/cylinder intersection currently supports only coaxial circular cuts"
+        }
+    );
+
+    let tilted_cylinder = Cylinder::new(
+        Frame::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.5, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        0.5,
+    )
+    .unwrap();
+    let err = intersect_bounded_cone_cylinder(
+        &cone,
+        cone_window(),
+        &tilted_cylinder,
+        cylinder_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "cone/cylinder intersection currently supports only coaxial circular cuts"
+        }
+    );
+}
+
+#[test]
+fn surface_surface_dispatches_cone_cylinder_both_orders() {
+    let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
+    let cylinder = Cylinder::new(Frame::world(), 0.5).unwrap();
+    let cone_range = [
+        ParamRange::new(0.0, core::f64::consts::TAU),
+        ParamRange::new(-4.0, 0.0),
+    ];
+    let cylinder_range = [
+        ParamRange::new(0.0, core::f64::consts::TAU),
+        ParamRange::new(-3.0, 0.0),
+    ];
+    let hit = intersect_bounded_surfaces(
+        &cone,
+        cone_range,
+        &cylinder,
+        cylinder_range,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.curves.len(), 3);
+    assert_cone_cylinder_branch_endpoints(&hit, &cone, &cylinder);
+
+    let swapped = intersect_bounded_surfaces(
+        &cylinder,
+        cylinder_range,
+        &cone,
+        cone_range,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(swapped.curves.len(), hit.curves.len());
+    for branch in &swapped.curves {
+        let start = branch.curve.eval(branch.curve_range.lo);
+        let end = branch.curve.eval(branch.curve_range.hi);
+        assert!(cylinder.eval(branch.uv_a_start).dist(start) < 1e-12);
+        assert!(cylinder.eval(branch.uv_a_end).dist(end) < 1e-12);
+        assert!(cone.eval(branch.uv_b_start).dist(start) < 1e-12);
+        assert!(cone.eval(branch.uv_b_end).dist(end) < 1e-12);
+    }
 }
 
 #[test]

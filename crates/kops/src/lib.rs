@@ -12,7 +12,7 @@
 //! filtering, misses, and oriented coincident overlaps. Bounded surface/surface
 //! intersections have started with plane/plane, plane/sphere, plane/cylinder,
 //! plane/cone circular and elliptic slices, coaxial cylinder/sphere and
-//! cone/sphere circles, coaxial sphere/torus circles, parallel
+//! cone/cylinder, cone/sphere, and sphere/torus circles, parallel
 //! cylinder/cylinder rulings, plane/torus latitude and meridian circles, and
 //! sphere/sphere closed forms. General
 //! NURBS/procedural curve/curve, broader curve/surface, broader SSI, imprinting,
