@@ -17,6 +17,8 @@
 //!   r sin v·Z`, both periodic, requires `R > r > 0` (open torus first;
 //!   degenerate self-intersecting tori deferred).
 
+use core::any::Any;
+
 use crate::aabb::Aabb3;
 use crate::frame::Frame;
 use crate::param::ParamRange;
@@ -62,7 +64,10 @@ pub struct Degeneracy {
 }
 
 /// The uniform surface evaluator protocol (spec §L1).
-pub trait Surface {
+pub trait Surface: Any {
+    /// Runtime type view for dispatch layers that need exact analytic cases.
+    fn as_any(&self) -> &dyn Any;
+
     /// Position at `(u, v)`.
     fn eval(&self, uv: [f64; 2]) -> Point3 {
         self.eval_derivs(uv, 0).p
@@ -112,6 +117,10 @@ impl Plane {
 }
 
 impl Surface for Plane {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn eval_derivs(&self, uv: [f64; 2], order: usize) -> SurfaceDerivs {
         let mut d = SurfaceDerivs {
             p: self.frame.point_at(uv[0], uv[1], 0.0),
@@ -173,6 +182,10 @@ impl Cylinder {
 }
 
 impl Surface for Cylinder {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn eval_derivs(&self, uv: [f64; 2], order: usize) -> SurfaceDerivs {
         let (sin, cos) = math::sincos(uv[0]);
         let radial = self.frame.x() * cos + self.frame.y() * sin;
@@ -338,6 +351,10 @@ impl Cone {
 }
 
 impl Surface for Cone {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn eval_derivs(&self, uv: [f64; 2], order: usize) -> SurfaceDerivs {
         let (sin_u, cos_u) = math::sincos(uv[0]);
         let (sin_a, cos_a) = math::sincos(self.half_angle);
@@ -417,6 +434,10 @@ impl Sphere {
 }
 
 impl Surface for Sphere {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn eval_derivs(&self, uv: [f64; 2], order: usize) -> SurfaceDerivs {
         let (sin_u, cos_u) = math::sincos(uv[0]);
         let (sin_v, cos_v) = math::sincos(uv[1]);
@@ -523,6 +544,10 @@ impl Torus {
 }
 
 impl Surface for Torus {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn eval_derivs(&self, uv: [f64; 2], order: usize) -> SurfaceDerivs {
         let (sin_u, cos_u) = math::sincos(uv[0]);
         let (sin_v, cos_v) = math::sincos(uv[1]);

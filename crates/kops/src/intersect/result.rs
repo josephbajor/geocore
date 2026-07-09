@@ -2,6 +2,7 @@ use kcore::error::{Error, Result};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::param::ParamRange;
+use kgeom::surface::Surface;
 use kgeom::vec::Point3;
 
 /// Local character of an isolated curve/curve contact.
@@ -132,6 +133,123 @@ pub fn accept_curve_curve_candidate(
         point: (pa + pb) / 2.0,
         t_a,
         t_b,
+        residual,
+        kind,
+    })
+}
+
+/// One isolated curve/surface intersection with curve and surface parameters.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CurveSurfacePoint {
+    /// Symmetric representative point between the two evaluations.
+    pub point: Point3,
+    /// Parameter on the curve.
+    pub t_curve: f64,
+    /// Parameters on the surface.
+    pub uv_surface: [f64; 2],
+    /// Distance between the two evaluated points.
+    pub residual: f64,
+    /// Local contact character.
+    pub kind: ContactKind,
+}
+
+/// A positive-length curve interval contained in a surface.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CurveSurfaceOverlap {
+    /// Coincident interval on the curve.
+    pub curve: ParamRange,
+    /// Surface parameters at `curve.lo`.
+    pub uv_start: [f64; 2],
+    /// Surface parameters at `curve.hi`.
+    pub uv_end: [f64; 2],
+}
+
+/// Complete curve/surface intersection result. Empty is a proven miss;
+/// failure to establish an answer is represented by `Err`, not by empty.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CurveSurfaceIntersections {
+    /// Isolated contacts in deterministic curve-parameter order.
+    pub points: Vec<CurveSurfacePoint>,
+    /// Positive-length intervals where the curve lies on the surface.
+    pub overlaps: Vec<CurveSurfaceOverlap>,
+}
+
+impl CurveSurfaceIntersections {
+    /// Validate and sort intersection evidence into canonical parameter order.
+    pub fn canonicalized(
+        mut points: Vec<CurveSurfacePoint>,
+        mut overlaps: Vec<CurveSurfaceOverlap>,
+    ) -> Result<Self> {
+        if points.iter().any(|p| {
+            !p.point.x.is_finite()
+                || !p.point.y.is_finite()
+                || !p.point.z.is_finite()
+                || !p.t_curve.is_finite()
+                || !p.uv_surface[0].is_finite()
+                || !p.uv_surface[1].is_finite()
+                || !p.residual.is_finite()
+                || p.residual < 0.0
+        }) {
+            return Err(Error::InvalidGeometry {
+                reason: "non-finite or negative curve/surface intersection point data",
+            });
+        }
+        if overlaps.iter().any(|o| {
+            !o.curve.is_finite()
+                || o.curve.width() <= 0.0
+                || o.uv_start.iter().any(|v| !v.is_finite())
+                || o.uv_end.iter().any(|v| !v.is_finite())
+        }) {
+            return Err(Error::InvalidGeometry {
+                reason: "curve/surface overlap data must be finite and have positive width",
+            });
+        }
+        points.sort_by(|a, b| {
+            a.t_curve
+                .total_cmp(&b.t_curve)
+                .then(a.uv_surface[0].total_cmp(&b.uv_surface[0]))
+                .then(a.uv_surface[1].total_cmp(&b.uv_surface[1]))
+                .then(a.kind.cmp(&b.kind))
+        });
+        overlaps.sort_by(|a, b| {
+            a.curve
+                .lo
+                .total_cmp(&b.curve.lo)
+                .then(a.curve.hi.total_cmp(&b.curve.hi))
+                .then(a.uv_start[0].total_cmp(&b.uv_start[0]))
+                .then(a.uv_start[1].total_cmp(&b.uv_start[1]))
+        });
+        Ok(Self { points, overlaps })
+    }
+
+    /// True when the curve and surface were proven not to intersect.
+    pub fn is_empty(&self) -> bool {
+        self.points.is_empty() && self.overlaps.is_empty()
+    }
+}
+
+/// Evaluate and tolerance-filter one curve/surface candidate.
+pub fn accept_curve_surface_candidate(
+    curve: &dyn Curve,
+    t_curve: f64,
+    surface: &dyn Surface,
+    uv_surface: [f64; 2],
+    kind: ContactKind,
+    tolerances: Tolerances,
+) -> Option<CurveSurfacePoint> {
+    if !t_curve.is_finite() || !uv_surface[0].is_finite() || !uv_surface[1].is_finite() {
+        return None;
+    }
+    let pc = curve.eval(t_curve);
+    let ps = surface.eval(uv_surface);
+    let residual = pc.dist(ps);
+    if !residual.is_finite() || residual > tolerances.linear() {
+        return None;
+    }
+    Some(CurveSurfacePoint {
+        point: (pc + ps) / 2.0,
+        t_curve,
+        uv_surface,
         residual,
         kind,
     })

@@ -129,7 +129,9 @@ coplanar secants/tangencies, skew-plane contacts, periodic arc filtering,
 tolerance-aware near tangencies, and coincident overlaps where applicable.
 The public curve/curve dispatcher now routes every line/circle/ellipse ordered
 pair to those exact solvers and rejects unsupported NURBS/procedural curves
-explicitly. General NURBS/procedural curve/curve, curve/surface, and SSI remain.
+explicitly. Curve/surface has begun with bounded line/plane and line/sphere
+over finite surface windows, including contained line-on-plane intervals.
+General NURBS/procedural curve/curve, broader curve/surface, and SSI remain.
 
 **Exit:** SSI test battery including tangent cylinders, near-tangent tori, and
 NURBS-vs-quadric cases; every intersection curve usable as edge geometry and

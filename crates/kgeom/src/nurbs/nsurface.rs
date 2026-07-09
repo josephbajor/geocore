@@ -202,6 +202,10 @@ impl NurbsSurface {
 }
 
 impl Surface for NurbsSurface {
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
     fn eval_derivs(&self, uv: [f64; 2], order: usize) -> SurfaceDerivs {
         let order = order.min(2);
         let du = self.knots_u.domain();
