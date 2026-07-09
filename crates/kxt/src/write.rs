@@ -36,6 +36,7 @@ struct Plan {
     faces: Vec<(FaceId, u32)>,
     loops: Vec<(LoopId, u32)>,
     fins: Vec<(FinId, u32)>,
+    dummy_fins: Vec<(EdgeId, u32)>,
     edges: Vec<(EdgeId, u32)>,
     vertices: Vec<(VertexId, u32)>,
     surfaces: Vec<(SurfaceId, u32)>,
@@ -112,6 +113,7 @@ impl Plan {
             }
         }
         let mut curve_handles = Vec::new();
+        let mut dummy_fin_edges = Vec::new();
         for &edge in &edge_handles {
             let e = store.get(edge)?;
             if e.tolerance.is_some() {
@@ -120,6 +122,9 @@ impl Plan {
                 });
             }
             validate_edge_fin_count(e, b.kind)?;
+            if needs_dummy_fin(e, b.kind) {
+                dummy_fin_edges.push(edge);
+            }
             let curve = e.curve.ok_or(XtError::Unsupported {
                 what: "curve-less edges",
             })?;
@@ -168,6 +173,7 @@ impl Plan {
         let faces = assign(&face_handles, &mut next);
         let loops = assign(&loop_handles, &mut next);
         let fins = assign(&fin_handles, &mut next);
+        let dummy_fins = assign(&dummy_fin_edges, &mut next);
         let edges = assign(&edge_handles, &mut next);
         let vertices = assign(&vertex_handles, &mut next);
         let surfaces = assign(&surface_handles, &mut next);
@@ -180,6 +186,7 @@ impl Plan {
             faces,
             loops,
             fins,
+            dummy_fins,
             edges,
             vertices,
             surfaces,
@@ -307,7 +314,13 @@ impl Plan {
             let forward = lp.fins[(position + 1) % lp.fins.len()];
             let backward = lp.fins[(position + lp.fins.len() - 1) % lp.fins.len()];
             let edge = store.get(fin.edge)?;
-            let other = edge.fins.iter().copied().find(|&v| v != fin_id);
+            let other = edge
+                .fins
+                .iter()
+                .copied()
+                .find(|&v| v != fin_id)
+                .map(|fin| id_of(&self.fins, fin))
+                .or_else(|| self.dummy_fin_id(fin.edge));
             let head = store.fin_head(fin_id)?;
             out.push(OutNode {
                 code: code::FIN,
@@ -318,13 +331,42 @@ impl Plan {
                     ptr(id_of(&self.fins, forward)),
                     ptr(id_of(&self.fins, backward)),
                     ptr(head.map_or(0, |v| id_of(&self.vertices, v))),
-                    ptr(other.map_or(0, |v| id_of(&self.fins, v))),
+                    ptr(other.unwrap_or(0)),
                     ptr(id_of(&self.edges, fin.edge)),
                     ptr(0),
                     ptr(head
                         .and_then(|v| self.next_fin_at_vertex(store, v, fin_id))
                         .map_or(0, |v| id_of(&self.fins, v))),
                     sense(fin.sense),
+                ],
+            });
+        }
+        for &(edge_id, index) in &self.dummy_fins {
+            let edge = store.get(edge_id)?;
+            let [actual_fin] = edge.fins.as_slice() else {
+                return Err(XtError::InvalidModel {
+                    what: "dummy FIN edge must have exactly one real fin",
+                });
+            };
+            let actual_fin = *actual_fin;
+            let actual = store.get(actual_fin)?;
+            let tail = store.fin_tail(actual_fin)?.ok_or(XtError::InvalidModel {
+                what: "dummy FIN boundary edge has no tail vertex",
+            })?;
+            out.push(OutNode {
+                code: code::FIN,
+                index,
+                values: vec![
+                    ptr(0),
+                    ptr(0),
+                    ptr(0),
+                    ptr(0),
+                    ptr(id_of(&self.vertices, tail)),
+                    ptr(id_of(&self.fins, actual_fin)),
+                    ptr(id_of(&self.edges, edge_id)),
+                    ptr(0),
+                    ptr(0),
+                    sense(actual.sense.flipped()),
                 ],
             });
         }
@@ -448,6 +490,12 @@ impl Plan {
             found = candidate == fin;
         }
         None
+    }
+
+    fn dummy_fin_id(&self, edge: EdgeId) -> Option<u32> {
+        self.dummy_fins
+            .iter()
+            .find_map(|&(candidate, id)| (candidate == edge).then_some(id))
     }
 
     fn push_solid_scaffold_nodes(&self, out: &mut Vec<OutNode>) {
@@ -663,15 +711,28 @@ fn validate_edge_fin_count(edge: &Edge, kind: BodyKind) -> Result<()> {
         BodyKind::Sheet if edge.fins.len() == 2 => {}
         BodyKind::Sheet
             if edge.fins.len() == 1 && edge.vertices == [None, None] && edge.bounds.is_none() => {}
+        BodyKind::Sheet
+            if edge.fins.len() == 1
+                && edge.vertices[0].is_some()
+                && edge.vertices[1].is_some()
+                && edge.bounds.is_some() => {}
         BodyKind::Sheet => {
             return Err(XtError::Unsupported {
-                what: "sheet boundary edges with vertices need dummy FIN writer support",
+                what: "unsupported sheet edge fin topology",
             });
         }
         BodyKind::Wire | BodyKind::Acorn => unreachable!("rejected during planning"),
         _ => {}
     }
     Ok(())
+}
+
+fn needs_dummy_fin(edge: &Edge, kind: BodyKind) -> bool {
+    kind == BodyKind::Sheet
+        && edge.fins.len() == 1
+        && edge.vertices[0].is_some()
+        && edge.vertices[1].is_some()
+        && edge.bounds.is_some()
 }
 
 fn surface_node(

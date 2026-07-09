@@ -1,12 +1,16 @@
 //! M3b writer round trips for self-authored primitives and supported imports.
 
-use kgeom::curve::Curve;
+use kgeom::curve::{Curve, Line};
 use kgeom::frame::Frame;
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
+use kgeom::surface::Plane;
 use kgeom::vec::{Point3, Vec3};
 use ktopo::btess::{TessOptions, check_watertight, tessellate_body};
 use ktopo::check::check_body;
-use ktopo::entity::{BodyId, BodyKind, Edge, EdgeId, Face, FaceId, Vertex};
+use ktopo::entity::{
+    Body, BodyId, BodyKind, Edge, EdgeId, Face, FaceId, Fin, Loop, Region, RegionKind, Sense,
+    Shell, Vertex,
+};
 use ktopo::geom::{CurveGeom, SurfaceGeom};
 use ktopo::make;
 use ktopo::store::Store;
@@ -154,6 +158,74 @@ fn replace_face_with_bilinear_nurbs(store: &mut Store, body: BodyId) {
     *store.get_mut(surface_id).unwrap() = SurfaceGeom::Nurbs(surface);
 }
 
+fn sheet_square(store: &mut Store) -> BodyId {
+    let body = store.add(Body {
+        kind: BodyKind::Sheet,
+        regions: Vec::new(),
+    });
+    let region = store.add(Region {
+        body,
+        kind: RegionKind::Void,
+        shells: Vec::new(),
+    });
+    store.get_mut(body).unwrap().regions.push(region);
+    let shell = store.add(Shell {
+        region,
+        faces: Vec::new(),
+        edges: Vec::new(),
+        vertex: None,
+    });
+    store.get_mut(region).unwrap().shells.push(shell);
+
+    let surface = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
+    let face = store.add(Face {
+        shell,
+        loops: Vec::new(),
+        surface,
+        sense: Sense::Forward,
+    });
+    store.get_mut(shell).unwrap().faces.push(face);
+    let loop_id = store.add(Loop {
+        face,
+        fins: Vec::new(),
+    });
+    store.get_mut(face).unwrap().loops.push(loop_id);
+
+    let corners = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(1.0, 1.0, 0.0),
+        Point3::new(0.0, 1.0, 0.0),
+    ];
+    let vertices = corners.map(|point| {
+        let point = store.add(point);
+        store.add(Vertex {
+            point,
+            tolerance: None,
+        })
+    });
+    for i in 0..corners.len() {
+        let start = corners[i];
+        let end = corners[(i + 1) % corners.len()];
+        let curve = store.add(CurveGeom::Line(Line::new(start, end - start).unwrap()));
+        let edge = store.add(Edge {
+            curve: Some(curve),
+            vertices: [Some(vertices[i]), Some(vertices[(i + 1) % vertices.len()])],
+            bounds: Some((0.0, (end - start).norm())),
+            fins: Vec::new(),
+            tolerance: None,
+        });
+        let fin = store.add(Fin {
+            parent: loop_id,
+            edge,
+            sense: Sense::Forward,
+        });
+        store.get_mut(loop_id).unwrap().fins.push(fin);
+        store.get_mut(edge).unwrap().fins.push(fin);
+    }
+    body
+}
+
 #[test]
 fn all_analytic_primitives_round_trip() {
     let frame = tilted();
@@ -269,6 +341,32 @@ fn nurbs_surface_face_round_trips_as_b_surface() {
     assert_eq!(nurbs[0].degree_v(), 1);
     assert_eq!(nurbs[0].net_size(), (2, 2));
     assert_eq!(imported.faces_of_body(imported_body).unwrap().len(), 6);
+}
+
+#[test]
+fn sheet_square_boundary_edges_round_trip_with_dummy_fins() {
+    let mut store = Store::new();
+    let body = sheet_square(&mut store);
+
+    let (text, imported, imported_body) = assert_checker_roundtrip(&store, body);
+    let parsed = kxt::read_xt(text.as_bytes()).unwrap();
+    let fin_nodes = parsed
+        .nodes
+        .values()
+        .filter(|node| node.code == code::FIN)
+        .count();
+    assert_eq!(fin_nodes, 8, "four real FINs plus four dummy FINs");
+    assert_eq!(imported.get(imported_body).unwrap().kind, BodyKind::Sheet);
+    assert_eq!(imported.faces_of_body(imported_body).unwrap().len(), 1);
+    let edges = imported.edges_of_body(imported_body).unwrap();
+    assert_eq!(edges.len(), 4);
+    for edge in edges {
+        let edge = imported.get(edge).unwrap();
+        assert_eq!(edge.fins.len(), 1);
+        assert!(edge.vertices[0].is_some());
+        assert!(edge.vertices[1].is_some());
+        assert!(edge.bounds.is_some());
+    }
 }
 
 #[test]
