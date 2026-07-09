@@ -124,10 +124,10 @@ proven misses, isolated contacts, and coincident intervals. Bounded line/line ha
 transverse contacts, endpoint touches, parallel misses, and same/reversed overlaps.
 Bounded 3D line/circle and line/ellipse handle coplanar secants and tangencies,
 transverse plane crossings, periodic arc filtering, and tolerance-aware near
-contacts. Bounded 3D circle/circle and circle/ellipse handle coplanar
-secants/tangencies, skew-plane contacts, periodic arc filtering,
+contacts. Bounded 3D circle/circle, circle/ellipse, and ellipse/ellipse handle
+coplanar secants/tangencies, skew-plane contacts, periodic arc filtering,
 tolerance-aware near tangencies, and coincident overlaps where applicable.
-Ellipse/ellipse, general curve/curve, curve/surface, and SSI remain.
+General curve/curve, curve/surface, and SSI remain.
 
 **Exit:** SSI test battery including tangent cylinders, near-tangent tori, and
 NURBS-vs-quadric cases; every intersection curve usable as edge geometry and

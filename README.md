@@ -15,7 +15,7 @@ parametric CAD application; feature history and regeneration are later layers.
 | [`crates/kcore`](crates/kcore) | L0 foundations | Robust predicates, exact expansion arithmetic, interval filters, tolerance policy (Parasolid numeric regime), typed errors, generational entity arenas, deterministic parallel primitives, deterministic transcendental math (musl port — platform libm is banned in kernel code via clippy `disallowed-methods`) |
 | [`crates/kgeom`](crates/kgeom) | L1 geometry | Analytic curves (line/circle/ellipse) and surfaces (plane/cylinder/cone/sphere/torus) with exact bounding boxes, NURBS engine (Piegl & Tiller), closest-point projection, deterministic trimmed-face tessellation with explicit refinement-limit errors, evaluator conformance harness |
 | [`crates/ktopo`](crates/ktopo) | L2 topology | Parasolid entity hierarchy (body→region→shell→face→loop→fin→edge→vertex) over generational arenas, Euler operators, primitive body constructors, the body checker (structural + geometric invariants), whole-body watertight tessellation |
-| [`crates/kops`](crates/kops) | L3 operations | M4 intersection foundation: parameter-rich curve/curve results plus deterministic bounded line/line, 3D line/circle, 3D line/ellipse, 3D circle/circle, and 3D circle/ellipse intersections |
+| [`crates/kops`](crates/kops) | L3 operations | M4 intersection foundation: parameter-rich curve/curve results plus deterministic bounded line/line, 3D line/circle, 3D line/ellipse, 3D circle/circle, 3D circle/ellipse, and 3D ellipse/ellipse intersections |
 | [`crates/kxt`](crates/kxt) | L5 interchange | Atomic modern-schema Parasolid XT (`.x_t`/`.x_b`) import for the supported geometry subset, plus a deterministic schema-13006 text writer for self-authored analytic solids (clean-room from the published XT Format Reference) |
 
 ## Current Status
@@ -27,9 +27,9 @@ parametric CAD application; feature history and regeneration are later layers.
   Pre-13006 schemas, assemblies, procedural/SP geometry, tolerant entities,
   neutral-binary writing, and external Solid Edge round-trip certification remain.
 - M4 has started in `kops` with bounded line/line, 3D line/circle, 3D
-  line/ellipse, 3D circle/circle, and 3D circle/ellipse intersections. Other
-  analytic curve/curve cases, curve/surface, surface/surface intersections,
-  and imprinting remain.
+  line/ellipse, 3D circle/circle, 3D circle/ellipse, and 3D ellipse/ellipse
+  intersections. General curve/curve cases, curve/surface, surface/surface
+  intersections, and imprinting remain.
 
 Immediate work per the roadmap: broaden analytic curve/curve intersections,
 then curve/surface and SSI; complete M3b external XT validation in parallel.
