@@ -85,8 +85,8 @@ struct SurfaceAuxIds {
     v_knots: u32,
 }
 
-/// Export one checker-clean solid, supported sheet body, or supported wire
-/// body as deterministic schema-13006 text XT. The writer supports
+/// Export one checker-clean solid, supported sheet body, supported wire body,
+/// or acorn body as deterministic schema-13006 text XT. The writer supports
 /// self-authored analytic bodies plus non-periodic B-spline/NURBS curves and
 /// surfaces.
 pub fn export_text(store: &Store, body: BodyId) -> Result<String> {
@@ -249,7 +249,7 @@ impl Plan {
             BodyKind::Solid => self.push_solid_scaffold_nodes(&mut out),
             BodyKind::Sheet => self.push_sheet_scaffold_nodes(&mut out),
             BodyKind::Wire => self.push_wire_scaffold_nodes(&mut out),
-            BodyKind::Acorn => unreachable!("rejected during planning"),
+            BodyKind::Acorn => self.push_acorn_scaffold_nodes(&mut out),
         }
 
         for (position, &(face_id, index)) in self.faces.iter().enumerate() {
@@ -668,6 +668,37 @@ impl Plan {
             ],
         });
     }
+
+    fn push_acorn_scaffold_nodes(&self, out: &mut Vec<OutNode>) {
+        out.push(OutNode {
+            code: code::REGION,
+            index: 2,
+            values: vec![
+                int(2),
+                ptr(0),
+                ptr(1),
+                ptr(0),
+                ptr(0),
+                ptr(self.shell_id),
+                Value::Char('V'),
+            ],
+        });
+        out.push(OutNode {
+            code: code::SHELL,
+            index: self.shell_id,
+            values: vec![
+                int(self.shell_id),
+                ptr(0),
+                ptr(1),
+                ptr(0),
+                ptr(0),
+                ptr(0),
+                ptr(first_id(&self.vertices)),
+                ptr(2),
+                ptr(0),
+            ],
+        });
+    }
 }
 
 impl Scaffold {
@@ -676,9 +707,7 @@ impl Scaffold {
             BodyKind::Solid => Self::solid(store, body),
             BodyKind::Sheet => Self::sheet(store, body),
             BodyKind::Wire => Self::wire(store, body),
-            BodyKind::Acorn => Err(XtError::Unsupported {
-                what: "text writing supports solid bodies, sheet bodies, and wire bodies only",
-            }),
+            BodyKind::Acorn => Self::acorn(store, body),
         }
     }
 
@@ -770,6 +799,34 @@ impl Scaffold {
         })
     }
 
+    fn acorn(store: &Store, body: &ktopo::entity::Body) -> Result<Self> {
+        let [void_region] = body.regions.as_slice() else {
+            return Err(XtError::Unsupported {
+                what: "acorn text writing requires one void region",
+            });
+        };
+        let region = store.get(*void_region)?;
+        let [shell] = region.shells.as_slice() else {
+            return Err(XtError::Unsupported {
+                what: "acorn text writing requires exactly one shell",
+            });
+        };
+        let shell = store.get(*shell)?;
+        if region.kind != RegionKind::Void
+            || !shell.faces.is_empty()
+            || !shell.edges.is_empty()
+            || shell.vertex.is_none()
+        {
+            return Err(XtError::Unsupported {
+                what: "acorn text writing requires one vertex-only shell in the void region",
+            });
+        }
+        Ok(Scaffold {
+            shell_id: 3,
+            void_shell_id: 0,
+        })
+    }
+
     fn first_entity_id(self) -> u32 {
         if self.void_shell_id == 0 { 4 } else { 6 }
     }
@@ -808,7 +865,7 @@ fn body_type(kind: BodyKind) -> i64 {
         BodyKind::Solid => 1,
         BodyKind::Sheet => 3,
         BodyKind::Wire => 2,
-        BodyKind::Acorn => unreachable!("rejected during planning"),
+        BodyKind::Acorn => 2,
     }
 }
 

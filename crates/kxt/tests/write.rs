@@ -385,6 +385,33 @@ fn wire_ellipse_arc(store: &mut Store) -> BodyId {
     body
 }
 
+fn acorn_point(store: &mut Store) -> BodyId {
+    let body = store.add(Body {
+        kind: BodyKind::Acorn,
+        regions: Vec::new(),
+    });
+    let region = store.add(Region {
+        body,
+        kind: RegionKind::Void,
+        shells: Vec::new(),
+    });
+    store.get_mut(body).unwrap().regions.push(region);
+
+    let point = store.add(Point3::new(0.25, -0.5, 1.5));
+    let vertex = store.add(Vertex {
+        point,
+        tolerance: None,
+    });
+    let shell = store.add(Shell {
+        region,
+        faces: Vec::new(),
+        edges: Vec::new(),
+        vertex: Some(vertex),
+    });
+    store.get_mut(region).unwrap().shells.push(shell);
+    body
+}
+
 #[test]
 fn all_analytic_primitives_round_trip() {
     let frame = tilted();
@@ -604,6 +631,27 @@ fn wire_ellipse_arc_round_trips() {
     let (lo, hi) = edge.bounds.unwrap();
     assert!((lo - 0.0).abs() < 1e-12);
     assert!((hi - core::f64::consts::FRAC_PI_2).abs() < 1e-12);
+}
+
+#[test]
+fn acorn_point_round_trips() {
+    let mut store = Store::new();
+    let body = acorn_point(&mut store);
+
+    let (text, imported, imported_body) = assert_checker_roundtrip(&store, body);
+    let parsed = kxt::read_xt(text.as_bytes()).unwrap();
+    let body_node = parsed.node(1).unwrap();
+    assert_eq!(
+        parsed.field(body_node, "body_type").unwrap().as_int(),
+        Some(2)
+    );
+    assert_eq!(imported.get(imported_body).unwrap().kind, BodyKind::Acorn);
+    assert!(imported.faces_of_body(imported_body).unwrap().is_empty());
+    assert!(imported.edges_of_body(imported_body).unwrap().is_empty());
+    let vertices = imported.vertices_of_body(imported_body).unwrap();
+    assert_eq!(vertices.len(), 1);
+    let point = imported.vertex_position(vertices[0]).unwrap();
+    assert_eq!(point, Point3::new(0.25, -0.5, 1.5));
 }
 
 #[test]

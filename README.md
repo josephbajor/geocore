@@ -16,7 +16,7 @@ parametric CAD application; feature history and regeneration are later layers.
 | [`crates/kgeom`](crates/kgeom) | L1 geometry | Analytic curves (line/circle/ellipse) and surfaces (plane/cylinder/cone/sphere/torus) with exact bounding boxes, NURBS engine (Piegl & Tiller), closest-point projection, deterministic trimmed-face tessellation with explicit refinement-limit errors, evaluator conformance harness |
 | [`crates/ktopo`](crates/ktopo) | L2 topology | Parasolid entity hierarchy (body→region→shell→face→loop→fin→edge→vertex) over generational arenas, Euler operators, primitive body constructors, the body checker (structural + geometric invariants), whole-body watertight tessellation |
 | [`crates/kops`](crates/kops) | L3 operations | M4 intersection foundation: parameter-rich curve/curve results plus deterministic bounded line/line, 3D line/circle, 3D line/ellipse, 3D circle/circle, 3D circle/ellipse, and 3D ellipse/ellipse intersections behind a general analytic dispatcher |
-| [`crates/kxt`](crates/kxt) | L5 interchange | Atomic modern-schema Parasolid XT (`.x_t`/`.x_b`) import for the supported geometry subset, plus a deterministic schema-13006 text writer for self-authored analytic solids, sheet bodies, and wire bodies (clean-room from the published XT Format Reference) |
+| [`crates/kxt`](crates/kxt) | L5 interchange | Atomic modern-schema Parasolid XT (`.x_t`/`.x_b`) import for the supported geometry subset, plus a deterministic schema-13006 text writer for self-authored analytic solids, sheet bodies, wire bodies, and acorn bodies (clean-room from the published XT Format Reference) |
 
 ## Current Status
 
