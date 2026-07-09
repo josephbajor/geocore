@@ -136,8 +136,9 @@ ellipse/cylinder, ellipse/cone, and ellipse/torus over finite
 surface windows, including contained line-on-plane, conic-on-plane,
 circle-on-cylinder, ellipse-on-cylinder, circle-on-cone, ellipse-on-cone,
 circle-on-sphere, circle-on-torus, ellipse-on-torus, line-on-ruling intervals,
-NURBS/plane, and initial fixed-grid NURBS/sphere marching, including contained
-curve overlaps, cone apex singular contacts, and torus quartic contacts. General
+NURBS/plane, and initial fixed-grid NURBS/sphere and NURBS/cylinder marching,
+including contained curve overlaps, cone apex singular contacts, and torus
+quartic contacts. General
 NURBS/procedural curve/curve and broader curve/surface remain. Surface/surface
 has started with bounded plane/plane, plane/sphere, plane/cylinder, plane/cone
 circular and elliptic slices, coaxial cylinder/sphere, cylinder/torus,
