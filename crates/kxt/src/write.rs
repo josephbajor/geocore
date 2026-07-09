@@ -1,4 +1,4 @@
-//! Deterministic XT text emission for self-authored analytic solids.
+//! Deterministic XT text emission for checker-clean solids.
 //!
 //! This first M3b slice intentionally writes the fixed base schema 13006.
 //! Unsupported model classes fail explicitly rather than being approximated.
@@ -9,6 +9,10 @@ use crate::schema::{base_schema, code};
 use kcore::arena::Handle;
 use kcore::math;
 use kcore::tolerance::{LINEAR_RESOLUTION, check_in_size_box};
+use kgeom::curve::Curve;
+use kgeom::nurbs::{KnotVector, NurbsCurve, NurbsSurface};
+use kgeom::surface::{Dir, Surface};
+use kgeom::vec::Point3;
 use kgeom::vec::Vec3;
 use ktopo::check::check_body;
 use ktopo::entity::{
@@ -37,11 +41,31 @@ struct Plan {
     curves: Vec<(CurveId, u32)>,
     points: Vec<(PointId, u32)>,
     void_shell_id: u32,
+    first_aux_id: u32,
     max_id: u32,
 }
 
-/// Export one checker-clean analytic solid as deterministic schema-13006
-/// text XT. The current writer supports all self-authored primitive bodies.
+#[derive(Debug, Clone, Copy)]
+struct CurveAuxIds {
+    nurbs: u32,
+    poles: u32,
+    knot_mult: u32,
+    knots: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SurfaceAuxIds {
+    nurbs: u32,
+    poles: u32,
+    u_knot_mult: u32,
+    v_knot_mult: u32,
+    u_knots: u32,
+    v_knots: u32,
+}
+
+/// Export one checker-clean solid as deterministic schema-13006 text XT.
+/// The writer supports self-authored analytic bodies plus non-periodic
+/// B-spline/NURBS curves and surfaces.
 pub fn export_text(store: &Store, body: BodyId) -> Result<String> {
     let plan = Plan::build(store, body)?;
     let nodes = plan.nodes(store)?;
@@ -130,10 +154,8 @@ impl Plan {
                 (CurveGeom::Line(_), [Some(_), Some(_)], Some(_)) => {}
                 (CurveGeom::Circle(_), [None, None], None) => {}
                 (CurveGeom::Ellipse(_), [None, None], None) => {}
-                (CurveGeom::Nurbs(_), _, _) => {
-                    return Err(XtError::Unsupported {
-                        what: "NURBS curves",
-                    });
+                (CurveGeom::Nurbs(n), [Some(_), Some(_)], Some(_)) => {
+                    validate_nurbs_curve(n)?;
                 }
                 _ => {
                     return Err(XtError::Unsupported {
@@ -159,11 +181,7 @@ impl Plan {
         }
         for &surface in &surface_handles {
             match store.get(surface)? {
-                SurfaceGeom::Nurbs(_) => {
-                    return Err(XtError::Unsupported {
-                        what: "NURBS surfaces",
-                    });
-                }
+                SurfaceGeom::Nurbs(s) => validate_nurbs_surface(s)?,
                 SurfaceGeom::Plane(s) => check_in_size_box(s.frame().origin().to_array())?,
                 SurfaceGeom::Cylinder(s) => check_in_size_box(s.frame().origin().to_array())?,
                 SurfaceGeom::Cone(s) => check_in_size_box(s.frame().origin().to_array())?,
@@ -181,6 +199,8 @@ impl Plan {
         let surfaces = assign(&surface_handles, &mut next);
         let curves = assign(&curve_handles, &mut next);
         let points = assign(&point_handles, &mut next);
+        let first_aux_id = next;
+        next += aux_node_count(store, &surface_handles, &curve_handles)?;
         Ok(Plan {
             faces,
             loops,
@@ -191,12 +211,14 @@ impl Plan {
             curves,
             points,
             void_shell_id: 5,
+            first_aux_id,
             max_id: next - 1,
         })
     }
 
     fn nodes(&self, store: &Store) -> Result<Vec<OutNode>> {
         let mut out = Vec::with_capacity(self.max_id as usize);
+        let mut next_aux = self.first_aux_id;
         out.push(OutNode {
             code: code::BODY,
             index: 1,
@@ -433,7 +455,14 @@ impl Plan {
                 adjacent(&self.surfaces, position, 1),
                 adjacent(&self.surfaces, position, -1),
             );
-            out.push(surface_node(store.get(surface_id)?, index, common));
+            let aux = if matches!(store.get(surface_id)?, SurfaceGeom::Nurbs(_)) {
+                let ids = SurfaceAuxIds::allocate(&mut next_aux);
+                push_surface_aux_nodes(&mut out, store.get(surface_id)?, ids)?;
+                Some(ids)
+            } else {
+                None
+            };
+            out.push(surface_node(store.get(surface_id)?, index, common, aux));
         }
         for (position, &(curve_id, index)) in self.curves.iter().enumerate() {
             let edge = self
@@ -449,7 +478,14 @@ impl Plan {
                 adjacent(&self.curves, position, 1),
                 adjacent(&self.curves, position, -1),
             );
-            out.push(curve_node(store.get(curve_id)?, index, common)?);
+            let aux = if matches!(store.get(curve_id)?, CurveGeom::Nurbs(_)) {
+                let ids = CurveAuxIds::allocate(&mut next_aux);
+                push_curve_aux_nodes(&mut out, store.get(curve_id)?, ids)?;
+                Some(ids)
+            } else {
+                None
+            };
+            out.push(curve_node(store.get(curve_id)?, index, common, aux)?);
         }
         for (position, &(point_id, index)) in self.points.iter().enumerate() {
             out.push(OutNode {
@@ -466,6 +502,7 @@ impl Plan {
             });
         }
         out.sort_by_key(|node| node.index);
+        debug_assert_eq!(next_aux, self.max_id + 1);
         Ok(out)
     }
 
@@ -484,7 +521,40 @@ impl Plan {
     }
 }
 
-fn surface_node(surface: &SurfaceGeom, index: u32, mut values: Vec<Value>) -> OutNode {
+impl CurveAuxIds {
+    fn allocate(next: &mut u32) -> Self {
+        let ids = CurveAuxIds {
+            nurbs: *next,
+            poles: *next + 1,
+            knot_mult: *next + 2,
+            knots: *next + 3,
+        };
+        *next += 4;
+        ids
+    }
+}
+
+impl SurfaceAuxIds {
+    fn allocate(next: &mut u32) -> Self {
+        let ids = SurfaceAuxIds {
+            nurbs: *next,
+            poles: *next + 1,
+            u_knot_mult: *next + 2,
+            v_knot_mult: *next + 3,
+            u_knots: *next + 4,
+            v_knots: *next + 5,
+        };
+        *next += 6;
+        ids
+    }
+}
+
+fn surface_node(
+    surface: &SurfaceGeom,
+    index: u32,
+    mut values: Vec<Value>,
+    aux: Option<SurfaceAuxIds>,
+) -> OutNode {
     let code = match surface {
         SurfaceGeom::Plane(s) => {
             values.extend([
@@ -534,7 +604,11 @@ fn surface_node(surface: &SurfaceGeom, index: u32, mut values: Vec<Value>) -> Ou
             ]);
             code::TORUS
         }
-        SurfaceGeom::Nurbs(_) => unreachable!("rejected during planning"),
+        SurfaceGeom::Nurbs(_) => {
+            let aux = aux.expect("planned NURBS surface auxiliaries");
+            values.extend([ptr(aux.nurbs), ptr(0)]);
+            code::B_SURFACE
+        }
     };
     OutNode {
         code,
@@ -543,7 +617,12 @@ fn surface_node(surface: &SurfaceGeom, index: u32, mut values: Vec<Value>) -> Ou
     }
 }
 
-fn curve_node(curve: &CurveGeom, index: u32, mut values: Vec<Value>) -> Result<OutNode> {
+fn curve_node(
+    curve: &CurveGeom,
+    index: u32,
+    mut values: Vec<Value>,
+    aux: Option<CurveAuxIds>,
+) -> Result<OutNode> {
     let code = match curve {
         CurveGeom::Line(c) => {
             values.extend([vector(c.origin()), vector(c.dir())]);
@@ -569,9 +648,9 @@ fn curve_node(curve: &CurveGeom, index: u32, mut values: Vec<Value>) -> Result<O
             code::ELLIPSE
         }
         CurveGeom::Nurbs(_) => {
-            return Err(XtError::Unsupported {
-                what: "NURBS curves",
-            });
+            let aux = aux.expect("planned NURBS curve auxiliaries");
+            values.extend([ptr(aux.nurbs), ptr(0)]);
+            code::B_CURVE
         }
     };
     Ok(OutNode {
@@ -579,6 +658,193 @@ fn curve_node(curve: &CurveGeom, index: u32, mut values: Vec<Value>) -> Result<O
         index,
         values,
     })
+}
+
+fn push_curve_aux_nodes(out: &mut Vec<OutNode>, curve: &CurveGeom, ids: CurveAuxIds) -> Result<()> {
+    let CurveGeom::Nurbs(curve) = curve else {
+        return Ok(());
+    };
+    let (knots, multiplicities) = compressed_knots(curve.knots());
+    let rational = curve.is_rational();
+    let vertex_dim = if rational { 4 } else { 3 };
+    out.push(OutNode {
+        code: code::NURBS_CURVE,
+        index: ids.nurbs,
+        values: vec![
+            Value::Int(curve.degree() as i64),
+            Value::Int(curve.points().len() as i64),
+            Value::Int(vertex_dim),
+            Value::Int(knots.len() as i64),
+            Value::Int(0),
+            Value::Logical(false),
+            Value::Logical(false),
+            Value::Logical(rational),
+            Value::Int(0),
+            ptr(ids.poles),
+            ptr(ids.knot_mult),
+            ptr(ids.knots),
+        ],
+    });
+    out.push(bspline_vertices_node(ids.poles, flatten_curve_poles(curve)));
+    out.push(int_values_node(ids.knot_mult, &multiplicities));
+    out.push(knot_values_node(ids.knots, knots));
+    Ok(())
+}
+
+fn push_surface_aux_nodes(
+    out: &mut Vec<OutNode>,
+    surface: &SurfaceGeom,
+    ids: SurfaceAuxIds,
+) -> Result<()> {
+    let SurfaceGeom::Nurbs(surface) = surface else {
+        return Ok(());
+    };
+    let (u_knots, u_multiplicities) = compressed_knots(surface.knots(Dir::U));
+    let (v_knots, v_multiplicities) = compressed_knots(surface.knots(Dir::V));
+    let rational = surface.is_rational();
+    let vertex_dim = if rational { 4 } else { 3 };
+    let (nu, nv) = surface.net_size();
+    out.push(OutNode {
+        code: code::NURBS_SURF,
+        index: ids.nurbs,
+        values: vec![
+            Value::Logical(false),
+            Value::Logical(false),
+            Value::Int(surface.degree_u() as i64),
+            Value::Int(surface.degree_v() as i64),
+            Value::Int(nu as i64),
+            Value::Int(nv as i64),
+            Value::Int(0),
+            Value::Int(0),
+            Value::Int(u_knots.len() as i64),
+            Value::Int(v_knots.len() as i64),
+            Value::Logical(rational),
+            Value::Logical(false),
+            Value::Logical(false),
+            Value::Int(0),
+            Value::Int(vertex_dim),
+            ptr(ids.poles),
+            ptr(ids.u_knot_mult),
+            ptr(ids.v_knot_mult),
+            ptr(ids.u_knots),
+            ptr(ids.v_knots),
+        ],
+    });
+    out.push(bspline_vertices_node(
+        ids.poles,
+        flatten_surface_poles(surface),
+    ));
+    out.push(int_values_node(ids.u_knot_mult, &u_multiplicities));
+    out.push(int_values_node(ids.v_knot_mult, &v_multiplicities));
+    out.push(knot_values_node(ids.u_knots, u_knots));
+    out.push(knot_values_node(ids.v_knots, v_knots));
+    Ok(())
+}
+
+fn aux_node_count(store: &Store, surfaces: &[SurfaceId], curves: &[CurveId]) -> Result<u32> {
+    let mut count = 0u32;
+    for &surface in surfaces {
+        if matches!(store.get(surface)?, SurfaceGeom::Nurbs(_)) {
+            count += 6;
+        }
+    }
+    for &curve in curves {
+        if matches!(store.get(curve)?, CurveGeom::Nurbs(_)) {
+            count += 4;
+        }
+    }
+    Ok(count)
+}
+
+fn validate_nurbs_curve(curve: &NurbsCurve) -> Result<()> {
+    if curve.periodicity().is_some() {
+        return Err(XtError::Unsupported {
+            what: "periodic NURBS curves",
+        });
+    }
+    for &point in curve.points() {
+        check_in_size_box(point.to_array())?;
+    }
+    Ok(())
+}
+
+fn validate_nurbs_surface(surface: &NurbsSurface) -> Result<()> {
+    if surface.periodicity() != [None, None] {
+        return Err(XtError::Unsupported {
+            what: "periodic NURBS surfaces",
+        });
+    }
+    for &point in surface.points() {
+        check_in_size_box(point.to_array())?;
+    }
+    Ok(())
+}
+
+fn compressed_knots(knots: &KnotVector) -> (Vec<f64>, Vec<i64>) {
+    let raw = knots.as_slice();
+    let mut values = Vec::new();
+    let mut multiplicities = Vec::new();
+    let mut i = 0;
+    while i < raw.len() {
+        let value = raw[i];
+        let mut j = i + 1;
+        while j < raw.len() && raw[j] == value {
+            j += 1;
+        }
+        values.push(value);
+        multiplicities.push((j - i) as i64);
+        i = j;
+    }
+    (values, multiplicities)
+}
+
+fn flatten_curve_poles(curve: &NurbsCurve) -> Vec<f64> {
+    flatten_poles(curve.points(), curve.weights())
+}
+
+fn flatten_surface_poles(surface: &NurbsSurface) -> Vec<f64> {
+    flatten_poles(surface.points(), surface.weights())
+}
+
+fn flatten_poles(points: &[Point3], weights: Option<&[f64]>) -> Vec<f64> {
+    let mut values = Vec::with_capacity(points.len() * if weights.is_some() { 4 } else { 3 });
+    match weights {
+        Some(weights) => {
+            for (&point, &weight) in points.iter().zip(weights) {
+                values.extend([point.x * weight, point.y * weight, point.z * weight, weight]);
+            }
+        }
+        None => {
+            for point in points {
+                values.extend([point.x, point.y, point.z]);
+            }
+        }
+    }
+    values
+}
+
+fn bspline_vertices_node(index: u32, values: Vec<f64>) -> OutNode {
+    OutNode {
+        code: code::BSPLINE_VERTICES,
+        index,
+        values: vec![Value::Arr(values.into_iter().map(Value::Double).collect())],
+    }
+}
+
+fn knot_values_node(index: u32, values: Vec<f64>) -> OutNode {
+    OutNode {
+        code: code::KNOT_SET,
+        index,
+        values: vec![Value::Arr(values.into_iter().map(Value::Double).collect())],
+    }
+}
+
+fn int_values_node(index: u32, values: &[i64]) -> OutNode {
+    OutNode {
+        code: code::KNOT_MULT,
+        index,
+        values: vec![Value::Arr(values.iter().copied().map(Value::Int).collect())],
+    }
 }
 
 fn geom_common(index: u32, owner: u32, next: u32, previous: u32) -> Vec<Value> {
@@ -614,7 +880,22 @@ fn serialize(nodes: &[OutNode]) -> Result<String> {
                 what: "writer produced the wrong field count",
             });
         }
-        data.push_str(&format!("{} {} ", node.code, node.index));
+        if def.is_variable() {
+            let variable_len = node
+                .values
+                .last()
+                .and_then(|value| match value {
+                    Value::Arr(values) => Some(values.len()),
+                    Value::Str(value) => Some(value.len()),
+                    _ => None,
+                })
+                .ok_or(XtError::InvalidModel {
+                    what: "writer produced a variable node without an array value",
+                })?;
+            data.push_str(&format!("{} {} {} ", node.code, variable_len, node.index));
+        } else {
+            data.push_str(&format!("{} {} ", node.code, node.index));
+        }
         for value in &node.values {
             write_value(&mut data, value)?;
         }
@@ -658,6 +939,11 @@ fn write_value(out: &mut String, value: &Value) -> Result<()> {
                     });
                 }
                 out.push_str(&format!("{value} "));
+            }
+        }
+        Value::Arr(values) => {
+            for value in values {
+                write_value(out, value)?;
             }
         }
         _ => {

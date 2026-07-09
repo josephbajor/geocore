@@ -9,9 +9,10 @@
 //! files based on schema 13006, and atomic reconstruction of the supported
 //! topology and geometry subset. Failed reconstruction leaves the supplied
 //! store unchanged. Supported geometry includes point, line, circle, ellipse,
-//! B-curve, plane, cylinder, cone, sphere, torus, and B-surface. The initial
-//! M3b writer emits deterministic base-schema text XT for self-authored
-//! analytic solids. Procedural and SP geometry, tolerant entities, pre-13006
+//! B-curve, plane, cylinder, cone, sphere, torus, and B-surface. The M3b
+//! writer emits deterministic base-schema text XT for checker-clean solids
+//! using analytic geometry and non-periodic B-spline/NURBS curves or surfaces.
+//! Procedural and SP geometry, tolerant entities, periodic NURBS, pre-13006
 //! schemas, assemblies, and neutral-binary writing remain deferred.
 //!
 //! Typical use:
