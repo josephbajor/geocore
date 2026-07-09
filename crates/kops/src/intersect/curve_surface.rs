@@ -1,6 +1,7 @@
 use super::circle_cone::intersect_bounded_circle_cone;
 use super::circle_cylinder::intersect_bounded_circle_cylinder;
 use super::circle_sphere::intersect_bounded_circle_sphere;
+use super::ellipse_cylinder::intersect_bounded_ellipse_cylinder;
 use super::ellipse_sphere::intersect_bounded_ellipse_sphere;
 use super::line_cone::intersect_bounded_line_cone;
 use super::line_cylinder::intersect_bounded_line_cylinder;
@@ -19,7 +20,7 @@ use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 ///
 /// This currently dispatches bounded line/surface analytic cases, planar
 /// circle-or-ellipse/plane cases, circle/cone/cylinder/sphere cases, and
-/// ellipse/sphere cases.
+/// ellipse/sphere, and ellipse/cylinder cases.
 /// Unsupported curve or surface classes fail explicitly; broader analytic
 /// cases and the general subdivision/Newton curve/surface solver remain later
 /// M4 work.
@@ -118,6 +119,17 @@ pub fn intersect_bounded_curve_surface(
     {
         return intersect_bounded_circle_cylinder(
             circle,
+            curve_range,
+            cylinder,
+            surface_range,
+            tolerances,
+        );
+    }
+    if let Some(cylinder) = as_cylinder(surface)
+        && let Some(ellipse) = as_ellipse(curve)
+    {
+        return intersect_bounded_ellipse_cylinder(
+            ellipse,
             curve_range,
             cylinder,
             surface_range,
