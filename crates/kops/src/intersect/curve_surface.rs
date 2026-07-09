@@ -2,17 +2,18 @@ use super::line_cone::intersect_bounded_line_cone;
 use super::line_cylinder::intersect_bounded_line_cylinder;
 use super::line_plane::intersect_bounded_line_plane;
 use super::line_sphere::intersect_bounded_line_sphere;
+use super::line_torus::intersect_bounded_line_torus;
 use super::result::CurveSurfaceIntersections;
 use kcore::error::{Error, Result};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Curve, Line};
 use kgeom::param::ParamRange;
-use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface};
+use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 
 /// Intersect a curve with a surface over finite curve and surface windows.
 ///
-/// This currently dispatches line/plane, line/cylinder, line/cone, and line/sphere
-/// analytic cases.
+/// This currently dispatches line/plane, line/cylinder, line/cone,
+/// line/sphere, and line/torus analytic cases.
 /// Unsupported curve or surface classes fail explicitly; broader analytic
 /// cases and the general subdivision/Newton curve/surface solver remain later
 /// M4 work.
@@ -54,6 +55,15 @@ pub fn intersect_bounded_curve_surface(
                 tolerances,
             );
         }
+        if let Some(torus) = as_torus(surface) {
+            return intersect_bounded_line_torus(
+                line,
+                curve_range,
+                torus,
+                surface_range,
+                tolerances,
+            );
+        }
     }
 
     Err(Error::InvalidGeometry {
@@ -78,5 +88,9 @@ fn as_cone(surface: &dyn Surface) -> Option<&Cone> {
 }
 
 fn as_sphere(surface: &dyn Surface) -> Option<&Sphere> {
+    surface.as_any().downcast_ref()
+}
+
+fn as_torus(surface: &dyn Surface) -> Option<&Torus> {
     surface.as_any().downcast_ref()
 }
