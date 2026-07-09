@@ -5,12 +5,13 @@ use super::plane_cone::intersect_bounded_plane_cone;
 use super::plane_cylinder::intersect_bounded_plane_cylinder;
 use super::plane_plane::intersect_bounded_planes;
 use super::plane_sphere::intersect_bounded_plane_sphere;
+use super::plane_torus::intersect_bounded_plane_torus;
 use super::result::SurfaceSurfaceIntersections;
 use super::sphere_sphere::intersect_bounded_spheres;
 use kcore::error::{Error, Result};
 use kcore::tolerance::Tolerances;
 use kgeom::param::ParamRange;
-use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface};
+use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 
 /// Intersect two surfaces over finite parameter windows.
 ///
@@ -94,6 +95,17 @@ pub fn intersect_bounded_surfaces(
         return intersect_bounded_plane_sphere(plane, b_range, sphere, a_range, tolerances)
             .map(SurfaceSurfaceIntersections::swapped);
     }
+    if let Some(plane) = as_plane(a)
+        && let Some(torus) = as_torus(b)
+    {
+        return intersect_bounded_plane_torus(plane, a_range, torus, b_range, tolerances);
+    }
+    if let Some(torus) = as_torus(a)
+        && let Some(plane) = as_plane(b)
+    {
+        return intersect_bounded_plane_torus(plane, b_range, torus, a_range, tolerances)
+            .map(SurfaceSurfaceIntersections::swapped);
+    }
 
     Err(Error::InvalidGeometry {
         reason: "unsupported surface/surface intersection class",
@@ -113,5 +125,9 @@ fn as_cone(surface: &dyn Surface) -> Option<&Cone> {
 }
 
 fn as_sphere(surface: &dyn Surface) -> Option<&Sphere> {
+    surface.as_any().downcast_ref()
+}
+
+fn as_torus(surface: &dyn Surface) -> Option<&Torus> {
     surface.as_any().downcast_ref()
 }

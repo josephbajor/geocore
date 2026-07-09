@@ -7,13 +7,14 @@ use kgeom::curve::Curve;
 use kgeom::frame::Frame;
 use kgeom::nurbs::NurbsCurve;
 use kgeom::param::ParamRange;
-use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface};
+use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
     intersect_bounded_cone_sphere, intersect_bounded_cylinder_sphere, intersect_bounded_cylinders,
     intersect_bounded_plane_cone, intersect_bounded_plane_cylinder, intersect_bounded_plane_sphere,
-    intersect_bounded_planes, intersect_bounded_spheres, intersect_bounded_surfaces,
+    intersect_bounded_plane_torus, intersect_bounded_planes, intersect_bounded_spheres,
+    intersect_bounded_surfaces,
 };
 
 fn plane_window() -> [ParamRange; 2] {
@@ -43,6 +44,17 @@ fn sphere_window() -> [ParamRange; 2] {
         ParamRange::new(0.0, core::f64::consts::TAU),
         ParamRange::new(-core::f64::consts::FRAC_PI_2, core::f64::consts::FRAC_PI_2),
     ]
+}
+
+fn torus_window() -> [ParamRange; 2] {
+    [
+        ParamRange::new(0.0, core::f64::consts::TAU),
+        ParamRange::new(0.0, core::f64::consts::TAU),
+    ]
+}
+
+fn torus_plane_window() -> [ParamRange; 2] {
+    [ParamRange::new(-3.0, 3.0), ParamRange::new(-3.0, 3.0)]
 }
 
 fn horizontal_plane(z: f64) -> Plane {
@@ -137,6 +149,21 @@ fn assert_cylinder_cylinder_branch_endpoints(
         assert!(a.eval(branch.uv_a_end).dist(end) < 1e-12);
         assert!(b.eval(branch.uv_b_start).dist(start) < 1e-12);
         assert!(b.eval(branch.uv_b_end).dist(end) < 1e-12);
+    }
+}
+
+fn assert_plane_torus_branch_endpoints(
+    hit: &SurfaceSurfaceIntersections,
+    plane: &Plane,
+    torus: &Torus,
+) {
+    for branch in &hit.curves {
+        let start = branch.curve.eval(branch.curve_range.lo);
+        let end = branch.curve.eval(branch.curve_range.hi);
+        assert!(plane.eval(branch.uv_a_start).dist(start) < 1e-12);
+        assert!(plane.eval(branch.uv_a_end).dist(end) < 1e-12);
+        assert!(torus.eval(branch.uv_b_start).dist(start) < 1e-12);
+        assert!(torus.eval(branch.uv_b_end).dist(end) < 1e-12);
     }
 }
 
@@ -553,6 +580,192 @@ fn surface_surface_dispatches_plane_sphere_and_rejects_unsupported() {
             reason: "unsupported surface/surface intersection class"
         }
     );
+}
+
+#[test]
+fn plane_torus_axis_normal_secant_returns_latitude_circles() {
+    let plane = horizontal_plane(0.25);
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let hit = intersect_bounded_plane_torus(
+        &plane,
+        torus_plane_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 2);
+    assert!((total_curve_width(&hit) - 2.0 * core::f64::consts::TAU).abs() < 1e-12);
+    assert_plane_torus_branch_endpoints(&hit, &plane, &torus);
+
+    let radial_delta = 3.0_f64.sqrt() / 4.0;
+    let mut radii = Vec::new();
+    for branch in &hit.curves {
+        assert_eq!(branch.kind, ContactKind::Transverse);
+        let SurfaceIntersectionCurve::Circle(circle) = &branch.curve else {
+            panic!("axis-normal plane/torus cut should be carried by latitude circles");
+        };
+        assert!(circle.frame().origin().dist(Point3::new(0.0, 0.0, 0.25)) < 1e-12);
+        radii.push(circle.radius());
+    }
+    radii.sort_by(f64::total_cmp);
+    assert!((radii[0] - (2.0 - radial_delta)).abs() < 1e-12);
+    assert!((radii[1] - (2.0 + radial_delta)).abs() < 1e-12);
+}
+
+#[test]
+fn plane_torus_surface_windows_clip_latitude_circles() {
+    let plane = horizontal_plane(0.0);
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let hit = intersect_bounded_plane_torus(
+        &plane,
+        torus_plane_window(),
+        &torus,
+        [
+            ParamRange::new(0.0, core::f64::consts::PI),
+            ParamRange::new(0.0, core::f64::consts::TAU),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 2);
+    assert!((total_curve_width(&hit) - 2.0 * core::f64::consts::PI).abs() < 1e-12);
+    assert_plane_torus_branch_endpoints(&hit, &plane, &torus);
+    for branch in &hit.curves {
+        assert!(branch.curve_range.lo.abs() < 1e-12);
+        assert!((branch.curve_range.hi - core::f64::consts::PI).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn plane_torus_meridian_returns_tube_circles() {
+    let plane = vertical_plane_y(0.0);
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let hit = intersect_bounded_plane_torus(
+        &plane,
+        torus_plane_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 2);
+    assert!((total_curve_width(&hit) - 2.0 * core::f64::consts::TAU).abs() < 1e-12);
+    assert_plane_torus_branch_endpoints(&hit, &plane, &torus);
+
+    let mut centers = Vec::new();
+    for branch in &hit.curves {
+        assert_eq!(branch.kind, ContactKind::Transverse);
+        let SurfaceIntersectionCurve::Circle(circle) = &branch.curve else {
+            panic!("meridian plane/torus cut should be carried by tube circles");
+        };
+        assert!((circle.radius() - 0.5).abs() < 1e-12);
+        centers.push(circle.frame().origin());
+    }
+    centers.sort_by(|lhs, rhs| lhs.x.total_cmp(&rhs.x));
+    assert!(centers[0].dist(Point3::new(-2.0, 0.0, 0.0)) < 1e-12);
+    assert!(centers[1].dist(Point3::new(2.0, 0.0, 0.0)) < 1e-12);
+}
+
+#[test]
+fn plane_torus_tangent_miss_and_unsupported_cases() {
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let tangent_plane = horizontal_plane(0.5);
+    let tangent = intersect_bounded_plane_torus(
+        &tangent_plane,
+        torus_plane_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(tangent.points.is_empty());
+    assert_eq!(tangent.curves.len(), 1);
+    assert_eq!(tangent.curves[0].kind, ContactKind::Tangent);
+    assert_plane_torus_branch_endpoints(&tangent, &tangent_plane, &torus);
+
+    let miss = intersect_bounded_plane_torus(
+        &horizontal_plane(0.75),
+        torus_plane_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(miss.is_empty());
+
+    let offset_meridian = vertical_plane_y(0.25);
+    let err = intersect_bounded_plane_torus(
+        &offset_meridian,
+        torus_plane_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "plane/torus intersection currently supports only axis-normal latitude circles or axis-containing meridian circles"
+        }
+    );
+
+    let oblique = Plane::new(
+        Frame::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.5, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+    );
+    let err = intersect_bounded_plane_torus(
+        &oblique,
+        torus_plane_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "plane/torus intersection currently supports only axis-normal latitude circles or axis-containing meridian circles"
+        }
+    );
+}
+
+#[test]
+fn surface_surface_dispatches_plane_torus_both_orders() {
+    let plane = horizontal_plane(0.0);
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let hit = intersect_bounded_surfaces(
+        &plane,
+        torus_plane_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.curves.len(), 2);
+    assert_plane_torus_branch_endpoints(&hit, &plane, &torus);
+
+    let swapped = intersect_bounded_surfaces(
+        &torus,
+        torus_window(),
+        &plane,
+        torus_plane_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(swapped.curves.len(), hit.curves.len());
+    assert_eq!(swapped.curves[0].uv_a_start, hit.curves[0].uv_b_start);
+    assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
 }
 
 #[test]

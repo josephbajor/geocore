@@ -140,9 +140,9 @@ intervals, cone apex singular contacts, and torus quartic contacts. General
 NURBS/procedural curve/curve and broader curve/surface remain. Surface/surface
 has started with bounded plane/plane, plane/sphere, plane/cylinder, plane/cone
 circular and elliptic slices, coaxial cylinder/sphere and cone/sphere circles,
-parallel cylinder/cylinder rulings, and sphere/sphere closed form branches over
-finite windows, including tangent point contacts, singular apex contacts,
-ruling branches, and branch clipping.
+parallel cylinder/cylinder rulings, plane/torus latitude and meridian circles,
+and sphere/sphere closed form branches over finite windows, including tangent
+point contacts, singular apex contacts, ruling branches, and branch clipping.
 SSI branch result geometry now supports exact NURBS curves in addition to
 line/circle/ellipse branches, clearing the result-contract path for broader
 conic and marched/subdivision SSI curves.

@@ -31,6 +31,7 @@ mod plane_cone;
 mod plane_cylinder;
 mod plane_plane;
 mod plane_sphere;
+mod plane_torus;
 mod result;
 mod sphere_sphere;
 mod surface_surface;
@@ -65,6 +66,7 @@ pub use plane_cone::intersect_bounded_plane_cone;
 pub use plane_cylinder::intersect_bounded_plane_cylinder;
 pub use plane_plane::intersect_bounded_planes;
 pub use plane_sphere::intersect_bounded_plane_sphere;
+pub use plane_torus::intersect_bounded_plane_torus;
 pub use result::{
     ContactKind, CurveCurveIntersections, CurveCurveOverlap, CurveCurvePoint,
     CurveSurfaceIntersections, CurveSurfaceOverlap, CurveSurfacePoint, ParamOrientation,
