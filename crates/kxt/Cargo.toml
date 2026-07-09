@@ -1,6 +1,6 @@
 [package]
 name = "kxt"
-description = "Modern-schema Parasolid XT reader and deterministic analytic text writer"
+description = "Modern-schema Parasolid XT reader and deterministic text writer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

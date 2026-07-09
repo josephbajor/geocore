@@ -1,4 +1,4 @@
-//! Deterministic XT text emission for checker-clean solids.
+//! Deterministic XT text emission for checker-clean bodies.
 //!
 //! This first M3b slice intentionally writes the fixed base schema 13006.
 //! Unsupported model classes fail explicitly rather than being approximated.
@@ -16,7 +16,7 @@ use kgeom::vec::Point3;
 use kgeom::vec::Vec3;
 use ktopo::check::check_body;
 use ktopo::entity::{
-    BodyId, BodyKind, CurveId, EdgeId, FaceId, FinId, LoopId, PointId, RegionKind, Sense,
+    BodyId, BodyKind, CurveId, Edge, EdgeId, FaceId, FinId, LoopId, PointId, RegionKind, Sense,
     SurfaceId, VertexId,
 };
 use ktopo::geom::{CurveGeom, SurfaceGeom};
@@ -32,6 +32,7 @@ struct OutNode {
 }
 
 struct Plan {
+    body_kind: BodyKind,
     faces: Vec<(FaceId, u32)>,
     loops: Vec<(LoopId, u32)>,
     fins: Vec<(FinId, u32)>,
@@ -40,9 +41,16 @@ struct Plan {
     surfaces: Vec<(SurfaceId, u32)>,
     curves: Vec<(CurveId, u32)>,
     points: Vec<(PointId, u32)>,
+    shell_id: u32,
     void_shell_id: u32,
     first_aux_id: u32,
     max_id: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Scaffold {
+    shell_id: u32,
+    void_shell_id: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -63,9 +71,9 @@ struct SurfaceAuxIds {
     v_knots: u32,
 }
 
-/// Export one checker-clean solid as deterministic schema-13006 text XT.
-/// The writer supports self-authored analytic bodies plus non-periodic
-/// B-spline/NURBS curves and surfaces.
+/// Export one checker-clean solid or supported sheet body as deterministic
+/// schema-13006 text XT. The writer supports self-authored analytic bodies
+/// plus non-periodic B-spline/NURBS curves and surfaces.
 pub fn export_text(store: &Store, body: BodyId) -> Result<String> {
     let plan = Plan::build(store, body)?;
     let nodes = plan.nodes(store)?;
@@ -80,37 +88,7 @@ impl Plan {
             });
         }
         let b = store.get(body)?;
-        if b.kind != BodyKind::Solid {
-            return Err(XtError::Unsupported {
-                what: "text writing currently supports solid bodies only",
-            });
-        }
-        if b.regions.len() != 2 {
-            return Err(XtError::Unsupported {
-                what: "text writing requires one void and one solid region",
-            });
-        }
-        let void_region = b.regions[0];
-        let solid_region = b.regions[1];
-        let vr = store.get(void_region)?;
-        let sr = store.get(solid_region)?;
-        if vr.kind != RegionKind::Void || !vr.shells.is_empty() || sr.kind != RegionKind::Solid {
-            return Err(XtError::Unsupported {
-                what: "text writing requires the standard solid region scaffold",
-            });
-        }
-        let [shell] = sr.shells.as_slice() else {
-            return Err(XtError::Unsupported {
-                what: "text writing requires exactly one solid shell",
-            });
-        };
-        let shell = *shell;
-        let sh = store.get(shell)?;
-        if sh.faces.is_empty() || !sh.edges.is_empty() || sh.vertex.is_some() {
-            return Err(XtError::Unsupported {
-                what: "wireframe, acorn, and empty shells are not writable yet",
-            });
-        }
+        let scaffold = Scaffold::validate(store, b)?;
 
         let face_handles = store.faces_of_body(body)?;
         let edge_handles = store.edges_of_body(body)?;
@@ -141,11 +119,7 @@ impl Plan {
                     what: "tolerant edges",
                 });
             }
-            if e.fins.len() != 2 {
-                return Err(XtError::Unsupported {
-                    what: "solid edges must have exactly two fins",
-                });
-            }
+            validate_edge_fin_count(e, b.kind)?;
             let curve = e.curve.ok_or(XtError::Unsupported {
                 what: "curve-less edges",
             })?;
@@ -190,7 +164,7 @@ impl Plan {
             }
         }
 
-        let mut next = 6u32; // body, two regions, real shell, synthetic void shell
+        let mut next = scaffold.first_entity_id();
         let faces = assign(&face_handles, &mut next);
         let loops = assign(&loop_handles, &mut next);
         let fins = assign(&fin_handles, &mut next);
@@ -202,6 +176,7 @@ impl Plan {
         let first_aux_id = next;
         next += aux_node_count(store, &surface_handles, &curve_handles)?;
         Ok(Plan {
+            body_kind: b.kind,
             faces,
             loops,
             fins,
@@ -210,7 +185,8 @@ impl Plan {
             surfaces,
             curves,
             points,
-            void_shell_id: 5,
+            shell_id: scaffold.shell_id,
+            void_shell_id: scaffold.void_shell_id,
             first_aux_id,
             max_id: next - 1,
         })
@@ -237,9 +213,9 @@ impl Plan {
                 ptr(0),
                 Value::Int(1),
                 ptr(0),
+                Value::Int(body_type(self.body_kind)),
                 Value::Int(1),
-                Value::Int(1),
-                ptr(4),
+                ptr(self.shell_id),
                 ptr(first_id(&self.surfaces)),
                 ptr(first_id(&self.curves)),
                 ptr(first_id(&self.points)),
@@ -248,62 +224,11 @@ impl Plan {
                 ptr(first_id(&self.vertices)),
             ],
         });
-        out.push(OutNode {
-            code: code::REGION,
-            index: 2,
-            values: vec![
-                int(2),
-                ptr(0),
-                ptr(1),
-                ptr(3),
-                ptr(0),
-                ptr(self.void_shell_id),
-                Value::Char('V'),
-            ],
-        });
-        out.push(OutNode {
-            code: code::REGION,
-            index: 3,
-            values: vec![
-                int(3),
-                ptr(0),
-                ptr(1),
-                ptr(0),
-                ptr(2),
-                ptr(4),
-                Value::Char('S'),
-            ],
-        });
-        out.push(OutNode {
-            code: code::SHELL,
-            index: 4,
-            values: vec![
-                int(4),
-                ptr(0),
-                ptr(1),
-                ptr(0),
-                ptr(first_id(&self.faces)),
-                ptr(0),
-                ptr(0),
-                ptr(3),
-                ptr(0),
-            ],
-        });
-        out.push(OutNode {
-            code: code::SHELL,
-            index: self.void_shell_id,
-            values: vec![
-                int(self.void_shell_id),
-                ptr(0),
-                ptr(0),
-                ptr(0),
-                ptr(0),
-                ptr(0),
-                ptr(0),
-                ptr(2),
-                ptr(first_id(&self.faces)),
-            ],
-        });
+        match self.body_kind {
+            BodyKind::Solid => self.push_solid_scaffold_nodes(&mut out),
+            BodyKind::Sheet => self.push_sheet_scaffold_nodes(&mut out),
+            BodyKind::Wire | BodyKind::Acorn => unreachable!("rejected during planning"),
+        }
 
         for (position, &(face_id, index)) in self.faces.iter().enumerate() {
             let face = store.get(face_id)?;
@@ -320,14 +245,26 @@ impl Plan {
                     ptr(next),
                     ptr(previous),
                     ptr(first_loop),
-                    ptr(4),
+                    ptr(self.shell_id),
                     ptr(id_of(&self.surfaces, face.surface)),
                     sense(face.sense),
                     ptr(0),
                     ptr(0),
-                    ptr(next),
-                    ptr(previous),
-                    ptr(self.void_shell_id),
+                    ptr(if self.body_kind == BodyKind::Solid {
+                        next
+                    } else {
+                        0
+                    }),
+                    ptr(if self.body_kind == BodyKind::Solid {
+                        previous
+                    } else {
+                        0
+                    }),
+                    ptr(if self.body_kind == BodyKind::Solid {
+                        self.void_shell_id
+                    } else {
+                        0
+                    }),
                 ],
             });
         }
@@ -370,14 +307,7 @@ impl Plan {
             let forward = lp.fins[(position + 1) % lp.fins.len()];
             let backward = lp.fins[(position + lp.fins.len() - 1) % lp.fins.len()];
             let edge = store.get(fin.edge)?;
-            let other =
-                edge.fins
-                    .iter()
-                    .copied()
-                    .find(|&v| v != fin_id)
-                    .ok_or(XtError::InvalidModel {
-                        what: "edge has no paired fin",
-                    })?;
+            let other = edge.fins.iter().copied().find(|&v| v != fin_id);
             let head = store.fin_head(fin_id)?;
             out.push(OutNode {
                 code: code::FIN,
@@ -388,7 +318,7 @@ impl Plan {
                     ptr(id_of(&self.fins, forward)),
                     ptr(id_of(&self.fins, backward)),
                     ptr(head.map_or(0, |v| id_of(&self.vertices, v))),
-                    ptr(id_of(&self.fins, other)),
+                    ptr(other.map_or(0, |v| id_of(&self.fins, v))),
                     ptr(id_of(&self.edges, fin.edge)),
                     ptr(0),
                     ptr(head
@@ -519,6 +449,172 @@ impl Plan {
         }
         None
     }
+
+    fn push_solid_scaffold_nodes(&self, out: &mut Vec<OutNode>) {
+        out.push(OutNode {
+            code: code::REGION,
+            index: 2,
+            values: vec![
+                int(2),
+                ptr(0),
+                ptr(1),
+                ptr(3),
+                ptr(0),
+                ptr(self.void_shell_id),
+                Value::Char('V'),
+            ],
+        });
+        out.push(OutNode {
+            code: code::REGION,
+            index: 3,
+            values: vec![
+                int(3),
+                ptr(0),
+                ptr(1),
+                ptr(0),
+                ptr(2),
+                ptr(self.shell_id),
+                Value::Char('S'),
+            ],
+        });
+        out.push(OutNode {
+            code: code::SHELL,
+            index: self.shell_id,
+            values: vec![
+                int(self.shell_id),
+                ptr(0),
+                ptr(1),
+                ptr(0),
+                ptr(first_id(&self.faces)),
+                ptr(0),
+                ptr(0),
+                ptr(3),
+                ptr(0),
+            ],
+        });
+        out.push(OutNode {
+            code: code::SHELL,
+            index: self.void_shell_id,
+            values: vec![
+                int(self.void_shell_id),
+                ptr(0),
+                ptr(0),
+                ptr(0),
+                ptr(0),
+                ptr(0),
+                ptr(0),
+                ptr(2),
+                ptr(first_id(&self.faces)),
+            ],
+        });
+    }
+
+    fn push_sheet_scaffold_nodes(&self, out: &mut Vec<OutNode>) {
+        out.push(OutNode {
+            code: code::REGION,
+            index: 2,
+            values: vec![
+                int(2),
+                ptr(0),
+                ptr(1),
+                ptr(0),
+                ptr(0),
+                ptr(self.shell_id),
+                Value::Char('V'),
+            ],
+        });
+        out.push(OutNode {
+            code: code::SHELL,
+            index: self.shell_id,
+            values: vec![
+                int(self.shell_id),
+                ptr(0),
+                ptr(1),
+                ptr(0),
+                ptr(first_id(&self.faces)),
+                ptr(0),
+                ptr(0),
+                ptr(2),
+                ptr(0),
+            ],
+        });
+    }
+}
+
+impl Scaffold {
+    fn validate(store: &Store, body: &ktopo::entity::Body) -> Result<Self> {
+        match body.kind {
+            BodyKind::Solid => Self::solid(store, body),
+            BodyKind::Sheet => Self::sheet(store, body),
+            BodyKind::Wire | BodyKind::Acorn => Err(XtError::Unsupported {
+                what: "text writing supports solid bodies and sheet bodies only",
+            }),
+        }
+    }
+
+    fn solid(store: &Store, body: &ktopo::entity::Body) -> Result<Self> {
+        if body.regions.len() != 2 {
+            return Err(XtError::Unsupported {
+                what: "solid text writing requires one void and one solid region",
+            });
+        }
+        let void_region = body.regions[0];
+        let solid_region = body.regions[1];
+        let vr = store.get(void_region)?;
+        let sr = store.get(solid_region)?;
+        if vr.kind != RegionKind::Void || !vr.shells.is_empty() || sr.kind != RegionKind::Solid {
+            return Err(XtError::Unsupported {
+                what: "solid text writing requires the standard solid region scaffold",
+            });
+        }
+        let [shell] = sr.shells.as_slice() else {
+            return Err(XtError::Unsupported {
+                what: "solid text writing requires exactly one solid shell",
+            });
+        };
+        let sh = store.get(*shell)?;
+        if sh.faces.is_empty() || !sh.edges.is_empty() || sh.vertex.is_some() {
+            return Err(XtError::Unsupported {
+                what: "wireframe, acorn, and empty shells are not writable yet",
+            });
+        }
+        Ok(Scaffold {
+            shell_id: 4,
+            void_shell_id: 5,
+        })
+    }
+
+    fn sheet(store: &Store, body: &ktopo::entity::Body) -> Result<Self> {
+        let [void_region] = body.regions.as_slice() else {
+            return Err(XtError::Unsupported {
+                what: "sheet text writing requires one void region",
+            });
+        };
+        let region = store.get(*void_region)?;
+        let [shell] = region.shells.as_slice() else {
+            return Err(XtError::Unsupported {
+                what: "sheet text writing requires exactly one shell",
+            });
+        };
+        let shell = store.get(*shell)?;
+        if region.kind != RegionKind::Void
+            || shell.faces.is_empty()
+            || !shell.edges.is_empty()
+            || shell.vertex.is_some()
+        {
+            return Err(XtError::Unsupported {
+                what: "sheet text writing requires one non-empty face shell in the void region",
+            });
+        }
+        Ok(Scaffold {
+            shell_id: 3,
+            void_shell_id: 0,
+        })
+    }
+
+    fn first_entity_id(self) -> u32 {
+        if self.void_shell_id == 0 { 4 } else { 6 }
+    }
 }
 
 impl CurveAuxIds {
@@ -547,6 +643,35 @@ impl SurfaceAuxIds {
         *next += 6;
         ids
     }
+}
+
+fn body_type(kind: BodyKind) -> i64 {
+    match kind {
+        BodyKind::Solid => 1,
+        BodyKind::Sheet => 3,
+        BodyKind::Wire | BodyKind::Acorn => unreachable!("rejected during planning"),
+    }
+}
+
+fn validate_edge_fin_count(edge: &Edge, kind: BodyKind) -> Result<()> {
+    match kind {
+        BodyKind::Solid if edge.fins.len() != 2 => {
+            return Err(XtError::Unsupported {
+                what: "solid edges must have exactly two fins",
+            });
+        }
+        BodyKind::Sheet if edge.fins.len() == 2 => {}
+        BodyKind::Sheet
+            if edge.fins.len() == 1 && edge.vertices == [None, None] && edge.bounds.is_none() => {}
+        BodyKind::Sheet => {
+            return Err(XtError::Unsupported {
+                what: "sheet boundary edges with vertices need dummy FIN writer support",
+            });
+        }
+        BodyKind::Wire | BodyKind::Acorn => unreachable!("rejected during planning"),
+        _ => {}
+    }
+    Ok(())
 }
 
 fn surface_node(

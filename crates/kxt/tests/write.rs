@@ -1,4 +1,4 @@
-//! M3b writer round trips for every self-authored analytic primitive.
+//! M3b writer round trips for self-authored primitives and supported imports.
 
 use kgeom::curve::Curve;
 use kgeom::frame::Frame;
@@ -6,7 +6,7 @@ use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::vec::{Point3, Vec3};
 use ktopo::btess::{TessOptions, check_watertight, tessellate_body};
 use ktopo::check::check_body;
-use ktopo::entity::{BodyId, Edge, EdgeId, Face, FaceId, Vertex};
+use ktopo::entity::{BodyId, BodyKind, Edge, EdgeId, Face, FaceId, Vertex};
 use ktopo::geom::{CurveGeom, SurfaceGeom};
 use ktopo::make;
 use ktopo::store::Store;
@@ -19,6 +19,11 @@ fn tilted() -> Frame {
         Vec3::new(0.0, 1.0, 0.0),
     )
     .unwrap()
+}
+
+fn fixture(name: &str) -> Vec<u8> {
+    let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
+    std::fs::read(&path).unwrap_or_else(|error| panic!("reading fixture {path}: {error}"))
 }
 
 fn assert_roundtrip(store: &Store, body: BodyId) {
@@ -264,4 +269,32 @@ fn nurbs_surface_face_round_trips_as_b_surface() {
     assert_eq!(nurbs[0].degree_v(), 1);
     assert_eq!(nurbs[0].net_size(), (2, 2));
     assert_eq!(imported.faces_of_body(imported_body).unwrap().len(), 6);
+}
+
+#[test]
+fn real_world_sheet_disk_round_trips_through_writer() {
+    let mut store = Store::new();
+    let recon = kxt::import(&fixture("disk_nat.x_t"), &mut store).unwrap();
+    assert_eq!(recon.bodies.len(), 1);
+    let body = recon.bodies[0];
+    assert_eq!(store.get(body).unwrap().kind, BodyKind::Sheet);
+
+    let text = kxt::export_text(&store, body).unwrap();
+    let parsed = kxt::read_xt(text.as_bytes()).unwrap();
+    let body_node = parsed.node(1).unwrap();
+    assert_eq!(
+        parsed.field(body_node, "body_type").unwrap().as_int(),
+        Some(3)
+    );
+    let mut imported = Store::new();
+    let recon = kxt::import(text.as_bytes(), &mut imported).unwrap();
+    assert_eq!(recon.bodies.len(), 1);
+    let imported_body = recon.bodies[0];
+    let faults = check_body(&imported, imported_body).unwrap();
+    assert!(faults.is_empty(), "round-trip checker faults: {faults:?}");
+    assert_eq!(imported.get(imported_body).unwrap().kind, BodyKind::Sheet);
+    assert_eq!(imported.faces_of_body(imported_body).unwrap().len(), 1);
+    let edges = imported.edges_of_body(imported_body).unwrap();
+    assert_eq!(edges.len(), 1);
+    assert_eq!(imported.get(edges[0]).unwrap().fins.len(), 1);
 }
