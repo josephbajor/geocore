@@ -12,10 +12,10 @@ use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
     intersect_bounded_cone_cylinder, intersect_bounded_cone_sphere,
-    intersect_bounded_cylinder_sphere, intersect_bounded_cylinders, intersect_bounded_plane_cone,
-    intersect_bounded_plane_cylinder, intersect_bounded_plane_sphere,
-    intersect_bounded_plane_torus, intersect_bounded_planes, intersect_bounded_sphere_torus,
-    intersect_bounded_spheres, intersect_bounded_surfaces,
+    intersect_bounded_cylinder_sphere, intersect_bounded_cylinder_torus,
+    intersect_bounded_cylinders, intersect_bounded_plane_cone, intersect_bounded_plane_cylinder,
+    intersect_bounded_plane_sphere, intersect_bounded_plane_torus, intersect_bounded_planes,
+    intersect_bounded_sphere_torus, intersect_bounded_spheres, intersect_bounded_surfaces,
 };
 
 fn plane_window() -> [ParamRange; 2] {
@@ -150,6 +150,21 @@ fn assert_cylinder_cylinder_branch_endpoints(
         assert!(a.eval(branch.uv_a_end).dist(end) < 1e-12);
         assert!(b.eval(branch.uv_b_start).dist(start) < 1e-12);
         assert!(b.eval(branch.uv_b_end).dist(end) < 1e-12);
+    }
+}
+
+fn assert_cylinder_torus_branch_endpoints(
+    hit: &SurfaceSurfaceIntersections,
+    cylinder: &Cylinder,
+    torus: &Torus,
+) {
+    for branch in &hit.curves {
+        let start = branch.curve.eval(branch.curve_range.lo);
+        let end = branch.curve.eval(branch.curve_range.hi);
+        assert!(cylinder.eval(branch.uv_a_start).dist(start) < 1e-12);
+        assert!(cylinder.eval(branch.uv_a_end).dist(end) < 1e-12);
+        assert!(torus.eval(branch.uv_b_start).dist(start) < 1e-12);
+        assert!(torus.eval(branch.uv_b_end).dist(end) < 1e-12);
     }
 }
 
@@ -595,11 +610,11 @@ fn surface_surface_dispatches_plane_sphere_and_rejects_unsupported() {
     assert_eq!(swapped.curves[0].uv_a_start, hit.curves[0].uv_b_start);
     assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
 
-    let cylinder = Cylinder::new(Frame::world(), 1.0).unwrap();
+    let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
     let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
     let err = intersect_bounded_surfaces(
-        &cylinder,
-        cylinder_window(),
+        &cone,
+        cone_window(),
         &torus,
         torus_window(),
         Tolerances::default(),
@@ -1205,6 +1220,176 @@ fn surface_surface_dispatches_cylinder_cylinder_both_orders() {
     .unwrap();
     assert_eq!(swapped.curves.len(), 2);
     assert_cylinder_cylinder_branch_endpoints(&swapped, &b, &a);
+}
+
+#[test]
+fn cylinder_torus_coaxial_secant_returns_latitude_circles() {
+    let cylinder = Cylinder::new(Frame::world(), 2.25).unwrap();
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let hit = intersect_bounded_cylinder_torus(
+        &cylinder,
+        cylinder_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 2);
+    assert!((total_curve_width(&hit) - 2.0 * core::f64::consts::TAU).abs() < 1e-12);
+    assert_cylinder_torus_branch_endpoints(&hit, &cylinder, &torus);
+
+    let mut centers = Vec::new();
+    for branch in &hit.curves {
+        assert_eq!(branch.kind, ContactKind::Transverse);
+        let SurfaceIntersectionCurve::Circle(circle) = &branch.curve else {
+            panic!("coaxial cylinder/torus cut should be carried by latitude circles");
+        };
+        assert!((circle.radius() - 2.25).abs() < 1e-12);
+        centers.push(circle.frame().origin().z);
+    }
+    centers.sort_by(f64::total_cmp);
+    let h = 3.0_f64.sqrt() / 4.0;
+    assert!((centers[0] + h).abs() < 1e-12);
+    assert!((centers[1] - h).abs() < 1e-12);
+}
+
+#[test]
+fn cylinder_torus_surface_windows_clip_latitude_circles() {
+    let cylinder = Cylinder::new(Frame::world(), 2.25).unwrap();
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let hit = intersect_bounded_cylinder_torus(
+        &cylinder,
+        [
+            ParamRange::new(0.0, core::f64::consts::PI),
+            ParamRange::new(0.0, 1.0),
+        ],
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 1);
+    assert!((total_curve_width(&hit) - core::f64::consts::PI).abs() < 1e-12);
+    assert_cylinder_torus_branch_endpoints(&hit, &cylinder, &torus);
+    assert!(hit.curves[0].curve_range.lo.abs() < 1e-12);
+    assert!((hit.curves[0].curve_range.hi - core::f64::consts::PI).abs() < 1e-12);
+}
+
+#[test]
+fn cylinder_torus_tangent_miss_and_unsupported_cases() {
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let tangent_cylinder = Cylinder::new(Frame::world(), 2.5).unwrap();
+    let tangent = intersect_bounded_cylinder_torus(
+        &tangent_cylinder,
+        cylinder_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(tangent.points.is_empty());
+    assert_eq!(tangent.curves.len(), 1);
+    assert_eq!(tangent.curves[0].kind, ContactKind::Tangent);
+    assert_cylinder_torus_branch_endpoints(&tangent, &tangent_cylinder, &torus);
+
+    let miss_cylinder = Cylinder::new(Frame::world(), 3.0).unwrap();
+    let miss = intersect_bounded_cylinder_torus(
+        &miss_cylinder,
+        cylinder_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(miss.is_empty());
+
+    let shifted_cylinder = Cylinder::new(
+        Frame::new(
+            Point3::new(0.25, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        2.25,
+    )
+    .unwrap();
+    let err = intersect_bounded_cylinder_torus(
+        &shifted_cylinder,
+        cylinder_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "cylinder/torus intersection currently supports only coaxial circular cuts"
+        }
+    );
+
+    let tilted_cylinder = Cylinder::new(
+        Frame::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.5, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        2.25,
+    )
+    .unwrap();
+    let err = intersect_bounded_cylinder_torus(
+        &tilted_cylinder,
+        cylinder_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "cylinder/torus intersection currently supports only coaxial circular cuts"
+        }
+    );
+}
+
+#[test]
+fn surface_surface_dispatches_cylinder_torus_both_orders() {
+    let cylinder = Cylinder::new(Frame::world(), 2.25).unwrap();
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let hit = intersect_bounded_surfaces(
+        &cylinder,
+        cylinder_window(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.curves.len(), 2);
+    assert_cylinder_torus_branch_endpoints(&hit, &cylinder, &torus);
+
+    let swapped = intersect_bounded_surfaces(
+        &torus,
+        torus_window(),
+        &cylinder,
+        cylinder_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(swapped.curves.len(), hit.curves.len());
+    for branch in &swapped.curves {
+        let start = branch.curve.eval(branch.curve_range.lo);
+        let end = branch.curve.eval(branch.curve_range.hi);
+        assert!(torus.eval(branch.uv_a_start).dist(start) < 1e-12);
+        assert!(torus.eval(branch.uv_a_end).dist(end) < 1e-12);
+        assert!(cylinder.eval(branch.uv_b_start).dist(start) < 1e-12);
+        assert!(cylinder.eval(branch.uv_b_end).dist(end) < 1e-12);
+    }
 }
 
 #[test]
