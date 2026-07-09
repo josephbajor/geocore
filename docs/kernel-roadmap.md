@@ -128,8 +128,10 @@ contacts. Bounded 3D circle/circle, circle/ellipse, and ellipse/ellipse handle
 coplanar secants/tangencies, skew-plane contacts, periodic arc filtering,
 tolerance-aware near tangencies, and coincident overlaps where applicable.
 The public curve/curve dispatcher now routes every line/circle/ellipse ordered
-pair to those exact solvers and rejects unsupported NURBS/procedural curves
-explicitly. Curve/surface has begun with bounded line/plane, line/cylinder,
+pair to those exact solvers, plus an initial fixed-grid line/NURBS bridge for
+isolated contacts and finite contained overlaps, while rejecting unsupported
+NURBS/procedural pairs explicitly. Curve/surface has begun with bounded
+line/plane, line/cylinder,
 line/cone, line/sphere, line/torus, circle/plane, ellipse/plane, and
 circle/cylinder, circle/cone, circle/sphere, circle/torus, ellipse/sphere,
 ellipse/cylinder, ellipse/cone, and ellipse/torus over finite
@@ -138,8 +140,8 @@ circle-on-cylinder, ellipse-on-cylinder, circle-on-cone, ellipse-on-cone,
 circle-on-sphere, circle-on-torus, ellipse-on-torus, line-on-ruling intervals,
 NURBS/plane, and initial fixed-grid NURBS/sphere, NURBS/cylinder, NURBS/cone,
 and NURBS/torus marching, including contained curve overlaps, cone apex singular
-contacts, and torus quartic contacts. General
-NURBS/procedural curve/curve and broader curve/surface remain. Surface/surface
+contacts, and torus quartic contacts. Broader NURBS/procedural curve/curve and
+curve/surface remain. Surface/surface
 has started with bounded plane/plane, plane/sphere, plane/cylinder, plane/cone
 circular and elliptic slices, coaxial cylinder/sphere, cylinder/torus,
 cone/cone, cone/cylinder, cone/sphere, cone/torus, sphere/torus, and torus/torus
