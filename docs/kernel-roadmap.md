@@ -138,9 +138,9 @@ circle-on-cylinder, ellipse-on-cylinder, circle-on-cone, ellipse-on-cone,
 circle-on-sphere, circle-on-torus, ellipse-on-torus, and line-on-ruling
 intervals, cone apex singular contacts, and torus quartic contacts. General
 NURBS/procedural curve/curve and broader curve/surface remain. Surface/surface
-has started with bounded plane/sphere, plane/cylinder, and sphere/sphere closed
-form branches over finite windows, including tangent point contacts, ruling
-branches, and branch clipping.
+has started with bounded plane/plane, plane/sphere, plane/cylinder, and
+sphere/sphere closed form branches over finite windows, including tangent point
+contacts, ruling branches, and branch clipping.
 
 **Exit:** SSI test battery including tangent cylinders, near-tangent tori, and
 NURBS-vs-quadric cases; every intersection curve usable as edge geometry and

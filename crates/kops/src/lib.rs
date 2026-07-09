@@ -10,9 +10,9 @@
 //! circle/torus plus ellipse/sphere, ellipse/cylinder, ellipse/cone, and
 //! ellipse/torus. These cover transverse and tangent contacts, periodic arc
 //! filtering, misses, and oriented coincident overlaps. Bounded surface/surface
-//! intersections have started with plane/sphere, plane/cylinder, and
-//! sphere/sphere closed forms. General NURBS/procedural curve/curve, broader
-//! curve/surface, broader SSI, imprinting, and body operations remain future M4
-//! work.
+//! intersections have started with plane/plane, plane/sphere, plane/cylinder,
+//! and sphere/sphere closed forms. General NURBS/procedural curve/curve,
+//! broader curve/surface, broader SSI, imprinting, and body operations remain
+//! future M4 work.
 
 pub mod intersect;

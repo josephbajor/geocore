@@ -24,6 +24,7 @@ mod line_sphere;
 mod line_torus;
 mod planar_curve_plane;
 mod plane_cylinder;
+mod plane_plane;
 mod plane_sphere;
 mod result;
 mod sphere_sphere;
@@ -52,6 +53,7 @@ pub use line_sphere::intersect_bounded_line_sphere;
 pub use line_torus::intersect_bounded_line_torus;
 pub use planar_curve_plane::{intersect_bounded_circle_plane, intersect_bounded_ellipse_plane};
 pub use plane_cylinder::intersect_bounded_plane_cylinder;
+pub use plane_plane::intersect_bounded_planes;
 pub use plane_sphere::intersect_bounded_plane_sphere;
 pub use result::{
     ContactKind, CurveCurveIntersections, CurveCurveOverlap, CurveCurvePoint,

@@ -1,4 +1,5 @@
 use super::plane_cylinder::intersect_bounded_plane_cylinder;
+use super::plane_plane::intersect_bounded_planes;
 use super::plane_sphere::intersect_bounded_plane_sphere;
 use super::result::SurfaceSurfaceIntersections;
 use super::sphere_sphere::intersect_bounded_spheres;
@@ -9,9 +10,9 @@ use kgeom::surface::{Cylinder, Plane, Sphere, Surface};
 
 /// Intersect two surfaces over finite parameter windows.
 ///
-/// This is the first SSI dispatcher layer and currently routes the bounded
-/// plane/sphere analytic case. Unsupported classes fail explicitly; broader
-/// closed forms and marching/subdivision SSI remain later M4 work.
+/// This SSI dispatcher routes supported bounded analytic pairs. Unsupported
+/// classes fail explicitly; broader closed forms and marching/subdivision SSI
+/// remain later M4 work.
 pub fn intersect_bounded_surfaces(
     a: &dyn Surface,
     a_range: [ParamRange; 2],
@@ -23,6 +24,11 @@ pub fn intersect_bounded_surfaces(
         && let Some(sphere_b) = as_sphere(b)
     {
         return intersect_bounded_spheres(sphere_a, a_range, sphere_b, b_range, tolerances);
+    }
+    if let Some(plane_a) = as_plane(a)
+        && let Some(plane_b) = as_plane(b)
+    {
+        return intersect_bounded_planes(plane_a, a_range, plane_b, b_range, tolerances);
     }
     if let Some(plane) = as_plane(a)
         && let Some(cylinder) = as_cylinder(b)

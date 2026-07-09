@@ -9,8 +9,8 @@ use kgeom::surface::{Cylinder, Plane, Sphere, Surface};
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceIntersections,
-    intersect_bounded_plane_cylinder, intersect_bounded_plane_sphere, intersect_bounded_spheres,
-    intersect_bounded_surfaces,
+    intersect_bounded_plane_cylinder, intersect_bounded_plane_sphere, intersect_bounded_planes,
+    intersect_bounded_spheres, intersect_bounded_surfaces,
 };
 
 fn plane_window() -> [ParamRange; 2] {
@@ -94,6 +94,17 @@ fn assert_plane_cylinder_branch_endpoints(
     }
 }
 
+fn assert_plane_plane_branch_endpoints(hit: &SurfaceSurfaceIntersections, a: &Plane, b: &Plane) {
+    for branch in &hit.curves {
+        let start = branch.curve.eval(branch.curve_range.lo);
+        let end = branch.curve.eval(branch.curve_range.hi);
+        assert!(a.eval(branch.uv_a_start).dist(start) < 1e-12);
+        assert!(a.eval(branch.uv_a_end).dist(end) < 1e-12);
+        assert!(b.eval(branch.uv_b_start).dist(start) < 1e-12);
+        assert!(b.eval(branch.uv_b_end).dist(end) < 1e-12);
+    }
+}
+
 fn total_curve_width(hit: &SurfaceSurfaceIntersections) -> f64 {
     hit.curves
         .iter()
@@ -146,6 +157,132 @@ fn assert_sphere_sphere_circle_segments(
         );
     }
     assert!((total_width - expected_width).abs() < 1e-12);
+}
+
+#[test]
+fn plane_plane_transverse_returns_bounded_line_branch() {
+    let a = horizontal_plane(0.0);
+    let b = vertical_plane_x(0.0);
+    let hit = intersect_bounded_planes(
+        &a,
+        plane_window(),
+        &b,
+        plane_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 1);
+    assert_eq!(hit.curves[0].kind, ContactKind::Transverse);
+    assert!((hit.curves[0].curve_range.lo + 1.0).abs() < 1e-12);
+    assert!((hit.curves[0].curve_range.hi - 1.0).abs() < 1e-12);
+    assert_plane_plane_branch_endpoints(&hit, &a, &b);
+    let SurfaceIntersectionCurve::Line(line) = &hit.curves[0].curve else {
+        panic!("transverse plane/plane cut should be a line");
+    };
+    assert!(line.origin().dist(Point3::new(0.0, 0.0, 0.0)) < 1e-12);
+    assert!(line.dir().cross(Vec3::new(0.0, 1.0, 0.0)).norm() < 1e-12);
+}
+
+#[test]
+fn plane_plane_windows_clip_line_branch() {
+    let a = horizontal_plane(0.0);
+    let b = vertical_plane_x(0.0);
+    let hit = intersect_bounded_planes(
+        &a,
+        [ParamRange::new(-1.0, 1.0), ParamRange::new(-0.5, 0.75)],
+        &b,
+        [ParamRange::new(0.0, 1.0), ParamRange::new(-1.0, 1.0)],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 1);
+    assert!((hit.curves[0].curve_range.lo - 0.0).abs() < 1e-12);
+    assert!((hit.curves[0].curve_range.hi - 0.75).abs() < 1e-12);
+    assert_plane_plane_branch_endpoints(&hit, &a, &b);
+}
+
+#[test]
+fn plane_plane_window_boundary_contact_is_point() {
+    let a = horizontal_plane(0.0);
+    let b = vertical_plane_x(0.0);
+    let hit = intersect_bounded_planes(
+        &a,
+        [ParamRange::new(-1.0, 1.0), ParamRange::new(0.0, 1.0)],
+        &b,
+        [ParamRange::new(1.0, 2.0), ParamRange::new(-1.0, 1.0)],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.curves.is_empty());
+    assert_eq!(hit.points.len(), 1);
+    assert_eq!(hit.points[0].kind, ContactKind::Transverse);
+    assert!(hit.points[0].point.dist(Point3::new(0.0, 1.0, 0.0)) < 1e-12);
+    assert_eq!(hit.points[0].uv_a, [0.0, 1.0]);
+    assert_eq!(hit.points[0].uv_b, [1.0, 0.0]);
+}
+
+#[test]
+fn plane_plane_parallel_miss_and_coincident_cases() {
+    let a = horizontal_plane(0.0);
+    let miss = intersect_bounded_planes(
+        &a,
+        plane_window(),
+        &horizontal_plane(2.0),
+        plane_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(miss.is_empty());
+
+    let err = intersect_bounded_planes(
+        &a,
+        plane_window(),
+        &a,
+        plane_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "coincident plane/plane intersection is a surface overlap"
+        }
+    );
+}
+
+#[test]
+fn surface_surface_dispatches_plane_plane_both_orders() {
+    let a = horizontal_plane(0.0);
+    let b = vertical_plane_x(0.0);
+    let hit = intersect_bounded_surfaces(
+        &a,
+        plane_window(),
+        &b,
+        plane_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.curves.len(), 1);
+
+    let swapped = intersect_bounded_surfaces(
+        &b,
+        plane_window(),
+        &a,
+        plane_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(swapped.curves.len(), 1);
+    let same_orientation = swapped.curves[0].uv_a_start == hit.curves[0].uv_b_start
+        && swapped.curves[0].uv_b_start == hit.curves[0].uv_a_start;
+    let reversed_orientation = swapped.curves[0].uv_a_start == hit.curves[0].uv_b_end
+        && swapped.curves[0].uv_b_start == hit.curves[0].uv_a_end;
+    assert!(same_orientation || reversed_orientation);
 }
 
 #[test]
@@ -275,11 +412,12 @@ fn surface_surface_dispatches_plane_sphere_and_rejects_unsupported() {
     assert_eq!(swapped.curves[0].uv_a_start, hit.curves[0].uv_b_start);
     assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
 
+    let cylinder = Cylinder::new(Frame::world(), 1.0).unwrap();
     let err = intersect_bounded_surfaces(
-        &plane,
-        plane_window(),
-        &horizontal_plane(0.25),
-        plane_window(),
+        &sphere,
+        sphere_window(),
+        &cylinder,
+        cylinder_window(),
         Tolerances::default(),
     )
     .unwrap_err();
