@@ -343,6 +343,53 @@ fn wire_line(store: &mut Store) -> BodyId {
     body
 }
 
+fn wire_shared_line_segments(store: &mut Store) -> BodyId {
+    let body = store.add(Body {
+        kind: BodyKind::Wire,
+        regions: Vec::new(),
+    });
+    let region = store.add(Region {
+        body,
+        kind: RegionKind::Void,
+        shells: Vec::new(),
+    });
+    store.get_mut(body).unwrap().regions.push(region);
+    let shell = store.add(Shell {
+        region,
+        faces: Vec::new(),
+        edges: Vec::new(),
+        vertex: None,
+    });
+    store.get_mut(region).unwrap().shells.push(shell);
+
+    let points = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(2.0, 0.0, 0.0),
+    ];
+    let vertices = points.map(|point| {
+        let point = store.add(point);
+        store.add(Vertex {
+            point,
+            tolerance: None,
+        })
+    });
+    let curve = store.add(CurveGeom::Line(
+        Line::new(points[0], Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+    ));
+    for i in 0..2 {
+        let edge = store.add(Edge {
+            curve: Some(curve),
+            vertices: [Some(vertices[i]), Some(vertices[i + 1])],
+            bounds: Some((i as f64, i as f64 + 1.0)),
+            fins: Vec::new(),
+            tolerance: None,
+        });
+        store.get_mut(shell).unwrap().edges.push(edge);
+    }
+    body
+}
+
 fn wire_ellipse_arc(store: &mut Store) -> BodyId {
     let body = store.add(Body {
         kind: BodyKind::Wire,
@@ -619,6 +666,35 @@ fn wire_line_round_trips_with_dummy_fins() {
     assert!(edge.vertices[0].is_some());
     assert!(edge.vertices[1].is_some());
     assert!(edge.bounds.is_some());
+}
+
+#[test]
+fn wire_edges_can_share_a_basis_curve() {
+    let mut store = Store::new();
+    let body = wire_shared_line_segments(&mut store);
+
+    let (text, imported, imported_body) = assert_checker_roundtrip(&store, body);
+    let parsed = kxt::read_xt(text.as_bytes()).unwrap();
+    let line_nodes = parsed
+        .nodes
+        .values()
+        .filter(|node| node.code == code::LINE)
+        .count();
+    let trim_nodes = parsed
+        .nodes
+        .values()
+        .filter(|node| node.code == code::TRIMMED_CURVE)
+        .count();
+    assert_eq!(line_nodes, 1, "shared basis line should be emitted once");
+    assert_eq!(trim_nodes, 2, "each bounded edge gets its own trim");
+    assert_eq!(imported.edges_of_body(imported_body).unwrap().len(), 2);
+    assert_eq!(
+        imported
+            .iter::<CurveGeom>()
+            .filter(|(_, curve)| matches!(curve, CurveGeom::Line(_)))
+            .count(),
+        1
+    );
 }
 
 #[test]

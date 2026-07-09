@@ -114,11 +114,7 @@ impl Plan {
         let mut surface_handles = Vec::new();
         for &face in &face_handles {
             let f = store.get(face)?;
-            push_unique(
-                &mut surface_handles,
-                f.surface,
-                "surface shared by multiple faces",
-            )?;
+            push_interned(&mut surface_handles, f.surface);
             for &lp in &f.loops {
                 if store.get(lp)?.fins.is_empty() {
                     return Err(XtError::InvalidModel { what: "empty loop" });
@@ -145,7 +141,7 @@ impl Plan {
             if e.bounds.is_some() {
                 trimmed_curve_edges.push(edge);
             }
-            push_unique(&mut curve_handles, curve, "curve shared by multiple edges")?;
+            push_interned(&mut curve_handles, curve);
             match (store.get(curve)?, e.vertices, e.bounds) {
                 (CurveGeom::Line(_), [Some(_), Some(_)], Some(_)) => {}
                 (CurveGeom::Circle(_), [None, None], None) => {}
@@ -171,11 +167,7 @@ impl Plan {
                 });
             }
             check_in_size_box(store.get(v.point)?.to_array())?;
-            push_unique(
-                &mut point_handles,
-                v.point,
-                "point shared by multiple vertices",
-            )?;
+            push_interned(&mut point_handles, v.point);
         }
         for &surface in &surface_handles {
             match store.get(surface)? {
@@ -1442,12 +1434,10 @@ fn assign_dummy_fins(dummy_fins: &[DummyFin], next: &mut u32) -> Vec<(DummyFin, 
         .collect()
 }
 
-fn push_unique<T>(values: &mut Vec<Handle<T>>, value: Handle<T>, what: &'static str) -> Result<()> {
-    if values.contains(&value) {
-        return Err(XtError::Unsupported { what });
+fn push_interned<T>(values: &mut Vec<Handle<T>>, value: Handle<T>) {
+    if !values.contains(&value) {
+        values.push(value);
     }
-    values.push(value);
-    Ok(())
 }
 
 fn id_of<T>(values: &[(Handle<T>, u32)], handle: Handle<T>) -> u32 {
