@@ -13,6 +13,7 @@ use super::plane_torus::intersect_bounded_plane_torus;
 use super::result::SurfaceSurfaceIntersections;
 use super::sphere_sphere::intersect_bounded_spheres;
 use super::sphere_torus::intersect_bounded_sphere_torus;
+use super::torus_torus::intersect_bounded_tori;
 use kcore::error::{Error, Result};
 use kcore::tolerance::Tolerances;
 use kgeom::param::ParamRange;
@@ -45,6 +46,11 @@ pub fn intersect_bounded_surfaces(
     {
         return intersect_bounded_sphere_torus(sphere, b_range, torus, a_range, tolerances)
             .map(SurfaceSurfaceIntersections::swapped);
+    }
+    if let Some(torus_a) = as_torus(a)
+        && let Some(torus_b) = as_torus(b)
+    {
+        return intersect_bounded_tori(torus_a, a_range, torus_b, b_range, tolerances);
     }
     if let Some(cylinder_a) = as_cylinder(a)
         && let Some(cylinder_b) = as_cylinder(b)

@@ -40,6 +40,7 @@ mod result;
 mod sphere_sphere;
 mod sphere_torus;
 mod surface_surface;
+mod torus_torus;
 
 pub use circle_circle::intersect_bounded_circles;
 pub use circle_cone::intersect_bounded_circle_cone;
@@ -86,3 +87,4 @@ pub use result::{
 pub use sphere_sphere::intersect_bounded_spheres;
 pub use sphere_torus::intersect_bounded_sphere_torus;
 pub use surface_surface::intersect_bounded_surfaces;
+pub use torus_torus::intersect_bounded_tori;
