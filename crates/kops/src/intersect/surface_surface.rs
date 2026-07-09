@@ -1,3 +1,4 @@
+use super::cone_cone::intersect_bounded_cones;
 use super::cone_cylinder::intersect_bounded_cone_cylinder;
 use super::cone_sphere::intersect_bounded_cone_sphere;
 use super::cone_torus::intersect_bounded_cone_torus;
@@ -60,6 +61,11 @@ pub fn intersect_bounded_surfaces(
     {
         return intersect_bounded_cylinder_torus(cylinder, b_range, torus, a_range, tolerances)
             .map(SurfaceSurfaceIntersections::swapped);
+    }
+    if let Some(cone_a) = as_cone(a)
+        && let Some(cone_b) = as_cone(b)
+    {
+        return intersect_bounded_cones(cone_a, a_range, cone_b, b_range, tolerances);
     }
     if let Some(cone) = as_cone(a)
         && let Some(torus) = as_torus(b)

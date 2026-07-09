@@ -5,14 +5,14 @@ use kcore::math;
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::frame::Frame;
-use kgeom::nurbs::NurbsCurve;
+use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::param::ParamRange;
 use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
     intersect_bounded_cone_cylinder, intersect_bounded_cone_sphere, intersect_bounded_cone_torus,
-    intersect_bounded_cylinder_sphere, intersect_bounded_cylinder_torus,
+    intersect_bounded_cones, intersect_bounded_cylinder_sphere, intersect_bounded_cylinder_torus,
     intersect_bounded_cylinders, intersect_bounded_plane_cone, intersect_bounded_plane_cylinder,
     intersect_bounded_plane_sphere, intersect_bounded_plane_torus, intersect_bounded_planes,
     intersect_bounded_sphere_torus, intersect_bounded_spheres, intersect_bounded_surfaces,
@@ -37,6 +37,13 @@ fn cone_window() -> [ParamRange; 2] {
     [
         ParamRange::new(0.0, core::f64::consts::TAU),
         ParamRange::new(-1.0, 1.0),
+    ]
+}
+
+fn wide_cone_window() -> [ParamRange; 2] {
+    [
+        ParamRange::new(0.0, core::f64::consts::TAU),
+        ParamRange::new(-4.0, 2.0),
     ]
 }
 
@@ -243,6 +250,17 @@ fn assert_cone_cylinder_branch_endpoints(
     }
 }
 
+fn assert_cone_cone_branch_endpoints(hit: &SurfaceSurfaceIntersections, a: &Cone, b: &Cone) {
+    for branch in &hit.curves {
+        let start = branch.curve.eval(branch.curve_range.lo);
+        let end = branch.curve.eval(branch.curve_range.hi);
+        assert!(a.eval(branch.uv_a_start).dist(start) < 1e-12);
+        assert!(a.eval(branch.uv_a_end).dist(end) < 1e-12);
+        assert!(b.eval(branch.uv_b_start).dist(start) < 1e-12);
+        assert!(b.eval(branch.uv_b_end).dist(end) < 1e-12);
+    }
+}
+
 fn assert_cone_torus_branch_endpoints(
     hit: &SurfaceSurfaceIntersections,
     cone: &Cone,
@@ -333,6 +351,23 @@ fn quarter_circle_nurbs() -> NurbsCurve {
             Point3::new(0.0, 1.0, 0.0),
         ],
         Some(vec![1.0, core::f64::consts::FRAC_1_SQRT_2, 1.0]),
+    )
+    .unwrap()
+}
+
+fn bilinear_nurbs_surface() -> NurbsSurface {
+    NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+        ],
+        None,
     )
     .unwrap()
 }
@@ -625,23 +660,12 @@ fn surface_surface_dispatches_plane_sphere_and_rejects_unsupported() {
     assert_eq!(swapped.curves[0].uv_a_start, hit.curves[0].uv_b_start);
     assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
 
-    let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
-    let other_cone = Cone::new(
-        Frame::new(
-            Point3::new(0.25, 0.0, 0.0),
-            Vec3::new(0.0, 0.0, 1.0),
-            Vec3::new(1.0, 0.0, 0.0),
-        )
-        .unwrap(),
-        1.0,
-        core::f64::consts::PI / 5.0,
-    )
-    .unwrap();
+    let nurbs = bilinear_nurbs_surface();
     let err = intersect_bounded_surfaces(
-        &cone,
-        cone_window(),
-        &other_cone,
-        cone_window(),
+        &nurbs,
+        nurbs.param_range(),
+        &sphere,
+        sphere_window(),
         Tolerances::default(),
     )
     .unwrap_err();
@@ -1599,6 +1623,232 @@ fn surface_surface_dispatches_cone_cylinder_both_orders() {
         assert!(cone.eval(branch.uv_b_start).dist(start) < 1e-12);
         assert!(cone.eval(branch.uv_b_end).dist(end) < 1e-12);
     }
+}
+
+#[test]
+fn cone_cone_coaxial_secant_returns_circle_branches() {
+    let a = Cone::new(Frame::world(), 2.0, core::f64::consts::FRAC_PI_4).unwrap();
+    let b = Cone::new(Frame::world(), 2.0, math::atan2(1.0, 2.0)).unwrap();
+    let hit = intersect_bounded_cones(
+        &a,
+        wide_cone_window(),
+        &b,
+        wide_cone_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 3);
+    assert!((total_curve_width(&hit) - 2.0 * core::f64::consts::TAU).abs() < 1e-12);
+    assert_cone_cone_branch_endpoints(&hit, &a, &b);
+
+    let mut centers = Vec::new();
+    let mut radii = Vec::new();
+    for branch in &hit.curves {
+        assert_eq!(branch.kind, ContactKind::Transverse);
+        let SurfaceIntersectionCurve::Circle(circle) = &branch.curve else {
+            panic!("coaxial cone/cone cut should be carried by latitude circles");
+        };
+        if !centers
+            .iter()
+            .any(|z: &f64| (*z - circle.frame().origin().z).abs() < 1e-12)
+        {
+            centers.push(circle.frame().origin().z);
+        }
+        if !radii
+            .iter()
+            .any(|radius: &f64| (*radius - circle.radius()).abs() < 1e-12)
+        {
+            radii.push(circle.radius());
+        }
+    }
+    centers.sort_by(f64::total_cmp);
+    radii.sort_by(f64::total_cmp);
+    assert_eq!(centers.len(), 2);
+    assert_eq!(radii.len(), 2);
+    assert!((centers[0] + 8.0 / 3.0).abs() < 1e-12);
+    assert!(centers[1].abs() < 1e-12);
+    assert!((radii[0] - 2.0 / 3.0).abs() < 1e-12);
+    assert!((radii[1] - 2.0).abs() < 1e-12);
+}
+
+#[test]
+fn cone_cone_surface_windows_clip_circle_branch() {
+    let a = Cone::new(Frame::world(), 2.0, core::f64::consts::FRAC_PI_4).unwrap();
+    let b = Cone::new(Frame::world(), 2.0, math::atan2(1.0, 2.0)).unwrap();
+    let hit = intersect_bounded_cones(
+        &a,
+        [
+            ParamRange::new(0.0, core::f64::consts::PI),
+            ParamRange::new(-0.25, 0.25),
+        ],
+        &b,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(-0.25, 0.25),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 1);
+    assert!((total_curve_width(&hit) - core::f64::consts::PI).abs() < 1e-12);
+    assert_cone_cone_branch_endpoints(&hit, &a, &b);
+    assert!(hit.curves[0].curve_range.lo.abs() < 1e-12);
+    assert!((hit.curves[0].curve_range.hi - core::f64::consts::PI).abs() < 1e-12);
+}
+
+#[test]
+fn cone_cone_shared_apex_window_miss_overlap_and_unsupported_cases() {
+    let a = Cone::new(Frame::world(), 1.0, core::f64::consts::FRAC_PI_4).unwrap();
+    let b = Cone::new(Frame::world(), 2.0, math::atan2(2.0, 1.0)).unwrap();
+    let apex = intersect_bounded_cones(
+        &a,
+        wide_cone_window(),
+        &b,
+        wide_cone_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(apex.curves.is_empty());
+    assert_eq!(apex.points.len(), 1);
+    assert_eq!(apex.points[0].kind, ContactKind::Singular);
+    assert!(apex.points[0].point.dist(Point3::new(0.0, 0.0, -1.0)) < 1e-12);
+
+    let miss = intersect_bounded_cones(
+        &a,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(0.25, 0.75),
+        ],
+        &b,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(0.25, 0.75),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(miss.is_empty());
+
+    let err = intersect_bounded_cones(
+        &a,
+        wide_cone_window(),
+        &a,
+        wide_cone_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "coincident cone/cone intersection is a surface overlap"
+        }
+    );
+
+    let shifted = Cone::new(
+        Frame::new(
+            Point3::new(0.25, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        2.0,
+        math::atan2(1.0, 2.0),
+    )
+    .unwrap();
+    let err = intersect_bounded_cones(
+        &a,
+        wide_cone_window(),
+        &shifted,
+        wide_cone_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "cone/cone intersection currently supports only coaxial circular cuts"
+        }
+    );
+
+    let tilted = Cone::new(
+        Frame::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.5, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        2.0,
+        math::atan2(1.0, 2.0),
+    )
+    .unwrap();
+    let err = intersect_bounded_cones(
+        &a,
+        wide_cone_window(),
+        &tilted,
+        wide_cone_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "cone/cone intersection currently supports only coaxial circular cuts"
+        }
+    );
+}
+
+#[test]
+fn cone_cone_accepts_antiparallel_coaxial_axes() {
+    let a = Cone::new(Frame::world(), 2.0, core::f64::consts::FRAC_PI_4).unwrap();
+    let b = Cone::new(
+        Frame::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        2.0,
+        math::atan2(1.0, 2.0),
+    )
+    .unwrap();
+    let hit = intersect_bounded_cones(&a, cone_window(), &b, cone_window(), Tolerances::default())
+        .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 1);
+    assert!((total_curve_width(&hit) - core::f64::consts::TAU).abs() < 1e-12);
+    assert_cone_cone_branch_endpoints(&hit, &a, &b);
+}
+
+#[test]
+fn surface_surface_dispatches_cone_cone_both_orders() {
+    let a = Cone::new(Frame::world(), 2.0, core::f64::consts::FRAC_PI_4).unwrap();
+    let b = Cone::new(Frame::world(), 2.0, math::atan2(1.0, 2.0)).unwrap();
+    let hit = intersect_bounded_surfaces(
+        &a,
+        wide_cone_window(),
+        &b,
+        wide_cone_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.curves.len(), 3);
+    assert_cone_cone_branch_endpoints(&hit, &a, &b);
+
+    let swapped = intersect_bounded_surfaces(
+        &b,
+        wide_cone_window(),
+        &a,
+        wide_cone_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(swapped.curves.len(), hit.curves.len());
+    assert_cone_cone_branch_endpoints(&swapped, &b, &a);
 }
 
 #[test]
