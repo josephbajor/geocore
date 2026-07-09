@@ -11,19 +11,21 @@ use super::line_cylinder::intersect_bounded_line_cylinder;
 use super::line_plane::intersect_bounded_line_plane;
 use super::line_sphere::intersect_bounded_line_sphere;
 use super::line_torus::intersect_bounded_line_torus;
+use super::nurbs_plane::intersect_bounded_nurbs_plane;
 use super::planar_curve_plane::{intersect_bounded_circle_plane, intersect_bounded_ellipse_plane};
 use super::result::CurveSurfaceIntersections;
 use kcore::error::{Error, Result};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
+use kgeom::nurbs::NurbsCurve;
 use kgeom::param::ParamRange;
 use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 
 /// Intersect a curve with a surface over finite curve and surface windows.
 ///
 /// This currently dispatches bounded line/surface analytic cases, planar
-/// circle-or-ellipse/plane cases, circle/cone/cylinder/sphere/torus cases, and
-/// ellipse/sphere/cylinder/cone/torus cases.
+/// circle-or-ellipse/plane cases, NURBS/plane cases, circle/cone/cylinder/
+/// sphere/torus cases, and ellipse/sphere/cylinder/cone/torus cases.
 /// Unsupported curve or surface classes fail explicitly; broader analytic
 /// cases and the general subdivision/Newton curve/surface solver remain later
 /// M4 work.
@@ -88,6 +90,15 @@ pub fn intersect_bounded_curve_surface(
         if let Some(ellipse) = as_ellipse(curve) {
             return intersect_bounded_ellipse_plane(
                 ellipse,
+                curve_range,
+                plane,
+                surface_range,
+                tolerances,
+            );
+        }
+        if let Some(nurbs) = as_nurbs(curve) {
+            return intersect_bounded_nurbs_plane(
+                nurbs,
                 curve_range,
                 plane,
                 surface_range,
@@ -192,6 +203,10 @@ fn as_circle(curve: &dyn Curve) -> Option<&Circle> {
 }
 
 fn as_ellipse(curve: &dyn Curve) -> Option<&Ellipse> {
+    curve.as_any().downcast_ref()
+}
+
+fn as_nurbs(curve: &dyn Curve) -> Option<&NurbsCurve> {
     curve.as_any().downcast_ref()
 }
 

@@ -1,6 +1,5 @@
-//! Bounded analytic curve/surface intersection behavior.
+//! Bounded curve/surface intersection behavior.
 
-use kcore::error::Error;
 use kcore::math;
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
@@ -17,6 +16,7 @@ use kops::intersect::{
     intersect_bounded_ellipse_plane, intersect_bounded_ellipse_sphere,
     intersect_bounded_ellipse_torus, intersect_bounded_line_cone, intersect_bounded_line_cylinder,
     intersect_bounded_line_plane, intersect_bounded_line_sphere, intersect_bounded_line_torus,
+    intersect_bounded_nurbs_plane,
 };
 
 fn make_line(origin: [f64; 3], direction: [f64; 3]) -> Line {
@@ -62,6 +62,48 @@ fn horizontal_frame(origin: [f64; 3]) -> Frame {
         Point3::from_array(origin),
         Vec3::new(0.0, 0.0, 1.0),
         Vec3::new(1.0, 0.0, 0.0),
+    )
+    .unwrap()
+}
+
+fn crossing_nurbs() -> NurbsCurve {
+    NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(-1.0, 0.0, -1.0),
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 1.0),
+        ],
+        None,
+    )
+    .unwrap()
+}
+
+fn tangent_nurbs() -> NurbsCurve {
+    NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(-1.0, 0.0, 1.0),
+            Point3::new(0.0, 0.0, -1.0),
+            Point3::new(1.0, 0.0, 1.0),
+        ],
+        None,
+    )
+    .unwrap()
+}
+
+fn contained_quarter_circle_nurbs() -> NurbsCurve {
+    NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ],
+        Some(vec![1.0, 0.5_f64.sqrt(), 1.0]),
     )
     .unwrap()
 }
@@ -1541,6 +1583,82 @@ fn circle_in_plane_clips_overlap_to_surface_window() {
 }
 
 #[test]
+fn nurbs_plane_crossing_tangent_and_range_filtering() {
+    let plane = Plane::new(Frame::world());
+    let wide_plane = [ParamRange::new(-2.0, 2.0), ParamRange::new(-2.0, 2.0)];
+
+    let crossing = crossing_nurbs();
+    let hit = intersect_bounded_nurbs_plane(
+        &crossing,
+        crossing.param_range(),
+        &plane,
+        wide_plane,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.points.len(), 1);
+    assert_eq!(hit.points[0].kind, ContactKind::Transverse);
+    assert!((hit.points[0].t_curve - 0.5).abs() < 1e-8);
+    assert!(hit.points[0].point.dist(Point3::new(0.0, 0.0, 0.0)) < 1e-8);
+    assert_eq!(hit.points[0].uv_surface, [0.0, 0.0]);
+
+    let range_miss = intersect_bounded_nurbs_plane(
+        &crossing,
+        ParamRange::new(0.0, 0.25),
+        &plane,
+        wide_plane,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(range_miss.is_empty());
+
+    let window_miss = intersect_bounded_nurbs_plane(
+        &crossing,
+        crossing.param_range(),
+        &plane,
+        [ParamRange::new(0.25, 2.0), ParamRange::new(-1.0, 1.0)],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(window_miss.is_empty());
+
+    let tangent = tangent_nurbs();
+    let hit = intersect_bounded_nurbs_plane(
+        &tangent,
+        tangent.param_range(),
+        &plane,
+        wide_plane,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.points.len(), 1);
+    assert_eq!(hit.points[0].kind, ContactKind::Tangent);
+    assert!((hit.points[0].t_curve - 0.5).abs() < 1e-8);
+    assert!(hit.points[0].point.dist(Point3::new(0.0, 0.0, 0.0)) < 1e-8);
+}
+
+#[test]
+fn nurbs_contained_in_plane_reports_overlap() {
+    let curve = contained_quarter_circle_nurbs();
+    let plane = Plane::new(Frame::world());
+    let hit = intersect_bounded_nurbs_plane(
+        &curve,
+        curve.param_range(),
+        &plane,
+        [ParamRange::new(-0.25, 1.25), ParamRange::new(-0.25, 1.25)],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.overlaps.len(), 1);
+    assert_eq!(hit.overlaps[0].curve, ParamRange::new(0.0, 1.0));
+    assert_eq!(hit.overlaps[0].uv_start, [1.0, 0.0]);
+    assert!(hit.overlaps[0].uv_end[0].abs() < 1e-12);
+    assert!((hit.overlaps[0].uv_end[1] - 1.0).abs() < 1e-12);
+}
+
+#[test]
 fn curve_surface_dispatches_supported_cases_and_rejects_unsupported() {
     let line = make_line([0.0, 0.0, -1.0], [0.0, 0.0, 1.0]);
     let plane = Plane::new(Frame::world());
@@ -1712,18 +1830,15 @@ fn curve_surface_dispatches_supported_cases_and_rejects_unsupported() {
         None,
     )
     .unwrap();
-    let err = intersect_bounded_curve_surface(
+    let hit = intersect_bounded_curve_surface(
         &nurbs,
         nurbs.param_range(),
         &plane,
         plane_window(),
         Tolerances::default(),
     )
-    .unwrap_err();
-    assert_eq!(
-        err,
-        Error::InvalidGeometry {
-            reason: "unsupported curve/surface intersection class"
-        }
-    );
+    .unwrap();
+    assert_eq!(hit.points.len(), 1);
+    assert_eq!(hit.points[0].kind, ContactKind::Transverse);
+    assert!((hit.points[0].t_curve - 0.5).abs() < 1e-8);
 }
