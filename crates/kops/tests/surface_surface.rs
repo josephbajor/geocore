@@ -4,11 +4,12 @@ use kcore::error::Error;
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::frame::Frame;
+use kgeom::nurbs::NurbsCurve;
 use kgeom::param::ParamRange;
 use kgeom::surface::{Cylinder, Plane, Sphere, Surface};
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
-    ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceIntersections,
+    ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
     intersect_bounded_plane_cylinder, intersect_bounded_plane_sphere, intersect_bounded_planes,
     intersect_bounded_spheres, intersect_bounded_surfaces,
 };
@@ -157,6 +158,55 @@ fn assert_sphere_sphere_circle_segments(
         );
     }
     assert!((total_width - expected_width).abs() < 1e-12);
+}
+
+fn quarter_circle_nurbs() -> NurbsCurve {
+    NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ],
+        Some(vec![1.0, core::f64::consts::FRAC_1_SQRT_2, 1.0]),
+    )
+    .unwrap()
+}
+
+#[test]
+fn surface_intersection_curve_carries_nurbs_branch() {
+    let nurbs = quarter_circle_nurbs();
+    let branch = SurfaceIntersectionCurve::Nurbs(nurbs.clone());
+    assert_eq!(branch.param_range(), ParamRange::new(0.0, 1.0));
+    assert!(branch.eval(0.0).dist(Point3::new(1.0, 0.0, 0.0)) < 1e-12);
+    assert!(branch.eval(1.0).dist(Point3::new(0.0, 1.0, 0.0)) < 1e-12);
+    assert!(
+        branch.eval(0.5).dist(Point3::new(
+            core::f64::consts::FRAC_1_SQRT_2,
+            core::f64::consts::FRAC_1_SQRT_2,
+            0.0
+        )) < 1e-12
+    );
+
+    let intersections = SurfaceSurfaceIntersections::canonicalized(
+        Vec::new(),
+        vec![SurfaceSurfaceCurve {
+            curve: SurfaceIntersectionCurve::Nurbs(nurbs),
+            curve_range: ParamRange::new(0.0, 1.0),
+            uv_a_start: [0.0, 0.0],
+            uv_a_end: [1.0, 0.0],
+            uv_b_start: [0.0, 1.0],
+            uv_b_end: [1.0, 1.0],
+            kind: ContactKind::Transverse,
+        }],
+    )
+    .unwrap();
+    assert_eq!(intersections.curves.len(), 1);
+    assert!(matches!(
+        intersections.curves[0].curve,
+        SurfaceIntersectionCurve::Nurbs(_)
+    ));
 }
 
 #[test]

@@ -34,7 +34,9 @@ parametric CAD application; feature history and regeneration are later layers.
   circle/torus plus ellipse/sphere, ellipse/cylinder, ellipse/cone, and
   ellipse/torus. Surface/surface has bounded plane/plane, plane/sphere,
   plane/cylinder, and sphere/sphere closed forms. General NURBS/procedural
-  curve/curve cases, broader curve/surface, broader SSI, and imprinting remain.
+  curve/curve cases, broader curve/surface, broader SSI, and imprinting remain;
+  SSI branch results can already carry exact NURBS curves for non-analytic edge
+  geometry.
 
 Immediate work per the roadmap: broaden analytic curve/curve intersections,
 then curve/surface and SSI; complete M3b external XT validation in parallel.

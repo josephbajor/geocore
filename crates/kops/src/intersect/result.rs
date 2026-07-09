@@ -1,6 +1,7 @@
 use kcore::error::{Error, Result};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
+use kgeom::nurbs::NurbsCurve;
 use kgeom::param::ParamRange;
 use kgeom::surface::Surface;
 use kgeom::vec::Point3;
@@ -255,7 +256,7 @@ pub fn accept_curve_surface_candidate(
     })
 }
 
-/// Analytic curve geometry carrying a surface/surface intersection branch.
+/// Curve geometry carrying a surface/surface intersection branch.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SurfaceIntersectionCurve {
     /// Straight intersection branch.
@@ -264,6 +265,8 @@ pub enum SurfaceIntersectionCurve {
     Circle(Circle),
     /// Elliptic intersection branch.
     Ellipse(Ellipse),
+    /// Exact B-spline/NURBS intersection branch.
+    Nurbs(NurbsCurve),
 }
 
 impl SurfaceIntersectionCurve {
@@ -273,6 +276,7 @@ impl SurfaceIntersectionCurve {
             SurfaceIntersectionCurve::Line(line) => line.eval(t),
             SurfaceIntersectionCurve::Circle(circle) => circle.eval(t),
             SurfaceIntersectionCurve::Ellipse(ellipse) => ellipse.eval(t),
+            SurfaceIntersectionCurve::Nurbs(nurbs) => nurbs.eval(t),
         }
     }
 
@@ -282,6 +286,7 @@ impl SurfaceIntersectionCurve {
             SurfaceIntersectionCurve::Line(line) => line.param_range(),
             SurfaceIntersectionCurve::Circle(circle) => circle.param_range(),
             SurfaceIntersectionCurve::Ellipse(ellipse) => ellipse.param_range(),
+            SurfaceIntersectionCurve::Nurbs(nurbs) => nurbs.param_range(),
         }
     }
 }
@@ -304,7 +309,7 @@ pub struct SurfaceSurfacePoint {
 /// A positive-length surface/surface intersection branch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SurfaceSurfaceCurve {
-    /// Analytic curve carrying the intersection branch.
+    /// Curve carrying the intersection branch.
     pub curve: SurfaceIntersectionCurve,
     /// Active parameter interval on `curve`.
     pub curve_range: ParamRange,
