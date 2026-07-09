@@ -16,7 +16,7 @@ use kops::intersect::{
     intersect_bounded_ellipse_plane, intersect_bounded_ellipse_sphere,
     intersect_bounded_ellipse_torus, intersect_bounded_line_cone, intersect_bounded_line_cylinder,
     intersect_bounded_line_plane, intersect_bounded_line_sphere, intersect_bounded_line_torus,
-    intersect_bounded_nurbs_plane,
+    intersect_bounded_nurbs_plane, intersect_bounded_nurbs_sphere,
 };
 
 fn make_line(origin: [f64; 3], direction: [f64; 3]) -> Line {
@@ -104,6 +104,26 @@ fn contained_quarter_circle_nurbs() -> NurbsCurve {
             Point3::new(0.0, 1.0, 0.0),
         ],
         Some(vec![1.0, 0.5_f64.sqrt(), 1.0]),
+    )
+    .unwrap()
+}
+
+fn crossing_sphere_nurbs() -> NurbsCurve {
+    NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![Point3::new(-2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0)],
+        None,
+    )
+    .unwrap()
+}
+
+fn tangent_sphere_nurbs() -> NurbsCurve {
+    NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![Point3::new(-0.37, 1.0, 0.0), Point3::new(0.63, 1.0, 0.0)],
+        None,
     )
     .unwrap()
 }
@@ -1659,6 +1679,90 @@ fn nurbs_contained_in_plane_reports_overlap() {
 }
 
 #[test]
+fn nurbs_sphere_crossing_tangent_and_range_filtering() {
+    let sphere = Sphere::new(Frame::world(), 1.0).unwrap();
+    let crossing = crossing_sphere_nurbs();
+    let hit = intersect_bounded_nurbs_sphere(
+        &crossing,
+        crossing.param_range(),
+        &sphere,
+        sphere.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.points.len(), 2);
+    assert_eq!(hit.points[0].kind, ContactKind::Transverse);
+    assert!(hit.points[0].point.dist(Point3::new(-1.0, 0.0, 0.0)) < 1e-8);
+    assert!((hit.points[0].t_curve - 0.25).abs() < 1e-8);
+    assert_eq!(hit.points[1].kind, ContactKind::Transverse);
+    assert!(hit.points[1].point.dist(Point3::new(1.0, 0.0, 0.0)) < 1e-8);
+    assert!((hit.points[1].t_curve - 0.75).abs() < 1e-8);
+
+    let range_miss = intersect_bounded_nurbs_sphere(
+        &crossing,
+        ParamRange::new(0.0, 0.2),
+        &sphere,
+        sphere.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(range_miss.is_empty());
+
+    let filtered = intersect_bounded_nurbs_sphere(
+        &crossing,
+        crossing.param_range(),
+        &sphere,
+        [
+            ParamRange::new(0.0, core::f64::consts::FRAC_PI_2),
+            ParamRange::new(-core::f64::consts::FRAC_PI_2, core::f64::consts::FRAC_PI_2),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(filtered.points.len(), 1);
+    assert!(filtered.points[0].point.dist(Point3::new(1.0, 0.0, 0.0)) < 1e-8);
+
+    let tangent = tangent_sphere_nurbs();
+    let hit = intersect_bounded_nurbs_sphere(
+        &tangent,
+        tangent.param_range(),
+        &sphere,
+        sphere.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.points.len(), 1);
+    assert_eq!(hit.points[0].kind, ContactKind::Tangent);
+    assert!(
+        hit.points[0].point.dist(Point3::new(0.0, 1.0, 0.0)) < 2e-8,
+        "{:?}",
+        hit.points[0]
+    );
+    assert!((hit.points[0].t_curve - 0.37).abs() < 2e-8);
+}
+
+#[test]
+fn nurbs_contained_in_sphere_reports_overlap() {
+    let curve = contained_quarter_circle_nurbs();
+    let sphere = Sphere::new(Frame::world(), 1.0).unwrap();
+    let hit = intersect_bounded_nurbs_sphere(
+        &curve,
+        curve.param_range(),
+        &sphere,
+        sphere.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.overlaps.len(), 1);
+    assert_eq!(hit.overlaps[0].curve, ParamRange::new(0.0, 1.0));
+    assert_eq!(hit.overlaps[0].uv_start, [0.0, 0.0]);
+    assert!((hit.overlaps[0].uv_end[0] - core::f64::consts::FRAC_PI_2).abs() < 1e-12);
+    assert!(hit.overlaps[0].uv_end[1].abs() < 1e-12);
+}
+
+#[test]
 fn curve_surface_dispatches_supported_cases_and_rejects_unsupported() {
     let line = make_line([0.0, 0.0, -1.0], [0.0, 0.0, 1.0]);
     let plane = Plane::new(Frame::world());
@@ -1841,4 +1945,15 @@ fn curve_surface_dispatches_supported_cases_and_rejects_unsupported() {
     assert_eq!(hit.points.len(), 1);
     assert_eq!(hit.points[0].kind, ContactKind::Transverse);
     assert!((hit.points[0].t_curve - 0.5).abs() < 1e-8);
+
+    let nurbs = crossing_sphere_nurbs();
+    let hit = intersect_bounded_curve_surface(
+        &nurbs,
+        nurbs.param_range(),
+        &sphere,
+        sphere.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.points.len(), 2);
 }

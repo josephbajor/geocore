@@ -12,6 +12,7 @@ use super::line_plane::intersect_bounded_line_plane;
 use super::line_sphere::intersect_bounded_line_sphere;
 use super::line_torus::intersect_bounded_line_torus;
 use super::nurbs_plane::intersect_bounded_nurbs_plane;
+use super::nurbs_sphere::intersect_bounded_nurbs_sphere;
 use super::planar_curve_plane::{intersect_bounded_circle_plane, intersect_bounded_ellipse_plane};
 use super::result::CurveSurfaceIntersections;
 use kcore::error::{Error, Result};
@@ -24,8 +25,9 @@ use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 /// Intersect a curve with a surface over finite curve and surface windows.
 ///
 /// This currently dispatches bounded line/surface analytic cases, planar
-/// circle-or-ellipse/plane cases, NURBS/plane cases, circle/cone/cylinder/
-/// sphere/torus cases, and ellipse/sphere/cylinder/cone/torus cases.
+/// circle-or-ellipse/plane cases, NURBS/plane and NURBS/sphere cases,
+/// circle/cone/cylinder/sphere/torus cases, and
+/// ellipse/sphere/cylinder/cone/torus cases.
 /// Unsupported curve or surface classes fail explicitly; broader analytic
 /// cases and the general subdivision/Newton curve/surface solver remain later
 /// M4 work.
@@ -122,6 +124,17 @@ pub fn intersect_bounded_curve_surface(
     {
         return intersect_bounded_ellipse_sphere(
             ellipse,
+            curve_range,
+            sphere,
+            surface_range,
+            tolerances,
+        );
+    }
+    if let Some(sphere) = as_sphere(surface)
+        && let Some(nurbs) = as_nurbs(curve)
+    {
+        return intersect_bounded_nurbs_sphere(
+            nurbs,
             curve_range,
             sphere,
             surface_range,
