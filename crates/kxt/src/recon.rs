@@ -111,6 +111,7 @@ fn reconstruct_into(file: &XtFile, store: &mut Store) -> Result<Reconstruction> 
         store,
         curves: BTreeMap::new(),
         surfaces: BTreeMap::new(),
+        points: BTreeMap::new(),
         vertices: BTreeMap::new(),
         edges: BTreeMap::new(),
     };
@@ -252,6 +253,8 @@ struct Recon<'a> {
     curves: BTreeMap<u32, (CurveId, bool)>,
     /// XT surface index → (kernel surface, XT sense char).
     surfaces: BTreeMap<u32, (SurfaceId, char)>,
+    /// XT point index → kernel point.
+    points: BTreeMap<u32, ktopo::entity::PointId>,
     vertices: BTreeMap<u32, VertexId>,
     /// XT edge index → (kernel edge, fins must flip: curve sense was `-`).
     edges: BTreeMap<u32, (EdgeId, bool)>,
@@ -489,10 +492,17 @@ impl Recon<'_> {
         }
         let file = self.file;
         let vertex_node = xnode(file, vertex_idx)?;
-        let point_node = xnode(file, ptr(file, vertex_node, "point")?)?;
-        let p = in_size_box(vector(file, point_node, "pvec")?)?;
+        let point_idx = ptr(file, vertex_node, "point")?;
+        let point = if let Some(&point) = self.points.get(&point_idx) {
+            point
+        } else {
+            let point_node = xnode(file, point_idx)?;
+            let p = in_size_box(vector(file, point_node, "pvec")?)?;
+            let point = self.store.add(p);
+            self.points.insert(point_idx, point);
+            point
+        };
         let tol = tolerance(file, vertex_node)?;
-        let point = self.store.add(p);
         let v = self.store.add(Vertex {
             point,
             tolerance: tol,

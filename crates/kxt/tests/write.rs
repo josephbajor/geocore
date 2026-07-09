@@ -47,6 +47,7 @@ fn assert_roundtrip(store: &Store, body: BodyId) {
     assert_eq!(store.count::<Face>(), imported.count::<Face>());
     assert_eq!(store.count::<Edge>(), imported.count::<Edge>());
     assert_eq!(store.count::<Vertex>(), imported.count::<Vertex>());
+    assert_eq!(store.count::<Point3>(), imported.count::<Point3>());
 
     let mesh = tessellate_body(
         &imported,
@@ -78,6 +79,7 @@ fn assert_checker_roundtrip(store: &Store, body: BodyId) -> (String, Store, Body
     assert_eq!(store.count::<Face>(), imported.count::<Face>());
     assert_eq!(store.count::<Edge>(), imported.count::<Edge>());
     assert_eq!(store.count::<Vertex>(), imported.count::<Vertex>());
+    assert_eq!(store.count::<Point3>(), imported.count::<Point3>());
     (text, imported, imported_body)
 }
 
@@ -304,6 +306,76 @@ fn sheet_semicircle(store: &mut Store) -> BodyId {
     body
 }
 
+fn sheet_two_faces_shared_surface(store: &mut Store) -> BodyId {
+    let body = store.add(Body {
+        kind: BodyKind::Sheet,
+        regions: Vec::new(),
+    });
+    let region = store.add(Region {
+        body,
+        kind: RegionKind::Void,
+        shells: Vec::new(),
+    });
+    store.get_mut(body).unwrap().regions.push(region);
+    let shell = store.add(Shell {
+        region,
+        faces: Vec::new(),
+        edges: Vec::new(),
+        vertex: None,
+    });
+    store.get_mut(region).unwrap().shells.push(shell);
+
+    let surface = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
+    for x0 in [0.0, 2.0] {
+        let face = store.add(Face {
+            shell,
+            loops: Vec::new(),
+            surface,
+            sense: Sense::Forward,
+        });
+        store.get_mut(shell).unwrap().faces.push(face);
+        let loop_id = store.add(Loop {
+            face,
+            fins: Vec::new(),
+        });
+        store.get_mut(face).unwrap().loops.push(loop_id);
+
+        let corners = [
+            Point3::new(x0, 0.0, 0.0),
+            Point3::new(x0 + 1.0, 0.0, 0.0),
+            Point3::new(x0 + 1.0, 1.0, 0.0),
+            Point3::new(x0, 1.0, 0.0),
+        ];
+        let vertices = corners.map(|point| {
+            let point = store.add(point);
+            store.add(Vertex {
+                point,
+                tolerance: None,
+            })
+        });
+        for i in 0..corners.len() {
+            let start = corners[i];
+            let end = corners[(i + 1) % corners.len()];
+            let curve = store.add(CurveGeom::Line(Line::new(start, end - start).unwrap()));
+            let edge = store.add(Edge {
+                curve: Some(curve),
+                vertices: [Some(vertices[i]), Some(vertices[(i + 1) % vertices.len()])],
+                bounds: Some((0.0, (end - start).norm())),
+                fins: Vec::new(),
+                tolerance: None,
+            });
+            let fin = store.add(Fin {
+                parent: loop_id,
+                edge,
+                sense: Sense::Forward,
+            });
+            store.get_mut(loop_id).unwrap().fins.push(fin);
+            store.get_mut(edge).unwrap().fins.push(fin);
+        }
+    }
+    body
+}
+
 fn wire_line(store: &mut Store) -> BodyId {
     let body = store.add(Body {
         kind: BodyKind::Wire,
@@ -383,6 +455,68 @@ fn wire_shared_line_segments(store: &mut Store) -> BodyId {
             curve: Some(curve),
             vertices: [Some(vertices[i]), Some(vertices[i + 1])],
             bounds: Some((i as f64, i as f64 + 1.0)),
+            fins: Vec::new(),
+            tolerance: None,
+        });
+        store.get_mut(shell).unwrap().edges.push(edge);
+    }
+    body
+}
+
+fn wire_shared_point_vertices(store: &mut Store) -> BodyId {
+    let body = store.add(Body {
+        kind: BodyKind::Wire,
+        regions: Vec::new(),
+    });
+    let region = store.add(Region {
+        body,
+        kind: RegionKind::Void,
+        shells: Vec::new(),
+    });
+    store.get_mut(body).unwrap().regions.push(region);
+    let shell = store.add(Shell {
+        region,
+        faces: Vec::new(),
+        edges: Vec::new(),
+        vertex: None,
+    });
+    store.get_mut(region).unwrap().shells.push(shell);
+
+    let coords = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(1.0, 1.0, 0.0),
+    ];
+    let points = coords.map(|point| store.add(point));
+    let vertices = [
+        store.add(Vertex {
+            point: points[0],
+            tolerance: None,
+        }),
+        store.add(Vertex {
+            point: points[1],
+            tolerance: None,
+        }),
+        store.add(Vertex {
+            point: points[1],
+            tolerance: None,
+        }),
+        store.add(Vertex {
+            point: points[2],
+            tolerance: None,
+        }),
+    ];
+
+    let segments = [
+        (coords[0], coords[1], vertices[0], vertices[1]),
+        (coords[1], coords[2], vertices[2], vertices[3]),
+    ];
+    for (start, end, start_vertex, end_vertex) in segments {
+        let curve = store.add(CurveGeom::Line(Line::new(start, end - start).unwrap()));
+        let edge = store.add(Edge {
+            curve: Some(curve),
+            vertices: [Some(start_vertex), Some(end_vertex)],
+            bounds: Some((0.0, (end - start).norm())),
             fins: Vec::new(),
             tolerance: None,
         });
@@ -683,6 +817,29 @@ fn sheet_semicircle_arc_round_trips() {
 }
 
 #[test]
+fn sheet_faces_can_share_a_surface_node() {
+    let mut store = Store::new();
+    let body = sheet_two_faces_shared_surface(&mut store);
+
+    let (text, imported, imported_body) = assert_checker_roundtrip(&store, body);
+    let parsed = kxt::read_xt(text.as_bytes()).unwrap();
+    let plane_nodes = parsed
+        .nodes
+        .values()
+        .filter(|node| node.code == code::PLANE)
+        .count();
+    assert_eq!(plane_nodes, 1, "shared plane should be emitted once");
+    assert_eq!(imported.faces_of_body(imported_body).unwrap().len(), 2);
+    assert_eq!(
+        imported
+            .iter::<SurfaceGeom>()
+            .filter(|(_, surface)| matches!(surface, SurfaceGeom::Plane(_)))
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn wire_line_round_trips_with_dummy_fins() {
     let mut store = Store::new();
     let body = wire_line(&mut store);
@@ -737,6 +894,26 @@ fn wire_edges_can_share_a_basis_curve() {
             .count(),
         1
     );
+}
+
+#[test]
+fn wire_vertices_can_share_a_point_node() {
+    let mut store = Store::new();
+    let body = wire_shared_point_vertices(&mut store);
+    assert_eq!(store.count::<Vertex>(), 4);
+    assert_eq!(store.count::<Point3>(), 3);
+
+    let (text, imported, imported_body) = assert_checker_roundtrip(&store, body);
+    let parsed = kxt::read_xt(text.as_bytes()).unwrap();
+    let point_nodes = parsed
+        .nodes
+        .values()
+        .filter(|node| node.code == code::POINT)
+        .count();
+    assert_eq!(point_nodes, 3, "shared point should be emitted once");
+    assert_eq!(imported.edges_of_body(imported_body).unwrap().len(), 2);
+    assert_eq!(imported.count::<Vertex>(), 4);
+    assert_eq!(imported.count::<Point3>(), 3);
 }
 
 #[test]
