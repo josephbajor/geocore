@@ -36,7 +36,7 @@ struct Plan {
     faces: Vec<(FaceId, u32)>,
     loops: Vec<(LoopId, u32)>,
     fins: Vec<(FinId, u32)>,
-    dummy_fins: Vec<(EdgeId, u32)>,
+    dummy_fins: Vec<(DummyFin, u32)>,
     edges: Vec<(EdgeId, u32)>,
     vertices: Vec<(VertexId, u32)>,
     surfaces: Vec<(SurfaceId, u32)>,
@@ -46,6 +46,19 @@ struct Plan {
     void_shell_id: u32,
     first_aux_id: u32,
     max_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DummyFin {
+    edge: EdgeId,
+    role: DummyFinRole,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DummyFinRole {
+    SheetBoundary,
+    WireEnd,
+    WireStart,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -72,9 +85,10 @@ struct SurfaceAuxIds {
     v_knots: u32,
 }
 
-/// Export one checker-clean solid or supported sheet body as deterministic
-/// schema-13006 text XT. The writer supports self-authored analytic bodies
-/// plus non-periodic B-spline/NURBS curves and surfaces.
+/// Export one checker-clean solid, supported sheet body, or supported wire
+/// body as deterministic schema-13006 text XT. The writer supports
+/// self-authored analytic bodies plus non-periodic B-spline/NURBS curves and
+/// surfaces.
 pub fn export_text(store: &Store, body: BodyId) -> Result<String> {
     let plan = Plan::build(store, body)?;
     let nodes = plan.nodes(store)?;
@@ -113,7 +127,7 @@ impl Plan {
             }
         }
         let mut curve_handles = Vec::new();
-        let mut dummy_fin_edges = Vec::new();
+        let mut dummy_fin_specs = Vec::new();
         for &edge in &edge_handles {
             let e = store.get(edge)?;
             if e.tolerance.is_some() {
@@ -122,9 +136,7 @@ impl Plan {
                 });
             }
             validate_edge_fin_count(e, b.kind)?;
-            if needs_dummy_fin(e, b.kind) {
-                dummy_fin_edges.push(edge);
-            }
+            push_dummy_fins(&mut dummy_fin_specs, edge, e, b.kind);
             let curve = e.curve.ok_or(XtError::Unsupported {
                 what: "curve-less edges",
             })?;
@@ -173,7 +185,7 @@ impl Plan {
         let faces = assign(&face_handles, &mut next);
         let loops = assign(&loop_handles, &mut next);
         let fins = assign(&fin_handles, &mut next);
-        let dummy_fins = assign(&dummy_fin_edges, &mut next);
+        let dummy_fins = assign_dummy_fins(&dummy_fin_specs, &mut next);
         let edges = assign(&edge_handles, &mut next);
         let vertices = assign(&vertex_handles, &mut next);
         let surfaces = assign(&surface_handles, &mut next);
@@ -234,7 +246,8 @@ impl Plan {
         match self.body_kind {
             BodyKind::Solid => self.push_solid_scaffold_nodes(&mut out),
             BodyKind::Sheet => self.push_sheet_scaffold_nodes(&mut out),
-            BodyKind::Wire | BodyKind::Acorn => unreachable!("rejected during planning"),
+            BodyKind::Wire => self.push_wire_scaffold_nodes(&mut out),
+            BodyKind::Acorn => unreachable!("rejected during planning"),
         }
 
         for (position, &(face_id, index)) in self.faces.iter().enumerate() {
@@ -320,7 +333,7 @@ impl Plan {
                 .copied()
                 .find(|&v| v != fin_id)
                 .map(|fin| id_of(&self.fins, fin))
-                .or_else(|| self.dummy_fin_id(fin.edge));
+                .or_else(|| self.dummy_fin_id(fin.edge, DummyFinRole::SheetBoundary));
             let head = store.fin_head(fin_id)?;
             out.push(OutNode {
                 code: code::FIN,
@@ -341,18 +354,46 @@ impl Plan {
                 ],
             });
         }
-        for &(edge_id, index) in &self.dummy_fins {
+        for &(dummy, index) in &self.dummy_fins {
+            let edge_id = dummy.edge;
             let edge = store.get(edge_id)?;
-            let [actual_fin] = edge.fins.as_slice() else {
-                return Err(XtError::InvalidModel {
-                    what: "dummy FIN edge must have exactly one real fin",
-                });
+            let (vertex, other, fin_sense) = match dummy.role {
+                DummyFinRole::SheetBoundary => {
+                    let [actual_fin] = edge.fins.as_slice() else {
+                        return Err(XtError::InvalidModel {
+                            what: "sheet boundary dummy FIN edge must have exactly one real fin",
+                        });
+                    };
+                    let actual_fin = *actual_fin;
+                    let actual = store.get(actual_fin)?;
+                    let tail = store.fin_tail(actual_fin)?.ok_or(XtError::InvalidModel {
+                        what: "sheet boundary dummy FIN edge has no tail vertex",
+                    })?;
+                    (tail, id_of(&self.fins, actual_fin), actual.sense.flipped())
+                }
+                DummyFinRole::WireEnd => {
+                    let vertex = edge.vertices[1].ok_or(XtError::InvalidModel {
+                        what: "wire dummy FIN edge has no end vertex",
+                    })?;
+                    let other = self.dummy_fin_id(edge_id, DummyFinRole::WireStart).ok_or(
+                        XtError::InvalidModel {
+                            what: "wire dummy FIN pair is incomplete",
+                        },
+                    )?;
+                    (vertex, other, Sense::Forward)
+                }
+                DummyFinRole::WireStart => {
+                    let vertex = edge.vertices[0].ok_or(XtError::InvalidModel {
+                        what: "wire dummy FIN edge has no start vertex",
+                    })?;
+                    let other = self.dummy_fin_id(edge_id, DummyFinRole::WireEnd).ok_or(
+                        XtError::InvalidModel {
+                            what: "wire dummy FIN pair is incomplete",
+                        },
+                    )?;
+                    (vertex, other, Sense::Reversed)
+                }
             };
-            let actual_fin = *actual_fin;
-            let actual = store.get(actual_fin)?;
-            let tail = store.fin_tail(actual_fin)?.ok_or(XtError::InvalidModel {
-                what: "dummy FIN boundary edge has no tail vertex",
-            })?;
             out.push(OutNode {
                 code: code::FIN,
                 index,
@@ -361,17 +402,24 @@ impl Plan {
                     ptr(0),
                     ptr(0),
                     ptr(0),
-                    ptr(id_of(&self.vertices, tail)),
-                    ptr(id_of(&self.fins, actual_fin)),
+                    ptr(id_of(&self.vertices, vertex)),
+                    ptr(other),
                     ptr(id_of(&self.edges, edge_id)),
                     ptr(0),
                     ptr(0),
-                    sense(actual.sense.flipped()),
+                    sense(fin_sense),
                 ],
             });
         }
         for (position, &(edge_id, index)) in self.edges.iter().enumerate() {
             let edge = store.get(edge_id)?;
+            let first_fin = edge.fins.first().map_or_else(
+                || {
+                    self.dummy_fin_id(edge_id, DummyFinRole::WireEnd)
+                        .unwrap_or(0)
+                },
+                |&fin| id_of(&self.fins, fin),
+            );
             out.push(OutNode {
                 code: code::EDGE,
                 index,
@@ -379,7 +427,7 @@ impl Plan {
                     int(index),
                     ptr(0),
                     Value::Null,
-                    ptr(id_of(&self.fins, edge.fins[0])),
+                    ptr(first_fin),
                     ptr(adjacent(&self.edges, position, -1)),
                     ptr(adjacent(&self.edges, position, 1)),
                     ptr(id_of(&self.curves, edge.curve.expect("validated curve"))),
@@ -492,10 +540,10 @@ impl Plan {
         None
     }
 
-    fn dummy_fin_id(&self, edge: EdgeId) -> Option<u32> {
-        self.dummy_fins
-            .iter()
-            .find_map(|&(candidate, id)| (candidate == edge).then_some(id))
+    fn dummy_fin_id(&self, edge: EdgeId, role: DummyFinRole) -> Option<u32> {
+        self.dummy_fins.iter().find_map(|&(candidate, id)| {
+            (candidate.edge == edge && candidate.role == role).then_some(id)
+        })
     }
 
     fn push_solid_scaffold_nodes(&self, out: &mut Vec<OutNode>) {
@@ -587,6 +635,37 @@ impl Plan {
             ],
         });
     }
+
+    fn push_wire_scaffold_nodes(&self, out: &mut Vec<OutNode>) {
+        out.push(OutNode {
+            code: code::REGION,
+            index: 2,
+            values: vec![
+                int(2),
+                ptr(0),
+                ptr(1),
+                ptr(0),
+                ptr(0),
+                ptr(self.shell_id),
+                Value::Char('V'),
+            ],
+        });
+        out.push(OutNode {
+            code: code::SHELL,
+            index: self.shell_id,
+            values: vec![
+                int(self.shell_id),
+                ptr(0),
+                ptr(1),
+                ptr(0),
+                ptr(0),
+                ptr(first_id(&self.edges)),
+                ptr(0),
+                ptr(2),
+                ptr(0),
+            ],
+        });
+    }
 }
 
 impl Scaffold {
@@ -594,8 +673,9 @@ impl Scaffold {
         match body.kind {
             BodyKind::Solid => Self::solid(store, body),
             BodyKind::Sheet => Self::sheet(store, body),
-            BodyKind::Wire | BodyKind::Acorn => Err(XtError::Unsupported {
-                what: "text writing supports solid bodies and sheet bodies only",
+            BodyKind::Wire => Self::wire(store, body),
+            BodyKind::Acorn => Err(XtError::Unsupported {
+                what: "text writing supports solid bodies, sheet bodies, and wire bodies only",
             }),
         }
     }
@@ -660,6 +740,34 @@ impl Scaffold {
         })
     }
 
+    fn wire(store: &Store, body: &ktopo::entity::Body) -> Result<Self> {
+        let [void_region] = body.regions.as_slice() else {
+            return Err(XtError::Unsupported {
+                what: "wire text writing requires one void region",
+            });
+        };
+        let region = store.get(*void_region)?;
+        let [shell] = region.shells.as_slice() else {
+            return Err(XtError::Unsupported {
+                what: "wire text writing requires exactly one shell",
+            });
+        };
+        let shell = store.get(*shell)?;
+        if region.kind != RegionKind::Void
+            || !shell.faces.is_empty()
+            || shell.edges.is_empty()
+            || shell.vertex.is_some()
+        {
+            return Err(XtError::Unsupported {
+                what: "wire text writing requires one non-empty edge shell in the void region",
+            });
+        }
+        Ok(Scaffold {
+            shell_id: 3,
+            void_shell_id: 0,
+        })
+    }
+
     fn first_entity_id(self) -> u32 {
         if self.void_shell_id == 0 { 4 } else { 6 }
     }
@@ -697,7 +805,8 @@ fn body_type(kind: BodyKind) -> i64 {
     match kind {
         BodyKind::Solid => 1,
         BodyKind::Sheet => 3,
-        BodyKind::Wire | BodyKind::Acorn => unreachable!("rejected during planning"),
+        BodyKind::Wire => 2,
+        BodyKind::Acorn => unreachable!("rejected during planning"),
     }
 }
 
@@ -721,18 +830,47 @@ fn validate_edge_fin_count(edge: &Edge, kind: BodyKind) -> Result<()> {
                 what: "unsupported sheet edge fin topology",
             });
         }
-        BodyKind::Wire | BodyKind::Acorn => unreachable!("rejected during planning"),
+        BodyKind::Wire if !edge.fins.is_empty() => {
+            return Err(XtError::Unsupported {
+                what: "wire edges must not have real fins",
+            });
+        }
+        BodyKind::Acorn => unreachable!("rejected during planning"),
         _ => {}
     }
     Ok(())
 }
 
-fn needs_dummy_fin(edge: &Edge, kind: BodyKind) -> bool {
-    kind == BodyKind::Sheet
-        && edge.fins.len() == 1
-        && edge.vertices[0].is_some()
-        && edge.vertices[1].is_some()
-        && edge.bounds.is_some()
+fn push_dummy_fins(out: &mut Vec<DummyFin>, edge_id: EdgeId, edge: &Edge, kind: BodyKind) {
+    match kind {
+        BodyKind::Sheet
+            if edge.fins.len() == 1
+                && edge.vertices[0].is_some()
+                && edge.vertices[1].is_some()
+                && edge.bounds.is_some() =>
+        {
+            out.push(DummyFin {
+                edge: edge_id,
+                role: DummyFinRole::SheetBoundary,
+            });
+        }
+        BodyKind::Wire
+            if edge.fins.is_empty()
+                && edge.vertices[0].is_some()
+                && edge.vertices[1].is_some()
+                && edge.bounds.is_some() =>
+        {
+            out.push(DummyFin {
+                edge: edge_id,
+                role: DummyFinRole::WireEnd,
+            });
+            out.push(DummyFin {
+                edge: edge_id,
+                role: DummyFinRole::WireStart,
+            });
+        }
+        _ => {}
+    }
 }
 
 fn surface_node(
@@ -1148,6 +1286,17 @@ fn assign<T>(handles: &[Handle<T>], next: &mut u32) -> Vec<(Handle<T>, u32)> {
             let id = *next;
             *next += 1;
             (handle, id)
+        })
+        .collect()
+}
+
+fn assign_dummy_fins(dummy_fins: &[DummyFin], next: &mut u32) -> Vec<(DummyFin, u32)> {
+    dummy_fins
+        .iter()
+        .map(|&dummy| {
+            let id = *next;
+            *next += 1;
+            (dummy, id)
         })
         .collect()
 }

@@ -226,6 +226,46 @@ fn sheet_square(store: &mut Store) -> BodyId {
     body
 }
 
+fn wire_line(store: &mut Store) -> BodyId {
+    let body = store.add(Body {
+        kind: BodyKind::Wire,
+        regions: Vec::new(),
+    });
+    let region = store.add(Region {
+        body,
+        kind: RegionKind::Void,
+        shells: Vec::new(),
+    });
+    store.get_mut(body).unwrap().regions.push(region);
+    let shell = store.add(Shell {
+        region,
+        faces: Vec::new(),
+        edges: Vec::new(),
+        vertex: None,
+    });
+    store.get_mut(region).unwrap().shells.push(shell);
+
+    let start = Point3::new(0.0, 0.0, 0.0);
+    let end = Point3::new(1.25, 0.0, 0.0);
+    let vertices = [start, end].map(|point| {
+        let point = store.add(point);
+        store.add(Vertex {
+            point,
+            tolerance: None,
+        })
+    });
+    let curve = store.add(CurveGeom::Line(Line::new(start, end - start).unwrap()));
+    let edge = store.add(Edge {
+        curve: Some(curve),
+        vertices: [Some(vertices[0]), Some(vertices[1])],
+        bounds: Some((0.0, (end - start).norm())),
+        fins: Vec::new(),
+        tolerance: None,
+    });
+    store.get_mut(shell).unwrap().edges.push(edge);
+    body
+}
+
 #[test]
 fn all_analytic_primitives_round_trip() {
     let frame = tilted();
@@ -367,6 +407,34 @@ fn sheet_square_boundary_edges_round_trip_with_dummy_fins() {
         assert!(edge.vertices[1].is_some());
         assert!(edge.bounds.is_some());
     }
+}
+
+#[test]
+fn wire_line_round_trips_with_dummy_fins() {
+    let mut store = Store::new();
+    let body = wire_line(&mut store);
+
+    let (text, imported, imported_body) = assert_checker_roundtrip(&store, body);
+    let parsed = kxt::read_xt(text.as_bytes()).unwrap();
+    let body_node = parsed.node(1).unwrap();
+    assert_eq!(
+        parsed.field(body_node, "body_type").unwrap().as_int(),
+        Some(2)
+    );
+    let fin_nodes = parsed
+        .nodes
+        .values()
+        .filter(|node| node.code == code::FIN)
+        .count();
+    assert_eq!(fin_nodes, 2, "wire edge start/end dummy FINs");
+    assert_eq!(imported.get(imported_body).unwrap().kind, BodyKind::Wire);
+    let edges = imported.edges_of_body(imported_body).unwrap();
+    assert_eq!(edges.len(), 1);
+    let edge = imported.get(edges[0]).unwrap();
+    assert!(edge.fins.is_empty());
+    assert!(edge.vertices[0].is_some());
+    assert!(edge.vertices[1].is_some());
+    assert!(edge.bounds.is_some());
 }
 
 #[test]
