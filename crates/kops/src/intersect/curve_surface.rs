@@ -11,6 +11,7 @@ use super::line_cylinder::intersect_bounded_line_cylinder;
 use super::line_plane::intersect_bounded_line_plane;
 use super::line_sphere::intersect_bounded_line_sphere;
 use super::line_torus::intersect_bounded_line_torus;
+use super::nurbs_cone::intersect_bounded_nurbs_cone;
 use super::nurbs_cylinder::intersect_bounded_nurbs_cylinder;
 use super::nurbs_plane::intersect_bounded_nurbs_plane;
 use super::nurbs_sphere::intersect_bounded_nurbs_sphere;
@@ -26,7 +27,7 @@ use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 /// Intersect a curve with a surface over finite curve and surface windows.
 ///
 /// This currently dispatches bounded line/surface analytic cases, planar
-/// circle-or-ellipse/plane cases, NURBS/plane/sphere/cylinder cases,
+/// circle-or-ellipse/plane cases, NURBS/plane/sphere/cylinder/cone cases,
 /// circle/cone/cylinder/sphere/torus cases, and ellipse/sphere/cylinder/
 /// cone/torus cases.
 /// Unsupported curve or surface classes fail explicitly; broader analytic
@@ -201,6 +202,11 @@ pub fn intersect_bounded_curve_surface(
             surface_range,
             tolerances,
         );
+    }
+    if let Some(cone) = as_cone(surface)
+        && let Some(nurbs) = as_nurbs(curve)
+    {
+        return intersect_bounded_nurbs_cone(nurbs, curve_range, cone, surface_range, tolerances);
     }
     if let Some(torus) = as_torus(surface)
         && let Some(ellipse) = as_ellipse(curve)
