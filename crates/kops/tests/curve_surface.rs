@@ -11,10 +11,11 @@ use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
     ContactKind, intersect_bounded_circle_cone, intersect_bounded_circle_cylinder,
     intersect_bounded_circle_plane, intersect_bounded_circle_sphere,
-    intersect_bounded_curve_surface, intersect_bounded_ellipse_cone,
-    intersect_bounded_ellipse_cylinder, intersect_bounded_ellipse_plane,
-    intersect_bounded_ellipse_sphere, intersect_bounded_line_cone, intersect_bounded_line_cylinder,
-    intersect_bounded_line_plane, intersect_bounded_line_sphere, intersect_bounded_line_torus,
+    intersect_bounded_circle_torus, intersect_bounded_curve_surface,
+    intersect_bounded_ellipse_cone, intersect_bounded_ellipse_cylinder,
+    intersect_bounded_ellipse_plane, intersect_bounded_ellipse_sphere, intersect_bounded_line_cone,
+    intersect_bounded_line_cylinder, intersect_bounded_line_plane, intersect_bounded_line_sphere,
+    intersect_bounded_line_torus,
 };
 
 fn make_line(origin: [f64; 3], direction: [f64; 3]) -> Line {
@@ -1159,6 +1160,140 @@ fn line_torus_surface_range_filters_contacts() {
 }
 
 #[test]
+fn circle_torus_secant_tangent_and_surface_window_filtering() {
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let secant = Circle::new(horizontal_frame([1.0, 0.0, 0.0]), 1.0).unwrap();
+    let hit = intersect_bounded_circle_torus(
+        &secant,
+        secant.param_range(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    let x = 9.0 / 8.0;
+    let y = 63.0_f64.sqrt() / 8.0;
+    let t = math::atan2(y, 1.0 / 8.0);
+    assert_eq!(hit.points.len(), 2);
+    assert_eq!(hit.points[0].kind, ContactKind::Transverse);
+    assert!(hit.points[0].point.dist(Point3::new(x, y, 0.0)) < 1e-9);
+    assert!((hit.points[0].t_curve - t).abs() < 1e-9);
+    assert!((hit.points[0].uv_surface[0] - math::atan2(y, x)).abs() < 1e-9);
+    assert!((hit.points[0].uv_surface[1] - core::f64::consts::PI).abs() < 1e-9);
+    assert_eq!(hit.points[1].kind, ContactKind::Transverse);
+    assert!(hit.points[1].point.dist(Point3::new(x, -y, 0.0)) < 1e-9);
+    assert!((hit.points[1].t_curve - (core::f64::consts::TAU - t)).abs() < 1e-9);
+
+    let filtered = intersect_bounded_circle_torus(
+        &secant,
+        secant.param_range(),
+        &torus,
+        [
+            ParamRange::new(0.0, core::f64::consts::PI),
+            ParamRange::new(0.0, core::f64::consts::TAU),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(filtered.points.len(), 1);
+    assert!(filtered.points[0].point.dist(Point3::new(x, y, 0.0)) < 1e-9);
+
+    let tangent = Circle::new(horizontal_frame([3.0, 0.0, 0.0]), 0.5).unwrap();
+    let hit = intersect_bounded_circle_torus(
+        &tangent,
+        tangent.param_range(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.points.len(), 1);
+    assert_eq!(hit.points[0].kind, ContactKind::Tangent);
+    assert!(hit.points[0].point.dist(Point3::new(2.5, 0.0, 0.0)) < 1e-9);
+    assert!((hit.points[0].t_curve - core::f64::consts::PI).abs() < 1e-9);
+    assert!(hit.points[0].uv_surface[0].abs() < 1e-12);
+    assert_eq!(hit.points[0].uv_surface[1], 0.0);
+}
+
+#[test]
+fn circle_on_torus_clips_latitude_and_tube_overlaps() {
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let latitude = Circle::new(Frame::world(), 2.5).unwrap();
+    let hit = intersect_bounded_circle_torus(
+        &latitude,
+        latitude.param_range(),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.overlaps.len(), 1);
+    assert!(hit.overlaps[0].curve.lo.abs() < 1e-12);
+    assert!((hit.overlaps[0].curve.hi - core::f64::consts::TAU).abs() < 1e-12);
+    assert_eq!(hit.overlaps[0].uv_start, [0.0, 0.0]);
+    assert_eq!(hit.overlaps[0].uv_end, [0.0, 0.0]);
+
+    let clipped = intersect_bounded_circle_torus(
+        &latitude,
+        latitude.param_range(),
+        &torus,
+        [
+            ParamRange::new(0.0, core::f64::consts::PI),
+            ParamRange::new(0.0, core::f64::consts::TAU),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(clipped.points.is_empty());
+    assert_eq!(clipped.overlaps.len(), 1);
+    assert!(clipped.overlaps[0].curve.lo.abs() < 1e-12);
+    assert!((clipped.overlaps[0].curve.hi - core::f64::consts::PI).abs() < 1e-12);
+    assert_eq!(clipped.overlaps[0].uv_start, [0.0, 0.0]);
+    assert_eq!(clipped.overlaps[0].uv_end, [core::f64::consts::PI, 0.0]);
+
+    let tube_frame = Frame::new(
+        Point3::new(2.0, 0.0, 0.0),
+        Vec3::new(0.0, -1.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .unwrap();
+    let tube = Circle::new(tube_frame, 0.5).unwrap();
+    let clipped = intersect_bounded_circle_torus(
+        &tube,
+        tube.param_range(),
+        &torus,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(0.0, core::f64::consts::PI),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(clipped.points.is_empty());
+    assert_eq!(clipped.overlaps.len(), 1);
+    assert!(clipped.overlaps[0].curve.lo.abs() < 1e-12);
+    assert!((clipped.overlaps[0].curve.hi - core::f64::consts::PI).abs() < 1e-12);
+    assert_eq!(clipped.overlaps[0].uv_start, [0.0, 0.0]);
+    assert_eq!(clipped.overlaps[0].uv_end, [0.0, core::f64::consts::PI]);
+
+    let miss = intersect_bounded_circle_torus(
+        &latitude,
+        latitude.param_range(),
+        &torus,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(core::f64::consts::FRAC_PI_2, core::f64::consts::PI),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(miss.is_empty());
+}
+
+#[test]
 fn circle_plane_crossing_and_surface_window_filtering() {
     let circle = Circle::new(vertical_conic_frame(), 1.0).unwrap();
     let plane = Plane::new(Frame::world());
@@ -1376,6 +1511,17 @@ fn curve_surface_dispatches_supported_cases_and_rejects_unsupported() {
         circle.param_range(),
         &cone,
         cone_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.overlaps.len(), 1);
+
+    let torus_circle = Circle::new(Frame::world(), 2.5).unwrap();
+    let hit = intersect_bounded_curve_surface(
+        &torus_circle,
+        torus_circle.param_range(),
+        &torus,
+        torus_window(),
         Tolerances::default(),
     )
     .unwrap();
