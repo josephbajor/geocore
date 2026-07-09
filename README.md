@@ -33,7 +33,7 @@ parametric CAD application; feature history and regeneration are later layers.
   circle/plane, ellipse/plane, circle/cylinder, circle/cone, circle/sphere, and
   circle/torus plus ellipse/sphere, ellipse/cylinder, ellipse/cone, and
   ellipse/torus. General NURBS/procedural curve/curve cases, broader
-  curve/surface, surface/surface intersections, and imprinting remain.
+  curve/surface, broader surface/surface intersections, and imprinting remain.
 
 Immediate work per the roadmap: broaden analytic curve/curve intersections,
 then curve/surface and SSI; complete M3b external XT validation in parallel.

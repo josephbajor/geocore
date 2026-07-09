@@ -1,6 +1,6 @@
 use kcore::error::{Error, Result};
 use kcore::tolerance::Tolerances;
-use kgeom::curve::Curve;
+use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::param::ParamRange;
 use kgeom::surface::Surface;
 use kgeom::vec::Point3;
@@ -250,6 +250,176 @@ pub fn accept_curve_surface_candidate(
         point: (pc + ps) / 2.0,
         t_curve,
         uv_surface,
+        residual,
+        kind,
+    })
+}
+
+/// Analytic curve geometry carrying a surface/surface intersection branch.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SurfaceIntersectionCurve {
+    /// Straight intersection branch.
+    Line(Line),
+    /// Circular intersection branch.
+    Circle(Circle),
+    /// Elliptic intersection branch.
+    Ellipse(Ellipse),
+}
+
+impl SurfaceIntersectionCurve {
+    /// Evaluate the branch at its native curve parameter.
+    pub fn eval(&self, t: f64) -> Point3 {
+        match self {
+            SurfaceIntersectionCurve::Line(line) => line.eval(t),
+            SurfaceIntersectionCurve::Circle(circle) => circle.eval(t),
+            SurfaceIntersectionCurve::Ellipse(ellipse) => ellipse.eval(t),
+        }
+    }
+
+    /// Natural parameter range for the branch geometry.
+    pub fn param_range(&self) -> ParamRange {
+        match self {
+            SurfaceIntersectionCurve::Line(line) => line.param_range(),
+            SurfaceIntersectionCurve::Circle(circle) => circle.param_range(),
+            SurfaceIntersectionCurve::Ellipse(ellipse) => ellipse.param_range(),
+        }
+    }
+}
+
+/// One isolated surface/surface contact with parameters on both surfaces.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurfaceSurfacePoint {
+    /// Symmetric representative point between the two evaluations.
+    pub point: Point3,
+    /// Parameters on the first surface.
+    pub uv_a: [f64; 2],
+    /// Parameters on the second surface.
+    pub uv_b: [f64; 2],
+    /// Distance between the two evaluated points.
+    pub residual: f64,
+    /// Local contact character.
+    pub kind: ContactKind,
+}
+
+/// A positive-length surface/surface intersection branch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SurfaceSurfaceCurve {
+    /// Analytic curve carrying the intersection branch.
+    pub curve: SurfaceIntersectionCurve,
+    /// Active parameter interval on `curve`.
+    pub curve_range: ParamRange,
+    /// First-surface parameters at `curve_range.lo`.
+    pub uv_a_start: [f64; 2],
+    /// First-surface parameters at `curve_range.hi`.
+    pub uv_a_end: [f64; 2],
+    /// Second-surface parameters at `curve_range.lo`.
+    pub uv_b_start: [f64; 2],
+    /// Second-surface parameters at `curve_range.hi`.
+    pub uv_b_end: [f64; 2],
+    /// Local contact character along the branch.
+    pub kind: ContactKind,
+}
+
+/// Complete surface/surface intersection result. Empty is a proven miss;
+/// failure to establish an answer is represented by `Err`, not by empty.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SurfaceSurfaceIntersections {
+    /// Isolated contacts in deterministic surface-parameter order.
+    pub points: Vec<SurfaceSurfacePoint>,
+    /// Positive-length intersection branches.
+    pub curves: Vec<SurfaceSurfaceCurve>,
+}
+
+impl SurfaceSurfaceIntersections {
+    /// Validate and sort intersection evidence into canonical order.
+    pub fn canonicalized(
+        mut points: Vec<SurfaceSurfacePoint>,
+        mut curves: Vec<SurfaceSurfaceCurve>,
+    ) -> Result<Self> {
+        if points.iter().any(|p| {
+            !p.point.x.is_finite()
+                || !p.point.y.is_finite()
+                || !p.point.z.is_finite()
+                || p.uv_a.iter().any(|v| !v.is_finite())
+                || p.uv_b.iter().any(|v| !v.is_finite())
+                || !p.residual.is_finite()
+                || p.residual < 0.0
+        }) {
+            return Err(Error::InvalidGeometry {
+                reason: "non-finite or negative surface/surface point data",
+            });
+        }
+        if curves.iter().any(|c| {
+            !c.curve_range.is_finite()
+                || c.curve_range.width() <= 0.0
+                || c.uv_a_start.iter().any(|v| !v.is_finite())
+                || c.uv_a_end.iter().any(|v| !v.is_finite())
+                || c.uv_b_start.iter().any(|v| !v.is_finite())
+                || c.uv_b_end.iter().any(|v| !v.is_finite())
+        }) {
+            return Err(Error::InvalidGeometry {
+                reason: "surface/surface curve data must be finite and have positive width",
+            });
+        }
+        points.sort_by(|a, b| {
+            a.uv_a[0]
+                .total_cmp(&b.uv_a[0])
+                .then(a.uv_a[1].total_cmp(&b.uv_a[1]))
+                .then(a.uv_b[0].total_cmp(&b.uv_b[0]))
+                .then(a.uv_b[1].total_cmp(&b.uv_b[1]))
+                .then(a.kind.cmp(&b.kind))
+        });
+        curves.sort_by(|a, b| {
+            a.curve_range
+                .lo
+                .total_cmp(&b.curve_range.lo)
+                .then(a.curve_range.hi.total_cmp(&b.curve_range.hi))
+                .then(a.uv_a_start[0].total_cmp(&b.uv_a_start[0]))
+                .then(a.uv_a_start[1].total_cmp(&b.uv_a_start[1]))
+        });
+        Ok(Self { points, curves })
+    }
+
+    /// True when the surfaces were proven not to intersect.
+    pub fn is_empty(&self) -> bool {
+        self.points.is_empty() && self.curves.is_empty()
+    }
+
+    /// Swap the first and second surface parameter data.
+    pub fn swapped(mut self) -> Self {
+        for point in &mut self.points {
+            core::mem::swap(&mut point.uv_a, &mut point.uv_b);
+        }
+        for curve in &mut self.curves {
+            core::mem::swap(&mut curve.uv_a_start, &mut curve.uv_b_start);
+            core::mem::swap(&mut curve.uv_a_end, &mut curve.uv_b_end);
+        }
+        self
+    }
+}
+
+/// Evaluate and tolerance-filter one surface/surface point candidate.
+pub fn accept_surface_surface_candidate(
+    a: &dyn Surface,
+    uv_a: [f64; 2],
+    b: &dyn Surface,
+    uv_b: [f64; 2],
+    kind: ContactKind,
+    tolerances: Tolerances,
+) -> Option<SurfaceSurfacePoint> {
+    if uv_a.iter().any(|v| !v.is_finite()) || uv_b.iter().any(|v| !v.is_finite()) {
+        return None;
+    }
+    let pa = a.eval(uv_a);
+    let pb = b.eval(uv_b);
+    let residual = pa.dist(pb);
+    if !residual.is_finite() || residual > tolerances.linear() {
+        return None;
+    }
+    Some(SurfaceSurfacePoint {
+        point: (pa + pb) / 2.0,
+        uv_a,
+        uv_b,
         residual,
         kind,
     })

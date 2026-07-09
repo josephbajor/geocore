@@ -10,7 +10,7 @@
 //! circle/torus plus ellipse/sphere, ellipse/cylinder, ellipse/cone, and
 //! ellipse/torus. These cover transverse and tangent contacts, periodic arc
 //! filtering, misses, and oriented coincident overlaps. General
-//! NURBS/procedural curve/curve, broader curve/surface, SSI, imprinting, and
-//! body operations remain future M4 work.
+//! NURBS/procedural curve/curve, broader curve/surface, broader SSI,
+//! imprinting, and body operations remain future M4 work.
 
 pub mod intersect;

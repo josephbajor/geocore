@@ -23,7 +23,9 @@ mod line_plane;
 mod line_sphere;
 mod line_torus;
 mod planar_curve_plane;
+mod plane_sphere;
 mod result;
+mod surface_surface;
 
 pub use circle_circle::intersect_bounded_circles;
 pub use circle_cone::intersect_bounded_circle_cone;
@@ -47,8 +49,12 @@ pub use line_plane::intersect_bounded_line_plane;
 pub use line_sphere::intersect_bounded_line_sphere;
 pub use line_torus::intersect_bounded_line_torus;
 pub use planar_curve_plane::{intersect_bounded_circle_plane, intersect_bounded_ellipse_plane};
+pub use plane_sphere::intersect_bounded_plane_sphere;
 pub use result::{
     ContactKind, CurveCurveIntersections, CurveCurveOverlap, CurveCurvePoint,
     CurveSurfaceIntersections, CurveSurfaceOverlap, CurveSurfacePoint, ParamOrientation,
-    accept_curve_curve_candidate, accept_curve_surface_candidate,
+    SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
+    SurfaceSurfacePoint, accept_curve_curve_candidate, accept_curve_surface_candidate,
+    accept_surface_surface_candidate,
 };
+pub use surface_surface::intersect_bounded_surfaces;
