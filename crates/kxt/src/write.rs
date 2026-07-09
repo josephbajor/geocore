@@ -144,7 +144,9 @@ impl Plan {
             match (store.get(curve)?, e.vertices, e.bounds) {
                 (CurveGeom::Line(_), [Some(_), Some(_)], Some(_)) => {}
                 (CurveGeom::Circle(_), [None, None], None) => {}
+                (CurveGeom::Circle(_), [Some(_), Some(_)], Some(_)) => {}
                 (CurveGeom::Ellipse(_), [None, None], None) => {}
+                (CurveGeom::Ellipse(_), [Some(_), Some(_)], Some(_)) => {}
                 (CurveGeom::Nurbs(n), [Some(_), Some(_)], Some(_)) => {
                     validate_nurbs_curve(n)?;
                 }

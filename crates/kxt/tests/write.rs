@@ -1,6 +1,6 @@
 //! M3b writer round trips for self-authored primitives and supported imports.
 
-use kgeom::curve::{Curve, Line};
+use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::frame::Frame;
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::surface::Plane;
@@ -226,6 +226,83 @@ fn sheet_square(store: &mut Store) -> BodyId {
     body
 }
 
+fn sheet_semicircle(store: &mut Store) -> BodyId {
+    let body = store.add(Body {
+        kind: BodyKind::Sheet,
+        regions: Vec::new(),
+    });
+    let region = store.add(Region {
+        body,
+        kind: RegionKind::Void,
+        shells: Vec::new(),
+    });
+    store.get_mut(body).unwrap().regions.push(region);
+    let shell = store.add(Shell {
+        region,
+        faces: Vec::new(),
+        edges: Vec::new(),
+        vertex: None,
+    });
+    store.get_mut(region).unwrap().shells.push(shell);
+
+    let surface = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
+    let face = store.add(Face {
+        shell,
+        loops: Vec::new(),
+        surface,
+        sense: Sense::Forward,
+    });
+    store.get_mut(shell).unwrap().faces.push(face);
+    let loop_id = store.add(Loop {
+        face,
+        fins: Vec::new(),
+    });
+    store.get_mut(face).unwrap().loops.push(loop_id);
+
+    let right = Point3::new(1.0, 0.0, 0.0);
+    let left = Point3::new(-1.0, 0.0, 0.0);
+    let vertices = [right, left].map(|point| {
+        let point = store.add(point);
+        store.add(Vertex {
+            point,
+            tolerance: None,
+        })
+    });
+
+    let circle = store.add(CurveGeom::Circle(Circle::new(Frame::world(), 1.0).unwrap()));
+    let arc = store.add(Edge {
+        curve: Some(circle),
+        vertices: [Some(vertices[0]), Some(vertices[1])],
+        bounds: Some((0.0, core::f64::consts::PI)),
+        fins: Vec::new(),
+        tolerance: None,
+    });
+    let arc_fin = store.add(Fin {
+        parent: loop_id,
+        edge: arc,
+        sense: Sense::Forward,
+    });
+    store.get_mut(loop_id).unwrap().fins.push(arc_fin);
+    store.get_mut(arc).unwrap().fins.push(arc_fin);
+
+    let line = store.add(CurveGeom::Line(Line::new(left, right - left).unwrap()));
+    let chord = store.add(Edge {
+        curve: Some(line),
+        vertices: [Some(vertices[1]), Some(vertices[0])],
+        bounds: Some((0.0, (right - left).norm())),
+        fins: Vec::new(),
+        tolerance: None,
+    });
+    let chord_fin = store.add(Fin {
+        parent: loop_id,
+        edge: chord,
+        sense: Sense::Forward,
+    });
+    store.get_mut(loop_id).unwrap().fins.push(chord_fin);
+    store.get_mut(chord).unwrap().fins.push(chord_fin);
+    body
+}
+
 fn wire_line(store: &mut Store) -> BodyId {
     let body = store.add(Body {
         kind: BodyKind::Wire,
@@ -259,6 +336,48 @@ fn wire_line(store: &mut Store) -> BodyId {
         curve: Some(curve),
         vertices: [Some(vertices[0]), Some(vertices[1])],
         bounds: Some((0.0, (end - start).norm())),
+        fins: Vec::new(),
+        tolerance: None,
+    });
+    store.get_mut(shell).unwrap().edges.push(edge);
+    body
+}
+
+fn wire_ellipse_arc(store: &mut Store) -> BodyId {
+    let body = store.add(Body {
+        kind: BodyKind::Wire,
+        regions: Vec::new(),
+    });
+    let region = store.add(Region {
+        body,
+        kind: RegionKind::Void,
+        shells: Vec::new(),
+    });
+    store.get_mut(body).unwrap().regions.push(region);
+    let shell = store.add(Shell {
+        region,
+        faces: Vec::new(),
+        edges: Vec::new(),
+        vertex: None,
+    });
+    store.get_mut(region).unwrap().shells.push(shell);
+
+    let start = Point3::new(2.0, 0.0, 0.0);
+    let end = Point3::new(0.0, 1.0, 0.0);
+    let vertices = [start, end].map(|point| {
+        let point = store.add(point);
+        store.add(Vertex {
+            point,
+            tolerance: None,
+        })
+    });
+    let curve = store.add(CurveGeom::Ellipse(
+        Ellipse::new(Frame::world(), 2.0, 1.0).unwrap(),
+    ));
+    let edge = store.add(Edge {
+        curve: Some(curve),
+        vertices: [Some(vertices[0]), Some(vertices[1])],
+        bounds: Some((0.0, core::f64::consts::FRAC_PI_2)),
         fins: Vec::new(),
         tolerance: None,
     });
@@ -410,6 +529,32 @@ fn sheet_square_boundary_edges_round_trip_with_dummy_fins() {
 }
 
 #[test]
+fn sheet_semicircle_arc_round_trips() {
+    let mut store = Store::new();
+    let body = sheet_semicircle(&mut store);
+
+    let (text, imported, imported_body) = assert_checker_roundtrip(&store, body);
+    let parsed = kxt::read_xt(text.as_bytes()).unwrap();
+    assert!(parsed.nodes.values().any(|node| node.code == code::CIRCLE));
+    let edges = imported.edges_of_body(imported_body).unwrap();
+    assert_eq!(edges.len(), 2);
+    let arc = edges
+        .into_iter()
+        .find(|&edge| {
+            let curve = imported.get(edge).unwrap().curve.unwrap();
+            matches!(imported.get(curve).unwrap(), CurveGeom::Circle(_))
+        })
+        .expect("round-tripped circle edge");
+    let arc = imported.get(arc).unwrap();
+    assert_eq!(arc.fins.len(), 1);
+    assert!(arc.vertices[0].is_some());
+    assert!(arc.vertices[1].is_some());
+    let (lo, hi) = arc.bounds.unwrap();
+    assert!((lo - 0.0).abs() < 1e-12);
+    assert!((hi - core::f64::consts::PI).abs() < 1e-12);
+}
+
+#[test]
 fn wire_line_round_trips_with_dummy_fins() {
     let mut store = Store::new();
     let body = wire_line(&mut store);
@@ -435,6 +580,30 @@ fn wire_line_round_trips_with_dummy_fins() {
     assert!(edge.vertices[0].is_some());
     assert!(edge.vertices[1].is_some());
     assert!(edge.bounds.is_some());
+}
+
+#[test]
+fn wire_ellipse_arc_round_trips() {
+    let mut store = Store::new();
+    let body = wire_ellipse_arc(&mut store);
+
+    let (text, imported, imported_body) = assert_checker_roundtrip(&store, body);
+    let parsed = kxt::read_xt(text.as_bytes()).unwrap();
+    assert!(parsed.nodes.values().any(|node| node.code == code::ELLIPSE));
+    let edges = imported.edges_of_body(imported_body).unwrap();
+    assert_eq!(edges.len(), 1);
+    let edge = imported.get(edges[0]).unwrap();
+    let curve = edge.curve.unwrap();
+    assert!(matches!(
+        imported.get(curve).unwrap(),
+        CurveGeom::Ellipse(_)
+    ));
+    assert!(edge.fins.is_empty());
+    assert!(edge.vertices[0].is_some());
+    assert!(edge.vertices[1].is_some());
+    let (lo, hi) = edge.bounds.unwrap();
+    assert!((lo - 0.0).abs() < 1e-12);
+    assert!((hi - core::f64::consts::FRAC_PI_2).abs() < 1e-12);
 }
 
 #[test]
