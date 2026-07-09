@@ -1,4 +1,5 @@
 use super::cone_sphere::intersect_bounded_cone_sphere;
+use super::cylinder_cylinder::intersect_bounded_cylinders;
 use super::cylinder_sphere::intersect_bounded_cylinder_sphere;
 use super::plane_cone::intersect_bounded_plane_cone;
 use super::plane_cylinder::intersect_bounded_plane_cylinder;
@@ -27,6 +28,11 @@ pub fn intersect_bounded_surfaces(
         && let Some(sphere_b) = as_sphere(b)
     {
         return intersect_bounded_spheres(sphere_a, a_range, sphere_b, b_range, tolerances);
+    }
+    if let Some(cylinder_a) = as_cylinder(a)
+        && let Some(cylinder_b) = as_cylinder(b)
+    {
+        return intersect_bounded_cylinders(cylinder_a, a_range, cylinder_b, b_range, tolerances);
     }
     if let Some(cylinder) = as_cylinder(a)
         && let Some(sphere) = as_sphere(b)

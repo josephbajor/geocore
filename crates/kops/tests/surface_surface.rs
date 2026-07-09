@@ -11,9 +11,9 @@ use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface};
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
-    intersect_bounded_cone_sphere, intersect_bounded_cylinder_sphere, intersect_bounded_plane_cone,
-    intersect_bounded_plane_cylinder, intersect_bounded_plane_sphere, intersect_bounded_planes,
-    intersect_bounded_spheres, intersect_bounded_surfaces,
+    intersect_bounded_cone_sphere, intersect_bounded_cylinder_sphere, intersect_bounded_cylinders,
+    intersect_bounded_plane_cone, intersect_bounded_plane_cylinder, intersect_bounded_plane_sphere,
+    intersect_bounded_planes, intersect_bounded_spheres, intersect_bounded_surfaces,
 };
 
 fn plane_window() -> [ParamRange; 2] {
@@ -122,6 +122,21 @@ fn assert_cylinder_sphere_branch_endpoints(
         assert!(cylinder.eval(branch.uv_a_end).dist(end) < 1e-12);
         assert!(sphere.eval(branch.uv_b_start).dist(start) < 1e-12);
         assert!(sphere.eval(branch.uv_b_end).dist(end) < 1e-12);
+    }
+}
+
+fn assert_cylinder_cylinder_branch_endpoints(
+    hit: &SurfaceSurfaceIntersections,
+    a: &Cylinder,
+    b: &Cylinder,
+) {
+    for branch in &hit.curves {
+        let start = branch.curve.eval(branch.curve_range.lo);
+        let end = branch.curve.eval(branch.curve_range.hi);
+        assert!(a.eval(branch.uv_a_start).dist(start) < 1e-12);
+        assert!(a.eval(branch.uv_a_end).dist(end) < 1e-12);
+        assert!(b.eval(branch.uv_b_start).dist(start) < 1e-12);
+        assert!(b.eval(branch.uv_b_end).dist(end) < 1e-12);
     }
 }
 
@@ -697,6 +712,255 @@ fn surface_surface_dispatches_plane_cylinder_both_orders() {
     assert_eq!(swapped.curves.len(), 1);
     assert_eq!(swapped.curves[0].uv_a_start, hit.curves[0].uv_b_start);
     assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
+}
+
+#[test]
+fn cylinder_cylinder_parallel_secant_returns_ruling_lines() {
+    let a = Cylinder::new(Frame::world(), 1.0).unwrap();
+    let b = Cylinder::new(
+        Frame::new(
+            Point3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        1.0,
+    )
+    .unwrap();
+    let hit = intersect_bounded_cylinders(
+        &a,
+        cylinder_window(),
+        &b,
+        cylinder_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 2);
+    assert!((total_curve_width(&hit) - 4.0).abs() < 1e-12);
+    assert_cylinder_cylinder_branch_endpoints(&hit, &a, &b);
+
+    let mut origins = Vec::new();
+    for branch in &hit.curves {
+        assert_eq!(branch.kind, ContactKind::Transverse);
+        let SurfaceIntersectionCurve::Line(line) = &branch.curve else {
+            panic!("parallel cylinder/cylinder cut should be carried by ruling lines");
+        };
+        assert!(line.dir().cross(Vec3::new(0.0, 0.0, 1.0)).norm() < 1e-12);
+        origins.push(line.origin());
+    }
+    origins.sort_by(|lhs, rhs| lhs.y.total_cmp(&rhs.y));
+    let h = 3.0_f64.sqrt() / 2.0;
+    assert!(origins[0].dist(Point3::new(0.5, -h, 0.0)) < 1e-12);
+    assert!(origins[1].dist(Point3::new(0.5, h, 0.0)) < 1e-12);
+}
+
+#[test]
+fn cylinder_cylinder_surface_windows_clip_ruling_lines() {
+    let a = Cylinder::new(Frame::world(), 1.0).unwrap();
+    let b = Cylinder::new(
+        Frame::new(
+            Point3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        1.0,
+    )
+    .unwrap();
+    let hit = intersect_bounded_cylinders(
+        &a,
+        cylinder_window(),
+        &b,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(-0.75, -0.25),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 2);
+    assert!((total_curve_width(&hit) - 1.0).abs() < 1e-12);
+    assert_cylinder_cylinder_branch_endpoints(&hit, &a, &b);
+    for branch in &hit.curves {
+        assert!((branch.curve_range.lo - 0.25).abs() < 1e-12);
+        assert!((branch.curve_range.hi - 0.75).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn cylinder_cylinder_window_boundary_contact_returns_points() {
+    let a = Cylinder::new(Frame::world(), 1.0).unwrap();
+    let b = Cylinder::new(
+        Frame::new(
+            Point3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        1.0,
+    )
+    .unwrap();
+    let hit = intersect_bounded_cylinders(
+        &a,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(0.0, 1.0),
+        ],
+        &b,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(1.0, 2.0),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.curves.is_empty());
+    assert_eq!(hit.points.len(), 2);
+    for point in &hit.points {
+        assert_eq!(point.kind, ContactKind::Transverse);
+        assert!((point.point.z - 1.0).abs() < 1e-12);
+        assert!(a.eval(point.uv_a).dist(point.point) < 1e-12);
+        assert!(b.eval(point.uv_b).dist(point.point) < 1e-12);
+    }
+}
+
+#[test]
+fn cylinder_cylinder_tangent_miss_coincident_and_unsupported_cases() {
+    let a = Cylinder::new(Frame::world(), 1.0).unwrap();
+    let tangent_b = Cylinder::new(
+        Frame::new(
+            Point3::new(2.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        1.0,
+    )
+    .unwrap();
+    let tangent = intersect_bounded_cylinders(
+        &a,
+        cylinder_window(),
+        &tangent_b,
+        cylinder_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(tangent.points.is_empty());
+    assert_eq!(tangent.curves.len(), 1);
+    assert_eq!(tangent.curves[0].kind, ContactKind::Tangent);
+    assert_cylinder_cylinder_branch_endpoints(&tangent, &a, &tangent_b);
+
+    let miss_b = Cylinder::new(
+        Frame::new(
+            Point3::new(2.5, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        1.0,
+    )
+    .unwrap();
+    let miss = intersect_bounded_cylinders(
+        &a,
+        cylinder_window(),
+        &miss_b,
+        cylinder_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(miss.is_empty());
+
+    let concentric_b = Cylinder::new(Frame::world(), 0.5).unwrap();
+    let concentric = intersect_bounded_cylinders(
+        &a,
+        cylinder_window(),
+        &concentric_b,
+        cylinder_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(concentric.is_empty());
+
+    let err = intersect_bounded_cylinders(
+        &a,
+        cylinder_window(),
+        &a,
+        cylinder_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "coincident cylinder/cylinder intersection is a surface overlap"
+        }
+    );
+
+    let skew_b = Cylinder::new(
+        Frame::new(
+            Point3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.5, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        1.0,
+    )
+    .unwrap();
+    let err = intersect_bounded_cylinders(
+        &a,
+        cylinder_window(),
+        &skew_b,
+        cylinder_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "cylinder/cylinder intersection currently supports only parallel-axis ruling cuts"
+        }
+    );
+}
+
+#[test]
+fn surface_surface_dispatches_cylinder_cylinder_both_orders() {
+    let a = Cylinder::new(Frame::world(), 1.0).unwrap();
+    let b = Cylinder::new(
+        Frame::new(
+            Point3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        1.0,
+    )
+    .unwrap();
+    let hit = intersect_bounded_surfaces(
+        &a,
+        cylinder_window(),
+        &b,
+        cylinder_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.curves.len(), 2);
+    assert_cylinder_cylinder_branch_endpoints(&hit, &a, &b);
+
+    let swapped = intersect_bounded_surfaces(
+        &b,
+        cylinder_window(),
+        &a,
+        cylinder_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(swapped.curves.len(), 2);
+    assert_cylinder_cylinder_branch_endpoints(&swapped, &b, &a);
 }
 
 #[test]
