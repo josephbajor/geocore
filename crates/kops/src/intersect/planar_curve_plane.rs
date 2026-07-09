@@ -1,10 +1,9 @@
-use super::conic::fit_periodic_parameter;
+use super::conic::trig_linear_roots;
 use super::result::{
     ContactKind, CurveSurfaceIntersections, CurveSurfaceOverlap, CurveSurfacePoint,
     accept_curve_surface_candidate,
 };
 use kcore::error::{Error, Result};
-use kcore::math;
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Ellipse};
 use kgeom::frame::Frame;
@@ -85,7 +84,7 @@ fn intersect_planar_conic_plane(
     }
 
     let mut points = Vec::new();
-    for (t_curve, tangent) in trig_roots(a, b, c, curve_range, tolerances.linear()) {
+    for (t_curve, tangent) in trig_linear_roots(a, b, c, curve_range, tolerances.linear()) {
         let Some(uv) = fit_uv(
             plane_uv(conic.curve.eval(t_curve), plane),
             plane_range,
@@ -145,7 +144,7 @@ fn contained_planar_conic(
     for (axis, axis_range) in plane_range.iter().enumerate() {
         let (c0, a, b) = plane_axis_coefficients(conic, plane, axis);
         for bound in [axis_range.lo, axis_range.hi] {
-            for (root, _) in trig_roots(a, b, c0 - bound, curve_range, tolerances.linear()) {
+            for (root, _) in trig_linear_roots(a, b, c0 - bound, curve_range, tolerances.linear()) {
                 push_scalar(&mut cuts, root, tolerances);
             }
         }
@@ -232,85 +231,6 @@ fn plane_axis_coefficients(conic: PlanarConic<'_>, plane: &Plane, axis: usize) -
         conic.frame.x().dot(plane_axis) * conic.radius_x,
         conic.frame.y().dot(plane_axis) * conic.radius_y,
     )
-}
-
-fn trig_roots(a: f64, b: f64, c: f64, range: ParamRange, tolerance: f64) -> Vec<(f64, bool)> {
-    let amplitude = (a * a + b * b).sqrt();
-    if amplitude <= tolerance {
-        return Vec::new();
-    }
-
-    let mut roots = Vec::new();
-    if c.abs() > amplitude + tolerance {
-        return roots;
-    }
-    if c.abs() >= amplitude - tolerance {
-        let theta = math::atan2(b, a);
-        let root = if c > 0.0 {
-            theta + core::f64::consts::PI
-        } else {
-            theta
-        };
-        push_periodic_root(&mut roots, root, range, tolerance, true);
-        return roots;
-    }
-
-    let q2 = c - a;
-    let q1 = 2.0 * b;
-    let q0 = a + c;
-    for y in quadratic_roots(q2, q1, q0, tolerance) {
-        push_periodic_root(
-            &mut roots,
-            2.0 * math::atan2(y, 1.0),
-            range,
-            tolerance,
-            false,
-        );
-    }
-    if (c - a).abs() <= tolerance {
-        push_periodic_root(&mut roots, core::f64::consts::PI, range, tolerance, false);
-    }
-    roots
-}
-
-fn quadratic_roots(a: f64, b: f64, c: f64, tolerance: f64) -> Vec<f64> {
-    let coeff_tol = tolerance.max(1e-14);
-    if a.abs() <= coeff_tol {
-        if b.abs() <= coeff_tol {
-            Vec::new()
-        } else {
-            vec![-c / b]
-        }
-    } else {
-        let discriminant = b * b - 4.0 * a * c;
-        let discriminant_tolerance = coeff_tol * (a.abs() + b.abs() + c.abs() + 1.0);
-        if discriminant < -discriminant_tolerance {
-            Vec::new()
-        } else if discriminant.abs() <= discriminant_tolerance {
-            vec![-b / (2.0 * a)]
-        } else {
-            let root = discriminant.max(0.0).sqrt();
-            vec![(-b - root) / (2.0 * a), (-b + root) / (2.0 * a)]
-        }
-    }
-}
-
-fn push_periodic_root(
-    roots: &mut Vec<(f64, bool)>,
-    candidate: f64,
-    range: ParamRange,
-    tolerance: f64,
-    tangent: bool,
-) {
-    let Some(candidate) = fit_periodic_parameter(candidate, range, tolerance) else {
-        return;
-    };
-    if !roots
-        .iter()
-        .any(|(existing, _)| (*existing - candidate).abs() <= tolerance.max(1e-12))
-    {
-        roots.push((candidate, tangent));
-    }
 }
 
 fn push_scalar(values: &mut Vec<f64>, candidate: f64, tolerances: Tolerances) {

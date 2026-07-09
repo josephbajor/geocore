@@ -1,6 +1,7 @@
 //! Bounded analytic curve/surface intersection behavior.
 
 use kcore::error::Error;
+use kcore::math;
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::frame::Frame;
@@ -8,9 +9,10 @@ use kgeom::param::ParamRange;
 use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
-    ContactKind, intersect_bounded_circle_plane, intersect_bounded_curve_surface,
-    intersect_bounded_ellipse_plane, intersect_bounded_line_cone, intersect_bounded_line_cylinder,
-    intersect_bounded_line_plane, intersect_bounded_line_sphere, intersect_bounded_line_torus,
+    ContactKind, intersect_bounded_circle_plane, intersect_bounded_circle_sphere,
+    intersect_bounded_curve_surface, intersect_bounded_ellipse_plane, intersect_bounded_line_cone,
+    intersect_bounded_line_cylinder, intersect_bounded_line_plane, intersect_bounded_line_sphere,
+    intersect_bounded_line_torus,
 };
 
 fn make_line(origin: [f64; 3], direction: [f64; 3]) -> Line {
@@ -46,6 +48,15 @@ fn vertical_conic_frame() -> Frame {
     Frame::new(
         Point3::new(0.0, 0.0, 0.0),
         Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .unwrap()
+}
+
+fn horizontal_frame(origin: [f64; 3]) -> Frame {
+    Frame::new(
+        Point3::from_array(origin),
+        Vec3::new(0.0, 0.0, 1.0),
         Vec3::new(1.0, 0.0, 0.0),
     )
     .unwrap()
@@ -159,6 +170,108 @@ fn line_sphere_surface_range_filters_contacts() {
     assert_eq!(hit.points.len(), 1);
     assert!(hit.points[0].point.dist(Point3::new(1.0, 0.0, 0.0)) < 1e-12);
     assert!((hit.points[0].t_curve - 3.0).abs() < 1e-12);
+}
+
+#[test]
+fn circle_sphere_secant_tangent_and_surface_window_filtering() {
+    let sphere = Sphere::new(Frame::world(), 1.0).unwrap();
+    let secant = Circle::new(horizontal_frame([0.5, 0.0, 0.0]), 1.0).unwrap();
+    let hit = intersect_bounded_circle_sphere(
+        &secant,
+        secant.param_range(),
+        &sphere,
+        sphere.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    let y = 15.0_f64.sqrt() / 4.0;
+    let t = math::atan2(y, -0.25);
+    assert_eq!(hit.points.len(), 2);
+    assert_eq!(hit.points[0].kind, ContactKind::Transverse);
+    assert!(hit.points[0].point.dist(Point3::new(0.25, y, 0.0)) < 1e-12);
+    assert!((hit.points[0].t_curve - t).abs() < 1e-12);
+    assert_eq!(hit.points[1].kind, ContactKind::Transverse);
+    assert!(hit.points[1].point.dist(Point3::new(0.25, -y, 0.0)) < 1e-12);
+    assert!((hit.points[1].t_curve - (core::f64::consts::TAU - t)).abs() < 1e-12);
+
+    let filtered = intersect_bounded_circle_sphere(
+        &secant,
+        secant.param_range(),
+        &sphere,
+        [
+            ParamRange::new(0.0, core::f64::consts::PI),
+            ParamRange::new(-core::f64::consts::FRAC_PI_2, core::f64::consts::FRAC_PI_2),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(filtered.points.len(), 1);
+    assert!(filtered.points[0].point.dist(Point3::new(0.25, y, 0.0)) < 1e-12);
+
+    let tangent = Circle::new(horizontal_frame([1.5, 0.0, 0.0]), 0.5).unwrap();
+    let hit = intersect_bounded_circle_sphere(
+        &tangent,
+        tangent.param_range(),
+        &sphere,
+        sphere.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.points.len(), 1);
+    assert_eq!(hit.points[0].kind, ContactKind::Tangent);
+    assert!(hit.points[0].point.dist(Point3::new(1.0, 0.0, 0.0)) < 1e-12);
+    assert!((hit.points[0].t_curve - core::f64::consts::PI).abs() < 1e-12);
+}
+
+#[test]
+fn circle_on_sphere_clips_overlap_to_surface_window() {
+    let sphere = Sphere::new(Frame::world(), 1.0).unwrap();
+    let circle = Circle::new(Frame::world(), 1.0).unwrap();
+    let hit = intersect_bounded_circle_sphere(
+        &circle,
+        circle.param_range(),
+        &sphere,
+        sphere.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.overlaps.len(), 1);
+    assert!(hit.overlaps[0].curve.lo.abs() < 1e-12);
+    assert!((hit.overlaps[0].curve.hi - core::f64::consts::TAU).abs() < 1e-12);
+    assert_eq!(hit.overlaps[0].uv_start, [0.0, 0.0]);
+    assert_eq!(hit.overlaps[0].uv_end, [0.0, 0.0]);
+
+    let clipped = intersect_bounded_circle_sphere(
+        &circle,
+        circle.param_range(),
+        &sphere,
+        [
+            ParamRange::new(0.0, core::f64::consts::PI),
+            ParamRange::new(-core::f64::consts::FRAC_PI_2, core::f64::consts::FRAC_PI_2),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(clipped.points.is_empty());
+    assert_eq!(clipped.overlaps.len(), 1);
+    assert!(clipped.overlaps[0].curve.lo.abs() < 1e-12);
+    assert!((clipped.overlaps[0].curve.hi - core::f64::consts::PI).abs() < 1e-12);
+    assert_eq!(clipped.overlaps[0].uv_start, [0.0, 0.0]);
+    assert!((clipped.overlaps[0].uv_end[0] - core::f64::consts::PI).abs() < 1e-12);
+    assert!(clipped.overlaps[0].uv_end[1].abs() < 1e-12);
+
+    let miss = intersect_bounded_circle_sphere(
+        &Circle::new(Frame::world(), 0.5).unwrap(),
+        circle.param_range(),
+        &sphere,
+        sphere.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(miss.is_empty());
 }
 
 #[test]
@@ -665,9 +778,19 @@ fn curve_surface_dispatches_supported_cases_and_rejects_unsupported() {
     .unwrap();
     assert_eq!(hit.overlaps.len(), 1);
 
-    let err = intersect_bounded_curve_surface(
+    let hit = intersect_bounded_curve_surface(
         &circle,
         circle.param_range(),
+        &sphere,
+        sphere.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.overlaps.len(), 1);
+
+    let err = intersect_bounded_curve_surface(
+        &ellipse,
+        ellipse.param_range(),
         &sphere,
         sphere.param_range(),
         Tolerances::default(),

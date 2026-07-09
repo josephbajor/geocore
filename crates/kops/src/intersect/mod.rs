@@ -2,6 +2,7 @@
 
 mod circle_circle;
 mod circle_ellipse;
+mod circle_sphere;
 mod conic;
 mod curve_curve;
 mod curve_surface;
@@ -19,6 +20,7 @@ mod result;
 
 pub use circle_circle::intersect_bounded_circles;
 pub use circle_ellipse::intersect_bounded_circle_ellipse;
+pub use circle_sphere::intersect_bounded_circle_sphere;
 pub use curve_curve::intersect_bounded_curves;
 pub use curve_surface::intersect_bounded_curve_surface;
 pub use ellipse_ellipse::intersect_bounded_ellipses;

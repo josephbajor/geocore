@@ -48,10 +48,95 @@ pub(super) fn canonical_angle(t: f64) -> f64 {
     if period - s <= 1e-14 { 0.0 } else { s }
 }
 
+pub(super) fn trig_linear_roots(
+    a: f64,
+    b: f64,
+    c: f64,
+    range: ParamRange,
+    tolerance: f64,
+) -> Vec<(f64, bool)> {
+    let amplitude = (a * a + b * b).sqrt();
+    if amplitude <= tolerance {
+        return Vec::new();
+    }
+
+    let mut roots = Vec::new();
+    if c.abs() > amplitude + tolerance {
+        return roots;
+    }
+    if c.abs() >= amplitude - tolerance {
+        let theta = math::atan2(b, a);
+        let root = if c > 0.0 {
+            theta + core::f64::consts::PI
+        } else {
+            theta
+        };
+        push_periodic_trig_root(&mut roots, root, range, tolerance, true);
+        return roots;
+    }
+
+    let q2 = c - a;
+    let q1 = 2.0 * b;
+    let q0 = a + c;
+    for y in quadratic_roots(q2, q1, q0, tolerance) {
+        push_periodic_trig_root(
+            &mut roots,
+            2.0 * math::atan2(y, 1.0),
+            range,
+            tolerance,
+            false,
+        );
+    }
+    if (c - a).abs() <= tolerance {
+        push_periodic_trig_root(&mut roots, core::f64::consts::PI, range, tolerance, false);
+    }
+    roots
+}
+
 fn angular_distance(a: f64, b: f64) -> f64 {
     let period = core::f64::consts::TAU;
     let d = (a - b).abs();
     d.min(period - d)
+}
+
+fn quadratic_roots(a: f64, b: f64, c: f64, tolerance: f64) -> Vec<f64> {
+    let coeff_tol = tolerance.max(1e-14);
+    if a.abs() <= coeff_tol {
+        if b.abs() <= coeff_tol {
+            Vec::new()
+        } else {
+            vec![-c / b]
+        }
+    } else {
+        let discriminant = b * b - 4.0 * a * c;
+        let discriminant_tolerance = coeff_tol * (a.abs() + b.abs() + c.abs() + 1.0);
+        if discriminant < -discriminant_tolerance {
+            Vec::new()
+        } else if discriminant.abs() <= discriminant_tolerance {
+            vec![-b / (2.0 * a)]
+        } else {
+            let root = discriminant.max(0.0).sqrt();
+            vec![(-b - root) / (2.0 * a), (-b + root) / (2.0 * a)]
+        }
+    }
+}
+
+fn push_periodic_trig_root(
+    roots: &mut Vec<(f64, bool)>,
+    candidate: f64,
+    range: ParamRange,
+    tolerance: f64,
+    tangent: bool,
+) {
+    let Some(candidate) = fit_periodic_parameter(candidate, range, tolerance) else {
+        return;
+    };
+    if !roots
+        .iter()
+        .any(|(existing, _)| (*existing - candidate).abs() <= tolerance.max(1e-12))
+    {
+        roots.push((candidate, tangent));
+    }
 }
 
 pub(super) fn real_polynomial_roots(coeffs: &[f64]) -> Vec<f64> {

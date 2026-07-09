@@ -6,8 +6,9 @@
 //! intersections, plus a general analytic dispatcher over those classes.
 //! Curve/surface has started with bounded line/plane, line/cylinder,
 //! line/cone, line/sphere, and line/torus plus bounded circle/plane and
-//! ellipse/plane. These cover transverse and tangent contacts, periodic arc
-//! filtering, misses, and oriented coincident overlaps. General
+//! ellipse/plane, and circle/sphere. These cover transverse and tangent
+//! contacts, periodic arc filtering, misses, and oriented coincident overlaps.
+//! General
 //! NURBS/procedural curve/curve, broader curve/surface, SSI, imprinting, and
 //! body operations remain future M4 work.
 

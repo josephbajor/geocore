@@ -1,3 +1,4 @@
+use super::circle_sphere::intersect_bounded_circle_sphere;
 use super::line_cone::intersect_bounded_line_cone;
 use super::line_cylinder::intersect_bounded_line_cylinder;
 use super::line_plane::intersect_bounded_line_plane;
@@ -13,8 +14,8 @@ use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 
 /// Intersect a curve with a surface over finite curve and surface windows.
 ///
-/// This currently dispatches bounded line/surface analytic cases and planar
-/// circle-or-ellipse/plane cases.
+/// This currently dispatches bounded line/surface analytic cases, planar
+/// circle-or-ellipse/plane cases, and circle/sphere cases.
 /// Unsupported curve or surface classes fail explicitly; broader analytic
 /// cases and the general subdivision/Newton curve/surface solver remain later
 /// M4 work.
@@ -85,6 +86,17 @@ pub fn intersect_bounded_curve_surface(
                 tolerances,
             );
         }
+    }
+    if let Some(sphere) = as_sphere(surface)
+        && let Some(circle) = as_circle(curve)
+    {
+        return intersect_bounded_circle_sphere(
+            circle,
+            curve_range,
+            sphere,
+            surface_range,
+            tolerances,
+        );
     }
 
     Err(Error::InvalidGeometry {
