@@ -1,6 +1,7 @@
 //! Bounded analytic surface/surface intersection behavior.
 
 use kcore::error::Error;
+use kcore::math;
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::frame::Frame;
@@ -87,15 +88,10 @@ fn oblique_cylinder_plane() -> Plane {
     )
 }
 
-fn oblique_cone_plane() -> Plane {
-    Plane::new(
-        Frame::new(
-            Point3::new(0.0, 0.0, 0.0),
-            Vec3::new(0.0, 0.5, 1.0),
-            Vec3::new(1.0, 0.0, 0.0),
-        )
-        .unwrap(),
-    )
+fn cone_plane_with_slope(slope: f64) -> Plane {
+    let x_axis = Vec3::new(1.0, 0.0, slope).normalized().unwrap();
+    let y_axis = Vec3::new(0.0, 1.0, 0.0);
+    Plane::new(Frame::new(Point3::new(0.0, 0.0, 0.0), x_axis.cross(y_axis), x_axis).unwrap())
 }
 
 fn assert_plane_cylinder_branch_endpoints(
@@ -724,6 +720,50 @@ fn plane_cone_surface_windows_clip_circle_branch() {
 }
 
 #[test]
+fn plane_cone_oblique_elliptic_cut_returns_ellipse_branch() {
+    let slope = 0.5_f64;
+    let plane = cone_plane_with_slope(slope);
+    let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
+    let hit = intersect_bounded_plane_cone(
+        &plane,
+        wide_plane_window(),
+        &cone,
+        cone_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    let (sin_a, cos_a) = math::sincos(cone.half_angle());
+    let tan_a = sin_a / cos_a;
+    let k = slope * tan_a;
+    let axial = 1.0 - k * k;
+    let center_x = cone.radius() * k / axial;
+    let expected_major = cone.radius() * (1.0 + slope * slope).sqrt() / axial;
+    let expected_minor = cone.radius() / axial.sqrt();
+
+    assert!(hit.points.is_empty());
+    assert!(!hit.curves.is_empty());
+    assert!((total_curve_width(&hit) - core::f64::consts::TAU).abs() < 1e-12);
+    assert_plane_cone_branch_endpoints(&hit, &plane, &cone);
+
+    for branch in &hit.curves {
+        assert_eq!(branch.kind, ContactKind::Transverse);
+        let SurfaceIntersectionCurve::Ellipse(ellipse) = &branch.curve else {
+            panic!("oblique elliptic plane/cone cut should be an ellipse");
+        };
+        assert!(
+            ellipse
+                .frame()
+                .origin()
+                .dist(Point3::new(center_x, 0.0, slope * center_x))
+                < 1e-12
+        );
+        assert!((ellipse.major_radius() - expected_major).abs() < 1e-12);
+        assert!((ellipse.minor_radius() - expected_minor).abs() < 1e-12);
+    }
+}
+
+#[test]
 fn plane_cone_apex_contact_and_v_window_filtering() {
     let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
     let plane = horizontal_plane(cone.apex().z);
@@ -759,7 +799,7 @@ fn plane_cone_apex_contact_and_v_window_filtering() {
 }
 
 #[test]
-fn surface_surface_dispatches_plane_cone_circles_and_rejects_oblique() {
+fn surface_surface_dispatches_plane_cone_circles_and_ellipses() {
     let plane = horizontal_plane(0.0);
     let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
     let hit = intersect_bounded_surfaces(
@@ -784,20 +824,62 @@ fn surface_surface_dispatches_plane_cone_circles_and_rejects_oblique() {
     assert_eq!(swapped.curves[0].uv_a_start, hit.curves[0].uv_b_start);
     assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
 
-    let err = intersect_bounded_surfaces(
-        &oblique_cone_plane(),
+    let elliptic = intersect_bounded_surfaces(
+        &cone_plane_with_slope(0.5),
         wide_plane_window(),
         &cone,
         cone_window(),
         Tolerances::default(),
     )
-    .unwrap_err();
-    assert_eq!(
-        err,
-        Error::InvalidGeometry {
-            reason: "plane/cone intersection currently supports only axis-perpendicular circular cuts"
-        }
+    .unwrap();
+    assert!(!elliptic.curves.is_empty());
+    assert!((total_curve_width(&elliptic) - core::f64::consts::TAU).abs() < 1e-12);
+    assert!(
+        elliptic
+            .curves
+            .iter()
+            .all(|branch| matches!(branch.curve, SurfaceIntersectionCurve::Ellipse(_)))
     );
+
+    let swapped_elliptic = intersect_bounded_surfaces(
+        &cone,
+        cone_window(),
+        &cone_plane_with_slope(0.5),
+        wide_plane_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(swapped_elliptic.curves.len(), elliptic.curves.len());
+    assert_eq!(
+        swapped_elliptic.curves[0].uv_a_start,
+        elliptic.curves[0].uv_b_start
+    );
+    assert_eq!(
+        swapped_elliptic.curves[0].uv_b_start,
+        elliptic.curves[0].uv_a_start
+    );
+}
+
+#[test]
+fn plane_cone_rejects_unsupported_parabolic_and_hyperbolic_sections() {
+    let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
+    let (sin_a, cos_a) = math::sincos(cone.half_angle());
+    for slope in [cos_a / sin_a, 3.0] {
+        let err = intersect_bounded_surfaces(
+            &cone_plane_with_slope(slope),
+            wide_plane_window(),
+            &cone,
+            cone_window(),
+            Tolerances::default(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            Error::InvalidGeometry {
+                reason: "plane/cone intersection currently supports only circular and elliptic cuts"
+            }
+        );
+    }
 }
 
 #[test]

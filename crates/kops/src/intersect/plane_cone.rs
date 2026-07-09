@@ -1,6 +1,7 @@
 use super::circle_cone::intersect_bounded_circle_cone;
 use super::conic::{fit_periodic_parameter, parameter_tolerance};
-use super::planar_curve_plane::intersect_bounded_circle_plane;
+use super::ellipse_cone::intersect_bounded_ellipse_cone;
+use super::planar_curve_plane::{intersect_bounded_circle_plane, intersect_bounded_ellipse_plane};
 use super::result::{
     ContactKind, CurveSurfaceIntersections, CurveSurfaceOverlap, CurveSurfacePoint,
     SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
@@ -9,7 +10,7 @@ use super::result::{
 use kcore::error::{Error, Result};
 use kcore::math;
 use kcore::tolerance::Tolerances;
-use kgeom::curve::{Circle, Curve};
+use kgeom::curve::{Circle, Curve, Ellipse};
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
 use kgeom::surface::{Cone, Plane, Surface};
@@ -17,10 +18,9 @@ use kgeom::vec::Point3;
 
 /// Intersect a finite plane window with a finite cone parameter window.
 ///
-/// This first analytic plane/cone SSI slice supports planes perpendicular to
-/// the cone axis, producing circular branches or the singular apex contact.
-/// Oblique plane/cone conics are kept explicit until the full conic branch
-/// family is added.
+/// Supports axis-perpendicular circular cuts, oblique elliptic cuts, and
+/// singular apex contacts. Parabolic and hyperbolic plane/cone sections remain
+/// explicit until those branch geometries are represented in SSI results.
 pub fn intersect_bounded_plane_cone(
     plane: &Plane,
     plane_range: [ParamRange; 2],
@@ -36,9 +36,9 @@ pub fn intersect_bounded_plane_cone(
     let ny = normal.dot(cone.frame().y());
     let nz = normal.dot(axis);
     let radial_len = (nx * nx + ny * ny).sqrt();
-    if radial_len > tolerances.angular() || nz.abs() <= tolerances.angular() {
+    if nz.abs() <= tolerances.angular() {
         return Err(Error::InvalidGeometry {
-            reason: "plane/cone intersection currently supports only axis-perpendicular circular cuts",
+            reason: "plane/cone intersection currently supports only circular and elliptic cuts",
         });
     }
 
@@ -47,6 +47,22 @@ pub fn intersect_bounded_plane_cone(
     let (sin_a, cos_a) = math::sincos(cone.half_angle());
     let v = z / cos_a;
     let signed_radius = cone.radius() + v * sin_a;
+
+    if radial_len > tolerances.angular() {
+        return intersect_elliptic_plane_cone(
+            plane,
+            plane_range,
+            cone,
+            cone_range,
+            nx,
+            ny,
+            nz,
+            radial_len,
+            z,
+            signed_radius,
+            tolerances,
+        );
+    }
 
     if signed_radius.abs() <= tolerances.linear() {
         let mut points = Vec::new();
@@ -71,6 +87,65 @@ pub fn intersect_bounded_plane_cone(
     clip_circle_branch(circle, plane, plane_range, cone, cone_range, tolerances)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn intersect_elliptic_plane_cone(
+    plane: &Plane,
+    plane_range: [ParamRange; 2],
+    cone: &Cone,
+    cone_range: [ParamRange; 2],
+    nx: f64,
+    ny: f64,
+    nz: f64,
+    radial_len: f64,
+    z0: f64,
+    radius_at_axis: f64,
+    tolerances: Tolerances,
+) -> Result<SurfaceSurfaceIntersections> {
+    let (sin_a, cos_a) = math::sincos(cone.half_angle());
+    let tan_a = sin_a / cos_a;
+    let beta = radial_len / nz;
+    let conic_slope = tan_a * beta;
+    let axial = 1.0 - conic_slope * conic_slope;
+    if axial <= tolerances.angular() {
+        return Err(Error::InvalidGeometry {
+            reason: "plane/cone intersection currently supports only circular and elliptic cuts",
+        });
+    }
+
+    if radius_at_axis.abs() <= tolerances.linear() {
+        let mut points = Vec::new();
+        add_point(
+            &mut points,
+            cone.apex(),
+            ContactKind::Singular,
+            plane,
+            plane_range,
+            cone,
+            cone_range,
+            tolerances,
+        );
+        return SurfaceSurfaceIntersections::canonicalized(points, Vec::new());
+    }
+
+    let radial = (cone.frame().x() * nx + cone.frame().y() * ny) / radial_len;
+    let center_p = -radius_at_axis * conic_slope / axial;
+    let center_z = z0 - beta * center_p;
+    let center = cone.frame().origin() + radial * center_p + cone.frame().z() * center_z;
+    let x_axis = (radial - cone.frame().z() * beta)
+        .normalized()
+        .ok_or(Error::InvalidGeometry {
+            reason: "plane/cone ellipse axis has zero length",
+        })?;
+    let frame = Frame::new(center, plane.frame().z(), x_axis)?;
+    let p_radius = radius_at_axis.abs() / axial;
+    let ellipse = Ellipse::new(
+        frame,
+        p_radius * (1.0 + beta * beta).sqrt(),
+        radius_at_axis.abs() / axial.sqrt(),
+    )?;
+    clip_ellipse_branch(ellipse, plane, plane_range, cone, cone_range, tolerances)
+}
+
 fn clip_circle_branch(
     circle: Circle,
     plane: &Plane,
@@ -93,7 +168,50 @@ fn clip_circle_branch(
     add_clipped_branch(
         &mut points,
         &mut curves,
-        circle,
+        SurfaceIntersectionCurve::Circle(circle),
+        circle.param_range(),
+        parameter_tolerance(circle.radius(), tolerances),
+        &plane_hit,
+        &cone_hit,
+        plane,
+        plane_range,
+        cone,
+        cone_range,
+        tolerances,
+    );
+    SurfaceSurfaceIntersections::canonicalized(points, curves)
+}
+
+fn clip_ellipse_branch(
+    ellipse: Ellipse,
+    plane: &Plane,
+    plane_range: [ParamRange; 2],
+    cone: &Cone,
+    cone_range: [ParamRange; 2],
+    tolerances: Tolerances,
+) -> Result<SurfaceSurfaceIntersections> {
+    let plane_hit = intersect_bounded_ellipse_plane(
+        &ellipse,
+        ellipse.param_range(),
+        plane,
+        plane_range,
+        tolerances,
+    )?;
+    let cone_hit = intersect_bounded_ellipse_cone(
+        &ellipse,
+        ellipse.param_range(),
+        cone,
+        cone_range,
+        tolerances,
+    )?;
+    let mut points = Vec::new();
+    let mut curves = Vec::new();
+    add_clipped_branch(
+        &mut points,
+        &mut curves,
+        SurfaceIntersectionCurve::Ellipse(ellipse),
+        ellipse.param_range(),
+        parameter_tolerance(ellipse.minor_radius(), tolerances),
         &plane_hit,
         &cone_hit,
         plane,
@@ -109,7 +227,9 @@ fn clip_circle_branch(
 fn add_clipped_branch(
     points: &mut Vec<SurfaceSurfacePoint>,
     curves: &mut Vec<SurfaceSurfaceCurve>,
-    circle: Circle,
+    curve: SurfaceIntersectionCurve,
+    curve_range: ParamRange,
+    t_tol: f64,
     plane_hit: &CurveSurfaceIntersections,
     cone_hit: &CurveSurfaceIntersections,
     plane: &Plane,
@@ -118,15 +238,13 @@ fn add_clipped_branch(
     cone_range: [ParamRange; 2],
     tolerances: Tolerances,
 ) {
-    let curve_range = circle.param_range();
-    let t_tol = parameter_tolerance(circle.radius(), tolerances);
     for plane_overlap in &plane_hit.overlaps {
         for cone_overlap in &cone_hit.overlaps {
             let lo = plane_overlap.curve.lo.max(cone_overlap.curve.lo);
             let hi = plane_overlap.curve.hi.min(cone_overlap.curve.hi);
             if hi - lo > t_tol {
-                let start = circle.eval(lo);
-                let end = circle.eval(hi);
+                let start = curve.eval(lo);
+                let end = curve.eval(hi);
                 let Some(uv_plane_start) = plane_uv_at(start, plane, plane_range, tolerances)
                 else {
                     continue;
@@ -143,7 +261,7 @@ fn add_clipped_branch(
                 push_curve(
                     curves,
                     SurfaceSurfaceCurve {
-                        curve: SurfaceIntersectionCurve::Circle(circle),
+                        curve: curve.clone(),
                         curve_range: ParamRange::new(lo, hi),
                         uv_a_start: uv_plane_start,
                         uv_a_end: uv_plane_end,
@@ -156,7 +274,8 @@ fn add_clipped_branch(
             } else if (hi - lo).abs() <= t_tol {
                 add_point_from_curve_parameter(
                     points,
-                    &circle,
+                    &curve,
+                    curve_range,
                     ((lo + hi) / 2.0).clamp(curve_range.lo, curve_range.hi),
                     ContactKind::Transverse,
                     plane,
@@ -172,7 +291,8 @@ fn add_clipped_branch(
 
     add_isolated_points(
         points,
-        &circle,
+        &curve,
+        curve_range,
         plane_hit,
         cone_hit,
         plane,
@@ -187,7 +307,8 @@ fn add_clipped_branch(
 #[allow(clippy::too_many_arguments)]
 fn add_isolated_points(
     points: &mut Vec<SurfaceSurfacePoint>,
-    circle: &Circle,
+    curve: &SurfaceIntersectionCurve,
+    curve_range: ParamRange,
     plane_hit: &CurveSurfaceIntersections,
     cone_hit: &CurveSurfaceIntersections,
     plane: &Plane,
@@ -201,7 +322,8 @@ fn add_isolated_points(
         if hit_contains_t(cone_hit, point.t_curve, t_tol, tolerances) {
             add_point_from_curve_parameter(
                 points,
-                circle,
+                curve,
+                curve_range,
                 point.t_curve,
                 ContactKind::Transverse,
                 plane,
@@ -217,7 +339,8 @@ fn add_isolated_points(
         if hit_contains_t(plane_hit, point.t_curve, t_tol, tolerances) {
             add_point_from_curve_parameter(
                 points,
-                circle,
+                curve,
+                curve_range,
                 point.t_curve,
                 ContactKind::Transverse,
                 plane,
@@ -234,7 +357,8 @@ fn add_isolated_points(
             if curve_parameters_match(plane_point, cone_point, t_tol, tolerances) {
                 add_point_from_curve_parameter(
                     points,
-                    circle,
+                    curve,
+                    curve_range,
                     plane_point.t_curve,
                     ContactKind::Transverse,
                     plane,
@@ -252,7 +376,8 @@ fn add_isolated_points(
 #[allow(clippy::too_many_arguments)]
 fn add_point_from_curve_parameter(
     points: &mut Vec<SurfaceSurfacePoint>,
-    circle: &Circle,
+    curve: &SurfaceIntersectionCurve,
+    curve_range: ParamRange,
     t: f64,
     kind: ContactKind,
     plane: &Plane,
@@ -262,12 +387,12 @@ fn add_point_from_curve_parameter(
     t_tol: f64,
     tolerances: Tolerances,
 ) {
-    let Some(t) = fit_scalar_parameter(t, circle.param_range(), t_tol) else {
+    let Some(t) = fit_scalar_parameter(t, curve_range, t_tol) else {
         return;
     };
     add_point(
         points,
-        circle.eval(t),
+        curve.eval(t),
         kind,
         plane,
         plane_range,
