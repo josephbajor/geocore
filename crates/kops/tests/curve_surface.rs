@@ -9,10 +9,10 @@ use kgeom::param::ParamRange;
 use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
-    ContactKind, intersect_bounded_circle_plane, intersect_bounded_circle_sphere,
-    intersect_bounded_curve_surface, intersect_bounded_ellipse_plane, intersect_bounded_line_cone,
-    intersect_bounded_line_cylinder, intersect_bounded_line_plane, intersect_bounded_line_sphere,
-    intersect_bounded_line_torus,
+    ContactKind, intersect_bounded_circle_cylinder, intersect_bounded_circle_plane,
+    intersect_bounded_circle_sphere, intersect_bounded_curve_surface,
+    intersect_bounded_ellipse_plane, intersect_bounded_line_cone, intersect_bounded_line_cylinder,
+    intersect_bounded_line_plane, intersect_bounded_line_sphere, intersect_bounded_line_torus,
 };
 
 fn make_line(origin: [f64; 3], direction: [f64; 3]) -> Line {
@@ -378,6 +378,113 @@ fn line_on_cylinder_ruling_clips_to_surface_window_overlap() {
     assert_eq!(endpoint.points[0].kind, ContactKind::Tangent);
     assert_eq!(endpoint.points[0].uv_surface, [0.0, -0.5]);
     assert!(endpoint.overlaps.is_empty());
+}
+
+#[test]
+fn circle_cylinder_secant_tangent_and_surface_window_filtering() {
+    let cylinder = Cylinder::new(Frame::world(), 1.0).unwrap();
+    let secant = Circle::new(horizontal_frame([0.5, 0.0, 0.25]), 1.0).unwrap();
+    let hit = intersect_bounded_circle_cylinder(
+        &secant,
+        secant.param_range(),
+        &cylinder,
+        cylinder_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    let y = 15.0_f64.sqrt() / 4.0;
+    let t = math::atan2(y, -0.25);
+    assert_eq!(hit.points.len(), 2);
+    assert_eq!(hit.points[0].kind, ContactKind::Transverse);
+    assert!(hit.points[0].point.dist(Point3::new(0.25, y, 0.25)) < 1e-12);
+    assert!((hit.points[0].t_curve - t).abs() < 1e-12);
+    assert!((hit.points[0].uv_surface[0] - math::atan2(y, 0.25)).abs() < 1e-12);
+    assert_eq!(hit.points[0].uv_surface[1], 0.25);
+    assert_eq!(hit.points[1].kind, ContactKind::Transverse);
+    assert!(hit.points[1].point.dist(Point3::new(0.25, -y, 0.25)) < 1e-12);
+    assert!((hit.points[1].t_curve - (core::f64::consts::TAU - t)).abs() < 1e-12);
+
+    let filtered = intersect_bounded_circle_cylinder(
+        &secant,
+        secant.param_range(),
+        &cylinder,
+        [
+            ParamRange::new(0.0, core::f64::consts::PI),
+            ParamRange::new(-1.0, 1.0),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(filtered.points.len(), 1);
+    assert!(filtered.points[0].point.dist(Point3::new(0.25, y, 0.25)) < 1e-12);
+
+    let tangent = Circle::new(horizontal_frame([1.5, 0.0, 0.0]), 0.5).unwrap();
+    let hit = intersect_bounded_circle_cylinder(
+        &tangent,
+        tangent.param_range(),
+        &cylinder,
+        cylinder_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.points.len(), 1);
+    assert_eq!(hit.points[0].kind, ContactKind::Tangent);
+    assert!(hit.points[0].point.dist(Point3::new(1.0, 0.0, 0.0)) < 1e-12);
+    assert!((hit.points[0].t_curve - core::f64::consts::PI).abs() < 1e-12);
+}
+
+#[test]
+fn circle_on_cylinder_clips_overlap_to_surface_window() {
+    let cylinder = Cylinder::new(Frame::world(), 1.0).unwrap();
+    let circle = Circle::new(Frame::world(), 1.0).unwrap();
+    let hit = intersect_bounded_circle_cylinder(
+        &circle,
+        circle.param_range(),
+        &cylinder,
+        cylinder_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.overlaps.len(), 1);
+    assert!(hit.overlaps[0].curve.lo.abs() < 1e-12);
+    assert!((hit.overlaps[0].curve.hi - core::f64::consts::TAU).abs() < 1e-12);
+    assert_eq!(hit.overlaps[0].uv_start, [0.0, 0.0]);
+    assert_eq!(hit.overlaps[0].uv_end, [0.0, 0.0]);
+
+    let clipped = intersect_bounded_circle_cylinder(
+        &circle,
+        circle.param_range(),
+        &cylinder,
+        [
+            ParamRange::new(0.0, core::f64::consts::PI),
+            ParamRange::new(-1.0, 1.0),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(clipped.points.is_empty());
+    assert_eq!(clipped.overlaps.len(), 1);
+    assert!(clipped.overlaps[0].curve.lo.abs() < 1e-12);
+    assert!((clipped.overlaps[0].curve.hi - core::f64::consts::PI).abs() < 1e-12);
+    assert_eq!(clipped.overlaps[0].uv_start, [0.0, 0.0]);
+    assert!((clipped.overlaps[0].uv_end[0] - core::f64::consts::PI).abs() < 1e-12);
+    assert_eq!(clipped.overlaps[0].uv_end[1], 0.0);
+
+    let miss = intersect_bounded_circle_cylinder(
+        &circle,
+        circle.param_range(),
+        &cylinder,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(1.0, 2.0),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(miss.is_empty());
 }
 
 #[test]
@@ -783,6 +890,16 @@ fn curve_surface_dispatches_supported_cases_and_rejects_unsupported() {
         circle.param_range(),
         &sphere,
         sphere.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.overlaps.len(), 1);
+
+    let hit = intersect_bounded_curve_surface(
+        &circle,
+        circle.param_range(),
+        &cylinder,
+        cylinder_window(),
         Tolerances::default(),
     )
     .unwrap();

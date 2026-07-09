@@ -131,10 +131,11 @@ The public curve/curve dispatcher now routes every line/circle/ellipse ordered
 pair to those exact solvers and rejects unsupported NURBS/procedural curves
 explicitly. Curve/surface has begun with bounded line/plane, line/cylinder,
 line/cone, line/sphere, line/torus, circle/plane, ellipse/plane, and
-circle/sphere over finite surface windows, including contained line-on-plane,
-conic-on-plane, circle-on-sphere, and line-on-ruling intervals, cone apex
-singular contacts, and torus quartic contacts. General NURBS/procedural
-curve/curve, broader curve/surface, and SSI remain.
+circle/cylinder and circle/sphere over finite surface windows, including
+contained line-on-plane, conic-on-plane, circle-on-cylinder, circle-on-sphere,
+and line-on-ruling intervals, cone apex singular contacts, and torus quartic
+contacts. General NURBS/procedural curve/curve, broader curve/surface, and SSI
+remain.
 
 **Exit:** SSI test battery including tangent cylinders, near-tangent tori, and
 NURBS-vs-quadric cases; every intersection curve usable as edge geometry and
