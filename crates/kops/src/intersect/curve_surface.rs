@@ -3,17 +3,18 @@ use super::line_cylinder::intersect_bounded_line_cylinder;
 use super::line_plane::intersect_bounded_line_plane;
 use super::line_sphere::intersect_bounded_line_sphere;
 use super::line_torus::intersect_bounded_line_torus;
+use super::planar_curve_plane::{intersect_bounded_circle_plane, intersect_bounded_ellipse_plane};
 use super::result::CurveSurfaceIntersections;
 use kcore::error::{Error, Result};
 use kcore::tolerance::Tolerances;
-use kgeom::curve::{Curve, Line};
+use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::param::ParamRange;
 use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 
 /// Intersect a curve with a surface over finite curve and surface windows.
 ///
-/// This currently dispatches line/plane, line/cylinder, line/cone,
-/// line/sphere, and line/torus analytic cases.
+/// This currently dispatches bounded line/surface analytic cases and planar
+/// circle-or-ellipse/plane cases.
 /// Unsupported curve or surface classes fail explicitly; broader analytic
 /// cases and the general subdivision/Newton curve/surface solver remain later
 /// M4 work.
@@ -65,6 +66,26 @@ pub fn intersect_bounded_curve_surface(
             );
         }
     }
+    if let Some(plane) = as_plane(surface) {
+        if let Some(circle) = as_circle(curve) {
+            return intersect_bounded_circle_plane(
+                circle,
+                curve_range,
+                plane,
+                surface_range,
+                tolerances,
+            );
+        }
+        if let Some(ellipse) = as_ellipse(curve) {
+            return intersect_bounded_ellipse_plane(
+                ellipse,
+                curve_range,
+                plane,
+                surface_range,
+                tolerances,
+            );
+        }
+    }
 
     Err(Error::InvalidGeometry {
         reason: "unsupported curve/surface intersection class",
@@ -72,6 +93,14 @@ pub fn intersect_bounded_curve_surface(
 }
 
 fn as_line(curve: &dyn Curve) -> Option<&Line> {
+    curve.as_any().downcast_ref()
+}
+
+fn as_circle(curve: &dyn Curve) -> Option<&Circle> {
+    curve.as_any().downcast_ref()
+}
+
+fn as_ellipse(curve: &dyn Curve) -> Option<&Ellipse> {
     curve.as_any().downcast_ref()
 }
 

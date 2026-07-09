@@ -14,6 +14,7 @@ mod line_line;
 mod line_plane;
 mod line_sphere;
 mod line_torus;
+mod planar_curve_plane;
 mod result;
 
 pub use circle_circle::intersect_bounded_circles;
@@ -29,6 +30,7 @@ pub use line_line::intersect_bounded_lines;
 pub use line_plane::intersect_bounded_line_plane;
 pub use line_sphere::intersect_bounded_line_sphere;
 pub use line_torus::intersect_bounded_line_torus;
+pub use planar_curve_plane::{intersect_bounded_circle_plane, intersect_bounded_ellipse_plane};
 pub use result::{
     ContactKind, CurveCurveIntersections, CurveCurveOverlap, CurveCurvePoint,
     CurveSurfaceIntersections, CurveSurfaceOverlap, CurveSurfacePoint, ParamOrientation,
