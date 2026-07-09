@@ -1,6 +1,7 @@
 //! Geometric intersection algorithms and parameter-rich result contracts.
 
 mod circle_circle;
+mod circle_cone;
 mod circle_cylinder;
 mod circle_ellipse;
 mod circle_sphere;
@@ -20,6 +21,7 @@ mod planar_curve_plane;
 mod result;
 
 pub use circle_circle::intersect_bounded_circles;
+pub use circle_cone::intersect_bounded_circle_cone;
 pub use circle_cylinder::intersect_bounded_circle_cylinder;
 pub use circle_ellipse::intersect_bounded_circle_ellipse;
 pub use circle_sphere::intersect_bounded_circle_sphere;
