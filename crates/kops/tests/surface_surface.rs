@@ -11,8 +11,9 @@ use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface};
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
-    intersect_bounded_plane_cone, intersect_bounded_plane_cylinder, intersect_bounded_plane_sphere,
-    intersect_bounded_planes, intersect_bounded_spheres, intersect_bounded_surfaces,
+    intersect_bounded_cylinder_sphere, intersect_bounded_plane_cone,
+    intersect_bounded_plane_cylinder, intersect_bounded_plane_sphere, intersect_bounded_planes,
+    intersect_bounded_spheres, intersect_bounded_surfaces,
 };
 
 fn plane_window() -> [ParamRange; 2] {
@@ -106,6 +107,21 @@ fn assert_plane_cylinder_branch_endpoints(
         assert!(plane.eval(branch.uv_a_end).dist(end) < 1e-12);
         assert!(cylinder.eval(branch.uv_b_start).dist(start) < 1e-12);
         assert!(cylinder.eval(branch.uv_b_end).dist(end) < 1e-12);
+    }
+}
+
+fn assert_cylinder_sphere_branch_endpoints(
+    hit: &SurfaceSurfaceIntersections,
+    cylinder: &Cylinder,
+    sphere: &Sphere,
+) {
+    for branch in &hit.curves {
+        let start = branch.curve.eval(branch.curve_range.lo);
+        let end = branch.curve.eval(branch.curve_range.hi);
+        assert!(cylinder.eval(branch.uv_a_start).dist(start) < 1e-12);
+        assert!(cylinder.eval(branch.uv_a_end).dist(end) < 1e-12);
+        assert!(sphere.eval(branch.uv_b_start).dist(start) < 1e-12);
+        assert!(sphere.eval(branch.uv_b_end).dist(end) < 1e-12);
     }
 }
 
@@ -491,12 +507,12 @@ fn surface_surface_dispatches_plane_sphere_and_rejects_unsupported() {
     assert_eq!(swapped.curves[0].uv_a_start, hit.curves[0].uv_b_start);
     assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
 
-    let cylinder = Cylinder::new(Frame::world(), 1.0).unwrap();
+    let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
     let err = intersect_bounded_surfaces(
         &sphere,
         sphere_window(),
-        &cylinder,
-        cylinder_window(),
+        &cone,
+        cone_window(),
         Tolerances::default(),
     )
     .unwrap_err();
@@ -880,6 +896,157 @@ fn plane_cone_rejects_unsupported_parabolic_and_hyperbolic_sections() {
             }
         );
     }
+}
+
+#[test]
+fn cylinder_sphere_coaxial_secant_returns_circle_branches() {
+    let cylinder = Cylinder::new(Frame::world(), 0.5).unwrap();
+    let sphere = Sphere::new(Frame::world(), 1.0).unwrap();
+    let hit = intersect_bounded_cylinder_sphere(
+        &cylinder,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(-1.0, 1.0),
+        ],
+        &sphere,
+        sphere_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    let h = 3.0_f64.sqrt() / 2.0;
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 2);
+    assert!((total_curve_width(&hit) - 2.0 * core::f64::consts::TAU).abs() < 1e-12);
+    assert_cylinder_sphere_branch_endpoints(&hit, &cylinder, &sphere);
+
+    let mut centers = Vec::new();
+    for branch in &hit.curves {
+        assert_eq!(branch.kind, ContactKind::Transverse);
+        let SurfaceIntersectionCurve::Circle(circle) = &branch.curve else {
+            panic!("coaxial cylinder/sphere secant should be carried by circles");
+        };
+        assert!((circle.radius() - 0.5).abs() < 1e-12);
+        centers.push(circle.frame().origin().z);
+    }
+    centers.sort_by(f64::total_cmp);
+    assert!((centers[0] + h).abs() < 1e-12);
+    assert!((centers[1] - h).abs() < 1e-12);
+}
+
+#[test]
+fn cylinder_sphere_surface_windows_clip_circle_branches() {
+    let cylinder = Cylinder::new(Frame::world(), 0.5).unwrap();
+    let sphere = Sphere::new(Frame::world(), 1.0).unwrap();
+    let hit = intersect_bounded_cylinder_sphere(
+        &cylinder,
+        [
+            ParamRange::new(0.0, core::f64::consts::PI),
+            ParamRange::new(0.0, 1.0),
+        ],
+        &sphere,
+        sphere_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    let h = 3.0_f64.sqrt() / 2.0;
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 1);
+    assert!((total_curve_width(&hit) - core::f64::consts::PI).abs() < 1e-12);
+    assert_cylinder_sphere_branch_endpoints(&hit, &cylinder, &sphere);
+
+    let SurfaceIntersectionCurve::Circle(circle) = &hit.curves[0].curve else {
+        panic!("coaxial cylinder/sphere secant should be carried by circle segments");
+    };
+    assert!((circle.frame().origin().z - h).abs() < 1e-12);
+}
+
+#[test]
+fn cylinder_sphere_tangent_miss_and_unsupported_cases() {
+    let sphere = Sphere::new(Frame::world(), 1.0).unwrap();
+    let tangent_cylinder = Cylinder::new(Frame::world(), 1.0).unwrap();
+    let tangent = intersect_bounded_cylinder_sphere(
+        &tangent_cylinder,
+        cylinder_window(),
+        &sphere,
+        sphere_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(tangent.points.is_empty());
+    assert_eq!(tangent.curves.len(), 1);
+    assert_eq!(tangent.curves[0].kind, ContactKind::Tangent);
+    assert_cylinder_sphere_branch_endpoints(&tangent, &tangent_cylinder, &sphere);
+
+    let miss_cylinder = Cylinder::new(Frame::world(), 1.5).unwrap();
+    let miss = intersect_bounded_cylinder_sphere(
+        &miss_cylinder,
+        cylinder_window(),
+        &sphere,
+        sphere_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(miss.is_empty());
+
+    let shifted_sphere = Sphere::new(
+        Frame::new(
+            Point3::new(0.25, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        1.0,
+    )
+    .unwrap();
+    let err = intersect_bounded_cylinder_sphere(
+        &tangent_cylinder,
+        cylinder_window(),
+        &shifted_sphere,
+        sphere_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "cylinder/sphere intersection currently supports only coaxial circular cuts"
+        }
+    );
+}
+
+#[test]
+fn surface_surface_dispatches_cylinder_sphere_both_orders() {
+    let cylinder = Cylinder::new(Frame::world(), 0.5).unwrap();
+    let sphere = Sphere::new(Frame::world(), 1.0).unwrap();
+    let hit = intersect_bounded_surfaces(
+        &cylinder,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(-1.0, 1.0),
+        ],
+        &sphere,
+        sphere_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.curves.len(), 2);
+
+    let swapped = intersect_bounded_surfaces(
+        &sphere,
+        sphere_window(),
+        &cylinder,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(-1.0, 1.0),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(swapped.curves.len(), hit.curves.len());
+    assert_eq!(swapped.curves[0].uv_a_start, hit.curves[0].uv_b_start);
+    assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
 }
 
 #[test]
