@@ -32,8 +32,8 @@ parametric CAD application; feature history and regeneration are later layers.
   with bounded line/plane, line/cylinder, line/cone, line/sphere, line/torus,
   circle/plane, ellipse/plane, circle/cylinder, circle/cone, circle/sphere, and
   circle/torus plus ellipse/sphere, ellipse/cylinder, ellipse/cone, and
-  ellipse/torus. Surface/surface has bounded plane/sphere and sphere/sphere
-  closed forms. General NURBS/procedural curve/curve cases, broader
+  ellipse/torus. Surface/surface has bounded plane/sphere, plane/cylinder, and
+  sphere/sphere closed forms. General NURBS/procedural curve/curve cases, broader
   curve/surface, broader SSI, and imprinting remain.
 
 Immediate work per the roadmap: broaden analytic curve/curve intersections,
