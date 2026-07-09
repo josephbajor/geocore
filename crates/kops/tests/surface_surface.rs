@@ -12,7 +12,8 @@ use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
     intersect_bounded_cone_cylinder, intersect_bounded_cone_sphere, intersect_bounded_cone_torus,
-    intersect_bounded_cones, intersect_bounded_cylinder_sphere, intersect_bounded_cylinder_torus,
+    intersect_bounded_cones, intersect_bounded_cylinder_nurbs_surface,
+    intersect_bounded_cylinder_sphere, intersect_bounded_cylinder_torus,
     intersect_bounded_cylinders, intersect_bounded_plane_cone, intersect_bounded_plane_cylinder,
     intersect_bounded_plane_nurbs_surface, intersect_bounded_plane_sphere,
     intersect_bounded_plane_torus, intersect_bounded_planes,
@@ -330,6 +331,21 @@ fn assert_sphere_nurbs_branch_endpoints(
     }
 }
 
+fn assert_cylinder_nurbs_branch_endpoints(
+    hit: &SurfaceSurfaceIntersections,
+    cylinder: &Cylinder,
+    surface: &NurbsSurface,
+) {
+    for branch in &hit.curves {
+        let start = branch.curve.eval(branch.curve_range.lo);
+        let end = branch.curve.eval(branch.curve_range.hi);
+        assert!(cylinder.eval(branch.uv_a_start).dist(start) < 1e-7);
+        assert!(cylinder.eval(branch.uv_a_end).dist(end) < 1e-7);
+        assert!(surface.eval(branch.uv_b_start).dist(start) < 1e-7);
+        assert!(surface.eval(branch.uv_b_end).dist(end) < 1e-7);
+    }
+}
+
 fn total_curve_width(hit: &SurfaceSurfaceIntersections) -> f64 {
     hit.curves
         .iter()
@@ -403,18 +419,42 @@ fn bilinear_nurbs_surface() -> NurbsSurface {
 }
 
 fn bilinear_nurbs_surface_at_z(z: f64) -> NurbsSurface {
+    bilinear_nurbs_surface_rect(0.0, 1.0, 0.0, 1.0, z)
+}
+
+fn bilinear_nurbs_surface_rect(x0: f64, x1: f64, y0: f64, y1: f64, z: f64) -> NurbsSurface {
     NurbsSurface::new(
         1,
         1,
         vec![0.0, 0.0, 1.0, 1.0],
         vec![0.0, 0.0, 1.0, 1.0],
         vec![
-            Point3::new(0.0, 0.0, z),
-            Point3::new(0.0, 1.0, z),
-            Point3::new(1.0, 0.0, z),
-            Point3::new(1.0, 1.0, z),
+            Point3::new(x0, y0, z),
+            Point3::new(x0, y1, z),
+            Point3::new(x1, y0, z),
+            Point3::new(x1, y1, z),
         ],
         None,
+    )
+    .unwrap()
+}
+
+fn quarter_cylinder_nurbs_surface(radius: f64, z0: f64, z1: f64) -> NurbsSurface {
+    let weight = core::f64::consts::FRAC_1_SQRT_2;
+    NurbsSurface::new(
+        2,
+        1,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            Point3::new(radius, 0.0, z0),
+            Point3::new(radius, 0.0, z1),
+            Point3::new(radius, radius, z0),
+            Point3::new(radius, radius, z1),
+            Point3::new(0.0, radius, z0),
+            Point3::new(0.0, radius, z1),
+        ],
+        Some(vec![1.0, 1.0, weight, weight, 1.0, 1.0]),
     )
     .unwrap()
 }
@@ -617,6 +657,102 @@ fn sphere_nurbs_surface_dispatches_both_orders() {
         surface.param_range(),
         &sphere,
         sphere_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(swapped.curves.len(), 1);
+    assert_eq!(swapped.curves[0].uv_a_start, hit.curves[0].uv_b_start);
+    assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
+}
+
+#[test]
+fn cylinder_nurbs_surface_marches_planar_patch_arc() {
+    let radius = 0.75;
+    let cylinder = Cylinder::new(Frame::world(), radius).unwrap();
+    let surface = bilinear_nurbs_surface_at_z(0.5);
+    let hit = intersect_bounded_cylinder_nurbs_surface(
+        &cylinder,
+        cylinder_window(),
+        &surface,
+        surface.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.curves.len(), 1);
+    assert_eq!(hit.curves[0].kind, ContactKind::Transverse);
+    assert_cylinder_nurbs_branch_endpoints(&hit, &cylinder, &surface);
+
+    let SurfaceIntersectionCurve::Nurbs(curve) = &hit.curves[0].curve else {
+        panic!("marched cylinder/NURBS-surface cut should be carried by a NURBS polyline");
+    };
+    assert_eq!(curve.degree(), 1);
+    assert!(curve.points().len() >= 2);
+    for point in curve.points() {
+        assert!(((point.x * point.x + point.y * point.y).sqrt() - radius).abs() < 1e-7);
+        assert!((point.z - 0.5).abs() < 1e-12);
+    }
+
+    let branch = &hit.curves[0];
+    assert!((branch.uv_a_start[1] - 0.5).abs() < 1e-7);
+    assert!((branch.uv_a_end[1] - 0.5).abs() < 1e-7);
+    let u_min = branch.uv_a_start[0].min(branch.uv_a_end[0]);
+    let u_max = branch.uv_a_start[0].max(branch.uv_a_end[0]);
+    assert!(u_min.abs() < 1e-7);
+    assert!((u_max - core::f64::consts::FRAC_PI_2).abs() < 1e-7);
+
+    let miss_surface = bilinear_nurbs_surface_rect(0.0, 0.25, 0.0, 0.25, 0.5);
+    let miss = intersect_bounded_cylinder_nurbs_surface(
+        &cylinder,
+        cylinder_window(),
+        &miss_surface,
+        miss_surface.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(miss.is_empty());
+
+    let coincident = quarter_cylinder_nurbs_surface(radius, -0.25, 0.75);
+    let err = intersect_bounded_cylinder_nurbs_surface(
+        &cylinder,
+        [
+            ParamRange::new(0.0, core::f64::consts::FRAC_PI_2),
+            ParamRange::new(-0.25, 0.75),
+        ],
+        &coincident,
+        coincident.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "coincident cylinder/nurbs-surface intersection is a surface overlap"
+        }
+    );
+}
+
+#[test]
+fn cylinder_nurbs_surface_dispatches_both_orders() {
+    let cylinder = Cylinder::new(Frame::world(), 0.75).unwrap();
+    let surface = bilinear_nurbs_surface_at_z(0.5);
+    let hit = intersect_bounded_surfaces(
+        &cylinder,
+        cylinder_window(),
+        &surface,
+        surface.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.curves.len(), 1);
+    assert_cylinder_nurbs_branch_endpoints(&hit, &cylinder, &surface);
+
+    let swapped = intersect_bounded_surfaces(
+        &surface,
+        surface.param_range(),
+        &cylinder,
+        cylinder_window(),
         Tolerances::default(),
     )
     .unwrap();
