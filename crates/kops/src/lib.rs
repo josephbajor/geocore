@@ -4,9 +4,9 @@
 //! deterministic, tolerance-aware bounded line/line, 3D line/circle, 3D
 //! line/ellipse, 3D circle/circle, 3D circle/ellipse, and 3D ellipse/ellipse
 //! intersections, plus a general analytic dispatcher over those classes.
-//! Curve/surface has started with bounded line/plane, line/cylinder, and
-//! line/sphere. These cover transverse and tangent contacts, periodic arc
-//! filtering, misses, and oriented coincident overlaps. General
+//! Curve/surface has started with bounded line/plane, line/cylinder,
+//! line/cone, and line/sphere. These cover transverse and tangent contacts,
+//! periodic arc filtering, misses, and oriented coincident overlaps. General
 //! NURBS/procedural curve/curve, broader curve/surface, SSI, imprinting, and
 //! body operations remain future M4 work.
 

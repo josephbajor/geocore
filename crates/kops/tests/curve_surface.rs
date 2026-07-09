@@ -5,11 +5,11 @@ use kcore::tolerance::Tolerances;
 use kgeom::curve::Line;
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
-use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface};
+use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
-    ContactKind, intersect_bounded_curve_surface, intersect_bounded_line_cylinder,
-    intersect_bounded_line_plane, intersect_bounded_line_sphere,
+    ContactKind, intersect_bounded_curve_surface, intersect_bounded_line_cone,
+    intersect_bounded_line_cylinder, intersect_bounded_line_plane, intersect_bounded_line_sphere,
 };
 
 fn make_line(origin: [f64; 3], direction: [f64; 3]) -> Line {
@@ -21,6 +21,13 @@ fn plane_window() -> [ParamRange; 2] {
 }
 
 fn cylinder_window() -> [ParamRange; 2] {
+    [
+        ParamRange::new(0.0, core::f64::consts::TAU),
+        ParamRange::new(-1.0, 1.0),
+    ]
+}
+
+fn cone_window() -> [ParamRange; 2] {
     [
         ParamRange::new(0.0, core::f64::consts::TAU),
         ParamRange::new(-1.0, 1.0),
@@ -219,9 +226,12 @@ fn line_on_cylinder_ruling_clips_to_surface_window_overlap() {
 
     assert!(hit.points.is_empty());
     assert_eq!(hit.overlaps.len(), 1);
-    assert_eq!(hit.overlaps[0].curve, ParamRange::new(1.5, 2.75));
-    assert_eq!(hit.overlaps[0].uv_start, [0.0, -0.5]);
-    assert_eq!(hit.overlaps[0].uv_end, [0.0, 0.75]);
+    assert!((hit.overlaps[0].curve.lo - 1.5).abs() < 1e-12);
+    assert!((hit.overlaps[0].curve.hi - 2.75).abs() < 1e-12);
+    assert_eq!(hit.overlaps[0].uv_start[0], 0.0);
+    assert!((hit.overlaps[0].uv_start[1] + 0.5).abs() < 1e-12);
+    assert_eq!(hit.overlaps[0].uv_end[0], 0.0);
+    assert!((hit.overlaps[0].uv_end[1] - 0.75).abs() < 1e-12);
 
     let endpoint = intersect_bounded_line_cylinder(
         &ruling,
@@ -238,6 +248,130 @@ fn line_on_cylinder_ruling_clips_to_surface_window_overlap() {
     assert_eq!(endpoint.points[0].kind, ContactKind::Tangent);
     assert_eq!(endpoint.points[0].uv_surface, [0.0, -0.5]);
     assert!(endpoint.overlaps.is_empty());
+}
+
+#[test]
+fn line_cone_secant_tangent_and_apex_contacts() {
+    let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
+    let secant = make_line([-2.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    let hit = intersect_bounded_line_cone(
+        &secant,
+        ParamRange::new(0.0, 4.0),
+        &cone,
+        cone_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert_eq!(hit.points.len(), 2);
+    assert_eq!(hit.points[0].kind, ContactKind::Transverse);
+    assert!(hit.points[0].point.dist(Point3::new(-1.0, 0.0, 0.0)) < 1e-12);
+    assert!((hit.points[0].t_curve - 1.0).abs() < 1e-12);
+    assert!((hit.points[0].uv_surface[0] - core::f64::consts::PI).abs() < 1e-12);
+    assert_eq!(hit.points[0].uv_surface[1], 0.0);
+    assert_eq!(hit.points[1].kind, ContactKind::Transverse);
+    assert!(hit.points[1].point.dist(Point3::new(1.0, 0.0, 0.0)) < 1e-12);
+    assert!((hit.points[1].t_curve - 3.0).abs() < 1e-12);
+    assert_eq!(hit.points[1].uv_surface, [0.0, 0.0]);
+
+    for (height, tolerances) in [
+        (1.0, Tolerances::default()),
+        (1.0 + 5e-7, Tolerances::with_linear(1e-6).unwrap()),
+    ] {
+        let tangent = make_line([-2.0, height, 0.0], [1.0, 0.0, 0.0]);
+        let hit = intersect_bounded_line_cone(
+            &tangent,
+            ParamRange::new(0.0, 4.0),
+            &cone,
+            cone_window(),
+            tolerances,
+        )
+        .unwrap();
+        assert_eq!(hit.points.len(), 1);
+        assert_eq!(hit.points[0].kind, ContactKind::Tangent);
+        assert!((hit.points[0].t_curve - 2.0).abs() < 1e-12);
+        assert!(hit.points[0].residual <= tolerances.linear());
+    }
+
+    let apex_line = make_line(cone.apex().to_array(), [0.0, 0.0, 1.0]);
+    let apex = intersect_bounded_line_cone(
+        &apex_line,
+        ParamRange::new(0.0, 0.0),
+        &cone,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(cone.apex_v(), cone.apex_v()),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(apex.points.len(), 1);
+    assert_eq!(apex.points[0].kind, ContactKind::Singular);
+    assert_eq!(apex.points[0].uv_surface, [0.0, cone.apex_v()]);
+}
+
+#[test]
+fn line_cone_surface_range_filters_contacts() {
+    let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
+    let line = make_line([-2.0, 0.0, 0.25], [1.0, 0.0, 0.0]);
+    let hit = intersect_bounded_line_cone(
+        &line,
+        ParamRange::new(0.0, 4.0),
+        &cone,
+        [
+            ParamRange::new(0.0, core::f64::consts::FRAC_PI_2),
+            ParamRange::new(-1.0, 1.0),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert_eq!(hit.points.len(), 1);
+    let expected_x = 1.0 + 0.25 / 3.0_f64.sqrt();
+    assert!(hit.points[0].point.dist(Point3::new(expected_x, 0.0, 0.25)) < 1e-12);
+    assert!((hit.points[0].t_curve - (2.0 + expected_x)).abs() < 1e-12);
+    assert_eq!(hit.points[0].uv_surface[0], 0.0);
+}
+
+#[test]
+fn line_on_cone_ruling_clips_to_surface_window_overlap() {
+    let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
+    let ruling = make_line(cone.apex().to_array(), [0.5, 0.0, 3.0_f64.sqrt() / 2.0]);
+    let hit = intersect_bounded_line_cone(
+        &ruling,
+        ParamRange::new(0.0, 4.0),
+        &cone,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(-0.5, 0.75),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.overlaps.len(), 1);
+    assert!((hit.overlaps[0].curve.lo - 1.5).abs() < 1e-12);
+    assert!((hit.overlaps[0].curve.hi - 2.75).abs() < 1e-12);
+    assert_eq!(hit.overlaps[0].uv_start[0], 0.0);
+    assert!((hit.overlaps[0].uv_start[1] + 0.5).abs() < 1e-12);
+    assert_eq!(hit.overlaps[0].uv_end[0], 0.0);
+    assert!((hit.overlaps[0].uv_end[1] - 0.75).abs() < 1e-12);
+
+    let apex = intersect_bounded_line_cone(
+        &ruling,
+        ParamRange::new(0.0, 0.0),
+        &cone,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(cone.apex_v(), cone.apex_v()),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(apex.points.len(), 1);
+    assert_eq!(apex.points[0].kind, ContactKind::Singular);
+    assert!(apex.overlaps.is_empty());
 }
 
 #[test]
@@ -277,13 +411,27 @@ fn curve_surface_dispatches_supported_cases_and_rejects_unsupported() {
     assert!(hit.is_empty());
 
     let cone = Cone::new(Frame::world(), 1.0, 0.25).unwrap();
-    let err = intersect_bounded_curve_surface(
+    let hit = intersect_bounded_curve_surface(
         &line,
         ParamRange::new(0.0, 2.0),
         &cone,
         [
             ParamRange::new(0.0, core::f64::consts::TAU),
             ParamRange::new(-1.0, 1.0),
+        ],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(hit.is_empty());
+
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let err = intersect_bounded_curve_surface(
+        &line,
+        ParamRange::new(0.0, 2.0),
+        &torus,
+        [
+            ParamRange::new(0.0, core::f64::consts::TAU),
+            ParamRange::new(0.0, core::f64::consts::TAU),
         ],
         Tolerances::default(),
     )
