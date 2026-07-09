@@ -12,8 +12,9 @@
 //! filtering, misses, and oriented coincident overlaps. Bounded surface/surface
 //! intersections have started with plane/plane, plane/sphere, plane/cylinder,
 //! plane/cone circular and elliptic slices, coaxial cylinder/sphere and
-//! cone/sphere circles, parallel cylinder/cylinder rulings, plane/torus
-//! latitude and meridian circles, and sphere/sphere closed forms. General
+//! cone/sphere circles, coaxial sphere/torus circles, parallel
+//! cylinder/cylinder rulings, plane/torus latitude and meridian circles, and
+//! sphere/sphere closed forms. General
 //! NURBS/procedural curve/curve, broader curve/surface, broader SSI, imprinting,
 //! and body operations remain future M4 work; SSI branch results can carry exact
 //! NURBS curves for broader

@@ -34,6 +34,7 @@ mod plane_sphere;
 mod plane_torus;
 mod result;
 mod sphere_sphere;
+mod sphere_torus;
 mod surface_surface;
 
 pub use circle_circle::intersect_bounded_circles;
@@ -75,4 +76,5 @@ pub use result::{
     accept_surface_surface_candidate,
 };
 pub use sphere_sphere::intersect_bounded_spheres;
+pub use sphere_torus::intersect_bounded_sphere_torus;
 pub use surface_surface::intersect_bounded_surfaces;
