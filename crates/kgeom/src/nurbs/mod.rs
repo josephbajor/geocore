@@ -9,7 +9,8 @@
 //!   [`crate::curve::Curve`] evaluator protocol exactly;
 //! - polynomial and rational tensor-product surfaces ([`NurbsSurface`])
 //!   implementing [`crate::surface::Surface`];
-//! - knot insertion and refinement, curve splitting, Bezier extraction;
+//! - homogeneous knot insertion/refinement, exact curve and surface
+//!   splitting/restriction, and curve-segment/surface-patch Bezier extraction;
 //! - global curve interpolation ([`interpolate`]).
 //!
 //! Deliberately deferred (with rationale):

@@ -61,7 +61,7 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 | Milestone | Status | What the status means |
 |---|---|---|
 | M0 Foundations | IMPLEMENTED SLICE | Deterministic math, current predicates, intervals, tolerances, arenas with copy-on-write undo frames, and deterministic map primitives exist; conformance debt remains. |
-| M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS basics, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
+| M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS evaluation plus exact curve/surface splitting, restriction, Bezier extraction and active-subrange bounds, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, topology-internal Euler operators, transaction-owned public Euler edits, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, checked transaction-scoped assembly, and deterministic journals exist; general bodies and several degenerate topology classes remain. |
 | M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance and transaction-owned aggregate budgets; shared incidence validation; a complete transaction-owned public Euler surface with mandatory pcurve creation and derived/split/merge/delete lineage; private generic Store mutation; transaction-scoped low-level assembly whose only public persistence path uses deterministic mutation preview, incrementally replaced per-body ownership/shared-geometry dependency footprints, affected-root Fast checks, and complete ownership closure; pcurve-driven tessellation; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; a reusable validated simple-polygon planar profile; checked X_T reconstruction; explicit face metadata; certified imported domains; adaptive full-active-interval analytic/clamped-NURBS face-domain containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring loop proofs; and convex-planar, whole sphere/torus, sphere-cap, and single-planar-face shell embedding proofs have landed. General NURBS/mixed-parameter incidence, periodic/unclamped and unsupported exact/mixed-boundary containment, profiles with holes/curves, operation-specific tolerance propagation rules, curved-loop/general curved-shell proofs, production seam/singularity interchange fixtures, geometry graph, higher-operation migration, and multi-body performance baselines remain. |
 | M3 X_T | IN PROGRESS | The modern-schema subset reads both wire encodings and writes text, including bounded tolerant edges as trimmed SP-curves over finite 2D B-curves; production coverage and external certification remain. |
@@ -82,7 +82,7 @@ proof-bearing contracts. Work therefore advances through these gates in order:
 | Order | Delivery tranche | Required result | What it unlocks |
 |---|---|---|---|
 | 1 | Close M2.5 topology contracts | Production seam/pole/apex interchange fixtures; operation-specific rules over the landed tolerance provenance/budgets; multi-body performance baselines for the landed incremental affected-root index; and discharge the remaining checker-v2 `Full` proof gaps with adaptive incidence, curved-loop/multi-loop containment, and shell proofs. Full-active-interval face-domain containment, private/checked mutation, transaction lineage, affected-root selection, and per-body incremental indexing are landed. | A B-rep that intersections and features can modify without inventing representation rules mid-boolean. |
-| 2 | Build the M4 proof substrate | Geometry-graph descriptors for procedural/intersection curves; NURBS surface Bezier extraction; conservative subdivision/BVHs; a common `Complete`/`Indeterminate` result carrying paired pcurves and residual bounds. | Certified general CC/CS/SSI and trustworthy empty results. |
+| 2 | Build the M4 proof substrate | Geometry-graph descriptors for procedural/intersection curves; conservative patch BVHs and exclusion over the landed exact NURBS surface splitting/Bezier extraction; a common `Complete`/`Indeterminate` result carrying paired pcurves and residual bounds. | Certified general CC/CS/SSI and trustworthy empty results. |
 | 3 | Ship one end-to-end feature ladder | Profile-region builder with holes, deterministic body copy/transform, extrude/revolve, point-on-face and point-in-body classification, then block/block and block/cylinder booleans. Every result is atomic, journaled, checker-v2 clean, and externally X_T checked. | The first honest CAD modeling vertical slice. |
 | 4 | Broaden general modeling | Expand analytic booleans, then periodic NURBS booleans, sweep/loft, sewing/healing, and STEP. | General mechanical part construction and imported-body repair. |
 | 5 | Add local/advanced features | Fillet/blend, chamfer, offset, shell, draft/taper, replace/delete-and-heal, then production API and performance hardening. | The operation breadth expected by a fully featured CAD application. |
@@ -142,21 +142,22 @@ is stable enough for the eventual C ABI.
 
 `crates/kgeom` contains line/circle/ellipse curves; plane/cylinder/cone/sphere/torus
 surfaces; exact analytic patch boxes; rational and polynomial clamped NURBS evaluation;
-homogeneous 2D/3D curve knot insertion/refinement/splitting, exact active-subcurve
-restriction and conservative control-hull boxes; 3D Bezier extraction; surface knot
-insertion; global curve interpolation; multi-start projection; deterministic trimmed-face
+homogeneous 2D/3D curve and tensor-product surface knot insertion/refinement/splitting;
+exact active-subcurve/sub-surface restriction and conservative control-hull/net boxes;
+deterministic curve-segment and surface-patch Bezier extraction; global curve
+interpolation; multi-start projection; deterministic trimmed-face
 tessellation; and explicit `AlgorithmLimit` failures when refinement cannot meet its
 request.
 
 ### Debt and delivery point
 
-- **Before M4 certified general intersections:** Bezier patch extraction/subdivision for
-  NURBS surfaces, bounding/refinement support for periodic and unclamped forms, evaluator
-  conditioning/singularity information, and projection APIs that distinguish converged,
-  indeterminate, and failed searches.
+- **Before M4 certified general intersections:** Hierarchical BVHs and certified exclusion
+  over the landed Bezier patch extraction/subdivision, bounding/refinement support for
+  periodic and unclamped forms, evaluator conditioning/singularity information, and
+  projection APIs that distinguish converged, indeterminate, and failed searches.
 - **Before M3 production Tier 2 / M6:** periodic NURBS curves and surfaces, collapsed
-  patch detection, surface splitting, degree elevation, knot removal, approximation and
-  fitting with verified error, and derivative/iso-curve construction.
+  patch detection, degree elevation, knot removal, approximation and fitting with
+  verified error, and derivative/iso-curve construction.
 - **Through M2.5/M6:** intersection, SP, trimmed, degenerate, swept, spun, offset, and
   blend geometry represented as exact procedural classes where X_T requires them.
 - Add curvature and conditioning to the common evaluator protocol before blends and
@@ -769,8 +770,9 @@ ledger and include an adversarial regression that distinguishes `Invalid`,
    self-intersection/orientation adaptively.
 4. Add the geometry graph and redesign intersection results around completion evidence,
    paired pcurves, coincident regions, singular events, and verified residual bounds.
-5. Add NURBS surface Bezier extraction, conservative subdivision/BVHs, and certified
-   exclusion; keep analytic cases as accelerators of the same result contract.
+5. Build conservative patch BVHs and certified exclusion over the landed exact NURBS
+   surface Bezier extraction/subdivision; keep analytic cases as accelerators of the same
+   result contract.
 6. Extend the landed simple planar profile to regions with holes/curve loops, then ship
    checked copy/transform, extrude/revolve, and the classifiers needed by a narrow M5a
    boolean vertical slice.
