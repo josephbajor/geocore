@@ -1,25 +1,30 @@
 //! The entity store: typed generational arenas for all topology and
-//! attached geometry, with uniform access and deterministic traversal.
+//! attached geometry, with uniform access, deterministic traversal, and
+//! copy-on-write transaction entry points.
 
 use crate::entity::{
-    Body, BodyId, Edge, EdgeId, Face, FaceId, Fin, FinId, Loop, Region, Shell, Vertex, VertexId,
+    Body, BodyId, Edge, EdgeId, EntityRef, Face, FaceId, Fin, FinId, Loop, Region, Shell, Vertex,
+    VertexId,
 };
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
-use kcore::arena::{Arena, Handle};
+use crate::transaction::{Mutation, MutationKind, Transaction};
+use kcore::arena::{Arena, ArenaChangeKind, Handle};
 use kcore::error::{Error, Result};
 use kgeom::vec::Point3;
 
 /// Implemented by every type the [`Store`] can hold; maps the type to its
 /// arena so access is uniform: `store.add(entity)`, `store.get(handle)?`.
-pub trait Entity: Sized {
+pub trait Entity: Sized + Clone {
     /// The arena holding this entity type.
     fn arena(store: &Store) -> &Arena<Self>;
     /// The arena holding this entity type, mutably.
     fn arena_mut(store: &mut Store) -> &mut Arena<Self>;
+    /// Erase a typed handle for diagnostics and journaling.
+    fn entity_ref(handle: Handle<Self>) -> EntityRef;
 }
 
 macro_rules! entity_arena {
-    ($ty:ty, $field:ident) => {
+    ($ty:ty, $field:ident, $variant:ident) => {
         impl Entity for $ty {
             fn arena(store: &Store) -> &Arena<Self> {
                 &store.$field
@@ -27,13 +32,16 @@ macro_rules! entity_arena {
             fn arena_mut(store: &mut Store) -> &mut Arena<Self> {
                 &mut store.$field
             }
+            fn entity_ref(handle: Handle<Self>) -> EntityRef {
+                EntityRef::$variant(handle)
+            }
         }
     };
 }
 
 /// Holds every entity of a modeling session part. All cross-references are
 /// handles into these arenas; iteration order is slot order (deterministic).
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct Store {
     bodies: Arena<Body>,
     regions: Arena<Region>,
@@ -47,25 +55,108 @@ pub struct Store {
     surfaces: Arena<SurfaceGeom>,
     points: Arena<Point3>,
     curves_2d: Arena<Curve2dGeom>,
+    transaction_active: bool,
 }
 
-entity_arena!(Body, bodies);
-entity_arena!(Region, regions);
-entity_arena!(Shell, shells);
-entity_arena!(Face, faces);
-entity_arena!(Loop, loops);
-entity_arena!(Fin, fins);
-entity_arena!(Edge, edges);
-entity_arena!(Vertex, vertices);
-entity_arena!(CurveGeom, curves);
-entity_arena!(SurfaceGeom, surfaces);
-entity_arena!(Point3, points);
-entity_arena!(Curve2dGeom, curves_2d);
+impl Clone for Store {
+    fn clone(&self) -> Self {
+        Self {
+            bodies: self.bodies.clone(),
+            regions: self.regions.clone(),
+            shells: self.shells.clone(),
+            faces: self.faces.clone(),
+            loops: self.loops.clone(),
+            fins: self.fins.clone(),
+            edges: self.edges.clone(),
+            vertices: self.vertices.clone(),
+            curves: self.curves.clone(),
+            surfaces: self.surfaces.clone(),
+            points: self.points.clone(),
+            curves_2d: self.curves_2d.clone(),
+            transaction_active: false,
+        }
+    }
+}
+
+entity_arena!(Body, bodies, Body);
+entity_arena!(Region, regions, Region);
+entity_arena!(Shell, shells, Shell);
+entity_arena!(Face, faces, Face);
+entity_arena!(Loop, loops, Loop);
+entity_arena!(Fin, fins, Fin);
+entity_arena!(Edge, edges, Edge);
+entity_arena!(Vertex, vertices, Vertex);
+entity_arena!(CurveGeom, curves, Curve);
+entity_arena!(SurfaceGeom, surfaces, Surface);
+entity_arena!(Point3, points, Point);
+entity_arena!(Curve2dGeom, curves_2d, Curve2d);
 
 impl Store {
     /// Empty store.
     pub fn new() -> Store {
         Store::default()
+    }
+
+    /// Begin a scoped failure-atomic modeling transaction.
+    pub fn transaction(&mut self) -> Result<Transaction<'_>> {
+        if self.transaction_active {
+            return Err(Error::TransactionActive);
+        }
+        self.bodies.begin_undo_frame();
+        self.regions.begin_undo_frame();
+        self.shells.begin_undo_frame();
+        self.faces.begin_undo_frame();
+        self.loops.begin_undo_frame();
+        self.fins.begin_undo_frame();
+        self.edges.begin_undo_frame();
+        self.vertices.begin_undo_frame();
+        self.curves.begin_undo_frame();
+        self.surfaces.begin_undo_frame();
+        self.points.begin_undo_frame();
+        self.curves_2d.begin_undo_frame();
+        self.transaction_active = true;
+        Ok(Transaction::new(self))
+    }
+
+    pub(crate) fn commit_transaction(&mut self) -> Result<Vec<Mutation>> {
+        if !self.transaction_active {
+            return Err(Error::TransactionInactive);
+        }
+        let mut out = Vec::new();
+        append_changes::<Body>(&mut self.bodies, &mut out)?;
+        append_changes::<Region>(&mut self.regions, &mut out)?;
+        append_changes::<Shell>(&mut self.shells, &mut out)?;
+        append_changes::<Face>(&mut self.faces, &mut out)?;
+        append_changes::<Loop>(&mut self.loops, &mut out)?;
+        append_changes::<Fin>(&mut self.fins, &mut out)?;
+        append_changes::<Edge>(&mut self.edges, &mut out)?;
+        append_changes::<Vertex>(&mut self.vertices, &mut out)?;
+        append_changes::<CurveGeom>(&mut self.curves, &mut out)?;
+        append_changes::<SurfaceGeom>(&mut self.surfaces, &mut out)?;
+        append_changes::<Point3>(&mut self.points, &mut out)?;
+        append_changes::<Curve2dGeom>(&mut self.curves_2d, &mut out)?;
+        self.transaction_active = false;
+        Ok(out)
+    }
+
+    pub(crate) fn rollback_transaction(&mut self) -> Result<()> {
+        if !self.transaction_active {
+            return Err(Error::TransactionInactive);
+        }
+        self.curves_2d.rollback_undo_frame()?;
+        self.points.rollback_undo_frame()?;
+        self.surfaces.rollback_undo_frame()?;
+        self.curves.rollback_undo_frame()?;
+        self.vertices.rollback_undo_frame()?;
+        self.edges.rollback_undo_frame()?;
+        self.fins.rollback_undo_frame()?;
+        self.loops.rollback_undo_frame()?;
+        self.faces.rollback_undo_frame()?;
+        self.shells.rollback_undo_frame()?;
+        self.regions.rollback_undo_frame()?;
+        self.bodies.rollback_undo_frame()?;
+        self.transaction_active = false;
+        Ok(())
     }
 
     /// Insert an entity, returning its handle.
@@ -195,6 +286,23 @@ impl Store {
         let v = self.get(vertex)?;
         Ok(*self.get(v.point)?)
     }
+}
+
+fn append_changes<T: Entity>(arena: &mut Arena<T>, out: &mut Vec<Mutation>) -> Result<()> {
+    out.extend(
+        arena
+            .commit_undo_frame()?
+            .into_iter()
+            .map(|change| Mutation {
+                entity: T::entity_ref(change.handle()),
+                kind: match change.kind() {
+                    ArenaChangeKind::Created => MutationKind::Created,
+                    ArenaChangeKind::Modified => MutationKind::Modified,
+                    ArenaChangeKind::Deleted => MutationKind::Deleted,
+                },
+            }),
+    );
+    Ok(())
 }
 
 #[cfg(test)]

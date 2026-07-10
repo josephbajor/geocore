@@ -14,6 +14,8 @@
 //! supported sheet bodies, supported wire bodies, acorn bodies, and bounded
 //! curve-less tolerant edges using analytic geometry, non-periodic B-spline/
 //! NURBS geometry, and per-fin trimmed SP-curves over finite 2D B-curves.
+//! Reconstruction is failure-atomic through `ktopo`'s copy-on-write Store
+//! transactions and returns the committed entity mutation journal.
 //! Intersection/procedural geometry, broader tolerant topology, periodic or
 //! circular pcurve encoding, periodic NURBS, pre-13006 schemas, assemblies,
 //! and neutral-binary writing remain deferred.

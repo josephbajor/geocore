@@ -60,10 +60,10 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 
 | Milestone | Status | What the status means |
 |---|---|---|
-| M0 Foundations | IMPLEMENTED SLICE | Deterministic math, current predicates, intervals, tolerances, arenas, and deterministic map primitives exist; conformance debt remains. |
+| M0 Foundations | IMPLEMENTED SLICE | Deterministic math, current predicates, intervals, tolerances, arenas with copy-on-write undo frames, and deterministic map primitives exist; conformance debt remains. |
 | M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS basics, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
-| M2 Topology | IMPLEMENTED SLICE | Core hierarchy, Euler operators, primitives, checker v1, and watertight body tessellation exist; boolean-ready incidence and transactions do not. |
-| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves, bounded curve-less tolerant edges, shared incidence validation, pcurve-aware Euler creation, and pcurve-driven tessellation have landed; geometry graph, transactions, journals, mutation encapsulation, face domains/tolerances, and checker upgrades remain. |
+| M2 Topology | IMPLEMENTED SLICE | Core hierarchy, Euler operators, primitives, checker v1, watertight body tessellation, and the transaction/journal foundation exist; boolean-ready incidence and operation-wide checked mutation do not. |
+| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves, bounded curve-less tolerant edges, shared incidence validation, pcurve-aware Euler creation, pcurve-driven tessellation, copy-on-write transactions, and deterministic raw/semantic journals have landed; geometry graph, operation migration, mutation encapsulation, face domains/tolerances, and checker upgrades remain. |
 | M3 X_T | IN PROGRESS | The modern-schema subset reads both wire encodings and writes text, including bounded tolerant edges as trimmed SP-curves over finite 2D B-curves; production coverage and external certification remain. |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases and sampled NURBS experiments exist; certified generic discovery and boolean-ready branches do not. |
 | M5–M8 | NOT STARTED | No end-to-end booleans, general modeling, blends, stable API, or production hardening. |
@@ -75,7 +75,8 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 ### Implemented evidence
 
 `crates/kcore` contains adaptive expansion arithmetic, robust `orient2d`/`orient3d`,
-interval arithmetic, the session tolerance regime, typed generational arenas,
+interval arithmetic, the session tolerance regime, typed generational arenas with
+copy-on-write undo frames,
 deterministic index-ordered parallel map primitives, and kernel-owned deterministic
 sin/cos/sincos/atan/atan2. CI pins numeric golden hashes across debug/release and the
 supported operating-system matrix.
@@ -157,7 +158,10 @@ volume-tested.
   isolated loops, and several pole/apex or degenerate topologies are unsupported.
 - Entity fields and generic mutable store access allow callers to bypass Euler
   invariants. “Euler operators only” is a convention rather than an enforced boundary.
-- There is no modeling transaction, rollback log, entity lineage journal, attribute
+- Scoped Store transactions now provide rollback-on-drop and deterministic raw mutation
+  plus semantic lineage journals. Only checked face split/merge consumers and X_T
+  reconstruction use the foundation so far; most public constructors/Euler callers can
+  still mutate outside a transaction, and there is no partition history, attribute
   propagation mechanism, or incremental invalidation record.
 - Checker v1 samples incidence, supports loop orientation only on a subset of surfaces,
   and does not yet prove loop self-intersection/containment, face containment, shell
@@ -225,13 +229,29 @@ Remaining before the gate closes:
 
 ### C. Transactions and journals
 
-- Add arena checkpoints plus an undo/mutation log; do not clone the entire session for
-  modeling atomicity.
-- A transaction records created, deleted, and modified entities and either commits or
-  restores entity contents, handle validity, and subsequent allocation behavior.
-- Emit semantic lineage events (`split`, `merge`, `derived_from`, `replaced`) in addition
-  to raw mutations so the future feature layer has persistent-naming evidence.
-- Route X_T reconstruction through the same transaction mechanism.
+Landed slice:
+
+- Every typed arena supports nested copy-on-write undo frames. A frame snapshots allocator
+  metadata and clones only each first-touched pre-existing slot; rollback restores entity
+  contents, handle generations, free-list order, and subsequent allocations exactly.
+- A scoped Store transaction opens frames on every arena, rolls back on drop, rejects
+  underspecified nested modeling transactions, and commits deterministic created/
+  modified/deleted mutations in entity-type then slot order.
+- Journals carry semantic `split`, `merge`, `derived_from`, and `replaced` events in
+  addition to raw storage mutations. Checked pcurve-aware face split/merge wrappers emit
+  tested deterministic lineage.
+- X_T reconstruction uses the same transaction path and exposes its mutation journal;
+  the previous full-session staging clone has been removed.
+
+Remaining before the gate closes:
+
+- Route all higher modeling operations and import/healing paths through checked
+  transaction consumers; decide and test journal composition before enabling nested
+  modeling transactions.
+- Add partition/rollback marks and a committed undo/redo history above scoped operation
+  transactions without weakening handle identity guarantees.
+- Add attribute propagation and tolerance-budget entries to semantic journals, plus
+  persistent serialization/versioning once the feature layer consumes them.
 
 ### D. Enforced topology API
 
@@ -255,8 +275,9 @@ Remaining before the gate closes:
 - A seam-crossing face and a pole/apex-adjacent face round-trip with explicit pcurves and
   pass checker v2 without reconstructing UVs from 3D samples.
 - A deliberately failing multi-step topology operation restores bit-identical entities,
-  handle validity, and next-allocation behavior.
-- A successful split/merge scenario emits deterministic lineage events.
+  handle validity, and next-allocation behavior. **Landed for scoped Store transactions.**
+- A successful split/merge scenario emits deterministic lineage events. **Landed for the
+  checked pcurve-aware transaction wrappers.**
 - External code cannot mutate topology without checked topology APIs.
 - Invalid inputs and unsupported capabilities cannot panic or masquerade as proven
   geometric misses.
@@ -491,7 +512,8 @@ tolerance growth, algorithm limits, fuzz regressions, and performance percentile
 1. Finish the landed pcurve/coedge slice: migrate operation callers to pcurve-aware Euler,
    add face domains/tolerances, close seam/pole fixtures, and externally certify the
    bounded tolerant-edge X_T SP-curve subset.
-2. Add transaction/rollback and deterministic semantic journals; migrate X_T staging.
+2. Migrate every higher operation to the landed transaction/journal foundation; add
+   partition history and journal composition semantics.
 3. Encapsulate topology mutation and introduce checker v2 foundations.
 4. Redesign intersection results around completion evidence and paired pcurves.
 5. Build the X_T manifest/stage-rate harness and complete external M3b validation in

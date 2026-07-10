@@ -11,6 +11,7 @@ use ktopo::check::check_body;
 use ktopo::entity::{Body, BodyKind, Edge, Face, Region, Shell, Vertex};
 use ktopo::make::block;
 use ktopo::store::Store;
+use ktopo::transaction::MutationKind;
 use kxt::parse::Value;
 use kxt::schema::code;
 use kxt::{XtError, import, read_xt, reconstruct};
@@ -50,6 +51,33 @@ fn hand_authored_block_text_reconstructs_checker_clean() {
     }
     let faults = check_body(&store, body).unwrap();
     assert!(faults.is_empty(), "block.x_t faults: {faults:?}");
+}
+
+#[test]
+fn successful_reconstruction_exposes_its_atomic_mutation_journal() {
+    let mut store = Store::new();
+    let reconstruction = import(&fixture("block.x_t"), &mut store).unwrap();
+    let expected_created = store.count::<Body>()
+        + store.count::<Region>()
+        + store.count::<Shell>()
+        + store.count::<Face>()
+        + store.count::<ktopo::entity::Loop>()
+        + store.count::<ktopo::entity::Fin>()
+        + store.count::<Edge>()
+        + store.count::<Vertex>()
+        + store.count::<ktopo::geom::CurveGeom>()
+        + store.count::<ktopo::geom::SurfaceGeom>()
+        + store.count::<Point3>()
+        + store.count::<ktopo::geom::Curve2dGeom>();
+    assert_eq!(reconstruction.journal.mutations().len(), expected_created);
+    assert!(
+        reconstruction
+            .journal
+            .mutations()
+            .iter()
+            .all(|mutation| mutation.kind == MutationKind::Created)
+    );
+    assert!(reconstruction.journal.lineage().is_empty());
 }
 
 #[test]

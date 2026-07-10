@@ -26,3 +26,4 @@ pub mod geom;
 pub(crate) mod incidence;
 pub mod make;
 pub mod store;
+pub mod transaction;

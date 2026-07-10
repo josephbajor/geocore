@@ -12,12 +12,17 @@
 //! - **Deterministic iteration**: iteration order is slot order, a pure
 //!   function of the insertion/removal history — never hash order.
 //!
-//! Rollback/partition snapshots and journaling (spec §L2/L6) will be built on
-//! this storage model.
+//! Copy-on-write undo frames provide rollback/partition savepoints without
+//! cloning an entire session. A frame snapshots allocator metadata and saves
+//! each pre-existing slot only on its first mutation; commit returns a
+//! deterministic net mutation list, while rollback restores entity contents,
+//! handle validity, free-list order, and subsequent allocation behavior.
 
 use core::fmt;
 use core::hash::{Hash, Hasher};
 use core::marker::PhantomData;
+
+use crate::error::{Error, Result};
 
 /// A typed, generational reference to an entity in an [`Arena<T>`].
 pub struct Handle<T> {
@@ -57,12 +62,65 @@ struct Slot<T> {
     value: Option<T>,
 }
 
-/// A typed generational arena.
 #[derive(Clone)]
+struct UndoFrame<T> {
+    slots_len: usize,
+    free: Vec<u32>,
+    live: usize,
+    originals: Vec<(u32, Slot<T>)>,
+}
+
+/// Net kind of one arena mutation committed from an undo frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArenaChangeKind {
+    /// A handle became live during the frame.
+    Created,
+    /// A handle that was live at frame entry was mutably accessed and
+    /// remains live with the same identity.
+    Modified,
+    /// A handle that was live at frame entry is no longer live.
+    Deleted,
+}
+
+/// One deterministic net mutation produced by committing an undo frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArenaChange<T> {
+    handle: Handle<T>,
+    kind: ArenaChangeKind,
+}
+
+impl<T> ArenaChange<T> {
+    /// Affected handle. Deleted handles are intentionally stale after
+    /// commit but retain the identity that existed at frame entry.
+    pub fn handle(&self) -> Handle<T> {
+        self.handle
+    }
+
+    /// Net mutation kind.
+    pub fn kind(&self) -> ArenaChangeKind {
+        self.kind
+    }
+}
+
+/// A typed generational arena.
 pub struct Arena<T> {
     slots: Vec<Slot<T>>,
     free: Vec<u32>,
     live: usize,
+    undo: Vec<UndoFrame<T>>,
+}
+
+impl<T: Clone> Clone for Arena<T> {
+    fn clone(&self) -> Self {
+        Self {
+            slots: self.slots.clone(),
+            free: self.free.clone(),
+            live: self.live,
+            // A clone is an independent current-state snapshot, never a
+            // second owner of the source arena's active rollback scopes.
+            undo: Vec::new(),
+        }
+    }
 }
 
 impl<T> Default for Arena<T> {
@@ -78,6 +136,7 @@ impl<T> Arena<T> {
             slots: Vec::new(),
             free: Vec::new(),
             live: 0,
+            undo: Vec::new(),
         }
     }
 
@@ -91,10 +150,63 @@ impl<T> Arena<T> {
         self.live == 0
     }
 
+    fn slot(&self, handle: Handle<T>) -> Option<&Slot<T>> {
+        self.slots
+            .get(handle.index as usize)
+            .filter(|s| s.generation == handle.generation && s.value.is_some())
+    }
+
+    /// True if the handle refers to a live entity.
+    pub fn contains(&self, handle: Handle<T>) -> bool {
+        self.slot(handle).is_some()
+    }
+
+    /// Borrow the entity behind a handle; `None` if the handle is stale.
+    pub fn get(&self, handle: Handle<T>) -> Option<&T> {
+        self.slot(handle).and_then(|s| s.value.as_ref())
+    }
+
+    /// Iterate live entities in slot order (deterministic).
+    pub fn iter(&self) -> impl Iterator<Item = (Handle<T>, &T)> {
+        self.slots.iter().enumerate().filter_map(|(i, s)| {
+            s.value.as_ref().map(|v| {
+                (
+                    Handle {
+                        index: i as u32,
+                        generation: s.generation,
+                        _marker: PhantomData,
+                    },
+                    v,
+                )
+            })
+        })
+    }
+}
+
+impl<T: Clone> Arena<T> {
+    fn record_slot(&mut self, index: u32) {
+        if self.undo.is_empty() {
+            return;
+        }
+        let original = self.slots[index as usize].clone();
+        for frame in &mut self.undo {
+            if index as usize >= frame.slots_len
+                || frame
+                    .originals
+                    .iter()
+                    .any(|(recorded, _)| *recorded == index)
+            {
+                continue;
+            }
+            frame.originals.push((index, original.clone()));
+        }
+    }
+
     /// Insert an entity, returning its handle.
     pub fn insert(&mut self, value: T) -> Handle<T> {
         self.live += 1;
         if let Some(index) = self.free.pop() {
+            self.record_slot(index);
             let slot = &mut self.slots[index as usize];
             debug_assert!(slot.value.is_none());
             slot.value = Some(value);
@@ -116,38 +228,24 @@ impl<T> Arena<T> {
         }
     }
 
-    fn slot(&self, handle: Handle<T>) -> Option<&Slot<T>> {
-        self.slots
-            .get(handle.index as usize)
-            .filter(|s| s.generation == handle.generation && s.value.is_some())
-    }
-
-    /// True if the handle refers to a live entity.
-    pub fn contains(&self, handle: Handle<T>) -> bool {
-        self.slot(handle).is_some()
-    }
-
-    /// Borrow the entity behind a handle; `None` if the handle is stale.
-    pub fn get(&self, handle: Handle<T>) -> Option<&T> {
-        self.slot(handle).and_then(|s| s.value.as_ref())
-    }
-
     /// Mutably borrow the entity behind a handle; `None` if the handle is stale.
     pub fn get_mut(&mut self, handle: Handle<T>) -> Option<&mut T> {
-        self.slots
-            .get_mut(handle.index as usize)
-            .filter(|s| s.generation == handle.generation)
-            .and_then(|s| s.value.as_mut())
+        if !self.contains(handle) {
+            return None;
+        }
+        self.record_slot(handle.index);
+        self.slots[handle.index as usize].value.as_mut()
     }
 
     /// Remove an entity, returning it; `None` if the handle is stale.
     /// The slot's generation is bumped so existing handles to it dangle.
     pub fn remove(&mut self, handle: Handle<T>) -> Option<T> {
-        let slot = self
-            .slots
-            .get_mut(handle.index as usize)
-            .filter(|s| s.generation == handle.generation)?;
-        let value = slot.value.take()?;
+        if !self.contains(handle) {
+            return None;
+        }
+        self.record_slot(handle.index);
+        let slot = &mut self.slots[handle.index as usize];
+        let value = slot.value.take().expect("contains checked live slot");
         self.live -= 1;
         // On generation exhaustion the slot is retired (never freed) rather
         // than allowing a generation to repeat.
@@ -158,20 +256,99 @@ impl<T> Arena<T> {
         Some(value)
     }
 
-    /// Iterate live entities in slot order (deterministic).
-    pub fn iter(&self) -> impl Iterator<Item = (Handle<T>, &T)> {
-        self.slots.iter().enumerate().filter_map(|(i, s)| {
-            s.value.as_ref().map(|v| {
-                (
-                    Handle {
-                        index: i as u32,
-                        generation: s.generation,
+    /// Begin a copy-on-write undo frame. Frames may be nested; every active
+    /// frame observes subsequent mutations independently.
+    pub fn begin_undo_frame(&mut self) {
+        self.undo.push(UndoFrame {
+            slots_len: self.slots.len(),
+            free: self.free.clone(),
+            live: self.live,
+            originals: Vec::new(),
+        });
+    }
+
+    /// Commit the innermost undo frame and return its deterministic net
+    /// mutations in slot order.
+    pub fn commit_undo_frame(&mut self) -> Result<Vec<ArenaChange<T>>> {
+        let mut frame = self.undo.pop().ok_or(Error::TransactionInactive)?;
+        frame.originals.sort_by_key(|(index, _)| *index);
+        let mut changes = Vec::new();
+        for (index, original) in frame.originals {
+            let current = &self.slots[index as usize];
+            match (original.value.is_some(), current.value.is_some()) {
+                (true, true) if original.generation == current.generation => {
+                    changes.push(ArenaChange {
+                        handle: Handle {
+                            index,
+                            generation: current.generation,
+                            _marker: PhantomData,
+                        },
+                        kind: ArenaChangeKind::Modified,
+                    });
+                }
+                (true, true) => {
+                    changes.push(ArenaChange {
+                        handle: Handle {
+                            index,
+                            generation: original.generation,
+                            _marker: PhantomData,
+                        },
+                        kind: ArenaChangeKind::Deleted,
+                    });
+                    changes.push(ArenaChange {
+                        handle: Handle {
+                            index,
+                            generation: current.generation,
+                            _marker: PhantomData,
+                        },
+                        kind: ArenaChangeKind::Created,
+                    });
+                }
+                (true, false) => changes.push(ArenaChange {
+                    handle: Handle {
+                        index,
+                        generation: original.generation,
                         _marker: PhantomData,
                     },
-                    v,
-                )
-            })
-        })
+                    kind: ArenaChangeKind::Deleted,
+                }),
+                (false, true) => changes.push(ArenaChange {
+                    handle: Handle {
+                        index,
+                        generation: current.generation,
+                        _marker: PhantomData,
+                    },
+                    kind: ArenaChangeKind::Created,
+                }),
+                (false, false) => {}
+            }
+        }
+        for (index, slot) in self.slots.iter().enumerate().skip(frame.slots_len) {
+            if slot.value.is_some() {
+                changes.push(ArenaChange {
+                    handle: Handle {
+                        index: index as u32,
+                        generation: slot.generation,
+                        _marker: PhantomData,
+                    },
+                    kind: ArenaChangeKind::Created,
+                });
+            }
+        }
+        Ok(changes)
+    }
+
+    /// Roll back the innermost undo frame, restoring contents, identities,
+    /// allocator state, and future handle allocation exactly.
+    pub fn rollback_undo_frame(&mut self) -> Result<()> {
+        let frame = self.undo.pop().ok_or(Error::TransactionInactive)?;
+        self.slots.truncate(frame.slots_len);
+        for (index, slot) in frame.originals {
+            self.slots[index as usize] = slot;
+        }
+        self.free = frame.free;
+        self.live = frame.live;
+        Ok(())
     }
 }
 
@@ -240,5 +417,117 @@ mod tests {
         *cloned.get_mut(live).unwrap() = 4;
         assert_eq!(arena.get(live), Some(&1));
         assert_eq!(cloned.get(live), Some(&4));
+    }
+
+    #[test]
+    fn rollback_restores_contents_handle_validity_and_allocator_order() {
+        let mut arena = Arena::new();
+        let a = arena.insert(String::from("a"));
+        let spare = arena.insert(String::from("spare"));
+        arena.remove(spare).unwrap();
+        let mut control = arena.clone();
+
+        arena.begin_undo_frame();
+        arena.get_mut(a).unwrap().push_str(" changed");
+        let reused = arena.insert(String::from("reused"));
+        let appended = arena.insert(String::from("appended"));
+        arena.remove(a).unwrap();
+        assert!(!arena.contains(a));
+        assert!(arena.contains(reused));
+        assert!(arena.contains(appended));
+        arena.rollback_undo_frame().unwrap();
+
+        assert_eq!(arena.get(a).map(String::as_str), Some("a"));
+        assert!(!arena.contains(reused));
+        assert!(!arena.contains(appended));
+        let next = arena.insert(String::from("next"));
+        let control_next = control.insert(String::from("next"));
+        assert_eq!(next, control_next);
+    }
+
+    #[test]
+    fn commit_reports_net_changes_in_slot_order() {
+        let mut arena = Arena::new();
+        let modified = arena.insert(10);
+        let deleted = arena.insert(20);
+
+        arena.begin_undo_frame();
+        *arena.get_mut(modified).unwrap() = 11;
+        arena.remove(deleted).unwrap();
+        let replacement = arena.insert(30);
+        let appended = arena.insert(40);
+        let changes = arena.commit_undo_frame().unwrap();
+
+        assert_eq!(
+            changes,
+            vec![
+                ArenaChange {
+                    handle: modified,
+                    kind: ArenaChangeKind::Modified,
+                },
+                ArenaChange {
+                    handle: deleted,
+                    kind: ArenaChangeKind::Deleted,
+                },
+                ArenaChange {
+                    handle: replacement,
+                    kind: ArenaChangeKind::Created,
+                },
+                ArenaChange {
+                    handle: appended,
+                    kind: ArenaChangeKind::Created,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_frames_restore_their_own_entry_state() {
+        let mut arena = Arena::new();
+        let value = arena.insert(1);
+        arena.begin_undo_frame();
+        *arena.get_mut(value).unwrap() = 2;
+        arena.begin_undo_frame();
+        *arena.get_mut(value).unwrap() = 3;
+        let inner = arena.commit_undo_frame().unwrap();
+        assert_eq!(inner.len(), 1);
+        assert_eq!(arena.get(value), Some(&3));
+        arena.rollback_undo_frame().unwrap();
+        assert_eq!(arena.get(value), Some(&1));
+
+        arena.begin_undo_frame();
+        *arena.get_mut(value).unwrap() = 4;
+        arena.begin_undo_frame();
+        *arena.get_mut(value).unwrap() = 5;
+        arena.rollback_undo_frame().unwrap();
+        assert_eq!(arena.get(value), Some(&4));
+        arena.rollback_undo_frame().unwrap();
+        assert_eq!(arena.get(value), Some(&1));
+    }
+
+    #[test]
+    fn unbalanced_frames_are_errors_and_clones_are_independent_snapshots() {
+        let mut arena = Arena::new();
+        let value = arena.insert(1);
+        assert_eq!(
+            arena.commit_undo_frame().unwrap_err(),
+            Error::TransactionInactive
+        );
+        assert_eq!(
+            arena.rollback_undo_frame().unwrap_err(),
+            Error::TransactionInactive
+        );
+
+        arena.begin_undo_frame();
+        *arena.get_mut(value).unwrap() = 2;
+        let mut snapshot = arena.clone();
+        assert_eq!(snapshot.get(value), Some(&2));
+        assert_eq!(
+            snapshot.commit_undo_frame().unwrap_err(),
+            Error::TransactionInactive
+        );
+        arena.rollback_undo_frame().unwrap();
+        assert_eq!(arena.get(value), Some(&1));
+        assert_eq!(snapshot.get(value), Some(&2));
     }
 }

@@ -48,6 +48,7 @@ use ktopo::entity::{
 };
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::store::Store;
+use ktopo::transaction::{Journal, MutationKind};
 use std::collections::BTreeMap;
 
 /// Everything produced by reconstructing one transmit file.
@@ -58,19 +59,29 @@ pub struct Reconstruction {
     /// Node types that were present but intentionally not reconstructed
     /// (attributes, groups, …), with occurrence counts.
     pub skipped: Vec<(u16, usize)>,
+    /// Transaction journal for every entity created or changed by this
+    /// reconstruction. Import currently emits raw mutations; file-node
+    /// provenance becomes semantic lineage when interchange provenance IDs
+    /// are introduced.
+    pub journal: Journal,
 }
 
 /// Reconstruct every body in the file into `store`.
 pub fn reconstruct(file: &XtFile, store: &mut Store) -> Result<Reconstruction> {
-    let mut staged = store.clone();
-    let reconstruction = reconstruct_into(file, &mut staged)?;
-    *store = staged;
+    let mut transaction = store.transaction()?;
+    let mut reconstruction = reconstruct_into(file, transaction.store_mut())?;
+    reconstruction.journal = transaction.commit()?;
+    debug_assert!(
+        reconstruction
+            .journal
+            .mutations()
+            .iter()
+            .all(|mutation| mutation.kind != MutationKind::Deleted)
+    );
     Ok(reconstruction)
 }
 
-/// Reconstruct into a private staging store. Keeping provisional handles
-/// confined here makes failure atomic without exposing unsafe rollback
-/// semantics to callers.
+/// Reconstruct inside the caller's active copy-on-write transaction.
 fn reconstruct_into(file: &XtFile, store: &mut Store) -> Result<Reconstruction> {
     let root = xnode(file, 1)?;
     let mut body_indices = Vec::new();
@@ -159,6 +170,7 @@ fn reconstruct_into(file: &XtFile, store: &mut Store) -> Result<Reconstruction> 
     Ok(Reconstruction {
         bodies,
         skipped: skipped.into_iter().collect(),
+        journal: Journal::default(),
     })
 }
 

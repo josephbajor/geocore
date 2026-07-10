@@ -37,6 +37,14 @@ pub enum Error {
         /// The configured limit.
         limit: usize,
     },
+    /// A modeling transaction was requested while another transaction is
+    /// already active on the same store. Nested modeling transactions are
+    /// deliberately rejected until their journal-composition semantics are
+    /// part of the public contract.
+    TransactionActive,
+    /// A transaction commit or rollback was requested without a matching
+    /// active transaction frame.
+    TransactionInactive,
 }
 
 impl fmt::Display for Error {
@@ -57,6 +65,10 @@ impl fmt::Display for Error {
             Error::AlgorithmLimit { operation, limit } => {
                 write!(f, "{operation} exceeded its limit of {limit}")
             }
+            Error::TransactionActive => {
+                write!(f, "a modeling transaction is already active on this store")
+            }
+            Error::TransactionInactive => write!(f, "no transaction is active"),
         }
     }
 }
