@@ -63,8 +63,8 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 | M0 Foundations | IMPLEMENTED SLICE | Deterministic math, current predicates, intervals, tolerances, arenas, and deterministic map primitives exist; conformance debt remains. |
 | M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS basics, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, Euler operators, primitives, checker v1, and watertight body tessellation exist; boolean-ready incidence and transactions do not. |
-| M2.5 Architecture gate | IN PROGRESS / REQUIRED | The per-fin pcurve foundation, shared incidence validation, pcurve-aware Euler creation, and pcurve-driven body tessellation have landed; geometry graph, transactions, journals, mutation encapsulation, face domains/tolerances, and checker upgrades remain. |
-| M3 X_T | IN PROGRESS | Modern-schema supported subset reads both wire encodings and writes text; production coverage and external certification remain. |
+| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves, bounded curve-less tolerant edges, shared incidence validation, pcurve-aware Euler creation, and pcurve-driven tessellation have landed; geometry graph, transactions, journals, mutation encapsulation, face domains/tolerances, and checker upgrades remain. |
+| M3 X_T | IN PROGRESS | The modern-schema subset reads both wire encodings and writes text, including bounded tolerant edges as trimmed SP-curves over finite 2D B-curves; production coverage and external certification remain. |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases and sampled NURBS experiments exist; certified generic discovery and boolean-ready branches do not. |
 | M5–M8 | NOT STARTED | No end-to-end booleans, general modeling, blends, stable API, or production hardening. |
 
@@ -146,13 +146,15 @@ volume-tested.
 
 ### Known limits
 
-- Fins can now retain independent, explicitly parameter-mapped pcurves, and authored
-  analytic primitives use them. Body tessellation retains shared edge parameters and
-  evaluates each fin's pcurve branch. X_T SP-curve reconstruction, Euler propagation,
-  pole fixtures, and a mandatory-pcurve topology mode remain, so this is not yet
-  boolean-ready incidence.
-- `General` mixed-dimension bodies, face tolerances, curve-less tolerant edges, isolated
-  loops, and several degenerate topologies are unsupported.
+- Fins retain independent, explicitly parameter-mapped pcurves; authored analytic
+  primitives and pcurve-aware Euler variants propagate them. Bounded curve-less
+  tolerant edges use a canonical logical domain and require every fin pcurve; the
+  checker compares lifted realizations and endpoints within entity tolerance, and body
+  tessellation shares one deterministic 3D polyline across all uses. Legacy Euler entry
+  points and generic mutation still permit missing pcurves, so incidence is not yet
+  boolean-ready by construction.
+- `General` mixed-dimension bodies, face tolerances/domains, curve-less ring edges,
+  isolated loops, and several pole/apex or degenerate topologies are unsupported.
 - Entity fields and generic mutable store access allow callers to bypass Euler
   invariants. “Euler operators only” is a convention rather than an enforced boundary.
 - There is no modeling transaction, rollback log, entity lineage journal, attribute
@@ -186,21 +188,31 @@ Landed slice:
   pcurve-bearing fins on a destination surface before moving them; checker and Euler
   validation share one incidence implementation. Full multi-step atomicity remains part
   of the transaction gate below.
+- A bounded tolerant edge may omit its 3D curve and use a finite increasing logical edge
+  domain (canonically `[0, 1]`). Every real fin must then carry a pcurve whose affine map
+  covers that domain. The checker verifies pcurve definitions, endpoint-to-vertex
+  tolerance, and agreement among all lifted fin realizations; shared-edge tessellation
+  refines their deterministic averaged realization while anchoring topological vertices.
+- X_T import/export maps the conforming tolerant-edge representation
+  `EDGE.curve = null` plus per-fin `TRIMMED_CURVE → SP_CURVE → 2D B_CURVE`. Exact-edge
+  pcurves are intentionally not written into `FIN.curve`. Polynomial/rational finite
+  2D B-curves and reversed trim direction round-trip locally.
 
 Remaining before the gate closes:
 
 - Migrate higher operations to the pcurve-aware Euler variants and make pcurves mandatory
   for face-edge uses created through the future checked topology API; the legacy Euler
   entry points still intentionally create `None` during migration.
-- Implement curve-less tolerant edges before X_T SP-curve import/export. The published
-  XT contract reserves `FIN.curve` for non-dummy fins of tolerant edges, requires the
-  edge's own curve pointer to be null, and stores each fin use as a trimmed SP-curve over
-  a 2D B-curve. Exact-edge pcurves must not be emitted into that field.
+- Add an independently sourced, redistributable Parasolid fixture containing a true
+  tolerant edge and certify the emitted SP-curve chain in a licensed Parasolid host.
+  Current evidence is standards-derived and self-round-trip only. Extend interchange to
+  periodic/circular pcurves and any geometric-owner variants observed in that corpus.
 - Add explicit seam-branch metadata where a periodic pcurve range alone is insufficient,
   plus pole/apex-degenerate pcurve fixtures.
 - Add face tolerance/domain data needed by X_T and tolerant operations.
-- Upgrade sampled local incidence checking to adaptive verification, including endpoint
-  vertex and tolerance-provenance checks.
+- Upgrade sampled local incidence checking to adaptive verification and add explicit
+  tolerance provenance/budget tracking. Endpoint-to-vertex checks now exist, but they
+  are still sampling-based rather than a proof over the full interval.
 
 ### B. Geometry graph and procedural evaluation
 
@@ -262,6 +274,9 @@ read before its corresponding kernel geometry exists.
 - Embedded C/D/I/A/Z edits are applied against base schema 13006.
 - The supported body/analytic/non-periodic-NURBS subset reconstructs atomically and can
   be checked and tessellated.
+- The supported tolerant subset reconstructs bounded curve-less edges from trimmed
+  SP-curves over finite polynomial/rational 2D B-curves, including decreasing parameter
+  correspondence. It still lacks an external positive fixture.
 - Current external positive fixtures are intentionally small and cover only a cut
   sphere, sheet disk, and plate; they are smoke tests, not production-read evidence.
 
@@ -289,7 +304,14 @@ read before its corresponding kernel geometry exists.
 ### M3b — Tier 1 authoring and external certification — IN PROGRESS
 
 - Deterministic schema-13006 text output covers supported self-authored analytic solids,
-  sheets, wires, acorns, bounded arcs, shared geometry, and exact entity tolerances.
+  sheets, wires, acorns, bounded arcs, shared geometry, exact entity tolerances, and
+  bounded curve-less tolerant edges represented by per-fin trimmed SP-curves. Circular
+  and periodic pcurves are not yet in the declared writer subset.
+- Complete a field-by-field ownership/link audit for every declared writer cell,
+  including directly shared untrimmed curves and shared point ownership. The tolerant
+  SP path now emits its boundary-curve chain and geometric-owner rings, but acceptance
+  by this repository's permissive reader is not evidence that all older writer paths
+  satisfy Parasolid's relationship invariants.
 - Add neutral-binary output after the text semantics are independently certified.
 - For every authored capability: import into Solid Edge/another licensed Parasolid host,
   run its checker, re-export, re-import here, and compare topology, geometry class,
@@ -302,10 +324,11 @@ does not satisfy this gate.
 
 ### M3c — Tier 2/3 fidelity — THROUGH M6/M8
 
-Periodic B-geometry, SP/intersection curves, procedural surfaces, curve-less tolerant
-edges, general bodies, attributes, transforms, instances, assemblies, and older schemas
-land with their kernel dependencies. Full “any well-formed X_T” Tier 0 is not claimed
-until this matrix is closed.
+Periodic B-geometry, circular/periodic pcurve encodings, intersection curves, procedural
+surfaces, curve-less tolerant ring/degenerate cases, general bodies, attributes,
+transforms, instances, assemblies, and older schemas land with their kernel
+dependencies. Full “any well-formed X_T” Tier 0 is not claimed until this matrix is
+closed.
 
 ## M4 — Certified intersections + profile operations — PROVISIONAL / GATED
 
@@ -466,8 +489,8 @@ tolerance growth, algorithm limits, fuzz regressions, and performance percentile
 ## Immediate implementation queue
 
 1. Finish the landed pcurve/coedge slice: migrate operation callers to pcurve-aware Euler,
-   add curve-less tolerant edges and the conforming X_T SP-curve path, add face domains/
-   tolerances, and close seam/pole fixtures.
+   add face domains/tolerances, close seam/pole fixtures, and externally certify the
+   bounded tolerant-edge X_T SP-curve subset.
 2. Add transaction/rollback and deterministic semantic journals; migrate X_T staging.
 3. Encapsulate topology mutation and introduce checker v2 foundations.
 4. Redesign intersection results around completion evidence and paired pcurves.

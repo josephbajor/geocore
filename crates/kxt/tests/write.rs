@@ -2,7 +2,7 @@
 
 use kcore::tolerance::LINEAR_RESOLUTION;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
-use kgeom::curve2d::Line2d;
+use kgeom::curve2d::{Line2d, NurbsCurve2d};
 use kgeom::frame::Frame;
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::param::ParamRange;
@@ -118,6 +118,69 @@ fn replace_edge_with_linear_nurbs(store: &mut Store, body: BodyId) {
     let nurbs = NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![start, end], None).unwrap();
     *store.get_mut(curve_id).unwrap() = CurveGeom::Nurbs(nurbs);
     store.get_mut(edge_id).unwrap().bounds = Some((0.0, 1.0));
+}
+
+fn make_first_edge_truly_tolerant(store: &mut Store, body: BodyId) -> EdgeId {
+    let edge_id = first_bounded_edge(store, body);
+    let edge = store.get(edge_id).unwrap();
+    let old_bounds = edge.bounds.unwrap();
+    let fins = edge.fins.clone();
+    for fin_id in &fins {
+        let old = store.get(*fin_id).unwrap().pcurve.unwrap();
+        let q0 = old.parameter_at_edge(old_bounds.0);
+        let q1 = old.parameter_at_edge(old_bounds.1);
+        store.get_mut(*fin_id).unwrap().pcurve = Some(
+            FinPcurve::new(
+                old.curve(),
+                old.range(),
+                ParamMap1d::affine(q1 - q0, q0).unwrap(),
+            )
+            .unwrap(),
+        );
+    }
+
+    // Exercise rational 2D B-curve emission on one use.
+    let first = fins[0];
+    let first_use = store.get(first).unwrap().pcurve.unwrap();
+    let first_curve = store.get(first_use.curve()).unwrap().as_curve();
+    let range = first_use.range();
+    let endpoints = vec![first_curve.eval(range.lo), first_curve.eval(range.hi)];
+    *store.get_mut(first_use.curve()).unwrap() = Curve2dGeom::Nurbs(
+        NurbsCurve2d::new(
+            1,
+            vec![range.lo, range.lo, range.hi, range.hi],
+            endpoints,
+            Some(vec![2.0, 2.0]),
+        )
+        .unwrap(),
+    );
+
+    // Exercise decreasing SP-curve trim parameters on the other use while
+    // preserving exactly the same lifted geometry.
+    let second = fins[1];
+    let second_use = store.get(second).unwrap().pcurve.unwrap();
+    let Curve2dGeom::Line(line) = *store.get(second_use.curve()).unwrap() else {
+        panic!("block pcurve must be linear");
+    };
+    let range = second_use.range();
+    *store.get_mut(second_use.curve()).unwrap() = Curve2dGeom::Line(
+        Line2d::new(
+            line.origin() + line.dir() * (range.lo + range.hi),
+            -line.dir(),
+        )
+        .unwrap(),
+    );
+    let old_map = second_use.edge_to_pcurve();
+    let reversed_map =
+        ParamMap1d::affine(-old_map.scale(), range.lo + range.hi - old_map.offset()).unwrap();
+    store.get_mut(second).unwrap().pcurve =
+        Some(FinPcurve::new(second_use.curve(), second_use.range(), reversed_map).unwrap());
+
+    let edge = store.get_mut(edge_id).unwrap();
+    edge.curve = None;
+    edge.bounds = Some((0.0, 1.0));
+    edge.tolerance = Some(LINEAR_RESOLUTION);
+    edge_id
 }
 
 fn replace_face_with_bilinear_nurbs(store: &mut Store, body: BodyId) {
@@ -694,6 +757,145 @@ fn exact_tolerant_edge_and_vertex_round_trip() {
             .into_iter()
             .any(|vertex| imported.get(vertex).unwrap().tolerance == Some(LINEAR_RESOLUTION * 20.0))
     );
+}
+
+#[test]
+fn curve_less_tolerant_edge_round_trips_through_trimmed_sp_curves() {
+    let mut store = Store::new();
+    let body = make::block(&mut store, &Frame::world(), [2.0, 3.0, 4.0]).unwrap();
+    let tolerant = make_first_edge_truly_tolerant(&mut store, body);
+    assert!(check_body(&store, body).unwrap().is_empty());
+
+    let (text, imported, imported_body) = assert_checker_roundtrip(&store, body);
+    let parsed = kxt::read_xt(text.as_bytes()).unwrap();
+    let sp_curves: Vec<_> = parsed
+        .nodes
+        .values()
+        .filter(|node| node.code == code::SP_CURVE)
+        .collect();
+    assert_eq!(sp_curves.len(), 2);
+    assert!(
+        sp_curves
+            .iter()
+            .any(|node| { parsed.field(node, "sense").and_then(kxt::Value::as_char) == Some('-') })
+    );
+    let null_curve_edges = parsed
+        .nodes
+        .values()
+        .filter(|node| {
+            node.code == code::EDGE
+                && parsed.field(node, "curve").and_then(kxt::Value::as_ptr) == Some(0)
+        })
+        .count();
+    assert_eq!(null_curve_edges, 1);
+
+    // All directly/indirectly attached curve geometry belongs to the
+    // body's boundary-curve chain. The embedded 2D B-curves are the one
+    // specified exception: ownerless, unchained, and reached only via SP.
+    let body_node = parsed.nodes.get(&1).unwrap();
+    let mut curve_index = parsed
+        .field(body_node, "boundary_curve")
+        .and_then(kxt::Value::as_ptr)
+        .unwrap();
+    let mut previous = 0;
+    let mut boundary_codes = Vec::new();
+    while curve_index != 0 {
+        let node = parsed.nodes.get(&curve_index).unwrap();
+        assert_eq!(
+            parsed.field(node, "previous").and_then(kxt::Value::as_ptr),
+            Some(previous)
+        );
+        boundary_codes.push(node.code);
+        previous = curve_index;
+        curve_index = parsed
+            .field(node, "next")
+            .and_then(kxt::Value::as_ptr)
+            .unwrap();
+    }
+    assert_eq!(boundary_codes.len(), 26);
+    assert_eq!(
+        boundary_codes
+            .iter()
+            .filter(|&&node_code| node_code == code::SP_CURVE)
+            .count(),
+        2
+    );
+    assert!(!boundary_codes.contains(&code::B_CURVE));
+    for bcurve in parsed
+        .nodes
+        .values()
+        .filter(|node| node.code == code::B_CURVE)
+    {
+        assert_eq!(
+            parsed.field(bcurve, "owner").and_then(kxt::Value::as_ptr),
+            Some(0)
+        );
+        assert_eq!(
+            parsed.field(bcurve, "next").and_then(kxt::Value::as_ptr),
+            Some(0)
+        );
+    }
+    assert_eq!(
+        parsed
+            .nodes
+            .values()
+            .filter(|node| node.code == code::GEOMETRIC_OWNER)
+            .count(),
+        15
+    );
+    assert!(sp_curves.iter().all(|node| {
+        parsed
+            .field(node, "geometric_owner")
+            .and_then(kxt::Value::as_ptr)
+            .is_some_and(|owner| owner != 0)
+    }));
+
+    let imported_edge = imported
+        .edges_of_body(imported_body)
+        .unwrap()
+        .into_iter()
+        .find(|&edge| imported.get(edge).unwrap().curve.is_none())
+        .unwrap();
+    let edge = imported.get(imported_edge).unwrap();
+    assert_eq!(edge.bounds, Some((0.0, 1.0)));
+    assert_eq!(edge.tolerance, Some(LINEAR_RESOLUTION));
+    assert_eq!(edge.fins.len(), 2);
+    assert!(
+        edge.fins
+            .iter()
+            .all(|&fin| imported.get(fin).unwrap().pcurve.is_some())
+    );
+    assert!(edge.fins.iter().any(|&fin| {
+        imported.get(fin).unwrap().pcurve.unwrap().sense() == ktopo::entity::Sense::Reversed
+    }));
+    assert!(edge.fins.iter().any(|&fin| {
+        let curve = imported.get(fin).unwrap().pcurve.unwrap().curve();
+        matches!(imported.get(curve).unwrap(), Curve2dGeom::Nurbs(n) if n.weights().is_some())
+    }));
+
+    let mesh = tessellate_body(
+        &imported,
+        imported_body,
+        &TessOptions {
+            chord_tol: 1e-3,
+            max_edge_len: Some(0.2),
+        },
+    )
+    .unwrap();
+    assert!(check_watertight(&mesh).is_empty());
+    assert!(
+        mesh.edge_polylines
+            .iter()
+            .find(|(edge, _)| *edge == imported_edge)
+            .unwrap()
+            .1
+            .len()
+            > 2
+    );
+
+    // Keep the source handle observably in use: it must be the only
+    // curve-less edge before and after interchange.
+    assert!(store.get(tolerant).unwrap().curve.is_none());
 }
 
 #[test]

@@ -15,10 +15,13 @@
 //!   it is a back-face of, which matches our outward-normal convention.
 //!   Shells left with no content (e.g. the void exterior shell of a
 //!   solid, which only lists front-faces) are dropped.
-//! - Edge parameter bounds are not stored in XT; they are recovered by
+//! - Exact-edge parameter bounds are not stored in XT; they are recovered by
 //!   closed-form inversion of the vertex positions on analytic curves
 //!   (arc length on lines, `atan2` angles on circles/ellipses) and by
-//!   projection on B-curves. Ring edges (no vertices) get `bounds: None`.
+//!   projection on B-curves. A tolerant edge with `EDGE.curve = null` gets
+//!   the canonical logical domain `[0, 1]`; each trimmed SP-curve on its
+//!   fins supplies the correspondence to a 2D B-curve. Ring edges (no
+//!   vertices) get `bounds: None` and must have exact curve geometry.
 //! - Geometry conventions transfer exactly: XT and kernel
 //!   parameterizations coincide for plane/cylinder/sphere/torus/circle/
 //!   ellipse/line. Cones differ (XT measures `v` against the axis with a
@@ -31,17 +34,19 @@ use crate::error::{Result, XtError};
 use crate::parse::{Node, Value, XtFile};
 use crate::schema::code;
 use kcore::math;
+use kcore::tolerance::LINEAR_RESOLUTION;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
+use kgeom::curve2d::NurbsCurve2d;
 use kgeom::frame::Frame;
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
-use kgeom::param::wrap_periodic;
+use kgeom::param::{ParamRange, wrap_periodic};
 use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Torus};
-use kgeom::vec::{Point3, Vec3};
+use kgeom::vec::{Point2, Point3, Vec3};
 use ktopo::entity::{
-    Body, BodyId, BodyKind, CurveId, Edge, EdgeId, Face, FaceId, Fin, Loop, Region, RegionId,
-    RegionKind, Sense, Shell, ShellId, SurfaceId, Vertex, VertexId,
+    Body, BodyId, BodyKind, Curve2dId, CurveId, Edge, EdgeId, Face, FaceId, Fin, FinPcurve, Loop,
+    ParamMap1d, Region, RegionId, RegionKind, Sense, Shell, ShellId, SurfaceId, Vertex, VertexId,
 };
-use ktopo::geom::{CurveGeom, SurfaceGeom};
+use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::store::Store;
 use std::collections::BTreeMap;
 
@@ -110,6 +115,7 @@ fn reconstruct_into(file: &XtFile, store: &mut Store) -> Result<Reconstruction> 
         file,
         store,
         curves: BTreeMap::new(),
+        pcurves: BTreeMap::new(),
         surfaces: BTreeMap::new(),
         points: BTreeMap::new(),
         vertices: BTreeMap::new(),
@@ -251,6 +257,8 @@ struct Recon<'a> {
     store: &'a mut Store,
     /// XT curve index → (kernel curve, XT sense was `-`).
     curves: BTreeMap<u32, (CurveId, bool)>,
+    /// XT 2D B-curve index → kernel pcurve geometry.
+    pcurves: BTreeMap<u32, Curve2dId>,
     /// XT surface index → (kernel surface, XT sense char).
     surfaces: BTreeMap<u32, (SurfaceId, char)>,
     /// XT point index → kernel point.
@@ -463,11 +471,12 @@ impl Recon<'_> {
             if flip {
                 sense = sense.flipped();
             }
+            let pcurve = self.fin_pcurve(fin_idx, face, edge)?;
             let fin = self.store.add(Fin {
                 parent: lp,
                 edge,
                 sense,
-                pcurve: None,
+                pcurve,
             });
             self.store.get_mut(edge)?.fins.push(fin);
             fins.push(fin);
@@ -519,23 +528,22 @@ impl Recon<'_> {
         let file = self.file;
         let edge_node = xnode(file, edge_idx)?;
         let curve_idx = ptr(file, edge_node, "curve")?;
-        if curve_idx == 0 {
-            return Err(XtError::Unsupported {
-                what: "tolerant edges without exact curves (M3c)",
-            });
-        }
-
-        // Trimmed curves carry their bounds; plain curves get inverted.
-        let curve_node = xnode(file, curve_idx)?;
-        let (geom_curve_idx, trim) = if curve_node.code == code::TRIMMED_CURVE {
-            let basis = ptr(file, curve_node, "basis_curve")?;
-            let p1 = f64_of(file, curve_node, "parm_1")?;
-            let p2 = f64_of(file, curve_node, "parm_2")?;
-            (basis, Some((p1, p2)))
+        let (curve, curve_reversed, trim) = if curve_idx == 0 {
+            (None, false, None)
         } else {
-            (curve_idx, None)
+            // Trimmed curves carry their bounds; plain curves get inverted.
+            let curve_node = xnode(file, curve_idx)?;
+            let (geom_curve_idx, trim) = if curve_node.code == code::TRIMMED_CURVE {
+                let basis = ptr(file, curve_node, "basis_curve")?;
+                let p1 = f64_of(file, curve_node, "parm_1")?;
+                let p2 = f64_of(file, curve_node, "parm_2")?;
+                (basis, Some((p1, p2)))
+            } else {
+                (curve_idx, None)
+            };
+            let (curve, reversed) = self.curve(geom_curve_idx)?;
+            (Some(curve), reversed, trim)
         };
-        let (curve, curve_reversed) = self.curve(geom_curve_idx)?;
 
         // Vertices via the edge's fin ring: a `+` fin's forward vertex is
         // the edge end, a `-` fin's is the edge start (dummy fins exist
@@ -591,20 +599,36 @@ impl Recon<'_> {
             (Some(s), Some(e)) => {
                 let sp = self.store.vertex_position(s)?;
                 let ep = self.store.vertex_position(e)?;
-                let curve_geom = self.store.get(curve)?;
-                Some(edge_bounds(curve_geom, sp, ep, trim, curve_reversed).ok_or(
-                    XtError::BadField {
-                        index: edge_idx,
-                        what: "could not recover edge parameter bounds on its curve",
-                    },
-                )?)
+                match curve {
+                    Some(curve) => {
+                        let curve_geom = self.store.get(curve)?;
+                        Some(edge_bounds(curve_geom, sp, ep, trim, curve_reversed).ok_or(
+                            XtError::BadField {
+                                index: edge_idx,
+                                what: "could not recover edge parameter bounds on its curve",
+                            },
+                        )?)
+                    }
+                    None => Some((0.0, 1.0)),
+                }
             }
             _ => unreachable!("checked above"),
         };
 
         let tol = tolerance(file, edge_node)?;
+        if curve.is_none() && tol.is_none() {
+            return Err(XtError::BadField {
+                index: edge_idx,
+                what: "curve-less edge has no tolerance",
+            });
+        }
+        if curve.is_none() && bounds.is_none() {
+            return Err(XtError::Unsupported {
+                what: "curve-less tolerant ring edges",
+            });
+        }
         let e = self.store.add(Edge {
-            curve: Some(curve),
+            curve,
             vertices: [start, end],
             bounds,
             fins: Vec::new(),
@@ -612,6 +636,154 @@ impl Recon<'_> {
         });
         self.edges.insert(edge_idx, (e, curve_reversed));
         Ok((e, curve_reversed))
+    }
+
+    /// Reconstruct the trimmed SP-curve attached to one real FIN.
+    fn fin_pcurve(
+        &mut self,
+        fin_idx: u32,
+        face: FaceId,
+        edge: EdgeId,
+    ) -> Result<Option<FinPcurve>> {
+        let file = self.file;
+        let fin_node = xnode(file, fin_idx)?;
+        let trim_idx = ptr(file, fin_node, "curve")?;
+        if trim_idx == 0 {
+            if self.store.get(edge)?.curve.is_none() {
+                return Err(XtError::BadField {
+                    index: fin_idx,
+                    what: "curve-less tolerant edge fin has no SP-curve",
+                });
+            }
+            return Ok(None);
+        }
+        let trim = xnode(file, trim_idx)?;
+        if trim.code != code::TRIMMED_CURVE {
+            return Err(XtError::BadField {
+                index: trim_idx,
+                what: "FIN curve is not a TRIMMED_CURVE",
+            });
+        }
+        if ch(file, trim, "sense")? != '+' {
+            return Err(XtError::BadField {
+                index: trim_idx,
+                what: "FIN TRIMMED_CURVE sense must be positive",
+            });
+        }
+        let sp_idx = ptr(file, trim, "basis_curve")?;
+        let sp = xnode(file, sp_idx)?;
+        if sp.code != code::SP_CURVE {
+            return Err(XtError::BadField {
+                index: sp_idx,
+                what: "FIN TRIMMED_CURVE basis is not an SP_CURVE",
+            });
+        }
+        let sp_surface = ptr(file, sp, "surface")?;
+        let (surface, _) = self.surface(sp_surface)?;
+        if surface != self.store.get(face)?.surface {
+            return Err(XtError::BadField {
+                index: sp_idx,
+                what: "SP_CURVE surface is not the FIN's face surface",
+            });
+        }
+        let bcurve_idx = ptr(file, sp, "b_curve")?;
+        let pcurve = self.pcurve_b_curve(bcurve_idx)?;
+        let p1 = f64_of(file, trim, "parm_1")?;
+        let p2 = f64_of(file, trim, "parm_2")?;
+        let sp_forward = match ch(file, sp, "sense")? {
+            '+' => true,
+            '-' => false,
+            _ => {
+                return Err(XtError::BadField {
+                    index: sp_idx,
+                    what: "SP_CURVE sense is not +/-",
+                });
+            }
+        };
+        if !(p1.is_finite() && p2.is_finite() && p1 != p2 && ((p2 > p1) == sp_forward)) {
+            return Err(XtError::BadField {
+                index: trim_idx,
+                what: "SP-curve trim parameters disagree with basis sense",
+            });
+        }
+        let (t0, t1) = self.store.get(edge)?.bounds.ok_or(XtError::BadField {
+            index: fin_idx,
+            what: "FIN SP-curve is attached to an unbounded edge",
+        })?;
+        let scale = (p2 - p1) / (t1 - t0);
+        let map = ParamMap1d::affine(scale, p1 - scale * t0).map_err(XtError::Kernel)?;
+        let curve = self.store.get(pcurve)?.as_curve();
+        let natural = curve.param_range();
+        if !natural.contains(p1) || !natural.contains(p2) {
+            return Err(XtError::BadField {
+                index: trim_idx,
+                what: "SP-curve trim parameters lie outside the 2D B-curve domain",
+            });
+        }
+        let surface = self.store.get(surface)?.as_surface();
+        let trim_point_1 = vector(file, trim, "point_1")?;
+        let trim_point_2 = vector(file, trim, "point_2")?;
+        let uv1 = curve.eval(p1);
+        let uv2 = curve.eval(p2);
+        let tolerance = self
+            .store
+            .get(edge)?
+            .tolerance
+            .unwrap_or(LINEAR_RESOLUTION)
+            .max(LINEAR_RESOLUTION);
+        if surface.eval([uv1.x, uv1.y]).dist(trim_point_1) > tolerance
+            || surface.eval([uv2.x, uv2.y]).dist(trim_point_2) > tolerance
+        {
+            return Err(XtError::BadField {
+                index: trim_idx,
+                what: "TRIMMED_CURVE points do not match its SP-curve parameters",
+            });
+        }
+        let use_ = FinPcurve::new(pcurve, ParamRange::new(p1.min(p2), p1.max(p2)), map)
+            .map_err(XtError::Kernel)?;
+        Ok(Some(use_))
+    }
+
+    fn pcurve_b_curve(&mut self, curve_idx: u32) -> Result<Curve2dId> {
+        if let Some(&curve) = self.pcurves.get(&curve_idx) {
+            return Ok(curve);
+        }
+        let node = xnode(self.file, curve_idx)?;
+        if node.code != code::B_CURVE {
+            return Err(XtError::BadField {
+                index: curve_idx,
+                what: "SP_CURVE parameter geometry is not a B_CURVE",
+            });
+        }
+        let curve = self.b_curve_2d(curve_idx, node)?;
+        let id = self.store.add(Curve2dGeom::Nurbs(curve));
+        self.pcurves.insert(curve_idx, id);
+        Ok(id)
+    }
+
+    fn b_curve_2d(&mut self, curve_idx: u32, node: &Node) -> Result<NurbsCurve2d> {
+        let file = self.file;
+        let nurbs_idx = ptr(file, node, "nurbs")?;
+        let n = xnode(file, nurbs_idx)?;
+        let degree = f64_of(file, n, "degree")? as usize;
+        let n_vertices = f64_of(file, n, "n_vertices")? as usize;
+        let vertex_dim = f64_of(file, n, "vertex_dim")? as usize;
+        if logical_of(file, n, "periodic")? {
+            return Err(XtError::Unsupported {
+                what: "periodic 2D B-curves",
+            });
+        }
+        let rational = logical_of(file, n, "rational")?;
+        let knots = self.knot_vector(ptr(file, n, "knots")?, ptr(file, n, "knot_mult")?)?;
+        let raw = self.doubles(ptr(file, n, "bspline_vertices")?, "vertices")?;
+        if raw.len() != n_vertices * vertex_dim {
+            return Err(XtError::BadField {
+                index: curve_idx,
+                what: "2D bspline vertex array length mismatch",
+            });
+        }
+        let (points, weights) = split_poles_2d(&raw, vertex_dim, rational)?;
+        NurbsCurve2d::new(degree, knots, points, weights).map_err(XtError::Kernel)
     }
 
     /// Convert an XT curve node to kernel geometry. Returns the curve and
@@ -893,6 +1065,39 @@ fn split_poles(raw: &[f64], dim: usize, rational: bool) -> Result<(Vec<Point3>, 
     Ok((points, if rational { Some(weights) } else { None }))
 }
 
+/// Split a flat XT 2D pole array. Rational poles are premultiplied
+/// (`u·w, v·w, w`).
+fn split_poles_2d(
+    raw: &[f64],
+    dim: usize,
+    rational: bool,
+) -> Result<(Vec<Point2>, Option<Vec<f64>>)> {
+    let expected_dim = if rational { 3 } else { 2 };
+    if dim != expected_dim {
+        return Err(XtError::Unsupported {
+            what: "2D B-geometry with vertex dimension other than 2 (or 3 rational)",
+        });
+    }
+    let mut points = Vec::new();
+    let mut weights = Vec::new();
+    for pole in raw.chunks_exact(dim) {
+        if rational {
+            let w = pole[2];
+            if w <= 0.0 {
+                return Err(XtError::BadField {
+                    index: 0,
+                    what: "non-positive 2D rational weight",
+                });
+            }
+            points.push(Point2::new(pole[0] / w, pole[1] / w));
+            weights.push(w);
+        } else {
+            points.push(Point2::new(pole[0], pole[1]));
+        }
+    }
+    Ok((points, if rational { Some(weights) } else { None }))
+}
+
 /// Recover the parameter interval of an edge from its endpoint positions
 /// on the (natural-direction) curve. `trim` short-circuits with the
 /// parameters stored in a trimmed curve, oriented to increase along the
@@ -976,5 +1181,14 @@ mod tests {
         assert_eq!(pts[0], Point3::new(1.0, 2.0, 3.0));
         assert_eq!(w.unwrap(), vec![2.0, 1.0]);
         assert!(split_poles(&raw, 2, false).is_err());
+    }
+
+    #[test]
+    fn split_poles_2d_unweights_rational_data() {
+        let raw = [2.0, 4.0, 2.0, 1.0, 0.0, 1.0];
+        let (points, weights) = split_poles_2d(&raw, 3, true).unwrap();
+        assert_eq!(points, vec![Point2::new(1.0, 2.0), Point2::new(1.0, 0.0)]);
+        assert_eq!(weights.unwrap(), vec![2.0, 1.0]);
+        assert!(split_poles_2d(&raw, 2, true).is_err());
     }
 }

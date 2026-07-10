@@ -2,6 +2,12 @@
 
 Provenance of every transmit file used by the `kxt` test suite.
 
+None of the current external positive fixtures contains a true tolerant edge with
+`EDGE.curve = null` and a per-fin trimmed SP-curve. That capability has standards-derived
+self-round-trip coverage in `tests/write.rs`, but it remains intentionally uncertified
+until an independently authored, redistributable positive fixture and a licensed
+Parasolid-host round trip are added.
+
 ## Hand-authored (this repository)
 
 - `block.x_t`, `block.x_b` — a 0.2 × 0.3 × 0.4 m solid block, written by
