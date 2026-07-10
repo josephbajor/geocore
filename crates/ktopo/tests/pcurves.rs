@@ -1,15 +1,36 @@
 //! Integration coverage for per-fin parameter-space curves.
 
+use kcore::tolerance::LINEAR_RESOLUTION;
 use kgeom::curve2d::{Line2d, NurbsCurve2d};
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
 use kgeom::vec::{Point2, Vec2};
 use ktopo::btess::{TessOptions, check_watertight, tessellate_body};
 use ktopo::check::{FaultKind, check_body};
-use ktopo::entity::{FinPcurve, ParamMap1d};
+use ktopo::entity::{EdgeId, EntityRef, FinPcurve, ParamMap1d};
 use ktopo::geom::Curve2dGeom;
 use ktopo::make::{block, cone, cylinder};
 use ktopo::store::Store;
+
+fn make_first_edge_curveless_tolerant(store: &mut Store, body: ktopo::entity::BodyId) -> EdgeId {
+    let edge_id = store.edges_of_body(body).unwrap()[0];
+    let edge = store.get(edge_id).unwrap();
+    let old_bounds = edge.bounds.unwrap();
+    let fins = edge.fins.clone();
+    for fin_id in fins {
+        let old = store.get(fin_id).unwrap().pcurve.unwrap();
+        let q0 = old.parameter_at_edge(old_bounds.0);
+        let q1 = old.parameter_at_edge(old_bounds.1);
+        let map = ParamMap1d::affine(q1 - q0, q0).unwrap();
+        store.get_mut(fin_id).unwrap().pcurve =
+            Some(FinPcurve::new(old.curve(), old.range(), map).unwrap());
+    }
+    let edge = store.get_mut(edge_id).unwrap();
+    edge.curve = None;
+    edge.bounds = Some((0.0, 1.0));
+    edge.tolerance = Some(LINEAR_RESOLUTION);
+    edge_id
+}
 
 #[test]
 fn authored_primitives_carry_checker_verified_pcurves() {
@@ -126,4 +147,92 @@ fn body_tessellation_consumes_a_nurbs_pcurve() {
     )
     .unwrap();
     assert!(check_watertight(&mesh).is_empty());
+}
+
+#[test]
+fn checker_accepts_a_bounded_tolerant_edge_defined_by_pcurves() {
+    let mut store = Store::new();
+    let body = block(&mut store, &Frame::world(), [2.0, 3.0, 4.0]).unwrap();
+    let edge = make_first_edge_curveless_tolerant(&mut store, body);
+
+    assert!(store.get(edge).unwrap().curve.is_none());
+    let faults = check_body(&store, body).unwrap();
+    assert!(faults.is_empty(), "tolerant edge faults: {faults:?}");
+}
+
+#[test]
+fn checker_requires_every_tolerant_fin_pcurve() {
+    let mut store = Store::new();
+    let body = block(&mut store, &Frame::world(), [2.0, 3.0, 4.0]).unwrap();
+    let edge = make_first_edge_curveless_tolerant(&mut store, body);
+    let fin = store.get(edge).unwrap().fins[0];
+    store.get_mut(fin).unwrap().pcurve = None;
+
+    let faults = check_body(&store, body).unwrap();
+    assert!(faults.iter().any(|fault| {
+        fault.entity == EntityRef::Fin(fin) && fault.kind == FaultKind::MissingPcurve
+    }));
+}
+
+#[test]
+fn checker_compares_tolerant_pcurve_lifts_and_endpoints() {
+    let mut store = Store::new();
+    let body = block(&mut store, &Frame::world(), [2.0, 3.0, 4.0]).unwrap();
+    let edge = make_first_edge_curveless_tolerant(&mut store, body);
+    let fin = store.get(edge).unwrap().fins[0];
+    let pcurve = store.get(fin).unwrap().pcurve.unwrap().curve();
+    let Curve2dGeom::Line(line) = *store.get(pcurve).unwrap() else {
+        panic!("block pcurve must be linear");
+    };
+    *store.get_mut(pcurve).unwrap() =
+        Curve2dGeom::Line(Line2d::new(line.origin() + Vec2::new(1e-4, 0.0), line.dir()).unwrap());
+
+    let faults = check_body(&store, body).unwrap();
+    assert!(faults.iter().any(|fault| {
+        fault.entity == EntityRef::Fin(fin) && fault.kind == FaultKind::PcurveEndpointOffVertex
+    }));
+    assert!(faults.iter().any(|fault| {
+        fault.entity == EntityRef::Edge(edge) && fault.kind == FaultKind::PcurvesDisagree
+    }));
+}
+
+#[test]
+fn curve_less_edge_without_tolerance_is_not_reclassified() {
+    let mut store = Store::new();
+    let body = block(&mut store, &Frame::world(), [2.0, 3.0, 4.0]).unwrap();
+    let edge = store.edges_of_body(body).unwrap()[0];
+    store.get_mut(edge).unwrap().curve = None;
+
+    let faults = check_body(&store, body).unwrap();
+    assert!(faults.iter().any(|fault| {
+        fault.entity == EntityRef::Edge(edge) && fault.kind == FaultKind::MissingCurve
+    }));
+}
+
+#[test]
+fn body_tessellation_realizes_a_curve_less_edge_from_all_fin_pcurves() {
+    let mut store = Store::new();
+    let body = block(&mut store, &Frame::world(), [2.0, 3.0, 4.0]).unwrap();
+    let edge = make_first_edge_curveless_tolerant(&mut store, body);
+    assert!(check_body(&store, body).unwrap().is_empty());
+
+    let mesh = tessellate_body(
+        &store,
+        body,
+        &TessOptions {
+            chord_tol: 1e-3,
+            max_edge_len: Some(0.2),
+        },
+    )
+    .unwrap();
+    assert!(check_watertight(&mesh).is_empty());
+    let polyline = mesh
+        .edge_polylines
+        .iter()
+        .find(|(candidate, _)| *candidate == edge)
+        .unwrap();
+    assert!(
+        polyline.1.len() > 2,
+        "logical edge must refine in its interior"
+    );
 }

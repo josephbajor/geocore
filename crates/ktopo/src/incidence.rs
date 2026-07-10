@@ -17,6 +17,15 @@ pub(crate) enum PcurveIssue {
     OffSurface,
 }
 
+fn edge_range(bounds: Option<(f64, f64)>) -> core::result::Result<ParamRange, PcurveIssue> {
+    match bounds {
+        Some((lo, hi)) if lo.is_finite() && hi.is_finite() && lo < hi => {
+            Ok(ParamRange::new(lo, hi))
+        }
+        _ => Err(PcurveIssue::BadRange),
+    }
+}
+
 fn parameter_slack(a: f64, b: f64) -> f64 {
     256.0 * f64::EPSILON * (1.0 + a.abs().max(b.abs()))
 }
@@ -55,6 +64,29 @@ pub(crate) fn check_pcurve_definition(
     }
 }
 
+/// Validate that a pcurve use covers a bounded logical edge domain exactly.
+/// This is shared by exact and curve-less tolerant edges.
+pub(crate) fn check_pcurve_parameterization(
+    store: &Store,
+    bounds: Option<(f64, f64)>,
+    pcurve_use: FinPcurve,
+) -> core::result::Result<(), PcurveIssue> {
+    check_pcurve_definition(store, pcurve_use)?;
+    let edge_range = edge_range(bounds)?;
+    let pcurve_range = pcurve_use.range();
+    let q0 = pcurve_use.parameter_at_edge(edge_range.lo);
+    let q1 = pcurve_use.parameter_at_edge(edge_range.hi);
+    if q0.is_finite()
+        && q1.is_finite()
+        && parameter_close(q0.min(q1), pcurve_range.lo)
+        && parameter_close(q0.max(q1), pcurve_range.hi)
+    {
+        Ok(())
+    } else {
+        Err(PcurveIssue::BadRange)
+    }
+}
+
 /// Validate a complete `(3D curve, edge range, 2D pcurve, surface)` tuple.
 pub(crate) fn check_pcurve_incidence(
     store: &Store,
@@ -73,7 +105,10 @@ pub(crate) fn check_pcurve_incidence(
         .map_err(|_| PcurveIssue::StaleReference)?;
     let curve = curve_geometry.as_curve();
     let edge_range = match bounds {
-        Some((lo, hi)) if lo.is_finite() && hi.is_finite() && lo < hi => ParamRange::new(lo, hi),
+        Some(_) => {
+            check_pcurve_parameterization(store, bounds, pcurve_use)?;
+            edge_range(bounds)?
+        }
         None => {
             let range = curve.param_range();
             if !range.is_finite() || range.lo >= range.hi {
@@ -81,18 +116,19 @@ pub(crate) fn check_pcurve_incidence(
             }
             range
         }
-        Some(_) => return Err(PcurveIssue::BadRange),
     };
 
     let pcurve_range = pcurve_use.range();
-    let q0 = pcurve_use.parameter_at_edge(edge_range.lo);
-    let q1 = pcurve_use.parameter_at_edge(edge_range.hi);
-    if !q0.is_finite()
-        || !q1.is_finite()
-        || !parameter_close(q0.min(q1), pcurve_range.lo)
-        || !parameter_close(q0.max(q1), pcurve_range.hi)
-    {
-        return Err(PcurveIssue::BadRange);
+    if bounds.is_none() {
+        let q0 = pcurve_use.parameter_at_edge(edge_range.lo);
+        let q1 = pcurve_use.parameter_at_edge(edge_range.hi);
+        if !q0.is_finite()
+            || !q1.is_finite()
+            || !parameter_close(q0.min(q1), pcurve_range.lo)
+            || !parameter_close(q0.max(q1), pcurve_range.hi)
+        {
+            return Err(PcurveIssue::BadRange);
+        }
     }
 
     let pcurve_geometry = store

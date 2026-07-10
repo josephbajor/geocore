@@ -266,17 +266,38 @@ impl FaceUse<'_> {
 /// kgeom's boundary criterion against every adjacent face use hold with
 /// margin. Explicit pcurves preserve seam branches; legacy uses invert.
 struct CurveRefine<'a> {
-    curve: &'a dyn Curve,
+    curve: Option<&'a dyn Curve>,
     face_uses: Vec<FaceUse<'a>>,
     ctx: Ctx,
 }
 
 impl CurveRefine<'_> {
+    fn point_at(&self, edge_parameter: f64) -> Result<Point3> {
+        if let Some(curve) = self.curve {
+            return Ok(curve.eval(edge_parameter));
+        }
+        if self.face_uses.is_empty() {
+            return Err(Error::InvalidGeometry {
+                reason: "curve-less tolerant edge has no adjacent face pcurves",
+            });
+        }
+        let mut xyz = [0.0; 3];
+        for face_use in &self.face_uses {
+            let uv = face_use.uv_at(edge_parameter, Point3::new(f64::NAN, f64::NAN, f64::NAN))?;
+            let p = face_use.surface.as_surface().eval([uv.x, uv.y]);
+            xyz[0] += p.x;
+            xyz[1] += p.y;
+            xyz[2] += p.z;
+        }
+        let n = self.face_uses.len() as f64;
+        Ok(Point3::new(xyz[0] / n, xyz[1] / n, xyz[2] / n))
+    }
+
     fn needs_split(&self, a: (f64, Point3), b: (f64, Point3)) -> Result<bool> {
         if a.1.dist(b.1) > self.ctx.max_len {
             return Ok(true);
         }
-        let mid = self.curve.eval((a.0 + b.0) / 2.0);
+        let mid = self.point_at((a.0 + b.0) / 2.0)?;
         if point_seg_dist(mid, a.1, b.1) > self.ctx.tol {
             return Ok(true);
         }
@@ -308,7 +329,7 @@ impl CurveRefine<'_> {
             return Ok(());
         }
         let tm = (a.0 + b.0) / 2.0;
-        let m = (tm, self.curve.eval(tm));
+        let m = (tm, self.point_at(tm)?);
         self.refine(a, m, depth + 1, out)?;
         out.push(m);
         self.refine(m, b, depth + 1, out)
@@ -412,11 +433,15 @@ fn discretize_edge(
     ctx: Ctx,
 ) -> Result<EdgeLine> {
     let e: &Edge = store.get(edge)?;
-    let curve_id = e.curve.ok_or(Error::InvalidGeometry {
-        reason: "edge has no curve geometry attached",
-    })?;
-    let cg = store.get(curve_id)?;
-    let c = cg.as_curve();
+    let curve = match e.curve {
+        Some(curve_id) => Some(store.get(curve_id)?.as_curve()),
+        None if e.tolerance.is_some() => None,
+        None => {
+            return Err(Error::InvalidGeometry {
+                reason: "edge has neither curve geometry nor a tolerance",
+            });
+        }
+    };
 
     // Parameter interval: explicit bounds, or one full period for a ring.
     let (t0, t1) = match e.bounds {
@@ -429,6 +454,9 @@ fn discretize_edge(
             (a, b)
         }
         None => {
+            let c = curve.ok_or(Error::InvalidGeometry {
+                reason: "curve-less tolerant ring edges are unsupported",
+            })?;
             let p = c.periodicity().ok_or(Error::InvalidGeometry {
                 reason: "ring edge on a non-periodic curve",
             })?;
@@ -449,6 +477,9 @@ fn discretize_edge(
     let (g_start, g_end, closed) = match e.vertices {
         [Some(v0), Some(v1)] => (vgid(v0)?, vgid(v1)?, v0 == v1),
         [None, None] => {
+            let c = curve.ok_or(Error::InvalidGeometry {
+                reason: "curve-less tolerant ring edges are unsupported",
+            })?;
             let g = acc.push(c.eval(t0));
             (g, g, true)
         }
@@ -469,7 +500,12 @@ fn discretize_edge(
         let face = store.get(store.get(lp)?.face)?;
         let pcurve = match fin.pcurve {
             Some(use_) => Some((store.get(use_.curve())?, use_)),
-            None => None,
+            None if curve.is_some() => None,
+            None => {
+                return Err(Error::InvalidGeometry {
+                    reason: "curve-less tolerant edge fin has no pcurve",
+                });
+            }
         };
         face_uses.push(FaceUse {
             surface: store.get(face.surface)?,
@@ -477,7 +513,7 @@ fn discretize_edge(
         });
     }
     let refine = CurveRefine {
-        curve: c,
+        curve,
         face_uses,
         ctx,
     };
@@ -489,7 +525,7 @@ fn discretize_edge(
     if closed {
         for k in 1..4 {
             let t = t0 + (t1 - t0) * f64::from(k) / 4.0;
-            seed.push((t, c.eval(t)));
+            seed.push((t, refine.point_at(t)?));
         }
     }
     seed.push((t1, acc.pos(g_end)));

@@ -41,8 +41,8 @@
 //!   periodic direction (seam-wrapping loops are skipped).
 //! - A zero-loop face on a NURBS surface is faulted: closed NURBS
 //!   surfaces land with periodic NURBS (M3).
-//! - Edges without curve geometry are faulted; tolerant curve-less edges
-//!   arrive with M3c.
+//! - Curve-less tolerant ring edges are not supported; vertex-bounded
+//!   tolerant edges are realized by their fins' lifted pcurves.
 //! - Shells containing unclassifiable faces are exempt from the Euler
 //!   identity (they still get all local checks).
 
@@ -51,7 +51,7 @@ use crate::entity::{
     ShellId, VertexId,
 };
 use crate::geom::SurfaceGeom;
-use crate::incidence::{PcurveIssue, check_pcurve_definition, check_pcurve_incidence};
+use crate::incidence::{PcurveIssue, check_pcurve_incidence, check_pcurve_parameterization};
 use crate::store::{Entity, Store};
 use kcore::arena::Handle;
 use kcore::error::Result;
@@ -91,8 +91,8 @@ pub enum FaultKind {
     MissingBounds,
     /// A bounded edge is missing one or both vertices.
     MissingVertices,
-    /// An edge has no curve geometry (tolerant curve-less edges are
-    /// deferred to M3c).
+    /// An edge has neither exact curve geometry nor a valid tolerant-edge
+    /// representation.
     MissingCurve,
     /// Edge bounds are not finite, not increasing, outside the curve's
     /// range, or wider than its period.
@@ -115,9 +115,17 @@ pub enum FaultKind {
     /// A fin's pcurve range or edge-to-pcurve parameter correspondence is
     /// invalid for the referenced 2D/3D curves.
     BadPcurveRange,
+    /// A curve-less tolerant edge fin has no pcurve representation.
+    MissingPcurve,
     /// A sampled pcurve point lifted through the face surface does not
     /// coincide with the corresponding 3D edge point within tolerance.
     PcurveOffSurface,
+    /// A tolerant pcurve endpoint misses its topological vertex by more
+    /// than the edge/vertex tolerance.
+    PcurveEndpointOffVertex,
+    /// Two lifted fin pcurves of one tolerant edge disagree by more than
+    /// the edge tolerance at a common logical parameter.
+    PcurvesDisagree,
     /// A coordinate is not finite or lies outside the ±500 m size box.
     OutsideSizeBox,
     /// An entity tolerance is below session resolution or not finite.
@@ -464,10 +472,13 @@ impl<'a> Checker<'a> {
     }
 
     /// Validate the full incidence tuple `(edge curve, pcurve, surface)`.
-    /// Missing pcurves remain accepted during the M2.5 migration, but every
-    /// pcurve that is present must be self-consistent and geometrically true.
+    /// Missing pcurves remain accepted for exact legacy topology. A
+    /// curve-less tolerant edge requires one on every fin.
     fn check_fin_pcurve(&mut self, fin_id: FinId, fin: &Fin, edge: &Edge, fid: FaceId) {
         let Some(pcurve_use) = fin.pcurve else {
+            if edge.curve.is_none() {
+                self.fault(EntityRef::Fin(fin_id), FaultKind::MissingPcurve);
+            }
             return;
         };
         let at = EntityRef::Fin(fin_id);
@@ -483,7 +494,7 @@ impl<'a> Checker<'a> {
                 ),
                 Err(_) => Err(PcurveIssue::StaleReference),
             },
-            None => check_pcurve_definition(self.store, pcurve_use),
+            None => check_pcurve_parameterization(self.store, edge.bounds, pcurve_use),
         };
         match result {
             Ok(()) => {}
@@ -505,11 +516,13 @@ impl<'a> Checker<'a> {
         {
             self.fault(at, FaultKind::BadTolerance);
         }
+        let tolerant_curveless = edge.curve.is_none() && edge.tolerance.is_some();
         let curve = match edge.curve {
-            None => {
+            None if !tolerant_curveless => {
                 self.fault(at, FaultKind::MissingCurve);
                 None
             }
+            None => None,
             Some(c) => self.live(c, at),
         };
 
@@ -538,6 +551,8 @@ impl<'a> Checker<'a> {
                     } else {
                         self.fault(at, FaultKind::BadBounds);
                     }
+                } else if tolerant_curveless {
+                    bounds_ok = true;
                 }
                 if verts[0].is_none() || verts[1].is_none() {
                     self.fault(at, FaultKind::MissingVertices);
@@ -576,6 +591,11 @@ impl<'a> Checker<'a> {
             && a.sense == b.sense
         {
             self.fault(at, FaultKind::FinsNotOpposed);
+        }
+
+        if tolerant_curveless {
+            self.check_tolerant_edge_geometry(eid, edge, bounds_ok);
+            return;
         }
 
         // Geometry: endpoints on the curve, samples on adjacent surfaces,
@@ -645,6 +665,92 @@ impl<'a> Checker<'a> {
                 {
                     self.fault(at, FaultKind::EdgeOffSurface);
                     off_faces.push(fid);
+                }
+            }
+        }
+    }
+
+    fn check_tolerant_edge_geometry(&mut self, eid: EdgeId, edge: &Edge, bounds_ok: bool) {
+        if !bounds_ok {
+            return;
+        }
+        let Some((t0, t1)) = edge.bounds else {
+            return;
+        };
+        let edge_tol = edge.tolerance.unwrap_or(0.0).max(LINEAR_RESOLUTION);
+        let mut uses = Vec::new();
+        for &fin_id in &edge.fins {
+            let Ok(fin) = self.store.get(fin_id) else {
+                continue;
+            };
+            let Some(pcurve_use) = fin.pcurve else {
+                continue;
+            };
+            let Ok(lp) = self.store.get(fin.parent) else {
+                continue;
+            };
+            let Ok(face) = self.store.get(lp.face) else {
+                continue;
+            };
+            let (Ok(pcurve), Ok(surface)) = (
+                self.store.get(pcurve_use.curve()),
+                self.store.get(face.surface),
+            ) else {
+                continue;
+            };
+            uses.push((fin_id, pcurve_use, pcurve.as_curve(), surface.as_surface()));
+        }
+
+        let mut endpoint_faulted = Vec::new();
+        let mut disagreement_faulted = false;
+        let mut boxed = true;
+        for i in 0..EDGE_SAMPLES {
+            let t = t0 + (t1 - t0) * (i as f64) / ((EDGE_SAMPLES - 1) as f64);
+            let mut reference = None;
+            for &(fin_id, pcurve_use, pcurve, surface) in &uses {
+                let uv = pcurve.eval(pcurve_use.parameter_at_edge(t));
+                let p = surface.eval([uv.x, uv.y]);
+                if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite())
+                    || p.x.abs() > SIZE_BOX_HALF
+                    || p.y.abs() > SIZE_BOX_HALF
+                    || p.z.abs() > SIZE_BOX_HALF
+                {
+                    if boxed {
+                        self.fault(EntityRef::Edge(eid), FaultKind::OutsideSizeBox);
+                        boxed = false;
+                    }
+                    continue;
+                }
+                if let Some(other) = reference
+                    && p.dist(other) > edge_tol
+                    && !disagreement_faulted
+                {
+                    self.fault(EntityRef::Edge(eid), FaultKind::PcurvesDisagree);
+                    disagreement_faulted = true;
+                }
+                reference = Some(reference.unwrap_or(p));
+
+                let vertex = if i == 0 {
+                    edge.vertices[0]
+                } else if i == EDGE_SAMPLES - 1 {
+                    edge.vertices[1]
+                } else {
+                    None
+                };
+                if let Some(vertex) = vertex
+                    && !endpoint_faulted.contains(&fin_id)
+                    && let Ok(position) = self.store.vertex_position(vertex)
+                {
+                    let vertex_tol = self
+                        .store
+                        .get(vertex)
+                        .ok()
+                        .and_then(|v| v.tolerance)
+                        .unwrap_or(0.0);
+                    if p.dist(position) > edge_tol.max(vertex_tol) {
+                        self.fault(EntityRef::Fin(fin_id), FaultKind::PcurveEndpointOffVertex);
+                        endpoint_faulted.push(fin_id);
+                    }
                 }
             }
         }

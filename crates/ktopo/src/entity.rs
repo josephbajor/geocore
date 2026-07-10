@@ -307,17 +307,19 @@ pub struct Fin {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Edge {
     /// Supporting curve geometry; its parameterization direction *is* the
-    /// edge direction. `None` only for tolerant edges with no exact curve
-    /// (not constructed before M3c).
+    /// edge direction. `None` denotes a tolerant edge whose 3D realization
+    /// is defined by its fins' pcurves lifted through their face surfaces.
     pub curve: Option<CurveId>,
     /// Start and end vertices in curve direction. `[Some, Some]` for an
     /// ordinary edge (equal handles ⇔ closed edge through one vertex),
     /// `[None, None]` for a ring edge.
     pub vertices: [Option<VertexId>; 2],
-    /// Curve-parameter interval `(t0, t1)`, `t0 < t1`, matching the
-    /// vertices; for periodic curves possibly unwrapped past the period
-    /// seam (`t1 - t0 ≤ period`). `None` ⇔ ring edge spanning the full
-    /// period.
+    /// Edge-parameter interval `(t0, t1)`, `t0 < t1`, matching the vertices.
+    /// For an exact edge this is its 3D curve parameter (possibly unwrapped
+    /// across a periodic seam). For a curve-less tolerant edge it is a
+    /// logical correspondence domain, conventionally `[0, 1]`, mapped into
+    /// every fin pcurve by [`FinPcurve`]. `None` denotes an exact ring edge
+    /// spanning one full period; curve-less ring edges are not supported.
     pub bounds: Option<(f64, f64)>,
     /// Fins using this edge, in creation order (2 for a manifold interior
     /// edge, 1 on a sheet boundary, 0 for wireframe).
