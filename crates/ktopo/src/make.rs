@@ -14,6 +14,10 @@
 //!   closed surface — no edges, no vertices.
 //! - [`cylindrical_sheet`]: a full-period cylindrical face whose shared
 //!   longitudinal edge has explicit paired lower/upper seam roles.
+//! - [`planar_sheet`]: one simple polygonal profile on a plane, with an
+//!   explicit line pcurve on every boundary use.
+//! - [`wire_polyline`]: an open or closed chain of bounded line edges.
+//! - [`acorn`]: one isolated model-space point.
 //!
 //! Full cones running to the apex (a degenerate vertex-only boundary) are
 //! deferred; [`cone`] builds frustums with two positive radii.
@@ -24,10 +28,12 @@ use crate::entity::{
     SurfaceParameter, Vertex, VertexId,
 };
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
+use crate::profile::PlanarProfile;
 use crate::store::Store;
 use crate::transaction::Journal;
 use kcore::error::{Error, Result};
 use kcore::math;
+use kcore::tolerance::{LINEAR_RESOLUTION, check_in_size_box};
 use kgeom::curve::{Circle, Line};
 use kgeom::curve2d::{Circle2d, Line2d};
 use kgeom::frame::Frame;
@@ -153,6 +159,220 @@ fn checked_body_creation(
     let body = create(transaction.store_mut())?;
     let journal = transaction.commit_checked_body(body)?;
     Ok(BodyCreation { body, journal })
+}
+
+/// Create a non-solid body with its void region and one empty shell.
+fn non_solid_body_scaffold(store: &mut Store, kind: BodyKind) -> (BodyId, ShellId) {
+    debug_assert!(kind != BodyKind::Solid);
+    let body = store.add(Body {
+        kind,
+        regions: Vec::new(),
+    });
+    let region = store.add(Region {
+        body,
+        kind: RegionKind::Void,
+        shells: Vec::new(),
+    });
+    let shell = store.add(Shell {
+        region,
+        faces: Vec::new(),
+        edges: Vec::new(),
+        vertex: None,
+    });
+    store
+        .get_mut(region)
+        .expect("fresh handle")
+        .shells
+        .push(shell);
+    store
+        .get_mut(body)
+        .expect("fresh handle")
+        .regions
+        .push(region);
+    (body, shell)
+}
+
+/// Create a failure-atomic sheet body from one simple planar polygon.
+///
+/// `polygon` is expressed in the `frame` XY plane. Clockwise input is
+/// normalized; repeated, collinear-consecutive, sub-resolution, non-finite,
+/// outside-size-box, and self-intersecting boundaries are rejected. Holes are
+/// intentionally deferred to the profile-region builder.
+pub fn planar_sheet(store: &mut Store, frame: &Frame, polygon: &[Point2]) -> Result<BodyId> {
+    Ok(planar_sheet_with_journal(store, frame, polygon)?.body)
+}
+
+/// Failure-atomic [`planar_sheet`] creation with its deterministic journal.
+pub fn planar_sheet_with_journal(
+    store: &mut Store,
+    frame: &Frame,
+    polygon: &[Point2],
+) -> Result<BodyCreation> {
+    let profile = PlanarProfile::from_polygon(*frame, polygon)?;
+    planar_sheet_from_profile_with_journal(store, &profile)
+}
+
+/// Create a sheet from a previously validated reusable planar profile.
+pub fn planar_sheet_from_profile(store: &mut Store, profile: &PlanarProfile) -> Result<BodyId> {
+    Ok(planar_sheet_from_profile_with_journal(store, profile)?.body)
+}
+
+/// Failure-atomic [`planar_sheet_from_profile`] creation with its journal.
+pub fn planar_sheet_from_profile_with_journal(
+    store: &mut Store,
+    profile: &PlanarProfile,
+) -> Result<BodyCreation> {
+    checked_body_creation(store, |store| planar_sheet_in(store, profile))
+}
+
+fn planar_sheet_in(store: &mut Store, profile: &PlanarProfile) -> Result<BodyId> {
+    let frame = profile.frame();
+    let polygon = profile.outer();
+    let positions: Vec<_> = polygon
+        .iter()
+        .map(|point| frame.point_at(point.x, point.y, 0.0))
+        .collect();
+    let (body, shell) = non_solid_body_scaffold(store, BodyKind::Sheet);
+    let surface = store.add(SurfaceGeom::Plane(Plane::new(*frame)));
+    let face = store.add(Face {
+        shell,
+        loops: Vec::new(),
+        surface,
+        sense: Sense::Forward,
+        domain: Some(point_domain(polygon.iter().copied())?),
+        tolerance: None,
+    });
+    store.get_mut(shell)?.faces.push(face);
+    let loop_id = store.add(Loop {
+        face,
+        fins: Vec::new(),
+    });
+    store.get_mut(face)?.loops.push(loop_id);
+    let vertices: Vec<_> = positions
+        .iter()
+        .map(|&position| {
+            let point = store.add(position);
+            store.add(Vertex {
+                point,
+                tolerance: None,
+            })
+        })
+        .collect();
+    for index in 0..positions.len() {
+        let next = (index + 1) % positions.len();
+        let start = positions[index];
+        let end = positions[next];
+        let length = (end - start).norm();
+        let curve = store.add(CurveGeom::Line(Line::new(start, end - start)?));
+        let edge = store.add(Edge {
+            curve: Some(curve),
+            vertices: [Some(vertices[index]), Some(vertices[next])],
+            bounds: Some((0.0, length)),
+            fins: Vec::new(),
+            tolerance: None,
+        });
+        let pcurve = line_pcurve(store, frame, start, end, length)?;
+        let fin = store.add(Fin {
+            parent: loop_id,
+            edge,
+            sense: Sense::Forward,
+            pcurve: Some(pcurve),
+        });
+        store.get_mut(loop_id)?.fins.push(fin);
+        store.get_mut(edge)?.fins.push(fin);
+    }
+    Ok(body)
+}
+
+/// Create a failure-atomic line-segment wire from ordered model-space points.
+///
+/// A closed wire adds the final edge back to the first point; callers must
+/// not repeat the first point at the end. The current Full checker still
+/// reports global wire self-intersection as `Indeterminate`.
+pub fn wire_polyline(store: &mut Store, points: &[Point3], closed: bool) -> Result<BodyId> {
+    Ok(wire_polyline_with_journal(store, points, closed)?.body)
+}
+
+/// Failure-atomic [`wire_polyline`] creation with its deterministic journal.
+pub fn wire_polyline_with_journal(
+    store: &mut Store,
+    points: &[Point3],
+    closed: bool,
+) -> Result<BodyCreation> {
+    checked_body_creation(store, |store| wire_polyline_in(store, points, closed))
+}
+
+fn wire_polyline_in(store: &mut Store, points: &[Point3], closed: bool) -> Result<BodyId> {
+    let minimum = if closed { 3 } else { 2 };
+    if points.len() < minimum {
+        return Err(Error::InvalidGeometry {
+            reason: "wire polyline has too few points for its closure mode",
+        });
+    }
+    for &point in points {
+        check_in_size_box(point.to_array())?;
+    }
+    let edge_count = if closed {
+        points.len()
+    } else {
+        points.len() - 1
+    };
+    for index in 0..edge_count {
+        let next = (index + 1) % points.len();
+        if (points[next] - points[index]).norm() <= LINEAR_RESOLUTION {
+            return Err(Error::InvalidGeometry {
+                reason: "wire polyline has a zero-length edge",
+            });
+        }
+    }
+    let (body, shell) = non_solid_body_scaffold(store, BodyKind::Wire);
+    let vertices: Vec<_> = points
+        .iter()
+        .map(|&position| {
+            let point = store.add(position);
+            store.add(Vertex {
+                point,
+                tolerance: None,
+            })
+        })
+        .collect();
+    for index in 0..edge_count {
+        let next = (index + 1) % points.len();
+        let direction = points[next] - points[index];
+        let length = direction.norm();
+        let curve = store.add(CurveGeom::Line(Line::new(points[index], direction)?));
+        let edge = store.add(Edge {
+            curve: Some(curve),
+            vertices: [Some(vertices[index]), Some(vertices[next])],
+            bounds: Some((0.0, length)),
+            fins: Vec::new(),
+            tolerance: None,
+        });
+        store.get_mut(shell)?.edges.push(edge);
+    }
+    Ok(body)
+}
+
+/// Create a failure-atomic acorn body containing one isolated point.
+pub fn acorn(store: &mut Store, position: Point3) -> Result<BodyId> {
+    Ok(acorn_with_journal(store, position)?.body)
+}
+
+/// Failure-atomic [`acorn`] creation with its deterministic journal.
+pub fn acorn_with_journal(store: &mut Store, position: Point3) -> Result<BodyCreation> {
+    checked_body_creation(store, |store| acorn_in(store, position))
+}
+
+fn acorn_in(store: &mut Store, position: Point3) -> Result<BodyId> {
+    check_in_size_box(position.to_array())?;
+    let (body, shell) = non_solid_body_scaffold(store, BodyKind::Acorn);
+    let point = store.add(position);
+    let vertex = store.add(Vertex {
+        point,
+        tolerance: None,
+    });
+    store.get_mut(shell)?.vertex = Some(vertex);
+    Ok(body)
 }
 
 /// Create a solid block centered at `frame`'s origin with side lengths

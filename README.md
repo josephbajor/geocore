@@ -15,7 +15,7 @@ parametric CAD application; feature history and regeneration are later layers.
 |---|---|---|
 | [`crates/kcore`](crates/kcore) | L0 foundations | Robust predicates, exact expansion arithmetic, interval filters, tolerance policy (Parasolid numeric regime), typed errors, generational entity arenas with copy-on-write undo frames, deterministic parallel primitives, deterministic transcendental math (musl port — platform libm is banned in kernel code via clippy `disallowed-methods`) |
 | [`crates/kgeom`](crates/kgeom) | L1 geometry | Analytic curves (line/circle/ellipse), true 2D line/circle/NURBS pcurve evaluators, and analytic surfaces (plane/cylinder/cone/sphere/torus) with exact bounding boxes, NURBS engine (Piegl & Tiller), closest-point projection, deterministic trimmed-face tessellation with explicit refinement-limit errors, evaluator conformance harness |
-| [`crates/ktopo`](crates/ktopo) | L2 topology | Parasolid entity hierarchy (body→region→shell→face→loop→fin→edge→vertex), finite conservative face UV domains and tolerance metadata, independent per-fin pcurves, bounded curve-less tolerant edges, pcurve-aware Euler variants, checker-gated failure-atomic transactions, deterministic mutation/lineage journals, journal-returning checked primitive constructors, shared incidence validation, and pcurve-driven watertight tessellation |
+| [`crates/ktopo`](crates/ktopo) | L2 topology | Parasolid entity hierarchy (body→region→shell→face→loop→fin→edge→vertex), finite conservative face UV domains and tolerance metadata, independent per-fin pcurves, bounded curve-less tolerant edges, reusable validated simple-polygon profiles, pcurve-aware Euler variants, checker-gated failure-atomic transactions, deterministic mutation/lineage journals, journal-returning checked solid/sheet/wire/acorn constructors, shared incidence validation, and pcurve-driven watertight tessellation |
 | [`crates/kops`](crates/kops) | L3 operations | Provisional M4 intersection foundation: exact analytic special cases plus early sampled NURBS curve/curve, curve/surface, and surface/surface experiments; generic completeness and boolean-ready pcurve results remain gated |
 | [`crates/kxt`](crates/kxt) | L5 interchange | Atomic modern-schema Parasolid XT (`.x_t`/`.x_b`) import for the supported geometry subset, plus a deterministic schema-13006 text writer for self-authored analytic solids, sheets, wires, acorns, and bounded tolerant edges encoded as trimmed SP-curves over 2D B-curves (clean-room from the published XT Format Reference) |
 
@@ -54,10 +54,12 @@ parametric CAD application; feature history and regeneration are later layers.
   supported positive fixture in the committed X_T corpus to Full `Valid`; general curved
   multi-face shell proofs remain open.
   Checked transaction commits now reject and roll back Fast-checker-faulting results with
-  a typed topology error. All public analytic primitive/sheet constructors are
-  failure-atomic and have journal-returning variants; X_T reconstruction and checked
-  face split/merge use the same checker-gated commit path. Generic mutable Store access,
-  legacy Euler entry points, and non-primitive builders are not encapsulated yet.
+  a typed topology error. All public analytic primitive, simple planar sheet, line-wire,
+  and acorn constructors are failure-atomic and have journal-returning variants; X_T
+  reconstruction and checked face split/merge use the same checker-gated commit path.
+  The planar sheet consumes a reusable robust-predicate-validated profile input and
+  round-trips through X_T. Profiles with holes/curves, generic mutable Store access,
+  legacy Euler entry points, and general-body builders are not encapsulated yet.
   Adaptive full-curve containment, production seam/pole/apex interchange fixtures,
   operation caller migration, a procedural geometry graph, operation-wide transaction/
   journal adoption, partition history, enforced topology mutation, richer errors/

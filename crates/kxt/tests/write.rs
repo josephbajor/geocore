@@ -727,6 +727,86 @@ fn all_analytic_primitives_round_trip() {
 }
 
 #[test]
+fn checked_non_solid_builders_round_trip() {
+    let mut sheet_store = Store::new();
+    let sheet = make::planar_sheet(
+        &mut sheet_store,
+        &tilted(),
+        &[
+            Point2::new(0.0, 0.0),
+            Point2::new(0.0, 1.0),
+            Point2::new(0.6, 0.4),
+            Point2::new(1.2, 1.0),
+            Point2::new(1.2, 0.0),
+        ],
+    )
+    .unwrap();
+    assert!(
+        sheet_store
+            .iter::<Fin>()
+            .all(|(_, fin)| fin.pcurve.is_some())
+    );
+    let (_, imported_sheet, imported_sheet_body) = assert_checker_roundtrip(&sheet_store, sheet);
+    assert_eq!(
+        imported_sheet.get(imported_sheet_body).unwrap().kind,
+        BodyKind::Sheet
+    );
+    let mesh = tessellate_body(
+        &imported_sheet,
+        imported_sheet_body,
+        &TessOptions {
+            chord_tol: 1e-3,
+            max_edge_len: Some(0.2),
+        },
+    )
+    .unwrap();
+    assert!(!mesh.triangles.is_empty());
+
+    let mut wire_store = Store::new();
+    let wire = make::wire_polyline(
+        &mut wire_store,
+        &[
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.5, 0.8, 0.2),
+            Point3::new(1.0, 0.0, 0.0),
+        ],
+        false,
+    )
+    .unwrap();
+    let (_, imported_wire, imported_wire_body) = assert_checker_roundtrip(&wire_store, wire);
+    assert_eq!(
+        imported_wire.get(imported_wire_body).unwrap().kind,
+        BodyKind::Wire
+    );
+    assert_eq!(
+        imported_wire
+            .edges_of_body(imported_wire_body)
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let mut acorn_store = Store::new();
+    let position = Point3::new(0.25, -0.5, 1.5);
+    let acorn = make::acorn(&mut acorn_store, position).unwrap();
+    let (_, imported_acorn, imported_acorn_body) = assert_checker_roundtrip(&acorn_store, acorn);
+    assert_eq!(
+        imported_acorn.get(imported_acorn_body).unwrap().kind,
+        BodyKind::Acorn
+    );
+    assert_eq!(
+        imported_acorn
+            .vertex_position(
+                imported_acorn
+                    .vertices_of_body(imported_acorn_body)
+                    .unwrap()[0]
+            )
+            .unwrap(),
+        position
+    );
+}
+
+#[test]
 fn cylindrical_sheet_seam_topology_round_trips() {
     let mut store = Store::new();
     let body = make::cylindrical_sheet(&mut store, &tilted(), 1.25, 2.5).unwrap();

@@ -63,7 +63,7 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 | M0 Foundations | IMPLEMENTED SLICE | Deterministic math, current predicates, intervals, tolerances, arenas with copy-on-write undo frames, and deterministic map primitives exist; conformance debt remains. |
 | M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS basics, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, Euler operators, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, checker-gated transactions, and deterministic journals exist; generic mutation and legacy Euler APIs are not yet encapsulated. |
-| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; shared incidence validation; pcurve-aware Euler creation; pcurve-driven tessellation; checker-gated copy-on-write transactions; deterministic journals; failure-atomic journaled primitive/sheet constructors; checked X_T reconstruction and split/merge commits; explicit face metadata; certified imported domains; checker-enforced pcurve-endpoint containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring loop proofs; and convex-planar, whole sphere/torus, sphere-cap, and single-planar-face shell embedding proofs have landed. General NURBS/mixed-parameter incidence, curved-loop/containment/general curved-shell proofs, production seam/singularity interchange fixtures, geometry graph, remaining operation migration, mutation encapsulation, and tolerance provenance remain. |
+| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; shared incidence validation; pcurve-aware Euler creation; pcurve-driven tessellation; checker-gated copy-on-write transactions; deterministic journals; failure-atomic journaled solid/sheet/wire/acorn constructors; a reusable validated simple-polygon planar profile; checked X_T reconstruction and split/merge commits; explicit face metadata; certified imported domains; checker-enforced pcurve-endpoint containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring loop proofs; and convex-planar, whole sphere/torus, sphere-cap, and single-planar-face shell embedding proofs have landed. General NURBS/mixed-parameter incidence, profiles with holes/curves, curved-loop/containment/general curved-shell proofs, production seam/singularity interchange fixtures, geometry graph, remaining operation migration, mutation encapsulation, and tolerance provenance remain. |
 | M3 X_T | IN PROGRESS | The modern-schema subset reads both wire encodings and writes text, including bounded tolerant edges as trimmed SP-curves over finite 2D B-curves; production coverage and external certification remain. |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases and sampled NURBS experiments exist; certified generic discovery and boolean-ready branches do not. |
 | M5–M8 | NOT STARTED | No end-to-end booleans, general modeling, blends, stable API, or production hardening. |
@@ -195,14 +195,15 @@ meshes are Fast-checker-clean, watertight, outward-oriented, and volume-tested.
 - Scoped Store transactions now provide rollback-on-drop and deterministic raw mutation
   plus semantic lineage journals. Checked commits validate result bodies and roll back
   on any Fast checker fault. X_T reconstruction, checked face split/merge, and every
-  public analytic primitive/sheet constructor use this path; constructors also expose
-  journal-returning variants. Generic mutable Store access and legacy Euler entry points
-  still bypass the boundary, and there is no partition history, attribute propagation
-  mechanism, or incremental invalidation record.
-- Fast checking samples incidence and supports loop orientation only on a subset of
-  surfaces. Full checking reports these missing proofs as explicit gaps and therefore
-  returns `Indeterminate`; it does not yet prove loop self-intersection/containment,
-  complete face containment, shell self-intersection, or global shell orientation.
+  public implemented solid/sheet/wire/acorn constructor use this path; constructors also
+  expose journal-returning variants. Generic mutable Store access and legacy Euler entry
+  points still bypass the boundary, and there is no partition history, attribute
+  propagation mechanism, or incremental invalidation record.
+- Fast checking samples some incidence and supports loop orientation only on a subset of
+  surfaces. Full checking now proves the supported analytic incidence, simple planar
+  segment/circle/ellipse loops, convex planar and selected closed analytic shells, but
+  returns explicit `Indeterminate` gaps for unsupported NURBS/mixed incidence,
+  multi-loop containment, general curved loops/shells, and wire self-intersection.
 
 The following milestone closes these gaps before booleans.
 
@@ -307,10 +308,11 @@ Landed slice:
 - Journals carry semantic `split`, `merge`, `derived_from`, and `replaced` events in
   addition to raw storage mutations. Checked pcurve-aware face split/merge wrappers emit
   tested deterministic lineage.
-- All public block/cylinder/cone/sphere/torus/cylindrical-sheet constructors are scoped
-  checked transactions and have journal-returning variants. Invalid torus creation
-  demonstrates rollback after partial scaffold allocation and preserves future handle
-  identity.
+- All public block/cylinder/cone/sphere/torus/cylindrical-sheet, simple planar-sheet,
+  open/closed line-wire, and acorn constructors are scoped checked transactions and have
+  journal-returning variants. Invalid polygon/wire/acorn inputs and partial invalid torus
+  creation exercise rollback and preserve future handle identity; deterministic builder
+  journals are tested.
 - X_T reconstruction and checked face split/merge use checker-gated commits and expose
   their mutation/lineage journals; the previous full-session staging clone has been
   removed.
@@ -334,13 +336,21 @@ Landed slice:
   not transaction/checker enforcement.
 - Checked commit is reusable by higher operations and returns a stable topology-check
   error category rather than retaining an invalid result.
+- Explicit checked builders now cover one-face planar polygon sheets, open/closed
+  line-segment wires, and acorn point bodies. Their common void-region scaffold prevents
+  ownership-layout drift, every sheet boundary use has an independent pcurve, and all
+  three body kinds round-trip through the X_T writer.
+- `PlanarProfile` separates robust input validation from topology mutation. Its first
+  slice normalizes one simple polygon with exact-sign orientation/intersection decisions
+  and is reusable by future sheet, extrude, revolve, and region-building operations.
 
 Remaining before the gate closes:
 
 - Make entity mutation private to topology internals and expose checked read views.
 - Higher operations compose Euler/topology primitives inside transactions.
-- Add explicit builders for sheet, wire, acorn, and general bodies rather than requiring
-  callers to assemble public vectors and back-pointers manually.
+- Add explicit general-body and multi-face/multi-loop sheet builders; extend wire inputs
+  beyond line polylines without requiring callers to assemble public vectors and
+  back-pointers manually.
 
 ### E. Tolerance, errors, and checker v2
 
@@ -551,7 +561,9 @@ intersection curve.
 
 ### M4d — First modeling consumers: profiles, transforms, extrude, and revolve
 
-- Construct planar wire profiles with holes and explicit pcurves.
+- Extend the landed validated simple-polygon `PlanarProfile` to curve loops, holes,
+  nesting/arrangements, and explicit pcurves without weakening its exact-sign rejection
+  of degenerate or self-intersecting boundaries.
 - Add deterministic checked copy/transform for geometry and complete bodies, preserving
   incidence, attributes, tolerances, and lineage without aliasing mutable ownership.
 - Extrude and revolve them through the transaction/journal/topology APIs.
@@ -691,8 +703,9 @@ ledger and include an adversarial regression that distinguishes `Invalid`,
    paired pcurves, coincident regions, singular events, and verified residual bounds.
 5. Add NURBS surface Bezier extraction, conservative subdivision/BVHs, and certified
    exclusion; keep analytic cases as accelerators of the same result contract.
-6. Ship profile regions, checked copy/transform, extrude/revolve, and the classifiers
-   needed by a narrow M5a boolean vertical slice.
+6. Extend the landed simple planar profile to regions with holes/curve loops, then ship
+   checked copy/transform, extrude/revolve, and the classifiers needed by a narrow M5a
+   boolean vertical slice.
 7. Expand the landed X_T manifest/stage-rate harness in parallel to licensed production-scale,
    tolerant, NURBS, transformed, multi-body, and assembly corpora; complete external M3b
    validation and externally certify the bounded tolerant-edge SP-curve subset.

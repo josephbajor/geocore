@@ -15,6 +15,7 @@
 //!   traversals.
 //! - [`euler`] — Euler operators, the only sanctioned topology edits.
 //! - [`make`] — primitive body constructors.
+//! - [`profile`] — validated planar inputs shared by sheet and feature builders.
 //! - [`check`] — the body checker (structural + geometric invariants).
 //! - [`btess`] — whole-body watertight tessellation.
 //! - [`domain`] — certified conservative face UV work-box construction.
@@ -30,6 +31,7 @@ pub mod geom;
 pub(crate) mod incidence;
 pub(crate) mod loop_proof;
 pub mod make;
+pub mod profile;
 pub(crate) mod shell_proof;
 pub mod store;
 pub mod transaction;
