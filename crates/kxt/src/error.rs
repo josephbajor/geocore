@@ -52,6 +52,9 @@ pub enum XtCapability {
     TolerantWireEdges,
     /// Circular pcurve writing.
     CircularPcurves,
+    /// Non-null kernel face tolerance cannot be represented by the
+    /// published schema-13006 writer contract.
+    FaceTolerances,
 }
 
 impl XtCapability {
@@ -77,6 +80,7 @@ impl XtCapability {
         Self::WriterEdgeTopology,
         Self::TolerantWireEdges,
         Self::CircularPcurves,
+        Self::FaceTolerances,
     ];
 
     /// Stable dotted identifier for manifests, metrics, and API clients.
@@ -102,6 +106,7 @@ impl XtCapability {
             Self::WriterEdgeTopology => "xt.write.edge-topology",
             Self::TolerantWireEdges => "xt.write.tolerant-wire-edges",
             Self::CircularPcurves => "xt.write.circular-pcurves",
+            Self::FaceTolerances => "xt.write.face-tolerances",
         }
     }
 }

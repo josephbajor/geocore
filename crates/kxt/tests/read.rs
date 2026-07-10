@@ -9,6 +9,7 @@ use kgeom::frame::Frame;
 use kgeom::vec::Point3;
 use ktopo::check::check_body;
 use ktopo::entity::{Body, BodyKind, Edge, Face, Region, Shell, Vertex};
+use ktopo::geom::SurfaceGeom;
 use ktopo::make::block;
 use ktopo::store::Store;
 use ktopo::transaction::MutationKind;
@@ -126,6 +127,13 @@ fn real_world_cut_sphere_v27_reconstructs() {
     for f in faces {
         let face = store.get(f).unwrap();
         assert!(store.get(face.surface).is_ok());
+        if matches!(store.get(face.surface).unwrap(), SurfaceGeom::Sphere(_)) {
+            assert!(
+                face.domain.is_some(),
+                "finite natural sphere domain retained"
+            );
+        }
+        assert_eq!(face.tolerance, None);
     }
     let faults = check_body(&store, body).unwrap();
     assert!(faults.is_empty(), "sphere.x_t faults: {faults:?}");

@@ -63,7 +63,7 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 | M0 Foundations | IMPLEMENTED SLICE | Deterministic math, current predicates, intervals, tolerances, arenas with copy-on-write undo frames, and deterministic map primitives exist; conformance debt remains. |
 | M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS basics, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, Euler operators, primitives, checker v1, watertight body tessellation, and the transaction/journal foundation exist; boolean-ready incidence and operation-wide checked mutation do not. |
-| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves, bounded curve-less tolerant edges, shared incidence validation, pcurve-aware Euler creation, pcurve-driven tessellation, copy-on-write transactions, and deterministic raw/semantic journals have landed; geometry graph, operation migration, mutation encapsulation, face domains/tolerances, and checker upgrades remain. |
+| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves, bounded curve-less tolerant edges, shared incidence validation, pcurve-aware Euler creation, pcurve-driven tessellation, copy-on-write transactions, deterministic raw/semantic journals, and explicit face-domain/tolerance metadata have landed; geometry graph, operation migration, mutation encapsulation, certified imported trim domains, and checker upgrades remain. |
 | M3 X_T | IN PROGRESS | The modern-schema subset reads both wire encodings and writes text, including bounded tolerant edges as trimmed SP-curves over finite 2D B-curves; production coverage and external certification remain. |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases and sampled NURBS experiments exist; certified generic discovery and boolean-ready branches do not. |
 | M5–M8 | NOT STARTED | No end-to-end booleans, general modeling, blends, stable API, or production hardening. |
@@ -213,7 +213,14 @@ Remaining before the gate closes:
   periodic/circular pcurves and any geometric-owner variants observed in that corpus.
 - Add explicit seam-branch metadata where a periodic pcurve range alone is insufficient,
   plus pole/apex-degenerate pcurve fixtures.
-- Add face tolerance/domain data needed by X_T and tolerant operations.
+- `FaceDomain` now carries an optional finite conservative UV work box and faces carry
+  optional tolerance metadata. Analytic primitives author exact boxes; finite natural
+  surface ranges initialize imported faces; Euler splits inherit them, merges union them
+  only on the same surface (otherwise mark them unknown); the checker validates range/
+  period/full-closed-face invariants; and tessellation uses them to anchor periodic
+  branches. Still needed: certified tight trim-domain construction for imported plane/
+  cylinder/cone faces, boundary-containment proof, seam-branch metadata beyond a box,
+  and tolerance provenance/budgets.
 - Upgrade sampled local incidence checking to adaptive verification and add explicit
   tolerance provenance/budget tracking. Endpoint-to-vertex checks now exist, but they
   are still sampling-based rather than a proof over the full interval.
@@ -349,6 +356,10 @@ read before its corresponding kernel geometry exists.
   sheets, wires, acorns, bounded arcs, shared geometry, exact entity tolerances, and
   bounded curve-less tolerant edges represented by per-fin trimmed SP-curves. Circular
   and periodic pcurves are not yet in the declared writer subset.
+- The published schema-13006 FACE tolerance field is required to be null. The writer
+  therefore rejects a non-null kernel face tolerance with stable capability
+  `xt.write.face-tolerances` rather than emitting a nonconforming file; face UV domains
+  remain kernel-side because XT represents face bounds through loops, not a UV box field.
 - Complete a field-by-field ownership/link audit for every declared writer cell,
   including directly shared untrimmed curves and shared point ownership. The tolerant
   SP path now emits its boundary-curve chain and geometric-owner rings, but acceptance
@@ -531,8 +542,8 @@ tolerance growth, algorithm limits, fuzz regressions, and performance percentile
 ## Immediate implementation queue
 
 1. Finish the landed pcurve/coedge slice: migrate operation callers to pcurve-aware Euler,
-   add face domains/tolerances, expand seam/pole/apex fixtures, and externally certify the
-   bounded tolerant-edge X_T SP-curve subset.
+   complete certified imported trim-domain/tolerance provenance, expand seam/pole/apex
+   fixtures, and externally certify the bounded tolerant-edge X_T SP-curve subset.
 2. Migrate every higher operation to the landed transaction/journal foundation; add
    partition history and journal composition semantics.
 3. Encapsulate topology mutation and introduce checker v2 foundations.

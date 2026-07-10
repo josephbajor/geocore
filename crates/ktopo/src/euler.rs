@@ -42,8 +42,8 @@
 //! candidate).
 
 use crate::entity::{
-    BodyId, CurveId, Edge, EdgeId, Face, FaceId, Fin, FinId, FinPcurve, Loop, LoopId, PointId,
-    RegionId, Sense, ShellId, SurfaceId, Vertex, VertexId,
+    BodyId, CurveId, Edge, EdgeId, Face, FaceDomain, FaceId, Fin, FinId, FinPcurve, Loop, LoopId,
+    PointId, RegionId, Sense, ShellId, SurfaceId, Vertex, VertexId,
 };
 use crate::incidence::{PcurveIssue, check_pcurve_incidence};
 use crate::store::Store;
@@ -52,6 +52,45 @@ use kcore::tolerance::LINEAR_RESOLUTION;
 
 fn topo_err<T>(reason: &'static str) -> Result<T> {
     Err(Error::InvalidGeometry { reason })
+}
+
+fn merged_face_metadata(
+    store: &Store,
+    a: &Face,
+    b: &Face,
+) -> Result<(Option<FaceDomain>, Option<f64>)> {
+    let mut domain = if a.surface == b.surface {
+        match (a.domain, b.domain) {
+            (Some(a), Some(b)) => Some(a.union(b)?),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    if let Some(candidate) = domain {
+        let periodicity = store.get(a.surface)?.as_surface().periodicity();
+        if [candidate.u, candidate.v]
+            .into_iter()
+            .zip(periodicity)
+            .any(|(range, period)| {
+                period.is_some_and(|period| {
+                    let epsilon = 128.0 * f64::EPSILON * period.max(1.0);
+                    range.width() > period + epsilon
+                })
+            })
+        {
+            // Equivalent seam branches need explicit branch metadata before
+            // they can be unioned safely. Preserve correctness by marking the
+            // merged work box unknown rather than guessing a period shift.
+            domain = None;
+        }
+    }
+    let tolerance = match (a.tolerance, b.tolerance) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    };
+    Ok((domain, tolerance))
 }
 
 /// The two independent parameter-space uses of a new edge, keyed by the
@@ -170,7 +209,7 @@ pub struct Mvfs {
 /// face on `surface` with a single zero-fin loop, and a seed vertex stored
 /// in the shell's acorn slot. `V − E + F = 1 − 0 + 1 = 2 = 2(S − G) + R`.
 pub fn mvfs(store: &mut Store, surface: SurfaceId, sense: Sense, point: PointId) -> Result<Mvfs> {
-    store.get(surface)?;
+    let domain = FaceDomain::natural(store.get(surface)?);
     store.get(point)?;
     let (body, shell) = crate::make::solid_body_scaffold(store);
     let regions = store.get(body)?.regions.clone();
@@ -179,6 +218,8 @@ pub fn mvfs(store: &mut Store, surface: SurfaceId, sense: Sense, point: PointId)
         loops: Vec::new(),
         surface,
         sense,
+        domain,
+        tolerance: None,
     });
     let ring = store.add(Loop {
         face,
@@ -532,6 +573,13 @@ fn mef_impl(
     };
     let shell = shell_of_loop(store, lp)?;
     let old_face = store.get(lp)?.face;
+    let old = store.get(old_face)?;
+    let domain = if surface == old.surface {
+        old.domain
+    } else {
+        FaceDomain::natural(store.get(surface)?)
+    };
+    let tolerance = old.tolerance;
     let new_len = (j + n - i) % n;
     if surface != store.get(old_face)?.surface {
         let moved: Vec<_> = (0..new_len).map(|k| fins[(i + k) % n]).collect();
@@ -550,6 +598,8 @@ fn mef_impl(
         loops: Vec::new(),
         surface,
         sense,
+        domain,
+        tolerance,
     });
     let ring = store.add(Loop {
         face,
@@ -617,6 +667,8 @@ pub fn kef(store: &mut Store, edge: EdgeId) -> Result<()> {
     let lb = store.get(fb)?.parent;
     let face_a = store.get(la)?.face;
     let face_b = store.get(lb)?.face;
+    let face_a_data = store.get(face_a)?.clone();
+    let face_b_data = store.get(face_b)?.clone();
     if face_a == face_b {
         return topo_err("kef: the edge's fins must belong to different faces (use kemr)");
     }
@@ -646,6 +698,10 @@ pub fn kef(store: &mut Store, edge: EdgeId) -> Result<()> {
         store.get_mut(f)?.parent = la;
     }
     store.get_mut(la)?.fins = merged;
+    let (domain, tolerance) = merged_face_metadata(store, &face_a_data, &face_b_data)?;
+    let survivor = store.get_mut(face_a)?;
+    survivor.domain = domain;
+    survivor.tolerance = tolerance;
 
     let shell = store.get(face_b)?.shell;
     store.get_mut(shell)?.faces.retain(|f| *f != face_b);
@@ -835,19 +891,25 @@ pub fn kfmrh(store: &mut Store, keep: FaceId, kill: FaceId) -> Result<LoopId> {
     if keep == kill {
         return topo_err("kfmrh: faces must be distinct");
     }
-    let shell = store.get(keep)?.shell;
-    if store.get(kill)?.shell != shell {
+    let keep_face = store.get(keep)?.clone();
+    let kill_face = store.get(kill)?.clone();
+    let shell = keep_face.shell;
+    if kill_face.shell != shell {
         return topo_err("kfmrh: faces must share a shell");
     }
-    let loops = store.get(kill)?.loops.clone();
+    let loops = kill_face.loops.clone();
     let [ring] = loops[..] else {
         return topo_err("kfmrh: killed face must have exactly one loop");
     };
-    if store.get(keep)?.surface != store.get(kill)?.surface {
-        validate_fins_on_surface(store, &store.get(ring)?.fins, store.get(keep)?.surface)?;
+    if keep_face.surface != kill_face.surface {
+        validate_fins_on_surface(store, &store.get(ring)?.fins, keep_face.surface)?;
     }
+    let (merged_domain, merged_tolerance) = merged_face_metadata(store, &keep_face, &kill_face)?;
     store.get_mut(ring)?.face = keep;
-    store.get_mut(keep)?.loops.push(ring);
+    let keep = store.get_mut(keep)?;
+    keep.loops.push(ring);
+    keep.domain = merged_domain;
+    keep.tolerance = merged_tolerance;
     store.get_mut(shell)?.faces.retain(|f| *f != kill);
     store.remove(kill)?;
     Ok(ring)
@@ -866,11 +928,20 @@ pub fn mfkrh(store: &mut Store, ring: LoopId, surface: SurfaceId, sense: Sense) 
         validate_fins_on_surface(store, &store.get(ring)?.fins, surface)?;
     }
     let shell = store.get(old_face)?.shell;
+    let old = store.get(old_face)?;
+    let domain = if surface == old.surface {
+        old.domain
+    } else {
+        FaceDomain::natural(store.get(surface)?)
+    };
+    let tolerance = old.tolerance;
     let face = store.add(Face {
         shell,
         loops: vec![ring],
         surface,
         sense,
+        domain,
+        tolerance,
     });
     store.get_mut(old_face)?.loops.retain(|l| *l != ring);
     store.get_mut(ring)?.face = face;

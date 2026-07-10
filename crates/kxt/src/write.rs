@@ -126,6 +126,12 @@ impl Plan {
         let mut surface_handles = Vec::new();
         for &face in &face_handles {
             let f = store.get(face)?;
+            if f.tolerance.is_some() {
+                return Err(XtError::Unsupported {
+                    capability: XtCapability::FaceTolerances,
+                    what: "schema-13006 FACE tolerance is required to be null",
+                });
+            }
             push_interned(&mut surface_handles, f.surface);
             for &lp in &f.loops {
                 if store.get(lp)?.fins.is_empty() {

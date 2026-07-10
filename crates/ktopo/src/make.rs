@@ -15,8 +15,8 @@
 //! deferred; [`cone`] builds frustums with two positive radii.
 
 use crate::entity::{
-    Body, BodyId, BodyKind, Edge, EdgeId, Face, FaceId, Fin, FinPcurve, Loop, LoopId, ParamMap1d,
-    Region, RegionKind, Sense, Shell, ShellId, Vertex, VertexId,
+    Body, BodyId, BodyKind, Edge, EdgeId, Face, FaceDomain, FaceId, Fin, FinPcurve, Loop, LoopId,
+    ParamMap1d, Region, RegionKind, Sense, Shell, ShellId, Vertex, VertexId,
 };
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use crate::store::Store;
@@ -36,6 +36,21 @@ fn frame_uv(frame: &Frame, point: Point3) -> Point2 {
 
 fn frame_uv_vector(frame: &Frame, vector: Vec3) -> Vec2 {
     Vec2::new(vector.dot(frame.x()), vector.dot(frame.y()))
+}
+
+fn point_domain(points: impl IntoIterator<Item = Point2>) -> Result<FaceDomain> {
+    let mut points = points.into_iter();
+    let first = points.next().ok_or(Error::InvalidGeometry {
+        reason: "cannot build a face domain from no points",
+    })?;
+    let (mut u_min, mut u_max, mut v_min, mut v_max) = (first.x, first.x, first.y, first.y);
+    for point in points {
+        u_min = u_min.min(point.x);
+        u_max = u_max.max(point.x);
+        v_min = v_min.min(point.y);
+        v_max = v_max.max(point.y);
+    }
+    FaceDomain::from_bounds(u_min, u_max, v_min, v_max)
 }
 
 fn line_pcurve(
@@ -158,12 +173,18 @@ pub fn block(store: &mut Store, frame: &Frame, extents: [f64; 3]) -> Result<Body
         let x_hint = corners[ring[1]] - corners[ring[0]];
         let plane = Plane::new(Frame::new(origin, normal, x_hint)?);
         let surface = store.add(SurfaceGeom::Plane(plane));
+        let domain = point_domain(
+            ring.iter()
+                .map(|&index| frame_uv(plane.frame(), corners[index])),
+        )?;
 
         let face: FaceId = store.add(Face {
             shell,
             loops: Vec::new(),
             surface,
             sense: Sense::Forward,
+            domain: Some(domain),
+            tolerance: None,
         });
         store.get_mut(shell)?.faces.push(face);
 
@@ -281,6 +302,13 @@ fn ring_boundary(
         loops: Vec::new(),
         surface: cap_surface,
         sense: Sense::Forward,
+        domain: Some(FaceDomain::from_bounds(
+            -circle.radius(),
+            circle.radius(),
+            -circle.radius(),
+            circle.radius(),
+        )?),
+        tolerance: None,
     });
     store.get_mut(shell)?.faces.push(cap);
     let cap_loop = store.add(Loop {
@@ -333,6 +361,13 @@ pub fn cylinder(store: &mut Store, frame: &Frame, radius: f64, height: f64) -> R
         loops: Vec::new(),
         surface: side_surf,
         sense: Sense::Forward, // cylinder normal is radially outward
+        domain: Some(FaceDomain::from_bounds(
+            0.0,
+            core::f64::consts::TAU,
+            0.0,
+            height,
+        )?),
+        tolerance: None,
     });
     store.get_mut(shell)?.faces.push(side);
 
@@ -399,6 +434,8 @@ pub fn cone(
         Frame::new(frame.origin(), -frame.z(), frame.x())?
     };
     let surface = Cone::new(surf_frame, base_radius, alpha)?;
+    let slant = (dr * dr + height * height).sqrt();
+    let top_v = if expanding { slant } else { -slant };
 
     let (body, shell) = solid_body_scaffold(store);
     let side_surf = store.add(SurfaceGeom::Cone(surface));
@@ -408,6 +445,13 @@ pub fn cone(
         surface: side_surf,
         // du × dv points out of the material for both frame choices.
         sense: Sense::Forward,
+        domain: Some(FaceDomain::from_bounds(
+            0.0,
+            core::f64::consts::TAU,
+            top_v.min(0.0),
+            top_v.max(0.0),
+        )?),
+        tolerance: None,
     });
     store.get_mut(shell)?.faces.push(side);
 
@@ -432,8 +476,6 @@ pub fn cone(
     } else {
         (Sense::Reversed, Sense::Forward)
     };
-    let slant = (dr * dr + height * height).sqrt();
-    let top_v = if expanding { slant } else { -slant };
     ring_boundary(
         store,
         shell,
@@ -458,6 +500,13 @@ pub fn sphere(store: &mut Store, frame: &Frame, radius: f64) -> Result<BodyId> {
         loops: Vec::new(),
         surface,
         sense: Sense::Forward, // sphere normal is radially outward
+        domain: Some(FaceDomain::from_bounds(
+            0.0,
+            core::f64::consts::TAU,
+            -core::f64::consts::FRAC_PI_2,
+            core::f64::consts::FRAC_PI_2,
+        )?),
+        tolerance: None,
     });
     store.get_mut(shell)?.faces.push(face);
     Ok(body)
@@ -485,6 +534,13 @@ pub fn torus(
         loops: Vec::new(),
         surface,
         sense: Sense::Forward, // torus normal points out of the tube
+        domain: Some(FaceDomain::from_bounds(
+            0.0,
+            core::f64::consts::TAU,
+            0.0,
+            core::f64::consts::TAU,
+        )?),
+        tolerance: None,
     });
     store.get_mut(shell)?.faces.push(face);
     Ok(body)
@@ -520,6 +576,13 @@ mod tests {
         assert_eq!(store.faces_of_body(body).unwrap().len(), 6);
         assert_eq!(store.edges_of_body(body).unwrap().len(), 12);
         assert_eq!(store.vertices_of_body(body).unwrap().len(), 8);
+        assert!(
+            store
+                .faces_of_body(body)
+                .unwrap()
+                .into_iter()
+                .all(|face| store.get(face).unwrap().domain.is_some())
+        );
     }
 
     #[test]

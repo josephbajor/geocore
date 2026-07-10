@@ -150,6 +150,74 @@ pub struct Shell {
     pub vertex: Option<VertexId>,
 }
 
+/// A finite conservative parameter-space work box for one face.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FaceDomain {
+    /// Conservative finite range in the surface's first parameter.
+    pub u: ParamRange,
+    /// Conservative finite range in the surface's second parameter.
+    pub v: ParamRange,
+}
+
+impl FaceDomain {
+    /// Construct a finite, positive-area parameter-space work box.
+    pub fn new(u: ParamRange, v: ParamRange) -> Result<Self> {
+        let (u_width, v_width) = (u.width(), v.width());
+        if !u.is_finite()
+            || !v.is_finite()
+            || !u_width.is_finite()
+            || !v_width.is_finite()
+            || u_width <= 0.0
+            || v_width <= 0.0
+        {
+            return Err(Error::InvalidGeometry {
+                reason: "face domain ranges must be finite and increasing",
+            });
+        }
+        Ok(Self { u, v })
+    }
+
+    /// Construct from `(u_min, u_max, v_min, v_max)` without panicking on
+    /// untrusted values.
+    pub fn from_bounds(u_min: f64, u_max: f64, v_min: f64, v_max: f64) -> Result<Self> {
+        if [u_min, u_max, v_min, v_max]
+            .iter()
+            .any(|value| value.is_nan())
+            || u_min > u_max
+            || v_min > v_max
+        {
+            return Err(Error::InvalidGeometry {
+                reason: "face domain bounds are invalid",
+            });
+        }
+        Self::new(ParamRange::new(u_min, u_max), ParamRange::new(v_min, v_max))
+    }
+
+    /// The surface's natural parameter box when both ranges are finite.
+    /// Unbounded analytic surfaces deliberately return `None` rather than
+    /// inventing a trim domain from samples.
+    pub fn natural(surface: &SurfaceGeom) -> Option<Self> {
+        let [u, v] = surface.as_surface().param_range();
+        Self::new(u, v).ok()
+    }
+
+    /// Smallest domain containing both inputs; errors if combining the
+    /// finite ranges would overflow.
+    pub fn union(self, other: Self) -> Result<Self> {
+        Self::from_bounds(
+            self.u.lo.min(other.u.lo),
+            self.u.hi.max(other.u.hi),
+            self.v.lo.min(other.v.lo),
+            self.v.hi.max(other.v.hi),
+        )
+    }
+
+    /// Whether a parameter lies in this conservative box.
+    pub fn contains(self, uv: [f64; 2]) -> bool {
+        self.u.contains(uv[0]) && self.v.contains(uv[1])
+    }
+}
+
 /// A bounded, connected subset of one surface.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Face {
@@ -162,6 +230,13 @@ pub struct Face {
     pub surface: SurfaceId,
     /// Face normal vs. surface normal: `Forward` means they agree.
     pub sense: Sense,
+    /// Finite conservative UV work box. `None` means the domain is not yet
+    /// known; consumers must not replace it with sampled guesses.
+    pub domain: Option<FaceDomain>,
+    /// Optional imported/operation tolerance. The published XT FACE field
+    /// is normally null; unlike tolerant edges/vertices, this does not
+    /// change the face's exact/tolerant classification.
+    pub tolerance: Option<f64>,
 }
 
 /// A closed ring of fins bounding a face.
@@ -367,4 +442,32 @@ pub enum EntityRef {
     Point(PointId),
     /// An attached parameter-space curve.
     Curve2d(Curve2dId),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kgeom::frame::Frame;
+    use kgeom::surface::Sphere;
+
+    #[test]
+    fn face_domain_is_finite_positive_and_composable() {
+        assert!(FaceDomain::from_bounds(0.0, 0.0, 0.0, 1.0).is_err());
+        assert!(FaceDomain::from_bounds(f64::NEG_INFINITY, 1.0, 0.0, 1.0).is_err());
+        assert!(FaceDomain::from_bounds(-f64::MAX, f64::MAX, 0.0, 1.0).is_err());
+        let a = FaceDomain::from_bounds(0.0, 1.0, -1.0, 0.0).unwrap();
+        let b = FaceDomain::from_bounds(0.5, 2.0, -0.5, 1.0).unwrap();
+        let union = a.union(b).unwrap();
+        assert_eq!(union, FaceDomain::from_bounds(0.0, 2.0, -1.0, 1.0).unwrap());
+        assert!(union.contains([1.5, 0.5]));
+        assert!(!union.contains([2.5, 0.5]));
+    }
+
+    #[test]
+    fn finite_natural_surface_domain_is_available() {
+        let sphere = SurfaceGeom::Sphere(Sphere::new(Frame::world(), 1.0).unwrap());
+        let domain = FaceDomain::natural(&sphere).unwrap();
+        assert_eq!(domain.u.width(), core::f64::consts::TAU);
+        assert_eq!(domain.v.width(), core::f64::consts::PI);
+    }
 }

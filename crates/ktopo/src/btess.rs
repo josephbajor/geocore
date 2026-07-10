@@ -43,7 +43,7 @@
 //! into two frozen pole-to-pole sides and welds the parameter-singular pole
 //! rows by global mesh identity.
 
-use crate::entity::{BodyId, Edge, EdgeId, FaceId, FinPcurve, Sense, VertexId};
+use crate::entity::{BodyId, Edge, EdgeId, FaceDomain, FaceId, FinPcurve, Sense, VertexId};
 use crate::geom::{Curve2dGeom, SurfaceGeom};
 use crate::store::Store;
 use kcore::error::{Error, Result};
@@ -701,6 +701,36 @@ fn chain_uv(sg: &SurfaceGeom, raw: RawUvChain) -> Result<UvChain> {
         close_uv,
         winding,
     })
+}
+
+/// Move an unwrapped loop onto the periodic branch selected by the face's
+/// declared work box. Winding is unchanged; this only removes arbitrary
+/// whole-period offsets introduced by inversion at seams.
+fn anchor_chain_to_domain(chain: &mut UvChain, domain: FaceDomain, periods: [Option<f64>; 2]) {
+    let centers = [
+        domain.u.lo + domain.u.width() / 2.0,
+        domain.v.lo + domain.v.width() / 2.0,
+    ];
+    for direction in 0..2 {
+        let Some(period) = periods[direction] else {
+            continue;
+        };
+        let coordinate = |uv: Vec2| if direction == 0 { uv.x } else { uv.y };
+        let mean = chain.uvs.iter().copied().map(coordinate).sum::<f64>() / chain.uvs.len() as f64;
+        let shift = period * ((centers[direction] - mean) / period).round();
+        for uv in &mut chain.uvs {
+            if direction == 0 {
+                uv.x += shift;
+            } else {
+                uv.y += shift;
+            }
+        }
+        if direction == 0 {
+            chain.close_uv.x += shift;
+        } else {
+            chain.close_uv.y += shift;
+        }
+    }
 }
 
 /// Run kgeom's face tessellator over prepared UV loops and splice the
@@ -1396,6 +1426,12 @@ fn tess_face(
         let raw = loop_chain(store, elines, sg, acc, lp, flip)?;
         chains.push(chain_uv(sg, raw)?);
     }
+    if let Some(domain) = face.domain {
+        let periods = sg.as_surface().periodicity();
+        for chain in &mut chains {
+            anchor_chain_to_domain(chain, domain, periods);
+        }
+    }
     // A meridional boundary can pass through both sphere poles while
     // acquiring either ±1 *or zero* winding from their arbitrary singular
     // longitudes. Classify it geometrically before the winding cases.
@@ -1608,6 +1644,8 @@ mod tests {
             loops: Vec::new(),
             surface,
             sense: Sense::Forward,
+            domain: None,
+            tolerance: None,
         });
         store.get_mut(shell).unwrap().faces.push(face);
         face

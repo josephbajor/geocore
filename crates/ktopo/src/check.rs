@@ -57,6 +57,7 @@ use kcore::arena::Handle;
 use kcore::error::Result;
 use kcore::math;
 use kcore::tolerance::{LINEAR_RESOLUTION, SIZE_BOX_HALF, Tolerances};
+use kgeom::param::ParamRange;
 use kgeom::project::project_to_surface;
 use kgeom::vec::Point3;
 
@@ -130,6 +131,10 @@ pub enum FaultKind {
     OutsideSizeBox,
     /// An entity tolerance is below session resolution or not finite.
     BadTolerance,
+    /// A supplied face UV work box is non-finite, empty, outside a
+    /// non-periodic surface range, wider than one surface period, or does
+    /// not cover the whole surface for a zero-loop closed face.
+    BadFaceDomain,
     /// The Euler–Poincaré identity fails for a shell (see module docs).
     EulerViolation,
 }
@@ -358,6 +363,16 @@ impl<'a> Checker<'a> {
             self.fault(EntityRef::Face(fid), FaultKind::BackPointerMismatch);
         }
         let surface = self.live(face.surface, EntityRef::Face(fid));
+        if let Some(tolerance) = face.tolerance
+            && self.tol.entity_tolerance(tolerance).is_err()
+        {
+            self.fault(EntityRef::Face(fid), FaultKind::BadTolerance);
+        }
+        if let (Some(domain), Some(surface)) = (face.domain, surface)
+            && !valid_face_domain(domain, surface)
+        {
+            self.fault(EntityRef::Face(fid), FaultKind::BadFaceDomain);
+        }
         if face.loops.is_empty()
             && !matches!(
                 surface,
@@ -367,6 +382,14 @@ impl<'a> Checker<'a> {
             // Closed NURBS surfaces are accepted once periodic NURBS land
             // (M3); until then a zero-loop NURBS face is a fault too.
             self.fault(EntityRef::Face(fid), FaultKind::ZeroLoopFaceOnOpenSurface);
+        }
+        if face.loops.is_empty()
+            && let Some(surface @ (SurfaceGeom::Sphere(_) | SurfaceGeom::Torus(_))) = surface
+            && face
+                .domain
+                .is_none_or(|domain| !domain_covers_natural_surface(domain, surface))
+        {
+            self.fault(EntityRef::Face(fid), FaultKind::BadFaceDomain);
         }
         for &lid in &face.loops {
             let Some(lp) = self.live(lid, EntityRef::Face(fid)) else {
@@ -939,6 +962,61 @@ impl<'a> Checker<'a> {
     }
 }
 
+fn valid_face_domain(domain: crate::entity::FaceDomain, surface: &SurfaceGeom) -> bool {
+    let ranges = [domain.u, domain.v];
+    if ranges
+        .iter()
+        .any(|range| !range.is_finite() || !range.width().is_finite() || range.width() <= 0.0)
+    {
+        return false;
+    }
+    let natural = surface.as_surface().param_range();
+    let periodicity = surface.as_surface().periodicity();
+    ranges
+        .into_iter()
+        .zip(natural)
+        .zip(periodicity)
+        .all(|((domain, natural), period)| valid_domain_range(domain, natural, period))
+}
+
+fn valid_domain_range(domain: ParamRange, natural: ParamRange, period: Option<f64>) -> bool {
+    let scale = domain
+        .lo
+        .abs()
+        .max(domain.hi.abs())
+        .max(natural.lo.abs().min(1.0e6))
+        .max(natural.hi.abs().min(1.0e6))
+        .max(1.0);
+    let epsilon = 128.0 * f64::EPSILON * scale;
+    match period {
+        Some(period) => domain.width() <= period + epsilon,
+        None => {
+            (!natural.lo.is_finite() || domain.lo >= natural.lo - epsilon)
+                && (!natural.hi.is_finite() || domain.hi <= natural.hi + epsilon)
+        }
+    }
+}
+
+fn domain_covers_natural_surface(domain: crate::entity::FaceDomain, surface: &SurfaceGeom) -> bool {
+    let natural = surface.as_surface().param_range();
+    let periodicity = surface.as_surface().periodicity();
+    [domain.u, domain.v]
+        .into_iter()
+        .zip(natural)
+        .zip(periodicity)
+        .all(|((domain, natural), period)| {
+            let scale = natural.lo.abs().max(natural.hi.abs()).max(1.0);
+            let epsilon = 128.0 * f64::EPSILON * scale;
+            match period {
+                Some(period) => (domain.width() - period).abs() <= epsilon,
+                None => {
+                    (domain.lo - natural.lo).abs() <= epsilon
+                        && (domain.hi - natural.hi).abs() <= epsilon
+                }
+            }
+        })
+}
+
 /// Exact distance from a point to an analytic surface; NURBS falls back to
 /// projection. `None` when it cannot be evaluated.
 fn surface_distance(sg: &SurfaceGeom, p: Point3) -> Option<f64> {
@@ -1060,6 +1138,8 @@ mod tests {
                 loops: Vec::new(),
                 surface,
                 sense: Sense::Forward,
+                domain: None,
+                tolerance: None,
             });
             store.get_mut(shell).unwrap().faces.push(face);
             for &(edge, sense) in rings {
@@ -1100,6 +1180,16 @@ mod tests {
             loops: Vec::new(),
             surface: surf,
             sense: Sense::Forward,
+            domain: Some(
+                crate::entity::FaceDomain::from_bounds(
+                    0.0,
+                    core::f64::consts::TAU,
+                    -core::f64::consts::FRAC_PI_2,
+                    core::f64::consts::FRAC_PI_2,
+                )
+                .unwrap(),
+            ),
+            tolerance: None,
         });
         store.get_mut(shell).unwrap().faces.push(face);
         body
@@ -1131,6 +1221,8 @@ mod tests {
             loops: Vec::new(),
             surface: surf,
             sense: Sense::Forward,
+            domain: None,
+            tolerance: None,
         });
         store.get_mut(shell).unwrap().faces.push(face);
         let lp = store.add(Loop {
@@ -1213,6 +1305,26 @@ mod tests {
         let mut store = Store::new();
         let body = sheet_square(&mut store);
         assert_eq!(check_body(&store, body).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn invalid_face_domain_and_tolerance_fault() {
+        let mut store = Store::new();
+        let body = sphere_body(&mut store);
+        let face = store.faces_of_body(body).unwrap()[0];
+        store.get_mut(face).unwrap().domain = Some(
+            crate::entity::FaceDomain::from_bounds(
+                0.0,
+                core::f64::consts::TAU * 1.1,
+                -core::f64::consts::FRAC_PI_2,
+                core::f64::consts::FRAC_PI_2,
+            )
+            .unwrap(),
+        );
+        store.get_mut(face).unwrap().tolerance = Some(1e-12);
+        let faults = check_body(&store, body).unwrap();
+        assert_has(&faults, FaultKind::BadFaceDomain);
+        assert_has(&faults, FaultKind::BadTolerance);
     }
 
     #[test]

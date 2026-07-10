@@ -20,7 +20,8 @@
 //! code as well as human-readable context.
 //! Intersection/procedural geometry, broader tolerant topology, periodic or
 //! circular pcurve encoding, periodic NURBS, pre-13006 schemas, assemblies,
-//! and neutral-binary writing remain deferred.
+//! non-null face-tolerance writing, and neutral-binary writing remain deferred. Face UV
+//! work domains are kernel-side metadata because XT bounds faces through their loops.
 //!
 //! Typical use:
 //!

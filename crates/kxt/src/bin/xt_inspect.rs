@@ -14,6 +14,8 @@ use std::process::ExitCode;
 #[derive(Default)]
 struct Features {
     body_nodes: usize,
+    face_nodes: usize,
+    nonnull_face_tolerances: usize,
     edge_nodes: usize,
     fin_nodes: usize,
     null_curve_tolerant_edges: usize,
@@ -34,6 +36,12 @@ fn features(file: &XtFile) -> Features {
     for node in file.nodes.values() {
         match node.code {
             code::BODY => out.body_nodes += 1,
+            code::FACE => {
+                out.face_nodes += 1;
+                if !matches!(file.field(node, "tolerance"), Some(Value::Null) | None) {
+                    out.nonnull_face_tolerances += 1;
+                }
+            }
             code::EDGE => {
                 out.edge_nodes += 1;
                 let curve_is_null = pointer(file, node, "curve") == Some(0);
@@ -114,7 +122,8 @@ fn failed_row(
 ) -> String {
     format!(
         "{{\"path\":{},\"bytes\":{bytes},\"schema\":null,\"nodes\":0,\
-         \"features\":{{\"body_nodes\":0,\"edge_nodes\":0,\"fin_nodes\":0,\
+         \"features\":{{\"body_nodes\":0,\"face_nodes\":0,\"nonnull_face_tolerances\":0,\
+         \"edge_nodes\":0,\"fin_nodes\":0,\
          \"null_curve_tolerant_edges\":0,\"fin_curves\":0,\
          \"trimmed_sp_fin_curves\":0,\"b_curves\":0,\"b_surfaces\":0,\
          \"intersection_curves\":0,\"procedural_surfaces\":0}},\
@@ -293,11 +302,14 @@ fn count_json(counts: &BTreeMap<String, usize>) -> String {
 
 fn feature_json(features: &Features) -> String {
     format!(
-        "{{\"body_nodes\":{},\"edge_nodes\":{},\"fin_nodes\":{},\
+        "{{\"body_nodes\":{},\"face_nodes\":{},\"nonnull_face_tolerances\":{},\
+         \"edge_nodes\":{},\"fin_nodes\":{},\
          \"null_curve_tolerant_edges\":{},\"fin_curves\":{},\
          \"trimmed_sp_fin_curves\":{},\"b_curves\":{},\"b_surfaces\":{},\
          \"intersection_curves\":{},\"procedural_surfaces\":{}}}",
         features.body_nodes,
+        features.face_nodes,
+        features.nonnull_face_tolerances,
         features.edge_nodes,
         features.fin_nodes,
         features.null_curve_tolerant_edges,

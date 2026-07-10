@@ -43,8 +43,9 @@ use kgeom::param::{ParamRange, wrap_periodic};
 use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Torus};
 use kgeom::vec::{Point2, Point3, Vec3};
 use ktopo::entity::{
-    Body, BodyId, BodyKind, Curve2dId, CurveId, Edge, EdgeId, Face, FaceId, Fin, FinPcurve, Loop,
-    ParamMap1d, Region, RegionId, RegionKind, Sense, Shell, ShellId, SurfaceId, Vertex, VertexId,
+    Body, BodyId, BodyKind, Curve2dId, CurveId, Edge, EdgeId, Face, FaceDomain, FaceId, Fin,
+    FinPcurve, Loop, ParamMap1d, Region, RegionId, RegionKind, Sense, Shell, ShellId, SurfaceId,
+    Vertex, VertexId,
 };
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::store::Store;
@@ -419,8 +420,10 @@ impl Recon<'_> {
         }
         let first_loop = ptr(file, face_node, "loop")?;
         let xt_face_sense = ch(file, face_node, "sense")?;
+        let tolerance = tolerance(file, face_node)?;
 
         let (surface, surf_sense) = self.surface(surface_idx)?;
+        let domain = FaceDomain::natural(self.store.get(surface)?);
         // Face normal == natural surface normal iff the two senses agree.
         let sense = if xt_face_sense == surf_sense {
             Sense::Forward
@@ -432,6 +435,8 @@ impl Recon<'_> {
             loops: Vec::new(),
             surface,
             sense,
+            domain,
+            tolerance,
         });
         self.store.get_mut(shell)?.faces.push(face);
 

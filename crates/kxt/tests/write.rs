@@ -224,6 +224,8 @@ fn replace_face_with_bilinear_nurbs(store: &mut Store, body: BodyId) {
     )
     .unwrap();
     *store.get_mut(surface_id).unwrap() = SurfaceGeom::Nurbs(surface);
+    store.get_mut(face_id).unwrap().domain =
+        Some(ktopo::entity::FaceDomain::from_bounds(0.0, 1.0, 0.0, 1.0).unwrap());
 
     // The replacement surface uses normalized [0, 1]^2 parameters, so
     // replace the inherited plane-coordinate pcurves with exact normalized
@@ -288,6 +290,8 @@ fn sheet_square(store: &mut Store) -> BodyId {
         loops: Vec::new(),
         surface,
         sense: Sense::Forward,
+        domain: None,
+        tolerance: None,
     });
     store.get_mut(shell).unwrap().faces.push(face);
     let loop_id = store.add(Loop {
@@ -357,6 +361,8 @@ fn sheet_semicircle(store: &mut Store) -> BodyId {
         loops: Vec::new(),
         surface,
         sense: Sense::Forward,
+        domain: None,
+        tolerance: None,
     });
     store.get_mut(shell).unwrap().faces.push(face);
     let loop_id = store.add(Loop {
@@ -437,6 +443,8 @@ fn sheet_two_faces_shared_surface(store: &mut Store) -> BodyId {
             loops: Vec::new(),
             surface,
             sense: Sense::Forward,
+            domain: None,
+            tolerance: None,
         });
         store.get_mut(shell).unwrap().faces.push(face);
         let loop_id = store.add(Loop {
@@ -716,6 +724,16 @@ fn all_analytic_primitives_round_trip() {
         let body = constructor(&mut store, &frame);
         assert_roundtrip(&store, body);
     }
+}
+
+#[test]
+fn non_null_face_tolerance_is_rejected_by_schema_13006_writer() {
+    let mut store = Store::new();
+    let body = make::block(&mut store, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
+    let face = store.faces_of_body(body).unwrap()[0];
+    store.get_mut(face).unwrap().tolerance = Some(LINEAR_RESOLUTION);
+    let error = kxt::export_text(&store, body).unwrap_err();
+    assert_eq!(error.capability(), Some(kxt::XtCapability::FaceTolerances));
 }
 
 #[test]

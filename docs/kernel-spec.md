@@ -118,9 +118,11 @@ BODY → REGION (solid|void) → SHELL → FACE → LOOP → FIN (half-edge) →
 ```
 
 Body types: solid, sheet, wire, acorn (minimal), general (mixed-dimension).
-Faces reference surfaces with a sense flag; fins reference edges with sense; edges
-reference curves; vertices reference points. Tolerant edges/vertices store a tolerance
-overriding session precision.
+Faces reference surfaces with a sense flag, an optional finite conservative UV work
+domain, and optional operation/import tolerance metadata; fins reference edges with
+sense; edges reference curves; vertices reference points. Tolerant edges/vertices store
+a tolerance overriding session precision. An unknown face domain stays explicit rather
+than being replaced by an uncertified sampled bound.
 
 - Euler operators as the only structural mutation primitives (MEV, MEF, KEMR, etc.),
   each preserving the Euler–Poincaré invariant; all higher ops compose them.

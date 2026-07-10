@@ -195,12 +195,16 @@ fn checked_face_split_and_merge_emit_semantic_lineage() {
     let body = block(&mut store, &Frame::world(), [2.0, 2.0, 2.0]).unwrap();
     let (lp, curve, length, surface, sense, pcurves) = first_face_diagonal(&mut store, body);
     let source_face = store.get(lp).unwrap().face;
+    let source_domain = store.get(source_face).unwrap().domain;
+    store.get_mut(source_face).unwrap().tolerance = Some(1.0e-8);
 
     let mut split = store.transaction().unwrap();
     let made = split
         .split_face(lp, 0, 2, curve, (0.0, length), surface, sense, pcurves)
         .unwrap();
     let split_journal = split.commit().unwrap();
+    assert_eq!(store.get(made.face).unwrap().domain, source_domain);
+    assert_eq!(store.get(made.face).unwrap().tolerance, Some(1.0e-8));
     assert_eq!(
         split_journal.lineage(),
         &[LineageEvent::Split {
@@ -214,6 +218,8 @@ fn checked_face_split_and_merge_emit_semantic_lineage() {
     let mut merge = store.transaction().unwrap();
     merge.merge_faces(made.edge).unwrap();
     let merge_journal = merge.commit().unwrap();
+    assert_eq!(store.get(source_face).unwrap().domain, source_domain);
+    assert_eq!(store.get(source_face).unwrap().tolerance, Some(1.0e-8));
     assert_eq!(
         merge_journal.lineage(),
         &[LineageEvent::Merge {
