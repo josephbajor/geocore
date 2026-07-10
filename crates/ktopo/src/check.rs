@@ -787,16 +787,28 @@ impl<'a> Checker<'a> {
         let Ok(sg) = self.store.get(face.surface) else {
             return;
         };
-        for (li, &lid) in face.loops.iter().enumerate() {
-            let Some(area) = self.loop_uv_area(lid, sg) else {
-                continue;
-            };
-            if area == 0.0 {
-                continue;
-            }
+        let measured: Vec<_> = face
+            .loops
+            .iter()
+            .filter_map(|&lid| {
+                let area = self.loop_uv_area(lid, sg)?;
+                (area != 0.0).then_some((lid, area))
+            })
+            .collect();
+        let Some(&(outer, _)) = measured
+            .iter()
+            .max_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs()))
+        else {
+            return;
+        };
+        for &(lid, area) in &measured {
             // Counterclockwise in UV = counterclockwise around the
-            // *surface* normal; the face normal flips with face.sense.
-            let expect_positive = (li == 0) == face.sense.is_forward();
+            // *surface* normal; the face normal flips with face.sense. XT
+            // does not require the outer loop to be first in the face's
+            // loop chain. Until checker v2 proves containment explicitly,
+            // the largest absolute UV area is the outer-loop proxy; a
+            // simple contained hole cannot have greater absolute area.
+            let expect_positive = (lid == outer) == face.sense.is_forward();
             if (area > 0.0) != expect_positive {
                 self.fault(EntityRef::Loop(lid), FaultKind::WrongLoopOrientation);
             }
@@ -1200,6 +1212,60 @@ mod tests {
     fn clean_sheet_square_is_clean() {
         let mut store = Store::new();
         let body = sheet_square(&mut store);
+        assert_eq!(check_body(&store, body).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn outer_loop_orientation_does_not_depend_on_storage_order() {
+        let mut store = Store::new();
+        let body = sheet_square(&mut store);
+        let face = store.faces_of_body(body).unwrap()[0];
+        let hole = store.add(Loop {
+            face,
+            fins: Vec::new(),
+        });
+        store.get_mut(face).unwrap().loops.push(hole);
+
+        // Clockwise inner square in the face's UV frame.
+        let corners = [
+            Point3::new(0.25, 0.25, 0.0),
+            Point3::new(0.25, 0.75, 0.0),
+            Point3::new(0.75, 0.75, 0.0),
+            Point3::new(0.75, 0.25, 0.0),
+        ];
+        let vertices: Vec<_> = corners
+            .iter()
+            .map(|&position| {
+                let point = store.add(position);
+                store.add(Vertex {
+                    point,
+                    tolerance: None,
+                })
+            })
+            .collect();
+        for i in 0..corners.len() {
+            let a = corners[i];
+            let b = corners[(i + 1) % corners.len()];
+            let curve = store.add(CurveGeom::Line(Line::new(a, b - a).unwrap()));
+            let edge = store.add(Edge {
+                curve: Some(curve),
+                vertices: [Some(vertices[i]), Some(vertices[(i + 1) % vertices.len()])],
+                bounds: Some((0.0, (b - a).norm())),
+                fins: Vec::new(),
+                tolerance: None,
+            });
+            let fin = store.add(Fin {
+                parent: hole,
+                edge,
+                sense: Sense::Forward,
+                pcurve: None,
+            });
+            store.get_mut(hole).unwrap().fins.push(fin);
+            store.get_mut(edge).unwrap().fins.push(fin);
+        }
+        assert_eq!(check_body(&store, body).unwrap(), Vec::new());
+
+        store.get_mut(face).unwrap().loops.swap(0, 1);
         assert_eq!(check_body(&store, body).unwrap(), Vec::new());
     }
 
