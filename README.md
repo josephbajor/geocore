@@ -40,10 +40,13 @@ parametric CAD application; feature history and regeneration are later layers.
   structural/sampled gate, while `Full` returns `Valid`, `Invalid`, or `Indeterminate`
   and, for Fast-clean bodies, enumerates every proof obligation the current
   implementation cannot discharge.
-  The X_T corpus inspector records both the Fast gate and Full outcome/gap categories.
+  The X_T corpus inspector records proven checker faults plus the Full outcome/gap
+  categories.
   A first whole-interval proof slice now certifies exact affine and harmonic incidence:
   all stored curves on planes, cylinder generators/sections, sphere
   sections, and matching analytic pcurve lifts on plane and revolved surfaces.
+  Robust-predicate loop proofs now certify planar straight-segment loops and simple
+  circle/ellipse rings, while reporting proven crossings or overlaps as Full faults.
   Adaptive full-curve containment, production seam/pole/apex interchange fixtures,
   operation caller migration, a procedural geometry graph, operation-wide transaction/
   journal adoption, partition history, enforced topology mutation, richer errors/

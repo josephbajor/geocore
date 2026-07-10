@@ -62,6 +62,7 @@ use crate::incidence::{
     check_pcurve_chart, check_pcurve_incidence, check_pcurve_metadata,
     check_pcurve_parameterization,
 };
+use crate::loop_proof::{LoopSimplicity, certify_loop_simplicity};
 use crate::store::{Entity, Store};
 use kcore::arena::Handle;
 use kcore::error::Result;
@@ -117,6 +118,9 @@ pub enum FaultKind {
     /// A loop winds the wrong way for its position (outer loops run
     /// counterclockwise w.r.t. the face normal; holes clockwise).
     WrongLoopOrientation,
+    /// A whole-loop proof found a proper crossing, non-adjacent touch, or
+    /// positive-length adjacent overlap.
+    LoopSelfIntersection,
     /// An edge endpoint does not lie on the edge's curve at its bound
     /// parameter, within tolerance.
     VertexOffCurve,
@@ -278,11 +282,12 @@ pub fn check_body_report(store: &Store, body: BodyId, level: CheckLevel) -> Resu
         faults: Vec::new(),
     };
     checker.run(body, b);
-    let gaps = if level == CheckLevel::Full && checker.faults.is_empty() {
-        collect_full_verification_gaps(store, body, b)?
+    let (proof_faults, gaps) = if level == CheckLevel::Full && checker.faults.is_empty() {
+        collect_full_verification(store, body, b)?
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
+    checker.faults.extend(proof_faults);
     Ok(CheckReport {
         level,
         faults: checker.faults,
@@ -290,11 +295,12 @@ pub fn check_body_report(store: &Store, body: BodyId, level: CheckLevel) -> Resu
     })
 }
 
-fn collect_full_verification_gaps(
+fn collect_full_verification(
     store: &Store,
     body_id: BodyId,
     body: &Body,
-) -> Result<Vec<VerificationGap>> {
+) -> Result<(Vec<Fault>, Vec<VerificationGap>)> {
+    let mut faults = Vec::new();
     let mut gaps = Vec::new();
     let mut push = |entity, kind| {
         let gap = VerificationGap { entity, kind };
@@ -314,10 +320,17 @@ fn collect_full_verification_gaps(
             );
         }
         for &loop_id in &face.loops {
-            push(
-                EntityRef::Loop(loop_id),
-                VerificationGapKind::LoopSelfIntersection,
-            );
+            match certify_loop_simplicity(store, loop_id)? {
+                LoopSimplicity::Certified => {}
+                LoopSimplicity::SelfIntersecting => faults.push(Fault {
+                    entity: EntityRef::Loop(loop_id),
+                    kind: FaultKind::LoopSelfIntersection,
+                }),
+                LoopSimplicity::Indeterminate => push(
+                    EntityRef::Loop(loop_id),
+                    VerificationGapKind::LoopSelfIntersection,
+                ),
+            }
             for &fin_id in &store.get(loop_id)?.fins {
                 let fin = store.get(fin_id)?;
                 let edge = store.get(fin.edge)?;
@@ -373,7 +386,7 @@ fn collect_full_verification_gaps(
             }
         }
     }
-    Ok(gaps)
+    Ok((faults, gaps))
 }
 
 /// Number of interior samples when verifying an edge lies on its faces.
@@ -1677,6 +1690,59 @@ mod tests {
                 report.gaps
             );
         }
+    }
+
+    #[test]
+    fn full_checker_proves_simple_loops_and_rejects_a_bow_tie() {
+        let mut store = Store::new();
+        let sheet = sheet_square(&mut store);
+        let simple = check_body_report(&store, sheet, CheckLevel::Full).unwrap();
+        assert!(simple.faults.is_empty());
+        assert!(simple.gaps.iter().all(|gap| {
+            !matches!(gap.entity, EntityRef::Loop(_))
+                || gap.kind != VerificationGapKind::LoopSelfIntersection
+        }));
+
+        let rings = cylinder_body(&mut store);
+        let ring_report = check_body_report(&store, rings, CheckLevel::Full).unwrap();
+        assert!(ring_report.faults.is_empty());
+        assert!(ring_report.gaps.iter().all(|gap| {
+            !matches!(gap.entity, EntityRef::Loop(_))
+                || gap.kind != VerificationGapKind::LoopSelfIntersection
+        }));
+
+        let face = store.faces_of_body(sheet).unwrap()[0];
+        let loop_id = store.get(face).unwrap().loops[0];
+        let fins = store.get(loop_id).unwrap().fins.clone();
+        let positions = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+        ];
+        for (index, &fin_id) in fins.iter().enumerate() {
+            let vertex = store.fin_tail(fin_id).unwrap().unwrap();
+            let point = store.get(vertex).unwrap().point;
+            *store.get_mut(point).unwrap() = positions[index];
+        }
+        for (index, &fin_id) in fins.iter().enumerate() {
+            let edge_id = store.get(fin_id).unwrap().edge;
+            let curve_id = store.get(edge_id).unwrap().curve.unwrap();
+            let start = positions[index];
+            let end = positions[(index + 1) % positions.len()];
+            *store.get_mut(curve_id).unwrap() =
+                CurveGeom::Line(Line::new(start, end - start).unwrap());
+            store.get_mut(edge_id).unwrap().bounds = Some((0.0, start.dist(end)));
+        }
+
+        let fast = check_body_report(&store, sheet, CheckLevel::Fast).unwrap();
+        assert_eq!(fast.outcome(), CheckOutcome::Valid);
+        let full = check_body_report(&store, sheet, CheckLevel::Full).unwrap();
+        assert_eq!(full.outcome(), CheckOutcome::Invalid);
+        assert!(full.faults.iter().any(|fault| {
+            fault.entity == EntityRef::Loop(loop_id)
+                && fault.kind == FaultKind::LoopSelfIntersection
+        }));
     }
 
     #[test]

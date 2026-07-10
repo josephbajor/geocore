@@ -26,6 +26,7 @@ pub mod entity;
 pub mod euler;
 pub mod geom;
 pub(crate) mod incidence;
+pub(crate) mod loop_proof;
 pub mod make;
 pub mod store;
 pub mod transaction;
