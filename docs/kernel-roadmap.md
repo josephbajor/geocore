@@ -322,8 +322,9 @@ read before its corresponding kernel geometry exists.
   exporter/version, schema family, size, entity counts, geometry/topology features, and
   expected outcome.
 - Record separate parse, reconstruct, checker, tessellation, and round-trip outcomes.
-  Unsupported content must identify a stable capability code, not a static free-form
-  reason alone.
+  Unsupported parse/reconstruction content now carries a stable `XtCapability` code in
+  both the Rust API and JSONL corpus output while retaining human context. Extend the
+  same manifest discipline to round-trip and external-host outcomes.
 - Track ratcheted rates for the declared support matrix. Adding a new file cannot hide a
   regression by changing the denominator.
 - Build a legally usable corpus spanning schema generations, analytic and NURBS parts,

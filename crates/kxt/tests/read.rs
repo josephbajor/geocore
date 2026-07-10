@@ -162,8 +162,12 @@ fn real_world_plate_v28_reconstructs() {
 fn pre_13006_files_are_rejected_with_unsupported_schema() {
     let mut store = Store::new();
     match import(&fixture("longbar.x_t"), &mut store) {
-        Err(XtError::UnsupportedSchema { schema }) => {
+        Err(error @ XtError::UnsupportedSchema { .. }) => {
+            let XtError::UnsupportedSchema { schema } = &error else {
+                unreachable!()
+            };
             assert_eq!(schema, "SCH_1000230_10004");
+            assert_eq!(error.capability(), Some(kxt::XtCapability::SchemaBase13006));
         }
         other => panic!("expected UnsupportedSchema, got {other:?}"),
     }

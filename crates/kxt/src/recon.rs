@@ -30,7 +30,7 @@
 //! - Attributes, groups, transforms, and construction geometry are parsed
 //!   but not reconstructed (recorded in [`Reconstruction::skipped`]).
 
-use crate::error::{Result, XtError};
+use crate::error::{Result, XtCapability, XtError};
 use crate::parse::{Node, Value, XtFile};
 use crate::schema::code;
 use kcore::math;
@@ -97,6 +97,7 @@ fn reconstruct_into(file: &XtFile, store: &mut Store) -> Result<Reconstruction> 
                         body_indices.push(v);
                     } else {
                         return Err(XtError::Unsupported {
+                            capability: XtCapability::Assemblies,
                             what: "non-body parts (assemblies) in array-of-parts files",
                         });
                     }
@@ -106,11 +107,13 @@ fn reconstruct_into(file: &XtFile, store: &mut Store) -> Result<Reconstruction> 
         }
         code::ASSEMBLY => {
             return Err(XtError::Unsupported {
+                capability: XtCapability::Assemblies,
                 what: "assembly transmit files (Tier-0 reads body files)",
             });
         }
         code::WORLD => {
             return Err(XtError::Unsupported {
+                capability: XtCapability::Partitions,
                 what: "partition transmit files (Tier-0 reads body files)",
             });
         }
@@ -296,6 +299,7 @@ impl Recon<'_> {
             Some(3) => BodyKind::Sheet,
             _ => {
                 return Err(XtError::Unsupported {
+                    capability: XtCapability::GeneralBodies,
                     what: "general bodies (body_type 6)",
                 });
             }
@@ -409,6 +413,7 @@ impl Recon<'_> {
         let surface_idx = ptr(file, face_node, "surface")?;
         if surface_idx == 0 {
             return Err(XtError::Unsupported {
+                capability: XtCapability::SurfaceLessFaces,
                 what: "faces without surface geometry",
             });
         }
@@ -445,6 +450,7 @@ impl Recon<'_> {
         let first_fin = ptr(file, loop_node, "fin")?;
         if first_fin == 0 {
             return Err(XtError::Unsupported {
+                capability: XtCapability::IsolatedLoops,
                 what: "isolated loops (single-vertex loops)",
             });
         }
@@ -636,6 +642,7 @@ impl Recon<'_> {
         }
         if curve.is_none() && bounds.is_none() {
             return Err(XtError::Unsupported {
+                capability: XtCapability::TolerantRingEdges,
                 what: "curve-less tolerant ring edges",
             });
         }
@@ -782,6 +789,7 @@ impl Recon<'_> {
         let vertex_dim = f64_of(file, n, "vertex_dim")? as usize;
         if logical_of(file, n, "periodic")? {
             return Err(XtError::Unsupported {
+                capability: XtCapability::PeriodicPcurves,
                 what: "periodic 2D B-curves",
             });
         }
@@ -830,6 +838,7 @@ impl Recon<'_> {
             code::B_CURVE => self.b_curve(curve_idx, node)?.into(),
             code::INTERSECTION | code::SP_CURVE | code::PE_CURVE => {
                 return Err(XtError::Unsupported {
+                    capability: XtCapability::ProceduralCurves,
                     what: "procedural curves (intersection/SP/foreign) — Tier 2",
                 });
             }
@@ -854,6 +863,7 @@ impl Recon<'_> {
         let vertex_dim = f64_of(file, n, "vertex_dim")? as usize;
         if logical_of(file, n, "periodic")? {
             return Err(XtError::Unsupported {
+                capability: XtCapability::PeriodicNurbsCurves,
                 what: "periodic B-curves (kernel periodic NURBS lands at M3)",
             });
         }
@@ -904,6 +914,7 @@ impl Recon<'_> {
                 let minor = f64_of(file, node, "minor_radius")?;
                 if major <= minor {
                     return Err(XtError::Unsupported {
+                        capability: XtCapability::SelfIntersectingTori,
                         what: "self-intersecting (apple/lemon) tori",
                     });
                 }
@@ -919,6 +930,7 @@ impl Recon<'_> {
             | code::BLEND_BOUND
             | code::PE_SURF => {
                 return Err(XtError::Unsupported {
+                    capability: XtCapability::ProceduralSurfaces,
                     what: "procedural surfaces (swept/spun/offset/blend/foreign) — Tier 2",
                 });
             }
@@ -940,6 +952,7 @@ impl Recon<'_> {
         let n = xnode(file, nurbs_idx)?;
         if logical_of(file, n, "u_periodic")? || logical_of(file, n, "v_periodic")? {
             return Err(XtError::Unsupported {
+                capability: XtCapability::PeriodicNurbsSurfaces,
                 what: "periodic B-surfaces (kernel periodic NURBS lands at M3)",
             });
         }
@@ -1054,6 +1067,7 @@ fn split_poles(raw: &[f64], dim: usize, rational: bool) -> Result<(Vec<Point3>, 
     let expected_dim = if rational { 4 } else { 3 };
     if dim != expected_dim {
         return Err(XtError::Unsupported {
+            capability: XtCapability::NonstandardNurbsPoles,
             what: "B-geometry with vertex dimension other than 3 (or 4 rational)",
         });
     }
@@ -1087,6 +1101,7 @@ fn split_poles_2d(
     let expected_dim = if rational { 3 } else { 2 };
     if dim != expected_dim {
         return Err(XtError::Unsupported {
+            capability: XtCapability::NonstandardNurbsPoles,
             what: "2D B-geometry with vertex dimension other than 2 (or 3 rational)",
         });
     }

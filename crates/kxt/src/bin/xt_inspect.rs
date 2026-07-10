@@ -5,7 +5,7 @@ use ktopo::check::check_body;
 use ktopo::store::Store;
 use kxt::parse::{Value, XtFile};
 use kxt::schema::code;
-use kxt::{XtError, read_xt, reconstruct};
+use kxt::{XtCapability, XtError, read_xt, reconstruct};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
@@ -93,13 +93,25 @@ fn json_string(value: &str) -> String {
 }
 
 fn error_stage(error: &XtError) -> &'static str {
-    match error {
-        XtError::UnsupportedSchema { .. } | XtError::Unsupported { .. } => "unsupported",
-        _ => "fail",
+    if error.capability().is_some() {
+        "unsupported"
+    } else {
+        "fail"
     }
 }
 
-fn failed_row(path: &Path, bytes: usize, stage: &str, status: &str, error: &str) -> String {
+fn capability_json(capability: Option<XtCapability>) -> String {
+    capability.map_or_else(|| "null".to_owned(), |value| json_string(value.code()))
+}
+
+fn failed_row(
+    path: &Path,
+    bytes: usize,
+    stage: &str,
+    status: &str,
+    capability: Option<XtCapability>,
+    error: &str,
+) -> String {
     format!(
         "{{\"path\":{},\"bytes\":{bytes},\"schema\":null,\"nodes\":0,\
          \"features\":{{\"body_nodes\":0,\"edge_nodes\":0,\"fin_nodes\":0,\
@@ -109,10 +121,11 @@ fn failed_row(path: &Path, bytes: usize, stage: &str, status: &str, error: &str)
          \"stages\":{{\"parse\":{},\"reconstruct\":\"not_run\",\
          \"checker\":\"not_run\",\"tessellate\":\"not_run\"}},\
          \"reconstructed_bodies\":0,\"checker_faults\":0,\"triangles\":0,\
-         \"checker_fault_kinds\":{},\"failed_stage\":{},\"error\":{}}}",
+         \"checker_fault_kinds\":{},\"capability\":{},\"failed_stage\":{},\"error\":{}}}",
         json_string(&path.display().to_string()),
         json_string(status),
         "{}",
+        capability_json(capability),
         json_string(stage),
         json_string(error),
     )
@@ -123,7 +136,7 @@ fn inspect(path: &Path) -> (String, bool) {
         Ok(bytes) => bytes,
         Err(error) => {
             return (
-                failed_row(path, 0, "read", "fail", &error.to_string()),
+                failed_row(path, 0, "read", "fail", None, &error.to_string()),
                 false,
             );
         }
@@ -137,6 +150,7 @@ fn inspect(path: &Path) -> (String, bool) {
                     bytes.len(),
                     "parse",
                     error_stage(&error),
+                    error.capability(),
                     &error.to_string(),
                 ),
                 false,
@@ -154,7 +168,7 @@ fn inspect(path: &Path) -> (String, bool) {
                  \"reconstruct\":{},\"checker\":\"not_run\",\
                  \"tessellate\":\"not_run\"}},\"reconstructed_bodies\":0,\
                  \"checker_faults\":0,\"triangles\":0,\"checker_fault_kinds\":{},\
-                 \"failed_stage\":\"reconstruct\",\
+                 \"capability\":{},\"failed_stage\":\"reconstruct\",\
                  \"error\":{}}}",
                 json_string(&path.display().to_string()),
                 bytes.len(),
@@ -163,6 +177,7 @@ fn inspect(path: &Path) -> (String, bool) {
                 feature_json(&found),
                 json_string(error_stage(&error)),
                 "{}",
+                capability_json(error.capability()),
                 json_string(&error.to_string()),
             );
             return (row, false);
@@ -243,7 +258,7 @@ fn inspect(path: &Path) -> (String, bool) {
              \"features\":{},\"stages\":{{\"parse\":\"pass\",\
              \"reconstruct\":\"pass\",\"checker\":{},\"tessellate\":{}}},\
              \"reconstructed_bodies\":{},\"checker_faults\":{},\"triangles\":{},\
-             \"checker_fault_kinds\":{},\"failed_stage\":{},\"error\":{}}}",
+             \"checker_fault_kinds\":{},\"capability\":null,\"failed_stage\":{},\"error\":{}}}",
             json_string(&path.display().to_string()),
             bytes.len(),
             json_string(&file.schema),

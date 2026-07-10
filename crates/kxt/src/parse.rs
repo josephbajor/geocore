@@ -7,7 +7,7 @@
 //! visible at the PK interface.
 
 use crate::cursor::{BinCursor, Cursor, Scalar, TextCursor};
-use crate::error::{Result, XtError};
+use crate::error::{Result, XtCapability, XtError};
 use crate::schema::{self, EditOp, EmbeddedField, FieldType, NodeDef};
 use std::collections::BTreeMap;
 
@@ -201,6 +201,7 @@ pub fn read_xt(bytes: &[u8]) -> Result<XtFile> {
             parse_stream(header, &mut BinCursor::new(&data[4..]))
         }
         Some(b'B') => Err(XtError::Unsupported {
+            capability: XtCapability::MachineDependentBinary,
             what: "bare binary transmit files (machine-dependent format)",
         }),
         _ => Err(XtError::BadHeader {

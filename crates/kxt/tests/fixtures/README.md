@@ -9,7 +9,7 @@ until an independently authored, redistributable positive fixture and a licensed
 Parasolid-host round trip are added.
 
 `manifest.tsv` is the machine-readable source of truth for provenance, schema, size,
-feature tags, and expected parse/reconstruct/checker/tessellation stage outcomes. The
+feature tags, stable unsupported-capability code, and expected parse/reconstruct/checker/tessellation stage outcomes. The
 `xt_inspect` binary emits the corresponding observed JSON Lines record and the corpus
 test ratchets every row against the manifest. Expected failures are retained as explicit
 regression targets rather than removed from the denominator.

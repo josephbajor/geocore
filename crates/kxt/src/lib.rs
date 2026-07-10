@@ -15,7 +15,9 @@
 //! curve-less tolerant edges using analytic geometry, non-periodic B-spline/
 //! NURBS geometry, and per-fin trimmed SP-curves over finite 2D B-curves.
 //! Reconstruction is failure-atomic through `ktopo`'s copy-on-write Store
-//! transactions and returns the committed entity mutation journal.
+//! transactions and returns the committed entity mutation journal. Valid
+//! content outside the declared subset reports a stable [`XtCapability`]
+//! code as well as human-readable context.
 //! Intersection/procedural geometry, broader tolerant topology, periodic or
 //! circular pcurve encoding, periodic NURBS, pre-13006 schemas, assemblies,
 //! and neutral-binary writing remain deferred.
@@ -38,7 +40,7 @@ pub mod recon;
 pub mod schema;
 pub mod write;
 
-pub use error::{Result, XtError};
+pub use error::{Result, XtCapability, XtError};
 pub use parse::{Header, Node, Value, XtFile, read_xt};
 pub use recon::{Reconstruction, reconstruct};
 pub use write::export_text;

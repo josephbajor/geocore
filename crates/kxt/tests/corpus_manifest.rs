@@ -18,6 +18,7 @@ struct Entry {
     checker: String,
     tessellate: String,
     checker_faults: usize,
+    capability: String,
 }
 
 fn fixture_dir() -> PathBuf {
@@ -28,14 +29,14 @@ fn manifest() -> Vec<Entry> {
     let text = std::fs::read_to_string(fixture_dir().join("manifest.tsv")).unwrap();
     let mut lines = text.lines();
     let header = lines.next().unwrap();
-    assert_eq!(header.split('\t').count(), 15);
+    assert_eq!(header.split('\t').count(), 16);
     lines
         .enumerate()
         .map(|(line_number, line)| {
             let columns: Vec<_> = line.split('\t').collect();
             assert_eq!(
                 columns.len(),
-                15,
+                16,
                 "manifest line {} has wrong column count",
                 line_number + 2
             );
@@ -56,6 +57,7 @@ fn manifest() -> Vec<Entry> {
                 checker: columns[11].to_owned(),
                 tessellate: columns[12].to_owned(),
                 checker_faults: columns[13].parse().unwrap(),
+                capability: columns[14].to_owned(),
             }
         })
         .collect()
@@ -95,7 +97,7 @@ fn manifest_covers_every_transmit_fixture_and_matches_file_sizes() {
 fn unlicensed_discovery_catalog_is_metadata_only() {
     let text = std::fs::read_to_string(fixture_dir().join("discovery.tsv")).unwrap();
     let mut lines = text.lines();
-    assert_eq!(lines.next().unwrap().split('\t').count(), 15);
+    assert_eq!(lines.next().unwrap().split('\t').count(), 16);
     let rows: Vec<_> = lines.collect();
     assert!(
         rows.len() >= DISCOVERY_FLOOR,
@@ -103,7 +105,7 @@ fn unlicensed_discovery_catalog_is_metadata_only() {
     );
     for (line_number, row) in rows.iter().enumerate() {
         let columns: Vec<_> = row.split('\t').collect();
-        assert_eq!(columns.len(), 15, "discovery line {}", line_number + 2);
+        assert_eq!(columns.len(), 16, "discovery line {}", line_number + 2);
         assert_eq!(columns[1], "external-discovery-only");
         assert_eq!(columns[4], "NOT-REDISTRIBUTABLE-no-license-found");
         assert!(columns[2].starts_with("https://github.com/"));
@@ -166,6 +168,16 @@ fn observed_corpus_stages_match_the_non_shrinking_manifest() {
         );
         assert!(
             row.contains(&format!("\"checker_faults\":{}", entry.checker_faults)),
+            "{}: {row}",
+            entry.file
+        );
+        let capability = if entry.capability == "-" {
+            "null".to_owned()
+        } else {
+            format!("\"{}\"", entry.capability)
+        };
+        assert!(
+            row.contains(&format!("\"capability\":{capability}")),
             "{}: {row}",
             entry.file
         );

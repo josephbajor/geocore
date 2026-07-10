@@ -39,4 +39,5 @@ fn inspector_keeps_scanning_and_fails_process_for_unsupported_fixture() {
             .unwrap()
             .contains("\"parse\":\"unsupported\"")
     );
+    assert!(rows.contains("\"capability\":\"xt.schema.base-13006\""));
 }

@@ -3,7 +3,7 @@
 //! This first M3b slice intentionally writes the fixed base schema 13006.
 //! Unsupported model classes fail explicitly rather than being approximated.
 
-use crate::error::{Result, XtError};
+use crate::error::{Result, XtCapability, XtError};
 use crate::parse::Value;
 use crate::schema::{base_schema, code};
 use kcore::arena::Handle;
@@ -160,6 +160,7 @@ impl Plan {
                         }
                         _ => {
                             return Err(XtError::Unsupported {
+                                capability: XtCapability::WriterEdgeTopology,
                                 what: "unsupported edge/curve topology",
                             });
                         }
@@ -168,6 +169,7 @@ impl Plan {
                 None => {
                     if e.fins.is_empty() {
                         return Err(XtError::Unsupported {
+                            capability: XtCapability::TolerantWireEdges,
                             what: "curve-less tolerant wire edges",
                         });
                     }
@@ -1013,6 +1015,7 @@ impl Scaffold {
     fn solid(store: &Store, body: &ktopo::entity::Body) -> Result<Self> {
         if body.regions.len() != 2 {
             return Err(XtError::Unsupported {
+                capability: XtCapability::WriterBodyTopology,
                 what: "solid text writing requires one void and one solid region",
             });
         }
@@ -1022,17 +1025,20 @@ impl Scaffold {
         let sr = store.get(solid_region)?;
         if vr.kind != RegionKind::Void || !vr.shells.is_empty() || sr.kind != RegionKind::Solid {
             return Err(XtError::Unsupported {
+                capability: XtCapability::WriterBodyTopology,
                 what: "solid text writing requires the standard solid region scaffold",
             });
         }
         let [shell] = sr.shells.as_slice() else {
             return Err(XtError::Unsupported {
+                capability: XtCapability::WriterBodyTopology,
                 what: "solid text writing requires exactly one solid shell",
             });
         };
         let sh = store.get(*shell)?;
         if sh.faces.is_empty() || !sh.edges.is_empty() || sh.vertex.is_some() {
             return Err(XtError::Unsupported {
+                capability: XtCapability::WriterBodyTopology,
                 what: "wireframe, acorn, and empty shells are not writable yet",
             });
         }
@@ -1045,12 +1051,14 @@ impl Scaffold {
     fn sheet(store: &Store, body: &ktopo::entity::Body) -> Result<Self> {
         let [void_region] = body.regions.as_slice() else {
             return Err(XtError::Unsupported {
+                capability: XtCapability::WriterBodyTopology,
                 what: "sheet text writing requires one void region",
             });
         };
         let region = store.get(*void_region)?;
         let [shell] = region.shells.as_slice() else {
             return Err(XtError::Unsupported {
+                capability: XtCapability::WriterBodyTopology,
                 what: "sheet text writing requires exactly one shell",
             });
         };
@@ -1061,6 +1069,7 @@ impl Scaffold {
             || shell.vertex.is_some()
         {
             return Err(XtError::Unsupported {
+                capability: XtCapability::WriterBodyTopology,
                 what: "sheet text writing requires one non-empty face shell in the void region",
             });
         }
@@ -1073,12 +1082,14 @@ impl Scaffold {
     fn wire(store: &Store, body: &ktopo::entity::Body) -> Result<Self> {
         let [void_region] = body.regions.as_slice() else {
             return Err(XtError::Unsupported {
+                capability: XtCapability::WriterBodyTopology,
                 what: "wire text writing requires one void region",
             });
         };
         let region = store.get(*void_region)?;
         let [shell] = region.shells.as_slice() else {
             return Err(XtError::Unsupported {
+                capability: XtCapability::WriterBodyTopology,
                 what: "wire text writing requires exactly one shell",
             });
         };
@@ -1089,6 +1100,7 @@ impl Scaffold {
             || shell.vertex.is_some()
         {
             return Err(XtError::Unsupported {
+                capability: XtCapability::WriterBodyTopology,
                 what: "wire text writing requires one non-empty edge shell in the void region",
             });
         }
@@ -1101,12 +1113,14 @@ impl Scaffold {
     fn acorn(store: &Store, body: &ktopo::entity::Body) -> Result<Self> {
         let [void_region] = body.regions.as_slice() else {
             return Err(XtError::Unsupported {
+                capability: XtCapability::WriterBodyTopology,
                 what: "acorn text writing requires one void region",
             });
         };
         let region = store.get(*void_region)?;
         let [shell] = region.shells.as_slice() else {
             return Err(XtError::Unsupported {
+                capability: XtCapability::WriterBodyTopology,
                 what: "acorn text writing requires exactly one shell",
             });
         };
@@ -1117,6 +1131,7 @@ impl Scaffold {
             || shell.vertex.is_none()
         {
             return Err(XtError::Unsupported {
+                capability: XtCapability::WriterBodyTopology,
                 what: "acorn text writing requires one vertex-only shell in the void region",
             });
         }
@@ -1172,6 +1187,7 @@ fn validate_edge_fin_count(edge: &Edge, kind: BodyKind) -> Result<()> {
     match kind {
         BodyKind::Solid if edge.fins.len() != 2 => {
             return Err(XtError::Unsupported {
+                capability: XtCapability::WriterEdgeTopology,
                 what: "solid edges must have exactly two fins",
             });
         }
@@ -1185,11 +1201,13 @@ fn validate_edge_fin_count(edge: &Edge, kind: BodyKind) -> Result<()> {
                 && edge.bounds.is_some() => {}
         BodyKind::Sheet => {
             return Err(XtError::Unsupported {
+                capability: XtCapability::WriterEdgeTopology,
                 what: "unsupported sheet edge fin topology",
             });
         }
         BodyKind::Wire if !edge.fins.is_empty() => {
             return Err(XtError::Unsupported {
+                capability: XtCapability::WriterEdgeTopology,
                 what: "wire edges must not have real fins",
             });
         }
@@ -1471,6 +1489,7 @@ fn aux_node_count(store: &Store, surfaces: &[SurfaceId], curves: &[CurveId]) -> 
 fn validate_nurbs_curve(curve: &NurbsCurve) -> Result<()> {
     if curve.periodicity().is_some() {
         return Err(XtError::Unsupported {
+            capability: XtCapability::PeriodicNurbsCurves,
             what: "periodic NURBS curves",
         });
     }
@@ -1483,6 +1502,7 @@ fn validate_nurbs_curve(curve: &NurbsCurve) -> Result<()> {
 fn validate_nurbs_surface(surface: &NurbsSurface) -> Result<()> {
     if surface.periodicity() != [None, None] {
         return Err(XtError::Unsupported {
+            capability: XtCapability::PeriodicNurbsSurfaces,
             what: "periodic NURBS surfaces",
         });
     }
@@ -1549,6 +1569,7 @@ fn pcurve_nurbs(store: &Store, fin_id: FinId) -> Result<NurbsCurve2d> {
         }
         Curve2dGeom::Nurbs(curve) => Ok(curve.clone()),
         Curve2dGeom::Circle(_) => Err(XtError::Unsupported {
+            capability: XtCapability::CircularPcurves,
             what: "circular pcurves on curve-less tolerant edges",
         }),
     }
