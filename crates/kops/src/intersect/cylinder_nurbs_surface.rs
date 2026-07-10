@@ -35,6 +35,7 @@ pub fn intersect_bounded_cylinder_nurbs_surface(
         surface,
         surface_range,
         tolerances,
+        implicit_surface: cylinder,
         signed_distance: &signed_distance,
         other_uv: &other_uv,
         branch_kind: &branch_kind,

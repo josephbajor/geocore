@@ -3,6 +3,7 @@
 use super::NurbsSurface;
 use crate::aabb::Aabb3;
 use crate::bvh::AabbBvh;
+use crate::implicit::{ImplicitBoxRelation, ImplicitSurface, classify_implicit_box};
 use crate::vec::{Point3, Vec3};
 use kcore::error::{Error, Result};
 use kcore::interval::Interval;
@@ -89,6 +90,49 @@ impl NurbsSurfaceBvh {
             .overlapping_pairs(&other.hierarchy, max_separation)
     }
 
+    /// Classify one patch's complete control-hull box against an implicit
+    /// surface after outward growth by a model-space `margin`.
+    ///
+    /// A non-candidate result certifies that the entire rational patch is
+    /// farther than `margin` from the implicit zero set. `Candidate` does not
+    /// assert that an intersection exists; it requests subdivision or a
+    /// narrower solver.
+    pub fn classify_patch_against_implicit(
+        &self,
+        patch: usize,
+        surface: &dyn ImplicitSurface,
+        margin: f64,
+    ) -> Result<ImplicitBoxRelation> {
+        let bounds = self
+            .hierarchy
+            .primitive_bounds(patch)
+            .ok_or(Error::InvalidGeometry {
+                reason: "NURBS BVH patch index is out of range",
+            })?;
+        classify_implicit_box(surface, bounds, margin)
+    }
+
+    /// Patches whose complete control-hull boxes cannot be excluded from an
+    /// implicit zero set within model-space `margin`.
+    ///
+    /// Hierarchy nodes are pruned by interval field signs before leaf boxes
+    /// are classified. An empty result is a certificate that the complete
+    /// represented NURBS surface misses the implicit surface by more than the
+    /// requested margin.
+    pub fn implicit_candidates(
+        &self,
+        surface: &dyn ImplicitSurface,
+        margin: f64,
+    ) -> Result<Vec<usize>> {
+        validate_margin(margin)?;
+        Ok(self.hierarchy.query_pruned(|bounds| {
+            match classify_implicit_box(surface, bounds, margin) {
+                Ok(ImplicitBoxRelation::Candidate) | Err(_) => true,
+                Ok(ImplicitBoxRelation::Negative | ImplicitBoxRelation::Positive) => false,
+            }
+        }))
+    }
+
     /// Classify one patch against the plane through `origin` with the given
     /// normal. `half_width` is a model-space tolerance on each side of the
     /// plane. Normal scale and signed-distance arithmetic are enclosed with
@@ -172,6 +216,15 @@ fn validate_plane(origin: Point3, normal: Vec3, half_width: f64) -> Result<Plane
         normal,
         scaled_half_width,
     })
+}
+
+fn validate_margin(margin: f64) -> Result<()> {
+    if !margin.is_finite() || margin < 0.0 {
+        return Err(Error::InvalidGeometry {
+            reason: "NURBS implicit-surface margin must be finite and non-negative",
+        });
+    }
+    Ok(())
 }
 
 fn finite_point(point: Vec3) -> bool {
@@ -267,7 +320,7 @@ fn classify_interval(minimum: f64, maximum: f64, half_width: f64) -> PlanePatchR
 mod tests {
     use super::*;
     use crate::param::ParamRange;
-    use crate::surface::Surface;
+    use crate::surface::{Sphere, Surface};
 
     fn rational_multi_patch(offset: Vec3) -> NurbsSurface {
         let knots = vec![0.0, 0.0, 0.5, 1.0, 1.0];
@@ -330,6 +383,71 @@ mod tests {
 
         let far = NurbsSurfaceBvh::build(&rational_multi_patch(Vec3::new(0.0, 0.0, 10.0))).unwrap();
         assert!(a.overlapping_patch_pairs(&far, 0.0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn implicit_filter_prunes_analytic_zero_sets_without_false_negatives() {
+        let hierarchy = NurbsSurfaceBvh::build(&rational_multi_patch(Vec3::default())).unwrap();
+        let crossing = Sphere::new(crate::frame::Frame::world(), 1.0).unwrap();
+        let candidates = hierarchy.implicit_candidates(&crossing, 0.0).unwrap();
+        assert!(!candidates.is_empty());
+        assert_eq!(
+            candidates,
+            hierarchy.implicit_candidates(&crossing, 0.0).unwrap()
+        );
+
+        // The patch boundary at (u, v) = (0.5, 0) evaluates to (1, 0, 0),
+        // so every patch owning that boundary must survive the interval
+        // filter. This checks a real zero, not merely broad box overlap.
+        for index in 0..hierarchy.patch_count() {
+            let patch = hierarchy.patch(index).unwrap();
+            let range = patch.param_range();
+            if range[0].contains(0.5) && range[1].contains(0.0) {
+                assert!(candidates.contains(&index));
+                assert_eq!(
+                    hierarchy
+                        .classify_patch_against_implicit(index, &crossing, 0.0)
+                        .unwrap(),
+                    ImplicitBoxRelation::Candidate
+                );
+            }
+        }
+
+        let far_frame =
+            crate::frame::Frame::from_z(Point3::new(0.0, 0.0, 10.0), Vec3::new(0.0, 0.0, 1.0))
+                .unwrap();
+        let far = Sphere::new(far_frame, 1.0).unwrap();
+        assert!(hierarchy.implicit_candidates(&far, 0.0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn implicit_filter_margin_and_invalid_inputs_are_explicit() {
+        let hierarchy = NurbsSurfaceBvh::build(&rational_multi_patch(Vec3::default())).unwrap();
+        let sphere = Sphere::new(
+            crate::frame::Frame::from_z(Point3::new(0.0, 0.0, 3.0), Vec3::new(0.0, 0.0, 1.0))
+                .unwrap(),
+            1.0,
+        )
+        .unwrap();
+        assert!(
+            hierarchy
+                .implicit_candidates(&sphere, 0.0)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !hierarchy
+                .implicit_candidates(&sphere, 2.0)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(hierarchy.implicit_candidates(&sphere, -1.0).is_err());
+        assert!(hierarchy.implicit_candidates(&sphere, f64::NAN).is_err());
+        assert!(
+            hierarchy
+                .classify_patch_against_implicit(usize::MAX, &sphere, 0.0)
+                .is_err()
+        );
     }
 
     #[test]

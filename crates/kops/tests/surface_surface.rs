@@ -722,6 +722,7 @@ fn sphere_nurbs_surface_marches_planar_patch_arc() {
     )
     .unwrap();
     assert!(miss.is_empty());
+    assert!(miss.is_proven_empty());
 }
 
 #[test]
@@ -799,6 +800,7 @@ fn cylinder_nurbs_surface_marches_planar_patch_arc() {
     )
     .unwrap();
     assert!(miss.is_empty());
+    assert!(miss.is_proven_empty());
 
     let coincident = quarter_cylinder_nurbs_surface(radius, -0.25, 0.75);
     let err = intersect_bounded_cylinder_nurbs_surface(
@@ -897,6 +899,7 @@ fn cone_nurbs_surface_marches_planar_patch_arc() {
     )
     .unwrap();
     assert!(miss.is_empty());
+    assert!(miss.is_proven_empty());
 
     let coincident = quarter_cone_nurbs_surface(&cone, 0.0, 0.75);
     let err = intersect_bounded_cone_nurbs_surface(
@@ -996,6 +999,7 @@ fn torus_nurbs_surface_marches_planar_patch_arc() {
     )
     .unwrap();
     assert!(miss.is_empty());
+    assert!(miss.is_proven_empty());
 
     let coincident = quarter_torus_nurbs_surface(&torus);
     let err = intersect_bounded_torus_nurbs_surface(

@@ -4,7 +4,8 @@ use super::result::{
 use kcore::error::{Error, Result};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
-use kgeom::nurbs::{NurbsCurve, NurbsSurface};
+use kgeom::implicit::ImplicitSurface;
+use kgeom::nurbs::{NurbsCurve, NurbsSurface, NurbsSurfaceBvh};
 use kgeom::param::ParamRange;
 use kgeom::surface::{Dir, Surface};
 use kgeom::vec::Point3;
@@ -20,6 +21,7 @@ pub(super) struct MarchConfig<'a> {
     pub surface: &'a NurbsSurface,
     pub surface_range: [ParamRange; 2],
     pub tolerances: Tolerances,
+    pub implicit_surface: &'a dyn ImplicitSurface,
     pub signed_distance: &'a dyn Fn(Point3) -> f64,
     pub other_uv: &'a dyn Fn(Point3) -> Option<[f64; 2]>,
     pub branch_kind: &'a dyn Fn(&[MarchPoint]) -> ContactKind,
@@ -63,6 +65,31 @@ pub(super) fn march_nurbs_surface_intersection(
     config: MarchConfig<'_>,
 ) -> Result<SurfaceSurfaceIntersections> {
     validate_nurbs_surface_range(config)?;
+
+    // This is the first proof-bearing exit from the provisional marcher. Use
+    // exact NURBS restriction so the hierarchy covers precisely the active
+    // domain rather than retaining irrelevant candidates elsewhere. A failed
+    // optional restriction/build merely leaves the result on the sampled,
+    // explicitly indeterminate path.
+    let domain = config.surface.param_range();
+    let proof_range = [
+        ParamRange::new(
+            config.surface_range[0].lo.max(domain[0].lo),
+            config.surface_range[0].hi.min(domain[0].hi),
+        ),
+        ParamRange::new(
+            config.surface_range[1].lo.max(domain[1].lo),
+            config.surface_range[1].hi.min(domain[1].hi),
+        ),
+    ];
+    if let Ok(active_surface) = config.surface.restricted_to(proof_range)
+        && let Ok(hierarchy) = NurbsSurfaceBvh::build(&active_surface)
+        && hierarchy
+            .implicit_candidates(config.implicit_surface, config.tolerances.linear())?
+            .is_empty()
+    {
+        return Ok(SurfaceSurfaceIntersections::complete_empty());
+    }
 
     let parameter_tol = surface_parameter_tolerance(config.surface_range, config.tolerances);
     if config.surface_range[0].width() <= parameter_tol

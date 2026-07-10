@@ -114,6 +114,10 @@ Every bounded intersection result carries explicit completion evidence. `Complet
 the full requested domains were covered and therefore permits an empty result to prove a
 miss; `Indeterminate` may still carry individually verified discoveries but can never be
 silently interpreted as complete.
+For clamped positive-weight NURBS surfaces against analytic planes, spheres, cylinders,
+cones, and tori, outward-inflated control-hull BVHs are filtered by conservative interval
+implicit fields. A fully excluded hierarchy is completion evidence for a miss; retained
+boxes remain candidates and cannot be promoted by fixed-grid sampling alone.
 
 ### L2 — Topology
 Parasolid's exact hierarchy:

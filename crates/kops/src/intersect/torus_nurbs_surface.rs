@@ -35,6 +35,7 @@ pub fn intersect_bounded_torus_nurbs_surface(
         surface,
         surface_range,
         tolerances,
+        implicit_surface: torus,
         signed_distance: &signed_distance,
         other_uv: &other_uv,
         branch_kind: &branch_kind,

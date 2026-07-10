@@ -37,6 +37,7 @@ pub fn intersect_bounded_cone_nurbs_surface(
         surface,
         surface_range,
         tolerances,
+        implicit_surface: cone,
         signed_distance: &signed_distance,
         other_uv: &other_uv,
         branch_kind: &branch_kind,

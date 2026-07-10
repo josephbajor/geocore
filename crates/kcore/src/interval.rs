@@ -95,6 +95,25 @@ impl Interval {
             Self::widened(0.0, m * m)
         }
     }
+
+    /// Conservative square root over the non-negative part of the interval.
+    ///
+    /// A slightly negative lower bound is clamped to zero, which is useful
+    /// when an algebraically non-negative expression was widened below zero.
+    /// Returns `None` only when the complete interval is negative or either
+    /// endpoint is NaN.
+    pub fn sqrt(self) -> Option<Self> {
+        if self.lo.is_nan() || self.hi.is_nan() || self.hi < 0.0 {
+            return None;
+        }
+        let lo = if self.lo <= 0.0 {
+            0.0
+        } else {
+            self.lo.sqrt().next_down()
+        };
+        let hi = self.hi.sqrt().next_up();
+        Some(Interval { lo, hi })
+    }
 }
 
 impl core::ops::Add for Interval {
@@ -201,5 +220,17 @@ mod tests {
         assert!(s.lo() <= 0.0);
         assert!(s.contains(9.0));
         assert!(s.contains(0.0));
+    }
+
+    #[test]
+    fn square_root_is_outward_rounded_and_domain_aware() {
+        let root = Interval::new(2.0, 9.0).sqrt().unwrap();
+        assert!(root.lo() < 2.0_f64.sqrt());
+        assert!(root.contains(3.0));
+
+        let widened_nonnegative = Interval::new(-f64::EPSILON, 4.0).sqrt().unwrap();
+        assert_eq!(widened_nonnegative.lo(), 0.0);
+        assert!(widened_nonnegative.contains(2.0));
+        assert!(Interval::new(-4.0, -1.0).sqrt().is_none());
     }
 }

@@ -11,7 +11,7 @@ use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
     CurveCurveIntersections, intersect_bounded_line_nurbs, intersect_bounded_line_plane,
     intersect_bounded_lines, intersect_bounded_nurbs_sphere, intersect_bounded_plane_nurbs_surface,
-    intersect_bounded_planes,
+    intersect_bounded_planes, intersect_bounded_sphere_nurbs_surface,
 };
 
 fn x_axis(y: f64) -> Line {
@@ -155,7 +155,7 @@ fn curve_surface_and_surface_surface_paths_propagate_completion() {
         None,
     )
     .unwrap();
-    let sampled_surface_miss = intersect_bounded_plane_nurbs_surface(
+    let certified_surface_miss = intersect_bounded_plane_nurbs_surface(
         &plane,
         window,
         &patch,
@@ -163,6 +163,67 @@ fn curve_surface_and_surface_surface_paths_propagate_completion() {
         Tolerances::default(),
     )
     .unwrap();
-    assert!(sampled_surface_miss.is_empty());
-    assert!(!sampled_surface_miss.is_proven_empty());
+    assert!(certified_surface_miss.is_empty());
+    assert!(certified_surface_miss.is_proven_empty());
+
+    // A positive quadratic height field can have Bernstein control points on
+    // both sides of the plane. The interval broad phase must retain it, while
+    // the fixed grid discovers no contact. That empty remains unresolved.
+    let epsilon = 10.0 * Tolerances::default().linear();
+    let unresolved_patch = NurbsSurface::new(
+        2,
+        1,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.25 + epsilon),
+            Point3::new(0.0, 1.0, 0.25 + epsilon),
+            Point3::new(0.5, 0.0, -0.25 + epsilon),
+            Point3::new(0.5, 1.0, -0.25 + epsilon),
+            Point3::new(1.0, 0.0, 0.25 + epsilon),
+            Point3::new(1.0, 1.0, 0.25 + epsilon),
+        ],
+        None,
+    )
+    .unwrap();
+    let unresolved_surface_miss = intersect_bounded_plane_nurbs_surface(
+        &plane,
+        window,
+        &unresolved_patch,
+        unresolved_patch.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(unresolved_surface_miss.is_empty());
+    assert!(!unresolved_surface_miss.is_proven_empty());
+    assert_eq!(
+        unresolved_surface_miss.completion().indeterminate_reason(),
+        Some("fixed-grid NURBS surface marching does not prove complete coverage")
+    );
+
+    // Exact restriction must allow a bounded subdomain to prove a miss even
+    // when another part of the same underlying NURBS surface meets the sphere.
+    let wide_patch = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, -1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(4.0, -1.0, 0.0),
+            Point3::new(4.0, 1.0, 0.0),
+        ],
+        None,
+    )
+    .unwrap();
+    let restricted_miss = intersect_bounded_sphere_nurbs_surface(
+        &sphere,
+        sphere.param_range(),
+        &wide_patch,
+        [ParamRange::new(0.75, 1.0), ParamRange::new(0.0, 1.0)],
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(restricted_miss.is_proven_empty());
 }
