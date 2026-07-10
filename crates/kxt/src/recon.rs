@@ -446,6 +446,8 @@ impl Recon<'_> {
             self.lp(face, loop_idx)?;
             loop_idx = next;
         }
+        let domain = ktopo::domain::derive_face_domain(self.store, face)?;
+        self.store.get_mut(face)?.domain = domain;
         Ok(face)
     }
 

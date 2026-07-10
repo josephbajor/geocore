@@ -17,9 +17,11 @@
 //! - [`make`] — primitive body constructors.
 //! - [`check`] — the body checker (structural + geometric invariants).
 //! - [`btess`] — whole-body watertight tessellation.
+//! - [`domain`] — certified conservative face UV work-box construction.
 
 pub mod btess;
 pub mod check;
+pub mod domain;
 pub mod entity;
 pub mod euler;
 pub mod geom;

@@ -127,6 +127,10 @@ fn real_world_cut_sphere_v27_reconstructs() {
     for f in faces {
         let face = store.get(f).unwrap();
         assert!(store.get(face.surface).is_ok());
+        assert!(
+            face.domain.is_some(),
+            "exact boundary yields a certified face domain"
+        );
         if matches!(store.get(face.surface).unwrap(), SurfaceGeom::Sphere(_)) {
             assert!(
                 face.domain.is_some(),
@@ -145,6 +149,10 @@ fn real_world_sheet_disk_v27_reconstructs() {
     assert_eq!(store.get(body).unwrap().kind, BodyKind::Sheet);
     let faces = store.faces_of_body(body).unwrap();
     assert_eq!(faces.len(), 1);
+    assert!(
+        store.get(faces[0]).unwrap().domain.is_some(),
+        "exact circular boundary yields a certified plane domain"
+    );
     let edges = store.edges_of_body(body).unwrap();
     assert_eq!(edges.len(), 1);
     assert_eq!(store.get(edges[0]).unwrap().fins.len(), 1);
@@ -161,6 +169,10 @@ fn real_world_plate_v28_reconstructs() {
     for f in faces {
         let face = store.get(f).unwrap();
         assert!(store.get(face.surface).is_ok());
+        assert!(
+            face.domain.is_some(),
+            "exact boundary yields a certified face domain"
+        );
     }
     let faults = check_body(&store, body).unwrap();
     assert!(faults.is_empty(), "plate.x_t faults: {faults:?}");
