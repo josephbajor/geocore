@@ -63,10 +63,44 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 | M0 Foundations | IMPLEMENTED SLICE | Deterministic math, current predicates, intervals, tolerances, arenas with copy-on-write undo frames, and deterministic map primitives exist; conformance debt remains. |
 | M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS basics, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, Euler operators, primitives, checker v1, watertight body tessellation, and the transaction/journal foundation exist; boolean-ready incidence and operation-wide checked mutation do not. |
-| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves, bounded curve-less tolerant edges, shared incidence validation, pcurve-aware Euler creation, pcurve-driven tessellation, copy-on-write transactions, deterministic raw/semantic journals, and explicit face-domain/tolerance metadata have landed; geometry graph, operation migration, mutation encapsulation, certified imported trim domains, and checker upgrades remain. |
+| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves, bounded curve-less tolerant edges, shared incidence validation, pcurve-aware Euler creation, pcurve-driven tessellation, copy-on-write transactions, deterministic raw/semantic journals, explicit face-domain/tolerance metadata, and certified conservative domains for imported exact-edge analytic faces have landed; pcurve-only trim bounds, seam/singularity metadata, geometry graph, operation migration, mutation encapsulation, tolerance provenance, and checker upgrades remain. |
 | M3 X_T | IN PROGRESS | The modern-schema subset reads both wire encodings and writes text, including bounded tolerant edges as trimmed SP-curves over finite 2D B-curves; production coverage and external certification remain. |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases and sampled NURBS experiments exist; certified generic discovery and boolean-ready branches do not. |
 | M5–M8 | NOT STARTED | No end-to-end booleans, general modeling, blends, stable API, or production hardening. |
+
+The machine-readable companion [kernel-support.tsv](kernel-support.tsv) is the capability
+ledger. A change updates the ledger only when the named exit evidence lands; file count,
+test count, or a new special-case solver is not by itself a status change.
+
+## Reconciled critical path
+
+The architecture is directionally correct: pure geometry, handle-based B-rep topology,
+per-incidence pcurves, checked Euler edits, transactions/journals, and interchange as a
+parallel corpus source are the right layer boundaries. The main risk is breadth outrunning
+proof-bearing contracts. Work therefore advances through these gates in order:
+
+| Order | Delivery tranche | Required result | What it unlocks |
+|---|---|---|---|
+| 1 | Close M2.5 topology contracts | Pcurve-derived bounds for curve-less tolerant edges; explicit periodic seam and pole/apex metadata; checked/private topology mutation; operation-wide transactions and lineage; tolerance provenance/budgets; checker v2 `Fast`/`Full` modes. | A B-rep that intersections and features can modify without inventing representation rules mid-boolean. |
+| 2 | Build the M4 proof substrate | Geometry-graph descriptors for procedural/intersection curves; NURBS surface Bezier extraction; conservative subdivision/BVHs; a common `Complete`/`Indeterminate` result carrying paired pcurves and residual bounds. | Certified general CC/CS/SSI and trustworthy empty results. |
+| 3 | Ship one end-to-end feature ladder | Profile-region builder with holes, deterministic body copy/transform, extrude/revolve, point-on-face and point-in-body classification, then block/block and block/cylinder booleans. Every result is atomic, journaled, checker-v2 clean, and externally X_T checked. | The first honest CAD modeling vertical slice. |
+| 4 | Broaden general modeling | Expand analytic booleans, then periodic NURBS booleans, sweep/loft, sewing/healing, and STEP. | General mechanical part construction and imported-body repair. |
+| 5 | Add local/advanced features | Fillet/blend, chamfer, offset, shell, draft/taper, replace/delete-and-heal, then production API and performance hardening. | The operation breadth expected by a fully featured CAD application. |
+
+M3 X_T corpus work runs beside every tranche. It supplies hostile geometry and an external
+oracle, but parser breadth does not substitute for a modeling milestone. Conversely, a
+kernel operation does not enter the supported matrix until its result survives checker,
+corpus, determinism, rollback, tolerance, and independent-oracle gates.
+
+The following activities are useful experiments but do **not** advance the critical path
+on their own:
+
+- adding sampled pair-specific intersection solvers without completeness evidence;
+- accepting another X_T node class without checker/tessellation and declared capability
+  outcomes;
+- relying on self-round-trip as interchange certification;
+- exposing additional direct `Store` mutation before the checked topology boundary;
+- growing happy-path unit tests without adversarial, minimized, and production cases.
 
 ---
 
@@ -218,9 +252,14 @@ Remaining before the gate closes:
   surface ranges initialize imported faces; Euler splits inherit them, merges union them
   only on the same surface (otherwise mark them unknown); the checker validates range/
   period/full-closed-face invariants; and tessellation uses them to anchor periodic
-  branches. Still needed: certified tight trim-domain construction for imported plane/
-  cylinder/cone faces, boundary-containment proof, seam-branch metadata beyond a box,
-  and tolerance provenance/budgets.
+  branches. X_T reconstruction now derives conservative plane/cylinder/cone work boxes
+  from exact analytic or positive-weight NURBS boundary-curve boxes, inflates them by
+  entity tolerance, and projects them analytically; periodic analytic faces deliberately
+  use a full-period angular range. It returns an explicit unknown domain when any
+  boundary is curve-less rather than sampling. Still needed: certified 2D pcurve bounds
+  for those tolerant boundaries, tighter periodic trim boxes where useful, proof that
+  every pcurve lift remains inside the selected chart/domain, seam-branch metadata beyond
+  a box, and tolerance provenance/budgets.
 - Upgrade sampled local incidence checking to adaptive verification and add explicit
   tolerance provenance/budget tracking. Endpoint-to-vertex checks now exist, but they
   are still sampling-based rather than a proof over the full interval.
@@ -423,9 +462,11 @@ intersection curve.
 - A branch is accepted as edge geometry only when checker v2 validates its complete
   incidence at the requested tolerance.
 
-### M4d — First modeling consumers: extrude and revolve
+### M4d — First modeling consumers: profiles, transforms, extrude, and revolve
 
 - Construct planar wire profiles with holes and explicit pcurves.
+- Add deterministic checked copy/transform for geometry and complete bodies, preserving
+  incidence, attributes, tolerances, and lineage without aliasing mutable ownership.
 - Extrude and revolve them through the transaction/journal/topology APIs.
 - Exercise seams, axis contacts, caps, inner loops, and full/partial revolutions.
 
@@ -460,7 +501,7 @@ M4 cases are certified.
   non-regular cases, disjoint/contained/coincident inputs, voids, sheets, and
   sheet-splits-solid.
 - Add certified area, volume, centroid, and inertia; body/face bounding hierarchies;
-  minimum distance; and clash detection.
+  point/ray classification, section curves, minimum distance, and clash detection.
 - Run differential tests against OCCT and Parasolid. Every disagreement is classified
   and retained as a regression case.
 
@@ -489,7 +530,8 @@ round-trips preserve geometry class and topology.
 
 ## M7 — Blends, offsets, shelling, and local operations — NOT STARTED
 
-- Constant-radius rolling-ball edge blends with exact procedural representation.
+- Constant-radius rolling-ball edge blends and chamfers with exact procedural
+  representation.
 - Variable radius, tangent chains, setbacks, and corner patches.
 - Face/body offset, hollow/shell, taper, tweak/replace surface, and delete-and-heal.
 - Detect offset singularities, blend overrun, vanishing faces, and topology changes;
@@ -541,20 +583,25 @@ tolerance growth, algorithm limits, fuzz regressions, and performance percentile
 
 ## Immediate implementation queue
 
-1. Finish the landed pcurve/coedge slice: migrate operation callers to pcurve-aware Euler,
-   complete certified imported trim-domain/tolerance provenance, expand seam/pole/apex
-   fixtures, and externally certify the bounded tolerant-edge X_T SP-curve subset.
-2. Migrate every higher operation to the landed transaction/journal foundation; add
-   partition history and journal composition semantics.
-3. Encapsulate topology mutation and introduce checker v2 foundations.
-4. Redesign intersection results around completion evidence and paired pcurves.
-5. Expand the landed X_T manifest/stage-rate harness to licensed production-scale,
+1. Finish parameter-space incidence: derive certified pcurve-only face domains, add seam
+   chart and pole/apex metadata, migrate callers to pcurve-aware Euler, and expand the
+   corresponding checker and X_T fixtures.
+2. Encapsulate topology mutation; route every modeling/import/healing consumer through
+   checked transactions; add tolerance provenance/budgets, journal composition, and
+   partition history.
+3. Introduce checker v2 `Fast`/`Full` foundations and prove pcurve/surface incidence,
+   loop containment, face containment, and shell orientation adaptively.
+4. Add the geometry graph and redesign intersection results around completion evidence,
+   paired pcurves, coincident regions, singular events, and verified residual bounds.
+5. Add NURBS surface Bezier extraction, conservative subdivision/BVHs, and certified
+   exclusion; keep analytic cases as accelerators of the same result contract.
+6. Ship profile regions, checked copy/transform, extrude/revolve, and the classifiers
+   needed by a narrow M5a boolean vertical slice.
+7. Expand the landed X_T manifest/stage-rate harness in parallel to licensed production-scale,
    tolerant, NURBS, transformed, multi-body, and assembly corpora; complete external M3b
-   validation in parallel.
-6. Replace fixed-grid “general” intersections with Bezier subdivision and certified
-   exclusion, keeping analytic cases as accelerators.
-7. Ship extrude/revolve, then the narrow M5a boolean vertical slice before expanding the
-   pair-specific solver catalogue further.
+   validation and externally certify the bounded tolerant-edge SP-curve subset.
+8. Broaden booleans only after the vertical slice passes its checker, rollback, lineage,
+   tolerance, determinism, corpus, performance, and independent-oracle gates.
 
 ## After the kernel
 

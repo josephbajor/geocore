@@ -7,6 +7,7 @@ parametric CAD application; feature history and regeneration are later layers.
 
 - **Specification:** [docs/kernel-spec.md](docs/kernel-spec.md)
 - **Construction roadmap:** [docs/kernel-roadmap.md](docs/kernel-roadmap.md)
+- **Machine-readable capability ledger:** [docs/kernel-support.tsv](docs/kernel-support.tsv)
 
 ## Layout
 
@@ -26,10 +27,12 @@ parametric CAD application; feature history and regeneration are later layers.
   2D evaluators, analytic primitive authoring, shared incidence checking, pcurve-aware
   Euler creation, bounded curve-less tolerant edges, pcurve-driven body tessellation,
   conforming finite 2D B-curve X_T SP-curve slices, and the first explicit face-domain/
-  tolerance propagation slice have landed. Operation caller migration, certified trim-
-  domain derivation for imported unbounded surfaces, a procedural geometry graph,
-  operation-wide transaction/journal adoption, partition history, enforced topology
-  mutation, richer errors/tolerance rules, and checker v2 must still land before booleans.
+  tolerance propagation slice have landed. X_T import now derives certified conservative
+  work domains for exact-edge plane/cylinder/cone faces without sampling. Pcurve-only
+  tolerant trim bounds, seam/pole/apex metadata, operation caller migration, a procedural
+  geometry graph, operation-wide transaction/journal adoption, partition history,
+  enforced topology mutation, richer errors/tolerance rules, and checker v2 must still
+  land before booleans.
 - M3 is in progress: modern base-13006 schema edit scripts, text/neutral-binary
   reading, atomic reconstruction, and analytic text writing are implemented.
   X_T reconstruction now uses the same copy-on-write transaction mechanism instead of a

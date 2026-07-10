@@ -1,0 +1,29 @@
+id	area	capability	status	first_exit_gate	evidence	next_required_step
+foundation.predicates	foundation	Robust predicates and interval filters	implemented_slice	M0	crates/kcore/src/predicates.rs;crates/kcore/src/interval.rs	Adversarial incircle and decision audit
+foundation.transactions	foundation	Failure-atomic storage transactions and lineage journals	implemented_slice	M2.5	crates/ktopo/src/transaction.rs;crates/ktopo/tests/transactions.rs	Migrate all modeling import and healing consumers
+geometry.analytic	geometry	Analytic curves and surfaces	implemented_slice	M1	crates/kgeom/src/curve.rs;crates/kgeom/src/surface.rs	Conditioning curvature and singularity conformance
+geometry.nurbs	geometry	NURBS evaluation and construction	implemented_slice	M1	crates/kgeom/src/nurbs	Periodic forms surface Bezier extraction and verified approximation
+geometry.procedural_graph	geometry	Procedural and intersection geometry graph	not_started	M2.5	-	Define acyclic descriptors and evaluation context
+topology.brep	topology	Handle-based B-rep hierarchy and Euler operators	implemented_slice	M2	crates/ktopo/src/entity.rs;crates/ktopo/src/euler.rs	Private checked mutation boundary and general bodies
+topology.pcurves	topology	Independent per-fin pcurves and tolerant edges	implemented_slice	M2.5	crates/ktopo/src/entity.rs;crates/ktopo/tests/pcurves.rs	Mandatory creation seam charts and singular endpoints
+topology.face_domains	topology	Conservative finite face work domains	implemented_slice	M2.5	crates/ktopo/src/domain.rs;crates/kxt/tests/read.rs	Pcurve-only bounds containment proof and tolerance provenance
+topology.checked_api	topology	Externally enforced checked mutation API	not_started	M2.5	-	Privatize mutation and add checked body builders
+topology.checker_v2	topology	Adaptive full B-rep validation	not_started	M2.5	crates/ktopo/src/check.rs	Fast and Full modes with containment and shell proof
+modeling.primitives	modeling	Analytic solid primitives	implemented_slice	M2	crates/ktopo/src/make.rs;crates/ktopo/tests/primitives.rs	Add prism and checked builders
+modeling.profiles	modeling	Planar profiles with holes	not_started	M4	-	Region builder arrangements and explicit pcurves
+modeling.copy_transform	modeling	Checked geometry and body copy transform	not_started	M4	-	Ownership-safe transactional copy with lineage
+modeling.extrude_revolve	modeling	Extrude and revolve	not_started	M4	-	Build on profiles checked topology and seam metadata
+intersection.analytic	intersection	Analytic CC CS and SSI special cases	provisional_gated	M4	crates/kops/src/intersect	Adopt common completion and paired-pcurve result contract
+intersection.general	intersection	Certified general CC CS and SSI	not_started	M4	-	Bezier subdivision certified seeds and residual verification
+modeling.classification	modeling	Point face and body classification	not_started	M5	-	Certified boundary-aware classifiers with indeterminate outcome
+modeling.booleans	modeling	Unite subtract intersect and sheet split	not_started	M5	-	Block block and block cylinder vertical slice
+interrogation.properties	interrogation	Mass properties distance clash and sectioning	not_started	M5	-	Certified integration BVHs classification and queries
+modeling.sweep_loft	modeling	Sweep and loft	not_started	M6	-	Periodic NURBS compatibility and verified fitting
+modeling.sewing_healing	modeling	Sewing healing and tolerant repair	not_started	M6	-	Gap budgets diagnostics and healing journals
+modeling.blend_chamfer	modeling	Fillet blend and chamfer	not_started	M7	-	Procedural intersection and corner handling
+modeling.offset_shell_draft	modeling	Offset shell draft and local face edits	not_started	M7	-	Singularity and topology-change handling
+interchange.xt_read	interchange	Parasolid X_T reader	in_progress	M3	crates/kxt/src;crates/kxt/tests/fixtures/manifest.tsv	Licensed production corpus and Tier 2 geometry
+interchange.xt_write	interchange	Parasolid X_T writer	in_progress	M3	crates/kxt/src/write.rs;crates/kxt/tests/write.rs	External Parasolid certification and neutral binary output
+interchange.step	interchange	STEP AP242 read and write	not_started	M6	-	Land after sewing and general NURBS topology
+api.production	api	Stable native C and automation APIs	not_started	M8	-	Freeze after modeling semantics and session history stabilize
+hardening.production	quality	Fuzzing scale performance and compatibility gates	in_progress	M8	.github/workflows/ci.yml;crates/kxt/tests/corpus_manifest.rs	Sustained fuzzing size ladders benchmarks and version policy
