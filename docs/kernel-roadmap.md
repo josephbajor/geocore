@@ -298,10 +298,25 @@ read before its corresponding kernel geometry exists.
 - The supported tolerant subset reconstructs bounded curve-less edges from trimmed
   SP-curves over finite polynomial/rational 2D B-curves, including decreasing parameter
   correspondence. It still lacks an external positive fixture.
-- Current external positive fixtures are intentionally small and cover only a cut
-  sphere, sheet disk, and plate; they are smoke tests, not production-read evidence.
+- Three committed external positive fixtures pass parse, reconstruction, checker, and
+  tessellation. Eight additional public discovery candidates—including multi-loop solids
+  and a 1,501-node SolidWorks part—were inspected but are metadata-only because no source
+  license was found. These are small smoke/regression results, not production-read
+  evidence.
 
-### M3a1 — Corpus and reader observability — NEXT / PARALLEL
+### M3a1 — Corpus and reader observability — IN PROGRESS / PARALLEL
+
+- A committed TSV manifest records provenance, source commit, license status, exporter,
+  schema, size, node count, feature tags, and ratcheted parse/reconstruct/checker/
+  tessellation outcomes for all 6 committed fixtures. `xt_inspect` emits one JSON Lines record per
+  input and continues after failures; tests prevent fixture or stage-result shrinkage.
+- The committed set contains 4 externally authored files and 2 hand-authored
+  schema-13006 fixtures. Three external files pass every local stage and one old-schema
+  file remains an explicit unsupported case. A metadata-only discovery catalog records
+  eight more inspected SCOREC files without redistributing them: seven pass locally and
+  one general body is unsupported. The largest discovery is only 89 KB / 1,501 nodes, no
+  external tolerant-edge positive has been found, and permission or licensed replacements
+  are required before these candidates can enter CI.
 
 - Maintain a manifest for every fixture: provenance, license/redistribution status,
   exporter/version, schema family, size, entity counts, geometry/topology features, and
@@ -319,8 +334,13 @@ read before its corresponding kernel geometry exists.
 - Add parser mutation/property fuzzing now, not only in M8. Every crash or semantic bug
   becomes a minimized fixture.
 - Replace the full text-buffer copy and full-session clone path with bounded-memory
-  parsing/staging. Add a size ladder through at least one 50 MB file and one million
-  reconstructed topological entities.
+  parsing/staging. The reconstruction clone has been removed in favor of Store
+  transactions; the full input buffer and parser representation remain. Add a size
+  ladder through at least one 50 MB file and one million reconstructed topological
+  entities.
+- Make tessellation inspection scale-aware and record mesh quality/watertightness, not
+  only stage success. The initial inspector intentionally uses one fixed chord tolerance,
+  which is deterministic but too coarse to compare differently scaled models.
 
 ### M3b — Tier 1 authoring and external certification — IN PROGRESS
 
@@ -510,14 +530,15 @@ tolerance growth, algorithm limits, fuzz regressions, and performance percentile
 ## Immediate implementation queue
 
 1. Finish the landed pcurve/coedge slice: migrate operation callers to pcurve-aware Euler,
-   add face domains/tolerances, close seam/pole fixtures, and externally certify the
+   add face domains/tolerances, expand seam/pole/apex fixtures, and externally certify the
    bounded tolerant-edge X_T SP-curve subset.
 2. Migrate every higher operation to the landed transaction/journal foundation; add
    partition history and journal composition semantics.
 3. Encapsulate topology mutation and introduce checker v2 foundations.
 4. Redesign intersection results around completion evidence and paired pcurves.
-5. Build the X_T manifest/stage-rate harness and complete external M3b validation in
-   parallel.
+5. Expand the landed X_T manifest/stage-rate harness to licensed production-scale,
+   tolerant, NURBS, transformed, multi-body, and assembly corpora; complete external M3b
+   validation in parallel.
 6. Replace fixed-grid “general” intersections with Bezier subdivision and certified
    exclusion, keeping analytic cases as accelerators.
 7. Ship extrude/revolve, then the narrow M5a boolean vertical slice before expanding the

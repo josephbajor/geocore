@@ -33,8 +33,13 @@ parametric CAD application; feature history and regeneration are later layers.
 - M3 is in progress: modern base-13006 schema edit scripts, text/neutral-binary
   reading, atomic reconstruction, and analytic text writing are implemented.
   X_T reconstruction now uses the same copy-on-write transaction mechanism instead of a
-  full-store staging clone. Pre-13006 schemas, assemblies, intersection/procedural
-  geometry, the rest of tolerant
+  full-store staging clone. A machine-readable corpus manifest and JSONL stage inspector
+  now ratchet six committed fixtures; three external modern-schema files pass parse,
+  reconstruction, checking, and tessellation. A separate metadata-only discovery catalog
+  records eight more files that exposed real defects but cannot be redistributed because
+  no source license was found. This is an observability foothold, not production-read
+  evidence. Pre-13006 schemas,
+  assemblies, intersection/procedural geometry, the rest of tolerant
   topology, periodic/circular pcurve interchange, neutral-binary writing, a
   production-scale corpus, and external Parasolid
   round-trip certification remain.
