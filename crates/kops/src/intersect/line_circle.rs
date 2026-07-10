@@ -32,7 +32,7 @@ pub fn intersect_bounded_line_circle(
     if local_direction.z.abs() > tolerances.angular() {
         let t_line = -local_origin.z / local_direction.z;
         let Some(t_line) = fit_line_parameter(t_line, line_range, tolerances.linear()) else {
-            return Ok(CurveCurveIntersections::default());
+            return Ok(CurveCurveIntersections::complete_empty());
         };
         let local = local_origin + local_direction * t_line;
         let raw_circle = math::atan2(local.y, local.x);
@@ -41,7 +41,7 @@ pub fn intersect_bounded_line_circle(
             circle_range,
             circle_parameter_tolerance(circle.radius(), tolerances),
         ) else {
-            return Ok(CurveCurveIntersections::default());
+            return Ok(CurveCurveIntersections::complete_empty());
         };
         let points = accept_curve_curve_candidate(
             line,
@@ -53,11 +53,11 @@ pub fn intersect_bounded_line_circle(
         )
         .into_iter()
         .collect();
-        return CurveCurveIntersections::canonicalized(points, Vec::new());
+        return CurveCurveIntersections::canonicalized_complete(points, Vec::new());
     }
 
     if local_origin.z.abs() > tolerances.linear() {
-        return Ok(CurveCurveIntersections::default());
+        return Ok(CurveCurveIntersections::complete_empty());
     }
 
     intersect_coplanar(
@@ -90,7 +90,7 @@ fn intersect_coplanar(
     let closest_radius = (closest_x * closest_x + closest_y * closest_y).sqrt();
     let radius = circle.radius();
     if closest_radius > radius + tolerances.linear() {
-        return Ok(CurveCurveIntersections::default());
+        return Ok(CurveCurveIntersections::complete_empty());
     }
 
     let tangent = (closest_radius - radius).abs() <= tolerances.linear();
@@ -130,7 +130,7 @@ fn intersect_coplanar(
             push_distinct(&mut points, point, tolerances);
         }
     }
-    CurveCurveIntersections::canonicalized(points, Vec::new())
+    CurveCurveIntersections::canonicalized_complete(points, Vec::new())
 }
 
 fn fit_line_parameter(candidate: f64, range: ParamRange, tolerance: f64) -> Option<f64> {

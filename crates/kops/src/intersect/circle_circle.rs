@@ -49,7 +49,7 @@ fn intersect_parallel_plane_circles(
 ) -> Result<CurveCurveIntersections> {
     let center_delta = b.frame().origin() - a.frame().origin();
     if center_delta.dot(a.frame().z()).abs() > tolerances.linear() {
-        return Ok(CurveCurveIntersections::default());
+        return Ok(CurveCurveIntersections::complete_empty());
     }
 
     let local_b_center = a.frame().to_local(b.frame().origin());
@@ -60,7 +60,7 @@ fn intersect_parallel_plane_circles(
         return intersect_coincident_circles(a, range_a, b, range_b, tolerances);
     }
     if center_distance <= tolerances.linear() {
-        return Ok(CurveCurveIntersections::default());
+        return Ok(CurveCurveIntersections::complete_empty());
     }
 
     intersect_coplanar_distinct_circles(
@@ -90,7 +90,7 @@ fn intersect_coplanar_distinct_circles(
     if center_distance > ra + rb + tolerances.linear()
         || center_distance < (ra - rb).abs() - tolerances.linear()
     {
-        return Ok(CurveCurveIntersections::default());
+        return Ok(CurveCurveIntersections::complete_empty());
     }
 
     let axis = Vec3::new(
@@ -132,7 +132,7 @@ fn intersect_coplanar_distinct_circles(
             &mut points,
         );
     }
-    CurveCurveIntersections::canonicalized(points, Vec::new())
+    CurveCurveIntersections::canonicalized_complete(points, Vec::new())
 }
 
 fn intersect_plane_crossing_circles(
@@ -173,7 +173,7 @@ fn intersect_plane_crossing_circles(
             push_distinct(&mut points, point, tolerances);
         }
     }
-    CurveCurveIntersections::canonicalized(points, Vec::new())
+    CurveCurveIntersections::canonicalized_complete(points, Vec::new())
 }
 
 fn intersect_coincident_circles(
@@ -256,7 +256,7 @@ fn intersect_coincident_circles(
         }
     }
 
-    CurveCurveIntersections::canonicalized(points, overlaps)
+    CurveCurveIntersections::canonicalized_complete(points, overlaps)
 }
 
 fn push_candidate_from_point(

@@ -73,7 +73,7 @@ pub fn intersect_bounded_cones(
         }
     }
 
-    SurfaceSurfaceIntersections::canonicalized(points, curves)
+    SurfaceSurfaceIntersections::canonicalized_complete(points, curves)
 }
 
 #[derive(Clone, Copy)]

@@ -110,6 +110,10 @@ Intersection suite (the kernel's technical core):
   closed forms), marching with adaptive step control, and subdivision fallback for
   start-point discovery; explicit handling of tangent contacts, singular points, and
   small loops. Results are intersection-curve geometry usable directly as edge geometry.
+Every bounded intersection result carries explicit completion evidence. `Complete` means
+the full requested domains were covered and therefore permits an empty result to prove a
+miss; `Indeterminate` may still carry individually verified discoveries but can never be
+silently interpreted as complete.
 
 ### L2 — Topology
 Parasolid's exact hierarchy:

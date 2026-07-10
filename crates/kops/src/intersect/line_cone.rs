@@ -88,7 +88,7 @@ pub fn intersect_bounded_line_cone(
         }
     }
 
-    CurveSurfaceIntersections::canonicalized(points, Vec::new())
+    CurveSurfaceIntersections::canonicalized_complete(points, Vec::new())
 }
 
 fn contained_ruling_interval(
@@ -108,7 +108,7 @@ fn contained_ruling_interval(
         cone_range,
         tolerances,
     ) else {
-        return Ok(CurveSurfaceIntersections::default());
+        return Ok(CurveSurfaceIntersections::complete_empty());
     };
     let cos_a = math::cos(cone.half_angle());
     let Some(interval) = clip_linear_interval(
@@ -118,7 +118,7 @@ fn contained_ruling_interval(
         cone_range[1],
         tolerances,
     ) else {
-        return Ok(CurveSurfaceIntersections::default());
+        return Ok(CurveSurfaceIntersections::complete_empty());
     };
 
     if interval.width() > tolerances.linear() {
@@ -127,21 +127,21 @@ fn contained_ruling_interval(
             cone_range[1],
             tolerances.linear(),
         ) else {
-            return Ok(CurveSurfaceIntersections::default());
+            return Ok(CurveSurfaceIntersections::complete_empty());
         };
         let Some(v_end) = fit_scalar_parameter(
             v_at(local_origin, local_direction, interval.hi, cos_a),
             cone_range[1],
             tolerances.linear(),
         ) else {
-            return Ok(CurveSurfaceIntersections::default());
+            return Ok(CurveSurfaceIntersections::complete_empty());
         };
         let overlap = CurveSurfaceOverlap {
             curve: interval,
             uv_start: [u, v_start],
             uv_end: [u, v_end],
         };
-        return CurveSurfaceIntersections::canonicalized(Vec::new(), vec![overlap]);
+        return CurveSurfaceIntersections::canonicalized_complete(Vec::new(), vec![overlap]);
     }
 
     let t_line = ((interval.lo + interval.hi) / 2.0).clamp(line_range.lo, line_range.hi);
@@ -150,7 +150,7 @@ fn contained_ruling_interval(
         cone_range[1],
         tolerances.linear(),
     ) else {
-        return Ok(CurveSurfaceIntersections::default());
+        return Ok(CurveSurfaceIntersections::complete_empty());
     };
     let uv = [u, v];
     let kind = if cone.normal(uv).is_none() {
@@ -161,7 +161,7 @@ fn contained_ruling_interval(
     let points = accept_curve_surface_candidate(line, t_line, cone, uv, kind, tolerances)
         .into_iter()
         .collect::<Vec<CurveSurfacePoint>>();
-    CurveSurfaceIntersections::canonicalized(points, Vec::new())
+    CurveSurfaceIntersections::canonicalized_complete(points, Vec::new())
 }
 
 fn cone_uv(

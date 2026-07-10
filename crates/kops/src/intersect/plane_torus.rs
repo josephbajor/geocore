@@ -66,7 +66,7 @@ fn intersect_axis_normal_plane_torus(
     let h_sq = minor * minor - h * h;
     let sq_tol = squared_tolerance(minor, tolerances);
     if h_sq < -sq_tol {
-        return Ok(SurfaceSurfaceIntersections::default());
+        return Ok(SurfaceSurfaceIntersections::complete_empty());
     }
 
     let center = torus.frame().origin() + axis * h;
@@ -109,7 +109,7 @@ fn intersect_axis_normal_plane_torus(
         }
     }
 
-    SurfaceSurfaceIntersections::canonicalized(points, curves)
+    SurfaceSurfaceIntersections::canonicalized_complete(points, curves)
 }
 
 fn intersect_meridian_plane_torus(
@@ -153,7 +153,7 @@ fn intersect_meridian_plane_torus(
         )?;
     }
 
-    SurfaceSurfaceIntersections::canonicalized(points, curves)
+    SurfaceSurfaceIntersections::canonicalized_complete(points, curves)
 }
 
 #[allow(clippy::too_many_arguments)]

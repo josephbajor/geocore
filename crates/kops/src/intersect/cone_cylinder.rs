@@ -66,7 +66,7 @@ pub fn intersect_bounded_cone_cylinder(
         )?;
     }
 
-    SurfaceSurfaceIntersections::canonicalized(points, curves)
+    SurfaceSurfaceIntersections::canonicalized_complete(points, curves)
 }
 
 #[allow(clippy::too_many_arguments)]

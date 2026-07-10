@@ -60,7 +60,7 @@ fn intersect_parallel_plane(
 ) -> Result<CurveCurveIntersections> {
     let center_delta = b.frame().origin() - a.frame().origin();
     if center_delta.dot(a.frame().z()).abs() > tolerances.linear() {
-        return Ok(CurveCurveIntersections::default());
+        return Ok(CurveCurveIntersections::complete_empty());
     }
 
     if ellipse_is_circle(a, tolerances) && ellipse_is_circle(b, tolerances) {
@@ -111,7 +111,7 @@ fn intersect_plane_crossing(
         let point = a.eval(line_hit.t_b);
         push_candidate_from_point(&pair, point, &mut points);
     }
-    CurveCurveIntersections::canonicalized(points, Vec::new())
+    CurveCurveIntersections::canonicalized_complete(points, Vec::new())
 }
 
 fn intersect_coplanar_distinct(
@@ -136,7 +136,7 @@ fn intersect_coplanar_distinct(
     for (t_a, tangent_hint) in coplanar_candidate_parameters(b, a, tolerances) {
         push_projected_from_a(&pair, t_a, tangent_hint, &mut points);
     }
-    CurveCurveIntersections::canonicalized(points, Vec::new())
+    CurveCurveIntersections::canonicalized_complete(points, Vec::new())
 }
 
 fn coplanar_candidate_parameters(
@@ -298,7 +298,7 @@ fn intersect_coincident_ellipses(
         }
     }
 
-    CurveCurveIntersections::canonicalized(points, overlaps)
+    CurveCurveIntersections::canonicalized_complete(points, overlaps)
 }
 
 fn coincident_parameter_map(a: &Ellipse, b: &Ellipse) -> (f64, f64) {

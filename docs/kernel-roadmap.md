@@ -65,7 +65,7 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, topology-internal Euler operators, transaction-owned public Euler edits, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, checked transaction-scoped assembly, and deterministic journals exist; general bodies and several degenerate topology classes remain. |
 | M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance and transaction-owned aggregate budgets; shared incidence validation; a complete transaction-owned public Euler surface with mandatory pcurve creation and derived/split/merge/delete lineage; private generic Store mutation; transaction-scoped low-level assembly whose only public persistence path uses deterministic mutation preview, incrementally replaced per-body ownership/shared-geometry dependency footprints, affected-root Fast checks, and complete ownership closure; pcurve-driven tessellation; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; a reusable validated simple-polygon planar profile; checked X_T reconstruction; explicit face metadata; certified imported domains; adaptive full-active-interval analytic/clamped-NURBS face-domain containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring loop proofs; and convex-planar, whole sphere/torus, sphere-cap, and single-planar-face shell embedding proofs have landed. General NURBS/mixed-parameter incidence, periodic/unclamped and unsupported exact/mixed-boundary containment, profiles with holes/curves, operation-specific tolerance propagation rules, curved-loop/general curved-shell proofs, production seam/singularity interchange fixtures, geometry graph, higher-operation migration, and multi-body performance baselines remain. |
 | M3 X_T | IN PROGRESS | The modern-schema subset reads both wire encodings and writes text, including bounded tolerant edges as trimmed SP-curves over finite 2D B-curves; production coverage and external certification remain. |
-| M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases and sampled NURBS experiments exist; certified generic discovery and boolean-ready branches do not. |
+| M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases, explicit `Complete`/`Indeterminate` result evidence, exact NURBS patch subdivision/BVH/plane exclusion, and sampled NURBS experiments exist; certified generic discovery and boolean-ready paired-pcurve branches do not. |
 | M5–M8 | NOT STARTED | No end-to-end booleans, general modeling, blends, stable API, or production hardening. |
 
 The machine-readable companion [kernel-support.tsv](kernel-support.tsv) is the capability
@@ -82,7 +82,7 @@ proof-bearing contracts. Work therefore advances through these gates in order:
 | Order | Delivery tranche | Required result | What it unlocks |
 |---|---|---|---|
 | 1 | Close M2.5 topology contracts | Production seam/pole/apex interchange fixtures; operation-specific rules over the landed tolerance provenance/budgets; multi-body performance baselines for the landed incremental affected-root index; and discharge the remaining checker-v2 `Full` proof gaps with adaptive incidence, curved-loop/multi-loop containment, and shell proofs. Full-active-interval face-domain containment, private/checked mutation, transaction lineage, affected-root selection, and per-body incremental indexing are landed. | A B-rep that intersections and features can modify without inventing representation rules mid-boolean. |
-| 2 | Build the M4 proof substrate | Geometry-graph descriptors for procedural/intersection curves; generic implicit-surface exclusion and adaptive isolation over the landed exact NURBS patch BVH and affine-plane interval certificate; a common `Complete`/`Indeterminate` result carrying paired pcurves and residual bounds. | Certified general CC/CS/SSI and trustworthy empty results. |
+| 2 | Build the M4 proof substrate | Geometry-graph descriptors for procedural/intersection curves; generic implicit-surface exclusion and adaptive isolation over the landed exact NURBS patch BVH and affine-plane interval certificate; extend the landed common `Complete`/`Indeterminate` evidence with paired pcurves and verified residual bounds. | Certified general CC/CS/SSI and trustworthy empty results. |
 | 3 | Ship one end-to-end feature ladder | Profile-region builder with holes, deterministic body copy/transform, extrude/revolve, point-on-face and point-in-body classification, then block/block and block/cylinder booleans. Every result is atomic, journaled, checker-v2 clean, and externally X_T checked. | The first honest CAD modeling vertical slice. |
 | 4 | Broaden general modeling | Expand analytic booleans, then periodic NURBS booleans, sweep/loft, sewing/healing, and STEP. | General mechanical part construction and imported-body repair. |
 | 5 | Add local/advanced features | Fillet/blend, chamfer, offset, shell, draft/taper, replace/delete-and-heal, then production API and performance hardening. | The operation breadth expected by a fully featured CAD application. |
@@ -593,13 +593,17 @@ closed.
 Existing analytic solvers remain valuable exact accelerators. Existing fixed-grid NURBS
 curve and surface marchers are experiments: they may discover contacts, but they cannot
 label an empty result a proven miss or label an interpolated polyline an exact
-intersection curve.
+intersection curve. The common result types now enforce that distinction: analytic
+solvers explicitly construct `Complete` results, while provisional NURBS paths return
+verified discoveries with a stable `Indeterminate` reason, and `is_proven_empty()` is
+true only for an empty complete result.
 
 ### M4a — Common intersection contract and numerical core
 
-- Replace implicit success/empty semantics with `Complete`, `Indeterminate`, and typed
-  failure/limit outcomes. Empty means miss only when exclusion evidence covers the full
-  requested domain.
+- Landed common evidence contract: CC, CS, and SSI results carry shared `Complete` or
+  diagnostic `Indeterminate` status; conservative/default construction is indeterminate,
+  committed analytic solvers opt into completion, and empty means miss only through
+  `is_proven_empty()`. Still needed: structured limit provenance beyond stable reasons.
 - An SSI branch carries a 3D curve, pcurve on surface A, pcurve on surface B, parameter
   correspondence, closure/end events, contact character, and a verified residual/error
   bound over the entire active interval—not only endpoint UVs.
@@ -774,8 +778,9 @@ ledger and include an adversarial regression that distinguishes `Invalid`,
    Bezier-extracted NURBS and mixed-parameter pcurves, extend loop proofs to curved
    periodic charts, then prove multi-loop containment and curved/non-convex shell
    self-intersection/orientation adaptively.
-4. Add the geometry graph and redesign intersection results around completion evidence,
-   paired pcurves, coincident regions, singular events, and verified residual bounds.
+4. Add the geometry graph and extend the landed intersection completion evidence with
+   paired pcurves, coincident regions, singular events, structured limits, and verified
+   residual bounds.
 5. Extend the landed deterministic NURBS patch BVH and affine-plane interval exclusion to
    generic implicit-surface certificates and adaptive candidate isolation; keep analytic
    cases as accelerators of the same result contract.

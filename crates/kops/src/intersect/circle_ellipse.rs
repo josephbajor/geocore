@@ -60,7 +60,7 @@ fn intersect_parallel_plane(
 ) -> Result<CurveCurveIntersections> {
     let center_delta = circle.frame().origin() - ellipse.frame().origin();
     if center_delta.dot(ellipse.frame().z()).abs() > tolerances.linear() {
-        return Ok(CurveCurveIntersections::default());
+        return Ok(CurveCurveIntersections::complete_empty());
     }
 
     if ellipse_is_circle(ellipse, tolerances)
@@ -116,7 +116,7 @@ fn intersect_plane_crossing(
         let point = circle.eval(line_hit.t_b);
         push_candidate_from_point(&pair, point, None, &mut points);
     }
-    CurveCurveIntersections::canonicalized(points, Vec::new())
+    CurveCurveIntersections::canonicalized_complete(points, Vec::new())
 }
 
 fn intersect_coplanar_distinct(
@@ -141,7 +141,7 @@ fn intersect_coplanar_distinct(
         let point = ellipse.eval(t_ellipse);
         push_candidate_from_point(&pair, point, None, &mut points);
     }
-    CurveCurveIntersections::canonicalized(points, Vec::new())
+    CurveCurveIntersections::canonicalized_complete(points, Vec::new())
 }
 
 fn coplanar_roots(

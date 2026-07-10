@@ -13,6 +13,15 @@ use kgeom::vec::Point3;
 const MAX_ROOT_DEPTH: usize = 72;
 const MAX_CLIP_DEPTH: usize = 72;
 const LEAF_SAMPLES: usize = 16;
+const COMPLETION_REASON: &str =
+    "NURBS/plane Bezier clipping leaf fallbacks do not yet report complete coverage";
+
+fn provisional_result(
+    points: Vec<CurveSurfacePoint>,
+    overlaps: Vec<CurveSurfaceOverlap>,
+) -> Result<CurveSurfaceIntersections> {
+    CurveSurfaceIntersections::canonicalized_indeterminate(points, overlaps, COMPLETION_REASON)
+}
 
 /// Intersect a clamped NURBS curve restricted to a finite range with a finite
 /// plane parameter window.
@@ -77,7 +86,7 @@ pub fn intersect_bounded_nurbs_plane(
     }
 
     merge_overlaps(&mut overlaps, curve_range, tolerances);
-    CurveSurfaceIntersections::canonicalized(points, overlaps)
+    provisional_result(points, overlaps)
 }
 
 fn collect_isolated_roots(
@@ -197,14 +206,18 @@ fn single_parameter_intersection(
     tolerances: Tolerances,
 ) -> Result<CurveSurfaceIntersections> {
     if signed_distance(curve.eval(t_curve), plane).abs() > tolerances.linear() {
-        return Ok(CurveSurfaceIntersections::default());
+        return Ok(CurveSurfaceIntersections::indeterminate_empty(
+            COMPLETION_REASON,
+        ));
     }
     let Some(uv) = fit_uv(
         plane_uv(curve.eval(t_curve), plane),
         plane_range,
         tolerances,
     ) else {
-        return Ok(CurveSurfaceIntersections::default());
+        return Ok(CurveSurfaceIntersections::indeterminate_empty(
+            COMPLETION_REASON,
+        ));
     };
     let points = accept_curve_surface_candidate(
         curve,
@@ -216,7 +229,7 @@ fn single_parameter_intersection(
     )
     .into_iter()
     .collect();
-    CurveSurfaceIntersections::canonicalized(points, Vec::new())
+    provisional_result(points, Vec::new())
 }
 
 fn restrict_curve_to_range(

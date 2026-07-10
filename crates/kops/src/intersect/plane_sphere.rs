@@ -28,7 +28,7 @@ pub fn intersect_bounded_plane_sphere(
     let signed_distance = (sphere.frame().origin() - plane.frame().origin()).dot(normal);
     let distance = signed_distance.abs();
     if distance > sphere.radius() + tolerances.linear() {
-        return Ok(SurfaceSurfaceIntersections::default());
+        return Ok(SurfaceSurfaceIntersections::complete_empty());
     }
 
     if (distance - sphere.radius()).abs() <= tolerances.linear() {
@@ -43,7 +43,7 @@ pub fn intersect_bounded_plane_sphere(
             sphere_range,
             tolerances,
         );
-        return SurfaceSurfaceIntersections::canonicalized(points, Vec::new());
+        return SurfaceSurfaceIntersections::canonicalized_complete(points, Vec::new());
     }
 
     let center = sphere.frame().origin() - normal * signed_distance;
@@ -125,7 +125,7 @@ pub fn intersect_bounded_plane_sphere(
         }
     }
 
-    SurfaceSurfaceIntersections::canonicalized(points, curves)
+    SurfaceSurfaceIntersections::canonicalized_complete(points, curves)
 }
 
 fn add_tangent_point(

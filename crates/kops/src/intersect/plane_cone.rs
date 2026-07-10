@@ -76,7 +76,7 @@ pub fn intersect_bounded_plane_cone(
             cone_range,
             tolerances,
         );
-        return SurfaceSurfaceIntersections::canonicalized(points, Vec::new());
+        return SurfaceSurfaceIntersections::canonicalized_complete(points, Vec::new());
     }
 
     let center = cone.frame().origin() + axis * z;
@@ -124,7 +124,7 @@ fn intersect_elliptic_plane_cone(
             cone_range,
             tolerances,
         );
-        return SurfaceSurfaceIntersections::canonicalized(points, Vec::new());
+        return SurfaceSurfaceIntersections::canonicalized_complete(points, Vec::new());
     }
 
     let radial = (cone.frame().x() * nx + cone.frame().y() * ny) / radial_len;
@@ -179,7 +179,7 @@ fn clip_circle_branch(
         cone_range,
         tolerances,
     );
-    SurfaceSurfaceIntersections::canonicalized(points, curves)
+    SurfaceSurfaceIntersections::canonicalized_complete(points, curves)
 }
 
 fn clip_ellipse_branch(
@@ -220,7 +220,7 @@ fn clip_ellipse_branch(
         cone_range,
         tolerances,
     );
-    SurfaceSurfaceIntersections::canonicalized(points, curves)
+    SurfaceSurfaceIntersections::canonicalized_complete(points, curves)
 }
 
 #[allow(clippy::too_many_arguments)]

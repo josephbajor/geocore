@@ -12,6 +12,8 @@ use kgeom::vec::Point3;
 const MIN_GRID_STEPS: usize = 24;
 const MAX_GRID_STEPS: usize = 96;
 const MAX_BISECTION_STEPS: usize = 80;
+const COMPLETION_REASON: &str =
+    "fixed-grid NURBS surface marching does not prove complete coverage";
 
 #[derive(Clone, Copy)]
 pub(super) struct MarchConfig<'a> {
@@ -53,6 +55,10 @@ struct Segment {
     b: MarchPoint,
 }
 
+fn provisional_result(curves: Vec<SurfaceSurfaceCurve>) -> Result<SurfaceSurfaceIntersections> {
+    SurfaceSurfaceIntersections::canonicalized_indeterminate(Vec::new(), curves, COMPLETION_REASON)
+}
+
 pub(super) fn march_nurbs_surface_intersection(
     config: MarchConfig<'_>,
 ) -> Result<SurfaceSurfaceIntersections> {
@@ -62,7 +68,9 @@ pub(super) fn march_nurbs_surface_intersection(
     if config.surface_range[0].width() <= parameter_tol
         || config.surface_range[1].width() <= parameter_tol
     {
-        return Ok(SurfaceSurfaceIntersections::default());
+        return Ok(SurfaceSurfaceIntersections::indeterminate_empty(
+            COMPLETION_REASON,
+        ));
     }
 
     let (u_steps, v_steps) = marching_steps(config.surface);
@@ -100,7 +108,7 @@ pub(super) fn march_nurbs_surface_intersection(
             curves.push(curve);
         }
     }
-    SurfaceSurfaceIntersections::canonicalized(Vec::new(), curves)
+    provisional_result(curves)
 }
 
 fn collect_cell_segments(

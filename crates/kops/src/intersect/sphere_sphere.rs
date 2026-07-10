@@ -34,13 +34,13 @@ pub fn intersect_bounded_spheres(
                 reason: "coincident sphere/sphere intersection is a surface overlap",
             });
         }
-        return Ok(SurfaceSurfaceIntersections::default());
+        return Ok(SurfaceSurfaceIntersections::complete_empty());
     }
 
     if distance > radius_a + radius_b + tolerances.linear()
         || distance < (radius_a - radius_b).abs() - tolerances.linear()
     {
-        return Ok(SurfaceSurfaceIntersections::default());
+        return Ok(SurfaceSurfaceIntersections::complete_empty());
     }
 
     let axis = delta / distance;
@@ -49,7 +49,7 @@ pub fn intersect_bounded_spheres(
     let circle_radius_sq = radius_a * radius_a - center_offset * center_offset;
     let sq_tol = squared_tolerance(distance, radius_a, radius_b, tolerances);
     if circle_radius_sq < -sq_tol {
-        return Ok(SurfaceSurfaceIntersections::default());
+        return Ok(SurfaceSurfaceIntersections::complete_empty());
     }
     if circle_radius_sq <= sq_tol {
         let point = tangent_point(a.frame().origin(), axis, center_offset, radius_a);
@@ -64,7 +64,7 @@ pub fn intersect_bounded_spheres(
             ContactKind::Tangent,
             tolerances,
         );
-        return SurfaceSurfaceIntersections::canonicalized(points, Vec::new());
+        return SurfaceSurfaceIntersections::canonicalized_complete(points, Vec::new());
     }
 
     let circle_center = a.frame().origin() + axis * center_offset;
@@ -106,7 +106,7 @@ pub fn intersect_bounded_spheres(
         tolerances,
     );
 
-    SurfaceSurfaceIntersections::canonicalized(points, curves)
+    SurfaceSurfaceIntersections::canonicalized_complete(points, curves)
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -78,7 +78,7 @@ fn intersect_planar_conic_plane(
 
     if amplitude <= tolerances.linear() {
         if c.abs() > tolerances.linear() {
-            return Ok(CurveSurfaceIntersections::default());
+            return Ok(CurveSurfaceIntersections::complete_empty());
         }
         return contained_planar_conic(conic, curve_range, plane, plane_range, tolerances);
     }
@@ -108,7 +108,7 @@ fn intersect_planar_conic_plane(
         }
     }
 
-    CurveSurfaceIntersections::canonicalized(points, Vec::new())
+    CurveSurfaceIntersections::canonicalized_complete(points, Vec::new())
 }
 
 fn contained_planar_conic(
@@ -125,7 +125,7 @@ fn contained_planar_conic(
             plane_range,
             tolerances,
         ) else {
-            return Ok(CurveSurfaceIntersections::default());
+            return Ok(CurveSurfaceIntersections::complete_empty());
         };
         let points = accept_curve_surface_candidate(
             conic.curve,
@@ -137,7 +137,7 @@ fn contained_planar_conic(
         )
         .into_iter()
         .collect::<Vec<CurveSurfacePoint>>();
-        return CurveSurfaceIntersections::canonicalized(points, Vec::new());
+        return CurveSurfaceIntersections::canonicalized_complete(points, Vec::new());
     }
 
     let mut cuts = vec![curve_range.lo, curve_range.hi];
@@ -216,7 +216,7 @@ fn contained_planar_conic(
         }
     }
 
-    CurveSurfaceIntersections::canonicalized(points, overlaps)
+    CurveSurfaceIntersections::canonicalized_complete(points, overlaps)
 }
 
 fn plane_axis_coefficients(conic: PlanarConic<'_>, plane: &Plane, axis: usize) -> (f64, f64, f64) {

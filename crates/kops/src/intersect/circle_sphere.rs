@@ -35,7 +35,7 @@ pub fn intersect_bounded_circle_sphere(
 
     if amplitude <= tolerance {
         if c.abs() > tolerance {
-            return Ok(CurveSurfaceIntersections::default());
+            return Ok(CurveSurfaceIntersections::complete_empty());
         }
         return contained_circle_sphere(&context);
     }
@@ -45,7 +45,7 @@ pub fn intersect_bounded_circle_sphere(
         context.add_contact(&mut points, t_curve, tangent);
     }
 
-    CurveSurfaceIntersections::canonicalized(points, Vec::new())
+    CurveSurfaceIntersections::canonicalized_complete(points, Vec::new())
 }
 
 struct CircleSphereContext<'a> {
@@ -142,7 +142,7 @@ fn contained_circle_sphere(context: &CircleSphereContext<'_>) -> Result<CurveSur
     if context.circle_range.width() <= t_tol {
         let mut points = Vec::new();
         context.add_contact(&mut points, context.circle_range.lo, true);
-        return CurveSurfaceIntersections::canonicalized(points, Vec::new());
+        return CurveSurfaceIntersections::canonicalized_complete(points, Vec::new());
     }
 
     let mut cuts = vec![context.circle_range.lo, context.circle_range.hi];
@@ -206,7 +206,7 @@ fn contained_circle_sphere(context: &CircleSphereContext<'_>) -> Result<CurveSur
         context.add_contact(&mut points, cut, true);
     }
 
-    CurveSurfaceIntersections::canonicalized(points, overlaps)
+    CurveSurfaceIntersections::canonicalized_complete(points, overlaps)
 }
 
 fn push_sphere_window_cuts(context: &CircleSphereContext<'_>, cuts: &mut Vec<f64>) {

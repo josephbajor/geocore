@@ -13,6 +13,8 @@ use kgeom::vec::{Point3, Vec3};
 const MIN_STEPS: usize = 96;
 const MAX_STEPS: usize = 512;
 const MAX_BISECTION_STEPS: usize = 80;
+const COMPLETION_REASON: &str =
+    "fixed-grid NURBS curve/surface marching does not prove complete coverage";
 
 #[derive(Clone, Copy)]
 pub(super) struct CurveMarchConfig<'a> {
@@ -35,6 +37,13 @@ struct Sample {
     t: f64,
     point: Point3,
     distance: f64,
+}
+
+fn provisional_result(
+    points: Vec<CurveSurfacePoint>,
+    overlaps: Vec<CurveSurfaceOverlap>,
+) -> Result<CurveSurfaceIntersections> {
+    CurveSurfaceIntersections::canonicalized_indeterminate(points, overlaps, COMPLETION_REASON)
 }
 
 pub(super) fn march_nurbs_curve_surface_intersection(
@@ -95,7 +104,7 @@ pub(super) fn march_nurbs_curve_surface_intersection(
         push_root_candidate(config, root, forced_kind, &mut points);
     }
 
-    CurveSurfaceIntersections::canonicalized(points, Vec::new())
+    provisional_result(points, Vec::new())
 }
 
 fn single_parameter_intersection(
@@ -103,11 +112,13 @@ fn single_parameter_intersection(
     t_curve: f64,
 ) -> Result<CurveSurfaceIntersections> {
     if (config.signed_distance)(config.curve.eval(t_curve)).abs() > config.tolerances.linear() {
-        return Ok(CurveSurfaceIntersections::default());
+        return Ok(CurveSurfaceIntersections::indeterminate_empty(
+            COMPLETION_REASON,
+        ));
     }
     let mut points = Vec::new();
     push_root_candidate(config, t_curve, None, &mut points);
-    CurveSurfaceIntersections::canonicalized(points, Vec::new())
+    provisional_result(points, Vec::new())
 }
 
 fn contained_curve_intersections(
@@ -141,7 +152,7 @@ fn contained_curve_intersections(
         });
     }
     merge_overlaps(&mut overlaps, config.curve_range, config.tolerances);
-    CurveSurfaceIntersections::canonicalized(Vec::new(), overlaps)
+    provisional_result(Vec::new(), overlaps)
 }
 
 fn sample_curve(config: CurveMarchConfig<'_>, curve_range: ParamRange) -> Vec<Sample> {

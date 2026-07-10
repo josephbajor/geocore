@@ -48,14 +48,14 @@ pub fn intersect_bounded_cylinders(
                 reason: "coincident cylinder/cylinder intersection is a surface overlap",
             });
         }
-        return Ok(SurfaceSurfaceIntersections::default());
+        return Ok(SurfaceSurfaceIntersections::complete_empty());
     }
 
     let x = (radius_a * radius_a - radius_b * radius_b + distance * distance) / (2.0 * distance);
     let h_sq = radius_a * radius_a - x * x;
     let sq_tol = squared_tolerance(radius_a, radius_b, distance, tolerances);
     if h_sq < -sq_tol {
-        return Ok(SurfaceSurfaceIntersections::default());
+        return Ok(SurfaceSurfaceIntersections::complete_empty());
     }
 
     let radial_x = radial_offset / distance;
@@ -95,7 +95,7 @@ pub fn intersect_bounded_cylinders(
         }
     }
 
-    SurfaceSurfaceIntersections::canonicalized(points, curves)
+    SurfaceSurfaceIntersections::canonicalized_complete(points, curves)
 }
 
 #[allow(clippy::too_many_arguments)]

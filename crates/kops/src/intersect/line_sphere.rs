@@ -34,7 +34,7 @@ pub fn intersect_bounded_line_sphere(
     let closest_radius = closest.norm();
     let radius = sphere.radius();
     if closest_radius > radius + tolerances.linear() {
-        return Ok(CurveSurfaceIntersections::default());
+        return Ok(CurveSurfaceIntersections::complete_empty());
     }
 
     let tangent = (closest_radius - radius).abs() <= tolerances.linear();
@@ -70,7 +70,7 @@ pub fn intersect_bounded_line_sphere(
         }
     }
 
-    CurveSurfaceIntersections::canonicalized(points, Vec::new())
+    CurveSurfaceIntersections::canonicalized_complete(points, Vec::new())
 }
 
 fn sphere_uv(

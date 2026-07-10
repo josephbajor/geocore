@@ -38,7 +38,7 @@ pub fn intersect_bounded_line_ellipse(
     if local_direction.z.abs() > tolerances.angular() {
         let t_line = -local_origin.z / local_direction.z;
         let Some(t_line) = fit_line_parameter(t_line, line_range, tolerances.linear()) else {
-            return Ok(CurveCurveIntersections::default());
+            return Ok(CurveCurveIntersections::complete_empty());
         };
         let local = local_origin + local_direction * t_line;
         let raw_ellipse = ellipse_parameter(local, ellipse);
@@ -47,7 +47,7 @@ pub fn intersect_bounded_line_ellipse(
             ellipse_range,
             ellipse_parameter_tolerance(ellipse.minor_radius(), tolerances),
         ) else {
-            return Ok(CurveCurveIntersections::default());
+            return Ok(CurveCurveIntersections::complete_empty());
         };
         let points = accept_curve_curve_candidate(
             line,
@@ -59,11 +59,11 @@ pub fn intersect_bounded_line_ellipse(
         )
         .into_iter()
         .collect();
-        return CurveCurveIntersections::canonicalized(points, Vec::new());
+        return CurveCurveIntersections::canonicalized_complete(points, Vec::new());
     }
 
     if local_origin.z.abs() > tolerances.linear() {
-        return Ok(CurveCurveIntersections::default());
+        return Ok(CurveCurveIntersections::complete_empty());
     }
 
     intersect_coplanar(
@@ -97,7 +97,7 @@ fn intersect_coplanar(
     let closest_radius = (closest.x * closest.x + closest.y * closest.y).sqrt();
     let scaled_tol = ellipse_parameter_tolerance(minor, tolerances);
     if closest_radius > 1.0 + scaled_tol {
-        return Ok(CurveCurveIntersections::default());
+        return Ok(CurveCurveIntersections::complete_empty());
     }
 
     let tangent = (closest_radius - 1.0).abs() <= scaled_tol;
@@ -137,7 +137,7 @@ fn intersect_coplanar(
             push_distinct(&mut points, point, tolerances);
         }
     }
-    CurveCurveIntersections::canonicalized(points, Vec::new())
+    CurveCurveIntersections::canonicalized_complete(points, Vec::new())
 }
 
 fn ellipse_parameter(local: Vec3, ellipse: &Ellipse) -> f64 {

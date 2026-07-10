@@ -32,7 +32,7 @@ pub fn intersect_bounded_planes(
                 reason: "coincident plane/plane intersection is a surface overlap",
             });
         }
-        return Ok(SurfaceSurfaceIntersections::default());
+        return Ok(SurfaceSurfaceIntersections::complete_empty());
     }
 
     let c_a = n_a.dot(a.frame().origin());
@@ -40,7 +40,7 @@ pub fn intersect_bounded_planes(
     let origin = ((n_b * c_a - n_a * c_b).cross(direction)) / direction.norm_sq();
     let line = Line::new(origin, direction)?;
     let Some(line_range) = candidate_line_range(&line, a, a_range, b, b_range, tolerances) else {
-        return Ok(SurfaceSurfaceIntersections::default());
+        return Ok(SurfaceSurfaceIntersections::complete_empty());
     };
 
     let a_hit = intersect_bounded_line_plane(&line, line_range, a, a_range, tolerances)?;
@@ -61,7 +61,7 @@ pub fn intersect_bounded_planes(
         b_range,
         tolerances,
     );
-    SurfaceSurfaceIntersections::canonicalized(points, curves)
+    SurfaceSurfaceIntersections::canonicalized_complete(points, curves)
 }
 
 fn candidate_line_range(

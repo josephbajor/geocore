@@ -40,14 +40,14 @@ pub fn intersect_bounded_lines(
         || t_b < range_b.lo - parameter_tol
         || t_b > range_b.hi + parameter_tol
     {
-        return Ok(CurveCurveIntersections::default());
+        return Ok(CurveCurveIntersections::complete_empty());
     }
     t_a = t_a.clamp(range_a.lo, range_a.hi);
     t_b = t_b.clamp(range_b.lo, range_b.hi);
     let points = accept_curve_curve_candidate(a, t_a, b, t_b, ContactKind::Transverse, tolerances)
         .into_iter()
         .collect();
-    CurveCurveIntersections::canonicalized(points, Vec::new())
+    CurveCurveIntersections::canonicalized_complete(points, Vec::new())
 }
 
 fn parallel_intersection(
@@ -60,7 +60,7 @@ fn parallel_intersection(
     let delta = a.origin() - b.origin();
     let line_distance = delta.cross(b.dir()).norm();
     if line_distance > tolerances.linear() {
-        return Ok(CurveCurveIntersections::default());
+        return Ok(CurveCurveIntersections::complete_empty());
     }
 
     // b(s) = a(t), with s = offset + direction*t for collinear unit lines.
@@ -73,7 +73,7 @@ fn parallel_intersection(
     let lo = range_a.lo.max(mapped_lo);
     let hi = range_a.hi.min(mapped_hi);
     if hi < lo - tolerances.linear() {
-        return Ok(CurveCurveIntersections::default());
+        return Ok(CurveCurveIntersections::complete_empty());
     }
     if hi - lo <= tolerances.linear() {
         let t_a = ((lo + hi) / 2.0).clamp(range_a.lo, range_a.hi);
@@ -81,7 +81,7 @@ fn parallel_intersection(
         let points = accept_curve_curve_candidate(a, t_a, b, t_b, ContactKind::Tangent, tolerances)
             .into_iter()
             .collect();
-        return CurveCurveIntersections::canonicalized(points, Vec::new());
+        return CurveCurveIntersections::canonicalized_complete(points, Vec::new());
     }
 
     let s0 = offset + direction * lo;
@@ -95,7 +95,7 @@ fn parallel_intersection(
             ParamOrientation::Reversed
         },
     };
-    CurveCurveIntersections::canonicalized(Vec::new(), vec![overlap])
+    CurveCurveIntersections::canonicalized_complete(Vec::new(), vec![overlap])
 }
 
 fn validate_range(range: ParamRange) -> Result<()> {

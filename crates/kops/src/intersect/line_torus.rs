@@ -52,7 +52,7 @@ pub fn intersect_bounded_line_torus(
         context.add_candidate(&mut points, t_line, true);
     }
 
-    CurveSurfaceIntersections::canonicalized(points, Vec::new())
+    CurveSurfaceIntersections::canonicalized_complete(points, Vec::new())
 }
 
 struct TorusLineContext<'a> {

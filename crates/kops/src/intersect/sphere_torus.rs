@@ -50,7 +50,7 @@ pub fn intersect_bounded_sphere_torus(
     let h_sq = sphere_radius * sphere_radius - along * along;
     let sq_tol = squared_tolerance(sphere_radius, minor, distance, tolerances);
     if h_sq < -sq_tol {
-        return Ok(SurfaceSurfaceIntersections::default());
+        return Ok(SurfaceSurfaceIntersections::complete_empty());
     }
 
     let e_rho = major / distance;
@@ -93,7 +93,7 @@ pub fn intersect_bounded_sphere_torus(
         }
     }
 
-    SurfaceSurfaceIntersections::canonicalized(points, curves)
+    SurfaceSurfaceIntersections::canonicalized_complete(points, curves)
 }
 
 #[allow(clippy::too_many_arguments)]

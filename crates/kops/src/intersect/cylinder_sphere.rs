@@ -44,7 +44,7 @@ pub fn intersect_bounded_cylinder_sphere(
     let h_sq = sphere_radius * sphere_radius - cylinder_radius * cylinder_radius;
     let sq_tol = squared_tolerance(cylinder_radius, sphere_radius, tolerances);
     if h_sq < -sq_tol {
-        return Ok(SurfaceSurfaceIntersections::default());
+        return Ok(SurfaceSurfaceIntersections::complete_empty());
     }
 
     let mut points = Vec::new();
@@ -78,7 +78,7 @@ pub fn intersect_bounded_cylinder_sphere(
         }
     }
 
-    SurfaceSurfaceIntersections::canonicalized(points, curves)
+    SurfaceSurfaceIntersections::canonicalized_complete(points, curves)
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -63,7 +63,7 @@ pub fn intersect_bounded_tori(
         )?;
     }
 
-    SurfaceSurfaceIntersections::canonicalized(points, curves)
+    SurfaceSurfaceIntersections::canonicalized_complete(points, curves)
 }
 
 #[derive(Clone, Copy)]

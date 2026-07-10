@@ -35,11 +35,11 @@ pub fn intersect_bounded_line_plane(
     if local_direction.z.abs() > tolerances.angular() {
         let t_line = -local_origin.z / local_direction.z;
         let Some(t_line) = fit_line_parameter(t_line, line_range, tolerances.linear()) else {
-            return Ok(CurveSurfaceIntersections::default());
+            return Ok(CurveSurfaceIntersections::complete_empty());
         };
         let local = local_origin + local_direction * t_line;
         let Some(uv) = fit_uv([local.x, local.y], plane_range, tolerances.linear()) else {
-            return Ok(CurveSurfaceIntersections::default());
+            return Ok(CurveSurfaceIntersections::complete_empty());
         };
         let points = accept_curve_surface_candidate(
             line,
@@ -51,11 +51,11 @@ pub fn intersect_bounded_line_plane(
         )
         .into_iter()
         .collect();
-        return CurveSurfaceIntersections::canonicalized(points, Vec::new());
+        return CurveSurfaceIntersections::canonicalized_complete(points, Vec::new());
     }
 
     if local_origin.z.abs() > tolerances.linear() {
-        return Ok(CurveSurfaceIntersections::default());
+        return Ok(CurveSurfaceIntersections::complete_empty());
     }
 
     contained_line_interval(
@@ -92,7 +92,7 @@ fn contained_line_interval(
         };
         let Some(next) = clip_linear_interval(interval, origin, direction, range, tolerances)
         else {
-            return Ok(CurveSurfaceIntersections::default());
+            return Ok(CurveSurfaceIntersections::complete_empty());
         };
         interval = next;
     }
@@ -105,7 +105,7 @@ fn contained_line_interval(
             uv_start,
             uv_end,
         };
-        return CurveSurfaceIntersections::canonicalized(Vec::new(), vec![overlap]);
+        return CurveSurfaceIntersections::canonicalized_complete(Vec::new(), vec![overlap]);
     }
 
     let t_line = ((interval.lo + interval.hi) / 2.0).clamp(line_range.lo, line_range.hi);
@@ -114,13 +114,13 @@ fn contained_line_interval(
         plane_range,
         tolerances.linear(),
     ) else {
-        return Ok(CurveSurfaceIntersections::default());
+        return Ok(CurveSurfaceIntersections::complete_empty());
     };
     let points =
         accept_curve_surface_candidate(line, t_line, plane, uv, ContactKind::Tangent, tolerances)
             .into_iter()
             .collect::<Vec<CurveSurfacePoint>>();
-    CurveSurfaceIntersections::canonicalized(points, Vec::new())
+    CurveSurfaceIntersections::canonicalized_complete(points, Vec::new())
 }
 
 fn fit_line_parameter(candidate: f64, range: ParamRange, tolerance: f64) -> Option<f64> {

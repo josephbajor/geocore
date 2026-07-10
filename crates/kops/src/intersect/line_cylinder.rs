@@ -54,7 +54,7 @@ pub fn intersect_bounded_line_cylinder(
     let closest_radius = (closest.x * closest.x + closest.y * closest.y).sqrt();
     let radius = cylinder.radius();
     if closest_radius > radius + tolerances.linear() {
-        return Ok(CurveSurfaceIntersections::default());
+        return Ok(CurveSurfaceIntersections::complete_empty());
     }
 
     let tangent = (closest_radius - radius).abs() <= tolerances.linear();
@@ -92,7 +92,7 @@ pub fn intersect_bounded_line_cylinder(
         }
     }
 
-    CurveSurfaceIntersections::canonicalized(points, Vec::new())
+    CurveSurfaceIntersections::canonicalized_complete(points, Vec::new())
 }
 
 fn contained_ruling_interval(
@@ -107,7 +107,7 @@ fn contained_ruling_interval(
     let radius = cylinder.radius();
     let radial_radius = (local_origin.x * local_origin.x + local_origin.y * local_origin.y).sqrt();
     if (radial_radius - radius).abs() > tolerances.linear() {
-        return Ok(CurveSurfaceIntersections::default());
+        return Ok(CurveSurfaceIntersections::complete_empty());
     }
 
     let raw_u = math::atan2(local_origin.y, local_origin.x);
@@ -116,7 +116,7 @@ fn contained_ruling_interval(
         cylinder_range[0],
         parameter_tolerance(radius, tolerances),
     ) else {
-        return Ok(CurveSurfaceIntersections::default());
+        return Ok(CurveSurfaceIntersections::complete_empty());
     };
 
     let Some(interval) = clip_linear_interval(
@@ -126,7 +126,7 @@ fn contained_ruling_interval(
         cylinder_range[1],
         tolerances,
     ) else {
-        return Ok(CurveSurfaceIntersections::default());
+        return Ok(CurveSurfaceIntersections::complete_empty());
     };
 
     if interval.width() > tolerances.linear() {
@@ -135,14 +135,14 @@ fn contained_ruling_interval(
             cylinder_range[1],
             tolerances.linear(),
         ) else {
-            return Ok(CurveSurfaceIntersections::default());
+            return Ok(CurveSurfaceIntersections::complete_empty());
         };
         let Some(v_end) = fit_scalar_parameter(
             v_at(local_origin, local_direction, interval.hi),
             cylinder_range[1],
             tolerances.linear(),
         ) else {
-            return Ok(CurveSurfaceIntersections::default());
+            return Ok(CurveSurfaceIntersections::complete_empty());
         };
         let uv_start = [u, v_start];
         let uv_end = [u, v_end];
@@ -151,7 +151,7 @@ fn contained_ruling_interval(
             uv_start,
             uv_end,
         };
-        return CurveSurfaceIntersections::canonicalized(Vec::new(), vec![overlap]);
+        return CurveSurfaceIntersections::canonicalized_complete(Vec::new(), vec![overlap]);
     }
 
     let t_line = ((interval.lo + interval.hi) / 2.0).clamp(line_range.lo, line_range.hi);
@@ -160,7 +160,7 @@ fn contained_ruling_interval(
         cylinder_range[1],
         tolerances.linear(),
     ) else {
-        return Ok(CurveSurfaceIntersections::default());
+        return Ok(CurveSurfaceIntersections::complete_empty());
     };
     let points = accept_curve_surface_candidate(
         line,
@@ -172,7 +172,7 @@ fn contained_ruling_interval(
     )
     .into_iter()
     .collect::<Vec<CurveSurfacePoint>>();
-    CurveSurfaceIntersections::canonicalized(points, Vec::new())
+    CurveSurfaceIntersections::canonicalized_complete(points, Vec::new())
 }
 
 fn cylinder_uv(

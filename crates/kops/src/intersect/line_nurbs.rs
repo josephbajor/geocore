@@ -12,12 +12,21 @@ use kgeom::vec::{Point3, Vec3};
 const MIN_STEPS: usize = 96;
 const MAX_STEPS: usize = 512;
 const MAX_BISECTION_STEPS: usize = 80;
+const COMPLETION_REASON: &str =
+    "fixed-grid line/NURBS candidate discovery does not prove complete coverage";
 
 #[derive(Debug, Clone, Copy)]
 struct Sample {
     t_curve: f64,
     distance: f64,
     t_line: f64,
+}
+
+fn provisional_result(
+    points: Vec<CurveCurvePoint>,
+    overlaps: Vec<CurveCurveOverlap>,
+) -> Result<CurveCurveIntersections> {
+    CurveCurveIntersections::canonicalized_indeterminate(points, overlaps, COMPLETION_REASON)
 }
 
 /// Intersect a finite line range with a clamped NURBS curve restricted to a
@@ -97,7 +106,7 @@ pub fn intersect_bounded_line_nurbs(
         );
     }
 
-    CurveCurveIntersections::canonicalized(points, Vec::new())
+    provisional_result(points, Vec::new())
 }
 
 fn single_parameter_intersection(
@@ -108,7 +117,9 @@ fn single_parameter_intersection(
     tolerances: Tolerances,
 ) -> Result<CurveCurveIntersections> {
     if distance_to_line(curve.eval(t_curve), line) > tolerances.linear() {
-        return Ok(CurveCurveIntersections::default());
+        return Ok(CurveCurveIntersections::indeterminate_empty(
+            COMPLETION_REASON,
+        ));
     }
     let mut points = Vec::new();
     push_root_candidate(
@@ -120,7 +131,7 @@ fn single_parameter_intersection(
         &mut points,
         tolerances,
     );
-    CurveCurveIntersections::canonicalized(points, Vec::new())
+    provisional_result(points, Vec::new())
 }
 
 fn contained_curve_intersections(
@@ -149,7 +160,7 @@ fn contained_curve_intersections(
         );
     }
     merge_overlaps(&mut overlaps, global_range, tolerances);
-    CurveCurveIntersections::canonicalized(Vec::new(), overlaps)
+    provisional_result(Vec::new(), overlaps)
 }
 
 #[allow(clippy::too_many_arguments)]

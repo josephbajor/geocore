@@ -19,6 +19,8 @@
 //!   handles into typed arenas.
 //! - [`parallel`]: deterministic parallel primitives (index-ordered results,
 //!   independent of thread count).
+//! - [`proof`]: shared completion evidence for algorithms that may establish
+//!   a complete answer or conservatively remain indeterminate.
 //! - [`error`]: the typed error model shared by every public operation.
 //!
 //! # Determinism contract
@@ -35,4 +37,5 @@ pub mod interval;
 pub mod math;
 pub mod parallel;
 pub mod predicates;
+pub mod proof;
 pub mod tolerance;

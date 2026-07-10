@@ -109,8 +109,11 @@ parametric CAD application; feature history and regeneration are later layers.
   deterministic tensor-product Bezier patch extraction, and conservative active-patch
   control-net boxes now feed a reusable deterministic AABB BVH. Outward-rounded distance
   padding and interval-certified plane/control-hull exclusion can prove broad-phase and
-  plane misses without sampling. Generic implicit-surface exclusion, adaptive candidate
-  isolation, and completion-bearing intersection traversal remain.
+  plane misses without sampling. Common CC/CS/SSI results now carry explicit `Complete`
+  or diagnostic `Indeterminate` evidence: committed analytic solvers opt into completion,
+  while fixed-grid and leaf-sampled NURBS paths preserve discoveries without claiming an
+  empty sample is a miss. Generic implicit-surface exclusion, adaptive candidate
+  isolation, paired pcurves, and verified whole-branch residuals remain.
 - M5-M8 are not started: there are no end-to-end booleans, general sweeps/sewing,
   blends/offsets/shelling, stable C API, or production hardening yet.
 

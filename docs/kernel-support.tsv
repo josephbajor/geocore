@@ -16,7 +16,8 @@ modeling.primitives	modeling	Analytic solids sheets line wires and acorn points	
 modeling.profiles	modeling	Validated planar profiles with holes	in_progress	M4	crates/ktopo/src/profile.rs;crates/ktopo/tests/builders.rs	Add curve loops holes nesting arrangements and explicit pcurves
 modeling.copy_transform	modeling	Checked geometry and body copy transform	not_started	M4	-	Ownership-safe transactional copy with lineage
 modeling.extrude_revolve	modeling	Extrude and revolve	not_started	M4	-	Build on profiles checked topology and seam metadata
-intersection.analytic	intersection	Analytic CC CS and SSI special cases	provisional_gated	M4	crates/kops/src/intersect	Adopt common completion and paired-pcurve result contract
+intersection.completion_evidence	intersection	Shared Complete and diagnostic Indeterminate result evidence	implemented_slice	M4	crates/kcore/src/proof.rs;crates/kops/src/intersect/result.rs;crates/kops/tests/completion.rs	Add structured limits paired pcurves coincident regions and verified residual certificates
+intersection.analytic	intersection	Analytic CC CS and SSI special cases	provisional_gated	M4	crates/kops/src/intersect	Add paired-pcurve verified residual and coincident-region result contracts
 intersection.general	intersection	Certified general CC CS and SSI	not_started	M4	-	Bezier subdivision certified seeds and residual verification
 modeling.classification	modeling	Point face and body classification	not_started	M5	-	Certified boundary-aware classifiers with indeterminate outcome
 modeling.booleans	modeling	Unite subtract intersect and sheet split	not_started	M5	-	Block block and block cylinder vertical slice

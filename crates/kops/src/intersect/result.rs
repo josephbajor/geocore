@@ -1,10 +1,14 @@
 use kcore::error::{Error, Result};
+use kcore::proof::Completion;
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::nurbs::NurbsCurve;
 use kgeom::param::ParamRange;
 use kgeom::surface::Surface;
 use kgeom::vec::Point3;
+
+const MISSING_COMPLETION_REASON: &str =
+    "intersection algorithm did not provide complete-domain exclusion evidence";
 
 /// Local character of an isolated curve/curve contact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -53,21 +57,85 @@ pub struct CurveCurveOverlap {
     pub orientation: ParamOrientation,
 }
 
-/// Complete curve/curve intersection result. Empty is a proven miss;
-/// failure to establish an answer is represented by `Err`, not by empty.
-#[derive(Debug, Clone, PartialEq, Default)]
+/// Curve/curve intersection evidence with explicit domain-completion status.
+#[derive(Debug, Clone, PartialEq)]
 pub struct CurveCurveIntersections {
     /// Isolated contacts in deterministic parameter order.
     pub points: Vec<CurveCurvePoint>,
     /// Coincident intervals in deterministic parameter order.
     pub overlaps: Vec<CurveCurveOverlap>,
+    completion: Completion,
+}
+
+impl Default for CurveCurveIntersections {
+    fn default() -> Self {
+        Self {
+            points: Vec::new(),
+            overlaps: Vec::new(),
+            completion: Completion::Indeterminate {
+                reason: MISSING_COMPLETION_REASON,
+            },
+        }
+    }
 }
 
 impl CurveCurveIntersections {
-    /// Validate and sort intersection evidence into canonical parameter order.
+    /// Validate and sort partial intersection evidence. This conservative
+    /// constructor is indeterminate until a solver supplies completion proof.
     pub fn canonicalized(
+        points: Vec<CurveCurvePoint>,
+        overlaps: Vec<CurveCurveOverlap>,
+    ) -> Result<Self> {
+        Self::canonicalized_with_completion(
+            points,
+            overlaps,
+            Completion::Indeterminate {
+                reason: MISSING_COMPLETION_REASON,
+            },
+        )
+    }
+
+    /// Validate and sort partial evidence with a stable algorithm-specific
+    /// explanation for missing completion proof.
+    pub fn canonicalized_indeterminate(
+        points: Vec<CurveCurvePoint>,
+        overlaps: Vec<CurveCurveOverlap>,
+        reason: &'static str,
+    ) -> Result<Self> {
+        Self::canonicalized_with_completion(points, overlaps, Completion::Indeterminate { reason })
+    }
+
+    /// Validate and sort evidence whose solver covered the complete requested
+    /// domain.
+    pub fn canonicalized_complete(
+        points: Vec<CurveCurvePoint>,
+        overlaps: Vec<CurveCurveOverlap>,
+    ) -> Result<Self> {
+        Self::canonicalized_with_completion(points, overlaps, Completion::Complete)
+    }
+
+    /// Proven empty result over the complete requested domain.
+    pub fn complete_empty() -> Self {
+        Self {
+            points: Vec::new(),
+            overlaps: Vec::new(),
+            completion: Completion::Complete,
+        }
+    }
+
+    /// Empty partial result with a stable missing-proof diagnostic.
+    pub fn indeterminate_empty(reason: &'static str) -> Self {
+        Self {
+            points: Vec::new(),
+            overlaps: Vec::new(),
+            completion: Completion::Indeterminate { reason },
+        }
+    }
+
+    fn canonicalized_with_completion(
         mut points: Vec<CurveCurvePoint>,
         mut overlaps: Vec<CurveCurveOverlap>,
+        completion: Completion,
     ) -> Result<Self> {
         if points.iter().any(|p| {
             !p.point.x.is_finite()
@@ -103,12 +171,33 @@ impl CurveCurveIntersections {
                 .then(a.b.hi.total_cmp(&b.b.hi))
                 .then(a.orientation.cmp(&b.orientation))
         });
-        Ok(Self { points, overlaps })
+        Ok(Self {
+            points,
+            overlaps,
+            completion,
+        })
     }
 
-    /// True when the curves were proven not to intersect in the search ranges.
+    /// True when no contacts or overlaps were discovered. Consult
+    /// [`CurveCurveIntersections::is_proven_empty`] before treating this as a
+    /// miss.
     pub fn is_empty(&self) -> bool {
         self.points.is_empty() && self.overlaps.is_empty()
+    }
+
+    /// Completion evidence for the complete requested parameter domains.
+    pub fn completion(&self) -> Completion {
+        self.completion
+    }
+
+    /// True only when the solver covered the complete requested domains.
+    pub fn is_complete(&self) -> bool {
+        self.completion.is_complete()
+    }
+
+    /// True only for an empty result backed by complete-domain proof.
+    pub fn is_proven_empty(&self) -> bool {
+        self.is_complete() && self.is_empty()
     }
 }
 
@@ -165,21 +254,85 @@ pub struct CurveSurfaceOverlap {
     pub uv_end: [f64; 2],
 }
 
-/// Complete curve/surface intersection result. Empty is a proven miss;
-/// failure to establish an answer is represented by `Err`, not by empty.
-#[derive(Debug, Clone, PartialEq, Default)]
+/// Curve/surface intersection evidence with explicit domain-completion status.
+#[derive(Debug, Clone, PartialEq)]
 pub struct CurveSurfaceIntersections {
     /// Isolated contacts in deterministic curve-parameter order.
     pub points: Vec<CurveSurfacePoint>,
     /// Positive-length intervals where the curve lies on the surface.
     pub overlaps: Vec<CurveSurfaceOverlap>,
+    completion: Completion,
+}
+
+impl Default for CurveSurfaceIntersections {
+    fn default() -> Self {
+        Self {
+            points: Vec::new(),
+            overlaps: Vec::new(),
+            completion: Completion::Indeterminate {
+                reason: MISSING_COMPLETION_REASON,
+            },
+        }
+    }
 }
 
 impl CurveSurfaceIntersections {
-    /// Validate and sort intersection evidence into canonical parameter order.
+    /// Validate and sort partial intersection evidence. This conservative
+    /// constructor is indeterminate until a solver supplies completion proof.
     pub fn canonicalized(
+        points: Vec<CurveSurfacePoint>,
+        overlaps: Vec<CurveSurfaceOverlap>,
+    ) -> Result<Self> {
+        Self::canonicalized_with_completion(
+            points,
+            overlaps,
+            Completion::Indeterminate {
+                reason: MISSING_COMPLETION_REASON,
+            },
+        )
+    }
+
+    /// Validate and sort partial evidence with a stable algorithm-specific
+    /// explanation for missing completion proof.
+    pub fn canonicalized_indeterminate(
+        points: Vec<CurveSurfacePoint>,
+        overlaps: Vec<CurveSurfaceOverlap>,
+        reason: &'static str,
+    ) -> Result<Self> {
+        Self::canonicalized_with_completion(points, overlaps, Completion::Indeterminate { reason })
+    }
+
+    /// Validate and sort evidence whose solver covered the complete requested
+    /// domain.
+    pub fn canonicalized_complete(
+        points: Vec<CurveSurfacePoint>,
+        overlaps: Vec<CurveSurfaceOverlap>,
+    ) -> Result<Self> {
+        Self::canonicalized_with_completion(points, overlaps, Completion::Complete)
+    }
+
+    /// Proven empty result over the complete requested domain.
+    pub fn complete_empty() -> Self {
+        Self {
+            points: Vec::new(),
+            overlaps: Vec::new(),
+            completion: Completion::Complete,
+        }
+    }
+
+    /// Empty partial result with a stable missing-proof diagnostic.
+    pub fn indeterminate_empty(reason: &'static str) -> Self {
+        Self {
+            points: Vec::new(),
+            overlaps: Vec::new(),
+            completion: Completion::Indeterminate { reason },
+        }
+    }
+
+    fn canonicalized_with_completion(
         mut points: Vec<CurveSurfacePoint>,
         mut overlaps: Vec<CurveSurfaceOverlap>,
+        completion: Completion,
     ) -> Result<Self> {
         if points.iter().any(|p| {
             !p.point.x.is_finite()
@@ -220,12 +373,32 @@ impl CurveSurfaceIntersections {
                 .then(a.uv_start[0].total_cmp(&b.uv_start[0]))
                 .then(a.uv_start[1].total_cmp(&b.uv_start[1]))
         });
-        Ok(Self { points, overlaps })
+        Ok(Self {
+            points,
+            overlaps,
+            completion,
+        })
     }
 
-    /// True when the curve and surface were proven not to intersect.
+    /// True when no contacts or overlaps were discovered. This alone is not
+    /// proof of a miss.
     pub fn is_empty(&self) -> bool {
         self.points.is_empty() && self.overlaps.is_empty()
+    }
+
+    /// Completion evidence for the complete requested domains.
+    pub fn completion(&self) -> Completion {
+        self.completion
+    }
+
+    /// True only when the solver covered the complete requested domains.
+    pub fn is_complete(&self) -> bool {
+        self.completion.is_complete()
+    }
+
+    /// True only for an empty result backed by complete-domain proof.
+    pub fn is_proven_empty(&self) -> bool {
+        self.is_complete() && self.is_empty()
     }
 }
 
@@ -325,21 +498,86 @@ pub struct SurfaceSurfaceCurve {
     pub kind: ContactKind,
 }
 
-/// Complete surface/surface intersection result. Empty is a proven miss;
-/// failure to establish an answer is represented by `Err`, not by empty.
-#[derive(Debug, Clone, PartialEq, Default)]
+/// Surface/surface intersection evidence with explicit domain-completion
+/// status.
+#[derive(Debug, Clone, PartialEq)]
 pub struct SurfaceSurfaceIntersections {
     /// Isolated contacts in deterministic surface-parameter order.
     pub points: Vec<SurfaceSurfacePoint>,
     /// Positive-length intersection branches.
     pub curves: Vec<SurfaceSurfaceCurve>,
+    completion: Completion,
+}
+
+impl Default for SurfaceSurfaceIntersections {
+    fn default() -> Self {
+        Self {
+            points: Vec::new(),
+            curves: Vec::new(),
+            completion: Completion::Indeterminate {
+                reason: MISSING_COMPLETION_REASON,
+            },
+        }
+    }
 }
 
 impl SurfaceSurfaceIntersections {
-    /// Validate and sort intersection evidence into canonical order.
+    /// Validate and sort partial intersection evidence. This conservative
+    /// constructor is indeterminate until a solver supplies completion proof.
     pub fn canonicalized(
+        points: Vec<SurfaceSurfacePoint>,
+        curves: Vec<SurfaceSurfaceCurve>,
+    ) -> Result<Self> {
+        Self::canonicalized_with_completion(
+            points,
+            curves,
+            Completion::Indeterminate {
+                reason: MISSING_COMPLETION_REASON,
+            },
+        )
+    }
+
+    /// Validate and sort partial evidence with a stable algorithm-specific
+    /// explanation for missing completion proof.
+    pub fn canonicalized_indeterminate(
+        points: Vec<SurfaceSurfacePoint>,
+        curves: Vec<SurfaceSurfaceCurve>,
+        reason: &'static str,
+    ) -> Result<Self> {
+        Self::canonicalized_with_completion(points, curves, Completion::Indeterminate { reason })
+    }
+
+    /// Validate and sort evidence whose solver covered the complete requested
+    /// domain.
+    pub fn canonicalized_complete(
+        points: Vec<SurfaceSurfacePoint>,
+        curves: Vec<SurfaceSurfaceCurve>,
+    ) -> Result<Self> {
+        Self::canonicalized_with_completion(points, curves, Completion::Complete)
+    }
+
+    /// Proven empty result over the complete requested domain.
+    pub fn complete_empty() -> Self {
+        Self {
+            points: Vec::new(),
+            curves: Vec::new(),
+            completion: Completion::Complete,
+        }
+    }
+
+    /// Empty partial result with a stable missing-proof diagnostic.
+    pub fn indeterminate_empty(reason: &'static str) -> Self {
+        Self {
+            points: Vec::new(),
+            curves: Vec::new(),
+            completion: Completion::Indeterminate { reason },
+        }
+    }
+
+    fn canonicalized_with_completion(
         mut points: Vec<SurfaceSurfacePoint>,
         mut curves: Vec<SurfaceSurfaceCurve>,
+        completion: Completion,
     ) -> Result<Self> {
         if points.iter().any(|p| {
             !p.point.x.is_finite()
@@ -382,12 +620,32 @@ impl SurfaceSurfaceIntersections {
                 .then(a.uv_a_start[0].total_cmp(&b.uv_a_start[0]))
                 .then(a.uv_a_start[1].total_cmp(&b.uv_a_start[1]))
         });
-        Ok(Self { points, curves })
+        Ok(Self {
+            points,
+            curves,
+            completion,
+        })
     }
 
-    /// True when the surfaces were proven not to intersect.
+    /// True when no contacts or branches were discovered. This alone is not
+    /// proof of a miss.
     pub fn is_empty(&self) -> bool {
         self.points.is_empty() && self.curves.is_empty()
+    }
+
+    /// Completion evidence for the complete requested surface domains.
+    pub fn completion(&self) -> Completion {
+        self.completion
+    }
+
+    /// True only when the solver covered the complete requested domains.
+    pub fn is_complete(&self) -> bool {
+        self.completion.is_complete()
+    }
+
+    /// True only for an empty result backed by complete-domain proof.
+    pub fn is_proven_empty(&self) -> bool {
+        self.is_complete() && self.is_empty()
     }
 
     /// Swap the first and second surface parameter data.

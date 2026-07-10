@@ -49,7 +49,7 @@ pub fn intersect_bounded_ellipse_sphere(
         context.add_contact(&mut points, core::f64::consts::PI, true);
     }
 
-    CurveSurfaceIntersections::canonicalized(points, Vec::new())
+    CurveSurfaceIntersections::canonicalized_complete(points, Vec::new())
 }
 
 struct EllipseSphereContext<'a> {
@@ -167,7 +167,7 @@ fn contained_ellipse_sphere(
     if context.ellipse_range.width() <= t_tol {
         let mut points = Vec::new();
         context.add_contact(&mut points, context.ellipse_range.lo, true);
-        return CurveSurfaceIntersections::canonicalized(points, Vec::new());
+        return CurveSurfaceIntersections::canonicalized_complete(points, Vec::new());
     }
 
     let mut cuts = vec![context.ellipse_range.lo, context.ellipse_range.hi];
@@ -231,7 +231,7 @@ fn contained_ellipse_sphere(
         context.add_contact(&mut points, cut, true);
     }
 
-    CurveSurfaceIntersections::canonicalized(points, overlaps)
+    CurveSurfaceIntersections::canonicalized_complete(points, overlaps)
 }
 
 fn push_sphere_window_cuts(context: &EllipseSphereContext<'_>, cuts: &mut Vec<f64>) {

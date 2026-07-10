@@ -101,14 +101,14 @@ fn intersect_parallel_plane_cylinder(
     tolerances: Tolerances,
 ) -> Result<SurfaceSurfaceIntersections> {
     if radial_len <= tolerances.angular() {
-        return Ok(SurfaceSurfaceIntersections::default());
+        return Ok(SurfaceSurfaceIntersections::complete_empty());
     }
 
     let radius = cylinder.radius();
     let q = -offset / (radius * radial_len);
     let q_tol = tolerances.linear() / radius;
     if q.abs() > 1.0 + q_tol {
-        return Ok(SurfaceSurfaceIntersections::default());
+        return Ok(SurfaceSurfaceIntersections::complete_empty());
     }
 
     let radial_x = (cylinder.frame().x() * nx + cylinder.frame().y() * ny) / radial_len;
@@ -148,7 +148,7 @@ fn intersect_parallel_plane_cylinder(
         )?;
     }
 
-    SurfaceSurfaceIntersections::canonicalized(points, curves)
+    SurfaceSurfaceIntersections::canonicalized_complete(points, curves)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -228,7 +228,7 @@ fn clip_circle_branch(
         true,
         tolerances,
     );
-    SurfaceSurfaceIntersections::canonicalized(points, curves)
+    SurfaceSurfaceIntersections::canonicalized_complete(points, curves)
 }
 
 fn clip_ellipse_branch(
@@ -272,7 +272,7 @@ fn clip_ellipse_branch(
         true,
         tolerances,
     );
-    SurfaceSurfaceIntersections::canonicalized(points, curves)
+    SurfaceSurfaceIntersections::canonicalized_complete(points, curves)
 }
 
 #[allow(clippy::too_many_arguments)]

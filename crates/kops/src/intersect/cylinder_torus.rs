@@ -51,7 +51,7 @@ pub fn intersect_bounded_cylinder_torus(
     let h_sq = torus.minor_radius() * torus.minor_radius() - delta * delta;
     let sq_tol = squared_tolerance(cylinder.radius(), torus, tolerances);
     if h_sq < -sq_tol {
-        return Ok(SurfaceSurfaceIntersections::default());
+        return Ok(SurfaceSurfaceIntersections::complete_empty());
     }
 
     let mut points = Vec::new();
@@ -85,7 +85,7 @@ pub fn intersect_bounded_cylinder_torus(
         }
     }
 
-    SurfaceSurfaceIntersections::canonicalized(points, curves)
+    SurfaceSurfaceIntersections::canonicalized_complete(points, curves)
 }
 
 #[allow(clippy::too_many_arguments)]

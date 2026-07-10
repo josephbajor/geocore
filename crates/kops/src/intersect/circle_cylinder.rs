@@ -48,7 +48,7 @@ pub fn intersect_bounded_circle_cylinder(
         context.add_contact(&mut points, core::f64::consts::PI, true);
     }
 
-    CurveSurfaceIntersections::canonicalized(points, Vec::new())
+    CurveSurfaceIntersections::canonicalized_complete(points, Vec::new())
 }
 
 struct CircleCylinderContext<'a> {
@@ -160,7 +160,7 @@ fn contained_circle_cylinder(
     if context.circle_range.width() <= t_tol {
         let mut points = Vec::new();
         context.add_contact(&mut points, context.circle_range.lo, true);
-        return CurveSurfaceIntersections::canonicalized(points, Vec::new());
+        return CurveSurfaceIntersections::canonicalized_complete(points, Vec::new());
     }
 
     let mut cuts = vec![context.circle_range.lo, context.circle_range.hi];
@@ -224,7 +224,7 @@ fn contained_circle_cylinder(
         context.add_contact(&mut points, cut, true);
     }
 
-    CurveSurfaceIntersections::canonicalized(points, overlaps)
+    CurveSurfaceIntersections::canonicalized_complete(points, overlaps)
 }
 
 fn push_cylinder_window_cuts(context: &CircleCylinderContext<'_>, cuts: &mut Vec<f64>) {
