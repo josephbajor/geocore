@@ -62,8 +62,8 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 |---|---|---|
 | M0 Foundations | IMPLEMENTED SLICE | Deterministic math, current predicates, intervals, tolerances, arenas with copy-on-write undo frames, and deterministic map primitives exist; conformance debt remains. |
 | M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS basics, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
-| M2 Topology | IMPLEMENTED SLICE | Core hierarchy, Euler operators, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, checker-gated transactions, and deterministic journals exist; generic mutation and legacy Euler APIs are not yet encapsulated. |
-| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance and transaction-owned aggregate budgets; shared incidence validation; pcurve-aware Euler creation; pcurve-driven tessellation; checker-gated copy-on-write transactions; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; a reusable validated simple-polygon planar profile; checked X_T reconstruction and split/merge commits; explicit face metadata; certified imported domains; checker-enforced pcurve-endpoint containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring loop proofs; and convex-planar, whole sphere/torus, sphere-cap, and single-planar-face shell embedding proofs have landed. General NURBS/mixed-parameter incidence, profiles with holes/curves, operation-specific tolerance propagation rules, curved-loop/containment/general curved-shell proofs, production seam/singularity interchange fixtures, geometry graph, remaining operation migration, and mutation encapsulation remain. |
+| M2 Topology | IMPLEMENTED SLICE | Core hierarchy, topology-internal Euler operators, transaction-owned public Euler edits, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, checker-gated transactions, and deterministic journals exist; generic Store/entity mutation is not yet encapsulated. |
+| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance and transaction-owned aggregate budgets; shared incidence validation; a complete transaction-owned public Euler surface with mandatory pcurve creation and derived/split/merge/delete lineage; pcurve-driven tessellation; checker-gated copy-on-write transactions; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; a reusable validated simple-polygon planar profile; checked X_T reconstruction; explicit face metadata; certified imported domains; checker-enforced pcurve-endpoint containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring loop proofs; and convex-planar, whole sphere/torus, sphere-cap, and single-planar-face shell embedding proofs have landed. General NURBS/mixed-parameter incidence, profiles with holes/curves, operation-specific tolerance propagation rules, curved-loop/containment/general curved-shell proofs, production seam/singularity interchange fixtures, geometry graph, higher-operation migration, and generic mutation encapsulation remain. |
 | M3 X_T | IN PROGRESS | The modern-schema subset reads both wire encodings and writes text, including bounded tolerant edges as trimmed SP-curves over finite 2D B-curves; production coverage and external certification remain. |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases and sampled NURBS experiments exist; certified generic discovery and boolean-ready branches do not. |
 | M5–M8 | NOT STARTED | No end-to-end booleans, general modeling, blends, stable API, or production hardening. |
@@ -182,12 +182,12 @@ meshes are Fast-checker-clean, watertight, outward-oriented, and volume-tested.
 ### Known limits
 
 - Fins retain independent, explicitly parameter-mapped pcurves; authored analytic
-  primitives and pcurve-aware Euler variants propagate them. Bounded curve-less
+  primitives and transaction-owned pcurve-aware Euler edits propagate them. Bounded curve-less
   tolerant edges use a canonical logical domain and require every fin pcurve; the
   checker compares lifted realizations and endpoints within entity tolerance, and body
-  tessellation shares one deterministic 3D polyline across all uses. Legacy Euler entry
-  points and generic mutation still permit missing pcurves, so incidence is not yet
-  boolean-ready by construction.
+  tessellation shares one deterministic 3D polyline across all uses. Public Euler
+  creation now requires independent pcurves, but generic Store/entity mutation still
+  permits missing pcurves, so incidence is not yet boolean-ready by construction.
 - `General` mixed-dimension bodies, face tolerances/domains, curve-less ring edges,
   isolated loops, and several pole/apex or degenerate topologies are unsupported.
 - Entity fields and generic mutable store access allow callers to bypass Euler
@@ -195,11 +195,11 @@ meshes are Fast-checker-clean, watertight, outward-oriented, and volume-tested.
   rather than an enforced boundary.
 - Scoped Store transactions now provide rollback-on-drop and deterministic raw mutation
   plus semantic lineage journals. Checked commits validate result bodies and roll back
-  on any Fast checker fault. X_T reconstruction, checked face split/merge, and every
+  on any Fast checker fault. X_T reconstruction, the complete public Euler edit surface, and every
   public implemented solid/sheet/wire/acorn constructor use this path; constructors also
-  expose journal-returning variants. Generic mutable Store access and legacy Euler entry
-  points still bypass the boundary, and there is no partition history, attribute
-  propagation mechanism, or incremental invalidation record.
+  expose journal-returning variants. Generic mutable Store/entity access still bypasses
+  the boundary, and there is no partition history, attribute propagation mechanism, or
+  incremental invalidation record.
 - Fast checking samples some incidence and supports loop orientation only on a subset of
   surfaces. Full checking now proves the supported analytic incidence, simple planar
   segment/circle/ellipse loops, convex planar and selected closed analytic shells, but
@@ -243,9 +243,9 @@ Landed slice:
 
 Remaining before the gate closes:
 
-- Migrate higher operations to the pcurve-aware Euler variants and make pcurves mandatory
-  for face-edge uses created through the future checked topology API; the legacy Euler
-  entry points still intentionally create `None` during migration.
+- Migrate higher modeling/healing operations to the landed transaction-owned Euler
+  methods. Pcurves are mandatory on every public MEV/MEF/MEKR face-edge creation; only
+  topology-internal unit tests retain pcurve-less helpers.
 - Add an independently sourced, redistributable Parasolid fixture containing a true
   tolerant edge and certify the emitted SP-curve chain in a licensed Parasolid host.
   Current evidence is standards-derived and self-round-trip only. Extend interchange to
@@ -307,15 +307,16 @@ Landed slice:
 - `Transaction::commit_checked` validates each result body with the Fast checker and
   rolls the whole operation back with typed `TopologyCheckFailed` evidence when any
   fault is proven. Duplicate result handles are checked once deterministically.
-- Journals carry semantic `split`, `merge`, `derived_from`, and `replaced` events in
-  addition to raw storage mutations. Checked pcurve-aware face split/merge wrappers emit
-  tested deterministic lineage.
+- Journals carry semantic `split`, `merge`, `derived_from`, `replaced`, and `deleted`
+  events in addition to raw storage mutations. Every public Euler edit—minimal-body,
+  edge/vertex, edge/face, edge/ring, and face/ring-hole—runs inside a transaction and
+  emits tested deterministic lineage; all public face-edge creation requires pcurves.
 - All public block/cylinder/cone/sphere/torus/cylindrical-sheet, simple planar-sheet,
   open/closed line-wire, and acorn constructors are scoped checked transactions and have
   journal-returning variants. Invalid polygon/wire/acorn inputs and partial invalid torus
   creation exercise rollback and preserve future handle identity; deterministic builder
   journals are tested.
-- X_T reconstruction and checked face split/merge use checker-gated commits and expose
+- X_T reconstruction and transaction-owned Euler edits use checker-gated commits and expose
   their mutation/lineage journals; the previous full-session staging clone has been
   removed.
 - Entity tolerances are validated values retaining their original metric value,
@@ -327,9 +328,8 @@ Landed slice:
 
 Remaining before the gate closes:
 
-- Route remaining Euler, future modeling, and healing paths through checked transaction
-  consumers; decide and test journal composition before enabling nested modeling
-  transactions.
+- Route future modeling and healing paths through checked transaction consumers; decide
+  and test journal composition before enabling nested modeling transactions.
 - Add partition/rollback marks and a committed undo/redo history above scoped operation
   transactions without weakening handle identity guarantees.
 - Add attribute propagation and persistent journal serialization/versioning; define
@@ -351,11 +351,16 @@ Landed slice:
 - `PlanarProfile` separates robust input validation from topology mutation. Its first
   slice normalizes one simple polygon with exact-sign orientation/intersection decisions
   and is reusable by future sheet, extrude, revolve, and region-building operations.
+- Raw Euler functions are crate-private. The complete public operator surface is exposed
+  as transaction methods: minimal-body make/kill, pcurve-bearing edge/vertex make and
+  inverse, pcurve-bearing face split/merge, edge↔ring, and face↔ring-hole. Multi-operator
+  inverse sequences are checker-gated, rollback/identity tested, and emit deterministic
+  derived/split/merge/delete lineage.
 
 Remaining before the gate closes:
 
 - Make entity mutation private to topology internals and expose checked read views.
-- Higher operations compose Euler/topology primitives inside transactions.
+- Migrate future higher operations to compose the landed transaction Euler/topology API.
 - Add explicit general-body and multi-face/multi-loop sheet builders; extend wire inputs
   beyond line polylines without requiring callers to assemble public vectors and
   back-pointers manually.
@@ -709,11 +714,11 @@ ledger and include an adversarial regression that distinguishes `Invalid`,
 ## Immediate implementation queue
 
 1. Finish parameter-space incidence: acquire production seam/pole/apex fixtures, add
-   adaptive full-curve face-domain containment, migrate callers to pcurve-aware Euler,
-   and add non-identity chart interchange.
-2. Encapsulate generic topology mutation; migrate remaining Euler plus future
-   modeling/healing consumers to checked transactions and the landed tolerance budgets;
-   add operation-specific propagation rules, journal composition, and partition history.
+   adaptive full-curve face-domain containment, migrate higher callers to the landed
+   pcurve-aware transaction Euler API, and add non-identity chart interchange.
+2. Encapsulate generic Store/entity mutation; migrate future modeling/healing consumers
+   to checked transactions and the landed tolerance budgets; add operation-specific
+   propagation rules, journal composition, and partition history.
 3. Discharge the remaining checker-v2 `Full` gaps: extend incidence certificates to
    Bezier-extracted NURBS and mixed-parameter pcurves, extend loop proofs to curved
    periodic charts, then prove multi-loop containment, complete face containment, and

@@ -15,7 +15,7 @@ parametric CAD application; feature history and regeneration are later layers.
 |---|---|---|
 | [`crates/kcore`](crates/kcore) | L0 foundations | Robust predicates, exact expansion arithmetic, interval filters, tolerance policy (Parasolid numeric regime), typed errors, generational entity arenas with copy-on-write undo frames, deterministic parallel primitives, deterministic transcendental math (musl port — platform libm is banned in kernel code via clippy `disallowed-methods`) |
 | [`crates/kgeom`](crates/kgeom) | L1 geometry | Analytic curves (line/circle/ellipse), true 2D line/circle/NURBS pcurve evaluators, and analytic surfaces (plane/cylinder/cone/sphere/torus) with exact bounding boxes, NURBS engine (Piegl & Tiller), closest-point projection, deterministic trimmed-face tessellation with explicit refinement-limit errors, evaluator conformance harness |
-| [`crates/ktopo`](crates/ktopo) | L2 topology | Parasolid entity hierarchy (body→region→shell→face→loop→fin→edge→vertex), finite conservative face UV domains, typed entity-tolerance provenance and transaction-owned growth budgets, independent per-fin pcurves, bounded curve-less tolerant edges, reusable validated simple-polygon profiles, pcurve-aware Euler variants, checker-gated failure-atomic transactions, deterministic mutation/lineage/tolerance journals, journal-returning checked solid/sheet/wire/acorn constructors, shared incidence validation, and pcurve-driven watertight tessellation |
+| [`crates/ktopo`](crates/ktopo) | L2 topology | Parasolid entity hierarchy (body→region→shell→face→loop→fin→edge→vertex), finite conservative face UV domains, typed entity-tolerance provenance and transaction-owned growth budgets, independent per-fin pcurves, bounded curve-less tolerant edges, reusable validated simple-polygon profiles, transaction-owned pcurve-aware Euler edits, checker-gated failure-atomic transactions, deterministic mutation/lineage/tolerance journals, journal-returning checked solid/sheet/wire/acorn constructors, shared incidence validation, and pcurve-driven watertight tessellation |
 | [`crates/kops`](crates/kops) | L3 operations | Provisional M4 intersection foundation: exact analytic special cases plus early sampled NURBS curve/curve, curve/surface, and surface/surface experiments; generic completeness and boolean-ready pcurve results remain gated |
 | [`crates/kxt`](crates/kxt) | L5 interchange | Atomic modern-schema Parasolid XT (`.x_t`/`.x_b`) import for the supported geometry subset, plus a deterministic schema-13006 text writer for self-authored analytic solids, sheets, wires, acorns, and bounded tolerant edges encoded as trimmed SP-curves over 2D B-curves (clean-room from the published XT Format Reference) |
 
@@ -59,7 +59,10 @@ parametric CAD application; feature history and regeneration are later layers.
   reconstruction and checked face split/merge use the same checker-gated commit path.
   The planar sheet consumes a reusable robust-predicate-validated profile input and
   round-trips through X_T. Profiles with holes/curves, generic mutable Store access,
-  legacy Euler entry points, and general-body builders are not encapsulated yet.
+  and general-body builders are not encapsulated yet. Raw Euler functions are now
+  topology-internal: public MVFS/KVFS, MEV/KEV, MEF/KEF, KEMR/MEKR, and KFMRH/MFKRH
+  edits run through transaction methods, require pcurves when creating face-edge uses,
+  and emit deterministic derived/split/merge/delete lineage.
   Entity tolerances now retain imported-versus-operation origin, original value,
   accumulated growth, and last operation. Transactions own aggregate tolerance-growth
   budgets, reject exhaustion with a typed error, journal every authorized change, and

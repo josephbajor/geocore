@@ -129,7 +129,9 @@ budgeted enlargement in the transaction journal. An unknown face domain stays ex
 replaced by an uncertified sampled bound.
 
 - Euler operators as the only structural mutation primitives (MEV, MEF, KEMR, etc.),
-  each preserving the Euler–Poincaré invariant; all higher ops compose them.
+  each preserving the Euler–Poincaré invariant; raw operators are topology-internal and
+  all higher ops compose transaction-owned methods with mandatory pcurve-bearing
+  creation, rollback, checked result commit, and semantic lineage.
 - **Checker** (our `PK_BODY_check` equivalent): validates topology (closure, manifold
   conditions per body type, loop orientation), geometry (self-intersection, degeneracy),
   and geometry–topology consistency (face-loop containment, edge-on-surface within

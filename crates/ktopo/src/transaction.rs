@@ -1,18 +1,18 @@
 //! Failure-atomic modeling transactions and deterministic journals.
 //!
 //! A [`Transaction`] opens copy-on-write undo frames on every [`Store`]
-//! arena. Existing Euler operations can run against [`Transaction::store_mut`]
-//! without learning rollback mechanics. Committing produces raw net mutations
-//! in a stable entity-type/slot order plus semantic lineage recorded by the
-//! higher-level operation. Journals also retain declared tolerance-growth
+//! arena. Its public methods own Euler mutation, pcurve preflight, semantic
+//! lineage, and tolerance growth without exposing raw operators. Committing
+//! produces raw net mutations in a stable entity-type/slot order plus semantic
+//! operation evidence. Journals also retain declared tolerance-growth
 //! budgets and ordered per-entity changes. Dropping or explicitly rolling back
 //! restores entity contents, handle generations, free-list order, and future
 //! allocations while discarding uncommitted budget usage.
 
 use crate::entity::{
-    BodyId, CurveId, EdgeId, EntityRef, FaceId, LoopId, Sense, SurfaceId, VertexId,
+    BodyId, CurveId, EdgeId, EntityRef, FaceId, LoopId, PointId, Sense, SurfaceId, VertexId,
 };
-use crate::euler::{FinPcurvePair, Mef};
+use crate::euler::{FinPcurvePair, Mef, Mekr, Mev, Mvfs};
 use crate::store::Store;
 use crate::tolerance::EntityTolerance;
 use kcore::error::{Error, Result};
@@ -148,6 +148,11 @@ pub enum LineageEvent {
         /// Replacement identity.
         new: EntityRef,
     },
+    /// One semantic identity was intentionally removed without a replacement.
+    Deleted {
+        /// Removed identity; intentionally stale after commit.
+        entity: EntityRef,
+    },
 }
 
 /// Deterministic committed transaction record.
@@ -228,11 +233,6 @@ impl<'a> Transaction<'a> {
     /// Mutate the in-progress store using checked topology/Euler operations.
     pub fn store_mut(&mut self) -> &mut Store {
         self.store
-    }
-
-    /// Record a semantic lineage event in deterministic operation order.
-    pub fn record_lineage(&mut self, event: LineageEvent) {
-        self.lineage.push(event);
     }
 
     /// Declare the aggregate tolerance growth available to one operation.
@@ -364,6 +364,135 @@ impl<'a> Transaction<'a> {
             self.store.get_mut(vertex)?.tolerance = Some(current);
         }
         Ok(())
+    }
+
+    /// MVFS: create the transient minimal solid-body topology.
+    ///
+    /// Higher construction must complete the body before checked commit.
+    pub fn make_minimal_body(
+        &mut self,
+        surface: SurfaceId,
+        sense: Sense,
+        point: PointId,
+    ) -> Result<Mvfs> {
+        let made = crate::euler::mvfs(self.store, surface, sense, point)?;
+        self.lineage.push(LineageEvent::DerivedFrom {
+            derived: EntityRef::Vertex(made.vertex),
+            source: EntityRef::Point(point),
+        });
+        Ok(made)
+    }
+
+    /// KVFS: remove a body that is still in minimal MVFS form.
+    pub fn kill_minimal_body(&mut self, body: BodyId) -> Result<()> {
+        crate::euler::kvfs(self.store, body)?;
+        self.lineage.push(LineageEvent::Deleted {
+            entity: EntityRef::Body(body),
+        });
+        Ok(())
+    }
+
+    /// MEV: sprout an edge and new vertex with mandatory independent pcurves.
+    #[allow(clippy::too_many_arguments)]
+    pub fn make_edge_vertex(
+        &mut self,
+        lp: LoopId,
+        at: usize,
+        curve: CurveId,
+        bounds: (f64, f64),
+        point: PointId,
+        pcurves: FinPcurvePair,
+    ) -> Result<Mev> {
+        let made =
+            crate::euler::mev_with_pcurves(self.store, lp, at, curve, bounds, point, pcurves)?;
+        self.lineage.push(LineageEvent::DerivedFrom {
+            derived: EntityRef::Edge(made.edge),
+            source: EntityRef::Loop(lp),
+        });
+        self.lineage.push(LineageEvent::DerivedFrom {
+            derived: EntityRef::Vertex(made.vertex),
+            source: EntityRef::Point(point),
+        });
+        Ok(made)
+    }
+
+    /// KEV: remove a strut edge and its otherwise-unused vertex.
+    pub fn kill_edge_vertex(&mut self, edge: EdgeId) -> Result<()> {
+        let deleted_vertex = crate::euler::kev(self.store, edge)?;
+        self.lineage.push(LineageEvent::Deleted {
+            entity: EntityRef::Edge(edge),
+        });
+        self.lineage.push(LineageEvent::Deleted {
+            entity: EntityRef::Vertex(deleted_vertex),
+        });
+        Ok(())
+    }
+
+    /// KEMR: remove an edge and split its loop into outer and ring loops.
+    pub fn kill_edge_make_ring(&mut self, edge: EdgeId) -> Result<LoopId> {
+        let [first, _] = self.store.get(edge)?.fins[..] else {
+            return Err(Error::InvalidGeometry {
+                reason: "KEMR requires an edge with two fins",
+            });
+        };
+        let source = self.store.get(first)?.parent;
+        let ring = crate::euler::kemr(self.store, edge)?;
+        self.lineage.push(LineageEvent::Split {
+            source: EntityRef::Loop(source),
+            pieces: vec![EntityRef::Loop(source), EntityRef::Loop(ring)],
+        });
+        Ok(ring)
+    }
+
+    /// MEKR: join an inner ring to another loop with a pcurve-bearing edge.
+    #[allow(clippy::too_many_arguments)]
+    pub fn make_edge_kill_ring(
+        &mut self,
+        outer: LoopId,
+        i: usize,
+        ring: LoopId,
+        j: usize,
+        curve: CurveId,
+        bounds: (f64, f64),
+        pcurves: FinPcurvePair,
+    ) -> Result<Mekr> {
+        let made =
+            crate::euler::mekr_with_pcurves(self.store, outer, i, ring, j, curve, bounds, pcurves)?;
+        self.lineage.push(LineageEvent::DerivedFrom {
+            derived: EntityRef::Edge(made.edge),
+            source: EntityRef::Loop(ring),
+        });
+        self.lineage.push(LineageEvent::Merge {
+            sources: vec![EntityRef::Loop(outer), EntityRef::Loop(ring)],
+            result: EntityRef::Loop(outer),
+        });
+        Ok(made)
+    }
+
+    /// KFMRH: absorb a one-loop face into another face as a ring hole.
+    pub fn merge_face_as_hole(&mut self, keep: FaceId, kill: FaceId) -> Result<LoopId> {
+        let ring = crate::euler::kfmrh(self.store, keep, kill)?;
+        self.lineage.push(LineageEvent::Merge {
+            sources: vec![EntityRef::Face(keep), EntityRef::Face(kill)],
+            result: EntityRef::Face(keep),
+        });
+        Ok(ring)
+    }
+
+    /// MFKRH: detach an inner ring into a new face.
+    pub fn split_hole_as_face(
+        &mut self,
+        ring: LoopId,
+        surface: SurfaceId,
+        sense: Sense,
+    ) -> Result<FaceId> {
+        let source = self.store.get(ring)?.face;
+        let face = crate::euler::mfkrh(self.store, ring, surface, sense)?;
+        self.lineage.push(LineageEvent::Split {
+            source: EntityRef::Face(source),
+            pieces: vec![EntityRef::Face(source), EntityRef::Face(face)],
+        });
+        Ok(face)
     }
 
     /// Split a face through the pcurve-aware MEF operator and record the

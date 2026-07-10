@@ -13,7 +13,8 @@
 //!   its own parameter-space curve use and edge-parameter correspondence.
 //! - [`store`] — the arena-backed entity store and deterministic
 //!   traversals.
-//! - [`euler`] — Euler operators, the only sanctioned topology edits.
+//! - [`euler`] — topology-internal Euler primitives and public result types;
+//!   external edits use [`transaction::Transaction`].
 //! - [`make`] — primitive body constructors.
 //! - [`profile`] — validated planar inputs shared by sheet and feature builders.
 //! - [`tolerance`] — entity tolerance provenance and growth contracts.

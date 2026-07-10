@@ -12,7 +12,7 @@ use ktopo::entity::{
     Body, BodyId, Edge, EntityRef, Face, Fin, FinPcurve, Loop, ParamMap1d, Region, Sense, Shell,
     Vertex,
 };
-use ktopo::euler::{FinPcurvePair, mev, mvfs};
+use ktopo::euler::FinPcurvePair;
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::make::{block, block_with_journal, torus_with_journal};
 use ktopo::store::Store;
@@ -87,18 +87,18 @@ fn first_face_diagonal(
 
 fn failing_multi_step_edit(store: &mut Store) -> Result<()> {
     let (surface, start, curve, end) = seed_geometry(store);
+    let make_pcurve = |store: &mut Store| {
+        let curve = store.add(Curve2dGeom::Line(
+            Line2d::new(Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)).unwrap(),
+        ));
+        FinPcurve::new(curve, ParamRange::new(0.0, 1.0), ParamMap1d::identity()).unwrap()
+    };
+    let pcurves = FinPcurvePair::new(make_pcurve(store), make_pcurve(store));
     let mut transaction = store.transaction()?;
-    let made = mvfs(transaction.store_mut(), surface, Sense::Forward, start)?;
+    let made = transaction.make_minimal_body(surface, Sense::Forward, start)?;
     // The first step created a complete minimal topology. The second step
     // fails preflight; `?` drops the transaction and must undo the first.
-    mev(
-        transaction.store_mut(),
-        made.ring,
-        0,
-        curve,
-        (1.0, 0.0),
-        end,
-    )?;
+    transaction.make_edge_vertex(made.ring, 0, curve, (1.0, 0.0), end, pcurves)?;
     let _ = transaction.commit();
     Ok(())
 }
@@ -125,8 +125,16 @@ fn failed_multi_step_euler_edit_restores_identity_and_future_allocations() {
     let mut control = store.clone();
     let surface = store.iter::<SurfaceGeom>().next().unwrap().0;
     let start = store.iter::<Point3>().next().unwrap().0;
-    let made = mvfs(&mut store, surface, Sense::Forward, start).unwrap();
-    let control_made = mvfs(&mut control, surface, Sense::Forward, start).unwrap();
+    let mut transaction = store.transaction().unwrap();
+    let made = transaction
+        .make_minimal_body(surface, Sense::Forward, start)
+        .unwrap();
+    transaction.commit().unwrap();
+    let mut control_transaction = control.transaction().unwrap();
+    let control_made = control_transaction
+        .make_minimal_body(surface, Sense::Forward, start)
+        .unwrap();
+    control_transaction.commit().unwrap();
     assert_eq!(made.body, control_made.body);
     assert_eq!(made.void_region, control_made.void_region);
     assert_eq!(made.solid_region, control_made.solid_region);
@@ -141,12 +149,13 @@ fn commit_emits_raw_mutations_and_semantic_lineage_deterministically() {
     let mut store = Store::new();
     let (surface, start, _, _) = seed_geometry(&mut store);
     let mut transaction = store.transaction().unwrap();
-    let made = mvfs(transaction.store_mut(), surface, Sense::Forward, start).unwrap();
+    let made = transaction
+        .make_minimal_body(surface, Sense::Forward, start)
+        .unwrap();
     let lineage = LineageEvent::DerivedFrom {
         derived: EntityRef::Vertex(made.vertex),
         source: EntityRef::Point(start),
     };
-    transaction.record_lineage(lineage.clone());
     let journal = transaction.commit().unwrap();
 
     let entities: Vec<_> = journal
@@ -181,7 +190,9 @@ fn transaction_is_rollback_on_drop_and_nested_scope_is_rejected() {
     let (surface, start, _, _) = seed_geometry(&mut store);
     {
         let mut transaction = store.transaction().unwrap();
-        mvfs(transaction.store_mut(), surface, Sense::Forward, start).unwrap();
+        transaction
+            .make_minimal_body(surface, Sense::Forward, start)
+            .unwrap();
         assert_eq!(
             transaction.store_mut().transaction().err(),
             Some(Error::TransactionActive)

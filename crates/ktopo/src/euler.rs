@@ -3,12 +3,16 @@
 //! Each operator makes one local, invariant-preserving change (Mäntylä's
 //! operator set adapted to the Parasolid entity model):
 //!
-//! - [`mvfs`] / [`kvfs`] — make/kill the minimal body (vertex, face, shell).
-//! - [`mev`] / [`kev`] — make/kill edge + vertex.
-//! - [`mef`] / [`kef`] — make/kill edge + face (splitting/merging a loop).
-//! - [`kemr`] / [`mekr`] — kill edge, make ring loop / inverse.
-//! - [`kfmrh`] / [`mfkrh`] — kill face, make ring hole (genus change) /
-//!   inverse.
+//! - MVFS / KVFS — make/kill the minimal body (vertex, face, shell).
+//! - MEV / KEV — make/kill edge + vertex.
+//! - MEF / KEF — make/kill edge + face (splitting/merging a loop).
+//! - KEMR / MEKR — kill edge, make ring loop / inverse.
+//! - KFMRH / MFKRH — kill face, make ring hole (genus change) / inverse.
+//!
+//! Raw operators are topology-internal. External modeling code uses the
+//! corresponding [`crate::transaction::Transaction`] methods so multi-step
+//! edits are rollback-safe, pcurve-bearing creation is mandatory, checked
+//! commit gates finished bodies, and semantic lineage is recorded.
 //!
 //! Every operator keeps the Euler–Poincaré identity
 //! `V − E + F = 2(S − G) + R` (`R` = inner-loop count, i.e. loops beyond
@@ -32,7 +36,7 @@
 //!
 //! **Transient states.** Between operator applications a body may be
 //! topologically consistent but not checker-clean (e.g. the zero-fin loop
-//! and lone shell vertex made by [`mvfs`], or "strut" edges whose two fins
+//! and lone shell vertex made by MVFS, or "strut" edges whose two fins
 //! belong to one loop). Only *finished* bodies are expected to pass
 //! [`crate::check::check_body`].
 //!
@@ -199,7 +203,7 @@ fn shell_of_loop(store: &Store, lp: LoopId) -> Result<ShellId> {
     Ok(store.get(store.get(lp)?.face)?.shell)
 }
 
-/// Entities created by [`mvfs`].
+/// Entities created by MVFS.
 #[derive(Debug, Clone, Copy)]
 pub struct Mvfs {
     /// The new body.
@@ -209,7 +213,7 @@ pub struct Mvfs {
     /// Its solid region (owns the shell).
     pub solid_region: RegionId,
     /// The new shell; holds `vertex` in its acorn slot until the first
-    /// [`mev`] hangs an edge off it.
+    /// MEV hangs an edge off it.
     pub shell: ShellId,
     /// The new face (one zero-fin loop).
     pub face: FaceId,
@@ -224,7 +228,12 @@ pub struct Mvfs {
 /// Creates a solid body scaffold (void + solid regions, one shell), one
 /// face on `surface` with a single zero-fin loop, and a seed vertex stored
 /// in the shell's acorn slot. `V − E + F = 1 − 0 + 1 = 2 = 2(S − G) + R`.
-pub fn mvfs(store: &mut Store, surface: SurfaceId, sense: Sense, point: PointId) -> Result<Mvfs> {
+pub(crate) fn mvfs(
+    store: &mut Store,
+    surface: SurfaceId,
+    sense: Sense,
+    point: PointId,
+) -> Result<Mvfs> {
     let domain = FaceDomain::natural(store.get(surface)?);
     store.get(point)?;
     let (body, shell) = crate::make::solid_body_scaffold(store);
@@ -260,11 +269,11 @@ pub fn mvfs(store: &mut Store, surface: SurfaceId, sense: Sense, point: PointId)
     })
 }
 
-/// Kill vertex, face, shell, body: exact inverse of [`mvfs`].
+/// Kill vertex, face, shell, body: exact inverse of MVFS.
 ///
-/// The body must still be in the minimal shape [`mvfs`] made (one face
+/// The body must still be in the minimal shape MVFS made (one face
 /// with one empty loop, seed vertex in the shell slot, no edges).
-pub fn kvfs(store: &mut Store, body: BodyId) -> Result<()> {
+pub(crate) fn kvfs(store: &mut Store, body: BodyId) -> Result<()> {
     let regions = store.get(body)?.regions.clone();
     if regions.len() != 2 {
         return topo_err("kvfs: body must have exactly void + solid regions");
@@ -305,7 +314,7 @@ pub fn kvfs(store: &mut Store, body: BodyId) -> Result<()> {
     Ok(())
 }
 
-/// Entities created by [`mev`].
+/// Entities created by MEV.
 #[derive(Debug, Clone, Copy)]
 pub struct Mev {
     /// The new edge, directed sprout vertex → new vertex.
@@ -322,12 +331,13 @@ pub struct Mev {
 ///
 /// The new edge runs from the *sprout vertex* to a new vertex at `point`,
 /// and both of its fins are spliced consecutively into `lp` at index `at`
-/// (out then back — a "strut" the next [`mef`] can split away). The
+/// (out then back — a "strut" the next MEF can split away). The
 /// sprout vertex is the tail of the fin currently at `at`; on a zero-fin
-/// loop (fresh from [`mvfs`]) `at` must be 0 and the shell's seed vertex
+/// loop (fresh from MVFS) `at` must be 0 and the shell's seed vertex
 /// is consumed as the sprout. The caller guarantees `curve`/`bounds` run
 /// sprout → new vertex.
-pub fn mev(
+#[cfg(test)]
+pub(crate) fn mev(
     store: &mut Store,
     lp: LoopId,
     at: usize,
@@ -338,9 +348,9 @@ pub fn mev(
     mev_impl(store, lp, at, curve, bounds, point, None)
 }
 
-/// Pcurve-bearing [`mev`]. Both pcurves are validated against the owning
+/// Pcurve-bearing MEV. Both pcurves are validated against the owning
 /// face before topology is mutated, then attached to the new fins.
-pub fn mev_with_pcurves(
+pub(crate) fn mev_with_pcurves(
     store: &mut Store,
     lp: LoopId,
     at: usize,
@@ -423,13 +433,13 @@ fn mev_impl(
     })
 }
 
-/// Kill edge and vertex: exact inverse of [`mev`].
+/// Kill edge and vertex: exact inverse of MEV.
 ///
 /// The edge's two fins must sit consecutively in one loop (the strut
-/// shape [`mev`] makes), and the vertex between them must be used by no
+/// shape MEV makes), and the vertex between them must be used by no
 /// other edge. If the loop becomes empty, the surviving vertex returns to
 /// the shell's seed slot.
-pub fn kev(store: &mut Store, edge: EdgeId) -> Result<()> {
+pub(crate) fn kev(store: &mut Store, edge: EdgeId) -> Result<VertexId> {
     let e = store.get(edge)?;
     let [f0, f1] = e.fins[..] else {
         return topo_err("kev: edge must have exactly two fins");
@@ -489,10 +499,10 @@ pub fn kev(store: &mut Store, edge: EdgeId) -> Result<()> {
         let slot = &mut store.get_mut(shell)?.vertex;
         *slot = Some(survivor);
     }
-    Ok(())
+    Ok(dying)
 }
 
-/// Entities created by [`mef`].
+/// Entities created by MEF.
 #[derive(Debug, Clone, Copy)]
 pub struct Mef {
     /// The new edge, directed tail(fins\[i\]) → tail(fins\[j\]).
@@ -516,7 +526,8 @@ pub struct Mef {
 /// the rest, closed by the `Forward` fin. The new face joins the same
 /// shell.
 #[allow(clippy::too_many_arguments)] // one edge + one face worth of inputs
-pub fn mef(
+#[cfg(test)]
+pub(crate) fn mef(
     store: &mut Store,
     lp: LoopId,
     i: usize,
@@ -529,11 +540,11 @@ pub fn mef(
     mef_impl(store, lp, i, j, curve, bounds, surface, sense, None)
 }
 
-/// Pcurve-bearing [`mef`]. The forward use is validated on the old face;
+/// Pcurve-bearing MEF. The forward use is validated on the old face;
 /// the reversed use is validated on the new face's supporting surface.
 /// Existing pcurve-bearing fins moved to the new face are also preflighted.
 #[allow(clippy::too_many_arguments)]
-pub fn mef_with_pcurves(
+pub(crate) fn mef_with_pcurves(
     store: &mut Store,
     lp: LoopId,
     i: usize,
@@ -669,12 +680,12 @@ fn mef_impl(
     })
 }
 
-/// Kill edge and face: inverse of [`mef`].
+/// Kill edge and face: inverse of MEF.
 ///
 /// The edge's two fins must belong to loops of *different* faces, and the
 /// face being absorbed must have exactly one loop. That face and loop are
 /// removed and their remaining fins merge into the surviving loop.
-pub fn kef(store: &mut Store, edge: EdgeId) -> Result<()> {
+pub(crate) fn kef(store: &mut Store, edge: EdgeId) -> Result<()> {
     let e = store.get(edge)?;
     let [fa, fb] = e.fins[..] else {
         return topo_err("kef: edge must have exactly two fins");
@@ -736,8 +747,8 @@ pub fn kef(store: &mut Store, edge: EdgeId) -> Result<()> {
 /// The fins between the edge's two fins (in ring order, exclusive) become
 /// the ring loop; both resulting rings must be non-empty (killing a strut
 /// would need a vertex-only loop, which this model cannot represent —
-/// use [`kev`] for struts). Returns the new ring loop.
-pub fn kemr(store: &mut Store, edge: EdgeId) -> Result<LoopId> {
+/// use KEV for struts). Returns the new ring loop.
+pub(crate) fn kemr(store: &mut Store, edge: EdgeId) -> Result<LoopId> {
     let e = store.get(edge)?;
     let [fa, fb] = e.fins[..] else {
         return topo_err("kemr: edge must have exactly two fins");
@@ -772,7 +783,7 @@ pub fn kemr(store: &mut Store, edge: EdgeId) -> Result<LoopId> {
     Ok(ring)
 }
 
-/// Entities created by [`mekr`].
+/// Entities created by MEKR.
 #[derive(Debug, Clone, Copy)]
 pub struct Mekr {
     /// The new edge, directed outer tail → ring tail.
@@ -784,11 +795,12 @@ pub struct Mekr {
 }
 
 /// Make edge, kill ring: join an inner (ring) loop back into another loop
-/// of the same face with a new edge. Inverse of [`kemr`].
+/// of the same face with a new edge. Inverse of KEMR.
 ///
 /// The edge runs from the tail vertex of `outer`'s fin `i` to the tail
 /// vertex of `ring`'s fin `j`; `ring` is dissolved into `outer`.
-pub fn mekr(
+#[cfg(test)]
+pub(crate) fn mekr(
     store: &mut Store,
     outer: LoopId,
     i: usize,
@@ -800,10 +812,10 @@ pub fn mekr(
     mekr_impl(store, outer, i, ring, j, curve, bounds, None)
 }
 
-/// Pcurve-bearing [`mekr`]. Both new fin uses are preflighted on the
+/// Pcurve-bearing MEKR. Both new fin uses are preflighted on the
 /// loops' common face before the ring is dissolved.
 #[allow(clippy::too_many_arguments)]
-pub fn mekr_with_pcurves(
+pub(crate) fn mekr_with_pcurves(
     store: &mut Store,
     outer: LoopId,
     i: usize,
@@ -903,7 +915,7 @@ fn mekr_impl(
 /// Kill face, make ring hole: delete `kill` (which must have exactly one
 /// loop and share `keep`'s shell) and move its loop onto `keep` as an
 /// inner loop. Raises the shell's genus by one. Returns the moved loop.
-pub fn kfmrh(store: &mut Store, keep: FaceId, kill: FaceId) -> Result<LoopId> {
+pub(crate) fn kfmrh(store: &mut Store, keep: FaceId, kill: FaceId) -> Result<LoopId> {
     if keep == kill {
         return topo_err("kfmrh: faces must be distinct");
     }
@@ -932,9 +944,14 @@ pub fn kfmrh(store: &mut Store, keep: FaceId, kill: FaceId) -> Result<LoopId> {
 }
 
 /// Make face, kill ring hole: detach an inner loop of a face into a new
-/// face on `surface` in the same shell. Inverse of [`kfmrh`]; lowers the
+/// face on `surface` in the same shell. Inverse of KFMRH; lowers the
 /// shell's genus by one. Returns the new face.
-pub fn mfkrh(store: &mut Store, ring: LoopId, surface: SurfaceId, sense: Sense) -> Result<FaceId> {
+pub(crate) fn mfkrh(
+    store: &mut Store,
+    ring: LoopId,
+    surface: SurfaceId,
+    sense: Sense,
+) -> Result<FaceId> {
     store.get(surface)?;
     let old_face = store.get(ring)?.face;
     if store.get(old_face)?.loops.len() < 2 {
