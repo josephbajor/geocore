@@ -22,7 +22,7 @@ fn line_inputs(
 ) -> (ktopo::entity::CurveId, (f64, f64), FinPcurvePair) {
     let direction = end - start;
     let length = direction.norm();
-    let curve = store.add(CurveGeom::Line(Line::new(start, direction).unwrap()));
+    let curve = store.insert_curve(CurveGeom::Line(Line::new(start, direction).unwrap()));
     let SurfaceGeom::Plane(plane) = *store.get(surface).unwrap() else {
         panic!("test surface must be planar");
     };
@@ -31,7 +31,7 @@ fn line_inputs(
     let uv_start = Point2::new(start_local.x, start_local.y);
     let uv_end = Point2::new(end_local.x, end_local.y);
     let make_use = |store: &mut Store| {
-        let pcurve = store.add(Curve2dGeom::Line(
+        let pcurve = store.insert_pcurve(Curve2dGeom::Line(
             Line2d::new(uv_start, uv_end - uv_start).unwrap(),
         ));
         FinPcurve::new(pcurve, ParamRange::new(0.0, length), ParamMap1d::identity()).unwrap()
@@ -45,11 +45,11 @@ fn line_inputs(
 
 fn minimal_inverse_journal() -> Journal {
     let mut store = Store::new();
-    let surface = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
+    let surface = store.insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())));
     let start_position = Point3::new(0.0, 0.0, 0.0);
     let end_position = Point3::new(1.0, 0.0, 0.0);
-    let start = store.add(start_position);
-    let end = store.add(end_position);
+    let start = store.insert_point(start_position).unwrap();
+    let end = store.insert_point(end_position).unwrap();
     let (curve, bounds, pcurves) = line_inputs(&mut store, surface, start_position, end_position);
 
     let mut transaction = store.transaction().unwrap();
@@ -61,7 +61,7 @@ fn minimal_inverse_journal() -> Journal {
         .unwrap();
     transaction.kill_edge_vertex(sprout.edge).unwrap();
     transaction.kill_minimal_body(minimal.body).unwrap();
-    let journal = transaction.commit().unwrap();
+    let journal = transaction.commit_checked(&[]).unwrap();
 
     assert_eq!(store.count::<Body>(), 0);
     assert_eq!(store.count::<Face>(), 0);

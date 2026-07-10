@@ -132,6 +132,12 @@ replaced by an uncertified sampled bound.
   each preserving the Euler–Poincaré invariant; raw operators are topology-internal and
   all higher ops compose transaction-owned methods with mandatory pcurve-bearing
   creation, rollback, checked result commit, and semantic lineage.
+- Generic topology insertion, mutable borrowing, removal, and unchecked commit are not
+  public Store operations. Interchange reconstruction and specialized graph builders use
+  a transaction-scoped assembly facade whose changes can survive only a checked commit.
+  The commit validates all live bodies and global ownership closure; a maintained
+  ownership/dependency index may later narrow this to touched roots without weakening the
+  invariant.
 - **Checker** (our `PK_BODY_check` equivalent): validates topology (closure, manifold
   conditions per body type, loop orientation), geometry (self-intersection, degeneracy),
   and geometry–topology consistency (face-loop containment, edge-on-surface within

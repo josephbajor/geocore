@@ -9,8 +9,8 @@ use kgeom::surface::Plane;
 use kgeom::vec::{Point2, Point3, Vec3};
 use ktopo::check::check_body;
 use ktopo::entity::{
-    Body, BodyId, Edge, EntityRef, Face, Fin, FinPcurve, Loop, ParamMap1d, Region, Sense, Shell,
-    Vertex,
+    Body, BodyId, BodyKind, Edge, EntityRef, Face, Fin, FinPcurve, Loop, ParamMap1d, Region,
+    RegionKind, Sense, Shell, Vertex,
 };
 use ktopo::euler::FinPcurvePair;
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
@@ -27,10 +27,10 @@ fn seed_geometry(
     ktopo::entity::CurveId,
     ktopo::entity::PointId,
 ) {
-    let surface = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
-    let start = store.add(Point3::new(0.0, 0.0, 0.0));
-    let end = store.add(Point3::new(1.0, 0.0, 0.0));
-    let curve = store.add(CurveGeom::Line(
+    let surface = store.insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())));
+    let start = store.insert_point(Point3::new(0.0, 0.0, 0.0)).unwrap();
+    let end = store.insert_point(Point3::new(1.0, 0.0, 0.0)).unwrap();
+    let curve = store.insert_curve(CurveGeom::Line(
         Line::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
     ));
     (surface, start, curve, end)
@@ -57,7 +57,7 @@ fn first_face_diagonal(
     let end = store.vertex_position(end_vertex).unwrap();
     let delta = end - start;
     let length = delta.norm();
-    let curve = store.add(CurveGeom::Line(Line::new(start, delta).unwrap()));
+    let curve = store.insert_curve(CurveGeom::Line(Line::new(start, delta).unwrap()));
     let plane = match store.get(surface).unwrap() {
         SurfaceGeom::Plane(plane) => *plane,
         _ => panic!("block face must be planar"),
@@ -68,7 +68,7 @@ fn first_face_diagonal(
     let uv_end = Point2::new(local_end.x, local_end.y);
     let range = ParamRange::new(0.0, length);
     let make_use = |store: &mut Store| {
-        let pcurve = store.add(Curve2dGeom::Line(
+        let pcurve = store.insert_pcurve(Curve2dGeom::Line(
             Line2d::new(uv_start, uv_end - uv_start).unwrap(),
         ));
         FinPcurve::new(pcurve, range, ParamMap1d::identity()).unwrap()
@@ -88,7 +88,7 @@ fn first_face_diagonal(
 fn failing_multi_step_edit(store: &mut Store) -> Result<()> {
     let (surface, start, curve, end) = seed_geometry(store);
     let make_pcurve = |store: &mut Store| {
-        let curve = store.add(Curve2dGeom::Line(
+        let curve = store.insert_pcurve(Curve2dGeom::Line(
             Line2d::new(Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)).unwrap(),
         ));
         FinPcurve::new(curve, ParamRange::new(0.0, 1.0), ParamMap1d::identity()).unwrap()
@@ -99,7 +99,7 @@ fn failing_multi_step_edit(store: &mut Store) -> Result<()> {
     // The first step created a complete minimal topology. The second step
     // fails preflight; `?` drops the transaction and must undo the first.
     transaction.make_edge_vertex(made.ring, 0, curve, (1.0, 0.0), end, pcurves)?;
-    let _ = transaction.commit();
+    let _ = transaction.commit_checked_body(made.body);
     Ok(())
 }
 
@@ -129,12 +129,10 @@ fn failed_multi_step_euler_edit_restores_identity_and_future_allocations() {
     let made = transaction
         .make_minimal_body(surface, Sense::Forward, start)
         .unwrap();
-    transaction.commit().unwrap();
     let mut control_transaction = control.transaction().unwrap();
     let control_made = control_transaction
         .make_minimal_body(surface, Sense::Forward, start)
         .unwrap();
-    control_transaction.commit().unwrap();
     assert_eq!(made.body, control_made.body);
     assert_eq!(made.void_region, control_made.void_region);
     assert_eq!(made.solid_region, control_made.solid_region);
@@ -142,21 +140,36 @@ fn failed_multi_step_euler_edit_restores_identity_and_future_allocations() {
     assert_eq!(made.face, control_made.face);
     assert_eq!(made.ring, control_made.ring);
     assert_eq!(made.vertex, control_made.vertex);
+    transaction.rollback().unwrap();
+    control_transaction.rollback().unwrap();
 }
 
 #[test]
-fn commit_emits_raw_mutations_and_semantic_lineage_deterministically() {
+fn checked_assembly_commit_emits_raw_mutations_deterministically() {
     let mut store = Store::new();
-    let (surface, start, _, _) = seed_geometry(&mut store);
     let mut transaction = store.transaction().unwrap();
-    let made = transaction
-        .make_minimal_body(surface, Sense::Forward, start)
-        .unwrap();
-    let lineage = LineageEvent::DerivedFrom {
-        derived: EntityRef::Vertex(made.vertex),
-        source: EntityRef::Point(start),
+    let (body, region, shell) = {
+        let mut assembly = transaction.assembly();
+        let body = assembly.add(Body {
+            kind: BodyKind::Wire,
+            regions: Vec::new(),
+        });
+        let region = assembly.add(Region {
+            body,
+            kind: RegionKind::Void,
+            shells: Vec::new(),
+        });
+        let shell = assembly.add(Shell {
+            region,
+            faces: Vec::new(),
+            edges: Vec::new(),
+            vertex: None,
+        });
+        assembly.get_mut(region).unwrap().shells.push(shell);
+        assembly.get_mut(body).unwrap().regions.push(region);
+        (body, region, shell)
     };
-    let journal = transaction.commit().unwrap();
+    let journal = transaction.commit_checked_body(body).unwrap();
 
     let entities: Vec<_> = journal
         .mutations()
@@ -166,13 +179,9 @@ fn commit_emits_raw_mutations_and_semantic_lineage_deterministically() {
     assert_eq!(
         entities,
         vec![
-            EntityRef::Body(made.body),
-            EntityRef::Region(made.void_region),
-            EntityRef::Region(made.solid_region),
-            EntityRef::Shell(made.shell),
-            EntityRef::Face(made.face),
-            EntityRef::Loop(made.ring),
-            EntityRef::Vertex(made.vertex),
+            EntityRef::Body(body),
+            EntityRef::Region(region),
+            EntityRef::Shell(shell),
         ]
     );
     assert!(
@@ -181,11 +190,11 @@ fn commit_emits_raw_mutations_and_semantic_lineage_deterministically() {
             .iter()
             .all(|mutation| mutation.kind == MutationKind::Created)
     );
-    assert_eq!(journal.lineage(), &[lineage]);
+    assert!(journal.lineage().is_empty());
 }
 
 #[test]
-fn transaction_is_rollback_on_drop_and_nested_scope_is_rejected() {
+fn transaction_is_rollback_on_drop() {
     let mut store = Store::new();
     let (surface, start, _, _) = seed_geometry(&mut store);
     {
@@ -193,10 +202,6 @@ fn transaction_is_rollback_on_drop_and_nested_scope_is_rejected() {
         transaction
             .make_minimal_body(surface, Sense::Forward, start)
             .unwrap();
-        assert_eq!(
-            transaction.store_mut().transaction().err(),
-            Some(Error::TransactionActive)
-        );
     }
     assert_eq!(store.count::<Body>(), 0);
 }
@@ -209,7 +214,9 @@ fn checked_face_split_and_merge_emit_semantic_lineage() {
     let source_face = store.get(lp).unwrap().face;
     let source_domain = store.get(source_face).unwrap().domain;
     let source_tolerance = EntityTolerance::operation(1.0e-8, "split-test").unwrap();
-    store.get_mut(source_face).unwrap().tolerance = Some(source_tolerance);
+    let mut metadata = store.transaction().unwrap();
+    metadata.assembly().get_mut(source_face).unwrap().tolerance = Some(source_tolerance);
+    metadata.commit_checked_body(body).unwrap();
 
     let mut split = store.transaction().unwrap();
     let made = split
@@ -258,7 +265,7 @@ fn checked_commit_rejects_faulted_topology_and_restores_the_body() {
 
     let mut transaction = store.transaction().unwrap();
     transaction
-        .store_mut()
+        .assembly()
         .get_mut(body)
         .unwrap()
         .regions

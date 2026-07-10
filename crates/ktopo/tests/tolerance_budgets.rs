@@ -69,7 +69,9 @@ fn committed_growth_is_provenanced_budgeted_and_journaled() {
 fn imported_origin_survives_budgeted_growth() {
     let (mut store, body, edge) = model();
     let imported = EntityTolerance::imported_xt(LINEAR_RESOLUTION * 2.0).unwrap();
-    store.get_mut(edge).unwrap().tolerance = Some(imported);
+    let mut setup = store.transaction().unwrap();
+    setup.assembly().get_mut(edge).unwrap().tolerance = Some(imported);
+    setup.commit_checked_body(body).unwrap();
 
     let mut transaction = store.transaction().unwrap();
     let budget = transaction
@@ -121,7 +123,7 @@ fn checked_commit_rolls_back_tolerance_growth_with_faulted_topology() {
     transaction
         .grow_edge_tolerance(budget, edge, LINEAR_RESOLUTION * 3.0)
         .unwrap();
-    transaction.store_mut().get_mut(edge).unwrap().vertices = [None, None];
+    transaction.assembly().get_mut(edge).unwrap().vertices = [None, None];
     let error = transaction.commit_checked_body(body).unwrap_err();
     assert!(matches!(error, Error::TopologyCheckFailed { .. }));
     assert_eq!(store.get(edge).unwrap(), &original);

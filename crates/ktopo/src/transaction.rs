@@ -13,8 +13,10 @@ use crate::entity::{
     BodyId, CurveId, EdgeId, EntityRef, FaceId, LoopId, PointId, Sense, SurfaceId, VertexId,
 };
 use crate::euler::{FinPcurvePair, Mef, Mekr, Mev, Mvfs};
-use crate::store::Store;
+use crate::store::{Entity, Store};
 use crate::tolerance::EntityTolerance;
+use core::ops::Deref;
+use kcore::arena::Handle;
 use kcore::error::{Error, Result};
 use kcore::tolerance::{LINEAR_RESOLUTION, Tolerances};
 
@@ -164,6 +166,45 @@ pub struct Journal {
     tolerance_events: Vec<ToleranceEvent>,
 }
 
+/// Low-level entity assembly available only while a transaction owns every
+/// arena's undo frame.
+///
+/// This is the bridge for interchange reconstruction and specialized kernel
+/// builders that must materialize an already-defined entity graph. Ordinary
+/// modeling should prefer the semantic [`Transaction`] methods. Reads are
+/// inherited from [`Store`] through [`Deref`]; all writes remain scoped to the
+/// transaction and are therefore rollback-safe and journaled. Public callers
+/// can retain assembly changes only through a checked commit, which validates
+/// every live body and the store's topology ownership closure.
+pub struct AssemblyStore<'a> {
+    store: &'a mut Store,
+}
+
+impl AssemblyStore<'_> {
+    /// Insert any geometry or topology entity into the active transaction.
+    pub fn add<T: Entity>(&mut self, entity: T) -> Handle<T> {
+        self.store.add(entity)
+    }
+
+    /// Mutably borrow an entity inside the active transaction.
+    pub fn get_mut<T: Entity>(&mut self, handle: Handle<T>) -> Result<&mut T> {
+        self.store.get_mut(handle)
+    }
+
+    /// Remove an entity inside the active transaction.
+    pub fn remove<T: Entity>(&mut self, handle: Handle<T>) -> Result<T> {
+        self.store.remove(handle)
+    }
+}
+
+impl Deref for AssemblyStore<'_> {
+    type Target = Store;
+
+    fn deref(&self) -> &Self::Target {
+        self.store
+    }
+}
+
 impl Journal {
     /// Raw net mutations, ordered by arena type then slot.
     pub fn mutations(&self) -> &[Mutation] {
@@ -202,9 +243,9 @@ impl Journal {
 
 /// Scoped failure-atomic mutation of one [`Store`].
 ///
-/// Transactions are rollback-on-drop. Call [`Self::commit`] exactly once to
-/// retain changes and obtain their journal. Nested transactions on one store
-/// are currently rejected so semantic journal composition cannot be
+/// Transactions are rollback-on-drop. Call [`Self::commit_checked`] exactly
+/// once to retain changes and obtain their journal. Nested transactions on one
+/// store are currently rejected so semantic journal composition cannot be
 /// accidentally underspecified.
 pub struct Transaction<'a> {
     store: &'a mut Store,
@@ -230,9 +271,14 @@ impl<'a> Transaction<'a> {
         self.store
     }
 
-    /// Mutate the in-progress store using checked topology/Euler operations.
-    pub fn store_mut(&mut self) -> &mut Store {
+    /// Topology-internal mutable Store access for implemented constructors.
+    pub(crate) fn store_mut(&mut self) -> &mut Store {
         self.store
+    }
+
+    /// Open the low-level reconstruction/assembly facade for this transaction.
+    pub fn assembly(&mut self) -> AssemblyStore<'_> {
+        AssemblyStore { store: self.store }
     }
 
     /// Declare the aggregate tolerance growth available to one operation.
@@ -540,23 +586,15 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    /// Commit all changes and return their raw and semantic journal.
-    pub fn commit(mut self) -> Result<Journal> {
-        let mutations = self.store.commit_transaction()?;
-        self.finished = true;
-        Ok(Journal::new(
-            mutations,
-            core::mem::take(&mut self.lineage),
-            core::mem::take(&mut self.tolerance_budgets),
-            core::mem::take(&mut self.tolerance_events),
-        ))
-    }
-
-    /// Validate every listed body with the Fast checker, then commit.
+    /// Validate the complete live topology with the Fast checker, then commit.
     ///
-    /// Any checker fault or validation error rolls the entire transaction
-    /// back before returning. Duplicate body handles are checked once in
-    /// first-occurrence order.
+    /// `bodies` supplies the expected result roots and their preferred
+    /// validation order. Every other live body is checked too, followed by a
+    /// store-wide ownership-closure check, so low-level assembly cannot hide
+    /// an invalid unlisted body or orphan topology. Any fault or validation
+    /// error rolls the entire transaction back. This whole-store validation
+    /// is deliberately conservative until the store has a maintained
+    /// ownership index for touched-root validation.
     pub fn commit_checked(mut self, bodies: &[BodyId]) -> Result<Journal> {
         let mut checked = Vec::new();
         let validation = (|| {
@@ -568,6 +606,14 @@ impl<'a> Transaction<'a> {
                 checked.push(body);
                 fault_count += crate::check::check_body(self.store, body)?.len();
             }
+            for (body, _) in self.store.iter::<crate::entity::Body>() {
+                if checked.contains(&body) {
+                    continue;
+                }
+                checked.push(body);
+                fault_count += crate::check::check_body(self.store, body)?.len();
+            }
+            fault_count += crate::check::topology_ownership_fault_count(self.store);
             if fault_count == 0 {
                 Ok(())
             } else {

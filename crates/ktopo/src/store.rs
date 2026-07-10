@@ -3,13 +3,14 @@
 //! copy-on-write transaction entry points.
 
 use crate::entity::{
-    Body, BodyId, Edge, EdgeId, EntityRef, Face, FaceId, Fin, FinId, Loop, Region, Shell, Vertex,
-    VertexId,
+    Body, BodyId, Curve2dId, CurveId, Edge, EdgeId, EntityRef, Face, FaceId, Fin, FinId, Loop,
+    PointId, Region, Shell, SurfaceId, Vertex, VertexId,
 };
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use crate::transaction::{Mutation, MutationKind, Transaction};
 use kcore::arena::{Arena, ArenaChangeKind, Handle};
 use kcore::error::{Error, Result};
+use kcore::tolerance::check_in_size_box;
 use kgeom::vec::Point3;
 
 /// Implemented by every type the [`Store`] can hold; maps the type to its
@@ -41,6 +42,38 @@ macro_rules! entity_arena {
 
 /// Holds every entity of a modeling session part. All cross-references are
 /// handles into these arenas; iteration order is slot order (deterministic).
+///
+/// Generic entity mutation is deliberately not public. Use checked body
+/// builders or [`crate::transaction::Transaction`] methods; low-level import
+/// reconstruction uses transaction-scoped [`crate::transaction::AssemblyStore`].
+///
+/// ```compile_fail
+/// use ktopo::entity::{Body, BodyKind};
+/// use ktopo::store::Store;
+///
+/// let mut store = Store::new();
+/// // Direct topology insertion is not part of the public API.
+/// store.add(Body { kind: BodyKind::Wire, regions: Vec::new() });
+/// ```
+///
+/// ```compile_fail
+/// use kgeom::frame::Frame;
+/// use ktopo::{make, store::Store};
+///
+/// let mut store = Store::new();
+/// let body = make::block(&mut store, &Frame::world(), [1.0; 3]).unwrap();
+/// // Reads are public, mutable entity borrows are not.
+/// store.get_mut(body).unwrap().regions.clear();
+/// ```
+///
+/// ```compile_fail
+/// use ktopo::store::Store;
+///
+/// let mut store = Store::new();
+/// let transaction = store.transaction().unwrap();
+/// // Unchecked commit is reserved for topology internals.
+/// transaction.commit().unwrap();
+/// ```
 #[derive(Default)]
 pub struct Store {
     bodies: Arena<Body>,
@@ -159,9 +192,31 @@ impl Store {
         Ok(())
     }
 
-    /// Insert an entity, returning its handle.
-    pub fn add<T: Entity>(&mut self, entity: T) -> Handle<T> {
+    /// Insert an entity for topology-internal construction or a scoped
+    /// [`crate::transaction::AssemblyStore`].
+    pub(crate) fn add<T: Entity>(&mut self, entity: T) -> Handle<T> {
         T::arena_mut(self).insert(entity)
+    }
+
+    /// Insert immutable point geometry after size-box validation.
+    pub fn insert_point(&mut self, point: Point3) -> Result<PointId> {
+        check_in_size_box(point.to_array())?;
+        Ok(self.add(point))
+    }
+
+    /// Insert immutable 3D curve geometry.
+    pub fn insert_curve(&mut self, curve: CurveGeom) -> CurveId {
+        self.add(curve)
+    }
+
+    /// Insert immutable supporting-surface geometry.
+    pub fn insert_surface(&mut self, surface: SurfaceGeom) -> SurfaceId {
+        self.add(surface)
+    }
+
+    /// Insert immutable parameter-space curve geometry.
+    pub fn insert_pcurve(&mut self, curve: Curve2dGeom) -> Curve2dId {
+        self.add(curve)
     }
 
     /// Borrow an entity; [`Error::StaleHandle`] if removed or unknown.
@@ -171,14 +226,14 @@ impl Store {
 
     /// Mutably borrow an entity; [`Error::StaleHandle`] if removed or
     /// unknown.
-    pub fn get_mut<T: Entity>(&mut self, handle: Handle<T>) -> Result<&mut T> {
+    pub(crate) fn get_mut<T: Entity>(&mut self, handle: Handle<T>) -> Result<&mut T> {
         T::arena_mut(self).get_mut(handle).ok_or(Error::StaleHandle)
     }
 
     /// Remove an entity, returning it; [`Error::StaleHandle`] if already
     /// gone. Removal never fixes up references *to* the entity — that is
     /// the caller's job (Euler operators do this correctly).
-    pub fn remove<T: Entity>(&mut self, handle: Handle<T>) -> Result<T> {
+    pub(crate) fn remove<T: Entity>(&mut self, handle: Handle<T>) -> Result<T> {
         T::arena_mut(self).remove(handle).ok_or(Error::StaleHandle)
     }
 
@@ -327,5 +382,15 @@ mod tests {
         assert_eq!(store.count::<Region>(), 1);
         store.remove(region).unwrap();
         assert_eq!(store.get(region), Err(Error::StaleHandle));
+    }
+
+    #[test]
+    fn nested_store_transaction_is_rejected() {
+        let mut store = Store::new();
+        let mut transaction = store.transaction().unwrap();
+        assert_eq!(
+            transaction.store_mut().transaction().err(),
+            Some(Error::TransactionActive)
+        );
     }
 }

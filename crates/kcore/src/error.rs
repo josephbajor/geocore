@@ -58,10 +58,11 @@ pub enum Error {
     /// A transaction commit or rollback was requested without a matching
     /// active transaction frame.
     TransactionInactive,
-    /// A checked modeling transaction produced one or more body-checker
-    /// faults. The transaction is rolled back before this error is returned.
+    /// A checked modeling transaction produced one or more body-checker or
+    /// store topology-ownership faults. The transaction is rolled back before
+    /// this error is returned.
     TopologyCheckFailed {
-        /// Total proven faults across the bodies requested for validation.
+        /// Total proven faults across all live topology.
         fault_count: usize,
     },
 }
@@ -102,7 +103,7 @@ impl fmt::Display for Error {
             Error::TopologyCheckFailed { fault_count } => {
                 write!(
                     f,
-                    "checked topology commit rejected {fault_count} body fault(s)"
+                    "checked topology commit rejected {fault_count} invariant fault(s)"
                 )
             }
         }

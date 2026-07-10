@@ -50,7 +50,7 @@ use ktopo::entity::{
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::store::Store;
 use ktopo::tolerance::EntityTolerance;
-use ktopo::transaction::{Journal, MutationKind};
+use ktopo::transaction::{AssemblyStore, Journal, MutationKind};
 use std::collections::BTreeMap;
 
 /// Everything produced by reconstructing one transmit file.
@@ -71,7 +71,10 @@ pub struct Reconstruction {
 /// Reconstruct every body in the file into `store`.
 pub fn reconstruct(file: &XtFile, store: &mut Store) -> Result<Reconstruction> {
     let mut transaction = store.transaction()?;
-    let mut reconstruction = reconstruct_into(file, transaction.store_mut())?;
+    let mut reconstruction = {
+        let mut assembly = transaction.assembly();
+        reconstruct_into(file, &mut assembly)?
+    };
     reconstruction.journal = transaction.commit_checked(&reconstruction.bodies)?;
     debug_assert!(
         reconstruction
@@ -84,7 +87,7 @@ pub fn reconstruct(file: &XtFile, store: &mut Store) -> Result<Reconstruction> {
 }
 
 /// Reconstruct inside the caller's active copy-on-write transaction.
-fn reconstruct_into(file: &XtFile, store: &mut Store) -> Result<Reconstruction> {
+fn reconstruct_into(file: &XtFile, store: &mut AssemblyStore<'_>) -> Result<Reconstruction> {
     let root = xnode(file, 1)?;
     let mut body_indices = Vec::new();
     match root.code {
@@ -271,9 +274,9 @@ fn in_size_box(p: Vec3) -> Result<Vec3> {
 
 // ---------------------------------------------------------------- body --
 
-struct Recon<'a> {
-    file: &'a XtFile,
-    store: &'a mut Store,
+struct Recon<'file, 'assembly, 'store> {
+    file: &'file XtFile,
+    store: &'assembly mut AssemblyStore<'store>,
     /// XT curve index → (kernel curve, XT sense was `-`).
     curves: BTreeMap<u32, (CurveId, bool)>,
     /// XT 2D B-curve index → kernel pcurve geometry.
@@ -287,7 +290,7 @@ struct Recon<'a> {
     edges: BTreeMap<u32, (EdgeId, bool)>,
 }
 
-impl Recon<'_> {
+impl Recon<'_, '_, '_> {
     fn body(&mut self, body_idx: u32) -> Result<BodyId> {
         let file = self.file;
         let body_node = xnode(file, body_idx)?;

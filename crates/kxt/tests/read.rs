@@ -246,7 +246,7 @@ fn reconstruction_failure_leaves_store_unchanged() {
     assert!(store.get(existing).is_ok());
     assert!(check_body(&store, existing).unwrap().is_empty());
     assert_eq!(
-        store.add(Point3::new(4.0, 5.0, 6.0)),
-        control.add(Point3::new(4.0, 5.0, 6.0))
+        store.insert_point(Point3::new(4.0, 5.0, 6.0)).unwrap(),
+        control.insert_point(Point3::new(4.0, 5.0, 6.0)).unwrap()
     );
 }

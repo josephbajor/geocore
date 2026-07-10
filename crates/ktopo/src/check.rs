@@ -53,8 +53,8 @@
 //!   identity (they still get all local checks).
 
 use crate::entity::{
-    Body, BodyId, BodyKind, Edge, EdgeId, EntityRef, Face, FaceId, Fin, FinId, LoopId, RegionKind,
-    SeamSide, ShellId, VertexId,
+    Body, BodyId, BodyKind, Edge, EdgeId, EntityRef, Face, FaceId, Fin, FinId, Loop, LoopId,
+    Region, RegionId, RegionKind, SeamSide, Shell, ShellId, Vertex, VertexId,
 };
 use crate::geom::SurfaceGeom;
 use crate::incidence::{
@@ -72,6 +72,7 @@ use kcore::tolerance::{LINEAR_RESOLUTION, SIZE_BOX_HALF, Tolerances};
 use kgeom::param::ParamRange;
 use kgeom::project::project_to_surface;
 use kgeom::vec::Point3;
+use std::collections::HashMap;
 
 /// What is wrong, attached to the offending entity in a [`Fault`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,6 +298,130 @@ pub fn check_body_report(store: &Store, body: BodyId, level: CheckLevel) -> Resu
         faults: checker.faults,
         gaps,
     })
+}
+
+/// Count live topology entities that are not reachable from exactly one live
+/// body. Body-local checking catches broken parent/child relationships; this
+/// store-level closure catches orphan subgraphs and topology shared across
+/// body roots, neither of which is observable by checking each body alone.
+pub(crate) fn topology_ownership_fault_count(store: &Store) -> usize {
+    #[derive(Default)]
+    struct Claims {
+        regions: HashMap<RegionId, BodyId>,
+        shells: HashMap<ShellId, BodyId>,
+        faces: HashMap<FaceId, BodyId>,
+        loops: HashMap<LoopId, BodyId>,
+        fins: HashMap<FinId, BodyId>,
+        edges: HashMap<EdgeId, BodyId>,
+        vertices: HashMap<VertexId, BodyId>,
+        faults: usize,
+    }
+
+    fn claim<T>(
+        claims: &mut HashMap<Handle<T>, BodyId>,
+        handle: Handle<T>,
+        body: BodyId,
+        faults: &mut usize,
+    ) -> bool {
+        if let Some(owner) = claims.get(&handle) {
+            if *owner != body {
+                *faults += 1;
+            }
+            return false;
+        }
+        claims.insert(handle, body);
+        true
+    }
+
+    fn walk_edge(store: &Store, claims: &mut Claims, body: BodyId, edge_id: EdgeId) {
+        if !claim(&mut claims.edges, edge_id, body, &mut claims.faults) {
+            return;
+        }
+        let Ok(edge) = store.get(edge_id) else {
+            return;
+        };
+        for vertex in edge.vertices.into_iter().flatten() {
+            claim(&mut claims.vertices, vertex, body, &mut claims.faults);
+        }
+    }
+
+    fn walk_loop(store: &Store, claims: &mut Claims, body: BodyId, loop_id: LoopId) {
+        if !claim(&mut claims.loops, loop_id, body, &mut claims.faults) {
+            return;
+        }
+        let Ok(loop_) = store.get(loop_id) else {
+            return;
+        };
+        for &fin_id in &loop_.fins {
+            if !claim(&mut claims.fins, fin_id, body, &mut claims.faults) {
+                continue;
+            }
+            if let Ok(fin) = store.get(fin_id) {
+                walk_edge(store, claims, body, fin.edge);
+            }
+        }
+    }
+
+    fn walk_face(store: &Store, claims: &mut Claims, body: BodyId, face_id: FaceId) {
+        if !claim(&mut claims.faces, face_id, body, &mut claims.faults) {
+            return;
+        }
+        let Ok(face) = store.get(face_id) else {
+            return;
+        };
+        for &loop_id in &face.loops {
+            walk_loop(store, claims, body, loop_id);
+        }
+    }
+
+    fn walk_shell(store: &Store, claims: &mut Claims, body: BodyId, shell_id: ShellId) {
+        if !claim(&mut claims.shells, shell_id, body, &mut claims.faults) {
+            return;
+        }
+        let Ok(shell) = store.get(shell_id) else {
+            return;
+        };
+        for &face_id in &shell.faces {
+            walk_face(store, claims, body, face_id);
+        }
+        for &edge_id in &shell.edges {
+            walk_edge(store, claims, body, edge_id);
+        }
+        if let Some(vertex) = shell.vertex {
+            claim(&mut claims.vertices, vertex, body, &mut claims.faults);
+        }
+    }
+
+    let mut claims = Claims::default();
+    for (body_id, body) in store.iter::<Body>() {
+        for &region_id in &body.regions {
+            if !claim(&mut claims.regions, region_id, body_id, &mut claims.faults) {
+                continue;
+            }
+            let Ok(region) = store.get(region_id) else {
+                continue;
+            };
+            for &shell_id in &region.shells {
+                walk_shell(store, &mut claims, body_id, shell_id);
+            }
+        }
+    }
+
+    fn unclaimed<T: Entity>(store: &Store, claims: &HashMap<Handle<T>, BodyId>) -> usize {
+        store
+            .iter::<T>()
+            .filter(|(handle, _)| !claims.contains_key(handle))
+            .count()
+    }
+
+    claims.faults
+        + unclaimed::<Region>(store, &claims.regions)
+        + unclaimed::<Shell>(store, &claims.shells)
+        + unclaimed::<Face>(store, &claims.faces)
+        + unclaimed::<Loop>(store, &claims.loops)
+        + unclaimed::<Fin>(store, &claims.fins)
+        + unclaimed::<Edge>(store, &claims.edges)
+        + unclaimed::<Vertex>(store, &claims.vertices)
 }
 
 fn collect_full_verification(

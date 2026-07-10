@@ -18,6 +18,7 @@ use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::make;
 use ktopo::store::Store;
 use ktopo::tolerance::{EntityTolerance, ToleranceOrigin};
+use ktopo::transaction::AssemblyStore;
 use kxt::schema::code;
 
 fn tilted() -> Frame {
@@ -110,335 +111,217 @@ fn first_plane_face(store: &Store, body: BodyId) -> FaceId {
         .unwrap()
 }
 
+fn edit_body<R>(
+    store: &mut Store,
+    body: BodyId,
+    edit: impl FnOnce(&mut AssemblyStore<'_>) -> R,
+) -> R {
+    let mut transaction = store.transaction().unwrap();
+    let result = {
+        let mut assembly = transaction.assembly();
+        edit(&mut assembly)
+    };
+    transaction.commit_checked_body(body).unwrap();
+    result
+}
+
+fn assemble_body(
+    store: &mut Store,
+    assemble: impl FnOnce(&mut AssemblyStore<'_>) -> BodyId,
+) -> BodyId {
+    let mut transaction = store.transaction().unwrap();
+    let body = {
+        let mut assembly = transaction.assembly();
+        assemble(&mut assembly)
+    };
+    transaction.commit_checked_body(body).unwrap();
+    body
+}
+
 fn replace_edge_with_linear_nurbs(store: &mut Store, body: BodyId) {
-    let edge_id = first_bounded_edge(store, body);
-    let edge = store.get(edge_id).unwrap();
-    let curve_id = edge.curve.unwrap();
-    let start = store.vertex_position(edge.vertices[0].unwrap()).unwrap();
-    let end = store.vertex_position(edge.vertices[1].unwrap()).unwrap();
-    let nurbs = NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![start, end], None).unwrap();
-    *store.get_mut(curve_id).unwrap() = CurveGeom::Nurbs(nurbs);
-    store.get_mut(edge_id).unwrap().bounds = Some((0.0, 1.0));
+    edit_body(store, body, |store| {
+        let edge_id = first_bounded_edge(store, body);
+        let edge = store.get(edge_id).unwrap();
+        let curve_id = edge.curve.unwrap();
+        let start = store.vertex_position(edge.vertices[0].unwrap()).unwrap();
+        let end = store.vertex_position(edge.vertices[1].unwrap()).unwrap();
+        let nurbs = NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![start, end], None).unwrap();
+        *store.get_mut(curve_id).unwrap() = CurveGeom::Nurbs(nurbs);
+        store.get_mut(edge_id).unwrap().bounds = Some((0.0, 1.0));
+    });
 }
 
 fn make_first_edge_truly_tolerant(store: &mut Store, body: BodyId) -> EdgeId {
-    let edge_id = first_bounded_edge(store, body);
-    let edge = store.get(edge_id).unwrap();
-    let old_bounds = edge.bounds.unwrap();
-    let fins = edge.fins.clone();
-    for fin_id in &fins {
-        let old = store.get(*fin_id).unwrap().pcurve.unwrap();
-        let q0 = old.parameter_at_edge(old_bounds.0);
-        let q1 = old.parameter_at_edge(old_bounds.1);
-        store.get_mut(*fin_id).unwrap().pcurve = Some(
-            FinPcurve::new(
-                old.curve(),
-                old.range(),
-                ParamMap1d::affine(q1 - q0, q0).unwrap(),
+    edit_body(store, body, |store| {
+        let edge_id = first_bounded_edge(store, body);
+        let edge = store.get(edge_id).unwrap();
+        let old_bounds = edge.bounds.unwrap();
+        let fins = edge.fins.clone();
+        for fin_id in &fins {
+            let old = store.get(*fin_id).unwrap().pcurve.unwrap();
+            let q0 = old.parameter_at_edge(old_bounds.0);
+            let q1 = old.parameter_at_edge(old_bounds.1);
+            store.get_mut(*fin_id).unwrap().pcurve = Some(
+                FinPcurve::new(
+                    old.curve(),
+                    old.range(),
+                    ParamMap1d::affine(q1 - q0, q0).unwrap(),
+                )
+                .unwrap(),
+            );
+        }
+
+        // Exercise rational 2D B-curve emission on one use.
+        let first = fins[0];
+        let first_use = store.get(first).unwrap().pcurve.unwrap();
+        let first_curve = store.get(first_use.curve()).unwrap().as_curve();
+        let range = first_use.range();
+        let endpoints = vec![first_curve.eval(range.lo), first_curve.eval(range.hi)];
+        *store.get_mut(first_use.curve()).unwrap() = Curve2dGeom::Nurbs(
+            NurbsCurve2d::new(
+                1,
+                vec![range.lo, range.lo, range.hi, range.hi],
+                endpoints,
+                Some(vec![2.0, 2.0]),
             )
             .unwrap(),
         );
-    }
 
-    // Exercise rational 2D B-curve emission on one use.
-    let first = fins[0];
-    let first_use = store.get(first).unwrap().pcurve.unwrap();
-    let first_curve = store.get(first_use.curve()).unwrap().as_curve();
-    let range = first_use.range();
-    let endpoints = vec![first_curve.eval(range.lo), first_curve.eval(range.hi)];
-    *store.get_mut(first_use.curve()).unwrap() = Curve2dGeom::Nurbs(
-        NurbsCurve2d::new(
-            1,
-            vec![range.lo, range.lo, range.hi, range.hi],
-            endpoints,
-            Some(vec![2.0, 2.0]),
-        )
-        .unwrap(),
-    );
+        // Exercise decreasing SP-curve trim parameters on the other use while
+        // preserving exactly the same lifted geometry.
+        let second = fins[1];
+        let second_use = store.get(second).unwrap().pcurve.unwrap();
+        let Curve2dGeom::Line(line) = *store.get(second_use.curve()).unwrap() else {
+            panic!("block pcurve must be linear");
+        };
+        let range = second_use.range();
+        *store.get_mut(second_use.curve()).unwrap() = Curve2dGeom::Line(
+            Line2d::new(
+                line.origin() + line.dir() * (range.lo + range.hi),
+                -line.dir(),
+            )
+            .unwrap(),
+        );
+        let old_map = second_use.edge_to_pcurve();
+        let reversed_map =
+            ParamMap1d::affine(-old_map.scale(), range.lo + range.hi - old_map.offset()).unwrap();
+        store.get_mut(second).unwrap().pcurve =
+            Some(FinPcurve::new(second_use.curve(), second_use.range(), reversed_map).unwrap());
 
-    // Exercise decreasing SP-curve trim parameters on the other use while
-    // preserving exactly the same lifted geometry.
-    let second = fins[1];
-    let second_use = store.get(second).unwrap().pcurve.unwrap();
-    let Curve2dGeom::Line(line) = *store.get(second_use.curve()).unwrap() else {
-        panic!("block pcurve must be linear");
-    };
-    let range = second_use.range();
-    *store.get_mut(second_use.curve()).unwrap() = Curve2dGeom::Line(
-        Line2d::new(
-            line.origin() + line.dir() * (range.lo + range.hi),
-            -line.dir(),
-        )
-        .unwrap(),
-    );
-    let old_map = second_use.edge_to_pcurve();
-    let reversed_map =
-        ParamMap1d::affine(-old_map.scale(), range.lo + range.hi - old_map.offset()).unwrap();
-    store.get_mut(second).unwrap().pcurve =
-        Some(FinPcurve::new(second_use.curve(), second_use.range(), reversed_map).unwrap());
-
-    let edge = store.get_mut(edge_id).unwrap();
-    edge.curve = None;
-    edge.bounds = Some((0.0, 1.0));
-    edge.tolerance = Some(EntityTolerance::operation(LINEAR_RESOLUTION, "writer-test").unwrap());
-    edge_id
+        let edge = store.get_mut(edge_id).unwrap();
+        edge.curve = None;
+        edge.bounds = Some((0.0, 1.0));
+        edge.tolerance =
+            Some(EntityTolerance::operation(LINEAR_RESOLUTION, "writer-test").unwrap());
+        edge_id
+    })
 }
 
 fn replace_face_with_bilinear_nurbs(store: &mut Store, body: BodyId) {
-    let face_id = first_plane_face(store, body);
-    let surface_id = store.get(face_id).unwrap().surface;
-    let plane = match store.get(surface_id).unwrap() {
-        SurfaceGeom::Plane(plane) => *plane,
-        _ => unreachable!(),
-    };
+    edit_body(store, body, |store| {
+        let face_id = first_plane_face(store, body);
+        let surface_id = store.get(face_id).unwrap().surface;
+        let plane = match store.get(surface_id).unwrap() {
+            SurfaceGeom::Plane(plane) => *plane,
+            _ => unreachable!(),
+        };
 
-    let mut u_bounds = [f64::INFINITY, f64::NEG_INFINITY];
-    let mut v_bounds = [f64::INFINITY, f64::NEG_INFINITY];
-    for &loop_id in &store.get(face_id).unwrap().loops {
-        for &fin_id in &store.get(loop_id).unwrap().fins {
-            let edge = store.get(store.get(fin_id).unwrap().edge).unwrap();
-            for vertex in edge.vertices.into_iter().flatten() {
-                let local = plane
-                    .frame()
-                    .to_local(store.vertex_position(vertex).unwrap());
-                u_bounds[0] = u_bounds[0].min(local.x);
-                u_bounds[1] = u_bounds[1].max(local.x);
-                v_bounds[0] = v_bounds[0].min(local.y);
-                v_bounds[1] = v_bounds[1].max(local.y);
+        let mut u_bounds = [f64::INFINITY, f64::NEG_INFINITY];
+        let mut v_bounds = [f64::INFINITY, f64::NEG_INFINITY];
+        for &loop_id in &store.get(face_id).unwrap().loops {
+            for &fin_id in &store.get(loop_id).unwrap().fins {
+                let edge = store.get(store.get(fin_id).unwrap().edge).unwrap();
+                for vertex in edge.vertices.into_iter().flatten() {
+                    let local = plane
+                        .frame()
+                        .to_local(store.vertex_position(vertex).unwrap());
+                    u_bounds[0] = u_bounds[0].min(local.x);
+                    u_bounds[1] = u_bounds[1].max(local.x);
+                    v_bounds[0] = v_bounds[0].min(local.y);
+                    v_bounds[1] = v_bounds[1].max(local.y);
+                }
             }
         }
-    }
 
-    let points = vec![
-        plane.frame().point_at(u_bounds[0], v_bounds[0], 0.0),
-        plane.frame().point_at(u_bounds[0], v_bounds[1], 0.0),
-        plane.frame().point_at(u_bounds[1], v_bounds[0], 0.0),
-        plane.frame().point_at(u_bounds[1], v_bounds[1], 0.0),
-    ];
-    let surface = NurbsSurface::new(
-        1,
-        1,
-        vec![0.0, 0.0, 1.0, 1.0],
-        vec![0.0, 0.0, 1.0, 1.0],
-        points,
-        None,
-    )
-    .unwrap();
-    *store.get_mut(surface_id).unwrap() = SurfaceGeom::Nurbs(surface);
-    store.get_mut(face_id).unwrap().domain =
-        Some(ktopo::entity::FaceDomain::from_bounds(0.0, 1.0, 0.0, 1.0).unwrap());
+        let points = vec![
+            plane.frame().point_at(u_bounds[0], v_bounds[0], 0.0),
+            plane.frame().point_at(u_bounds[0], v_bounds[1], 0.0),
+            plane.frame().point_at(u_bounds[1], v_bounds[0], 0.0),
+            plane.frame().point_at(u_bounds[1], v_bounds[1], 0.0),
+        ];
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            points,
+            None,
+        )
+        .unwrap();
+        *store.get_mut(surface_id).unwrap() = SurfaceGeom::Nurbs(surface);
+        store.get_mut(face_id).unwrap().domain =
+            Some(ktopo::entity::FaceDomain::from_bounds(0.0, 1.0, 0.0, 1.0).unwrap());
 
-    // The replacement surface uses normalized [0, 1]^2 parameters, so
-    // replace the inherited plane-coordinate pcurves with exact normalized
-    // ones while retaining each fin's independent Curve2d identity.
-    let du = u_bounds[1] - u_bounds[0];
-    let dv = v_bounds[1] - v_bounds[0];
-    let fin_ids: Vec<_> = store
-        .get(face_id)
-        .unwrap()
-        .loops
-        .iter()
-        .flat_map(|&loop_id| store.get(loop_id).unwrap().fins.iter().copied())
-        .collect();
-    for fin_id in fin_ids {
-        let fin = store.get(fin_id).unwrap();
-        let edge = store.get(fin.edge).unwrap();
-        let [Some(start_id), Some(end_id)] = edge.vertices else {
-            unreachable!()
-        };
-        let Some((t0, t1)) = edge.bounds else {
-            unreachable!()
-        };
-        let to_uv = |point: Point3| {
-            let local = plane.frame().to_local(point);
-            Point2::new((local.x - u_bounds[0]) / du, (local.y - v_bounds[0]) / dv)
-        };
-        let start = to_uv(store.vertex_position(start_id).unwrap());
-        let end = to_uv(store.vertex_position(end_id).unwrap());
-        let uv_len = (end - start).norm();
-        let pcurve_id = fin.pcurve.unwrap().curve();
-        *store.get_mut(pcurve_id).unwrap() =
-            Curve2dGeom::Line(Line2d::new(start, end - start).unwrap());
-        let scale = uv_len / (t1 - t0);
-        let map = ParamMap1d::affine(scale, -scale * t0).unwrap();
-        store.get_mut(fin_id).unwrap().pcurve =
-            Some(FinPcurve::new(pcurve_id, ParamRange::new(0.0, uv_len), map).unwrap());
-    }
+        // The replacement surface uses normalized [0, 1]^2 parameters, so
+        // replace the inherited plane-coordinate pcurves with exact normalized
+        // ones while retaining each fin's independent Curve2d identity.
+        let du = u_bounds[1] - u_bounds[0];
+        let dv = v_bounds[1] - v_bounds[0];
+        let fin_ids: Vec<_> = store
+            .get(face_id)
+            .unwrap()
+            .loops
+            .iter()
+            .flat_map(|&loop_id| store.get(loop_id).unwrap().fins.iter().copied())
+            .collect();
+        for fin_id in fin_ids {
+            let fin = store.get(fin_id).unwrap();
+            let edge = store.get(fin.edge).unwrap();
+            let [Some(start_id), Some(end_id)] = edge.vertices else {
+                unreachable!()
+            };
+            let Some((t0, t1)) = edge.bounds else {
+                unreachable!()
+            };
+            let to_uv = |point: Point3| {
+                let local = plane.frame().to_local(point);
+                Point2::new((local.x - u_bounds[0]) / du, (local.y - v_bounds[0]) / dv)
+            };
+            let start = to_uv(store.vertex_position(start_id).unwrap());
+            let end = to_uv(store.vertex_position(end_id).unwrap());
+            let uv_len = (end - start).norm();
+            let pcurve_id = fin.pcurve.unwrap().curve();
+            *store.get_mut(pcurve_id).unwrap() =
+                Curve2dGeom::Line(Line2d::new(start, end - start).unwrap());
+            let scale = uv_len / (t1 - t0);
+            let map = ParamMap1d::affine(scale, -scale * t0).unwrap();
+            store.get_mut(fin_id).unwrap().pcurve =
+                Some(FinPcurve::new(pcurve_id, ParamRange::new(0.0, uv_len), map).unwrap());
+        }
+    });
 }
 
 fn sheet_square(store: &mut Store) -> BodyId {
-    let body = store.add(Body {
-        kind: BodyKind::Sheet,
-        regions: Vec::new(),
-    });
-    let region = store.add(Region {
-        body,
-        kind: RegionKind::Void,
-        shells: Vec::new(),
-    });
-    store.get_mut(body).unwrap().regions.push(region);
-    let shell = store.add(Shell {
-        region,
-        faces: Vec::new(),
-        edges: Vec::new(),
-        vertex: None,
-    });
-    store.get_mut(region).unwrap().shells.push(shell);
-
-    let surface = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
-    let face = store.add(Face {
-        shell,
-        loops: Vec::new(),
-        surface,
-        sense: Sense::Forward,
-        domain: None,
-        tolerance: None,
-    });
-    store.get_mut(shell).unwrap().faces.push(face);
-    let loop_id = store.add(Loop {
-        face,
-        fins: Vec::new(),
-    });
-    store.get_mut(face).unwrap().loops.push(loop_id);
-
-    let corners = [
-        Point3::new(0.0, 0.0, 0.0),
-        Point3::new(1.0, 0.0, 0.0),
-        Point3::new(1.0, 1.0, 0.0),
-        Point3::new(0.0, 1.0, 0.0),
-    ];
-    let vertices = corners.map(|point| {
-        let point = store.add(point);
-        store.add(Vertex {
-            point,
-            tolerance: None,
-        })
-    });
-    for i in 0..corners.len() {
-        let start = corners[i];
-        let end = corners[(i + 1) % corners.len()];
-        let curve = store.add(CurveGeom::Line(Line::new(start, end - start).unwrap()));
-        let edge = store.add(Edge {
-            curve: Some(curve),
-            vertices: [Some(vertices[i]), Some(vertices[(i + 1) % vertices.len()])],
-            bounds: Some((0.0, (end - start).norm())),
-            fins: Vec::new(),
-            tolerance: None,
+    assemble_body(store, |store| {
+        let body = store.add(Body {
+            kind: BodyKind::Sheet,
+            regions: Vec::new(),
         });
-        let fin = store.add(Fin {
-            parent: loop_id,
-            edge,
-            sense: Sense::Forward,
-            pcurve: None,
+        let region = store.add(Region {
+            body,
+            kind: RegionKind::Void,
+            shells: Vec::new(),
         });
-        store.get_mut(loop_id).unwrap().fins.push(fin);
-        store.get_mut(edge).unwrap().fins.push(fin);
-    }
-    body
-}
+        store.get_mut(body).unwrap().regions.push(region);
+        let shell = store.add(Shell {
+            region,
+            faces: Vec::new(),
+            edges: Vec::new(),
+            vertex: None,
+        });
+        store.get_mut(region).unwrap().shells.push(shell);
 
-fn sheet_semicircle(store: &mut Store) -> BodyId {
-    let body = store.add(Body {
-        kind: BodyKind::Sheet,
-        regions: Vec::new(),
-    });
-    let region = store.add(Region {
-        body,
-        kind: RegionKind::Void,
-        shells: Vec::new(),
-    });
-    store.get_mut(body).unwrap().regions.push(region);
-    let shell = store.add(Shell {
-        region,
-        faces: Vec::new(),
-        edges: Vec::new(),
-        vertex: None,
-    });
-    store.get_mut(region).unwrap().shells.push(shell);
-
-    let surface = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
-    let face = store.add(Face {
-        shell,
-        loops: Vec::new(),
-        surface,
-        sense: Sense::Forward,
-        domain: None,
-        tolerance: None,
-    });
-    store.get_mut(shell).unwrap().faces.push(face);
-    let loop_id = store.add(Loop {
-        face,
-        fins: Vec::new(),
-    });
-    store.get_mut(face).unwrap().loops.push(loop_id);
-
-    let right = Point3::new(1.0, 0.0, 0.0);
-    let left = Point3::new(-1.0, 0.0, 0.0);
-    let vertices = [right, left].map(|point| {
-        let point = store.add(point);
-        store.add(Vertex {
-            point,
-            tolerance: None,
-        })
-    });
-
-    let circle = store.add(CurveGeom::Circle(Circle::new(Frame::world(), 1.0).unwrap()));
-    let arc = store.add(Edge {
-        curve: Some(circle),
-        vertices: [Some(vertices[0]), Some(vertices[1])],
-        bounds: Some((0.0, core::f64::consts::PI)),
-        fins: Vec::new(),
-        tolerance: None,
-    });
-    let arc_fin = store.add(Fin {
-        parent: loop_id,
-        edge: arc,
-        sense: Sense::Forward,
-        pcurve: None,
-    });
-    store.get_mut(loop_id).unwrap().fins.push(arc_fin);
-    store.get_mut(arc).unwrap().fins.push(arc_fin);
-
-    let line = store.add(CurveGeom::Line(Line::new(left, right - left).unwrap()));
-    let chord = store.add(Edge {
-        curve: Some(line),
-        vertices: [Some(vertices[1]), Some(vertices[0])],
-        bounds: Some((0.0, (right - left).norm())),
-        fins: Vec::new(),
-        tolerance: None,
-    });
-    let chord_fin = store.add(Fin {
-        parent: loop_id,
-        edge: chord,
-        sense: Sense::Forward,
-        pcurve: None,
-    });
-    store.get_mut(loop_id).unwrap().fins.push(chord_fin);
-    store.get_mut(chord).unwrap().fins.push(chord_fin);
-    body
-}
-
-fn sheet_two_faces_shared_surface(store: &mut Store) -> BodyId {
-    let body = store.add(Body {
-        kind: BodyKind::Sheet,
-        regions: Vec::new(),
-    });
-    let region = store.add(Region {
-        body,
-        kind: RegionKind::Void,
-        shells: Vec::new(),
-    });
-    store.get_mut(body).unwrap().regions.push(region);
-    let shell = store.add(Shell {
-        region,
-        faces: Vec::new(),
-        edges: Vec::new(),
-        vertex: None,
-    });
-    store.get_mut(region).unwrap().shells.push(shell);
-
-    let surface = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
-    for x0 in [0.0, 2.0] {
+        let surface = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
         let face = store.add(Face {
             shell,
             loops: Vec::new(),
@@ -455,10 +338,10 @@ fn sheet_two_faces_shared_surface(store: &mut Store) -> BodyId {
         store.get_mut(face).unwrap().loops.push(loop_id);
 
         let corners = [
-            Point3::new(x0, 0.0, 0.0),
-            Point3::new(x0 + 1.0, 0.0, 0.0),
-            Point3::new(x0 + 1.0, 1.0, 0.0),
-            Point3::new(x0, 1.0, 0.0),
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
         ];
         let vertices = corners.map(|point| {
             let point = store.add(point);
@@ -487,226 +370,394 @@ fn sheet_two_faces_shared_surface(store: &mut Store) -> BodyId {
             store.get_mut(loop_id).unwrap().fins.push(fin);
             store.get_mut(edge).unwrap().fins.push(fin);
         }
-    }
-    body
+        body
+    })
 }
 
-fn wire_line(store: &mut Store) -> BodyId {
-    let body = store.add(Body {
-        kind: BodyKind::Wire,
-        regions: Vec::new(),
-    });
-    let region = store.add(Region {
-        body,
-        kind: RegionKind::Void,
-        shells: Vec::new(),
-    });
-    store.get_mut(body).unwrap().regions.push(region);
-    let shell = store.add(Shell {
-        region,
-        faces: Vec::new(),
-        edges: Vec::new(),
-        vertex: None,
-    });
-    store.get_mut(region).unwrap().shells.push(shell);
+fn sheet_semicircle(store: &mut Store) -> BodyId {
+    assemble_body(store, |store| {
+        let body = store.add(Body {
+            kind: BodyKind::Sheet,
+            regions: Vec::new(),
+        });
+        let region = store.add(Region {
+            body,
+            kind: RegionKind::Void,
+            shells: Vec::new(),
+        });
+        store.get_mut(body).unwrap().regions.push(region);
+        let shell = store.add(Shell {
+            region,
+            faces: Vec::new(),
+            edges: Vec::new(),
+            vertex: None,
+        });
+        store.get_mut(region).unwrap().shells.push(shell);
 
-    let start = Point3::new(0.0, 0.0, 0.0);
-    let end = Point3::new(1.25, 0.0, 0.0);
-    let vertices = [start, end].map(|point| {
-        let point = store.add(point);
-        store.add(Vertex {
-            point,
+        let surface = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
+        let face = store.add(Face {
+            shell,
+            loops: Vec::new(),
+            surface,
+            sense: Sense::Forward,
+            domain: None,
             tolerance: None,
-        })
-    });
-    let curve = store.add(CurveGeom::Line(Line::new(start, end - start).unwrap()));
-    let edge = store.add(Edge {
-        curve: Some(curve),
-        vertices: [Some(vertices[0]), Some(vertices[1])],
-        bounds: Some((0.0, (end - start).norm())),
-        fins: Vec::new(),
-        tolerance: None,
-    });
-    store.get_mut(shell).unwrap().edges.push(edge);
-    body
-}
+        });
+        store.get_mut(shell).unwrap().faces.push(face);
+        let loop_id = store.add(Loop {
+            face,
+            fins: Vec::new(),
+        });
+        store.get_mut(face).unwrap().loops.push(loop_id);
 
-fn wire_shared_line_segments(store: &mut Store) -> BodyId {
-    let body = store.add(Body {
-        kind: BodyKind::Wire,
-        regions: Vec::new(),
-    });
-    let region = store.add(Region {
-        body,
-        kind: RegionKind::Void,
-        shells: Vec::new(),
-    });
-    store.get_mut(body).unwrap().regions.push(region);
-    let shell = store.add(Shell {
-        region,
-        faces: Vec::new(),
-        edges: Vec::new(),
-        vertex: None,
-    });
-    store.get_mut(region).unwrap().shells.push(shell);
+        let right = Point3::new(1.0, 0.0, 0.0);
+        let left = Point3::new(-1.0, 0.0, 0.0);
+        let vertices = [right, left].map(|point| {
+            let point = store.add(point);
+            store.add(Vertex {
+                point,
+                tolerance: None,
+            })
+        });
 
-    let points = [
-        Point3::new(0.0, 0.0, 0.0),
-        Point3::new(1.0, 0.0, 0.0),
-        Point3::new(2.0, 0.0, 0.0),
-    ];
-    let vertices = points.map(|point| {
-        let point = store.add(point);
-        store.add(Vertex {
-            point,
-            tolerance: None,
-        })
-    });
-    let curve = store.add(CurveGeom::Line(
-        Line::new(points[0], Vec3::new(1.0, 0.0, 0.0)).unwrap(),
-    ));
-    for i in 0..2 {
-        let edge = store.add(Edge {
-            curve: Some(curve),
-            vertices: [Some(vertices[i]), Some(vertices[i + 1])],
-            bounds: Some((i as f64, i as f64 + 1.0)),
+        let circle = store.add(CurveGeom::Circle(Circle::new(Frame::world(), 1.0).unwrap()));
+        let arc = store.add(Edge {
+            curve: Some(circle),
+            vertices: [Some(vertices[0]), Some(vertices[1])],
+            bounds: Some((0.0, core::f64::consts::PI)),
             fins: Vec::new(),
             tolerance: None,
         });
-        store.get_mut(shell).unwrap().edges.push(edge);
-    }
-    body
+        let arc_fin = store.add(Fin {
+            parent: loop_id,
+            edge: arc,
+            sense: Sense::Forward,
+            pcurve: None,
+        });
+        store.get_mut(loop_id).unwrap().fins.push(arc_fin);
+        store.get_mut(arc).unwrap().fins.push(arc_fin);
+
+        let line = store.add(CurveGeom::Line(Line::new(left, right - left).unwrap()));
+        let chord = store.add(Edge {
+            curve: Some(line),
+            vertices: [Some(vertices[1]), Some(vertices[0])],
+            bounds: Some((0.0, (right - left).norm())),
+            fins: Vec::new(),
+            tolerance: None,
+        });
+        let chord_fin = store.add(Fin {
+            parent: loop_id,
+            edge: chord,
+            sense: Sense::Forward,
+            pcurve: None,
+        });
+        store.get_mut(loop_id).unwrap().fins.push(chord_fin);
+        store.get_mut(chord).unwrap().fins.push(chord_fin);
+        body
+    })
 }
 
-fn wire_shared_point_vertices(store: &mut Store) -> BodyId {
-    let body = store.add(Body {
-        kind: BodyKind::Wire,
-        regions: Vec::new(),
-    });
-    let region = store.add(Region {
-        body,
-        kind: RegionKind::Void,
-        shells: Vec::new(),
-    });
-    store.get_mut(body).unwrap().regions.push(region);
-    let shell = store.add(Shell {
-        region,
-        faces: Vec::new(),
-        edges: Vec::new(),
-        vertex: None,
-    });
-    store.get_mut(region).unwrap().shells.push(shell);
+fn sheet_two_faces_shared_surface(store: &mut Store) -> BodyId {
+    assemble_body(store, |store| {
+        let body = store.add(Body {
+            kind: BodyKind::Sheet,
+            regions: Vec::new(),
+        });
+        let region = store.add(Region {
+            body,
+            kind: RegionKind::Void,
+            shells: Vec::new(),
+        });
+        store.get_mut(body).unwrap().regions.push(region);
+        let shell = store.add(Shell {
+            region,
+            faces: Vec::new(),
+            edges: Vec::new(),
+            vertex: None,
+        });
+        store.get_mut(region).unwrap().shells.push(shell);
 
-    let coords = [
-        Point3::new(0.0, 0.0, 0.0),
-        Point3::new(1.0, 0.0, 0.0),
-        Point3::new(1.0, 1.0, 0.0),
-    ];
-    let points = coords.map(|point| store.add(point));
-    let vertices = [
-        store.add(Vertex {
-            point: points[0],
-            tolerance: None,
-        }),
-        store.add(Vertex {
-            point: points[1],
-            tolerance: None,
-        }),
-        store.add(Vertex {
-            point: points[1],
-            tolerance: None,
-        }),
-        store.add(Vertex {
-            point: points[2],
-            tolerance: None,
-        }),
-    ];
+        let surface = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
+        for x0 in [0.0, 2.0] {
+            let face = store.add(Face {
+                shell,
+                loops: Vec::new(),
+                surface,
+                sense: Sense::Forward,
+                domain: None,
+                tolerance: None,
+            });
+            store.get_mut(shell).unwrap().faces.push(face);
+            let loop_id = store.add(Loop {
+                face,
+                fins: Vec::new(),
+            });
+            store.get_mut(face).unwrap().loops.push(loop_id);
 
-    let segments = [
-        (coords[0], coords[1], vertices[0], vertices[1]),
-        (coords[1], coords[2], vertices[2], vertices[3]),
-    ];
-    for (start, end, start_vertex, end_vertex) in segments {
+            let corners = [
+                Point3::new(x0, 0.0, 0.0),
+                Point3::new(x0 + 1.0, 0.0, 0.0),
+                Point3::new(x0 + 1.0, 1.0, 0.0),
+                Point3::new(x0, 1.0, 0.0),
+            ];
+            let vertices = corners.map(|point| {
+                let point = store.add(point);
+                store.add(Vertex {
+                    point,
+                    tolerance: None,
+                })
+            });
+            for i in 0..corners.len() {
+                let start = corners[i];
+                let end = corners[(i + 1) % corners.len()];
+                let curve = store.add(CurveGeom::Line(Line::new(start, end - start).unwrap()));
+                let edge = store.add(Edge {
+                    curve: Some(curve),
+                    vertices: [Some(vertices[i]), Some(vertices[(i + 1) % vertices.len()])],
+                    bounds: Some((0.0, (end - start).norm())),
+                    fins: Vec::new(),
+                    tolerance: None,
+                });
+                let fin = store.add(Fin {
+                    parent: loop_id,
+                    edge,
+                    sense: Sense::Forward,
+                    pcurve: None,
+                });
+                store.get_mut(loop_id).unwrap().fins.push(fin);
+                store.get_mut(edge).unwrap().fins.push(fin);
+            }
+        }
+        body
+    })
+}
+
+fn wire_line(store: &mut Store) -> BodyId {
+    assemble_body(store, |store| {
+        let body = store.add(Body {
+            kind: BodyKind::Wire,
+            regions: Vec::new(),
+        });
+        let region = store.add(Region {
+            body,
+            kind: RegionKind::Void,
+            shells: Vec::new(),
+        });
+        store.get_mut(body).unwrap().regions.push(region);
+        let shell = store.add(Shell {
+            region,
+            faces: Vec::new(),
+            edges: Vec::new(),
+            vertex: None,
+        });
+        store.get_mut(region).unwrap().shells.push(shell);
+
+        let start = Point3::new(0.0, 0.0, 0.0);
+        let end = Point3::new(1.25, 0.0, 0.0);
+        let vertices = [start, end].map(|point| {
+            let point = store.add(point);
+            store.add(Vertex {
+                point,
+                tolerance: None,
+            })
+        });
         let curve = store.add(CurveGeom::Line(Line::new(start, end - start).unwrap()));
         let edge = store.add(Edge {
             curve: Some(curve),
-            vertices: [Some(start_vertex), Some(end_vertex)],
+            vertices: [Some(vertices[0]), Some(vertices[1])],
             bounds: Some((0.0, (end - start).norm())),
             fins: Vec::new(),
             tolerance: None,
         });
         store.get_mut(shell).unwrap().edges.push(edge);
-    }
-    body
+        body
+    })
+}
+
+fn wire_shared_line_segments(store: &mut Store) -> BodyId {
+    assemble_body(store, |store| {
+        let body = store.add(Body {
+            kind: BodyKind::Wire,
+            regions: Vec::new(),
+        });
+        let region = store.add(Region {
+            body,
+            kind: RegionKind::Void,
+            shells: Vec::new(),
+        });
+        store.get_mut(body).unwrap().regions.push(region);
+        let shell = store.add(Shell {
+            region,
+            faces: Vec::new(),
+            edges: Vec::new(),
+            vertex: None,
+        });
+        store.get_mut(region).unwrap().shells.push(shell);
+
+        let points = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+        ];
+        let vertices = points.map(|point| {
+            let point = store.add(point);
+            store.add(Vertex {
+                point,
+                tolerance: None,
+            })
+        });
+        let curve = store.add(CurveGeom::Line(
+            Line::new(points[0], Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+        ));
+        for i in 0..2 {
+            let edge = store.add(Edge {
+                curve: Some(curve),
+                vertices: [Some(vertices[i]), Some(vertices[i + 1])],
+                bounds: Some((i as f64, i as f64 + 1.0)),
+                fins: Vec::new(),
+                tolerance: None,
+            });
+            store.get_mut(shell).unwrap().edges.push(edge);
+        }
+        body
+    })
+}
+
+fn wire_shared_point_vertices(store: &mut Store) -> BodyId {
+    assemble_body(store, |store| {
+        let body = store.add(Body {
+            kind: BodyKind::Wire,
+            regions: Vec::new(),
+        });
+        let region = store.add(Region {
+            body,
+            kind: RegionKind::Void,
+            shells: Vec::new(),
+        });
+        store.get_mut(body).unwrap().regions.push(region);
+        let shell = store.add(Shell {
+            region,
+            faces: Vec::new(),
+            edges: Vec::new(),
+            vertex: None,
+        });
+        store.get_mut(region).unwrap().shells.push(shell);
+
+        let coords = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+        ];
+        let points = coords.map(|point| store.add(point));
+        let vertices = [
+            store.add(Vertex {
+                point: points[0],
+                tolerance: None,
+            }),
+            store.add(Vertex {
+                point: points[1],
+                tolerance: None,
+            }),
+            store.add(Vertex {
+                point: points[1],
+                tolerance: None,
+            }),
+            store.add(Vertex {
+                point: points[2],
+                tolerance: None,
+            }),
+        ];
+
+        let segments = [
+            (coords[0], coords[1], vertices[0], vertices[1]),
+            (coords[1], coords[2], vertices[2], vertices[3]),
+        ];
+        for (start, end, start_vertex, end_vertex) in segments {
+            let curve = store.add(CurveGeom::Line(Line::new(start, end - start).unwrap()));
+            let edge = store.add(Edge {
+                curve: Some(curve),
+                vertices: [Some(start_vertex), Some(end_vertex)],
+                bounds: Some((0.0, (end - start).norm())),
+                fins: Vec::new(),
+                tolerance: None,
+            });
+            store.get_mut(shell).unwrap().edges.push(edge);
+        }
+        body
+    })
 }
 
 fn wire_ellipse_arc(store: &mut Store) -> BodyId {
-    let body = store.add(Body {
-        kind: BodyKind::Wire,
-        regions: Vec::new(),
-    });
-    let region = store.add(Region {
-        body,
-        kind: RegionKind::Void,
-        shells: Vec::new(),
-    });
-    store.get_mut(body).unwrap().regions.push(region);
-    let shell = store.add(Shell {
-        region,
-        faces: Vec::new(),
-        edges: Vec::new(),
-        vertex: None,
-    });
-    store.get_mut(region).unwrap().shells.push(shell);
+    assemble_body(store, |store| {
+        let body = store.add(Body {
+            kind: BodyKind::Wire,
+            regions: Vec::new(),
+        });
+        let region = store.add(Region {
+            body,
+            kind: RegionKind::Void,
+            shells: Vec::new(),
+        });
+        store.get_mut(body).unwrap().regions.push(region);
+        let shell = store.add(Shell {
+            region,
+            faces: Vec::new(),
+            edges: Vec::new(),
+            vertex: None,
+        });
+        store.get_mut(region).unwrap().shells.push(shell);
 
-    let start = Point3::new(2.0, 0.0, 0.0);
-    let end = Point3::new(0.0, 1.0, 0.0);
-    let vertices = [start, end].map(|point| {
-        let point = store.add(point);
-        store.add(Vertex {
-            point,
+        let start = Point3::new(2.0, 0.0, 0.0);
+        let end = Point3::new(0.0, 1.0, 0.0);
+        let vertices = [start, end].map(|point| {
+            let point = store.add(point);
+            store.add(Vertex {
+                point,
+                tolerance: None,
+            })
+        });
+        let curve = store.add(CurveGeom::Ellipse(
+            Ellipse::new(Frame::world(), 2.0, 1.0).unwrap(),
+        ));
+        let edge = store.add(Edge {
+            curve: Some(curve),
+            vertices: [Some(vertices[0]), Some(vertices[1])],
+            bounds: Some((0.0, core::f64::consts::FRAC_PI_2)),
+            fins: Vec::new(),
             tolerance: None,
-        })
-    });
-    let curve = store.add(CurveGeom::Ellipse(
-        Ellipse::new(Frame::world(), 2.0, 1.0).unwrap(),
-    ));
-    let edge = store.add(Edge {
-        curve: Some(curve),
-        vertices: [Some(vertices[0]), Some(vertices[1])],
-        bounds: Some((0.0, core::f64::consts::FRAC_PI_2)),
-        fins: Vec::new(),
-        tolerance: None,
-    });
-    store.get_mut(shell).unwrap().edges.push(edge);
-    body
+        });
+        store.get_mut(shell).unwrap().edges.push(edge);
+        body
+    })
 }
 
 fn acorn_point(store: &mut Store) -> BodyId {
-    let body = store.add(Body {
-        kind: BodyKind::Acorn,
-        regions: Vec::new(),
-    });
-    let region = store.add(Region {
-        body,
-        kind: RegionKind::Void,
-        shells: Vec::new(),
-    });
-    store.get_mut(body).unwrap().regions.push(region);
+    assemble_body(store, |store| {
+        let body = store.add(Body {
+            kind: BodyKind::Acorn,
+            regions: Vec::new(),
+        });
+        let region = store.add(Region {
+            body,
+            kind: RegionKind::Void,
+            shells: Vec::new(),
+        });
+        store.get_mut(body).unwrap().regions.push(region);
 
-    let point = store.add(Point3::new(0.25, -0.5, 1.5));
-    let vertex = store.add(Vertex {
-        point,
-        tolerance: None,
-    });
-    let shell = store.add(Shell {
-        region,
-        faces: Vec::new(),
-        edges: Vec::new(),
-        vertex: Some(vertex),
-    });
-    store.get_mut(region).unwrap().shells.push(shell);
-    body
+        let point = store.add(Point3::new(0.25, -0.5, 1.5));
+        let vertex = store.add(Vertex {
+            point,
+            tolerance: None,
+        });
+        let shell = store.add(Shell {
+            region,
+            faces: Vec::new(),
+            edges: Vec::new(),
+            vertex: Some(vertex),
+        });
+        store.get_mut(region).unwrap().shells.push(shell);
+        body
+    })
 }
 
 #[test]
@@ -849,8 +900,10 @@ fn non_null_face_tolerance_is_rejected_by_schema_13006_writer() {
     let mut store = Store::new();
     let body = make::block(&mut store, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
     let face = store.faces_of_body(body).unwrap()[0];
-    store.get_mut(face).unwrap().tolerance =
-        Some(EntityTolerance::operation(LINEAR_RESOLUTION, "writer-test").unwrap());
+    edit_body(&mut store, body, |store| {
+        store.get_mut(face).unwrap().tolerance =
+            Some(EntityTolerance::operation(LINEAR_RESOLUTION, "writer-test").unwrap());
+    });
     let error = kxt::export_text(&store, body).unwrap_err();
     assert_eq!(error.capability(), Some(kxt::XtCapability::FaceTolerances));
 }
@@ -861,10 +914,12 @@ fn exact_tolerant_edge_and_vertex_round_trip() {
     let body = make::block(&mut store, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
     let edge = first_bounded_edge(&store, body);
     let vertex = store.get(edge).unwrap().vertices[0].unwrap();
-    store.get_mut(edge).unwrap().tolerance =
-        Some(EntityTolerance::operation(LINEAR_RESOLUTION * 10.0, "writer-test").unwrap());
-    store.get_mut(vertex).unwrap().tolerance =
-        Some(EntityTolerance::operation(LINEAR_RESOLUTION * 20.0, "writer-test").unwrap());
+    edit_body(&mut store, body, |store| {
+        store.get_mut(edge).unwrap().tolerance =
+            Some(EntityTolerance::operation(LINEAR_RESOLUTION * 10.0, "writer-test").unwrap());
+        store.get_mut(vertex).unwrap().tolerance =
+            Some(EntityTolerance::operation(LINEAR_RESOLUTION * 20.0, "writer-test").unwrap());
+    });
 
     let (text, imported, imported_body) = assert_checker_roundtrip(&store, body);
     let parsed = kxt::read_xt(text.as_bytes()).unwrap();
