@@ -23,6 +23,19 @@ pub enum Error {
         /// The offending tolerance value.
         value: f64,
     },
+    /// A tolerance-growth budget limit was negative or not finite.
+    InvalidToleranceBudget {
+        /// The offending total-growth limit.
+        limit: f64,
+    },
+    /// An operation attempted to enlarge entity tolerances beyond its
+    /// declared aggregate growth budget.
+    ToleranceBudgetExceeded {
+        /// Growth requested by the current change.
+        requested_growth: f64,
+        /// Growth still available before the current change.
+        remaining_growth: f64,
+    },
     /// Geometry construction received degenerate or inconsistent inputs
     /// (zero-length axis, parallel basis hint, non-positive radius, …).
     InvalidGeometry {
@@ -64,6 +77,17 @@ impl fmt::Display for Error {
             Error::InvalidTolerance { value } => write!(
                 f,
                 "tolerance {value} is below session resolution or not finite"
+            ),
+            Error::InvalidToleranceBudget { limit } => write!(
+                f,
+                "tolerance-growth budget {limit} is negative or not finite"
+            ),
+            Error::ToleranceBudgetExceeded {
+                requested_growth,
+                remaining_growth,
+            } => write!(
+                f,
+                "tolerance growth {requested_growth} exceeds remaining budget {remaining_growth}"
             ),
             Error::InvalidGeometry { reason } => {
                 write!(f, "invalid geometry construction: {reason}")

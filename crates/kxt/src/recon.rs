@@ -49,6 +49,7 @@ use ktopo::entity::{
 };
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::store::Store;
+use ktopo::tolerance::EntityTolerance;
 use ktopo::transaction::{Journal, MutationKind};
 use std::collections::BTreeMap;
 
@@ -233,13 +234,15 @@ fn vector(file: &XtFile, node: &Node, name: &'static str) -> Result<Vec3> {
 }
 
 /// Optional tolerance: null double → `None`.
-fn tolerance(file: &XtFile, node: &Node) -> Result<Option<f64>> {
+fn tolerance(file: &XtFile, node: &Node) -> Result<Option<EntityTolerance>> {
     Ok(match field(file, node, "tolerance")? {
         Value::Null => None,
-        v => Some(v.as_f64().ok_or(XtError::BadField {
-            index: 0,
-            what: "tolerance is not numeric",
-        })?),
+        v => Some(EntityTolerance::imported_xt(v.as_f64().ok_or(
+            XtError::BadField {
+                index: 0,
+                what: "tolerance is not numeric",
+            },
+        )?)?),
     })
 }
 
@@ -755,6 +758,7 @@ impl Recon<'_> {
             .store
             .get(edge)?
             .tolerance
+            .map(EntityTolerance::value)
             .unwrap_or(LINEAR_RESOLUTION)
             .max(LINEAR_RESOLUTION);
         if surface.eval([uv1.x, uv1.y]).dist(trim_point_1) > tolerance

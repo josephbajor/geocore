@@ -25,6 +25,7 @@
 //!   period of a closed curve and has no vertices.
 
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
+use crate::tolerance::EntityTolerance;
 use kcore::arena::Handle;
 use kcore::error::{Error, Result};
 use kgeom::curve2d::Curve2d;
@@ -234,10 +235,11 @@ pub struct Face {
     /// Finite conservative UV work box. `None` means the domain is not yet
     /// known; consumers must not replace it with sampled guesses.
     pub domain: Option<FaceDomain>,
-    /// Optional imported/operation tolerance. The published XT FACE field
-    /// is normally null; unlike tolerant edges/vertices, this does not
-    /// change the face's exact/tolerant classification.
-    pub tolerance: Option<f64>,
+    /// Optional validated imported/operation tolerance with retained origin
+    /// and growth provenance. The published XT FACE field is normally null;
+    /// unlike tolerant edges/vertices, this does not change the face's
+    /// exact/tolerant classification.
+    pub tolerance: Option<EntityTolerance>,
 }
 
 /// A closed ring of fins bounding a face.
@@ -598,9 +600,9 @@ pub struct Edge {
     /// Fins using this edge, in creation order (2 for a manifold interior
     /// edge, 1 on a sheet boundary, 0 for wireframe).
     pub fins: Vec<FinId>,
-    /// Tolerance for a tolerant edge (≥ session linear resolution), or
-    /// `None` for an exact edge.
-    pub tolerance: Option<f64>,
+    /// Validated tolerance and provenance for a tolerant edge (≥ session
+    /// linear resolution), or `None` for an exact edge.
+    pub tolerance: Option<EntityTolerance>,
 }
 
 /// A point of the model, shared by all edges that end there.
@@ -608,9 +610,9 @@ pub struct Edge {
 pub struct Vertex {
     /// Position geometry.
     pub point: PointId,
-    /// Tolerance for a tolerant vertex (≥ session linear resolution), or
-    /// `None` for an exact vertex.
-    pub tolerance: Option<f64>,
+    /// Validated tolerance and provenance for a tolerant vertex (≥ session
+    /// linear resolution), or `None` for an exact vertex.
+    pub tolerance: Option<EntityTolerance>,
 }
 
 /// A type-erased reference to any entity, for diagnostics ([`crate::check`])

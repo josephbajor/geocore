@@ -14,6 +14,7 @@ use ktopo::entity::{
 use ktopo::geom::{Curve2dGeom, SurfaceGeom};
 use ktopo::make::{block, cone, cylinder};
 use ktopo::store::Store;
+use ktopo::tolerance::EntityTolerance;
 
 fn make_first_edge_curveless_tolerant(store: &mut Store, body: ktopo::entity::BodyId) -> EdgeId {
     let edge_id = store.edges_of_body(body).unwrap()[0];
@@ -31,7 +32,7 @@ fn make_first_edge_curveless_tolerant(store: &mut Store, body: ktopo::entity::Bo
     let edge = store.get_mut(edge_id).unwrap();
     edge.curve = None;
     edge.bounds = Some((0.0, 1.0));
-    edge.tolerance = Some(LINEAR_RESOLUTION);
+    edge.tolerance = Some(EntityTolerance::operation(LINEAR_RESOLUTION, "pcurve-test").unwrap());
     edge_id
 }
 

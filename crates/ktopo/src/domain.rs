@@ -50,7 +50,11 @@ pub fn derive_face_domain(store: &Store, face_id: FaceId) -> Result<Option<FaceD
 
     let mut uv_bounds = Aabb2::empty();
     let mut xyz_bounds = Aabb3::empty();
-    let mut tolerance = face.tolerance.unwrap_or(0.0).max(LINEAR_RESOLUTION);
+    let mut tolerance = face
+        .tolerance
+        .map(crate::tolerance::EntityTolerance::value)
+        .unwrap_or(0.0)
+        .max(LINEAR_RESOLUTION);
     let mut needs_full_period_u = false;
     let mut found_edge = false;
     let periods = surface.as_surface().periodicity();
@@ -87,7 +91,11 @@ pub fn derive_face_domain(store: &Store, face_id: FaceId) -> Result<Option<FaceD
                 }
             };
             xyz_bounds = xyz_bounds.union(curve_box(curve, range));
-            tolerance = tolerance.max(edge.tolerance.unwrap_or(0.0));
+            tolerance = tolerance.max(
+                edge.tolerance
+                    .map(crate::tolerance::EntityTolerance::value)
+                    .unwrap_or(0.0),
+            );
             needs_full_period_u |=
                 matches!(surface, SurfaceGeom::Cylinder(_) | SurfaceGeom::Cone(_));
             found_edge = true;
@@ -345,7 +353,9 @@ mod tests {
         let edge = store.get_mut(edge_id).unwrap();
         edge.curve = None;
         edge.bounds = Some((0.0, 1.0));
-        edge.tolerance = Some(LINEAR_RESOLUTION);
+        edge.tolerance = Some(
+            crate::tolerance::EntityTolerance::operation(LINEAR_RESOLUTION, "domain-test").unwrap(),
+        );
         edge_id
     }
 

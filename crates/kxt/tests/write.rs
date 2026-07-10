@@ -17,6 +17,7 @@ use ktopo::entity::{
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::make;
 use ktopo::store::Store;
+use ktopo::tolerance::{EntityTolerance, ToleranceOrigin};
 use kxt::schema::code;
 
 fn tilted() -> Frame {
@@ -179,7 +180,7 @@ fn make_first_edge_truly_tolerant(store: &mut Store, body: BodyId) -> EdgeId {
     let edge = store.get_mut(edge_id).unwrap();
     edge.curve = None;
     edge.bounds = Some((0.0, 1.0));
-    edge.tolerance = Some(LINEAR_RESOLUTION);
+    edge.tolerance = Some(EntityTolerance::operation(LINEAR_RESOLUTION, "writer-test").unwrap());
     edge_id
 }
 
@@ -848,7 +849,8 @@ fn non_null_face_tolerance_is_rejected_by_schema_13006_writer() {
     let mut store = Store::new();
     let body = make::block(&mut store, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
     let face = store.faces_of_body(body).unwrap()[0];
-    store.get_mut(face).unwrap().tolerance = Some(LINEAR_RESOLUTION);
+    store.get_mut(face).unwrap().tolerance =
+        Some(EntityTolerance::operation(LINEAR_RESOLUTION, "writer-test").unwrap());
     let error = kxt::export_text(&store, body).unwrap_err();
     assert_eq!(error.capability(), Some(kxt::XtCapability::FaceTolerances));
 }
@@ -859,8 +861,10 @@ fn exact_tolerant_edge_and_vertex_round_trip() {
     let body = make::block(&mut store, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
     let edge = first_bounded_edge(&store, body);
     let vertex = store.get(edge).unwrap().vertices[0].unwrap();
-    store.get_mut(edge).unwrap().tolerance = Some(LINEAR_RESOLUTION * 10.0);
-    store.get_mut(vertex).unwrap().tolerance = Some(LINEAR_RESOLUTION * 20.0);
+    store.get_mut(edge).unwrap().tolerance =
+        Some(EntityTolerance::operation(LINEAR_RESOLUTION * 10.0, "writer-test").unwrap());
+    store.get_mut(vertex).unwrap().tolerance =
+        Some(EntityTolerance::operation(LINEAR_RESOLUTION * 20.0, "writer-test").unwrap());
 
     let (text, imported, imported_body) = assert_checker_roundtrip(&store, body);
     let parsed = kxt::read_xt(text.as_bytes()).unwrap();
@@ -883,14 +887,28 @@ fn exact_tolerant_edge_and_vertex_round_trip() {
             .edges_of_body(imported_body)
             .unwrap()
             .into_iter()
-            .any(|edge| imported.get(edge).unwrap().tolerance == Some(LINEAR_RESOLUTION * 10.0))
+            .any(|edge| imported
+                .get(edge)
+                .unwrap()
+                .tolerance
+                .is_some_and(|tolerance| {
+                    tolerance.value() == LINEAR_RESOLUTION * 10.0
+                        && tolerance.origin() == ToleranceOrigin::ImportedXt
+                }))
     );
     assert!(
         imported
             .vertices_of_body(imported_body)
             .unwrap()
             .into_iter()
-            .any(|vertex| imported.get(vertex).unwrap().tolerance == Some(LINEAR_RESOLUTION * 20.0))
+            .any(|vertex| imported
+                .get(vertex)
+                .unwrap()
+                .tolerance
+                .is_some_and(|tolerance| {
+                    tolerance.value() == LINEAR_RESOLUTION * 20.0
+                        && tolerance.origin() == ToleranceOrigin::ImportedXt
+                }))
     );
 }
 
@@ -993,7 +1011,9 @@ fn curve_less_tolerant_edge_round_trips_through_trimmed_sp_curves() {
         .unwrap();
     let edge = imported.get(imported_edge).unwrap();
     assert_eq!(edge.bounds, Some((0.0, 1.0)));
-    assert_eq!(edge.tolerance, Some(LINEAR_RESOLUTION));
+    let tolerance = edge.tolerance.unwrap();
+    assert_eq!(tolerance.value(), LINEAR_RESOLUTION);
+    assert_eq!(tolerance.origin(), ToleranceOrigin::ImportedXt);
     assert_eq!(edge.fins.len(), 2);
     assert!(
         edge.fins

@@ -48,8 +48,9 @@ Interoperability is defined by three commitments, not by cloning Parasolid inter
    types map 1:1 onto the published XT schema. Nothing we author is inexpressible in XT.
 2. **Numeric-regime compatibility.** SI meters internally; working size box of
    1000 m (coordinates within ±500 m of origin); linear resolution 1e-8 m; angular
-   resolution 1e-11 rad. Tolerant edges/vertices carry per-entity tolerances ≥ resolution,
-   exactly as Parasolid's tolerant modeling does. Geometry we export must satisfy
+   resolution 1e-11 rad. Tolerant edges/vertices carry validated per-entity tolerances ≥
+   resolution together with their import/operation origin and accumulated growth,
+   exactly as Parasolid's tolerant modeling requires operationally. Geometry we export must satisfy
    Parasolid's checker (verified empirically via Solid Edge import).
 3. **Exactness commitment.** Analytic surfaces (plane, cylinder, cone, sphere, torus)
    and procedural surfaces (swept, spun, offset, rolling-ball blend) are represented
@@ -122,8 +123,9 @@ Faces reference surfaces with a sense flag, an optional finite conservative UV w
 domain, and optional operation/import tolerance metadata; fins reference edges with
 sense and may carry an independent pcurve use plus explicit integer-period chart shift,
 paired lower/upper seam role, closed-use winding, and endpoint singularity markers; edges
-reference curves; vertices reference points. Tolerant edges/vertices store a tolerance
-overriding session precision. An unknown face domain stays explicit rather than being
+reference curves; vertices reference points. Tolerant edges/vertices store a typed
+tolerance overriding session precision, retaining its original value/source and every
+budgeted enlargement in the transaction journal. An unknown face domain stays explicit rather than being
 replaced by an uncertified sampled bound.
 
 - Euler operators as the only structural mutation primitives (MEV, MEF, KEMR, etc.),
@@ -206,7 +208,9 @@ Kernels fail on tolerances and intersections, not on data structures. Policy:
    decisions live in one policy module.
 2. Tolerant modeling as a first-class concept from day one (not retrofitted): edges and
    vertices may carry tolerances; ops must accept and produce tolerant entities exactly
-   as Parasolid does, or real-world imported geometry will be unusable.
+   as Parasolid does, or real-world imported geometry will be unusable. Every operation
+   that enlarges tolerance declares an aggregate transaction-owned budget; exhaustion is
+   a typed failure, and rollback discards both model changes and recorded consumption.
 3. Differential testing: every modeling op runs against oracles — Open CASCADE (open
    source) and actual Parasolid via Solid Edge Community Edition batch import/export —
    over a growing corpus of real XT files. Disagreements are triaged into bugs or

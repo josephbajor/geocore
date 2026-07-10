@@ -21,6 +21,7 @@ use ktopo::entity::{
 };
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::store::Store;
+use ktopo::tolerance::EntityTolerance;
 
 const VERSION: &str = ": TRANSMIT FILE created by modeller version 1300000";
 const SCHEMA: &str = "SCH_1300000_13006";
@@ -471,7 +472,7 @@ impl Plan {
                 values: vec![
                     int(index),
                     ptr(0),
-                    optional_double(edge.tolerance),
+                    optional_double(edge.tolerance.map(EntityTolerance::value)),
                     ptr(first_fin),
                     ptr(adjacent(&self.edges, position, -1)),
                     ptr(adjacent(&self.edges, position, 1)),
@@ -506,7 +507,7 @@ impl Plan {
                     ptr(adjacent(&self.vertices, position, -1)),
                     ptr(adjacent(&self.vertices, position, 1)),
                     ptr(id_of(&self.points, vertex.point)),
-                    optional_double(vertex.tolerance),
+                    optional_double(vertex.tolerance.map(EntityTolerance::value)),
                     ptr(1),
                 ],
             });

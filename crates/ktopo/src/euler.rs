@@ -47,6 +47,7 @@ use crate::entity::{
 };
 use crate::incidence::{PcurveIssue, check_pcurve_incidence};
 use crate::store::Store;
+use crate::tolerance::EntityTolerance;
 use kcore::error::{Error, Result};
 use kcore::tolerance::LINEAR_RESOLUTION;
 
@@ -58,7 +59,7 @@ fn merged_face_metadata(
     store: &Store,
     a: &Face,
     b: &Face,
-) -> Result<(Option<FaceDomain>, Option<f64>)> {
+) -> Result<(Option<FaceDomain>, Option<EntityTolerance>)> {
     let mut domain = if a.surface == b.surface {
         match (a.domain, b.domain) {
             (Some(a), Some(b)) => Some(a.union(b)?),
@@ -86,7 +87,7 @@ fn merged_face_metadata(
         }
     }
     let tolerance = match (a.tolerance, b.tolerance) {
-        (Some(a), Some(b)) => Some(a.max(b)),
+        (Some(a), Some(b)) => Some(a.inherited_max(b)),
         (Some(value), None) | (None, Some(value)) => Some(value),
         (None, None) => None,
     };
@@ -174,7 +175,10 @@ fn validate_fins_on_surface(store: &Store, fins: &[FinId], surface: SurfaceId) -
             edge.bounds,
             surface,
             pcurve,
-            edge.tolerance.unwrap_or(0.0).max(LINEAR_RESOLUTION),
+            edge.tolerance
+                .map(EntityTolerance::value)
+                .unwrap_or(0.0)
+                .max(LINEAR_RESOLUTION),
         )
         .map_err(pcurve_error)?;
     }

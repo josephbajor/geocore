@@ -338,7 +338,11 @@ fn collect_full_verification(
             for &fin_id in &store.get(loop_id)?.fins {
                 let fin = store.get(fin_id)?;
                 let edge = store.get(fin.edge)?;
-                let tolerance = edge.tolerance.unwrap_or(0.0).max(LINEAR_RESOLUTION);
+                let tolerance = edge
+                    .tolerance
+                    .map(crate::tolerance::EntityTolerance::value)
+                    .unwrap_or(0.0)
+                    .max(LINEAR_RESOLUTION);
                 if let Some(pcurve) = fin.pcurve {
                     if certify_pcurve_incidence(store, fin.edge, face.surface, pcurve, tolerance)?
                         != IncidenceCertification::Certified
@@ -604,7 +608,7 @@ impl<'a> Checker<'a> {
         }
         let surface = self.live(face.surface, EntityRef::Face(fid));
         if let Some(tolerance) = face.tolerance
-            && self.tol.entity_tolerance(tolerance).is_err()
+            && self.tol.entity_tolerance(tolerance.value()).is_err()
         {
             self.fault(EntityRef::Face(fid), FaultKind::BadTolerance);
         }
@@ -758,7 +762,10 @@ impl<'a> Checker<'a> {
                     edge.bounds,
                     face.surface,
                     pcurve_use,
-                    edge.tolerance.unwrap_or(0.0).max(self.tol.linear()),
+                    edge.tolerance
+                        .map(crate::tolerance::EntityTolerance::value)
+                        .unwrap_or(0.0)
+                        .max(self.tol.linear()),
                 ),
                 Err(_) => Err(PcurveIssue::StaleReference),
             },
@@ -799,7 +806,7 @@ impl<'a> Checker<'a> {
             return;
         };
         if let Some(t) = edge.tolerance
-            && self.tol.entity_tolerance(t).is_err()
+            && self.tol.entity_tolerance(t.value()).is_err()
         {
             self.fault(at, FaultKind::BadTolerance);
         }
@@ -892,7 +899,11 @@ impl<'a> Checker<'a> {
             return;
         };
         let c = g.as_curve();
-        let edge_tol = edge.tolerance.unwrap_or(0.0).max(LINEAR_RESOLUTION);
+        let edge_tol = edge
+            .tolerance
+            .map(crate::tolerance::EntityTolerance::value)
+            .unwrap_or(0.0)
+            .max(LINEAR_RESOLUTION);
         if bounds_ok {
             let (t0, t1) = edge.bounds.expect("bounds_ok implies Some");
             for (vh, t) in [(edge.vertices[0], t0), (edge.vertices[1], t1)] {
@@ -905,6 +916,7 @@ impl<'a> Checker<'a> {
                     .get(vid)
                     .ok()
                     .and_then(|v| v.tolerance)
+                    .map(crate::tolerance::EntityTolerance::value)
                     .unwrap_or(0.0);
                 if (c.eval(t) - pos).norm() > edge_tol.max(vtol) {
                     self.fault(at, FaultKind::VertexOffCurve);
@@ -1002,7 +1014,11 @@ impl<'a> Checker<'a> {
         let Some((t0, t1)) = edge.bounds else {
             return;
         };
-        let edge_tol = edge.tolerance.unwrap_or(0.0).max(LINEAR_RESOLUTION);
+        let edge_tol = edge
+            .tolerance
+            .map(crate::tolerance::EntityTolerance::value)
+            .unwrap_or(0.0)
+            .max(LINEAR_RESOLUTION);
         let mut uses = Vec::new();
         for &fin_id in &edge.fins {
             let Ok(fin) = self.store.get(fin_id) else {
@@ -1073,6 +1089,7 @@ impl<'a> Checker<'a> {
                         .get(vertex)
                         .ok()
                         .and_then(|v| v.tolerance)
+                        .map(crate::tolerance::EntityTolerance::value)
                         .unwrap_or(0.0);
                     if p.dist(position) > edge_tol.max(vertex_tol) {
                         self.fault(EntityRef::Fin(fin_id), FaultKind::PcurveEndpointOffVertex);
@@ -1089,7 +1106,7 @@ impl<'a> Checker<'a> {
             return;
         };
         if let Some(t) = vertex.tolerance
-            && self.tol.entity_tolerance(t).is_err()
+            && self.tol.entity_tolerance(t.value()).is_err()
         {
             self.fault(at, FaultKind::BadTolerance);
         }
@@ -1805,7 +1822,8 @@ mod tests {
             )
             .unwrap(),
         );
-        store.get_mut(face).unwrap().tolerance = Some(1e-12);
+        store.get_mut(face).unwrap().tolerance =
+            Some(crate::tolerance::EntityTolerance::unchecked(1e-12));
         let faults = check_body(&store, body).unwrap();
         assert_has(&faults, FaultKind::BadFaceDomain);
         assert_has(&faults, FaultKind::BadTolerance);
@@ -1998,7 +2016,8 @@ mod tests {
         let mut store = Store::new();
         let body = clean_block(&mut store);
         let v = store.vertices_of_body(body).unwrap()[0];
-        store.get_mut(v).unwrap().tolerance = Some(1e-12);
+        store.get_mut(v).unwrap().tolerance =
+            Some(crate::tolerance::EntityTolerance::unchecked(1e-12));
         assert_has(&check_body(&store, body).unwrap(), FaultKind::BadTolerance);
     }
 

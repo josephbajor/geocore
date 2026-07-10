@@ -15,7 +15,9 @@
 //! curve-less tolerant edges using analytic geometry, non-periodic B-spline/
 //! NURBS geometry, and per-fin trimmed SP-curves over finite 2D B-curves.
 //! Reconstruction is failure-atomic through `ktopo`'s copy-on-write Store
-//! transactions and returns the committed entity mutation journal. Valid
+//! transactions and returns the committed entity mutation journal. Imported
+//! entity tolerances are validated and retain explicit XT origin provenance;
+//! writing emits their current metric value. Valid
 //! content outside the declared subset reports a stable [`XtCapability`]
 //! code as well as human-readable context.
 //! Intersection/procedural geometry, broader tolerant topology, periodic or

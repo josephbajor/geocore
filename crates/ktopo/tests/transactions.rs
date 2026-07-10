@@ -16,6 +16,7 @@ use ktopo::euler::{FinPcurvePair, mev, mvfs};
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::make::{block, block_with_journal, torus_with_journal};
 use ktopo::store::Store;
+use ktopo::tolerance::EntityTolerance;
 use ktopo::transaction::{LineageEvent, MutationKind};
 
 fn seed_geometry(
@@ -196,7 +197,8 @@ fn checked_face_split_and_merge_emit_semantic_lineage() {
     let (lp, curve, length, surface, sense, pcurves) = first_face_diagonal(&mut store, body);
     let source_face = store.get(lp).unwrap().face;
     let source_domain = store.get(source_face).unwrap().domain;
-    store.get_mut(source_face).unwrap().tolerance = Some(1.0e-8);
+    let source_tolerance = EntityTolerance::operation(1.0e-8, "split-test").unwrap();
+    store.get_mut(source_face).unwrap().tolerance = Some(source_tolerance);
 
     let mut split = store.transaction().unwrap();
     let made = split
@@ -204,7 +206,10 @@ fn checked_face_split_and_merge_emit_semantic_lineage() {
         .unwrap();
     let split_journal = split.commit_checked_body(body).unwrap();
     assert_eq!(store.get(made.face).unwrap().domain, source_domain);
-    assert_eq!(store.get(made.face).unwrap().tolerance, Some(1.0e-8));
+    assert_eq!(
+        store.get(made.face).unwrap().tolerance,
+        Some(source_tolerance)
+    );
     assert_eq!(
         split_journal.lineage(),
         &[LineageEvent::Split {
@@ -219,7 +224,10 @@ fn checked_face_split_and_merge_emit_semantic_lineage() {
     merge.merge_faces(made.edge).unwrap();
     let merge_journal = merge.commit_checked_body(body).unwrap();
     assert_eq!(store.get(source_face).unwrap().domain, source_domain);
-    assert_eq!(store.get(source_face).unwrap().tolerance, Some(1.0e-8));
+    assert_eq!(
+        store.get(source_face).unwrap().tolerance,
+        Some(source_tolerance)
+    );
     assert_eq!(
         merge_journal.lineage(),
         &[LineageEvent::Merge {
