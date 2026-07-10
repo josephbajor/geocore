@@ -18,7 +18,22 @@ use std::collections::HashMap;
 /// Snapshot of body ownership and shared geometry dependencies for one Store
 /// state. Values preserve deterministic body slot order even though lookup is
 /// hash-based.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct BodyFootprint {
+    regions: Vec<RegionId>,
+    shells: Vec<ShellId>,
+    faces: Vec<FaceId>,
+    loops: Vec<LoopId>,
+    fins: Vec<FinId>,
+    edges: Vec<EdgeId>,
+    vertices: Vec<VertexId>,
+    curves: Vec<CurveId>,
+    surfaces: Vec<SurfaceId>,
+    points: Vec<PointId>,
+    pcurves: Vec<Curve2dId>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct StoreIndex {
     regions: HashMap<RegionId, BodyId>,
     shells: HashMap<ShellId, BodyId>,
@@ -31,6 +46,9 @@ pub(crate) struct StoreIndex {
     surfaces: HashMap<SurfaceId, Vec<BodyId>>,
     points: HashMap<PointId, Vec<BodyId>>,
     pcurves: HashMap<Curve2dId, Vec<BodyId>>,
+    footprints: HashMap<BodyId, BodyFootprint>,
+    body_order: Vec<BodyId>,
+    body_ranks: HashMap<BodyId, usize>,
     ownership_fault_count: usize,
 }
 
@@ -40,23 +58,9 @@ impl StoreIndex {
     /// still selected and the body checker can report the actual fault.
     pub(crate) fn build(store: &Store) -> Self {
         let mut index = Self::default();
+        index.set_body_order(store);
         for (body_id, body) in store.iter::<Body>() {
-            for &region_id in &body.regions {
-                if !claim(
-                    &mut index.regions,
-                    region_id,
-                    body_id,
-                    &mut index.ownership_fault_count,
-                ) {
-                    continue;
-                }
-                let Ok(region) = store.get(region_id) else {
-                    continue;
-                };
-                for &shell_id in &region.shells {
-                    index.walk_shell(store, body_id, shell_id);
-                }
-            }
+            index.rebuild_body(store, body_id, body);
         }
 
         index.ownership_fault_count += unclaimed::<Region>(store, &index.regions)
@@ -129,7 +133,164 @@ impl StoreIndex {
         bodies
     }
 
-    fn walk_shell(&mut self, store: &Store, body: BodyId, shell_id: ShellId) {
+    /// Incrementally replace only body footprints implicated by the pending
+    /// mutations. The committed index is assumed ownership-clean; callers use
+    /// [`Self::build`] after topology-internal out-of-transaction mutation.
+    pub(crate) fn candidate(store: &Store, previous: &Self, mutations: &[Mutation]) -> Self {
+        Self::candidate_with_stats(store, previous, mutations).0
+    }
+
+    fn candidate_with_stats(
+        store: &Store,
+        previous: &Self,
+        mutations: &[Mutation],
+    ) -> (Self, usize) {
+        let affected = previous.affected_bodies(previous, mutations);
+        if affected.is_empty() {
+            let mut candidate = previous.clone();
+            candidate.ownership_fault_count = 0;
+            candidate.audit_mutated_topology(store, mutations, &[]);
+            return (candidate, 0);
+        }
+
+        let mut candidate = previous.clone();
+        candidate.ownership_fault_count = 0;
+        candidate.set_body_order(store);
+
+        let mut removed = Vec::new();
+        for &body in &affected {
+            if let Some(footprint) = candidate.remove_body(body) {
+                removed.push(footprint);
+            }
+        }
+        let body_order = candidate.body_order.clone();
+        let mut rebuilt_bodies = 0usize;
+        for body_id in body_order {
+            if affected.contains(&body_id)
+                && let Ok(body) = store.get(body_id)
+            {
+                candidate.rebuild_body(store, body_id, body);
+                rebuilt_bodies += 1;
+            }
+        }
+        candidate.audit_mutated_topology(store, mutations, &removed);
+        (candidate, rebuilt_bodies)
+    }
+
+    /// Debug/test oracle: clean incremental candidates must equal a full
+    /// deterministic rebuild; invalid candidates must at least agree that the
+    /// ownership closure is not valid.
+    pub(crate) fn debug_assert_full_rebuild_parity(&self, _store: &Store) {
+        #[cfg(debug_assertions)]
+        {
+            let rebuilt = Self::build(_store);
+            debug_assert_eq!(
+                self.ownership_fault_count == 0,
+                rebuilt.ownership_fault_count == 0,
+                "incremental and full ownership audits disagree"
+            );
+            if self.ownership_fault_count == 0 {
+                debug_assert_eq!(self, &rebuilt);
+            }
+        }
+    }
+
+    fn set_body_order(&mut self, store: &Store) {
+        self.body_order = store.iter::<Body>().map(|(body, _)| body).collect();
+        self.body_ranks.clear();
+        for (rank, &body) in self.body_order.iter().enumerate() {
+            self.body_ranks.insert(body, rank);
+        }
+    }
+
+    fn rebuild_body(&mut self, store: &Store, body_id: BodyId, body: &Body) {
+        let mut footprint = BodyFootprint::default();
+        for &region_id in &body.regions {
+            if !claim(
+                &mut self.regions,
+                region_id,
+                body_id,
+                &mut self.ownership_fault_count,
+            ) {
+                continue;
+            }
+            footprint.regions.push(region_id);
+            let Ok(region) = store.get(region_id) else {
+                continue;
+            };
+            for &shell_id in &region.shells {
+                self.walk_shell(store, body_id, shell_id, &mut footprint);
+            }
+        }
+        self.footprints.insert(body_id, footprint);
+    }
+
+    fn remove_body(&mut self, body: BodyId) -> Option<BodyFootprint> {
+        let footprint = self.footprints.remove(&body)?;
+        remove_owned(&mut self.regions, &footprint.regions, body);
+        remove_owned(&mut self.shells, &footprint.shells, body);
+        remove_owned(&mut self.faces, &footprint.faces, body);
+        remove_owned(&mut self.loops, &footprint.loops, body);
+        remove_owned(&mut self.fins, &footprint.fins, body);
+        remove_owned(&mut self.edges, &footprint.edges, body);
+        remove_owned(&mut self.vertices, &footprint.vertices, body);
+        remove_dependencies(&mut self.curves, &footprint.curves, body);
+        remove_dependencies(&mut self.surfaces, &footprint.surfaces, body);
+        remove_dependencies(&mut self.points, &footprint.points, body);
+        remove_dependencies(&mut self.pcurves, &footprint.pcurves, body);
+        Some(footprint)
+    }
+
+    fn audit_mutated_topology(
+        &mut self,
+        store: &Store,
+        mutations: &[Mutation],
+        removed: &[BodyFootprint],
+    ) {
+        let mut unowned = Vec::new();
+        for footprint in removed {
+            collect_live_unowned(store, &self.regions, &footprint.regions, &mut unowned);
+            collect_live_unowned(store, &self.shells, &footprint.shells, &mut unowned);
+            collect_live_unowned(store, &self.faces, &footprint.faces, &mut unowned);
+            collect_live_unowned(store, &self.loops, &footprint.loops, &mut unowned);
+            collect_live_unowned(store, &self.fins, &footprint.fins, &mut unowned);
+            collect_live_unowned(store, &self.edges, &footprint.edges, &mut unowned);
+            collect_live_unowned(store, &self.vertices, &footprint.vertices, &mut unowned);
+        }
+        for mutation in mutations {
+            if self.live_unowned_topology(store, mutation.entity)
+                && !unowned.contains(&mutation.entity)
+            {
+                unowned.push(mutation.entity);
+            }
+        }
+        self.ownership_fault_count += unowned.len();
+    }
+
+    fn live_unowned_topology(&self, store: &Store, entity: EntityRef) -> bool {
+        match entity {
+            EntityRef::Region(id) => store.contains(id) && !self.regions.contains_key(&id),
+            EntityRef::Shell(id) => store.contains(id) && !self.shells.contains_key(&id),
+            EntityRef::Face(id) => store.contains(id) && !self.faces.contains_key(&id),
+            EntityRef::Loop(id) => store.contains(id) && !self.loops.contains_key(&id),
+            EntityRef::Fin(id) => store.contains(id) && !self.fins.contains_key(&id),
+            EntityRef::Edge(id) => store.contains(id) && !self.edges.contains_key(&id),
+            EntityRef::Vertex(id) => store.contains(id) && !self.vertices.contains_key(&id),
+            EntityRef::Body(_)
+            | EntityRef::Curve(_)
+            | EntityRef::Surface(_)
+            | EntityRef::Point(_)
+            | EntityRef::Curve2d(_) => false,
+        }
+    }
+
+    fn walk_shell(
+        &mut self,
+        store: &Store,
+        body: BodyId,
+        shell_id: ShellId,
+        footprint: &mut BodyFootprint,
+    ) {
         if !claim(
             &mut self.shells,
             shell_id,
@@ -138,21 +299,28 @@ impl StoreIndex {
         ) {
             return;
         }
+        footprint.shells.push(shell_id);
         let Ok(shell) = store.get(shell_id) else {
             return;
         };
         for &face_id in &shell.faces {
-            self.walk_face(store, body, face_id);
+            self.walk_face(store, body, face_id, footprint);
         }
         for &edge_id in &shell.edges {
-            self.walk_edge(store, body, edge_id);
+            self.walk_edge(store, body, edge_id, footprint);
         }
         if let Some(vertex_id) = shell.vertex {
-            self.walk_vertex(store, body, vertex_id);
+            self.walk_vertex(store, body, vertex_id, footprint);
         }
     }
 
-    fn walk_face(&mut self, store: &Store, body: BodyId, face_id: FaceId) {
+    fn walk_face(
+        &mut self,
+        store: &Store,
+        body: BodyId,
+        face_id: FaceId,
+        footprint: &mut BodyFootprint,
+    ) {
         if !claim(
             &mut self.faces,
             face_id,
@@ -161,16 +329,29 @@ impl StoreIndex {
         ) {
             return;
         }
+        footprint.faces.push(face_id);
         let Ok(face) = store.get(face_id) else {
             return;
         };
-        add_dependency(&mut self.surfaces, face.surface, body);
+        add_dependency(
+            &mut self.surfaces,
+            &mut footprint.surfaces,
+            face.surface,
+            body,
+            &self.body_ranks,
+        );
         for &loop_id in &face.loops {
-            self.walk_loop(store, body, loop_id);
+            self.walk_loop(store, body, loop_id, footprint);
         }
     }
 
-    fn walk_loop(&mut self, store: &Store, body: BodyId, loop_id: LoopId) {
+    fn walk_loop(
+        &mut self,
+        store: &Store,
+        body: BodyId,
+        loop_id: LoopId,
+        footprint: &mut BodyFootprint,
+    ) {
         if !claim(
             &mut self.loops,
             loop_id,
@@ -179,6 +360,7 @@ impl StoreIndex {
         ) {
             return;
         }
+        footprint.loops.push(loop_id);
         let Ok(loop_) = store.get(loop_id) else {
             return;
         };
@@ -191,16 +373,29 @@ impl StoreIndex {
             ) {
                 continue;
             }
+            footprint.fins.push(fin_id);
             if let Ok(fin) = store.get(fin_id) {
                 if let Some(pcurve) = fin.pcurve {
-                    add_dependency(&mut self.pcurves, pcurve.curve(), body);
+                    add_dependency(
+                        &mut self.pcurves,
+                        &mut footprint.pcurves,
+                        pcurve.curve(),
+                        body,
+                        &self.body_ranks,
+                    );
                 }
-                self.walk_edge(store, body, fin.edge);
+                self.walk_edge(store, body, fin.edge, footprint);
             }
         }
     }
 
-    fn walk_edge(&mut self, store: &Store, body: BodyId, edge_id: EdgeId) {
+    fn walk_edge(
+        &mut self,
+        store: &Store,
+        body: BodyId,
+        edge_id: EdgeId,
+        footprint: &mut BodyFootprint,
+    ) {
         if !claim(
             &mut self.edges,
             edge_id,
@@ -209,18 +404,31 @@ impl StoreIndex {
         ) {
             return;
         }
+        footprint.edges.push(edge_id);
         let Ok(edge) = store.get(edge_id) else {
             return;
         };
         if let Some(curve) = edge.curve {
-            add_dependency(&mut self.curves, curve, body);
+            add_dependency(
+                &mut self.curves,
+                &mut footprint.curves,
+                curve,
+                body,
+                &self.body_ranks,
+            );
         }
         for vertex_id in edge.vertices.into_iter().flatten() {
-            self.walk_vertex(store, body, vertex_id);
+            self.walk_vertex(store, body, vertex_id, footprint);
         }
     }
 
-    fn walk_vertex(&mut self, store: &Store, body: BodyId, vertex_id: VertexId) {
+    fn walk_vertex(
+        &mut self,
+        store: &Store,
+        body: BodyId,
+        vertex_id: VertexId,
+        footprint: &mut BodyFootprint,
+    ) {
         if !claim(
             &mut self.vertices,
             vertex_id,
@@ -229,8 +437,15 @@ impl StoreIndex {
         ) {
             return;
         }
+        footprint.vertices.push(vertex_id);
         if let Ok(vertex) = store.get(vertex_id) {
-            add_dependency(&mut self.points, vertex.point, body);
+            add_dependency(
+                &mut self.points,
+                &mut footprint.points,
+                vertex.point,
+                body,
+                &self.body_ranks,
+            );
         }
     }
 }
@@ -253,12 +468,62 @@ fn claim<T>(
 
 fn add_dependency<T>(
     dependencies: &mut HashMap<Handle<T>, Vec<BodyId>>,
+    footprint: &mut Vec<Handle<T>>,
     handle: Handle<T>,
     body: BodyId,
+    body_ranks: &HashMap<BodyId, usize>,
 ) {
     let bodies = dependencies.entry(handle).or_default();
     if !bodies.contains(&body) {
-        bodies.push(body);
+        let rank = body_ranks.get(&body).copied().unwrap_or(usize::MAX);
+        let position = bodies
+            .iter()
+            .position(|candidate| body_ranks.get(candidate).copied().unwrap_or(usize::MAX) > rank)
+            .unwrap_or(bodies.len());
+        bodies.insert(position, body);
+    }
+    if !footprint.contains(&handle) {
+        footprint.push(handle);
+    }
+}
+
+fn remove_owned<T>(owners: &mut HashMap<Handle<T>, BodyId>, handles: &[Handle<T>], body: BodyId) {
+    for &handle in handles {
+        if owners.get(&handle) == Some(&body) {
+            owners.remove(&handle);
+        }
+    }
+}
+
+fn remove_dependencies<T>(
+    dependencies: &mut HashMap<Handle<T>, Vec<BodyId>>,
+    handles: &[Handle<T>],
+    body: BodyId,
+) {
+    for &handle in handles {
+        let remove_entry = if let Some(bodies) = dependencies.get_mut(&handle) {
+            bodies.retain(|candidate| *candidate != body);
+            bodies.is_empty()
+        } else {
+            false
+        };
+        if remove_entry {
+            dependencies.remove(&handle);
+        }
+    }
+}
+
+fn collect_live_unowned<T: Entity>(
+    store: &Store,
+    owners: &HashMap<Handle<T>, BodyId>,
+    handles: &[Handle<T>],
+    out: &mut Vec<EntityRef>,
+) {
+    for &handle in handles {
+        let entity = T::entity_ref(handle);
+        if store.contains(handle) && !owners.contains_key(&handle) && !out.contains(&entity) {
+            out.push(entity);
+        }
     }
 }
 
@@ -292,9 +557,11 @@ fn push_body(bodies: &mut Vec<BodyId>, body: BodyId) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::make::block;
+    use crate::make::{acorn, block};
+    use crate::tolerance::EntityTolerance;
     use crate::transaction::MutationKind;
     use kgeom::frame::Frame;
+    use kgeom::vec::Point3;
 
     #[test]
     fn ownership_and_shared_geometry_dependencies_select_affected_roots() {
@@ -352,5 +619,31 @@ mod tests {
                 vec![first]
             );
         }
+    }
+
+    #[test]
+    fn multi_body_candidate_rebuilds_only_the_affected_footprint() {
+        let mut store = Store::new();
+        let bodies: Vec<_> = (0..64)
+            .map(|index| acorn(&mut store, Point3::new(f64::from(index) * 0.01, 0.0, 0.0)).unwrap())
+            .collect();
+        let target = bodies[31];
+        let vertex = store.vertices_of_body(target).unwrap()[0];
+        let mut transaction = store.transaction().unwrap();
+        transaction.assembly().get_mut(vertex).unwrap().tolerance =
+            Some(EntityTolerance::operation(1.0e-8, "index-scope-test").unwrap());
+        let pending = transaction.store().pending_transaction_mutations().unwrap();
+        let (candidate, rebuilt_bodies) = StoreIndex::candidate_with_stats(
+            transaction.store(),
+            transaction.store().committed_index(),
+            &pending,
+        );
+        assert_eq!(rebuilt_bodies, 1);
+        assert_eq!(
+            candidate.affected_bodies(transaction.store().committed_index(), &pending),
+            vec![target]
+        );
+        candidate.debug_assert_full_rebuild_parity(transaction.store());
+        transaction.commit_checked(&[]).unwrap();
     }
 }

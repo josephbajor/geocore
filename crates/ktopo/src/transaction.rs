@@ -606,9 +606,14 @@ impl<'a> Transaction<'a> {
                 return Err(error);
             }
         };
-        let candidate_index = crate::index::StoreIndex::build(self.store);
-        let affected = candidate_index.affected_bodies(self.store.committed_index(), &pending);
         let validate_all = self.store.full_validation_required();
+        let candidate_index = if validate_all {
+            crate::index::StoreIndex::build(self.store)
+        } else {
+            crate::index::StoreIndex::candidate(self.store, self.store.committed_index(), &pending)
+        };
+        candidate_index.debug_assert_full_rebuild_parity(self.store);
+        let affected = candidate_index.affected_bodies(self.store.committed_index(), &pending);
         let mut checked = Vec::new();
         let validation = (|| {
             let mut fault_count = candidate_index.ownership_fault_count();

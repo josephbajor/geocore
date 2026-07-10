@@ -137,8 +137,9 @@ replaced by an uncertified sampled bound.
   a transaction-scoped assembly facade whose changes can survive only a checked commit.
   Deterministic pending mutations are resolved through committed and candidate topology
   ownership/shared-geometry dependency indexes; every affected body is checked and every
-  commit audits global ownership closure. Candidate index construction may later become
-  incremental without weakening this invariant.
+  commit audits global ownership closure. Candidate indexes replace deterministic
+  per-body footprints for affected roots and retain full reconstruction as a debug/audit
+  oracle.
 - **Checker** (our `PK_BODY_check` equivalent): validates topology (closure, manifold
   conditions per body type, loop orientation), geometry (self-intersection, degeneracy),
   and geometry–topology consistency (face-loop containment, edge-on-surface within

@@ -113,6 +113,54 @@ fn checked_commit_rejects_orphan_topology() {
 }
 
 #[test]
+fn incremental_index_rejects_cross_body_topology_sharing() {
+    let mut store = Store::new();
+    let (first, _) = checked_empty_wire(&mut store);
+    let (second, _) = checked_empty_wire(&mut store);
+    let first_region = store.get(first).unwrap().regions[0];
+    let first_shell = store.get(first_region).unwrap().shells[0];
+    let second_region = store.get(second).unwrap().regions[0];
+    let original_shells = store.get(second_region).unwrap().shells.clone();
+    let mut transaction = store.transaction().unwrap();
+    transaction
+        .assembly()
+        .get_mut(second_region)
+        .unwrap()
+        .shells
+        .push(first_shell);
+    assert!(matches!(
+        transaction.commit_checked_body(second),
+        Err(Error::TopologyCheckFailed { fault_count }) if fault_count > 0
+    ));
+    assert_eq!(store.get(second_region).unwrap().shells, original_shells);
+}
+
+#[test]
+fn incremental_index_removes_a_committed_body_footprint() {
+    let mut store = Store::new();
+    let (body, _) = checked_empty_wire(&mut store);
+    let region = store.get(body).unwrap().regions[0];
+    let shell = store.get(region).unwrap().shells[0];
+    let mut transaction = store.transaction().unwrap();
+    {
+        let mut assembly = transaction.assembly();
+        assembly.remove(shell).unwrap();
+        assembly.remove(region).unwrap();
+        assembly.remove(body).unwrap();
+    }
+    let journal = transaction.commit_checked(&[]).unwrap();
+    assert_eq!(store.count::<Body>(), 0);
+    assert_eq!(store.count::<Region>(), 0);
+    assert_eq!(store.count::<Shell>(), 0);
+    assert!(
+        journal
+            .mutations()
+            .iter()
+            .all(|mutation| mutation.kind == MutationKind::Deleted)
+    );
+}
+
+#[test]
 fn affected_root_selection_finds_topology_without_explicit_hints() {
     let mut store = Store::new();
     let (body, _) = checked_empty_wire(&mut store);

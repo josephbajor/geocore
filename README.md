@@ -77,10 +77,10 @@ parametric CAD application; feature history and regeneration are later layers.
   the metric value. Operation-specific propagation/combination rules and migration of
   every future tolerance-producing operation remain.
   Adaptive full-curve containment, production seam/pole/apex interchange fixtures,
-  operation caller migration, a procedural geometry graph, incremental maintenance of
-  the landed ownership/dependency index (its candidate snapshot is currently rebuilt
-  linearly), partition history, richer errors/remaining tolerance rules, and the adaptive
-  proofs behind checker v2 must still land before booleans.
+  operation caller migration, a procedural geometry graph, large multi-body performance
+  baselines for the landed incremental ownership/dependency index, partition history,
+  richer errors/remaining tolerance rules, and the adaptive proofs behind checker v2 must
+  still land before booleans.
 - M3 is in progress: modern base-13006 schema edit scripts, text/neutral-binary
   reading, atomic reconstruction, and analytic text writing are implemented.
   X_T reconstruction now uses the same copy-on-write transaction mechanism instead of a

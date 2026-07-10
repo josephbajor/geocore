@@ -63,7 +63,7 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 | M0 Foundations | IMPLEMENTED SLICE | Deterministic math, current predicates, intervals, tolerances, arenas with copy-on-write undo frames, and deterministic map primitives exist; conformance debt remains. |
 | M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS basics, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, topology-internal Euler operators, transaction-owned public Euler edits, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, checked transaction-scoped assembly, and deterministic journals exist; general bodies and several degenerate topology classes remain. |
-| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance and transaction-owned aggregate budgets; shared incidence validation; a complete transaction-owned public Euler surface with mandatory pcurve creation and derived/split/merge/delete lineage; private generic Store mutation; transaction-scoped low-level assembly whose only public persistence path uses deterministic mutation preview, affected-root ownership/shared-geometry dependency indexing, Fast body checks, and complete ownership closure; pcurve-driven tessellation; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; a reusable validated simple-polygon planar profile; checked X_T reconstruction; explicit face metadata; certified imported domains; checker-enforced pcurve-endpoint containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring loop proofs; and convex-planar, whole sphere/torus, sphere-cap, and single-planar-face shell embedding proofs have landed. General NURBS/mixed-parameter incidence, profiles with holes/curves, operation-specific tolerance propagation rules, curved-loop/containment/general curved-shell proofs, production seam/singularity interchange fixtures, geometry graph, higher-operation migration, and incremental index maintenance remain. |
+| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance and transaction-owned aggregate budgets; shared incidence validation; a complete transaction-owned public Euler surface with mandatory pcurve creation and derived/split/merge/delete lineage; private generic Store mutation; transaction-scoped low-level assembly whose only public persistence path uses deterministic mutation preview, incrementally replaced per-body ownership/shared-geometry dependency footprints, affected-root Fast checks, and complete ownership closure; pcurve-driven tessellation; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; a reusable validated simple-polygon planar profile; checked X_T reconstruction; explicit face metadata; certified imported domains; checker-enforced pcurve-endpoint containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring loop proofs; and convex-planar, whole sphere/torus, sphere-cap, and single-planar-face shell embedding proofs have landed. General NURBS/mixed-parameter incidence, profiles with holes/curves, operation-specific tolerance propagation rules, curved-loop/containment/general curved-shell proofs, production seam/singularity interchange fixtures, geometry graph, higher-operation migration, and multi-body performance baselines remain. |
 | M3 X_T | IN PROGRESS | The modern-schema subset reads both wire encodings and writes text, including bounded tolerant edges as trimmed SP-curves over finite 2D B-curves; production coverage and external certification remain. |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases and sampled NURBS experiments exist; certified generic discovery and boolean-ready branches do not. |
 | M5–M8 | NOT STARTED | No end-to-end booleans, general modeling, blends, stable API, or production hardening. |
@@ -81,7 +81,7 @@ proof-bearing contracts. Work therefore advances through these gates in order:
 
 | Order | Delivery tranche | Required result | What it unlocks |
 |---|---|---|---|
-| 1 | Close M2.5 topology contracts | Production seam/pole/apex interchange fixtures; operation-specific rules over the landed tolerance provenance/budgets; incremental maintenance/performance baselines for the landed affected-root index; and discharge the landed checker-v2 `Full` proof gaps with adaptive incidence, containment, and shell proofs. The private/checked mutation, transaction-lineage, and affected-root selection portions are landed. | A B-rep that intersections and features can modify without inventing representation rules mid-boolean. |
+| 1 | Close M2.5 topology contracts | Production seam/pole/apex interchange fixtures; operation-specific rules over the landed tolerance provenance/budgets; multi-body performance baselines for the landed incremental affected-root index; and discharge the landed checker-v2 `Full` proof gaps with adaptive incidence, containment, and shell proofs. The private/checked mutation, transaction-lineage, affected-root selection, and per-body incremental index portions are landed. | A B-rep that intersections and features can modify without inventing representation rules mid-boolean. |
 | 2 | Build the M4 proof substrate | Geometry-graph descriptors for procedural/intersection curves; NURBS surface Bezier extraction; conservative subdivision/BVHs; a common `Complete`/`Indeterminate` result carrying paired pcurves and residual bounds. | Certified general CC/CS/SSI and trustworthy empty results. |
 | 3 | Ship one end-to-end feature ladder | Profile-region builder with holes, deterministic body copy/transform, extrude/revolve, point-on-face and point-in-body classification, then block/block and block/cylinder booleans. Every result is atomic, journaled, checker-v2 clean, and externally X_T checked. | The first honest CAD modeling vertical slice. |
 | 4 | Broaden general modeling | Expand analytic booleans, then periodic NURBS booleans, sweep/loft, sewing/healing, and STEP. | General mechanical part construction and imported-body repair. |
@@ -201,8 +201,9 @@ meshes are Fast-checker-clean, watertight, outward-oriented, and volume-tested.
   audits global ownership closure. Invalid unlisted bodies, orphan subgraphs, and
   cross-body topology sharing roll back. X_T reconstruction, the complete public Euler
   edit surface, and every public implemented solid/sheet/wire/acorn constructor use this
-  path. Candidate index construction still scans topology linearly; incremental index
-  maintenance, partition history, attribute propagation, and invalidation records remain.
+  path. Candidate indexes clone the committed map and replace only deterministic affected
+  body footprints; full reconstruction is asserted as a debug oracle. Deterministic body
+  rank refresh, partition history, attribute propagation, and invalidation records remain.
 - Fast checking samples some incidence and supports loop orientation only on a subset of
   surfaces. Full checking now proves the supported analytic incidence, simple planar
   segment/circle/ellipse loops, convex planar and selected closed analytic shells, but
@@ -318,6 +319,12 @@ Landed slice:
   `TopologyCheckFailed` evidence for body faults, invalid unlisted bodies, orphan
   topology, or cross-body sharing. Duplicate roots are checked once deterministically;
   successful commit atomically installs the candidate index.
+- Each committed body retains a deterministic footprint of owned regions/shells/faces/
+  loops/fins/edges/vertices and referenced curves/surfaces/points/pcurves. Normal commits
+  remove and rebuild only mutation-affected footprints, including committed-body deletion;
+  debug/test builds compare every clean incremental candidate with a full reconstruction.
+  A 64-body scope regression proves a one-body metadata edit rebuilds exactly one
+  footprint and selects exactly that result root.
 - Journals carry semantic `split`, `merge`, `derived_from`, `replaced`, and `deleted`
   events in addition to raw storage mutations. Every public Euler edit—minimal-body,
   edge/vertex, edge/face, edge/ring, and face/ring-hole—runs inside a transaction and
@@ -384,9 +391,9 @@ Remaining before the gate closes:
 - Add explicit general-body and multi-face/multi-loop sheet builders; extend wire inputs
   beyond line polylines without requiring callers to assemble public vectors and
   back-pointers manually.
-- Maintain the candidate ownership/dependency index incrementally from typed mutations
-  rather than rebuilding it with one linear topology scan per commit. Preserve periodic
-  full reconstruction as an audit oracle and add large multi-body performance baselines.
+- Add large multi-body performance baselines and optimize the remaining deterministic
+  body-order/rank refresh if measurements require it. Retain full reconstruction as the
+  debug/audit oracle.
 
 ### E. Tolerance, errors, and checker v2
 
@@ -741,11 +748,11 @@ ledger and include an adversarial regression that distinguishes `Invalid`,
 1. Finish parameter-space incidence: acquire production seam/pole/apex fixtures, add
    adaptive full-curve face-domain containment, migrate higher callers to the landed
    pcurve-aware transaction Euler API, and add non-identity chart interchange.
-2. Make the landed ownership/shared-geometry dependency index incrementally maintain its
-   candidate snapshot and add multi-body performance baselines, retaining full
-   reconstruction audit tests; migrate future modeling/healing consumers to checked
-   transactions and the landed tolerance budgets; add operation-specific propagation
-   rules, journal composition, and partition history.
+2. Add multi-body performance baselines for the landed incremental ownership/shared-
+   geometry dependency index and optimize body-order refresh if measurements require it,
+   retaining full reconstruction audit tests; migrate future modeling/healing consumers
+   to checked transactions and the landed tolerance budgets; add operation-specific
+   propagation rules, journal composition, and partition history.
 3. Discharge the remaining checker-v2 `Full` gaps: extend incidence certificates to
    Bezier-extracted NURBS and mixed-parameter pcurves, extend loop proofs to curved
    periodic charts, then prove multi-loop containment, complete face containment, and
