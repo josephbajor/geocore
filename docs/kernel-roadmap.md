@@ -63,7 +63,7 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 | M0 Foundations | IMPLEMENTED SLICE | Deterministic math, current predicates, intervals, tolerances, arenas with copy-on-write undo frames, and deterministic map primitives exist; conformance debt remains. |
 | M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS basics, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, topology-internal Euler operators, transaction-owned public Euler edits, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, checked transaction-scoped assembly, and deterministic journals exist; general bodies and several degenerate topology classes remain. |
-| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance and transaction-owned aggregate budgets; shared incidence validation; a complete transaction-owned public Euler surface with mandatory pcurve creation and derived/split/merge/delete lineage; private generic Store mutation; transaction-scoped low-level assembly whose only public persistence path validates every live body and store ownership closure; pcurve-driven tessellation; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; a reusable validated simple-polygon planar profile; checked X_T reconstruction; explicit face metadata; certified imported domains; checker-enforced pcurve-endpoint containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring loop proofs; and convex-planar, whole sphere/torus, sphere-cap, and single-planar-face shell embedding proofs have landed. General NURBS/mixed-parameter incidence, profiles with holes/curves, operation-specific tolerance propagation rules, curved-loop/containment/general curved-shell proofs, production seam/singularity interchange fixtures, geometry graph, higher-operation migration, and an incremental ownership/dependency index remain. |
+| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance and transaction-owned aggregate budgets; shared incidence validation; a complete transaction-owned public Euler surface with mandatory pcurve creation and derived/split/merge/delete lineage; private generic Store mutation; transaction-scoped low-level assembly whose only public persistence path uses deterministic mutation preview, affected-root ownership/shared-geometry dependency indexing, Fast body checks, and complete ownership closure; pcurve-driven tessellation; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; a reusable validated simple-polygon planar profile; checked X_T reconstruction; explicit face metadata; certified imported domains; checker-enforced pcurve-endpoint containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring loop proofs; and convex-planar, whole sphere/torus, sphere-cap, and single-planar-face shell embedding proofs have landed. General NURBS/mixed-parameter incidence, profiles with holes/curves, operation-specific tolerance propagation rules, curved-loop/containment/general curved-shell proofs, production seam/singularity interchange fixtures, geometry graph, higher-operation migration, and incremental index maintenance remain. |
 | M3 X_T | IN PROGRESS | The modern-schema subset reads both wire encodings and writes text, including bounded tolerant edges as trimmed SP-curves over finite 2D B-curves; production coverage and external certification remain. |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases and sampled NURBS experiments exist; certified generic discovery and boolean-ready branches do not. |
 | M5–M8 | NOT STARTED | No end-to-end booleans, general modeling, blends, stable API, or production hardening. |
@@ -81,7 +81,7 @@ proof-bearing contracts. Work therefore advances through these gates in order:
 
 | Order | Delivery tranche | Required result | What it unlocks |
 |---|---|---|---|
-| 1 | Close M2.5 topology contracts | Production seam/pole/apex interchange fixtures; operation-specific rules over the landed tolerance provenance/budgets; touched-root ownership/dependency indexing; and discharge the landed checker-v2 `Full` proof gaps with adaptive incidence, containment, and shell proofs. The private/checked mutation and transaction-lineage portions are landed. | A B-rep that intersections and features can modify without inventing representation rules mid-boolean. |
+| 1 | Close M2.5 topology contracts | Production seam/pole/apex interchange fixtures; operation-specific rules over the landed tolerance provenance/budgets; incremental maintenance/performance baselines for the landed affected-root index; and discharge the landed checker-v2 `Full` proof gaps with adaptive incidence, containment, and shell proofs. The private/checked mutation, transaction-lineage, and affected-root selection portions are landed. | A B-rep that intersections and features can modify without inventing representation rules mid-boolean. |
 | 2 | Build the M4 proof substrate | Geometry-graph descriptors for procedural/intersection curves; NURBS surface Bezier extraction; conservative subdivision/BVHs; a common `Complete`/`Indeterminate` result carrying paired pcurves and residual bounds. | Certified general CC/CS/SSI and trustworthy empty results. |
 | 3 | Ship one end-to-end feature ladder | Profile-region builder with holes, deterministic body copy/transform, extrude/revolve, point-on-face and point-in-body classification, then block/block and block/cylinder booleans. Every result is atomic, journaled, checker-v2 clean, and externally X_T checked. | The first honest CAD modeling vertical slice. |
 | 4 | Broaden general modeling | Expand analytic booleans, then periodic NURBS booleans, sweep/loft, sewing/healing, and STEP. | General mechanical part construction and imported-body repair. |
@@ -187,20 +187,22 @@ meshes are Fast-checker-clean, watertight, outward-oriented, and volume-tested.
   checker compares lifted realizations and endpoints within entity tolerance, and body
   tessellation shares one deterministic 3D polyline across all uses. Public Euler
   creation requires independent pcurves; low-level graph assembly is transaction-scoped
-  and cannot persist unless the complete live topology passes the checked boundary.
+  and cannot persist unless every affected body passes Fast checking and the complete
+  live topology passes the ownership-closure boundary.
 - `General` mixed-dimension bodies, face tolerances/domains, curve-less ring edges,
   isolated loops, and several pole/apex or degenerate topologies are unsupported.
 - Entity fields remain readable plain data, but generic Store insertion/mutable borrow/
   removal and unchecked commit are private. External low-level construction is available
   only through transaction-scoped `AssemblyStore` and mandatory checked commit.
 - Scoped Store transactions provide rollback-on-drop and deterministic raw mutation plus
-  semantic lineage journals. Checked commits validate caller-declared result roots first,
-  then every other live body and the global topology ownership closure; invalid unlisted
-  bodies, orphan subgraphs, and cross-body sharing roll back. X_T reconstruction, the
-  complete public Euler edit surface, and every public implemented solid/sheet/wire/acorn
-  constructor use this path. Whole-store validation is currently conservative: there is
-  no maintained ownership/dependency index, partition history, attribute propagation
-  mechanism, or incremental invalidation record.
+  semantic lineage journals. Non-consuming mutation previews resolve old/new topology
+  owners and curve/surface/point/pcurve dependents through committed/candidate indexes;
+  caller-declared roots and every affected body are checked, while candidate construction
+  audits global ownership closure. Invalid unlisted bodies, orphan subgraphs, and
+  cross-body topology sharing roll back. X_T reconstruction, the complete public Euler
+  edit surface, and every public implemented solid/sheet/wire/acorn constructor use this
+  path. Candidate index construction still scans topology linearly; incremental index
+  maintenance, partition history, attribute propagation, and invalidation records remain.
 - Fast checking samples some incidence and supports loop orientation only on a subset of
   surfaces. Full checking now proves the supported analytic incidence, simple planar
   segment/circle/ellipse loops, convex planar and selected closed analytic shells, but
@@ -305,11 +307,17 @@ Landed slice:
 - A scoped Store transaction opens frames on every arena, rolls back on drop, rejects
   underspecified nested modeling transactions, and commits deterministic created/
   modified/deleted mutations in entity-type then slot order.
-- `Transaction::commit_checked` validates declared result roots first, then every other
-  live body with the Fast checker and the store-wide topology ownership closure. It rolls
-  the whole operation back with typed `TopologyCheckFailed` evidence for body faults,
-  invalid unlisted bodies, orphan topology, or cross-body sharing. Duplicate declared
-  roots are checked once deterministically.
+- Every arena exposes a non-consuming deterministic net-mutation preview that is asserted
+  equal to the eventual commit journal. `StoreIndex` maps each live topology entity to
+  its sole body and every referenced curve, surface, point, and pcurve to all dependent
+  bodies. Committed and candidate indexes resolve old/new dependents for moves, deletion,
+  replacement, and shared-geometry edits.
+- `Transaction::commit_checked` validates declared result roots first and every
+  mutation-affected live body with the Fast checker. Candidate index construction audits
+  the complete store ownership closure and rolls the operation back with typed
+  `TopologyCheckFailed` evidence for body faults, invalid unlisted bodies, orphan
+  topology, or cross-body sharing. Duplicate roots are checked once deterministically;
+  successful commit atomically installs the candidate index.
 - Journals carry semantic `split`, `merge`, `derived_from`, `replaced`, and `deleted`
   events in addition to raw storage mutations. Every public Euler edit—minimal-body,
   edge/vertex, edge/face, edge/ring, and face/ring-hole—runs inside a transaction and
@@ -364,11 +372,11 @@ Landed slice:
   interchange and specialized graph reconstruction use `AssemblyStore`, which exists
   only while a transaction owns every arena undo frame and can persist only through
   checked commit. Compile-fail guards lock the public boundary.
-- Checked commit covers the complete live topology, not only caller-listed roots. Tests
-  prove an unlisted invalid body and an orphan child both reject atomically, while dropped
-  assembly restores identity and future allocation order. X_T reconstruction and its
-  hand-authored writer fixtures have migrated to this assembly path and pass the normal
-  checker gate.
+- Checked commit covers every affected body and complete topology ownership, not only
+  caller-listed roots. Tests with no declared roots prove topology edits and shared
+  surface changes select their dependents; an unlisted invalid body and an orphan child
+  reject atomically, while dropped assembly restores identity and future allocation
+  order. X_T reconstruction and its hand-authored writer fixtures use this path.
 
 Remaining before the gate closes:
 
@@ -376,9 +384,9 @@ Remaining before the gate closes:
 - Add explicit general-body and multi-face/multi-loop sheet builders; extend wire inputs
   beyond line polylines without requiring callers to assemble public vectors and
   back-pointers manually.
-- Add a maintained topology ownership and geometry-dependency index so checked commit can
-  validate touched roots and affected dependents instead of conservatively scanning the
-  entire Store. Preserve the current whole-store closure check as an audit/test oracle.
+- Maintain the candidate ownership/dependency index incrementally from typed mutations
+  rather than rebuilding it with one linear topology scan per commit. Preserve periodic
+  full reconstruction as an audit oracle and add large multi-body performance baselines.
 
 ### E. Tolerance, errors, and checker v2
 
@@ -456,7 +464,8 @@ Remaining before the gate closes:
   **Landed for transaction-owned face/edge/vertex tolerance growth.**
 - External code cannot mutate topology without checked topology APIs. **Landed: generic
   Store mutation and unchecked commit are private; transaction-scoped assembly is
-  whole-store checker/ownership-gated, with compile-fail and rollback tests.**
+  affected-body checker/whole-store ownership-gated, with compile-fail, dependency, and
+  rollback tests.**
 - Invalid inputs and unsupported capabilities cannot panic or masquerade as proven
   geometric misses.
 
@@ -732,11 +741,11 @@ ledger and include an adversarial regression that distinguishes `Invalid`,
 1. Finish parameter-space incidence: acquire production seam/pole/apex fixtures, add
    adaptive full-curve face-domain containment, migrate higher callers to the landed
    pcurve-aware transaction Euler API, and add non-identity chart interchange.
-2. Replace conservative whole-store commit validation with a maintained ownership and
-   geometry-dependency index for affected-root checking, retaining full-store audit
-   tests; migrate future modeling/healing consumers to checked transactions and the
-   landed tolerance budgets; add operation-specific propagation rules, journal
-   composition, and partition history.
+2. Make the landed ownership/shared-geometry dependency index incrementally maintain its
+   candidate snapshot and add multi-body performance baselines, retaining full
+   reconstruction audit tests; migrate future modeling/healing consumers to checked
+   transactions and the landed tolerance budgets; add operation-specific propagation
+   rules, journal composition, and partition history.
 3. Discharge the remaining checker-v2 `Full` gaps: extend incidence certificates to
    Bezier-extracted NURBS and mixed-parameter pcurves, extend loop proofs to curved
    periodic charts, then prove multi-loop containment, complete face containment, and

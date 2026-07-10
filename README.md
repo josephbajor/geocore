@@ -53,8 +53,10 @@ parametric CAD application; feature history and regeneration are later layers.
   shells and an exact sphere-cap-plus-plane shell are also certified, bringing every
   supported positive fixture in the committed X_T corpus to Full `Valid`; general curved
   multi-face shell proofs remain open.
-  Checked transaction commits now validate every live body plus store-wide topology
-  ownership closure, rejecting Fast-checker faults, unlisted invalid bodies, orphan
+  Checked transaction commits preview deterministic net mutations and resolve them
+  through committed/candidate topology-ownership and shared-geometry dependency indexes.
+  Explicit and affected bodies receive the Fast checker while every commit still audits
+  store-wide topology ownership closure, rejecting invalid unlisted bodies, orphan
   subgraphs, and cross-body topology sharing with atomic rollback and a typed error.
   Generic `Store` add/mutate/remove and unchecked commit are no longer public; low-level
   X_T reconstruction uses a transaction-scoped assembly facade and the same mandatory
@@ -75,10 +77,10 @@ parametric CAD application; feature history and regeneration are later layers.
   the metric value. Operation-specific propagation/combination rules and migration of
   every future tolerance-producing operation remain.
   Adaptive full-curve containment, production seam/pole/apex interchange fixtures,
-  operation caller migration, a procedural geometry graph, an ownership/dependency index
-  for touched-root rather than whole-store commit validation, partition history, richer
-  errors/remaining tolerance rules, and the adaptive proofs behind checker v2 must still
-  land before booleans.
+  operation caller migration, a procedural geometry graph, incremental maintenance of
+  the landed ownership/dependency index (its candidate snapshot is currently rebuilt
+  linearly), partition history, richer errors/remaining tolerance rules, and the adaptive
+  proofs behind checker v2 must still land before booleans.
 - M3 is in progress: modern base-13006 schema edit scripts, text/neutral-binary
   reading, atomic reconstruction, and analytic text writing are implemented.
   X_T reconstruction now uses the same copy-on-write transaction mechanism instead of a

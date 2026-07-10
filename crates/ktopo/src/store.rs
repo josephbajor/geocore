@@ -7,6 +7,7 @@ use crate::entity::{
     PointId, Region, Shell, SurfaceId, Vertex, VertexId,
 };
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
+use crate::index::StoreIndex;
 use crate::transaction::{Mutation, MutationKind, Transaction};
 use kcore::arena::{Arena, ArenaChangeKind, Handle};
 use kcore::error::{Error, Result};
@@ -88,6 +89,9 @@ pub struct Store {
     surfaces: Arena<SurfaceGeom>,
     points: Arena<Point3>,
     curves_2d: Arena<Curve2dGeom>,
+    index: StoreIndex,
+    index_dirty: bool,
+    full_validation_required: bool,
     transaction_active: bool,
 }
 
@@ -106,6 +110,12 @@ impl Clone for Store {
             surfaces: self.surfaces.clone(),
             points: self.points.clone(),
             curves_2d: self.curves_2d.clone(),
+            index: self.index.clone(),
+            // Arena clones snapshot the transaction's current state rather
+            // than its entry state, so an active source transaction cannot
+            // reuse the source's committed index without rebuilding it.
+            index_dirty: self.index_dirty || self.transaction_active,
+            full_validation_required: self.full_validation_required || self.transaction_active,
             transaction_active: false,
         }
     }
@@ -135,6 +145,10 @@ impl Store {
         if self.transaction_active {
             return Err(Error::TransactionActive);
         }
+        if self.index_dirty {
+            self.index = StoreIndex::build(self);
+            self.index_dirty = false;
+        }
         self.bodies.begin_undo_frame();
         self.regions.begin_undo_frame();
         self.shells.begin_undo_frame();
@@ -149,6 +163,43 @@ impl Store {
         self.curves_2d.begin_undo_frame();
         self.transaction_active = true;
         Ok(Transaction::new(self))
+    }
+
+    /// Inspect the active transaction's deterministic net mutations without
+    /// consuming any undo frame.
+    pub(crate) fn pending_transaction_mutations(&self) -> Result<Vec<Mutation>> {
+        if !self.transaction_active {
+            return Err(Error::TransactionInactive);
+        }
+        let mut out = Vec::new();
+        append_pending_changes::<Body>(&self.bodies, &mut out)?;
+        append_pending_changes::<Region>(&self.regions, &mut out)?;
+        append_pending_changes::<Shell>(&self.shells, &mut out)?;
+        append_pending_changes::<Face>(&self.faces, &mut out)?;
+        append_pending_changes::<Loop>(&self.loops, &mut out)?;
+        append_pending_changes::<Fin>(&self.fins, &mut out)?;
+        append_pending_changes::<Edge>(&self.edges, &mut out)?;
+        append_pending_changes::<Vertex>(&self.vertices, &mut out)?;
+        append_pending_changes::<CurveGeom>(&self.curves, &mut out)?;
+        append_pending_changes::<SurfaceGeom>(&self.surfaces, &mut out)?;
+        append_pending_changes::<Point3>(&self.points, &mut out)?;
+        append_pending_changes::<Curve2dGeom>(&self.curves_2d, &mut out)?;
+        Ok(out)
+    }
+
+    pub(crate) fn committed_index(&self) -> &StoreIndex {
+        debug_assert!(!self.index_dirty);
+        &self.index
+    }
+
+    pub(crate) fn full_validation_required(&self) -> bool {
+        self.full_validation_required
+    }
+
+    pub(crate) fn install_committed_index(&mut self, index: StoreIndex) {
+        self.index = index;
+        self.index_dirty = false;
+        self.full_validation_required = false;
     }
 
     pub(crate) fn commit_transaction(&mut self) -> Result<Vec<Mutation>> {
@@ -195,7 +246,12 @@ impl Store {
     /// Insert an entity for topology-internal construction or a scoped
     /// [`crate::transaction::AssemblyStore`].
     pub(crate) fn add<T: Entity>(&mut self, entity: T) -> Handle<T> {
-        T::arena_mut(self).insert(entity)
+        let handle = T::arena_mut(self).insert(entity);
+        if !self.transaction_active && is_topology(T::entity_ref(handle)) {
+            self.index_dirty = true;
+            self.full_validation_required = true;
+        }
+        handle
     }
 
     /// Insert immutable point geometry after size-box validation.
@@ -227,6 +283,10 @@ impl Store {
     /// Mutably borrow an entity; [`Error::StaleHandle`] if removed or
     /// unknown.
     pub(crate) fn get_mut<T: Entity>(&mut self, handle: Handle<T>) -> Result<&mut T> {
+        if !self.transaction_active {
+            self.index_dirty = true;
+            self.full_validation_required = true;
+        }
         T::arena_mut(self).get_mut(handle).ok_or(Error::StaleHandle)
     }
 
@@ -234,6 +294,10 @@ impl Store {
     /// gone. Removal never fixes up references *to* the entity — that is
     /// the caller's job (Euler operators do this correctly).
     pub(crate) fn remove<T: Entity>(&mut self, handle: Handle<T>) -> Result<T> {
+        if !self.transaction_active {
+            self.index_dirty = true;
+            self.full_validation_required = true;
+        }
         T::arena_mut(self).remove(handle).ok_or(Error::StaleHandle)
     }
 
@@ -348,22 +412,51 @@ fn append_changes<T: Entity>(arena: &mut Arena<T>, out: &mut Vec<Mutation>) -> R
         arena
             .commit_undo_frame()?
             .into_iter()
-            .map(|change| Mutation {
-                entity: T::entity_ref(change.handle()),
-                kind: match change.kind() {
-                    ArenaChangeKind::Created => MutationKind::Created,
-                    ArenaChangeKind::Modified => MutationKind::Modified,
-                    ArenaChangeKind::Deleted => MutationKind::Deleted,
-                },
-            }),
+            .map(change_to_mutation::<T>),
     );
     Ok(())
+}
+
+fn append_pending_changes<T: Entity>(arena: &Arena<T>, out: &mut Vec<Mutation>) -> Result<()> {
+    out.extend(
+        arena
+            .pending_undo_frame_changes()?
+            .into_iter()
+            .map(change_to_mutation::<T>),
+    );
+    Ok(())
+}
+
+fn change_to_mutation<T: Entity>(change: kcore::arena::ArenaChange<T>) -> Mutation {
+    Mutation {
+        entity: T::entity_ref(change.handle()),
+        kind: match change.kind() {
+            ArenaChangeKind::Created => MutationKind::Created,
+            ArenaChangeKind::Modified => MutationKind::Modified,
+            ArenaChangeKind::Deleted => MutationKind::Deleted,
+        },
+    }
+}
+
+fn is_topology(entity: EntityRef) -> bool {
+    matches!(
+        entity,
+        EntityRef::Body(_)
+            | EntityRef::Region(_)
+            | EntityRef::Shell(_)
+            | EntityRef::Face(_)
+            | EntityRef::Loop(_)
+            | EntityRef::Fin(_)
+            | EntityRef::Edge(_)
+            | EntityRef::Vertex(_)
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::entity::{BodyKind, RegionKind};
+    use kgeom::frame::Frame;
 
     #[test]
     fn add_get_roundtrip_and_stale_handles() {
@@ -392,5 +485,20 @@ mod tests {
             transaction.store_mut().transaction().err(),
             Some(Error::TransactionActive)
         );
+    }
+
+    #[test]
+    fn topology_internal_out_of_transaction_mutation_forces_a_full_audit() {
+        let mut store = Store::new();
+        let invalid = crate::make::block(&mut store, &Frame::world(), [1.0; 3]).unwrap();
+        let unchanged = crate::make::block(&mut store, &Frame::world(), [1.0; 3]).unwrap();
+        store.get_mut(invalid).unwrap().regions.clear();
+
+        let transaction = store.transaction().unwrap();
+        assert!(matches!(
+            transaction.commit_checked_body(unchanged),
+            Err(Error::TopologyCheckFailed { fault_count }) if fault_count > 0
+        ));
+        assert!(store.get(invalid).unwrap().regions.is_empty());
     }
 }

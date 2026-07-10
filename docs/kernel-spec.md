@@ -135,9 +135,10 @@ replaced by an uncertified sampled bound.
 - Generic topology insertion, mutable borrowing, removal, and unchecked commit are not
   public Store operations. Interchange reconstruction and specialized graph builders use
   a transaction-scoped assembly facade whose changes can survive only a checked commit.
-  The commit validates all live bodies and global ownership closure; a maintained
-  ownership/dependency index may later narrow this to touched roots without weakening the
-  invariant.
+  Deterministic pending mutations are resolved through committed and candidate topology
+  ownership/shared-geometry dependency indexes; every affected body is checked and every
+  commit audits global ownership closure. Candidate index construction may later become
+  incremental without weakening this invariant.
 - **Checker** (our `PK_BODY_check` equivalent): validates topology (closure, manifold
   conditions per body type, loop orientation), geometry (self-intersection, degeneracy),
   and geometry–topology consistency (face-loop containment, edge-on-surface within

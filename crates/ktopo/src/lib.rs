@@ -13,6 +13,8 @@
 //!   its own parameter-space curve use and edge-parameter correspondence.
 //! - [`store`] — the arena-backed entity store and deterministic
 //!   traversals.
+//! - `index` — committed topology ownership and shared-geometry dependency
+//!   indexing used for affected-root checked commits.
 //! - [`euler`] — topology-internal Euler primitives and public result types;
 //!   external edits use [`transaction::Transaction`].
 //! - [`make`] — primitive body constructors.
@@ -31,6 +33,7 @@ pub mod entity;
 pub mod euler;
 pub mod geom;
 pub(crate) mod incidence;
+pub(crate) mod index;
 pub(crate) mod loop_proof;
 pub mod make;
 pub mod profile;

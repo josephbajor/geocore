@@ -175,7 +175,7 @@ pub struct Journal {
 /// inherited from [`Store`] through [`Deref`]; all writes remain scoped to the
 /// transaction and are therefore rollback-safe and journaled. Public callers
 /// can retain assembly changes only through a checked commit, which validates
-/// every live body and the store's topology ownership closure.
+/// every affected body and the store's complete topology ownership closure.
 pub struct AssemblyStore<'a> {
     store: &'a mut Store,
 }
@@ -586,19 +586,32 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
 
-    /// Validate the complete live topology with the Fast checker, then commit.
+    /// Validate every affected body and the complete topology ownership
+    /// closure, then commit.
     ///
     /// `bodies` supplies the expected result roots and their preferred
-    /// validation order. Every other live body is checked too, followed by a
-    /// store-wide ownership-closure check, so low-level assembly cannot hide
-    /// an invalid unlisted body or orphan topology. Any fault or validation
-    /// error rolls the entire transaction back. This whole-store validation
-    /// is deliberately conservative until the store has a maintained
-    /// ownership index for touched-root validation.
+    /// validation order. Deterministic pending mutations are resolved through
+    /// both the committed and candidate ownership/dependency indexes, so moved
+    /// topology and shared geometry validate every old and new dependent body.
+    /// The candidate index also audits the complete store-wide ownership
+    /// closure, so low-level assembly cannot hide an invalid unlisted body or
+    /// orphan topology. Any fault or validation error rolls the entire
+    /// transaction back.
     pub fn commit_checked(mut self, bodies: &[BodyId]) -> Result<Journal> {
+        let pending = match self.store.pending_transaction_mutations() {
+            Ok(pending) => pending,
+            Err(error) => {
+                self.store.rollback_transaction()?;
+                self.finished = true;
+                return Err(error);
+            }
+        };
+        let candidate_index = crate::index::StoreIndex::build(self.store);
+        let affected = candidate_index.affected_bodies(self.store.committed_index(), &pending);
+        let validate_all = self.store.full_validation_required();
         let mut checked = Vec::new();
         let validation = (|| {
-            let mut fault_count = 0usize;
+            let mut fault_count = candidate_index.ownership_fault_count();
             for &body in bodies {
                 if checked.contains(&body) {
                     continue;
@@ -606,14 +619,22 @@ impl<'a> Transaction<'a> {
                 checked.push(body);
                 fault_count += crate::check::check_body(self.store, body)?.len();
             }
-            for (body, _) in self.store.iter::<crate::entity::Body>() {
-                if checked.contains(&body) {
+            for body in affected {
+                if checked.contains(&body) || !self.store.contains(body) {
                     continue;
                 }
                 checked.push(body);
                 fault_count += crate::check::check_body(self.store, body)?.len();
             }
-            fault_count += crate::check::topology_ownership_fault_count(self.store);
+            if validate_all {
+                for (body, _) in self.store.iter::<crate::entity::Body>() {
+                    if checked.contains(&body) {
+                        continue;
+                    }
+                    checked.push(body);
+                    fault_count += crate::check::check_body(self.store, body)?.len();
+                }
+            }
             if fault_count == 0 {
                 Ok(())
             } else {
@@ -626,6 +647,8 @@ impl<'a> Transaction<'a> {
             return Err(error);
         }
         let mutations = self.store.commit_transaction()?;
+        debug_assert_eq!(mutations, pending);
+        self.store.install_committed_index(candidate_index);
         self.finished = true;
         Ok(Journal::new(
             mutations,

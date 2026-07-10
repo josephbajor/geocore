@@ -267,13 +267,11 @@ impl<T: Clone> Arena<T> {
         });
     }
 
-    /// Commit the innermost undo frame and return its deterministic net
-    /// mutations in slot order.
-    pub fn commit_undo_frame(&mut self) -> Result<Vec<ArenaChange<T>>> {
-        let mut frame = self.undo.pop().ok_or(Error::TransactionInactive)?;
-        frame.originals.sort_by_key(|(index, _)| *index);
+    fn undo_frame_changes(&self, frame: &UndoFrame<T>) -> Vec<ArenaChange<T>> {
+        let mut originals: Vec<_> = frame.originals.iter().collect();
+        originals.sort_by_key(|(index, _)| *index);
         let mut changes = Vec::new();
-        for (index, original) in frame.originals {
+        for &(index, ref original) in originals {
             let current = &self.slots[index as usize];
             match (original.value.is_some(), current.value.is_some()) {
                 (true, true) if original.generation == current.generation => {
@@ -335,7 +333,22 @@ impl<T: Clone> Arena<T> {
                 });
             }
         }
-        Ok(changes)
+        changes
+    }
+
+    /// Inspect the deterministic net mutations of the innermost undo frame
+    /// without consuming it. A subsequent commit returns the identical list;
+    /// rollback remains available after inspection.
+    pub fn pending_undo_frame_changes(&self) -> Result<Vec<ArenaChange<T>>> {
+        let frame = self.undo.last().ok_or(Error::TransactionInactive)?;
+        Ok(self.undo_frame_changes(frame))
+    }
+
+    /// Commit the innermost undo frame and return its deterministic net
+    /// mutations in slot order.
+    pub fn commit_undo_frame(&mut self) -> Result<Vec<ArenaChange<T>>> {
+        let frame = self.undo.pop().ok_or(Error::TransactionInactive)?;
+        Ok(self.undo_frame_changes(&frame))
     }
 
     /// Roll back the innermost undo frame, restoring contents, identities,
@@ -456,7 +469,10 @@ mod tests {
         arena.remove(deleted).unwrap();
         let replacement = arena.insert(30);
         let appended = arena.insert(40);
+        let pending = arena.pending_undo_frame_changes().unwrap();
         let changes = arena.commit_undo_frame().unwrap();
+
+        assert_eq!(pending, changes);
 
         assert_eq!(
             changes,
@@ -478,6 +494,27 @@ mod tests {
                     kind: ArenaChangeKind::Created,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn mutation_preview_does_not_consume_rollback_state() {
+        let mut arena = Arena::new();
+        let value = arena.insert(1);
+        arena.begin_undo_frame();
+        *arena.get_mut(value).unwrap() = 2;
+        assert_eq!(
+            arena.pending_undo_frame_changes().unwrap(),
+            vec![ArenaChange {
+                handle: value,
+                kind: ArenaChangeKind::Modified,
+            }]
+        );
+        arena.rollback_undo_frame().unwrap();
+        assert_eq!(arena.get(value), Some(&1));
+        assert_eq!(
+            arena.pending_undo_frame_changes().unwrap_err(),
+            Error::TransactionInactive
         );
     }
 

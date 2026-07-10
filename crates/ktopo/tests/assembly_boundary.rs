@@ -1,8 +1,13 @@
 //! Generic graph assembly is transaction-scoped; the public Store is read-only.
 
 use kcore::error::Error;
-use kgeom::vec::Point3;
+use kgeom::frame::Frame;
+use kgeom::surface::Plane;
+use kgeom::vec::{Point3, Vec3};
+use ktopo::check::check_body;
 use ktopo::entity::{Body, BodyKind, Region, RegionKind, Shell};
+use ktopo::geom::SurfaceGeom;
+use ktopo::make::block;
 use ktopo::store::Store;
 use ktopo::transaction::{AssemblyStore, MutationKind};
 
@@ -105,6 +110,61 @@ fn checked_commit_rejects_orphan_topology() {
         Err(Error::TopologyCheckFailed { fault_count }) if fault_count > 0
     ));
     assert_eq!(store.count::<Region>(), 1);
+}
+
+#[test]
+fn affected_root_selection_finds_topology_without_explicit_hints() {
+    let mut store = Store::new();
+    let (body, _) = checked_empty_wire(&mut store);
+    let original_regions = store.get(body).unwrap().regions.clone();
+    let mut transaction = store.transaction().unwrap();
+    transaction
+        .assembly()
+        .get_mut(body)
+        .unwrap()
+        .regions
+        .clear();
+    assert!(matches!(
+        transaction.commit_checked(&[]),
+        Err(Error::TopologyCheckFailed { fault_count }) if fault_count > 0
+    ));
+    assert_eq!(store.get(body).unwrap().regions, original_regions);
+}
+
+#[test]
+fn affected_root_selection_tracks_shared_geometry_without_explicit_hints() {
+    let mut store = Store::new();
+    let first = block(&mut store, &Frame::world(), [1.0; 3]).unwrap();
+    let second = block(&mut store, &Frame::world(), [1.0; 3]).unwrap();
+    let first_face = store.faces_of_body(first).unwrap()[0];
+    let second_face = store.faces_of_body(second).unwrap()[0];
+    let shared_surface = store.get(first_face).unwrap().surface;
+
+    let mut share = store.transaction().unwrap();
+    share.assembly().get_mut(second_face).unwrap().surface = shared_surface;
+    share.commit_checked_body(second).unwrap();
+    assert!(check_body(&store, first).unwrap().is_empty());
+    assert!(check_body(&store, second).unwrap().is_empty());
+
+    let SurfaceGeom::Plane(original) = store.get(shared_surface).unwrap() else {
+        panic!("block face must use a plane");
+    };
+    let original_origin = original.frame().origin();
+    let shifted = SurfaceGeom::Plane(Plane::new(
+        Frame::from_z(Point3::new(0.0, 0.0, 10.0), Vec3::new(0.0, 0.0, 1.0)).unwrap(),
+    ));
+    let mut transaction = store.transaction().unwrap();
+    *transaction.assembly().get_mut(shared_surface).unwrap() = shifted;
+    assert!(matches!(
+        transaction.commit_checked(&[]),
+        Err(Error::TopologyCheckFailed { fault_count }) if fault_count > 0
+    ));
+    let SurfaceGeom::Plane(restored) = store.get(shared_surface).unwrap() else {
+        panic!("rolled-back block face must use a plane");
+    };
+    assert_eq!(restored.frame().origin(), original_origin);
+    assert!(check_body(&store, first).unwrap().is_empty());
+    assert!(check_body(&store, second).unwrap().is_empty());
 }
 
 #[test]
