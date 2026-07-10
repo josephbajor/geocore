@@ -133,6 +133,19 @@ impl Aabb2 {
     pub fn contains(self, p: Vec2) -> bool {
         self.min.x <= p.x && p.x <= self.max.x && self.min.y <= p.y && p.y <= self.max.y
     }
+
+    /// Box grown outward by `margin` on every side.
+    pub fn inflated(self, margin: f64) -> Self {
+        debug_assert!(margin >= 0.0);
+        if self.is_empty() {
+            return self;
+        }
+        let amount = Vec2::new(margin, margin);
+        Self {
+            min: self.min - amount,
+            max: self.max + amount,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -169,5 +182,9 @@ mod tests {
         let b = Aabb3::from_point(Vec3::new(1.0, 1.0, 1.0)).inflated(0.5);
         assert!(b.contains(Vec3::new(0.6, 1.4, 1.0)));
         assert!(!b.contains(Vec3::new(0.4, 1.0, 1.0)));
+
+        let b = Aabb2::from_points(&[Vec2::new(1.0, 1.0)]).inflated(0.5);
+        assert!(b.contains(Vec2::new(0.6, 1.4)));
+        assert!(!b.contains(Vec2::new(0.4, 1.0)));
     }
 }

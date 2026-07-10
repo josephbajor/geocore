@@ -6,16 +6,22 @@
 //! (row/column-wise application).
 
 use super::knots::KnotVector;
-use crate::vec::{Point3, Vec3};
+use crate::vec::{Point3, Vec2, Vec3};
 use kcore::error::{Error, Result};
 
 /// Types that support the convex combination used by knot insertion.
-pub(super) trait Comb: Copy {
+pub(crate) trait Comb: Copy {
     /// `(1 - alpha) * a + alpha * b`.
     fn comb(a: Self, b: Self, alpha: f64) -> Self;
 }
 
 impl Comb for Vec3 {
+    fn comb(a: Self, b: Self, alpha: f64) -> Self {
+        a * (1.0 - alpha) + b * alpha
+    }
+}
+
+impl Comb for Vec2 {
     fn comb(a: Self, b: Self, alpha: f64) -> Self {
         a * (1.0 - alpha) + b * alpha
     }
@@ -68,7 +74,7 @@ impl Comb for Hpt {
 /// `CurveKnotIns`). `u` must lie strictly inside the domain; the resulting
 /// multiplicity must not exceed the degree. Returns the refined knots and
 /// control points; the curve's point set is unchanged.
-pub(super) fn insert_knot<T: Comb>(
+pub(crate) fn insert_knot<T: Comb>(
     kv: &KnotVector,
     points: &[T],
     u: f64,
@@ -135,7 +141,7 @@ pub(super) fn insert_knot<T: Comb>(
 /// Semantically A5.4 `RefineKnotVectCurve`; implemented as repeated A5.1 for
 /// a smaller trusted core — refinement is O(n·r) instead of O(n + r), which
 /// is irrelevant off the hot path (fitting, splitting, extraction).
-pub(super) fn refine_knots<T: Comb>(
+pub(crate) fn refine_knots<T: Comb>(
     degree: usize,
     kv: &KnotVector,
     points: &[T],

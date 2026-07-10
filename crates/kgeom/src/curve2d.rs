@@ -11,6 +11,7 @@ use core::any::Any;
 use crate::aabb::Aabb2;
 use crate::nurbs::KnotVector;
 use crate::nurbs::basis::ders_basis_funs;
+use crate::nurbs::ops::{Comb, insert_knot, refine_knots};
 use crate::param::ParamRange;
 use crate::vec::{Point2, Vec2};
 use kcore::error::{Error, Result};
@@ -51,6 +52,38 @@ pub trait Curve2d: Any {
 
 fn finite_point(p: Point2) -> bool {
     p.x.is_finite() && p.y.is_finite()
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct Hpt2 {
+    x: f64,
+    y: f64,
+    w: f64,
+}
+
+impl Hpt2 {
+    fn lift(point: Point2, weight: f64) -> Self {
+        Self {
+            x: point.x * weight,
+            y: point.y * weight,
+            w: weight,
+        }
+    }
+
+    fn project(self) -> (Point2, f64) {
+        (Point2::new(self.x / self.w, self.y / self.w), self.w)
+    }
+}
+
+impl Comb for Hpt2 {
+    fn comb(a: Self, b: Self, alpha: f64) -> Self {
+        let one_minus = 1.0 - alpha;
+        Self {
+            x: a.x * one_minus + b.x * alpha,
+            y: a.y * one_minus + b.y * alpha,
+            w: a.w * one_minus + b.w * alpha,
+        }
+    }
 }
 
 /// An unbounded parameter-space line, parameterized by 2D arc length.
@@ -274,6 +307,133 @@ impl NurbsCurve2d {
     pub fn weights(&self) -> Option<&[f64]> {
         self.weights.as_deref()
     }
+
+    fn from_hpts(degree: usize, knots: Vec<f64>, points: Vec<Hpt2>) -> Result<Self> {
+        let (points, weights): (Vec<Point2>, Vec<f64>) =
+            points.into_iter().map(Hpt2::project).unzip();
+        Self::new(degree, knots, points, Some(weights))
+    }
+
+    /// Curve with `u` inserted `times` times. The represented point set and
+    /// rational weights are preserved exactly in homogeneous space.
+    pub fn with_knot_inserted(&self, u: f64, times: usize) -> Result<Self> {
+        match &self.weights {
+            Some(weights) => {
+                let points: Vec<_> = self
+                    .points
+                    .iter()
+                    .zip(weights)
+                    .map(|(&point, &weight)| Hpt2::lift(point, weight))
+                    .collect();
+                let (knots, points) = insert_knot(&self.knots, &points, u, times)?;
+                Self::from_hpts(self.degree(), knots, points)
+            }
+            None => {
+                let (knots, points) = insert_knot(&self.knots, &self.points, u, times)?;
+                Self::new(self.degree(), knots, points, None)
+            }
+        }
+    }
+
+    /// Curve with each value in `knots` inserted once per occurrence.
+    pub fn with_knots_refined(&self, knots: &[f64]) -> Result<Self> {
+        let degree = self.degree();
+        match &self.weights {
+            Some(weights) => {
+                let points: Vec<_> = self
+                    .points
+                    .iter()
+                    .zip(weights)
+                    .map(|(&point, &weight)| Hpt2::lift(point, weight))
+                    .collect();
+                let (knots, points) = refine_knots(degree, &self.knots, &points, knots)?;
+                Self::from_hpts(degree, knots, points)
+            }
+            None => {
+                let (knots, points) = refine_knots(degree, &self.knots, &self.points, knots)?;
+                Self::new(degree, knots, points, None)
+            }
+        }
+    }
+
+    /// Split a clamped curve at a parameter strictly inside its domain.
+    pub fn split_at(&self, parameter: f64) -> Result<(Self, Self)> {
+        if !self.knots.is_clamped() {
+            return Err(Error::InvalidGeometry {
+                reason: "splitting a 2D NURBS requires a clamped knot vector",
+            });
+        }
+        let domain = self.knots.domain();
+        if !(domain.lo < parameter && parameter < domain.hi) {
+            return Err(Error::InvalidGeometry {
+                reason: "2D NURBS split parameter must lie strictly inside the domain",
+            });
+        }
+        let degree = self.degree();
+        if degree == 0 {
+            return Err(Error::InvalidGeometry {
+                reason: "degree-zero 2D NURBS splitting is unsupported",
+            });
+        }
+        let needed = degree - self.knots.multiplicity(parameter);
+        let full = if needed > 0 {
+            self.with_knot_inserted(parameter, needed)?
+        } else {
+            self.clone()
+        };
+        let knots = full.knots.as_slice();
+        let split = knots
+            .iter()
+            .position(|&knot| knot == parameter)
+            .expect("split knot has full multiplicity after insertion");
+        let mut left_knots = knots[..split + degree].to_vec();
+        left_knots.push(parameter);
+        let mut right_knots = vec![parameter];
+        right_knots.extend_from_slice(&knots[split..]);
+        let left_points = full.points[..split].to_vec();
+        let right_points = full.points[split - 1..].to_vec();
+        let (left_weights, right_weights) = match &full.weights {
+            Some(weights) => (
+                Some(weights[..split].to_vec()),
+                Some(weights[split - 1..].to_vec()),
+            ),
+            None => (None, None),
+        };
+        Ok((
+            Self::new(degree, left_knots, left_points, left_weights)?,
+            Self::new(degree, right_knots, right_points, right_weights)?,
+        ))
+    }
+
+    /// Clamped subcurve over `range`, preserving exact parameter values.
+    pub fn restricted_to(&self, range: ParamRange) -> Result<Self> {
+        if !self.knots.is_clamped() {
+            return Err(Error::InvalidGeometry {
+                reason: "restricting a 2D NURBS requires a clamped knot vector",
+            });
+        }
+        let domain = self.knots.domain();
+        if range.lo < domain.lo || range.hi > domain.hi {
+            return Err(Error::InvalidGeometry {
+                reason: "2D NURBS restriction lies outside its domain",
+            });
+        }
+        let mut restricted = self.clone();
+        if range.lo > domain.lo {
+            restricted = restricted.split_at(range.lo)?.1;
+        }
+        if range.hi < domain.hi {
+            restricted = restricted.split_at(range.hi)?.0;
+        }
+        Ok(restricted)
+    }
+
+    fn subrange_control_box(&self, range: ParamRange) -> Aabb2 {
+        self.restricted_to(range).map_or_else(
+            |_| Aabb2::from_points(&self.points),
+            |curve| Aabb2::from_points(&curve.points),
+        )
+    }
 }
 
 impl Curve2d for NurbsCurve2d {
@@ -339,7 +499,7 @@ impl Curve2d for NurbsCurve2d {
 
     fn bounding_box(&self, range: ParamRange) -> Aabb2 {
         debug_assert!(range.is_finite());
-        Aabb2::from_points(&self.points)
+        self.subrange_control_box(range)
     }
 }
 
@@ -375,6 +535,73 @@ mod tests {
         for i in 0..=100 {
             let p = curve.eval(i as f64 / 100.0);
             assert!((p.norm() - 1.0).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn knot_insertion_split_and_restriction_preserve_2d_nurbs() {
+        let curve = NurbsCurve2d::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point2::new(1.0, 0.0),
+                Point2::new(1.0, 1.0),
+                Point2::new(0.0, 1.0),
+            ],
+            Some(vec![1.0, core::f64::consts::FRAC_1_SQRT_2, 1.0]),
+        )
+        .unwrap();
+        let refined = curve.with_knot_inserted(0.4, 1).unwrap();
+        let (left, right) = curve.split_at(0.4).unwrap();
+        let restricted = curve.restricted_to(ParamRange::new(0.2, 0.6)).unwrap();
+        assert_eq!(left.param_range(), ParamRange::new(0.0, 0.4));
+        assert_eq!(right.param_range(), ParamRange::new(0.4, 1.0));
+        assert_eq!(restricted.param_range(), ParamRange::new(0.2, 0.6));
+        for index in 0..=100 {
+            let parameter = f64::from(index) / 100.0;
+            assert!(refined.eval(parameter).dist(curve.eval(parameter)) < 1.0e-12);
+            if left.param_range().contains(parameter) {
+                assert!(left.eval(parameter).dist(curve.eval(parameter)) < 1.0e-12);
+            }
+            if right.param_range().contains(parameter) {
+                assert!(right.eval(parameter).dist(curve.eval(parameter)) < 1.0e-12);
+            }
+            if restricted.param_range().contains(parameter) {
+                assert!(restricted.eval(parameter).dist(curve.eval(parameter)) < 1.0e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn nurbs_subrange_box_tightens_and_contains_the_curve() {
+        let curve = NurbsCurve2d::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec![
+                Point2::new(0.0, 0.0),
+                Point2::new(0.0, 10.0),
+                Point2::new(10.0, 10.0),
+                Point2::new(10.0, 0.0),
+            ],
+            None,
+        )
+        .unwrap();
+        let range = ParamRange::new(0.0, 0.1);
+        let full = Aabb2::from_points(curve.points());
+        let subrange = curve
+            .bounding_box(range)
+            .inflated(kcore::tolerance::LINEAR_RESOLUTION);
+        assert!(subrange.max.x < full.max.x);
+        assert!(subrange.max.y < full.max.y);
+        for index in 0..=100 {
+            let parameter = range.lo + range.width() * f64::from(index) / 100.0;
+            let point = curve.eval(parameter);
+            assert!(
+                point.x >= subrange.min.x
+                    && point.x <= subrange.max.x
+                    && point.y >= subrange.min.y
+                    && point.y <= subrange.max.y
+            );
         }
     }
 

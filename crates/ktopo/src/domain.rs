@@ -6,13 +6,14 @@
 //! equivalent 3D boxes that are projected analytically into plane/cylinder/
 //! cone parameters. There is deliberately no sampled fallback.
 
-use crate::entity::{FaceDomain, FaceId, FinPcurve};
+use crate::entity::{FaceDomain, FaceId, FinPcurve, PcurveChart};
 use crate::geom::SurfaceGeom;
 use crate::store::Store;
 use kcore::error::{Error, Result};
 use kcore::tolerance::LINEAR_RESOLUTION;
 use kgeom::aabb::{Aabb2, Aabb3};
 use kgeom::curve::Curve;
+use kgeom::curve2d::Curve2d;
 use kgeom::param::ParamRange;
 use kgeom::vec::{Point3, Vec2, Vec3};
 
@@ -21,12 +22,15 @@ use kgeom::vec::{Point3, Vec2, Vec3};
 pub enum FaceDomainContainment {
     /// Conservative boxes prove the entire represented boundary is inside.
     Certified,
-    /// An evaluated boundary endpoint is provably outside the domain.
+    /// An evaluated boundary point is provably outside the domain.
     Outside,
     /// No point is proven outside, but current bounds are too loose or
     /// incomplete to prove full containment.
     Indeterminate,
 }
+
+const CONTAINMENT_MAX_DEPTH: usize = 20;
+const CONTAINMENT_MAX_SEGMENTS: usize = 4096;
 
 /// Derive a certified conservative finite UV work box for `face`.
 ///
@@ -148,18 +152,38 @@ pub fn certify_face_domain_containment(
     };
     let surface = store.get(face.surface)?;
     let periods = surface.as_surface().periodicity();
+    let mut saw_boundary = false;
+    let mut every_boundary_use_certified = true;
     for &loop_id in &face.loops {
         for &fin_id in &store.get(loop_id)?.fins {
+            saw_boundary = true;
             let fin = store.get(fin_id)?;
-            let Some(use_) = fin.pcurve else { continue };
+            let Some(use_) = fin.pcurve else {
+                every_boundary_use_certified = false;
+                continue;
+            };
             let curve = store.get(use_.curve())?.as_curve();
-            for q in [use_.range().lo, use_.range().hi] {
-                let uv = use_.chart().apply(curve.eval(q), periods)?;
-                if !domain_contains_uv(domain, uv) {
+            match certify_curve_range_containment(
+                curve,
+                use_.range(),
+                use_.chart(),
+                periods,
+                domain,
+                CONTAINMENT_MAX_DEPTH,
+                CONTAINMENT_MAX_SEGMENTS,
+            )? {
+                FaceDomainContainment::Outside => {
                     return Ok(FaceDomainContainment::Outside);
                 }
+                FaceDomainContainment::Indeterminate => {
+                    every_boundary_use_certified = false;
+                }
+                FaceDomainContainment::Certified => {}
             }
         }
+    }
+    if saw_boundary && every_boundary_use_certified {
+        return Ok(FaceDomainContainment::Certified);
     }
     let Some(required) = derive_face_domain(store, face_id)? else {
         return Ok(FaceDomainContainment::Indeterminate);
@@ -169,6 +193,55 @@ pub fn certify_face_domain_containment(
     } else {
         Ok(FaceDomainContainment::Indeterminate)
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn certify_curve_range_containment(
+    curve: &dyn Curve2d,
+    range: ParamRange,
+    chart: PcurveChart,
+    periods: [Option<f64>; 2],
+    domain: FaceDomain,
+    max_depth: usize,
+    max_segments: usize,
+) -> Result<FaceDomainContainment> {
+    let mut stack = vec![(range, 0usize)];
+    let mut visited = 0usize;
+    while let Some((segment, depth)) = stack.pop() {
+        visited += 1;
+        if visited > max_segments {
+            return Ok(FaceDomainContainment::Indeterminate);
+        }
+
+        for parameter in [segment.lo, segment.hi] {
+            let point = chart.apply(curve.eval(parameter), periods)?;
+            if !domain_contains_uv(domain, point) {
+                return Ok(FaceDomainContainment::Outside);
+            }
+        }
+
+        let bounds = curve.bounding_box(segment);
+        let min = chart.apply(bounds.min, periods)?;
+        let max = chart.apply(bounds.max, periods)?;
+        if domain_contains_uv(domain, min) && domain_contains_uv(domain, max) {
+            continue;
+        }
+
+        let midpoint = segment.lo + 0.5 * (segment.hi - segment.lo);
+        if midpoint == segment.lo || midpoint == segment.hi {
+            return Ok(FaceDomainContainment::Indeterminate);
+        }
+        let point = chart.apply(curve.eval(midpoint), periods)?;
+        if !domain_contains_uv(domain, point) {
+            return Ok(FaceDomainContainment::Outside);
+        }
+        if depth >= max_depth {
+            return Ok(FaceDomainContainment::Indeterminate);
+        }
+        stack.push((ParamRange::new(midpoint, segment.hi), depth + 1));
+        stack.push((ParamRange::new(segment.lo, midpoint), depth + 1));
+    }
+    Ok(FaceDomainContainment::Certified)
 }
 
 fn domain_contains_uv(domain: FaceDomain, uv: Vec2) -> bool {
@@ -270,12 +343,13 @@ fn project_box(bounds: Aabb3, origin: Point3, axis: Vec3) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::check_body;
+    use crate::check::{CheckLevel, VerificationGapKind, check_body, check_body_report};
     use crate::entity::{EdgeId, ParamMap1d};
     use crate::geom::Curve2dGeom;
     use crate::make::{block, cylinder};
+    use kgeom::curve2d::NurbsCurve2d;
     use kgeom::frame::Frame;
-    use kgeom::vec::{Point3, Vec3};
+    use kgeom::vec::{Point2, Point3, Vec3};
 
     fn tilted() -> Frame {
         Frame::new(
@@ -335,6 +409,116 @@ mod tests {
             certify_face_domain_containment(&store, face).unwrap(),
             FaceDomainContainment::Indeterminate
         );
+    }
+
+    #[test]
+    fn adaptive_nurbs_containment_certifies_subranges_and_preserves_unknowns() {
+        let curve = NurbsCurve2d::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec![
+                Point2::new(0.0, 0.0),
+                Point2::new(1.0, 0.0),
+                Point2::new(100.0, 0.0),
+                Point2::new(100.0, 0.0),
+            ],
+            None,
+        )
+        .unwrap();
+        let range = ParamRange::new(0.0, 0.1);
+        let domain = FaceDomain::from_bounds(0.0, 4.0, -1.0, 1.0).unwrap();
+        assert!(!domain_contains_uv(
+            domain,
+            curve.bounding_box(curve.param_range()).max
+        ));
+        assert_eq!(
+            certify_curve_range_containment(
+                &curve,
+                range,
+                PcurveChart::identity(),
+                [None, None],
+                domain,
+                CONTAINMENT_MAX_DEPTH,
+                CONTAINMENT_MAX_SEGMENTS,
+            )
+            .unwrap(),
+            FaceDomainContainment::Certified
+        );
+
+        let arch = NurbsCurve2d::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec![
+                Point2::new(0.0, 0.0),
+                Point2::new(0.0, 10.0),
+                Point2::new(1.0, 10.0),
+                Point2::new(1.0, 0.0),
+            ],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            certify_curve_range_containment(
+                &arch,
+                arch.param_range(),
+                PcurveChart::identity(),
+                [None, None],
+                FaceDomain::from_bounds(-1.0, 2.0, -1.0, 7.0).unwrap(),
+                CONTAINMENT_MAX_DEPTH,
+                CONTAINMENT_MAX_SEGMENTS,
+            )
+            .unwrap(),
+            FaceDomainContainment::Outside
+        );
+        assert_eq!(
+            certify_curve_range_containment(
+                &arch,
+                arch.param_range(),
+                PcurveChart::identity(),
+                [None, None],
+                FaceDomain::from_bounds(-1.0, 2.0, -1.0, 8.0).unwrap(),
+                0,
+                CONTAINMENT_MAX_SEGMENTS,
+            )
+            .unwrap(),
+            FaceDomainContainment::Indeterminate
+        );
+    }
+
+    #[test]
+    fn active_nurbs_pcurve_subrange_discharges_the_face_domain_gap() {
+        let mut store = Store::new();
+        let body = block(&mut store, &Frame::world(), [2.0, 3.0, 4.0]).unwrap();
+        let face = store.faces_of_body(body).unwrap()[0];
+        let loop_id = store.get(face).unwrap().loops[0];
+        let fin_id = store.get(loop_id).unwrap().fins[0];
+        let use_ = store.get(fin_id).unwrap().pcurve.unwrap();
+        let Curve2dGeom::Line(line) = *store.get(use_.curve()).unwrap() else {
+            panic!("block pcurve must be linear");
+        };
+        let active = use_.range();
+        let extended_hi = active.lo + 10.0 * active.width();
+        let nurbs = NurbsCurve2d::new(
+            1,
+            vec![active.lo, active.lo, extended_hi, extended_hi],
+            vec![line.eval(active.lo), line.eval(extended_hi)],
+            None,
+        )
+        .unwrap();
+        let pcurve = store.insert_pcurve(Curve2dGeom::Nurbs(nurbs));
+        store.get_mut(fin_id).unwrap().pcurve =
+            Some(FinPcurve::new(pcurve, active, use_.edge_to_pcurve()).unwrap());
+
+        assert!(check_body(&store, body).unwrap().is_empty());
+        assert_eq!(
+            certify_face_domain_containment(&store, face).unwrap(),
+            FaceDomainContainment::Certified
+        );
+        let report = check_body_report(&store, body, CheckLevel::Full).unwrap();
+        assert!(report.gaps.iter().all(|gap| {
+            gap.entity != crate::entity::EntityRef::Face(face)
+                || gap.kind != VerificationGapKind::FaceDomainContainment
+        }));
     }
 
     fn make_curve_less(store: &mut Store, body: crate::entity::BodyId) -> EdgeId {

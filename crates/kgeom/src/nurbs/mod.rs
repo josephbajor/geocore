@@ -26,7 +26,7 @@ mod fit;
 mod knots;
 mod ncurve;
 mod nsurface;
-mod ops;
+pub(crate) mod ops;
 
 pub use fit::interpolate;
 pub use knots::KnotVector;

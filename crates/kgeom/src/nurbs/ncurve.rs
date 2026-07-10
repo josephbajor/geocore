@@ -157,6 +157,11 @@ impl NurbsCurve {
             });
         }
         let p = self.degree();
+        if p == 0 {
+            return Err(Error::InvalidGeometry {
+                reason: "degree-zero NURBS splitting is unsupported",
+            });
+        }
         let need = p - self.knots.multiplicity(t);
         let full = if need > 0 {
             self.with_knot_inserted(t, need)?
@@ -185,6 +190,37 @@ impl NurbsCurve {
             NurbsCurve::new(p, left_knots, left_pts, left_w)?,
             NurbsCurve::new(p, right_knots, right_pts, right_w)?,
         ))
+    }
+
+    /// Clamped subcurve over `range`, preserving the original parameter
+    /// values and rational representation.
+    pub fn restricted_to(&self, range: ParamRange) -> Result<NurbsCurve> {
+        if !self.knots.is_clamped() {
+            return Err(Error::InvalidGeometry {
+                reason: "restricting a NURBS curve requires a clamped knot vector",
+            });
+        }
+        let domain = self.knots.domain();
+        if range.lo < domain.lo || range.hi > domain.hi {
+            return Err(Error::InvalidGeometry {
+                reason: "NURBS curve restriction lies outside its domain",
+            });
+        }
+        let mut restricted = self.clone();
+        if range.lo > domain.lo {
+            restricted = restricted.split_at(range.lo)?.1;
+        }
+        if range.hi < domain.hi {
+            restricted = restricted.split_at(range.hi)?.0;
+        }
+        Ok(restricted)
+    }
+
+    fn subrange_control_box(&self, range: ParamRange) -> Aabb3 {
+        self.restricted_to(range).map_or_else(
+            |_| Aabb3::from_points(&self.points),
+            |curve| Aabb3::from_points(&curve.points),
+        )
     }
 
     /// Decompose into Bezier segments (knot refinement to full interior
@@ -299,12 +335,12 @@ impl Curve for NurbsCurve {
         None
     }
 
-    /// Convex-hull box of the control points: contains the whole curve
-    /// (valid for rational curves because all weights are positive), so it
-    /// is conservative for any sub-range.
+    /// Convex-hull box of the exact clamped subcurve control points. Positive
+    /// rational weights make the projected curve a convex combination, so
+    /// this is conservative and tightens under parameter subdivision.
     fn bounding_box(&self, range: ParamRange) -> Aabb3 {
         debug_assert!(range.is_finite());
-        Aabb3::from_points(&self.points)
+        self.subrange_control_box(range)
     }
 }
 
@@ -518,6 +554,24 @@ mod tests {
         for i in 0..=100 {
             let t = i as f64 / 100.0;
             assert!(bb.contains(c.eval(t)));
+        }
+    }
+
+    #[test]
+    fn subrange_bounding_box_uses_restricted_control_hull() {
+        let curve = cubic_polynomial();
+        let range = ParamRange::new(0.0, 0.1);
+        let full = Aabb3::from_points(curve.points());
+        let subrange = curve
+            .bounding_box(range)
+            .inflated(kcore::tolerance::LINEAR_RESOLUTION);
+        assert!(subrange.max.x < full.max.x);
+        let restricted = curve.restricted_to(range).unwrap();
+        assert_eq!(restricted.param_range(), range);
+        for index in 0..=100 {
+            let parameter = range.lo + range.width() * f64::from(index) / 100.0;
+            assert!(subrange.contains(curve.eval(parameter)));
+            assert!(restricted.eval(parameter).dist(curve.eval(parameter)) < 1.0e-12);
         }
     }
 

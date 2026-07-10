@@ -14,7 +14,7 @@ parametric CAD application; feature history and regeneration are later layers.
 | Crate | Layer | Contents |
 |---|---|---|
 | [`crates/kcore`](crates/kcore) | L0 foundations | Robust predicates, exact expansion arithmetic, interval filters, tolerance policy (Parasolid numeric regime), typed errors, generational entity arenas with copy-on-write undo frames, deterministic parallel primitives, deterministic transcendental math (musl port — platform libm is banned in kernel code via clippy `disallowed-methods`) |
-| [`crates/kgeom`](crates/kgeom) | L1 geometry | Analytic curves (line/circle/ellipse), true 2D line/circle/NURBS pcurve evaluators, and analytic surfaces (plane/cylinder/cone/sphere/torus) with exact bounding boxes, NURBS engine (Piegl & Tiller), closest-point projection, deterministic trimmed-face tessellation with explicit refinement-limit errors, evaluator conformance harness |
+| [`crates/kgeom`](crates/kgeom) | L1 geometry | Analytic curves (line/circle/ellipse), true 2D line/circle/NURBS pcurve evaluators, and analytic surfaces (plane/cylinder/cone/sphere/torus) with exact bounding boxes, NURBS engine (Piegl & Tiller) with homogeneous 2D/3D knot operations and conservative active-subrange control-hull boxes, closest-point projection, deterministic trimmed-face tessellation with explicit refinement-limit errors, evaluator conformance harness |
 | [`crates/ktopo`](crates/ktopo) | L2 topology | Parasolid entity hierarchy (body→region→shell→face→loop→fin→edge→vertex), finite conservative face UV domains, typed entity-tolerance provenance and transaction-owned growth budgets, independent per-fin pcurves, bounded curve-less tolerant edges, reusable validated simple-polygon profiles, transaction-owned pcurve-aware Euler edits, private generic Store mutation with transaction-scoped checked assembly, deterministic mutation/lineage/tolerance journals, journal-returning checked solid/sheet/wire/acorn constructors, shared incidence validation, and pcurve-driven watertight tessellation |
 | [`crates/kops`](crates/kops) | L3 operations | Provisional M4 intersection foundation: exact analytic special cases plus early sampled NURBS curve/curve, curve/surface, and surface/surface experiments; generic completeness and boolean-ready pcurve results remain gated |
 | [`crates/kxt`](crates/kxt) | L5 interchange | Atomic modern-schema Parasolid XT (`.x_t`/`.x_b`) import for the supported geometry subset, plus a deterministic schema-13006 text writer for self-authored analytic solids, sheets, wires, acorns, and bounded tolerant edges encoded as trimmed SP-curves over 2D B-curves (clean-room from the published XT Format Reference) |
@@ -53,6 +53,13 @@ parametric CAD application; feature history and regeneration are later layers.
   shells and an exact sphere-cap-plus-plane shell are also certified, bringing every
   supported positive fixture in the committed X_T corpus to Full `Valid`; general curved
   multi-face shell proofs remain open.
+  Face-domain containment now evaluates every available charted pcurve over its full
+  active interval. Analytic curves and positive-weight clamped NURBS use conservative
+  subrange boxes with deterministic adaptive subdivision; a witnessed exterior point is
+  `Invalid`, proof-limit exhaustion remains `Indeterminate`, and only complete box
+  coverage is certified. The tolerant-edge X_T round-trip exercises a 2D B-curve whose
+  stored extent is ten times its active SP-curve trim, guarding the production path
+  against accidental whole-curve bounds.
   Checked transaction commits preview deterministic net mutations and resolve them
   through committed/candidate topology-ownership and shared-geometry dependency indexes.
   Explicit and affected bodies receive the Fast checker while every commit still audits
@@ -76,11 +83,12 @@ parametric CAD application; feature history and regeneration are later layers.
   discard usage on rollback; X_T import stamps imported provenance and export preserves
   the metric value. Operation-specific propagation/combination rules and migration of
   every future tolerance-producing operation remain.
-  Adaptive full-curve containment, production seam/pole/apex interchange fixtures,
-  operation caller migration, a procedural geometry graph, large multi-body performance
-  baselines for the landed incremental ownership/dependency index, partition history,
-  richer errors/remaining tolerance rules, and the adaptive proofs behind checker v2 must
-  still land before booleans.
+  Periodic/unclamped NURBS containment, unsupported exact/mixed boundary classes,
+  production seam/pole/apex interchange fixtures, operation caller migration, a
+  procedural geometry graph, large multi-body performance baselines for the landed
+  incremental ownership/dependency index, partition history, richer errors/remaining
+  tolerance rules, and the remaining adaptive incidence/loop/shell proofs behind checker
+  v2 must still land before booleans.
 - M3 is in progress: modern base-13006 schema edit scripts, text/neutral-binary
   reading, atomic reconstruction, and analytic text writing are implemented.
   X_T reconstruction now uses the same copy-on-write transaction mechanism instead of a

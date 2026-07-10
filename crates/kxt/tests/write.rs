@@ -171,16 +171,19 @@ fn make_first_edge_truly_tolerant(store: &mut Store, body: BodyId) -> EdgeId {
             );
         }
 
-        // Exercise rational 2D B-curve emission on one use.
+        // Exercise rational 2D B-curve emission whose stored curve extends
+        // well beyond the active SP-curve trim. Import/domain reconstruction
+        // must use the exact active NURBS subrange rather than its global hull.
         let first = fins[0];
         let first_use = store.get(first).unwrap().pcurve.unwrap();
         let first_curve = store.get(first_use.curve()).unwrap().as_curve();
         let range = first_use.range();
-        let endpoints = vec![first_curve.eval(range.lo), first_curve.eval(range.hi)];
+        let extended_hi = range.lo + 10.0 * range.width();
+        let endpoints = vec![first_curve.eval(range.lo), first_curve.eval(extended_hi)];
         *store.get_mut(first_use.curve()).unwrap() = Curve2dGeom::Nurbs(
             NurbsCurve2d::new(
                 1,
-                vec![range.lo, range.lo, range.hi, range.hi],
+                vec![range.lo, range.lo, extended_hi, extended_hi],
                 endpoints,
                 Some(vec![2.0, 2.0]),
             )

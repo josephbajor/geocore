@@ -125,8 +125,8 @@ sense and may carry an independent pcurve use plus explicit integer-period chart
 paired lower/upper seam role, closed-use winding, and endpoint singularity markers; edges
 reference curves; vertices reference points. Tolerant edges/vertices store a typed
 tolerance overriding session precision, retaining its original value/source and every
-budgeted enlargement in the transaction journal. An unknown face domain stays explicit rather than being
-replaced by an uncertified sampled bound.
+budgeted enlargement in the transaction journal. An unknown face domain stays explicit
+rather than being replaced by an uncertified sampled bound.
 
 - Euler operators as the only structural mutation primitives (MEV, MEF, KEMR, etc.),
   each preserving the Euler–Poincaré invariant; raw operators are topology-internal and
@@ -148,6 +148,10 @@ replaced by an uncertified sampled bound.
   unresolved proof obligation rather than treating a clean sample as proof. It runs in
   CI after every modeling op on the test corpus; nothing ships that emits
   checker-failing bodies, and conformance claims require a `Full` `Valid` result.
+  Face-domain containment follows the same contract: conservative active-subrange boxes
+  and adaptive subdivision may prove a complete pcurve interval inside, evaluated points
+  may witness an exterior fault, and unsupported representations or exhausted proof
+  limits remain `Indeterminate`.
 
 ### L3 — Modeling operations
 Ordered by dependency, roughly matching build order in the roadmap:
