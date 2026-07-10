@@ -49,8 +49,10 @@ parametric CAD application; feature history and regeneration are later layers.
   circle/ellipse rings, while reporting proven crossings or overlaps as Full faults.
   Convex planar solid shells now receive global embedding/outward-orientation proofs,
   and single-face planar sheets inherit embedding from their simple loop. The committed
-  block, plate, and disk fixtures consequently reach Full `Valid`; curved shell proofs
-  remain open.
+  block, plate, and disk fixtures consequently reach Full `Valid`. Whole sphere/torus
+  shells and an exact sphere-cap-plus-plane shell are also certified, bringing every
+  supported positive fixture in the committed X_T corpus to Full `Valid`; general curved
+  multi-face shell proofs remain open.
   Adaptive full-curve containment, production seam/pole/apex interchange fixtures,
   operation caller migration, a procedural geometry graph, operation-wide transaction/
   journal adoption, partition history, enforced topology mutation, richer errors/

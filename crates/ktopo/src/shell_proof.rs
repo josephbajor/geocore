@@ -8,11 +8,13 @@
 
 use crate::entity::{BodyKind, FaceId, RegionKind, Sense, ShellId, VertexId};
 use crate::geom::{CurveGeom, SurfaceGeom};
+use crate::incidence::{IncidenceCertification, certify_edge_surface_incidence};
 use crate::loop_proof::{LoopSimplicity, certify_loop_simplicity};
 use crate::store::Store;
 use kcore::error::Result;
 use kcore::predicates::{Orientation as PredicateOrientation, orient2d, orient3d};
-use kcore::tolerance::LINEAR_RESOLUTION;
+use kcore::tolerance::{ANGULAR_RESOLUTION, LINEAR_RESOLUTION};
+use kgeom::curve::Curve;
 use kgeom::vec::Point2;
 
 /// Proof state for global shell self-intersection.
@@ -68,6 +70,12 @@ pub(crate) fn certify_shell(
     if body_kind != BodyKind::Solid || region_kind != RegionKind::Solid {
         return Ok(indeterminate());
     }
+    if let Some(certification) = certify_whole_closed_surface(store, shell_id)? {
+        return Ok(certification);
+    }
+    if let Some(certification) = certify_sphere_cap_shell(store, shell_id)? {
+        return Ok(certification);
+    }
     certify_convex_planar_shell(store, shell_id)
 }
 
@@ -76,6 +84,162 @@ fn indeterminate() -> ShellCertification {
         embedding: ShellEmbedding::Indeterminate,
         orientation: ShellOrientation::Indeterminate,
     }
+}
+
+fn certify_whole_closed_surface(
+    store: &Store,
+    shell_id: ShellId,
+) -> Result<Option<ShellCertification>> {
+    let shell = store.get(shell_id)?;
+    if shell.faces.len() != 1 {
+        return Ok(None);
+    }
+    let face = store.get(shell.faces[0])?;
+    if !face.loops.is_empty()
+        || !matches!(
+            store.get(face.surface)?,
+            SurfaceGeom::Sphere(_) | SurfaceGeom::Torus(_)
+        )
+    {
+        return Ok(None);
+    }
+    Ok(Some(ShellCertification {
+        embedding: ShellEmbedding::Certified,
+        orientation: if face.sense == Sense::Forward {
+            ShellOrientation::Certified
+        } else {
+            ShellOrientation::Invalid
+        },
+    }))
+}
+
+fn certify_sphere_cap_shell(
+    store: &Store,
+    shell_id: ShellId,
+) -> Result<Option<ShellCertification>> {
+    let shell = store.get(shell_id)?;
+    if shell.faces.len() != 2 {
+        return Ok(None);
+    }
+    let mut sphere_face = None;
+    let mut plane_face = None;
+    for &face_id in &shell.faces {
+        match store.get(store.get(face_id)?.surface)? {
+            SurfaceGeom::Sphere(_) => sphere_face = Some(face_id),
+            SurfaceGeom::Plane(_) => plane_face = Some(face_id),
+            _ => return Ok(None),
+        }
+    }
+    let (Some(sphere_face_id), Some(plane_face_id)) = (sphere_face, plane_face) else {
+        return Ok(None);
+    };
+    let sphere_face = store.get(sphere_face_id)?;
+    let plane_face = store.get(plane_face_id)?;
+    if sphere_face.loops.len() != 1 || plane_face.loops.len() != 1 {
+        return Ok(None);
+    }
+    let sphere_loop = store.get(sphere_face.loops[0])?;
+    let plane_loop = store.get(plane_face.loops[0])?;
+    if sphere_loop.fins.len() != 1
+        || plane_loop.fins.len() != 1
+        || certify_loop_simplicity(store, sphere_face.loops[0])? != LoopSimplicity::Certified
+        || certify_loop_simplicity(store, plane_face.loops[0])? != LoopSimplicity::Certified
+    {
+        return Ok(None);
+    }
+    let sphere_fin = store.get(sphere_loop.fins[0])?;
+    let plane_fin = store.get(plane_loop.fins[0])?;
+    if sphere_fin.edge != plane_fin.edge {
+        return Ok(None);
+    }
+    let edge = store.get(sphere_fin.edge)?;
+    if edge.tolerance.is_some() {
+        return Ok(None);
+    }
+    let Some(curve_id) = edge.curve else {
+        return Ok(None);
+    };
+    let CurveGeom::Circle(circle) = store.get(curve_id)? else {
+        return Ok(None);
+    };
+    let SurfaceGeom::Sphere(sphere) = store.get(sphere_face.surface)? else {
+        unreachable!("classified above");
+    };
+    let SurfaceGeom::Plane(plane) = store.get(plane_face.surface)? else {
+        unreachable!("classified above");
+    };
+    if certify_edge_surface_incidence(
+        store,
+        sphere_fin.edge,
+        sphere_face.surface,
+        LINEAR_RESOLUTION,
+    )? != IncidenceCertification::Certified
+        || certify_edge_surface_incidence(
+            store,
+            plane_fin.edge,
+            plane_face.surface,
+            LINEAR_RESOLUTION,
+        )? != IncidenceCertification::Certified
+    {
+        return Ok(None);
+    }
+
+    let plane_normal = plane.frame().z();
+    if 1.0 - circle.frame().z().dot(plane_normal).abs() > ANGULAR_RESOLUTION {
+        return Ok(None);
+    }
+    let center_offset = sphere.frame().origin() - plane.frame().origin();
+    let signed_height = center_offset.dot(plane_normal);
+    if signed_height.abs() >= sphere.radius() {
+        return Ok(None);
+    }
+    let expected_center = sphere.frame().origin() - plane_normal * signed_height;
+    let expected_radius =
+        (sphere.radius() * sphere.radius() - signed_height * signed_height).sqrt();
+    if circle.frame().origin().dist(expected_center) > LINEAR_RESOLUTION
+        || (circle.radius() - expected_radius).abs() > LINEAR_RESOLUTION
+    {
+        return Ok(None);
+    }
+
+    let range = match edge.bounds {
+        Some((lo, hi)) if lo.is_finite() && hi.is_finite() && lo < hi => {
+            kgeom::param::ParamRange::new(lo, hi)
+        }
+        Some(_) => return Ok(None),
+        None => circle.param_range(),
+    };
+    let parameter = if sphere_fin.sense.is_forward() {
+        range.lo
+    } else {
+        range.hi
+    };
+    let point = circle.eval(parameter);
+    let mut tangent = circle.eval_derivs(parameter, 1).d[1];
+    if !sphere_fin.sense.is_forward() {
+        tangent = -tangent;
+    }
+    let sphere_normal =
+        (point - sphere.frame().origin()) / sphere.radius() * sense_factor(sphere_face.sense);
+    let cap_interior = sphere_normal.cross(tangent);
+    let plane_outward = plane_normal * sense_factor(plane_face.sense);
+    let alignment = cap_interior.dot(-plane_outward);
+    if alignment.abs() <= circle.radius() * ANGULAR_RESOLUTION {
+        return Ok(None);
+    }
+    let orientation_valid = sphere_face.sense == Sense::Forward && alignment > 0.0;
+    Ok(Some(ShellCertification {
+        embedding: ShellEmbedding::Certified,
+        orientation: if orientation_valid {
+            ShellOrientation::Certified
+        } else {
+            ShellOrientation::Invalid
+        },
+    }))
+}
+
+fn sense_factor(sense: Sense) -> f64 {
+    if sense.is_forward() { 1.0 } else { -1.0 }
 }
 
 fn certify_convex_planar_shell(store: &Store, shell_id: ShellId) -> Result<ShellCertification> {
@@ -227,7 +391,7 @@ fn strictly_convex(points: &[Point2]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::make::{block, sphere};
+    use crate::make::{block, cylinder, sphere, torus};
     use crate::store::Store;
     use kgeom::frame::Frame;
 
@@ -267,9 +431,27 @@ mod tests {
     }
 
     #[test]
-    fn curved_shell_remains_indeterminate() {
+    fn whole_sphere_and_torus_shells_are_embedded_and_oriented() {
         let mut store = Store::new();
-        let body = sphere(&mut store, &Frame::world(), 1.0).unwrap();
+        for body in [
+            sphere(&mut store, &Frame::world(), 1.0).unwrap(),
+            torus(&mut store, &Frame::world(), 2.0, 0.5).unwrap(),
+        ] {
+            let shell = solid_shell(&store, body);
+            assert_eq!(
+                certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
+                ShellCertification {
+                    embedding: ShellEmbedding::Certified,
+                    orientation: ShellOrientation::Certified,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_curved_multiface_shell_remains_indeterminate() {
+        let mut store = Store::new();
+        let body = cylinder(&mut store, &Frame::world(), 1.0, 2.0).unwrap();
         let shell = solid_shell(&store, body);
         assert_eq!(
             certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),

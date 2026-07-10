@@ -1755,6 +1755,22 @@ mod tests {
     }
 
     #[test]
+    fn full_checker_rejects_an_inward_whole_sphere() {
+        let mut store = Store::new();
+        let body = sphere_body(&mut store);
+        let face = store.faces_of_body(body).unwrap()[0];
+        store.get_mut(face).unwrap().sense = Sense::Reversed;
+
+        let fast = check_body_report(&store, body, CheckLevel::Fast).unwrap();
+        assert_eq!(fast.outcome(), CheckOutcome::Valid);
+        let full = check_body_report(&store, body, CheckLevel::Full).unwrap();
+        assert_eq!(full.outcome(), CheckOutcome::Invalid);
+        assert!(full.faults.iter().any(|fault| {
+            fault.kind == FaultKind::ShellOrientation && matches!(fault.entity, EntityRef::Shell(_))
+        }));
+    }
+
+    #[test]
     fn clean_cylinder_with_ring_edges_is_clean() {
         let mut store = Store::new();
         let body = cylinder_body(&mut store);

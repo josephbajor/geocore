@@ -63,7 +63,7 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 | M0 Foundations | IMPLEMENTED SLICE | Deterministic math, current predicates, intervals, tolerances, arenas with copy-on-write undo frames, and deterministic map primitives exist; conformance debt remains. |
 | M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS basics, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, Euler operators, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, and the transaction/journal foundation exist; boolean-ready incidence proofs and operation-wide checked mutation do not. |
-| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; shared incidence validation; pcurve-aware Euler creation; pcurve-driven tessellation; copy-on-write transactions; deterministic journals; explicit face metadata; certified imported domains; checker-enforced pcurve-endpoint containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring loop proofs; and convex-planar/single-planar-face shell embedding proofs have landed. General NURBS/mixed-parameter incidence, curved-loop/containment/curved-shell proofs, production seam/singularity interchange fixtures, geometry graph, operation migration, mutation encapsulation, and tolerance provenance remain. |
+| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; shared incidence validation; pcurve-aware Euler creation; pcurve-driven tessellation; copy-on-write transactions; deterministic journals; explicit face metadata; certified imported domains; checker-enforced pcurve-endpoint containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring loop proofs; and convex-planar, whole sphere/torus, sphere-cap, and single-planar-face shell embedding proofs have landed. General NURBS/mixed-parameter incidence, curved-loop/containment/general curved-shell proofs, production seam/singularity interchange fixtures, geometry graph, operation migration, mutation encapsulation, and tolerance provenance remain. |
 | M3 X_T | IN PROGRESS | The modern-schema subset reads both wire encodings and writes text, including bounded tolerant edges as trimmed SP-curves over finite 2D B-curves; production coverage and external certification remain. |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases and sampled NURBS experiments exist; certified generic discovery and boolean-ready branches do not. |
 | M5–M8 | NOT STARTED | No end-to-end booleans, general modeling, blends, stable API, or production hardening. |
@@ -354,9 +354,11 @@ Landed slice:
   supporting plane, and the occupied half-space determines the required outward face
   sense. Sub-resolution plane residuals consume metric tolerance before nonzero side
   signs route through robust `orient3d`. Single-face planar sheet shells are embedded
-  when their sole loop is simple. This makes the committed block, neutral-binary block,
-  production plate, and disk fixtures Full `Valid`; the cut-sphere fixture remains
-  `Indeterminate` on curved-shell embedding/orientation.
+  when their sole loop is simple. Whole sphere/torus faces are certified from their
+  analytic embedding, and a two-face sphere-cap shell is certified when its shared
+  circle is the complete sphere/plane intersection and fin traversal agrees with the
+  cap material half-space. Every supported positive fixture in the committed X_T corpus
+  is now Full `Valid`.
 - The X_T JSONL inspector uses every proven Full fault as its checker/tessellation gate
   while unresolved gaps remain non-failing, and separately records the Full outcome, gap
   count, and gap categories. Production
