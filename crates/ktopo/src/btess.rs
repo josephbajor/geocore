@@ -6,9 +6,10 @@
 //!    polyline (chordal refinement of its curve), producing shared mesh
 //!    vertices.
 //! 2. Each face builds its UV trim loops from those *frozen* edge
-//!    polylines (surface-inverting each polyline point; periodic surfaces
-//!    are seam-cut, zero-loop closed faces get full-period rectangles with
-//!    seam and pole rows welded by index).
+//!    polylines by evaluating the fin's explicit pcurve at every retained
+//!    edge parameter. Legacy topology without pcurves falls back to surface
+//!    inversion. Periodic surfaces are seam-cut; zero-loop closed faces get
+//!    full-period rectangles with seam and pole rows welded by index.
 //! 3. Faces tessellate with [`kgeom::tess`] (frozen boundary), and the
 //!    body mesh is assembled by **index mapping** — never by positional
 //!    welding.
@@ -39,8 +40,8 @@
 //! second boundary, and the domain splits into two patches at an existing
 //! chain sample near the half period.
 
-use crate::entity::{BodyId, Edge, EdgeId, FaceId, Sense, SurfaceId, VertexId};
-use crate::geom::SurfaceGeom;
+use crate::entity::{BodyId, Edge, EdgeId, FaceId, FinPcurve, Sense, VertexId};
+use crate::geom::{Curve2dGeom, SurfaceGeom};
 use crate::store::Store;
 use kcore::error::{Error, Result};
 use kcore::math;
@@ -235,12 +236,38 @@ fn unwrap_near(mut uv: Vec2, prev: Vec2, periods: [Option<f64>; 2]) -> Vec2 {
     uv
 }
 
+/// One face's parameter-space use of an edge during shared refinement.
+struct FaceUse<'a> {
+    surface: &'a SurfaceGeom,
+    pcurve: Option<(&'a Curve2dGeom, FinPcurve)>,
+}
+
+impl FaceUse<'_> {
+    fn uv_at(&self, edge_parameter: f64, point: Point3) -> Result<Vec2> {
+        match self.pcurve {
+            Some((geometry, use_)) => {
+                let uv = geometry
+                    .as_curve()
+                    .eval(use_.parameter_at_edge(edge_parameter));
+                if uv.x.is_finite() && uv.y.is_finite() {
+                    Ok(uv)
+                } else {
+                    Err(Error::InvalidGeometry {
+                        reason: "pcurve evaluated to a non-finite parameter-space point",
+                    })
+                }
+            }
+            None => invert_uv(self.surface, point),
+        }
+    }
+}
+
 /// Edge-polyline refinement: split until the curve chord criterion *and*
-/// kgeom's boundary criterion against every adjacent face surface hold
-/// with margin.
+/// kgeom's boundary criterion against every adjacent face use hold with
+/// margin. Explicit pcurves preserve seam branches; legacy uses invert.
 struct CurveRefine<'a> {
     curve: &'a dyn Curve,
-    surfs: Vec<&'a SurfaceGeom>,
+    face_uses: Vec<FaceUse<'a>>,
     ctx: Ctx,
 }
 
@@ -253,11 +280,15 @@ impl CurveRefine<'_> {
         if point_seg_dist(mid, a.1, b.1) > self.ctx.tol {
             return Ok(true);
         }
-        for sg in &self.surfs {
-            let ua = invert_uv(sg, a.1)?;
-            let ub = unwrap_near(invert_uv(sg, b.1)?, ua, sg.as_surface().periodicity());
+        for face_use in &self.face_uses {
+            let ua = face_use.uv_at(a.0, a.1)?;
+            let ub = unwrap_near(
+                face_use.uv_at(b.0, b.1)?,
+                ua,
+                face_use.surface.as_surface().periodicity(),
+            );
             let um = (ua + ub) / 2.0;
-            let q = sg.as_surface().eval([um.x, um.y]);
+            let q = face_use.surface.as_surface().eval([um.x, um.y]);
             if point_seg_dist(q, a.1, b.1) > self.ctx.tol {
                 return Ok(true);
             }
@@ -345,14 +376,28 @@ struct UvChain {
     winding: [i64; 2],
 }
 
-/// The discretized edges of a body, parallel to [`Store::edges_of_body`].
-type EdgeLines = Vec<(EdgeId, Vec<u32>)>;
+/// One retained point of a shared edge polyline. The edge parameter is kept
+/// even when a closed edge repeats the first global vertex at its end: the
+/// two parameters can map to different branches of a periodic pcurve.
+#[derive(Debug, Clone, Copy)]
+struct EdgeSample {
+    parameter: f64,
+    vertex: u32,
+}
 
-fn find_eline(elines: &EdgeLines, edge: EdgeId) -> Result<&Vec<u32>> {
+/// One edge's frozen shared polyline in increasing edge parameter.
+struct EdgeLine {
+    edge: EdgeId,
+    samples: Vec<EdgeSample>,
+}
+
+/// The discretized edges of a body, parallel to [`Store::edges_of_body`].
+type EdgeLines = Vec<EdgeLine>;
+
+fn find_eline(elines: &EdgeLines, edge: EdgeId) -> Result<&EdgeLine> {
     elines
         .iter()
-        .find(|(e, _)| *e == edge)
-        .map(|(_, l)| l)
+        .find(|line| line.edge == edge)
         .ok_or(Error::StaleHandle)
 }
 
@@ -365,7 +410,7 @@ fn discretize_edge(
     vgids: &[(VertexId, u32)],
     acc: &mut MeshAcc,
     ctx: Ctx,
-) -> Result<Vec<u32>> {
+) -> Result<EdgeLine> {
     let e: &Edge = store.get(edge)?;
     let curve_id = e.curve.ok_or(Error::InvalidGeometry {
         reason: "edge has no curve geometry attached",
@@ -414,23 +459,26 @@ fn discretize_edge(
         }
     };
 
-    // Adjacent face surfaces (deduplicated, deterministic order): the
-    // crack-prevention rule refines against each of them.
-    let mut surf_ids: Vec<SurfaceId> = Vec::new();
-    for &fin in &e.fins {
-        let lp = store.get(fin)?.parent;
+    // Adjacent face uses in deterministic fin order. They are deliberately
+    // not deduplicated by surface: two fins on the same periodic surface can
+    // carry different pcurve branches.
+    let mut face_uses = Vec::with_capacity(e.fins.len());
+    for &fin_id in &e.fins {
+        let fin = store.get(fin_id)?;
+        let lp = fin.parent;
         let face = store.get(store.get(lp)?.face)?;
-        if !surf_ids.contains(&face.surface) {
-            surf_ids.push(face.surface);
-        }
-    }
-    let mut surfs = Vec::with_capacity(surf_ids.len());
-    for sid in surf_ids {
-        surfs.push(store.get(sid)?);
+        let pcurve = match fin.pcurve {
+            Some(use_) => Some((store.get(use_.curve())?, use_)),
+            None => None,
+        };
+        face_uses.push(FaceUse {
+            surface: store.get(face.surface)?,
+            pcurve,
+        });
     }
     let refine = CurveRefine {
         curve: c,
-        surfs,
+        face_uses,
         ctx,
     };
 
@@ -446,40 +494,92 @@ fn discretize_edge(
     }
     seed.push((t1, acc.pos(g_end)));
 
-    let mut gids: Vec<u32> = vec![g_start];
+    let mut samples = vec![EdgeSample {
+        parameter: t0,
+        vertex: g_start,
+    }];
     for w in seed.windows(2) {
         let mut interior = Vec::new();
         refine.refine(w[0], w[1], 0, &mut interior)?;
-        for (_, p) in interior {
-            gids.push(acc.push(p));
+        for (parameter, point) in interior {
+            samples.push(EdgeSample {
+                parameter,
+                vertex: acc.push(point),
+            });
         }
         // Segment end: a seed interior point gets a fresh vertex; the
         // final endpoint reuses its anchor id.
         if w[1].0 < t1 {
-            gids.push(acc.push(w[1].1));
+            samples.push(EdgeSample {
+                parameter: w[1].0,
+                vertex: acc.push(w[1].1),
+            });
         }
     }
-    gids.push(g_end);
-    Ok(gids)
+    samples.push(EdgeSample {
+        parameter: t1,
+        vertex: g_end,
+    });
+    Ok(EdgeLine { edge, samples })
 }
 
-/// Assemble the oriented vertex-id chain of one loop by concatenating its
-/// fins' edge polylines (each contributes all but its final point). When
-/// `reverse` is set the whole traversal is flipped (used to normalize
-/// reversed-sense faces so their loops read counterclockwise in UV).
+#[derive(Clone, Copy)]
+struct RawUvSample {
+    vertex: u32,
+    uv: Vec2,
+}
+
+struct RawUvChain {
+    samples: Vec<RawUvSample>,
+    close: RawUvSample,
+}
+
+fn fin_sample_uv(
+    store: &Store,
+    sg: &SurfaceGeom,
+    acc: &MeshAcc,
+    fin: &crate::entity::Fin,
+    sample: EdgeSample,
+) -> Result<Vec2> {
+    match fin.pcurve {
+        Some(use_) => {
+            let uv = store
+                .get(use_.curve())?
+                .as_curve()
+                .eval(use_.parameter_at_edge(sample.parameter));
+            if uv.x.is_finite() && uv.y.is_finite() {
+                Ok(uv)
+            } else {
+                Err(Error::InvalidGeometry {
+                    reason: "pcurve evaluated to a non-finite parameter-space point",
+                })
+            }
+        }
+        None => invert_uv(sg, acc.pos(sample.vertex)),
+    }
+}
+
+/// Assemble the oriented `(global vertex, raw UV)` chain of one loop by
+/// concatenating its fins' edge samples. Each fin contributes all but its
+/// final endpoint; that endpoint is retained separately so a periodic
+/// pcurve can close at a different UV branch over the same global vertex.
+/// When `reverse` is set the whole traversal is flipped.
 fn loop_chain(
     store: &Store,
     elines: &EdgeLines,
+    sg: &SurfaceGeom,
+    acc: &MeshAcc,
     lp: crate::entity::LoopId,
     reverse: bool,
-) -> Result<Vec<u32>> {
+) -> Result<RawUvChain> {
     let fins = &store.get(lp)?.fins;
     if fins.is_empty() {
         return Err(Error::InvalidGeometry {
             reason: "loop has no fins",
         });
     }
-    let mut chain: Vec<u32> = Vec::new();
+    let mut chain = Vec::new();
+    let mut close = None;
     let ordered: Vec<_> = if reverse {
         fins.iter().rev().copied().collect()
     } else {
@@ -488,39 +588,76 @@ fn loop_chain(
     for fin_id in ordered {
         let fin = store.get(fin_id)?;
         let line = find_eline(elines, fin.edge)?;
+        if line.samples.len() < 2 {
+            return Err(Error::InvalidGeometry {
+                reason: "edge polyline has fewer than two parameter samples",
+            });
+        }
         let forward = fin.sense.is_forward() != reverse;
         if forward {
-            chain.extend_from_slice(&line[..line.len() - 1]);
+            for &sample in &line.samples[..line.samples.len() - 1] {
+                chain.push(RawUvSample {
+                    vertex: sample.vertex,
+                    uv: fin_sample_uv(store, sg, acc, fin, sample)?,
+                });
+            }
+            let sample = *line.samples.last().expect("at least two samples");
+            close = Some(RawUvSample {
+                vertex: sample.vertex,
+                uv: fin_sample_uv(store, sg, acc, fin, sample)?,
+            });
         } else {
-            chain.extend(line.iter().rev().take(line.len() - 1));
+            for &sample in line.samples.iter().rev().take(line.samples.len() - 1) {
+                chain.push(RawUvSample {
+                    vertex: sample.vertex,
+                    uv: fin_sample_uv(store, sg, acc, fin, sample)?,
+                });
+            }
+            let sample = line.samples[0];
+            close = Some(RawUvSample {
+                vertex: sample.vertex,
+                uv: fin_sample_uv(store, sg, acc, fin, sample)?,
+            });
         }
     }
-    Ok(chain)
+    let close = close.expect("non-empty fin list");
+    if chain
+        .first()
+        .is_none_or(|first| first.vertex != close.vertex)
+    {
+        return Err(Error::InvalidGeometry {
+            reason: "loop edge polyline does not close by shared vertex identity",
+        });
+    }
+    Ok(RawUvChain {
+        samples: chain,
+        close,
+    })
 }
 
-/// Map an id chain into the face surface's UV space with periodic
-/// continuity, and measure its winding.
-fn chain_uv(sg: &SurfaceGeom, acc: &MeshAcc, ids: &[u32]) -> Result<UvChain> {
+/// Unwrap a raw per-fin pcurve chain with periodic continuity and measure
+/// its winding. The explicit closing sample is essential for seam loops.
+fn chain_uv(sg: &SurfaceGeom, raw: RawUvChain) -> Result<UvChain> {
     let s = sg.as_surface();
     let per = s.periodicity();
-    let mut uvs: Vec<Vec2> = Vec::with_capacity(ids.len());
-    for &gid in ids {
-        let raw = invert_uv(sg, acc.pos(gid))?;
+    let mut ids = Vec::with_capacity(raw.samples.len());
+    let mut uvs: Vec<Vec2> = Vec::with_capacity(raw.samples.len());
+    for sample in raw.samples {
         let uv = match uvs.last() {
-            Some(&prev) => unwrap_near(raw, prev, per),
-            None => raw,
+            Some(&prev) => unwrap_near(sample.uv, prev, per),
+            None => sample.uv,
         };
+        ids.push(sample.vertex);
         uvs.push(uv);
     }
-    let close_raw = invert_uv(sg, acc.pos(ids[0]))?;
-    let close_uv = unwrap_near(close_raw, *uvs.last().expect("non-empty chain"), per);
+    let close_uv = unwrap_near(raw.close.uv, *uvs.last().expect("non-empty chain"), per);
     let wind = |d: f64, p: Option<f64>| p.map_or(0, |p| (d / p).round() as i64);
     let winding = [
         wind(close_uv.x - uvs[0].x, per[0]),
         wind(close_uv.y - uvs[0].y, per[1]),
     ];
     Ok(UvChain {
-        ids: ids.to_vec(),
+        ids,
         uvs,
         close_uv,
         winding,
@@ -1070,8 +1207,8 @@ fn tess_face(
     }
     let mut chains = Vec::with_capacity(face.loops.len());
     for &lp in &face.loops {
-        let ids = loop_chain(store, elines, lp, flip)?;
-        chains.push(chain_uv(sg, acc, &ids)?);
+        let raw = loop_chain(store, elines, sg, acc, lp, flip)?;
+        chains.push(chain_uv(sg, raw)?);
     }
     if chains.iter().all(|c| c.winding == [0, 0]) {
         face_case_a(sg.as_surface(), chains, flip, acc, opts)
@@ -1117,7 +1254,7 @@ pub fn tessellate_body(store: &Store, body: BodyId, opts: &TessOptions) -> Resul
     let mut elines: EdgeLines = Vec::new();
     for e in store.edges_of_body(body)? {
         let line = discretize_edge(store, e, &vgids, &mut acc, ctx)?;
-        elines.push((e, line));
+        elines.push(line);
     }
     // Faces, assembled by index mapping.
     let mut triangles: Vec<[u32; 3]> = Vec::new();
@@ -1131,17 +1268,30 @@ pub fn tessellate_body(store: &Store, body: BodyId, opts: &TessOptions) -> Resul
         positions: acc.positions,
         triangles,
         face_ranges,
-        edge_polylines: elines,
+        edge_polylines: elines
+            .into_iter()
+            .map(|line| {
+                (
+                    line.edge,
+                    line.samples
+                        .into_iter()
+                        .map(|sample| sample.vertex)
+                        .collect(),
+                )
+            })
+            .collect(),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::check::check_body;
     use crate::entity::{Face, Fin, Loop, ShellId};
-    use crate::geom::CurveGeom;
-    use crate::make::{block, solid_body_scaffold};
+    use crate::geom::{Curve2dGeom, CurveGeom};
+    use crate::make::{block, cylinder, solid_body_scaffold};
     use kgeom::curve::Circle;
+    use kgeom::curve2d::Line2d;
     use kgeom::frame::Frame;
     use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Torus};
     use kgeom::vec::Vec3;
@@ -1160,6 +1310,54 @@ mod tests {
             chord_tol,
             max_edge_len: None,
         }
+    }
+
+    #[test]
+    fn explicit_periodic_pcurve_branch_drives_uv_and_tessellation() {
+        let mut store = Store::new();
+        let body = cylinder(&mut store, &Frame::world(), 1.0, 2.0).unwrap();
+        let side = store.faces_of_body(body).unwrap()[0];
+        let surface_id = store.get(side).unwrap().surface;
+        let lp = store.get(side).unwrap().loops[0];
+        let fin_id = store.get(lp).unwrap().fins[0];
+        let use_ = store.get(fin_id).unwrap().pcurve.unwrap();
+        let line = match store.get(use_.curve()).unwrap() {
+            Curve2dGeom::Line(line) => *line,
+            _ => panic!("cylinder side pcurve must be a line"),
+        };
+        let tau = core::f64::consts::TAU;
+        *store.get_mut(use_.curve()).unwrap() = Curve2dGeom::Line(
+            Line2d::new(line.origin() + Vec2::new(tau, 0.0), line.dir()).unwrap(),
+        );
+
+        // A whole-period branch shift lifts to the same cylinder and stays
+        // checker-clean, but it is observably distinct from 3D inversion.
+        assert!(check_body(&store, body).unwrap().is_empty());
+        let fin = store.get(fin_id).unwrap();
+        let edge = store.get(fin.edge).unwrap();
+        let curve = store.get(edge.curve.unwrap()).unwrap().as_curve();
+        let t = curve.param_range().lo;
+        let point = curve.eval(t);
+        let acc = MeshAcc {
+            positions: vec![point],
+        };
+        let sg = store.get(surface_id).unwrap();
+        let uv = fin_sample_uv(
+            &store,
+            sg,
+            &acc,
+            fin,
+            EdgeSample {
+                parameter: t,
+                vertex: 0,
+            },
+        )
+        .unwrap();
+        let inverted = invert_uv(sg, point).unwrap();
+        assert!((uv.x - inverted.x - tau).abs() < 1e-12);
+
+        let mesh = tessellate_body(&store, body, &opts(1e-3)).unwrap();
+        assert_watertight(&mesh);
     }
 
     fn tilted() -> Frame {

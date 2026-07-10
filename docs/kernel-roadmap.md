@@ -63,7 +63,7 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 | M0 Foundations | IMPLEMENTED SLICE | Deterministic math, current predicates, intervals, tolerances, arenas, and deterministic map primitives exist; conformance debt remains. |
 | M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS basics, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, Euler operators, primitives, checker v1, and watertight body tessellation exist; boolean-ready incidence and transactions do not. |
-| M2.5 Architecture gate | IN PROGRESS / REQUIRED | The per-fin pcurve foundation and local incidence checks have landed; geometry graph, transactions, journals, mutation encapsulation, face domains/tolerances, and checker upgrades remain. |
+| M2.5 Architecture gate | IN PROGRESS / REQUIRED | The per-fin pcurve foundation, local incidence checks, and pcurve-driven body tessellation have landed; geometry graph, transactions, journals, mutation encapsulation, face domains/tolerances, and checker upgrades remain. |
 | M3 X_T | IN PROGRESS | Modern-schema supported subset reads both wire encodings and writes text; production coverage and external certification remain. |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases and sampled NURBS experiments exist; certified generic discovery and boolean-ready branches do not. |
 | M5–M8 | NOT STARTED | No end-to-end booleans, general modeling, blends, stable API, or production hardening. |
@@ -147,9 +147,10 @@ volume-tested.
 ### Known limits
 
 - Fins can now retain independent, explicitly parameter-mapped pcurves, and authored
-  analytic primitives use them. X_T SP-curve reconstruction, pcurve-driven body
-  tessellation, Euler propagation, pole fixtures, and a mandatory-pcurve topology mode
-  remain, so this is not yet boolean-ready incidence.
+  analytic primitives use them. Body tessellation retains shared edge parameters and
+  evaluates each fin's pcurve branch. X_T SP-curve reconstruction, Euler propagation,
+  pole fixtures, and a mandatory-pcurve topology mode remain, so this is not yet
+  boolean-ready incidence.
 - `General` mixed-dimension bodies, face tolerances, curve-less tolerant edges, isolated
   loops, and several degenerate topologies are unsupported.
 - Entity fields and generic mutable store access allow callers to bypass Euler
@@ -177,14 +178,15 @@ Landed slice:
   UV representation.
 - The checker validates pcurve range coverage and samples the full 3D edge → pcurve →
   supporting-surface incidence tuple. Loop orientation consumes pcurves when present.
+- Whole-body tessellation retains the edge parameter beside every shared mesh vertex,
+  evaluates each fin's line/circle/NURBS pcurve directly, preserves explicit periodic
+  branches through loop closure, and uses 3D surface inversion only for legacy fins.
 
 Remaining before the gate closes:
 
 - Make pcurves mandatory for face-edge uses created through the checked topology API;
   migrate Euler operations and X_T SP-curve import/export instead of silently rebuilding
   UV data from 3D.
-- Carry edge parameters alongside shared tessellation polylines so body tessellation uses
-  each fin's pcurve directly, especially across seams and degenerate surface regions.
 - Add explicit seam-branch metadata where a periodic pcurve range alone is insufficient,
   plus pole/apex-degenerate pcurve fixtures.
 - Add face tolerance/domain data needed by X_T and tolerant operations.
@@ -454,8 +456,8 @@ tolerance growth, algorithm limits, fuzz regressions, and performance percentile
 
 ## Immediate implementation queue
 
-1. Finish the landed pcurve/coedge slice: migrate Euler and X_T SP-curve paths, drive
-   tessellation from pcurves, add face domains/tolerances, and close seam/pole fixtures.
+1. Finish the landed pcurve/coedge slice: migrate Euler and X_T SP-curve paths, add face
+   domains/tolerances, and close seam/pole fixtures.
 2. Add transaction/rollback and deterministic semantic journals; migrate X_T staging.
 3. Encapsulate topology mutation and introduce checker v2 foundations.
 4. Redesign intersection results around completion evidence and paired pcurves.

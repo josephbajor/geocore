@@ -92,5 +92,7 @@ fn golden_hash_of_topology_results() {
     }
 
     // Golden value. Changing it is a reviewed, intentional event.
-    assert_eq!(hash.0, 0x95F3_5E03_A7FE_A662, "topology results drifted");
+    // Updated when boundary UV construction switched from approximate 3D
+    // inversion to the fin's exact retained edge parameters and pcurves.
+    assert_eq!(hash.0, 0x1329_1F63_B68C_9B19, "topology results drifted");
 }

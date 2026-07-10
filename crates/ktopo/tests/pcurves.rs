@@ -1,9 +1,10 @@
 //! Integration coverage for per-fin parameter-space curves.
 
-use kgeom::curve2d::Line2d;
+use kgeom::curve2d::{Line2d, NurbsCurve2d};
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
 use kgeom::vec::{Point2, Vec2};
+use ktopo::btess::{TessOptions, check_watertight, tessellate_body};
 use ktopo::check::{FaultKind, check_body};
 use ktopo::entity::{FinPcurve, ParamMap1d};
 use ktopo::geom::Curve2dGeom;
@@ -92,4 +93,37 @@ fn reversed_affine_correspondence_is_invertible_and_explicit() {
     let q = map.map(1.25);
     assert_eq!(map.inverse(q), 1.25);
     assert!(ParamMap1d::affine(0.0, 0.0).is_err());
+}
+
+#[test]
+fn body_tessellation_consumes_a_nurbs_pcurve() {
+    let mut store = Store::new();
+    let body = block(&mut store, &Frame::world(), [2.0, 3.0, 4.0]).unwrap();
+    let edge = store.edges_of_body(body).unwrap()[0];
+    let fin_id = store.get(edge).unwrap().fins[0];
+    let use_ = store.get(fin_id).unwrap().pcurve.unwrap();
+    let curve = store.get(use_.curve()).unwrap().as_curve();
+    let range = use_.range();
+    let endpoints = vec![curve.eval(range.lo), curve.eval(range.hi)];
+    *store.get_mut(use_.curve()).unwrap() = Curve2dGeom::Nurbs(
+        NurbsCurve2d::new(
+            1,
+            vec![range.lo, range.lo, range.hi, range.hi],
+            endpoints,
+            None,
+        )
+        .unwrap(),
+    );
+
+    assert!(check_body(&store, body).unwrap().is_empty());
+    let mesh = tessellate_body(
+        &store,
+        body,
+        &TessOptions {
+            chord_tol: 1e-3,
+            max_edge_len: None,
+        },
+    )
+    .unwrap();
+    assert!(check_watertight(&mesh).is_empty());
 }
