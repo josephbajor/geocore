@@ -38,7 +38,10 @@
 //! by real-world XT cut spheres — reuse the same machinery: the contained
 //! pole (chosen by the loop's material side) stands in for the missing
 //! second boundary, and the domain splits into two patches at an existing
-//! chain sample near the half period.
+//! chain sample near the half period. A distinct bipolar case handles
+//! meridional loops that pass through both sphere poles: it splits the loop
+//! into two frozen pole-to-pole sides and welds the parameter-singular pole
+//! rows by global mesh identity.
 
 use crate::entity::{BodyId, Edge, EdgeId, FaceId, FinPcurve, Sense, VertexId};
 use crate::geom::{Curve2dGeom, SurfaceGeom};
@@ -1088,6 +1091,153 @@ fn face_case_cap(
     Ok(tris)
 }
 
+/// Spherical face whose one trim loop passes through both parameter poles.
+///
+/// Longitude is undefined at a pole, so the ordinary unwrapped loop has a
+/// spurious winding and diagonal UV segments at its pole samples. The loop
+/// nevertheless has two well-defined pole-to-pole sides. This routine uses
+/// those frozen sides as the left/right boundaries of one patch and inserts
+/// collapsed pole rows between them. Every row vertex maps to the existing
+/// frozen edge pole vertex, so the only added UV boundary segments disappear
+/// under identity welding and the original 3D edge remains exact.
+#[allow(clippy::too_many_arguments)]
+fn face_case_bipolar_sphere(
+    sp: &kgeom::surface::Sphere,
+    s: &dyn Surface,
+    chain: UvChain,
+    holes: Vec<UvChain>,
+    flip: bool,
+    acc: &mut MeshAcc,
+    opts: &TessOptions,
+    ctx: Ctx,
+) -> Result<Vec<[u32; 3]>> {
+    let half = core::f64::consts::FRAC_PI_2;
+    let tau = core::f64::consts::TAU;
+    let pole_eps = 64.0 * f64::EPSILON;
+    let at_north = |uv: Vec2| (uv.y - half).abs() <= pole_eps;
+    let at_south = |uv: Vec2| (uv.y + half).abs() <= pole_eps;
+    let north = chain.uvs.iter().position(|&uv| at_north(uv));
+    let south = chain.uvs.iter().position(|&uv| at_south(uv));
+    let (Some(north), Some(south)) = (north, south) else {
+        return Err(Error::InvalidGeometry {
+            reason: "bipolar sphere loop does not contain both poles",
+        });
+    };
+
+    // Follow the already sense-normalized loop cyclically. Samples after a
+    // wrap receive the loop's measured period shift, preserving the branch
+    // established by chain_uv.
+    let cyclic_arc = |from: usize, to: usize| -> Arc {
+        let n = chain.uvs.len();
+        let period_shift = Vec2::new(chain.close_uv.x - chain.uvs[0].x, 0.0);
+        let mut out = Vec::new();
+        let mut i = from;
+        let mut shift = Vec2::new(0.0, 0.0);
+        loop {
+            out.push((chain.uvs[i] + shift, chain.ids[i]));
+            if i == to {
+                break;
+            }
+            i += 1;
+            if i == n {
+                i = 0;
+                shift = period_shift;
+            }
+        }
+        out
+    };
+    let mut right = cyclic_arc(south, north); // south -> north
+    let mut left_desc = cyclic_arc(north, south); // north -> south
+    if right.len() < 3 || left_desc.len() < 3 {
+        return Err(Error::InvalidGeometry {
+            reason: "bipolar sphere boundary needs a non-pole sample on each side",
+        });
+    }
+
+    // Replace each singular endpoint longitude with the adjacent side's
+    // limiting branch. This turns the two sides into faithful UV images of
+    // the frozen edge polyline instead of diagonal shortcuts at the poles.
+    right[0].0.x = right[1].0.x;
+    let rlast = right.len() - 1;
+    right[rlast].0.x = right[rlast - 1].0.x;
+    left_desc[0].0.x = left_desc[1].0.x;
+    let llast = left_desc.len() - 1;
+    left_desc[llast].0.x = left_desc[llast - 1].0.x;
+    right[0].0.y = -half;
+    right[rlast].0.y = half;
+    left_desc[0].0.y = half;
+    left_desc[llast].0.y = -half;
+    let mut left: Arc = left_desc.into_iter().rev().collect(); // south -> north
+
+    // Put the right side on the first equivalent periodic branch strictly
+    // to the right of the left side. The resulting width chooses the
+    // material side encoded by the normalized loop traversal.
+    let side_mean = |arc: &Arc| {
+        arc[1..arc.len() - 1]
+            .iter()
+            .map(|(uv, _)| uv.x)
+            .sum::<f64>()
+            / (arc.len() - 2) as f64
+    };
+    let lu = side_mean(&left);
+    let ru = side_mean(&right);
+    let width = (ru - lu).rem_euclid(tau);
+    if width <= 64.0 * f64::EPSILON || width >= tau - 64.0 * f64::EPSILON {
+        return Err(Error::InvalidGeometry {
+            reason: "bipolar sphere boundary sides do not enclose a finite patch",
+        });
+    }
+    let shift = lu + width - ru;
+    for (uv, _) in &mut right {
+        uv.x += shift;
+    }
+
+    // Pole-row density follows the closed-sphere/cap rule. All samples on
+    // a row intentionally share the pole's existing global vertex id.
+    let r = sp.radius();
+    let mut theta = (8.0 * ctx.tol / r).sqrt().min(half);
+    if ctx.max_len.is_finite() {
+        theta = theta.min(ctx.max_len / r);
+    }
+    let row = |ua: f64, ub: f64, v: f64, gid: u32| -> Arc {
+        let m = (((ub - ua).abs() / theta).ceil() as usize).max(2);
+        (0..=m)
+            .map(|i| (Vec2::new(ua + (ub - ua) * i as f64 / m as f64, v), gid))
+            .collect()
+    };
+    let bottom = row(left[0].0.x, right[0].0.x, -half, left[0].1);
+    let top = row(
+        left.last().expect("non-empty left arc").0.x,
+        right.last().expect("non-empty right arc").0.x,
+        half,
+        left.last().expect("non-empty left arc").1,
+    );
+    let patch = PatchArcs {
+        bottom,
+        right,
+        top,
+        left: core::mem::take(&mut left),
+    };
+    let (outer_pts, outer_ids) =
+        patch_polygon(&patch.bottom, &patch.right, &patch.top, &patch.left);
+
+    let center_u = outer_pts.iter().map(|uv| uv.x).sum::<f64>() / outer_pts.len() as f64;
+    let mut loops_pts = vec![outer_pts];
+    let mut loops_ids = vec![outer_ids];
+    for h in holes {
+        let hu = h.uvs.iter().map(|uv| uv.x).sum::<f64>() / h.uvs.len() as f64;
+        let hs = tau * ((center_u - hu) / tau).round();
+        loops_pts.push(
+            h.uvs
+                .into_iter()
+                .map(|uv| uv + Vec2::new(hs, 0.0))
+                .collect(),
+        );
+        loops_ids.push(h.ids);
+    }
+    run_kgeom(s, loops_pts, &loops_ids, flip, acc, opts)
+}
+
 /// Rectangular patch boundary assembled from four arcs (each including
 /// both endpoints): bottom, right, top, left in counterclockwise order.
 /// Each side contributes all points except its last, so corners appear
@@ -1245,6 +1395,40 @@ fn tess_face(
     for &lp in &face.loops {
         let raw = loop_chain(store, elines, sg, acc, lp, flip)?;
         chains.push(chain_uv(sg, raw)?);
+    }
+    // A meridional boundary can pass through both sphere poles while
+    // acquiring either ±1 *or zero* winding from their arbitrary singular
+    // longitudes. Classify it geometrically before the winding cases.
+    if let SurfaceGeom::Sphere(sp) = sg {
+        let half = core::f64::consts::FRAC_PI_2;
+        let eps = 64.0 * f64::EPSILON;
+        let touches_both = |chain: &UvChain| {
+            chain.uvs.iter().any(|uv| (uv.y - half).abs() <= eps)
+                && chain.uvs.iter().any(|uv| (uv.y + half).abs() <= eps)
+        };
+        let bipolar: Vec<_> = chains
+            .iter()
+            .enumerate()
+            .filter_map(|(i, chain)| touches_both(chain).then_some(i))
+            .collect();
+        if bipolar.len() > 1 {
+            return Err(Error::InvalidGeometry {
+                reason: "sphere face has multiple loops passing through both poles",
+            });
+        }
+        if let Some(&outer) = bipolar.first() {
+            let chain = chains.remove(outer);
+            return face_case_bipolar_sphere(
+                sp,
+                sg.as_surface(),
+                chain,
+                chains,
+                flip,
+                acc,
+                opts,
+                ctx,
+            );
+        }
     }
     if chains.iter().all(|c| c.winding == [0, 0]) {
         face_case_a(sg.as_surface(), chains, flip, acc, opts)
@@ -1654,6 +1838,34 @@ mod tests {
             assert!(
                 (vol - exact).abs() / exact < 0.02,
                 "tol {tol}: volume {vol} vs exact {exact}"
+            );
+        }
+    }
+
+    #[test]
+    fn meridional_cut_sphere_is_watertight_on_both_sides() {
+        // A great-circle cut through the parameter axis touches both poles.
+        // Its trim loop acquires an artificial winding from singular pole
+        // longitudes, but geometrically bounds a hemisphere on either side.
+        let r = 1.1;
+        let sphere = Sphere::new(tilted(), r).unwrap();
+        let plane = Frame::new(
+            sphere.frame().origin(),
+            sphere.frame().x(),
+            sphere.frame().y(),
+        )
+        .unwrap();
+        let exact = 2.0 / 3.0 * core::f64::consts::PI * r * r * r;
+        for keep_normal_side in [false, true] {
+            let mut store = Store::new();
+            let body = cut_sphere_body(&mut store, sphere, plane, r, keep_normal_side);
+            let mesh = tessellate_body(&store, body, &opts(1e-3)).unwrap();
+            assert_watertight(&mesh);
+            let vol = signed_volume(&mesh);
+            assert!(vol > 0.0, "orientation must be outward");
+            assert!(
+                (vol - exact).abs() / exact < 0.015,
+                "side {keep_normal_side}: volume {vol} vs exact {exact}"
             );
         }
     }
