@@ -34,4 +34,7 @@ pub use fit::interpolate;
 pub use knots::KnotVector;
 pub use ncurve::NurbsCurve;
 pub use nsurface::NurbsSurface;
-pub use patch_bvh::{NurbsSurfaceBvh, PlanePatchRelation};
+pub use patch_bvh::{
+    ImplicitCandidateCell, ImplicitIsolationLimits, ImplicitPatchIsolation, NurbsSurfaceBvh,
+    PlanePatchRelation,
+};

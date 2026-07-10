@@ -13,6 +13,8 @@ use kgeom::vec::Point3;
 const MIN_GRID_STEPS: usize = 24;
 const MAX_GRID_STEPS: usize = 96;
 const MAX_BISECTION_STEPS: usize = 80;
+const PROOF_SUBDIVISION_DEPTH: u32 = 12;
+const PROOF_CANDIDATE_BUDGET: usize = 4_096;
 const COMPLETION_REASON: &str =
     "fixed-grid NURBS surface marching does not prove complete coverage";
 
@@ -85,8 +87,13 @@ pub(super) fn march_nurbs_surface_intersection(
     if let Ok(active_surface) = config.surface.restricted_to(proof_range)
         && let Ok(hierarchy) = NurbsSurfaceBvh::build(&active_surface)
         && hierarchy
-            .implicit_candidates(config.implicit_surface, config.tolerances.linear())?
-            .is_empty()
+            .isolate_implicit_candidates(
+                config.implicit_surface,
+                config.tolerances.linear(),
+                PROOF_SUBDIVISION_DEPTH,
+                PROOF_CANDIDATE_BUDGET,
+            )?
+            .is_proven_empty()
     {
         return Ok(SurfaceSurfaceIntersections::complete_empty());
     }

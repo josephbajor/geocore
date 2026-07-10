@@ -117,7 +117,11 @@ silently interpreted as complete.
 For clamped positive-weight NURBS surfaces against analytic planes, spheres, cylinders,
 cones, and tori, outward-inflated control-hull BVHs are filtered by conservative interval
 implicit fields. A fully excluded hierarchy is completion evidence for a miss; retained
-boxes remain candidates and cannot be promoted by fixed-grid sampling alone.
+boxes are recursively split exactly in the parameter direction that most reduces retained
+implicit uncertainty. The resulting deterministic cells conservatively cover every
+possible contact and expose cell-budget or floating-parameter-resolution limits. Empty
+complete isolation is completion evidence; non-empty cells remain candidates and cannot
+be promoted by fixed-grid sampling alone.
 
 ### L2 — Topology
 Parasolid's exact hierarchy:

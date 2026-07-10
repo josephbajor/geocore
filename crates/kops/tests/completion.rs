@@ -28,6 +28,28 @@ fn vertical_nurbs(x: f64, y0: f64, y1: f64) -> NurbsCurve {
     .unwrap()
 }
 
+fn positive_quadratic_height_patch(center: f64, epsilon: f64) -> NurbsSurface {
+    let z0 = center * center + epsilon;
+    let z1 = center * center - center + epsilon;
+    let z2 = (1.0 - center) * (1.0 - center) + epsilon;
+    NurbsSurface::new(
+        2,
+        1,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, z0),
+            Point3::new(0.0, 1.0, z0),
+            Point3::new(0.5, 0.0, z1),
+            Point3::new(0.5, 1.0, z1),
+            Point3::new(1.0, 0.0, z2),
+            Point3::new(1.0, 1.0, z2),
+        ],
+        None,
+    )
+    .unwrap()
+}
+
 #[test]
 fn exact_analytic_results_distinguish_proven_empty_from_contacts() {
     let range = ParamRange::new(-1.0, 1.0);
@@ -166,26 +188,24 @@ fn curve_surface_and_surface_surface_paths_propagate_completion() {
     assert!(certified_surface_miss.is_empty());
     assert!(certified_surface_miss.is_proven_empty());
 
-    // A positive quadratic height field can have Bernstein control points on
-    // both sides of the plane. The interval broad phase must retain it, while
-    // the fixed grid discovers no contact. That empty remains unresolved.
-    let epsilon = 10.0 * Tolerances::default().linear();
-    let unresolved_patch = NurbsSurface::new(
-        2,
-        1,
-        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
-        vec![0.0, 0.0, 1.0, 1.0],
-        vec![
-            Point3::new(0.0, 0.0, 0.25 + epsilon),
-            Point3::new(0.0, 1.0, 0.25 + epsilon),
-            Point3::new(0.5, 0.0, -0.25 + epsilon),
-            Point3::new(0.5, 1.0, -0.25 + epsilon),
-            Point3::new(1.0, 0.0, 0.25 + epsilon),
-            Point3::new(1.0, 1.0, 0.25 + epsilon),
-        ],
-        None,
+    // Exact subdivision can discharge a positive quadratic even though its
+    // source Bernstein hull crosses the plane tolerance slab.
+    let adaptive_patch =
+        positive_quadratic_height_patch(0.37, 10.0 * Tolerances::default().linear());
+    let adaptive_surface_miss = intersect_bounded_plane_nurbs_surface(
+        &plane,
+        window,
+        &adaptive_patch,
+        adaptive_patch.param_range(),
+        Tolerances::default(),
     )
     .unwrap();
+    assert!(adaptive_surface_miss.is_proven_empty());
+
+    // A closer positive quadratic remains a candidate at the configured proof
+    // depth. The fixed grid finds no contact, so that empty stays unresolved.
+    let unresolved_patch =
+        positive_quadratic_height_patch(0.37, 1.001 * Tolerances::default().linear());
     let unresolved_surface_miss = intersect_bounded_plane_nurbs_surface(
         &plane,
         window,

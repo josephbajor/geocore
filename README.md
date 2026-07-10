@@ -113,8 +113,10 @@ parametric CAD application; feature history and regeneration are later layers.
   without sampling. Analytic/NURBS SSI now promotes those certified misses to `Complete`.
   Common CC/CS/SSI results carry explicit `Complete` or diagnostic `Indeterminate`
   evidence: sampled candidate paths preserve discoveries without claiming an unresolved
-  empty sample is a miss. Adaptive candidate isolation, paired pcurves, coincident-region
-  handling, and verified whole-branch residuals remain.
+  empty sample is a miss. Deterministic exact subpatch isolation now refines surviving
+  boxes adaptively, reports cell-budget/parameter-resolution limits, and proves additional
+  misses hidden by a source control hull. Verified root seeds, paired pcurves,
+  coincident-region handling, and verified whole-branch residuals remain.
 - M5-M8 are not started: there are no end-to-end booleans, general sweeps/sewing,
   blends/offsets/shelling, stable C API, or production hardening yet.
 

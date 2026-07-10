@@ -1,9 +1,12 @@
-//! Conservative BVH and affine half-space certificates for NURBS patches.
+//! Conservative BVH, implicit certificates, and exact adaptive isolation for
+//! NURBS patches.
 
 use super::NurbsSurface;
 use crate::aabb::Aabb3;
 use crate::bvh::AabbBvh;
 use crate::implicit::{ImplicitBoxRelation, ImplicitSurface, classify_implicit_box};
+use crate::param::ParamRange;
+use crate::surface::{Dir, Surface};
 use crate::vec::{Point3, Vec3};
 use kcore::error::{Error, Result};
 use kcore::interval::Interval;
@@ -19,6 +22,105 @@ pub enum PlanePatchRelation {
     Candidate,
     /// The complete patch lies on the positive side beyond the slab.
     Positive,
+}
+
+/// One exact NURBS subpatch whose control-hull box could not be excluded
+/// from an implicit zero set.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplicitCandidateCell {
+    source_patch: usize,
+    patch: NurbsSurface,
+    bounds: Aabb3,
+    depth: u32,
+}
+
+impl ImplicitCandidateCell {
+    /// Index of the source Bezier patch in [`NurbsSurfaceBvh`].
+    pub fn source_patch(&self) -> usize {
+        self.source_patch
+    }
+
+    /// Exact clamped subpatch represented by this cell.
+    pub fn patch(&self) -> &NurbsSurface {
+        &self.patch
+    }
+
+    /// Source parameter rectangle covered by the subpatch.
+    pub fn parameter_range(&self) -> [ParamRange; 2] {
+        self.patch.param_range()
+    }
+
+    /// Conservative positive-weight control-hull box.
+    pub fn bounds(&self) -> Aabb3 {
+        self.bounds
+    }
+
+    /// Number of exact binary subdivisions from the source Bezier patch.
+    pub fn depth(&self) -> u32 {
+        self.depth
+    }
+}
+
+/// Structured reasons why recursive implicit isolation stopped before every
+/// retained cell reached the requested depth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ImplicitIsolationLimits {
+    candidate_budget: Option<usize>,
+    parameter_resolution: bool,
+}
+
+impl ImplicitIsolationLimits {
+    /// Candidate-cell budget that prevented further subdivision, if any.
+    pub fn candidate_budget(self) -> Option<usize> {
+        self.candidate_budget
+    }
+
+    /// Whether an exact parameter midpoint rounded to an existing endpoint.
+    pub fn parameter_resolution(self) -> bool {
+        self.parameter_resolution
+    }
+
+    /// True when no configured or numeric limit interrupted isolation.
+    pub fn is_empty(self) -> bool {
+        self.candidate_budget.is_none() && !self.parameter_resolution
+    }
+}
+
+/// Certified cover of every possible implicit-surface contact on a NURBS
+/// surface after deterministic exact subdivision and interval pruning.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplicitPatchIsolation {
+    candidates: Vec<ImplicitCandidateCell>,
+    requested_depth: u32,
+    limits: ImplicitIsolationLimits,
+}
+
+impl ImplicitPatchIsolation {
+    /// Retained candidate cells in deterministic source/range order.
+    pub fn candidates(&self) -> &[ImplicitCandidateCell] {
+        &self.candidates
+    }
+
+    /// Requested exact binary subdivision depth.
+    pub fn requested_depth(&self) -> u32 {
+        self.requested_depth
+    }
+
+    /// Structured limits encountered while refining the cover.
+    pub fn limits(&self) -> ImplicitIsolationLimits {
+        self.limits
+    }
+
+    /// True when isolation finished without a configured or numeric limit.
+    /// Every retained cell then reached the requested depth.
+    pub fn is_complete(&self) -> bool {
+        self.limits.is_empty()
+    }
+
+    /// True when complete isolation excluded the entire represented surface.
+    pub fn is_proven_empty(&self) -> bool {
+        self.is_complete() && self.candidates.is_empty()
+    }
 }
 
 /// Deterministic hierarchy over the exact Bezier decomposition of one
@@ -133,6 +235,81 @@ impl NurbsSurfaceBvh {
         }))
     }
 
+    /// Recursively isolate an implicit zero set with exact binary NURBS
+    /// subdivision and interval control-hull pruning.
+    ///
+    /// The returned cells conservatively cover every possible contact within
+    /// `margin`. `requested_depth` controls spatial refinement without
+    /// pretending that a retained box contains a root. `max_candidate_cells`
+    /// is a soft memory bound: if the initial Bezier candidate cover already
+    /// exceeds it, that cover is preserved and reported as limited rather
+    /// than dropping geometry.
+    pub fn isolate_implicit_candidates(
+        &self,
+        surface: &dyn ImplicitSurface,
+        margin: f64,
+        requested_depth: u32,
+        max_candidate_cells: usize,
+    ) -> Result<ImplicitPatchIsolation> {
+        validate_margin(margin)?;
+        if max_candidate_cells == 0 {
+            return Err(Error::InvalidGeometry {
+                reason: "NURBS implicit isolation candidate budget must be positive",
+            });
+        }
+
+        let mut limits = ImplicitIsolationLimits::default();
+        let mut cells: Vec<_> = self
+            .implicit_candidates(surface, margin)?
+            .into_iter()
+            .map(|source_patch| WorkCell {
+                cell: candidate_cell(source_patch, self.patches[source_patch].clone(), 0),
+                blocked: false,
+            })
+            .collect();
+        if cells.len() > max_candidate_cells {
+            limits.candidate_budget = Some(max_candidate_cells);
+            return Ok(isolation_result(cells, requested_depth, limits));
+        }
+
+        for _ in 0..requested_depth {
+            if cells.is_empty() || cells.iter().all(|work| work.blocked) {
+                break;
+            }
+            let previous = core::mem::take(&mut cells);
+            let previous_len = previous.len();
+            let mut next = Vec::with_capacity(previous_len.saturating_mul(2));
+            for (position, mut work) in previous.into_iter().enumerate() {
+                if work.blocked {
+                    next.push(work);
+                    continue;
+                }
+
+                let Some(children) = candidate_children(&work.cell, surface, margin)? else {
+                    work.blocked = true;
+                    limits.parameter_resolution = true;
+                    next.push(work);
+                    continue;
+                };
+
+                let remaining = previous_len - position - 1;
+                if next.len() + children.len() + remaining <= max_candidate_cells {
+                    next.extend(children.into_iter().map(|cell| WorkCell {
+                        cell,
+                        blocked: false,
+                    }));
+                } else {
+                    work.blocked = true;
+                    limits.candidate_budget = Some(max_candidate_cells);
+                    next.push(work);
+                }
+            }
+            cells = next;
+        }
+
+        Ok(isolation_result(cells, requested_depth, limits))
+    }
+
     /// Classify one patch against the plane through `origin` with the given
     /// normal. `half_width` is a model-space tolerance on each side of the
     /// plane. Normal scale and signed-distance arithmetic are enclosed with
@@ -225,6 +402,90 @@ fn validate_margin(margin: f64) -> Result<()> {
         });
     }
     Ok(())
+}
+
+#[derive(Debug)]
+struct WorkCell {
+    cell: ImplicitCandidateCell,
+    blocked: bool,
+}
+
+fn candidate_cell(source_patch: usize, patch: NurbsSurface, depth: u32) -> ImplicitCandidateCell {
+    let bounds = Aabb3::from_points(patch.points());
+    ImplicitCandidateCell {
+        source_patch,
+        patch,
+        bounds,
+        depth,
+    }
+}
+
+fn candidate_children(
+    parent: &ImplicitCandidateCell,
+    surface: &dyn ImplicitSurface,
+    margin: f64,
+) -> Result<Option<Vec<ImplicitCandidateCell>>> {
+    let mut choices = Vec::with_capacity(2);
+    for (axis, direction) in [Dir::U, Dir::V].into_iter().enumerate() {
+        let range = parent.patch.param_range()[axis];
+        let midpoint = range.lo + 0.5 * range.width();
+        if !(range.lo < midpoint && midpoint < range.hi) {
+            continue;
+        }
+        let (left, right) = parent.patch.split_at(direction, midpoint)?;
+        let mut children = Vec::with_capacity(2);
+        let mut uncertainty = 0.0;
+        for patch in [left, right] {
+            let child = candidate_cell(parent.source_patch, patch, parent.depth + 1);
+            if classify_implicit_box(surface, child.bounds, margin)?
+                == ImplicitBoxRelation::Candidate
+            {
+                let expanded = child.bounds.inflated(margin);
+                let width = if expanded.is_finite() {
+                    surface.implicit_interval(expanded).width()
+                } else {
+                    f64::INFINITY
+                };
+                uncertainty += if width.is_finite() {
+                    width.max(0.0)
+                } else {
+                    f64::INFINITY
+                };
+                children.push(child);
+            }
+        }
+        choices.push((axis, children, uncertainty));
+    }
+    choices.sort_by(|a, b| {
+        a.1.len()
+            .cmp(&b.1.len())
+            .then(a.2.total_cmp(&b.2))
+            .then(a.0.cmp(&b.0))
+    });
+    Ok(choices.into_iter().next().map(|(_, children, _)| children))
+}
+
+fn isolation_result(
+    cells: Vec<WorkCell>,
+    requested_depth: u32,
+    limits: ImplicitIsolationLimits,
+) -> ImplicitPatchIsolation {
+    let mut candidates: Vec<_> = cells.into_iter().map(|work| work.cell).collect();
+    candidates.sort_by(|a, b| {
+        let ar = a.parameter_range();
+        let br = b.parameter_range();
+        a.source_patch
+            .cmp(&b.source_patch)
+            .then(ar[0].lo.total_cmp(&br[0].lo))
+            .then(ar[1].lo.total_cmp(&br[1].lo))
+            .then(ar[0].hi.total_cmp(&br[0].hi))
+            .then(ar[1].hi.total_cmp(&br[1].hi))
+    });
+    ImplicitPatchIsolation {
+        candidates,
+        requested_depth,
+        limits,
+    }
 }
 
 fn finite_point(point: Vec3) -> bool {
@@ -320,7 +581,7 @@ fn classify_interval(minimum: f64, maximum: f64, half_width: f64) -> PlanePatchR
 mod tests {
     use super::*;
     use crate::param::ParamRange;
-    use crate::surface::{Sphere, Surface};
+    use crate::surface::{Plane, Sphere, Surface};
 
     fn rational_multi_patch(offset: Vec3) -> NurbsSurface {
         let knots = vec![0.0, 0.0, 0.5, 1.0, 1.0];
@@ -334,6 +595,28 @@ mod tests {
             }
         }
         NurbsSurface::new(1, 1, knots.clone(), knots, points, Some(weights)).unwrap()
+    }
+
+    fn positive_quadratic_height(center: f64, epsilon: f64) -> NurbsSurface {
+        let z0 = center * center + epsilon;
+        let z1 = center * center - center + epsilon;
+        let z2 = (1.0 - center) * (1.0 - center) + epsilon;
+        NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, z0),
+                Point3::new(0.0, 1.0, z0),
+                Point3::new(0.5, 0.0, z1),
+                Point3::new(0.5, 1.0, z1),
+                Point3::new(1.0, 0.0, z2),
+                Point3::new(1.0, 1.0, z2),
+            ],
+            None,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -413,11 +696,30 @@ mod tests {
             }
         }
 
+        let isolation = hierarchy
+            .isolate_implicit_candidates(&crossing, 0.0, 6, 256)
+            .unwrap();
+        assert!(isolation.is_complete());
+        assert!(!isolation.candidates().is_empty());
+        assert!(isolation.candidates().iter().all(|cell| cell.depth() == 6));
+        let zero = hierarchy.patch(0).unwrap().eval([0.5, 0.0]);
+        assert!(isolation.candidates().iter().any(|cell| {
+            let range = cell.parameter_range();
+            range[0].contains(0.5)
+                && range[1].contains(0.0)
+                && cell.bounds().inflated(1.0e-12).contains(zero)
+        }));
+
         let far_frame =
             crate::frame::Frame::from_z(Point3::new(0.0, 0.0, 10.0), Vec3::new(0.0, 0.0, 1.0))
                 .unwrap();
         let far = Sphere::new(far_frame, 1.0).unwrap();
         assert!(hierarchy.implicit_candidates(&far, 0.0).unwrap().is_empty());
+        let far_isolation = hierarchy
+            .isolate_implicit_candidates(&far, 0.0, u32::MAX, 1)
+            .unwrap();
+        assert!(far_isolation.is_proven_empty());
+        assert_eq!(far_isolation.requested_depth(), u32::MAX);
     }
 
     #[test]
@@ -447,6 +749,106 @@ mod tests {
             hierarchy
                 .classify_patch_against_implicit(usize::MAX, &sphere, 0.0)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn adaptive_isolation_proves_a_miss_hidden_by_the_source_control_hull() {
+        let surface = positive_quadratic_height(0.37, 1.0e-5);
+        let hierarchy = NurbsSurfaceBvh::build(&surface).unwrap();
+        let plane = Plane::new(crate::frame::Frame::world());
+        assert_eq!(
+            hierarchy.implicit_candidates(&plane, 1.0e-6).unwrap(),
+            vec![0]
+        );
+
+        let isolation = hierarchy
+            .isolate_implicit_candidates(&plane, 1.0e-6, 16, 64)
+            .unwrap();
+        assert!(isolation.is_complete());
+        assert!(isolation.is_proven_empty());
+        assert!(isolation.candidates().is_empty());
+        assert_eq!(isolation.requested_depth(), 16);
+    }
+
+    #[test]
+    fn adaptive_isolation_is_deterministic_and_preserves_budget_limited_cover() {
+        let coincident = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.0, 1.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+            ],
+            None,
+        )
+        .unwrap();
+        let hierarchy = NurbsSurfaceBvh::build(&coincident).unwrap();
+        let plane = Plane::new(crate::frame::Frame::world());
+        let first = hierarchy
+            .isolate_implicit_candidates(&plane, 0.0, 5, 2)
+            .unwrap();
+        let second = hierarchy
+            .isolate_implicit_candidates(&plane, 0.0, 5, 2)
+            .unwrap();
+        assert_eq!(first, second);
+        assert!(!first.is_complete());
+        assert_eq!(first.limits().candidate_budget(), Some(2));
+        assert!(!first.limits().parameter_resolution());
+        assert_eq!(first.candidates().len(), 2);
+        assert!(first.candidates().iter().all(|cell| cell.depth() == 1));
+        assert!(
+            first
+                .candidates()
+                .iter()
+                .all(
+                    |cell| cell.bounds().inflated(1.0e-12).contains(cell.patch().eval([
+                        cell.parameter_range()[0].lerp(0.5),
+                        cell.parameter_range()[1].lerp(0.5),
+                    ]))
+                )
+        );
+        assert!(
+            hierarchy
+                .isolate_implicit_candidates(&plane, 0.0, 1, 0)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn adaptive_isolation_reports_parameter_resolution_without_dropping_cover() {
+        let lo = 1.0_f64;
+        let hi = lo.next_up();
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![lo, lo, hi, hi],
+            vec![lo, lo, hi, hi],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.0, 1.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+            ],
+            None,
+        )
+        .unwrap();
+        let hierarchy = NurbsSurfaceBvh::build(&surface).unwrap();
+        let plane = Plane::new(crate::frame::Frame::world());
+        let isolation = hierarchy
+            .isolate_implicit_candidates(&plane, 0.0, 1, 4)
+            .unwrap();
+        assert!(!isolation.is_complete());
+        assert!(isolation.limits().parameter_resolution());
+        assert_eq!(isolation.limits().candidate_budget(), None);
+        assert_eq!(isolation.candidates().len(), 1);
+        assert_eq!(
+            isolation.candidates()[0].parameter_range(),
+            [ParamRange::new(lo, hi), ParamRange::new(lo, hi),]
         );
     }
 
