@@ -2,6 +2,7 @@
 
 use kcore::error::Error;
 use kcore::tolerance::Tolerances;
+use kgeom::aabb::Aabb3;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::frame::Frame;
 use kgeom::nurbs::NurbsCurve;
@@ -15,6 +16,30 @@ fn line(origin: [f64; 3], direction: [f64; 3]) -> Line {
 
 fn full_range(curve: &dyn Curve) -> ParamRange {
     curve.param_range()
+}
+
+struct UnsupportedCurve;
+
+impl Curve for UnsupportedCurve {
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
+    fn eval_derivs(&self, _t: f64, _order: usize) -> kgeom::curve::CurveDerivs {
+        kgeom::curve::CurveDerivs::default()
+    }
+
+    fn param_range(&self) -> ParamRange {
+        ParamRange::new(0.0, 1.0)
+    }
+
+    fn periodicity(&self) -> Option<f64> {
+        None
+    }
+
+    fn bounding_box(&self, _range: ParamRange) -> Aabb3 {
+        Aabb3::from_points(&[Point3::new(0.0, 0.0, 0.0)])
+    }
 }
 
 #[test]
@@ -239,6 +264,62 @@ fn dispatches_ellipse_nurbs_both_orders() {
 }
 
 #[test]
+fn dispatches_nurbs_nurbs() {
+    let a = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![Point3::new(-1.0, -1.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+        None,
+    )
+    .unwrap();
+    let b = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![Point3::new(-2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0)],
+        None,
+    )
+    .unwrap();
+    let hit = intersect_bounded_curves(
+        &a,
+        full_range(&a),
+        &b,
+        full_range(&b),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.points.len(), 1);
+    assert_eq!(hit.points[0].kind, ContactKind::Transverse);
+    assert!((hit.points[0].t_a - 0.5).abs() < 1e-8);
+    assert!((hit.points[0].t_b - 0.5).abs() < 1e-8);
+
+    let contained = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![Point3::new(0.0, 0.0, 0.0), Point3::new(3.0, 0.0, 0.0)],
+        None,
+    )
+    .unwrap();
+    let reversed = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![Point3::new(3.0, 0.0, 0.0), Point3::new(0.0, 0.0, 0.0)],
+        None,
+    )
+    .unwrap();
+    let hit = intersect_bounded_curves(
+        &contained,
+        full_range(&contained),
+        &reversed,
+        full_range(&reversed),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.overlaps.len(), 1);
+    assert_eq!(hit.overlaps[0].orientation, ParamOrientation::Reversed);
+}
+
+#[test]
 fn reversed_dispatch_recanonicalizes_in_first_curve_order() {
     let circle = Circle::new(Frame::world(), 1.0).unwrap();
     let line = line([-2.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
@@ -291,20 +372,8 @@ fn dispatches_circle_ellipse_and_ellipse_ellipse() {
 
 #[test]
 fn unsupported_curve_class_is_explicit_error() {
-    let a = NurbsCurve::new(
-        1,
-        vec![0.0, 0.0, 1.0, 1.0],
-        vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
-        None,
-    )
-    .unwrap();
-    let b = NurbsCurve::new(
-        1,
-        vec![0.0, 0.0, 1.0, 1.0],
-        vec![Point3::new(0.5, -1.0, 0.0), Point3::new(0.5, 1.0, 0.0)],
-        None,
-    )
-    .unwrap();
+    let a = UnsupportedCurve;
+    let b = line([0.5, -1.0, 0.0], [0.0, 1.0, 0.0]);
     let err = intersect_bounded_curves(
         &a,
         full_range(&a),
