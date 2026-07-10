@@ -23,5 +23,6 @@ pub mod check;
 pub mod entity;
 pub mod euler;
 pub mod geom;
+pub(crate) mod incidence;
 pub mod make;
 pub mod store;

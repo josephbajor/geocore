@@ -51,12 +51,12 @@ use crate::entity::{
     ShellId, VertexId,
 };
 use crate::geom::SurfaceGeom;
+use crate::incidence::{PcurveIssue, check_pcurve_definition, check_pcurve_incidence};
 use crate::store::{Entity, Store};
 use kcore::arena::Handle;
 use kcore::error::Result;
 use kcore::math;
 use kcore::tolerance::{LINEAR_RESOLUTION, SIZE_BOX_HALF, Tolerances};
-use kgeom::param::ParamRange;
 use kgeom::project::project_to_surface;
 use kgeom::vec::Point3;
 
@@ -471,79 +471,25 @@ impl<'a> Checker<'a> {
             return;
         };
         let at = EntityRef::Fin(fin_id);
-        let Some(pcurve_geom) = self.live(pcurve_use.curve(), at) else {
-            return;
+        let result = match edge.curve {
+            Some(curve) => match self.store.get(fid) {
+                Ok(face) => check_pcurve_incidence(
+                    self.store,
+                    curve,
+                    edge.bounds,
+                    face.surface,
+                    pcurve_use,
+                    edge.tolerance.unwrap_or(0.0).max(self.tol.linear()),
+                ),
+                Err(_) => Err(PcurveIssue::StaleReference),
+            },
+            None => check_pcurve_definition(self.store, pcurve_use),
         };
-        let pcurve = pcurve_geom.as_curve();
-        let range = pcurve_use.range();
-        let natural = pcurve.param_range();
-        let curve_range_ok = match pcurve.periodicity() {
-            Some(period) => range.width() <= period && period.is_finite() && period > 0.0,
-            None => natural.contains(range.lo) && natural.contains(range.hi),
-        };
-
-        let Some(curve_id) = edge.curve else {
-            if !curve_range_ok {
-                self.fault(at, FaultKind::BadPcurveRange);
-            }
-            return;
-        };
-        let Ok(curve_geom) = self.store.get(curve_id) else {
-            return;
-        };
-        let curve = curve_geom.as_curve();
-        let edge_range = match edge.bounds {
-            Some((lo, hi)) if lo.is_finite() && hi.is_finite() && lo < hi => {
-                ParamRange::new(lo, hi)
-            }
-            None => {
-                let range = curve.param_range();
-                if !range.is_finite() || range.lo >= range.hi {
-                    self.fault(at, FaultKind::BadPcurveRange);
-                    return;
-                }
-                range
-            }
-            Some(_) => return,
-        };
-
-        let q0 = pcurve_use.parameter_at_edge(edge_range.lo);
-        let q1 = pcurve_use.parameter_at_edge(edge_range.hi);
-        let map_covers_range = q0.is_finite()
-            && q1.is_finite()
-            && parameter_close(q0.min(q1), range.lo)
-            && parameter_close(q0.max(q1), range.hi);
-        if !curve_range_ok || !map_covers_range {
-            self.fault(at, FaultKind::BadPcurveRange);
-            return;
-        }
-
-        let Ok(face) = self.store.get(fid) else {
-            return;
-        };
-        let Ok(surface_geom) = self.store.get(face.surface) else {
-            return;
-        };
-        let surface = surface_geom.as_surface();
-        let tolerance = edge.tolerance.unwrap_or(0.0).max(self.tol.linear());
-        for i in 0..=EDGE_SAMPLES {
-            let t = edge_range.lerp(i as f64 / EDGE_SAMPLES as f64);
-            let q = pcurve_use.parameter_at_edge(t);
-            if q < range.lo - parameter_slack(q, range.lo)
-                || q > range.hi + parameter_slack(q, range.hi)
-            {
-                self.fault(at, FaultKind::BadPcurveRange);
-                return;
-            }
-            let uv = pcurve.eval(q);
-            if !uv.x.is_finite() || !uv.y.is_finite() {
-                self.fault(at, FaultKind::BadPcurveRange);
-                return;
-            }
-            if surface.eval([uv.x, uv.y]).dist(curve.eval(t)) > tolerance {
-                self.fault(at, FaultKind::PcurveOffSurface);
-                return;
-            }
+        match result {
+            Ok(()) => {}
+            Err(PcurveIssue::StaleReference) => self.fault(at, FaultKind::StaleReference),
+            Err(PcurveIssue::BadRange) => self.fault(at, FaultKind::BadPcurveRange),
+            Err(PcurveIssue::OffSurface) => self.fault(at, FaultKind::PcurveOffSurface),
         }
     }
 
@@ -873,16 +819,6 @@ impl<'a> Checker<'a> {
             self.fault(EntityRef::Shell(sid), FaultKind::EulerViolation);
         }
     }
-}
-
-/// Representational comparison for mapped parameter interval endpoints.
-/// This is a floating-point roundoff allowance, not a model-space tolerance.
-fn parameter_slack(a: f64, b: f64) -> f64 {
-    256.0 * f64::EPSILON * (1.0 + a.abs().max(b.abs()))
-}
-
-fn parameter_close(a: f64, b: f64) -> bool {
-    (a - b).abs() <= parameter_slack(a, b)
 }
 
 /// Exact distance from a point to an analytic surface; NURBS falls back to

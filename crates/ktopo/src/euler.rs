@@ -22,9 +22,13 @@
 //! geometry: the caller passes the already-stored geometry handles
 //! ([`crate::entity::PointId`], [`crate::entity::CurveId`],
 //! [`crate::entity::SurfaceId`]) each new entity should reference, and the
-//! checker later verifies geometric consistency. Kill operators remove
-//! topology only — attached geometry stays in the store (it may be
-//! shared).
+//! checker later verifies geometric consistency. The `*_with_pcurves`
+//! variants additionally preflight the complete edge/pcurve/surface tuple
+//! and attach an explicit pcurve to every new fin. Operators that move
+//! pcurve-bearing fins between faces preflight them on the destination
+//! surface and reject the move if reparameterization is required. Kill
+//! operators remove topology only — attached geometry stays in the store
+//! (it may be shared).
 //!
 //! **Transient states.** Between operator applications a body may be
 //! topologically consistent but not checker-clean (e.g. the zero-fin loop
@@ -38,14 +42,92 @@
 //! candidate).
 
 use crate::entity::{
-    BodyId, CurveId, Edge, EdgeId, Face, FaceId, Fin, FinId, Loop, LoopId, PointId, RegionId,
-    Sense, ShellId, SurfaceId, Vertex, VertexId,
+    BodyId, CurveId, Edge, EdgeId, Face, FaceId, Fin, FinId, FinPcurve, Loop, LoopId, PointId,
+    RegionId, Sense, ShellId, SurfaceId, Vertex, VertexId,
 };
+use crate::incidence::{PcurveIssue, check_pcurve_incidence};
 use crate::store::Store;
 use kcore::error::{Error, Result};
+use kcore::tolerance::LINEAR_RESOLUTION;
 
 fn topo_err<T>(reason: &'static str) -> Result<T> {
     Err(Error::InvalidGeometry { reason })
+}
+
+/// The two independent parameter-space uses of a new edge, keyed by the
+/// edge-relative sense of the fins that will own them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FinPcurvePair {
+    /// Pcurve for the fin whose sense is [`Sense::Forward`].
+    pub forward: FinPcurve,
+    /// Pcurve for the fin whose sense is [`Sense::Reversed`].
+    pub reversed: FinPcurve,
+}
+
+impl FinPcurvePair {
+    /// Construct an explicitly ordered pcurve pair.
+    pub const fn new(forward: FinPcurve, reversed: FinPcurve) -> Self {
+        Self { forward, reversed }
+    }
+}
+
+fn pcurve_error(issue: PcurveIssue) -> Error {
+    match issue {
+        PcurveIssue::StaleReference => Error::StaleHandle,
+        PcurveIssue::BadRange => Error::InvalidGeometry {
+            reason: "Euler pcurve range does not cover the new edge parameter interval",
+        },
+        PcurveIssue::OffSurface => Error::InvalidGeometry {
+            reason: "Euler pcurve does not lift to the new 3D edge on its face surface",
+        },
+    }
+}
+
+fn validate_pcurve_pair(
+    store: &Store,
+    curve: CurveId,
+    bounds: (f64, f64),
+    surfaces: [SurfaceId; 2],
+    pcurves: FinPcurvePair,
+) -> Result<()> {
+    for (surface, pcurve) in [
+        (surfaces[0], pcurves.forward),
+        (surfaces[1], pcurves.reversed),
+    ] {
+        check_pcurve_incidence(
+            store,
+            curve,
+            Some(bounds),
+            surface,
+            pcurve,
+            LINEAR_RESOLUTION,
+        )
+        .map_err(pcurve_error)?;
+    }
+    Ok(())
+}
+
+fn validate_fins_on_surface(store: &Store, fins: &[FinId], surface: SurfaceId) -> Result<()> {
+    for &fin_id in fins {
+        let fin = store.get(fin_id)?;
+        let Some(pcurve) = fin.pcurve else {
+            continue;
+        };
+        let edge = store.get(fin.edge)?;
+        let curve = edge.curve.ok_or(Error::InvalidGeometry {
+            reason: "moving curve-less pcurve fins requires tolerant-edge support",
+        })?;
+        check_pcurve_incidence(
+            store,
+            curve,
+            edge.bounds,
+            surface,
+            pcurve,
+            edge.tolerance.unwrap_or(0.0).max(LINEAR_RESOLUTION),
+        )
+        .map_err(pcurve_error)?;
+    }
+    Ok(())
 }
 
 /// Validate an edge parameter interval: finite and increasing.
@@ -196,6 +278,35 @@ pub fn mev(
     bounds: (f64, f64),
     point: PointId,
 ) -> Result<Mev> {
+    mev_impl(store, lp, at, curve, bounds, point, None)
+}
+
+/// Pcurve-bearing [`mev`]. Both pcurves are validated against the owning
+/// face before topology is mutated, then attached to the new fins.
+pub fn mev_with_pcurves(
+    store: &mut Store,
+    lp: LoopId,
+    at: usize,
+    curve: CurveId,
+    bounds: (f64, f64),
+    point: PointId,
+    pcurves: FinPcurvePair,
+) -> Result<Mev> {
+    valid_bounds(bounds)?;
+    let face = store.get(store.get(lp)?.face)?;
+    validate_pcurve_pair(store, curve, bounds, [face.surface, face.surface], pcurves)?;
+    mev_impl(store, lp, at, curve, bounds, point, Some(pcurves))
+}
+
+fn mev_impl(
+    store: &mut Store,
+    lp: LoopId,
+    at: usize,
+    curve: CurveId,
+    bounds: (f64, f64),
+    point: PointId,
+    pcurves: Option<FinPcurvePair>,
+) -> Result<Mev> {
     valid_bounds(bounds)?;
     store.get(curve)?;
     store.get(point)?;
@@ -235,13 +346,13 @@ pub fn mev(
         parent: lp,
         edge,
         sense: Sense::Forward,
-        pcurve: None,
+        pcurve: pcurves.map(|pair| pair.forward),
     });
     let fin_back = store.add(Fin {
         parent: lp,
         edge,
         sense: Sense::Reversed,
-        pcurve: None,
+        pcurve: pcurves.map(|pair| pair.reversed),
     });
     store.get_mut(edge)?.fins = vec![fin_out, fin_back];
     let ring = &mut store.get_mut(lp)?.fins;
@@ -358,6 +469,53 @@ pub fn mef(
     surface: SurfaceId,
     sense: Sense,
 ) -> Result<Mef> {
+    mef_impl(store, lp, i, j, curve, bounds, surface, sense, None)
+}
+
+/// Pcurve-bearing [`mef`]. The forward use is validated on the old face;
+/// the reversed use is validated on the new face's supporting surface.
+/// Existing pcurve-bearing fins moved to the new face are also preflighted.
+#[allow(clippy::too_many_arguments)]
+pub fn mef_with_pcurves(
+    store: &mut Store,
+    lp: LoopId,
+    i: usize,
+    j: usize,
+    curve: CurveId,
+    bounds: (f64, f64),
+    surface: SurfaceId,
+    sense: Sense,
+    pcurves: FinPcurvePair,
+) -> Result<Mef> {
+    valid_bounds(bounds)?;
+    let old_face = store.get(lp)?.face;
+    let old_surface = store.get(old_face)?.surface;
+    validate_pcurve_pair(store, curve, bounds, [old_surface, surface], pcurves)?;
+    mef_impl(
+        store,
+        lp,
+        i,
+        j,
+        curve,
+        bounds,
+        surface,
+        sense,
+        Some(pcurves),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mef_impl(
+    store: &mut Store,
+    lp: LoopId,
+    i: usize,
+    j: usize,
+    curve: CurveId,
+    bounds: (f64, f64),
+    surface: SurfaceId,
+    sense: Sense,
+    pcurves: Option<FinPcurvePair>,
+) -> Result<Mef> {
     valid_bounds(bounds)?;
     store.get(curve)?;
     store.get(surface)?;
@@ -374,6 +532,11 @@ pub fn mef(
     };
     let shell = shell_of_loop(store, lp)?;
     let old_face = store.get(lp)?.face;
+    let new_len = (j + n - i) % n;
+    if surface != store.get(old_face)?.surface {
+        let moved: Vec<_> = (0..new_len).map(|k| fins[(i + k) % n]).collect();
+        validate_fins_on_surface(store, &moved, surface)?;
+    }
 
     let edge = store.add(Edge {
         curve: Some(curve),
@@ -399,13 +562,13 @@ pub fn mef(
         parent: lp,
         edge,
         sense: Sense::Forward,
-        pcurve: None,
+        pcurve: pcurves.map(|pair| pair.forward),
     });
     let fin_new = store.add(Fin {
         parent: ring,
         edge,
         sense: Sense::Reversed,
-        pcurve: None,
+        pcurve: pcurves.map(|pair| pair.reversed),
     });
     store.get_mut(edge)?.fins = vec![fin_old, fin_new];
 
@@ -414,7 +577,6 @@ pub fn mef(
     // the Forward fin (v_i → v_j). Both rings close by construction.
     // When i == j the new-loop segment is *empty* (the new face is a disc
     // bounded by the closed edge alone) and the old loop keeps all fins.
-    let new_len = (j + n - i) % n;
     let mut new_fins = Vec::with_capacity(new_len + 1);
     for k in 0..new_len {
         new_fins.push(fins[(i + k) % n]);
@@ -466,6 +628,10 @@ pub fn kef(store: &mut Store, edge: EdgeId) -> Result<()> {
     }
     let fins_a = store.get(la)?.fins.clone();
     let fins_b = store.get(lb)?.fins.clone();
+    if store.get(face_a)?.surface != store.get(face_b)?.surface {
+        let moved: Vec<_> = fins_b.iter().copied().filter(|&fin| fin != fb).collect();
+        validate_fins_on_surface(store, &moved, store.get(face_a)?.surface)?;
+    }
     let ia = fins_a.iter().position(|f| *f == fa).expect("fin in loop");
     let ib = fins_b.iter().position(|f| *f == fb).expect("fin in loop");
 
@@ -559,6 +725,46 @@ pub fn mekr(
     curve: CurveId,
     bounds: (f64, f64),
 ) -> Result<Mekr> {
+    mekr_impl(store, outer, i, ring, j, curve, bounds, None)
+}
+
+/// Pcurve-bearing [`mekr`]. Both new fin uses are preflighted on the
+/// loops' common face before the ring is dissolved.
+#[allow(clippy::too_many_arguments)]
+pub fn mekr_with_pcurves(
+    store: &mut Store,
+    outer: LoopId,
+    i: usize,
+    ring: LoopId,
+    j: usize,
+    curve: CurveId,
+    bounds: (f64, f64),
+    pcurves: FinPcurvePair,
+) -> Result<Mekr> {
+    valid_bounds(bounds)?;
+    if outer == ring {
+        return topo_err("mekr: loops must be distinct");
+    }
+    let face = store.get(outer)?.face;
+    if store.get(ring)?.face != face {
+        return topo_err("mekr: loops must belong to one face");
+    }
+    let surface = store.get(face)?.surface;
+    validate_pcurve_pair(store, curve, bounds, [surface, surface], pcurves)?;
+    mekr_impl(store, outer, i, ring, j, curve, bounds, Some(pcurves))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mekr_impl(
+    store: &mut Store,
+    outer: LoopId,
+    i: usize,
+    ring: LoopId,
+    j: usize,
+    curve: CurveId,
+    bounds: (f64, f64),
+    pcurves: Option<FinPcurvePair>,
+) -> Result<Mekr> {
     valid_bounds(bounds)?;
     store.get(curve)?;
     if outer == ring {
@@ -590,13 +796,13 @@ pub fn mekr(
         parent: outer,
         edge,
         sense: Sense::Forward,
-        pcurve: None,
+        pcurve: pcurves.map(|pair| pair.forward),
     });
     let fin_back = store.add(Fin {
         parent: outer,
         edge,
         sense: Sense::Reversed,
-        pcurve: None,
+        pcurve: pcurves.map(|pair| pair.reversed),
     });
     store.get_mut(edge)?.fins = vec![fin_out, fin_back];
 
@@ -637,6 +843,9 @@ pub fn kfmrh(store: &mut Store, keep: FaceId, kill: FaceId) -> Result<LoopId> {
     let [ring] = loops[..] else {
         return topo_err("kfmrh: killed face must have exactly one loop");
     };
+    if store.get(keep)?.surface != store.get(kill)?.surface {
+        validate_fins_on_surface(store, &store.get(ring)?.fins, store.get(keep)?.surface)?;
+    }
     store.get_mut(ring)?.face = keep;
     store.get_mut(keep)?.loops.push(ring);
     store.get_mut(shell)?.faces.retain(|f| *f != kill);
@@ -652,6 +861,9 @@ pub fn mfkrh(store: &mut Store, ring: LoopId, surface: SurfaceId, sense: Sense) 
     let old_face = store.get(ring)?.face;
     if store.get(old_face)?.loops.len() < 2 {
         return topo_err("mfkrh: loop must be an inner loop (face needs another loop)");
+    }
+    if surface != store.get(old_face)?.surface {
+        validate_fins_on_surface(store, &store.get(ring)?.fins, surface)?;
     }
     let shell = store.get(old_face)?.shell;
     let face = store.add(Face {
@@ -669,11 +881,16 @@ pub fn mfkrh(store: &mut Store, ring: LoopId, surface: SurfaceId, sense: Sense) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::check::check_body;
     use crate::entity::{Body, Region, Shell};
+    use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
+    use crate::make::block;
     use kgeom::curve::Line;
+    use kgeom::curve2d::Line2d;
     use kgeom::frame::Frame;
+    use kgeom::param::ParamRange;
     use kgeom::surface::Plane;
-    use kgeom::vec::{Point3, Vec3};
+    use kgeom::vec::{Point2, Point3, Vec2, Vec3};
 
     /// Deterministic xorshift (same family as the determinism harness).
     struct Rng(u64);
@@ -698,6 +915,77 @@ mod tests {
         let curve = store.add(crate::geom::CurveGeom::Line(line));
         let surface = store.add(crate::geom::SurfaceGeom::Plane(Plane::new(Frame::world())));
         (point, curve, surface)
+    }
+
+    fn planar_line_inputs(
+        store: &mut Store,
+        start: Point3,
+        end: Point3,
+        uv_shift: Vec2,
+    ) -> (CurveId, (f64, f64), FinPcurvePair) {
+        let delta = end - start;
+        let length = delta.norm();
+        let curve = store.add(CurveGeom::Line(Line::new(start, delta).unwrap()));
+        let uv_start = Point2::new(start.x, start.y) + uv_shift;
+        let uv_delta = Vec2::new(delta.x, delta.y);
+        let uv_length = uv_delta.norm();
+        let make_use = |store: &mut Store| {
+            let pcurve = store.add(Curve2dGeom::Line(Line2d::new(uv_start, uv_delta).unwrap()));
+            FinPcurve::new(
+                pcurve,
+                ParamRange::new(0.0, uv_length),
+                crate::entity::ParamMap1d::affine(uv_length / length, 0.0).unwrap(),
+            )
+            .unwrap()
+        };
+        (
+            curve,
+            (0.0, length),
+            FinPcurvePair::new(make_use(store), make_use(store)),
+        )
+    }
+
+    fn pcurved_square(store: &mut Store) -> (BodyId, FaceId, FaceId) {
+        let points = [
+            Point3::new(-1.0, -1.0, 0.0),
+            Point3::new(1.0, -1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(-1.0, 1.0, 0.0),
+        ];
+        let surface = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
+        let seed = store.add(points[0]);
+        let made = mvfs(store, surface, Sense::Forward, seed).unwrap();
+        let mut tail = made.vertex;
+        for i in 0..3 {
+            let (curve, bounds, pcurves) =
+                planar_line_inputs(store, points[i], points[i + 1], Vec2::default());
+            let point = store.add(points[i + 1]);
+            let at = if i == 0 {
+                0
+            } else {
+                index_with_tail(store, made.ring, tail)
+            };
+            tail = mev_with_pcurves(store, made.ring, at, curve, bounds, point, pcurves)
+                .unwrap()
+                .vertex;
+        }
+        let i = index_with_tail(store, made.ring, tail);
+        let j = index_with_tail(store, made.ring, made.vertex);
+        let (curve, bounds, pcurves) =
+            planar_line_inputs(store, points[3], points[0], Vec2::default());
+        let split = mef_with_pcurves(
+            store,
+            made.ring,
+            i,
+            j,
+            curve,
+            bounds,
+            surface,
+            Sense::Reversed,
+            pcurves,
+        )
+        .unwrap();
+        (made.body, store.get(made.ring).unwrap().face, split.face)
     }
 
     /// `V − E + F = 2(S − G) + R`, rearranged over total loop count `L`
@@ -831,6 +1119,96 @@ mod tests {
             assert_eq!(store.get(loops[0]).unwrap().fins.len(), 4);
         }
         assert_structurally_sound(&store, body);
+    }
+
+    #[test]
+    fn pcurve_aware_mev_and_mef_build_checker_clean_incidence() {
+        let mut store = Store::new();
+        let (body, _, _) = pcurved_square(&mut store);
+        for edge in store.edges_of_body(body).unwrap() {
+            for &fin in &store.get(edge).unwrap().fins {
+                assert!(store.get(fin).unwrap().pcurve.is_some());
+            }
+        }
+        let faults = check_body(&store, body).unwrap();
+        assert!(faults.is_empty(), "pcurved Euler square faults: {faults:?}");
+    }
+
+    #[test]
+    fn bad_pcurve_preflight_leaves_mev_state_unchanged() {
+        let mut store = Store::new();
+        let p0 = Point3::new(0.0, 0.0, 0.0);
+        let p1 = Point3::new(1.0, 0.0, 0.0);
+        let surface = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
+        let seed = store.add(p0);
+        let made = mvfs(&mut store, surface, Sense::Forward, seed).unwrap();
+        let (curve, bounds, bad_pcurves) =
+            planar_line_inputs(&mut store, p0, p1, Vec2::new(0.0, 1.0));
+        let point = store.add(p1);
+        let counts = (
+            store.count::<Edge>(),
+            store.count::<Vertex>(),
+            store.count::<Fin>(),
+        );
+        let seed_slot = store.get(made.shell).unwrap().vertex;
+
+        let result = mev_with_pcurves(&mut store, made.ring, 0, curve, bounds, point, bad_pcurves);
+        assert!(result.is_err());
+        assert_eq!(
+            counts,
+            (
+                store.count::<Edge>(),
+                store.count::<Vertex>(),
+                store.count::<Fin>()
+            )
+        );
+        assert_eq!(store.get(made.shell).unwrap().vertex, seed_slot);
+        assert!(store.get(made.ring).unwrap().fins.is_empty());
+    }
+
+    #[test]
+    fn face_moves_preflight_existing_pcurves_atomically() {
+        let mut store = Store::new();
+        let body = block(&mut store, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
+        let faces = store.faces_of_body(body).unwrap();
+        let shell = store.get(faces[0]).unwrap().shell;
+        let shell_faces = store.get(shell).unwrap().faces.clone();
+        let keep_loops = store.get(faces[0]).unwrap().loops.clone();
+        let kill_loops = store.get(faces[1]).unwrap().loops.clone();
+
+        assert!(kfmrh(&mut store, faces[0], faces[1]).is_err());
+        assert_eq!(store.get(shell).unwrap().faces, shell_faces);
+        assert_eq!(store.get(faces[0]).unwrap().loops, keep_loops);
+        assert_eq!(store.get(faces[1]).unwrap().loops, kill_loops);
+    }
+
+    #[test]
+    fn pcurve_aware_mekr_and_kemr_preserve_fin_uses() {
+        let mut store = Store::new();
+        let (body, keep, kill) = pcurved_square(&mut store);
+        let ring = kfmrh(&mut store, keep, kill).unwrap();
+        let outer = store.get(keep).unwrap().loops[0];
+        let outer_fin = store.get(outer).unwrap().fins[0];
+        let start_vertex = store.fin_tail(outer_fin).unwrap().unwrap();
+        let start = store.vertex_position(start_vertex).unwrap();
+        let ring_fins = store.get(ring).unwrap().fins.clone();
+        let (j, end) = ring_fins
+            .iter()
+            .enumerate()
+            .find_map(|(j, &fin)| {
+                let vertex = store.fin_tail(fin).ok().flatten()?;
+                let point = store.vertex_position(vertex).ok()?;
+                (point != start).then_some((j, point))
+            })
+            .unwrap();
+        let (curve, bounds, pcurves) = planar_line_inputs(&mut store, start, end, Vec2::default());
+        let joined =
+            mekr_with_pcurves(&mut store, outer, 0, ring, j, curve, bounds, pcurves).unwrap();
+        assert!(store.get(joined.fin_out).unwrap().pcurve.is_some());
+        assert!(store.get(joined.fin_back).unwrap().pcurve.is_some());
+        let restored_ring = kemr(&mut store, joined.edge).unwrap();
+        assert!(store.get(restored_ring).is_ok());
+        assert_euler_identity(&store, body, 1);
     }
 
     #[test]
