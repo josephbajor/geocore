@@ -9,6 +9,8 @@
 //!   orientation/adjacency invariants (documented there, enforced by
 //!   [`check`]).
 //! - [`geom`] — geometry attachment enums over the L1 classes.
+//!   This includes true 2D pcurve geometry; each [`entity::Fin`] can carry
+//!   its own parameter-space curve use and edge-parameter correspondence.
 //! - [`store`] — the arena-backed entity store and deterministic
 //!   traversals.
 //! - [`euler`] — Euler operators, the only sanctioned topology edits.

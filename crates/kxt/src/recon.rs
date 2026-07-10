@@ -467,6 +467,7 @@ impl Recon<'_> {
                 parent: lp,
                 edge,
                 sense,
+                pcurve: None,
             });
             self.store.get_mut(edge)?.fins.push(fin);
             fins.push(fin);

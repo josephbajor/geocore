@@ -2,17 +2,19 @@
 
 use kcore::tolerance::LINEAR_RESOLUTION;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
+use kgeom::curve2d::Line2d;
 use kgeom::frame::Frame;
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
+use kgeom::param::ParamRange;
 use kgeom::surface::Plane;
-use kgeom::vec::{Point3, Vec3};
+use kgeom::vec::{Point2, Point3, Vec3};
 use ktopo::btess::{TessOptions, check_watertight, tessellate_body};
 use ktopo::check::check_body;
 use ktopo::entity::{
-    Body, BodyId, BodyKind, Edge, EdgeId, Face, FaceId, Fin, Loop, Region, RegionKind, Sense,
-    Shell, Vertex,
+    Body, BodyId, BodyKind, Edge, EdgeId, Face, FaceId, Fin, FinPcurve, Loop, ParamMap1d, Region,
+    RegionKind, Sense, Shell, Vertex,
 };
-use ktopo::geom::{CurveGeom, SurfaceGeom};
+use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::make;
 use ktopo::store::Store;
 use kxt::schema::code;
@@ -159,6 +161,43 @@ fn replace_face_with_bilinear_nurbs(store: &mut Store, body: BodyId) {
     )
     .unwrap();
     *store.get_mut(surface_id).unwrap() = SurfaceGeom::Nurbs(surface);
+
+    // The replacement surface uses normalized [0, 1]^2 parameters, so
+    // replace the inherited plane-coordinate pcurves with exact normalized
+    // ones while retaining each fin's independent Curve2d identity.
+    let du = u_bounds[1] - u_bounds[0];
+    let dv = v_bounds[1] - v_bounds[0];
+    let fin_ids: Vec<_> = store
+        .get(face_id)
+        .unwrap()
+        .loops
+        .iter()
+        .flat_map(|&loop_id| store.get(loop_id).unwrap().fins.iter().copied())
+        .collect();
+    for fin_id in fin_ids {
+        let fin = store.get(fin_id).unwrap();
+        let edge = store.get(fin.edge).unwrap();
+        let [Some(start_id), Some(end_id)] = edge.vertices else {
+            unreachable!()
+        };
+        let Some((t0, t1)) = edge.bounds else {
+            unreachable!()
+        };
+        let to_uv = |point: Point3| {
+            let local = plane.frame().to_local(point);
+            Point2::new((local.x - u_bounds[0]) / du, (local.y - v_bounds[0]) / dv)
+        };
+        let start = to_uv(store.vertex_position(start_id).unwrap());
+        let end = to_uv(store.vertex_position(end_id).unwrap());
+        let uv_len = (end - start).norm();
+        let pcurve_id = fin.pcurve.unwrap().curve();
+        *store.get_mut(pcurve_id).unwrap() =
+            Curve2dGeom::Line(Line2d::new(start, end - start).unwrap());
+        let scale = uv_len / (t1 - t0);
+        let map = ParamMap1d::affine(scale, -scale * t0).unwrap();
+        store.get_mut(fin_id).unwrap().pcurve =
+            Some(FinPcurve::new(pcurve_id, ParamRange::new(0.0, uv_len), map).unwrap());
+    }
 }
 
 fn sheet_square(store: &mut Store) -> BodyId {
@@ -222,6 +261,7 @@ fn sheet_square(store: &mut Store) -> BodyId {
             parent: loop_id,
             edge,
             sense: Sense::Forward,
+            pcurve: None,
         });
         store.get_mut(loop_id).unwrap().fins.push(fin);
         store.get_mut(edge).unwrap().fins.push(fin);
@@ -284,6 +324,7 @@ fn sheet_semicircle(store: &mut Store) -> BodyId {
         parent: loop_id,
         edge: arc,
         sense: Sense::Forward,
+        pcurve: None,
     });
     store.get_mut(loop_id).unwrap().fins.push(arc_fin);
     store.get_mut(arc).unwrap().fins.push(arc_fin);
@@ -300,6 +341,7 @@ fn sheet_semicircle(store: &mut Store) -> BodyId {
         parent: loop_id,
         edge: chord,
         sense: Sense::Forward,
+        pcurve: None,
     });
     store.get_mut(loop_id).unwrap().fins.push(chord_fin);
     store.get_mut(chord).unwrap().fins.push(chord_fin);
@@ -368,6 +410,7 @@ fn sheet_two_faces_shared_surface(store: &mut Store) -> BodyId {
                 parent: loop_id,
                 edge,
                 sense: Sense::Forward,
+                pcurve: None,
             });
             store.get_mut(loop_id).unwrap().fins.push(fin);
             store.get_mut(edge).unwrap().fins.push(fin);

@@ -4,7 +4,7 @@
 use crate::entity::{
     Body, BodyId, Edge, EdgeId, Face, FaceId, Fin, FinId, Loop, Region, Shell, Vertex, VertexId,
 };
-use crate::geom::{CurveGeom, SurfaceGeom};
+use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use kcore::arena::{Arena, Handle};
 use kcore::error::{Error, Result};
 use kgeom::vec::Point3;
@@ -46,6 +46,7 @@ pub struct Store {
     curves: Arena<CurveGeom>,
     surfaces: Arena<SurfaceGeom>,
     points: Arena<Point3>,
+    curves_2d: Arena<Curve2dGeom>,
 }
 
 entity_arena!(Body, bodies);
@@ -59,6 +60,7 @@ entity_arena!(Vertex, vertices);
 entity_arena!(CurveGeom, curves);
 entity_arena!(SurfaceGeom, surfaces);
 entity_arena!(Point3, points);
+entity_arena!(Curve2dGeom, curves_2d);
 
 impl Store {
     /// Empty store.

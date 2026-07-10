@@ -1205,6 +1205,7 @@ mod tests {
             parent: lp,
             edge,
             sense,
+            pcurve: None,
         });
         store.get_mut(lp).unwrap().fins.push(fin);
         store.get_mut(edge).unwrap().fins.push(fin);

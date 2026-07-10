@@ -15,17 +15,45 @@
 //! deferred; [`cone`] builds frustums with two positive radii.
 
 use crate::entity::{
-    Body, BodyId, BodyKind, Edge, EdgeId, Face, FaceId, Fin, Loop, LoopId, Region, RegionKind,
-    Sense, Shell, ShellId, Vertex, VertexId,
+    Body, BodyId, BodyKind, Edge, EdgeId, Face, FaceId, Fin, FinPcurve, Loop, LoopId, ParamMap1d,
+    Region, RegionKind, Sense, Shell, ShellId, Vertex, VertexId,
 };
-use crate::geom::{CurveGeom, SurfaceGeom};
+use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use crate::store::Store;
 use kcore::error::{Error, Result};
 use kcore::math;
 use kgeom::curve::{Circle, Line};
+use kgeom::curve2d::{Circle2d, Line2d};
 use kgeom::frame::Frame;
+use kgeom::param::ParamRange;
 use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Torus};
-use kgeom::vec::{Point3, Vec3};
+use kgeom::vec::{Point2, Point3, Vec2, Vec3};
+
+fn frame_uv(frame: &Frame, point: Point3) -> Point2 {
+    let relative = point - frame.origin();
+    Point2::new(relative.dot(frame.x()), relative.dot(frame.y()))
+}
+
+fn frame_uv_vector(frame: &Frame, vector: Vec3) -> Vec2 {
+    Vec2::new(vector.dot(frame.x()), vector.dot(frame.y()))
+}
+
+fn line_pcurve(
+    store: &mut Store,
+    surface_frame: &Frame,
+    edge_start: Point3,
+    edge_end: Point3,
+    edge_length: f64,
+) -> Result<FinPcurve> {
+    let start = frame_uv(surface_frame, edge_start);
+    let end = frame_uv(surface_frame, edge_end);
+    let curve = store.add(Curve2dGeom::Line(Line2d::new(start, end - start)?));
+    FinPcurve::new(
+        curve,
+        ParamRange::new(0.0, edge_length),
+        ParamMap1d::identity(),
+    )
+}
 
 /// Create the standard body scaffold: a solid body with its infinite void
 /// exterior region, one solid region, and one shell owned by the solid
@@ -175,10 +203,19 @@ pub fn block(store: &mut Store, frame: &Frame, extents: [f64; 3]) -> Result<Body
             } else {
                 Sense::Reversed
             };
+            let (lo, hi) = (key.0, key.1);
+            let pcurve = line_pcurve(
+                store,
+                plane.frame(),
+                corners[lo],
+                corners[hi],
+                (corners[hi] - corners[lo]).norm(),
+            )?;
             let fin = store.add(Fin {
                 parent: lp,
                 edge,
                 sense,
+                pcurve: Some(pcurve),
             });
             store.get_mut(edge)?.fins.push(fin);
             fins.push(fin);
@@ -206,6 +243,7 @@ fn ring_boundary(
     side_face: FaceId,
     circle: Circle,
     side_sense: Sense,
+    side_v: f64,
     cap_frame: Frame,
 ) -> Result<EdgeId> {
     let curve = store.add(CurveGeom::Circle(circle));
@@ -217,6 +255,12 @@ fn ring_boundary(
         tolerance: None,
     });
 
+    let range = ParamRange::new(0.0, core::f64::consts::TAU);
+    let side_curve = store.add(Curve2dGeom::Line(Line2d::new(
+        Point2::new(0.0, side_v),
+        Vec2::new(1.0, 0.0),
+    )?));
+    let side_pcurve = FinPcurve::new(side_curve, range, ParamMap1d::identity())?;
     let side_loop: LoopId = store.add(Loop {
         face: side_face,
         fins: Vec::new(),
@@ -226,6 +270,7 @@ fn ring_boundary(
         parent: side_loop,
         edge,
         sense: side_sense,
+        pcurve: Some(side_pcurve),
     });
     store.get_mut(side_loop)?.fins.push(side_fin);
 
@@ -243,10 +288,25 @@ fn ring_boundary(
         fins: Vec::new(),
     });
     store.get_mut(cap)?.loops.push(cap_loop);
+
+    // Express the edge circle directly in the cap's parameter space. The
+    // cap frame can reverse handedness relative to the edge circle, so the
+    // affine map carries that seam-safe orientation explicitly.
+    let circle_x = frame_uv_vector(&cap_frame, circle.frame().x());
+    let circle_y = frame_uv_vector(&cap_frame, circle.frame().y());
+    let cap_curve = Circle2d::new(Point2::new(0.0, 0.0), circle.radius(), circle_x)?;
+    let map = if circle_y.dot(cap_curve.x_dir().perp()) >= 0.0 {
+        ParamMap1d::identity()
+    } else {
+        ParamMap1d::affine(-1.0, core::f64::consts::TAU)?
+    };
+    let cap_curve = store.add(Curve2dGeom::Circle(cap_curve));
+    let cap_pcurve = FinPcurve::new(cap_curve, range, map)?;
     let cap_fin = store.add(Fin {
         parent: cap_loop,
         edge,
         sense: side_sense.flipped(),
+        pcurve: Some(cap_pcurve),
     });
     store.get_mut(cap_loop)?.fins.push(cap_fin);
 
@@ -288,9 +348,18 @@ pub fn cylinder(store: &mut Store, frame: &Frame, radius: f64, height: f64) -> R
         side,
         bottom_circle,
         Sense::Forward,
+        0.0,
         bottom_cap,
     )?;
-    ring_boundary(store, shell, side, top_circle, Sense::Reversed, top_cap)?;
+    ring_boundary(
+        store,
+        shell,
+        side,
+        top_circle,
+        Sense::Reversed,
+        height,
+        top_cap,
+    )?;
     Ok(body)
 }
 
@@ -363,8 +432,18 @@ pub fn cone(
     } else {
         (Sense::Reversed, Sense::Forward)
     };
-    ring_boundary(store, shell, side, bottom_circle, bottom_sense, bottom_cap)?;
-    ring_boundary(store, shell, side, top_circle, top_sense, top_cap)?;
+    let slant = (dr * dr + height * height).sqrt();
+    let top_v = if expanding { slant } else { -slant };
+    ring_boundary(
+        store,
+        shell,
+        side,
+        bottom_circle,
+        bottom_sense,
+        0.0,
+        bottom_cap,
+    )?;
+    ring_boundary(store, shell, side, top_circle, top_sense, top_v, top_cap)?;
     Ok(body)
 }
 

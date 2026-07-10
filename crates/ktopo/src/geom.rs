@@ -6,8 +6,49 @@
 //! analytic classes must round-trip *as themselves*, never as NURBS.
 
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
+use kgeom::curve2d::{Circle2d, Curve2d, Line2d, NurbsCurve2d};
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
+
+/// An attached parameter-space curve used by one or more fins.
+#[derive(Debug, Clone)]
+pub enum Curve2dGeom {
+    /// Straight line in `(u, v)` space.
+    Line(Line2d),
+    /// Circle in `(u, v)` space.
+    Circle(Circle2d),
+    /// B-spline / NURBS curve in `(u, v)` space.
+    Nurbs(NurbsCurve2d),
+}
+
+impl Curve2dGeom {
+    /// Uniform parameter-space evaluator view.
+    pub fn as_curve(&self) -> &dyn Curve2d {
+        match self {
+            Self::Line(curve) => curve,
+            Self::Circle(curve) => curve,
+            Self::Nurbs(curve) => curve,
+        }
+    }
+}
+
+impl From<Line2d> for Curve2dGeom {
+    fn from(curve: Line2d) -> Self {
+        Self::Line(curve)
+    }
+}
+
+impl From<Circle2d> for Curve2dGeom {
+    fn from(curve: Circle2d) -> Self {
+        Self::Circle(curve)
+    }
+}
+
+impl From<NurbsCurve2d> for Curve2dGeom {
+    fn from(curve: NurbsCurve2d) -> Self {
+        Self::Nurbs(curve)
+    }
+}
 
 /// An attached curve: one of the kernel's curve classes.
 #[derive(Debug, Clone)]

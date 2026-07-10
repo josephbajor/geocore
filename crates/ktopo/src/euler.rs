@@ -235,11 +235,13 @@ pub fn mev(
         parent: lp,
         edge,
         sense: Sense::Forward,
+        pcurve: None,
     });
     let fin_back = store.add(Fin {
         parent: lp,
         edge,
         sense: Sense::Reversed,
+        pcurve: None,
     });
     store.get_mut(edge)?.fins = vec![fin_out, fin_back];
     let ring = &mut store.get_mut(lp)?.fins;
@@ -397,11 +399,13 @@ pub fn mef(
         parent: lp,
         edge,
         sense: Sense::Forward,
+        pcurve: None,
     });
     let fin_new = store.add(Fin {
         parent: ring,
         edge,
         sense: Sense::Reversed,
+        pcurve: None,
     });
     store.get_mut(edge)?.fins = vec![fin_old, fin_new];
 
@@ -586,11 +590,13 @@ pub fn mekr(
         parent: outer,
         edge,
         sense: Sense::Forward,
+        pcurve: None,
     });
     let fin_back = store.add(Fin {
         parent: outer,
         edge,
         sense: Sense::Reversed,
+        pcurve: None,
     });
     store.get_mut(edge)?.fins = vec![fin_out, fin_back];
 

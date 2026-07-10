@@ -13,6 +13,7 @@
 //! - [`vec`], [`frame`], [`aabb`], [`param`] — math types shared by all of L1+.
 //! - [`curve`] — the [`curve::Curve`] evaluator trait and analytic curves
 //!   (line, circle, ellipse).
+//! - [`curve2d`] — the parameter-space curve protocol used by B-rep pcurves.
 //! - [`surface`] — the [`surface::Surface`] evaluator trait and analytic
 //!   surfaces (plane, cylinder, cone, sphere, torus).
 //! - [`nurbs`] — B-spline/NURBS engine (basis, evaluation, knot operations,
@@ -31,6 +32,7 @@
 pub mod aabb;
 pub mod conformance;
 pub mod curve;
+pub mod curve2d;
 pub mod frame;
 pub mod nurbs;
 pub mod param;
