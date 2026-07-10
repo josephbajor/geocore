@@ -10,7 +10,8 @@
 //! **exact**: analytic classes are never converted to NURBS.
 //!
 //! Module map:
-//! - [`vec`], [`frame`], [`aabb`], [`param`] — math types shared by all of L1+.
+//! - [`vec`], [`frame`], [`aabb`], [`bvh`], [`param`] — math and deterministic
+//!   spatial-index types shared by all of L1+.
 //! - [`curve`] — the [`curve::Curve`] evaluator trait and analytic curves
 //!   (line, circle, ellipse).
 //! - [`curve2d`] — the parameter-space curve protocol used by B-rep pcurves.
@@ -30,6 +31,7 @@
 //! re-verified empirically against Parasolid during M3 (XT interchange).
 
 pub mod aabb;
+pub mod bvh;
 pub mod conformance;
 pub mod curve;
 pub mod curve2d;

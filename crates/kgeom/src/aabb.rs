@@ -35,6 +35,16 @@ impl Aabb3 {
         self.min.x > self.max.x || self.min.y > self.max.y || self.min.z > self.max.z
     }
 
+    /// True if all six bounds are finite.
+    pub fn is_finite(self) -> bool {
+        self.min.x.is_finite()
+            && self.min.y.is_finite()
+            && self.min.z.is_finite()
+            && self.max.x.is_finite()
+            && self.max.y.is_finite()
+            && self.max.z.is_finite()
+    }
+
     /// Smallest box containing `self` and `p`.
     pub fn including(self, p: Vec3) -> Self {
         Aabb3 {
@@ -71,16 +81,18 @@ impl Aabb3 {
             && other.min.z <= self.max.z
     }
 
-    /// Box grown outward by `margin` on every side.
+    /// Box grown by `margin` on every side with outward-rounded bounds.
     pub fn inflated(self, margin: f64) -> Self {
         debug_assert!(margin >= 0.0);
-        if self.is_empty() {
+        if self.is_empty() || margin == 0.0 {
             return self;
         }
         let m = Vec3::new(margin, margin, margin);
+        let min = self.min - m;
+        let max = self.max + m;
         Aabb3 {
-            min: self.min - m,
-            max: self.max + m,
+            min: Vec3::new(min.x.next_down(), min.y.next_down(), min.z.next_down()),
+            max: Vec3::new(max.x.next_up(), max.y.next_up(), max.z.next_up()),
         }
     }
 }
@@ -134,16 +146,18 @@ impl Aabb2 {
         self.min.x <= p.x && p.x <= self.max.x && self.min.y <= p.y && p.y <= self.max.y
     }
 
-    /// Box grown outward by `margin` on every side.
+    /// Box grown by `margin` on every side with outward-rounded bounds.
     pub fn inflated(self, margin: f64) -> Self {
         debug_assert!(margin >= 0.0);
-        if self.is_empty() {
+        if self.is_empty() || margin == 0.0 {
             return self;
         }
         let amount = Vec2::new(margin, margin);
+        let min = self.min - amount;
+        let max = self.max + amount;
         Self {
-            min: self.min - amount,
-            max: self.max + amount,
+            min: Vec2::new(min.x.next_down(), min.y.next_down()),
+            max: Vec2::new(max.x.next_up(), max.y.next_up()),
         }
     }
 }
@@ -175,6 +189,8 @@ mod tests {
         assert!(b.intersects(c));
         let d = Aabb3::from_point(Vec3::new(5.0, 5.0, 5.0));
         assert!(!b.intersects(d));
+        assert!(b.is_finite());
+        assert!(!Aabb3::empty().is_finite());
     }
 
     #[test]
@@ -182,6 +198,7 @@ mod tests {
         let b = Aabb3::from_point(Vec3::new(1.0, 1.0, 1.0)).inflated(0.5);
         assert!(b.contains(Vec3::new(0.6, 1.4, 1.0)));
         assert!(!b.contains(Vec3::new(0.4, 1.0, 1.0)));
+        assert_eq!(b.inflated(0.0), b);
 
         let b = Aabb2::from_points(&[Vec2::new(1.0, 1.0)]).inflated(0.5);
         assert!(b.contains(Vec2::new(0.6, 1.4)));

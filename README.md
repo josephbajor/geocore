@@ -107,8 +107,10 @@ parametric CAD application; feature history and regeneration are later layers.
   loops/tangencies, and SSI results do not yet carry paired pcurves with verified
   whole-branch error bounds. Exact homogeneous NURBS surface splitting/restriction,
   deterministic tensor-product Bezier patch extraction, and conservative active-patch
-  control-net boxes have landed as the first certified-subdivision substrate; patch BVHs,
-  exclusion predicates, and completion-bearing intersection traversal remain.
+  control-net boxes now feed a reusable deterministic AABB BVH. Outward-rounded distance
+  padding and interval-certified plane/control-hull exclusion can prove broad-phase and
+  plane misses without sampling. Generic implicit-surface exclusion, adaptive candidate
+  isolation, and completion-bearing intersection traversal remain.
 - M5-M8 are not started: there are no end-to-end booleans, general sweeps/sewing,
   blends/offsets/shelling, stable C API, or production hardening yet.
 

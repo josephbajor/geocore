@@ -28,8 +28,10 @@ mod knots;
 mod ncurve;
 mod nsurface;
 pub(crate) mod ops;
+mod patch_bvh;
 
 pub use fit::interpolate;
 pub use knots::KnotVector;
 pub use ncurve::NurbsCurve;
 pub use nsurface::NurbsSurface;
+pub use patch_bvh::{NurbsSurfaceBvh, PlanePatchRelation};

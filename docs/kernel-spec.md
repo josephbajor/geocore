@@ -225,14 +225,18 @@ Kernels fail on tolerances and intersections, not on data structures. Policy:
    as Parasolid does, or real-world imported geometry will be unusable. Every operation
    that enlarges tolerance declares an aggregate transaction-owned budget; exhaustion is
    a typed failure, and rollback discards both model changes and recorded consumption.
-3. Differential testing: every modeling op runs against oracles — Open CASCADE (open
+3. Spatial broad phases are deterministic and conservative: finite primitives enter
+   balanced AABB hierarchies, tolerance padding rounds outward, and a candidate is
+   excluded only by control-hull, interval, or exact-predicate evidence covering its
+   complete domain. A clean sample is never a proven miss.
+4. Differential testing: every modeling op runs against oracles — Open CASCADE (open
    source) and actual Parasolid via Solid Edge Community Edition batch import/export —
    over a growing corpus of real XT files. Disagreements are triaged into bugs or
    documented semantic differences.
-4. Property-based testing and fuzzing: Euler invariants after every Euler-op sequence;
+5. Property-based testing and fuzzing: Euler invariants after every Euler-op sequence;
    volume conservation across boolean partitions (vol(A) = vol(A∩B) + vol(A−B) within
    certified bounds); checker-clean outputs; XT fuzzing on the parser.
-5. Every fixed bug becomes a corpus file. The corpus is the kernel's real asset.
+6. Every fixed bug becomes a corpus file. The corpus is the kernel's real asset.
 
 ## 6. Key design decisions (proposed)
 

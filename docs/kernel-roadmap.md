@@ -82,7 +82,7 @@ proof-bearing contracts. Work therefore advances through these gates in order:
 | Order | Delivery tranche | Required result | What it unlocks |
 |---|---|---|---|
 | 1 | Close M2.5 topology contracts | Production seam/pole/apex interchange fixtures; operation-specific rules over the landed tolerance provenance/budgets; multi-body performance baselines for the landed incremental affected-root index; and discharge the remaining checker-v2 `Full` proof gaps with adaptive incidence, curved-loop/multi-loop containment, and shell proofs. Full-active-interval face-domain containment, private/checked mutation, transaction lineage, affected-root selection, and per-body incremental indexing are landed. | A B-rep that intersections and features can modify without inventing representation rules mid-boolean. |
-| 2 | Build the M4 proof substrate | Geometry-graph descriptors for procedural/intersection curves; conservative patch BVHs and exclusion over the landed exact NURBS surface splitting/Bezier extraction; a common `Complete`/`Indeterminate` result carrying paired pcurves and residual bounds. | Certified general CC/CS/SSI and trustworthy empty results. |
+| 2 | Build the M4 proof substrate | Geometry-graph descriptors for procedural/intersection curves; generic implicit-surface exclusion and adaptive isolation over the landed exact NURBS patch BVH and affine-plane interval certificate; a common `Complete`/`Indeterminate` result carrying paired pcurves and residual bounds. | Certified general CC/CS/SSI and trustworthy empty results. |
 | 3 | Ship one end-to-end feature ladder | Profile-region builder with holes, deterministic body copy/transform, extrude/revolve, point-on-face and point-in-body classification, then block/block and block/cylinder booleans. Every result is atomic, journaled, checker-v2 clean, and externally X_T checked. | The first honest CAD modeling vertical slice. |
 | 4 | Broaden general modeling | Expand analytic booleans, then periodic NURBS booleans, sweep/loft, sewing/healing, and STEP. | General mechanical part construction and imported-body repair. |
 | 5 | Add local/advanced features | Fillet/blend, chamfer, offset, shell, draft/taper, replace/delete-and-heal, then production API and performance hardening. | The operation breadth expected by a fully featured CAD application. |
@@ -145,16 +145,19 @@ surfaces; exact analytic patch boxes; rational and polynomial clamped NURBS eval
 homogeneous 2D/3D curve and tensor-product surface knot insertion/refinement/splitting;
 exact active-subcurve/sub-surface restriction and conservative control-hull/net boxes;
 deterministic curve-segment and surface-patch Bezier extraction; global curve
-interpolation; multi-start projection; deterministic trimmed-face
+interpolation; a reusable balanced deterministic AABB hierarchy with conservative
+distance queries; interval-certified NURBS patch/plane control-hull exclusion;
+multi-start projection; deterministic trimmed-face
 tessellation; and explicit `AlgorithmLimit` failures when refinement cannot meet its
 request.
 
 ### Debt and delivery point
 
-- **Before M4 certified general intersections:** Hierarchical BVHs and certified exclusion
-  over the landed Bezier patch extraction/subdivision, bounding/refinement support for
-  periodic and unclamped forms, evaluator conditioning/singularity information, and
-  projection APIs that distinguish converged, indeterminate, and failed searches.
+- **Before M4 certified general intersections:** Extend the landed patch BVH and affine
+  plane interval certificate to generic implicit-surface exclusion and adaptive candidate
+  isolation; add bounding/refinement support for periodic and unclamped forms, evaluator
+  conditioning/singularity information, and projection APIs that distinguish converged,
+  indeterminate, and failed searches.
 - **Before M3 production Tier 2 / M6:** periodic NURBS curves and surfaces, collapsed
   patch detection, degree elevation, knot removal, approximation and fitting with
   verified error, and derivative/iso-curve construction.
@@ -602,8 +605,11 @@ intersection curve.
   bound over the entire active interval—not only endpoint UVs.
 - Represent coincident curve intervals and coincident surface regions separately from
   isolated contacts and ordinary branches.
-- Add NURBS-to-Bezier subdivision, convex-hull/AABB and interval exclusion, deterministic
-  BVHs, candidate isolation, safeguarded Newton polishing, and conditioning diagnostics.
+- Landed substrate: NURBS-to-Bezier surface subdivision, positive-weight control-hull
+  boxes, a reusable deterministic AABB BVH with outward-rounded separation queries, and
+  interval-certified affine-plane patch exclusion. Extend it to generic curve/surface
+  pairing, implicit-surface interval exclusion, adaptive candidate isolation,
+  safeguarded Newton polishing, and conditioning diagnostics.
 - Analytic special cases and the generic solver feed the same canonical result type.
 
 ### M4b — Curve/curve and curve/surface completion
@@ -770,9 +776,9 @@ ledger and include an adversarial regression that distinguishes `Invalid`,
    self-intersection/orientation adaptively.
 4. Add the geometry graph and redesign intersection results around completion evidence,
    paired pcurves, coincident regions, singular events, and verified residual bounds.
-5. Build conservative patch BVHs and certified exclusion over the landed exact NURBS
-   surface Bezier extraction/subdivision; keep analytic cases as accelerators of the same
-   result contract.
+5. Extend the landed deterministic NURBS patch BVH and affine-plane interval exclusion to
+   generic implicit-surface certificates and adaptive candidate isolation; keep analytic
+   cases as accelerators of the same result contract.
 6. Extend the landed simple planar profile to regions with holes/curve loops, then ship
    checked copy/transform, extrude/revolve, and the classifiers needed by a narrow M5a
    boolean vertical slice.

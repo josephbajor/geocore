@@ -47,6 +47,14 @@ impl NurbsSurface {
                 reason: "control net size does not match knot vectors",
             });
         }
+        if points
+            .iter()
+            .any(|point| !point.x.is_finite() || !point.y.is_finite() || !point.z.is_finite())
+        {
+            return Err(Error::InvalidGeometry {
+                reason: "surface control points must be finite",
+            });
+        }
         if let Some(w) = &weights {
             if w.len() != points.len() {
                 return Err(Error::InvalidGeometry {
@@ -863,5 +871,10 @@ mod tests {
         let mut w = vec![1.0; 9];
         w[4] = -0.5;
         assert!(NurbsSurface::new(2, 2, k.clone(), k, pts, Some(w)).is_err());
+
+        let mut non_finite = vec![Point3::new(0.0, 0.0, 0.0); 9];
+        non_finite[4].z = f64::NAN;
+        let k = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        assert!(NurbsSurface::new(2, 2, k.clone(), k, non_finite, None).is_err());
     }
 }
