@@ -1,7 +1,7 @@
 //! JSON-lines corpus inspector for XT parse/reconstruct/check/tess stages.
 
 use ktopo::btess::{TessOptions, tessellate_body};
-use ktopo::check::check_body;
+use ktopo::check::{CheckLevel, CheckOutcome, check_body_report};
 use ktopo::store::Store;
 use kxt::parse::{Value, XtFile};
 use kxt::schema::code;
@@ -130,9 +130,12 @@ fn failed_row(
          \"stages\":{{\"parse\":{},\"reconstruct\":\"not_run\",\
          \"checker\":\"not_run\",\"tessellate\":\"not_run\"}},\
          \"reconstructed_bodies\":0,\"checker_faults\":0,\"triangles\":0,\
-         \"checker_fault_kinds\":{},\"capability\":{},\"failed_stage\":{},\"error\":{}}}",
+         \"checker_fault_kinds\":{},\"full_checker_outcome\":\"not_run\",\
+         \"full_checker_gaps\":0,\"full_checker_gap_kinds\":{},\
+         \"capability\":{},\"failed_stage\":{},\"error\":{}}}",
         json_string(&path.display().to_string()),
         json_string(status),
+        "{}",
         "{}",
         capability_json(capability),
         json_string(stage),
@@ -177,7 +180,9 @@ fn inspect(path: &Path) -> (String, bool) {
                  \"reconstruct\":{},\"checker\":\"not_run\",\
                  \"tessellate\":\"not_run\"}},\"reconstructed_bodies\":0,\
                  \"checker_faults\":0,\"triangles\":0,\"checker_fault_kinds\":{},\
-                 \"capability\":{},\"failed_stage\":\"reconstruct\",\
+                 \"full_checker_outcome\":\"not_run\",\"full_checker_gaps\":0,\
+                 \"full_checker_gap_kinds\":{},\"capability\":{},\
+                 \"failed_stage\":\"reconstruct\",\
                  \"error\":{}}}",
                 json_string(&path.display().to_string()),
                 bytes.len(),
@@ -185,6 +190,7 @@ fn inspect(path: &Path) -> (String, bool) {
                 file.nodes.len(),
                 feature_json(&found),
                 json_string(error_stage(&error)),
+                "{}",
                 "{}",
                 capability_json(error.capability()),
                 json_string(&error.to_string()),
@@ -195,14 +201,25 @@ fn inspect(path: &Path) -> (String, bool) {
 
     let mut checker_faults = 0usize;
     let mut checker_fault_kinds = BTreeMap::new();
+    let mut full_checker_outcome = CheckOutcome::Valid;
+    let mut full_checker_gaps = 0usize;
+    let mut full_checker_gap_kinds = BTreeMap::new();
     let mut checker_error = None;
     for &body in &reconstruction.bodies {
-        match check_body(&store, body) {
-            Ok(faults) => {
-                checker_faults += faults.len();
-                for fault in faults {
+        match check_body_report(&store, body, CheckLevel::Full) {
+            Ok(report) => {
+                full_checker_outcome =
+                    combine_check_outcomes(full_checker_outcome, report.outcome());
+                checker_faults += report.faults.len();
+                for fault in report.faults {
                     *checker_fault_kinds
                         .entry(format!("{:?}", fault.kind))
+                        .or_insert(0usize) += 1;
+                }
+                full_checker_gaps += report.gaps.len();
+                for gap in report.gaps {
+                    *full_checker_gap_kinds
+                        .entry(format!("{:?}", gap.kind))
                         .or_insert(0usize) += 1;
                 }
             }
@@ -251,6 +268,11 @@ fn inspect(path: &Path) -> (String, bool) {
         "pass"
     };
     let success = checker_pass && tessellation_error.is_none();
+    let full_checker_outcome_name = if checker_error.is_some() {
+        "error"
+    } else {
+        check_outcome_name(full_checker_outcome)
+    };
     let error = checker_error.or(tessellation_error);
     let failed_stage = if checker_faults != 0 || error.is_some() {
         if checker_pass {
@@ -267,7 +289,9 @@ fn inspect(path: &Path) -> (String, bool) {
              \"features\":{},\"stages\":{{\"parse\":\"pass\",\
              \"reconstruct\":\"pass\",\"checker\":{},\"tessellate\":{}}},\
              \"reconstructed_bodies\":{},\"checker_faults\":{},\"triangles\":{},\
-             \"checker_fault_kinds\":{},\"capability\":null,\"failed_stage\":{},\"error\":{}}}",
+             \"checker_fault_kinds\":{},\"full_checker_outcome\":{},\
+             \"full_checker_gaps\":{},\"full_checker_gap_kinds\":{},\
+             \"capability\":null,\"failed_stage\":{},\"error\":{}}}",
             json_string(&path.display().to_string()),
             bytes.len(),
             json_string(&file.schema),
@@ -279,6 +303,9 @@ fn inspect(path: &Path) -> (String, bool) {
             checker_faults,
             triangles,
             count_json(&checker_fault_kinds),
+            json_string(full_checker_outcome_name),
+            full_checker_gaps,
+            count_json(&full_checker_gap_kinds),
             json_string(failed_stage),
             error
                 .as_deref()
@@ -286,6 +313,24 @@ fn inspect(path: &Path) -> (String, bool) {
         ),
         success,
     )
+}
+
+fn combine_check_outcomes(left: CheckOutcome, right: CheckOutcome) -> CheckOutcome {
+    match (left, right) {
+        (CheckOutcome::Invalid, _) | (_, CheckOutcome::Invalid) => CheckOutcome::Invalid,
+        (CheckOutcome::Indeterminate, _) | (_, CheckOutcome::Indeterminate) => {
+            CheckOutcome::Indeterminate
+        }
+        (CheckOutcome::Valid, CheckOutcome::Valid) => CheckOutcome::Valid,
+    }
+}
+
+fn check_outcome_name(outcome: CheckOutcome) -> &'static str {
+    match outcome {
+        CheckOutcome::Valid => "valid",
+        CheckOutcome::Invalid => "invalid",
+        CheckOutcome::Indeterminate => "indeterminate",
+    }
 }
 
 fn count_json(counts: &BTreeMap<String, usize>) -> String {

@@ -28,11 +28,27 @@ parametric CAD application; feature history and regeneration are later layers.
   Euler creation, bounded curve-less tolerant edges, pcurve-driven body tessellation,
   conforming finite 2D B-curve X_T SP-curve slices, and the first explicit face-domain/
   tolerance propagation slice have landed. X_T import now derives certified conservative
-  work domains for exact-edge plane/cylinder/cone faces without sampling. Pcurve-only
-  tolerant trim bounds, seam/pole/apex metadata, operation caller migration, a procedural
-  geometry graph, operation-wide transaction/journal adoption, partition history,
-  enforced topology mutation, richer errors/tolerance rules, and checker v2 must still
-  land before booleans.
+  work domains for exact-edge and pcurve-bounded tolerant plane/cylinder/cone faces
+  without sampling, while rejecting incompatible periodic branches as unknown. Per-fin
+  integer-period charts now select branches without duplicating pcurve geometry, and the
+  checker enforces chart validity plus actual pcurve-endpoint containment. Closed-use
+  winding and singular endpoint markers are explicit and checker-validated; X_T SP-curve
+  import infers singular markers. Paired lower/upper seam roles are checker-validated and
+  exercised by a cylindrical-sheet primitive that remains checker-clean and tessellates
+  through X_T round-trip. Exact-fin seam metadata itself is not reconstructed yet.
+  The checker now has explicit `Fast` and `Full` reports: `Fast` preserves the current
+  structural/sampled gate, while `Full` returns `Valid`, `Invalid`, or `Indeterminate`
+  and, for Fast-clean bodies, enumerates every proof obligation the current
+  implementation cannot discharge.
+  The X_T corpus inspector records both the Fast gate and Full outcome/gap categories.
+  A first whole-interval proof slice now certifies exact affine and harmonic incidence:
+  all stored curves on planes, cylinder generators/sections, sphere
+  sections, and matching analytic pcurve lifts on plane and revolved surfaces.
+  Adaptive full-curve containment, production seam/pole/apex interchange fixtures,
+  operation caller migration, a procedural geometry graph, operation-wide transaction/
+  journal adoption, partition history, enforced topology mutation, richer errors/
+  tolerance rules, and the adaptive proofs behind checker v2 must still land before
+  booleans.
 - M3 is in progress: modern base-13006 schema edit scripts, text/neutral-binary
   reading, atomic reconstruction, and analytic text writing are implemented.
   X_T reconstruction now uses the same copy-on-write transaction mechanism instead of a

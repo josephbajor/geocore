@@ -7,8 +7,11 @@ use kgeom::param::ParamRange;
 use kgeom::vec::{Point2, Vec2};
 use ktopo::btess::{TessOptions, check_watertight, tessellate_body};
 use ktopo::check::{FaultKind, check_body};
-use ktopo::entity::{EdgeId, EntityRef, FinPcurve, ParamMap1d};
-use ktopo::geom::Curve2dGeom;
+use ktopo::domain::derive_face_domain;
+use ktopo::entity::{
+    BodyId, EdgeId, EntityRef, FinId, FinPcurve, ParamMap1d, PcurveChart, SeamSide,
+};
+use ktopo::geom::{Curve2dGeom, SurfaceGeom};
 use ktopo::make::{block, cone, cylinder};
 use ktopo::store::Store;
 
@@ -32,6 +35,34 @@ fn make_first_edge_curveless_tolerant(store: &mut Store, body: ktopo::entity::Bo
     edge_id
 }
 
+fn seamed_cylinder_sheet(store: &mut Store) -> (BodyId, FinId, FinId) {
+    let body = ktopo::make::cylindrical_sheet(store, &Frame::world(), 1.0, 2.0).unwrap();
+    let seam_edge = store
+        .edges_of_body(body)
+        .unwrap()
+        .into_iter()
+        .find(|&edge| store.get(edge).unwrap().fins.len() == 2)
+        .unwrap();
+    let fins = store.get(seam_edge).unwrap().fins.clone();
+    let by_side = |side| {
+        fins.iter()
+            .copied()
+            .find(|&fin| {
+                store
+                    .get(fin)
+                    .unwrap()
+                    .pcurve
+                    .unwrap()
+                    .seam()
+                    .unwrap()
+                    .side()
+                    == side
+            })
+            .unwrap()
+    };
+    (body, by_side(SeamSide::Upper), by_side(SeamSide::Lower))
+}
+
 #[test]
 fn authored_primitives_carry_checker_verified_pcurves() {
     let mut store = Store::new();
@@ -53,6 +84,32 @@ fn authored_primitives_carry_checker_verified_pcurves() {
             }
         }
     }
+}
+
+#[test]
+fn paired_seam_roles_define_a_checker_clean_cylindrical_sheet() {
+    let mut store = Store::new();
+    let (body, upper, lower) = seamed_cylinder_sheet(&mut store);
+    let faults = check_body(&store, body).unwrap();
+    assert!(faults.is_empty(), "seamed cylinder faults: {faults:?}");
+
+    let mesh = tessellate_body(
+        &store,
+        body,
+        &TessOptions {
+            chord_tol: 1e-3,
+            max_edge_len: Some(0.25),
+        },
+    )
+    .unwrap();
+    assert!(!mesh.triangles.is_empty());
+
+    let use_ = store.get(upper).unwrap().pcurve.unwrap();
+    store.get_mut(upper).unwrap().pcurve = Some(use_.without_seam());
+    let faults = check_body(&store, body).unwrap();
+    assert!(faults.iter().any(|fault| {
+        fault.entity == EntityRef::Fin(lower) && fault.kind == FaultKind::BadPcurveSeam
+    }));
 }
 
 #[test]
@@ -87,6 +144,90 @@ fn checker_rejects_a_parameter_map_that_does_not_cover_the_edge() {
     assert!(faults.iter().any(|fault| {
         fault.entity == ktopo::entity::EntityRef::Fin(fin_id)
             && fault.kind == FaultKind::BadPcurveRange
+    }));
+}
+
+#[test]
+fn checker_rejects_a_chart_shift_on_a_non_periodic_surface() {
+    let mut store = Store::new();
+    let body = block(&mut store, &Frame::world(), [2.0, 2.0, 2.0]).unwrap();
+    let edge = store.edges_of_body(body).unwrap()[0];
+    let fin_id = store.get(edge).unwrap().fins[0];
+    let use_ = store.get(fin_id).unwrap().pcurve.unwrap();
+    store.get_mut(fin_id).unwrap().pcurve = Some(use_.with_chart(PcurveChart::shifted([1, 0])));
+
+    let faults = check_body(&store, body).unwrap();
+    assert!(faults.iter().any(|fault| {
+        fault.entity == EntityRef::Fin(fin_id) && fault.kind == FaultKind::BadPcurveChart
+    }));
+}
+
+#[test]
+fn checker_requires_the_face_domain_to_match_periodic_charts() {
+    let mut store = Store::new();
+    let body = cylinder(&mut store, &Frame::world(), 1.0, 2.0).unwrap();
+    let side = store
+        .faces_of_body(body)
+        .unwrap()
+        .into_iter()
+        .find(|&face| {
+            matches!(
+                store.get(store.get(face).unwrap().surface).unwrap(),
+                SurfaceGeom::Cylinder(_)
+            )
+        })
+        .unwrap();
+    let loops = store.get(side).unwrap().loops.clone();
+    let first_fin = store.get(loops[0]).unwrap().fins[0];
+    let use_ = store.get(first_fin).unwrap().pcurve.unwrap();
+    store.get_mut(first_fin).unwrap().pcurve = Some(use_.with_chart(PcurveChart::shifted([1, 0])));
+
+    let faults = check_body(&store, body).unwrap();
+    assert!(faults.iter().any(|fault| {
+        fault.entity == EntityRef::Face(side)
+            && fault.kind == FaultKind::FaceDomainMissesPcurveEndpoint
+    }));
+
+    for loop_id in loops {
+        let fins = store.get(loop_id).unwrap().fins.clone();
+        for fin in fins {
+            let use_ = store.get(fin).unwrap().pcurve.unwrap();
+            store.get_mut(fin).unwrap().pcurve =
+                Some(use_.with_chart(PcurveChart::shifted([1, 0])));
+        }
+    }
+    let domain = derive_face_domain(&store, side).unwrap();
+    store.get_mut(side).unwrap().domain = domain;
+    assert!(check_body(&store, body).unwrap().is_empty());
+}
+
+#[test]
+fn checker_validates_explicit_ring_winding() {
+    let mut store = Store::new();
+    let body = cylinder(&mut store, &Frame::world(), 1.0, 2.0).unwrap();
+    let edge = store.edges_of_body(body).unwrap()[0];
+    let side_fin = store
+        .get(edge)
+        .unwrap()
+        .fins
+        .iter()
+        .copied()
+        .find(|&fin| {
+            let loop_id = store.get(fin).unwrap().parent;
+            let face = store.get(loop_id).unwrap().face;
+            matches!(
+                store.get(store.get(face).unwrap().surface).unwrap(),
+                SurfaceGeom::Cylinder(_)
+            )
+        })
+        .unwrap();
+    let use_ = store.get(side_fin).unwrap().pcurve.unwrap();
+    assert_eq!(use_.closure_winding(), Some([1, 0]));
+    store.get_mut(side_fin).unwrap().pcurve = Some(use_.with_closure_winding([0, 0]));
+
+    let faults = check_body(&store, body).unwrap();
+    assert!(faults.iter().any(|fault| {
+        fault.entity == EntityRef::Fin(side_fin) && fault.kind == FaultKind::BadPcurveClosure
     }));
 }
 

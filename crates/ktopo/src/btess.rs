@@ -248,18 +248,11 @@ struct FaceUse<'a> {
 impl FaceUse<'_> {
     fn uv_at(&self, edge_parameter: f64, point: Point3) -> Result<Vec2> {
         match self.pcurve {
-            Some((geometry, use_)) => {
-                let uv = geometry
-                    .as_curve()
-                    .eval(use_.parameter_at_edge(edge_parameter));
-                if uv.x.is_finite() && uv.y.is_finite() {
-                    Ok(uv)
-                } else {
-                    Err(Error::InvalidGeometry {
-                        reason: "pcurve evaluated to a non-finite parameter-space point",
-                    })
-                }
-            }
+            Some((geometry, use_)) => use_.evaluate_uv(
+                geometry.as_curve(),
+                edge_parameter,
+                self.surface.as_surface().periodicity(),
+            ),
             None => invert_uv(self.surface, point),
         }
     }
@@ -571,6 +564,7 @@ struct RawUvSample {
 struct RawUvChain {
     samples: Vec<RawUvSample>,
     close: RawUvSample,
+    declared_winding: Option<[i64; 2]>,
 }
 
 fn fin_sample_uv(
@@ -582,17 +576,8 @@ fn fin_sample_uv(
 ) -> Result<Vec2> {
     match fin.pcurve {
         Some(use_) => {
-            let uv = store
-                .get(use_.curve())?
-                .as_curve()
-                .eval(use_.parameter_at_edge(sample.parameter));
-            if uv.x.is_finite() && uv.y.is_finite() {
-                Ok(uv)
-            } else {
-                Err(Error::InvalidGeometry {
-                    reason: "pcurve evaluated to a non-finite parameter-space point",
-                })
-            }
+            let curve = store.get(use_.curve())?.as_curve();
+            use_.evaluate_uv(curve, sample.parameter, sg.as_surface().periodicity())
         }
         None => invert_uv(sg, acc.pos(sample.vertex)),
     }
@@ -619,6 +604,21 @@ fn loop_chain(
     }
     let mut chain = Vec::new();
     let mut close = None;
+    let declared_winding = if fins.len() == 1 {
+        let fin = store.get(fins[0])?;
+        fin.pcurve
+            .and_then(|use_| use_.closure_winding())
+            .map(|winding| {
+                let sign = if fin.sense.is_forward() != reverse {
+                    1_i64
+                } else {
+                    -1_i64
+                };
+                [i64::from(winding[0]) * sign, i64::from(winding[1]) * sign]
+            })
+    } else {
+        None
+    };
     let ordered: Vec<_> = if reverse {
         fins.iter().rev().copied().collect()
     } else {
@@ -671,6 +671,7 @@ fn loop_chain(
     Ok(RawUvChain {
         samples: chain,
         close,
+        declared_winding,
     })
 }
 
@@ -695,6 +696,14 @@ fn chain_uv(sg: &SurfaceGeom, raw: RawUvChain) -> Result<UvChain> {
         wind(close_uv.x - uvs[0].x, per[0]),
         wind(close_uv.y - uvs[0].y, per[1]),
     ];
+    if raw
+        .declared_winding
+        .is_some_and(|declared| declared != winding)
+    {
+        return Err(Error::InvalidGeometry {
+            reason: "declared pcurve closure winding disagrees with tessellation chain",
+        });
+    }
     Ok(UvChain {
         ids,
         uvs,
@@ -1543,11 +1552,10 @@ pub fn tessellate_body(store: &Store, body: BodyId, opts: &TessOptions) -> Resul
 mod tests {
     use super::*;
     use crate::check::check_body;
-    use crate::entity::{Face, Fin, Loop, ShellId};
-    use crate::geom::{Curve2dGeom, CurveGeom};
+    use crate::entity::{Face, Fin, Loop, PcurveChart, ShellId};
+    use crate::geom::CurveGeom;
     use crate::make::{block, cylinder, solid_body_scaffold};
     use kgeom::curve::Circle;
-    use kgeom::curve2d::Line2d;
     use kgeom::frame::Frame;
     use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Torus};
     use kgeom::vec::Vec3;
@@ -1576,18 +1584,22 @@ mod tests {
         let surface_id = store.get(side).unwrap().surface;
         let lp = store.get(side).unwrap().loops[0];
         let fin_id = store.get(lp).unwrap().fins[0];
-        let use_ = store.get(fin_id).unwrap().pcurve.unwrap();
-        let line = match store.get(use_.curve()).unwrap() {
-            Curve2dGeom::Line(line) => *line,
-            _ => panic!("cylinder side pcurve must be a line"),
-        };
         let tau = core::f64::consts::TAU;
-        *store.get_mut(use_.curve()).unwrap() = Curve2dGeom::Line(
-            Line2d::new(line.origin() + Vec2::new(tau, 0.0), line.dir()).unwrap(),
-        );
+        let loops = store.get(side).unwrap().loops.clone();
+        for loop_id in loops {
+            let fins = store.get(loop_id).unwrap().fins.clone();
+            for fin in fins {
+                let use_ = store.get(fin).unwrap().pcurve.unwrap();
+                store.get_mut(fin).unwrap().pcurve =
+                    Some(use_.with_chart(PcurveChart::shifted([1, 0])));
+            }
+        }
+        let domain = crate::domain::derive_face_domain(&store, side).unwrap();
+        store.get_mut(side).unwrap().domain = domain;
 
-        // A whole-period branch shift lifts to the same cylinder and stays
-        // checker-clean, but it is observably distinct from 3D inversion.
+        // A whole-period chart shift lifts to the same cylinder and stays
+        // checker-clean without duplicating pcurve geometry, but it is
+        // observably distinct from 3D inversion.
         assert!(check_body(&store, body).unwrap().is_empty());
         let fin = store.get(fin_id).unwrap();
         let edge = store.get(fin.edge).unwrap();

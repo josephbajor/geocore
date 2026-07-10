@@ -27,8 +27,9 @@
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use kcore::arena::Handle;
 use kcore::error::{Error, Result};
+use kgeom::curve2d::Curve2d;
 use kgeom::param::ParamRange;
-use kgeom::vec::Point3;
+use kgeom::vec::{Point2, Point3};
 
 /// Handle to a [`Body`].
 pub type BodyId = Handle<Body>;
@@ -259,6 +260,127 @@ pub struct ParamMap1d {
     offset: f64,
 }
 
+/// Integer branch selection for a pcurve on a periodic surface.
+///
+/// Pcurve geometry remains reusable in its authored coordinates. For each
+/// periodic surface direction, the corresponding integer adds whole periods
+/// before the UV is consumed. A nonzero shift in a non-periodic direction is
+/// invalid and is rejected by checked incidence consumers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct PcurveChart {
+    period_shifts: [i32; 2],
+}
+
+/// Topological meaning of one pcurve endpoint in increasing edge-parameter
+/// direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum PcurveEndpointKind {
+    /// An ordinary endpoint where the supporting surface is regular.
+    #[default]
+    Regular,
+    /// The endpoint lies on a degenerate surface iso-line (sphere pole,
+    /// cone apex, or an equivalent procedural singularity).
+    SurfaceSingularity,
+}
+
+/// One of the two surface-parameter directions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SurfaceParameter {
+    /// First surface parameter (`u`).
+    U,
+    /// Second surface parameter (`v`).
+    V,
+}
+
+/// Which boundary of a full-period face chart represents a seam use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SeamSide {
+    /// Lower bound of the face domain in the seam direction.
+    Lower,
+    /// Upper bound of the face domain in the seam direction.
+    Upper,
+}
+
+/// Explicit role of a pcurve that lies on a periodic face-chart cut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PcurveSeam {
+    direction: SurfaceParameter,
+    side: SeamSide,
+}
+
+impl PcurveSeam {
+    /// Declare a lower/upper seam use in one surface direction.
+    pub const fn new(direction: SurfaceParameter, side: SeamSide) -> Self {
+        Self { direction, side }
+    }
+
+    /// Periodic surface direction containing the chart cut.
+    pub const fn direction(self) -> SurfaceParameter {
+        self.direction
+    }
+
+    /// Lower or upper boundary of the face chart.
+    pub const fn side(self) -> SeamSide {
+        self.side
+    }
+}
+
+impl PcurveChart {
+    /// The authored pcurve branch, with no period translation.
+    pub const fn identity() -> Self {
+        Self {
+            period_shifts: [0, 0],
+        }
+    }
+
+    /// Select branches by integer period shifts in surface `(u, v)`.
+    pub const fn shifted(period_shifts: [i32; 2]) -> Self {
+        Self { period_shifts }
+    }
+
+    /// Integer period shifts in surface `(u, v)`.
+    pub const fn period_shifts(self) -> [i32; 2] {
+        self.period_shifts
+    }
+
+    /// Whether the authored pcurve branch is used unchanged.
+    pub const fn is_identity(self) -> bool {
+        self.period_shifts[0] == 0 && self.period_shifts[1] == 0
+    }
+
+    /// Translate `uv` onto this chart using the surface periods.
+    pub fn apply(self, mut uv: Point2, periods: [Option<f64>; 2]) -> Result<Point2> {
+        for (direction, period) in periods.into_iter().enumerate() {
+            let shift = self.period_shifts[direction];
+            if shift == 0 {
+                continue;
+            }
+            let Some(period) = period else {
+                return Err(Error::InvalidGeometry {
+                    reason: "pcurve chart shifts a non-periodic surface direction",
+                });
+            };
+            if !period.is_finite() || period <= 0.0 {
+                return Err(Error::InvalidGeometry {
+                    reason: "pcurve chart references an invalid surface period",
+                });
+            }
+            let delta = f64::from(shift) * period;
+            if direction == 0 {
+                uv.x += delta;
+            } else {
+                uv.y += delta;
+            }
+        }
+        if !uv.x.is_finite() || !uv.y.is_finite() {
+            return Err(Error::InvalidGeometry {
+                reason: "pcurve chart produced non-finite surface parameters",
+            });
+        }
+        Ok(uv)
+    }
+}
+
 impl ParamMap1d {
     /// Identity correspondence.
     pub const fn identity() -> Self {
@@ -318,6 +440,10 @@ pub struct FinPcurve {
     curve: Curve2dId,
     range: ParamRange,
     edge_to_pcurve: ParamMap1d,
+    chart: PcurveChart,
+    endpoint_kinds: [PcurveEndpointKind; 2],
+    closure_winding: Option<[i32; 2]>,
+    seam: Option<PcurveSeam>,
 }
 
 impl FinPcurve {
@@ -332,6 +458,10 @@ impl FinPcurve {
             curve,
             range,
             edge_to_pcurve,
+            chart: PcurveChart::identity(),
+            endpoint_kinds: [PcurveEndpointKind::Regular; 2],
+            closure_winding: None,
+            seam: None,
         })
     }
 
@@ -350,6 +480,64 @@ impl FinPcurve {
         self.edge_to_pcurve
     }
 
+    /// Select an explicit integer-period chart for this fin use.
+    ///
+    /// Validation that nonzero shifts correspond to periodic surface
+    /// directions occurs when the use is attached to a face.
+    pub const fn with_chart(mut self, chart: PcurveChart) -> Self {
+        self.chart = chart;
+        self
+    }
+
+    /// Explicit periodic chart selection for this fin use.
+    pub const fn chart(self) -> PcurveChart {
+        self.chart
+    }
+
+    /// Mark endpoint semantics in increasing edge-parameter direction.
+    pub const fn with_endpoint_kinds(mut self, endpoint_kinds: [PcurveEndpointKind; 2]) -> Self {
+        self.endpoint_kinds = endpoint_kinds;
+        self
+    }
+
+    /// Endpoint semantics in increasing edge-parameter direction.
+    pub const fn endpoint_kinds(self) -> [PcurveEndpointKind; 2] {
+        self.endpoint_kinds
+    }
+
+    /// Declare the whole-period displacement of a closed pcurve use in
+    /// increasing edge-parameter direction.
+    ///
+    /// This metadata is meaningful only for a ring edge or an edge whose
+    /// start and end vertex are the same. Checked incidence rejects it on an
+    /// open edge.
+    pub const fn with_closure_winding(mut self, winding: [i32; 2]) -> Self {
+        self.closure_winding = Some(winding);
+        self
+    }
+
+    /// Declared whole-period displacement of a closed use, if explicit.
+    pub const fn closure_winding(self) -> Option<[i32; 2]> {
+        self.closure_winding
+    }
+
+    /// Declare this use to lie on one side of a periodic face-chart seam.
+    pub const fn with_seam(mut self, seam: PcurveSeam) -> Self {
+        self.seam = Some(seam);
+        self
+    }
+
+    /// Remove an explicit seam role while preserving other use metadata.
+    pub const fn without_seam(mut self) -> Self {
+        self.seam = None;
+        self
+    }
+
+    /// Explicit periodic seam role, if any.
+    pub const fn seam(self) -> Option<PcurveSeam> {
+        self.seam
+    }
+
     /// Pcurve parameter direction relative to the edge direction.
     pub fn sense(self) -> Sense {
         self.edge_to_pcurve.sense()
@@ -358,6 +546,17 @@ impl FinPcurve {
     /// Evaluate the pcurve parameter corresponding to an edge parameter.
     pub fn parameter_at_edge(self, edge_parameter: f64) -> f64 {
         self.edge_to_pcurve.map(edge_parameter)
+    }
+
+    /// Evaluate this use in its selected surface chart.
+    pub fn evaluate_uv(
+        self,
+        curve: &dyn Curve2d,
+        edge_parameter: f64,
+        periods: [Option<f64>; 2],
+    ) -> Result<Point2> {
+        self.chart
+            .apply(curve.eval(self.parameter_at_edge(edge_parameter)), periods)
     }
 }
 
@@ -469,5 +668,27 @@ mod tests {
         let domain = FaceDomain::natural(&sphere).unwrap();
         assert_eq!(domain.u.width(), core::f64::consts::TAU);
         assert_eq!(domain.v.width(), core::f64::consts::PI);
+    }
+
+    #[test]
+    fn pcurve_chart_applies_only_valid_period_shifts() {
+        let uv = Point2::new(0.25, -0.5);
+        assert_eq!(
+            PcurveChart::identity()
+                .apply(uv, [Some(2.0), None])
+                .unwrap(),
+            uv
+        );
+        assert_eq!(
+            PcurveChart::shifted([2, 0])
+                .apply(uv, [Some(3.0), None])
+                .unwrap(),
+            Point2::new(6.25, -0.5)
+        );
+        assert!(
+            PcurveChart::shifted([0, 1])
+                .apply(uv, [Some(3.0), None])
+                .is_err()
+        );
     }
 }

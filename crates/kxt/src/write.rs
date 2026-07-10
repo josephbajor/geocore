@@ -1562,6 +1562,12 @@ fn pcurve_nurbs(store: &Store, fin_id: FinId) -> Result<NurbsCurve2d> {
     let use_: FinPcurve = store.get(fin_id)?.pcurve.ok_or(XtError::InvalidModel {
         what: "curve-less tolerant edge fin has no pcurve",
     })?;
+    if !use_.chart().is_identity() || use_.seam().is_some() {
+        return Err(XtError::Unsupported {
+            capability: XtCapability::PeriodicPcurves,
+            what: "explicit periodic chart or seam metadata on tolerant fin pcurves",
+        });
+    }
     match store.get(use_.curve())? {
         Curve2dGeom::Line(line) => {
             let range = use_.range();

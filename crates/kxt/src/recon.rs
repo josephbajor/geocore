@@ -36,16 +36,16 @@ use crate::schema::code;
 use kcore::math;
 use kcore::tolerance::LINEAR_RESOLUTION;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
-use kgeom::curve2d::NurbsCurve2d;
+use kgeom::curve2d::{Curve2d, NurbsCurve2d};
 use kgeom::frame::Frame;
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::param::{ParamRange, wrap_periodic};
-use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Torus};
+use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 use kgeom::vec::{Point2, Point3, Vec3};
 use ktopo::entity::{
     Body, BodyId, BodyKind, Curve2dId, CurveId, Edge, EdgeId, Face, FaceDomain, FaceId, Fin,
-    FinPcurve, Loop, ParamMap1d, Region, RegionId, RegionKind, Sense, Shell, ShellId, SurfaceId,
-    Vertex, VertexId,
+    FinPcurve, Loop, ParamMap1d, PcurveEndpointKind, Region, RegionId, RegionKind, Sense, Shell,
+    ShellId, SurfaceId, Vertex, VertexId,
 };
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::store::Store;
@@ -765,8 +765,10 @@ impl Recon<'_> {
                 what: "TRIMMED_CURVE points do not match its SP-curve parameters",
             });
         }
+        let endpoint_kinds = infer_pcurve_endpoint_kinds(surface, curve, map, [t0, t1]);
         let use_ = FinPcurve::new(pcurve, ParamRange::new(p1.min(p2), p1.max(p2)), map)
-            .map_err(XtError::Kernel)?;
+            .map_err(XtError::Kernel)?
+            .with_endpoint_kinds(endpoint_kinds);
         Ok(Some(use_))
     }
 
@@ -1185,6 +1187,29 @@ fn edge_bounds(
     }
 }
 
+fn infer_pcurve_endpoint_kinds(
+    surface: &dyn Surface,
+    curve: &dyn Curve2d,
+    map: ParamMap1d,
+    edge_parameters: [f64; 2],
+) -> [PcurveEndpointKind; 2] {
+    edge_parameters.map(|t| {
+        let uv = curve.eval(map.map(t));
+        if surface.degeneracies().iter().any(|degeneracy| {
+            let value = match degeneracy.dir {
+                kgeom::surface::Dir::U => uv.x,
+                kgeom::surface::Dir::V => uv.y,
+            };
+            let slack = 256.0 * f64::EPSILON * (1.0 + value.abs().max(degeneracy.at.abs()));
+            (value - degeneracy.at).abs() <= slack
+        }) {
+            PcurveEndpointKind::SurfaceSingularity
+        } else {
+            PcurveEndpointKind::Regular
+        }
+    })
+}
+
 /// Make `(t0, t1)` increasing on a periodic curve, unwrapping past the
 /// seam; coincident endpoints mean a full-period closed edge.
 fn unwrap_interval(t0: f64, t1: f64, period: f64) -> (f64, f64) {
@@ -1194,6 +1219,8 @@ fn unwrap_interval(t0: f64, t1: f64, period: f64) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kgeom::curve2d::Line2d;
+    use kgeom::vec::Vec2;
 
     #[test]
     fn unwrap_interval_handles_seam_and_closure() {
@@ -1206,6 +1233,25 @@ mod tests {
         let (a, b) = unwrap_interval(0.5, 0.5, tau);
         assert_eq!(a, 0.5);
         assert!((b - (0.5 + tau)).abs() < 1e-15);
+    }
+
+    #[test]
+    fn imported_pcurve_endpoints_infer_surface_singularities() {
+        let surface = Sphere::new(Frame::world(), 1.0).unwrap();
+        let curve = Line2d::new(Point2::new(0.0, 0.0), Vec2::new(0.0, 1.0)).unwrap();
+        let kinds = infer_pcurve_endpoint_kinds(
+            &surface,
+            &curve,
+            ParamMap1d::identity(),
+            [0.0, core::f64::consts::FRAC_PI_2],
+        );
+        assert_eq!(
+            kinds,
+            [
+                PcurveEndpointKind::Regular,
+                PcurveEndpointKind::SurfaceSingularity
+            ]
+        );
     }
 
     #[test]

@@ -10,13 +10,16 @@
 //!   closed by definition).
 //! - [`sphere`], [`torus`]: a single face with **zero loops** covering the
 //!   closed surface — no edges, no vertices.
+//! - [`cylindrical_sheet`]: a full-period cylindrical face whose shared
+//!   longitudinal edge has explicit paired lower/upper seam roles.
 //!
 //! Full cones running to the apex (a degenerate vertex-only boundary) are
 //! deferred; [`cone`] builds frustums with two positive radii.
 
 use crate::entity::{
     Body, BodyId, BodyKind, Edge, EdgeId, Face, FaceDomain, FaceId, Fin, FinPcurve, Loop, LoopId,
-    ParamMap1d, Region, RegionKind, Sense, Shell, ShellId, Vertex, VertexId,
+    ParamMap1d, PcurveChart, PcurveSeam, Region, RegionKind, SeamSide, Sense, Shell, ShellId,
+    SurfaceParameter, Vertex, VertexId,
 };
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use crate::store::Store;
@@ -281,7 +284,8 @@ fn ring_boundary(
         Point2::new(0.0, side_v),
         Vec2::new(1.0, 0.0),
     )?));
-    let side_pcurve = FinPcurve::new(side_curve, range, ParamMap1d::identity())?;
+    let side_pcurve =
+        FinPcurve::new(side_curve, range, ParamMap1d::identity())?.with_closure_winding([1, 0]);
     let side_loop: LoopId = store.add(Loop {
         face: side_face,
         fins: Vec::new(),
@@ -329,7 +333,7 @@ fn ring_boundary(
         ParamMap1d::affine(-1.0, core::f64::consts::TAU)?
     };
     let cap_curve = store.add(Curve2dGeom::Circle(cap_curve));
-    let cap_pcurve = FinPcurve::new(cap_curve, range, map)?;
+    let cap_pcurve = FinPcurve::new(cap_curve, range, map)?.with_closure_winding([0, 0]);
     let cap_fin = store.add(Fin {
         parent: cap_loop,
         edge,
@@ -395,6 +399,150 @@ pub fn cylinder(store: &mut Store, frame: &Frame, radius: f64, height: f64) -> R
         height,
         top_cap,
     )?;
+    Ok(body)
+}
+
+/// Create a full-period cylindrical sheet with an explicit longitudinal
+/// seam, extending from `frame.origin()` through `height * frame.z()`.
+///
+/// The seam is one shared 3D edge used twice by the same face. Its two fins
+/// carry complementary lower/upper [`PcurveSeam`] roles; the upper use
+/// selects the next integer-period chart without duplicating pcurve
+/// geometry. The circular boundaries are bounded closed edges so they can
+/// participate in the four-fin chart-boundary loop.
+pub fn cylindrical_sheet(
+    store: &mut Store,
+    frame: &Frame,
+    radius: f64,
+    height: f64,
+) -> Result<BodyId> {
+    let radius = positive_dimension(radius, "cylindrical sheet radius")?;
+    let height = positive_dimension(height, "cylindrical sheet height")?;
+    let tau = core::f64::consts::TAU;
+
+    let body = store.add(Body {
+        kind: BodyKind::Sheet,
+        regions: Vec::new(),
+    });
+    let region = store.add(Region {
+        body,
+        kind: RegionKind::Void,
+        shells: Vec::new(),
+    });
+    store.get_mut(body)?.regions.push(region);
+    let shell = store.add(Shell {
+        region,
+        faces: Vec::new(),
+        edges: Vec::new(),
+        vertex: None,
+    });
+    store.get_mut(region)?.shells.push(shell);
+
+    let surface = store.add(SurfaceGeom::Cylinder(Cylinder::new(*frame, radius)?));
+    let face = store.add(Face {
+        shell,
+        loops: Vec::new(),
+        surface,
+        sense: Sense::Forward,
+        domain: Some(FaceDomain::from_bounds(0.0, tau, 0.0, height)?),
+        tolerance: None,
+    });
+    store.get_mut(shell)?.faces.push(face);
+    let loop_id = store.add(Loop {
+        face,
+        fins: Vec::new(),
+    });
+    store.get_mut(face)?.loops.push(loop_id);
+
+    let bottom = frame.origin() + frame.x() * radius;
+    let top_origin = frame.origin() + frame.z() * height;
+    let top = top_origin + frame.x() * radius;
+    let vertices = [bottom, top].map(|position| {
+        let point = store.add(position);
+        store.add(Vertex {
+            point,
+            tolerance: None,
+        })
+    });
+    let seam_curve = store.add(CurveGeom::Line(Line::new(bottom, frame.z())?));
+    let seam_edge = store.add(Edge {
+        curve: Some(seam_curve),
+        vertices: [Some(vertices[0]), Some(vertices[1])],
+        bounds: Some((0.0, height)),
+        fins: Vec::new(),
+        tolerance: None,
+    });
+    let bottom_curve = store.add(CurveGeom::Circle(Circle::new(*frame, radius)?));
+    let bottom_edge = store.add(Edge {
+        curve: Some(bottom_curve),
+        vertices: [Some(vertices[0]), Some(vertices[0])],
+        bounds: Some((0.0, tau)),
+        fins: Vec::new(),
+        tolerance: None,
+    });
+    let top_frame = Frame::new(top_origin, frame.z(), frame.x())?;
+    let top_curve = store.add(CurveGeom::Circle(Circle::new(top_frame, radius)?));
+    let top_edge = store.add(Edge {
+        curve: Some(top_curve),
+        vertices: [Some(vertices[1]), Some(vertices[1])],
+        bounds: Some((0.0, tau)),
+        fins: Vec::new(),
+        tolerance: None,
+    });
+
+    let horizontal = |store: &mut Store, v: f64| -> Result<_> {
+        Ok(store.add(Curve2dGeom::Line(Line2d::new(
+            Point2::new(0.0, v),
+            Vec2::new(1.0, 0.0),
+        )?)))
+    };
+    let vertical = |store: &mut Store| -> Result<_> {
+        Ok(store.add(Curve2dGeom::Line(Line2d::new(
+            Point2::new(0.0, 0.0),
+            Vec2::new(0.0, 1.0),
+        )?)))
+    };
+    let bottom_pcurve = FinPcurve::new(
+        horizontal(store, 0.0)?,
+        ParamRange::new(0.0, tau),
+        ParamMap1d::identity(),
+    )?
+    .with_closure_winding([1, 0]);
+    let seam_upper = FinPcurve::new(
+        vertical(store)?,
+        ParamRange::new(0.0, height),
+        ParamMap1d::identity(),
+    )?
+    .with_chart(PcurveChart::shifted([1, 0]))
+    .with_seam(PcurveSeam::new(SurfaceParameter::U, SeamSide::Upper));
+    let top_pcurve = FinPcurve::new(
+        horizontal(store, height)?,
+        ParamRange::new(0.0, tau),
+        ParamMap1d::identity(),
+    )?
+    .with_closure_winding([1, 0]);
+    let seam_lower = FinPcurve::new(
+        vertical(store)?,
+        ParamRange::new(0.0, height),
+        ParamMap1d::identity(),
+    )?
+    .with_seam(PcurveSeam::new(SurfaceParameter::U, SeamSide::Lower));
+
+    for (edge, sense, pcurve) in [
+        (bottom_edge, Sense::Forward, bottom_pcurve),
+        (seam_edge, Sense::Forward, seam_upper),
+        (top_edge, Sense::Reversed, top_pcurve),
+        (seam_edge, Sense::Reversed, seam_lower),
+    ] {
+        let fin = store.add(Fin {
+            parent: loop_id,
+            edge,
+            sense,
+            pcurve: Some(pcurve),
+        });
+        store.get_mut(edge)?.fins.push(fin);
+        store.get_mut(loop_id)?.fins.push(fin);
+    }
     Ok(body)
 }
 
@@ -549,6 +697,8 @@ pub fn torus(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::btess::{TessOptions, tessellate_body};
+    use crate::check::check_body;
     use crate::entity::{Edge, Face, Fin, Loop, Region, Shell, Vertex};
     use kgeom::curve::Curve;
     use kgeom::surface::Surface;
@@ -674,6 +824,56 @@ mod tests {
             let mut store = Store::new();
             let body = cylinder(&mut store, &frame, 1.5, 4.0).unwrap();
             assert_revolved_frustum_shape(&store, body);
+        }
+    }
+
+    #[test]
+    fn cylindrical_sheet_has_paired_seam_roles() {
+        for frame in [Frame::world(), tilted()] {
+            let mut store = Store::new();
+            let body = cylindrical_sheet(&mut store, &frame, 1.5, 4.0).unwrap();
+            let faults = check_body(&store, body).unwrap();
+            assert!(faults.is_empty(), "cylindrical sheet faults: {faults:?}");
+            assert_eq!(store.faces_of_body(body).unwrap().len(), 1);
+            assert_eq!(store.edges_of_body(body).unwrap().len(), 3);
+            assert_eq!(store.vertices_of_body(body).unwrap().len(), 2);
+            let seam_edge = store
+                .edges_of_body(body)
+                .unwrap()
+                .into_iter()
+                .find(|&edge| store.get(edge).unwrap().fins.len() == 2)
+                .unwrap();
+            let mut sides: Vec<_> = store
+                .get(seam_edge)
+                .unwrap()
+                .fins
+                .iter()
+                .map(|&fin| {
+                    store
+                        .get(fin)
+                        .unwrap()
+                        .pcurve
+                        .unwrap()
+                        .seam()
+                        .unwrap()
+                        .side()
+                })
+                .collect();
+            sides.sort_by_key(|side| match side {
+                SeamSide::Lower => 0,
+                SeamSide::Upper => 1,
+            });
+            assert_eq!(sides, vec![SeamSide::Lower, SeamSide::Upper]);
+            let mesh = tessellate_body(
+                &store,
+                body,
+                &TessOptions {
+                    chord_tol: 1e-2,
+                    max_edge_len: Some(0.5),
+                },
+            )
+            .unwrap();
+            assert!(!mesh.triangles.is_empty());
         }
     }
 

@@ -18,6 +18,8 @@ struct Entry {
     checker: String,
     tessellate: String,
     checker_faults: usize,
+    full_checker_outcome: String,
+    full_checker_gaps: usize,
     capability: String,
 }
 
@@ -29,14 +31,14 @@ fn manifest() -> Vec<Entry> {
     let text = std::fs::read_to_string(fixture_dir().join("manifest.tsv")).unwrap();
     let mut lines = text.lines();
     let header = lines.next().unwrap();
-    assert_eq!(header.split('\t').count(), 16);
+    assert_eq!(header.split('\t').count(), 18);
     lines
         .enumerate()
         .map(|(line_number, line)| {
             let columns: Vec<_> = line.split('\t').collect();
             assert_eq!(
                 columns.len(),
-                16,
+                18,
                 "manifest line {} has wrong column count",
                 line_number + 2
             );
@@ -57,7 +59,9 @@ fn manifest() -> Vec<Entry> {
                 checker: columns[11].to_owned(),
                 tessellate: columns[12].to_owned(),
                 checker_faults: columns[13].parse().unwrap(),
-                capability: columns[14].to_owned(),
+                full_checker_outcome: columns[14].to_owned(),
+                full_checker_gaps: columns[15].parse().unwrap(),
+                capability: columns[16].to_owned(),
             }
         })
         .collect()
@@ -168,6 +172,22 @@ fn observed_corpus_stages_match_the_non_shrinking_manifest() {
         );
         assert!(
             row.contains(&format!("\"checker_faults\":{}", entry.checker_faults)),
+            "{}: {row}",
+            entry.file
+        );
+        assert!(
+            row.contains(&format!(
+                "\"full_checker_outcome\":\"{}\"",
+                entry.full_checker_outcome
+            )),
+            "{}: {row}",
+            entry.file
+        );
+        assert!(
+            row.contains(&format!(
+                "\"full_checker_gaps\":{}",
+                entry.full_checker_gaps
+            )),
             "{}: {row}",
             entry.file
         );

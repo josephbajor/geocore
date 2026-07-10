@@ -38,7 +38,7 @@ pub enum XtCapability {
     PeriodicNurbsCurves,
     /// Periodic NURBS surface realization or writing.
     PeriodicNurbsSurfaces,
-    /// Periodic parameter-space NURBS curve realization.
+    /// Periodic parameter-space geometry, explicit charts, or seam roles.
     PeriodicPcurves,
     /// Apple/lemon self-intersecting torus realization.
     SelfIntersectingTori,

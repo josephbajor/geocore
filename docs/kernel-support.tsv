@@ -5,11 +5,11 @@ geometry.analytic	geometry	Analytic curves and surfaces	implemented_slice	M1	cra
 geometry.nurbs	geometry	NURBS evaluation and construction	implemented_slice	M1	crates/kgeom/src/nurbs	Periodic forms surface Bezier extraction and verified approximation
 geometry.procedural_graph	geometry	Procedural and intersection geometry graph	not_started	M2.5	-	Define acyclic descriptors and evaluation context
 topology.brep	topology	Handle-based B-rep hierarchy and Euler operators	implemented_slice	M2	crates/ktopo/src/entity.rs;crates/ktopo/src/euler.rs	Private checked mutation boundary and general bodies
-topology.pcurves	topology	Independent per-fin pcurves and tolerant edges	implemented_slice	M2.5	crates/ktopo/src/entity.rs;crates/ktopo/tests/pcurves.rs	Mandatory creation seam charts and singular endpoints
-topology.face_domains	topology	Conservative finite face work domains	implemented_slice	M2.5	crates/ktopo/src/domain.rs;crates/kxt/tests/read.rs	Pcurve-only bounds containment proof and tolerance provenance
+topology.pcurves	topology	Independent pcurves tolerant edges periodic charts paired seams closure winding and singular endpoints	implemented_slice	M2.5	crates/ktopo/src/entity.rs;crates/ktopo/src/incidence.rs;crates/ktopo/tests/pcurves.rs	Mandatory creation production seam and singular fixtures and chart interchange
+topology.face_domains	topology	Conservative finite face work domains	implemented_slice	M2.5	crates/ktopo/src/domain.rs;crates/ktopo/src/check.rs;crates/kxt/tests/read.rs;crates/kxt/tests/write.rs	Adaptive full-curve containment tighter NURBS bounds and tolerance provenance
 topology.checked_api	topology	Externally enforced checked mutation API	not_started	M2.5	-	Privatize mutation and add checked body builders
-topology.checker_v2	topology	Adaptive full B-rep validation	not_started	M2.5	crates/ktopo/src/check.rs	Fast and Full modes with containment and shell proof
-modeling.primitives	modeling	Analytic solid primitives	implemented_slice	M2	crates/ktopo/src/make.rs;crates/ktopo/tests/primitives.rs	Add prism and checked builders
+topology.checker_v2	topology	Adaptive full B-rep validation	in_progress	M2.5	crates/ktopo/src/check.rs;crates/ktopo/src/domain.rs;crates/ktopo/src/incidence.rs;crates/kxt/src/bin/xt_inspect.rs	Extend incidence to NURBS then discharge loop containment and shell proof gaps
+modeling.primitives	modeling	Analytic solid and cylindrical sheet primitives	implemented_slice	M2	crates/ktopo/src/make.rs;crates/ktopo/tests/primitives.rs;crates/ktopo/tests/pcurves.rs	Add prism and checked builders
 modeling.profiles	modeling	Planar profiles with holes	not_started	M4	-	Region builder arrangements and explicit pcurves
 modeling.copy_transform	modeling	Checked geometry and body copy transform	not_started	M4	-	Ownership-safe transactional copy with lineage
 modeling.extrude_revolve	modeling	Extrude and revolve	not_started	M4	-	Build on profiles checked topology and seam metadata

@@ -103,6 +103,11 @@ impl Aabb2 {
         }
     }
 
+    /// True if no point is contained.
+    pub fn is_empty(self) -> bool {
+        self.min.x > self.max.x || self.min.y > self.max.y
+    }
+
     /// Smallest box containing `self` and `p`.
     pub fn including(self, p: Vec2) -> Self {
         Aabb2 {
@@ -114,6 +119,14 @@ impl Aabb2 {
     /// Box containing all given points.
     pub fn from_points(points: &[Vec2]) -> Self {
         points.iter().fold(Self::empty(), |bb, &p| bb.including(p))
+    }
+
+    /// Smallest box containing both boxes.
+    pub fn union(self, other: Aabb2) -> Self {
+        Aabb2 {
+            min: Vec2::new(self.min.x.min(other.min.x), self.min.y.min(other.min.y)),
+            max: Vec2::new(self.max.x.max(other.max.x), self.max.y.max(other.max.y)),
+        }
     }
 
     /// True if `p` lies inside (closed) bounds.
@@ -133,6 +146,12 @@ mod tests {
         let b = Aabb3::from_point(Vec3::new(1.0, 2.0, 3.0));
         assert_eq!(e.union(b), b);
         assert!(!e.contains(Vec3::new(0.0, 0.0, 0.0)));
+
+        let e = Aabb2::empty();
+        assert!(e.is_empty());
+        let b = Aabb2::from_points(&[Vec2::new(-1.0, 2.0), Vec2::new(3.0, 4.0)]);
+        assert_eq!(e.union(b), b);
+        assert!(!b.is_empty());
     }
 
     #[test]

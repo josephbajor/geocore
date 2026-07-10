@@ -727,6 +727,43 @@ fn all_analytic_primitives_round_trip() {
 }
 
 #[test]
+fn cylindrical_sheet_seam_topology_round_trips() {
+    let mut store = Store::new();
+    let body = make::cylindrical_sheet(&mut store, &tilted(), 1.25, 2.5).unwrap();
+    let (_text, imported, imported_body) = assert_checker_roundtrip(&store, body);
+    assert_eq!(imported.faces_of_body(imported_body).unwrap().len(), 1);
+    assert_eq!(imported.edges_of_body(imported_body).unwrap().len(), 3);
+    let seam = imported
+        .edges_of_body(imported_body)
+        .unwrap()
+        .into_iter()
+        .find(|&edge| imported.get(edge).unwrap().fins.len() == 2)
+        .unwrap();
+    let seam_faces: Vec<_> = imported
+        .get(seam)
+        .unwrap()
+        .fins
+        .iter()
+        .map(|&fin| {
+            let loop_id = imported.get(fin).unwrap().parent;
+            imported.get(loop_id).unwrap().face
+        })
+        .collect();
+    assert_eq!(seam_faces[0], seam_faces[1]);
+
+    let mesh = tessellate_body(
+        &imported,
+        imported_body,
+        &TessOptions {
+            chord_tol: 1e-3,
+            max_edge_len: Some(0.25),
+        },
+    )
+    .unwrap();
+    assert!(!mesh.triangles.is_empty());
+}
+
+#[test]
 fn non_null_face_tolerance_is_rejected_by_schema_13006_writer() {
     let mut store = Store::new();
     let body = make::block(&mut store, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
@@ -889,6 +926,11 @@ fn curve_less_tolerant_edge_round_trips_through_trimmed_sp_curves() {
     assert!(edge.fins.iter().any(|&fin| {
         let curve = imported.get(fin).unwrap().pcurve.unwrap().curve();
         matches!(imported.get(curve).unwrap(), Curve2dGeom::Nurbs(n) if n.weights().is_some())
+    }));
+    assert!(edge.fins.iter().all(|&fin| {
+        let loop_id = imported.get(fin).unwrap().parent;
+        let face = imported.get(loop_id).unwrap().face;
+        imported.get(face).unwrap().domain.is_some()
     }));
 
     let mesh = tessellate_body(

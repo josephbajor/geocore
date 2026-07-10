@@ -1,4 +1,4 @@
-//! The body checker (PK_BODY_check analog), v1.
+//! The body checker (PK_BODY_check analog).
 //!
 //! [`check_body`] walks a body and reports every violated invariant as a
 //! [`Fault`] — it never panics and never stops at the first fault, because
@@ -34,7 +34,13 @@
 //! and ≤ 2**. A block gives 8 − 12 + 6 = 2; a solid cylinder gives
 //! 0 − 0 + (0 + 1 + 1) = 2; sphere and torus bodies give 2 and 0.
 //!
-//! # v1 limits (documented deferrals)
+//! [`check_body`] is the compatibility Fast entry point. [`check_body_report`]
+//! makes assurance explicit: Full reports preserve proven faults and, once the
+//! Fast structure is clean, separately enumerate every proof obligation the
+//! current implementation cannot discharge. A clean sample is therefore never
+//! presented as Full validity.
+//!
+//! # Current Fast limits (reported as Full verification gaps)
 //!
 //! - Loop orientation is verified only on planes, cylinders, and cones
 //!   (analytic UV inversion), and only for loops that do not wind a
@@ -48,10 +54,14 @@
 
 use crate::entity::{
     Body, BodyId, BodyKind, Edge, EdgeId, EntityRef, Face, FaceId, Fin, FinId, LoopId, RegionKind,
-    ShellId, VertexId,
+    SeamSide, ShellId, VertexId,
 };
 use crate::geom::SurfaceGeom;
-use crate::incidence::{PcurveIssue, check_pcurve_incidence, check_pcurve_parameterization};
+use crate::incidence::{
+    IncidenceCertification, PcurveIssue, certify_edge_surface_incidence, certify_pcurve_incidence,
+    check_pcurve_chart, check_pcurve_incidence, check_pcurve_metadata,
+    check_pcurve_parameterization,
+};
 use crate::store::{Entity, Store};
 use kcore::arena::Handle;
 use kcore::error::Result;
@@ -116,6 +126,18 @@ pub enum FaultKind {
     /// A fin's pcurve range or edge-to-pcurve parameter correspondence is
     /// invalid for the referenced 2D/3D curves.
     BadPcurveRange,
+    /// A pcurve chart shifts a non-periodic direction or produces invalid
+    /// surface parameters.
+    BadPcurveChart,
+    /// Explicit closed-use winding does not match the pcurve endpoint
+    /// displacement or was attached to an open edge.
+    BadPcurveClosure,
+    /// A pcurve endpoint marked singular does not lie on a declared
+    /// degeneracy of its supporting surface.
+    BadPcurveSingularity,
+    /// An explicit seam role is not on a full-period chart boundary of its
+    /// supporting face.
+    BadPcurveSeam,
     /// A curve-less tolerant edge fin has no pcurve representation.
     MissingPcurve,
     /// A sampled pcurve point lifted through the face surface does not
@@ -135,6 +157,9 @@ pub enum FaultKind {
     /// non-periodic surface range, wider than one surface period, or does
     /// not cover the whole surface for a zero-loop closed face.
     BadFaceDomain,
+    /// A declared face work box does not contain an actual charted pcurve
+    /// endpoint.
+    FaceDomainMissesPcurveEndpoint,
     /// The Euler–Poincaré identity fails for a shell (see module docs).
     EulerViolation,
 }
@@ -148,11 +173,104 @@ pub struct Fault {
     pub kind: FaultKind,
 }
 
+/// Requested checker assurance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckLevel {
+    /// Structural checks plus the current bounded sampling checks.
+    Fast,
+    /// Request proof-complete validation. Any invariant that the current
+    /// checker cannot prove on a Fast-clean body is reported as a
+    /// [`VerificationGap`]. Invalid bodies return faults without attempting
+    /// downstream geometric proofs over inconsistent topology.
+    Full,
+}
+
+/// Overall checker result at the requested assurance level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckOutcome {
+    /// No fault or missing proof remains at this level.
+    Valid,
+    /// At least one violated invariant was found.
+    Invalid,
+    /// No violation was found, but one or more required proofs are absent.
+    Indeterminate,
+}
+
+/// Proof obligation not yet discharged by checker v2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum VerificationGapKind {
+    /// Edge-to-surface incidence is not covered by a whole-interval
+    /// certificate for this representation pair.
+    EdgeSurfaceIncidence,
+    /// Pcurve/edge/surface incidence is not covered by a whole-interval
+    /// certificate for this representation tuple.
+    PcurveSurfaceIncidence,
+    /// The declared UV domain cannot yet be proven to contain the complete
+    /// face boundary.
+    FaceDomainContainment,
+    /// A loop has not been proven free of self-intersection.
+    LoopSelfIntersection,
+    /// Relative containment of multiple loops has not been proven.
+    LoopContainment,
+    /// A shell has not been proven free of global self-intersection.
+    ShellSelfIntersection,
+    /// A solid shell's global outward orientation has not been proven.
+    ShellOrientation,
+    /// A wire body has not been proven free of global self-intersection.
+    WireSelfIntersection,
+}
+
+/// One missing proof attached to the smallest relevant entity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerificationGap {
+    /// Entity whose proof is incomplete.
+    pub entity: EntityRef,
+    /// Missing proof category.
+    pub kind: VerificationGapKind,
+}
+
+/// Checker findings and proof gaps at one assurance level.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckReport {
+    /// Requested assurance level.
+    pub level: CheckLevel,
+    /// Proven invariant violations.
+    pub faults: Vec<Fault>,
+    /// Proof obligations that remain unresolved.
+    pub gaps: Vec<VerificationGap>,
+}
+
+impl CheckReport {
+    /// Summarize faults and proof gaps without conflating an unknown result
+    /// with success or failure.
+    pub fn outcome(&self) -> CheckOutcome {
+        if !self.faults.is_empty() {
+            CheckOutcome::Invalid
+        } else if !self.gaps.is_empty() {
+            CheckOutcome::Indeterminate
+        } else {
+            CheckOutcome::Valid
+        }
+    }
+}
+
 /// Check a body, returning every fault found (empty = clean).
 ///
 /// Errors only if `body` itself is a stale handle; everything else —
 /// including stale references *inside* the body — is reported as faults.
 pub fn check_body(store: &Store, body: BodyId) -> Result<Vec<Fault>> {
+    Ok(check_body_report(store, body, CheckLevel::Fast)?.faults)
+}
+
+/// Check a body at an explicit assurance level.
+///
+/// A clean [`CheckLevel::Fast`] report means no current structural or
+/// sampled fault was found. Only a [`CheckLevel::Full`] report whose outcome
+/// is [`CheckOutcome::Valid`] is proof-complete; until all checker-v2
+/// obligations land, clean bodies generally return `Indeterminate` at that
+/// level.
+pub fn check_body_report(store: &Store, body: BodyId, level: CheckLevel) -> Result<CheckReport> {
     let b = store.get(body)?;
     let mut checker = Checker {
         store,
@@ -160,7 +278,102 @@ pub fn check_body(store: &Store, body: BodyId) -> Result<Vec<Fault>> {
         faults: Vec::new(),
     };
     checker.run(body, b);
-    Ok(checker.faults)
+    let gaps = if level == CheckLevel::Full && checker.faults.is_empty() {
+        collect_full_verification_gaps(store, body, b)?
+    } else {
+        Vec::new()
+    };
+    Ok(CheckReport {
+        level,
+        faults: checker.faults,
+        gaps,
+    })
+}
+
+fn collect_full_verification_gaps(
+    store: &Store,
+    body_id: BodyId,
+    body: &Body,
+) -> Result<Vec<VerificationGap>> {
+    let mut gaps = Vec::new();
+    let mut push = |entity, kind| {
+        let gap = VerificationGap { entity, kind };
+        if !gaps.contains(&gap) {
+            gaps.push(gap);
+        }
+    };
+
+    for face_id in store.faces_of_body(body_id)? {
+        let face = store.get(face_id)?;
+        if crate::domain::certify_face_domain_containment(store, face_id)?
+            != crate::domain::FaceDomainContainment::Certified
+        {
+            push(
+                EntityRef::Face(face_id),
+                VerificationGapKind::FaceDomainContainment,
+            );
+        }
+        for &loop_id in &face.loops {
+            push(
+                EntityRef::Loop(loop_id),
+                VerificationGapKind::LoopSelfIntersection,
+            );
+            for &fin_id in &store.get(loop_id)?.fins {
+                let fin = store.get(fin_id)?;
+                let edge = store.get(fin.edge)?;
+                let tolerance = edge.tolerance.unwrap_or(0.0).max(LINEAR_RESOLUTION);
+                if let Some(pcurve) = fin.pcurve {
+                    if certify_pcurve_incidence(store, fin.edge, face.surface, pcurve, tolerance)?
+                        != IncidenceCertification::Certified
+                    {
+                        push(
+                            EntityRef::Fin(fin_id),
+                            VerificationGapKind::PcurveSurfaceIncidence,
+                        );
+                    }
+                } else if certify_edge_surface_incidence(store, fin.edge, face.surface, tolerance)?
+                    != IncidenceCertification::Certified
+                {
+                    push(
+                        EntityRef::Edge(fin.edge),
+                        VerificationGapKind::EdgeSurfaceIncidence,
+                    );
+                }
+            }
+        }
+        if face.loops.len() > 1 {
+            push(
+                EntityRef::Face(face_id),
+                VerificationGapKind::LoopContainment,
+            );
+        }
+    }
+
+    if body.kind == BodyKind::Wire {
+        push(
+            EntityRef::Body(body_id),
+            VerificationGapKind::WireSelfIntersection,
+        );
+    }
+    for &region_id in &body.regions {
+        let region = store.get(region_id)?;
+        for &shell_id in &region.shells {
+            let shell = store.get(shell_id)?;
+            if !shell.faces.is_empty() {
+                push(
+                    EntityRef::Shell(shell_id),
+                    VerificationGapKind::ShellSelfIntersection,
+                );
+                if body.kind == BodyKind::Solid {
+                    push(
+                        EntityRef::Shell(shell_id),
+                        VerificationGapKind::ShellOrientation,
+                    );
+                }
+            }
+        }
+    }
+    Ok(gaps)
 }
 
 /// Number of interior samples when verifying an edge lies on its faces.
@@ -368,10 +581,15 @@ impl<'a> Checker<'a> {
         {
             self.fault(EntityRef::Face(fid), FaultKind::BadTolerance);
         }
-        if let (Some(domain), Some(surface)) = (face.domain, surface)
-            && !valid_face_domain(domain, surface)
-        {
-            self.fault(EntityRef::Face(fid), FaultKind::BadFaceDomain);
+        if let (Some(domain), Some(surface)) = (face.domain, surface) {
+            if !valid_face_domain(domain, surface) {
+                self.fault(EntityRef::Face(fid), FaultKind::BadFaceDomain);
+            } else if !face_domain_contains_pcurve_endpoints(self.store, face, domain) {
+                self.fault(
+                    EntityRef::Face(fid),
+                    FaultKind::FaceDomainMissesPcurveEndpoint,
+                );
+            }
         }
         if face.loops.is_empty()
             && !matches!(
@@ -517,12 +735,31 @@ impl<'a> Checker<'a> {
                 ),
                 Err(_) => Err(PcurveIssue::StaleReference),
             },
-            None => check_pcurve_parameterization(self.store, edge.bounds, pcurve_use),
-        };
+            None => match self.store.get(fid) {
+                Ok(face) => {
+                    check_pcurve_chart(self.store, face.surface, pcurve_use).and_then(|()| {
+                        check_pcurve_parameterization(self.store, edge.bounds, pcurve_use)
+                    })
+                }
+                Err(_) => Err(PcurveIssue::StaleReference),
+            },
+        }
+        .and_then(|()| match self.store.get(fid) {
+            Ok(face) => {
+                check_pcurve_metadata(self.store, edge, face.surface, face.domain, pcurve_use)
+            }
+            Err(_) => Err(PcurveIssue::StaleReference),
+        });
         match result {
             Ok(()) => {}
             Err(PcurveIssue::StaleReference) => self.fault(at, FaultKind::StaleReference),
             Err(PcurveIssue::BadRange) => self.fault(at, FaultKind::BadPcurveRange),
+            Err(PcurveIssue::BadChart) => self.fault(at, FaultKind::BadPcurveChart),
+            Err(PcurveIssue::BadClosure) => self.fault(at, FaultKind::BadPcurveClosure),
+            Err(PcurveIssue::BadSingularity) => {
+                self.fault(at, FaultKind::BadPcurveSingularity);
+            }
+            Err(PcurveIssue::BadSeam) => self.fault(at, FaultKind::BadPcurveSeam),
             Err(PcurveIssue::OffSurface) => self.fault(at, FaultKind::PcurveOffSurface),
         }
     }
@@ -615,6 +852,7 @@ impl<'a> Checker<'a> {
         {
             self.fault(at, FaultKind::FinsNotOpposed);
         }
+        self.check_seam_pairs(edge);
 
         if tolerant_curveless {
             self.check_tolerant_edge_geometry(eid, edge, bounds_ok);
@@ -693,6 +931,43 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn check_seam_pairs(&mut self, edge: &Edge) {
+        for &fin_id in &edge.fins {
+            let Ok(fin) = self.store.get(fin_id) else {
+                continue;
+            };
+            let Some(seam) = fin.pcurve.and_then(|use_| use_.seam()) else {
+                continue;
+            };
+            let Ok(loop_) = self.store.get(fin.parent) else {
+                continue;
+            };
+            let paired = edge.fins.iter().copied().any(|other_id| {
+                if other_id == fin_id {
+                    return false;
+                }
+                let Ok(other) = self.store.get(other_id) else {
+                    return false;
+                };
+                let Ok(other_loop) = self.store.get(other.parent) else {
+                    return false;
+                };
+                let Some(other_seam) = other.pcurve.and_then(|use_| use_.seam()) else {
+                    return false;
+                };
+                other_loop.face == loop_.face
+                    && other_seam.direction() == seam.direction()
+                    && matches!(
+                        (seam.side(), other_seam.side()),
+                        (SeamSide::Lower, SeamSide::Upper) | (SeamSide::Upper, SeamSide::Lower)
+                    )
+            });
+            if !paired {
+                self.fault(EntityRef::Fin(fin_id), FaultKind::BadPcurveSeam);
+            }
+        }
+    }
+
     fn check_tolerant_edge_geometry(&mut self, eid: EdgeId, edge: &Edge, bounds_ok: bool) {
         if !bounds_ok {
             return;
@@ -731,7 +1006,9 @@ impl<'a> Checker<'a> {
             let t = t0 + (t1 - t0) * (i as f64) / ((EDGE_SAMPLES - 1) as f64);
             let mut reference = None;
             for &(fin_id, pcurve_use, pcurve, surface) in &uses {
-                let uv = pcurve.eval(pcurve_use.parameter_at_edge(t));
+                let Ok(uv) = pcurve_use.evaluate_uv(pcurve, t, surface.periodicity()) else {
+                    continue;
+                };
                 let p = surface.eval([uv.x, uv.y]);
                 if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite())
                     || p.x.abs() > SIZE_BOX_HALF
@@ -875,7 +1152,9 @@ impl<'a> Checker<'a> {
                 let (mut u, v) = match fin.pcurve {
                     Some(pcurve_use) => {
                         let curve = self.store.get(pcurve_use.curve()).ok()?.as_curve();
-                        let uv = curve.eval(pcurve_use.parameter_at_edge(t));
+                        let uv = pcurve_use
+                            .evaluate_uv(curve, t, sg.as_surface().periodicity())
+                            .ok()?;
                         (uv.x, uv.y)
                     }
                     None => invert_uv(sg, c.eval(t))?,
@@ -979,6 +1258,50 @@ fn valid_face_domain(domain: crate::entity::FaceDomain, surface: &SurfaceGeom) -
         .all(|((domain, natural), period)| valid_domain_range(domain, natural, period))
 }
 
+fn face_domain_contains_pcurve_endpoints(
+    store: &Store,
+    face: &crate::entity::Face,
+    domain: crate::entity::FaceDomain,
+) -> bool {
+    let Ok(surface) = store.get(face.surface) else {
+        return true;
+    };
+    let periods = surface.as_surface().periodicity();
+    for &loop_id in &face.loops {
+        let Ok(loop_) = store.get(loop_id) else {
+            continue;
+        };
+        for &fin_id in &loop_.fins {
+            let Ok(fin) = store.get(fin_id) else {
+                continue;
+            };
+            let Some(use_) = fin.pcurve else { continue };
+            let Ok(curve) = store.get(use_.curve()) else {
+                continue;
+            };
+            for q in [use_.range().lo, use_.range().hi] {
+                let Ok(uv) = use_.chart().apply(curve.as_curve().eval(q), periods) else {
+                    continue;
+                };
+                if !domain_contains_uv(domain, [uv.x, uv.y]) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+fn domain_contains_uv(domain: crate::entity::FaceDomain, uv: [f64; 2]) -> bool {
+    range_contains_value(domain.u, uv[0]) && range_contains_value(domain.v, uv[1])
+}
+
+fn range_contains_value(range: ParamRange, value: f64) -> bool {
+    let epsilon =
+        256.0 * f64::EPSILON * (1.0 + range.lo.abs().max(range.hi.abs()).max(value.abs()));
+    value >= range.lo - epsilon && value <= range.hi + epsilon
+}
+
 fn valid_domain_range(domain: ParamRange, natural: ParamRange, period: Option<f64>) -> bool {
     let scale = domain
         .lo
@@ -1077,7 +1400,7 @@ mod tests {
     use super::*;
     use crate::entity::{Body, Edge, Face, Fin, Loop, Region, Sense, Shell, Vertex};
     use crate::geom::CurveGeom;
-    use crate::make::{block, solid_body_scaffold};
+    use crate::make::{block, cone, cylinder, cylindrical_sheet, solid_body_scaffold};
     use kgeom::curve::{Circle, Line};
     use kgeom::frame::Frame;
     use kgeom::surface::{Cylinder, Plane, Sphere};
@@ -1284,6 +1607,76 @@ mod tests {
         .unwrap();
         let tilted = block(&mut store, &frame, [1.0, 2.0, 0.5]).unwrap();
         assert_eq!(check_body(&store, tilted).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn explicit_check_levels_do_not_conflate_clean_with_proven() {
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        let fast = check_body_report(&store, body, CheckLevel::Fast).unwrap();
+        assert_eq!(fast.outcome(), CheckOutcome::Valid);
+        assert!(fast.faults.is_empty() && fast.gaps.is_empty());
+
+        let full = check_body_report(&store, body, CheckLevel::Full).unwrap();
+        assert_eq!(full.outcome(), CheckOutcome::Indeterminate);
+        assert!(full.faults.is_empty());
+        assert!(!full.gaps.is_empty());
+        assert!(
+            full.gaps
+                .iter()
+                .all(|gap| gap.kind != VerificationGapKind::FaceDomainContainment),
+            "authored block pcurve boxes certify its face domains"
+        );
+
+        let face = store.faces_of_body(body).unwrap()[0];
+        store.get_mut(face).unwrap().domain = None;
+        let full = check_body_report(&store, body, CheckLevel::Full).unwrap();
+        assert!(full.gaps.iter().any(|gap| {
+            gap.entity == EntityRef::Face(face)
+                && gap.kind == VerificationGapKind::FaceDomainContainment
+        }));
+
+        store.get_mut(body).unwrap().regions.clear();
+        let invalid = check_body_report(&store, body, CheckLevel::Full).unwrap();
+        assert_eq!(invalid.outcome(), CheckOutcome::Invalid);
+        assert!(
+            invalid.gaps.is_empty(),
+            "faults take precedence over proof gaps"
+        );
+    }
+
+    #[test]
+    fn full_checker_discharges_supported_analytic_incidence() {
+        let mut store = Store::new();
+        let frame = Frame::new(
+            Point3::new(0.3, -1.2, 2.1),
+            Vec3::new(1.0, 2.0, 3.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap();
+        let bodies = [
+            block(&mut store, &frame, [1.0, 2.0, 0.5]).unwrap(),
+            cylinder(&mut store, &frame, 1.2, 2.5).unwrap(),
+            cone(&mut store, &frame, 1.3, 0.7, 2.0).unwrap(),
+            cylindrical_sheet(&mut store, &frame, 0.8, 1.5).unwrap(),
+            cylinder_body(&mut store),
+            sheet_square(&mut store),
+        ];
+
+        for body in bodies {
+            let report = check_body_report(&store, body, CheckLevel::Full).unwrap();
+            assert_eq!(report.outcome(), CheckOutcome::Indeterminate);
+            assert!(report.faults.is_empty());
+            assert!(
+                report.gaps.iter().all(|gap| !matches!(
+                    gap.kind,
+                    VerificationGapKind::EdgeSurfaceIncidence
+                        | VerificationGapKind::PcurveSurfaceIncidence
+                )),
+                "supported analytic incidence remained unresolved: {:?}",
+                report.gaps
+            );
+        }
     }
 
     #[test]

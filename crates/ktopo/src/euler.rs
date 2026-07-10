@@ -116,6 +116,18 @@ fn pcurve_error(issue: PcurveIssue) -> Error {
         PcurveIssue::BadRange => Error::InvalidGeometry {
             reason: "Euler pcurve range does not cover the new edge parameter interval",
         },
+        PcurveIssue::BadChart => Error::InvalidGeometry {
+            reason: "Euler pcurve chart is invalid for the destination surface",
+        },
+        PcurveIssue::BadClosure => Error::InvalidGeometry {
+            reason: "Euler pcurve closure winding is invalid",
+        },
+        PcurveIssue::BadSingularity => Error::InvalidGeometry {
+            reason: "Euler pcurve singular endpoint metadata is invalid",
+        },
+        PcurveIssue::BadSeam => Error::InvalidGeometry {
+            reason: "Euler pcurve seam metadata is invalid",
+        },
         PcurveIssue::OffSurface => Error::InvalidGeometry {
             reason: "Euler pcurve does not lift to the new 3D edge on its face surface",
         },

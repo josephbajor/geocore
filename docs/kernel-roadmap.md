@@ -62,8 +62,8 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 |---|---|---|
 | M0 Foundations | IMPLEMENTED SLICE | Deterministic math, current predicates, intervals, tolerances, arenas with copy-on-write undo frames, and deterministic map primitives exist; conformance debt remains. |
 | M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS basics, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
-| M2 Topology | IMPLEMENTED SLICE | Core hierarchy, Euler operators, primitives, checker v1, watertight body tessellation, and the transaction/journal foundation exist; boolean-ready incidence and operation-wide checked mutation do not. |
-| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves, bounded curve-less tolerant edges, shared incidence validation, pcurve-aware Euler creation, pcurve-driven tessellation, copy-on-write transactions, deterministic raw/semantic journals, explicit face-domain/tolerance metadata, and certified conservative domains for imported exact-edge analytic faces have landed; pcurve-only trim bounds, seam/singularity metadata, geometry graph, operation migration, mutation encapsulation, tolerance provenance, and checker upgrades remain. |
+| M2 Topology | IMPLEMENTED SLICE | Core hierarchy, Euler operators, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, and the transaction/journal foundation exist; boolean-ready incidence proofs and operation-wide checked mutation do not. |
+| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; shared incidence validation; pcurve-aware Euler creation; pcurve-driven tessellation; copy-on-write transactions; deterministic journals; explicit face metadata; certified imported domains; checker-enforced pcurve-endpoint containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; and the first whole-interval affine/harmonic incidence certificates have landed. General NURBS/mixed-parameter incidence, loop/containment/shell proofs, production seam/singularity interchange fixtures, geometry graph, operation migration, mutation encapsulation, and tolerance provenance remain. |
 | M3 X_T | IN PROGRESS | The modern-schema subset reads both wire encodings and writes text, including bounded tolerant edges as trimmed SP-curves over finite 2D B-curves; production coverage and external certification remain. |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases and sampled NURBS experiments exist; certified generic discovery and boolean-ready branches do not. |
 | M5–M8 | NOT STARTED | No end-to-end booleans, general modeling, blends, stable API, or production hardening. |
@@ -81,7 +81,7 @@ proof-bearing contracts. Work therefore advances through these gates in order:
 
 | Order | Delivery tranche | Required result | What it unlocks |
 |---|---|---|---|
-| 1 | Close M2.5 topology contracts | Pcurve-derived bounds for curve-less tolerant edges; explicit periodic seam and pole/apex metadata; checked/private topology mutation; operation-wide transactions and lineage; tolerance provenance/budgets; checker v2 `Fast`/`Full` modes. | A B-rep that intersections and features can modify without inventing representation rules mid-boolean. |
+| 1 | Close M2.5 topology contracts | Production seam/pole/apex interchange fixtures; checked/private topology mutation; operation-wide transactions and lineage; tolerance provenance/budgets; discharge the landed checker-v2 `Full` proof gaps with adaptive incidence, containment, and shell proofs. | A B-rep that intersections and features can modify without inventing representation rules mid-boolean. |
 | 2 | Build the M4 proof substrate | Geometry-graph descriptors for procedural/intersection curves; NURBS surface Bezier extraction; conservative subdivision/BVHs; a common `Complete`/`Indeterminate` result carrying paired pcurves and residual bounds. | Certified general CC/CS/SSI and trustworthy empty results. |
 | 3 | Ship one end-to-end feature ladder | Profile-region builder with holes, deterministic body copy/transform, extrude/revolve, point-on-face and point-in-body classification, then block/block and block/cylinder booleans. Every result is atomic, journaled, checker-v2 clean, and externally X_T checked. | The first honest CAD modeling vertical slice. |
 | 4 | Broaden general modeling | Expand analytic booleans, then periodic NURBS booleans, sweep/loft, sewing/healing, and STEP. | General mechanical part construction and imported-body repair. |
@@ -175,9 +175,9 @@ accuracy.
 
 `crates/ktopo` contains body→region→shell→face→loop→fin→edge→vertex entities over typed
 arenas, the ten Euler operators, a randomized Euler–Poincare harness, block/cylinder/
-cone-frustum/sphere/torus constructors, checker v1, and edge-once whole-body
-tessellation. Primitive meshes are checker-clean, watertight, outward-oriented, and
-volume-tested.
+cone-frustum/sphere/torus constructors, a structural/sampled Fast checker plus the
+checker-v2 Full reporting foundation, and edge-once whole-body tessellation. Primitive
+meshes are Fast-checker-clean, watertight, outward-oriented, and volume-tested.
 
 ### Known limits
 
@@ -197,9 +197,10 @@ volume-tested.
   reconstruction use the foundation so far; most public constructors/Euler callers can
   still mutate outside a transaction, and there is no partition history, attribute
   propagation mechanism, or incremental invalidation record.
-- Checker v1 samples incidence, supports loop orientation only on a subset of surfaces,
-  and does not yet prove loop self-intersection/containment, face containment, shell
-  self-intersection, or full body orientation.
+- Fast checking samples incidence and supports loop orientation only on a subset of
+  surfaces. Full checking reports these missing proofs as explicit gaps and therefore
+  returns `Indeterminate`; it does not yet prove loop self-intersection/containment,
+  complete face containment, shell self-intersection, or global shell orientation.
 
 The following milestone closes these gaps before booleans.
 
@@ -245,21 +246,36 @@ Remaining before the gate closes:
   tolerant edge and certify the emitted SP-curve chain in a licensed Parasolid host.
   Current evidence is standards-derived and self-round-trip only. Extend interchange to
   periodic/circular pcurves and any geometric-owner variants observed in that corpus.
-- Add explicit seam-branch metadata where a periodic pcurve range alone is insufficient,
-  plus pole/apex-degenerate pcurve fixtures.
+- `FinPcurve` now carries an explicit `PcurveChart` of integer period shifts. Domain
+  derivation, incidence, loop orientation, tolerant-edge comparison, and tessellation all
+  consume the same charted evaluator; the checker rejects shifts in non-periodic
+  directions and domains that miss actual charted pcurve endpoints. Closed uses may also
+  declare integer winding in edge-parameter direction; cylinder/cone ring pcurves author
+  it, the checker validates it, and tessellation cross-checks it against the realized loop.
+  Bounded uses can mark either endpoint as a surface singularity; the checker validates
+  the marker against surface degeneracies and X_T SP-curve reconstruction infers it.
+  A `PcurveSeam` now explicitly identifies the lower/upper side of a full-period chart
+  cut. The checker proves that each marked pcurve lies on the named chart boundary and
+  requires a complementary role on another fin of the same edge and face. A synthetic
+  cylindrical-sheet fixture is checker-clean and tessellates through that paired seam.
+  Still needed: mandatory metadata in all future checked creation paths, production seam/
+  pole/apex X_T fixtures, and X_T round-trip for non-identity tolerant-pcurve charts.
 - `FaceDomain` now carries an optional finite conservative UV work box and faces carry
   optional tolerance metadata. Analytic primitives author exact boxes; finite natural
   surface ranges initialize imported faces; Euler splits inherit them, merges union them
   only on the same surface (otherwise mark them unknown); the checker validates range/
   period/full-closed-face invariants; and tessellation uses them to anchor periodic
   branches. X_T reconstruction now derives conservative plane/cylinder/cone work boxes
-  from exact analytic or positive-weight NURBS boundary-curve boxes, inflates them by
-  entity tolerance, and projects them analytically; periodic analytic faces deliberately
-  use a full-period angular range. It returns an explicit unknown domain when any
-  boundary is curve-less rather than sampling. Still needed: certified 2D pcurve bounds
-  for those tolerant boundaries, tighter periodic trim boxes where useful, proof that
-  every pcurve lift remains inside the selected chart/domain, seam-branch metadata beyond
-  a box, and tolerance provenance/budgets.
+  from each available fin pcurve's analytic or positive-weight NURBS control-hull box.
+  Legacy exact fins without pcurves fall back to tolerance-inflated 3D curve boxes and
+  analytic projection, so mixed faces are supported. Periodic faces preserve a consistent
+  unwrapped pcurve branch; an exact fallback expands that direction to a full period, and
+  incompatible pcurve branches yield an explicit unknown domain rather than a sampled or
+  invalid box. The checker now verifies actual charted pcurve endpoints against declared
+  domains. Conservative boxes are used to construct domains, but non-containment of a
+  loose box is not treated as proof of an invalid face. Still needed: tighter NURBS
+  subrange boxes and adaptive full-curve containment proof, production seam/pole/apex
+  interchange coverage, and tolerance provenance/budgets.
 - Upgrade sampled local incidence checking to adaptive verification and add explicit
   tolerance provenance/budget tracking. Endpoint-to-vertex checks now exist, but they
   are still sampling-based rather than a proof over the full interval.
@@ -308,13 +324,43 @@ Remaining before the gate closes:
 
 ### E. Tolerance, errors, and checker v2
 
+Landed slice:
+
+- `check_body_report` accepts explicit `Fast` and `Full` assurance levels and returns
+  proven faults plus, after Fast structure is clean, unresolved verification gaps.
+  Invalid bodies do not attempt downstream proofs over inconsistent topology. Outcomes
+  are three-valued:
+  `Invalid` dominates proven faults, `Indeterminate` means no fault was found but a
+  required proof is absent, and only an empty Full report is `Valid`.
+- Full reports currently enumerate edge/surface and pcurve/surface incidence, face-domain
+  containment, loop self-intersection/containment, wire self-intersection, shell
+  self-intersection, and solid-shell orientation obligations. Conservative analytic and
+  positive-weight NURBS boundary boxes can certify some face domains; an actual charted
+  endpoint outside the declared domain remains a Fast fault.
+- Whole-interval incidence certification now recognizes exact affine and
+  single-frequency harmonic traces. It proves all stored curve classes on planes when
+  their analytic/control-hull residual is bounded, lines and harmonic curves on
+  cylinders plus harmonic curves on spheres where the implicit residual is bounded, and
+  matching line/circle
+  pcurve lifts on analytic plane/cylinder/cone/sphere/torus iso-curves. A scale-aware
+  rounding guard is charged before accepting the certificate; unsupported NURBS
+  compositions and mixed-parameter nonlinear traces remain explicit gaps.
+- The X_T JSONL inspector continues to use Fast faults as its checker/tessellation gate
+  and separately records the Full outcome, gap count, and gap categories. Production
+  corpus dashboards can therefore ratchet proof coverage without turning unknowns into
+  successes or breaking the existing reconstruction pipeline.
+
+Remaining before the gate closes:
+
 - Define tolerance combination/propagation rules and a tolerance-growth budget for each
   operation. Preserve provenance of imported entity tolerances.
 - Introduce capability and completion errors rather than treating unsupported or
   indeterminate geometry as invalid input.
-- Checker v2 adds pcurve/3D incidence, loop self-intersection and containment, face
-  containment, shell closure/orientation, adaptive incidence verification, tolerance
-  validation, and `Fast` versus `Full` levels.
+- Extend incidence proof to Bezier-extracted NURBS/procedural curves and mixed-parameter
+  nonlinear pcurves with conservative subdivision residuals.
+- Replace the remaining Full gaps with adaptive/certified loop self-intersection and
+  containment, complete face containment, shell closure/self-intersection/orientation,
+  and tolerance-budget validation.
 
 ### Exit gate
 
@@ -395,6 +441,11 @@ read before its corresponding kernel geometry exists.
   sheets, wires, acorns, bounded arcs, shared geometry, exact entity tolerances, and
   bounded curve-less tolerant edges represented by per-fin trimmed SP-curves. Circular
   and periodic pcurves are not yet in the declared writer subset.
+- The full-period `cylindrical_sheet` primitive preserves its shared longitudinal seam
+  edge and same-face double incidence through text X_T export/import, then checks and
+  tessellates. Exact-fin pcurve chart/seam metadata is kernel-side and is not reconstructed
+  yet; non-identity chart or seam metadata on emitted tolerant pcurves remains an explicit
+  `xt.geometry.periodic-pcurves` unsupported capability.
 - The published schema-13006 FACE tolerance field is required to be null. The writer
   therefore rejects a non-null kernel face tolerance with stable capability
   `xt.write.face-tolerances` rather than emitting a nonconforming file; face UV domains
@@ -580,17 +631,26 @@ Every future pull request that adds a kernel capability should answer:
 Metrics are versioned artifacts, not prose claims. Maintain machine-readable support
 matrices and dashboards for X_T stage rates, checker failures, boolean outcomes,
 tolerance growth, algorithm limits, fuzz regressions, and performance percentiles.
+The committed X_T manifest therefore records both the Fast checker gate and the expected
+Full outcome/gap count for each fixture. A checker-v2 change advances the roadmap only
+when it either discharges a ratcheted gap with a conservative proof or adds a previously
+missing obligation explicitly; deleting, weakening, or silently reclassifying an
+obligation is not progress. Any intentional baseline change must update the capability
+ledger and include an adversarial regression that distinguishes `Invalid`,
+`Indeterminate`, and `Valid`.
 
 ## Immediate implementation queue
 
-1. Finish parameter-space incidence: derive certified pcurve-only face domains, add seam
-   chart and pole/apex metadata, migrate callers to pcurve-aware Euler, and expand the
-   corresponding checker and X_T fixtures.
+1. Finish parameter-space incidence: acquire production seam/pole/apex fixtures, add
+   adaptive full-curve face-domain containment, migrate callers to pcurve-aware Euler,
+   and add non-identity chart interchange.
 2. Encapsulate topology mutation; route every modeling/import/healing consumer through
    checked transactions; add tolerance provenance/budgets, journal composition, and
    partition history.
-3. Introduce checker v2 `Fast`/`Full` foundations and prove pcurve/surface incidence,
-   loop containment, face containment, and shell orientation adaptively.
+3. Discharge the remaining checker-v2 `Full` gaps: extend incidence certificates to
+   Bezier-extracted NURBS and mixed-parameter pcurves, then prove loop
+   self-intersection/containment, complete face containment, and shell
+   self-intersection/orientation adaptively.
 4. Add the geometry graph and redesign intersection results around completion evidence,
    paired pcurves, coincident regions, singular events, and verified residual bounds.
 5. Add NURBS surface Bezier extraction, conservative subdivision/BVHs, and certified
