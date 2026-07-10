@@ -63,6 +63,7 @@ use crate::incidence::{
     check_pcurve_parameterization,
 };
 use crate::loop_proof::{LoopSimplicity, certify_loop_simplicity};
+use crate::shell_proof::{ShellEmbedding, ShellOrientation, certify_shell};
 use crate::store::{Entity, Store};
 use kcore::arena::Handle;
 use kcore::error::Result;
@@ -166,6 +167,9 @@ pub enum FaultKind {
     FaceDomainMissesPcurveEndpoint,
     /// The Euler–Poincaré identity fails for a shell (see module docs).
     EulerViolation,
+    /// A global shell proof found one or more facet normals pointing into
+    /// the material.
+    ShellOrientation,
 }
 
 /// One checker finding.
@@ -373,15 +377,25 @@ fn collect_full_verification(
         for &shell_id in &region.shells {
             let shell = store.get(shell_id)?;
             if !shell.faces.is_empty() {
-                push(
-                    EntityRef::Shell(shell_id),
-                    VerificationGapKind::ShellSelfIntersection,
-                );
-                if body.kind == BodyKind::Solid {
+                let certification = certify_shell(store, shell_id, body.kind, region.kind)?;
+                if certification.embedding != ShellEmbedding::Certified {
                     push(
                         EntityRef::Shell(shell_id),
-                        VerificationGapKind::ShellOrientation,
+                        VerificationGapKind::ShellSelfIntersection,
                     );
+                }
+                if body.kind == BodyKind::Solid {
+                    match certification.orientation {
+                        ShellOrientation::Certified => {}
+                        ShellOrientation::Invalid => faults.push(Fault {
+                            entity: EntityRef::Shell(shell_id),
+                            kind: FaultKind::ShellOrientation,
+                        }),
+                        ShellOrientation::Indeterminate => push(
+                            EntityRef::Shell(shell_id),
+                            VerificationGapKind::ShellOrientation,
+                        ),
+                    }
                 }
             }
         }
@@ -1631,19 +1645,14 @@ mod tests {
         assert!(fast.faults.is_empty() && fast.gaps.is_empty());
 
         let full = check_body_report(&store, body, CheckLevel::Full).unwrap();
-        assert_eq!(full.outcome(), CheckOutcome::Indeterminate);
+        assert_eq!(full.outcome(), CheckOutcome::Valid);
         assert!(full.faults.is_empty());
-        assert!(!full.gaps.is_empty());
-        assert!(
-            full.gaps
-                .iter()
-                .all(|gap| gap.kind != VerificationGapKind::FaceDomainContainment),
-            "authored block pcurve boxes certify its face domains"
-        );
+        assert!(full.gaps.is_empty());
 
         let face = store.faces_of_body(body).unwrap()[0];
         store.get_mut(face).unwrap().domain = None;
         let full = check_body_report(&store, body, CheckLevel::Full).unwrap();
+        assert_eq!(full.outcome(), CheckOutcome::Indeterminate);
         assert!(full.gaps.iter().any(|gap| {
             gap.entity == EntityRef::Face(face)
                 && gap.kind == VerificationGapKind::FaceDomainContainment
@@ -1678,7 +1687,7 @@ mod tests {
 
         for body in bodies {
             let report = check_body_report(&store, body, CheckLevel::Full).unwrap();
-            assert_eq!(report.outcome(), CheckOutcome::Indeterminate);
+            assert_ne!(report.outcome(), CheckOutcome::Invalid);
             assert!(report.faults.is_empty());
             assert!(
                 report.gaps.iter().all(|gap| !matches!(

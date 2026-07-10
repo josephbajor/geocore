@@ -19,8 +19,8 @@ fn inspector_reports_all_success_stages_for_supported_fixture() {
     assert!(row.contains("\"reconstruct\":\"pass\""));
     assert!(row.contains("\"checker\":\"pass\""));
     assert!(row.contains("\"tessellate\":\"pass\""));
-    assert!(row.contains("\"full_checker_outcome\":\"indeterminate\""));
-    assert!(!row.contains("\"full_checker_gaps\":0"));
+    assert!(row.contains("\"full_checker_outcome\":\"valid\""));
+    assert!(row.contains("\"full_checker_gaps\":0"));
     assert!(row.contains("\"null_curve_tolerant_edges\":0"));
     assert!(row.contains("\"trimmed_sp_fin_curves\":0"));
     assert!(row.contains("\"nonnull_face_tolerances\":0"));

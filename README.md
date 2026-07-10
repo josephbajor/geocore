@@ -47,6 +47,10 @@ parametric CAD application; feature history and regeneration are later layers.
   sections, and matching analytic pcurve lifts on plane and revolved surfaces.
   Robust-predicate loop proofs now certify planar straight-segment loops and simple
   circle/ellipse rings, while reporting proven crossings or overlaps as Full faults.
+  Convex planar solid shells now receive global embedding/outward-orientation proofs,
+  and single-face planar sheets inherit embedding from their simple loop. The committed
+  block, plate, and disk fixtures consequently reach Full `Valid`; curved shell proofs
+  remain open.
   Adaptive full-curve containment, production seam/pole/apex interchange fixtures,
   operation caller migration, a procedural geometry graph, operation-wide transaction/
   journal adoption, partition history, enforced topology mutation, richer errors/

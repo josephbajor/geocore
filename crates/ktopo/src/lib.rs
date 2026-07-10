@@ -18,6 +18,8 @@
 //! - [`check`] — the body checker (structural + geometric invariants).
 //! - [`btess`] — whole-body watertight tessellation.
 //! - [`domain`] — certified conservative face UV work-box construction.
+//! - `loop_proof` / `shell_proof` — checker-v2 whole-entity certificates
+//!   kept private until their representation coverage is production-ready.
 
 pub mod btess;
 pub mod check;
@@ -28,5 +30,6 @@ pub mod geom;
 pub(crate) mod incidence;
 pub(crate) mod loop_proof;
 pub mod make;
+pub(crate) mod shell_proof;
 pub mod store;
 pub mod transaction;
