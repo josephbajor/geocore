@@ -71,7 +71,7 @@ pub struct Reconstruction {
 pub fn reconstruct(file: &XtFile, store: &mut Store) -> Result<Reconstruction> {
     let mut transaction = store.transaction()?;
     let mut reconstruction = reconstruct_into(file, transaction.store_mut())?;
-    reconstruction.journal = transaction.commit()?;
+    reconstruction.journal = transaction.commit_checked(&reconstruction.bodies)?;
     debug_assert!(
         reconstruction
             .journal

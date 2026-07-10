@@ -1,7 +1,9 @@
 //! Primitive body constructors (PK_BODY_create_solid_* analogs).
 //!
-//! Every constructor returns a checker-clean solid body positioned by a
-//! caller [`Frame`]:
+//! Every public constructor is failure-atomic, checker-gated, and returns a
+//! clean body positioned by a caller [`Frame`]. A corresponding
+//! `*_with_journal` variant exposes the deterministic committed mutation
+//! journal:
 //!
 //! - [`block`]: centered at the frame origin, sides along the frame axes.
 //! - [`cylinder`], [`cone`] (frustum): base disc in the frame's origin
@@ -23,6 +25,7 @@ use crate::entity::{
 };
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use crate::store::Store;
+use crate::transaction::Journal;
 use kcore::error::{Error, Result};
 use kcore::math;
 use kgeom::curve::{Circle, Line};
@@ -118,6 +121,40 @@ pub(crate) fn positive_dimension(value: f64, what: &'static str) -> Result<f64> 
     }
 }
 
+/// A failure-atomic body creation and its deterministic mutation journal.
+#[derive(Debug)]
+pub struct BodyCreation {
+    body: BodyId,
+    journal: Journal,
+}
+
+impl BodyCreation {
+    /// Created body handle.
+    pub fn body(&self) -> BodyId {
+        self.body
+    }
+
+    /// Raw and semantic mutations committed by the creation operation.
+    pub fn journal(&self) -> &Journal {
+        &self.journal
+    }
+
+    /// Consume the result into its body and journal.
+    pub fn into_parts(self) -> (BodyId, Journal) {
+        (self.body, self.journal)
+    }
+}
+
+fn checked_body_creation(
+    store: &mut Store,
+    create: impl FnOnce(&mut Store) -> Result<BodyId>,
+) -> Result<BodyCreation> {
+    let mut transaction = store.transaction()?;
+    let body = create(transaction.store_mut())?;
+    let journal = transaction.commit_checked_body(body)?;
+    Ok(BodyCreation { body, journal })
+}
+
 /// Create a solid block centered at `frame`'s origin with side lengths
 /// `extents = [dx, dy, dz]` along the frame's axes.
 ///
@@ -125,6 +162,19 @@ pub(crate) fn positive_dimension(value: f64, what: &'static str) -> Result<f64> 
 /// fins each), one shell, solid + void regions. Face normals point
 /// outward; loops run counterclockwise seen from outside.
 pub fn block(store: &mut Store, frame: &Frame, extents: [f64; 3]) -> Result<BodyId> {
+    Ok(block_with_journal(store, frame, extents)?.body)
+}
+
+/// Failure-atomic [`block`] creation with its deterministic journal.
+pub fn block_with_journal(
+    store: &mut Store,
+    frame: &Frame,
+    extents: [f64; 3],
+) -> Result<BodyCreation> {
+    checked_body_creation(store, |store| block_in(store, frame, extents))
+}
+
+fn block_in(store: &mut Store, frame: &Frame, extents: [f64; 3]) -> Result<BodyId> {
     let [dx, dy, dz] = extents;
     let hx = positive_dimension(dx, "block dx")? / 2.0;
     let hy = positive_dimension(dy, "block dy")? / 2.0;
@@ -354,6 +404,20 @@ fn ring_boundary(
 /// face's `u` runs with both circles; the base circle (low `v`) is
 /// traversed `Forward`, the top (high `v`) `Reversed`.
 pub fn cylinder(store: &mut Store, frame: &Frame, radius: f64, height: f64) -> Result<BodyId> {
+    Ok(cylinder_with_journal(store, frame, radius, height)?.body)
+}
+
+/// Failure-atomic [`cylinder`] creation with its deterministic journal.
+pub fn cylinder_with_journal(
+    store: &mut Store,
+    frame: &Frame,
+    radius: f64,
+    height: f64,
+) -> Result<BodyCreation> {
+    checked_body_creation(store, |store| cylinder_in(store, frame, radius, height))
+}
+
+fn cylinder_in(store: &mut Store, frame: &Frame, radius: f64, height: f64) -> Result<BodyId> {
     let radius = positive_dimension(radius, "cylinder radius")?;
     let height = positive_dimension(height, "cylinder height")?;
 
@@ -411,6 +475,27 @@ pub fn cylinder(store: &mut Store, frame: &Frame, radius: f64, height: f64) -> R
 /// geometry. The circular boundaries are bounded closed edges so they can
 /// participate in the four-fin chart-boundary loop.
 pub fn cylindrical_sheet(
+    store: &mut Store,
+    frame: &Frame,
+    radius: f64,
+    height: f64,
+) -> Result<BodyId> {
+    Ok(cylindrical_sheet_with_journal(store, frame, radius, height)?.body)
+}
+
+/// Failure-atomic [`cylindrical_sheet`] creation with its deterministic journal.
+pub fn cylindrical_sheet_with_journal(
+    store: &mut Store,
+    frame: &Frame,
+    radius: f64,
+    height: f64,
+) -> Result<BodyCreation> {
+    checked_body_creation(store, |store| {
+        cylindrical_sheet_in(store, frame, radius, height)
+    })
+}
+
+fn cylindrical_sheet_in(
     store: &mut Store,
     frame: &Frame,
     radius: f64,
@@ -562,6 +647,29 @@ pub fn cone(
     top_radius: f64,
     height: f64,
 ) -> Result<BodyId> {
+    Ok(cone_with_journal(store, frame, base_radius, top_radius, height)?.body)
+}
+
+/// Failure-atomic [`cone`] creation with its deterministic journal.
+pub fn cone_with_journal(
+    store: &mut Store,
+    frame: &Frame,
+    base_radius: f64,
+    top_radius: f64,
+    height: f64,
+) -> Result<BodyCreation> {
+    checked_body_creation(store, |store| {
+        cone_in(store, frame, base_radius, top_radius, height)
+    })
+}
+
+fn cone_in(
+    store: &mut Store,
+    frame: &Frame,
+    base_radius: f64,
+    top_radius: f64,
+    height: f64,
+) -> Result<BodyId> {
     let base_radius = positive_dimension(base_radius, "cone base radius")?;
     let top_radius = positive_dimension(top_radius, "cone top radius")?;
     let height = positive_dimension(height, "cone height")?;
@@ -640,6 +748,15 @@ pub fn cone(
 /// Create a solid sphere centered at `frame`'s origin: a single face with
 /// zero loops covering the closed surface — no edges, no vertices.
 pub fn sphere(store: &mut Store, frame: &Frame, radius: f64) -> Result<BodyId> {
+    Ok(sphere_with_journal(store, frame, radius)?.body)
+}
+
+/// Failure-atomic [`sphere`] creation with its deterministic journal.
+pub fn sphere_with_journal(store: &mut Store, frame: &Frame, radius: f64) -> Result<BodyCreation> {
+    checked_body_creation(store, |store| sphere_in(store, frame, radius))
+}
+
+fn sphere_in(store: &mut Store, frame: &Frame, radius: f64) -> Result<BodyId> {
     let radius = positive_dimension(radius, "sphere radius")?;
     let (body, shell) = solid_body_scaffold(store);
     let surface = store.add(SurfaceGeom::Sphere(Sphere::new(*frame, radius)?));
@@ -664,6 +781,27 @@ pub fn sphere(store: &mut Store, frame: &Frame, radius: f64) -> Result<BodyId> {
 /// origin plane around `frame.z`, with `major_radius > minor_radius > 0`:
 /// a single zero-loop face like [`sphere`].
 pub fn torus(
+    store: &mut Store,
+    frame: &Frame,
+    major_radius: f64,
+    minor_radius: f64,
+) -> Result<BodyId> {
+    Ok(torus_with_journal(store, frame, major_radius, minor_radius)?.body)
+}
+
+/// Failure-atomic [`torus`] creation with its deterministic journal.
+pub fn torus_with_journal(
+    store: &mut Store,
+    frame: &Frame,
+    major_radius: f64,
+    minor_radius: f64,
+) -> Result<BodyCreation> {
+    checked_body_creation(store, |store| {
+        torus_in(store, frame, major_radius, minor_radius)
+    })
+}
+
+fn torus_in(
     store: &mut Store,
     frame: &Frame,
     major_radius: f64,

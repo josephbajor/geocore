@@ -14,7 +14,7 @@ use ktopo::entity::{
 };
 use ktopo::euler::{FinPcurvePair, mev, mvfs};
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
-use ktopo::make::block;
+use ktopo::make::{block, block_with_journal, torus_with_journal};
 use ktopo::store::Store;
 use ktopo::transaction::{LineageEvent, MutationKind};
 
@@ -202,7 +202,7 @@ fn checked_face_split_and_merge_emit_semantic_lineage() {
     let made = split
         .split_face(lp, 0, 2, curve, (0.0, length), surface, sense, pcurves)
         .unwrap();
-    let split_journal = split.commit().unwrap();
+    let split_journal = split.commit_checked_body(body).unwrap();
     assert_eq!(store.get(made.face).unwrap().domain, source_domain);
     assert_eq!(store.get(made.face).unwrap().tolerance, Some(1.0e-8));
     assert_eq!(
@@ -217,7 +217,7 @@ fn checked_face_split_and_merge_emit_semantic_lineage() {
 
     let mut merge = store.transaction().unwrap();
     merge.merge_faces(made.edge).unwrap();
-    let merge_journal = merge.commit().unwrap();
+    let merge_journal = merge.commit_checked_body(body).unwrap();
     assert_eq!(store.get(source_face).unwrap().domain, source_domain);
     assert_eq!(store.get(source_face).unwrap().tolerance, Some(1.0e-8));
     assert_eq!(
@@ -229,4 +229,56 @@ fn checked_face_split_and_merge_emit_semantic_lineage() {
     );
     let faults = check_body(&store, body).unwrap();
     assert!(faults.is_empty(), "merge checker faults: {faults:?}");
+}
+
+#[test]
+fn checked_commit_rejects_faulted_topology_and_restores_the_body() {
+    let mut store = Store::new();
+    let body = block(&mut store, &Frame::world(), [2.0, 2.0, 2.0]).unwrap();
+    let original_regions = store.get(body).unwrap().regions.clone();
+
+    let mut transaction = store.transaction().unwrap();
+    transaction
+        .store_mut()
+        .get_mut(body)
+        .unwrap()
+        .regions
+        .clear();
+    assert!(matches!(
+        transaction.commit_checked_body(body),
+        Err(Error::TopologyCheckFailed { fault_count }) if fault_count > 0
+    ));
+    assert_eq!(store.get(body).unwrap().regions, original_regions);
+    assert!(check_body(&store, body).unwrap().is_empty());
+}
+
+#[test]
+fn checked_body_creation_is_atomic_and_journaled_deterministically() {
+    let mut store = Store::new();
+    let mut control = Store::new();
+    let made = block_with_journal(&mut store, &Frame::world(), [2.0, 3.0, 4.0]).unwrap();
+    let expected = block_with_journal(&mut control, &Frame::world(), [2.0, 3.0, 4.0]).unwrap();
+    assert_eq!(made.body(), expected.body());
+    assert_eq!(made.journal(), expected.journal());
+    assert!(
+        made.journal()
+            .mutations()
+            .iter()
+            .all(|mutation| mutation.kind == MutationKind::Created)
+    );
+    assert!(made.journal().lineage().is_empty());
+    assert!(check_body(&store, made.body()).unwrap().is_empty());
+
+    let mut failed = Store::new();
+    let mut pristine = Store::new();
+    // The torus relation is rejected only after its raw constructor has
+    // created the body scaffold, so this exercises rollback of partial
+    // topology rather than input-only preflight.
+    assert!(torus_with_journal(&mut failed, &Frame::world(), 1.0, 2.0).is_err());
+    let after_failure = block(&mut failed, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
+    let pristine_body = block(&mut pristine, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
+    assert_eq!(
+        after_failure, pristine_body,
+        "rollback must restore the next body identity"
+    );
 }

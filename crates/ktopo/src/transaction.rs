@@ -7,7 +7,7 @@
 //! higher-level operation. Dropping or explicitly rolling back restores entity
 //! contents, handle generations, free-list order, and future allocations.
 
-use crate::entity::{CurveId, EdgeId, EntityRef, LoopId, Sense, SurfaceId};
+use crate::entity::{BodyId, CurveId, EdgeId, EntityRef, LoopId, Sense, SurfaceId};
 use crate::euler::{FinPcurvePair, Mef};
 use crate::store::Store;
 use kcore::error::Result;
@@ -180,6 +180,43 @@ impl<'a> Transaction<'a> {
         let mutations = self.store.commit_transaction()?;
         self.finished = true;
         Ok(Journal::new(mutations, core::mem::take(&mut self.lineage)))
+    }
+
+    /// Validate every listed body with the Fast checker, then commit.
+    ///
+    /// Any checker fault or validation error rolls the entire transaction
+    /// back before returning. Duplicate body handles are checked once in
+    /// first-occurrence order.
+    pub fn commit_checked(mut self, bodies: &[BodyId]) -> Result<Journal> {
+        let mut checked = Vec::new();
+        let validation = (|| {
+            let mut fault_count = 0usize;
+            for &body in bodies {
+                if checked.contains(&body) {
+                    continue;
+                }
+                checked.push(body);
+                fault_count += crate::check::check_body(self.store, body)?.len();
+            }
+            if fault_count == 0 {
+                Ok(())
+            } else {
+                Err(kcore::error::Error::TopologyCheckFailed { fault_count })
+            }
+        })();
+        if let Err(error) = validation {
+            self.store.rollback_transaction()?;
+            self.finished = true;
+            return Err(error);
+        }
+        let mutations = self.store.commit_transaction()?;
+        self.finished = true;
+        Ok(Journal::new(mutations, core::mem::take(&mut self.lineage)))
+    }
+
+    /// Validate one result body and commit atomically.
+    pub fn commit_checked_body(self, body: BodyId) -> Result<Journal> {
+        self.commit_checked(&[body])
     }
 
     /// Explicitly restore the transaction entry state. Dropping without
