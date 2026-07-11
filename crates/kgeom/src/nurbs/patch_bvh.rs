@@ -10,7 +10,59 @@ use crate::surface::{Dir, Surface};
 use crate::vec::{Point3, Vec3};
 use kcore::error::{Error, Result};
 use kcore::interval::Interval;
+use kcore::operation::{
+    DiagnosticCode, LimitSnapshot, OperationPolicyError, OperationScope, ResourceKind, StageId,
+};
 use kcore::tolerance::LINEAR_RESOLUTION;
+
+/// Stable work stage for NURBS implicit-isolation setup and subdivision attempts.
+pub const NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS: StageId =
+    match StageId::new("kgeom.nurbs.implicit-isolation-subdivisions") {
+        Ok(stage) => stage,
+        Err(_) => panic!("valid NURBS implicit-isolation subdivision stage"),
+    };
+
+/// Stable high-water stage for the conservative implicit-isolation candidate cover.
+pub const NURBS_IMPLICIT_ISOLATION_CANDIDATES: StageId =
+    match StageId::new("kgeom.nurbs.implicit-isolation-candidates") {
+        Ok(stage) => stage,
+        Err(_) => panic!("valid NURBS implicit-isolation candidate stage"),
+    };
+
+/// Stable high-water stage for exact implicit-isolation subdivision depth.
+pub const NURBS_IMPLICIT_ISOLATION_DEPTH: StageId =
+    match StageId::new("kgeom.nurbs.implicit-isolation-depth") {
+        Ok(stage) => stage,
+        Err(_) => panic!("valid NURBS implicit-isolation depth stage"),
+    };
+
+/// Diagnostic for subdivision-work exhaustion during implicit isolation.
+pub const NURBS_IMPLICIT_ISOLATION_SUBDIVISION_LIMIT: DiagnosticCode =
+    match DiagnosticCode::new("kgeom.nurbs.implicit-isolation-subdivision-limit") {
+        Ok(code) => code,
+        Err(_) => panic!("valid NURBS implicit-isolation subdivision diagnostic"),
+    };
+
+/// Diagnostic for candidate-cover exhaustion during implicit isolation.
+pub const NURBS_IMPLICIT_ISOLATION_CANDIDATE_LIMIT: DiagnosticCode =
+    match DiagnosticCode::new("kgeom.nurbs.implicit-isolation-candidate-limit") {
+        Ok(code) => code,
+        Err(_) => panic!("valid NURBS implicit-isolation candidate diagnostic"),
+    };
+
+/// Diagnostic for depth exhaustion during implicit isolation.
+pub const NURBS_IMPLICIT_ISOLATION_DEPTH_LIMIT: DiagnosticCode =
+    match DiagnosticCode::new("kgeom.nurbs.implicit-isolation-depth-limit") {
+        Ok(code) => code,
+        Err(_) => panic!("valid NURBS implicit-isolation depth diagnostic"),
+    };
+
+/// Diagnostic for floating-point parameter resolution during implicit isolation.
+pub const NURBS_IMPLICIT_ISOLATION_NUMERIC_RESOLUTION: DiagnosticCode =
+    match DiagnosticCode::new("kgeom.nurbs.implicit-isolation-numeric-resolution") {
+        Ok(code) => code,
+        Err(_) => panic!("valid NURBS implicit-isolation numeric diagnostic"),
+    };
 
 /// Certified relation of a positive-weight Bezier patch's control hull to a
 /// plane tolerance slab.
@@ -67,6 +119,9 @@ impl ImplicitCandidateCell {
 pub struct ImplicitIsolationLimits {
     candidate_budget: Option<usize>,
     parameter_resolution: bool,
+    subdivision_work: Option<LimitSnapshot>,
+    candidate_cells: Option<LimitSnapshot>,
+    subdivision_depth: Option<LimitSnapshot>,
 }
 
 impl ImplicitIsolationLimits {
@@ -80,9 +135,49 @@ impl ImplicitIsolationLimits {
         self.parameter_resolution
     }
 
+    /// Structured subdivision-work limit reached by a contextual isolation.
+    pub fn subdivision_work(self) -> Option<LimitSnapshot> {
+        self.subdivision_work
+    }
+
+    /// Structured candidate-cover limit reached by a contextual isolation.
+    pub fn candidate_cells(self) -> Option<LimitSnapshot> {
+        self.candidate_cells
+    }
+
+    /// Structured subdivision-depth limit reached by a contextual isolation.
+    pub fn subdivision_depth(self) -> Option<LimitSnapshot> {
+        self.subdivision_depth
+    }
+
     /// True when no configured or numeric limit interrupted isolation.
     pub fn is_empty(self) -> bool {
-        self.candidate_budget.is_none() && !self.parameter_resolution
+        self.candidate_budget.is_none()
+            && !self.parameter_resolution
+            && self.subdivision_work.is_none()
+            && self.candidate_cells.is_none()
+            && self.subdivision_depth.is_none()
+    }
+}
+
+/// Failure to run contextual implicit isolation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ContextImplicitIsolationError {
+    /// Geometry validation or exact NURBS processing failed.
+    Kernel(Error),
+    /// The operation scope did not provide a valid accounting contract.
+    Policy(OperationPolicyError),
+}
+
+impl From<Error> for ContextImplicitIsolationError {
+    fn from(error: Error) -> Self {
+        Self::Kernel(error)
+    }
+}
+
+impl From<OperationPolicyError> for ContextImplicitIsolationError {
+    fn from(error: OperationPolicyError) -> Self {
+        Self::Policy(error)
     }
 }
 
@@ -251,63 +346,59 @@ impl NurbsSurfaceBvh {
         requested_depth: u32,
         max_candidate_cells: usize,
     ) -> Result<ImplicitPatchIsolation> {
-        validate_margin(margin)?;
         if max_candidate_cells == 0 {
             return Err(Error::InvalidGeometry {
                 reason: "NURBS implicit isolation candidate budget must be positive",
             });
         }
-
-        let mut limits = ImplicitIsolationLimits::default();
-        let mut cells: Vec<_> = self
-            .implicit_candidates(surface, margin)?
-            .into_iter()
-            .map(|source_patch| WorkCell {
-                cell: candidate_cell(source_patch, self.patches[source_patch].clone(), 0),
-                blocked: false,
-            })
-            .collect();
-        if cells.len() > max_candidate_cells {
-            limits.candidate_budget = Some(max_candidate_cells);
-            return Ok(isolation_result(cells, requested_depth, limits));
+        let mut limiter = LegacyIsolationLimiter {
+            max_candidate_cells,
+        };
+        match isolate_implicit_candidates_engine(
+            self,
+            surface,
+            margin,
+            requested_depth,
+            &mut limiter,
+        ) {
+            Ok(isolation) => Ok(isolation),
+            Err(IsolationEngineError::Kernel(error)) => Err(error),
+            Err(IsolationEngineError::Limiter(error)) => match error {},
         }
+    }
 
-        for _ in 0..requested_depth {
-            if cells.is_empty() || cells.iter().all(|work| work.blocked) {
-                break;
+    /// Contextual exact implicit isolation with deterministic work, candidate,
+    /// and depth accounting.
+    ///
+    /// The caller charges one subdivision-stage unit before constructing this
+    /// hierarchy. This method then charges one unit before each exact candidate
+    /// subdivision. Candidate cells and subdivision depth are observed as
+    /// high-water resources. Reaching any configured allowance retains a
+    /// conservative cover and records the exact attempted snapshot in
+    /// [`ImplicitIsolationLimits`].
+    pub fn isolate_implicit_candidates_in_scope(
+        &self,
+        surface: &dyn ImplicitSurface,
+        margin: f64,
+        requested_depth: u32,
+        scope: &mut OperationScope<'_, '_>,
+    ) -> core::result::Result<ImplicitPatchIsolation, ContextImplicitIsolationError> {
+        let mut limiter = ContextIsolationLimiter { scope };
+        match isolate_implicit_candidates_engine(
+            self,
+            surface,
+            margin,
+            requested_depth,
+            &mut limiter,
+        ) {
+            Ok(isolation) => Ok(isolation),
+            Err(IsolationEngineError::Kernel(error)) => {
+                Err(ContextImplicitIsolationError::Kernel(error))
             }
-            let previous = core::mem::take(&mut cells);
-            let previous_len = previous.len();
-            let mut next = Vec::with_capacity(previous_len.saturating_mul(2));
-            for (position, mut work) in previous.into_iter().enumerate() {
-                if work.blocked {
-                    next.push(work);
-                    continue;
-                }
-
-                let Some(children) = candidate_children(&work.cell, surface, margin)? else {
-                    work.blocked = true;
-                    limits.parameter_resolution = true;
-                    next.push(work);
-                    continue;
-                };
-
-                let remaining = previous_len - position - 1;
-                if next.len() + children.len() + remaining <= max_candidate_cells {
-                    next.extend(children.into_iter().map(|cell| WorkCell {
-                        cell,
-                        blocked: false,
-                    }));
-                } else {
-                    work.blocked = true;
-                    limits.candidate_budget = Some(max_candidate_cells);
-                    next.push(work);
-                }
+            Err(IsolationEngineError::Limiter(error)) => {
+                Err(ContextImplicitIsolationError::Policy(error))
             }
-            cells = next;
         }
-
-        Ok(isolation_result(cells, requested_depth, limits))
     }
 
     /// Classify one patch against the plane through `origin` with the given
@@ -402,6 +493,304 @@ fn validate_margin(margin: f64) -> Result<()> {
         });
     }
     Ok(())
+}
+
+enum IsolationEngineError<E> {
+    Kernel(Error),
+    Limiter(E),
+}
+
+trait IsolationLimiter {
+    type Error;
+
+    fn observe_candidates(
+        &mut self,
+        value: usize,
+        limits: &mut ImplicitIsolationLimits,
+    ) -> core::result::Result<bool, Self::Error>;
+
+    fn observe_depth(
+        &mut self,
+        value: u64,
+        limits: &mut ImplicitIsolationLimits,
+    ) -> core::result::Result<bool, Self::Error>;
+
+    fn charge_subdivision(
+        &mut self,
+        limits: &mut ImplicitIsolationLimits,
+    ) -> core::result::Result<bool, Self::Error>;
+
+    fn attempted_candidate_count(
+        &mut self,
+        retained: usize,
+        children: usize,
+        remaining: usize,
+    ) -> core::result::Result<usize, Self::Error>;
+
+    fn record_numeric_resolution(&mut self) -> core::result::Result<(), Self::Error>;
+}
+
+struct LegacyIsolationLimiter {
+    max_candidate_cells: usize,
+}
+
+impl IsolationLimiter for LegacyIsolationLimiter {
+    type Error = core::convert::Infallible;
+
+    fn observe_candidates(
+        &mut self,
+        value: usize,
+        limits: &mut ImplicitIsolationLimits,
+    ) -> core::result::Result<bool, Self::Error> {
+        if value <= self.max_candidate_cells {
+            Ok(true)
+        } else {
+            limits.candidate_budget = Some(self.max_candidate_cells);
+            Ok(false)
+        }
+    }
+
+    fn observe_depth(
+        &mut self,
+        _value: u64,
+        _limits: &mut ImplicitIsolationLimits,
+    ) -> core::result::Result<bool, Self::Error> {
+        Ok(true)
+    }
+
+    fn charge_subdivision(
+        &mut self,
+        _limits: &mut ImplicitIsolationLimits,
+    ) -> core::result::Result<bool, Self::Error> {
+        Ok(true)
+    }
+
+    fn attempted_candidate_count(
+        &mut self,
+        retained: usize,
+        children: usize,
+        remaining: usize,
+    ) -> core::result::Result<usize, Self::Error> {
+        Ok(retained
+            .checked_add(children)
+            .and_then(|count| count.checked_add(remaining))
+            .expect("allocated candidate cover count fits usize"))
+    }
+
+    fn record_numeric_resolution(&mut self) -> core::result::Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+struct ContextIsolationLimiter<'scope, 'context, 'session> {
+    scope: &'scope mut OperationScope<'context, 'session>,
+}
+
+impl IsolationLimiter for ContextIsolationLimiter<'_, '_, '_> {
+    type Error = OperationPolicyError;
+
+    fn observe_candidates(
+        &mut self,
+        value: usize,
+        limits: &mut ImplicitIsolationLimits,
+    ) -> core::result::Result<bool, Self::Error> {
+        let value = usize_to_u64(
+            value,
+            NURBS_IMPLICIT_ISOLATION_CANDIDATES,
+            ResourceKind::Items,
+        )?;
+        let Some(snapshot) = observe_context_limit(
+            self.scope,
+            NURBS_IMPLICIT_ISOLATION_CANDIDATES,
+            ResourceKind::Items,
+            value,
+        )?
+        else {
+            return Ok(true);
+        };
+        if limits.candidate_cells.is_none() {
+            limits.candidate_budget = usize::try_from(snapshot.allowed).ok();
+            limits.candidate_cells = Some(snapshot);
+        }
+        Ok(false)
+    }
+
+    fn observe_depth(
+        &mut self,
+        value: u64,
+        limits: &mut ImplicitIsolationLimits,
+    ) -> core::result::Result<bool, Self::Error> {
+        let Some(snapshot) = observe_context_limit(
+            self.scope,
+            NURBS_IMPLICIT_ISOLATION_DEPTH,
+            ResourceKind::Depth,
+            value,
+        )?
+        else {
+            return Ok(true);
+        };
+        if limits.subdivision_depth.is_none() {
+            limits.subdivision_depth = Some(snapshot);
+        }
+        Ok(false)
+    }
+
+    fn charge_subdivision(
+        &mut self,
+        limits: &mut ImplicitIsolationLimits,
+    ) -> core::result::Result<bool, Self::Error> {
+        match self
+            .scope
+            .ledger_mut()
+            .charge(NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS, 1)
+        {
+            Ok(()) => Ok(true),
+            Err(OperationPolicyError::LimitReached(snapshot)) => {
+                if limits.subdivision_work.is_none() {
+                    limits.subdivision_work = Some(snapshot);
+                }
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn attempted_candidate_count(
+        &mut self,
+        retained: usize,
+        children: usize,
+        remaining: usize,
+    ) -> core::result::Result<usize, Self::Error> {
+        retained
+            .checked_add(children)
+            .and_then(|count| count.checked_add(remaining))
+            .ok_or(OperationPolicyError::AccountingOverflow {
+                stage: NURBS_IMPLICIT_ISOLATION_CANDIDATES,
+                resource: ResourceKind::Items,
+            })
+    }
+
+    fn record_numeric_resolution(&mut self) -> core::result::Result<(), Self::Error> {
+        self.scope
+            .record_numeric_resolution(NURBS_IMPLICIT_ISOLATION_DEPTH);
+        Ok(())
+    }
+}
+
+fn isolate_implicit_candidates_engine<L: IsolationLimiter>(
+    hierarchy: &NurbsSurfaceBvh,
+    surface: &dyn ImplicitSurface,
+    margin: f64,
+    requested_depth: u32,
+    limiter: &mut L,
+) -> core::result::Result<ImplicitPatchIsolation, IsolationEngineError<L::Error>> {
+    let mut limits = ImplicitIsolationLimits::default();
+    let mut cells: Vec<_> = hierarchy
+        .implicit_candidates(surface, margin)
+        .map_err(IsolationEngineError::Kernel)?
+        .into_iter()
+        .map(|source_patch| WorkCell {
+            cell: candidate_cell(source_patch, hierarchy.patches[source_patch].clone(), 0),
+            blocked: false,
+        })
+        .collect();
+
+    if !limiter
+        .observe_candidates(cells.len(), &mut limits)
+        .map_err(IsolationEngineError::Limiter)?
+        || !limiter
+            .observe_depth(0, &mut limits)
+            .map_err(IsolationEngineError::Limiter)?
+    {
+        return Ok(isolation_result(cells, requested_depth, limits));
+    }
+
+    for _ in 0..requested_depth {
+        if cells.is_empty() || cells.iter().all(|work| work.blocked) {
+            break;
+        }
+        let previous = core::mem::take(&mut cells);
+        let previous_len = previous.len();
+        let mut next = Vec::with_capacity(previous_len.saturating_mul(2));
+        for (position, mut work) in previous.into_iter().enumerate() {
+            if work.blocked || limits.subdivision_work.is_some() {
+                work.blocked = true;
+                next.push(work);
+                continue;
+            }
+
+            let attempted_depth = u64::from(work.cell.depth).saturating_add(1);
+            if !limiter
+                .observe_depth(attempted_depth, &mut limits)
+                .map_err(IsolationEngineError::Limiter)?
+            {
+                work.blocked = true;
+                next.push(work);
+                continue;
+            }
+            if !limiter
+                .charge_subdivision(&mut limits)
+                .map_err(IsolationEngineError::Limiter)?
+            {
+                work.blocked = true;
+                next.push(work);
+                continue;
+            }
+
+            let Some(children) = candidate_children(&work.cell, surface, margin)
+                .map_err(IsolationEngineError::Kernel)?
+            else {
+                work.blocked = true;
+                limits.parameter_resolution = true;
+                limiter
+                    .record_numeric_resolution()
+                    .map_err(IsolationEngineError::Limiter)?;
+                next.push(work);
+                continue;
+            };
+
+            let remaining = previous_len - position - 1;
+            let attempted_candidates = limiter
+                .attempted_candidate_count(next.len(), children.len(), remaining)
+                .map_err(IsolationEngineError::Limiter)?;
+            if limiter
+                .observe_candidates(attempted_candidates, &mut limits)
+                .map_err(IsolationEngineError::Limiter)?
+            {
+                next.extend(children.into_iter().map(|cell| WorkCell {
+                    cell,
+                    blocked: false,
+                }));
+            } else {
+                work.blocked = true;
+                next.push(work);
+            }
+        }
+        cells = next;
+    }
+
+    Ok(isolation_result(cells, requested_depth, limits))
+}
+
+fn observe_context_limit(
+    scope: &mut OperationScope<'_, '_>,
+    stage: StageId,
+    resource: ResourceKind,
+    value: u64,
+) -> core::result::Result<Option<LimitSnapshot>, OperationPolicyError> {
+    match scope.ledger_mut().observe(stage, resource, value) {
+        Ok(()) => Ok(None),
+        Err(OperationPolicyError::LimitReached(snapshot)) => Ok(Some(snapshot)),
+        Err(error) => Err(error),
+    }
+}
+
+fn usize_to_u64(
+    value: usize,
+    stage: StageId,
+    resource: ResourceKind,
+) -> core::result::Result<u64, OperationPolicyError> {
+    u64::try_from(value).map_err(|_| OperationPolicyError::AccountingOverflow { stage, resource })
 }
 
 #[derive(Debug)]
@@ -582,6 +971,11 @@ mod tests {
     use super::*;
     use crate::param::ParamRange;
     use crate::surface::{Plane, Sphere, Surface};
+    use kcore::operation::{
+        AccountingMode, BudgetPlan, ExecutionPolicy, LimitSpec, NumericalPolicy, OperationContext,
+        OperationReport, OperationScope, PolicyVersion, SessionPolicy, SessionPrecision,
+    };
+    use kcore::tolerance::Tolerances;
 
     fn rational_multi_patch(offset: Vec3) -> NurbsSurface {
         let knots = vec![0.0, 0.0, 0.5, 1.0, 1.0];
@@ -617,6 +1011,76 @@ mod tests {
             None,
         )
         .unwrap()
+    }
+
+    fn coincident_patch() -> NurbsSurface {
+        NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.0, 1.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+            ],
+            None,
+        )
+        .unwrap()
+    }
+
+    fn contextual_isolation(
+        hierarchy: &NurbsSurfaceBvh,
+        surface: &dyn ImplicitSurface,
+        requested_depth: u32,
+        work_allowed: u64,
+        candidates_allowed: u64,
+        depth_allowed: u64,
+    ) -> (ImplicitPatchIsolation, OperationReport) {
+        let budget = BudgetPlan::new([
+            LimitSpec::new(
+                NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                work_allowed,
+            ),
+            LimitSpec::new(
+                NURBS_IMPLICIT_ISOLATION_CANDIDATES,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                candidates_allowed,
+            ),
+            LimitSpec::new(
+                NURBS_IMPLICIT_ISOLATION_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                depth_allowed,
+            ),
+        ])
+        .unwrap();
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            budget,
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let mut scope = OperationScope::new(&context);
+        let isolation = hierarchy
+            .isolate_implicit_candidates_in_scope(surface, 0.0, requested_depth, &mut scope)
+            .unwrap();
+        let (result, report) = scope.finish(Ok(isolation)).into_parts();
+        (result.unwrap(), report)
+    }
+
+    fn usage(report: &OperationReport, stage: StageId) -> LimitSnapshot {
+        *report
+            .usage()
+            .iter()
+            .find(|snapshot| snapshot.stage == stage)
+            .unwrap()
     }
 
     #[test]
@@ -773,20 +1237,7 @@ mod tests {
 
     #[test]
     fn adaptive_isolation_is_deterministic_and_preserves_budget_limited_cover() {
-        let coincident = NurbsSurface::new(
-            1,
-            1,
-            vec![0.0, 0.0, 1.0, 1.0],
-            vec![0.0, 0.0, 1.0, 1.0],
-            vec![
-                Point3::new(0.0, 0.0, 0.0),
-                Point3::new(0.0, 1.0, 0.0),
-                Point3::new(1.0, 0.0, 0.0),
-                Point3::new(1.0, 1.0, 0.0),
-            ],
-            None,
-        )
-        .unwrap();
+        let coincident = coincident_patch();
         let hierarchy = NurbsSurfaceBvh::build(&coincident).unwrap();
         let plane = Plane::new(crate::frame::Frame::world());
         let first = hierarchy
@@ -816,6 +1267,168 @@ mod tests {
             hierarchy
                 .isolate_implicit_candidates(&plane, 0.0, 1, 0)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn contextual_isolation_stage_boundaries_are_exact_and_failure_atomic() {
+        let coincident = coincident_patch();
+        let hierarchy = NurbsSurfaceBvh::build(&coincident).unwrap();
+        let plane = Plane::new(crate::frame::Frame::world());
+
+        let (work_low, work_low_report) = contextual_isolation(&hierarchy, &plane, 1, 0, 4, 1);
+        let work_limit = LimitSnapshot {
+            stage: NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
+            resource: ResourceKind::Work,
+            consumed: 1,
+            allowed: 0,
+        };
+        assert_eq!(work_low.limits().subdivision_work(), Some(work_limit));
+        assert_eq!(work_low_report.limit_events(), &[work_limit]);
+        assert_eq!(
+            usage(&work_low_report, NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS).consumed,
+            0
+        );
+        assert_eq!(work_low.candidates().len(), 1);
+        assert_eq!(work_low.candidates()[0].depth(), 0);
+
+        let (work_exact, work_exact_report) = contextual_isolation(&hierarchy, &plane, 1, 1, 4, 1);
+        let (work_plus, work_plus_report) = contextual_isolation(&hierarchy, &plane, 1, 2, 4, 1);
+        assert!(work_exact.limits().subdivision_work().is_none());
+        assert_eq!(work_exact.candidates().len(), 2);
+        assert_eq!(work_exact, work_plus);
+        assert_eq!(
+            usage(&work_exact_report, NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS).consumed,
+            1
+        );
+        assert_eq!(
+            usage(&work_plus_report, NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS).consumed,
+            1
+        );
+
+        let (candidate_low, candidate_low_report) =
+            contextual_isolation(&hierarchy, &plane, 1, 2, 1, 1);
+        let candidate_limit = LimitSnapshot {
+            stage: NURBS_IMPLICIT_ISOLATION_CANDIDATES,
+            resource: ResourceKind::Items,
+            consumed: 2,
+            allowed: 1,
+        };
+        assert_eq!(
+            candidate_low.limits().candidate_cells(),
+            Some(candidate_limit)
+        );
+        assert_eq!(candidate_low_report.limit_events(), &[candidate_limit]);
+        assert_eq!(
+            usage(&candidate_low_report, NURBS_IMPLICIT_ISOLATION_CANDIDATES).consumed,
+            1
+        );
+        let (candidate_exact, candidate_exact_report) =
+            contextual_isolation(&hierarchy, &plane, 1, 2, 2, 1);
+        let (candidate_plus, candidate_plus_report) =
+            contextual_isolation(&hierarchy, &plane, 1, 2, 3, 1);
+        let legacy_exact = hierarchy
+            .isolate_implicit_candidates(&plane, 0.0, 1, 2)
+            .unwrap();
+        let legacy_limited = hierarchy
+            .isolate_implicit_candidates(&plane, 0.0, 1, 1)
+            .unwrap();
+        assert_eq!(legacy_exact, candidate_exact);
+        assert_eq!(legacy_limited.candidates(), candidate_low.candidates());
+        assert_eq!(
+            legacy_limited.limits().candidate_budget(),
+            candidate_low.limits().candidate_budget()
+        );
+        assert_eq!(
+            legacy_limited.limits().parameter_resolution(),
+            candidate_low.limits().parameter_resolution()
+        );
+        assert_eq!(candidate_exact, candidate_plus);
+        assert_eq!(
+            usage(&candidate_exact_report, NURBS_IMPLICIT_ISOLATION_CANDIDATES).consumed,
+            2
+        );
+        assert_eq!(
+            usage(&candidate_plus_report, NURBS_IMPLICIT_ISOLATION_CANDIDATES).consumed,
+            2
+        );
+
+        let (depth_low, depth_low_report) = contextual_isolation(&hierarchy, &plane, 1, 2, 4, 0);
+        let depth_limit = LimitSnapshot {
+            stage: NURBS_IMPLICIT_ISOLATION_DEPTH,
+            resource: ResourceKind::Depth,
+            consumed: 1,
+            allowed: 0,
+        };
+        assert_eq!(depth_low.limits().subdivision_depth(), Some(depth_limit));
+        assert_eq!(depth_low_report.limit_events(), &[depth_limit]);
+        assert_eq!(
+            usage(&depth_low_report, NURBS_IMPLICIT_ISOLATION_DEPTH).consumed,
+            0
+        );
+        let (depth_exact, depth_exact_report) =
+            contextual_isolation(&hierarchy, &plane, 1, 2, 4, 1);
+        let (depth_plus, depth_plus_report) = contextual_isolation(&hierarchy, &plane, 1, 2, 4, 2);
+        assert_eq!(depth_exact, depth_plus);
+        assert_eq!(
+            usage(&depth_exact_report, NURBS_IMPLICIT_ISOLATION_DEPTH).consumed,
+            1
+        );
+        assert_eq!(
+            usage(&depth_plus_report, NURBS_IMPLICIT_ISOLATION_DEPTH).consumed,
+            1
+        );
+    }
+
+    #[test]
+    fn contextual_limited_cover_is_deterministic_ordered_and_conservative() {
+        let coincident = coincident_patch();
+        let hierarchy = NurbsSurfaceBvh::build(&coincident).unwrap();
+        let plane = Plane::new(crate::frame::Frame::world());
+        let (first, first_report) = contextual_isolation(&hierarchy, &plane, 1, 2, 1, 1);
+        let (second, second_report) = contextual_isolation(&hierarchy, &plane, 1, 2, 1, 1);
+        assert_eq!(first, second);
+        assert_eq!(first_report.limit_events(), second_report.limit_events());
+        assert_eq!(first.candidates().len(), 1);
+        let candidate = &first.candidates()[0];
+        assert_eq!(candidate.parameter_range(), coincident.param_range());
+        for i in 0..=4 {
+            for j in 0..=4 {
+                let uv = [f64::from(i) / 4.0, f64::from(j) / 4.0];
+                assert!(candidate.bounds().contains(coincident.eval(uv)));
+            }
+        }
+    }
+
+    #[test]
+    fn contextual_numeric_resolution_is_not_reported_as_a_resource_limit() {
+        let lo = 1.0_f64;
+        let hi = lo.next_up();
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![lo, lo, hi, hi],
+            vec![lo, lo, hi, hi],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.0, 1.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+            ],
+            None,
+        )
+        .unwrap();
+        let hierarchy = NurbsSurfaceBvh::build(&surface).unwrap();
+        let plane = Plane::new(crate::frame::Frame::world());
+        let (isolation, report) = contextual_isolation(&hierarchy, &plane, 1, 1, 4, 1);
+        assert!(isolation.limits().parameter_resolution());
+        assert!(isolation.limits().subdivision_work().is_none());
+        assert!(isolation.limits().candidate_cells().is_none());
+        assert!(isolation.limits().subdivision_depth().is_none());
+        assert!(report.limit_events().is_empty());
+        assert_eq!(
+            report.numeric_resolution_stages(),
+            &[NURBS_IMPLICIT_ISOLATION_DEPTH]
         );
     }
 

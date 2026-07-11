@@ -2,10 +2,21 @@ use super::result::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
 };
 use kcore::error::{Error, Result};
+use kcore::operation::{
+    AccountingMode, BudgetPlan, DiagnosticCode, DiagnosticKind, ExecutionPolicy, LimitSnapshot,
+    LimitSpec, NumericalPolicy, OperationContext, OperationPolicyError, OperationScope,
+    PolicyVersion, ResourceKind, SessionPolicy, SessionPrecision, StageId,
+};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::implicit::ImplicitSurface;
-use kgeom::nurbs::{NurbsCurve, NurbsSurface, NurbsSurfaceBvh};
+use kgeom::nurbs::{
+    ContextImplicitIsolationError, ImplicitIsolationLimits,
+    NURBS_IMPLICIT_ISOLATION_CANDIDATE_LIMIT, NURBS_IMPLICIT_ISOLATION_CANDIDATES,
+    NURBS_IMPLICIT_ISOLATION_DEPTH, NURBS_IMPLICIT_ISOLATION_DEPTH_LIMIT,
+    NURBS_IMPLICIT_ISOLATION_NUMERIC_RESOLUTION, NURBS_IMPLICIT_ISOLATION_SUBDIVISION_LIMIT,
+    NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS, NurbsCurve, NurbsSurface, NurbsSurfaceBvh,
+};
 use kgeom::param::ParamRange;
 use kgeom::surface::{Dir, Surface};
 use kgeom::vec::Point3;
@@ -15,8 +26,74 @@ const MAX_GRID_STEPS: usize = 96;
 const MAX_BISECTION_STEPS: usize = 80;
 const PROOF_SUBDIVISION_DEPTH: u32 = 12;
 const PROOF_CANDIDATE_BUDGET: usize = 4_096;
+const PROOF_SUBDIVISION_WORK: u64 =
+    1 + PROOF_SUBDIVISION_DEPTH as u64 * PROOF_CANDIDATE_BUDGET as u64;
 const COMPLETION_REASON: &str =
     "fixed-grid NURBS surface marching does not prove complete coverage";
+
+/// Stable stage for one signed-distance evaluation at a marching-grid sample.
+pub const NURBS_SURFACE_MARCH_SAMPLES: StageId =
+    match StageId::new("kops.intersect.ssi-grid-samples") {
+        Ok(stage) => stage,
+        Err(_) => panic!("valid NURBS surface marching stage"),
+    };
+
+/// Diagnostic emitted when the marching-grid sample allowance is exhausted.
+pub const NURBS_SURFACE_MARCH_SAMPLE_LIMIT: DiagnosticCode =
+    match DiagnosticCode::new("kops.intersect.ssi-grid-sample-limit") {
+        Ok(code) => code,
+        Err(_) => panic!("valid NURBS surface marching diagnostic code"),
+    };
+
+/// Version-1 deterministic budget profile for the shared NURBS-surface marcher.
+pub struct NurbsSurfaceMarchBudgetProfile;
+
+impl NurbsSurfaceMarchBudgetProfile {
+    /// Preserves the prior proof depth, candidate cover, and maximum `97 × 97`
+    /// grid without earlier exhaustion.
+    pub fn v1_defaults() -> BudgetPlan {
+        BudgetPlan::new([
+            LimitSpec::new(
+                NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                PROOF_SUBDIVISION_WORK,
+            ),
+            LimitSpec::new(
+                NURBS_IMPLICIT_ISOLATION_CANDIDATES,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                PROOF_CANDIDATE_BUDGET as u64,
+            ),
+            LimitSpec::new(
+                NURBS_IMPLICIT_ISOLATION_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                u64::from(PROOF_SUBDIVISION_DEPTH),
+            ),
+            LimitSpec::new(
+                NURBS_SURFACE_MARCH_SAMPLES,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                ((MAX_GRID_STEPS + 1) * (MAX_GRID_STEPS + 1)) as u64,
+            ),
+        ])
+        .expect("built-in NURBS surface marching budget is valid")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum ContextMarchError {
+    Kernel(Error),
+    Limit(LimitSnapshot),
+    Policy(OperationPolicyError),
+}
+
+impl From<Error> for ContextMarchError {
+    fn from(error: Error) -> Self {
+        Self::Kernel(error)
+    }
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct MarchConfig<'a> {
@@ -66,15 +143,53 @@ fn provisional_result(curves: Vec<SurfaceSurfaceCurve>) -> Result<SurfaceSurface
 pub(super) fn march_nurbs_surface_intersection(
     config: MarchConfig<'_>,
 ) -> Result<SurfaceSurfaceIntersections> {
-    validate_nurbs_surface_range(config)?;
+    let session = SessionPolicy::new(
+        SessionPrecision::parasolid(),
+        NumericalPolicy::v1(),
+        ExecutionPolicy::Serial,
+        NurbsSurfaceMarchBudgetProfile::v1_defaults(),
+        PolicyVersion::V1,
+    );
+    let context = OperationContext::new(&session, config.tolerances)
+        .expect("validated Tolerances always satisfy v1 session precision");
+    let mut scope = OperationScope::new(&context);
+    match march_nurbs_surface_intersection_in_scope(config, &mut scope) {
+        Ok(result) => scope.finish(Ok(result)).into_result(),
+        Err(ContextMarchError::Kernel(error)) => scope.finish(Err(error)).into_result(),
+        Err(ContextMarchError::Limit(snapshot)) => scope
+            .finish(Err(Error::ResourceLimit { snapshot }))
+            .into_result(),
+        Err(ContextMarchError::Policy(error)) => {
+            panic!("built-in v1 NURBS surface marching policy is invalid: {error:?}")
+        }
+    }
+}
 
-    // This is the first proof-bearing exit from the provisional marcher. Use
-    // exact NURBS restriction so the hierarchy covers precisely the active
-    // domain rather than retaining irrelevant candidates elsewhere. A failed
-    // optional restriction/build merely leaves the result on the sampled,
-    // explicitly indeterminate path.
+pub(super) fn march_nurbs_surface_intersection_in_scope(
+    config: MarchConfig<'_>,
+    scope: &mut OperationScope<'_, '_>,
+) -> core::result::Result<SurfaceSurfaceIntersections, ContextMarchError> {
+    validate_nurbs_surface_range(config)?;
+    if contextual_proof_is_empty(config, scope)? {
+        return Ok(SurfaceSurfaceIntersections::complete_empty());
+    }
+
+    let parameter_tol = surface_parameter_tolerance(config.surface_range, config.tolerances);
+    if parameter_window_is_tiny(config.surface_range, parameter_tol) {
+        return Ok(SurfaceSurfaceIntersections::indeterminate_empty(
+            COMPLETION_REASON,
+        ));
+    }
+
+    let (u_steps, v_steps) = marching_steps(config.surface);
+    let samples = sample_grid_in_scope(config, u_steps, v_steps, scope)?;
+    finish_sampled_march(config, parameter_tol, u_steps, v_steps, samples)
+        .map_err(ContextMarchError::Kernel)
+}
+
+fn proof_range(config: MarchConfig<'_>) -> [ParamRange; 2] {
     let domain = config.surface.param_range();
-    let proof_range = [
+    [
         ParamRange::new(
             config.surface_range[0].lo.max(domain[0].lo),
             config.surface_range[0].hi.min(domain[0].hi),
@@ -83,32 +198,113 @@ pub(super) fn march_nurbs_surface_intersection(
             config.surface_range[1].lo.max(domain[1].lo),
             config.surface_range[1].hi.min(domain[1].hi),
         ),
-    ];
-    if let Ok(active_surface) = config.surface.restricted_to(proof_range)
-        && let Ok(hierarchy) = NurbsSurfaceBvh::build(&active_surface)
-        && hierarchy
-            .isolate_implicit_candidates(
-                config.implicit_surface,
-                config.tolerances.linear(),
-                PROOF_SUBDIVISION_DEPTH,
-                PROOF_CANDIDATE_BUDGET,
-            )?
-            .is_proven_empty()
+    ]
+}
+
+fn contextual_proof_is_empty(
+    config: MarchConfig<'_>,
+    scope: &mut OperationScope<'_, '_>,
+) -> core::result::Result<bool, ContextMarchError> {
+    // Charge before restriction/BVH construction so a zero root-work budget
+    // cannot execute a proof and then report a complete result with zero work.
+    match scope
+        .ledger_mut()
+        .charge(NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS, 1)
     {
-        return Ok(SurfaceSurfaceIntersections::complete_empty());
+        Ok(()) => {}
+        Err(OperationPolicyError::LimitReached(snapshot)) => {
+            diagnose_limit(
+                scope,
+                snapshot,
+                NURBS_IMPLICIT_ISOLATION_SUBDIVISION_LIMIT,
+                "NURBS implicit-isolation proof setup limit reached",
+            );
+            return Ok(false);
+        }
+        Err(error) => return Err(ContextMarchError::Policy(error)),
     }
 
-    let parameter_tol = surface_parameter_tolerance(config.surface_range, config.tolerances);
-    if config.surface_range[0].width() <= parameter_tol
-        || config.surface_range[1].width() <= parameter_tol
-    {
-        return Ok(SurfaceSurfaceIntersections::indeterminate_empty(
-            COMPLETION_REASON,
-        ));
-    }
+    let Ok(active_surface) = config.surface.restricted_to(proof_range(config)) else {
+        return Ok(false);
+    };
+    let Ok(hierarchy) = NurbsSurfaceBvh::build(&active_surface) else {
+        return Ok(false);
+    };
+    let isolation = hierarchy
+        .isolate_implicit_candidates_in_scope(
+            config.implicit_surface,
+            config.tolerances.linear(),
+            PROOF_SUBDIVISION_DEPTH,
+            scope,
+        )
+        .map_err(|error| match error {
+            ContextImplicitIsolationError::Kernel(error) => ContextMarchError::Kernel(error),
+            ContextImplicitIsolationError::Policy(error) => ContextMarchError::Policy(error),
+        })?;
+    diagnose_isolation_limits(scope, isolation.limits());
+    Ok(isolation.is_proven_empty())
+}
 
-    let (u_steps, v_steps) = marching_steps(config.surface);
-    let samples = sample_grid(config, u_steps, v_steps)?;
+fn diagnose_isolation_limits(scope: &mut OperationScope<'_, '_>, limits: ImplicitIsolationLimits) {
+    if let Some(snapshot) = limits.subdivision_work() {
+        diagnose_limit(
+            scope,
+            snapshot,
+            NURBS_IMPLICIT_ISOLATION_SUBDIVISION_LIMIT,
+            "NURBS implicit-isolation subdivision limit reached",
+        );
+    }
+    if let Some(snapshot) = limits.candidate_cells() {
+        diagnose_limit(
+            scope,
+            snapshot,
+            NURBS_IMPLICIT_ISOLATION_CANDIDATE_LIMIT,
+            "NURBS implicit-isolation candidate-cover limit reached",
+        );
+    }
+    if let Some(snapshot) = limits.subdivision_depth() {
+        diagnose_limit(
+            scope,
+            snapshot,
+            NURBS_IMPLICIT_ISOLATION_DEPTH_LIMIT,
+            "NURBS implicit-isolation depth limit reached",
+        );
+    }
+    if limits.parameter_resolution() {
+        scope.diagnose(
+            NURBS_IMPLICIT_ISOLATION_DEPTH,
+            NURBS_IMPLICIT_ISOLATION_NUMERIC_RESOLUTION,
+            DiagnosticKind::NumericResolution,
+            "NURBS implicit isolation stopped at floating-point parameter resolution",
+        );
+    }
+}
+
+fn diagnose_limit(
+    scope: &mut OperationScope<'_, '_>,
+    snapshot: LimitSnapshot,
+    code: DiagnosticCode,
+    message: &'static str,
+) {
+    scope.diagnose(
+        snapshot.stage,
+        code,
+        DiagnosticKind::LimitReached(snapshot),
+        message,
+    );
+}
+
+fn parameter_window_is_tiny(range: [ParamRange; 2], parameter_tol: f64) -> bool {
+    range[0].width() <= parameter_tol || range[1].width() <= parameter_tol
+}
+
+fn finish_sampled_march(
+    config: MarchConfig<'_>,
+    parameter_tol: f64,
+    u_steps: usize,
+    v_steps: usize,
+    samples: Vec<Sample>,
+) -> Result<SurfaceSurfaceIntersections> {
     if samples
         .iter()
         .all(|sample| sample.distance.abs() <= config.tolerances.linear())
@@ -138,7 +334,7 @@ pub(super) fn march_nurbs_surface_intersection(
     let polylines = join_segments(segments, parameter_tol, config.tolerances);
     let mut curves = Vec::new();
     for polyline in polylines {
-        if let Some(curve) = branch_from_polyline(config, polyline)? {
+        if let Some(curve) = branch_from_polyline(config, polyline, parameter_tol)? {
             curves.push(curve);
         }
     }
@@ -259,6 +455,7 @@ fn edge_roots(
 fn branch_from_polyline(
     config: MarchConfig<'_>,
     polyline: Vec<MarchPoint>,
+    parameter_tol: f64,
 ) -> Result<Option<SurfaceSurfaceCurve>> {
     let points = distinct_polyline_points(polyline, config.tolerances);
     if points.len() < 2 {
@@ -275,18 +472,10 @@ fn branch_from_polyline(
         curve_range: range,
         uv_a_start: start.other_uv,
         uv_a_end: end.other_uv,
-        uv_b_start: fit_uv(
-            start.surface_uv,
-            config.surface_range,
-            surface_parameter_tolerance(config.surface_range, config.tolerances),
-        )
-        .unwrap_or(start.surface_uv),
-        uv_b_end: fit_uv(
-            end.surface_uv,
-            config.surface_range,
-            surface_parameter_tolerance(config.surface_range, config.tolerances),
-        )
-        .unwrap_or(end.surface_uv),
+        uv_b_start: fit_uv(start.surface_uv, config.surface_range, parameter_tol)
+            .unwrap_or(start.surface_uv),
+        uv_b_end: fit_uv(end.surface_uv, config.surface_range, parameter_tol)
+            .unwrap_or(end.surface_uv),
         kind: (config.branch_kind)(&points),
     }))
 }
@@ -400,24 +589,55 @@ fn march_point(config: MarchConfig<'_>, uv: [f64; 2], parameter_tol: f64) -> Opt
     })
 }
 
-fn sample_grid(config: MarchConfig<'_>, u_steps: usize, v_steps: usize) -> Result<Vec<Sample>> {
+fn sample_grid_in_scope(
+    config: MarchConfig<'_>,
+    u_steps: usize,
+    v_steps: usize,
+    scope: &mut OperationScope<'_, '_>,
+) -> core::result::Result<Vec<Sample>, ContextMarchError> {
     let mut samples = Vec::with_capacity((u_steps + 1) * (v_steps + 1));
     for i in 0..=u_steps {
         for j in 0..=v_steps {
-            let uv = [
-                config.surface_range[0].lerp(i as f64 / u_steps as f64),
-                config.surface_range[1].lerp(j as f64 / v_steps as f64),
-            ];
-            let distance = (config.signed_distance)(config.surface.eval(uv));
-            if !distance.is_finite() {
-                return Err(Error::InvalidGeometry {
-                    reason: config.non_finite_reason,
-                });
-            }
-            samples.push(Sample { uv, distance });
+            charge_grid_sample(scope)?;
+            samples.push(
+                evaluate_grid_sample(config, u_steps, v_steps, i, j)
+                    .map_err(ContextMarchError::Kernel)?,
+            );
         }
     }
     Ok(samples)
+}
+
+fn evaluate_grid_sample(
+    config: MarchConfig<'_>,
+    u_steps: usize,
+    v_steps: usize,
+    i: usize,
+    j: usize,
+) -> Result<Sample> {
+    let uv = [
+        config.surface_range[0].lerp(i as f64 / u_steps as f64),
+        config.surface_range[1].lerp(j as f64 / v_steps as f64),
+    ];
+    let distance = (config.signed_distance)(config.surface.eval(uv));
+    if !distance.is_finite() {
+        return Err(Error::InvalidGeometry {
+            reason: config.non_finite_reason,
+        });
+    }
+    Ok(Sample { uv, distance })
+}
+
+fn charge_grid_sample(
+    scope: &mut OperationScope<'_, '_>,
+) -> core::result::Result<(), ContextMarchError> {
+    match scope.ledger_mut().charge(NURBS_SURFACE_MARCH_SAMPLES, 1) {
+        Ok(()) => Ok(()),
+        Err(OperationPolicyError::LimitReached(snapshot)) => {
+            Err(ContextMarchError::Limit(snapshot))
+        }
+        Err(error) => Err(ContextMarchError::Policy(error)),
+    }
 }
 
 fn sample_at(samples: &[Sample], v_steps: usize, i: usize, j: usize) -> Sample {

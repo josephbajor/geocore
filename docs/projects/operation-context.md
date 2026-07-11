@@ -251,7 +251,15 @@ The ledger supports:
   count, and scratch-memory high-water marks;
 - deterministic child reservation by stable work-item ordinal;
 - a root total-work ceiling in addition to stage-specific limits; and
-- a snapshot on both success and failure.
+- accepted-usage snapshots plus first-crossing and numeric-resolution evidence on
+  both success and failure.
+
+When a parent has a root total-work ceiling, every child reserves root capacity
+as well as stage capacity. If a child plan omits an explicit root ceiling, the
+ledger infers the checked sum of its cumulative Work allowances; an explicit
+stricter child ceiling is preserved. This makes a valid completed child
+mergeable instead of allowing parent work to consume capacity already promised
+implicitly to the child.
 
 The unit charged at each stage is part of that stage's documentation and tests. A
 "work" unit is not a time unit. Wall-clock deadlines are deliberately excluded because
@@ -285,6 +293,8 @@ pub struct OperationOutcome<T> {
 pub struct OperationReport {
     policy_version: PolicyVersion,
     usage: Vec<LimitSnapshot>,
+    limit_events: Vec<LimitSnapshot>,
+    numeric_resolution_stages: Vec<StageId>,
     diagnostics: Vec<OperationDiagnostic>,
 }
 
@@ -299,6 +309,12 @@ impl<T> OperationOutcome<T> {
 This shape avoids putting mutable output sinks in the context, preserves reports after
 errors, and lets F4 evolve the error taxonomy independently. Reports are assembled only
 after child work is merged in deterministic ordinal order.
+
+`usage` records accepted accounting. `limit_events` separately retains the first
+attempted crossing for each configured stage/resource pair, and
+`numeric_resolution_stages` retains arithmetic-resolution stops. These two semantic
+records are independent of diagnostic level; optional diagnostics add bounded human
+context but are never the only machine-readable explanation for incomplete work.
 
 Existing public functions remain and become compatibility wrappers:
 
@@ -374,6 +390,8 @@ Normative rules:
 
 - work items receive stable ordinals before parallel execution;
 - result and diagnostic merging is ordinal-ordered;
+- limit and numeric-resolution evidence from child ledgers is merged in that same
+  ordinal order;
 - floating reductions use a prescribed index order or a prescribed deterministic tree,
   never completion order;
 - budget allocation cannot be an atomic race. A frontier is planned serially or each

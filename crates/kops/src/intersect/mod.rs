@@ -104,11 +104,15 @@ pub use nurbs_cylinder::intersect_bounded_nurbs_cylinder;
 pub use nurbs_nurbs::intersect_bounded_nurbs_nurbs;
 pub use nurbs_plane::intersect_bounded_nurbs_plane;
 pub use nurbs_sphere::intersect_bounded_nurbs_sphere;
+pub use nurbs_surface_march::{
+    NURBS_SURFACE_MARCH_SAMPLE_LIMIT, NURBS_SURFACE_MARCH_SAMPLES, NurbsSurfaceMarchBudgetProfile,
+};
 pub use nurbs_torus::intersect_bounded_nurbs_torus;
 pub use planar_curve_plane::{intersect_bounded_circle_plane, intersect_bounded_ellipse_plane};
 pub use plane_cone::intersect_bounded_plane_cone;
 pub use plane_cylinder::intersect_bounded_plane_cylinder;
 pub use plane_nurbs_surface::intersect_bounded_plane_nurbs_surface;
+pub use plane_nurbs_surface::intersect_bounded_plane_nurbs_surface_with_context;
 pub use plane_plane::intersect_bounded_planes;
 pub use plane_sphere::intersect_bounded_plane_sphere;
 pub use plane_torus::intersect_bounded_plane_torus;

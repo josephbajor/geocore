@@ -35,6 +35,10 @@ pub use knots::KnotVector;
 pub use ncurve::NurbsCurve;
 pub use nsurface::NurbsSurface;
 pub use patch_bvh::{
-    ImplicitCandidateCell, ImplicitIsolationLimits, ImplicitPatchIsolation, NurbsSurfaceBvh,
-    PlanePatchRelation,
+    ContextImplicitIsolationError, ImplicitCandidateCell, ImplicitIsolationLimits,
+    ImplicitPatchIsolation, NURBS_IMPLICIT_ISOLATION_CANDIDATE_LIMIT,
+    NURBS_IMPLICIT_ISOLATION_CANDIDATES, NURBS_IMPLICIT_ISOLATION_DEPTH,
+    NURBS_IMPLICIT_ISOLATION_DEPTH_LIMIT, NURBS_IMPLICIT_ISOLATION_NUMERIC_RESOLUTION,
+    NURBS_IMPLICIT_ISOLATION_SUBDIVISION_LIMIT, NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
+    NurbsSurfaceBvh, PlanePatchRelation,
 };

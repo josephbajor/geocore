@@ -148,6 +148,8 @@ pub mod code {
     pub const INVALID_GEOMETRY: ErrorCode = known_error_code("kcore.input.invalid-geometry");
     /// A legacy algorithm work/refinement allowance was reached.
     pub const ALGORITHM_LIMIT: ErrorCode = known_error_code("kcore.limit.algorithm");
+    /// A deterministic resource allowance was reached with structured F2 data.
+    pub const RESOURCE_LIMIT: ErrorCode = known_error_code("kcore.limit.resource");
     /// A nested modeling transaction was requested.
     pub const TRANSACTION_ACTIVE: ErrorCode = known_error_code("kcore.state.transaction-active");
     /// A transaction operation was requested without an active transaction.
@@ -168,6 +170,7 @@ pub mod code {
         TOLERANCE_BUDGET_EXCEEDED,
         INVALID_GEOMETRY,
         ALGORITHM_LIMIT,
+        RESOURCE_LIMIT,
         TRANSACTION_ACTIVE,
         TRANSACTION_INACTIVE,
         TOPOLOGY_CHECK_FAILED,
@@ -217,6 +220,12 @@ pub enum Error {
         /// The configured limit.
         limit: usize,
     },
+    /// A deterministic resource allowance was reached with exact F2 stage,
+    /// resource, consumed, and allowed data.
+    ResourceLimit {
+        /// Structured snapshot of the attempted usage that crossed the limit.
+        snapshot: LimitSnapshot,
+    },
     /// A modeling transaction was requested while another transaction is
     /// already active on the same store. Nested modeling transactions are
     /// deliberately rejected until their journal-composition semantics are
@@ -263,6 +272,14 @@ impl fmt::Display for Error {
             Error::AlgorithmLimit { operation, limit } => {
                 write!(f, "{operation} exceeded its limit of {limit}")
             }
+            Error::ResourceLimit { snapshot } => write!(
+                f,
+                "{} {:?} usage {} exceeds {}",
+                snapshot.stage.as_str(),
+                snapshot.resource,
+                snapshot.consumed,
+                snapshot.allowed
+            ),
             Error::TransactionActive => {
                 write!(f, "a modeling transaction is already active on this store")
             }
@@ -288,9 +305,9 @@ impl Error {
             | Self::InvalidTolerance { .. }
             | Self::InvalidToleranceBudget { .. }
             | Self::InvalidGeometry { .. } => ErrorClass::InvalidInput,
-            Self::ToleranceBudgetExceeded { .. } | Self::AlgorithmLimit { .. } => {
-                ErrorClass::ResourceLimit
-            }
+            Self::ToleranceBudgetExceeded { .. }
+            | Self::AlgorithmLimit { .. }
+            | Self::ResourceLimit { .. } => ErrorClass::ResourceLimit,
             Self::TransactionActive | Self::TransactionInactive => ErrorClass::InvalidState,
             Self::TopologyCheckFailed { .. } => ErrorClass::ModelRejected,
         }
@@ -306,6 +323,7 @@ impl Error {
             Self::ToleranceBudgetExceeded { .. } => code::TOLERANCE_BUDGET_EXCEEDED,
             Self::InvalidGeometry { .. } => code::INVALID_GEOMETRY,
             Self::AlgorithmLimit { .. } => code::ALGORITHM_LIMIT,
+            Self::ResourceLimit { .. } => code::RESOURCE_LIMIT,
             Self::TransactionActive => code::TRANSACTION_ACTIVE,
             Self::TransactionInactive => code::TRANSACTION_INACTIVE,
             Self::TopologyCheckFailed { .. } => code::TOPOLOGY_CHECK_FAILED,
@@ -322,10 +340,13 @@ impl Error {
 
     /// Returns F2 structured limit data when present.
     ///
-    /// Existing limit variants predate F2 and cannot reconstruct a truthful
-    /// stage/resource/consumed snapshot from their legacy payloads.
+    /// Legacy limit variants cannot reconstruct a truthful snapshot and return
+    /// `None`; the additive structured variant returns its exact F2 data.
     pub const fn limit(&self) -> Option<LimitSnapshot> {
-        None
+        match self {
+            Self::ResourceLimit { snapshot } => Some(*snapshot),
+            _ => None,
+        }
     }
 }
 
@@ -414,6 +435,20 @@ mod tests {
         assert_eq!(limit.class(), ErrorClass::ResourceLimit);
         assert_eq!(limit.code(), code::ALGORITHM_LIMIT);
         assert_eq!(limit.limit(), None);
+
+        let snapshot = LimitSnapshot {
+            stage: match crate::operation::StageId::new("kcore.test.structured-limit") {
+                Ok(stage) => stage,
+                Err(_) => panic!("valid stage"),
+            },
+            resource: crate::operation::ResourceKind::Work,
+            consumed: 11,
+            allowed: 10,
+        };
+        let structured = Error::ResourceLimit { snapshot };
+        assert_eq!(structured.class(), ErrorClass::ResourceLimit);
+        assert_eq!(structured.code(), code::RESOURCE_LIMIT);
+        assert_eq!(structured.limit(), Some(snapshot));
 
         assert_eq!(Error::TransactionActive.class(), ErrorClass::InvalidState);
         assert_eq!(

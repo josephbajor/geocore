@@ -2,6 +2,12 @@
 
 use super::id::{OperationPolicyError, StageId};
 
+/// Stable stage for the synthetic root ceiling over cumulative work.
+pub const TOTAL_WORK_STAGE: StageId = match StageId::new("kcore.operation.total-work") {
+    Ok(stage) => stage,
+    Err(_) => panic!("valid total-work stage identifier"),
+};
+
 /// The category of deterministically accounted resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
@@ -171,6 +177,8 @@ pub struct WorkLedger {
     entries: Vec<UsageEntry>,
     total_work_allowed: Option<u64>,
     total_work_consumed: u64,
+    limit_events: Vec<LimitSnapshot>,
+    numeric_resolution_stages: Vec<StageId>,
     reservations: Vec<Reservation>,
 }
 
@@ -185,6 +193,8 @@ impl WorkLedger {
                 .collect(),
             total_work_allowed: plan.total_work_allowed,
             total_work_consumed: 0,
+            limit_events: Vec::new(),
+            numeric_resolution_stages: Vec::new(),
             reservations: Vec::new(),
         }
     }
@@ -213,7 +223,10 @@ impl WorkLedger {
         let attempted = current
             .checked_add(amount)
             .ok_or(OperationPolicyError::AccountingOverflow { stage, resource })?;
-        self.ensure_within_reserved_capacity(index, attempted)?;
+        if let Some(snapshot) = self.stage_limit_crossing(index, attempted)? {
+            self.record_limit(snapshot);
+            return Err(OperationPolicyError::LimitReached(snapshot));
+        }
         let attempted_total = if resource == ResourceKind::Work {
             Some(
                 self.total_work_consumed
@@ -226,12 +239,14 @@ impl WorkLedger {
         if let (Some(total), Some(allowed)) = (attempted_total, self.total_work_allowed) {
             let usable = allowed.saturating_sub(self.reserved_total_work()?);
             if total > usable {
-                return Err(OperationPolicyError::LimitReached(LimitSnapshot {
-                    stage: total_work_stage(),
+                let snapshot = LimitSnapshot {
+                    stage: TOTAL_WORK_STAGE,
                     resource,
                     consumed: total,
                     allowed: usable,
-                }));
+                };
+                self.record_limit(snapshot);
+                return Err(OperationPolicyError::LimitReached(snapshot));
             }
         }
         self.entries[index].consumed = attempted;
@@ -253,7 +268,10 @@ impl WorkLedger {
             return Err(OperationPolicyError::AccountingModeMismatch { stage, resource });
         }
         let attempted = self.entries[index].consumed.max(value);
-        self.ensure_within_reserved_capacity(index, attempted)?;
+        if let Some(snapshot) = self.stage_limit_crossing(index, attempted)? {
+            self.record_limit(snapshot);
+            return Err(OperationPolicyError::LimitReached(snapshot));
+        }
         self.entries[index].consumed = attempted;
         Ok(())
     }
@@ -262,10 +280,16 @@ impl WorkLedger {
     ///
     /// Reservations must be planned in increasing ordinal order. Parent work
     /// cannot consume reserved capacity until children are merged.
+    ///
+    /// When the parent has a root total-work ceiling and the child plan omits
+    /// one, the child root reservation is inferred as the checked sum of its
+    /// cumulative `Work` allowances. An explicit child root ceiling is used as
+    /// written, including when it is stricter than that sum; the inferred sum
+    /// is never added to an explicit ceiling.
     pub fn reserve_child(
         &mut self,
         ordinal: u64,
-        plan: BudgetPlan,
+        mut plan: BudgetPlan,
     ) -> core::result::Result<ChildWorkLedger, OperationPolicyError> {
         if self
             .reservations
@@ -273,6 +297,20 @@ impl WorkLedger {
             .is_some_and(|reservation| reservation.ordinal >= ordinal)
         {
             return Err(OperationPolicyError::InvalidChildOrdinal);
+        }
+        if self.total_work_allowed.is_some() && plan.total_work_allowed.is_none() {
+            let inferred = plan
+                .limits
+                .iter()
+                .filter(|spec| spec.resource == ResourceKind::Work)
+                .try_fold(0_u64, |sum, spec| {
+                    sum.checked_add(spec.allowed)
+                        .ok_or(OperationPolicyError::AccountingOverflow {
+                            stage: TOTAL_WORK_STAGE,
+                            resource: ResourceKind::Work,
+                        })
+                })?;
+            plan.total_work_allowed = Some(inferred);
         }
         for spec in &plan.limits {
             let index = self.entry_index(spec.stage, spec.resource)?;
@@ -302,20 +340,20 @@ impl WorkLedger {
             let reserved_total = self.reserved_total_work()?;
             let required = reserved_total.checked_add(child_total).ok_or(
                 OperationPolicyError::AccountingOverflow {
-                    stage: total_work_stage(),
+                    stage: TOTAL_WORK_STAGE,
                     resource: ResourceKind::Work,
                 },
             )?;
             let available = self
                 .total_work_allowed
                 .ok_or(OperationPolicyError::UnknownLimit {
-                    stage: total_work_stage(),
+                    stage: TOTAL_WORK_STAGE,
                     resource: ResourceKind::Work,
                 })?
                 .saturating_sub(self.total_work_consumed);
             if required > available {
                 return Err(OperationPolicyError::ChildReservationExceeded {
-                    stage: total_work_stage(),
+                    stage: TOTAL_WORK_STAGE,
                     resource: ResourceKind::Work,
                 });
             }
@@ -366,9 +404,22 @@ impl WorkLedger {
                     }
                 };
                 if let Err(error) = result {
+                    let attempted_limit = match error {
+                        OperationPolicyError::LimitReached(snapshot) => Some(snapshot),
+                        _ => None,
+                    };
                     *self = original;
+                    if let Some(snapshot) = attempted_limit {
+                        self.record_limit(snapshot);
+                    }
                     return Err(error);
                 }
+            }
+            for snapshot in child.ledger.limit_events {
+                self.record_limit(snapshot);
+            }
+            for stage in child.ledger.numeric_resolution_stages {
+                self.record_numeric_resolution(stage);
             }
         }
         Ok(())
@@ -388,7 +439,7 @@ impl WorkLedger {
             .collect();
         if let Some(allowed) = self.total_work_allowed {
             snapshots.push(LimitSnapshot {
-                stage: total_work_stage(),
+                stage: TOTAL_WORK_STAGE,
                 resource: ResourceKind::Work,
                 consumed: self.total_work_consumed,
                 allowed,
@@ -403,6 +454,24 @@ impl WorkLedger {
         self.total_work_consumed
     }
 
+    /// Returns the first actual attempted crossing for each configured
+    /// stage/resource pair, in deterministic observation order.
+    pub fn limit_events(&self) -> &[LimitSnapshot] {
+        &self.limit_events
+    }
+
+    /// Retains a numeric-resolution stop once in first-observed order.
+    pub fn record_numeric_resolution(&mut self, stage: StageId) {
+        if !self.numeric_resolution_stages.contains(&stage) {
+            self.numeric_resolution_stages.push(stage);
+        }
+    }
+
+    /// Returns numeric-resolution stops in deterministic observation order.
+    pub fn numeric_resolution_stages(&self) -> &[StageId] {
+        &self.numeric_resolution_stages
+    }
+
     fn entry_index(
         &self,
         stage: StageId,
@@ -415,23 +484,33 @@ impl WorkLedger {
             .map_err(|_| OperationPolicyError::UnknownLimit { stage, resource })
     }
 
-    fn ensure_within_reserved_capacity(
+    fn stage_limit_crossing(
         &self,
         index: usize,
         attempted: u64,
-    ) -> core::result::Result<(), OperationPolicyError> {
+    ) -> core::result::Result<Option<LimitSnapshot>, OperationPolicyError> {
         let entry = self.entries[index];
         let reserved = self.reserved_for(entry.spec.stage, entry.spec.resource)?;
         let usable = entry.spec.allowed.saturating_sub(reserved);
         if attempted > usable {
-            return Err(OperationPolicyError::LimitReached(LimitSnapshot {
+            return Ok(Some(LimitSnapshot {
                 stage: entry.spec.stage,
                 resource: entry.spec.resource,
                 consumed: attempted,
                 allowed: usable,
             }));
         }
-        Ok(())
+        Ok(None)
+    }
+
+    fn record_limit(&mut self, snapshot: LimitSnapshot) {
+        if !self
+            .limit_events
+            .iter()
+            .any(|event| event.stage == snapshot.stage && event.resource == snapshot.resource)
+        {
+            self.limit_events.push(snapshot);
+        }
     }
 
     fn reserved_for(
@@ -462,18 +541,10 @@ impl WorkLedger {
             .try_fold(0_u64, |sum, value| {
                 sum.checked_add(value)
                     .ok_or(OperationPolicyError::AccountingOverflow {
-                        stage: total_work_stage(),
+                        stage: TOTAL_WORK_STAGE,
                         resource: ResourceKind::Work,
                     })
             })
-    }
-}
-
-const fn total_work_stage() -> StageId {
-    // Kept private: it identifies the ledger's synthetic aggregate ceiling.
-    match StageId::new("kcore.operation.total-work") {
-        Ok(stage) => stage,
-        Err(_) => panic!("valid internal stage identifier"),
     }
 }
 
@@ -498,5 +569,58 @@ impl ChildWorkLedger {
     /// Returns the child's immutable ledger.
     pub const fn ledger(&self) -> &WorkLedger {
         &self.ledger
+    }
+}
+
+#[cfg(test)]
+mod internal_tests {
+    use super::*;
+
+    const WORK_STAGE: StageId = match StageId::new("kcore.test.merge-work") {
+        Ok(stage) => stage,
+        Err(_) => panic!("valid work stage"),
+    };
+    const NUMERIC_STAGE: StageId = match StageId::new("kcore.test.merge-numeric") {
+        Ok(stage) => stage,
+        Err(_) => panic!("valid numeric stage"),
+    };
+
+    #[test]
+    fn failed_merge_rolls_back_usage_and_reservations_but_retains_attempted_limit() {
+        let parent_plan = BudgetPlan::new([LimitSpec::new(
+            WORK_STAGE,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            10,
+        )])
+        .unwrap();
+        let child_plan = BudgetPlan::new([LimitSpec::new(
+            WORK_STAGE,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            5,
+        )])
+        .unwrap();
+        let mut parent = WorkLedger::new(parent_plan);
+        parent.record_numeric_resolution(NUMERIC_STAGE);
+        let mut child = parent.reserve_child(1, child_plan).unwrap();
+        child.ledger.record_numeric_resolution(WORK_STAGE);
+
+        // Simulate a corrupted/foreign child result that violated its reserved
+        // allowance. Safe public child accounting cannot construct this state;
+        // the test pins failure rollback and attempted-event retention if a
+        // merge nevertheless encounters it.
+        child.ledger.entries[0].consumed = 11;
+        let snapshot = match parent.merge_children(vec![child]) {
+            Err(OperationPolicyError::LimitReached(snapshot)) => snapshot,
+            other => panic!("unexpected merge result: {other:?}"),
+        };
+        assert_eq!(snapshot.stage, WORK_STAGE);
+        assert_eq!(snapshot.consumed, 11);
+        assert_eq!(snapshot.allowed, 10);
+        assert_eq!(parent.snapshots()[0].consumed, 0);
+        assert_eq!(parent.reservations.len(), 1);
+        assert_eq!(parent.limit_events(), &[snapshot]);
+        assert_eq!(parent.numeric_resolution_stages(), &[NUMERIC_STAGE]);
     }
 }

@@ -153,6 +153,14 @@ impl<'context, 'session> OperationScope<'context, 'session> {
         &self.ledger
     }
 
+    /// Retains a numeric-resolution stop independently of diagnostic level.
+    ///
+    /// Each validated stage is retained once in first-observed order. This
+    /// evidence does not require a budget entry for the stage.
+    pub fn record_numeric_resolution(&mut self, stage: StageId) {
+        self.ledger.record_numeric_resolution(stage);
+    }
+
     /// Records a semantic diagnostic if diagnostics are enabled and capacity remains.
     pub fn diagnose(
         &mut self,
@@ -181,11 +189,15 @@ impl<'context, 'session> OperationScope<'context, 'session> {
 
     /// Finishes the operation and preserves its report alongside the result.
     pub fn finish<T>(self, result: Result<T>) -> OperationOutcome<T> {
+        let limit_events = self.ledger.limit_events().to_vec();
+        let numeric_resolution_stages = self.ledger.numeric_resolution_stages().to_vec();
         OperationOutcome {
             result,
             report: OperationReport {
                 policy_version: self.context.session.policy_version(),
                 usage: self.ledger.snapshots(),
+                limit_events,
+                numeric_resolution_stages,
                 diagnostics: self.diagnostics,
                 dropped_diagnostics: self.dropped_diagnostics,
             },
@@ -198,6 +210,8 @@ impl<'context, 'session> OperationScope<'context, 'session> {
 pub struct OperationReport {
     policy_version: PolicyVersion,
     usage: Vec<LimitSnapshot>,
+    limit_events: Vec<LimitSnapshot>,
+    numeric_resolution_stages: Vec<StageId>,
     diagnostics: Vec<OperationDiagnostic>,
     dropped_diagnostics: u64,
 }
@@ -211,6 +225,22 @@ impl OperationReport {
     /// Returns canonical stage/resource usage order.
     pub fn usage(&self) -> &[LimitSnapshot] {
         &self.usage
+    }
+
+    /// Returns attempted limit crossings in deterministic observation order.
+    ///
+    /// Unlike prose diagnostics, these events are always retained when a
+    /// limit affects operation control flow, including when diagnostics are
+    /// disabled.
+    pub fn limit_events(&self) -> &[LimitSnapshot] {
+        &self.limit_events
+    }
+
+    /// Returns stages where arithmetic resolution stopped proof/refinement.
+    ///
+    /// These structured stops are retained even when diagnostics are off.
+    pub fn numeric_resolution_stages(&self) -> &[StageId] {
+        &self.numeric_resolution_stages
     }
 
     /// Returns operation-local diagnostic insertion order.

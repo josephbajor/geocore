@@ -149,19 +149,146 @@ fn child_reservations_protect_stage_and_root_capacity() {
     .expect("valid parent plan")
     .with_total_work_limit(10);
     let mut parent = WorkLedger::new(parent_plan);
-    let child = parent
+    let mut child = parent
         .reserve_child(1, child_plan)
         .expect("child reservation");
+    child
+        .ledger_mut()
+        .charge(STAGE_A, 4)
+        .expect("child allowance");
+    let child_limit = match child.ledger_mut().charge(STAGE_A, 1) {
+        Err(OperationPolicyError::LimitReached(snapshot)) => snapshot,
+        other => panic!("unexpected child limit result: {other:?}"),
+    };
     parent.charge(STAGE_B, 6).expect("unreserved root capacity");
-    assert!(matches!(
-        parent.charge(STAGE_B, 1),
-        Err(OperationPolicyError::LimitReached(LimitSnapshot {
-            consumed: 7,
-            allowed: 6,
-            ..
-        }))
-    ));
+    let parent_limit = match parent.charge(STAGE_B, 1) {
+        Err(OperationPolicyError::LimitReached(snapshot)) => snapshot,
+        other => panic!("unexpected parent limit result: {other:?}"),
+    };
+    assert_eq!(parent_limit.stage, TOTAL_WORK_STAGE);
+    assert_eq!(parent_limit.consumed, 7);
+    assert_eq!(parent_limit.allowed, 6);
     parent.merge_children(vec![child]).expect("join child");
+    assert_eq!(parent.limit_events(), &[parent_limit, child_limit]);
+}
+
+#[test]
+fn omitted_child_root_is_inferred_and_prevents_late_merge_exhaustion() {
+    let parent_plan = BudgetPlan::new([
+        LimitSpec::new(STAGE_A, ResourceKind::Work, AccountingMode::Cumulative, 5),
+        LimitSpec::new(STAGE_B, ResourceKind::Work, AccountingMode::Cumulative, 10),
+    ])
+    .unwrap()
+    .with_total_work_limit(10);
+    let child_plan = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        5,
+    )])
+    .unwrap();
+    let mut parent = WorkLedger::new(parent_plan);
+    let mut child = parent.reserve_child(1, child_plan).unwrap();
+    child.ledger_mut().charge(STAGE_A, 5).unwrap();
+    parent.charge(STAGE_B, 5).unwrap();
+
+    let protected = match parent.charge(STAGE_B, 1) {
+        Err(OperationPolicyError::LimitReached(snapshot)) => snapshot,
+        other => panic!("unexpected protected-capacity result: {other:?}"),
+    };
+    assert_eq!(protected.stage, TOTAL_WORK_STAGE);
+    assert_eq!(protected.consumed, 6);
+    assert_eq!(protected.allowed, 5);
+
+    parent.merge_children(vec![child]).unwrap();
+    assert_eq!(parent.total_work_consumed(), 10);
+    assert_eq!(
+        parent
+            .snapshots()
+            .into_iter()
+            .find(|snapshot| snapshot.stage == STAGE_B)
+            .unwrap()
+            .consumed,
+        5
+    );
+    assert_eq!(parent.limit_events(), &[protected]);
+}
+
+#[test]
+fn inferred_child_root_rejects_insufficient_capacity_and_respects_explicit_stricter_total() {
+    let parent_plan = BudgetPlan::new([
+        LimitSpec::new(STAGE_A, ResourceKind::Work, AccountingMode::Cumulative, 5),
+        LimitSpec::new(STAGE_B, ResourceKind::Work, AccountingMode::Cumulative, 10),
+    ])
+    .unwrap()
+    .with_total_work_limit(4);
+    let child_plan = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        5,
+    )])
+    .unwrap();
+    let mut parent = WorkLedger::new(parent_plan);
+    assert_eq!(
+        parent.reserve_child(1, child_plan.clone()).unwrap_err(),
+        OperationPolicyError::ChildReservationExceeded {
+            stage: TOTAL_WORK_STAGE,
+            resource: ResourceKind::Work,
+        }
+    );
+
+    let parent_plan = BudgetPlan::new([
+        LimitSpec::new(STAGE_A, ResourceKind::Work, AccountingMode::Cumulative, 5),
+        LimitSpec::new(STAGE_B, ResourceKind::Work, AccountingMode::Cumulative, 10),
+    ])
+    .unwrap()
+    .with_total_work_limit(10);
+    let mut parent = WorkLedger::new(parent_plan);
+    let mut child = parent
+        .reserve_child(1, child_plan.with_total_work_limit(3))
+        .unwrap();
+    parent.charge(STAGE_B, 7).unwrap();
+    child.ledger_mut().charge(STAGE_A, 3).unwrap();
+    parent.merge_children(vec![child]).unwrap();
+    assert_eq!(parent.total_work_consumed(), 10);
+}
+
+#[test]
+fn numeric_resolution_events_merge_by_child_ordinal_and_rollback_cleanly() {
+    let mut parent = WorkLedger::new(BudgetPlan::empty());
+    let mut first = parent.reserve_child(2, BudgetPlan::empty()).unwrap();
+    let mut second = parent.reserve_child(9, BudgetPlan::empty()).unwrap();
+    first.ledger_mut().record_numeric_resolution(STAGE_B);
+    first.ledger_mut().record_numeric_resolution(STAGE_A);
+    second.ledger_mut().record_numeric_resolution(STAGE_A);
+
+    let mut reversed_parent = parent.clone();
+    let normal_children = vec![first.clone(), second.clone()];
+    reversed_parent.merge_children(vec![second, first]).unwrap();
+    parent.merge_children(normal_children).unwrap();
+    assert_eq!(parent.numeric_resolution_stages(), &[STAGE_B, STAGE_A]);
+    assert_eq!(
+        reversed_parent.numeric_resolution_stages(),
+        parent.numeric_resolution_stages()
+    );
+
+    let mut rollback_parent = WorkLedger::new(BudgetPlan::empty());
+    rollback_parent.record_numeric_resolution(STAGE_A);
+    let mut child = rollback_parent
+        .reserve_child(1, BudgetPlan::empty())
+        .unwrap();
+    child.ledger_mut().record_numeric_resolution(STAGE_B);
+    assert_eq!(
+        rollback_parent.merge_children(Vec::new()),
+        Err(OperationPolicyError::UnknownChildReservation)
+    );
+    assert_eq!(rollback_parent.numeric_resolution_stages(), &[STAGE_A]);
+    rollback_parent.merge_children(vec![child]).unwrap();
+    assert_eq!(
+        rollback_parent.numeric_resolution_stages(),
+        &[STAGE_A, STAGE_B]
+    );
 }
 
 #[test]
@@ -178,6 +305,16 @@ fn report_is_ordered_bounded_and_retained_on_both_outcomes() {
         .with_diagnostics(DiagnosticLevel::Summary, 1);
     let mut scope = OperationScope::new(&context);
     scope.ledger_mut().charge(STAGE_A, 3).expect("work");
+    let attempted = match scope.ledger_mut().charge(STAGE_A, 8) {
+        Err(OperationPolicyError::LimitReached(snapshot)) => snapshot,
+        other => panic!("unexpected limit result: {other:?}"),
+    };
+    assert!(matches!(
+        scope.ledger_mut().charge(STAGE_A, 9),
+        Err(OperationPolicyError::LimitReached(_))
+    ));
+    scope.record_numeric_resolution(STAGE_B);
+    scope.record_numeric_resolution(STAGE_B);
     scope.diagnose(
         STAGE_B,
         CODE_A,
@@ -196,6 +333,8 @@ fn report_is_ordered_bounded_and_retained_on_both_outcomes() {
     assert_eq!(success.report().diagnostics()[0].ordinal, 0);
     assert_eq!(success.report().dropped_diagnostics(), 1);
     assert_eq!(success.report().usage()[0].stage, STAGE_A);
+    assert_eq!(success.report().limit_events(), &[attempted]);
+    assert_eq!(success.report().numeric_resolution_stages(), &[STAGE_B]);
 
     let failure_scope = OperationScope::new(&context);
     let failure: OperationOutcome<()> = failure_scope.finish(Err(Error::StaleHandle));
@@ -203,6 +342,49 @@ fn report_is_ordered_bounded_and_retained_on_both_outcomes() {
     let (result, report) = failure.into_parts();
     assert_eq!(result, Err(Error::StaleHandle));
     assert_eq!(report.policy_version(), PolicyVersion::V1);
+    assert!(report.limit_events().is_empty());
+    assert!(report.numeric_resolution_stages().is_empty());
+}
+
+#[test]
+fn structured_limit_events_survive_diagnostics_off() {
+    let session = SessionPolicy::new(
+        SessionPrecision::parasolid(),
+        NumericalPolicy::v1(),
+        ExecutionPolicy::Serial,
+        plan(),
+        PolicyVersion::V1,
+    );
+    let context = OperationContext::new(&session, Tolerances::default()).expect("valid context");
+    let mut scope = OperationScope::new(&context);
+    let snapshot = match scope.ledger_mut().charge(STAGE_A, 11) {
+        Err(OperationPolicyError::LimitReached(snapshot)) => snapshot,
+        other => panic!("unexpected limit result: {other:?}"),
+    };
+    scope.record_numeric_resolution(STAGE_B);
+    scope.diagnose(
+        snapshot.stage,
+        CODE_A,
+        DiagnosticKind::LimitReached(snapshot),
+        "filtered diagnostic",
+    );
+    let outcome = scope.finish(Ok(()));
+    assert_eq!(outcome.report().limit_events(), &[snapshot]);
+    assert_eq!(outcome.report().numeric_resolution_stages(), &[STAGE_B]);
+    assert!(outcome.report().diagnostics().is_empty());
+}
+
+#[test]
+fn numeric_resolution_does_not_require_a_budget_stage() {
+    let session = SessionPolicy::v1();
+    let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+    let mut scope = OperationScope::new(&context);
+    scope.record_numeric_resolution(STAGE_A);
+    scope.record_numeric_resolution(STAGE_A);
+    let outcome = scope.finish(Ok(()));
+    assert_eq!(outcome.report().numeric_resolution_stages(), &[STAGE_A]);
+    assert!(outcome.report().usage().is_empty());
+    assert!(outcome.report().diagnostics().is_empty());
 }
 
 #[test]
