@@ -1,5 +1,47 @@
 //! Shared proof-completion evidence for bounded kernel algorithms.
 
+use crate::error::CapabilityId;
+use crate::operation::{DiagnosticCode, LimitSnapshot, StageId};
+
+/// Structured cause of an unresolved proof obligation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum IncompleteCause {
+    /// A valid feature needed to complete the operation is unsupported.
+    Unsupported {
+        /// Smallest stable unavailable support-matrix feature.
+        capability: CapabilityId,
+    },
+    /// A deterministic configured allowance was reached.
+    Limit {
+        /// Exact stage, resource, attempted usage, and allowance.
+        snapshot: LimitSnapshot,
+    },
+    /// Floating-point resolution stopped progress without proving the
+    /// outstanding obligation.
+    NumericResolution,
+    /// External cancellation stopped the proof.
+    Cancelled,
+    /// The implementation has no complete proof method for this valid case.
+    ProofMethodUnavailable {
+        /// Smallest stable unavailable proof capability.
+        capability: CapabilityId,
+    },
+}
+
+/// One stable, machine-readable explanation for incomplete proof evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IncompleteEvidence {
+    /// Stable identity of the incomplete-proof observation.
+    pub code: DiagnosticCode,
+    /// Deterministic operation stage where the obligation remained open.
+    pub stage: StageId,
+    /// Structured reason the obligation could not be discharged.
+    pub cause: IncompleteCause,
+    /// Non-stable human-readable context; callers must not parse it.
+    pub message: &'static str,
+}
+
 /// Whether an algorithm established a complete result over its requested
 /// domain or returned only verified partial evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,5 +88,25 @@ mod tests {
             unknown.indeterminate_reason(),
             Some("candidate isolation is incomplete")
         );
+    }
+
+    #[test]
+    fn incomplete_evidence_keeps_limit_data_structured() {
+        use crate::operation::{ResourceKind, TOTAL_WORK_STAGE};
+
+        let snapshot = LimitSnapshot {
+            stage: TOTAL_WORK_STAGE,
+            resource: ResourceKind::Work,
+            consumed: 3,
+            allowed: 2,
+        };
+        let code = DiagnosticCode::new("kcore.test.proof-incomplete").unwrap();
+        let evidence = IncompleteEvidence {
+            code,
+            stage: snapshot.stage,
+            cause: IncompleteCause::Limit { snapshot },
+            message: "display-only context",
+        };
+        assert_eq!(evidence.cause, IncompleteCause::Limit { snapshot });
     }
 }

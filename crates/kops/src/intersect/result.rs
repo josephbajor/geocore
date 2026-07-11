@@ -1,5 +1,5 @@
 use kcore::error::{Error, Result};
-use kcore::proof::Completion;
+use kcore::proof::{Completion, IncompleteEvidence};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::nurbs::NurbsCurve;
@@ -533,6 +533,7 @@ pub struct SurfaceSurfaceIntersections {
     /// Positive-length intersection branches.
     pub curves: Vec<SurfaceSurfaceCurve>,
     completion: Completion,
+    incomplete_evidence: Vec<IncompleteEvidence>,
 }
 
 impl Default for SurfaceSurfaceIntersections {
@@ -543,6 +544,7 @@ impl Default for SurfaceSurfaceIntersections {
             completion: Completion::Indeterminate {
                 reason: MISSING_COMPLETION_REASON,
             },
+            incomplete_evidence: Vec::new(),
         }
     }
 }
@@ -573,6 +575,23 @@ impl SurfaceSurfaceIntersections {
         Self::canonicalized_with_completion(points, curves, Completion::Indeterminate { reason })
     }
 
+    /// Validate and sort verified partial evidence while retaining structured
+    /// reasons why complete-domain proof remains unavailable.
+    pub fn canonicalized_with_incomplete_evidence(
+        mut points: Vec<SurfaceSurfacePoint>,
+        mut curves: Vec<SurfaceSurfaceCurve>,
+        reason: &'static str,
+        incomplete_evidence: Vec<IncompleteEvidence>,
+    ) -> Result<Self> {
+        Self::validate_and_sort(&mut points, &mut curves)?;
+        Ok(Self {
+            points,
+            curves,
+            completion: Completion::Indeterminate { reason },
+            incomplete_evidence,
+        })
+    }
+
     /// Validate and sort evidence whose solver covered the complete requested
     /// domain.
     pub fn canonicalized_complete(
@@ -588,6 +607,7 @@ impl SurfaceSurfaceIntersections {
             points: Vec::new(),
             curves: Vec::new(),
             completion: Completion::Complete,
+            incomplete_evidence: Vec::new(),
         }
     }
 
@@ -597,6 +617,20 @@ impl SurfaceSurfaceIntersections {
             points: Vec::new(),
             curves: Vec::new(),
             completion: Completion::Indeterminate { reason },
+            incomplete_evidence: Vec::new(),
+        }
+    }
+
+    /// Empty verified partial result with structured missing-proof evidence.
+    pub fn indeterminate_empty_with_evidence(
+        reason: &'static str,
+        incomplete_evidence: Vec<IncompleteEvidence>,
+    ) -> Self {
+        Self {
+            points: Vec::new(),
+            curves: Vec::new(),
+            completion: Completion::Indeterminate { reason },
+            incomplete_evidence,
         }
     }
 
@@ -605,6 +639,19 @@ impl SurfaceSurfaceIntersections {
         mut curves: Vec<SurfaceSurfaceCurve>,
         completion: Completion,
     ) -> Result<Self> {
+        Self::validate_and_sort(&mut points, &mut curves)?;
+        Ok(Self {
+            points,
+            curves,
+            completion,
+            incomplete_evidence: Vec::new(),
+        })
+    }
+
+    fn validate_and_sort(
+        points: &mut [SurfaceSurfacePoint],
+        curves: &mut [SurfaceSurfaceCurve],
+    ) -> Result<()> {
         if points.iter().any(|p| {
             !p.point.x.is_finite()
                 || !p.point.y.is_finite()
@@ -646,11 +693,7 @@ impl SurfaceSurfaceIntersections {
                 .then(a.uv_a_start[0].total_cmp(&b.uv_a_start[0]))
                 .then(a.uv_a_start[1].total_cmp(&b.uv_a_start[1]))
         });
-        Ok(Self {
-            points,
-            curves,
-            completion,
-        })
+        Ok(())
     }
 
     /// True when no contacts or branches were discovered. This alone is not
@@ -667,6 +710,18 @@ impl SurfaceSurfaceIntersections {
     /// True only when the solver covered the complete requested domains.
     pub fn is_complete(&self) -> bool {
         self.completion.is_complete()
+    }
+
+    /// Structured reasons why complete-domain proof remains unavailable.
+    ///
+    /// Legacy indeterminate constructors may return an empty slice until
+    /// their owning solver is migrated. Evidence remains in the deterministic
+    /// proof-obligation order supplied by the owning solver; canonicalization
+    /// and operand swapping preserve that order and retain distinct repeated
+    /// observations. A complete result always returns an empty slice because
+    /// complete constructors have no evidence parameter.
+    pub fn incomplete_evidence(&self) -> &[IncompleteEvidence] {
+        &self.incomplete_evidence
     }
 
     /// True only for an empty result backed by complete-domain proof.

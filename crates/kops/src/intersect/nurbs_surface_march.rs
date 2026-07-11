@@ -1,12 +1,13 @@
 use super::result::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
 };
-use kcore::error::{Error, Result};
+use kcore::error::{CapabilityId, Error, Result};
 use kcore::operation::{
     AccountingMode, BudgetPlan, DiagnosticCode, DiagnosticKind, ExecutionPolicy, LimitSnapshot,
     LimitSpec, NumericalPolicy, OperationContext, OperationPolicyError, OperationScope,
     PolicyVersion, ResourceKind, SessionPolicy, SessionPrecision, StageId,
 };
+use kcore::proof::{IncompleteCause, IncompleteEvidence};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::implicit::ImplicitSurface;
@@ -44,6 +45,35 @@ pub const NURBS_SURFACE_MARCH_SAMPLE_LIMIT: DiagnosticCode =
         Ok(code) => code,
         Err(_) => panic!("valid NURBS surface marching diagnostic code"),
     };
+
+/// Stable incomplete-proof observation for the fixed-grid marching bridge.
+pub const NURBS_SURFACE_MARCH_INCOMPLETE: DiagnosticCode =
+    match DiagnosticCode::new("kops.intersect.ssi-fixed-grid-incomplete") {
+        Ok(code) => code,
+        Err(_) => panic!("valid NURBS surface marching diagnostic code"),
+    };
+
+/// Complete-domain exclusion proof unavailable from the fixed-grid marcher.
+pub const NURBS_SURFACE_MARCH_COMPLETE_COVERAGE: CapabilityId =
+    match CapabilityId::new("kops.intersect.ssi-fixed-grid-complete-coverage") {
+        Ok(capability) => capability,
+        Err(_) => panic!("valid NURBS surface marching capability"),
+    };
+
+/// Every diagnostic identity owned by the NURBS surface marcher, in stable
+/// deterministic order.
+///
+/// Implicit-isolation proof diagnostics remain inventoried by `kgeom`; the
+/// marcher references those identities without duplicating their ownership.
+pub const NURBS_SURFACE_MARCH_DIAGNOSTICS: &[DiagnosticCode] = &[
+    NURBS_SURFACE_MARCH_SAMPLE_LIMIT,
+    NURBS_SURFACE_MARCH_INCOMPLETE,
+];
+
+/// Every capability identity owned by the NURBS surface marcher, in stable
+/// deterministic order.
+pub const NURBS_SURFACE_MARCH_CAPABILITIES: &[CapabilityId] =
+    &[NURBS_SURFACE_MARCH_COMPLETE_COVERAGE];
 
 /// Version-1 deterministic budget profile for the shared NURBS-surface marcher.
 pub struct NurbsSurfaceMarchBudgetProfile;
@@ -136,8 +166,33 @@ struct Segment {
     b: MarchPoint,
 }
 
-fn provisional_result(curves: Vec<SurfaceSurfaceCurve>) -> Result<SurfaceSurfaceIntersections> {
-    SurfaceSurfaceIntersections::canonicalized_indeterminate(Vec::new(), curves, COMPLETION_REASON)
+enum ProofCoverage {
+    ProvenEmpty,
+    Incomplete(Vec<IncompleteEvidence>),
+}
+
+fn fixed_grid_incomplete_evidence() -> IncompleteEvidence {
+    IncompleteEvidence {
+        code: NURBS_SURFACE_MARCH_INCOMPLETE,
+        stage: NURBS_SURFACE_MARCH_SAMPLES,
+        cause: IncompleteCause::ProofMethodUnavailable {
+            capability: NURBS_SURFACE_MARCH_COMPLETE_COVERAGE,
+        },
+        message: COMPLETION_REASON,
+    }
+}
+
+fn provisional_result(
+    curves: Vec<SurfaceSurfaceCurve>,
+    mut incomplete_evidence: Vec<IncompleteEvidence>,
+) -> Result<SurfaceSurfaceIntersections> {
+    incomplete_evidence.push(fixed_grid_incomplete_evidence());
+    SurfaceSurfaceIntersections::canonicalized_with_incomplete_evidence(
+        Vec::new(),
+        curves,
+        COMPLETION_REASON,
+        incomplete_evidence,
+    )
 }
 
 pub(super) fn march_nurbs_surface_intersection(
@@ -170,21 +225,33 @@ pub(super) fn march_nurbs_surface_intersection_in_scope(
     scope: &mut OperationScope<'_, '_>,
 ) -> core::result::Result<SurfaceSurfaceIntersections, ContextMarchError> {
     validate_nurbs_surface_range(config)?;
-    if contextual_proof_is_empty(config, scope)? {
-        return Ok(SurfaceSurfaceIntersections::complete_empty());
-    }
+    let mut incomplete_evidence = match contextual_proof_coverage(config, scope)? {
+        ProofCoverage::ProvenEmpty => return Ok(SurfaceSurfaceIntersections::complete_empty()),
+        ProofCoverage::Incomplete(evidence) => evidence,
+    };
 
     let parameter_tol = surface_parameter_tolerance(config.surface_range, config.tolerances);
     if parameter_window_is_tiny(config.surface_range, parameter_tol) {
-        return Ok(SurfaceSurfaceIntersections::indeterminate_empty(
-            COMPLETION_REASON,
-        ));
+        incomplete_evidence.push(fixed_grid_incomplete_evidence());
+        return Ok(
+            SurfaceSurfaceIntersections::indeterminate_empty_with_evidence(
+                COMPLETION_REASON,
+                incomplete_evidence,
+            ),
+        );
     }
 
     let (u_steps, v_steps) = marching_steps(config.surface);
     let samples = sample_grid_in_scope(config, u_steps, v_steps, scope)?;
-    finish_sampled_march(config, parameter_tol, u_steps, v_steps, samples)
-        .map_err(ContextMarchError::Kernel)
+    finish_sampled_march(
+        config,
+        parameter_tol,
+        u_steps,
+        v_steps,
+        samples,
+        incomplete_evidence,
+    )
+    .map_err(ContextMarchError::Kernel)
 }
 
 fn proof_range(config: MarchConfig<'_>) -> [ParamRange; 2] {
@@ -201,10 +268,10 @@ fn proof_range(config: MarchConfig<'_>) -> [ParamRange; 2] {
     ]
 }
 
-fn contextual_proof_is_empty(
+fn contextual_proof_coverage(
     config: MarchConfig<'_>,
     scope: &mut OperationScope<'_, '_>,
-) -> core::result::Result<bool, ContextMarchError> {
+) -> core::result::Result<ProofCoverage, ContextMarchError> {
     // Charge before restriction/BVH construction so a zero root-work budget
     // cannot execute a proof and then report a complete result with zero work.
     match scope
@@ -213,22 +280,22 @@ fn contextual_proof_is_empty(
     {
         Ok(()) => {}
         Err(OperationPolicyError::LimitReached(snapshot)) => {
-            diagnose_limit(
+            let evidence = diagnose_limit(
                 scope,
                 snapshot,
                 NURBS_IMPLICIT_ISOLATION_SUBDIVISION_LIMIT,
                 "NURBS implicit-isolation proof setup limit reached",
             );
-            return Ok(false);
+            return Ok(ProofCoverage::Incomplete(vec![evidence]));
         }
         Err(error) => return Err(ContextMarchError::Policy(error)),
     }
 
     let Ok(active_surface) = config.surface.restricted_to(proof_range(config)) else {
-        return Ok(false);
+        return Ok(ProofCoverage::Incomplete(Vec::new()));
     };
     let Ok(hierarchy) = NurbsSurfaceBvh::build(&active_surface) else {
-        return Ok(false);
+        return Ok(ProofCoverage::Incomplete(Vec::new()));
     };
     let isolation = hierarchy
         .isolate_implicit_candidates_in_scope(
@@ -241,43 +308,63 @@ fn contextual_proof_is_empty(
             ContextImplicitIsolationError::Kernel(error) => ContextMarchError::Kernel(error),
             ContextImplicitIsolationError::Policy(error) => ContextMarchError::Policy(error),
         })?;
-    diagnose_isolation_limits(scope, isolation.limits());
-    Ok(isolation.is_proven_empty())
+    let incomplete_evidence = diagnose_isolation_limits(scope, isolation.limits());
+    if isolation.is_proven_empty() && incomplete_evidence.is_empty() {
+        Ok(ProofCoverage::ProvenEmpty)
+    } else {
+        Ok(ProofCoverage::Incomplete(incomplete_evidence))
+    }
 }
 
-fn diagnose_isolation_limits(scope: &mut OperationScope<'_, '_>, limits: ImplicitIsolationLimits) {
+/// Evidence order is the deterministic proof-obligation order: subdivision
+/// work, retained candidates, depth, then numerical resolution. The caller
+/// appends the fixed-grid proof-method gap after these proof-stage stops.
+fn diagnose_isolation_limits(
+    scope: &mut OperationScope<'_, '_>,
+    limits: ImplicitIsolationLimits,
+) -> Vec<IncompleteEvidence> {
+    let mut evidence = Vec::new();
     if let Some(snapshot) = limits.subdivision_work() {
-        diagnose_limit(
+        evidence.push(diagnose_limit(
             scope,
             snapshot,
             NURBS_IMPLICIT_ISOLATION_SUBDIVISION_LIMIT,
             "NURBS implicit-isolation subdivision limit reached",
-        );
+        ));
     }
     if let Some(snapshot) = limits.candidate_cells() {
-        diagnose_limit(
+        evidence.push(diagnose_limit(
             scope,
             snapshot,
             NURBS_IMPLICIT_ISOLATION_CANDIDATE_LIMIT,
             "NURBS implicit-isolation candidate-cover limit reached",
-        );
+        ));
     }
     if let Some(snapshot) = limits.subdivision_depth() {
-        diagnose_limit(
+        evidence.push(diagnose_limit(
             scope,
             snapshot,
             NURBS_IMPLICIT_ISOLATION_DEPTH_LIMIT,
             "NURBS implicit-isolation depth limit reached",
-        );
+        ));
     }
     if limits.parameter_resolution() {
+        const MESSAGE: &str =
+            "NURBS implicit isolation stopped at floating-point parameter resolution";
         scope.diagnose(
             NURBS_IMPLICIT_ISOLATION_DEPTH,
             NURBS_IMPLICIT_ISOLATION_NUMERIC_RESOLUTION,
             DiagnosticKind::NumericResolution,
-            "NURBS implicit isolation stopped at floating-point parameter resolution",
+            MESSAGE,
         );
+        evidence.push(IncompleteEvidence {
+            code: NURBS_IMPLICIT_ISOLATION_NUMERIC_RESOLUTION,
+            stage: NURBS_IMPLICIT_ISOLATION_DEPTH,
+            cause: IncompleteCause::NumericResolution,
+            message: MESSAGE,
+        });
     }
+    evidence
 }
 
 fn diagnose_limit(
@@ -285,13 +372,19 @@ fn diagnose_limit(
     snapshot: LimitSnapshot,
     code: DiagnosticCode,
     message: &'static str,
-) {
+) -> IncompleteEvidence {
     scope.diagnose(
         snapshot.stage,
         code,
         DiagnosticKind::LimitReached(snapshot),
         message,
     );
+    IncompleteEvidence {
+        code,
+        stage: snapshot.stage,
+        cause: IncompleteCause::Limit { snapshot },
+        message,
+    }
 }
 
 fn parameter_window_is_tiny(range: [ParamRange; 2], parameter_tol: f64) -> bool {
@@ -304,6 +397,7 @@ fn finish_sampled_march(
     u_steps: usize,
     v_steps: usize,
     samples: Vec<Sample>,
+    incomplete_evidence: Vec<IncompleteEvidence>,
 ) -> Result<SurfaceSurfaceIntersections> {
     if samples
         .iter()
@@ -338,7 +432,7 @@ fn finish_sampled_march(
             curves.push(curve);
         }
     }
-    provisional_result(curves)
+    provisional_result(curves, incomplete_evidence)
 }
 
 fn collect_cell_segments(

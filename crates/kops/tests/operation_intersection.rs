@@ -8,6 +8,7 @@ use kcore::operation::{
     LimitSpec, NumericalPolicy, OperationContext, OperationPolicyError, PolicyVersion,
     ResourceKind, SessionPolicy, SessionPrecision, TOTAL_WORK_STAGE,
 };
+use kcore::proof::{IncompleteCause, IncompleteEvidence};
 use kcore::tolerance::Tolerances;
 use kgeom::frame::Frame;
 use kgeom::nurbs::NurbsSurface;
@@ -21,11 +22,97 @@ use kgeom::param::ParamRange;
 use kgeom::surface::{Plane, Surface};
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
-    NURBS_SURFACE_MARCH_SAMPLES, NurbsSurfaceMarchBudgetProfile,
-    intersect_bounded_plane_nurbs_surface, intersect_bounded_plane_nurbs_surface_with_context,
+    NURBS_SURFACE_MARCH_CAPABILITIES, NURBS_SURFACE_MARCH_COMPLETE_COVERAGE,
+    NURBS_SURFACE_MARCH_DIAGNOSTICS, NURBS_SURFACE_MARCH_INCOMPLETE,
+    NURBS_SURFACE_MARCH_SAMPLE_LIMIT, NURBS_SURFACE_MARCH_SAMPLES, NurbsSurfaceMarchBudgetProfile,
+    SurfaceSurfaceIntersections, intersect_bounded_plane_nurbs_surface,
+    intersect_bounded_plane_nurbs_surface_with_context, intersect_bounded_surfaces,
 };
 
 const ACTUAL_GRID_SAMPLES: u64 = 25 * 25;
+const MARCH_INCOMPLETE_REASON: &str =
+    "fixed-grid NURBS surface marching does not prove complete coverage";
+
+fn fixed_grid_evidence() -> IncompleteEvidence {
+    IncompleteEvidence {
+        code: NURBS_SURFACE_MARCH_INCOMPLETE,
+        stage: NURBS_SURFACE_MARCH_SAMPLES,
+        cause: IncompleteCause::ProofMethodUnavailable {
+            capability: NURBS_SURFACE_MARCH_COMPLETE_COVERAGE,
+        },
+        message: MARCH_INCOMPLETE_REASON,
+    }
+}
+
+#[test]
+fn marcher_identifier_inventories_are_finite_unique_and_stable() {
+    use std::collections::BTreeSet;
+
+    const FROZEN_DIAGNOSTICS: &[&str] = &[
+        "kops.intersect.ssi-grid-sample-limit",
+        "kops.intersect.ssi-fixed-grid-incomplete",
+    ];
+    const FROZEN_CAPABILITIES: &[&str] = &["kops.intersect.ssi-fixed-grid-complete-coverage"];
+
+    assert_eq!(
+        NURBS_SURFACE_MARCH_DIAGNOSTICS
+            .iter()
+            .map(|code| code.as_str())
+            .collect::<Vec<_>>(),
+        FROZEN_DIAGNOSTICS
+    );
+    assert_eq!(
+        NURBS_SURFACE_MARCH_CAPABILITIES
+            .iter()
+            .map(|capability| capability.as_str())
+            .collect::<Vec<_>>(),
+        FROZEN_CAPABILITIES
+    );
+
+    let diagnostics: BTreeSet<_> = NURBS_SURFACE_MARCH_DIAGNOSTICS
+        .iter()
+        .map(|code| code.as_str())
+        .collect();
+    let capabilities: BTreeSet<_> = NURBS_SURFACE_MARCH_CAPABILITIES
+        .iter()
+        .map(|capability| capability.as_str())
+        .collect();
+    assert_eq!(diagnostics.len(), NURBS_SURFACE_MARCH_DIAGNOSTICS.len());
+    assert_eq!(capabilities.len(), NURBS_SURFACE_MARCH_CAPABILITIES.len());
+    assert!(
+        diagnostics
+            .iter()
+            .chain(capabilities.iter())
+            .all(|identifier| identifier.starts_with("kops.intersect."))
+    );
+    assert!(
+        FROZEN_DIAGNOSTICS
+            .iter()
+            .all(|&identifier| kcore::operation::DiagnosticCode::new(identifier).is_ok())
+    );
+    assert!(
+        FROZEN_CAPABILITIES
+            .iter()
+            .all(|&identifier| kcore::error::CapabilityId::new(identifier).is_ok())
+    );
+    assert!(diagnostics.is_disjoint(&capabilities));
+    assert_eq!(
+        NURBS_SURFACE_MARCH_DIAGNOSTICS[0],
+        NURBS_SURFACE_MARCH_SAMPLE_LIMIT
+    );
+    assert_eq!(
+        NURBS_SURFACE_MARCH_DIAGNOSTICS[1],
+        NURBS_SURFACE_MARCH_INCOMPLETE
+    );
+    assert_eq!(
+        NURBS_SURFACE_MARCH_CAPABILITIES[0],
+        NURBS_SURFACE_MARCH_COMPLETE_COVERAGE
+    );
+    assert!(
+        !NURBS_SURFACE_MARCH_DIAGNOSTICS.contains(&NURBS_IMPLICIT_ISOLATION_SUBDIVISION_LIMIT),
+        "kgeom-owned proof diagnostics must not be duplicated in kops inventory"
+    );
+}
 
 fn plane() -> Plane {
     Plane::new(
@@ -188,6 +275,89 @@ fn v1_context_is_bit_exact_with_compatibility_and_retains_usage() {
     assert_eq!(usage.resource, ResourceKind::Work);
     assert_eq!(usage.consumed, ACTUAL_GRID_SAMPLES);
     assert_eq!(usage.allowed, 9_409);
+}
+
+#[test]
+fn structured_incompleteness_survives_canonicalization_swapping_and_dispatch() {
+    let plane = plane();
+    let surface = surface();
+    let tolerances = Tolerances::default();
+    let result = intersect_bounded_plane_nurbs_surface(
+        &plane,
+        plane_range(),
+        &surface,
+        surface.param_range(),
+        tolerances,
+    )
+    .unwrap();
+    let expected = vec![fixed_grid_evidence()];
+    assert_eq!(result.incomplete_evidence(), expected);
+    assert_eq!(
+        NURBS_SURFACE_MARCH_INCOMPLETE.as_str(),
+        "kops.intersect.ssi-fixed-grid-incomplete"
+    );
+    assert_eq!(
+        NURBS_SURFACE_MARCH_COMPLETE_COVERAGE.as_str(),
+        "kops.intersect.ssi-fixed-grid-complete-coverage"
+    );
+    assert_eq!(
+        result.completion().indeterminate_reason(),
+        Some(MARCH_INCOMPLETE_REASON)
+    );
+
+    let rebuilt = SurfaceSurfaceIntersections::canonicalized_with_incomplete_evidence(
+        result.points.clone(),
+        result.curves.clone(),
+        MARCH_INCOMPLETE_REASON,
+        expected.clone(),
+    )
+    .unwrap();
+    assert_eq!(rebuilt.incomplete_evidence(), expected);
+    assert_eq!(result.clone().swapped().incomplete_evidence(), expected);
+    let repeated = vec![fixed_grid_evidence(), fixed_grid_evidence()];
+    let repeated_result = SurfaceSurfaceIntersections::canonicalized_with_incomplete_evidence(
+        result.points.clone(),
+        result.curves.clone(),
+        MARCH_INCOMPLETE_REASON,
+        repeated.clone(),
+    )
+    .unwrap();
+    assert_eq!(repeated_result.incomplete_evidence(), repeated);
+    assert_eq!(
+        repeated_result.swapped().incomplete_evidence(),
+        repeated,
+        "normalization must not sort or deduplicate proof observations"
+    );
+
+    let direct = intersect_bounded_surfaces(
+        &plane,
+        plane_range(),
+        &surface,
+        surface.param_range(),
+        tolerances,
+    )
+    .unwrap();
+    let reversed = intersect_bounded_surfaces(
+        &surface,
+        surface.param_range(),
+        &plane,
+        plane_range(),
+        tolerances,
+    )
+    .unwrap();
+    assert_eq!(direct.incomplete_evidence(), expected);
+    assert_eq!(reversed.incomplete_evidence(), expected);
+
+    let complete = intersect_bounded_plane_nurbs_surface(
+        &plane,
+        plane_range(),
+        &separated_surface(),
+        [ParamRange::new(0.0, 1.0), ParamRange::new(0.0, 1.0)],
+        tolerances,
+    )
+    .unwrap();
+    assert!(complete.is_complete());
+    assert!(complete.incomplete_evidence().is_empty());
 }
 
 #[test]
@@ -459,6 +629,23 @@ fn proof_candidate_and_depth_limits_are_structured_and_never_complete() {
         DiagnosticKind::LimitReached(candidate_snapshot)
     );
     assert_eq!(candidate.report().limit_events(), &[candidate_snapshot]);
+    let candidate_result = candidate.result().unwrap();
+    assert_eq!(candidate_result.incomplete_evidence().len(), 2);
+    assert_eq!(
+        candidate_result.incomplete_evidence()[0],
+        IncompleteEvidence {
+            code: NURBS_IMPLICIT_ISOLATION_CANDIDATE_LIMIT,
+            stage: NURBS_IMPLICIT_ISOLATION_CANDIDATES,
+            cause: IncompleteCause::Limit {
+                snapshot: candidate_snapshot,
+            },
+            message: "NURBS implicit-isolation candidate-cover limit reached",
+        }
+    );
+    assert_eq!(
+        candidate_result.incomplete_evidence()[1],
+        fixed_grid_evidence()
+    );
 
     let depth_context = OperationContext::new(&session, tolerances)
         .unwrap()
@@ -495,6 +682,20 @@ fn proof_candidate_and_depth_limits_are_structured_and_never_complete() {
         DiagnosticKind::LimitReached(depth_snapshot)
     );
     assert_eq!(depth.report().limit_events(), &[depth_snapshot]);
+    let depth_result = depth.result().unwrap();
+    assert_eq!(depth_result.incomplete_evidence().len(), 2);
+    assert_eq!(
+        depth_result.incomplete_evidence()[0],
+        IncompleteEvidence {
+            code: NURBS_IMPLICIT_ISOLATION_DEPTH_LIMIT,
+            stage: NURBS_IMPLICIT_ISOLATION_DEPTH,
+            cause: IncompleteCause::Limit {
+                snapshot: depth_snapshot,
+            },
+            message: "NURBS implicit-isolation depth limit reached",
+        }
+    );
+    assert_eq!(depth_result.incomplete_evidence()[1], fixed_grid_evidence());
 }
 
 #[test]
@@ -533,6 +734,20 @@ fn proof_work_and_root_zero_limits_stop_before_complete_proof() {
             .result()
             .is_ok_and(|result| !result.is_complete())
     );
+    assert_eq!(
+        proof_limited.result().unwrap().incomplete_evidence(),
+        [
+            IncompleteEvidence {
+                code: NURBS_IMPLICIT_ISOLATION_SUBDIVISION_LIMIT,
+                stage: NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
+                cause: IncompleteCause::Limit {
+                    snapshot: proof_snapshot,
+                },
+                message: "NURBS implicit-isolation proof setup limit reached",
+            },
+            fixed_grid_evidence(),
+        ]
+    );
     assert!(
         proof_limited
             .report()
@@ -566,6 +781,10 @@ fn proof_work_and_root_zero_limits_stop_before_complete_proof() {
     assert!(proof_off.result().is_ok_and(|result| !result.is_complete()));
     assert!(proof_off.report().diagnostics().is_empty());
     assert_eq!(proof_off.report().limit_events(), &[proof_snapshot]);
+    assert_eq!(
+        proof_off.result().unwrap().incomplete_evidence(),
+        proof_limited.result().unwrap().incomplete_evidence()
+    );
 
     let root_session = SessionPolicy::new(
         SessionPrecision::parasolid(),
@@ -629,6 +848,18 @@ fn numeric_resolution_remains_structured_when_diagnostics_are_off() {
         outcome.report().numeric_resolution_stages(),
         &[NURBS_IMPLICIT_ISOLATION_DEPTH]
     );
+    let evidence = outcome.result().unwrap().incomplete_evidence();
+    assert_eq!(evidence.len(), 2);
+    assert_eq!(
+        evidence[0],
+        IncompleteEvidence {
+            code: NURBS_IMPLICIT_ISOLATION_NUMERIC_RESOLUTION,
+            stage: NURBS_IMPLICIT_ISOLATION_DEPTH,
+            cause: IncompleteCause::NumericResolution,
+            message: "NURBS implicit isolation stopped at floating-point parameter resolution",
+        }
+    );
+    assert_eq!(evidence[1], fixed_grid_evidence());
 
     let diagnostic_context = OperationContext::new(&session, Tolerances::default())
         .unwrap()
@@ -645,6 +876,7 @@ fn numeric_resolution_remains_structured_when_diagnostics_are_off() {
         diagnosed.report().numeric_resolution_stages(),
         &[NURBS_IMPLICIT_ISOLATION_DEPTH]
     );
+    assert_eq!(diagnosed.result().unwrap().incomplete_evidence(), evidence);
     assert!(diagnosed.report().diagnostics().iter().any(|diagnostic| {
         diagnostic.stage == NURBS_IMPLICIT_ISOLATION_DEPTH
             && diagnostic.code == NURBS_IMPLICIT_ISOLATION_NUMERIC_RESOLUTION

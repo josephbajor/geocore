@@ -105,6 +105,8 @@ pub use nurbs_nurbs::intersect_bounded_nurbs_nurbs;
 pub use nurbs_plane::intersect_bounded_nurbs_plane;
 pub use nurbs_sphere::intersect_bounded_nurbs_sphere;
 pub use nurbs_surface_march::{
+    NURBS_SURFACE_MARCH_CAPABILITIES, NURBS_SURFACE_MARCH_COMPLETE_COVERAGE,
+    NURBS_SURFACE_MARCH_DIAGNOSTICS, NURBS_SURFACE_MARCH_INCOMPLETE,
     NURBS_SURFACE_MARCH_SAMPLE_LIMIT, NURBS_SURFACE_MARCH_SAMPLES, NurbsSurfaceMarchBudgetProfile,
 };
 pub use nurbs_torus::intersect_bounded_nurbs_torus;
