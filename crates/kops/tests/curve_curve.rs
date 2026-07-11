@@ -1,6 +1,7 @@
 //! General bounded curve/curve dispatch over supported analytic classes.
 
 use kcore::error::Error;
+use kcore::proof::Completion;
 use kcore::tolerance::Tolerances;
 use kgeom::aabb::Aabb3;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
@@ -101,6 +102,7 @@ fn dispatches_line_nurbs_both_orders() {
     )
     .unwrap();
     assert_eq!(reversed.points.len(), 1);
+    assert_eq!(reversed.completion(), hit.completion());
     assert!((reversed.points[0].t_a - 0.5).abs() < 1e-8);
     assert!(reversed.points[0].t_b.abs() < 1e-8);
 
@@ -125,6 +127,10 @@ fn dispatches_line_nurbs_both_orders() {
     assert!((hit.overlaps[0].a.hi - 2.0 / 3.0).abs() < 1e-8);
     assert_eq!(hit.overlaps[0].b, ParamRange::new(1.0, 2.0));
     assert_eq!(hit.overlaps[0].orientation, ParamOrientation::Same);
+    assert_eq!(
+        hit.completion().indeterminate_reason(),
+        Some("fixed-grid line/NURBS candidate discovery does not prove complete coverage")
+    );
 }
 
 #[test]
@@ -332,11 +338,29 @@ fn reversed_dispatch_recanonicalizes_in_first_curve_order() {
     )
     .unwrap();
 
+    assert_eq!(hit.completion(), Completion::Complete);
     assert_eq!(hit.points.len(), 2);
     assert!(hit.points[0].t_a.abs() < 1e-12);
     assert!((hit.points[0].t_b - 3.0).abs() < 1e-12);
     assert!((hit.points[1].t_a - core::f64::consts::PI).abs() < 1e-12);
     assert!((hit.points[1].t_b - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn reversed_dispatch_preserves_complete_miss_evidence() {
+    let circle = Circle::new(Frame::world(), 1.0).unwrap();
+    let line = line([-2.0, 2.0, 0.0], [1.0, 0.0, 0.0]);
+    let hit = intersect_bounded_curves(
+        &circle,
+        full_range(&circle),
+        &line,
+        ParamRange::new(0.0, 4.0),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert_eq!(hit.completion(), Completion::Complete);
+    assert!(hit.is_proven_empty());
 }
 
 #[test]

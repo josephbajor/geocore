@@ -7,7 +7,7 @@ use super::line_ellipse::intersect_bounded_line_ellipse;
 use super::line_line::intersect_bounded_lines;
 use super::line_nurbs::intersect_bounded_line_nurbs;
 use super::nurbs_nurbs::intersect_bounded_nurbs_nurbs;
-use super::result::{CurveCurveIntersections, CurveCurveOverlap, CurveCurvePoint};
+use super::result::CurveCurveIntersections;
 use kcore::error::{Error, Result};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
@@ -34,21 +34,21 @@ pub fn intersect_bounded_curves(
     }
     if let (Some(a), Some(b)) = (as_circle(a), as_line(b)) {
         return intersect_bounded_line_circle(b, range_b, a, range_a, tolerances)
-            .and_then(reverse_intersections);
+            .map(CurveCurveIntersections::swapped);
     }
     if let (Some(a), Some(b)) = (as_line(a), as_ellipse(b)) {
         return intersect_bounded_line_ellipse(a, range_a, b, range_b, tolerances);
     }
     if let (Some(a), Some(b)) = (as_ellipse(a), as_line(b)) {
         return intersect_bounded_line_ellipse(b, range_b, a, range_a, tolerances)
-            .and_then(reverse_intersections);
+            .map(CurveCurveIntersections::swapped);
     }
     if let (Some(a), Some(b)) = (as_line(a), as_nurbs(b)) {
         return intersect_bounded_line_nurbs(a, range_a, b, range_b, tolerances);
     }
     if let (Some(a), Some(b)) = (as_nurbs(a), as_line(b)) {
         return intersect_bounded_line_nurbs(b, range_b, a, range_a, tolerances)
-            .and_then(reverse_intersections);
+            .map(CurveCurveIntersections::swapped);
     }
     if let (Some(a), Some(b)) = (as_circle(a), as_circle(b)) {
         return super::circle_circle::intersect_bounded_circles(a, range_a, b, range_b, tolerances);
@@ -58,14 +58,14 @@ pub fn intersect_bounded_curves(
     }
     if let (Some(a), Some(b)) = (as_nurbs(a), as_circle(b)) {
         return intersect_bounded_circle_nurbs(b, range_b, a, range_a, tolerances)
-            .and_then(reverse_intersections);
+            .map(CurveCurveIntersections::swapped);
     }
     if let (Some(a), Some(b)) = (as_circle(a), as_ellipse(b)) {
         return intersect_bounded_circle_ellipse(a, range_a, b, range_b, tolerances);
     }
     if let (Some(a), Some(b)) = (as_ellipse(a), as_circle(b)) {
         return intersect_bounded_circle_ellipse(b, range_b, a, range_a, tolerances)
-            .and_then(reverse_intersections);
+            .map(CurveCurveIntersections::swapped);
     }
     if let (Some(a), Some(b)) = (as_ellipse(a), as_ellipse(b)) {
         return intersect_bounded_ellipses(a, range_a, b, range_b, tolerances);
@@ -75,7 +75,7 @@ pub fn intersect_bounded_curves(
     }
     if let (Some(a), Some(b)) = (as_nurbs(a), as_ellipse(b)) {
         return intersect_bounded_ellipse_nurbs(b, range_b, a, range_a, tolerances)
-            .and_then(reverse_intersections);
+            .map(CurveCurveIntersections::swapped);
     }
     if let (Some(a), Some(b)) = (as_nurbs(a), as_nurbs(b)) {
         return intersect_bounded_nurbs_nurbs(a, range_a, b, range_b, tolerances);
@@ -100,29 +100,4 @@ fn as_ellipse(curve: &dyn Curve) -> Option<&Ellipse> {
 
 fn as_nurbs(curve: &dyn Curve) -> Option<&NurbsCurve> {
     curve.as_any().downcast_ref()
-}
-
-fn reverse_intersections(hit: CurveCurveIntersections) -> Result<CurveCurveIntersections> {
-    CurveCurveIntersections::canonicalized(
-        hit.points.into_iter().map(reverse_point).collect(),
-        hit.overlaps.into_iter().map(reverse_overlap).collect(),
-    )
-}
-
-fn reverse_point(point: CurveCurvePoint) -> CurveCurvePoint {
-    CurveCurvePoint {
-        point: point.point,
-        t_a: point.t_b,
-        t_b: point.t_a,
-        residual: point.residual,
-        kind: point.kind,
-    }
-}
-
-fn reverse_overlap(overlap: CurveCurveOverlap) -> CurveCurveOverlap {
-    CurveCurveOverlap {
-        a: overlap.b,
-        b: overlap.a,
-        orientation: overlap.orientation,
-    }
 }

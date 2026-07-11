@@ -199,6 +199,32 @@ impl CurveCurveIntersections {
     pub fn is_proven_empty(&self) -> bool {
         self.is_complete() && self.is_empty()
     }
+
+    /// Swap the first and second curve parameter data while preserving
+    /// completion evidence and canonical first-curve ordering.
+    pub fn swapped(mut self) -> Self {
+        for point in &mut self.points {
+            core::mem::swap(&mut point.t_a, &mut point.t_b);
+        }
+        for overlap in &mut self.overlaps {
+            core::mem::swap(&mut overlap.a, &mut overlap.b);
+        }
+        self.points.sort_by(|a, b| {
+            a.t_a
+                .total_cmp(&b.t_a)
+                .then(a.t_b.total_cmp(&b.t_b))
+                .then(a.kind.cmp(&b.kind))
+        });
+        self.overlaps.sort_by(|a, b| {
+            a.a.lo
+                .total_cmp(&b.a.lo)
+                .then(a.a.hi.total_cmp(&b.a.hi))
+                .then(a.b.lo.total_cmp(&b.b.lo))
+                .then(a.b.hi.total_cmp(&b.b.hi))
+                .then(a.orientation.cmp(&b.orientation))
+        });
+        self
+    }
 }
 
 /// Evaluate and tolerance-filter one candidate parameter pair.
