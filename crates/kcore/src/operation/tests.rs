@@ -327,6 +327,7 @@ fn report_is_ordered_bounded_and_retained_on_both_outcomes() {
         DiagnosticKind::ProofIncomplete,
         "dropped by bound",
     );
+    // The error type remains inferable for this legacy Ok-only call.
     let success = scope.finish(Ok(42));
     assert_eq!(success.result(), Ok(&42));
     assert_eq!(success.report().policy_version(), PolicyVersion::V1);

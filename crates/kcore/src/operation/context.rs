@@ -1,6 +1,6 @@
 //! Operation contexts, scopes, diagnostics, reports, and outcomes.
 
-use crate::error::{Error, Result};
+use crate::error::Error;
 use crate::tolerance::Tolerances;
 
 use super::budget::{BudgetPlan, LimitSnapshot, WorkLedger};
@@ -187,8 +187,17 @@ impl<'context, 'session> OperationScope<'context, 'session> {
         });
     }
 
-    /// Finishes the operation and preserves its report alongside the result.
-    pub fn finish<T>(self, result: Result<T>) -> OperationOutcome<T> {
+    /// Finishes a kernel-error operation and preserves its report.
+    ///
+    /// This compatibility entry point intentionally fixes the error type to
+    /// [`Error`], which keeps `scope.finish(Ok(value))` inference ergonomic.
+    /// Use [`Self::finish_typed`] when a layer owns a more specific error.
+    pub fn finish<T>(self, result: core::result::Result<T, Error>) -> OperationOutcome<T> {
+        self.finish_typed(result)
+    }
+
+    /// Finishes an operation with a caller-defined error and preserves its report.
+    pub fn finish_typed<T, E>(self, result: core::result::Result<T, E>) -> OperationOutcome<T, E> {
         let limit_events = self.ledger.limit_events().to_vec();
         let numeric_resolution_stages = self.ledger.numeric_resolution_stages().to_vec();
         OperationOutcome {
@@ -254,16 +263,34 @@ impl OperationReport {
     }
 }
 
-/// A kernel result paired with its deterministic operation report.
+/// An operation result paired with its deterministic operation report.
+///
+/// The error parameter defaults to [`Error`] so existing kernel-layer APIs
+/// can continue to spell `OperationOutcome<T>`. Higher layers can retain
+/// their own typed errors without converting them into a `kcore` error.
+///
+/// ```
+/// use kcore::operation::{OperationContext, OperationOutcome, OperationScope, SessionPolicy};
+/// use kcore::tolerance::Tolerances;
+///
+/// #[derive(Debug, PartialEq)]
+/// struct LayerError;
+///
+/// let session = SessionPolicy::v1();
+/// let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+/// let scope = OperationScope::new(&context);
+/// let outcome: OperationOutcome<(), LayerError> = scope.finish_typed(Err(LayerError));
+/// assert_eq!(outcome.result(), Err(&LayerError));
+/// ```
 #[derive(Debug, Clone, PartialEq)]
-pub struct OperationOutcome<T> {
-    result: Result<T>,
+pub struct OperationOutcome<T, E = Error> {
+    result: core::result::Result<T, E>,
     report: OperationReport,
 }
 
-impl<T> OperationOutcome<T> {
+impl<T, E> OperationOutcome<T, E> {
     /// Borrows the successful value or operation error.
-    pub const fn result(&self) -> core::result::Result<&T, &Error> {
+    pub const fn result(&self) -> core::result::Result<&T, &E> {
         self.result.as_ref()
     }
 
@@ -273,12 +300,34 @@ impl<T> OperationOutcome<T> {
     }
 
     /// Discards the report and returns the compatibility result.
-    pub fn into_result(self) -> Result<T> {
+    pub fn into_result(self) -> core::result::Result<T, E> {
         self.result
     }
 
     /// Separates the operation result from its report.
-    pub fn into_parts(self) -> (Result<T>, OperationReport) {
+    pub fn into_parts(self) -> (core::result::Result<T, E>, OperationReport) {
         (self.result, self.report)
+    }
+
+    /// Maps a successful value without changing the operation report.
+    pub fn map<U, F>(self, op: F) -> OperationOutcome<U, E>
+    where
+        F: FnOnce(T) -> U,
+    {
+        OperationOutcome {
+            result: self.result.map(op),
+            report: self.report,
+        }
+    }
+
+    /// Maps an operation error without changing the operation report.
+    pub fn map_err<F, O>(self, op: O) -> OperationOutcome<T, F>
+    where
+        O: FnOnce(E) -> F,
+    {
+        OperationOutcome {
+            result: self.result.map_err(op),
+            report: self.report,
+        }
     }
 }

@@ -576,10 +576,10 @@ same `OperationReport`:
 pub type OperationOutcome<T> = kcore::operation::OperationOutcome<T, KernelError>;
 ```
 
-If the landed F2 type is fixed to `kcore::Error`, `kernel` supplies a thin
-generic adapter with the same `result`, `report`, `into_result`, and
-`into_parts` behavior. It must still own no ledger or diagnostic buffer. This
-is representation adaptation, not a second report implementation.
+The generic F2 outcome is the only report implementation. Lower-layer outcomes
+map values and errors into facade identities with `map`/`map_err`, preserving
+the exact report. `kernel` owns no ledger, report clone, diagnostic buffer, or
+fallback report for failures that occur before an operation scope exists.
 
 Rules:
 

@@ -285,8 +285,8 @@ Context-aware entry points return an outcome that preserves diagnostics even whe
 operation fails:
 
 ```rust
-pub struct OperationOutcome<T> {
-    result: kcore::error::Result<T>,
+pub struct OperationOutcome<T, E = kcore::error::Error> {
+    result: core::result::Result<T, E>,
     report: OperationReport,
 }
 
@@ -298,17 +298,22 @@ pub struct OperationReport {
     diagnostics: Vec<OperationDiagnostic>,
 }
 
-impl<T> OperationOutcome<T> {
-    pub fn result(&self) -> core::result::Result<&T, &Error>;
+impl<T, E> OperationOutcome<T, E> {
+    pub fn result(&self) -> core::result::Result<&T, &E>;
     pub fn report(&self) -> &OperationReport;
-    pub fn into_result(self) -> Result<T>;
-    pub fn into_parts(self) -> (Result<T>, OperationReport);
+    pub fn into_result(self) -> core::result::Result<T, E>;
+    pub fn into_parts(self) -> (core::result::Result<T, E>, OperationReport);
+    pub fn map<U>(self, op: impl FnOnce(T) -> U) -> OperationOutcome<U, E>;
+    pub fn map_err<F>(self, op: impl FnOnce(E) -> F) -> OperationOutcome<T, F>;
 }
 ```
 
 This shape avoids putting mutable output sinks in the context, preserves reports after
-errors, and lets F4 evolve the error taxonomy independently. Reports are assembled only
-after child work is merged in deterministic ordinal order.
+errors, and lets each layer retain its classified error without copying report machinery.
+`OperationScope::finish` remains fixed to `kcore::Error` so legacy
+`finish(Ok(value))` calls stay inference-safe; `finish_typed` constructs an outcome for a
+layer-owned error. Reports are assembled only after child work is merged in deterministic
+ordinal order.
 
 `usage` records accepted accounting. `limit_events` separately retains the first
 attempted crossing for each configured stage/resource pair, and

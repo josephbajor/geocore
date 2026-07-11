@@ -47,6 +47,86 @@ fn public_context_scope_and_outcome_preserve_error_reports() {
     assert_eq!(outcome.report().diagnostics()[0].ordinal, 0);
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LayerError {
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdaptedError {
+    Rejected,
+}
+
+#[test]
+fn typed_outcomes_retain_layer_errors_and_maps_preserve_the_exact_report() {
+    let session = SessionPolicy::v1();
+    let budget = BudgetPlan::new([LimitSpec::new(
+        SOLVE,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        4,
+    )])
+    .expect("valid budget");
+    let context = OperationContext::new(&session, Tolerances::default())
+        .expect("valid operation context")
+        .with_budget_overrides(budget)
+        .with_diagnostics(DiagnosticLevel::Summary, 1);
+
+    let mut success_scope = OperationScope::new(&context);
+    success_scope
+        .ledger_mut()
+        .charge(SOLVE, 3)
+        .expect("accounted work");
+    success_scope.diagnose(
+        SOLVE,
+        FALLBACK,
+        DiagnosticKind::FallbackSelected,
+        "test fallback",
+    );
+    let success: OperationOutcome<u32, LayerError> = success_scope.finish_typed(Ok(21));
+    let success_report = success.report().clone();
+    let mapped = success.map(|value| value * 2);
+    assert_eq!(mapped.result(), Ok(&42));
+    assert_eq!(mapped.report(), &success_report);
+    let (result, report) = mapped.into_parts();
+    assert_eq!(result, Ok(42));
+    assert_eq!(report, success_report);
+
+    let mut failure_scope = OperationScope::new(&context);
+    failure_scope
+        .ledger_mut()
+        .charge(SOLVE, 2)
+        .expect("accounted work");
+    let failure: OperationOutcome<(), LayerError> =
+        failure_scope.finish_typed(Err(LayerError::Rejected));
+    let failure_report = failure.report().clone();
+    let mapped_error = failure.map_err(|LayerError::Rejected| AdaptedError::Rejected);
+    assert_eq!(mapped_error.result(), Err(&AdaptedError::Rejected));
+    assert_eq!(mapped_error.report(), &failure_report);
+    assert_eq!(
+        mapped_error.into_parts(),
+        (Err(AdaptedError::Rejected), failure_report)
+    );
+
+    let direct_failure: OperationOutcome<(), LayerError> =
+        OperationScope::new(&context).finish_typed(Err(LayerError::Rejected));
+    assert_eq!(direct_failure.into_result(), Err(LayerError::Rejected));
+}
+
+#[test]
+fn legacy_ok_only_finish_infers_the_default_kernel_error() {
+    let session = SessionPolicy::v1();
+    let context =
+        OperationContext::new(&session, Tolerances::default()).expect("valid operation context");
+    let scope = OperationScope::new(&context);
+
+    // No result annotation or `Ok::<_, Error>` hint: this is the legacy
+    // source shape that a fully generic `finish` would make ambiguous.
+    let outcome = scope.finish(Ok(7_u32));
+    let _: &OperationOutcome<u32> = &outcome;
+    assert_eq!(outcome.into_result(), Ok(7));
+}
+
 #[test]
 fn public_child_ledgers_merge_by_stable_ordinal() {
     let child_budget = BudgetPlan::new([LimitSpec::new(
