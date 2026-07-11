@@ -1,6 +1,6 @@
 # Operation context and numerical policy
 
-Status: Stage 1, the first Stage 2 pilot, and truthful Stage 4 tessellation vocabulary implemented
+Status: Stage 1, intersection and checker Stage 2 pilots, and truthful Stage 4 tessellation vocabulary implemented
 
 ## Purpose
 

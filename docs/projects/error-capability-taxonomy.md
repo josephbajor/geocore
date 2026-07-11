@@ -1,6 +1,6 @@
 # F4 kernel error and capability taxonomy
 
-Status: Phase 1, representative Phase 2 slices, and graph evaluation classification implemented
+Status: Phase 1, representative Phase 2 slices, graph classification, and one structured-incompleteness pilot implemented
 
 ## Outcome
 
