@@ -1,0 +1,15 @@
+[package]
+name = "kgraph"
+description = "Kernel layer 1.5: immutable geometry nodes, typed handles, dependencies, and bounded evaluation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kcore = { path = "../kcore" }
+kgeom = { path = "../kgeom" }
+
+[lints]
+workspace = true

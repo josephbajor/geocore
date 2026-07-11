@@ -12,6 +12,8 @@
 //! - [`math`]: deterministic transcendental functions (sin/cos/atan2, musl
 //!   port). Kernel code must use these, never platform libm — enforced via
 //!   clippy `disallowed-methods`.
+//! - [`operation`]: immutable session policy, per-operation configuration,
+//!   deterministic work accounting, and bounded semantic diagnostics.
 //! - [`tolerance`]: the session numeric regime (Parasolid-compatible:
 //!   meters, 1000 m size box, 1e-8 linear / 1e-11 angular resolution) and
 //!   the tolerance policy object threaded through all modeling operations.
@@ -35,6 +37,7 @@ pub mod error;
 pub mod expansion;
 pub mod interval;
 pub mod math;
+pub mod operation;
 pub mod parallel;
 pub mod predicates;
 pub mod proof;

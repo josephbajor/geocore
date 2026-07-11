@@ -19,6 +19,8 @@
 use std::num::NonZeroUsize;
 use std::thread;
 
+use crate::operation::ExecutionPolicy;
+
 /// Effective parallelism level: the smaller of available hardware
 /// parallelism and `work_len`, and at least 1.
 fn thread_count(work_len: usize) -> usize {
@@ -38,11 +40,27 @@ where
     U: Send,
     F: Fn(&T) -> U + Sync,
 {
+    par_map_with_policy(items, ExecutionPolicy::Available, f)
+}
+
+/// Deterministic, index-ordered map under an explicit execution policy.
+///
+/// The policy changes only how independent chunks are scheduled. Result
+/// assembly and all observable ordering remain identical to serial mapping.
+pub fn par_map_with_policy<T, U, F>(items: &[T], policy: ExecutionPolicy, f: F) -> Vec<U>
+where
+    T: Sync,
+    U: Send,
+    F: Fn(&T) -> U + Sync,
+{
     let n = items.len();
     if n == 0 {
         return Vec::new();
     }
-    let threads = thread_count(n);
+    let threads = match policy {
+        ExecutionPolicy::Available => thread_count(n),
+        _ => policy.worker_count(n),
+    };
     if threads == 1 {
         return items.iter().map(f).collect();
     }
@@ -80,6 +98,16 @@ where
     par_map(&indices, |&i| f(i))
 }
 
+/// Deterministic index-range map under an explicit execution policy.
+pub fn par_map_indices_with_policy<U, F>(count: usize, policy: ExecutionPolicy, f: F) -> Vec<U>
+where
+    U: Send,
+    F: Fn(usize) -> U + Sync,
+{
+    let indices: Vec<usize> = (0..count).collect();
+    par_map_with_policy(&indices, policy, |&i| f(i))
+}
+
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)] // tests may cross-check against platform libm
 mod tests {
@@ -113,5 +141,27 @@ mod tests {
     fn index_variant_matches_direct_computation() {
         let direct: Vec<usize> = (0..1_000).map(|i| i * i).collect();
         assert_eq!(par_map_indices(1_000, |i| i * i), direct);
+    }
+
+    #[test]
+    fn execution_policies_preserve_result_bits_and_order() {
+        let items: Vec<u64> = (0..1_003).collect();
+        let serial = par_map_with_policy(&items, ExecutionPolicy::Serial, |value| {
+            value.wrapping_mul(17).rotate_right(3)
+        });
+        let fixed = par_map_with_policy(
+            &items,
+            ExecutionPolicy::AtMost(NonZeroUsize::new(3).expect("nonzero")),
+            |value| value.wrapping_mul(17).rotate_right(3),
+        );
+        let available = par_map_with_policy(&items, ExecutionPolicy::Available, |value| {
+            value.wrapping_mul(17).rotate_right(3)
+        });
+        assert_eq!(fixed, serial);
+        assert_eq!(available, serial);
+        assert_eq!(
+            par_map_indices_with_policy(4, ExecutionPolicy::Serial, |index| index * index),
+            [0, 1, 4, 9]
+        );
     }
 }

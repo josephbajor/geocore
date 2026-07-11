@@ -12,11 +12,11 @@ topology boundaries.
 | Project | Current state |
 | --- | --- |
 | F0 | Implemented: curve/curve operand swapping preserves completion evidence and canonical order. |
-| F1 | Contract complete in `geometry-graph.md`; implementation stages G1-G5 remain. |
-| F2 | Contract complete in `operation-context.md`; implementation stages 0-6 remain. |
+| F1 | G1 implemented: the `kgraph` leaf graph, stable class identity, bounded evaluation context, and parity tests are in place; G2-G5 remain. |
+| F2 | Stage 1 implemented: immutable policy, operation scopes, deterministic work ledgers, diagnostics, and execution-policy helpers are in place; stages 2-6 remain. |
 | F3 | First slice implemented: shared leaf-class inspection and tuple-match curve/curve and surface/surface dispatch. Shared drivers and generic fallback remain. |
 | F4 | Contract complete in `error-capability-taxonomy.md`; shared identifiers and representative migrations remain. |
-| F5 | Pending F1/F2/F4 contract reconciliation; facade design is the next project. |
+| F5 | Contract complete in `kernel-facade.md`; implementation stages K1-K5 remain. |
 | F6 | First slice implemented: shared surface inversion, chart normalization, and distance services consumed by checker and tessellation. Module splits remain. |
 | F7 | Q0 implemented: toolchain/MSRV pinned; `quality-harness.md` defines Q1-Q8 benchmark and fuzz rollout. |
 

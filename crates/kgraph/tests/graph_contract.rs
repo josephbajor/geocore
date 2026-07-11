@@ -1,0 +1,185 @@
+//! Ownership, validation, limits, determinism, and clone contract tests.
+
+use kcore::tolerance::Tolerances;
+use kgeom::curve::Line;
+use kgeom::curve2d::Line2d;
+use kgeom::frame::Frame;
+use kgeom::nurbs::NurbsCurve;
+use kgeom::param::ParamRange;
+use kgeom::surface::Plane;
+use kgeom::vec::{Vec2, Vec3};
+use kgraph::{
+    EvalContext, EvalError, EvalLimits, GeometryGraph, GeometryGraphError, GeometryRef,
+    SurfaceDerivativeOrder,
+};
+
+fn line(origin: [f64; 3]) -> Line {
+    Line::new(Vec3::from_array(origin), Vec3::new(1.0, 0.0, 0.0)).unwrap()
+}
+
+#[test]
+fn stale_handles_fail_without_aliasing_reused_slots() {
+    let mut graph = GeometryGraph::new();
+    let stale = graph.insert_curve(line([0.0, 0.0, 0.0])).unwrap();
+    graph.remove_curve(stale).unwrap();
+    let replacement = graph.insert_curve(line([2.0, 0.0, 0.0])).unwrap();
+    assert_ne!(stale, replacement);
+    assert!(graph.curve(stale).is_none());
+
+    let mut eval = EvalContext::new(&graph, EvalLimits::default(), Tolerances::default());
+    assert_eq!(
+        eval.eval_curve(stale, 0.0, 0),
+        Err(EvalError::StaleGeometryHandle {
+            geometry: GeometryRef::Curve(stale)
+        })
+    );
+    assert_eq!(
+        graph.direct_dependencies(GeometryRef::Curve(stale)),
+        Err(GeometryGraphError::StaleGeometryHandle {
+            geometry: GeometryRef::Curve(stale)
+        })
+    );
+}
+
+#[test]
+fn insertion_rejects_non_finite_leaf_state() {
+    // `kgeom::Line` predates graph-boundary validation and accepts this
+    // non-finite origin because its direction is valid.
+    let non_finite = Line::new(Vec3::new(f64::NAN, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap();
+    let mut graph = GeometryGraph::new();
+    assert!(matches!(
+        graph.insert_curve(non_finite),
+        Err(GeometryGraphError::InvalidDescriptor { .. })
+    ));
+    assert!(graph.is_empty());
+}
+
+#[test]
+fn evaluation_validates_parameters_ranges_orders_and_resets_query_budget() {
+    let mut graph = GeometryGraph::new();
+    let curve = graph.insert_curve(line([0.0, 0.0, 0.0])).unwrap();
+    let surface = graph.insert_surface(Plane::new(Frame::world())).unwrap();
+    let bounded = graph
+        .insert_curve(
+            NurbsCurve::new(
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)],
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    let mut eval = EvalContext::new(
+        &graph,
+        EvalLimits {
+            max_dependency_depth: 1,
+            max_node_visits_per_query: 1,
+        },
+        Tolerances::default(),
+    );
+    // Both succeed: node visits are per query, not cumulative across reuse.
+    assert!(eval.eval_curve(curve, 0.0, 1).is_ok());
+    assert!(eval.eval_curve(curve, 1.0, 1).is_ok());
+    assert_eq!(
+        eval.eval_curve(curve, f64::INFINITY, 0),
+        Err(EvalError::InvalidParameter)
+    );
+    assert!(matches!(
+        eval.eval_curve(curve, 0.0, 4),
+        Err(EvalError::DerivativeUnavailable { requested: 4, .. })
+    ));
+    assert_eq!(
+        eval.eval_surface(surface, [f64::NAN, 0.0], SurfaceDerivativeOrder::Position),
+        Err(EvalError::InvalidParameter)
+    );
+    assert_eq!(
+        eval.eval_curve(bounded, 2.0, 0),
+        Err(EvalError::ParameterOutsideDomain)
+    );
+    assert_eq!(
+        eval.curve_bounds(bounded, ParamRange::unbounded()),
+        Err(EvalError::InvalidRange)
+    );
+
+    let mut no_visits = EvalContext::new(
+        &graph,
+        EvalLimits {
+            max_dependency_depth: 1,
+            max_node_visits_per_query: 0,
+        },
+        Tolerances::default(),
+    );
+    assert_eq!(
+        no_visits.eval_curve(curve, 0.0, 0),
+        Err(EvalError::NodeVisitLimitExceeded {
+            consumed: 1,
+            limit: 0
+        })
+    );
+
+    let mut no_depth = EvalContext::new(
+        &graph,
+        EvalLimits {
+            max_dependency_depth: 0,
+            max_node_visits_per_query: 1,
+        },
+        Tolerances::default(),
+    );
+    assert_eq!(
+        no_depth.eval_curve(curve, 0.0, 0),
+        Err(EvalError::DependencyDepthExceeded {
+            consumed: 1,
+            limit: 0
+        })
+    );
+}
+
+#[test]
+fn iteration_and_leaf_traversal_are_deterministic() {
+    let mut graph = GeometryGraph::new();
+    let c0 = graph.insert_curve(line([0.0, 0.0, 0.0])).unwrap();
+    let c1 = graph.insert_curve(line([1.0, 0.0, 0.0])).unwrap();
+    let s0 = graph.insert_surface(Plane::new(Frame::world())).unwrap();
+    let p0 = graph
+        .insert_curve2d(Line2d::new(Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap())
+        .unwrap();
+
+    let order: Vec<_> = graph.geometry().collect();
+    assert_eq!(
+        order,
+        vec![
+            GeometryRef::Curve(c0),
+            GeometryRef::Curve(c1),
+            GeometryRef::Surface(s0),
+            GeometryRef::Curve2d(p0)
+        ]
+    );
+    for geometry in order {
+        assert!(graph.direct_dependencies(geometry).unwrap().is_empty());
+        assert_eq!(graph.dependency_closure(geometry).unwrap(), vec![geometry]);
+        assert!(graph.dependents(geometry).unwrap().is_empty());
+        assert!(graph.reaches(geometry, geometry).unwrap());
+    }
+    graph.validate().unwrap();
+}
+
+#[test]
+fn cloning_produces_an_independent_current_state_snapshot() {
+    let mut source = GeometryGraph::new();
+    let original = source.insert_curve(line([0.0, 0.0, 0.0])).unwrap();
+    let mut cloned = source.clone();
+
+    let extra = cloned.insert_curve(line([3.0, 0.0, 0.0])).unwrap();
+    assert_eq!(source.curve_count(), 1);
+    assert_eq!(cloned.curve_count(), 2);
+    assert!(source.curve(extra).is_none());
+    assert!(cloned.curve(extra).is_some());
+
+    cloned.remove_curve(original).unwrap();
+    assert!(cloned.curve(original).is_none());
+    assert!(source.curve(original).is_some());
+    source.validate().unwrap();
+    cloned.validate().unwrap();
+}
