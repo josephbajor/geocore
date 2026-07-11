@@ -1,0 +1,20 @@
+[package]
+name = "kernel-benchmarks"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93.0"
+publish = false
+
+[dev-dependencies]
+criterion = { version = "=0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "benchmark_contract"
+harness = false
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

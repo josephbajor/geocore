@@ -1,0 +1,59 @@
+{
+  "schema_version": "kernel-benchmark-baseline.v1",
+  "run": {
+    "kind": "synthetic-example",
+    "comparison_eligible": false,
+    "note": "Schema example only. Values are invented and must never be treated as performance evidence."
+  },
+  "case": {
+    "path": "harness/contract/tiny-v1/64/default-v1",
+    "fixture_version": "tiny-contract.v1",
+    "deterministic_seed": 5423831822361165825,
+    "size_parameters": { "elements": 64 },
+    "tolerances": {},
+    "policy_values": { "mode": "contract" }
+  },
+  "repository": {
+    "revision": "SYNTHETIC-NOT-A-GIT-REVISION",
+    "dirty_worktree": true
+  },
+  "toolchain": {
+    "rustc_version": "SYNTHETIC",
+    "cargo_version": "SYNTHETIC",
+    "target_triple": "synthetic-unknown-none",
+    "profile": "bench",
+    "enabled_features": []
+  },
+  "host": {
+    "os": "synthetic",
+    "architecture": "synthetic",
+    "cpu_model": "SYNTHETIC-NOT-A-HOST",
+    "logical_core_count": 1,
+    "available_memory_bytes": 1
+  },
+  "runner": {
+    "name": "cargo-criterion",
+    "version": "1.1.0",
+    "criterion_version": "0.8.2",
+    "warm_up_seconds": 0.1,
+    "sample_size": 10,
+    "measurement_seconds": 0.2,
+    "process_affinity": "synthetic-unrestricted"
+  },
+  "result_counters": {
+    "input_elements": 64,
+    "operations": 64,
+    "wrapping_sum_hex": "babfef09cc07d280",
+    "output_digest": "142890537c90ed65"
+  },
+  "measurement": {
+    "source_format": "cargo-criterion-json.v1",
+    "unit": "ns",
+    "estimate": 100.0,
+    "lower_bound": 99.0,
+    "upper_bound": 101.0,
+    "sample_count": 3,
+    "total_iterations": 6,
+    "advisory_only": true
+  }
+}

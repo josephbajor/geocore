@@ -1,6 +1,6 @@
 # F7 quality, fuzzing, and performance harnesses
 
-Status: first slice implemented; benchmark and fuzz stages implementation-ready
+Status: Q0 and Q1 implemented; benchmark ladders and fuzz stages implementation-ready
 
 ## Outcome
 
@@ -9,7 +9,7 @@ repeatable before modeling breadth grows. The harnesses protect observable
 kernel contracts and algorithmic scale. Elapsed time is a measurement, never a
 correctness oracle.
 
-This first slice establishes one explicit Rust contract:
+Q0 establishes one explicit Rust contract:
 
 - `rust-toolchain.toml` pins Rust 1.93.0 with the minimal profile plus `rustfmt`
   and `clippy`;
@@ -24,7 +24,9 @@ requires a separate change that compiles and tests every target with the
 proposed version. Raising either value requires release notes and a CI-green
 toolchain commit. Do not claim compatibility with an untested compiler.
 
-No benchmark or fuzz dependency is introduced in this first slice.
+Benchmark dependencies are isolated in the excluded `benches/` package and do
+not enter the kernel workspace dependency graph or root lockfile. No fuzz
+dependency has been introduced.
 
 ## Governing rules
 
@@ -52,7 +54,12 @@ Land the following structure incrementally:
 
 ```text
 benches/
+  Cargo.toml
+  Cargo.lock
   README.md
+  cases.json
+  benches/
+    benchmark_contract.rs
   baselines/
     schema.json
     <host>/<git-revision>.json
@@ -96,10 +103,12 @@ Implemented by this slice.
 
 ## Stage Q1 — benchmark contract and runner
 
-Add a small shared benchmark support crate or module only after the concrete
-runner is selected. Prefer one established statistics runner over custom
-statistics code. Keep fixture construction and invariant checking in ordinary
-Rust helpers so benchmarks do not duplicate production algorithms.
+Implemented with Criterion 0.8.2 for established sampling/statistics and
+cargo-criterion 1.1.0 for its documented machine-readable JSON-lines output.
+The isolated `kernel-benchmarks` package contains shared deterministic fixture
+helpers; repository tooling validates and enriches runner output without
+implementing custom statistics. Fixture construction and invariant checking
+remain ordinary Rust helpers.
 
 Every benchmark case has a stable path:
 
@@ -123,6 +132,21 @@ Store compact reviewed baselines under `benches/baselines/`. Large raw sample
 streams belong in CI artifacts, not Git. A baseline comparison must refuse to
 produce a pass/fail judgement when schema, host identity, compiler, target,
 profile, fixture version, or case parameters differ.
+
+Q1 implementation:
+
+- `benches/cases.json` is the versioned case registry and enforces the stable
+  five-segment path;
+- `benches/baselines/schema.json` defines the closed v1 report shape;
+- `scripts/benchmark/` separates strict contract parsing, environment capture,
+  report composition, and CLI orchestration;
+- `scripts/benchmark_baseline.py smoke` exercises schema validation, strict
+  runner parsing, synthetic report assembly, and output validation without
+  timing or network access;
+- the checked-in report and runner stream are unmistakably synthetic and
+  comparison-ineligible; and
+- Q1 comparison reports identity compatibility only. Timing ratios,
+  thresholds, and performance pass/fail policy remain outside this stage.
 
 ### Regression policy
 

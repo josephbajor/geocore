@@ -1,0 +1,24 @@
+{
+  "schema_version": "kernel-benchmark-cases.v1",
+  "cases": [
+    {
+      "path": "harness/contract/tiny-v1/64/default-v1",
+      "benchmark_target": "benchmark_contract",
+      "fixture_version": "tiny-contract.v1",
+      "deterministic_seed": 5423831822361165825,
+      "size_parameters": {
+        "elements": 64
+      },
+      "tolerances": {},
+      "policy_values": {
+        "mode": "contract"
+      },
+      "expected_result_counters": {
+        "input_elements": 64,
+        "operations": 64,
+        "wrapping_sum_hex": "babfef09cc07d280",
+        "output_digest": "142890537c90ed65"
+      }
+    }
+  ]
+}

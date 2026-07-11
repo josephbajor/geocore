@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kernel.invalid/schemas/benchmark-baseline.v1.json",
+  "title": "Kernel benchmark baseline v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run",
+    "case",
+    "repository",
+    "toolchain",
+    "host",
+    "runner",
+    "result_counters",
+    "measurement"
+  ],
+  "properties": {
+    "schema_version": { "const": "kernel-benchmark-baseline.v1" },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "comparison_eligible", "note"],
+      "properties": {
+        "kind": { "enum": ["measured", "synthetic-example"] },
+        "comparison_eligible": { "type": "boolean" },
+        "note": { "type": "string", "minLength": 1 }
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "fixture_version", "deterministic_seed", "size_parameters", "tolerances", "policy_values"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^[a-z0-9-]+(/[a-z0-9-]+){4}$" },
+        "fixture_version": { "type": "string", "minLength": 1 },
+        "deterministic_seed": { "type": "integer", "minimum": 0 },
+        "size_parameters": { "type": "object" },
+        "tolerances": { "type": "object" },
+        "policy_values": { "type": "object" }
+      }
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "dirty_worktree"],
+      "properties": {
+        "revision": { "type": "string", "minLength": 1 },
+        "dirty_worktree": { "type": "boolean" }
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rustc_version", "cargo_version", "target_triple", "profile", "enabled_features"],
+      "properties": {
+        "rustc_version": { "type": "string", "minLength": 1 },
+        "cargo_version": { "type": "string", "minLength": 1 },
+        "target_triple": { "type": "string", "minLength": 1 },
+        "profile": { "type": "string", "minLength": 1 },
+        "enabled_features": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "architecture", "cpu_model", "logical_core_count", "available_memory_bytes"],
+      "properties": {
+        "os": { "type": "string", "minLength": 1 },
+        "architecture": { "type": "string", "minLength": 1 },
+        "cpu_model": { "type": "string", "minLength": 1 },
+        "logical_core_count": { "type": "integer", "minimum": 1 },
+        "available_memory_bytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "criterion_version", "warm_up_seconds", "sample_size", "measurement_seconds", "process_affinity"],
+      "properties": {
+        "name": { "const": "cargo-criterion" },
+        "version": { "type": "string", "minLength": 1 },
+        "criterion_version": { "type": "string", "minLength": 1 },
+        "warm_up_seconds": { "type": "number", "minimum": 0 },
+        "sample_size": { "type": "integer", "minimum": 1 },
+        "measurement_seconds": { "type": "number", "exclusiveMinimum": 0 },
+        "process_affinity": { "type": "string", "minLength": 1 }
+      }
+    },
+    "result_counters": { "type": "object", "minProperties": 1 },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_format", "unit", "estimate", "lower_bound", "upper_bound", "sample_count", "total_iterations", "advisory_only"],
+      "properties": {
+        "source_format": { "const": "cargo-criterion-json.v1" },
+        "unit": { "type": "string", "minLength": 1 },
+        "estimate": { "type": "number", "minimum": 0 },
+        "lower_bound": { "type": "number", "minimum": 0 },
+        "upper_bound": { "type": "number", "minimum": 0 },
+        "sample_count": { "type": "integer", "minimum": 1 },
+        "total_iterations": { "type": "integer", "minimum": 1 },
+        "advisory_only": { "const": true }
+      }
+    }
+  }
+}
