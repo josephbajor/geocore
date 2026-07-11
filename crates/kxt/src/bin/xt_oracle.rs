@@ -528,6 +528,7 @@ fn surface_class(surface: &SurfaceGeom) -> &'static str {
         SurfaceGeom::Sphere(_) => "sphere",
         SurfaceGeom::Torus(_) => "torus",
         SurfaceGeom::Nurbs(_) => "nurbs",
+        SurfaceGeom::Offset(_) => "offset",
         _ => "procedural",
     }
 }

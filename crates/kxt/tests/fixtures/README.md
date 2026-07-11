@@ -29,6 +29,14 @@ the committed corpus.
   void regions, and the void-exterior shell listing the faces as
   front-faces). Regenerate with `gen_block.py` (committed alongside); the
   files are committed as stable fixtures and must not silently change.
+- `offset_plane.x_t` — the canonical G4a writer output for a bounded
+  2 × 1 m planar sheet at `z = 0.25`, represented as a `+0.25` true-normal
+  offset along the sensed normal of the world XY plane. It retains all four
+  authored fin pcurves as
+  trimmed SP-curves. Tests pin the complete byte stream and its
+  reconstruct/evaluate/check/tessellate/re-export behavior. This synthetic
+  fixture validates the published base-13006 layout locally; it does not
+  claim acceptance by a modern external Parasolid oracle.
 
 ## Downloaded (public GitHub repositories)
 
@@ -60,8 +68,9 @@ statement accompanied the individual files.
   edges with per-fin trimmed SP-curves) exported by the repository owner
   from their own Onshape project as Parasolid text (Parasolid 37.1.212,
   schema `SCH_3701212_37102_13006`, 2026-07-11). Parses fully through
-  the embedded-schema mechanism; reconstruction stops at
-  Tier-2 procedural (offset) surfaces by design. Primary reference for
+  the embedded-schema mechanism. OFFSET_SURF reconstruction now advances
+  until a periodic B-surface basis, which remains outside the kernel's NURBS
+  contract. Primary reference for
   modern writer conventions: TRIMMED_CURVE/GEOMETRIC_OWNER linkage,
   tolerant-edge fin curves, POINT ownership by vertex, and the resolved
   37102 node layouts (133/141 match base 13006 exactly).

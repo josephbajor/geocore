@@ -34,14 +34,15 @@ use crate::error::{Result, XtCapability, XtError};
 use crate::parse::{Node, Value, XtFile};
 use crate::schema::code;
 use kcore::math;
-use kcore::tolerance::LINEAR_RESOLUTION;
+use kcore::tolerance::{LINEAR_RESOLUTION, Tolerances};
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::curve2d::{Curve2d, NurbsCurve2d};
 use kgeom::frame::Frame;
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::param::{ParamRange, wrap_periodic};
-use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
+use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Torus};
 use kgeom::vec::{Point2, Point3, Vec3};
+use kgraph::{EvalLimits, OffsetSurfaceDescriptor, SurfaceDerivativeOrder};
 use ktopo::entity::{
     Body, BodyId, BodyKind, Curve2dId, CurveId, Edge, EdgeId, Face, FaceDomain, FaceId, Fin,
     FinPcurve, Loop, ParamMap1d, PcurveEndpointKind, Region, RegionId, RegionKind, Sense, Shell,
@@ -136,6 +137,7 @@ fn reconstruct_into(file: &XtFile, store: &mut AssemblyStore<'_>) -> Result<Reco
         curves: BTreeMap::new(),
         pcurves: BTreeMap::new(),
         surfaces: BTreeMap::new(),
+        surface_stack: Vec::new(),
         points: BTreeMap::new(),
         vertices: BTreeMap::new(),
         edges: BTreeMap::new(),
@@ -281,8 +283,11 @@ struct Recon<'file, 'assembly, 'store> {
     curves: BTreeMap<u32, (CurveId, bool)>,
     /// XT 2D B-curve index → kernel pcurve geometry.
     pcurves: BTreeMap<u32, Curve2dId>,
-    /// XT surface index → (kernel surface, XT sense char).
+    /// Black tri-color entries: XT surface index → completed kernel node.
     surfaces: BTreeMap<u32, (SurfaceId, char)>,
+    /// Gray tri-color entries in deterministic transport-ID stack order.
+    /// Indices absent from both containers are white.
+    surface_stack: Vec<u32>,
     /// XT point index → kernel point.
     points: BTreeMap<u32, ktopo::entity::PointId>,
     vertices: BTreeMap<u32, VertexId>,
@@ -752,14 +757,6 @@ impl Recon<'_, '_, '_> {
                 what: "SP-curve trim parameters lie outside the 2D B-curve domain",
             });
         }
-        let surface = self
-            .store
-            .get(surface)?
-            .as_leaf_surface()
-            .ok_or(XtError::Unsupported {
-                capability: XtCapability::ProceduralSurfaces,
-                what: "SP-curve verification for procedural surfaces",
-            })?;
         let trim_point_1 = vector(file, trim, "point_1")?;
         let trim_point_2 = vector(file, trim, "point_2")?;
         let uv1 = curve.eval(p1);
@@ -771,15 +768,27 @@ impl Recon<'_, '_, '_> {
             .map(EntityTolerance::value)
             .unwrap_or(LINEAR_RESOLUTION)
             .max(LINEAR_RESOLUTION);
-        if surface.eval([uv1.x, uv1.y]).dist(trim_point_1) > tolerance
-            || surface.eval([uv2.x, uv2.y]).dist(trim_point_2) > tolerance
-        {
+        let mut eval = self
+            .store
+            .eval_context(EvalLimits::default(), Tolerances::default());
+        let point1 = eval
+            .eval_surface(surface, [uv1.x, uv1.y], SurfaceDerivativeOrder::Position)
+            .map_err(XtError::Evaluation)?
+            .p;
+        let point2 = eval
+            .eval_surface(surface, [uv2.x, uv2.y], SurfaceDerivativeOrder::Position)
+            .map_err(XtError::Evaluation)?
+            .p;
+        if point1.dist(trim_point_1) > tolerance || point2.dist(trim_point_2) > tolerance {
             return Err(XtError::BadField {
                 index: trim_idx,
                 what: "TRIMMED_CURVE points do not match its SP-curve parameters",
             });
         }
-        let endpoint_kinds = infer_pcurve_endpoint_kinds(surface, curve, map, [t0, t1]);
+        let degeneracies = eval
+            .surface_degeneracies(surface)
+            .map_err(XtError::Evaluation)?;
+        let endpoint_kinds = infer_pcurve_endpoint_kinds(&degeneracies, curve, map, [t0, t1]);
         let use_ = FinPcurve::new(pcurve, ParamRange::new(p1.min(p2), p1.max(p2)), map)
             .map_err(XtError::Kernel)?
             .with_endpoint_kinds(endpoint_kinds);
@@ -913,31 +922,60 @@ impl Recon<'_, '_, '_> {
         if let Some(&(s, sense)) = self.surfaces.get(&surface_idx) {
             return Ok((s, sense));
         }
+        if let Some(start) = self
+            .surface_stack
+            .iter()
+            .position(|&active| active == surface_idx)
+        {
+            let mut path = self.surface_stack[start..].to_vec();
+            path.push(surface_idx);
+            return Err(XtError::SurfaceDependencyCycle { path });
+        }
+        self.surface_stack.push(surface_idx);
+        let result = self.surface_unmemoized(surface_idx);
+        let popped = self.surface_stack.pop();
+        debug_assert_eq!(popped, Some(surface_idx));
+        if let Ok(value) = result {
+            self.surfaces.insert(surface_idx, value);
+        }
+        result
+    }
+
+    fn surface_unmemoized(&mut self, surface_idx: u32) -> Result<(SurfaceId, char)> {
         let file = self.file;
-        let node = xnode(file, surface_idx)?;
-        let sense = ch(file, node, "sense")?;
+        let node = xnode(file, surface_idx)?.clone();
+        let sense = match ch(file, &node, "sense")? {
+            '+' => '+',
+            '-' => '-',
+            _ => {
+                return Err(XtError::BadField {
+                    index: surface_idx,
+                    what: "surface sense is not +/-",
+                });
+            }
+        };
         let geom: SurfaceGeom = match node.code {
             code::PLANE => {
-                let frame = frame_from(file, node, "pvec", "normal", "x_axis")?;
+                let frame = frame_from(file, &node, "pvec", "normal", "x_axis")?;
                 Plane::new(frame).into()
             }
             code::CYLINDER => {
-                let frame = frame_from(file, node, "pvec", "axis", "x_axis")?;
-                let radius = f64_of(file, node, "radius")?;
+                let frame = frame_from(file, &node, "pvec", "axis", "x_axis")?;
+                let radius = f64_of(file, &node, "radius")?;
                 Cylinder::new(frame, radius)
                     .map_err(XtError::Kernel)?
                     .into()
             }
-            code::CONE => cone_from(file, node)?.into(),
+            code::CONE => cone_from(file, &node)?.into(),
             code::SPHERE => {
-                let frame = frame_from(file, node, "centre", "axis", "x_axis")?;
-                let radius = f64_of(file, node, "radius")?;
+                let frame = frame_from(file, &node, "centre", "axis", "x_axis")?;
+                let radius = f64_of(file, &node, "radius")?;
                 Sphere::new(frame, radius).map_err(XtError::Kernel)?.into()
             }
             code::TORUS => {
-                let frame = frame_from(file, node, "centre", "axis", "x_axis")?;
-                let major = f64_of(file, node, "major_radius")?;
-                let minor = f64_of(file, node, "minor_radius")?;
+                let frame = frame_from(file, &node, "centre", "axis", "x_axis")?;
+                let major = f64_of(file, &node, "major_radius")?;
+                let minor = f64_of(file, &node, "minor_radius")?;
                 if major <= minor {
                     return Err(XtError::Unsupported {
                         capability: XtCapability::SelfIntersectingTori,
@@ -948,16 +986,65 @@ impl Recon<'_, '_, '_> {
                     .map_err(XtError::Kernel)?
                     .into()
             }
-            code::B_SURFACE => self.b_surface(surface_idx, node)?.into(),
+            code::B_SURFACE => self.b_surface(surface_idx, &node)?.into(),
+            code::OFFSET_SURF => {
+                match ch(file, &node, "check")? {
+                    'U' | 'V' => {}
+                    'I' => {
+                        return Err(XtError::BadField {
+                            index: surface_idx,
+                            what: "OFFSET_SURF check I declares invalid geometry",
+                        });
+                    }
+                    _ => {
+                        return Err(XtError::BadField {
+                            index: surface_idx,
+                            what: "OFFSET_SURF check is not U/V/I",
+                        });
+                    }
+                }
+                let _true_offset = logical_of(file, &node, "true_offset")?;
+                match field(file, &node, "scale")? {
+                    Value::Null | Value::Double(_) | Value::Int(_) => {}
+                    _ => {
+                        return Err(XtError::BadField {
+                            index: surface_idx,
+                            what: "OFFSET_SURF scale is not null or numeric",
+                        });
+                    }
+                }
+                let offset = f64_of(file, &node, "offset")?;
+                if !offset.is_finite() || offset.abs() <= LINEAR_RESOLUTION {
+                    return Err(XtError::BadField {
+                        index: surface_idx,
+                        what: "OFFSET_SURF offset must be finite and exceed linear resolution",
+                    });
+                }
+                let basis_idx = ptr(file, &node, "surface")?;
+                if basis_idx == 0 {
+                    return Err(XtError::BadField {
+                        index: surface_idx,
+                        what: "OFFSET_SURF basis is null",
+                    });
+                }
+                let (basis, basis_sense) = self.surface(basis_idx)?;
+                if basis_sense != sense {
+                    return Err(XtError::BadField {
+                        index: surface_idx,
+                        what: "OFFSET_SURF and basis senses differ",
+                    });
+                }
+                let signed_distance = if basis_sense == '+' { offset } else { -offset };
+                OffsetSurfaceDescriptor::new(basis, signed_distance).into()
+            }
             code::SWEPT_SURF
             | code::SPUN_SURF
-            | code::OFFSET_SURF
             | code::BLENDED_EDGE
             | code::BLEND_BOUND
             | code::PE_SURF => {
                 return Err(XtError::Unsupported {
                     capability: XtCapability::ProceduralSurfaces,
-                    what: "procedural surfaces (swept/spun/offset/blend/foreign) — Tier 2",
+                    what: "procedural surfaces (swept/spun/blend/foreign) — Tier 2",
                 });
             }
             _ => {
@@ -968,7 +1055,6 @@ impl Recon<'_, '_, '_> {
             }
         };
         let s = self.store.insert_surface(geom).map_err(XtError::Kernel)?;
-        self.surfaces.insert(surface_idx, (s, sense));
         Ok((s, sense))
     }
 
@@ -1208,14 +1294,14 @@ fn edge_bounds(
 }
 
 fn infer_pcurve_endpoint_kinds(
-    surface: &dyn Surface,
+    degeneracies: &[kgeom::surface::Degeneracy],
     curve: &dyn Curve2d,
     map: ParamMap1d,
     edge_parameters: [f64; 2],
 ) -> [PcurveEndpointKind; 2] {
     edge_parameters.map(|t| {
         let uv = curve.eval(map.map(t));
-        if surface.degeneracies().iter().any(|degeneracy| {
+        if degeneracies.iter().any(|degeneracy| {
             let value = match degeneracy.dir {
                 kgeom::surface::Dir::U => uv.x,
                 kgeom::surface::Dir::V => uv.y,
@@ -1253,6 +1339,7 @@ fn clamp_period_width(t0: f64, mut t1: f64, period: f64) -> f64 {
 mod tests {
     use super::*;
     use kgeom::curve2d::Line2d;
+    use kgeom::surface::Surface;
     use kgeom::vec::Vec2;
 
     #[test]
@@ -1273,7 +1360,7 @@ mod tests {
         let surface = Sphere::new(Frame::world(), 1.0).unwrap();
         let curve = Line2d::new(Point2::new(0.0, 0.0), Vec2::new(0.0, 1.0)).unwrap();
         let kinds = infer_pcurve_endpoint_kinds(
-            &surface,
+            &surface.degeneracies(),
             &curve,
             ParamMap1d::identity(),
             [0.0, core::f64::consts::FRAC_PI_2],

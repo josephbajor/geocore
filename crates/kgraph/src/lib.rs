@@ -15,7 +15,10 @@ pub use descriptor::{
     Curve2dDescriptor, CurveDescriptor, GeometryDependencies, OffsetSurfaceDescriptor,
     SurfaceDescriptor,
 };
-pub use error::{EvalError, EvalResult, GeometryGraphError, GeometryGraphResult};
+pub use error::{
+    EvalError, EvalResult, GeometryGraphError, GeometryGraphResult, capability as eval_capability,
+    code as eval_error_code, stage as eval_stage,
+};
 pub use eval::{EvalContext, EvalLimits, SurfaceDerivativeOrder, SurfaceValidity, ValidityGap};
 pub use graph::{
     Curve2dHandle, Curve2dNode, CurveHandle, CurveNode, GeometryChanges, GeometryGraph,

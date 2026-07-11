@@ -9,18 +9,21 @@
 //! files based on schema 13006, and atomic reconstruction of the supported
 //! topology and geometry subset. Failed reconstruction leaves the supplied
 //! store unchanged. Supported geometry includes point, line, circle, ellipse,
-//! B-curve, plane, cylinder, cone, sphere, torus, and B-surface. The M3b
+//! B-curve, plane, cylinder, cone, sphere, torus, B-surface, and the G4a
+//! single-offset subset. The M3b
 //! writer emits deterministic base-schema text XT for checker-clean solids,
 //! supported sheet bodies, supported wire bodies, acorn bodies, and bounded
 //! curve-less tolerant edges using analytic geometry, non-periodic B-spline/
-//! NURBS geometry, and per-fin trimmed SP-curves over finite 2D B-curves.
+//! NURBS geometry, dependency-first one-level offsets, and per-fin trimmed
+//! SP-curves over finite 2D B-curves.
 //! Reconstruction is failure-atomic through `ktopo`'s copy-on-write Store
 //! transactions and returns the committed entity mutation journal. Imported
 //! entity tolerances are validated and retain explicit XT origin provenance;
 //! writing emits their current metric value. Valid
 //! content outside the declared subset reports a stable [`XtCapability`]
 //! code as well as human-readable context.
-//! Intersection/procedural geometry, broader tolerant topology, periodic or
+//! Intersection and other procedural geometry, nested/shared-basis offset
+//! export, broader tolerant topology, periodic or
 //! circular pcurve encoding, periodic NURBS, pre-13006 schemas, assemblies,
 //! non-null face-tolerance writing, and neutral-binary writing remain deferred. Face UV
 //! work domains are kernel-side metadata because XT bounds faces through their loops.

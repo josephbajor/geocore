@@ -13,12 +13,13 @@ use crate::parse::Value;
 use crate::schema::{base_schema, code};
 use kcore::arena::Handle;
 use kcore::math;
-use kcore::tolerance::{LINEAR_RESOLUTION, check_in_size_box};
+use kcore::tolerance::{LINEAR_RESOLUTION, Tolerances, check_in_size_box};
 use kgeom::curve::Curve;
 use kgeom::curve2d::{Curve2d, NurbsCurve2d};
 use kgeom::nurbs::{KnotVector, NurbsCurve, NurbsSurface};
 use kgeom::surface::{Dir, Surface};
 use kgeom::vec::{Point3, Vec3};
+use kgraph::{EvalLimits, SurfaceDerivativeOrder};
 use ktopo::check::check_body;
 use ktopo::entity::{
     BodyId, BodyKind, CurveId, Edge, EdgeId, FaceId, FinId, FinPcurve, LoopId, PointId, RegionKind,
@@ -170,7 +171,7 @@ impl Plan {
                     what: "schema-13006 FACE tolerance is required to be null",
                 });
             }
-            push_interned(&mut surface_handles, f.surface);
+            plan_surface_dependencies(store, f.surface, &mut surface_handles)?;
             for &lp in &f.loops {
                 if store.get(lp)?.fins.is_empty() {
                     return Err(XtError::InvalidModel { what: "empty loop" });
@@ -220,6 +221,22 @@ impl Plan {
                 }
             }
         }
+        // Procedural faces cannot reconstruct exact-edge incidence from the
+        // 3D basis alone. Preserve every authored pcurve as a trimmed
+        // SP_CURVE, in the already-deterministic fin traversal order.
+        for &fin in &fin_handles {
+            let fin_value = store.get(fin)?;
+            let face = store.get(fin_value.parent)?.face;
+            if matches!(store.get(store.get(face)?.surface)?, SurfaceGeom::Offset(_)) {
+                if fin_value.pcurve.is_none() {
+                    return Err(XtError::InvalidModel {
+                        what: "offset-face fin requires an authored pcurve for X_T export",
+                    });
+                }
+                pcurve_nurbs(store, fin)?;
+                push_interned(&mut fin_pcurve_handles, fin);
+            }
+        }
         let mut point_handles = Vec::new();
         for &vertex in &vertex_handles {
             let v = store.get(vertex)?;
@@ -234,6 +251,21 @@ impl Plan {
                 SurfaceGeom::Cone(s) => check_in_size_box(s.frame().origin().to_array())?,
                 SurfaceGeom::Sphere(s) => check_in_size_box(s.frame().origin().to_array())?,
                 SurfaceGeom::Torus(s) => check_in_size_box(s.frame().origin().to_array())?,
+                SurfaceGeom::Offset(offset) => {
+                    if !offset.signed_distance().is_finite()
+                        || offset.signed_distance().abs() <= LINEAR_RESOLUTION
+                    {
+                        return Err(XtError::InvalidModel {
+                            what: "offset distance must be finite and exceed linear resolution",
+                        });
+                    }
+                    if matches!(store.get(offset.basis())?, SurfaceGeom::Offset(_)) {
+                        return Err(XtError::Unsupported {
+                            capability: XtCapability::NestedOffsetExport,
+                            what: "nested offset-surface export",
+                        });
+                    }
+                }
                 _ => {
                     return Err(XtError::Unsupported {
                         capability: XtCapability::ProceduralSurfaces,
@@ -242,6 +274,7 @@ impl Plan {
                 }
             }
         }
+        reject_shared_offset_bases(store, &surface_handles)?;
 
         let mut next = scaffold.first_entity_id();
         let faces = assign(&face_handles, &mut next);
@@ -583,16 +616,12 @@ impl Plan {
             });
         }
         for (position, &(surface_id, index)) in self.surfaces.iter().enumerate() {
-            let face = self
-                .faces
-                .iter()
-                .find_map(|&(face, _)| {
-                    (store.get(face).ok()?.surface == surface_id).then_some(face)
-                })
-                .expect("validated surface owner");
+            let face = self.faces.iter().find_map(|&(face, _)| {
+                (store.get(face).ok()?.surface == surface_id).then_some(face)
+            });
             let mut common = geom_common(
                 index,
-                id_of(&self.faces, face),
+                face.map_or(1, |face| id_of(&self.faces, face)),
                 adjacent(&self.surfaces, position, 1),
                 adjacent(&self.surfaces, position, -1),
             );
@@ -604,7 +633,13 @@ impl Plan {
             } else {
                 None
             };
-            out.push(surface_node(store.get(surface_id)?, index, common, aux)?);
+            out.push(surface_node(
+                store.get(surface_id)?,
+                index,
+                common,
+                aux,
+                &self.surfaces,
+            )?);
         }
         for (position, &(curve_id, index)) in self.curves.iter().enumerate() {
             let direct_owner = self.edges.iter().find_map(|&(edge, id)| {
@@ -746,18 +781,26 @@ impl Plan {
         let q1 = use_.parameter_at_edge(t1);
         let lp = store.get(fin.parent)?;
         let face = store.get(lp.face)?;
-        let surface = store
-            .get(face.surface)?
-            .as_leaf_surface()
-            .ok_or(XtError::Unsupported {
-                capability: XtCapability::ProceduralSurfaces,
-                what: "SP-curve emission for procedural surfaces",
-            })?;
         let pcurve = store.get(use_.curve())?.as_curve();
         let uv0 = pcurve.eval(q0);
         let uv1 = pcurve.eval(q1);
-        let point0 = surface.eval([uv0.x, uv0.y]);
-        let point1 = surface.eval([uv1.x, uv1.y]);
+        let mut eval = store.eval_context(EvalLimits::default(), Tolerances::default());
+        let point0 = eval
+            .eval_surface(
+                face.surface,
+                [uv0.x, uv0.y],
+                SurfaceDerivativeOrder::Position,
+            )
+            .map_err(XtError::Evaluation)?
+            .p;
+        let point1 = eval
+            .eval_surface(
+                face.surface,
+                [uv1.x, uv1.y],
+                SurfaceDerivativeOrder::Position,
+            )
+            .map_err(XtError::Evaluation)?
+            .p;
 
         let position = self
             .fin_pcurves
@@ -1290,6 +1333,7 @@ fn surface_node(
     index: u32,
     mut values: Vec<Value>,
     aux: Option<SurfaceAuxIds>,
+    surfaces: &[(SurfaceId, u32)],
 ) -> Result<OutNode> {
     let code = match surface {
         SurfaceGeom::Plane(s) => {
@@ -1345,6 +1389,16 @@ fn surface_node(
             values.extend([ptr(aux.nurbs), ptr(0)]);
             code::B_SURFACE
         }
+        SurfaceGeom::Offset(offset) => {
+            values.extend([
+                Value::Char('U'),
+                Value::Logical(false),
+                ptr(id_of(surfaces, offset.basis())),
+                Value::Double(offset.signed_distance()),
+                Value::Null,
+            ]);
+            code::OFFSET_SURF
+        }
         _ => {
             return Err(XtError::Unsupported {
                 capability: XtCapability::ProceduralSurfaces,
@@ -1357,6 +1411,45 @@ fn surface_node(
         index,
         values,
     })
+}
+
+/// Append `surface` after its direct dependencies. Face iteration supplies
+/// deterministic root order; descriptor field order supplies dependency order.
+fn plan_surface_dependencies(
+    store: &Store,
+    surface: SurfaceId,
+    planned: &mut Vec<SurfaceId>,
+) -> Result<()> {
+    if planned.contains(&surface) {
+        return Ok(());
+    }
+    if let SurfaceGeom::Offset(offset) = store.get(surface)? {
+        if matches!(store.get(offset.basis())?, SurfaceGeom::Offset(_)) {
+            return Err(XtError::Unsupported {
+                capability: XtCapability::NestedOffsetExport,
+                what: "nested offset-surface export",
+            });
+        }
+        plan_surface_dependencies(store, offset.basis(), planned)?;
+    }
+    planned.push(surface);
+    Ok(())
+}
+
+fn reject_shared_offset_bases(store: &Store, surfaces: &[SurfaceId]) -> Result<()> {
+    let mut bases = Vec::<SurfaceId>::new();
+    for &surface in surfaces {
+        if let SurfaceGeom::Offset(offset) = store.get(surface)? {
+            if bases.contains(&offset.basis()) {
+                return Err(XtError::Unsupported {
+                    capability: XtCapability::SharedOffsetBasisExport,
+                    what: "multiple offset surfaces share one basis surface",
+                });
+            }
+            bases.push(offset.basis());
+        }
+    }
+    Ok(())
 }
 
 fn curve_node(

@@ -35,7 +35,7 @@ pub enum XtCapability {
     TolerantRingEdges,
     /// Procedural/intersection/foreign curve realization.
     ProceduralCurves,
-    /// Procedural/swept/spun/offset/blend surface realization.
+    /// Procedural swept/spun/blend/foreign surface realization.
     ProceduralSurfaces,
     /// Periodic NURBS curve realization or writing.
     PeriodicNurbsCurves,
@@ -58,6 +58,11 @@ pub enum XtCapability {
     /// Non-null kernel face tolerance cannot be represented by the
     /// published schema-13006 writer contract.
     FaceTolerances,
+    /// Two exported offsets share one basis; canonical ownership awaits a
+    /// modern Parasolid oracle.
+    SharedOffsetBasisExport,
+    /// An exported offset directly uses another offset as its basis.
+    NestedOffsetExport,
 }
 
 impl XtCapability {
@@ -84,6 +89,8 @@ impl XtCapability {
         Self::TolerantWireEdges,
         Self::CircularPcurves,
         Self::FaceTolerances,
+        Self::SharedOffsetBasisExport,
+        Self::NestedOffsetExport,
     ];
 
     /// Stable dotted identifier for manifests, metrics, and API clients.
@@ -110,6 +117,8 @@ impl XtCapability {
             Self::TolerantWireEdges => "xt.write.tolerant-wire-edges",
             Self::CircularPcurves => "xt.write.circular-pcurves",
             Self::FaceTolerances => "xt.write.face-tolerances",
+            Self::SharedOffsetBasisExport => "xt.write.shared-offset-basis",
+            Self::NestedOffsetExport => "xt.write.nested-offset",
         }
     }
 
@@ -157,6 +166,9 @@ pub mod code {
     pub const BAD_FIELD: ErrorCode = known_error_code("xt.parse.bad-field");
     /// A reconstruction coordinate is outside the kernel session size box.
     pub const OUTSIDE_SIZE_BOX: ErrorCode = known_error_code("xt.read.outside-size-box");
+    /// Surface references contain a dependency cycle.
+    pub const SURFACE_DEPENDENCY_CYCLE: ErrorCode =
+        known_error_code("xt.read.surface-dependency-cycle");
 
     /// Every X_T-owned error code in deterministic order.
     pub const ALL: &[ErrorCode] = &[
@@ -169,6 +181,7 @@ pub mod code {
         MISSING_NODE,
         BAD_FIELD,
         OUTSIDE_SIZE_BOX,
+        SURFACE_DEPENDENCY_CYCLE,
     ];
 }
 
@@ -232,6 +245,13 @@ pub enum XtError {
         /// The offending value.
         value: f64,
     },
+    /// Recursive X_T surface references contain a cycle.
+    SurfaceDependencyCycle {
+        /// Deterministic transport-node path including the repeated endpoint.
+        path: Vec<u32>,
+    },
+    /// Geometry-graph evaluation failed while validating or emitting data.
+    Evaluation(kgraph::EvalError),
     /// A kernel error during geometry or topology reconstruction.
     Kernel(kcore::error::Error),
 }
@@ -264,6 +284,10 @@ impl fmt::Display for XtError {
             XtError::OutsideSizeBox { value } => {
                 write!(f, "coordinate {value} outside the ±500 m size box")
             }
+            XtError::SurfaceDependencyCycle { path } => {
+                write!(f, "XT surface dependency cycle: {path:?}")
+            }
+            XtError::Evaluation(error) => write!(f, "XT geometry evaluation failed: {error}"),
             XtError::Kernel(e) => write!(f, "kernel error during reconstruction: {e}"),
         }
     }
@@ -272,6 +296,7 @@ impl fmt::Display for XtError {
 impl std::error::Error for XtError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Evaluation(error) => Some(error),
             Self::Kernel(error) => Some(error),
             _ => None,
         }
@@ -296,11 +321,13 @@ impl XtError {
             | Self::Parse { .. }
             | Self::MissingNode { .. }
             | Self::BadField { .. }
-            | Self::OutsideSizeBox { .. } => ErrorClass::InvalidInput,
+            | Self::OutsideSizeBox { .. }
+            | Self::SurfaceDependencyCycle { .. } => ErrorClass::InvalidInput,
             Self::UnsupportedSchema { .. }
             | Self::UnknownNodeType { .. }
             | Self::Unsupported { .. } => ErrorClass::Unsupported,
             Self::InvalidModel { .. } => ErrorClass::ModelRejected,
+            Self::Evaluation(error) => error.class(),
             Self::Kernel(error) => error.class(),
         }
     }
@@ -317,6 +344,8 @@ impl XtError {
             Self::MissingNode { .. } => code::MISSING_NODE,
             Self::BadField { .. } => code::BAD_FIELD,
             Self::OutsideSizeBox { .. } => code::OUTSIDE_SIZE_BOX,
+            Self::SurfaceDependencyCycle { .. } => code::SURFACE_DEPENDENCY_CYCLE,
+            Self::Evaluation(error) => error.code(),
             Self::Kernel(error) => error.code(),
         }
     }
@@ -327,6 +356,7 @@ impl XtError {
         match self.capability() {
             Some(capability) => Some(capability.id()),
             None => match self {
+                Self::Evaluation(error) => error.capability(),
                 Self::Kernel(error) => error.capability(),
                 _ => None,
             },
@@ -337,6 +367,7 @@ impl XtError {
     /// errors.
     pub const fn limit(&self) -> Option<LimitSnapshot> {
         match self {
+            Self::Evaluation(error) => error.limit(),
             Self::Kernel(error) => error.limit(),
             _ => None,
         }
@@ -400,6 +431,8 @@ mod tests {
             "xt.write.tolerant-wire-edges",
             "xt.write.circular-pcurves",
             "xt.write.face-tolerances",
+            "xt.write.shared-offset-basis",
+            "xt.write.nested-offset",
         ];
         let codes: BTreeSet<_> = XtCapability::ALL
             .iter()
@@ -460,7 +493,7 @@ mod tests {
     #[test]
     fn wrapped_kernel_errors_preserve_classification_and_source_chain() {
         let kernel = kcore::error::Error::TransactionActive;
-        let error = XtError::Kernel(kernel);
+        let error = XtError::Kernel(kernel.clone());
         assert_eq!(error.class(), kernel.class());
         assert_eq!(error.code(), kernel.code());
         assert_eq!(error.capability_id(), kernel.capability());

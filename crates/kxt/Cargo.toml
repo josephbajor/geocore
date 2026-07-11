@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 kcore = { path = "../kcore" }
 kgeom = { path = "../kgeom" }
+kgraph = { path = "../kgraph" }
 ktopo = { path = "../ktopo" }
 
 [lints]

@@ -133,3 +133,20 @@ fn compare_accepts_identity_and_rejects_a_different_body() {
         .expect("running xt_oracle compare");
     assert_eq!(output.status.code(), Some(2), "IO failure must exit 2");
 }
+
+#[test]
+fn compare_reports_offset_as_a_stable_surface_class() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/offset_plane.x_t");
+    let output = Command::new(env!("CARGO_BIN_EXE_xt_oracle"))
+        .arg("compare")
+        .arg(&fixture)
+        .arg(&fixture)
+        .output()
+        .expect("running xt_oracle offset identity comparison");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("PASS  surface_classes: offset:1"),
+        "{stdout}"
+    );
+}
