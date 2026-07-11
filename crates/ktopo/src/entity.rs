@@ -199,7 +199,7 @@ impl FaceDomain {
     /// Unbounded analytic surfaces deliberately return `None` rather than
     /// inventing a trim domain from samples.
     pub fn natural(surface: &SurfaceGeom) -> Option<Self> {
-        let [u, v] = surface.as_surface().param_range();
+        let [u, v] = surface.as_leaf_surface()?.param_range();
         Self::new(u, v).ok()
     }
 

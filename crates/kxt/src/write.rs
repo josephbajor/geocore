@@ -746,7 +746,13 @@ impl Plan {
         let q1 = use_.parameter_at_edge(t1);
         let lp = store.get(fin.parent)?;
         let face = store.get(lp.face)?;
-        let surface = store.get(face.surface)?.as_surface();
+        let surface = store
+            .get(face.surface)?
+            .as_leaf_surface()
+            .ok_or(XtError::Unsupported {
+                capability: XtCapability::ProceduralSurfaces,
+                what: "SP-curve emission for procedural surfaces",
+            })?;
         let pcurve = store.get(use_.curve())?.as_curve();
         let uv0 = pcurve.eval(q0);
         let uv1 = pcurve.eval(q1);

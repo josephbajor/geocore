@@ -43,16 +43,29 @@
 //! into two frozen pole-to-pole sides and welds the parameter-singular pole
 //! rows by global mesh identity.
 
-use crate::entity::{BodyId, Edge, EdgeId, FaceDomain, FaceId, FinPcurve, Sense, VertexId};
+use crate::entity::{
+    BodyId, Edge, EdgeId, FaceDomain, FaceId, FinPcurve, Sense, SurfaceId, VertexId,
+};
 use crate::geom::{Curve2dGeom, SurfaceGeom};
 use crate::store::Store;
-use kcore::error::{Error, Result};
+use kcore::error::Error;
 use kgeom::curve::Curve;
 use kgeom::surface::Surface;
 use kgeom::surface_point::{invert_surface_point, normalize_surface_uv};
 pub use kgeom::tess::TessOptions;
 use kgeom::tess::{TrimLoop, TrimmedSurface, tessellate};
 use kgeom::vec::{Point3, Vec2};
+mod error;
+mod offset;
+
+pub use error::{
+    EVALUATION_FAILED, OFFSET_PERIODIC_WINDING, PROCEDURAL_LEAF_ALGORITHM,
+    REGULARITY_INDETERMINATE, SURFACE_REGULARITY_PROOF, TessellationError, TessellationResult,
+    UNSUPPORTED_TESSELLATION,
+};
+use offset::{eval_surface_point, face_case_planar_offset, surface_periodicity};
+
+type Result<T> = TessellationResult<T>;
 
 /// A watertight tessellation of one body.
 #[derive(Debug, Clone, PartialEq)]
@@ -184,13 +197,22 @@ fn point_seg_dist(p: Point3, a: Point3, b: Point3) -> f64 {
     p.dist(a + ab * t)
 }
 
+fn require_leaf_surface(surface: &SurfaceGeom) -> Result<&dyn Surface> {
+    surface
+        .as_leaf_surface()
+        .ok_or(TessellationError::Unsupported {
+            capability: PROCEDURAL_LEAF_ALGORITHM,
+        })
+}
+
 /// Invert a point known to lie on the surface to UV coordinates, with
 /// periodic parameters wrapped into the surface's base range.
 fn invert_uv(sg: &SurfaceGeom, p: Point3) -> Result<Vec2> {
-    let mapped = invert_surface_point(sg.as_surface(), p).map_err(|_| Error::InvalidGeometry {
+    let surface = require_leaf_surface(sg)?;
+    let mapped = invert_surface_point(surface, p).map_err(|_| Error::InvalidGeometry {
         reason: "closest-point projection onto NURBS surface failed",
     })?;
-    let uv = normalize_surface_uv(sg.as_surface(), mapped.uv);
+    let uv = normalize_surface_uv(surface, mapped.uv);
     Ok(Vec2::new(uv[0], uv[1]))
 }
 
@@ -207,6 +229,8 @@ fn unwrap_near(mut uv: Vec2, prev: Vec2, periods: [Option<f64>; 2]) -> Vec2 {
 
 /// One face's parameter-space use of an edge during shared refinement.
 struct FaceUse<'a> {
+    store: &'a Store,
+    surface_id: SurfaceId,
     surface: &'a SurfaceGeom,
     pcurve: Option<(&'a Curve2dGeom, FinPcurve)>,
 }
@@ -214,11 +238,11 @@ struct FaceUse<'a> {
 impl FaceUse<'_> {
     fn uv_at(&self, edge_parameter: f64, point: Point3) -> Result<Vec2> {
         match self.pcurve {
-            Some((geometry, use_)) => use_.evaluate_uv(
+            Some((geometry, use_)) => Ok(use_.evaluate_uv(
                 geometry.as_curve(),
                 edge_parameter,
-                self.surface.as_surface().periodicity(),
-            ),
+                surface_periodicity(self.store, self.surface_id)?,
+            )?),
             None => invert_uv(self.surface, point),
         }
     }
@@ -241,12 +265,13 @@ impl CurveRefine<'_> {
         if self.face_uses.is_empty() {
             return Err(Error::InvalidGeometry {
                 reason: "curve-less tolerant edge has no adjacent face pcurves",
-            });
+            }
+            .into());
         }
         let mut xyz = [0.0; 3];
         for face_use in &self.face_uses {
             let uv = face_use.uv_at(edge_parameter, Point3::new(f64::NAN, f64::NAN, f64::NAN))?;
-            let p = face_use.surface.as_surface().eval([uv.x, uv.y]);
+            let p = eval_surface_point(face_use.store, face_use.surface_id, uv)?;
             xyz[0] += p.x;
             xyz[1] += p.y;
             xyz[2] += p.z;
@@ -268,10 +293,10 @@ impl CurveRefine<'_> {
             let ub = unwrap_near(
                 face_use.uv_at(b.0, b.1)?,
                 ua,
-                face_use.surface.as_surface().periodicity(),
+                surface_periodicity(face_use.store, face_use.surface_id)?,
             );
             let um = (ua + ub) / 2.0;
-            let q = face_use.surface.as_surface().eval([um.x, um.y]);
+            let q = eval_surface_point(face_use.store, face_use.surface_id, um)?;
             if point_seg_dist(q, a.1, b.1) > self.ctx.tol {
                 return Ok(true);
             }
@@ -381,7 +406,7 @@ fn find_eline(elines: &EdgeLines, edge: EdgeId) -> Result<&EdgeLine> {
     elines
         .iter()
         .find(|line| line.edge == edge)
-        .ok_or(Error::StaleHandle)
+        .ok_or_else(|| Error::StaleHandle.into())
 }
 
 /// Discretize one edge into global mesh vertices. Returns the vertex-index
@@ -401,7 +426,8 @@ fn discretize_edge(
         None => {
             return Err(Error::InvalidGeometry {
                 reason: "edge has neither curve geometry nor a tolerance",
-            });
+            }
+            .into());
         }
     };
 
@@ -411,7 +437,8 @@ fn discretize_edge(
             if !(a.is_finite() && b.is_finite() && a < b) {
                 return Err(Error::InvalidGeometry {
                     reason: "edge bounds are not a finite increasing interval",
-                });
+                }
+                .into());
             }
             (a, b)
         }
@@ -434,7 +461,7 @@ fn discretize_edge(
             .iter()
             .find(|(id, _)| *id == v)
             .map(|&(_, g)| g)
-            .ok_or(Error::StaleHandle)
+            .ok_or_else(|| Error::StaleHandle.into())
     };
     let (g_start, g_end, closed) = match e.vertices {
         [Some(v0), Some(v1)] => (vgid(v0)?, vgid(v1)?, v0 == v1),
@@ -448,7 +475,8 @@ fn discretize_edge(
         _ => {
             return Err(Error::InvalidGeometry {
                 reason: "edge has exactly one vertex",
-            });
+            }
+            .into());
         }
     };
 
@@ -466,10 +494,13 @@ fn discretize_edge(
             None => {
                 return Err(Error::InvalidGeometry {
                     reason: "curve-less tolerant edge fin has no pcurve",
-                });
+                }
+                .into());
             }
         };
         face_uses.push(FaceUse {
+            store,
+            surface_id: face.surface,
             surface: store.get(face.surface)?,
             pcurve,
         });
@@ -535,6 +566,7 @@ struct RawUvChain {
 
 fn fin_sample_uv(
     store: &Store,
+    surface_id: SurfaceId,
     sg: &SurfaceGeom,
     acc: &MeshAcc,
     fin: &crate::entity::Fin,
@@ -543,7 +575,11 @@ fn fin_sample_uv(
     match fin.pcurve {
         Some(use_) => {
             let curve = store.get(use_.curve())?.as_curve();
-            use_.evaluate_uv(curve, sample.parameter, sg.as_surface().periodicity())
+            Ok(use_.evaluate_uv(
+                curve,
+                sample.parameter,
+                surface_periodicity(store, surface_id)?,
+            )?)
         }
         None => invert_uv(sg, acc.pos(sample.vertex)),
     }
@@ -557,6 +593,7 @@ fn fin_sample_uv(
 fn loop_chain(
     store: &Store,
     elines: &EdgeLines,
+    surface_id: SurfaceId,
     sg: &SurfaceGeom,
     acc: &MeshAcc,
     lp: crate::entity::LoopId,
@@ -566,7 +603,8 @@ fn loop_chain(
     if fins.is_empty() {
         return Err(Error::InvalidGeometry {
             reason: "loop has no fins",
-        });
+        }
+        .into());
     }
     let mut chain = Vec::new();
     let mut close = None;
@@ -596,32 +634,33 @@ fn loop_chain(
         if line.samples.len() < 2 {
             return Err(Error::InvalidGeometry {
                 reason: "edge polyline has fewer than two parameter samples",
-            });
+            }
+            .into());
         }
         let forward = fin.sense.is_forward() != reverse;
         if forward {
             for &sample in &line.samples[..line.samples.len() - 1] {
                 chain.push(RawUvSample {
                     vertex: sample.vertex,
-                    uv: fin_sample_uv(store, sg, acc, fin, sample)?,
+                    uv: fin_sample_uv(store, surface_id, sg, acc, fin, sample)?,
                 });
             }
             let sample = *line.samples.last().expect("at least two samples");
             close = Some(RawUvSample {
                 vertex: sample.vertex,
-                uv: fin_sample_uv(store, sg, acc, fin, sample)?,
+                uv: fin_sample_uv(store, surface_id, sg, acc, fin, sample)?,
             });
         } else {
             for &sample in line.samples.iter().rev().take(line.samples.len() - 1) {
                 chain.push(RawUvSample {
                     vertex: sample.vertex,
-                    uv: fin_sample_uv(store, sg, acc, fin, sample)?,
+                    uv: fin_sample_uv(store, surface_id, sg, acc, fin, sample)?,
                 });
             }
             let sample = line.samples[0];
             close = Some(RawUvSample {
                 vertex: sample.vertex,
-                uv: fin_sample_uv(store, sg, acc, fin, sample)?,
+                uv: fin_sample_uv(store, surface_id, sg, acc, fin, sample)?,
             });
         }
     }
@@ -632,7 +671,8 @@ fn loop_chain(
     {
         return Err(Error::InvalidGeometry {
             reason: "loop edge polyline does not close by shared vertex identity",
-        });
+        }
+        .into());
     }
     Ok(RawUvChain {
         samples: chain,
@@ -643,9 +683,7 @@ fn loop_chain(
 
 /// Unwrap a raw per-fin pcurve chain with periodic continuity and measure
 /// its winding. The explicit closing sample is essential for seam loops.
-fn chain_uv(sg: &SurfaceGeom, raw: RawUvChain) -> Result<UvChain> {
-    let s = sg.as_surface();
-    let per = s.periodicity();
+fn chain_uv(per: [Option<f64>; 2], raw: RawUvChain) -> Result<UvChain> {
     let mut ids = Vec::with_capacity(raw.samples.len());
     let mut uvs: Vec<Vec2> = Vec::with_capacity(raw.samples.len());
     for sample in raw.samples {
@@ -668,7 +706,8 @@ fn chain_uv(sg: &SurfaceGeom, raw: RawUvChain) -> Result<UvChain> {
     {
         return Err(Error::InvalidGeometry {
             reason: "declared pcurve closure winding disagrees with tessellation chain",
-        });
+        }
+        .into());
     }
     Ok(UvChain {
         ids,
@@ -731,7 +770,8 @@ fn run_kgeom(
     if fm.boundary.len() != loops_ids.len() {
         return Err(Error::InvalidGeometry {
             reason: "internal: face boundary loop count mismatch",
-        });
+        }
+        .into());
     }
     let mut l2g: Vec<Option<u32>> = vec![None; fm.positions.len()];
     for (bl, ids) in fm.boundary.iter().zip(loops_ids) {
@@ -740,7 +780,8 @@ fn run_kgeom(
             // that would be a cross-face crack, so fail loudly.
             return Err(Error::InvalidGeometry {
                 reason: "internal: boundary refinement mismatch (potential crack)",
-            });
+            }
+            .into());
         }
         for (&li, &gid) in bl.iter().zip(ids) {
             l2g[li as usize] = Some(gid);
@@ -786,7 +827,8 @@ fn face_case_a(
         if positive.len() != 1 {
             return Err(Error::InvalidGeometry {
                 reason: "face must have exactly one counterclockwise (outer) loop",
-            });
+            }
+            .into());
         }
         positive.pop().expect("one outer loop")
     };
@@ -827,7 +869,7 @@ fn face_case_b(
     opts: &TessOptions,
     ctx: Ctx,
 ) -> Result<Vec<[u32; 3]>> {
-    let s = sg.as_surface();
+    let s = require_leaf_surface(sg)?;
     let pu = s.periodicity()[0].ok_or(Error::InvalidGeometry {
         reason: "winding loop on a non-periodic surface direction",
     })?;
@@ -841,7 +883,8 @@ fn face_case_b(
             _ => {
                 return Err(Error::InvalidGeometry {
                     reason: "unsupported loop winding configuration on periodic face",
-                });
+                }
+                .into());
             }
         }
     }
@@ -855,14 +898,16 @@ fn face_case_b(
         (None, None) => {
             return Err(Error::InvalidGeometry {
                 reason: "seam-cut face needs one +1 and one -1 winding loop",
-            });
+            }
+            .into());
         }
     };
     let mean_v = |c: &UvChain| c.uvs.iter().map(|p| p.y).sum::<f64>() / c.uvs.len() as f64;
     if mean_v(&top) <= mean_v(&bottom) {
         return Err(Error::InvalidGeometry {
             reason: "seam-cut face has its winding loops on the wrong sides",
-        });
+        }
+        .into());
     }
 
     // Anchor the top chain so its end (low-u side) sits on the bottom
@@ -954,9 +999,10 @@ fn face_case_cap(
         // winding loop; cone apex caps are deferred until full cones land.
         return Err(Error::InvalidGeometry {
             reason: "single-winding loop is only supported as a spherical polar cap",
-        });
+        }
+        .into());
     };
-    let s = sg.as_surface();
+    let s = require_leaf_surface(sg)?;
     let tau = core::f64::consts::TAU;
     let half = core::f64::consts::FRAC_PI_2;
     let w = chain.winding[0];
@@ -970,7 +1016,8 @@ fn face_case_cap(
     if n < 2 {
         return Err(Error::InvalidGeometry {
             reason: "cap boundary loop has too few samples to seam-split",
-        });
+        }
+        .into());
     }
     let pole_v = if w > 0 { half } else { -half };
     if cuvs
@@ -979,7 +1026,8 @@ fn face_case_cap(
     {
         return Err(Error::InvalidGeometry {
             reason: "cap boundary loop touches the pole",
-        });
+        }
+        .into());
     }
 
     let g_pole = acc.push(s.eval([cuvs[0].x, pole_v]));
@@ -1002,7 +1050,8 @@ fn face_case_cap(
     if !split_ok {
         return Err(Error::InvalidGeometry {
             reason: "cap boundary loop cannot be seam-split at an existing sample",
-        });
+        }
+        .into());
     }
 
     // Pole rows: uniform samples between two seam longitudes, all welded
@@ -1126,7 +1175,8 @@ fn face_case_bipolar_sphere(
     let (Some(north), Some(south)) = (north, south) else {
         return Err(Error::InvalidGeometry {
             reason: "bipolar sphere loop does not contain both poles",
-        });
+        }
+        .into());
     };
 
     // Follow the already sense-normalized loop cyclically. Samples after a
@@ -1156,7 +1206,8 @@ fn face_case_bipolar_sphere(
     if right.len() < 3 || left_desc.len() < 3 {
         return Err(Error::InvalidGeometry {
             reason: "bipolar sphere boundary needs a non-pole sample on each side",
-        });
+        }
+        .into());
     }
 
     // Replace each singular endpoint longitude with the adjacent side's
@@ -1190,7 +1241,8 @@ fn face_case_bipolar_sphere(
     if width <= 64.0 * f64::EPSILON || width >= tau - 64.0 * f64::EPSILON {
         return Err(Error::InvalidGeometry {
             reason: "bipolar sphere boundary sides do not enclose a finite patch",
-        });
+        }
+        .into());
     }
     let shift = lu + width - ru;
     for (uv, _) in &mut right {
@@ -1283,7 +1335,7 @@ fn face_case_c(
 ) -> Result<Vec<[u32; 3]>> {
     let pi = core::f64::consts::PI;
     let tau = core::f64::consts::TAU;
-    let s = sg.as_surface();
+    let s = require_leaf_surface(sg)?;
     let mut tris = Vec::new();
     match sg {
         SurfaceGeom::Sphere(sp) => {
@@ -1374,7 +1426,8 @@ fn face_case_c(
         _ => {
             return Err(Error::InvalidGeometry {
                 reason: "zero-loop face on a surface that is not closed",
-            });
+            }
+            .into());
         }
     }
     Ok(tris)
@@ -1397,15 +1450,23 @@ fn tess_face(
         return face_case_c(sg, flip, acc, opts, ctx);
     }
     let mut chains = Vec::with_capacity(face.loops.len());
+    let periods = surface_periodicity(store, face.surface)?;
     for &lp in &face.loops {
-        let raw = loop_chain(store, elines, sg, acc, lp, flip)?;
-        chains.push(chain_uv(sg, raw)?);
+        let raw = loop_chain(store, elines, face.surface, sg, acc, lp, flip)?;
+        chains.push(chain_uv(periods, raw)?);
     }
     if let Some(domain) = face.domain {
-        let periods = sg.as_surface().periodicity();
         for chain in &mut chains {
             anchor_chain_to_domain(chain, domain, periods);
         }
+    }
+    if matches!(sg, SurfaceGeom::Offset(_)) {
+        if chains.iter().any(|chain| chain.winding != [0, 0]) {
+            return Err(TessellationError::Unsupported {
+                capability: OFFSET_PERIODIC_WINDING,
+            });
+        }
+        return face_case_planar_offset(store, face.surface, chains, flip, acc, opts);
     }
     // A meridional boundary can pass through both sphere poles while
     // acquiring either ±1 *or zero* winding from their arbitrary singular
@@ -1425,13 +1486,14 @@ fn tess_face(
         if bipolar.len() > 1 {
             return Err(Error::InvalidGeometry {
                 reason: "sphere face has multiple loops passing through both poles",
-            });
+            }
+            .into());
         }
         if let Some(&outer) = bipolar.first() {
             let chain = chains.remove(outer);
             return face_case_bipolar_sphere(
                 sp,
-                sg.as_surface(),
+                require_leaf_surface(sg)?,
                 chain,
                 chains,
                 flip,
@@ -1442,7 +1504,7 @@ fn tess_face(
         }
     }
     if chains.iter().all(|c| c.winding == [0, 0]) {
-        face_case_a(sg.as_surface(), chains, flip, acc, opts)
+        face_case_a(require_leaf_surface(sg)?, chains, flip, acc, opts)
     } else {
         face_case_b(sg, chains, flip, acc, opts, ctx)
     }
@@ -1453,12 +1515,13 @@ pub fn tessellate_body(store: &Store, body: BodyId, opts: &TessOptions) -> Resul
     if !opts.chord_tol.is_finite() || opts.chord_tol <= 0.0 {
         return Err(Error::InvalidTolerance {
             value: opts.chord_tol,
-        });
+        }
+        .into());
     }
     if let Some(l) = opts.max_edge_len
         && (!l.is_finite() || l <= 0.0)
     {
-        return Err(Error::InvalidTolerance { value: l });
+        return Err(Error::InvalidTolerance { value: l }.into());
     }
     let ctx = Ctx {
         tol: opts.chord_tol * MARGIN,
@@ -1469,7 +1532,8 @@ pub fn tessellate_body(store: &Store, body: BodyId, opts: &TessOptions) -> Resul
     if faces.is_empty() {
         return Err(Error::InvalidGeometry {
             reason: "body has no faces to tessellate",
-        });
+        }
+        .into());
     }
 
     let mut acc = MeshAcc {
@@ -1517,15 +1581,19 @@ pub fn tessellate_body(store: &Store, body: BodyId, opts: &TessOptions) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::check_body;
+    use crate::check::{
+        CheckLevel, CheckOutcome, FaultKind, VerificationGapKind, check_body, check_body_report,
+    };
     use crate::entity::{Face, Fin, Loop, PcurveChart, ShellId};
     use crate::geom::CurveGeom;
-    use crate::make::{block, cylinder, solid_body_scaffold};
+    use crate::make::{block, cylinder, planar_sheet, solid_body_scaffold};
     use kcore::math;
     use kgeom::curve::Circle;
     use kgeom::frame::Frame;
+    use kgeom::nurbs::NurbsSurface;
     use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Torus};
     use kgeom::vec::Vec3;
+    use kgraph::{EvalError, GeometryRef, OffsetSurfaceDescriptor};
 
     fn assert_watertight(mesh: &BodyMesh) {
         let problems = check_watertight(mesh);
@@ -1541,6 +1609,285 @@ mod tests {
             chord_tol,
             max_edge_len: None,
         }
+    }
+
+    #[test]
+    fn checked_planar_offset_face_tessellates_through_pcurves_without_basis_copy() {
+        let mut store = Store::new();
+        let world = Frame::world();
+        let translated = Frame::new(
+            world.origin() + Vec3::new(0.0, 0.0, 1.0),
+            world.z(),
+            world.x(),
+        )
+        .unwrap();
+        let body = planar_sheet(
+            &mut store,
+            &translated,
+            &[
+                Vec2::new(-1.0, -1.0),
+                Vec2::new(1.0, -1.0),
+                Vec2::new(1.0, 1.0),
+                Vec2::new(-1.0, 1.0),
+            ],
+        )
+        .unwrap();
+        let face = store.faces_of_body(body).unwrap()[0];
+        let old_surface = store.get(face).unwrap().surface;
+
+        let mut transaction = store.transaction().unwrap();
+        let (basis, offset) = {
+            let mut assembly = transaction.assembly();
+            let basis = assembly
+                .insert_surface(Plane::new(Frame::world()).into())
+                .unwrap();
+            let offset = assembly
+                .insert_surface(OffsetSurfaceDescriptor::new(basis, 1.0).into())
+                .unwrap();
+            assembly.get_mut(face).unwrap().surface = offset;
+            assembly.remove_surface(old_surface).unwrap();
+            (basis, offset)
+        };
+        transaction.commit_checked_body(body).unwrap();
+
+        assert_eq!(store.geometry().surface_count(), 2);
+        assert_eq!(
+            store
+                .geometry()
+                .dependency_closure(GeometryRef::Surface(offset))
+                .unwrap(),
+            vec![GeometryRef::Surface(basis), GeometryRef::Surface(offset)]
+        );
+        assert!(check_body(&store, body).unwrap().is_empty());
+        let report = check_body_report(&store, body, CheckLevel::Full).unwrap();
+        assert_eq!(report.outcome(), CheckOutcome::Indeterminate);
+        assert!(report.gaps.iter().any(|gap| {
+            gap.entity == crate::entity::EntityRef::Face(face)
+                && gap.kind == VerificationGapKind::SurfaceRegularity
+        }));
+
+        let mesh = tessellate_body(&store, body, &opts(1.0e-4)).unwrap();
+        assert!(!mesh.triangles.is_empty());
+        assert!(
+            mesh.positions
+                .iter()
+                .all(|point| (point.z - 1.0).abs() <= 1.0e-12)
+        );
+
+        let max_edge_len = 0.2;
+        let constrained = tessellate_body(
+            &store,
+            body,
+            &TessOptions {
+                chord_tol: 1.0e-4,
+                max_edge_len: Some(max_edge_len),
+            },
+        )
+        .unwrap();
+        for triangle in constrained.triangles {
+            let [a, b, c] = triangle.map(|index| constrained.positions[index as usize]);
+            for length in [a.dist(b), b.dist(c), c.dist(a)] {
+                assert!(length <= max_edge_len + 1.0e-12, "mesh edge {length}");
+            }
+        }
+    }
+
+    #[test]
+    fn failed_checked_offset_retarget_rolls_back_graph_and_topology() {
+        let mut store = Store::new();
+        let world = Frame::world();
+        let translated = Frame::new(
+            world.origin() + Vec3::new(0.0, 0.0, 1.0),
+            world.z(),
+            world.x(),
+        )
+        .unwrap();
+        let body = planar_sheet(
+            &mut store,
+            &translated,
+            &[
+                Vec2::new(0.0, 0.0),
+                Vec2::new(1.0, 0.0),
+                Vec2::new(1.0, 1.0),
+                Vec2::new(0.0, 1.0),
+            ],
+        )
+        .unwrap();
+        let face = store.faces_of_body(body).unwrap()[0];
+        let original_surface = store.get(face).unwrap().surface;
+        let original_count = store.geometry().surface_count();
+
+        let mut transaction = store.transaction().unwrap();
+        {
+            let mut assembly = transaction.assembly();
+            let basis = assembly
+                .insert_surface(Plane::new(Frame::world()).into())
+                .unwrap();
+            let bad_offset = assembly
+                .insert_surface(OffsetSurfaceDescriptor::new(basis, 2.0).into())
+                .unwrap();
+            assembly.get_mut(face).unwrap().surface = bad_offset;
+        }
+        let faults = check_body(transaction.store(), body).unwrap();
+        assert!(
+            faults
+                .iter()
+                .any(|fault| fault.kind == FaultKind::PcurveOffSurface)
+        );
+        assert!(transaction.commit_checked_body(body).is_err());
+
+        assert_eq!(store.geometry().surface_count(), original_count);
+        assert_eq!(store.get(face).unwrap().surface, original_surface);
+        store.geometry().validate().unwrap();
+    }
+
+    #[test]
+    fn procedural_face_requires_pcurves_and_rejects_unclassifiable_samples() {
+        let polygon = [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1.0, 0.0),
+            Vec2::new(1.0, 1.0),
+            Vec2::new(0.0, 1.0),
+        ];
+
+        let mut store = Store::new();
+        let body = planar_sheet(&mut store, &Frame::world(), &polygon).unwrap();
+        let face = store.faces_of_body(body).unwrap()[0];
+        let loop_id = store.get(face).unwrap().loops[0];
+        let fin = store.get(loop_id).unwrap().fins[0];
+        let mut transaction = store.transaction().unwrap();
+        {
+            let mut assembly = transaction.assembly();
+            let basis = assembly
+                .insert_surface(Plane::new(Frame::world()).into())
+                .unwrap();
+            let offset = assembly
+                .insert_surface(OffsetSurfaceDescriptor::new(basis, 0.0).into())
+                .unwrap();
+            assembly.get_mut(face).unwrap().surface = offset;
+            assembly.get_mut(fin).unwrap().pcurve = None;
+        }
+        let faults = check_body(transaction.store(), body).unwrap();
+        assert!(faults.iter().any(|fault| {
+            fault.entity == crate::entity::EntityRef::Fin(fin)
+                && fault.kind == FaultKind::MissingPcurve
+        }));
+        assert!(transaction.commit_checked_body(body).is_err());
+        assert_eq!(
+            store.get(fin).unwrap().pcurve.unwrap().closure_winding(),
+            None
+        );
+
+        let mut transaction = store.transaction().unwrap();
+        {
+            let mut assembly = transaction.assembly();
+            let basis = assembly
+                .insert_surface(Plane::new(Frame::world()).into())
+                .unwrap();
+            let offset = assembly
+                .insert_surface(OffsetSurfaceDescriptor::new(basis, 0.0).into())
+                .unwrap();
+            assembly.get_mut(face).unwrap().surface = offset;
+            let use_ = assembly.get(fin).unwrap().pcurve.unwrap();
+            assembly.get_mut(fin).unwrap().pcurve =
+                Some(use_.with_chart(PcurveChart::shifted([1, 0])));
+        }
+        let faults = check_body(transaction.store(), body).unwrap();
+        assert!(faults.iter().any(|fault| {
+            fault.entity == crate::entity::EntityRef::Fin(fin)
+                && fault.kind == FaultKind::BadPcurveChart
+        }));
+        drop(transaction);
+
+        let mut store = Store::new();
+        let body = planar_sheet(&mut store, &Frame::world(), &polygon).unwrap();
+        let face = store.faces_of_body(body).unwrap()[0];
+        let mut transaction = store.transaction().unwrap();
+        {
+            let mut assembly = transaction.assembly();
+            let basis = assembly
+                .insert_surface(Cylinder::new(Frame::world(), 2.0).unwrap().into())
+                .unwrap();
+            let singular = assembly
+                .insert_surface(OffsetSurfaceDescriptor::new(basis, -2.0).into())
+                .unwrap();
+            assembly.get_mut(face).unwrap().surface = singular;
+        }
+        let faults = check_body(transaction.store(), body).unwrap();
+        assert!(
+            faults
+                .iter()
+                .any(|fault| fault.kind == FaultKind::SurfaceSingular)
+        );
+        drop(transaction);
+
+        let epsilon = 1.0e-12;
+        let ill_conditioned = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, epsilon, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(2.0, epsilon, 0.0),
+            ],
+            None,
+        )
+        .unwrap();
+        let face = store.faces_of_body(body).unwrap()[0];
+        let loop_id = store.get(face).unwrap().loops[0];
+        let fin = store.get(loop_id).unwrap().fins[0];
+        let mut transaction = store.transaction().unwrap();
+        {
+            let mut assembly = transaction.assembly();
+            let basis = assembly
+                .insert_surface(ill_conditioned.clone().into())
+                .unwrap();
+            let offset = assembly
+                .insert_surface(OffsetSurfaceDescriptor::new(basis, 1.0).into())
+                .unwrap();
+            assembly.get_mut(face).unwrap().surface = offset;
+            let use_ = assembly.get(fin).unwrap().pcurve.unwrap();
+            assembly.get_mut(fin).unwrap().pcurve = Some(use_.with_closure_winding([1, 0]));
+        }
+        let faults = check_body(transaction.store(), body).unwrap();
+        assert!(faults.iter().any(|fault| {
+            fault.entity == crate::entity::EntityRef::Fin(fin)
+                && fault.kind == FaultKind::BadPcurveClosure
+        }));
+        assert!(transaction.commit_checked_body(body).is_err());
+        assert_eq!(
+            store.get(fin).unwrap().pcurve.unwrap().closure_winding(),
+            None
+        );
+
+        let mut transaction = store.transaction().unwrap();
+        {
+            let mut assembly = transaction.assembly();
+            let basis = assembly.insert_surface(ill_conditioned.into()).unwrap();
+            let offset = assembly
+                .insert_surface(OffsetSurfaceDescriptor::new(basis, 1.0).into())
+                .unwrap();
+            assembly.get_mut(face).unwrap().surface = offset;
+        }
+        let faults = check_body(transaction.store(), body).unwrap();
+        assert!(faults.is_empty());
+        let report = check_body_report(transaction.store(), body, CheckLevel::Full).unwrap();
+        assert_eq!(report.outcome(), CheckOutcome::Indeterminate);
+        assert!(report.gaps.iter().any(|gap| {
+            gap.entity == crate::entity::EntityRef::Face(face)
+                && gap.kind == VerificationGapKind::SurfaceRegularity
+        }));
+        transaction.commit_checked_body(body).unwrap();
+        assert!(matches!(
+            tessellate_body(&store, body, &opts(1.0e-3)),
+            Err(TessellationError::Indeterminate {
+                surface: _,
+                source: Some(EvalError::IllConditionedSurface { .. })
+            })
+        ));
     }
 
     #[test]
@@ -1579,6 +1926,7 @@ mod tests {
         let sg = store.get(surface_id).unwrap();
         let uv = fin_sample_uv(
             &store,
+            surface_id,
             sg,
             &acc,
             fin,
@@ -1902,9 +2250,9 @@ mod tests {
         let err = tessellate_body(&store, body, &opts(1e-3)).unwrap_err();
         assert_eq!(
             err,
-            Error::InvalidGeometry {
+            TessellationError::Kernel(Error::InvalidGeometry {
                 reason: "single-winding loop is only supported as a spherical polar cap",
-            }
+            })
         );
     }
 

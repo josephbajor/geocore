@@ -11,9 +11,12 @@ mod eval;
 mod graph;
 
 pub use class::{Curve2dClass, CurveClass, GeometryClassKey, SurfaceClass};
-pub use descriptor::{Curve2dDescriptor, CurveDescriptor, GeometryDependencies, SurfaceDescriptor};
+pub use descriptor::{
+    Curve2dDescriptor, CurveDescriptor, GeometryDependencies, OffsetSurfaceDescriptor,
+    SurfaceDescriptor,
+};
 pub use error::{EvalError, EvalResult, GeometryGraphError, GeometryGraphResult};
-pub use eval::{EvalContext, EvalLimits, SurfaceDerivativeOrder};
+pub use eval::{EvalContext, EvalLimits, SurfaceDerivativeOrder, SurfaceValidity, ValidityGap};
 pub use graph::{
     Curve2dHandle, Curve2dNode, CurveHandle, CurveNode, GeometryChanges, GeometryGraph,
     GeometryRef, SurfaceHandle, SurfaceNode,

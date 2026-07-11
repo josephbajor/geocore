@@ -68,6 +68,8 @@ pub enum SurfaceClass {
     Torus,
     /// Tensor-product B-spline or NURBS surface.
     Nurbs,
+    /// Constant signed true-normal offset of another graph surface.
+    Offset,
 }
 
 impl SurfaceClass {
@@ -80,6 +82,7 @@ impl SurfaceClass {
             Self::Sphere => "kernel.surface.sphere.v1",
             Self::Torus => "kernel.surface.torus.v1",
             Self::Nurbs => "kernel.surface.nurbs.v1",
+            Self::Offset => "kernel.surface.offset.v1",
         })
     }
 }

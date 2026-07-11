@@ -7,9 +7,34 @@ use kgeom::curve2d::{Curve2d, Curve2dDerivs};
 use kgeom::param::ParamRange;
 use kgeom::surface::{Degeneracy, Surface, SurfaceDerivs};
 
+use crate::SurfaceClass;
 use crate::descriptor::{Curve2dDescriptor, CurveDescriptor, SurfaceDescriptor};
 use crate::error::{EvalError, EvalResult};
 use crate::graph::{Curve2dHandle, CurveHandle, GeometryGraph, GeometryRef, SurfaceHandle};
+
+/// Reason a surface regularity query could not certify regularity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValidityGap {
+    /// The normalized Jacobian is at or below angular conditioning tolerance.
+    IllConditioned,
+}
+
+/// Pointwise surface regularity result.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SurfaceValidity {
+    /// The parameterization is pointwise regular.
+    Regular {
+        /// `|du × dv| / (|du| |dv|)`.
+        normalized_jacobian: f64,
+    },
+    /// The surface Jacobian is exactly singular.
+    Singular,
+    /// The Jacobian is nonzero but cannot be robustly certified regular.
+    Indeterminate {
+        /// Named reason for the proof gap.
+        reason: ValidityGap,
+    },
+}
 
 /// Work reserved for one public graph query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,52 +259,25 @@ impl<'g> EvalContext<'g> {
         if !uv.into_iter().all(f64::is_finite) {
             return Err(EvalError::InvalidParameter);
         }
-        let geometry = GeometryRef::Surface(surface);
-        self.enter(geometry)?;
-        let result = (|| {
-            let descriptor = self
-                .graph
-                .surface(surface)
-                .ok_or(EvalError::StaleGeometryHandle { geometry })?
-                .descriptor();
-            let leaf = surface_leaf(descriptor);
-            let domain = leaf.param_range();
-            let periodicity = leaf.periodicity();
-            validate_parameter(uv[0], domain[0], periodicity[0])?;
-            validate_parameter(uv[1], domain[1], periodicity[1])?;
-            let order = order.as_usize();
-            let value = leaf.eval_derivs(uv, order);
-            if surface_derivs_finite(value, order) {
-                Ok(value)
-            } else {
-                Err(EvalError::NonFiniteResult {
-                    class: descriptor.class_key(),
-                })
-            }
-        })();
-        self.leave(geometry);
-        result
+        self.eval_surface_inner(surface, uv, order, true)
     }
 
     /// Query a surface's natural parameter ranges.
     pub fn surface_param_range(&mut self, surface: SurfaceHandle) -> EvalResult<[ParamRange; 2]> {
-        self.with_surface(surface, |descriptor| {
-            Ok(surface_leaf(descriptor).param_range())
-        })
+        self.begin_query();
+        self.surface_param_range_inner(surface)
     }
 
     /// Query a surface's periods by parameter direction.
     pub fn surface_periodicity(&mut self, surface: SurfaceHandle) -> EvalResult<[Option<f64>; 2]> {
-        self.with_surface(surface, |descriptor| {
-            Ok(surface_leaf(descriptor).periodicity())
-        })
+        self.begin_query();
+        self.surface_periodicity_inner(surface)
     }
 
     /// Query exact degenerate iso-parameter lines advertised by the leaf.
     pub fn surface_degeneracies(&mut self, surface: SurfaceHandle) -> EvalResult<Vec<Degeneracy>> {
-        self.with_surface(surface, |descriptor| {
-            Ok(surface_leaf(descriptor).degeneracies())
-        })
+        self.begin_query();
+        self.surface_degeneracies_inner(surface)
     }
 
     /// Bound a surface over finite in-domain parameter ranges.
@@ -288,21 +286,23 @@ impl<'g> EvalContext<'g> {
         surface: SurfaceHandle,
         range: [ParamRange; 2],
     ) -> EvalResult<Aabb3> {
-        self.with_surface(surface, |descriptor| {
-            let leaf = surface_leaf(descriptor);
-            let domain = leaf.param_range();
-            let periodicity = leaf.periodicity();
-            validate_range(range[0], domain[0], periodicity[0])?;
-            validate_range(range[1], domain[1], periodicity[1])?;
-            let value = leaf.bounding_box(range);
-            if value.is_finite() {
-                Ok(value)
-            } else {
-                Err(EvalError::NonFiniteResult {
-                    class: descriptor.class_key(),
-                })
-            }
-        })
+        self.begin_query();
+        self.surface_bounds_inner(surface, range)
+    }
+
+    /// Classify pointwise surface regularity without guessing across tolerance gaps.
+    pub fn surface_validity(
+        &mut self,
+        surface: SurfaceHandle,
+        uv: [f64; 2],
+    ) -> EvalResult<SurfaceValidity> {
+        self.begin_query();
+        if !uv.into_iter().all(f64::is_finite) {
+            return Err(EvalError::InvalidParameter);
+        }
+        let derivatives =
+            self.eval_surface_inner(surface, uv, SurfaceDerivativeOrder::First, false)?;
+        Ok(classify_jacobian(derivatives, self.tolerances))
     }
 
     fn with_curve<T>(
@@ -339,19 +339,216 @@ impl<'g> EvalContext<'g> {
         result
     }
 
-    fn with_surface<T>(
+    fn eval_surface_inner(
         &mut self,
-        handle: SurfaceHandle,
-        query: impl FnOnce(&SurfaceDescriptor) -> EvalResult<T>,
-    ) -> EvalResult<T> {
-        self.begin_query();
-        let geometry = GeometryRef::Surface(handle);
+        surface: SurfaceHandle,
+        uv: [f64; 2],
+        order: SurfaceDerivativeOrder,
+        require_regular: bool,
+    ) -> EvalResult<SurfaceDerivs> {
+        let geometry = GeometryRef::Surface(surface);
         self.enter(geometry)?;
-        let result = self
-            .graph
-            .surface(handle)
-            .ok_or(EvalError::StaleGeometryHandle { geometry })
-            .and_then(|node| query(node.descriptor()));
+        let result = (|| {
+            let descriptor = self
+                .graph
+                .surface(surface)
+                .ok_or(EvalError::StaleGeometryHandle { geometry })?;
+            match descriptor {
+                SurfaceDescriptor::Offset(offset) => {
+                    if order == SurfaceDerivativeOrder::Second {
+                        return Err(EvalError::DerivativeUnavailable {
+                            class: descriptor.class_key(),
+                            requested: 2,
+                        });
+                    }
+                    self.eval_offset_chain(surface, *offset, uv, require_regular)
+                }
+                _ => {
+                    let leaf = surface_leaf(descriptor);
+                    let domain = leaf.param_range();
+                    let periodicity = leaf.periodicity();
+                    validate_parameter(uv[0], domain[0], periodicity[0])?;
+                    validate_parameter(uv[1], domain[1], periodicity[1])?;
+                    let exact_order = order.as_usize();
+                    let value = leaf.eval_derivs(uv, exact_order);
+                    if surface_derivs_finite(value, exact_order) {
+                        Ok(value)
+                    } else {
+                        Err(EvalError::NonFiniteResult {
+                            class: descriptor.class_key(),
+                        })
+                    }
+                }
+            }
+        })();
+        self.leave(geometry);
+        result
+    }
+
+    fn surface_param_range_inner(&mut self, surface: SurfaceHandle) -> EvalResult<[ParamRange; 2]> {
+        let geometry = GeometryRef::Surface(surface);
+        self.enter(geometry)?;
+        let result = (|| {
+            let descriptor = self
+                .graph
+                .surface(surface)
+                .ok_or(EvalError::StaleGeometryHandle { geometry })?;
+            if let SurfaceDescriptor::Offset(offset) = descriptor {
+                let basis = offset.basis();
+                self.surface_param_range_inner(basis)
+            } else {
+                Ok(surface_leaf(descriptor).param_range())
+            }
+        })();
+        self.leave(geometry);
+        result
+    }
+
+    fn eval_offset_chain(
+        &mut self,
+        root: SurfaceHandle,
+        root_offset: crate::OffsetSurfaceDescriptor,
+        uv: [f64; 2],
+        require_final_regular: bool,
+    ) -> EvalResult<SurfaceDerivs> {
+        let mut chain = vec![(root, root_offset.signed_distance())];
+        let mut entered = Vec::new();
+        let result = (|| {
+            let mut basis_handle = root_offset.basis();
+            loop {
+                let geometry = GeometryRef::Surface(basis_handle);
+                self.enter(geometry)?;
+                entered.push(geometry);
+                let descriptor = self
+                    .graph
+                    .surface(basis_handle)
+                    .ok_or(EvalError::StaleGeometryHandle { geometry })?;
+                if let SurfaceDescriptor::Offset(offset) = descriptor {
+                    chain.push((basis_handle, offset.signed_distance()));
+                    basis_handle = offset.basis();
+                } else {
+                    let leaf = surface_leaf(descriptor);
+                    let domain = leaf.param_range();
+                    let periodicity = leaf.periodicity();
+                    validate_parameter(uv[0], domain[0], periodicity[0])?;
+                    validate_parameter(uv[1], domain[1], periodicity[1])?;
+                    let basis = leaf.eval_derivs(uv, 2);
+                    if !surface_derivs_finite(basis, 2) {
+                        return Err(EvalError::NonFiniteResult {
+                            class: descriptor.class_key(),
+                        });
+                    }
+                    enforce_regular(basis, self.tolerances, basis_handle, uv)?;
+                    let basis_normal = basis.du.cross(basis.dv);
+                    let mut current = basis;
+                    let mut effective_distance = 0.0;
+                    let chain_len = chain.len();
+                    for (index, &(node, distance)) in chain.iter().rev().enumerate() {
+                        let orientation = if current
+                            .du
+                            .cross(current.dv)
+                            .dot(basis_normal)
+                            .is_sign_negative()
+                        {
+                            -1.0
+                        } else {
+                            1.0
+                        };
+                        effective_distance += orientation * distance;
+                        current = offset_derivatives(basis, effective_distance)?;
+                        let final_node = index + 1 == chain_len;
+                        if !final_node || require_final_regular {
+                            enforce_regular(current, self.tolerances, node, uv)?;
+                        }
+                    }
+                    return Ok(current);
+                }
+            }
+        })();
+        for geometry in entered.into_iter().rev() {
+            self.leave(geometry);
+        }
+        result
+    }
+
+    fn surface_periodicity_inner(
+        &mut self,
+        surface: SurfaceHandle,
+    ) -> EvalResult<[Option<f64>; 2]> {
+        let geometry = GeometryRef::Surface(surface);
+        self.enter(geometry)?;
+        let result = (|| {
+            let descriptor = self
+                .graph
+                .surface(surface)
+                .ok_or(EvalError::StaleGeometryHandle { geometry })?;
+            if let SurfaceDescriptor::Offset(offset) = descriptor {
+                let basis = offset.basis();
+                self.surface_periodicity_inner(basis)
+            } else {
+                Ok(surface_leaf(descriptor).periodicity())
+            }
+        })();
+        self.leave(geometry);
+        result
+    }
+
+    fn surface_degeneracies_inner(
+        &mut self,
+        surface: SurfaceHandle,
+    ) -> EvalResult<Vec<Degeneracy>> {
+        let geometry = GeometryRef::Surface(surface);
+        self.enter(geometry)?;
+        let result = (|| {
+            let descriptor = self
+                .graph
+                .surface(surface)
+                .ok_or(EvalError::StaleGeometryHandle { geometry })?;
+            if let SurfaceDescriptor::Offset(offset) = descriptor {
+                let basis = offset.basis();
+                self.surface_degeneracies_inner(basis)
+            } else {
+                Ok(surface_leaf(descriptor).degeneracies())
+            }
+        })();
+        self.leave(geometry);
+        result
+    }
+
+    fn surface_bounds_inner(
+        &mut self,
+        surface: SurfaceHandle,
+        range: [ParamRange; 2],
+    ) -> EvalResult<Aabb3> {
+        let geometry = GeometryRef::Surface(surface);
+        self.enter(geometry)?;
+        let result = (|| {
+            let descriptor = self
+                .graph
+                .surface(surface)
+                .ok_or(EvalError::StaleGeometryHandle { geometry })?;
+            if let SurfaceDescriptor::Offset(offset) = descriptor {
+                let basis = offset.basis();
+                let distance = offset.signed_distance();
+                Ok(self
+                    .surface_bounds_inner(basis, range)?
+                    .inflated(distance.abs()))
+            } else {
+                let leaf = surface_leaf(descriptor);
+                let domain = leaf.param_range();
+                let periodicity = leaf.periodicity();
+                validate_range(range[0], domain[0], periodicity[0])?;
+                validate_range(range[1], domain[1], periodicity[1])?;
+                let value = leaf.bounding_box(range);
+                if value.is_finite() {
+                    Ok(value)
+                } else {
+                    Err(EvalError::NonFiniteResult {
+                        class: descriptor.class_key(),
+                    })
+                }
+            }
+        })();
         self.leave(geometry);
         result
     }
@@ -420,6 +617,68 @@ fn surface_leaf(descriptor: &SurfaceDescriptor) -> &dyn Surface {
         SurfaceDescriptor::Sphere(v) => v,
         SurfaceDescriptor::Torus(v) => v,
         SurfaceDescriptor::Nurbs(v) => v,
+        SurfaceDescriptor::Offset(_) => unreachable!("offsets are evaluated recursively"),
+    }
+}
+
+fn offset_derivatives(basis: SurfaceDerivs, distance: f64) -> EvalResult<SurfaceDerivs> {
+    let w = basis.du.cross(basis.dv);
+    let q = w.norm();
+    if q == 0.0 || !q.is_finite() {
+        return Err(EvalError::NonFiniteResult {
+            class: SurfaceClass::Offset.key(),
+        });
+    }
+    let n = w / q;
+    let w_u = basis.duu.cross(basis.dv) + basis.du.cross(basis.duv);
+    let w_v = basis.duv.cross(basis.dv) + basis.du.cross(basis.dvv);
+    let n_u = (w_u - n * n.dot(w_u)) / q;
+    let n_v = (w_v - n * n.dot(w_v)) / q;
+    let value = SurfaceDerivs {
+        p: basis.p + n * distance,
+        du: basis.du + n_u * distance,
+        dv: basis.dv + n_v * distance,
+        ..SurfaceDerivs::default()
+    };
+    if surface_derivs_finite(value, 1) {
+        Ok(value)
+    } else {
+        Err(EvalError::NonFiniteResult {
+            class: SurfaceClass::Offset.key(),
+        })
+    }
+}
+
+fn classify_jacobian(value: SurfaceDerivs, tolerances: Tolerances) -> SurfaceValidity {
+    let cross = value.du.cross(value.dv).norm();
+    let scale = value.du.norm() * value.dv.norm();
+    if cross == 0.0 || scale == 0.0 || !cross.is_finite() || !scale.is_finite() {
+        return SurfaceValidity::Singular;
+    }
+    let normalized = cross / scale;
+    if !normalized.is_finite() || normalized <= tolerances.angular() {
+        SurfaceValidity::Indeterminate {
+            reason: ValidityGap::IllConditioned,
+        }
+    } else {
+        SurfaceValidity::Regular {
+            normalized_jacobian: normalized,
+        }
+    }
+}
+
+fn enforce_regular(
+    value: SurfaceDerivs,
+    tolerances: Tolerances,
+    surface: SurfaceHandle,
+    uv: [f64; 2],
+) -> EvalResult<()> {
+    match classify_jacobian(value, tolerances) {
+        SurfaceValidity::Regular { .. } => Ok(()),
+        SurfaceValidity::Singular => Err(EvalError::SingularSurface { surface, uv }),
+        SurfaceValidity::Indeterminate { .. } => {
+            Err(EvalError::IllConditionedSurface { surface, uv })
+        }
     }
 }
 

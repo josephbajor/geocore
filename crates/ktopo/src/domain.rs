@@ -6,7 +6,7 @@
 //! equivalent 3D boxes that are projected analytically into plane/cylinder/
 //! cone parameters. There is deliberately no sampled fallback.
 
-use crate::entity::{FaceDomain, FaceId, FinPcurve, PcurveChart};
+use crate::entity::{FaceDomain, FaceId, FinPcurve, PcurveChart, SurfaceId};
 use crate::geom::SurfaceGeom;
 use crate::store::Store;
 use kcore::error::{Error, Result};
@@ -16,6 +16,7 @@ use kgeom::curve::Curve;
 use kgeom::curve2d::Curve2d;
 use kgeom::param::ParamRange;
 use kgeom::vec::{Point3, Vec2, Vec3};
+use kgraph::EvalLimits;
 
 /// Proof status for whether a declared face domain contains its boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,14 +43,11 @@ const CONTAINMENT_MAX_SEGMENTS: usize = 4096;
 pub fn derive_face_domain(store: &Store, face_id: FaceId) -> Result<Option<FaceDomain>> {
     let face = store.get(face_id)?;
     let surface = store.get(face.surface)?;
-    if let Some(domain) = FaceDomain::natural(surface) {
-        return Ok(Some(domain));
-    }
-    if !matches!(
-        surface,
-        SurfaceGeom::Plane(_) | SurfaceGeom::Cylinder(_) | SurfaceGeom::Cone(_)
-    ) {
+    let Some((natural, periods)) = surface_metadata(store, face.surface) else {
         return Ok(None);
+    };
+    if let Ok(domain) = FaceDomain::new(natural[0], natural[1]) {
+        return Ok(Some(domain));
     }
 
     let mut uv_bounds = Aabb2::empty();
@@ -61,7 +59,6 @@ pub fn derive_face_domain(store: &Store, face_id: FaceId) -> Result<Option<FaceD
         .max(LINEAR_RESOLUTION);
     let mut needs_full_period_u = false;
     let mut found_edge = false;
-    let periods = surface.as_surface().periodicity();
     for &loop_id in &face.loops {
         for &fin_id in &store.get(loop_id)?.fins {
             let fin = store.get(fin_id)?;
@@ -70,6 +67,12 @@ pub fn derive_face_domain(store: &Store, face_id: FaceId) -> Result<Option<FaceD
                 uv_bounds = uv_bounds.union(pcurve_box(store, pcurve, periods)?);
                 found_edge = true;
                 continue;
+            }
+            if !matches!(
+                surface,
+                SurfaceGeom::Plane(_) | SurfaceGeom::Cylinder(_) | SurfaceGeom::Cone(_)
+            ) {
+                return Ok(None);
             }
             let Some(curve_id) = edge.curve else {
                 return Ok(None);
@@ -129,10 +132,10 @@ pub fn derive_face_domain(store: &Store, face_id: FaceId) -> Result<Option<FaceD
                 let cos = kcore::math::cos(cone.half_angle());
                 include_v_range(&mut uv_bounds, z_min / cos, z_max / cos);
             }
-            _ => unreachable!("filtered above"),
+            _ => return Ok(None),
         }
     }
-    domain_from_box(surface, uv_bounds, needs_full_period_u)
+    domain_from_box(periods, uv_bounds, needs_full_period_u)
 }
 
 /// Certify containment of a face boundary in its declared UV work box.
@@ -150,8 +153,9 @@ pub fn certify_face_domain_containment(
     let Some(domain) = face.domain else {
         return Ok(FaceDomainContainment::Indeterminate);
     };
-    let surface = store.get(face.surface)?;
-    let periods = surface.as_surface().periodicity();
+    let Some((_, periods)) = surface_metadata(store, face.surface) else {
+        return Ok(FaceDomainContainment::Indeterminate);
+    };
     let mut saw_boundary = false;
     let mut every_boundary_use_certified = true;
     for &loop_id in &face.loops {
@@ -295,7 +299,7 @@ fn include_v_range(bounds: &mut Aabb2, v_min: f64, v_max: f64) {
 }
 
 fn domain_from_box(
-    surface: &SurfaceGeom,
+    periods: [Option<f64>; 2],
     mut bounds: Aabb2,
     needs_full_period_u: bool,
 ) -> Result<Option<FaceDomain>> {
@@ -307,7 +311,6 @@ fn domain_from_box(
     {
         return Ok(None);
     }
-    let periods = surface.as_surface().periodicity();
     for (direction, period) in periods.into_iter().enumerate() {
         let Some(period) = period else { continue };
         let (lo, hi) = if direction == 0 {
@@ -329,6 +332,19 @@ fn domain_from_box(
         return Ok(None);
     }
     FaceDomain::from_bounds(bounds.min.x, bounds.max.x, bounds.min.y, bounds.max.y).map(Some)
+}
+
+fn surface_metadata(
+    store: &Store,
+    surface: SurfaceId,
+) -> Option<([ParamRange; 2], [Option<f64>; 2])> {
+    let mut evaluator = store.eval_context(
+        EvalLimits::default(),
+        kcore::tolerance::Tolerances::default(),
+    );
+    let ranges = evaluator.surface_param_range(surface).ok()?;
+    let periods = evaluator.surface_periodicity(surface).ok()?;
+    Some((ranges, periods))
 }
 
 /// Range of `(point - origin) · axis` over an axis-aligned 3D box.
@@ -556,7 +572,8 @@ mod tests {
             let periods = store
                 .get(store.get(face).unwrap().surface)
                 .unwrap()
-                .as_surface()
+                .as_leaf_surface()
+                .unwrap()
                 .periodicity();
             let bounds = pcurve_box(&store, pcurve, periods).unwrap();
             assert!(domain.contains([bounds.min.x, bounds.min.y]));

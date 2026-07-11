@@ -73,21 +73,33 @@ fn merged_face_metadata(
         None
     };
     if let Some(candidate) = domain {
-        let periodicity = store.get(a.surface)?.as_surface().periodicity();
-        if [candidate.u, candidate.v]
-            .into_iter()
-            .zip(periodicity)
-            .any(|(range, period)| {
-                period.is_some_and(|period| {
-                    let epsilon = 128.0 * f64::EPSILON * period.max(1.0);
-                    range.width() > period + epsilon
-                })
-            })
-        {
-            // Equivalent seam branches need explicit branch metadata before
-            // they can be unioned safely. Preserve correctness by marking the
-            // merged work box unknown rather than guessing a period shift.
-            domain = None;
+        let periodicity = store
+            .eval_context(
+                kgraph::EvalLimits::default(),
+                kcore::tolerance::Tolerances::default(),
+            )
+            .surface_periodicity(a.surface)
+            .ok();
+        match periodicity {
+            Some(periodicity)
+                if [candidate.u, candidate.v].into_iter().zip(periodicity).any(
+                    |(range, period)| {
+                        period.is_some_and(|period| {
+                            let epsilon = 128.0 * f64::EPSILON * period.max(1.0);
+                            range.width() > period + epsilon
+                        })
+                    },
+                ) =>
+            {
+                // Equivalent seam branches need explicit branch metadata before
+                // they can be unioned safely. Preserve correctness by marking the
+                // merged work box unknown rather than guessing a period shift.
+                domain = None;
+            }
+            None => {
+                domain = None;
+            }
+            Some(_) => {}
         }
     }
     let tolerance = match (a.tolerance, b.tolerance) {

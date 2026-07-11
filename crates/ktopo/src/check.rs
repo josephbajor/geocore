@@ -70,6 +70,7 @@ use kcore::error::Result;
 use kcore::tolerance::{LINEAR_RESOLUTION, SIZE_BOX_HALF, Tolerances};
 use kgeom::param::ParamRange;
 use kgeom::surface_point::{distance_to_surface, invert_surface_point};
+use kgraph::{EvalError, EvalLimits, SurfaceDerivativeOrder};
 
 /// What is wrong, attached to the offending entity in a [`Fault`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,8 +142,12 @@ pub enum FaultKind {
     /// An explicit seam role is not on a full-period chart boundary of its
     /// supporting face.
     BadPcurveSeam,
-    /// A curve-less tolerant edge fin has no pcurve representation.
+    /// A fin that requires graph-backed surface evaluation has no pcurve representation.
     MissingPcurve,
+    /// The supporting surface is proven singular at a required pcurve sample.
+    SurfaceSingular,
+    /// Supporting-surface metadata or evaluation failed for another typed reason.
+    SurfaceEvaluationFailed,
     /// A sampled pcurve point lifted through the face surface does not
     /// coincide with the corresponding 3D edge point within tolerance.
     PcurveOffSurface,
@@ -206,6 +211,9 @@ pub enum CheckOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum VerificationGapKind {
+    /// The supporting surface has not been proven regular over the complete
+    /// trimmed face domain.
+    SurfaceRegularity,
     /// Edge-to-surface incidence is not covered by a whole-interval
     /// certificate for this representation pair.
     EdgeSurfaceIncidence,
@@ -313,6 +321,12 @@ fn collect_full_verification(
 
     for face_id in store.faces_of_body(body_id)? {
         let face = store.get(face_id)?;
+        if matches!(store.get(face.surface), Ok(SurfaceGeom::Offset(_))) {
+            push(
+                EntityRef::Face(face_id),
+                VerificationGapKind::SurfaceRegularity,
+            );
+        }
         if crate::domain::certify_face_domain_containment(store, face_id)?
             != crate::domain::FaceDomainContainment::Certified
         {
@@ -610,8 +624,8 @@ impl<'a> Checker<'a> {
         {
             self.fault(EntityRef::Face(fid), FaultKind::BadTolerance);
         }
-        if let (Some(domain), Some(surface)) = (face.domain, surface) {
-            if !valid_face_domain(domain, surface) {
+        if let (Some(domain), Some(_)) = (face.domain, surface) {
+            if !valid_face_domain(self.store, face.surface, domain) {
                 self.fault(EntityRef::Face(fid), FaultKind::BadFaceDomain);
             } else if !face_domain_contains_pcurve_endpoints(self.store, face, domain) {
                 self.fault(
@@ -742,58 +756,152 @@ impl<'a> Checker<'a> {
     }
 
     /// Validate the full incidence tuple `(edge curve, pcurve, surface)`.
-    /// Missing pcurves remain accepted for exact legacy topology. A
-    /// curve-less tolerant edge requires one on every fin.
+    /// Missing pcurves remain accepted for exact legacy leaf topology. A
+    /// curve-less tolerant edge and every procedural face use require one.
     fn check_fin_pcurve(&mut self, fin_id: FinId, fin: &Fin, edge: &Edge, fid: FaceId) {
         let Some(pcurve_use) = fin.pcurve else {
-            if edge.curve.is_none() {
+            let procedural = self
+                .store
+                .get(fid)
+                .and_then(|face| self.store.get(face.surface))
+                .is_ok_and(|surface| surface.as_leaf_surface().is_none());
+            if edge.curve.is_none() || procedural {
                 self.fault(EntityRef::Fin(fin_id), FaultKind::MissingPcurve);
             }
             return;
         };
         let at = EntityRef::Fin(fin_id);
-        let result = match edge.curve {
-            Some(curve) => match self.store.get(fid) {
-                Ok(face) => check_pcurve_incidence(
-                    self.store,
-                    curve,
-                    edge.bounds,
-                    face.surface,
-                    pcurve_use,
-                    edge.tolerance
-                        .map(crate::tolerance::EntityTolerance::value)
-                        .unwrap_or(0.0)
-                        .max(self.tol.linear()),
-                ),
-                Err(_) => Err(PcurveIssue::StaleReference),
-            },
-            None => match self.store.get(fid) {
-                Ok(face) => {
-                    check_pcurve_chart(self.store, face.surface, pcurve_use).and_then(|()| {
-                        check_pcurve_parameterization(self.store, edge.bounds, pcurve_use)
-                    })
+        let Ok(face) = self.store.get(fid) else {
+            self.fault(at, FaultKind::StaleReference);
+            return;
+        };
+
+        // Structural pcurve obligations are independent of whether surface
+        // evaluation can be classified. Prove or fault them before any
+        // procedural regularity precheck can return Indeterminate.
+        let structural = check_pcurve_chart(self.store, face.surface, pcurve_use)
+            .and_then(|()| {
+                if edge.bounds.is_some() {
+                    check_pcurve_parameterization(self.store, edge.bounds, pcurve_use)
+                } else {
+                    Ok(())
                 }
-                Err(_) => Err(PcurveIssue::StaleReference),
-            },
-        }
-        .and_then(|()| match self.store.get(fid) {
-            Ok(face) => {
+            })
+            .and_then(|()| {
                 check_pcurve_metadata(self.store, edge, face.surface, face.domain, pcurve_use)
-            }
-            Err(_) => Err(PcurveIssue::StaleReference),
-        });
-        match result {
-            Ok(()) => {}
-            Err(PcurveIssue::StaleReference) => self.fault(at, FaultKind::StaleReference),
-            Err(PcurveIssue::BadRange) => self.fault(at, FaultKind::BadPcurveRange),
-            Err(PcurveIssue::BadChart) => self.fault(at, FaultKind::BadPcurveChart),
-            Err(PcurveIssue::BadClosure) => self.fault(at, FaultKind::BadPcurveClosure),
-            Err(PcurveIssue::BadSingularity) => {
+            });
+        if let Err(issue) = structural {
+            self.record_pcurve_issue(at, issue);
+            return;
+        }
+
+        if self
+            .store
+            .get(face.surface)
+            .is_ok_and(|surface| surface.as_leaf_surface().is_none())
+            && !self.check_procedural_surface_samples(at, edge, face.surface, pcurve_use)
+        {
+            return;
+        }
+
+        let Some(curve) = edge.curve else {
+            return;
+        };
+        let result = check_pcurve_incidence(
+            self.store,
+            curve,
+            edge.bounds,
+            face.surface,
+            pcurve_use,
+            edge.tolerance
+                .map(crate::tolerance::EntityTolerance::value)
+                .unwrap_or(0.0)
+                .max(self.tol.linear()),
+        );
+        if let Err(issue) = result {
+            self.record_pcurve_issue(at, issue);
+        }
+    }
+
+    fn record_pcurve_issue(&mut self, at: EntityRef, issue: PcurveIssue) {
+        match issue {
+            PcurveIssue::StaleReference => self.fault(at, FaultKind::StaleReference),
+            PcurveIssue::BadRange => self.fault(at, FaultKind::BadPcurveRange),
+            PcurveIssue::BadChart => self.fault(at, FaultKind::BadPcurveChart),
+            PcurveIssue::BadClosure => self.fault(at, FaultKind::BadPcurveClosure),
+            PcurveIssue::BadSingularity => {
                 self.fault(at, FaultKind::BadPcurveSingularity);
             }
-            Err(PcurveIssue::BadSeam) => self.fault(at, FaultKind::BadPcurveSeam),
-            Err(PcurveIssue::OffSurface) => self.fault(at, FaultKind::PcurveOffSurface),
+            PcurveIssue::BadSeam => self.fault(at, FaultKind::BadPcurveSeam),
+            PcurveIssue::OffSurface => self.fault(at, FaultKind::PcurveOffSurface),
         }
+    }
+
+    fn check_procedural_surface_samples(
+        &mut self,
+        at: EntityRef,
+        edge: &Edge,
+        surface: crate::entity::SurfaceId,
+        pcurve_use: crate::entity::FinPcurve,
+    ) -> bool {
+        let periods = match self
+            .store
+            .eval_context(EvalLimits::default(), self.tol)
+            .surface_periodicity(surface)
+        {
+            Ok(periods) => periods,
+            Err(error) => {
+                self.fault(
+                    at,
+                    surface_eval_fault(&error).unwrap_or(FaultKind::SurfaceEvaluationFailed),
+                );
+                return false;
+            }
+        };
+        let Ok(pcurve) = self.store.get(pcurve_use.curve()) else {
+            // The immediately following legacy validation reports StaleReference.
+            return true;
+        };
+        let range = match edge.bounds {
+            Some((lo, hi)) if lo.is_finite() && hi.is_finite() && lo < hi => (lo, hi),
+            None => {
+                let Some(curve) = edge.curve.and_then(|curve| self.store.get(curve).ok()) else {
+                    // Legacy edge/pcurve validation reports the missing or stale curve.
+                    return true;
+                };
+                let range = curve.as_curve().param_range();
+                if !range.is_finite() || range.lo >= range.hi {
+                    // Legacy incidence validation reports BadRange.
+                    return true;
+                }
+                (range.lo, range.hi)
+            }
+            Some(_) => {
+                // `check_edge` and legacy incidence validation report BadBounds/BadRange.
+                return true;
+            }
+        };
+        for index in 0..EDGE_SAMPLES {
+            let t = range.0 + (range.1 - range.0) * index as f64 / (EDGE_SAMPLES - 1) as f64;
+            let Ok(uv) = pcurve_use.evaluate_uv(pcurve.as_curve(), t, periods) else {
+                // The immediately following legacy validation reports BadChart/BadRange.
+                return true;
+            };
+            let result = self
+                .store
+                .eval_context(EvalLimits::default(), self.tol)
+                .eval_surface(surface, [uv.x, uv.y], SurfaceDerivativeOrder::Position);
+            if let Err(error) = result {
+                if let Some(kind) = surface_eval_fault(&error) {
+                    self.fault(at, kind);
+                }
+                // Ill-conditioning is not a proven violation. Full checking
+                // reports the face's SurfaceRegularity obligation, while
+                // graph-backed tessellation refuses to produce a partial mesh.
+                return false;
+            }
+        }
+        true
     }
 
     fn check_edge(&mut self, use_: &EdgeUse, kind: BodyKind) {
@@ -958,11 +1066,20 @@ impl<'a> Checker<'a> {
                 let Ok(sg) = self.store.get(face.surface) else {
                     continue;
                 };
-                if let Ok(distance) = distance_to_surface(sg.as_surface(), p)
-                    && distance.distance > edge_tol
-                {
-                    self.fault(at, FaultKind::EdgeOffSurface);
-                    off_faces.push(fid);
+                match sg.as_leaf_surface() {
+                    Some(surface) => {
+                        if let Ok(distance) = distance_to_surface(surface, p)
+                            && distance.distance > edge_tol
+                        {
+                            self.fault(at, FaultKind::EdgeOffSurface);
+                            off_faces.push(fid);
+                        }
+                    }
+                    None => {
+                        // Procedural incidence is checked from each mandatory
+                        // fin pcurve in `check_fin_pcurve`; 3D inversion is not
+                        // a certified fallback for graph surfaces.
+                    }
                 }
             }
         }
@@ -1031,26 +1148,61 @@ impl<'a> Checker<'a> {
             let Ok(face) = self.store.get(lp.face) else {
                 continue;
             };
-            let (Ok(pcurve), Ok(surface)) = (
+            let (Ok(pcurve), Ok(_surface)) = (
                 self.store.get(pcurve_use.curve()),
                 self.store.get(face.surface),
             ) else {
                 continue;
             };
-            uses.push((fin_id, pcurve_use, pcurve.as_curve(), surface.as_surface()));
+            let periods_result = self
+                .store
+                .eval_context(kgraph::EvalLimits::default(), self.tol)
+                .surface_periodicity(face.surface);
+            let periods = match periods_result {
+                Ok(periods) => periods,
+                Err(error) => {
+                    if let Some(kind) = surface_eval_fault(&error) {
+                        self.fault(EntityRef::Fin(fin_id), kind);
+                    }
+                    continue;
+                }
+            };
+            uses.push((fin_id, pcurve_use, pcurve.as_curve(), face.surface, periods));
         }
 
         let mut endpoint_faulted = Vec::new();
+        let mut surface_faulted = Vec::new();
         let mut disagreement_faulted = false;
         let mut boxed = true;
         for i in 0..EDGE_SAMPLES {
             let t = t0 + (t1 - t0) * (i as f64) / ((EDGE_SAMPLES - 1) as f64);
             let mut reference = None;
-            for &(fin_id, pcurve_use, pcurve, surface) in &uses {
-                let Ok(uv) = pcurve_use.evaluate_uv(pcurve, t, surface.periodicity()) else {
+            for &(fin_id, pcurve_use, pcurve, surface, periods) in &uses {
+                if surface_faulted.contains(&fin_id) {
+                    continue;
+                }
+                let Ok(uv) = pcurve_use.evaluate_uv(pcurve, t, periods) else {
                     continue;
                 };
-                let p = surface.eval([uv.x, uv.y]);
+                let evaluation = self
+                    .store
+                    .eval_context(kgraph::EvalLimits::default(), self.tol)
+                    .eval_surface(
+                        surface,
+                        [uv.x, uv.y],
+                        kgraph::SurfaceDerivativeOrder::Position,
+                    );
+                let value = match evaluation {
+                    Ok(value) => value,
+                    Err(error) => {
+                        if let Some(kind) = surface_eval_fault(&error) {
+                            self.fault(EntityRef::Fin(fin_id), kind);
+                        }
+                        surface_faulted.push(fin_id);
+                        continue;
+                    }
+                };
+                let p = value.p;
                 if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite())
                     || p.x.abs() > SIZE_BOX_HALF
                     || p.y.abs() > SIZE_BOX_HALF
@@ -1194,13 +1346,14 @@ impl<'a> Checker<'a> {
                 let (mut u, v) = match fin.pcurve {
                     Some(pcurve_use) => {
                         let curve = self.store.get(pcurve_use.curve()).ok()?.as_curve();
+                        let surface = sg.as_leaf_surface()?;
                         let uv = pcurve_use
-                            .evaluate_uv(curve, t, sg.as_surface().periodicity())
+                            .evaluate_uv(curve, t, surface.periodicity())
                             .ok()?;
                         (uv.x, uv.y)
                     }
                     None => {
-                        let mapped = invert_surface_point(sg.as_surface(), c.eval(t)).ok()?;
+                        let mapped = invert_surface_point(sg.as_leaf_surface()?, c.eval(t)).ok()?;
                         (mapped.uv[0], mapped.uv[1])
                     }
                 };
@@ -1286,7 +1439,19 @@ impl<'a> Checker<'a> {
     }
 }
 
-fn valid_face_domain(domain: crate::entity::FaceDomain, surface: &SurfaceGeom) -> bool {
+fn surface_eval_fault(error: &EvalError) -> Option<FaultKind> {
+    match error {
+        EvalError::SingularSurface { .. } => Some(FaultKind::SurfaceSingular),
+        EvalError::IllConditionedSurface { .. } => None,
+        _ => Some(FaultKind::SurfaceEvaluationFailed),
+    }
+}
+
+fn valid_face_domain(
+    store: &Store,
+    surface: crate::entity::SurfaceId,
+    domain: crate::entity::FaceDomain,
+) -> bool {
     let ranges = [domain.u, domain.v];
     if ranges
         .iter()
@@ -1294,8 +1459,13 @@ fn valid_face_domain(domain: crate::entity::FaceDomain, surface: &SurfaceGeom) -
     {
         return false;
     }
-    let natural = surface.as_surface().param_range();
-    let periodicity = surface.as_surface().periodicity();
+    let mut evaluator = store.eval_context(kgraph::EvalLimits::default(), Tolerances::default());
+    let Ok(natural) = evaluator.surface_param_range(surface) else {
+        return false;
+    };
+    let Ok(periodicity) = evaluator.surface_periodicity(surface) else {
+        return false;
+    };
     ranges
         .into_iter()
         .zip(natural)
@@ -1308,10 +1478,12 @@ fn face_domain_contains_pcurve_endpoints(
     face: &crate::entity::Face,
     domain: crate::entity::FaceDomain,
 ) -> bool {
-    let Ok(surface) = store.get(face.surface) else {
-        return true;
+    let Ok(periods) = store
+        .eval_context(kgraph::EvalLimits::default(), Tolerances::default())
+        .surface_periodicity(face.surface)
+    else {
+        return false;
     };
-    let periods = surface.as_surface().periodicity();
     for &loop_id in &face.loops {
         let Ok(loop_) = store.get(loop_id) else {
             continue;
@@ -1366,8 +1538,11 @@ fn valid_domain_range(domain: ParamRange, natural: ParamRange, period: Option<f6
 }
 
 fn domain_covers_natural_surface(domain: crate::entity::FaceDomain, surface: &SurfaceGeom) -> bool {
-    let natural = surface.as_surface().param_range();
-    let periodicity = surface.as_surface().periodicity();
+    let Some(surface) = surface.as_leaf_surface() else {
+        return false;
+    };
+    let natural = surface.param_range();
+    let periodicity = surface.periodicity();
     [domain.u, domain.v]
         .into_iter()
         .zip(natural)

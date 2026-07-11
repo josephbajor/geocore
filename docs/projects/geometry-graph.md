@@ -148,8 +148,10 @@ pub struct OffsetSurfaceDescriptor {
 `signed_distance` is finite, expressed in model meters, and measured along the
 basis evaluator's natural unit normal. A zero distance remains an offset node;
 it is not canonicalized to its basis because class identity must survive
-round-trip. X_T sense and scale fields are transport concerns: `kxt` converts
-them to this canonical definition on read and emits an equivalent canonical
+round-trip. The published April 2008 X_T reference defines `true_offset` as
+unused and `scale` as internal-only and nullable. `kxt` therefore ignores those
+two fields, converts the transmitted signed `offset` through the common surface
+sense to this canonical definition on read, and emits an equivalent canonical
 form on write.
 
 `IntersectionCurveDescriptor` is declared only when its verification contract
@@ -512,18 +514,24 @@ intersection consolidation project.
 
 1. marks the X_T node `Visiting`;
 2. resolves the referenced basis surface recursively;
-3. validates the published `check`, `true_offset`, `offset`, `scale`, and sense
-   semantics;
-4. converts the signed displacement to model meters along the graph basis's
-   natural normal;
+3. accepts `check` values `U` and `V`, rejects `I`, ignores the published-unused
+   `true_offset` field and internal nullable `scale`, validates a nonzero finite
+   `offset`, and requires the offset and basis surface senses to agree;
+4. converts the transmitted signed displacement to model meters along the
+   graph basis's natural normal: use `offset` for basis sense `+` and `-offset`
+   for basis sense `-`;
 5. inserts `SurfaceDescriptor::Offset` referencing the basis handle;
 6. marks the X_T node `Complete` and caches its graph handle.
 
-Only the constant true-normal-offset form enters the first slice. Any other
-meaning represented by `true_offset == false` or unsupported check mode returns
-a typed `xt.geometry.offset-surface-mode` capability error. Do not guess field
-semantics from the exemplar: confirm them against the published X_T reference
-and an external Parasolid round-trip fixture.
+Only the constant normal-offset form enters the first slice. Invalid check
+status, mismatched senses, a zero-resolution displacement, or malformed field
+types return typed reconstruction errors; the unused flag and scale do not
+change geometry. These rules follow the published
+[*Parasolid XT Format Reference, April 2008*](https://ww3.cad.de/foren/ubb/uploads/Rainer%2BSchulze/XT_Format_April_2008_tcm73-62642.pdf),
+`OFFSET_SURF` section. A modern external Parasolid
+round-trip fixture still gates claims about emitting multiple offset nodes that
+share one basis, because the older reference forbids that sharing while the
+graph intentionally supports it internally.
 
 Recursive reconstruction means a basis node is interned once even if it is
 used by multiple offsets or directly by another face. An X_T dependency cycle
@@ -534,8 +542,12 @@ fails with its deterministic node-index path and rolls back the whole import.
 The writer starts from topology-attached handles, walks the dependency closure,
 and assigns X_T node IDs in stable dependency-first order. Shared nodes are
 emitted once. `SurfaceDescriptor::Offset` emits `OFFSET_SURF` referencing the
-already-planned basis node. Canonical field values are acceptable; semantic
-and class-preserving round-trip is required, byte-for-byte retention is not.
+already-planned basis node. The canonical first-slice form uses common sense
+`+`, check `U` (the Full regularity proof is still open), `true_offset=F`, null
+`scale`, and the graph distance directly. Canonical field values are
+acceptable; semantic and class-preserving round-trip is required,
+byte-for-byte retention is not. Shared-basis emission remains oracle-gated as
+described above.
 
 Writer planning must not depend on `HashMap` iteration. Root bodies retain
 their existing deterministic order; direct dependencies retain descriptor
@@ -726,9 +738,11 @@ F1 is complete only when all of the following are true:
 
 ## Open risks and decisions requiring evidence
 
-- **X_T offset signs and scale.** The graph convention is fixed, but `kxt` must
-  verify the exact interaction of geometry sense, basis sense, `true_offset`,
-  `offset`, and `scale` against the published reference and a Parasolid oracle.
+- **X_T shared offset bases.** Sign, unused-flag, and nullable-scale semantics
+  are resolved by the published reference. The remaining format risk is the
+  older restriction against multiple offset nodes sharing one basis. Keep the
+  graph representation permissive, but require a modern Parasolid oracle before
+  claiming shared-basis writer conformance.
 - **Third derivatives.** Exact second derivatives of an offset require a larger
   surface jet. Defer the API until a real consumer needs it, but keep the typed
   unavailable result so callers cannot assume zeros.

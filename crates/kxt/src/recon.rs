@@ -752,7 +752,14 @@ impl Recon<'_, '_, '_> {
                 what: "SP-curve trim parameters lie outside the 2D B-curve domain",
             });
         }
-        let surface = self.store.get(surface)?.as_surface();
+        let surface = self
+            .store
+            .get(surface)?
+            .as_leaf_surface()
+            .ok_or(XtError::Unsupported {
+                capability: XtCapability::ProceduralSurfaces,
+                what: "SP-curve verification for procedural surfaces",
+            })?;
         let trim_point_1 = vector(file, trim, "point_1")?;
         let trim_point_2 = vector(file, trim, "point_2")?;
         let uv1 = curve.eval(p1);

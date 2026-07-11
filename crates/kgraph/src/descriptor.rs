@@ -6,7 +6,34 @@ use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 
 use crate::class::{Curve2dClass, CurveClass, GeometryClassKey, SurfaceClass};
-use crate::graph::GeometryRef;
+use crate::graph::{GeometryRef, SurfaceHandle};
+
+/// Constant signed displacement along a basis surface's natural unit normal.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OffsetSurfaceDescriptor {
+    basis: SurfaceHandle,
+    signed_distance: f64,
+}
+
+impl OffsetSurfaceDescriptor {
+    /// Construct a descriptor. Graph insertion validates finiteness and basis liveness.
+    pub const fn new(basis: SurfaceHandle, signed_distance: f64) -> Self {
+        Self {
+            basis,
+            signed_distance,
+        }
+    }
+
+    /// Basis surface identity.
+    pub const fn basis(self) -> SurfaceHandle {
+        self.basis
+    }
+
+    /// Signed model-space displacement along the natural unit normal.
+    pub const fn signed_distance(self) -> f64 {
+        self.signed_distance
+    }
+}
 
 /// A 3D curve descriptor.
 #[non_exhaustive]
@@ -127,6 +154,8 @@ pub enum SurfaceDescriptor {
     Torus(Torus),
     /// Tensor-product B-spline or NURBS surface.
     Nurbs(NurbsSurface),
+    /// Constant signed true-normal offset of another graph surface.
+    Offset(OffsetSurfaceDescriptor),
 }
 
 impl SurfaceDescriptor {
@@ -135,16 +164,17 @@ impl SurfaceDescriptor {
         self
     }
 
-    /// Uniform leaf evaluator view.
-    pub fn as_surface(&self) -> &dyn Surface {
-        match self {
+    /// Uniform evaluator view for leaf classes; procedural nodes return `None`.
+    pub fn as_leaf_surface(&self) -> Option<&dyn Surface> {
+        Some(match self {
             Self::Plane(value) => value,
             Self::Cylinder(value) => value,
             Self::Cone(value) => value,
             Self::Sphere(value) => value,
             Self::Torus(value) => value,
             Self::Nurbs(value) => value,
-        }
+            Self::Offset(_) => return None,
+        })
     }
 
     /// Exact class of this descriptor.
@@ -156,6 +186,7 @@ impl SurfaceDescriptor {
             Self::Sphere(_) => SurfaceClass::Sphere,
             Self::Torus(_) => SurfaceClass::Torus,
             Self::Nurbs(_) => SurfaceClass::Nurbs,
+            Self::Offset(_) => SurfaceClass::Offset,
         }
     }
 
@@ -212,6 +243,14 @@ impl SurfaceDescriptor {
             None
         }
     }
+    /// Borrow as an offset descriptor when the class matches.
+    pub const fn as_offset(&self) -> Option<&OffsetSurfaceDescriptor> {
+        if let Self::Offset(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
 }
 
 impl From<Plane> for SurfaceDescriptor {
@@ -242,6 +281,11 @@ impl From<Torus> for SurfaceDescriptor {
 impl From<NurbsSurface> for SurfaceDescriptor {
     fn from(v: NurbsSurface) -> Self {
         Self::Nurbs(v)
+    }
+}
+impl From<OffsetSurfaceDescriptor> for SurfaceDescriptor {
+    fn from(v: OffsetSurfaceDescriptor) -> Self {
+        Self::Offset(v)
     }
 }
 
@@ -336,7 +380,11 @@ impl GeometryDependencies for CurveDescriptor {
     fn visit_dependencies(&self, _: &mut dyn FnMut(GeometryRef)) {}
 }
 impl GeometryDependencies for SurfaceDescriptor {
-    fn visit_dependencies(&self, _: &mut dyn FnMut(GeometryRef)) {}
+    fn visit_dependencies(&self, visit: &mut dyn FnMut(GeometryRef)) {
+        if let Self::Offset(offset) = self {
+            visit(GeometryRef::Surface(offset.basis()));
+        }
+    }
 }
 impl GeometryDependencies for Curve2dDescriptor {
     fn visit_dependencies(&self, _: &mut dyn FnMut(GeometryRef)) {}

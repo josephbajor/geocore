@@ -18,6 +18,7 @@ use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
 use kgeom::surface::{Dir, Surface};
 use kgeom::vec::{Point2, Point3, Vec2, Vec3};
+use kgraph::{EvalLimits, SurfaceDerivativeOrder};
 
 const INCIDENCE_SAMPLES: usize = 5;
 
@@ -70,6 +71,19 @@ fn parameter_slack(a: f64, b: f64) -> f64 {
 
 fn parameter_close(a: f64, b: f64) -> bool {
     (a - b).abs() <= parameter_slack(a, b)
+}
+
+fn graph_surface_periodicity(
+    store: &Store,
+    surface: SurfaceId,
+) -> core::result::Result<[Option<f64>; 2], PcurveIssue> {
+    store
+        .eval_context(
+            EvalLimits::default(),
+            kcore::tolerance::Tolerances::default(),
+        )
+        .surface_periodicity(surface)
+        .map_err(|_| PcurveIssue::BadChart)
 }
 
 /// Validate the pcurve handle and its active range against its own natural
@@ -136,11 +150,7 @@ pub(crate) fn check_pcurve_chart(
         .get(pcurve_use.curve())
         .map_err(|_| PcurveIssue::StaleReference)?
         .as_curve();
-    let periods = store
-        .get(surface_id)
-        .map_err(|_| PcurveIssue::StaleReference)?
-        .as_surface()
-        .periodicity();
+    let periods = graph_surface_periodicity(store, surface_id)?;
     for q in [pcurve_use.range().lo, pcurve_use.range().hi] {
         pcurve_use
             .chart()
@@ -164,11 +174,17 @@ pub(crate) fn check_pcurve_metadata(
         .get(pcurve_use.curve())
         .map_err(|_| PcurveIssue::StaleReference)?
         .as_curve();
-    let surface = store
+    store
         .get(surface_id)
-        .map_err(|_| PcurveIssue::StaleReference)?
-        .as_surface();
-    let periods = surface.periodicity();
+        .map_err(|_| PcurveIssue::StaleReference)?;
+    let periods = graph_surface_periodicity(store, surface_id)?;
+    let degeneracies = store
+        .eval_context(
+            EvalLimits::default(),
+            kcore::tolerance::Tolerances::default(),
+        )
+        .surface_degeneracies(surface_id)
+        .map_err(|_| PcurveIssue::BadSingularity)?;
     let closed =
         edge.bounds.is_none() || edge.vertices[0].is_some() && edge.vertices[0] == edge.vertices[1];
 
@@ -207,7 +223,7 @@ pub(crate) fn check_pcurve_metadata(
     }
     for (&kind, uv) in endpoint_kinds.iter().zip(endpoints) {
         if kind == PcurveEndpointKind::SurfaceSingularity
-            && !surface.degeneracies().iter().any(|degeneracy| {
+            && !degeneracies.iter().any(|degeneracy| {
                 let value = match degeneracy.dir {
                     Dir::U => uv.x,
                     Dir::V => uv.y,
@@ -333,11 +349,14 @@ pub(crate) fn check_pcurve_incidence(
         .get(pcurve_use.curve())
         .map_err(|_| PcurveIssue::StaleReference)?;
     let pcurve = pcurve_geometry.as_curve();
-    let surface_geometry = store
-        .get(surface_id)
-        .map_err(|_| PcurveIssue::StaleReference)?;
-    let surface = surface_geometry.as_surface();
-    let periods = surface.periodicity();
+    let periods = graph_surface_periodicity(store, surface_id)?;
+    let mut evaluator = store.eval_context(
+        EvalLimits::default(),
+        kcore::tolerance::Tolerances::with_linear(
+            tolerance.max(kcore::tolerance::LINEAR_RESOLUTION),
+        )
+        .map_err(|_| PcurveIssue::BadRange)?,
+    );
     for i in 0..=INCIDENCE_SAMPLES {
         let t = edge_range.lerp(i as f64 / INCIDENCE_SAMPLES as f64);
         let q = pcurve_use.parameter_at_edge(t);
@@ -349,7 +368,11 @@ pub(crate) fn check_pcurve_incidence(
         let uv = pcurve_use
             .evaluate_uv(pcurve, t, periods)
             .map_err(|_| PcurveIssue::BadChart)?;
-        if surface.eval([uv.x, uv.y]).dist(curve.eval(t)) > tolerance {
+        let point = evaluator
+            .eval_surface(surface_id, [uv.x, uv.y], SurfaceDerivativeOrder::Position)
+            .map_err(|_| PcurveIssue::OffSurface)?
+            .p;
+        if point.dist(curve.eval(t)) > tolerance {
             return Err(PcurveIssue::OffSurface);
         }
     }
@@ -614,7 +637,7 @@ fn lifted_pcurve_trace(
     surface: &SurfaceGeom,
     use_: FinPcurve,
 ) -> Option<AnalyticTrace> {
-    let periods = surface.as_surface().periodicity();
+    let periods = surface.as_leaf_surface()?.periodicity();
     let chart_offset = use_.chart().apply(Point2::default(), periods).ok()?;
     let map = use_.edge_to_pcurve();
     match pcurve {

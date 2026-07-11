@@ -671,6 +671,7 @@ fn validate_surface(descriptor: &SurfaceDescriptor) -> GeometryGraphResult<()> {
             v.points().iter().copied().all(finite3)
                 && v.weights().is_none_or(|w| w.iter().all(|x| x.is_finite()))
         }
+        SurfaceDescriptor::Offset(v) => v.signed_distance().is_finite(),
     };
     if valid {
         Ok(())
