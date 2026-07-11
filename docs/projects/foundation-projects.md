@@ -12,11 +12,11 @@ topology boundaries.
 | Project | Current state |
 | --- | --- |
 | F0 | Implemented: curve/curve operand swapping preserves completion evidence and canonical order. |
-| F1 | G1-G2 implemented: `kgraph` owns leaf identity/evaluation and `ktopo::Store` owns one authoritative graph with transactional geometry mutation and transitive footprints; G3-G5 remain. |
-| F2 | Stage 1 implemented: immutable policy, operation scopes, deterministic work ledgers, diagnostics, and execution-policy helpers are in place; stages 2-6 remain. |
+| F1 | G1-G3 implemented: `kgraph` and `ktopo::Store` own one transactional geometry graph, and the first exact offset descriptor/evaluator/checker/tessellation slice is in place; G4-G5 remain. |
+| F2 | Stage 1 and the first Stage 2 intersection pilot are implemented: one scoped NURBS proof/march path retains accepted usage, attempted limit events, numeric-resolution stops, and compatibility parity; the refinement/checking pilot and stages 3-6 remain. |
 | F3 | Two slices implemented: centralized class dispatch plus shared periodic/range and first-wins candidate emission migrated through line/circle and plane/sphere. Broader driver migration and generic fallback remain. |
-| F4 | Phase 1 implemented, plus the kops portion of Phase 2: shared identifiers/classification, X_T delegation, and typed unsupported curve/surface dispatch are in place. Structured limit and checker migrations remain. |
-| F5 | Contract complete in `kernel-facade.md`; implementation stages K1-K5 remain. |
+| F4 | Phase 1 plus representative Phase 2 slices are implemented: shared identifiers/classification, X_T delegation, typed unsupported dispatch, structured resource-limit evidence, and classified topology tessellation/checker outcomes are in place. Broader checker and legacy-limit migrations remain. |
+| F5 | K1 implemented: the `kernel` facade owns session/part lifecycle, opaque part-qualified IDs, classified source-preserving errors, and lazy deterministic read views; K2-K5 remain. |
 | F6 | First slice implemented: shared surface inversion, chart normalization, and distance services consumed by checker and tessellation. Module splits remain. |
 | F7 | Q0-Q1 implemented: toolchain/MSRV pinning plus an isolated, schema-validated benchmark runner contract and deterministic smoke fixture. Q2-Q8 remain. |
 
