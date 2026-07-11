@@ -313,8 +313,10 @@ Remaining before the gate closes:
 
 - Keep `kgeom` as pure mathematics, but introduce a geometry graph/evaluation context
   capable of resolving curve/surface handles.
-- Define descriptors for intersection and SP curves first; reserve stable extension
-  points for swept, spun, offset, and blend surfaces.
+- Define descriptors for intersection and SP curves first, and pull the offset-surface
+  descriptor forward as the graph's first import client — M3c drives `exemplar.x_t`
+  reconstruction through it; reserve stable extension points for swept, spun, and
+  blend surfaces.
 - Prevent recursive procedural geometry from requiring duplicated owned surfaces or a
   dependency from pure geometry back into topology.
 
@@ -639,6 +641,51 @@ surfaces, curve-less tolerant ring/degenerate cases, general bodies, attributes,
 transforms, instances, assemblies, and older schemas land with their kernel
 dependencies. Full “any well-formed X_T” Tier 0 is not claimed until this matrix is
 closed.
+
+The gate fixture for the import half of this matrix is `exemplar.x_t`
+(owner-contributed Onshape/Parasolid 37.1 production part, 2026-07-11: 96 faces
+of which 44 sit on offset surfaces and 68 reference B-surfaces, 110 intersection
+curves, 131 curve-less tolerant edges, 7,423 nodes). It parses fully today and
+reconstruction stops, by design, at its first offset surface. Its manifest row is
+the committed progress meter: `reconstruct: unsupported → pass`, then
+`tessellate: pass`, then full-checker gaps shrinking toward `valid`. Ordered
+plan:
+
+1. **Geometry graph with the offset-surface evaluator as its first import
+   client.** Build the M2.5-B evaluation context and land `OFFSET_SURF`
+   reconstruction on it: point/derivative evaluation through the basis
+   surface's curvature, validity domains (an offset is singular where the
+   distance reaches the basis's minimum concave radius of curvature),
+   conservative work boxes, and pcurve-driven tessellation. This is the single
+   blocker for exemplar reconstruction and the same graph the M4 proof
+   substrate needs; its descriptors must serve both clients without duplicated
+   owned geometry.
+2. **Verified import of intersection curves.** Consume stored XT `INTERSECTION`
+   geometry by verification, not recomputation: certify the transmitted
+   B-spline representation against both owning surfaces with residual bounds
+   inside the declared tolerances, following the landed
+   certified-imported-domain pattern for pcurves. Re-deriving boolean scars
+   through our own surface/surface intersector remains an M4 concern; import
+   must not wait on it.
+3. **Periodic/closed B-geometry.** Extend `kgeom` NURBS evaluation,
+   reconstruction, and the writer beyond clamped non-periodic forms (the M1
+   debt line). The pcurve chart machinery already carries integer period
+   shifts, so the work concentrates in evaluation/knot handling, edge-bound
+   recovery, and checker acceptance.
+4. **Checker-gap ratchet on real parts.** Import does not gate on full-checker
+   `valid`: exemplar-class bodies land as `Indeterminate` with named gaps
+   (curved-face loop containment, general curved-shell orientation/embedding,
+   self-intersection), and the M2.5 proof workstream closes those gaps
+   incrementally with the manifest recording each ratchet.
+
+Remaining matrix entries (general bodies, attributes, transforms, instances,
+assemblies, older schemas) continue to land opportunistically with their kernel
+dependencies.
+
+**Exit evidence for the import half:** `exemplar.x_t` reconstructs and
+tessellates deterministically with its mass properties recorded in the manifest
+and compared against the originating host's values, making a 96-face production
+part a standing differential fixture for every later modeling milestone.
 
 ## M4 — Certified intersections + profile operations — PROVISIONAL / GATED
 
