@@ -1,0 +1,135 @@
+# External Parasolid Oracle Loop (M3b)
+
+Self-round-trip cannot certify interchange: any convention shared by this repository's
+reader and writer — the provisional v-fastest B-surface pole ordering is the standing
+example — round-trips cleanly and stays invisible. The M3b exit gate therefore requires
+every declared Tier 1 authoring capability to import into a licensed Parasolid host with
+zero checker errors and survive a there-and-back comparison. This document is the
+operating procedure for that loop. It requires a human with host access; nothing else in
+the roadmap waits on it, so run it early and re-run it whenever writer capabilities grow.
+
+## 1. Generate the bundle
+
+```sh
+cargo run --release -p kxt --bin xt_oracle -- export oracle/outbox
+```
+
+This writes one `.x_t` file per declared Tier 1 writer capability plus `manifest.tsv`
+(expected topology counts, enclosed volume, checker outcomes, byte count, FNV-1a hash).
+Generation is deterministic — same source, same bytes — and every file is re-imported
+and re-checked locally before it is written, so a host is never handed a file this
+repository's own pipeline rejects. `oracle/` is gitignored transport space; the
+committed record is `docs/oracle-results.tsv`.
+
+The bundle deliberately includes `solid_block_nurbs_face.x_t` (a B_SURFACE part).
+**Every host run must include it** until a licensed host confirms or corrects the
+provisional B-surface pole ordering in `kxt::recon`.
+
+## 2. Import into a Parasolid host
+
+Accessible Parasolid-backed hosts, in preference order:
+
+1. **Solid Edge Community Edition** (free license, Windows) — a real Parasolid kernel
+   with a user-facing body checker. Open each `.x_t`, then run the geometry inspector
+   (`Inspect` → check/optimize tooling varies by release) and record any errors or
+   repairs. Measure the body's volume (`Inspect` → `Physical Properties`; Parasolid
+   files are in meters — check the displayed unit) and compare against the manifest's
+   `volume_exact_m3` (the closed-form value; the neighbouring `volume_mesh_m3` is the
+   chord-1e-3 tessellated value used by `compare` and sits up to ~1% below it on
+   curved solids).
+2. **Onshape** (free plan; Parasolid-kernel SaaS) — upload the `.x_t` to a document and
+   record whether translation succeeds and whether the imported part looks correct.
+   Note: free-plan documents are public.
+3. **Fusion 360** (personal license) — a secondary, non-Parasolid translator; useful as
+   an additional data point, not as the certification oracle.
+
+Open-source OCCT cannot read XT (its XT translator is a commercial component), so OCCT
+serves only as a geometry/mass-property differential via a host-exported STEP, or after
+M6 STEP support lands here.
+
+For each file record in `docs/oracle-results.tsv`: did import succeed, did the host
+checker report anything, does the host-measured volume match the manifest.
+
+## 3. Re-export and compare
+
+Re-export each part from the host as Parasolid text (`.x_t`) into
+`oracle/inbox/<host>/`, keeping the file name, then run:
+
+```sh
+cargo run --release -p kxt --bin xt_oracle -- compare \
+    oracle/outbox/solid_block.x_t oracle/inbox/solid-edge/solid_block.x_t
+```
+
+`compare` re-imports both files here and diffs body kind, entity counts, geometry-class
+histograms, entity tolerances, checker cleanliness, watertightness, and tessellated
+volume (2e-3 relative — XT does not store edge parameter bounds, so a re-import
+legitimately re-triangulates; the bound is discretization-driven). Exit code 0 means
+the re-export matches; 1 means mismatches (each is
+printed); 2 means the host file could not be read — which is itself a reader-gap
+finding worth a fixture. Hosts typically write their own newer schema with embedded
+edit scripts; the reader supports that mechanism, so a parse failure is signal, not
+noise.
+
+## 4. Record the outcome
+
+Append one row per (host, fixture) run to `docs/oracle-results.tsv`. That file is the
+committed, non-shrinking record the M3b exit gate ratchets on: 100% of the declared
+Tier 1 matrix importing with zero host checker errors and surviving there-and-back
+comparison. Failures stay in the table with their resolution commit; do not delete
+rows. If a host rejects or repairs a file, minimize the difference, fix the writer,
+regenerate the bundle, and re-run.
+
+## Appendix: the fast API loop (Onshape)
+
+When iterating on a writer defect, the manual upload flow is too slow. With an
+Onshape document open in a logged-in browser session, its REST API drives the
+loop in seconds per experiment:
+
+1. `POST /api/v6/blobelements/d/{did}/w/{wid}/e/{eid}` with a multipart `file`
+   field replaces a blob element's content **and starts a translation
+   automatically**, returning a `translationId` (send the `XSRF-TOKEN` cookie
+   value as the `X-XSRF-TOKEN` header; session cookies authenticate).
+2. `GET /api/v6/translations/{translationId}` until `requestState` leaves
+   `ACTIVE`; a failure carries `failureReason` (e.g. "Invalid or corrupt input
+   file" = parse-level rejection vs "Imported file contains no translatable
+   geometry" = parsed but semantically rejected — the distinction localizes a
+   defect to framing/layout versus topology/geometry semantics).
+
+The 2026-07-11 session drove ~15 experiments this way, bisecting from a
+known-good corpus file to isolate four writer conformance rules (embedded
+schema required, BODY/REGION edit scripts, USFLD_SIZE=1, no line may end with
+a space). All four are now encoded and pinned in `kxt::write`.
+
+Operational pitfalls observed:
+
+- The `XSRF-TOKEN` cookie value can end in base64 `=` padding; extract it
+  with everything after the first `=` (`raw.slice('XSRF-TOKEN='.length)`),
+  never `split('=')[1]`, or the POST fails 401 with an empty body.
+- Browser sessions expire between working sessions. A stale page still
+  renders (free-plan documents are public) and may even show the signed-in
+  avatar, but `GET /api/users/sessioninfo` returns 204 (anonymous) and every
+  POST fails 401 "Unauthenticated API request". The reconnect banner
+  redirects to `/signin`; a human must sign in again before the loop can
+  resume.
+- `USFLD_SIZE` is not a conformance requirement in itself: real V27 corpus
+  files declare 1, while Onshape's own Parasolid 37 exports declare 0. Both
+  are accepted; this writer emits 1 to match its V26105 declaration.
+
+The 2026-07-11 rerun (10/13 accepted) added five host-verified writer
+conventions, each isolated by diffing against a real file or by uploading
+hand-patched probe variants:
+
+- `EDGE.fin` must point at the positive-sense fin (cyl.x_t; the negative
+  pick read as "no translatable geometry" on periodic-wall solids).
+- `NURBS_CURVE` must declare `knot_type` 5 and `curve_form` 1, and every
+  `B_CURVE` needs a `CURVE_DATA` companion (exemplar.x_t, 301/301); zeros
+  read as "corrupt" on B-curve edges and killed tolerant SP chains late in
+  translation.
+- A sheet's shell lists its faces as `front_face`, and each face fronts
+  that same shell (disk_nat.x_t).
+- Every fin claiming a vertex — loop-less dummies included — must be
+  reachable from `VERTEX.fin` via the `next_at_vx` chain, and a sheet
+  boundary dummy fin must keep its vertex pointer (zeroing it regresses
+  from "no translatable geometry" back to "corrupt").
+- Wire and acorn bodies are still rejected as corrupt; no real exemplar
+  exists to bisect against (acorn suspect: the body_type encoding).

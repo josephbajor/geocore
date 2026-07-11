@@ -39,8 +39,8 @@ fn assert_roundtrip(store: &Store, body: BodyId) {
     let text = kxt::export_text(store, body).unwrap();
     assert_eq!(text, kxt::export_text(store, body).unwrap());
     let parsed = kxt::read_xt(text.as_bytes()).unwrap();
-    assert_eq!(parsed.schema, "SCH_1300000_13006");
-    assert_eq!(parsed.usfld_size, 0);
+    assert_eq!(parsed.schema, "SCH_2700142_26105_13006");
+    assert_eq!(parsed.usfld_size, 1);
 
     let mut imported = Store::new();
     let recon = kxt::import(text.as_bytes(), &mut imported).unwrap();
@@ -72,7 +72,7 @@ fn assert_checker_roundtrip(store: &Store, body: BodyId) -> (String, Store, Body
     let text = kxt::export_text(store, body).unwrap();
     assert_eq!(text, kxt::export_text(store, body).unwrap());
     let parsed = kxt::read_xt(text.as_bytes()).unwrap();
-    assert_eq!(parsed.schema, "SCH_1300000_13006");
+    assert_eq!(parsed.schema, "SCH_2700142_26105_13006");
 
     let mut imported = Store::new();
     let recon = kxt::import(text.as_bytes(), &mut imported).unwrap();
@@ -1023,7 +1023,9 @@ fn curve_less_tolerant_edge_round_trips_through_trimmed_sp_curves() {
             .and_then(kxt::Value::as_ptr)
             .unwrap();
     }
-    assert_eq!(boundary_codes.len(), 26);
+    // 11 exact line edges reference their LINE directly (no trims), plus
+    // the tolerant edge's two per-fin TRIMMED_CURVE + SP_CURVE pairs.
+    assert_eq!(boundary_codes.len(), 15);
     assert_eq!(
         boundary_codes
             .iter()
@@ -1046,13 +1048,16 @@ fn curve_less_tolerant_edge_round_trips_through_trimmed_sp_curves() {
             Some(0)
         );
     }
+    // Only the tolerant fins carry GEOMETRIC_OWNER nodes (one on each
+    // trimmed SP-curve, one on each supporting surface); exact edges no
+    // longer contribute any.
     assert_eq!(
         parsed
             .nodes
             .values()
             .filter(|node| node.code == code::GEOMETRIC_OWNER)
             .count(),
-        15
+        4
     );
     assert!(sp_curves.iter().all(|node| {
         parsed
@@ -1131,8 +1136,10 @@ fn nurbs_curve_edge_round_trips_as_b_curve() {
             .values()
             .any(|node| node.code == code::NURBS_CURVE)
     );
+    // The bounded NURBS edge references its B_CURVE directly; parameter
+    // bounds are recovered from the vertices on import.
     assert!(
-        parsed
+        !parsed
             .nodes
             .values()
             .any(|node| node.code == code::TRIMMED_CURVE)
@@ -1255,8 +1262,10 @@ fn sheet_semicircle_arc_round_trips() {
     let (text, imported, imported_body) = assert_checker_roundtrip(&store, body);
     let parsed = kxt::read_xt(text.as_bytes()).unwrap();
     assert!(parsed.nodes.values().any(|node| node.code == code::CIRCLE));
+    // Exact bounded edges reference their basis curve directly, as real
+    // exact-modeling files do; no TRIMMED_CURVE wrapper is emitted.
     assert!(
-        parsed
+        !parsed
             .nodes
             .values()
             .any(|node| node.code == code::TRIMMED_CURVE)
@@ -1348,7 +1357,10 @@ fn wire_edges_can_share_a_basis_curve() {
         .filter(|node| node.code == code::TRIMMED_CURVE)
         .count();
     assert_eq!(line_nodes, 1, "shared basis line should be emitted once");
-    assert_eq!(trim_nodes, 2, "each bounded edge gets its own trim");
+    assert_eq!(
+        trim_nodes, 0,
+        "bounded edges reference the shared basis curve directly"
+    );
     assert_eq!(imported.edges_of_body(imported_body).unwrap().len(), 2);
     assert_eq!(
         imported
@@ -1387,8 +1399,10 @@ fn wire_ellipse_arc_round_trips() {
     let (text, imported, imported_body) = assert_checker_roundtrip(&store, body);
     let parsed = kxt::read_xt(text.as_bytes()).unwrap();
     assert!(parsed.nodes.values().any(|node| node.code == code::ELLIPSE));
+    // The bounded arc references the ELLIPSE directly; its sub-range is
+    // recovered from the vertices on import.
     assert!(
-        parsed
+        !parsed
             .nodes
             .values()
             .any(|node| node.code == code::TRIMMED_CURVE)
@@ -1456,4 +1470,49 @@ fn real_world_sheet_disk_round_trips_through_writer() {
     let edges = imported.edges_of_body(imported_body).unwrap();
     assert_eq!(edges.len(), 1);
     assert_eq!(imported.get(edges[0]).unwrap().fins.len(), 1);
+}
+
+/// The writer's embedded-schema output must match real V27 Parasolid byte
+/// for byte where they describe the same thing: the flag-sequence schema
+/// key and the BODY edit script are extracted from `disk_nat.x_t` (written
+/// by Parasolid itself) and compared against a freshly exported block.
+/// Plain pre-embedded-schema text is rejected by production Parasolid
+/// hosts, so this framing is load-bearing for interchange.
+#[test]
+fn writer_embedded_schema_matches_real_v27_output() {
+    fn stream(text: &str) -> String {
+        let body = text
+            .split_once("**END_OF_HEADER")
+            .expect("header terminator")
+            .1;
+        let body = body.split_once('\n').expect("header line end").1;
+        body.replace(['\n', '\r'], "")
+    }
+    fn body_script(stream: &str, after: &str) -> String {
+        let start = stream.find(after).expect("BODY first occurrence") + after.len();
+        let end = stream[start..].find("dZ").expect("edit script end") + 2;
+        stream[start..start + end].to_string()
+    }
+
+    let real = stream(&String::from_utf8(fixture("disk_nat.x_t")).unwrap());
+    let real_script = body_script(&real, "SCH_2700142_26105_13006196 1 12 ");
+
+    let mut store = Store::new();
+    let body = make::block(&mut store, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
+    let text = kxt::export_text(&store, body).unwrap();
+    let ours = stream(&text);
+    // Same schema key, max-node-type count, and user-field size.
+    let ours_script = body_script(&ours, "SCH_2700142_26105_13006196 1 12 ");
+    assert_eq!(
+        ours_script, real_script,
+        "BODY edit script drifted from real V27 output"
+    );
+
+    // The parsed layout must be the full 30-field V26105 BODY.
+    let parsed = kxt::read_xt(text.as_bytes()).unwrap();
+    let def = &parsed.defs[&12];
+    assert_eq!(def.fields.len(), 30);
+    assert_eq!(def.fields[13].name, "owner");
+    assert_eq!(def.fields[23].name, "boundary_mesh");
+    assert_eq!(def.fields[29].name, "lowest_node_id");
 }

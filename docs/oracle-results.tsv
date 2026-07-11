@@ -1,0 +1,23 @@
+date	host	host_version	fixture	import_ok	host_checker	host_volume_m3	reexport_ok	compare_ok	notes
+2026-07-11	onshape	cloud-2026-07-11	disk_nat.x_t(corpus-baseline)	yes	none	-	-	-	real V27 file; confirms pipeline
+2026-07-11	onshape	cloud-2026-07-11	sphere.x_t(corpus-baseline)	yes	none	-	-	-	real V27 cut sphere incl ring edge
+2026-07-11	onshape	cloud-2026-07-11	solid_sphere.x_t	yes	none	-	-	-	FIRST kernel-authored file accepted by a licensed Parasolid host
+2026-07-11	onshape	cloud-2026-07-11	solid_torus.x_t	yes	none	-	-	-	zero-loop torus face accepted; TORUS layout confirmed
+2026-07-11	onshape	cloud-2026-07-11	solid_cylinder.x_t	no	-	-	-	-	parses; 'no translatable geometry' — two-ring-loop periodic wall face under investigation; radius-position experiment confirmed CYLINDER layout itself
+2026-07-11	onshape	cloud-2026-07-11	sheet_plane_polygon.x_t	no	-	-	-	-	'Invalid or corrupt input file' — TRIMMED_CURVE(133)/GEOMETRIC_OWNER(141) bounded-edge wrapping is the prime suspect (no real file uses it; layouts unverifiable)
+2026-07-11	onshape	cloud-2026-07-11	solid_block.x_t	no	-	-	-	-	pre-fix bytes only; retest after bounded-edge emission is reworked
+2026-07-11	onshape	cloud-2026-07-11	(bounded-edge rework)	-	-	-	-	-	writer reworked from exemplar.x_t/plate.x_t evidence: exact edges reference basis curves directly, POINT.owner=vertex, 133/141 reserved for tolerant SP chains; Onshape session expired before the rerun — bundle regenerated and queued, retest pending sign-in
+2026-07-11	onshape	cloud-2026-07-11	(EDGE.fin rework)	-	-	-	-	-	owner-contributed cyl.x_t (real Onshape solid cylinder) confirmed our periodic-wall topology (two vertex-less ring edges, self-ring fins, two wall loops) and exposed the one linkage diff: every modern real file points EDGE.fin at the positive-sense fin (exemplar 262/262, cyl 2/2, plate 12/12, disk_nat incl. its dummy) while this writer picked the first fin (half negative on blocks, one negative on cylinder/cone/seam); writer fixed, bundle regenerated, retest still pending sign-in
+2026-07-11	onshape	cloud-2026-07-11	solid_block.x_t	yes	none	-	-	-	accepted after bounded-edge + EDGE.fin rework (was 'Invalid or corrupt')
+2026-07-11	onshape	cloud-2026-07-11	solid_cylinder.x_t	yes	none	-	-	-	accepted after EDGE.fin -> positive-fin fix; the 'no translatable geometry' mystery was exactly that convention
+2026-07-11	onshape	cloud-2026-07-11	solid_cone.x_t	yes	none	-	-	-	accepted; same fix as cylinder
+2026-07-11	onshape	cloud-2026-07-11	solid_sphere.x_t	yes	none	-	-	-	regression check of reworked bytes: still accepted
+2026-07-11	onshape	cloud-2026-07-11	solid_torus.x_t	yes	none	-	-	-	regression check of reworked bytes: still accepted
+2026-07-11	onshape	cloud-2026-07-11	solid_block_nurbs_face.x_t	yes	none	-	-	-	FIRST host acceptance of an authored B_SURFACE; provisional v-fastest pole ordering survived a licensed Parasolid import
+2026-07-11	onshape	cloud-2026-07-11	solid_block_nurbs_edge.x_t	no->yes	none	-	-	-	'corrupt' until NURBS_CURVE declared knot_type 5 / curve_form 1 and B_CURVE carried a CURVE_DATA companion (exemplar: 301/301 real curves do all three; our 0/0/none was rejected); accepted after fix
+2026-07-11	onshape	cloud-2026-07-11	solid_block_tolerant_edge.x_t	no->yes	none	-	-	-	'failed to translate' until the same NURBS_CURVE metadata fix reached the tolerant pcurve chain; accepted after fix - first host certification of the emitted TRIMMED_CURVE/SP_CURVE/GEOMETRIC_OWNER tolerant path
+2026-07-11	onshape	cloud-2026-07-11	sheet_plane_polygon.x_t	no->yes	none	-	-	-	two defects isolated by probe bisection: sheet shell must list its faces as front_face with FACE.front_shell set (disk_nat convention) [corrupt -> no translatable geometry], and loop-less dummy fins must be chained into VERTEX.fin/next_at_vx fins-at-vertex lists [-> accepted]; zeroing the dummy fin vertex instead regressed to corrupt, so the dummy must keep its vertex AND be listed
+2026-07-11	onshape	cloud-2026-07-11	sheet_cylinder_seam.x_t	no->yes	none	-	-	-	accepted after the same sheet fixes; paired seam SP-curve chain passed
+2026-07-11	onshape	cloud-2026-07-11	wire_polyline_open.x_t	no	-	-	-	-	'Invalid or corrupt input file' before and after the fins-at-vertex fix; no real wire XT exemplar exists in the corpus to bisect against - open
+2026-07-11	onshape	cloud-2026-07-11	wire_polyline_closed.x_t	no	-	-	-	-	same as open wire - open
+2026-07-11	onshape	cloud-2026-07-11	acorn_point.x_t	no	-	-	-	-	'Invalid or corrupt input file' with only BODY/REGION/SHELL/VERTEX/POINT nodes; prime suspect is the acorn body_type encoding (we emit 2 = wire with no edges); no real acorn exemplar - open

@@ -1171,7 +1171,8 @@ fn edge_bounds(
                 let l = f.to_local(p);
                 wrap_periodic(math::atan2(l.y, l.x), 0.0, tau)
             };
-            Some(unwrap_interval(angle(start), angle(end), tau))
+            let (t0, t1) = unwrap_interval(angle(start), angle(end), tau);
+            Some((t0, clamp_period_width(t0, t1, tau)))
         }
         CurveGeom::Ellipse(e) => {
             let f = e.frame();
@@ -1183,7 +1184,8 @@ fn edge_bounds(
                     tau,
                 )
             };
-            Some(unwrap_interval(angle(start), angle(end), tau))
+            let (t0, t1) = unwrap_interval(angle(start), angle(end), tau);
+            Some((t0, clamp_period_width(t0, t1, tau)))
         }
         CurveGeom::Nurbs(n) => {
             let range = n.param_range();
@@ -1221,6 +1223,19 @@ fn infer_pcurve_endpoint_kinds(
 /// seam; coincident endpoints mean a full-period closed edge.
 fn unwrap_interval(t0: f64, t1: f64, period: f64) -> (f64, f64) {
     if t1 > t0 { (t0, t1) } else { (t0, t1 + period) }
+}
+
+/// The unwrap addition `t1 + period` can overshoot a full-period width by
+/// an ulp for some seam angles, and edge bounds wider than the curve's
+/// period are structurally invalid. Walk `t1` down to restore
+/// `t1 - t0 <= period`; a full-turn edge loses at most a few ulps of
+/// parameter, far below evaluation tolerance.
+fn clamp_period_width(t0: f64, mut t1: f64, period: f64) -> f64 {
+    // next_down is bit-level (no platform libm involved).
+    while t1 - t0 > period {
+        t1 = t1.next_down();
+    }
+    t1
 }
 
 #[cfg(test)]

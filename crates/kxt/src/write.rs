@@ -1,7 +1,12 @@
 //! Deterministic XT text emission for checker-clean bodies.
 //!
-//! This first M3b slice intentionally writes the fixed base schema 13006.
-//! Unsupported model classes fail explicitly rather than being approximated.
+//! Output is modern embedded-schema text (`SCH_2700142_26105_13006`) whose
+//! node layouts follow base schema 13006 plus the V26105 BODY/REGION edits.
+//! Exact bounded edges reference their basis curve directly (bounds are
+//! implied by the vertices, as in every real exact-modeling corpus file);
+//! TRIMMED_CURVE/GEOMETRIC_OWNER chains are emitted only for tolerant
+//! fin SP-curves. Unsupported model classes fail explicitly rather than
+//! being approximated.
 
 use crate::error::{Result, XtCapability, XtError};
 use crate::parse::Value;
@@ -22,9 +27,42 @@ use ktopo::entity::{
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::store::Store;
 use ktopo::tolerance::EntityTolerance;
+use std::collections::BTreeSet;
 
-const VERSION: &str = ": TRANSMIT FILE created by modeller version 1300000";
-const SCHEMA: &str = "SCH_1300000_13006";
+const VERSION: &str = ": TRANSMIT FILE created by modeller version 2700142";
+/// Declared file schema (PART2 header form, without the base suffix).
+///
+/// The writer emits the modern *embedded-schema* transmit form: the flag
+/// sequence declares `SCH_2700142_26105_13006` and every node type carries
+/// its layout at first occurrence, so a receiving Parasolid needs no
+/// external schema files. Plain pre-embedded-schema text (previously
+/// `SCH_1300000_13006`) is rejected by at least one production Parasolid
+/// host (Onshape: "Invalid or corrupt input file"), first observed through
+/// the oracle loop on 2026-07-11.
+const SCHEMA: &str = "SCH_2700142_26105";
+/// Flag-sequence schema key: file schema plus the `_13006` base suffix that
+/// marks the embedded-schema mechanism.
+const SCHEMA_KEY: &str = "SCH_2700142_26105_13006";
+/// Maximum node-type count in the flag sequence, as real V27 files declare.
+const MAX_NODE_TYPES: u16 = 196;
+/// BODY first-occurrence embedded description, byte-for-byte as real V27
+/// Parasolid emits it: copy base fields 1-13, delete-and-reinsert `owner`
+/// (its pointer class changed), copy base fields 15-23, then append the
+/// seven V26105 bookkeeping fields. Extracted from
+/// `tests/fixtures/disk_nat.x_t`; a test pins it against that file.
+const BODY_EDIT_SCRIPT: &str = "30 CCCCCCCCCCCCCDI5 owner1040 0 CCCCCCCCCA13 \
+                                boundary_mesh1006 0 A16 index_map_offset0 0 1 dA9 index_map82 0 \
+                                A17 node_id_index_map82 0 A20 schema_embedding_map82 0 A5 \
+                                child12 0 A14 lowest_node_id0 0 1 dZ";
+/// The V26105 BODY layout appends these fields to the base-13006 layout:
+/// boundary_mesh, index_map_offset, index_map, node_id_index_map,
+/// schema_embedding_map, child, lowest_node_id.
+const BODY_APPENDED_FIELDS: usize = 7;
+/// REGION first-occurrence embedded description, byte-for-byte as real V27
+/// Parasolid emits it: copy the seven base fields, append `owner`.
+const REGION_EDIT_SCRIPT: &str = "8 CCCCCCCA5 owner12 0 Z";
+/// The V26105 REGION layout appends one field: owner.
+const REGION_APPENDED_FIELDS: usize = 1;
 
 struct OutNode {
     code: u16,
@@ -41,8 +79,6 @@ struct Plan {
     edges: Vec<(EdgeId, u32)>,
     vertices: Vec<(VertexId, u32)>,
     surfaces: Vec<(SurfaceId, u32)>,
-    trimmed_curves: Vec<(EdgeId, u32)>,
-    trimmed_curve_owners: Vec<(EdgeId, u32)>,
     curves: Vec<(CurveId, u32)>,
     fin_pcurves: Vec<FinPcurvePlan>,
     points: Vec<(PointId, u32)>,
@@ -84,6 +120,7 @@ struct Scaffold {
 #[derive(Debug, Clone, Copy)]
 struct CurveAuxIds {
     nurbs: u32,
+    data: u32,
     poles: u32,
     knot_mult: u32,
     knots: u32,
@@ -143,7 +180,6 @@ impl Plan {
             }
         }
         let mut curve_handles = Vec::new();
-        let mut trimmed_curve_edges = Vec::new();
         let mut fin_pcurve_handles = Vec::new();
         let mut dummy_fin_specs = Vec::new();
         for &edge in &edge_handles {
@@ -152,9 +188,6 @@ impl Plan {
             push_dummy_fins(&mut dummy_fin_specs, edge, e, b.kind);
             match e.curve {
                 Some(curve) => {
-                    if e.bounds.is_some() {
-                        trimmed_curve_edges.push(edge);
-                    }
                     push_interned(&mut curve_handles, curve);
                     match (store.get(curve)?, e.vertices, e.bounds) {
                         (CurveGeom::Line(_), [Some(_), Some(_)], Some(_)) => {}
@@ -212,14 +245,12 @@ impl Plan {
         let edges = assign(&edge_handles, &mut next);
         let vertices = assign(&vertex_handles, &mut next);
         let surfaces = assign(&surface_handles, &mut next);
-        let trimmed_curves = assign(&trimmed_curve_edges, &mut next);
         let curves = assign(&curve_handles, &mut next);
         let fin_pcurves = assign_fin_pcurves(&fin_pcurve_handles, &mut next);
-        let trimmed_curve_owners = assign(&trimmed_curve_edges, &mut next);
         let points = assign(&point_handles, &mut next);
         let first_aux_id = next;
         next += aux_node_count(store, &surface_handles, &curve_handles)?;
-        next += 4 * u32::try_from(fin_pcurves.len()).map_err(|_| XtError::InvalidModel {
+        next += 5 * u32::try_from(fin_pcurves.len()).map_err(|_| XtError::InvalidModel {
             what: "too many tolerant fin pcurves",
         })?;
         Ok(Plan {
@@ -231,8 +262,6 @@ impl Plan {
             edges,
             vertices,
             surfaces,
-            trimmed_curves,
-            trimmed_curve_owners,
             curves,
             fin_pcurves,
             points,
@@ -273,6 +302,17 @@ impl Plan {
                 ptr(2),
                 ptr(first_id(&self.edges)),
                 ptr(first_id(&self.vertices)),
+                // V26105 appended fields (see BODY_EDIT_SCRIPT): null
+                // boundary_mesh, index_map_offset, index_map,
+                // node_id_index_map, schema_embedding_map, child,
+                // lowest_node_id — real Parasolid writes them as zeros.
+                ptr(0),
+                Value::Int(0),
+                ptr(0),
+                ptr(0),
+                ptr(0),
+                ptr(0),
+                Value::Int(0),
             ],
         });
         match self.body_kind {
@@ -316,20 +356,16 @@ impl Plan {
                     sense(face.sense),
                     ptr(adjacent(&surface_faces, surface_position, 1)),
                     ptr(adjacent(&surface_faces, surface_position, -1)),
-                    ptr(if self.body_kind == BodyKind::Solid {
-                        next
-                    } else {
-                        0
-                    }),
-                    ptr(if self.body_kind == BodyKind::Solid {
-                        previous
-                    } else {
-                        0
-                    }),
-                    ptr(if self.body_kind == BodyKind::Solid {
-                        self.void_shell_id
-                    } else {
-                        0
+                    // Solid faces front the void-region shell; sheet faces
+                    // bound their own shell from both sides and front it
+                    // too (disk_nat.x_t). The front chain mirrors the face
+                    // chain either way.
+                    ptr(next),
+                    ptr(previous),
+                    ptr(match self.body_kind {
+                        BodyKind::Solid => self.void_shell_id,
+                        BodyKind::Sheet => self.shell_id,
+                        _ => 0,
                     }),
                 ],
             });
@@ -393,9 +429,14 @@ impl Plan {
                     ptr(other.unwrap_or(0)),
                     ptr(id_of(&self.edges, fin.edge)),
                     ptr(self.fin_pcurve_id(fin_id).unwrap_or(0)),
-                    ptr(head
-                        .and_then(|v| self.next_fin_at_vertex(store, v, fin_id))
-                        .map_or(0, |v| id_of(&self.fins, v))),
+                    ptr(match head {
+                        Some(v) => self
+                            .next_fin_at_vertex(store, v, fin_id)
+                            .map(|f| id_of(&self.fins, f))
+                            .or_else(|| self.dummy_fins_at_vertex(store, v).first().copied())
+                            .unwrap_or(0),
+                        None => 0,
+                    }),
                     sense(fin.sense),
                 ],
             });
@@ -440,6 +481,14 @@ impl Plan {
                     (vertex, other, Sense::Reversed)
                 }
             };
+            let next_at_vertex = {
+                let peers = self.dummy_fins_at_vertex(store, vertex);
+                let position = peers.iter().position(|&id| id == index);
+                position
+                    .and_then(|p| peers.get(p + 1))
+                    .copied()
+                    .unwrap_or(0)
+            };
             out.push(OutNode {
                 code: code::FIN,
                 index,
@@ -452,20 +501,32 @@ impl Plan {
                     ptr(other),
                     ptr(id_of(&self.edges, edge_id)),
                     ptr(0),
-                    ptr(0),
+                    ptr(next_at_vertex),
                     sense(fin_sense),
                 ],
             });
         }
         for (position, &(edge_id, index)) in self.edges.iter().enumerate() {
             let edge = store.get(edge_id)?;
-            let first_fin = edge.fins.first().map_or_else(
-                || {
-                    self.dummy_fin_id(edge_id, DummyFinRole::WireEnd)
-                        .unwrap_or(0)
-                },
-                |&fin| id_of(&self.fins, fin),
-            );
+            // Every real corpus file points EDGE.fin at the positive-sense
+            // fin (exemplar.x_t 262/262, cyl.x_t, plate.x_t, disk_nat.x_t);
+            // the reversed partner is reachable through FIN.other. For a
+            // sheet boundary edge whose single real fin is reversed, the
+            // positive fin is the dummy partner.
+            let positive_fin = edge
+                .fins
+                .iter()
+                .copied()
+                .find(|&fin| store.get(fin).is_ok_and(|f| f.sense == Sense::Forward));
+            let first_fin = match (positive_fin, edge.fins.first()) {
+                (Some(fin), _) => id_of(&self.fins, fin),
+                (None, Some(&fin)) => self
+                    .dummy_fin_id(edge_id, DummyFinRole::SheetBoundary)
+                    .unwrap_or_else(|| id_of(&self.fins, fin)),
+                (None, None) => self
+                    .dummy_fin_id(edge_id, DummyFinRole::WireEnd)
+                    .unwrap_or(0),
+            };
             out.push(OutNode {
                 code: code::EDGE,
                 index,
@@ -476,10 +537,12 @@ impl Plan {
                     ptr(first_fin),
                     ptr(adjacent(&self.edges, position, -1)),
                     ptr(adjacent(&self.edges, position, 1)),
+                    // Real files reference the basis curve directly for
+                    // exact bounded edges (block.x_t, plate.x_t); parameter
+                    // bounds are implied by the vertices. TRIMMED_CURVE
+                    // wrapping stays reserved for tolerant fin SP-curves.
                     ptr(match edge.curve {
-                        Some(curve) => self
-                            .trimmed_curve_id(edge_id)
-                            .unwrap_or_else(|| id_of(&self.curves, curve)),
+                        Some(curve) => id_of(&self.curves, curve),
                         None => 0,
                     }),
                     ptr(0),
@@ -496,6 +559,7 @@ impl Plan {
                 .find_map(|&(fin, id)| {
                     (store.fin_head(fin).ok().flatten() == Some(vertex_id)).then_some(id)
                 })
+                .or_else(|| self.dummy_fins_at_vertex(store, vertex_id).first().copied())
                 .unwrap_or(0);
             out.push(OutNode {
                 code: code::VERTEX,
@@ -536,29 +600,16 @@ impl Plan {
             };
             out.push(surface_node(store.get(surface_id)?, index, common, aux));
         }
-        for (position, &(edge_id, index)) in self.trimmed_curves.iter().enumerate() {
+        for (position, &(curve_id, index)) in self.curves.iter().enumerate() {
+            let direct_owner = self.edges.iter().find_map(|&(edge, id)| {
+                (store.get(edge).ok()?.curve == Some(curve_id)).then_some(id)
+            });
             let common = geom_common(
                 index,
-                id_of(&self.edges, edge_id),
+                direct_owner.unwrap_or(1),
                 self.adjacent_curve_node(position, 1),
                 self.adjacent_curve_node(position, -1),
             );
-            out.push(self.trimmed_curve_node(store, edge_id, index, common)?);
-        }
-        for (position, &(curve_id, index)) in self.curves.iter().enumerate() {
-            let direct_owner = self.edges.iter().find_map(|&(edge, id)| {
-                let attached_directly = store.get(edge).ok()?.curve == Some(curve_id)
-                    && self.trimmed_curve_id(edge).is_none();
-                attached_directly.then_some(id)
-            });
-            let chain_position = self.trimmed_curves.len() + position;
-            let mut common = geom_common(
-                index,
-                direct_owner.unwrap_or(1),
-                self.adjacent_curve_node(chain_position, 1),
-                self.adjacent_curve_node(chain_position, -1),
-            );
-            common[5] = ptr(self.curve_geometric_owner(store, curve_id).unwrap_or(0));
             let aux = if matches!(store.get(curve_id)?, CurveGeom::Nurbs(_)) {
                 let ids = CurveAuxIds::allocate(&mut next_aux);
                 push_curve_aux_nodes(&mut out, store.get(curve_id)?, ids)?;
@@ -571,35 +622,22 @@ impl Plan {
         for plan in &self.fin_pcurves {
             self.push_fin_pcurve_nodes(store, *plan, &mut next_aux, &mut out)?;
         }
-        for &(edge_id, index) in &self.trimmed_curve_owners {
-            let curve = store
-                .get(edge_id)?
-                .curve
-                .expect("trimmed curve has validated basis");
-            let ring = self.curve_geometric_owners(store, curve);
-            let position = ring
-                .iter()
-                .position(|&(edge, _)| edge == edge_id)
-                .expect("planned geometric owner");
-            out.push(OutNode {
-                code: code::GEOMETRIC_OWNER,
-                index,
-                values: vec![
-                    ptr(self.trimmed_curve_id(edge_id).expect("planned trim")),
-                    ptr(ring[(position + 1) % ring.len()].1),
-                    ptr(ring[(position + ring.len() - 1) % ring.len()].1),
-                    ptr(id_of(&self.curves, curve)),
-                ],
-            });
-        }
         for (position, &(point_id, index)) in self.points.iter().enumerate() {
+            // Real files own each POINT by its VERTEX (plate.x_t and every
+            // modern corpus file); only ancient base-13006 output owned
+            // points by the body.
+            let owner = self
+                .vertices
+                .iter()
+                .find_map(|&(vertex, id)| (store.get(vertex).ok()?.point == point_id).then_some(id))
+                .unwrap_or(1);
             out.push(OutNode {
                 code: code::POINT,
                 index,
                 values: vec![
                     int(index),
                     ptr(0),
-                    ptr(1),
+                    ptr(owner),
                     ptr(adjacent(&self.points, position, 1)),
                     ptr(adjacent(&self.points, position, -1)),
                     vector(*store.get(point_id)?),
@@ -625,36 +663,44 @@ impl Plan {
         None
     }
 
+    /// The vertex a dummy fin heads at: the tail of the real fin for a
+    /// sheet boundary, the corresponding edge end for wire fins.
+    fn dummy_fin_vertex(&self, store: &Store, dummy: DummyFin) -> Option<VertexId> {
+        let edge = store.get(dummy.edge).ok()?;
+        match dummy.role {
+            DummyFinRole::SheetBoundary => {
+                let &[actual_fin] = edge.fins.as_slice() else {
+                    return None;
+                };
+                store.fin_tail(actual_fin).ok().flatten()
+            }
+            DummyFinRole::WireEnd => edge.vertices[1],
+            DummyFinRole::WireStart => edge.vertices[0],
+        }
+    }
+
+    /// Node ids of the dummy fins heading at `vertex`, in emission order.
+    /// Parasolid requires every fin claiming a vertex to be reachable from
+    /// the vertex's fin chain, dummies included (host-verified: Onshape
+    /// rejects sheets and wires whose loop-less fins are unlisted).
+    fn dummy_fins_at_vertex(&self, store: &Store, vertex: VertexId) -> Vec<u32> {
+        self.dummy_fins
+            .iter()
+            .filter(|&&(dummy, _)| self.dummy_fin_vertex(store, dummy) == Some(vertex))
+            .map(|&(_, id)| id)
+            .collect()
+    }
+
     fn dummy_fin_id(&self, edge: EdgeId, role: DummyFinRole) -> Option<u32> {
         self.dummy_fins.iter().find_map(|&(candidate, id)| {
             (candidate.edge == edge && candidate.role == role).then_some(id)
         })
     }
 
-    fn trimmed_curve_id(&self, edge: EdgeId) -> Option<u32> {
-        self.trimmed_curves
-            .iter()
-            .find_map(|&(candidate, id)| (candidate == edge).then_some(id))
-    }
-
     fn fin_pcurve_id(&self, fin: FinId) -> Option<u32> {
         self.fin_pcurves
             .iter()
             .find_map(|plan| (plan.fin == fin).then_some(plan.trimmed))
-    }
-
-    fn curve_geometric_owners(&self, store: &Store, curve: CurveId) -> Vec<(EdgeId, u32)> {
-        self.trimmed_curve_owners
-            .iter()
-            .copied()
-            .filter(|&(edge, _)| store.get(edge).is_ok_and(|e| e.curve == Some(curve)))
-            .collect()
-    }
-
-    fn curve_geometric_owner(&self, store: &Store, curve: CurveId) -> Option<u32> {
-        self.curve_geometric_owners(store, curve)
-            .first()
-            .map(|&(_, id)| id)
     }
 
     fn surface_geometric_owners(&self, store: &Store, surface: SurfaceId) -> Vec<(FinId, u32)> {
@@ -706,7 +752,7 @@ impl Plan {
             .iter()
             .position(|candidate| candidate.fin == plan.fin)
             .expect("planned fin pcurve");
-        let chain_position = self.trimmed_curves.len() + self.curves.len() + position * 2;
+        let chain_position = self.curves.len() + position * 2;
         let mut trimmed_values = geom_common(
             plan.trimmed,
             id_of(&self.fins, plan.fin),
@@ -750,7 +796,7 @@ impl Plan {
         let nurbs = pcurve_nurbs(store, plan.fin)?;
         push_pcurve_aux_nodes(out, &nurbs, aux);
         let mut bcurve_values = geom_common(plan.b_curve, 0, 0, 0);
-        bcurve_values.extend([ptr(aux.nurbs), ptr(0)]);
+        bcurve_values.extend([ptr(aux.nurbs), ptr(aux.data)]);
         out.push(OutNode {
             code: code::B_CURVE,
             index: plan.b_curve,
@@ -788,33 +834,22 @@ impl Plan {
     }
 
     fn first_curve_id(&self) -> u32 {
-        self.trimmed_curves.first().map_or_else(
-            || {
-                self.curves.first().map_or_else(
-                    || self.fin_pcurves.first().map_or(0, |plan| plan.trimmed),
-                    |&(_, id)| id,
-                )
-            },
+        self.curves.first().map_or_else(
+            || self.fin_pcurves.first().map_or(0, |plan| plan.trimmed),
             |&(_, id)| id,
         )
     }
 
     fn curve_node_id(&self, position: usize) -> Option<u32> {
-        if position < self.trimmed_curves.len() {
-            return Some(self.trimmed_curves[position].1);
-        }
-        self.curves
-            .get(position.checked_sub(self.trimmed_curves.len())?)
-            .map(|&(_, id)| id)
-            .or_else(|| {
-                let offset = position.checked_sub(self.trimmed_curves.len() + self.curves.len())?;
-                let plan = self.fin_pcurves.get(offset / 2)?;
-                Some(if offset % 2 == 0 {
-                    plan.trimmed
-                } else {
-                    plan.sp_curve
-                })
+        self.curves.get(position).map(|&(_, id)| id).or_else(|| {
+            let offset = position.checked_sub(self.curves.len())?;
+            let plan = self.fin_pcurves.get(offset / 2)?;
+            Some(if offset % 2 == 0 {
+                plan.trimmed
+            } else {
+                plan.sp_curve
             })
+        })
     }
 
     fn adjacent_curve_node(&self, position: usize, direction: i8) -> u32 {
@@ -823,37 +858,6 @@ impl Plan {
             1 => self.curve_node_id(position + 1).unwrap_or(0),
             _ => 0,
         }
-    }
-
-    fn trimmed_curve_node(
-        &self,
-        store: &Store,
-        edge_id: EdgeId,
-        index: u32,
-        mut values: Vec<Value>,
-    ) -> Result<OutNode> {
-        let edge = store.get(edge_id)?;
-        let (t0, t1) = edge.bounds.ok_or(XtError::InvalidModel {
-            what: "trimmed curve edge has no parameter bounds",
-        })?;
-        let start = edge.vertices[0].ok_or(XtError::InvalidModel {
-            what: "trimmed curve edge has no start vertex",
-        })?;
-        let end = edge.vertices[1].ok_or(XtError::InvalidModel {
-            what: "trimmed curve edge has no end vertex",
-        })?;
-        values.extend([
-            ptr(id_of(&self.curves, edge.curve.expect("validated curve"))),
-            vector(store.vertex_position(start)?),
-            vector(store.vertex_position(end)?),
-            Value::Double(t0),
-            Value::Double(t1),
-        ]);
-        Ok(OutNode {
-            code: code::TRIMMED_CURVE,
-            index,
-            values,
-        })
     }
 
     fn push_solid_scaffold_nodes(&self, out: &mut Vec<OutNode>) {
@@ -868,6 +872,8 @@ impl Plan {
                 ptr(0),
                 ptr(self.void_shell_id),
                 Value::Char('V'),
+                // V26105 appended field (see REGION_EDIT_SCRIPT): null owner.
+                ptr(0),
             ],
         });
         out.push(OutNode {
@@ -881,6 +887,8 @@ impl Plan {
                 ptr(2),
                 ptr(self.shell_id),
                 Value::Char('S'),
+                // V26105 appended field (see REGION_EDIT_SCRIPT): null owner.
+                ptr(0),
             ],
         });
         out.push(OutNode {
@@ -927,6 +935,8 @@ impl Plan {
                 ptr(0),
                 ptr(self.shell_id),
                 Value::Char('V'),
+                // V26105 appended field (see REGION_EDIT_SCRIPT): null owner.
+                ptr(0),
             ],
         });
         out.push(OutNode {
@@ -941,7 +951,9 @@ impl Plan {
                 ptr(0),
                 ptr(0),
                 ptr(2),
-                ptr(0),
+                // A sheet's faces bound their void-region shell from both
+                // sides, so they are also its front faces (disk_nat.x_t).
+                ptr(first_id(&self.faces)),
             ],
         });
     }
@@ -958,6 +970,8 @@ impl Plan {
                 ptr(0),
                 ptr(self.shell_id),
                 Value::Char('V'),
+                // V26105 appended field (see REGION_EDIT_SCRIPT): null owner.
+                ptr(0),
             ],
         });
         out.push(OutNode {
@@ -989,6 +1003,8 @@ impl Plan {
                 ptr(0),
                 ptr(self.shell_id),
                 Value::Char('V'),
+                // V26105 appended field (see REGION_EDIT_SCRIPT): null owner.
+                ptr(0),
             ],
         });
         out.push(OutNode {
@@ -1157,11 +1173,12 @@ impl CurveAuxIds {
     fn allocate(next: &mut u32) -> Self {
         let ids = CurveAuxIds {
             nurbs: *next,
-            poles: *next + 1,
-            knot_mult: *next + 2,
-            knots: *next + 3,
+            data: *next + 1,
+            poles: *next + 2,
+            knot_mult: *next + 3,
+            knots: *next + 4,
         };
-        *next += 4;
+        *next += 5;
         ids
     }
 }
@@ -1356,7 +1373,7 @@ fn curve_node(
         }
         CurveGeom::Nurbs(_) => {
             let aux = aux.expect("planned NURBS curve auxiliaries");
-            values.extend([ptr(aux.nurbs), ptr(0)]);
+            values.extend([ptr(aux.nurbs), ptr(aux.data)]);
             code::B_CURVE
         }
     };
@@ -1382,20 +1399,34 @@ fn push_curve_aux_nodes(out: &mut Vec<OutNode>, curve: &CurveGeom, ids: CurveAux
             Value::Int(curve.points().len() as i64),
             Value::Int(vertex_dim),
             Value::Int(knots.len() as i64),
-            Value::Int(0),
+            // Every real corpus NURBS_CURVE (exemplar.x_t, 301/301)
+            // declares knot_type 5 (bespoke) and curve_form 1
+            // (unspecified); Onshape rejects 0 in either as corrupt.
+            Value::Int(5),
             Value::Logical(false),
             Value::Logical(false),
             Value::Logical(rational),
-            Value::Int(0),
+            Value::Int(1),
             ptr(ids.poles),
             ptr(ids.knot_mult),
             ptr(ids.knots),
         ],
     });
+    out.push(curve_data_node(ids.data));
     out.push(bspline_vertices_node(ids.poles, flatten_curve_poles(curve)));
     out.push(int_values_node(ids.knot_mult, &multiplicities));
     out.push(knot_values_node(ids.knots, knots));
     Ok(())
+}
+
+/// Every real corpus B_CURVE carries a CURVE_DATA companion declaring
+/// self_int 1 (checked, no self-intersection) and no analytic form.
+fn curve_data_node(index: u32) -> OutNode {
+    OutNode {
+        code: code::CURVE_DATA,
+        index,
+        values: vec![Value::Int(1), ptr(0)],
+    }
 }
 
 fn push_pcurve_aux_nodes(out: &mut Vec<OutNode>, curve: &NurbsCurve2d, ids: CurveAuxIds) {
@@ -1410,16 +1441,18 @@ fn push_pcurve_aux_nodes(out: &mut Vec<OutNode>, curve: &NurbsCurve2d, ids: Curv
             Value::Int(curve.points().len() as i64),
             Value::Int(vertex_dim),
             Value::Int(knots.len() as i64),
-            Value::Int(0),
+            // knot_type 5 / curve_form 1, as in every real corpus file.
+            Value::Int(5),
             Value::Logical(false),
             Value::Logical(false),
             Value::Logical(rational),
-            Value::Int(0),
+            Value::Int(1),
             ptr(ids.poles),
             ptr(ids.knot_mult),
             ptr(ids.knots),
         ],
     });
+    out.push(curve_data_node(ids.data));
     out.push(bspline_vertices_node(
         ids.poles,
         flatten_pcurve_poles(curve),
@@ -1487,7 +1520,7 @@ fn aux_node_count(store: &Store, surfaces: &[SurfaceId], curves: &[CurveId]) -> 
     }
     for &curve in curves {
         if matches!(store.get(curve)?, CurveGeom::Nurbs(_)) {
-            count += 4;
+            count += 5;
         }
     }
     Ok(count)
@@ -1647,13 +1680,21 @@ fn geom_common(index: u32, owner: u32, next: u32, previous: u32) -> Vec<Value> {
 
 fn serialize(nodes: &[OutNode]) -> Result<String> {
     let defs = base_schema();
+    // Embedded-schema flag sequence: version string, schema key with base
+    // suffix, maximum node-type count, user-field size 0. The key is
+    // length-prefixed, so the count follows it without a separator —
+    // exactly as real Parasolid writes it.
+    // User-field size 1, as every observed real Parasolid file declares;
+    // each node's data is followed by one zero user-field int.
     let mut data = format!(
-        "T{} {}{} {} 0 ",
+        "T{} {}{} {}{} 1 ",
         VERSION.len(),
         VERSION,
-        SCHEMA.len(),
-        SCHEMA
+        SCHEMA_KEY.len(),
+        SCHEMA_KEY,
+        MAX_NODE_TYPES
     );
+    let mut described: BTreeSet<u16> = BTreeSet::new();
     for node in nodes {
         let def = defs
             .iter()
@@ -1661,11 +1702,33 @@ fn serialize(nodes: &[OutNode]) -> Result<String> {
             .ok_or(XtError::InvalidModel {
                 what: "writer selected an unknown node type",
             })?;
-        if def.fields.len() != node.values.len() {
+        let expected_fields = if node.code == code::BODY {
+            def.fields.len() + BODY_APPENDED_FIELDS
+        } else if node.code == code::REGION {
+            def.fields.len() + REGION_APPENDED_FIELDS
+        } else {
+            def.fields.len()
+        };
+        if expected_fields != node.values.len() {
             return Err(XtError::InvalidModel {
                 what: "writer produced the wrong field count",
             });
         }
+        // First occurrence of a node type carries its embedded layout:
+        // BODY and REGION differ from base 13006 (verified against every
+        // real fixture in the corpus) and get the real edit scripts; every
+        // other emitted type is byte 255, "identical to base".
+        let marker = if described.insert(node.code) {
+            if node.code == code::BODY {
+                BODY_EDIT_SCRIPT
+            } else if node.code == code::REGION {
+                REGION_EDIT_SCRIPT
+            } else {
+                "255 "
+            }
+        } else {
+            ""
+        };
         if def.is_variable() {
             let variable_len = node
                 .values
@@ -1678,25 +1741,73 @@ fn serialize(nodes: &[OutNode]) -> Result<String> {
                 .ok_or(XtError::InvalidModel {
                     what: "writer produced a variable node without an array value",
                 })?;
-            data.push_str(&format!("{} {} {} ", node.code, variable_len, node.index));
+            data.push_str(&format!(
+                "{} {marker}{} {} ",
+                node.code, variable_len, node.index
+            ));
         } else {
-            data.push_str(&format!("{} {} ", node.code, node.index));
+            data.push_str(&format!("{} {marker}{} ", node.code, node.index));
         }
         for value in &node.values {
             write_value(&mut data, value)?;
         }
+        // One zero user-field per node (USFLD_SIZE=1).
+        data.push_str("0 ");
     }
     data.push_str("1 0 ");
+    // Text lines are 80-column records, and a record must never END with a
+    // space: real Parasolid readers right-trim each line before splicing
+    // the stream back together, so a separator space at a line end is
+    // eaten and the adjacent tokens merge. Real writers therefore move a
+    // space that would land on column 80 to the start of the next line
+    // (their files mix 80-character lines with 79-character lines whose
+    // successor starts with a space — never a line ending in a space).
+    // Tokens themselves may split across records; only trailing spaces are
+    // unsafe. Established empirically through the oracle loop: re-wrapping
+    // a host-accepted file at a fixed 80 columns (leaving separator spaces
+    // at line ends) makes the host reject it as corrupt.
+    let bytes = data.as_bytes();
     let mut wrapped = String::new();
-    for chunk in data.as_bytes().chunks(79) {
-        wrapped.push_str(core::str::from_utf8(chunk).expect("writer emits ASCII"));
+    let mut start = 0;
+    while start < bytes.len() {
+        let width = (bytes.len() - start).min(80);
+        let mut cut = width;
+        if start + width < bytes.len() {
+            while cut > 1 && bytes[start + cut - 1] == b' ' {
+                cut -= 1;
+            }
+        }
+        wrapped.push_str(
+            core::str::from_utf8(&bytes[start..start + cut]).expect("writer emits ASCII"),
+        );
         wrapped.push('\n');
+        start += cut;
     }
+    // Header layout mirrors Parasolid-authored transmit files field for
+    // field: one keyword per line, every record within 80 columns, and the
+    // full PART1 identity set present with deterministic placeholder values
+    // (real Parasolid accepts and itself emits `unknown` here).
     Ok(format!(
         "**ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz**************************\n\
          **PARASOLID !\"#$%&'()*+,-./:;<=>?@[\\]^_`{{|}}~0123456789**************************\n\
-         **PART1;MC=none;APPL=cad_prototype-kxt;SITE=none;USER=none;FORMAT=text;GUISE=transmit;\n\
-         **PART2;SCH={SCHEMA};USFLD_SIZE=0;\n\
+         **PART1;\n\
+         MC=unknown;\n\
+         MC_MODEL=unknown;\n\
+         MC_ID=unknown;\n\
+         OS=unknown;\n\
+         OS_RELEASE=unknown;\n\
+         FRU=unknown;\n\
+         APPL=cad_prototype-kxt;\n\
+         SITE=unknown;\n\
+         USER=unknown;\n\
+         FORMAT=text;\n\
+         GUISE=transmit;\n\
+         KEY=unknown;\n\
+         FILE=unknown;\n\
+         DATE=unknown;\n\
+         **PART2;\n\
+         SCH={SCHEMA};\n\
+         USFLD_SIZE=1;\n\
          **PART3;\n\
          **END_OF_HEADER*****************************************************************\n{wrapped}"
     ))

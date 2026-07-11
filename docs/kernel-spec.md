@@ -51,7 +51,10 @@ Interoperability is defined by three commitments, not by cloning Parasolid inter
    resolution 1e-11 rad. Tolerant edges/vertices carry validated per-entity tolerances ≥
    resolution together with their import/operation origin and accumulated growth,
    exactly as Parasolid's tolerant modeling requires operationally. Geometry we export must satisfy
-   Parasolid's checker (verified empirically via Solid Edge import).
+   Parasolid's checker, verified empirically by importing into a licensed Parasolid host
+   (Solid Edge). That verification has not started; until it passes, writer output is
+   uncertified (see roadmap M3b and the oracle loop in
+   [oracle-loop.md](oracle-loop.md)).
 3. **Exactness commitment.** Analytic surfaces (plane, cylinder, cone, sphere, torus)
    and procedural surfaces (swept, spun, offset, rolling-ball blend) are represented
    *exactly*, never approximated as NURBS on export. NURBS-ification destroys downstream

@@ -120,8 +120,10 @@ parametric CAD application; feature history and regeneration are later layers.
 - M5-M8 are not started: there are no end-to-end booleans, general sweeps/sewing,
   blends/offsets/shelling, stable C API, or production hardening yet.
 
-Immediate work per the roadmap: complete the M2.5 architecture gate, build the X_T
-corpus/oracle harness in parallel, replace sampled general intersections with certified
+Immediate work per the roadmap: run the external Parasolid oracle loop
+(`xt_oracle` bundle export → licensed-host import → re-export → `xt_oracle compare`;
+see [docs/oracle-loop.md](docs/oracle-loop.md)), complete the M2.5 architecture gate,
+grow the X_T corpus in parallel, replace sampled general intersections with certified
 subdivision and completion semantics, then exercise the architecture through
 extrude/revolve and a narrow end-to-end analytic boolean slice.
 

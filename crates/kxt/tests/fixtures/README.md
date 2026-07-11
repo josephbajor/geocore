@@ -53,6 +53,28 @@ statement accompanied the individual files.
   (github.com/ansys/example-data, `pymechanical/embedding/LONGBAR.x_t`,
   commit `f4582f1`; that repository is MIT-licensed).
 
+## Owner-contributed exports
+
+- `exemplar.x_t` — a large organic production part (96 faces, 68
+  B-surfaces, 44 offset surfaces, 110 intersection curves, tolerant
+  edges with per-fin trimmed SP-curves) exported by the repository owner
+  from their own Onshape project as Parasolid text (Parasolid 37.1.212,
+  schema `SCH_3701212_37102_13006`, 2026-07-11). Parses fully through
+  the embedded-schema mechanism; reconstruction stops at
+  Tier-2 procedural (offset) surfaces by design. Primary reference for
+  modern writer conventions: TRIMMED_CURVE/GEOMETRIC_OWNER linkage,
+  tolerant-edge fin curves, POINT ownership by vertex, and the resolved
+  37102 node layouts (133/141 match base 13006 exactly).
+- `cyl.x_t` — a plain solid cylinder exported by the repository owner
+  from Onshape as Parasolid text (Parasolid 37.1.212, schema
+  `SCH_3701212_37102_13006`, 2026-07-11). The only real file in the
+  corpus with an analytic periodic wall face: two vertex-less ring
+  edges bounding a two-loop CYLINDER face, no SP-curves, no vertices
+  anywhere in the body. Settled the solid-cylinder emission questions:
+  full-circle edges carry no vertex, and `EDGE.fin` points at the
+  positive-sense fin (as in every modern real file). Passes every
+  local stage.
+
 Metadata-only discoveries from SCOREC/pumi-meshes at commit `684e480`:
 
 - `Kova_nat.x_t` — curved analytic solid written by the Parasolid acceptance tests

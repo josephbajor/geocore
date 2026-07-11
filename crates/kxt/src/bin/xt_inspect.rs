@@ -367,17 +367,69 @@ fn feature_json(features: &Features) -> String {
     )
 }
 
+fn render_value(value: &Value) -> String {
+    match value {
+        Value::Ptr(p) => format!("→{p}"),
+        Value::Double(x) => format!("{x}"),
+        Value::Int(i) => format!("{i}"),
+        Value::Char(c) => format!("'{c}'"),
+        Value::Arr(values) => {
+            let rendered: Vec<String> = values.iter().map(render_value).collect();
+            format!("[{}]", rendered.join(", "))
+        }
+        other => format!("{other:?}"),
+    }
+}
+
+/// Dump every node with named fields — the mining tool for diffing this
+/// writer's output against real corpus files.
+fn dump_nodes(path: &Path) -> Result<(), String> {
+    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+    let file = read_xt(&bytes).map_err(|error| error.to_string())?;
+    println!(
+        "== {} schema={} usfld={} nodes={}",
+        path.display(),
+        file.schema,
+        file.usfld_size,
+        file.nodes.len()
+    );
+    for (index, node) in &file.nodes {
+        let def = file.defs.get(&node.code);
+        let name = def.map_or("?", |d| d.name.as_str());
+        let mut parts = Vec::new();
+        for (position, value) in node.values.iter().enumerate() {
+            let field = def
+                .and_then(|d| d.fields.get(position))
+                .map_or_else(|| format!("f{position}"), |f| f.name.clone());
+            parts.push(format!("{field}={}", render_value(value)));
+        }
+        println!("[{index}] {name}({}) {}", node.code, parts.join(" "));
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
-    let paths: Vec<_> = std::env::args_os().skip(1).collect();
+    let mut paths: Vec<_> = std::env::args_os().skip(1).collect();
+    let dump = paths.first().is_some_and(|arg| arg == "--nodes");
+    if dump {
+        paths.remove(0);
+    }
     if paths.is_empty() {
-        eprintln!("usage: xt_inspect FILE.x_t [FILE.x_b ...]");
+        eprintln!("usage: xt_inspect [--nodes] FILE.x_t [FILE.x_b ...]");
         return ExitCode::from(2);
     }
     let mut all_passed = true;
     for path in paths {
-        let (row, passed) = inspect(Path::new(&path));
-        println!("{row}");
-        all_passed &= passed;
+        if dump {
+            if let Err(error) = dump_nodes(Path::new(&path)) {
+                eprintln!("{}: {error}", Path::new(&path).display());
+                all_passed = false;
+            }
+        } else {
+            let (row, passed) = inspect(Path::new(&path));
+            println!("{row}");
+            all_passed &= passed;
+        }
     }
     ExitCode::from(u8::from(!all_passed))
 }

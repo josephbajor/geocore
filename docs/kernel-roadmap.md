@@ -261,10 +261,16 @@ Remaining before the gate closes:
 - Migrate higher modeling/healing operations to the landed transaction-owned Euler
   methods. Pcurves are mandatory on every public MEV/MEF/MEKR face-edge creation; only
   topology-internal unit tests retain pcurve-less helpers.
-- Add an independently sourced, redistributable Parasolid fixture containing a true
-  tolerant edge and certify the emitted SP-curve chain in a licensed Parasolid host.
-  Current evidence is standards-derived and self-round-trip only. Extend interchange to
-  periodic/circular pcurves and any geometric-owner variants observed in that corpus.
+- Certify the emitted SP-curve chain in a licensed Parasolid host. The corpus has
+  an independently authored tolerant-edge exemplar (`exemplar.x_t`, owner-contributed
+  Onshape/Parasolid 37.1 export, 2026-07-11): 131 curve-less tolerant edges whose fins
+  carry `TRIMMED_CURVE → SP_CURVE` chains matching our emitted shape, and whose
+  resolved 37102 layouts confirm the base-13006 133/141 field order. The import leg
+  is now host-certified: Onshape accepted `solid_block_tolerant_edge.x_t`
+  (2026-07-11) once its pcurve NURBS_CURVE nodes declared knot_type 5 /
+  curve_form 1 with CURVE_DATA companions. The re-export/compare leg remains,
+  as does extending interchange to periodic/circular pcurves and any
+  geometric-owner variants observed in that corpus.
 - `FinPcurve` now carries an explicit `PcurveChart` of integer period shifts. Domain
   derivation, incidence, loop orientation, tolerant-edge comparison, and tessellation all
   consume the same charted evaluator; the checker rejects shifts in non-periodic
@@ -463,6 +469,12 @@ Landed slice:
 
 Remaining before the gate closes:
 
+- Wire `Full` checking into an opt-in commit gate: a commit variant that rejects
+  `Invalid` and can require `Valid` (or bounded `Indeterminate`) outcomes for its
+  result roots. Today `commit_checked` enforces the Fast (structural/sampled) level
+  only and the Full proof apparatus is exercised solely by tests and the corpus
+  inspector; the proofs must become load-bearing on a write path before booleans
+  consume them as an acceptance oracle.
 - Define operation-specific tolerance combination/propagation rules and route every
   future modeling/healing tolerance change through the landed transaction budget API.
 - Introduce capability and completion errors rather than treating unsupported or
@@ -544,6 +556,11 @@ read before its corresponding kernel geometry exists.
   later milestones.
 - Add parser mutation/property fuzzing now, not only in M8. Every crash or semantic bug
   becomes a minimized fixture.
+- Surface dropped semantic content as explicit per-file diagnostics rather than bare
+  skip counts: import currently skips ATTRIBUTE/GROUP/TRANSFORM/GEOMETRIC_OWNER and
+  foreign nodes silently, and ignores the GEOMETRIC_OWNER rings this repository's own
+  writer emits. Audit whether any skipped class (TRANSFORM in particular) can affect
+  reconstructed geometry and reject rather than skip if so.
 - Replace the full text-buffer copy and full-session clone path with bounded-memory
   parsing/staging. The reconstruction clone has been removed in favor of Store
   transactions; the full input buffer and parser representation remain. Add a size
@@ -568,16 +585,48 @@ read before its corresponding kernel geometry exists.
   therefore rejects a non-null kernel face tolerance with stable capability
   `xt.write.face-tolerances` rather than emitting a nonconforming file; face UV domains
   remain kernel-side because XT represents face bounds through loops, not a UV box field.
-- Complete a field-by-field ownership/link audit for every declared writer cell,
-  including directly shared untrimmed curves and shared point ownership. The tolerant
-  SP path now emits its boundary-curve chain and geometric-owner rings, but acceptance
-  by this repository's permissive reader is not evidence that all older writer paths
-  satisfy Parasolid's relationship invariants.
+- Field-by-field ownership/link audit against real corpus files (plate.x_t,
+  exemplar.x_t) landed 2026-07-11: exact bounded edges now reference their basis curve
+  directly (every real exact-modeling file does; bounds are implied by vertices and
+  recovered by inversion on import), POINT nodes are owned by their VERTEX (modern
+  convention; only ancient base-13006 output used the body), and the
+  TRIMMED_CURVE/GEOMETRIC_OWNER chain shape our tolerant path emits matches the
+  exemplar's real linkage exactly (GO owned by the consumer, self-ring when alone,
+  shared_geometry at the basis, basis owned by the body). Host acceptance of the
+  reworked emission remains to be recorded.
 - Add neutral-binary output after the text semantics are independently certified.
 - For every authored capability: import into Solid Edge/another licensed Parasolid host,
   run its checker, re-export, re-import here, and compare topology, geometry class,
   tolerance, orientation, and mass properties.
-- Use OCCT as a second, independent differential oracle where its semantics apply.
+- Landed harness: `xt_oracle export` deterministically generates the full declared
+  Tier 1 authoring bundle (analytic solids, seam sheet, concave planar sheet, wires,
+  acorn, B-curve edge, B-surface face, and bounded tolerant SP-curve edge) with a
+  manifest of expected topology counts, mass properties, checker outcomes, and content
+  hashes; `xt_oracle compare` diffs a host re-export against the original by body kind,
+  entity counts, geometry-class histograms, tolerances, checker cleanliness,
+  watertightness, and enclosed volume. The human-in-the-loop procedure is
+  [oracle-loop.md](oracle-loop.md); outcomes ratchet in
+  [oracle-results.tsv](oracle-results.tsv). First host runs (Onshape, 2026-07-11)
+  accepted `solid_sphere` and `solid_torus` — the first kernel-authored files accepted
+  by a licensed Parasolid — and drove four writer conformance fixes plus the
+  bounded-edge emission rework. The second run (2026-07-11, after the
+  `cyl.x_t`-driven `EDGE.fin` → positive-fin fix, the NURBS_CURVE
+  knot_type/curve_form/CURVE_DATA alignment, and the sheet front-face +
+  fins-at-vertex chain fixes) imported 10 of 13 fixtures cleanly: every
+  solid (block, cylinder, cone, sphere, torus), the B-surface and B-curve
+  blocks, the tolerant SP-curve block, and both sheets. Wire and acorn
+  bodies remain rejected as corrupt with no real exemplar to bisect
+  against. The import leg of the gate is proven for those ten; the
+  re-export/compare leg remains.
+- The bundle must include a B-surface part in every host run until the provisional
+  v-fastest B-surface pole ordering (`kxt::recon`) is confirmed or corrected by a
+  licensed host; self-round-trip structurally cannot detect a transposed convention
+  because reader and writer share it.
+- Accessible Parasolid-backed hosts: Solid Edge Community Edition (free license,
+  Windows) and Onshape (Parasolid-kernel SaaS; free plan documents are public).
+  Open-source OCCT cannot read XT (its XT translator is a commercial component), so
+  OCCT serves as a differential oracle only at the geometry/mass-property level via a
+  host-exported STEP, or after M6 STEP support lands here.
 
 **Exit:** 100% of the declared Tier 1 authoring matrix imports into the Parasolid oracle
 with zero checker errors and survives there-and-back comparison. Self-round-trip alone
@@ -622,6 +671,11 @@ true only for an empty complete result.
   empty exits. Extend it to generic curve/surface pairing, verified seed existence,
   safeguarded Newton polishing, conditioning diagnostics, and procedural/NURBS fields.
 - Analytic special cases and the generic solver feed the same canonical result type.
+- Consolidate the per-pair analytic curve/surface and SSI boilerplate (range
+  validation, parameter fitting, dedup, branch emission — currently repeated across
+  the conic/quadric pair files) into shared drivers behind the same result contract,
+  following the `MarchConfig` pattern already proven by the NURBS-surface marchers,
+  before adding further special-case pairs.
 
 ### M4b — Curve/curve and curve/surface completion
 
@@ -772,32 +826,41 @@ ledger and include an adversarial regression that distinguishes `Invalid`,
 
 ## Immediate implementation queue
 
-1. Finish parameter-space incidence: acquire production seam/pole/apex fixtures, extend
+1. Run the external oracle loop now: generate the Tier 1 authoring bundle with
+   `xt_oracle export`, import every file into a licensed Parasolid host (Solid Edge
+   Community Edition first; Onshape as a second Parasolid-backed host), record host
+   import/checker outcomes and mass properties, re-export, diff with
+   `xt_oracle compare`, and ratchet outcomes in `docs/oracle-results.tsv`. The first
+   run must settle the provisional B-surface pole ordering. This loop is
+   calendar-bound, requires a human with host access, and blocks nothing else —
+   start immediately and re-run as writer capabilities grow.
+2. Finish parameter-space incidence: acquire production seam/pole/apex fixtures, extend
    full-interval face-domain containment to periodic/unclamped NURBS and unsupported
    exact/mixed boundaries, migrate higher callers to the landed pcurve-aware transaction
    Euler API, and add non-identity chart interchange.
-2. Add multi-body performance baselines for the landed incremental ownership/shared-
+3. Add multi-body performance baselines for the landed incremental ownership/shared-
    geometry dependency index and optimize body-order refresh if measurements require it,
    retaining full reconstruction audit tests; migrate future modeling/healing consumers
    to checked transactions and the landed tolerance budgets; add operation-specific
    propagation rules, journal composition, and partition history.
-3. Discharge the remaining checker-v2 `Full` gaps: extend incidence certificates to
+4. Discharge the remaining checker-v2 `Full` gaps: extend incidence certificates to
    Bezier-extracted NURBS and mixed-parameter pcurves, extend loop proofs to curved
    periodic charts, then prove multi-loop containment and curved/non-convex shell
-   self-intersection/orientation adaptively.
-4. Add the geometry graph and extend the landed intersection completion evidence with
+   self-intersection/orientation adaptively. Wire `Full` checking into an opt-in
+   commit gate as coverage grows so the certificates become load-bearing at runtime.
+5. Add the geometry graph and extend the landed intersection completion evidence with
    paired pcurves, coincident regions, singular events, structured limits, and verified
    residual bounds.
-5. Turn cells retained by the landed exact adaptive NURBS/implicit isolation into verified
+6. Turn cells retained by the landed exact adaptive NURBS/implicit isolation into verified
    root seeds; add safeguarded polishing and conditioning diagnostics, then construct the
    branch graph while keeping analytic cases as accelerators of the same result contract.
-6. Extend the landed simple planar profile to regions with holes/curve loops, then ship
+7. Extend the landed simple planar profile to regions with holes/curve loops, then ship
    checked copy/transform, extrude/revolve, and the classifiers needed by a narrow M5a
    boolean vertical slice.
-7. Expand the landed X_T manifest/stage-rate harness in parallel to licensed production-scale,
+8. Expand the landed X_T manifest/stage-rate harness in parallel to licensed production-scale,
    tolerant, NURBS, transformed, multi-body, and assembly corpora; complete external M3b
    validation and externally certify the bounded tolerant-edge SP-curve subset.
-8. Broaden booleans only after the vertical slice passes its checker, rollback, lineage,
+9. Broaden booleans only after the vertical slice passes its checker, rollback, lineage,
    tolerance, determinism, corpus, performance, and independent-oracle gates.
 
 ## After the kernel
