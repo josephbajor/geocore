@@ -1,0 +1,16 @@
+[package]
+name = "kernel"
+description = "Supported native Rust facade for kernel session, part, and read-only topology access"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kcore = { path = "../kcore" }
+kgeom = { path = "../kgeom" }
+ktopo = { path = "../ktopo" }
+
+[lints]
+workspace = true

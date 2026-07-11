@@ -159,8 +159,8 @@ Initial construction is narrow:
 
 ```rust
 impl Kernel {
-    pub fn new() -> Result<Self>;
-    pub fn with_default_policy(policy: SessionPolicy) -> Result<Self>;
+    pub fn new() -> Self;
+    pub fn with_default_policy(policy: SessionPolicy) -> Self;
     pub fn create_session(&self) -> Session;
 }
 

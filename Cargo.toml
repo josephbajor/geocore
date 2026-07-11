@@ -5,6 +5,7 @@ members = [
     "crates/kcore",
     "crates/kgeom",
     "crates/kgraph",
+    "crates/kernel",
     "crates/ktopo",
     "crates/kops",
     "crates/kxt",

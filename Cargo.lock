@@ -7,6 +7,15 @@ name = "kcore"
 version = "0.1.0"
 
 [[package]]
+name = "kernel"
+version = "0.1.0"
+dependencies = [
+ "kcore",
+ "kgeom",
+ "ktopo",
+]
+
+[[package]]
 name = "kgeom"
 version = "0.1.0"
 dependencies = [
