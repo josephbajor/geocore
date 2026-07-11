@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: implementation-ready proposal
+Status: K1 implemented; K2-K5 implementation-ready
 
 ## Outcome
 

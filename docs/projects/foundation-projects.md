@@ -12,13 +12,13 @@ topology boundaries.
 | Project | Current state |
 | --- | --- |
 | F0 | Implemented: curve/curve operand swapping preserves completion evidence and canonical order. |
-| F1 | G1-G3 implemented: `kgraph` and `ktopo::Store` own one transactional geometry graph, and the first exact offset descriptor/evaluator/checker/tessellation slice is in place; G4-G5 remain. |
-| F2 | Stage 1 and the first Stage 2 intersection pilot are implemented: one scoped NURBS proof/march path retains accepted usage, attempted limit events, numeric-resolution stops, and compatibility parity; the refinement/checking pilot and stages 3-6 remain. |
+| F1 | G1-G4a implemented: `kgraph` and `ktopo::Store` own one transactional geometry graph; exact offsets evaluate, check, tessellate, and round-trip through the declared X_T subset without basis duplication. Broader G4 corpus coverage and G5 remain. |
+| F2 | Stage 1 and the first Stage 2 intersection pilot are implemented: one scoped NURBS proof/march path retains accepted usage, attempted limit events, numeric-resolution stops, and compatibility parity. Stage 4 tessellation vocabulary names the two truthful legacy ceilings without changing behavior; the refinement/checking pilot and contextual migrations remain. |
 | F3 | Two slices implemented: centralized class dispatch plus shared periodic/range and first-wins candidate emission migrated through line/circle and plane/sphere. Broader driver migration and generic fallback remain. |
-| F4 | Phase 1 plus representative Phase 2 slices are implemented: shared identifiers/classification, X_T delegation, typed unsupported dispatch, structured resource-limit evidence, and classified topology tessellation/checker outcomes are in place. Broader checker and legacy-limit migrations remain. |
+| F4 | Phase 1, representative Phase 2 slices, and graph-evaluation classification from Phase 3 are implemented: shared identifiers/classification, source-preserving X_T delegation, typed unsupported dispatch, structured resource-limit evidence, and classified topology tessellation/checker outcomes are in place. Structured incomplete evidence and broader legacy migrations remain. |
 | F5 | K1 implemented: the `kernel` facade owns session/part lifecycle, opaque part-qualified IDs, classified source-preserving errors, and lazy deterministic read views; K2-K5 remain. |
 | F6 | First slice implemented: shared surface inversion, chart normalization, and distance services consumed by checker and tessellation. Module splits remain. |
-| F7 | Q0-Q1 implemented: toolchain/MSRV pinning plus an isolated, schema-validated benchmark runner contract and deterministic smoke fixture. Q2-Q8 remain. |
+| F7 | Q0-Q2 implemented: toolchain/MSRV pinning, a schema-validated isolated runner, and the 21-case topology commit/index ladder with semantic digests and bounded smokes. Q3-Q8 remain. |
 
 ## Dependency outline
 

@@ -1,6 +1,6 @@
 # F1 procedural geometry graph
 
-Status: implementation-ready proposal
+Status: G1-G4a implemented; broader corpus coverage and G5 remain
 
 ## Outcome
 

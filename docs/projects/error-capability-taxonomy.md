@@ -1,6 +1,6 @@
 # F4 kernel error and capability taxonomy
 
-Status: implementation-ready contract proposal
+Status: Phase 1, representative Phase 2 slices, and graph evaluation classification implemented
 
 ## Outcome
 

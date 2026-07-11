@@ -1,6 +1,6 @@
 # Operation context and numerical policy
 
-Status: implementation-ready proposal for foundation project F2
+Status: Stage 1, the first Stage 2 pilot, and truthful Stage 4 tessellation vocabulary implemented
 
 ## Purpose
 
