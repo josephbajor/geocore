@@ -1,6 +1,6 @@
 //! Bounded analytic surface/surface intersection behavior.
 
-use kcore::error::Error;
+use kcore::error::{ClassifiedError, Error, ErrorClass};
 use kcore::math;
 use kcore::tolerance::Tolerances;
 use kgeom::aabb::Aabb3;
@@ -11,8 +11,9 @@ use kgeom::param::ParamRange;
 use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, SurfaceDerivs, Torus};
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
-    ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
-    intersect_bounded_cone_cylinder, intersect_bounded_cone_nurbs_surface,
+    ContactKind, IntersectionError, SURFACE_SURFACE_CLASS_PAIR, SurfaceClass,
+    SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
+    UNSUPPORTED_CLASS_PAIR, intersect_bounded_cone_cylinder, intersect_bounded_cone_nurbs_surface,
     intersect_bounded_cone_sphere, intersect_bounded_cone_torus, intersect_bounded_cones,
     intersect_bounded_cylinder_nurbs_surface, intersect_bounded_cylinder_sphere,
     intersect_bounded_cylinder_torus, intersect_bounded_cylinders, intersect_bounded_plane_cone,
@@ -1339,10 +1340,16 @@ fn surface_surface_dispatches_plane_sphere_and_rejects_unsupported() {
     .unwrap_err();
     assert_eq!(
         err,
-        Error::InvalidGeometry {
-            reason: "unsupported surface/surface intersection class"
+        IntersectionError::UnsupportedSurfacePair {
+            class_a: Some(SurfaceClass::Nurbs.key()),
+            class_b: Some(SurfaceClass::Nurbs.key()),
         }
     );
+    assert_eq!(err.class(), ErrorClass::Unsupported);
+    assert_eq!(err.code(), UNSUPPORTED_CLASS_PAIR);
+    assert_eq!(err.capability(), Some(SURFACE_SURFACE_CLASS_PAIR));
+    let classified: &dyn ClassifiedError = &err;
+    assert_eq!(classified.class(), ErrorClass::Unsupported);
 }
 
 #[test]
@@ -1360,8 +1367,9 @@ fn surface_surface_dispatch_rejects_unknown_surface_class() {
 
     assert_eq!(
         err,
-        Error::InvalidGeometry {
-            reason: "unsupported surface/surface intersection class"
+        IntersectionError::UnsupportedSurfacePair {
+            class_a: None,
+            class_b: Some(SurfaceClass::Plane.key()),
         }
     );
 }
@@ -2958,9 +2966,9 @@ fn plane_cone_rejects_unsupported_parabolic_and_hyperbolic_sections() {
         .unwrap_err();
         assert_eq!(
             err,
-            Error::InvalidGeometry {
+            IntersectionError::Kernel(Error::InvalidGeometry {
                 reason: "plane/cone intersection currently supports only circular and elliptic cuts"
-            }
+            })
         );
     }
 }

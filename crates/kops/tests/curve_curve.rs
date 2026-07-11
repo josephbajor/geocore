@@ -1,6 +1,8 @@
 //! General bounded curve/curve dispatch over supported analytic classes.
 
-use kcore::error::Error;
+use std::error::Error as _;
+
+use kcore::error::{ClassifiedError, Error, ErrorClass};
 use kcore::proof::Completion;
 use kcore::tolerance::Tolerances;
 use kgeom::aabb::Aabb3;
@@ -9,7 +11,10 @@ use kgeom::frame::Frame;
 use kgeom::nurbs::NurbsCurve;
 use kgeom::param::ParamRange;
 use kgeom::vec::{Point3, Vec3};
-use kops::intersect::{ContactKind, ParamOrientation, intersect_bounded_curves};
+use kops::intersect::{
+    CURVE_CURVE_CLASS_PAIR, ContactKind, CurveClass, IntersectionError, ParamOrientation,
+    UNSUPPORTED_CLASS_PAIR, intersect_bounded_curves,
+};
 
 fn line(origin: [f64; 3], direction: [f64; 3]) -> Line {
     Line::new(Point3::from_array(origin), Vec3::from_array(direction)).unwrap()
@@ -409,8 +414,45 @@ fn unsupported_curve_class_is_explicit_error() {
 
     assert_eq!(
         err,
-        Error::InvalidGeometry {
-            reason: "unsupported curve/curve intersection class"
+        IntersectionError::UnsupportedCurvePair {
+            class_a: None,
+            class_b: Some(CurveClass::Line.key()),
         }
+    );
+    assert_eq!(err.class(), ErrorClass::Unsupported);
+    assert_eq!(err.code(), UNSUPPORTED_CLASS_PAIR);
+    assert_eq!(err.capability(), Some(CURVE_CURVE_CLASS_PAIR));
+    assert!(err.source().is_none());
+
+    let classified: &dyn ClassifiedError = &err;
+    assert_eq!(classified.class(), ErrorClass::Unsupported);
+}
+
+#[test]
+fn supported_dispatch_preserves_kernel_error_classification_and_source() {
+    let a = line([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    let b = line([0.0, 1.0, 0.0], [1.0, 0.0, 0.0]);
+    let invalid_range = ParamRange { lo: 1.0, hi: 0.0 };
+    let err = intersect_bounded_curves(
+        &a,
+        invalid_range,
+        &b,
+        ParamRange::new(0.0, 1.0),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+
+    let kernel = Error::InvalidGeometry {
+        reason: "line intersection requires a finite non-reversed range",
+    };
+    assert_eq!(err, IntersectionError::Kernel(kernel));
+    assert_eq!(err.class(), kernel.class());
+    assert_eq!(err.code(), kernel.code());
+    assert_eq!(err.capability(), kernel.capability());
+    assert_eq!(err.limit(), kernel.limit());
+    assert_eq!(
+        err.source()
+            .and_then(|source| source.downcast_ref::<Error>()),
+        Some(&kernel)
     );
 }

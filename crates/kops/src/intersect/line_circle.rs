@@ -1,7 +1,10 @@
-use super::result::{
-    ContactKind, CurveCurveIntersections, CurveCurvePoint, accept_curve_curve_candidate,
+use super::candidate::emit_distinct_spatial;
+use super::parameter::{
+    angular_parameter_tolerance, fit_periodic_parameter, fit_scalar_parameter,
+    validate_finite_ranges, validate_period_span,
 };
-use kcore::error::{Error, Result};
+use super::result::{ContactKind, CurveCurveIntersections, accept_curve_curve_candidate};
+use kcore::error::Result;
 use kcore::math;
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Line};
@@ -31,15 +34,16 @@ pub fn intersect_bounded_line_circle(
 
     if local_direction.z.abs() > tolerances.angular() {
         let t_line = -local_origin.z / local_direction.z;
-        let Some(t_line) = fit_line_parameter(t_line, line_range, tolerances.linear()) else {
+        let Some(t_line) = fit_scalar_parameter(t_line, line_range, tolerances.linear()) else {
             return Ok(CurveCurveIntersections::complete_empty());
         };
         let local = local_origin + local_direction * t_line;
         let raw_circle = math::atan2(local.y, local.x);
-        let Some(t_circle) = fit_circle_parameter(
+        let Some(t_circle) = fit_periodic_parameter(
             raw_circle,
             circle_range,
-            circle_parameter_tolerance(circle.radius(), tolerances),
+            core::f64::consts::TAU,
+            angular_parameter_tolerance(circle.radius(), tolerances),
         ) else {
             return Ok(CurveCurveIntersections::complete_empty());
         };
@@ -103,16 +107,20 @@ fn intersect_coplanar(
         vec![center_parameter - offset, center_parameter + offset]
     };
 
-    let circle_parameter_tol = circle_parameter_tolerance(radius, tolerances);
+    let circle_parameter_tol = angular_parameter_tolerance(radius, tolerances);
     let mut points = Vec::with_capacity(line_parameters.len());
     for t_line in line_parameters {
-        let Some(t_line) = fit_line_parameter(t_line, line_range, tolerances.linear()) else {
+        let Some(t_line) = fit_scalar_parameter(t_line, line_range, tolerances.linear()) else {
             continue;
         };
         let local = local_origin + local_direction * t_line;
         let raw_circle = math::atan2(local.y, local.x);
-        let Some(t_circle) = fit_circle_parameter(raw_circle, circle_range, circle_parameter_tol)
-        else {
+        let Some(t_circle) = fit_periodic_parameter(
+            raw_circle,
+            circle_range,
+            core::f64::consts::TAU,
+            circle_parameter_tol,
+        ) else {
             continue;
         };
         if let Some(point) = accept_curve_curve_candidate(
@@ -127,45 +135,15 @@ fn intersect_coplanar(
             },
             tolerances,
         ) {
-            push_distinct(&mut points, point, tolerances);
+            emit_distinct_spatial(
+                &mut points,
+                point,
+                |candidate| candidate.point,
+                tolerances.linear(),
+            );
         }
     }
     CurveCurveIntersections::canonicalized_complete(points, Vec::new())
-}
-
-fn fit_line_parameter(candidate: f64, range: ParamRange, tolerance: f64) -> Option<f64> {
-    if candidate < range.lo - tolerance || candidate > range.hi + tolerance {
-        None
-    } else {
-        Some(candidate.clamp(range.lo, range.hi))
-    }
-}
-
-fn fit_circle_parameter(candidate: f64, range: ParamRange, tolerance: f64) -> Option<f64> {
-    let period = core::f64::consts::TAU;
-    let k_min = ((range.lo - tolerance - candidate) / period).ceil() as i64;
-    let k_max = ((range.hi + tolerance - candidate) / period).floor() as i64;
-    if k_min > k_max {
-        return None;
-    }
-    Some((candidate + k_min as f64 * period).clamp(range.lo, range.hi))
-}
-
-fn circle_parameter_tolerance(radius: f64, tolerances: Tolerances) -> f64 {
-    (tolerances.linear() / radius).max(tolerances.angular())
-}
-
-fn push_distinct(
-    points: &mut Vec<CurveCurvePoint>,
-    candidate: CurveCurvePoint,
-    tolerances: Tolerances,
-) {
-    if !points
-        .iter()
-        .any(|point| point.point.dist(candidate.point) <= tolerances.linear())
-    {
-        points.push(candidate);
-    }
 }
 
 fn validate_ranges(
@@ -174,21 +152,14 @@ fn validate_ranges(
     radius: f64,
     tolerances: Tolerances,
 ) -> Result<()> {
-    if !line_range.is_finite()
-        || !circle_range.is_finite()
-        || line_range.width() < 0.0
-        || circle_range.width() < 0.0
-    {
-        return Err(Error::InvalidGeometry {
-            reason: "line/circle intersection requires finite non-reversed ranges",
-        });
-    }
-    if circle_range.width()
-        > core::f64::consts::TAU + circle_parameter_tolerance(radius, tolerances)
-    {
-        return Err(Error::InvalidGeometry {
-            reason: "bounded circle range cannot span more than one period",
-        });
-    }
-    Ok(())
+    validate_finite_ranges(
+        &[line_range, circle_range],
+        "line/circle intersection requires finite non-reversed ranges",
+    )?;
+    validate_period_span(
+        circle_range,
+        core::f64::consts::TAU,
+        angular_parameter_tolerance(radius, tolerances),
+        "bounded circle range cannot span more than one period",
+    )
 }

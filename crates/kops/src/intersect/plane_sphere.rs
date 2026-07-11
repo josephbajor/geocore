@@ -1,11 +1,15 @@
+use super::candidate::{emit_distinct_range, emit_distinct_spatial};
 use super::circle_sphere::intersect_bounded_circle_sphere;
-use super::conic::{fit_periodic_parameter, parameter_tolerance};
+use super::parameter::{
+    angular_parameter_tolerance, fit_periodic_parameter, fit_scalar_parameter,
+    validate_finite_ranges,
+};
 use super::planar_curve_plane::intersect_bounded_circle_plane;
 use super::result::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
     SurfaceSurfacePoint, accept_surface_surface_candidate,
 };
-use kcore::error::{Error, Result};
+use kcore::error::Result;
 use kcore::math;
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve};
@@ -67,7 +71,7 @@ pub fn intersect_bounded_plane_sphere(
         tolerances,
     )?;
 
-    let t_tol = parameter_tolerance(circle.radius(), tolerances);
+    let t_tol = angular_parameter_tolerance(circle.radius(), tolerances);
     let mut points = Vec::new();
     let mut curves = Vec::new();
     for plane_overlap in &plane_hit.overlaps {
@@ -97,7 +101,7 @@ pub fn intersect_bounded_plane_sphere(
                 ) else {
                     continue;
                 };
-                push_curve(
+                emit_distinct_range(
                     &mut curves,
                     SurfaceSurfaceCurve {
                         curve: SurfaceIntersectionCurve::Circle(circle),
@@ -108,6 +112,7 @@ pub fn intersect_bounded_plane_sphere(
                         uv_b_end,
                         kind: ContactKind::Transverse,
                     },
+                    |candidate| candidate.curve_range,
                     t_tol,
                 );
             } else if (hi - lo).abs() <= t_tol {
@@ -156,7 +161,12 @@ fn add_tangent_point(
     if let Some(point) =
         accept_surface_surface_candidate(plane, uv_plane, sphere, uv_sphere, kind, tolerances)
     {
-        push_point(points, point, tolerances);
+        emit_distinct_spatial(
+            points,
+            point,
+            |candidate| candidate.point,
+            tolerances.linear(),
+        );
     }
 }
 
@@ -188,7 +198,12 @@ fn add_boundary_point(
         ContactKind::Tangent,
         tolerances,
     ) {
-        push_point(points, point, tolerances);
+        emit_distinct_spatial(
+            points,
+            point,
+            |candidate| candidate.point,
+            tolerances.linear(),
+        );
     }
 }
 
@@ -205,13 +220,13 @@ fn sphere_uv(
 ) -> Option<[f64; 2]> {
     let xy = (local.x * local.x + local.y * local.y).sqrt();
     let raw_v = math::atan2(local.z, xy);
-    let v_tol = parameter_tolerance(sphere.radius(), tolerances);
+    let v_tol = angular_parameter_tolerance(sphere.radius(), tolerances);
     let v = fit_scalar_parameter(raw_v, sphere_range[1], v_tol)?;
     let u = if xy <= tolerances.linear() {
         sphere_range[0].lo
     } else {
         let raw_u = math::atan2(local.y, local.x);
-        fit_periodic_parameter(raw_u, sphere_range[0], v_tol)?
+        fit_periodic_parameter(raw_u, sphere_range[0], core::f64::consts::TAU, v_tol)?
     };
     Some([u, v])
 }
@@ -223,56 +238,13 @@ fn fit_uv(candidate: [f64; 2], ranges: [ParamRange; 2]) -> Option<[f64; 2]> {
     ])
 }
 
-fn fit_scalar_parameter(candidate: f64, range: ParamRange, tolerance: f64) -> Option<f64> {
-    if candidate < range.lo - tolerance || candidate > range.hi + tolerance {
-        None
-    } else {
-        Some(candidate.clamp(range.lo, range.hi))
-    }
-}
-
-fn push_point(
-    points: &mut Vec<SurfaceSurfacePoint>,
-    candidate: SurfaceSurfacePoint,
-    tolerances: Tolerances,
-) {
-    if !points
-        .iter()
-        .any(|point| point.point.dist(candidate.point) <= tolerances.linear())
-    {
-        points.push(candidate);
-    }
-}
-
-fn push_curve(
-    curves: &mut Vec<SurfaceSurfaceCurve>,
-    candidate: SurfaceSurfaceCurve,
-    tolerance: f64,
-) {
-    if !curves.iter().any(|curve| {
-        (curve.curve_range.lo - candidate.curve_range.lo).abs() <= tolerance
-            && (curve.curve_range.hi - candidate.curve_range.hi).abs() <= tolerance
-    }) {
-        curves.push(candidate);
-    }
-}
-
 fn validate_ranges(plane_range: [ParamRange; 2], sphere_range: [ParamRange; 2]) -> Result<()> {
-    if plane_range
-        .iter()
-        .any(|range| !range.is_finite() || range.width() < 0.0)
-    {
-        return Err(Error::InvalidGeometry {
-            reason: "plane/sphere intersection requires finite non-reversed plane ranges",
-        });
-    }
-    if sphere_range
-        .iter()
-        .any(|range| !range.is_finite() || range.width() < 0.0)
-    {
-        return Err(Error::InvalidGeometry {
-            reason: "plane/sphere intersection requires finite non-reversed sphere ranges",
-        });
-    }
-    Ok(())
+    validate_finite_ranges(
+        &plane_range,
+        "plane/sphere intersection requires finite non-reversed plane ranges",
+    )?;
+    validate_finite_ranges(
+        &sphere_range,
+        "plane/sphere intersection requires finite non-reversed sphere ranges",
+    )
 }

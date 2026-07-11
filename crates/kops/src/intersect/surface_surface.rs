@@ -7,7 +7,8 @@ use super::cylinder_cylinder::intersect_bounded_cylinders;
 use super::cylinder_nurbs_surface::intersect_bounded_cylinder_nurbs_surface;
 use super::cylinder_sphere::intersect_bounded_cylinder_sphere;
 use super::cylinder_torus::intersect_bounded_cylinder_torus;
-use super::geometry_class::SurfaceClass;
+use super::error::{IntersectionError, IntersectionResult};
+use super::geometry_class::SurfaceDispatch;
 use super::plane_cone::intersect_bounded_plane_cone;
 use super::plane_cylinder::intersect_bounded_plane_cylinder;
 use super::plane_nurbs_surface::intersect_bounded_plane_nurbs_surface;
@@ -20,7 +21,6 @@ use super::sphere_sphere::intersect_bounded_spheres;
 use super::sphere_torus::intersect_bounded_sphere_torus;
 use super::torus_nurbs_surface::intersect_bounded_torus_nurbs_surface;
 use super::torus_torus::intersect_bounded_tori;
-use kcore::error::{Error, Result};
 use kcore::tolerance::Tolerances;
 use kgeom::param::ParamRange;
 use kgeom::surface::Surface;
@@ -36,130 +36,136 @@ pub fn intersect_bounded_surfaces(
     b: &dyn Surface,
     b_range: [ParamRange; 2],
     tolerances: Tolerances,
-) -> Result<SurfaceSurfaceIntersections> {
-    match (SurfaceClass::inspect(a), SurfaceClass::inspect(b)) {
-        (Some(SurfaceClass::Sphere(a)), Some(SurfaceClass::Sphere(b))) => {
+) -> IntersectionResult<SurfaceSurfaceIntersections> {
+    let class_a = SurfaceDispatch::inspect(a);
+    let class_b = SurfaceDispatch::inspect(b);
+    let result = match (class_a, class_b) {
+        (Some(SurfaceDispatch::Sphere(a)), Some(SurfaceDispatch::Sphere(b))) => {
             intersect_bounded_spheres(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Sphere(a)), Some(SurfaceClass::Torus(b))) => {
+        (Some(SurfaceDispatch::Sphere(a)), Some(SurfaceDispatch::Torus(b))) => {
             intersect_bounded_sphere_torus(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Torus(a)), Some(SurfaceClass::Sphere(b))) => {
+        (Some(SurfaceDispatch::Torus(a)), Some(SurfaceDispatch::Sphere(b))) => {
             intersect_bounded_sphere_torus(b, b_range, a, a_range, tolerances)
                 .map(SurfaceSurfaceIntersections::swapped)
         }
-        (Some(SurfaceClass::Torus(a)), Some(SurfaceClass::Torus(b))) => {
+        (Some(SurfaceDispatch::Torus(a)), Some(SurfaceDispatch::Torus(b))) => {
             intersect_bounded_tori(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Cylinder(a)), Some(SurfaceClass::Cylinder(b))) => {
+        (Some(SurfaceDispatch::Cylinder(a)), Some(SurfaceDispatch::Cylinder(b))) => {
             intersect_bounded_cylinders(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Cylinder(a)), Some(SurfaceClass::Torus(b))) => {
+        (Some(SurfaceDispatch::Cylinder(a)), Some(SurfaceDispatch::Torus(b))) => {
             intersect_bounded_cylinder_torus(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Torus(a)), Some(SurfaceClass::Cylinder(b))) => {
+        (Some(SurfaceDispatch::Torus(a)), Some(SurfaceDispatch::Cylinder(b))) => {
             intersect_bounded_cylinder_torus(b, b_range, a, a_range, tolerances)
                 .map(SurfaceSurfaceIntersections::swapped)
         }
-        (Some(SurfaceClass::Cone(a)), Some(SurfaceClass::Cone(b))) => {
+        (Some(SurfaceDispatch::Cone(a)), Some(SurfaceDispatch::Cone(b))) => {
             intersect_bounded_cones(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Cone(a)), Some(SurfaceClass::Torus(b))) => {
+        (Some(SurfaceDispatch::Cone(a)), Some(SurfaceDispatch::Torus(b))) => {
             intersect_bounded_cone_torus(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Torus(a)), Some(SurfaceClass::Cone(b))) => {
+        (Some(SurfaceDispatch::Torus(a)), Some(SurfaceDispatch::Cone(b))) => {
             intersect_bounded_cone_torus(b, b_range, a, a_range, tolerances)
                 .map(SurfaceSurfaceIntersections::swapped)
         }
-        (Some(SurfaceClass::Cone(a)), Some(SurfaceClass::Cylinder(b))) => {
+        (Some(SurfaceDispatch::Cone(a)), Some(SurfaceDispatch::Cylinder(b))) => {
             intersect_bounded_cone_cylinder(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Cylinder(a)), Some(SurfaceClass::Cone(b))) => {
+        (Some(SurfaceDispatch::Cylinder(a)), Some(SurfaceDispatch::Cone(b))) => {
             intersect_bounded_cone_cylinder(b, b_range, a, a_range, tolerances)
                 .map(SurfaceSurfaceIntersections::swapped)
         }
-        (Some(SurfaceClass::Cylinder(a)), Some(SurfaceClass::Sphere(b))) => {
+        (Some(SurfaceDispatch::Cylinder(a)), Some(SurfaceDispatch::Sphere(b))) => {
             intersect_bounded_cylinder_sphere(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Sphere(a)), Some(SurfaceClass::Cylinder(b))) => {
+        (Some(SurfaceDispatch::Sphere(a)), Some(SurfaceDispatch::Cylinder(b))) => {
             intersect_bounded_cylinder_sphere(b, b_range, a, a_range, tolerances)
                 .map(SurfaceSurfaceIntersections::swapped)
         }
-        (Some(SurfaceClass::Cone(a)), Some(SurfaceClass::Sphere(b))) => {
+        (Some(SurfaceDispatch::Cone(a)), Some(SurfaceDispatch::Sphere(b))) => {
             intersect_bounded_cone_sphere(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Sphere(a)), Some(SurfaceClass::Cone(b))) => {
+        (Some(SurfaceDispatch::Sphere(a)), Some(SurfaceDispatch::Cone(b))) => {
             intersect_bounded_cone_sphere(b, b_range, a, a_range, tolerances)
                 .map(SurfaceSurfaceIntersections::swapped)
         }
-        (Some(SurfaceClass::Plane(a)), Some(SurfaceClass::Plane(b))) => {
+        (Some(SurfaceDispatch::Plane(a)), Some(SurfaceDispatch::Plane(b))) => {
             intersect_bounded_planes(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Plane(a)), Some(SurfaceClass::Cylinder(b))) => {
+        (Some(SurfaceDispatch::Plane(a)), Some(SurfaceDispatch::Cylinder(b))) => {
             intersect_bounded_plane_cylinder(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Cylinder(a)), Some(SurfaceClass::Plane(b))) => {
+        (Some(SurfaceDispatch::Cylinder(a)), Some(SurfaceDispatch::Plane(b))) => {
             intersect_bounded_plane_cylinder(b, b_range, a, a_range, tolerances)
                 .map(SurfaceSurfaceIntersections::swapped)
         }
-        (Some(SurfaceClass::Plane(a)), Some(SurfaceClass::Cone(b))) => {
+        (Some(SurfaceDispatch::Plane(a)), Some(SurfaceDispatch::Cone(b))) => {
             intersect_bounded_plane_cone(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Cone(a)), Some(SurfaceClass::Plane(b))) => {
+        (Some(SurfaceDispatch::Cone(a)), Some(SurfaceDispatch::Plane(b))) => {
             intersect_bounded_plane_cone(b, b_range, a, a_range, tolerances)
                 .map(SurfaceSurfaceIntersections::swapped)
         }
-        (Some(SurfaceClass::Plane(a)), Some(SurfaceClass::Sphere(b))) => {
+        (Some(SurfaceDispatch::Plane(a)), Some(SurfaceDispatch::Sphere(b))) => {
             intersect_bounded_plane_sphere(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Sphere(a)), Some(SurfaceClass::Plane(b))) => {
+        (Some(SurfaceDispatch::Sphere(a)), Some(SurfaceDispatch::Plane(b))) => {
             intersect_bounded_plane_sphere(b, b_range, a, a_range, tolerances)
                 .map(SurfaceSurfaceIntersections::swapped)
         }
-        (Some(SurfaceClass::Plane(a)), Some(SurfaceClass::Torus(b))) => {
+        (Some(SurfaceDispatch::Plane(a)), Some(SurfaceDispatch::Torus(b))) => {
             intersect_bounded_plane_torus(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Torus(a)), Some(SurfaceClass::Plane(b))) => {
+        (Some(SurfaceDispatch::Torus(a)), Some(SurfaceDispatch::Plane(b))) => {
             intersect_bounded_plane_torus(b, b_range, a, a_range, tolerances)
                 .map(SurfaceSurfaceIntersections::swapped)
         }
-        (Some(SurfaceClass::Plane(a)), Some(SurfaceClass::Nurbs(b))) => {
+        (Some(SurfaceDispatch::Plane(a)), Some(SurfaceDispatch::Nurbs(b))) => {
             intersect_bounded_plane_nurbs_surface(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Nurbs(a)), Some(SurfaceClass::Plane(b))) => {
+        (Some(SurfaceDispatch::Nurbs(a)), Some(SurfaceDispatch::Plane(b))) => {
             intersect_bounded_plane_nurbs_surface(b, b_range, a, a_range, tolerances)
                 .map(SurfaceSurfaceIntersections::swapped)
         }
-        (Some(SurfaceClass::Sphere(a)), Some(SurfaceClass::Nurbs(b))) => {
+        (Some(SurfaceDispatch::Sphere(a)), Some(SurfaceDispatch::Nurbs(b))) => {
             intersect_bounded_sphere_nurbs_surface(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Nurbs(a)), Some(SurfaceClass::Sphere(b))) => {
+        (Some(SurfaceDispatch::Nurbs(a)), Some(SurfaceDispatch::Sphere(b))) => {
             intersect_bounded_sphere_nurbs_surface(b, b_range, a, a_range, tolerances)
                 .map(SurfaceSurfaceIntersections::swapped)
         }
-        (Some(SurfaceClass::Cylinder(a)), Some(SurfaceClass::Nurbs(b))) => {
+        (Some(SurfaceDispatch::Cylinder(a)), Some(SurfaceDispatch::Nurbs(b))) => {
             intersect_bounded_cylinder_nurbs_surface(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Nurbs(a)), Some(SurfaceClass::Cylinder(b))) => {
+        (Some(SurfaceDispatch::Nurbs(a)), Some(SurfaceDispatch::Cylinder(b))) => {
             intersect_bounded_cylinder_nurbs_surface(b, b_range, a, a_range, tolerances)
                 .map(SurfaceSurfaceIntersections::swapped)
         }
-        (Some(SurfaceClass::Cone(a)), Some(SurfaceClass::Nurbs(b))) => {
+        (Some(SurfaceDispatch::Cone(a)), Some(SurfaceDispatch::Nurbs(b))) => {
             intersect_bounded_cone_nurbs_surface(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Nurbs(a)), Some(SurfaceClass::Cone(b))) => {
+        (Some(SurfaceDispatch::Nurbs(a)), Some(SurfaceDispatch::Cone(b))) => {
             intersect_bounded_cone_nurbs_surface(b, b_range, a, a_range, tolerances)
                 .map(SurfaceSurfaceIntersections::swapped)
         }
-        (Some(SurfaceClass::Torus(a)), Some(SurfaceClass::Nurbs(b))) => {
+        (Some(SurfaceDispatch::Torus(a)), Some(SurfaceDispatch::Nurbs(b))) => {
             intersect_bounded_torus_nurbs_surface(a, a_range, b, b_range, tolerances)
         }
-        (Some(SurfaceClass::Nurbs(a)), Some(SurfaceClass::Torus(b))) => {
+        (Some(SurfaceDispatch::Nurbs(a)), Some(SurfaceDispatch::Torus(b))) => {
             intersect_bounded_torus_nurbs_surface(b, b_range, a, a_range, tolerances)
                 .map(SurfaceSurfaceIntersections::swapped)
         }
-        _ => Err(Error::InvalidGeometry {
-            reason: "unsupported surface/surface intersection class",
-        }),
-    }
+        _ => {
+            return Err(IntersectionError::UnsupportedSurfacePair {
+                class_a: class_a.map(|class| class.class().key()),
+                class_b: class_b.map(|class| class.class().key()),
+            });
+        }
+    };
+    result.map_err(IntersectionError::from)
 }

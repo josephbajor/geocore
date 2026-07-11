@@ -1,32 +1,25 @@
 use kcore::math;
-use kcore::tolerance::Tolerances;
 use kgeom::curve::Ellipse;
 use kgeom::param::ParamRange;
 use kgeom::vec::Vec3;
+
+pub(super) use super::parameter::angular_parameter_tolerance as parameter_tolerance;
+
+/// Compatibility seam for existing trigonometric conic solvers, whose
+/// angular parameterizations all have period `TAU`.
+pub(super) fn fit_periodic_parameter(
+    candidate: f64,
+    range: ParamRange,
+    tolerance: f64,
+) -> Option<f64> {
+    super::parameter::fit_periodic_parameter(candidate, range, core::f64::consts::TAU, tolerance)
+}
 
 pub(super) fn ellipse_parameter(local: Vec3, ellipse: &Ellipse) -> f64 {
     math::atan2(
         local.y / ellipse.minor_radius(),
         local.x / ellipse.major_radius(),
     )
-}
-
-pub(super) fn fit_periodic_parameter(
-    candidate: f64,
-    range: ParamRange,
-    tolerance: f64,
-) -> Option<f64> {
-    let period = core::f64::consts::TAU;
-    let k_min = ((range.lo - tolerance - candidate) / period).ceil() as i64;
-    let k_max = ((range.hi + tolerance - candidate) / period).floor() as i64;
-    if k_min > k_max {
-        return None;
-    }
-    Some((candidate + k_min as f64 * period).clamp(range.lo, range.hi))
-}
-
-pub(super) fn parameter_tolerance(radius: f64, tolerances: Tolerances) -> f64 {
-    (tolerances.linear() / radius).max(tolerances.angular())
 }
 
 pub(super) fn push_angle_root(roots: &mut Vec<f64>, t: f64) {

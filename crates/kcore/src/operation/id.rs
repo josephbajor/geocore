@@ -2,6 +2,8 @@
 
 use std::{error, fmt};
 
+use crate::identifier::valid_identifier;
+
 use super::budget::{LimitSnapshot, ResourceKind};
 
 /// The version of policy defaults that can affect deterministic output.
@@ -177,36 +179,4 @@ impl DiagnosticCode {
     pub const fn as_str(self) -> &'static str {
         self.0
     }
-}
-
-const fn valid_identifier(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    if bytes.len() < 3 {
-        return false;
-    }
-    let mut index = 0;
-    let mut has_namespace_separator = false;
-    let mut previous_was_separator = true;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        let is_alphanumeric = byte.is_ascii_lowercase() || byte.is_ascii_digit();
-        if is_alphanumeric {
-            previous_was_separator = false;
-        } else if byte == b'.' {
-            if previous_was_separator {
-                return false;
-            }
-            has_namespace_separator = true;
-            previous_was_separator = true;
-        } else if byte == b'-' {
-            if previous_was_separator {
-                return false;
-            }
-            previous_was_separator = true;
-        } else {
-            return false;
-        }
-        index += 1;
-    }
-    has_namespace_separator && !previous_was_separator
 }

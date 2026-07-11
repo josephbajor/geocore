@@ -1,5 +1,6 @@
 //! Geometric intersection algorithms and parameter-rich result contracts.
 
+mod candidate;
 mod circle_circle;
 mod circle_cone;
 mod circle_cylinder;
@@ -25,6 +26,7 @@ mod ellipse_ellipse;
 mod ellipse_nurbs;
 mod ellipse_sphere;
 mod ellipse_torus;
+mod error;
 mod geometry_class;
 mod line_circle;
 mod line_cone;
@@ -43,6 +45,7 @@ mod nurbs_plane;
 mod nurbs_sphere;
 mod nurbs_surface_march;
 mod nurbs_torus;
+mod parameter;
 mod planar_curve_plane;
 mod plane_cone;
 mod plane_cylinder;
@@ -82,6 +85,11 @@ pub use ellipse_ellipse::intersect_bounded_ellipses;
 pub use ellipse_nurbs::intersect_bounded_ellipse_nurbs;
 pub use ellipse_sphere::intersect_bounded_ellipse_sphere;
 pub use ellipse_torus::intersect_bounded_ellipse_torus;
+pub use error::{
+    CURVE_CURVE_CLASS_PAIR, IntersectionError, IntersectionResult, SURFACE_SURFACE_CLASS_PAIR,
+    UNSUPPORTED_CLASS_PAIR,
+};
+pub use kgraph::{CurveClass, GeometryClassKey, SurfaceClass};
 pub use line_circle::intersect_bounded_line_circle;
 pub use line_cone::intersect_bounded_line_cone;
 pub use line_cylinder::intersect_bounded_line_cylinder;

@@ -7,6 +7,9 @@
 
 use core::fmt;
 
+use kcore::error::{CapabilityId, ClassifiedError, ErrorClass, ErrorCode};
+use kcore::operation::LimitSnapshot;
+
 /// Stable machine-readable reason that valid XT content is outside the
 /// currently declared import/export support matrix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -109,6 +112,64 @@ impl XtCapability {
             Self::FaceTolerances => "xt.write.face-tolerances",
         }
     }
+
+    /// Shared stable capability identity used by generic kernel reporting.
+    pub const fn id(self) -> CapabilityId {
+        match CapabilityId::new(self.code()) {
+            Ok(id) => id,
+            Err(_) => panic!("invalid built-in XT capability identifier"),
+        }
+    }
+}
+
+impl From<XtCapability> for CapabilityId {
+    fn from(capability: XtCapability) -> Self {
+        capability.id()
+    }
+}
+
+const fn known_error_code(value: &'static str) -> ErrorCode {
+    match ErrorCode::new(value) {
+        Ok(code) => code,
+        Err(_) => panic!("invalid built-in XT error code"),
+    }
+}
+
+/// Stable error identities owned by X_T interchange contracts.
+pub mod code {
+    use super::{ErrorCode, known_error_code};
+
+    /// The common X_T header is malformed.
+    pub const BAD_HEADER: ErrorCode = known_error_code("xt.parse.bad-header");
+    /// The declared schema is outside the reader's supported base schema.
+    pub const UNSUPPORTED_SCHEMA: ErrorCode = known_error_code("xt.schema.unsupported");
+    /// The X_T data stream is malformed.
+    pub const PARSE: ErrorCode = known_error_code("xt.parse.invalid-data");
+    /// A node type is absent from the applicable schema.
+    pub const UNKNOWN_NODE_TYPE: ErrorCode = known_error_code("xt.schema.unknown-node-type");
+    /// Valid X_T content requires an unavailable support-matrix capability.
+    pub const UNSUPPORTED: ErrorCode = known_error_code("xt.content.unsupported");
+    /// A kernel model violates an invariant required for deterministic export.
+    pub const INVALID_MODEL: ErrorCode = known_error_code("xt.write.invalid-model");
+    /// A required referenced node is missing.
+    pub const MISSING_NODE: ErrorCode = known_error_code("xt.parse.missing-node");
+    /// A node field has an invalid type or value.
+    pub const BAD_FIELD: ErrorCode = known_error_code("xt.parse.bad-field");
+    /// A reconstruction coordinate is outside the kernel session size box.
+    pub const OUTSIDE_SIZE_BOX: ErrorCode = known_error_code("xt.read.outside-size-box");
+
+    /// Every X_T-owned error code in deterministic order.
+    pub const ALL: &[ErrorCode] = &[
+        BAD_HEADER,
+        UNSUPPORTED_SCHEMA,
+        PARSE,
+        UNKNOWN_NODE_TYPE,
+        UNSUPPORTED,
+        INVALID_MODEL,
+        MISSING_NODE,
+        BAD_FIELD,
+        OUTSIDE_SIZE_BOX,
+    ];
 }
 
 /// Errors produced while reading or reconstructing an XT transmit file.
@@ -208,7 +269,14 @@ impl fmt::Display for XtError {
     }
 }
 
-impl std::error::Error for XtError {}
+impl std::error::Error for XtError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Kernel(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl XtError {
     /// Stable capability code when this error means "valid but unsupported".
@@ -219,6 +287,77 @@ impl XtError {
             Self::Unsupported { capability, .. } => Some(*capability),
             _ => None,
         }
+    }
+
+    /// Broad semantic class for generic kernel reporting.
+    pub const fn class(&self) -> ErrorClass {
+        match self {
+            Self::BadHeader { .. }
+            | Self::Parse { .. }
+            | Self::MissingNode { .. }
+            | Self::BadField { .. }
+            | Self::OutsideSizeBox { .. } => ErrorClass::InvalidInput,
+            Self::UnsupportedSchema { .. }
+            | Self::UnknownNodeType { .. }
+            | Self::Unsupported { .. } => ErrorClass::Unsupported,
+            Self::InvalidModel { .. } => ErrorClass::ModelRejected,
+            Self::Kernel(error) => error.class(),
+        }
+    }
+
+    /// Stable machine-readable reason this X_T call failed.
+    pub const fn code(&self) -> ErrorCode {
+        match self {
+            Self::BadHeader { .. } => code::BAD_HEADER,
+            Self::UnsupportedSchema { .. } => code::UNSUPPORTED_SCHEMA,
+            Self::Parse { .. } => code::PARSE,
+            Self::UnknownNodeType { .. } => code::UNKNOWN_NODE_TYPE,
+            Self::Unsupported { .. } => code::UNSUPPORTED,
+            Self::InvalidModel { .. } => code::INVALID_MODEL,
+            Self::MissingNode { .. } => code::MISSING_NODE,
+            Self::BadField { .. } => code::BAD_FIELD,
+            Self::OutsideSizeBox { .. } => code::OUTSIDE_SIZE_BOX,
+            Self::Kernel(error) => error.code(),
+        }
+    }
+
+    /// Shared capability identity without changing the existing typed
+    /// [`Self::capability`] compatibility accessor.
+    pub const fn capability_id(&self) -> Option<CapabilityId> {
+        match self.capability() {
+            Some(capability) => Some(capability.id()),
+            None => match self {
+                Self::Kernel(error) => error.capability(),
+                _ => None,
+            },
+        }
+    }
+
+    /// Structured F2 limit data, delegated unchanged from wrapped kernel
+    /// errors.
+    pub const fn limit(&self) -> Option<LimitSnapshot> {
+        match self {
+            Self::Kernel(error) => error.limit(),
+            _ => None,
+        }
+    }
+}
+
+impl ClassifiedError for XtError {
+    fn class(&self) -> ErrorClass {
+        self.class()
+    }
+
+    fn code(&self) -> ErrorCode {
+        self.code()
+    }
+
+    fn capability(&self) -> Option<CapabilityId> {
+        self.capability_id()
+    }
+
+    fn limit(&self) -> Option<LimitSnapshot> {
+        self.limit()
     }
 }
 
@@ -235,15 +374,46 @@ pub type Result<T> = core::result::Result<T, XtError>;
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+    use std::error::Error as _;
 
     #[test]
     fn capability_codes_are_unique_stable_identifiers() {
+        const FROZEN_CODES: &[&str] = &[
+            "xt.schema.base-13006",
+            "xt.schema.node-type",
+            "xt.encoding.machine-binary",
+            "xt.read.assemblies",
+            "xt.read.partitions",
+            "xt.read.general-bodies",
+            "xt.read.surface-less-faces",
+            "xt.read.isolated-loops",
+            "xt.read.tolerant-ring-edges",
+            "xt.geometry.procedural-curves",
+            "xt.geometry.procedural-surfaces",
+            "xt.geometry.periodic-nurbs-curves",
+            "xt.geometry.periodic-nurbs-surfaces",
+            "xt.geometry.periodic-pcurves",
+            "xt.geometry.self-intersecting-tori",
+            "xt.geometry.nonstandard-nurbs-poles",
+            "xt.write.body-topology",
+            "xt.write.edge-topology",
+            "xt.write.tolerant-wire-edges",
+            "xt.write.circular-pcurves",
+            "xt.write.face-tolerances",
+        ];
         let codes: BTreeSet<_> = XtCapability::ALL
             .iter()
             .map(|capability| capability.code())
             .collect();
         assert_eq!(codes.len(), XtCapability::ALL.len());
         assert!(codes.iter().all(|code| code.starts_with("xt.")));
+        assert_eq!(
+            XtCapability::ALL
+                .iter()
+                .map(|capability| capability.id().as_str())
+                .collect::<Vec<_>>(),
+            FROZEN_CODES
+        );
     }
 
     #[test]
@@ -253,6 +423,12 @@ mod tests {
             what: "context retained for people",
         };
         assert_eq!(error.capability(), Some(XtCapability::GeneralBodies));
+        assert_eq!(
+            error.capability_id(),
+            Some(XtCapability::GeneralBodies.id())
+        );
+        assert_eq!(error.class(), ErrorClass::Unsupported);
+        assert_eq!(error.code(), code::UNSUPPORTED);
         assert!(error.to_string().contains("xt.read.general-bodies"));
         assert_eq!(
             XtError::UnsupportedSchema {
@@ -261,5 +437,40 @@ mod tests {
             .capability(),
             Some(XtCapability::SchemaBase13006)
         );
+    }
+
+    #[test]
+    fn xt_codes_are_unique_and_do_not_depend_on_display_context() {
+        let codes: BTreeSet<_> = code::ALL.iter().map(|code| code.as_str()).collect();
+        assert_eq!(codes.len(), code::ALL.len());
+
+        let first = XtError::BadField {
+            index: 1,
+            what: "first message",
+        };
+        let second = XtError::BadField {
+            index: 99,
+            what: "different message",
+        };
+        assert_ne!(first.to_string(), second.to_string());
+        assert_eq!(first.code(), second.code());
+        assert_eq!(first.class(), ErrorClass::InvalidInput);
+    }
+
+    #[test]
+    fn wrapped_kernel_errors_preserve_classification_and_source_chain() {
+        let kernel = kcore::error::Error::TransactionActive;
+        let error = XtError::Kernel(kernel);
+        assert_eq!(error.class(), kernel.class());
+        assert_eq!(error.code(), kernel.code());
+        assert_eq!(error.capability_id(), kernel.capability());
+        assert_eq!(error.limit(), kernel.limit());
+        let source = error.source().expect("kernel source retained");
+        assert_eq!(source.to_string(), kernel.to_string());
+        assert_eq!(source.downcast_ref::<kcore::error::Error>(), Some(&kernel));
+
+        let classified: &dyn ClassifiedError = &error;
+        assert_eq!(classified.class(), ErrorClass::InvalidState);
+        assert_eq!(classified.code(), kcore::error::code::TRANSACTION_ACTIVE);
     }
 }
