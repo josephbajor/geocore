@@ -66,7 +66,12 @@ use crate::loop_proof::{LoopSimplicity, certify_loop_simplicity};
 use crate::shell_proof::{ShellEmbedding, ShellOrientation, certify_shell};
 use crate::store::{Entity, Store};
 use kcore::arena::Handle;
-use kcore::error::Result;
+use kcore::error::{CapabilityId, Result};
+use kcore::operation::{
+    AccountingMode, BudgetPlan, ExecutionPolicy, LimitSnapshot, NumericalPolicy, OperationContext,
+    OperationOutcome, OperationPolicyError, OperationScope, PolicyVersion, ResourceKind,
+    SessionPolicy, SessionPrecision,
+};
 use kcore::tolerance::{LINEAR_RESOLUTION, SIZE_BOX_HALF, Tolerances};
 use kgeom::param::ParamRange;
 use kgeom::surface_point::{distance_to_surface, invert_surface_point};
@@ -196,6 +201,22 @@ pub enum CheckLevel {
     Full,
 }
 
+/// Version-1 aggregate budget for all contextual Full-check proof stages.
+///
+/// Callers depend on this checker-owned aggregate rather than composing leaf
+/// proof implementation profiles themselves. New Full-check stages can grow
+/// this profile without changing operation call sites.
+pub struct FullCheckBudgetProfile;
+
+impl FullCheckBudgetProfile {
+    /// Returns the exact defaults for the Full-check proof stages migrated so far.
+    pub fn v1_defaults() -> BudgetPlan {
+        let face_domain = crate::domain::FaceDomainContainmentBudgetProfile::v1_defaults();
+        BudgetPlan::new(face_domain.limits().iter().copied())
+            .expect("built-in Full-check budget is valid")
+    }
+}
+
 /// Overall checker result at the requested assurance level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckOutcome {
@@ -235,6 +256,21 @@ pub enum VerificationGapKind {
     WireSelfIntersection,
 }
 
+/// Why a Full-check proof obligation remains unresolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum VerificationGapCause {
+    /// The requested proof capability does not cover this representation yet.
+    Capability(CapabilityId),
+    /// A deterministic resource allowance stopped an otherwise supported proof.
+    Limit(LimitSnapshot),
+    /// Arithmetic resolution prevented further meaningful progress.
+    NumericResolution {
+        /// Numerical stage that could not progress.
+        stage: kcore::operation::StageId,
+    },
+}
+
 /// One missing proof attached to the smallest relevant entity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VerificationGap {
@@ -242,6 +278,11 @@ pub struct VerificationGap {
     pub entity: EntityRef,
     /// Missing proof category.
     pub kind: VerificationGapKind,
+    /// Structured reason the obligation remains unresolved, when migrated.
+    ///
+    /// `None` preserves legacy proof gaps whose stop or capability has not yet
+    /// moved to the shared F2/F4 vocabulary; callers must not infer a cause.
+    pub cause: Option<VerificationGapCause>,
 }
 
 /// Checker findings and proof gaps at one assurance level.
@@ -285,6 +326,56 @@ pub fn check_body(store: &Store, body: BodyId) -> Result<Vec<Fault>> {
 /// obligations land, clean bodies generally return `Indeterminate` at that
 /// level.
 pub fn check_body_report(store: &Store, body: BodyId, level: CheckLevel) -> Result<CheckReport> {
+    if level == CheckLevel::Fast {
+        return check_body_fast_report(store, body);
+    }
+    let session = SessionPolicy::new(
+        SessionPrecision::parasolid(),
+        NumericalPolicy::v1(),
+        ExecutionPolicy::Serial,
+        FullCheckBudgetProfile::v1_defaults(),
+        PolicyVersion::V1,
+    );
+    let context = OperationContext::new(&session, Tolerances::default())
+        .expect("validated default tolerances satisfy v1 session precision");
+    check_body_report_with_context(store, body, level, &context)
+        .expect("built-in v1 checker policy is valid")
+        .into_result()
+}
+
+/// Check a body while retaining deterministic operation accounting.
+///
+/// Full checking requires the stages from
+/// [`FullCheckBudgetProfile::v1_defaults`]. Fast checking does not consume
+/// that proof budget.
+pub fn check_body_report_with_context(
+    store: &Store,
+    body: BodyId,
+    level: CheckLevel,
+    context: &OperationContext<'_>,
+) -> core::result::Result<OperationOutcome<CheckReport>, OperationPolicyError> {
+    if level == CheckLevel::Full {
+        validate_full_check_budget(context)?;
+    }
+    let mut scope = OperationScope::new(context);
+    let result = check_body_report_in_scope(store, body, level, &mut scope);
+    Ok(scope.finish(result))
+}
+
+/// Check a body using an existing operation scope.
+///
+/// This is the composition seam for constructors and higher-level modeling
+/// operations once they adopt contextual checking: nested checking borrows
+/// the caller's ledger and never creates or resets an operation scope.
+pub fn check_body_report_in_scope(
+    store: &Store,
+    body: BodyId,
+    level: CheckLevel,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<CheckReport> {
+    if level == CheckLevel::Fast {
+        return check_body_fast_report(store, body);
+    }
     let b = store.get(body)?;
     let mut checker = Checker {
         store,
@@ -292,8 +383,8 @@ pub fn check_body_report(store: &Store, body: BodyId, level: CheckLevel) -> Resu
         faults: Vec::new(),
     };
     checker.run(body, b);
-    let (proof_faults, gaps) = if level == CheckLevel::Full && checker.faults.is_empty() {
-        collect_full_verification(store, body, b)?
+    let (proof_faults, gaps) = if checker.faults.is_empty() {
+        collect_full_verification(store, body, b, scope)?
     } else {
         (Vec::new(), Vec::new())
     };
@@ -305,15 +396,57 @@ pub fn check_body_report(store: &Store, body: BodyId, level: CheckLevel) -> Resu
     })
 }
 
+fn check_body_fast_report(store: &Store, body: BodyId) -> Result<CheckReport> {
+    let b = store.get(body)?;
+    let mut checker = Checker {
+        store,
+        tol: Tolerances::default(),
+        faults: Vec::new(),
+    };
+    checker.run(body, b);
+    Ok(CheckReport {
+        level: CheckLevel::Fast,
+        faults: checker.faults,
+        gaps: Vec::new(),
+    })
+}
+
+fn validate_full_check_budget(
+    context: &OperationContext<'_>,
+) -> core::result::Result<(), OperationPolicyError> {
+    let plan = context.effective_budget();
+    let Some(limit) = plan.limits().iter().find(|limit| {
+        limit.stage == crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS
+            && limit.resource == ResourceKind::Items
+    }) else {
+        return Err(OperationPolicyError::UnknownLimit {
+            stage: crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
+            resource: ResourceKind::Items,
+        });
+    };
+    if limit.mode != AccountingMode::HighWater {
+        return Err(OperationPolicyError::AccountingModeMismatch {
+            stage: limit.stage,
+            resource: limit.resource,
+        });
+    }
+    Ok(())
+}
+
 fn collect_full_verification(
     store: &Store,
     body_id: BodyId,
     body: &Body,
+    scope: &mut OperationScope<'_, '_>,
 ) -> Result<(Vec<Fault>, Vec<VerificationGap>)> {
     let mut faults = Vec::new();
     let mut gaps = Vec::new();
-    let mut push = |entity, kind| {
-        let gap = VerificationGap { entity, kind };
+    let mut push = |entity, kind: VerificationGapKind, cause| {
+        let gap = VerificationGap {
+            entity,
+            kind,
+            cause,
+        };
         if !gaps.contains(&gap) {
             gaps.push(gap);
         }
@@ -325,14 +458,16 @@ fn collect_full_verification(
             push(
                 EntityRef::Face(face_id),
                 VerificationGapKind::SurfaceRegularity,
+                None,
             );
         }
-        if crate::domain::certify_face_domain_containment(store, face_id)?
-            != crate::domain::FaceDomainContainment::Certified
-        {
+        let containment =
+            crate::domain::certify_face_domain_containment_in_scope(store, face_id, scope)?;
+        if containment.status != crate::domain::FaceDomainContainment::Certified {
             push(
                 EntityRef::Face(face_id),
                 VerificationGapKind::FaceDomainContainment,
+                face_domain_gap_cause(containment),
             );
         }
         for &loop_id in &face.loops {
@@ -345,6 +480,7 @@ fn collect_full_verification(
                 LoopSimplicity::Indeterminate => push(
                     EntityRef::Loop(loop_id),
                     VerificationGapKind::LoopSelfIntersection,
+                    None,
                 ),
             }
             for &fin_id in &store.get(loop_id)?.fins {
@@ -362,6 +498,7 @@ fn collect_full_verification(
                         push(
                             EntityRef::Fin(fin_id),
                             VerificationGapKind::PcurveSurfaceIncidence,
+                            None,
                         );
                     }
                 } else if certify_edge_surface_incidence(store, fin.edge, face.surface, tolerance)?
@@ -370,6 +507,7 @@ fn collect_full_verification(
                     push(
                         EntityRef::Edge(fin.edge),
                         VerificationGapKind::EdgeSurfaceIncidence,
+                        None,
                     );
                 }
             }
@@ -378,6 +516,7 @@ fn collect_full_verification(
             push(
                 EntityRef::Face(face_id),
                 VerificationGapKind::LoopContainment,
+                None,
             );
         }
     }
@@ -386,6 +525,7 @@ fn collect_full_verification(
         push(
             EntityRef::Body(body_id),
             VerificationGapKind::WireSelfIntersection,
+            None,
         );
     }
     for &region_id in &body.regions {
@@ -398,6 +538,7 @@ fn collect_full_verification(
                     push(
                         EntityRef::Shell(shell_id),
                         VerificationGapKind::ShellSelfIntersection,
+                        None,
                     );
                 }
                 if body.kind == BodyKind::Solid {
@@ -410,6 +551,7 @@ fn collect_full_verification(
                         ShellOrientation::Indeterminate => push(
                             EntityRef::Shell(shell_id),
                             VerificationGapKind::ShellOrientation,
+                            None,
                         ),
                     }
                 }
@@ -417,6 +559,12 @@ fn collect_full_verification(
         }
     }
     Ok((faults, gaps))
+}
+
+fn face_domain_gap_cause(
+    evidence: crate::domain::FaceDomainContainmentEvidence,
+) -> Option<VerificationGapCause> {
+    evidence.limit.map(VerificationGapCause::Limit)
 }
 
 /// Number of interior samples when verifying an edge lies on its faces.
@@ -1563,13 +1711,31 @@ fn domain_covers_natural_surface(domain: crate::entity::FaceDomain, surface: &Su
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{Body, Edge, Face, Fin, Loop, Region, Sense, Shell, Vertex};
-    use crate::geom::CurveGeom;
-    use crate::make::{block, cone, cylinder, cylindrical_sheet, solid_body_scaffold};
+    use crate::entity::{
+        Body, Edge, Face, FaceDomain, Fin, FinPcurve, Loop, ParamMap1d, Region, Sense, Shell,
+        Vertex,
+    };
+    use crate::geom::{Curve2dGeom, CurveGeom};
+    use crate::make::{
+        block, cone, cylinder, cylindrical_sheet, planar_sheet, solid_body_scaffold,
+    };
     use kgeom::curve::{Circle, Line};
+    use kgeom::curve2d::NurbsCurve2d;
     use kgeom::frame::Frame;
+    use kgeom::nurbs::NurbsCurve;
+    use kgeom::param::ParamRange;
     use kgeom::surface::{Cylinder, Plane, Sphere};
-    use kgeom::vec::{Point3, Vec3};
+    use kgeom::vec::{Point2, Point3, Vec3};
+
+    fn checker_session(default_budget: kcore::operation::BudgetPlan) -> SessionPolicy {
+        SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            default_budget,
+            PolicyVersion::V1,
+        )
+    }
 
     fn kinds(faults: &[Fault]) -> Vec<FaultKind> {
         faults.iter().map(|f| f.kind).collect()
@@ -1585,6 +1751,54 @@ mod tests {
 
     fn clean_block(store: &mut Store) -> BodyId {
         block(store, &Frame::world(), [2.0, 3.0, 4.0]).unwrap()
+    }
+
+    fn adaptive_domain_sheet(store: &mut Store) -> (BodyId, FaceId) {
+        let body = planar_sheet(
+            store,
+            &Frame::world(),
+            &[
+                Point2::new(0.0, 3.0),
+                Point2::new(4.0, 3.0),
+                Point2::new(4.0, 6.0),
+                Point2::new(0.0, 6.0),
+            ],
+        )
+        .unwrap();
+        let face = store.faces_of_body(body).unwrap()[0];
+        store.get_mut(face).unwrap().domain =
+            Some(FaceDomain::from_bounds(0.0, 4.0, 0.0, 6.0).unwrap());
+        let loop_id = store.get(face).unwrap().loops[0];
+        let fin_id = store.get(loop_id).unwrap().fins[0];
+        let edge_id = store.get(fin_id).unwrap().edge;
+        let knots = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        let uv_points = vec![
+            Point2::new(0.0, 3.0),
+            Point2::new(4.0 / 3.0, 9.0),
+            Point2::new(8.0 / 3.0, -3.0),
+            Point2::new(4.0, 3.0),
+        ];
+        let xyz_points = uv_points
+            .iter()
+            .map(|point| Point3::new(point.x, point.y, 0.0))
+            .collect();
+        let edge_curve = store
+            .insert_curve(CurveGeom::Nurbs(
+                NurbsCurve::new(3, knots.clone(), xyz_points, None).unwrap(),
+            ))
+            .unwrap();
+        let pcurve = store
+            .insert_pcurve(Curve2dGeom::Nurbs(
+                NurbsCurve2d::new(3, knots, uv_points, None).unwrap(),
+            ))
+            .unwrap();
+        store.get_mut(edge_id).unwrap().curve = Some(edge_curve);
+        store.get_mut(edge_id).unwrap().bounds = Some((0.0, 1.0));
+        store.get_mut(fin_id).unwrap().pcurve = Some(
+            FinPcurve::new(pcurve, ParamRange::new(0.0, 1.0), ParamMap1d::identity()).unwrap(),
+        );
+        assert!(check_body(store, body).unwrap().is_empty());
+        (body, face)
     }
 
     /// Hand-built solid cylinder r=1, h=2: two ring edges, a two-loop side
@@ -1819,6 +2033,207 @@ mod tests {
             invalid.gaps.is_empty(),
             "faults take precedence over proof gaps"
         );
+    }
+
+    #[test]
+    fn full_check_profile_composes_current_leaf_and_has_an_additive_growth_seam() {
+        let leaf = crate::domain::FaceDomainContainmentBudgetProfile::v1_defaults();
+        let aggregate = FullCheckBudgetProfile::v1_defaults();
+        assert_eq!(aggregate, leaf);
+
+        const FUTURE_STAGE: kcore::operation::StageId =
+            match kcore::operation::StageId::new("ktopo.check.future-proof-work") {
+                Ok(stage) => stage,
+                Err(_) => panic!("valid future test stage"),
+            };
+        let grown = BudgetPlan::new(aggregate.limits().iter().copied().chain([
+            kcore::operation::LimitSpec::new(
+                FUTURE_STAGE,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                10,
+            ),
+        ]))
+        .unwrap();
+        assert_eq!(grown.limits().len(), aggregate.limits().len() + 1);
+        assert!(
+            grown.limits().windows(2).all(|pair| {
+                (pair[0].stage, pair[0].resource) < (pair[1].stage, pair[1].resource)
+            })
+        );
+    }
+
+    #[test]
+    fn contextual_full_check_matches_legacy_and_reuses_one_scope() {
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        let legacy = check_body_report(&store, body, CheckLevel::Full).unwrap();
+
+        let session = checker_session(FullCheckBudgetProfile::v1_defaults());
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let contextual =
+            check_body_report_with_context(&store, body, CheckLevel::Full, &context).unwrap();
+        assert_eq!(contextual.result(), Ok(&legacy));
+        assert_eq!(
+            contextual.report().usage(),
+            [LimitSnapshot {
+                stage: crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
+                resource: ResourceKind::Items,
+                consumed: 1,
+                allowed: 4096,
+            }]
+        );
+
+        const CALLER_STAGE: kcore::operation::StageId =
+            match kcore::operation::StageId::new("ktopo.check.caller-work") {
+                Ok(stage) => stage,
+                Err(_) => panic!("valid test stage"),
+            };
+        let composed = kcore::operation::BudgetPlan::new(
+            FullCheckBudgetProfile::v1_defaults()
+                .limits()
+                .iter()
+                .copied()
+                .chain([kcore::operation::LimitSpec::new(
+                    CALLER_STAGE,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    5,
+                )]),
+        )
+        .unwrap();
+        let composed_session = checker_session(composed);
+        let composed_context =
+            OperationContext::new(&composed_session, Tolerances::default()).unwrap();
+        let mut scope = OperationScope::new(&composed_context);
+        scope.ledger_mut().charge(CALLER_STAGE, 3).unwrap();
+        scope
+            .ledger_mut()
+            .observe(
+                crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
+                ResourceKind::Items,
+                2,
+            )
+            .unwrap();
+        let first = check_body_report_in_scope(&store, body, CheckLevel::Full, &mut scope).unwrap();
+        let second =
+            check_body_report_in_scope(&store, body, CheckLevel::Full, &mut scope).unwrap();
+        assert_eq!(first, legacy);
+        assert_eq!(second, legacy);
+        let report = scope.finish(Ok(())).report().clone();
+        assert_eq!(
+            report.usage(),
+            [
+                LimitSnapshot {
+                    stage: CALLER_STAGE,
+                    resource: ResourceKind::Work,
+                    consumed: 3,
+                    allowed: 5,
+                },
+                LimitSnapshot {
+                    stage: crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
+                    resource: ResourceKind::Items,
+                    consumed: 2,
+                    allowed: 4096,
+                },
+            ]
+        );
+        assert!(report.limit_events().is_empty());
+    }
+
+    #[test]
+    fn full_checker_limit_is_a_gap_at_n_minus_one_and_disappears_at_n() {
+        let mut store = Store::new();
+        let (body, face) = adaptive_domain_sheet(&mut store);
+        let default_session = checker_session(FullCheckBudgetProfile::v1_defaults());
+        let default_context =
+            OperationContext::new(&default_session, Tolerances::default()).unwrap();
+        let baseline =
+            check_body_report_with_context(&store, body, CheckLevel::Full, &default_context)
+                .unwrap();
+        let needed = baseline.report().usage()[0].consumed;
+        assert!(needed > 1 && needed < 4096);
+        assert!(baseline.result().as_ref().unwrap().gaps.iter().all(|gap| {
+            gap.entity != EntityRef::Face(face)
+                || gap.kind != VerificationGapKind::FaceDomainContainment
+        }));
+
+        let run = |allowed| {
+            let budget = kcore::operation::BudgetPlan::new([kcore::operation::LimitSpec::new(
+                crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                allowed,
+            )])
+            .unwrap();
+            let session = checker_session(budget);
+            let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+            check_body_report_with_context(&store, body, CheckLevel::Full, &context).unwrap()
+        };
+
+        let below = run(needed - 1);
+        let exact = run(needed);
+        let above = run(needed + 1);
+        let snapshot = LimitSnapshot {
+            stage: crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
+            resource: ResourceKind::Items,
+            consumed: needed,
+            allowed: needed - 1,
+        };
+        let limited_gap = below
+            .result()
+            .as_ref()
+            .unwrap()
+            .gaps
+            .iter()
+            .find(|gap| {
+                gap.entity == EntityRef::Face(face)
+                    && gap.kind == VerificationGapKind::FaceDomainContainment
+            })
+            .unwrap();
+        assert_eq!(
+            limited_gap.cause,
+            Some(VerificationGapCause::Limit(snapshot))
+        );
+        assert_eq!(below.report().limit_events(), &[snapshot]);
+        for completed in [&exact, &above] {
+            assert!(completed.report().limit_events().is_empty());
+            assert!(completed.result().as_ref().unwrap().gaps.iter().all(|gap| {
+                gap.entity != EntityRef::Face(face)
+                    || gap.kind != VerificationGapKind::FaceDomainContainment
+            }));
+        }
+        assert_eq!(exact.result(), above.result());
+    }
+
+    #[test]
+    fn face_domain_limit_snapshot_is_attached_to_the_exact_gap() {
+        let snapshot = LimitSnapshot {
+            stage: crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
+            resource: ResourceKind::Items,
+            consumed: 4097,
+            allowed: 4096,
+        };
+        let evidence = crate::domain::FaceDomainContainmentEvidence {
+            status: crate::domain::FaceDomainContainment::Indeterminate,
+            limit: Some(snapshot),
+        };
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        let face = store.faces_of_body(body).unwrap()[0];
+        let gap = VerificationGap {
+            entity: EntityRef::Face(face),
+            kind: VerificationGapKind::FaceDomainContainment,
+            cause: face_domain_gap_cause(evidence),
+        };
+
+        assert_eq!(gap.cause, Some(VerificationGapCause::Limit(snapshot)));
+        let report = CheckReport {
+            level: CheckLevel::Full,
+            faults: Vec::new(),
+            gaps: vec![gap],
+        };
+        assert_eq!(report.outcome(), CheckOutcome::Indeterminate);
     }
 
     #[test]

@@ -10,6 +10,11 @@ use crate::entity::{FaceDomain, FaceId, FinPcurve, PcurveChart, SurfaceId};
 use crate::geom::SurfaceGeom;
 use crate::store::Store;
 use kcore::error::{Error, Result};
+use kcore::operation::{
+    AccountingMode, BudgetPlan, DiagnosticCode, DiagnosticKind, ExecutionPolicy, LimitSnapshot,
+    LimitSpec, NumericalPolicy, OperationContext, OperationPolicyError, OperationScope,
+    PolicyVersion, ResourceKind, SessionPolicy, SessionPrecision, StageId,
+};
 use kcore::tolerance::LINEAR_RESOLUTION;
 use kgeom::aabb::{Aabb2, Aabb3};
 use kgeom::curve::Curve;
@@ -30,8 +35,67 @@ pub enum FaceDomainContainment {
     Indeterminate,
 }
 
+/// Internal proof evidence retained for the Full checker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FaceDomainContainmentEvidence {
+    pub(crate) status: FaceDomainContainment,
+    pub(crate) limit: Option<LimitSnapshot>,
+}
+
+impl FaceDomainContainmentEvidence {
+    const fn new(status: FaceDomainContainment) -> Self {
+        Self {
+            status,
+            limit: None,
+        }
+    }
+
+    const fn limited(snapshot: LimitSnapshot) -> Self {
+        Self {
+            status: FaceDomainContainment::Indeterminate,
+            limit: Some(snapshot),
+        }
+    }
+}
+
 const CONTAINMENT_MAX_DEPTH: usize = 20;
 const CONTAINMENT_MAX_SEGMENTS: usize = 4096;
+
+/// High-water count of adaptively visited subranges for one pcurve use.
+///
+/// One item is one parameter subrange removed from the containment proof's
+/// deterministic stack. The high-water mode preserves the legacy per-pcurve
+/// ceiling while allowing every proof in a body check to share one operation
+/// scope without resetting its ledger.
+pub const FACE_DOMAIN_CONTAINMENT_SEGMENTS: StageId =
+    match StageId::new("ktopo.check.domain-segments") {
+        Ok(stage) => stage,
+        Err(_) => panic!("valid face-domain containment stage"),
+    };
+
+/// Diagnostic emitted when adaptive face-domain containment reaches its
+/// per-pcurve subrange allowance.
+pub const FACE_DOMAIN_CONTAINMENT_SEGMENT_LIMIT: DiagnosticCode =
+    match DiagnosticCode::new("ktopo.check.domain-segment-limit") {
+        Ok(code) => code,
+        Err(_) => panic!("valid face-domain containment diagnostic"),
+    };
+
+/// Version-1 deterministic budget for adaptive face-domain containment.
+pub struct FaceDomainContainmentBudgetProfile;
+
+impl FaceDomainContainmentBudgetProfile {
+    /// Preserves the legacy allowance of 4,096 visited subranges per pcurve.
+    pub fn v1_defaults() -> BudgetPlan {
+        BudgetPlan::new([LimitSpec::new(
+            FACE_DOMAIN_CONTAINMENT_SEGMENTS,
+            ResourceKind::Items,
+            AccountingMode::HighWater,
+            CONTAINMENT_MAX_SEGMENTS as u64,
+        )])
+        .expect("built-in face-domain containment budget is valid")
+    }
+}
 
 /// Derive a certified conservative finite UV work box for `face`.
 ///
@@ -149,15 +213,39 @@ pub fn certify_face_domain_containment(
     store: &Store,
     face_id: FaceId,
 ) -> Result<FaceDomainContainment> {
+    let session = SessionPolicy::new(
+        SessionPrecision::parasolid(),
+        NumericalPolicy::v1(),
+        ExecutionPolicy::Serial,
+        FaceDomainContainmentBudgetProfile::v1_defaults(),
+        PolicyVersion::V1,
+    );
+    let context = OperationContext::new(&session, kcore::tolerance::Tolerances::default())
+        .expect("validated default tolerances satisfy v1 session precision");
+    let mut scope = OperationScope::new(&context);
+    Ok(certify_face_domain_containment_in_scope(store, face_id, &mut scope)?.status)
+}
+
+/// Contextual containment proof used by the Full body checker.
+pub(crate) fn certify_face_domain_containment_in_scope(
+    store: &Store,
+    face_id: FaceId,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<FaceDomainContainmentEvidence> {
     let face = store.get(face_id)?;
     let Some(domain) = face.domain else {
-        return Ok(FaceDomainContainment::Indeterminate);
+        return Ok(FaceDomainContainmentEvidence::new(
+            FaceDomainContainment::Indeterminate,
+        ));
     };
     let Some((_, periods)) = surface_metadata(store, face.surface) else {
-        return Ok(FaceDomainContainment::Indeterminate);
+        return Ok(FaceDomainContainmentEvidence::new(
+            FaceDomainContainment::Indeterminate,
+        ));
     };
     let mut saw_boundary = false;
     let mut every_boundary_use_certified = true;
+    let mut limiting_snapshot = None;
     for &loop_id in &face.loops {
         for &fin_id in &store.get(loop_id)?.fins {
             saw_boundary = true;
@@ -174,28 +262,50 @@ pub fn certify_face_domain_containment(
                 periods,
                 domain,
                 CONTAINMENT_MAX_DEPTH,
-                CONTAINMENT_MAX_SEGMENTS,
+                scope,
             )? {
-                FaceDomainContainment::Outside => {
-                    return Ok(FaceDomainContainment::Outside);
+                FaceDomainContainmentEvidence {
+                    status: FaceDomainContainment::Outside,
+                    ..
+                } => {
+                    return Ok(FaceDomainContainmentEvidence::new(
+                        FaceDomainContainment::Outside,
+                    ));
                 }
-                FaceDomainContainment::Indeterminate => {
+                FaceDomainContainmentEvidence {
+                    status: FaceDomainContainment::Indeterminate,
+                    limit,
+                } => {
                     every_boundary_use_certified = false;
+                    limiting_snapshot = limiting_snapshot.or(limit);
                 }
-                FaceDomainContainment::Certified => {}
+                FaceDomainContainmentEvidence {
+                    status: FaceDomainContainment::Certified,
+                    ..
+                } => {}
             }
         }
     }
     if saw_boundary && every_boundary_use_certified {
-        return Ok(FaceDomainContainment::Certified);
+        return Ok(FaceDomainContainmentEvidence::new(
+            FaceDomainContainment::Certified,
+        ));
     }
     let Some(required) = derive_face_domain(store, face_id)? else {
-        return Ok(FaceDomainContainment::Indeterminate);
+        return Ok(match limiting_snapshot {
+            Some(snapshot) => FaceDomainContainmentEvidence::limited(snapshot),
+            None => FaceDomainContainmentEvidence::new(FaceDomainContainment::Indeterminate),
+        });
     };
     if domain_contains_domain(domain, required) {
-        Ok(FaceDomainContainment::Certified)
+        Ok(FaceDomainContainmentEvidence::new(
+            FaceDomainContainment::Certified,
+        ))
     } else {
-        Ok(FaceDomainContainment::Indeterminate)
+        Ok(match limiting_snapshot {
+            Some(snapshot) => FaceDomainContainmentEvidence::limited(snapshot),
+            None => FaceDomainContainmentEvidence::new(FaceDomainContainment::Indeterminate),
+        })
     }
 }
 
@@ -207,20 +317,36 @@ fn certify_curve_range_containment(
     periods: [Option<f64>; 2],
     domain: FaceDomain,
     max_depth: usize,
-    max_segments: usize,
-) -> Result<FaceDomainContainment> {
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<FaceDomainContainmentEvidence> {
     let mut stack = vec![(range, 0usize)];
-    let mut visited = 0usize;
+    let mut visited = 0u64;
     while let Some((segment, depth)) = stack.pop() {
         visited += 1;
-        if visited > max_segments {
-            return Ok(FaceDomainContainment::Indeterminate);
+        match scope.ledger_mut().observe(
+            FACE_DOMAIN_CONTAINMENT_SEGMENTS,
+            ResourceKind::Items,
+            visited,
+        ) {
+            Ok(()) => {}
+            Err(OperationPolicyError::LimitReached(snapshot)) => {
+                scope.diagnose(
+                    snapshot.stage,
+                    FACE_DOMAIN_CONTAINMENT_SEGMENT_LIMIT,
+                    DiagnosticKind::LimitReached(snapshot),
+                    "face-domain containment segment limit reached",
+                );
+                return Ok(FaceDomainContainmentEvidence::limited(snapshot));
+            }
+            Err(error) => return Err(error.into()),
         }
 
         for parameter in [segment.lo, segment.hi] {
             let point = chart.apply(curve.eval(parameter), periods)?;
             if !domain_contains_uv(domain, point) {
-                return Ok(FaceDomainContainment::Outside);
+                return Ok(FaceDomainContainmentEvidence::new(
+                    FaceDomainContainment::Outside,
+                ));
             }
         }
 
@@ -233,19 +359,27 @@ fn certify_curve_range_containment(
 
         let midpoint = segment.lo + 0.5 * (segment.hi - segment.lo);
         if midpoint == segment.lo || midpoint == segment.hi {
-            return Ok(FaceDomainContainment::Indeterminate);
+            return Ok(FaceDomainContainmentEvidence::new(
+                FaceDomainContainment::Indeterminate,
+            ));
         }
         let point = chart.apply(curve.eval(midpoint), periods)?;
         if !domain_contains_uv(domain, point) {
-            return Ok(FaceDomainContainment::Outside);
+            return Ok(FaceDomainContainmentEvidence::new(
+                FaceDomainContainment::Outside,
+            ));
         }
         if depth >= max_depth {
-            return Ok(FaceDomainContainment::Indeterminate);
+            return Ok(FaceDomainContainmentEvidence::new(
+                FaceDomainContainment::Indeterminate,
+            ));
         }
         stack.push((ParamRange::new(midpoint, segment.hi), depth + 1));
         stack.push((ParamRange::new(segment.lo, midpoint), depth + 1));
     }
-    Ok(FaceDomainContainment::Certified)
+    Ok(FaceDomainContainmentEvidence::new(
+        FaceDomainContainment::Certified,
+    ))
 }
 
 fn domain_contains_uv(domain: FaceDomain, uv: Vec2) -> bool {
@@ -358,12 +492,14 @@ fn project_box(bounds: Aabb3, origin: Point3, axis: Vec3) -> (f64, f64) {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+
     use super::*;
     use crate::check::{CheckLevel, VerificationGapKind, check_body, check_body_report};
     use crate::entity::{EdgeId, ParamMap1d};
     use crate::geom::Curve2dGeom;
     use crate::make::{block, cylinder};
-    use kgeom::curve2d::NurbsCurve2d;
+    use kgeom::curve2d::{Curve2dDerivs, NurbsCurve2d};
     use kgeom::frame::Frame;
     use kgeom::vec::{Point2, Point3, Vec3};
 
@@ -374,6 +510,132 @@ mod tests {
             Vec3::new(0.0, 1.0, 0.0),
         )
         .unwrap()
+    }
+
+    #[derive(Debug)]
+    struct QuarterBoxCurve;
+
+    impl Curve2d for QuarterBoxCurve {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn eval_derivs(&self, t: f64, _order: usize) -> Curve2dDerivs {
+            Curve2dDerivs {
+                d: [
+                    Point2::new(t, 0.0),
+                    Vec2::new(1.0, 0.0),
+                    Vec2::new(0.0, 0.0),
+                    Vec2::new(0.0, 0.0),
+                ],
+            }
+        }
+
+        fn param_range(&self) -> ParamRange {
+            ParamRange::new(0.0, 1.0)
+        }
+
+        fn periodicity(&self) -> Option<f64> {
+            None
+        }
+
+        fn bounding_box(&self, range: ParamRange) -> Aabb2 {
+            if range.width() <= 0.25 {
+                Aabb2::from_points(&[Point2::new(range.lo, 0.0), Point2::new(range.hi, 0.0)])
+            } else {
+                Aabb2::from_points(&[Point2::new(-2.0, -2.0), Point2::new(3.0, 2.0)])
+            }
+        }
+    }
+
+    fn certify_quarter_curve(
+        allowed: u64,
+    ) -> (
+        FaceDomainContainmentEvidence,
+        kcore::operation::OperationReport,
+    ) {
+        let budget = BudgetPlan::new([LimitSpec::new(
+            FACE_DOMAIN_CONTAINMENT_SEGMENTS,
+            ResourceKind::Items,
+            AccountingMode::HighWater,
+            allowed,
+        )])
+        .unwrap();
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            budget,
+            PolicyVersion::V1,
+        );
+        let context =
+            OperationContext::new(&session, kcore::tolerance::Tolerances::default()).unwrap();
+        let mut scope = OperationScope::new(&context);
+        let evidence = certify_curve_range_containment(
+            &QuarterBoxCurve,
+            ParamRange::new(0.0, 1.0),
+            PcurveChart::identity(),
+            [None, None],
+            FaceDomain::from_bounds(-1.0, 2.0, -1.0, 1.0).unwrap(),
+            CONTAINMENT_MAX_DEPTH,
+            &mut scope,
+        )
+        .unwrap();
+        let (result, report) = scope.finish(Ok(evidence)).into_parts();
+        (result.unwrap(), report)
+    }
+
+    #[test]
+    fn containment_profile_and_n_minus_one_n_n_plus_one_are_exact() {
+        let profile = FaceDomainContainmentBudgetProfile::v1_defaults();
+        assert_eq!(
+            profile.limits(),
+            [LimitSpec::new(
+                FACE_DOMAIN_CONTAINMENT_SEGMENTS,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                4096,
+            )]
+        );
+        assert_eq!(
+            FACE_DOMAIN_CONTAINMENT_SEGMENT_LIMIT.as_str(),
+            "ktopo.check.domain-segment-limit"
+        );
+
+        let mut ledger = kcore::operation::WorkLedger::new(profile);
+        ledger
+            .observe(FACE_DOMAIN_CONTAINMENT_SEGMENTS, ResourceKind::Items, 4096)
+            .unwrap();
+        assert!(matches!(
+            ledger.observe(
+                FACE_DOMAIN_CONTAINMENT_SEGMENTS,
+                ResourceKind::Items,
+                4097,
+            ),
+            Err(OperationPolicyError::LimitReached(snapshot))
+                if snapshot.consumed == 4097 && snapshot.allowed == 4096
+        ));
+
+        // This deterministic proof visits seven subranges: root, two halves,
+        // and four quarter ranges whose boxes discharge containment.
+        let (below, below_report) = certify_quarter_curve(6);
+        let (exact, exact_report) = certify_quarter_curve(7);
+        let (above, above_report) = certify_quarter_curve(8);
+
+        assert_eq!(below.status, FaceDomainContainment::Indeterminate);
+        assert!(matches!(
+            below.limit,
+            Some(snapshot) if snapshot.consumed == 7 && snapshot.allowed == 6
+        ));
+        assert_eq!(below_report.limit_events(), &[below.limit.unwrap()]);
+        assert_eq!(exact.status, FaceDomainContainment::Certified);
+        assert_eq!(above.status, FaceDomainContainment::Certified);
+        assert_eq!(exact.limit, None);
+        assert_eq!(above.limit, None);
+        assert_eq!(exact_report.usage()[0].consumed, 7);
+        assert_eq!(above_report.usage()[0].consumed, 7);
+        assert!(exact_report.limit_events().is_empty());
+        assert!(above_report.limit_events().is_empty());
     }
 
     #[test]
@@ -429,6 +691,16 @@ mod tests {
 
     #[test]
     fn adaptive_nurbs_containment_certifies_subranges_and_preserves_unknowns() {
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            FaceDomainContainmentBudgetProfile::v1_defaults(),
+            PolicyVersion::V1,
+        );
+        let context =
+            OperationContext::new(&session, kcore::tolerance::Tolerances::default()).unwrap();
+        let mut scope = OperationScope::new(&context);
         let curve = NurbsCurve2d::new(
             3,
             vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
@@ -455,12 +727,12 @@ mod tests {
                 [None, None],
                 domain,
                 CONTAINMENT_MAX_DEPTH,
-                CONTAINMENT_MAX_SEGMENTS,
+                &mut scope,
             )
-            .unwrap(),
+            .unwrap()
+            .status,
             FaceDomainContainment::Certified
         );
-
         let arch = NurbsCurve2d::new(
             3,
             vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
@@ -481,9 +753,10 @@ mod tests {
                 [None, None],
                 FaceDomain::from_bounds(-1.0, 2.0, -1.0, 7.0).unwrap(),
                 CONTAINMENT_MAX_DEPTH,
-                CONTAINMENT_MAX_SEGMENTS,
+                &mut scope,
             )
-            .unwrap(),
+            .unwrap()
+            .status,
             FaceDomainContainment::Outside
         );
         assert_eq!(
@@ -494,9 +767,10 @@ mod tests {
                 [None, None],
                 FaceDomain::from_bounds(-1.0, 2.0, -1.0, 8.0).unwrap(),
                 0,
-                CONTAINMENT_MAX_SEGMENTS,
+                &mut scope,
             )
-            .unwrap(),
+            .unwrap()
+            .status,
             FaceDomainContainment::Indeterminate
         );
     }
