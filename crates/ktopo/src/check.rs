@@ -1421,8 +1421,12 @@ mod tests {
         let bot_frame = Frame::world();
         let top_frame = Frame::new(Point3::new(0.0, 0.0, 2.0), z, x).unwrap();
 
-        let bot_curve = store.add(CurveGeom::Circle(Circle::new(bot_frame, 1.0).unwrap()));
-        let top_curve = store.add(CurveGeom::Circle(Circle::new(top_frame, 1.0).unwrap()));
+        let bot_curve = store
+            .insert_curve(CurveGeom::Circle(Circle::new(bot_frame, 1.0).unwrap()))
+            .unwrap();
+        let top_curve = store
+            .insert_curve(CurveGeom::Circle(Circle::new(top_frame, 1.0).unwrap()))
+            .unwrap();
         let ring_edge = |store: &mut Store, curve| {
             store.add(Edge {
                 curve: Some(curve),
@@ -1435,15 +1439,21 @@ mod tests {
         let e_bot = ring_edge(store, bot_curve);
         let e_top = ring_edge(store, top_curve);
 
-        let side_surf = store.add(SurfaceGeom::Cylinder(
-            Cylinder::new(Frame::world(), 1.0).unwrap(),
-        ));
-        let bot_surf = store.add(SurfaceGeom::Plane(Plane::new(
-            Frame::new(Point3::new(0.0, 0.0, 0.0), -z, x).unwrap(),
-        )));
-        let top_surf = store.add(SurfaceGeom::Plane(Plane::new(
-            Frame::new(Point3::new(0.0, 0.0, 2.0), z, x).unwrap(),
-        )));
+        let side_surf = store
+            .insert_surface(SurfaceGeom::Cylinder(
+                Cylinder::new(Frame::world(), 1.0).unwrap(),
+            ))
+            .unwrap();
+        let bot_surf = store
+            .insert_surface(SurfaceGeom::Plane(Plane::new(
+                Frame::new(Point3::new(0.0, 0.0, 0.0), -z, x).unwrap(),
+            )))
+            .unwrap();
+        let top_surf = store
+            .insert_surface(SurfaceGeom::Plane(Plane::new(
+                Frame::new(Point3::new(0.0, 0.0, 2.0), z, x).unwrap(),
+            )))
+            .unwrap();
 
         let face_with_ring_loops = |store: &mut Store, surface, rings: &[(EdgeId, Sense)]| {
             let face = store.add(Face {
@@ -1485,9 +1495,11 @@ mod tests {
     /// Hand-built solid sphere: one zero-loop face.
     fn sphere_body(store: &mut Store) -> BodyId {
         let (body, shell) = solid_body_scaffold(store);
-        let surf = store.add(SurfaceGeom::Sphere(
-            Sphere::new(Frame::world(), 1.0).unwrap(),
-        ));
+        let surf = store
+            .insert_surface(SurfaceGeom::Sphere(
+                Sphere::new(Frame::world(), 1.0).unwrap(),
+            ))
+            .unwrap();
         let face = store.add(Face {
             shell,
             loops: Vec::new(),
@@ -1528,7 +1540,9 @@ mod tests {
         });
         store.get_mut(void).unwrap().shells.push(shell);
 
-        let surf = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
+        let surf = store
+            .insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())))
+            .unwrap();
         let face = store.add(Face {
             shell,
             loops: Vec::new(),
@@ -1563,7 +1577,9 @@ mod tests {
         for k in 0..4 {
             let a = corners[k];
             let b = corners[(k + 1) % 4];
-            let curve = store.add(CurveGeom::Line(Line::new(a, b - a).unwrap()));
+            let curve = store
+                .insert_curve(CurveGeom::Line(Line::new(a, b - a).unwrap()))
+                .unwrap();
             let edge = store.add(Edge {
                 curve: Some(curve),
                 vertices: [Some(vids[k]), Some(vids[(k + 1) % 4])],
@@ -1692,24 +1708,30 @@ mod tests {
             Point3::new(0.0, 1.0, 0.0),
             Point3::new(1.0, 0.0, 0.0),
         ];
+        let mut transaction = store.transaction().unwrap();
         for (index, &fin_id) in fins.iter().enumerate() {
-            let vertex = store.fin_tail(fin_id).unwrap().unwrap();
-            let point = store.get(vertex).unwrap().point;
-            *store.get_mut(point).unwrap() = positions[index];
+            let vertex = transaction.store().fin_tail(fin_id).unwrap().unwrap();
+            let point = transaction.store().get(vertex).unwrap().point;
+            *transaction.assembly().get_mut(point).unwrap() = positions[index];
         }
         for (index, &fin_id) in fins.iter().enumerate() {
-            let edge_id = store.get(fin_id).unwrap().edge;
-            let curve_id = store.get(edge_id).unwrap().curve.unwrap();
+            let edge_id = transaction.store().get(fin_id).unwrap().edge;
+            let curve_id = transaction.store().get(edge_id).unwrap().curve.unwrap();
             let start = positions[index];
             let end = positions[(index + 1) % positions.len()];
-            *store.get_mut(curve_id).unwrap() =
-                CurveGeom::Line(Line::new(start, end - start).unwrap());
-            store.get_mut(edge_id).unwrap().bounds = Some((0.0, start.dist(end)));
+            transaction
+                .assembly()
+                .replace_curve(
+                    curve_id,
+                    CurveGeom::Line(Line::new(start, end - start).unwrap()),
+                )
+                .unwrap();
+            transaction.assembly().get_mut(edge_id).unwrap().bounds = Some((0.0, start.dist(end)));
         }
 
-        let fast = check_body_report(&store, sheet, CheckLevel::Fast).unwrap();
+        let fast = check_body_report(transaction.store(), sheet, CheckLevel::Fast).unwrap();
         assert_eq!(fast.outcome(), CheckOutcome::Valid);
-        let full = check_body_report(&store, sheet, CheckLevel::Full).unwrap();
+        let full = check_body_report(transaction.store(), sheet, CheckLevel::Full).unwrap();
         assert_eq!(full.outcome(), CheckOutcome::Invalid);
         assert!(full.faults.iter().any(|fault| {
             fault.entity == EntityRef::Loop(loop_id)
@@ -1806,7 +1828,9 @@ mod tests {
         for i in 0..corners.len() {
             let a = corners[i];
             let b = corners[(i + 1) % corners.len()];
-            let curve = store.add(CurveGeom::Line(Line::new(a, b - a).unwrap()));
+            let curve = store
+                .insert_curve(CurveGeom::Line(Line::new(a, b - a).unwrap()))
+                .unwrap();
             let edge = store.add(Edge {
                 curve: Some(curve),
                 vertices: [Some(vertices[i]), Some(vertices[(i + 1) % vertices.len()])],
@@ -1949,7 +1973,9 @@ mod tests {
         let mut store = Store::new();
         let body = sphere_body(&mut store);
         let face = store.faces_of_body(body).unwrap()[0];
-        let plane = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
+        let plane = store
+            .insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())))
+            .unwrap();
         store.get_mut(face).unwrap().surface = plane;
         assert_has(
             &check_body(&store, body).unwrap(),
@@ -2007,9 +2033,10 @@ mod tests {
         let body = clean_block(&mut store);
         let face = store.faces_of_body(body).unwrap()[0];
         let surface = store.get(face).unwrap().surface;
-        store.remove(surface).unwrap();
+        let mut transaction = store.transaction().unwrap();
+        transaction.assembly().remove_surface(surface).unwrap();
         assert_has(
-            &check_body(&store, body).unwrap(),
+            &check_body(transaction.store(), body).unwrap(),
             FaultKind::StaleReference,
         );
     }
@@ -2053,8 +2080,12 @@ mod tests {
             panic!("block edges are lines");
         };
         let shifted = Line::new(line.origin() + Vec3::new(1e-4, 1e-4, 0.0), line.dir()).unwrap();
-        *store.get_mut(curve).unwrap() = CurveGeom::Line(shifted);
-        let faults = check_body(&store, body).unwrap();
+        let mut transaction = store.transaction().unwrap();
+        transaction
+            .assembly()
+            .replace_curve(curve, CurveGeom::Line(shifted))
+            .unwrap();
+        let faults = check_body(transaction.store(), body).unwrap();
         assert_has(&faults, FaultKind::EdgeOffSurface);
         assert_has(&faults, FaultKind::VertexOffCurve);
     }
@@ -2064,9 +2095,11 @@ mod tests {
         let mut store = Store::new();
         let body = cylinder_body(&mut store);
         let e = store.edges_of_body(body).unwrap()[0];
-        let line = store.add(CurveGeom::Line(
-            Line::new(Point3::new(0.0, 1.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
-        ));
+        let line = store
+            .insert_curve(CurveGeom::Line(
+                Line::new(Point3::new(0.0, 1.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+            ))
+            .unwrap();
         store.get_mut(e).unwrap().curve = Some(line);
         let faults = check_body(&store, body).unwrap();
         assert_has(&faults, FaultKind::RingEdgeNotPeriodic);

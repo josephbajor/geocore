@@ -468,7 +468,7 @@ fn direct_incidence_bound(
     range: ParamRange,
 ) -> Option<f64> {
     match surface {
-        SurfaceGeom::Plane(plane) => Some(plane_curve_residual_bound(curve, plane.frame(), range)),
+        SurfaceGeom::Plane(plane) => plane_curve_residual_bound(curve, plane.frame(), range),
         SurfaceGeom::Cylinder(cylinder) => {
             cylinder_curve_residual_bound(curve, cylinder.frame(), cylinder.radius(), range)
         }
@@ -476,6 +476,7 @@ fn direct_incidence_bound(
             sphere_curve_residual_bound(curve, sphere.frame().origin(), sphere.radius())
         }
         SurfaceGeom::Cone(_) | SurfaceGeom::Torus(_) | SurfaceGeom::Nurbs(_) => None,
+        _ => None,
     }
 }
 
@@ -483,11 +484,13 @@ fn signed_plane_distance(frame: &Frame, point: Point3) -> f64 {
     (point - frame.origin()).dot(frame.z())
 }
 
-fn plane_curve_residual_bound(curve: &CurveGeom, frame: &Frame, range: ParamRange) -> f64 {
+fn plane_curve_residual_bound(curve: &CurveGeom, frame: &Frame, range: ParamRange) -> Option<f64> {
     match curve {
-        CurveGeom::Line(line) => signed_plane_distance(frame, line.eval(range.lo))
-            .abs()
-            .max(signed_plane_distance(frame, line.eval(range.hi)).abs()),
+        CurveGeom::Line(line) => Some(
+            signed_plane_distance(frame, line.eval(range.lo))
+                .abs()
+                .max(signed_plane_distance(frame, line.eval(range.hi)).abs()),
+        ),
         CurveGeom::Circle(_) | CurveGeom::Ellipse(_) => {
             let Some(AnalyticTrace::Harmonic {
                 center,
@@ -497,15 +500,20 @@ fn plane_curve_residual_bound(curve: &CurveGeom, frame: &Frame, range: ParamRang
             else {
                 unreachable!("circle and ellipse always have harmonic traces");
             };
-            signed_plane_distance(frame, center).abs()
-                + cosine.dot(frame.z()).abs()
-                + sine.dot(frame.z()).abs()
+            Some(
+                signed_plane_distance(frame, center).abs()
+                    + cosine.dot(frame.z()).abs()
+                    + sine.dot(frame.z()).abs(),
+            )
         }
-        CurveGeom::Nurbs(curve) => curve
-            .points()
-            .iter()
-            .map(|&point| signed_plane_distance(frame, point).abs())
-            .fold(0.0, f64::max),
+        CurveGeom::Nurbs(curve) => Some(
+            curve
+                .points()
+                .iter()
+                .map(|&point| signed_plane_distance(frame, point).abs())
+                .fold(0.0, f64::max),
+        ),
+        _ => None,
     }
 }
 
@@ -543,6 +551,7 @@ fn cylinder_curve_residual_bound(
             Some(squared_radius_residual_bound(center, cosine, sine, radius) / radius)
         }
         CurveGeom::Nurbs(_) => None,
+        _ => None,
     }
 }
 
@@ -596,6 +605,7 @@ fn attached_curve_trace(curve: &CurveGeom) -> Option<AnalyticTrace> {
             sine: ellipse.frame().y() * ellipse.minor_radius(),
         }),
         CurveGeom::Nurbs(_) => None,
+        _ => None,
     }
 }
 
@@ -630,6 +640,7 @@ fn lifted_pcurve_trace(
             ))
         }
         Curve2dGeom::Nurbs(_) => None,
+        _ => None,
     }
 }
 
@@ -723,6 +734,7 @@ fn lifted_line_trace(surface: &SurfaceGeom, uv0: Point2, rate: Vec2) -> Option<A
         | SurfaceGeom::Cone(_)
         | SurfaceGeom::Sphere(_)
         | SurfaceGeom::Torus(_) => None,
+        _ => None,
     }
 }
 
@@ -849,9 +861,11 @@ mod tests {
     #[test]
     fn whole_interval_certificate_requires_a_conservative_residual_bound() {
         let mut store = Store::new();
-        let curve = store.add(CurveGeom::Line(
-            Line::new(Point3::new(-2.0, 0.5, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
-        ));
+        let curve = store
+            .insert_curve(CurveGeom::Line(
+                Line::new(Point3::new(-2.0, 0.5, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+            ))
+            .unwrap();
         let edge = store.add(Edge {
             curve: Some(curve),
             vertices: [None, None],
@@ -859,7 +873,9 @@ mod tests {
             fins: Vec::new(),
             tolerance: None,
         });
-        let on_plane = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
+        let on_plane = store
+            .insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())))
+            .unwrap();
         assert_eq!(
             certify_edge_surface_incidence(
                 &store,
@@ -877,7 +893,9 @@ mod tests {
             Vec3::new(1.0, 0.0, 0.0),
         )
         .unwrap();
-        let displaced = store.add(SurfaceGeom::Plane(Plane::new(displaced_frame)));
+        let displaced = store
+            .insert_surface(SurfaceGeom::Plane(Plane::new(displaced_frame)))
+            .unwrap();
         assert_eq!(
             certify_edge_surface_incidence(
                 &store,
@@ -893,12 +911,16 @@ mod tests {
     #[test]
     fn singular_endpoint_metadata_matches_surface_degeneracies() {
         let mut store = Store::new();
-        let surface = store.add(SurfaceGeom::Sphere(
-            Sphere::new(Frame::world(), 1.0).unwrap(),
-        ));
-        let curve = store.add(Curve2dGeom::Line(
-            Line2d::new(Point2::new(0.0, 0.0), Vec2::new(0.0, 1.0)).unwrap(),
-        ));
+        let surface = store
+            .insert_surface(SurfaceGeom::Sphere(
+                Sphere::new(Frame::world(), 1.0).unwrap(),
+            ))
+            .unwrap();
+        let curve = store
+            .insert_pcurve(Curve2dGeom::Line(
+                Line2d::new(Point2::new(0.0, 0.0), Vec2::new(0.0, 1.0)).unwrap(),
+            ))
+            .unwrap();
         let range = ParamRange::new(0.0, core::f64::consts::FRAC_PI_2);
         let use_ = FinPcurve::new(curve, range, ParamMap1d::identity())
             .unwrap()
@@ -931,12 +953,16 @@ mod tests {
     #[test]
     fn seam_metadata_selects_a_full_period_chart_boundary() {
         let mut store = Store::new();
-        let surface = store.add(SurfaceGeom::Cylinder(
-            Cylinder::new(Frame::world(), 1.0).unwrap(),
-        ));
-        let curve = store.add(Curve2dGeom::Line(
-            Line2d::new(Point2::new(0.0, 0.0), Vec2::new(0.0, 1.0)).unwrap(),
-        ));
+        let surface = store
+            .insert_surface(SurfaceGeom::Cylinder(
+                Cylinder::new(Frame::world(), 1.0).unwrap(),
+            ))
+            .unwrap();
+        let curve = store
+            .insert_pcurve(Curve2dGeom::Line(
+                Line2d::new(Point2::new(0.0, 0.0), Vec2::new(0.0, 1.0)).unwrap(),
+            ))
+            .unwrap();
         let range = ParamRange::new(0.0, 2.0);
         let edge = Edge {
             curve: None,

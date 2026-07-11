@@ -13,6 +13,7 @@ use crate::entity::{
 use crate::store::{Entity, Store};
 use crate::transaction::Mutation;
 use kcore::arena::Handle;
+use kgraph::{GeometryGraph, GeometryRef};
 use std::collections::HashMap;
 
 /// Snapshot of body ownership and shared geometry dependencies for one Store
@@ -333,12 +334,11 @@ impl StoreIndex {
         let Ok(face) = store.get(face_id) else {
             return;
         };
-        add_dependency(
-            &mut self.surfaces,
-            &mut footprint.surfaces,
-            face.surface,
+        self.add_geometry_dependency(
+            store.geometry(),
+            GeometryRef::Surface(face.surface),
             body,
-            &self.body_ranks,
+            footprint,
         );
         for &loop_id in &face.loops {
             self.walk_loop(store, body, loop_id, footprint);
@@ -376,12 +376,11 @@ impl StoreIndex {
             footprint.fins.push(fin_id);
             if let Ok(fin) = store.get(fin_id) {
                 if let Some(pcurve) = fin.pcurve {
-                    add_dependency(
-                        &mut self.pcurves,
-                        &mut footprint.pcurves,
-                        pcurve.curve(),
+                    self.add_geometry_dependency(
+                        store.geometry(),
+                        GeometryRef::Curve2d(pcurve.curve()),
                         body,
-                        &self.body_ranks,
+                        footprint,
                     );
                 }
                 self.walk_edge(store, body, fin.edge, footprint);
@@ -409,12 +408,11 @@ impl StoreIndex {
             return;
         };
         if let Some(curve) = edge.curve {
-            add_dependency(
-                &mut self.curves,
-                &mut footprint.curves,
-                curve,
+            self.add_geometry_dependency(
+                store.geometry(),
+                GeometryRef::Curve(curve),
                 body,
-                &self.body_ranks,
+                footprint,
             );
         }
         for vertex_id in edge.vertices.into_iter().flatten() {
@@ -446,6 +444,50 @@ impl StoreIndex {
                 body,
                 &self.body_ranks,
             );
+        }
+    }
+
+    fn add_geometry_dependency(
+        &mut self,
+        graph: &GeometryGraph,
+        root: GeometryRef,
+        body: BodyId,
+        footprint: &mut BodyFootprint,
+    ) {
+        let closure = match graph.dependency_closure(root) {
+            Ok(closure) => closure,
+            Err(_) => {
+                // Retain the directly attached identity so invalid-model
+                // indexing can still select the owning body, but make the
+                // ownership audit fail rather than hiding graph corruption.
+                self.ownership_fault_count += 1;
+                vec![root]
+            }
+        };
+        for geometry in closure {
+            match geometry {
+                GeometryRef::Curve(handle) => add_dependency(
+                    &mut self.curves,
+                    &mut footprint.curves,
+                    handle,
+                    body,
+                    &self.body_ranks,
+                ),
+                GeometryRef::Surface(handle) => add_dependency(
+                    &mut self.surfaces,
+                    &mut footprint.surfaces,
+                    handle,
+                    body,
+                    &self.body_ranks,
+                ),
+                GeometryRef::Curve2d(handle) => add_dependency(
+                    &mut self.pcurves,
+                    &mut footprint.pcurves,
+                    handle,
+                    body,
+                    &self.body_ranks,
+                ),
+            }
         }
     }
 }
@@ -520,7 +562,7 @@ fn collect_live_unowned<T: Entity>(
     out: &mut Vec<EntityRef>,
 ) {
     for &handle in handles {
-        let entity = T::entity_ref(handle);
+        let entity = <T as crate::store::sealed::Storage>::entity_ref(handle);
         if store.contains(handle) && !owners.contains_key(&handle) && !out.contains(&entity) {
             out.push(entity);
         }

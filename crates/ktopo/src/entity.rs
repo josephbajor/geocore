@@ -24,7 +24,7 @@
 //! - An [`Edge`] with `bounds: None` is a *ring edge*: it spans one full
 //!   period of a closed curve and has no vertices.
 
-use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
+use crate::geom::SurfaceGeom;
 use crate::tolerance::EntityTolerance;
 use kcore::arena::Handle;
 use kcore::error::{Error, Result};
@@ -48,14 +48,14 @@ pub type FinId = Handle<Fin>;
 pub type EdgeId = Handle<Edge>;
 /// Handle to a [`Vertex`].
 pub type VertexId = Handle<Vertex>;
-/// Handle to an attached curve.
-pub type CurveId = Handle<CurveGeom>;
-/// Handle to an attached surface.
-pub type SurfaceId = Handle<SurfaceGeom>;
+/// Handle to an attached curve node in the geometry graph.
+pub type CurveId = kgraph::CurveHandle;
+/// Handle to an attached surface node in the geometry graph.
+pub type SurfaceId = kgraph::SurfaceHandle;
 /// Handle to an attached point.
 pub type PointId = Handle<Point3>;
-/// Handle to an attached parameter-space curve.
-pub type Curve2dId = Handle<Curve2dGeom>;
+/// Handle to an attached parameter-space curve node in the geometry graph.
+pub type Curve2dId = kgraph::Curve2dHandle;
 
 /// Relative orientation of one entity's direction against another's
 /// (fin vs. edge, face vs. surface normal).

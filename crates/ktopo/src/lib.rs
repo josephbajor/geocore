@@ -2,13 +2,13 @@
 //!
 //! The boundary-representation data model: the Parasolid entity hierarchy
 //! (`BODY → REGION → SHELL → FACE → LOOP → FIN → EDGE → VERTEX`) over
-//! generational arenas, with geometry attached from `kgeom`.
+//! generational arenas, with geometry attached by handles into `kgraph`.
 //!
 //! Module map:
 //! - [`entity`] — the entity structs, typed handles, senses, and the
 //!   orientation/adjacency invariants (documented there, enforced by
 //!   [`check`]).
-//! - [`geom`] — geometry attachment enums over the L1 classes.
+//! - [`geom`] — compatibility names for geometry-graph descriptors.
 //!   This includes true 2D pcurve geometry; each [`entity::Fin`] can carry
 //!   its own parameter-space curve use and edge-parameter correspondence.
 //! - [`store`] — the arena-backed entity store and deterministic

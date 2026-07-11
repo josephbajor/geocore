@@ -280,8 +280,14 @@ fn checker_rejects_a_pcurve_that_lifts_off_the_edge() {
     let fin_id = store.get(edge).unwrap().fins[0];
     let pcurve_id = store.get(fin_id).unwrap().pcurve.unwrap().curve();
     let faults = inspect_invalid_edit(&mut store, |store| {
-        *store.get_mut(pcurve_id).unwrap() =
-            Curve2dGeom::Line(Line2d::new(Point2::new(100.0, 100.0), Vec2::new(1.0, 0.0)).unwrap());
+        store
+            .replace_pcurve(
+                pcurve_id,
+                Curve2dGeom::Line(
+                    Line2d::new(Point2::new(100.0, 100.0), Vec2::new(1.0, 0.0)).unwrap(),
+                ),
+            )
+            .unwrap();
         check_body(store, body).unwrap()
     });
     assert!(faults.iter().any(|fault| {
@@ -310,15 +316,20 @@ fn body_tessellation_consumes_a_nurbs_pcurve() {
     let range = use_.range();
     let endpoints = vec![curve.eval(range.lo), curve.eval(range.hi)];
     edit_body(&mut store, body, |store| {
-        *store.get_mut(use_.curve()).unwrap() = Curve2dGeom::Nurbs(
-            NurbsCurve2d::new(
-                1,
-                vec![range.lo, range.lo, range.hi, range.hi],
-                endpoints,
-                None,
+        store
+            .replace_pcurve(
+                use_.curve(),
+                Curve2dGeom::Nurbs(
+                    NurbsCurve2d::new(
+                        1,
+                        vec![range.lo, range.lo, range.hi, range.hi],
+                        endpoints,
+                        None,
+                    )
+                    .unwrap(),
+                ),
             )
-            .unwrap(),
-        );
+            .unwrap();
     });
 
     assert!(check_body(&store, body).unwrap().is_empty());
@@ -371,9 +382,14 @@ fn checker_compares_tolerant_pcurve_lifts_and_endpoints() {
         panic!("block pcurve must be linear");
     };
     let faults = inspect_invalid_edit(&mut store, |store| {
-        *store.get_mut(pcurve).unwrap() = Curve2dGeom::Line(
-            Line2d::new(line.origin() + Vec2::new(1e-4, 0.0), line.dir()).unwrap(),
-        );
+        store
+            .replace_pcurve(
+                pcurve,
+                Curve2dGeom::Line(
+                    Line2d::new(line.origin() + Vec2::new(1e-4, 0.0), line.dir()).unwrap(),
+                ),
+            )
+            .unwrap();
         check_body(store, body).unwrap()
     });
     assert!(faults.iter().any(|fault| {

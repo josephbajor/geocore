@@ -791,7 +791,10 @@ impl Recon<'_, '_, '_> {
             });
         }
         let curve = self.b_curve_2d(curve_idx, node)?;
-        let id = self.store.add(Curve2dGeom::Nurbs(curve));
+        let id = self
+            .store
+            .insert_pcurve(Curve2dGeom::Nurbs(curve))
+            .map_err(XtError::Kernel)?;
         self.pcurves.insert(curve_idx, id);
         Ok(id)
     }
@@ -865,7 +868,7 @@ impl Recon<'_, '_, '_> {
                 });
             }
         };
-        let c = self.store.add(geom);
+        let c = self.store.insert_curve(geom).map_err(XtError::Kernel)?;
         self.curves.insert(curve_idx, (c, reversed));
         Ok((c, reversed))
     }
@@ -957,7 +960,7 @@ impl Recon<'_, '_, '_> {
                 });
             }
         };
-        let s = self.store.add(geom);
+        let s = self.store.insert_surface(geom).map_err(XtError::Kernel)?;
         self.surfaces.insert(surface_idx, (s, sense));
         Ok((s, sense))
     }
@@ -1193,6 +1196,7 @@ fn edge_bounds(
             let t1 = kgeom::project::project_to_curve(n, end, range)?.t;
             (t1 > t0).then_some((t0, t1))
         }
+        _ => None,
     }
 }
 

@@ -202,7 +202,10 @@ fn affected_root_selection_tracks_shared_geometry_without_explicit_hints() {
         Frame::from_z(Point3::new(0.0, 0.0, 10.0), Vec3::new(0.0, 0.0, 1.0)).unwrap(),
     ));
     let mut transaction = store.transaction().unwrap();
-    *transaction.assembly().get_mut(shared_surface).unwrap() = shifted;
+    transaction
+        .assembly()
+        .replace_surface(shared_surface, shifted)
+        .unwrap();
     assert!(matches!(
         transaction.commit_checked(&[]),
         Err(Error::TopologyCheckFailed { fault_count }) if fault_count > 0

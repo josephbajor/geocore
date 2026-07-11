@@ -22,7 +22,9 @@ fn line_inputs(
 ) -> (ktopo::entity::CurveId, (f64, f64), FinPcurvePair) {
     let direction = end - start;
     let length = direction.norm();
-    let curve = store.insert_curve(CurveGeom::Line(Line::new(start, direction).unwrap()));
+    let curve = store
+        .insert_curve(CurveGeom::Line(Line::new(start, direction).unwrap()))
+        .unwrap();
     let SurfaceGeom::Plane(plane) = *store.get(surface).unwrap() else {
         panic!("test surface must be planar");
     };
@@ -31,9 +33,11 @@ fn line_inputs(
     let uv_start = Point2::new(start_local.x, start_local.y);
     let uv_end = Point2::new(end_local.x, end_local.y);
     let make_use = |store: &mut Store| {
-        let pcurve = store.insert_pcurve(Curve2dGeom::Line(
-            Line2d::new(uv_start, uv_end - uv_start).unwrap(),
-        ));
+        let pcurve = store
+            .insert_pcurve(Curve2dGeom::Line(
+                Line2d::new(uv_start, uv_end - uv_start).unwrap(),
+            ))
+            .unwrap();
         FinPcurve::new(pcurve, ParamRange::new(0.0, length), ParamMap1d::identity()).unwrap()
     };
     (
@@ -45,7 +49,9 @@ fn line_inputs(
 
 fn minimal_inverse_journal() -> Journal {
     let mut store = Store::new();
-    let surface = store.insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())));
+    let surface = store
+        .insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())))
+        .unwrap();
     let start_position = Point3::new(0.0, 0.0, 0.0);
     let end_position = Point3::new(1.0, 0.0, 0.0);
     let start = store.insert_point(start_position).unwrap();

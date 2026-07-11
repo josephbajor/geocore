@@ -15,6 +15,6 @@ pub use descriptor::{Curve2dDescriptor, CurveDescriptor, GeometryDependencies, S
 pub use error::{EvalError, EvalResult, GeometryGraphError, GeometryGraphResult};
 pub use eval::{EvalContext, EvalLimits, SurfaceDerivativeOrder};
 pub use graph::{
-    Curve2dHandle, Curve2dNode, CurveHandle, CurveNode, GeometryGraph, GeometryRef, SurfaceHandle,
-    SurfaceNode,
+    Curve2dHandle, Curve2dNode, CurveHandle, CurveNode, GeometryChanges, GeometryGraph,
+    GeometryRef, SurfaceHandle, SurfaceNode,
 };

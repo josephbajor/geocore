@@ -74,7 +74,7 @@ fn line_pcurve(
 ) -> Result<FinPcurve> {
     let start = frame_uv(surface_frame, edge_start);
     let end = frame_uv(surface_frame, edge_end);
-    let curve = store.add(Curve2dGeom::Line(Line2d::new(start, end - start)?));
+    let curve = store.insert_pcurve(Curve2dGeom::Line(Line2d::new(start, end - start)?))?;
     FinPcurve::new(
         curve,
         ParamRange::new(0.0, edge_length),
@@ -233,7 +233,7 @@ fn planar_sheet_in(store: &mut Store, profile: &PlanarProfile) -> Result<BodyId>
         .map(|point| frame.point_at(point.x, point.y, 0.0))
         .collect();
     let (body, shell) = non_solid_body_scaffold(store, BodyKind::Sheet);
-    let surface = store.add(SurfaceGeom::Plane(Plane::new(*frame)));
+    let surface = store.insert_surface(SurfaceGeom::Plane(Plane::new(*frame)))?;
     let face = store.add(Face {
         shell,
         loops: Vec::new(),
@@ -263,7 +263,7 @@ fn planar_sheet_in(store: &mut Store, profile: &PlanarProfile) -> Result<BodyId>
         let start = positions[index];
         let end = positions[next];
         let length = (end - start).norm();
-        let curve = store.add(CurveGeom::Line(Line::new(start, end - start)?));
+        let curve = store.insert_curve(CurveGeom::Line(Line::new(start, end - start)?))?;
         let edge = store.add(Edge {
             curve: Some(curve),
             vertices: [Some(vertices[index]), Some(vertices[next])],
@@ -340,7 +340,7 @@ fn wire_polyline_in(store: &mut Store, points: &[Point3], closed: bool) -> Resul
         let next = (index + 1) % points.len();
         let direction = points[next] - points[index];
         let length = direction.norm();
-        let curve = store.add(CurveGeom::Line(Line::new(points[index], direction)?));
+        let curve = store.insert_curve(CurveGeom::Line(Line::new(points[index], direction)?))?;
         let edge = store.add(Edge {
             curve: Some(curve),
             vertices: [Some(vertices[index]), Some(vertices[next])],
@@ -445,7 +445,7 @@ fn block_in(store: &mut Store, frame: &Frame, extents: [f64; 3]) -> Result<BodyI
         // Deterministic in-plane x: direction of the loop's first edge.
         let x_hint = corners[ring[1]] - corners[ring[0]];
         let plane = Plane::new(Frame::new(origin, normal, x_hint)?);
-        let surface = store.add(SurfaceGeom::Plane(plane));
+        let surface = store.insert_surface(SurfaceGeom::Plane(plane))?;
         let domain = point_domain(
             ring.iter()
                 .map(|&index| frame_uv(plane.frame(), corners[index])),
@@ -480,7 +480,7 @@ fn block_in(store: &mut Store, frame: &Frame, extents: [f64; 3]) -> Result<BodyI
                     let dir = corners[hi] - corners[lo];
                     let len = dir.norm();
                     let line = Line::new(corners[lo], dir)?;
-                    let curve = store.add(CurveGeom::Line(line));
+                    let curve = store.insert_curve(CurveGeom::Line(line))?;
                     let e = store.add(Edge {
                         curve: Some(curve),
                         vertices: [Some(vertices[lo]), Some(vertices[hi])],
@@ -540,7 +540,7 @@ fn ring_boundary(
     side_v: f64,
     cap_frame: Frame,
 ) -> Result<EdgeId> {
-    let curve = store.add(CurveGeom::Circle(circle));
+    let curve = store.insert_curve(CurveGeom::Circle(circle))?;
     let edge = store.add(Edge {
         curve: Some(curve),
         vertices: [None, None],
@@ -550,10 +550,10 @@ fn ring_boundary(
     });
 
     let range = ParamRange::new(0.0, core::f64::consts::TAU);
-    let side_curve = store.add(Curve2dGeom::Line(Line2d::new(
+    let side_curve = store.insert_pcurve(Curve2dGeom::Line(Line2d::new(
         Point2::new(0.0, side_v),
         Vec2::new(1.0, 0.0),
-    )?));
+    )?))?;
     let side_pcurve =
         FinPcurve::new(side_curve, range, ParamMap1d::identity())?.with_closure_winding([1, 0]);
     let side_loop: LoopId = store.add(Loop {
@@ -570,7 +570,7 @@ fn ring_boundary(
     store.get_mut(side_loop)?.fins.push(side_fin);
 
     let plane = Plane::new(cap_frame);
-    let cap_surface = store.add(SurfaceGeom::Plane(plane));
+    let cap_surface = store.insert_surface(SurfaceGeom::Plane(plane))?;
     let cap = store.add(Face {
         shell,
         loops: Vec::new(),
@@ -602,7 +602,7 @@ fn ring_boundary(
     } else {
         ParamMap1d::affine(-1.0, core::f64::consts::TAU)?
     };
-    let cap_curve = store.add(Curve2dGeom::Circle(cap_curve));
+    let cap_curve = store.insert_pcurve(Curve2dGeom::Circle(cap_curve))?;
     let cap_pcurve = FinPcurve::new(cap_curve, range, map)?.with_closure_winding([0, 0]);
     let cap_fin = store.add(Fin {
         parent: cap_loop,
@@ -643,7 +643,7 @@ fn cylinder_in(store: &mut Store, frame: &Frame, radius: f64, height: f64) -> Re
 
     let (body, shell) = solid_body_scaffold(store);
     let surface = Cylinder::new(*frame, radius)?;
-    let side_surf = store.add(SurfaceGeom::Cylinder(surface));
+    let side_surf = store.insert_surface(SurfaceGeom::Cylinder(surface))?;
     let side = store.add(Face {
         shell,
         loops: Vec::new(),
@@ -743,7 +743,7 @@ fn cylindrical_sheet_in(
     });
     store.get_mut(region)?.shells.push(shell);
 
-    let surface = store.add(SurfaceGeom::Cylinder(Cylinder::new(*frame, radius)?));
+    let surface = store.insert_surface(SurfaceGeom::Cylinder(Cylinder::new(*frame, radius)?))?;
     let face = store.add(Face {
         shell,
         loops: Vec::new(),
@@ -769,7 +769,7 @@ fn cylindrical_sheet_in(
             tolerance: None,
         })
     });
-    let seam_curve = store.add(CurveGeom::Line(Line::new(bottom, frame.z())?));
+    let seam_curve = store.insert_curve(CurveGeom::Line(Line::new(bottom, frame.z())?))?;
     let seam_edge = store.add(Edge {
         curve: Some(seam_curve),
         vertices: [Some(vertices[0]), Some(vertices[1])],
@@ -777,7 +777,7 @@ fn cylindrical_sheet_in(
         fins: Vec::new(),
         tolerance: None,
     });
-    let bottom_curve = store.add(CurveGeom::Circle(Circle::new(*frame, radius)?));
+    let bottom_curve = store.insert_curve(CurveGeom::Circle(Circle::new(*frame, radius)?))?;
     let bottom_edge = store.add(Edge {
         curve: Some(bottom_curve),
         vertices: [Some(vertices[0]), Some(vertices[0])],
@@ -786,7 +786,7 @@ fn cylindrical_sheet_in(
         tolerance: None,
     });
     let top_frame = Frame::new(top_origin, frame.z(), frame.x())?;
-    let top_curve = store.add(CurveGeom::Circle(Circle::new(top_frame, radius)?));
+    let top_curve = store.insert_curve(CurveGeom::Circle(Circle::new(top_frame, radius)?))?;
     let top_edge = store.add(Edge {
         curve: Some(top_curve),
         vertices: [Some(vertices[1]), Some(vertices[1])],
@@ -796,16 +796,16 @@ fn cylindrical_sheet_in(
     });
 
     let horizontal = |store: &mut Store, v: f64| -> Result<_> {
-        Ok(store.add(Curve2dGeom::Line(Line2d::new(
+        store.insert_pcurve(Curve2dGeom::Line(Line2d::new(
             Point2::new(0.0, v),
             Vec2::new(1.0, 0.0),
-        )?)))
+        )?))
     };
     let vertical = |store: &mut Store| -> Result<_> {
-        Ok(store.add(Curve2dGeom::Line(Line2d::new(
+        store.insert_pcurve(Curve2dGeom::Line(Line2d::new(
             Point2::new(0.0, 0.0),
             Vec2::new(0.0, 1.0),
-        )?)))
+        )?))
     };
     let bottom_pcurve = FinPcurve::new(
         horizontal(store, 0.0)?,
@@ -914,7 +914,7 @@ fn cone_in(
     let top_v = if expanding { slant } else { -slant };
 
     let (body, shell) = solid_body_scaffold(store);
-    let side_surf = store.add(SurfaceGeom::Cone(surface));
+    let side_surf = store.insert_surface(SurfaceGeom::Cone(surface))?;
     let side = store.add(Face {
         shell,
         loops: Vec::new(),
@@ -979,7 +979,7 @@ pub fn sphere_with_journal(store: &mut Store, frame: &Frame, radius: f64) -> Res
 fn sphere_in(store: &mut Store, frame: &Frame, radius: f64) -> Result<BodyId> {
     let radius = positive_dimension(radius, "sphere radius")?;
     let (body, shell) = solid_body_scaffold(store);
-    let surface = store.add(SurfaceGeom::Sphere(Sphere::new(*frame, radius)?));
+    let surface = store.insert_surface(SurfaceGeom::Sphere(Sphere::new(*frame, radius)?))?;
     let face = store.add(Face {
         shell,
         loops: Vec::new(),
@@ -1030,11 +1030,11 @@ fn torus_in(
     let major_radius = positive_dimension(major_radius, "torus major radius")?;
     let minor_radius = positive_dimension(minor_radius, "torus minor radius")?;
     let (body, shell) = solid_body_scaffold(store);
-    let surface = store.add(SurfaceGeom::Torus(Torus::new(
+    let surface = store.insert_surface(SurfaceGeom::Torus(Torus::new(
         *frame,
         major_radius,
         minor_radius,
-    )?));
+    )?))?;
     let face = store.add(Face {
         shell,
         loops: Vec::new(),

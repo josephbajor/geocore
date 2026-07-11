@@ -27,12 +27,16 @@ fn seed_geometry(
     ktopo::entity::CurveId,
     ktopo::entity::PointId,
 ) {
-    let surface = store.insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())));
+    let surface = store
+        .insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())))
+        .unwrap();
     let start = store.insert_point(Point3::new(0.0, 0.0, 0.0)).unwrap();
     let end = store.insert_point(Point3::new(1.0, 0.0, 0.0)).unwrap();
-    let curve = store.insert_curve(CurveGeom::Line(
-        Line::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
-    ));
+    let curve = store
+        .insert_curve(CurveGeom::Line(
+            Line::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+        ))
+        .unwrap();
     (surface, start, curve, end)
 }
 
@@ -57,7 +61,9 @@ fn first_face_diagonal(
     let end = store.vertex_position(end_vertex).unwrap();
     let delta = end - start;
     let length = delta.norm();
-    let curve = store.insert_curve(CurveGeom::Line(Line::new(start, delta).unwrap()));
+    let curve = store
+        .insert_curve(CurveGeom::Line(Line::new(start, delta).unwrap()))
+        .unwrap();
     let plane = match store.get(surface).unwrap() {
         SurfaceGeom::Plane(plane) => *plane,
         _ => panic!("block face must be planar"),
@@ -68,9 +74,11 @@ fn first_face_diagonal(
     let uv_end = Point2::new(local_end.x, local_end.y);
     let range = ParamRange::new(0.0, length);
     let make_use = |store: &mut Store| {
-        let pcurve = store.insert_pcurve(Curve2dGeom::Line(
-            Line2d::new(uv_start, uv_end - uv_start).unwrap(),
-        ));
+        let pcurve = store
+            .insert_pcurve(Curve2dGeom::Line(
+                Line2d::new(uv_start, uv_end - uv_start).unwrap(),
+            ))
+            .unwrap();
         FinPcurve::new(pcurve, range, ParamMap1d::identity()).unwrap()
     };
     let forward = make_use(store);
@@ -88,9 +96,11 @@ fn first_face_diagonal(
 fn failing_multi_step_edit(store: &mut Store) -> Result<()> {
     let (surface, start, curve, end) = seed_geometry(store);
     let make_pcurve = |store: &mut Store| {
-        let curve = store.insert_pcurve(Curve2dGeom::Line(
-            Line2d::new(Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)).unwrap(),
-        ));
+        let curve = store
+            .insert_pcurve(Curve2dGeom::Line(
+                Line2d::new(Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)).unwrap(),
+            ))
+            .unwrap();
         FinPcurve::new(curve, ParamRange::new(0.0, 1.0), ParamMap1d::identity()).unwrap()
     };
     let pcurves = FinPcurvePair::new(make_pcurve(store), make_pcurve(store));

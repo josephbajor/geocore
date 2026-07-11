@@ -13,7 +13,8 @@ use crate::entity::{
     BodyId, CurveId, EdgeId, EntityRef, FaceId, LoopId, PointId, Sense, SurfaceId, VertexId,
 };
 use crate::euler::{FinPcurvePair, Mef, Mekr, Mev, Mvfs};
-use crate::store::{Entity, Store};
+use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
+use crate::store::{ArenaEntity, MutableEntity, Store};
 use crate::tolerance::EntityTolerance;
 use core::ops::Deref;
 use kcore::arena::Handle;
@@ -182,18 +183,71 @@ pub struct AssemblyStore<'a> {
 
 impl AssemblyStore<'_> {
     /// Insert any geometry or topology entity into the active transaction.
-    pub fn add<T: Entity>(&mut self, entity: T) -> Handle<T> {
+    pub fn add<T: ArenaEntity>(&mut self, entity: T) -> Handle<T> {
         self.store.add(entity)
     }
 
+    /// Insert a validated 3D curve descriptor into the graph.
+    pub fn insert_curve(&mut self, curve: CurveGeom) -> Result<CurveId> {
+        self.store.insert_curve(curve)
+    }
+
+    /// Insert a validated surface descriptor into the graph.
+    pub fn insert_surface(&mut self, surface: SurfaceGeom) -> Result<SurfaceId> {
+        self.store.insert_surface(surface)
+    }
+
+    /// Insert a validated pcurve descriptor into the graph.
+    pub fn insert_pcurve(&mut self, curve: Curve2dGeom) -> Result<crate::entity::Curve2dId> {
+        self.store.insert_pcurve(curve)
+    }
+
     /// Mutably borrow an entity inside the active transaction.
-    pub fn get_mut<T: Entity>(&mut self, handle: Handle<T>) -> Result<&mut T> {
+    pub fn get_mut<T: MutableEntity>(&mut self, handle: Handle<T>) -> Result<&mut T> {
         self.store.get_mut(handle)
     }
 
+    /// Replace a 3D curve descriptor atomically while preserving its handle.
+    pub fn replace_curve(&mut self, handle: CurveId, curve: CurveGeom) -> Result<CurveGeom> {
+        self.store.replace_curve(handle, curve)
+    }
+
+    /// Replace a surface descriptor atomically while preserving its handle.
+    pub fn replace_surface(
+        &mut self,
+        handle: SurfaceId,
+        surface: SurfaceGeom,
+    ) -> Result<SurfaceGeom> {
+        self.store.replace_surface(handle, surface)
+    }
+
+    /// Replace a pcurve descriptor atomically while preserving its handle.
+    pub fn replace_pcurve(
+        &mut self,
+        handle: crate::entity::Curve2dId,
+        curve: Curve2dGeom,
+    ) -> Result<Curve2dGeom> {
+        self.store.replace_pcurve(handle, curve)
+    }
+
     /// Remove an entity inside the active transaction.
-    pub fn remove<T: Entity>(&mut self, handle: Handle<T>) -> Result<T> {
+    pub fn remove<T: ArenaEntity>(&mut self, handle: Handle<T>) -> Result<T> {
         self.store.remove(handle)
+    }
+
+    /// Remove an unreferenced graph curve.
+    pub fn remove_curve(&mut self, handle: CurveId) -> Result<CurveGeom> {
+        self.store.remove_curve(handle)
+    }
+
+    /// Remove an unreferenced graph surface.
+    pub fn remove_surface(&mut self, handle: SurfaceId) -> Result<SurfaceGeom> {
+        self.store.remove_surface(handle)
+    }
+
+    /// Remove an unreferenced graph pcurve.
+    pub fn remove_pcurve(&mut self, handle: crate::entity::Curve2dId) -> Result<Curve2dGeom> {
+        self.store.remove_pcurve(handle)
     }
 }
 
@@ -616,6 +670,7 @@ impl<'a> Transaction<'a> {
         let affected = candidate_index.affected_bodies(self.store.committed_index(), &pending);
         let mut checked = Vec::new();
         let validation = (|| {
+            self.store.validate_geometry()?;
             let mut fault_count = candidate_index.ownership_fault_count();
             for &body in bodies {
                 if checked.contains(&body) {

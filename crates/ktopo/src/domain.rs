@@ -505,7 +505,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let pcurve = store.insert_pcurve(Curve2dGeom::Nurbs(nurbs));
+        let pcurve = store.insert_pcurve(Curve2dGeom::Nurbs(nurbs)).unwrap();
         store.get_mut(fin_id).unwrap().pcurve =
             Some(FinPcurve::new(pcurve, active, use_.edge_to_pcurve()).unwrap());
 

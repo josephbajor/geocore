@@ -1,6 +1,6 @@
-//! The entity store: typed generational arenas for all topology and
-//! attached geometry, with uniform access, deterministic traversal, and
-//! copy-on-write transaction entry points.
+//! The entity store: typed generational arenas for topology and points plus
+//! one authoritative geometry graph, with uniform compatibility reads,
+//! deterministic traversal, and copy-on-write transaction entry points.
 
 use crate::entity::{
     Body, BodyId, Curve2dId, CurveId, Edge, EdgeId, EntityRef, Face, FaceId, Fin, FinId, Loop,
@@ -11,33 +11,111 @@ use crate::index::StoreIndex;
 use crate::transaction::{Mutation, MutationKind, Transaction};
 use kcore::arena::{Arena, ArenaChangeKind, Handle};
 use kcore::error::{Error, Result};
-use kcore::tolerance::check_in_size_box;
+use kcore::tolerance::{Tolerances, check_in_size_box};
 use kgeom::vec::Point3;
+use kgraph::{GeometryGraph, GeometryGraphError, GeometryRef};
 
-/// Implemented by every type the [`Store`] can hold; maps the type to its
-/// arena so access is uniform: `store.add(entity)`, `store.get(handle)?`.
-pub trait Entity: Sized + Clone {
-    /// The arena holding this entity type.
-    fn arena(store: &Store) -> &Arena<Self>;
-    /// The arena holding this entity type, mutably.
-    fn arena_mut(store: &mut Store) -> &mut Arena<Self>;
-    /// Erase a typed handle for diagnostics and journaling.
-    fn entity_ref(handle: Handle<Self>) -> EntityRef;
+pub(crate) mod sealed {
+    use super::{EntityRef, Handle, Result, Store};
+
+    pub trait Storage: Sized + Clone {
+        fn get(store: &Store, handle: Handle<Self>) -> Option<&Self>;
+        fn contains(store: &Store, handle: Handle<Self>) -> bool;
+        fn count(store: &Store) -> usize;
+        fn iter(store: &Store) -> Box<dyn Iterator<Item = (Handle<Self>, &Self)> + '_>;
+        fn entity_ref(handle: Handle<Self>) -> EntityRef;
+    }
+
+    pub trait ArenaStorage: Storage {
+        fn insert(store: &mut Store, value: Self) -> Handle<Self>;
+        fn remove(store: &mut Store, handle: Handle<Self>) -> Result<Self>;
+    }
+
+    pub trait MutableStorage: ArenaStorage {
+        fn get_mut(store: &mut Store, handle: Handle<Self>) -> Option<&mut Self>;
+    }
 }
+
+/// Sealed marker implemented by every value readable through [`Store`].
+#[allow(private_bounds)]
+pub trait Entity: sealed::Storage {}
+
+/// Sealed marker for topology entities and points owned by Store arenas.
+#[allow(private_bounds)]
+pub trait ArenaEntity: Entity + sealed::ArenaStorage {}
+
+/// Store values whose representation may be mutated in place.
+///
+/// Geometry graph descriptors intentionally do not implement this trait;
+/// replacement is fallible and must update dependency bookkeeping atomically.
+#[allow(private_bounds)]
+pub trait MutableEntity: ArenaEntity + sealed::MutableStorage {}
 
 macro_rules! entity_arena {
     ($ty:ty, $field:ident, $variant:ident) => {
-        impl Entity for $ty {
-            fn arena(store: &Store) -> &Arena<Self> {
-                &store.$field
+        impl sealed::Storage for $ty {
+            fn get(store: &Store, handle: Handle<Self>) -> Option<&Self> {
+                store.$field.get(handle)
             }
-            fn arena_mut(store: &mut Store) -> &mut Arena<Self> {
-                &mut store.$field
+            fn contains(store: &Store, handle: Handle<Self>) -> bool {
+                store.$field.contains(handle)
+            }
+            fn count(store: &Store) -> usize {
+                store.$field.len()
+            }
+            fn iter(store: &Store) -> Box<dyn Iterator<Item = (Handle<Self>, &Self)> + '_> {
+                Box::new(store.$field.iter())
             }
             fn entity_ref(handle: Handle<Self>) -> EntityRef {
                 EntityRef::$variant(handle)
             }
         }
+        impl Entity for $ty {}
+        impl sealed::ArenaStorage for $ty {
+            fn insert(store: &mut Store, value: Self) -> Handle<Self> {
+                store.$field.insert(value)
+            }
+            fn remove(store: &mut Store, handle: Handle<Self>) -> Result<Self> {
+                store.$field.remove(handle).ok_or(Error::StaleHandle)
+            }
+        }
+        impl ArenaEntity for $ty {}
+        impl sealed::MutableStorage for $ty {
+            fn get_mut(store: &mut Store, handle: Handle<Self>) -> Option<&mut Self> {
+                store.$field.get_mut(handle)
+            }
+        }
+        impl MutableEntity for $ty {}
+    };
+}
+
+macro_rules! geometry_entity {
+    (
+        $ty:ty,
+        $get:ident,
+        $count:ident,
+        $iter:ident,
+        $ref_variant:ident,
+        $geom_variant:ident
+    ) => {
+        impl sealed::Storage for $ty {
+            fn get(store: &Store, handle: Handle<Self>) -> Option<&Self> {
+                store.geometry.$get(handle)
+            }
+            fn contains(store: &Store, handle: Handle<Self>) -> bool {
+                store.geometry.contains(GeometryRef::$geom_variant(handle))
+            }
+            fn count(store: &Store) -> usize {
+                store.geometry.$count()
+            }
+            fn iter(store: &Store) -> Box<dyn Iterator<Item = (Handle<Self>, &Self)> + '_> {
+                Box::new(store.geometry.$iter())
+            }
+            fn entity_ref(handle: Handle<Self>) -> EntityRef {
+                EntityRef::$ref_variant(handle)
+            }
+        }
+        impl Entity for $ty {}
     };
 }
 
@@ -85,10 +163,8 @@ pub struct Store {
     fins: Arena<Fin>,
     edges: Arena<Edge>,
     vertices: Arena<Vertex>,
-    curves: Arena<CurveGeom>,
-    surfaces: Arena<SurfaceGeom>,
+    geometry: GeometryGraph,
     points: Arena<Point3>,
-    curves_2d: Arena<Curve2dGeom>,
     index: StoreIndex,
     index_dirty: bool,
     full_validation_required: bool,
@@ -106,10 +182,8 @@ impl Clone for Store {
             fins: self.fins.clone(),
             edges: self.edges.clone(),
             vertices: self.vertices.clone(),
-            curves: self.curves.clone(),
-            surfaces: self.surfaces.clone(),
+            geometry: self.geometry.clone(),
             points: self.points.clone(),
-            curves_2d: self.curves_2d.clone(),
             index: self.index.clone(),
             // Arena clones snapshot the transaction's current state rather
             // than its entry state, so an active source transaction cannot
@@ -129,10 +203,24 @@ entity_arena!(Loop, loops, Loop);
 entity_arena!(Fin, fins, Fin);
 entity_arena!(Edge, edges, Edge);
 entity_arena!(Vertex, vertices, Vertex);
-entity_arena!(CurveGeom, curves, Curve);
-entity_arena!(SurfaceGeom, surfaces, Surface);
 entity_arena!(Point3, points, Point);
-entity_arena!(Curve2dGeom, curves_2d, Curve2d);
+geometry_entity!(CurveGeom, curve, curve_count, curves, Curve, Curve);
+geometry_entity!(
+    SurfaceGeom,
+    surface,
+    surface_count,
+    surfaces,
+    Surface,
+    Surface
+);
+geometry_entity!(
+    Curve2dGeom,
+    curve2d,
+    curve2d_count,
+    curves_2d,
+    Curve2d,
+    Curve2d
+);
 
 impl Store {
     /// Empty store.
@@ -157,10 +245,8 @@ impl Store {
         self.fins.begin_undo_frame();
         self.edges.begin_undo_frame();
         self.vertices.begin_undo_frame();
-        self.curves.begin_undo_frame();
-        self.surfaces.begin_undo_frame();
+        self.geometry.begin_undo_frame();
         self.points.begin_undo_frame();
-        self.curves_2d.begin_undo_frame();
         self.transaction_active = true;
         Ok(Transaction::new(self))
     }
@@ -180,10 +266,11 @@ impl Store {
         append_pending_changes::<Fin>(&self.fins, &mut out)?;
         append_pending_changes::<Edge>(&self.edges, &mut out)?;
         append_pending_changes::<Vertex>(&self.vertices, &mut out)?;
-        append_pending_changes::<CurveGeom>(&self.curves, &mut out)?;
-        append_pending_changes::<SurfaceGeom>(&self.surfaces, &mut out)?;
+        let changes = self.geometry.pending_undo_frame_changes()?;
+        append_geometry_changes::<CurveGeom>(changes.curves, &mut out);
+        append_geometry_changes::<SurfaceGeom>(changes.surfaces, &mut out);
         append_pending_changes::<Point3>(&self.points, &mut out)?;
-        append_pending_changes::<Curve2dGeom>(&self.curves_2d, &mut out)?;
+        append_geometry_changes::<Curve2dGeom>(changes.curves_2d, &mut out);
         Ok(out)
     }
 
@@ -215,10 +302,11 @@ impl Store {
         append_changes::<Fin>(&mut self.fins, &mut out)?;
         append_changes::<Edge>(&mut self.edges, &mut out)?;
         append_changes::<Vertex>(&mut self.vertices, &mut out)?;
-        append_changes::<CurveGeom>(&mut self.curves, &mut out)?;
-        append_changes::<SurfaceGeom>(&mut self.surfaces, &mut out)?;
+        let changes = self.geometry.commit_undo_frame()?;
+        append_geometry_changes::<CurveGeom>(changes.curves, &mut out);
+        append_geometry_changes::<SurfaceGeom>(changes.surfaces, &mut out);
         append_changes::<Point3>(&mut self.points, &mut out)?;
-        append_changes::<Curve2dGeom>(&mut self.curves_2d, &mut out)?;
+        append_geometry_changes::<Curve2dGeom>(changes.curves_2d, &mut out);
         self.transaction_active = false;
         Ok(out)
     }
@@ -227,10 +315,8 @@ impl Store {
         if !self.transaction_active {
             return Err(Error::TransactionInactive);
         }
-        self.curves_2d.rollback_undo_frame()?;
+        self.geometry.rollback_undo_frame()?;
         self.points.rollback_undo_frame()?;
-        self.surfaces.rollback_undo_frame()?;
-        self.curves.rollback_undo_frame()?;
         self.vertices.rollback_undo_frame()?;
         self.edges.rollback_undo_frame()?;
         self.fins.rollback_undo_frame()?;
@@ -245,9 +331,9 @@ impl Store {
 
     /// Insert an entity for topology-internal construction or a scoped
     /// [`crate::transaction::AssemblyStore`].
-    pub(crate) fn add<T: Entity>(&mut self, entity: T) -> Handle<T> {
-        let handle = T::arena_mut(self).insert(entity);
-        if !self.transaction_active && is_topology(T::entity_ref(handle)) {
+    pub(crate) fn add<T: ArenaEntity>(&mut self, entity: T) -> Handle<T> {
+        let handle = <T as sealed::ArenaStorage>::insert(self, entity);
+        if !self.transaction_active && is_topology(<T as sealed::Storage>::entity_ref(handle)) {
             self.index_dirty = true;
             self.full_validation_required = true;
         }
@@ -261,59 +347,150 @@ impl Store {
     }
 
     /// Insert immutable 3D curve geometry.
-    pub fn insert_curve(&mut self, curve: CurveGeom) -> CurveId {
-        self.add(curve)
+    pub fn insert_curve(&mut self, curve: CurveGeom) -> Result<CurveId> {
+        self.geometry.insert_curve(curve).map_err(map_graph_error)
     }
 
     /// Insert immutable supporting-surface geometry.
-    pub fn insert_surface(&mut self, surface: SurfaceGeom) -> SurfaceId {
-        self.add(surface)
+    pub fn insert_surface(&mut self, surface: SurfaceGeom) -> Result<SurfaceId> {
+        self.geometry
+            .insert_surface(surface)
+            .map_err(map_graph_error)
     }
 
     /// Insert immutable parameter-space curve geometry.
-    pub fn insert_pcurve(&mut self, curve: Curve2dGeom) -> Curve2dId {
-        self.add(curve)
+    pub fn insert_pcurve(&mut self, curve: Curve2dGeom) -> Result<Curve2dId> {
+        self.geometry.insert_curve2d(curve).map_err(map_graph_error)
+    }
+
+    /// Borrow the authoritative geometry graph.
+    pub fn geometry(&self) -> &GeometryGraph {
+        &self.geometry
+    }
+
+    /// Construct a bounded evaluator borrowing this store's geometry graph.
+    pub fn eval_context(
+        &self,
+        limits: kgraph::EvalLimits,
+        tolerances: Tolerances,
+    ) -> kgraph::EvalContext<'_> {
+        kgraph::EvalContext::new(&self.geometry, limits, tolerances)
+    }
+
+    /// Borrow a live 3D curve descriptor explicitly.
+    pub fn curve(&self, handle: CurveId) -> Result<&CurveGeom> {
+        self.geometry.curve(handle).ok_or(Error::StaleHandle)
+    }
+
+    /// Borrow a live supporting-surface descriptor explicitly.
+    pub fn surface(&self, handle: SurfaceId) -> Result<&SurfaceGeom> {
+        self.geometry.surface(handle).ok_or(Error::StaleHandle)
+    }
+
+    /// Borrow a live parameter-space curve descriptor explicitly.
+    pub fn pcurve(&self, handle: Curve2dId) -> Result<&Curve2dGeom> {
+        self.geometry.curve2d(handle).ok_or(Error::StaleHandle)
+    }
+
+    pub(crate) fn replace_curve(&mut self, handle: CurveId, curve: CurveGeom) -> Result<CurveGeom> {
+        self.require_active_transaction()?;
+        self.geometry
+            .replace_curve(handle, curve)
+            .map_err(map_graph_error)
+    }
+
+    pub(crate) fn replace_surface(
+        &mut self,
+        handle: SurfaceId,
+        surface: SurfaceGeom,
+    ) -> Result<SurfaceGeom> {
+        self.require_active_transaction()?;
+        self.geometry
+            .replace_surface(handle, surface)
+            .map_err(map_graph_error)
+    }
+
+    pub(crate) fn replace_pcurve(
+        &mut self,
+        handle: Curve2dId,
+        curve: Curve2dGeom,
+    ) -> Result<Curve2dGeom> {
+        self.require_active_transaction()?;
+        self.geometry
+            .replace_curve2d(handle, curve)
+            .map_err(map_graph_error)
+    }
+
+    pub(crate) fn remove_curve(&mut self, handle: CurveId) -> Result<CurveGeom> {
+        self.require_active_transaction()?;
+        self.geometry.remove_curve(handle).map_err(map_graph_error)
+    }
+
+    pub(crate) fn remove_surface(&mut self, handle: SurfaceId) -> Result<SurfaceGeom> {
+        self.require_active_transaction()?;
+        self.geometry
+            .remove_surface(handle)
+            .map_err(map_graph_error)
+    }
+
+    pub(crate) fn remove_pcurve(&mut self, handle: Curve2dId) -> Result<Curve2dGeom> {
+        self.require_active_transaction()?;
+        self.geometry
+            .remove_curve2d(handle)
+            .map_err(map_graph_error)
+    }
+
+    fn require_active_transaction(&self) -> Result<()> {
+        if self.transaction_active {
+            Ok(())
+        } else {
+            Err(Error::TransactionInactive)
+        }
+    }
+
+    pub(crate) fn validate_geometry(&self) -> Result<()> {
+        self.geometry.validate().map_err(map_graph_error)
     }
 
     /// Borrow an entity; [`Error::StaleHandle`] if removed or unknown.
     pub fn get<T: Entity>(&self, handle: Handle<T>) -> Result<&T> {
-        T::arena(self).get(handle).ok_or(Error::StaleHandle)
+        <T as sealed::Storage>::get(self, handle).ok_or(Error::StaleHandle)
     }
 
     /// Mutably borrow an entity; [`Error::StaleHandle`] if removed or
     /// unknown.
-    pub(crate) fn get_mut<T: Entity>(&mut self, handle: Handle<T>) -> Result<&mut T> {
+    pub(crate) fn get_mut<T: MutableEntity>(&mut self, handle: Handle<T>) -> Result<&mut T> {
         if !self.transaction_active {
             self.index_dirty = true;
             self.full_validation_required = true;
         }
-        T::arena_mut(self).get_mut(handle).ok_or(Error::StaleHandle)
+        <T as sealed::MutableStorage>::get_mut(self, handle).ok_or(Error::StaleHandle)
     }
 
     /// Remove an entity, returning it; [`Error::StaleHandle`] if already
     /// gone. Removal never fixes up references *to* the entity — that is
     /// the caller's job (Euler operators do this correctly).
-    pub(crate) fn remove<T: Entity>(&mut self, handle: Handle<T>) -> Result<T> {
+    pub(crate) fn remove<T: ArenaEntity>(&mut self, handle: Handle<T>) -> Result<T> {
         if !self.transaction_active {
             self.index_dirty = true;
             self.full_validation_required = true;
         }
-        T::arena_mut(self).remove(handle).ok_or(Error::StaleHandle)
+        <T as sealed::ArenaStorage>::remove(self, handle)
     }
 
     /// True if the handle refers to a live entity.
     pub fn contains<T: Entity>(&self, handle: Handle<T>) -> bool {
-        T::arena(self).contains(handle)
+        <T as sealed::Storage>::contains(self, handle)
     }
 
     /// Number of live entities of one type.
     pub fn count<T: Entity>(&self) -> usize {
-        T::arena(self).len()
+        <T as sealed::Storage>::count(self)
     }
 
     /// Iterate live entities of one type in slot order (deterministic).
     pub fn iter<'a, T: Entity + 'a>(&'a self) -> impl Iterator<Item = (Handle<T>, &'a T)> + 'a {
-        T::arena(self).iter()
+        <T as sealed::Storage>::iter(self)
     }
 
     /// All faces of a body, in region → shell → face stored order.
@@ -427,9 +604,16 @@ fn append_pending_changes<T: Entity>(arena: &Arena<T>, out: &mut Vec<Mutation>) 
     Ok(())
 }
 
+fn append_geometry_changes<T: Entity>(
+    changes: Vec<kcore::arena::ArenaChange<T>>,
+    out: &mut Vec<Mutation>,
+) {
+    out.extend(changes.into_iter().map(change_to_mutation::<T>));
+}
+
 fn change_to_mutation<T: Entity>(change: kcore::arena::ArenaChange<T>) -> Mutation {
     Mutation {
-        entity: T::entity_ref(change.handle()),
+        entity: <T as sealed::Storage>::entity_ref(change.handle()),
         kind: match change.kind() {
             ArenaChangeKind::Created => MutationKind::Created,
             ArenaChangeKind::Modified => MutationKind::Modified,
@@ -452,10 +636,32 @@ fn is_topology(entity: EntityRef) -> bool {
     )
 }
 
+fn map_graph_error(error: GeometryGraphError) -> Error {
+    match error {
+        GeometryGraphError::StaleGeometryHandle { .. } => Error::StaleHandle,
+        GeometryGraphError::InvalidDescriptor { reason, .. } => Error::InvalidGeometry { reason },
+        GeometryGraphError::HasDependents { .. } => Error::InvalidGeometry {
+            reason: "geometry node still has graph dependents",
+        },
+        GeometryGraphError::DependencyCycle { .. } => Error::InvalidGeometry {
+            reason: "geometry graph contains a dependency cycle",
+        },
+        GeometryGraphError::ReverseDependencyMismatch { .. } => Error::InvalidGeometry {
+            reason: "geometry graph reverse dependency index is inconsistent",
+        },
+        _ => Error::InvalidGeometry {
+            reason: "geometry graph validation failed",
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::entity::{BodyKind, RegionKind};
+    use crate::geom::CurveGeom;
+    use crate::transaction::MutationKind;
+    use kgeom::curve::Line;
     use kgeom::frame::Frame;
 
     #[test]
@@ -500,5 +706,88 @@ mod tests {
             Err(Error::TopologyCheckFailed { fault_count }) if fault_count > 0
         ));
         assert!(store.get(invalid).unwrap().regions.is_empty());
+    }
+
+    #[test]
+    fn graph_owned_geometry_replacement_is_journaled_and_rollback_exact() {
+        let mut store = Store::new();
+        let curve = store
+            .insert_curve(CurveGeom::Line(
+                Line::new(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)).unwrap(),
+            ))
+            .unwrap();
+        assert_eq!(store.geometry().curve_count(), 1);
+        assert_eq!(store.count::<CurveGeom>(), 1);
+        assert!(core::ptr::eq(
+            store.curve(curve).unwrap(),
+            store.geometry().curve(curve).unwrap()
+        ));
+
+        let original = store.curve(curve).unwrap().clone();
+        let mut transaction = store.transaction().unwrap();
+        transaction
+            .assembly()
+            .replace_curve(
+                curve,
+                CurveGeom::Line(
+                    Line::new(Point3::new(2.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)).unwrap(),
+                ),
+            )
+            .unwrap();
+        transaction.rollback().unwrap();
+        assert_eq!(store.curve(curve).unwrap(), &original);
+
+        let mut transaction = store.transaction().unwrap();
+        transaction
+            .assembly()
+            .replace_curve(
+                curve,
+                CurveGeom::Line(
+                    Line::new(Point3::new(3.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)).unwrap(),
+                ),
+            )
+            .unwrap();
+        let journal = transaction.commit_checked(&[]).unwrap();
+        assert!(journal.mutations().iter().any(|mutation| {
+            mutation.entity == EntityRef::Curve(curve) && mutation.kind == MutationKind::Modified
+        }));
+        store.geometry().validate().unwrap();
+    }
+
+    #[test]
+    fn invalid_geometry_insertion_is_fallible_and_leaves_graph_unchanged() {
+        let mut store = Store::new();
+        let invalid =
+            Line::new(Point3::new(f64::NAN, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)).unwrap();
+
+        assert!(matches!(
+            store.insert_curve(CurveGeom::Line(invalid)),
+            Err(Error::InvalidGeometry { .. })
+        ));
+        assert_eq!(store.geometry().curve_count(), 0);
+        store.geometry().validate().unwrap();
+    }
+
+    #[test]
+    fn graph_dependent_removal_error_retains_its_meaning_at_topology_boundary() {
+        let mut graph = GeometryGraph::new();
+        let basis = graph
+            .insert_curve(Line::new(Point3::default(), Point3::new(1.0, 0.0, 0.0)).unwrap())
+            .unwrap();
+        let dependent = graph
+            .insert_curve(
+                Line::new(Point3::new(0.0, 1.0, 0.0), Point3::new(1.0, 0.0, 0.0)).unwrap(),
+            )
+            .unwrap();
+        let mapped = map_graph_error(GeometryGraphError::HasDependents {
+            geometry: GeometryRef::Curve(basis),
+            dependents: vec![GeometryRef::Curve(dependent)],
+        });
+        assert_eq!(
+            mapped,
+            Error::InvalidGeometry {
+                reason: "geometry node still has graph dependents"
+            }
+        );
     }
 }

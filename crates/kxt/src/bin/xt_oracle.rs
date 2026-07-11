@@ -290,7 +290,9 @@ fn replace_edge_with_linear_nurbs(store: &mut Store, body: BodyId) {
             .expect("end position");
         let nurbs =
             NurbsCurve::new(1, vec![t0, t0, t1, t1], vec![start, end], None).expect("linear NURBS");
-        *store.get_mut(curve_id).expect("curve slot") = CurveGeom::Nurbs(nurbs);
+        store
+            .replace_curve(curve_id, CurveGeom::Nurbs(nurbs))
+            .expect("curve replacement");
     });
 }
 
@@ -341,7 +343,9 @@ fn replace_face_with_bilinear_nurbs(store: &mut Store, body: BodyId) {
             None,
         )
         .expect("bilinear NURBS patch");
-        *store.get_mut(surface_id).expect("surface slot") = SurfaceGeom::Nurbs(surface);
+        store
+            .replace_surface(surface_id, SurfaceGeom::Nurbs(surface))
+            .expect("surface replacement");
         store.get_mut(face_id).expect("face slot").domain =
             Some(FaceDomain::from_bounds(0.0, 1.0, 0.0, 1.0).expect("unit domain"));
 
@@ -374,8 +378,12 @@ fn replace_face_with_bilinear_nurbs(store: &mut Store, body: BodyId) {
             let end = to_uv(store.vertex_position(end_id).expect("end position"));
             let uv_len = (end - start).norm();
             let pcurve_id = fin.pcurve.expect("block fins carry pcurves").curve();
-            *store.get_mut(pcurve_id).expect("pcurve slot") =
-                Curve2dGeom::Line(Line2d::new(start, end - start).expect("uv line"));
+            store
+                .replace_pcurve(
+                    pcurve_id,
+                    Curve2dGeom::Line(Line2d::new(start, end - start).expect("uv line")),
+                )
+                .expect("pcurve replacement");
             let scale = uv_len / (t1 - t0);
             let map = ParamMap1d::affine(scale, -scale * t0).expect("affine map");
             store.get_mut(fin_id).expect("fin slot").pcurve = Some(
@@ -417,15 +425,20 @@ fn make_first_edge_truly_tolerant(store: &mut Store, body: BodyId) -> EdgeId {
         let range = first_use.range();
         let extended_hi = range.lo + 10.0 * range.width();
         let endpoints = vec![first_curve.eval(range.lo), first_curve.eval(extended_hi)];
-        *store.get_mut(first_use.curve()).expect("pcurve slot") = Curve2dGeom::Nurbs(
-            NurbsCurve2d::new(
-                1,
-                vec![range.lo, range.lo, extended_hi, extended_hi],
-                endpoints,
-                Some(vec![2.0, 2.0]),
+        store
+            .replace_pcurve(
+                first_use.curve(),
+                Curve2dGeom::Nurbs(
+                    NurbsCurve2d::new(
+                        1,
+                        vec![range.lo, range.lo, extended_hi, extended_hi],
+                        endpoints,
+                        Some(vec![2.0, 2.0]),
+                    )
+                    .expect("rational 2D B-curve"),
+                ),
             )
-            .expect("rational 2D B-curve"),
-        );
+            .expect("pcurve replacement");
 
         let second = fins[1];
         let second_use = store.get(second).expect("fin").pcurve.expect("pcurve");
@@ -433,13 +446,18 @@ fn make_first_edge_truly_tolerant(store: &mut Store, body: BodyId) -> EdgeId {
             unreachable!("block pcurve must be linear")
         };
         let range = second_use.range();
-        *store.get_mut(second_use.curve()).expect("pcurve slot") = Curve2dGeom::Line(
-            Line2d::new(
-                line.origin() + line.dir() * (range.lo + range.hi),
-                -line.dir(),
+        store
+            .replace_pcurve(
+                second_use.curve(),
+                Curve2dGeom::Line(
+                    Line2d::new(
+                        line.origin() + line.dir() * (range.lo + range.hi),
+                        -line.dir(),
+                    )
+                    .expect("reversed uv line"),
+                ),
             )
-            .expect("reversed uv line"),
-        );
+            .expect("pcurve replacement");
         let old_map = second_use.edge_to_pcurve();
         let reversed_map =
             ParamMap1d::affine(-old_map.scale(), range.lo + range.hi - old_map.offset())
@@ -510,6 +528,7 @@ fn surface_class(surface: &SurfaceGeom) -> &'static str {
         SurfaceGeom::Sphere(_) => "sphere",
         SurfaceGeom::Torus(_) => "torus",
         SurfaceGeom::Nurbs(_) => "nurbs",
+        _ => "procedural",
     }
 }
 
@@ -519,6 +538,7 @@ fn curve_class(curve: Option<&CurveGeom>) -> &'static str {
         Some(CurveGeom::Circle(_)) => "circle",
         Some(CurveGeom::Ellipse(_)) => "ellipse",
         Some(CurveGeom::Nurbs(_)) => "nurbs",
+        Some(_) => "procedural",
         None => "tolerant",
     }
 }

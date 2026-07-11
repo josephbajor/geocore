@@ -1606,7 +1606,7 @@ mod tests {
 
     /// A vertex-less ring edge over one full period of `circle`.
     fn ring_edge(store: &mut Store, circle: Circle) -> EdgeId {
-        let curve = store.add(CurveGeom::Circle(circle));
+        let curve = store.insert_curve(CurveGeom::Circle(circle)).unwrap();
         store.add(Edge {
             curve: Some(curve),
             vertices: [None, None],
@@ -1617,7 +1617,7 @@ mod tests {
     }
 
     fn add_face(store: &mut Store, shell: ShellId, surface: SurfaceGeom) -> FaceId {
-        let surface = store.add(surface);
+        let surface = store.insert_surface(surface).unwrap();
         let face = store.add(Face {
             shell,
             loops: Vec::new(),

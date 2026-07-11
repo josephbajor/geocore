@@ -1016,8 +1016,12 @@ mod tests {
     fn dummy(store: &mut Store) -> (crate::entity::PointId, CurveId, SurfaceId) {
         let point = store.add(Point3::new(0.0, 0.0, 0.0));
         let line = Line::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap();
-        let curve = store.add(crate::geom::CurveGeom::Line(line));
-        let surface = store.add(crate::geom::SurfaceGeom::Plane(Plane::new(Frame::world())));
+        let curve = store
+            .insert_curve(crate::geom::CurveGeom::Line(line))
+            .unwrap();
+        let surface = store
+            .insert_surface(crate::geom::SurfaceGeom::Plane(Plane::new(Frame::world())))
+            .unwrap();
         (point, curve, surface)
     }
 
@@ -1029,12 +1033,16 @@ mod tests {
     ) -> (CurveId, (f64, f64), FinPcurvePair) {
         let delta = end - start;
         let length = delta.norm();
-        let curve = store.add(CurveGeom::Line(Line::new(start, delta).unwrap()));
+        let curve = store
+            .insert_curve(CurveGeom::Line(Line::new(start, delta).unwrap()))
+            .unwrap();
         let uv_start = Point2::new(start.x, start.y) + uv_shift;
         let uv_delta = Vec2::new(delta.x, delta.y);
         let uv_length = uv_delta.norm();
         let make_use = |store: &mut Store| {
-            let pcurve = store.add(Curve2dGeom::Line(Line2d::new(uv_start, uv_delta).unwrap()));
+            let pcurve = store
+                .insert_pcurve(Curve2dGeom::Line(Line2d::new(uv_start, uv_delta).unwrap()))
+                .unwrap();
             FinPcurve::new(
                 pcurve,
                 ParamRange::new(0.0, uv_length),
@@ -1056,7 +1064,9 @@ mod tests {
             Point3::new(1.0, 1.0, 0.0),
             Point3::new(-1.0, 1.0, 0.0),
         ];
-        let surface = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
+        let surface = store
+            .insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())))
+            .unwrap();
         let seed = store.add(points[0]);
         let made = mvfs(store, surface, Sense::Forward, seed).unwrap();
         let mut tail = made.vertex;
@@ -1243,7 +1253,9 @@ mod tests {
         let mut store = Store::new();
         let p0 = Point3::new(0.0, 0.0, 0.0);
         let p1 = Point3::new(1.0, 0.0, 0.0);
-        let surface = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
+        let surface = store
+            .insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())))
+            .unwrap();
         let seed = store.add(p0);
         let made = mvfs(&mut store, surface, Sense::Forward, seed).unwrap();
         let (curve, bounds, bad_pcurves) =

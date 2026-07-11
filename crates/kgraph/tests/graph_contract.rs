@@ -161,7 +161,17 @@ fn iteration_and_leaf_traversal_are_deterministic() {
         assert_eq!(graph.dependency_closure(geometry).unwrap(), vec![geometry]);
         assert!(graph.dependents(geometry).unwrap().is_empty());
         assert!(graph.reaches(geometry, geometry).unwrap());
+        assert_eq!(
+            graph.dependency_path(geometry, geometry).unwrap(),
+            Some(vec![geometry])
+        );
     }
+    assert_eq!(
+        graph
+            .dependency_path(GeometryRef::Curve(c0), GeometryRef::Curve(c1))
+            .unwrap(),
+        None
+    );
     graph.validate().unwrap();
 }
 
@@ -182,4 +192,69 @@ fn cloning_produces_an_independent_current_state_snapshot() {
     assert!(source.curve(original).is_some());
     source.validate().unwrap();
     cloned.validate().unwrap();
+}
+
+#[test]
+fn replacement_is_validated_and_failed_replacement_is_atomic() {
+    let mut graph = GeometryGraph::new();
+    let curve = graph.insert_curve(line([0.0, 0.0, 0.0])).unwrap();
+    let original = graph.curve(curve).unwrap().clone();
+    let invalid = Line::new(Vec3::new(f64::NAN, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap();
+
+    assert!(matches!(
+        graph.replace_curve(curve, invalid),
+        Err(GeometryGraphError::InvalidDescriptor { .. })
+    ));
+    assert_eq!(graph.curve(curve), Some(&original));
+    graph.validate().unwrap();
+}
+
+#[test]
+fn graph_undo_restores_payloads_handles_and_future_allocation_order() {
+    let mut graph = GeometryGraph::new();
+    let original = graph.insert_curve(line([0.0, 0.0, 0.0])).unwrap();
+    let original_value = graph.curve(original).unwrap().clone();
+
+    graph.begin_undo_frame();
+    graph
+        .replace_curve(original, line([5.0, 0.0, 0.0]))
+        .unwrap();
+    let transient = graph.insert_curve(line([9.0, 0.0, 0.0])).unwrap();
+    assert_eq!(graph.pending_undo_frame_changes().unwrap().curves.len(), 2);
+    graph.rollback_undo_frame().unwrap();
+
+    assert_eq!(graph.curve(original), Some(&original_value));
+    assert!(graph.curve(transient).is_none());
+    let reused = graph.insert_curve(line([11.0, 0.0, 0.0])).unwrap();
+    assert_eq!(reused, transient);
+    graph.validate().unwrap();
+}
+
+#[test]
+fn nested_graph_frames_restore_their_own_dependency_and_arena_state() {
+    let mut graph = GeometryGraph::new();
+    let curve = graph.insert_curve(line([0.0, 0.0, 0.0])).unwrap();
+    let original = graph.curve(curve).unwrap().clone();
+
+    graph.begin_undo_frame();
+    graph.replace_curve(curve, line([1.0, 0.0, 0.0])).unwrap();
+    let outer_value = graph.curve(curve).unwrap().clone();
+
+    graph.begin_undo_frame();
+    graph.replace_curve(curve, line([2.0, 0.0, 0.0])).unwrap();
+    let transient = graph.insert_curve(line([3.0, 0.0, 0.0])).unwrap();
+    graph.rollback_undo_frame().unwrap();
+    assert_eq!(graph.curve(curve), Some(&outer_value));
+    assert!(graph.curve(transient).is_none());
+
+    graph.begin_undo_frame();
+    graph.replace_curve(curve, line([4.0, 0.0, 0.0])).unwrap();
+    graph.commit_undo_frame().unwrap();
+    assert_ne!(graph.curve(curve), Some(&outer_value));
+
+    graph.rollback_undo_frame().unwrap();
+    assert_eq!(graph.curve(curve), Some(&original));
+    let reused = graph.insert_curve(line([5.0, 0.0, 0.0])).unwrap();
+    assert_eq!(reused, transient);
+    graph.validate().unwrap();
 }

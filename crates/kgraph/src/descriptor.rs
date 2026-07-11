@@ -1,9 +1,9 @@
 //! Immutable leaf descriptors and dependency reporting.
 
-use kgeom::curve::{Circle, Ellipse, Line};
-use kgeom::curve2d::{Circle2d, Line2d, NurbsCurve2d};
+use kgeom::curve::{Circle, Curve, Ellipse, Line};
+use kgeom::curve2d::{Circle2d, Curve2d, Line2d, NurbsCurve2d};
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
-use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Torus};
+use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 
 use crate::class::{Curve2dClass, CurveClass, GeometryClassKey, SurfaceClass};
 use crate::graph::GeometryRef;
@@ -23,6 +23,21 @@ pub enum CurveDescriptor {
 }
 
 impl CurveDescriptor {
+    /// Borrow the node's immutable descriptor payload.
+    pub const fn descriptor(&self) -> &Self {
+        self
+    }
+
+    /// Uniform leaf evaluator view.
+    pub fn as_curve(&self) -> &dyn Curve {
+        match self {
+            Self::Line(value) => value,
+            Self::Circle(value) => value,
+            Self::Ellipse(value) => value,
+            Self::Nurbs(value) => value,
+        }
+    }
+
     /// Exact class of this descriptor.
     pub const fn class(&self) -> CurveClass {
         match self {
@@ -115,6 +130,23 @@ pub enum SurfaceDescriptor {
 }
 
 impl SurfaceDescriptor {
+    /// Borrow the node's immutable descriptor payload.
+    pub const fn descriptor(&self) -> &Self {
+        self
+    }
+
+    /// Uniform leaf evaluator view.
+    pub fn as_surface(&self) -> &dyn Surface {
+        match self {
+            Self::Plane(value) => value,
+            Self::Cylinder(value) => value,
+            Self::Cone(value) => value,
+            Self::Sphere(value) => value,
+            Self::Torus(value) => value,
+            Self::Nurbs(value) => value,
+        }
+    }
+
     /// Exact class of this descriptor.
     pub const fn class(&self) -> SurfaceClass {
         match self {
@@ -226,6 +258,20 @@ pub enum Curve2dDescriptor {
 }
 
 impl Curve2dDescriptor {
+    /// Borrow the node's immutable descriptor payload.
+    pub const fn descriptor(&self) -> &Self {
+        self
+    }
+
+    /// Uniform leaf evaluator view.
+    pub fn as_curve(&self) -> &dyn Curve2d {
+        match self {
+            Self::Line(value) => value,
+            Self::Circle(value) => value,
+            Self::Nurbs(value) => value,
+        }
+    }
+
     /// Exact class of this descriptor.
     pub const fn class(&self) -> Curve2dClass {
         match self {

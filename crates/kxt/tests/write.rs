@@ -146,7 +146,9 @@ fn replace_edge_with_linear_nurbs(store: &mut Store, body: BodyId) {
         let start = store.vertex_position(edge.vertices[0].unwrap()).unwrap();
         let end = store.vertex_position(edge.vertices[1].unwrap()).unwrap();
         let nurbs = NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![start, end], None).unwrap();
-        *store.get_mut(curve_id).unwrap() = CurveGeom::Nurbs(nurbs);
+        store
+            .replace_curve(curve_id, CurveGeom::Nurbs(nurbs))
+            .unwrap();
         store.get_mut(edge_id).unwrap().bounds = Some((0.0, 1.0));
     });
 }
@@ -180,15 +182,20 @@ fn make_first_edge_truly_tolerant(store: &mut Store, body: BodyId) -> EdgeId {
         let range = first_use.range();
         let extended_hi = range.lo + 10.0 * range.width();
         let endpoints = vec![first_curve.eval(range.lo), first_curve.eval(extended_hi)];
-        *store.get_mut(first_use.curve()).unwrap() = Curve2dGeom::Nurbs(
-            NurbsCurve2d::new(
-                1,
-                vec![range.lo, range.lo, extended_hi, extended_hi],
-                endpoints,
-                Some(vec![2.0, 2.0]),
+        store
+            .replace_pcurve(
+                first_use.curve(),
+                Curve2dGeom::Nurbs(
+                    NurbsCurve2d::new(
+                        1,
+                        vec![range.lo, range.lo, extended_hi, extended_hi],
+                        endpoints,
+                        Some(vec![2.0, 2.0]),
+                    )
+                    .unwrap(),
+                ),
             )
-            .unwrap(),
-        );
+            .unwrap();
 
         // Exercise decreasing SP-curve trim parameters on the other use while
         // preserving exactly the same lifted geometry.
@@ -198,13 +205,18 @@ fn make_first_edge_truly_tolerant(store: &mut Store, body: BodyId) -> EdgeId {
             panic!("block pcurve must be linear");
         };
         let range = second_use.range();
-        *store.get_mut(second_use.curve()).unwrap() = Curve2dGeom::Line(
-            Line2d::new(
-                line.origin() + line.dir() * (range.lo + range.hi),
-                -line.dir(),
+        store
+            .replace_pcurve(
+                second_use.curve(),
+                Curve2dGeom::Line(
+                    Line2d::new(
+                        line.origin() + line.dir() * (range.lo + range.hi),
+                        -line.dir(),
+                    )
+                    .unwrap(),
+                ),
             )
-            .unwrap(),
-        );
+            .unwrap();
         let old_map = second_use.edge_to_pcurve();
         let reversed_map =
             ParamMap1d::affine(-old_map.scale(), range.lo + range.hi - old_map.offset()).unwrap();
@@ -261,7 +273,9 @@ fn replace_face_with_bilinear_nurbs(store: &mut Store, body: BodyId) {
             None,
         )
         .unwrap();
-        *store.get_mut(surface_id).unwrap() = SurfaceGeom::Nurbs(surface);
+        store
+            .replace_surface(surface_id, SurfaceGeom::Nurbs(surface))
+            .unwrap();
         store.get_mut(face_id).unwrap().domain =
             Some(ktopo::entity::FaceDomain::from_bounds(0.0, 1.0, 0.0, 1.0).unwrap());
 
@@ -294,8 +308,12 @@ fn replace_face_with_bilinear_nurbs(store: &mut Store, body: BodyId) {
             let end = to_uv(store.vertex_position(end_id).unwrap());
             let uv_len = (end - start).norm();
             let pcurve_id = fin.pcurve.unwrap().curve();
-            *store.get_mut(pcurve_id).unwrap() =
-                Curve2dGeom::Line(Line2d::new(start, end - start).unwrap());
+            store
+                .replace_pcurve(
+                    pcurve_id,
+                    Curve2dGeom::Line(Line2d::new(start, end - start).unwrap()),
+                )
+                .unwrap();
             let scale = uv_len / (t1 - t0);
             let map = ParamMap1d::affine(scale, -scale * t0).unwrap();
             store.get_mut(fin_id).unwrap().pcurve =
@@ -324,7 +342,9 @@ fn sheet_square(store: &mut Store) -> BodyId {
         });
         store.get_mut(region).unwrap().shells.push(shell);
 
-        let surface = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
+        let surface = store
+            .insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())))
+            .unwrap();
         let face = store.add(Face {
             shell,
             loops: Vec::new(),
@@ -356,7 +376,9 @@ fn sheet_square(store: &mut Store) -> BodyId {
         for i in 0..corners.len() {
             let start = corners[i];
             let end = corners[(i + 1) % corners.len()];
-            let curve = store.add(CurveGeom::Line(Line::new(start, end - start).unwrap()));
+            let curve = store
+                .insert_curve(CurveGeom::Line(Line::new(start, end - start).unwrap()))
+                .unwrap();
             let edge = store.add(Edge {
                 curve: Some(curve),
                 vertices: [Some(vertices[i]), Some(vertices[(i + 1) % vertices.len()])],
@@ -397,7 +419,9 @@ fn sheet_semicircle(store: &mut Store) -> BodyId {
         });
         store.get_mut(region).unwrap().shells.push(shell);
 
-        let surface = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
+        let surface = store
+            .insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())))
+            .unwrap();
         let face = store.add(Face {
             shell,
             loops: Vec::new(),
@@ -423,7 +447,9 @@ fn sheet_semicircle(store: &mut Store) -> BodyId {
             })
         });
 
-        let circle = store.add(CurveGeom::Circle(Circle::new(Frame::world(), 1.0).unwrap()));
+        let circle = store
+            .insert_curve(CurveGeom::Circle(Circle::new(Frame::world(), 1.0).unwrap()))
+            .unwrap();
         let arc = store.add(Edge {
             curve: Some(circle),
             vertices: [Some(vertices[0]), Some(vertices[1])],
@@ -440,7 +466,9 @@ fn sheet_semicircle(store: &mut Store) -> BodyId {
         store.get_mut(loop_id).unwrap().fins.push(arc_fin);
         store.get_mut(arc).unwrap().fins.push(arc_fin);
 
-        let line = store.add(CurveGeom::Line(Line::new(left, right - left).unwrap()));
+        let line = store
+            .insert_curve(CurveGeom::Line(Line::new(left, right - left).unwrap()))
+            .unwrap();
         let chord = store.add(Edge {
             curve: Some(line),
             vertices: [Some(vertices[1]), Some(vertices[0])],
@@ -480,7 +508,9 @@ fn sheet_two_faces_shared_surface(store: &mut Store) -> BodyId {
         });
         store.get_mut(region).unwrap().shells.push(shell);
 
-        let surface = store.add(SurfaceGeom::Plane(Plane::new(Frame::world())));
+        let surface = store
+            .insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())))
+            .unwrap();
         for x0 in [0.0, 2.0] {
             let face = store.add(Face {
                 shell,
@@ -513,7 +543,9 @@ fn sheet_two_faces_shared_surface(store: &mut Store) -> BodyId {
             for i in 0..corners.len() {
                 let start = corners[i];
                 let end = corners[(i + 1) % corners.len()];
-                let curve = store.add(CurveGeom::Line(Line::new(start, end - start).unwrap()));
+                let curve = store
+                    .insert_curve(CurveGeom::Line(Line::new(start, end - start).unwrap()))
+                    .unwrap();
                 let edge = store.add(Edge {
                     curve: Some(curve),
                     vertices: [Some(vertices[i]), Some(vertices[(i + 1) % vertices.len()])],
@@ -564,7 +596,9 @@ fn wire_line(store: &mut Store) -> BodyId {
                 tolerance: None,
             })
         });
-        let curve = store.add(CurveGeom::Line(Line::new(start, end - start).unwrap()));
+        let curve = store
+            .insert_curve(CurveGeom::Line(Line::new(start, end - start).unwrap()))
+            .unwrap();
         let edge = store.add(Edge {
             curve: Some(curve),
             vertices: [Some(vertices[0]), Some(vertices[1])],
@@ -609,9 +643,11 @@ fn wire_shared_line_segments(store: &mut Store) -> BodyId {
                 tolerance: None,
             })
         });
-        let curve = store.add(CurveGeom::Line(
-            Line::new(points[0], Vec3::new(1.0, 0.0, 0.0)).unwrap(),
-        ));
+        let curve = store
+            .insert_curve(CurveGeom::Line(
+                Line::new(points[0], Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+            ))
+            .unwrap();
         for i in 0..2 {
             let edge = store.add(Edge {
                 curve: Some(curve),
@@ -676,7 +712,9 @@ fn wire_shared_point_vertices(store: &mut Store) -> BodyId {
             (coords[1], coords[2], vertices[2], vertices[3]),
         ];
         for (start, end, start_vertex, end_vertex) in segments {
-            let curve = store.add(CurveGeom::Line(Line::new(start, end - start).unwrap()));
+            let curve = store
+                .insert_curve(CurveGeom::Line(Line::new(start, end - start).unwrap()))
+                .unwrap();
             let edge = store.add(Edge {
                 curve: Some(curve),
                 vertices: [Some(start_vertex), Some(end_vertex)],
@@ -719,9 +757,11 @@ fn wire_ellipse_arc(store: &mut Store) -> BodyId {
                 tolerance: None,
             })
         });
-        let curve = store.add(CurveGeom::Ellipse(
-            Ellipse::new(Frame::world(), 2.0, 1.0).unwrap(),
-        ));
+        let curve = store
+            .insert_curve(CurveGeom::Ellipse(
+                Ellipse::new(Frame::world(), 2.0, 1.0).unwrap(),
+            ))
+            .unwrap();
         let edge = store.add(Edge {
             curve: Some(curve),
             vertices: [Some(vertices[0]), Some(vertices[1])],

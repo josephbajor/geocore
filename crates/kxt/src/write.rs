@@ -234,6 +234,12 @@ impl Plan {
                 SurfaceGeom::Cone(s) => check_in_size_box(s.frame().origin().to_array())?,
                 SurfaceGeom::Sphere(s) => check_in_size_box(s.frame().origin().to_array())?,
                 SurfaceGeom::Torus(s) => check_in_size_box(s.frame().origin().to_array())?,
+                _ => {
+                    return Err(XtError::Unsupported {
+                        capability: XtCapability::ProceduralSurfaces,
+                        what: "unimplemented geometry-graph surface class",
+                    });
+                }
             }
         }
 
@@ -598,7 +604,7 @@ impl Plan {
             } else {
                 None
             };
-            out.push(surface_node(store.get(surface_id)?, index, common, aux));
+            out.push(surface_node(store.get(surface_id)?, index, common, aux)?);
         }
         for (position, &(curve_id, index)) in self.curves.iter().enumerate() {
             let direct_owner = self.edges.iter().find_map(|&(edge, id)| {
@@ -1278,7 +1284,7 @@ fn surface_node(
     index: u32,
     mut values: Vec<Value>,
     aux: Option<SurfaceAuxIds>,
-) -> OutNode {
+) -> Result<OutNode> {
     let code = match surface {
         SurfaceGeom::Plane(s) => {
             values.extend([
@@ -1333,12 +1339,18 @@ fn surface_node(
             values.extend([ptr(aux.nurbs), ptr(0)]);
             code::B_SURFACE
         }
+        _ => {
+            return Err(XtError::Unsupported {
+                capability: XtCapability::ProceduralSurfaces,
+                what: "unimplemented geometry-graph surface class",
+            });
+        }
     };
-    OutNode {
+    Ok(OutNode {
         code,
         index,
         values,
-    }
+    })
 }
 
 fn curve_node(
@@ -1375,6 +1387,12 @@ fn curve_node(
             let aux = aux.expect("planned NURBS curve auxiliaries");
             values.extend([ptr(aux.nurbs), ptr(aux.data)]);
             code::B_CURVE
+        }
+        _ => {
+            return Err(XtError::Unsupported {
+                capability: XtCapability::ProceduralCurves,
+                what: "unimplemented geometry-graph curve class",
+            });
         }
     };
     Ok(OutNode {
@@ -1617,6 +1635,10 @@ fn pcurve_nurbs(store: &Store, fin_id: FinId) -> Result<NurbsCurve2d> {
         Curve2dGeom::Circle(_) => Err(XtError::Unsupported {
             capability: XtCapability::CircularPcurves,
             what: "circular pcurves on curve-less tolerant edges",
+        }),
+        _ => Err(XtError::Unsupported {
+            capability: XtCapability::ProceduralCurves,
+            what: "unimplemented geometry-graph pcurve class",
         }),
     }
 }
