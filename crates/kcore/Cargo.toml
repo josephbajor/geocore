@@ -3,6 +3,7 @@ name = "kcore"
 description = "Kernel layer 0: robust predicates, expansion arithmetic, intervals, tolerance policy, entity arenas"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

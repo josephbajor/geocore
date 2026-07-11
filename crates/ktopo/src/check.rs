@@ -67,11 +67,9 @@ use crate::shell_proof::{ShellEmbedding, ShellOrientation, certify_shell};
 use crate::store::{Entity, Store};
 use kcore::arena::Handle;
 use kcore::error::Result;
-use kcore::math;
 use kcore::tolerance::{LINEAR_RESOLUTION, SIZE_BOX_HALF, Tolerances};
 use kgeom::param::ParamRange;
-use kgeom::project::project_to_surface;
-use kgeom::vec::Point3;
+use kgeom::surface_point::{distance_to_surface, invert_surface_point};
 
 /// What is wrong, attached to the offending entity in a [`Fault`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -960,8 +958,8 @@ impl<'a> Checker<'a> {
                 let Ok(sg) = self.store.get(face.surface) else {
                     continue;
                 };
-                if let Some(d) = surface_distance(sg, p)
-                    && d > edge_tol
+                if let Ok(distance) = distance_to_surface(sg.as_surface(), p)
+                    && distance.distance > edge_tol
                 {
                     self.fault(at, FaultKind::EdgeOffSurface);
                     off_faces.push(fid);
@@ -1201,7 +1199,10 @@ impl<'a> Checker<'a> {
                             .ok()?;
                         (uv.x, uv.y)
                     }
-                    None => invert_uv(sg, c.eval(t))?,
+                    None => {
+                        let mapped = invert_surface_point(sg.as_surface(), c.eval(t)).ok()?;
+                        (mapped.uv[0], mapped.uv[1])
+                    }
                 };
                 if let (Some(p), Some(&(prev, _))) = (period, pts.last()) {
                     u += p * ((prev - u) / p).round();
@@ -1384,61 +1385,6 @@ fn domain_covers_natural_surface(domain: crate::entity::FaceDomain, surface: &Su
         })
 }
 
-/// Exact distance from a point to an analytic surface; NURBS falls back to
-/// projection. `None` when it cannot be evaluated.
-fn surface_distance(sg: &SurfaceGeom, p: Point3) -> Option<f64> {
-    match sg {
-        SurfaceGeom::Plane(s) => Some(s.frame().to_local(p).z.abs()),
-        SurfaceGeom::Cylinder(s) => {
-            let l = s.frame().to_local(p);
-            Some(((l.x * l.x + l.y * l.y).sqrt() - s.radius()).abs())
-        }
-        SurfaceGeom::Cone(s) => {
-            // In the (ρ, z) half-plane the cone is the line through (r, 0)
-            // with unit direction (sin α, cos α); perpendicular distance in
-            // that half-plane is the 3D distance to the cone.
-            let l = s.frame().to_local(p);
-            let rho = (l.x * l.x + l.y * l.y).sqrt();
-            let (sin_a, cos_a) = math::sincos(s.half_angle());
-            Some(((rho - s.radius()) * cos_a - l.z * sin_a).abs())
-        }
-        SurfaceGeom::Sphere(s) => Some((s.frame().to_local(p).norm() - s.radius()).abs()),
-        SurfaceGeom::Torus(s) => {
-            let l = s.frame().to_local(p);
-            let ring = (l.x * l.x + l.y * l.y).sqrt() - s.major_radius();
-            Some(((ring * ring + l.z * l.z).sqrt() - s.minor_radius()).abs())
-        }
-        SurfaceGeom::Nurbs(s) => {
-            let [ur, vr] = kgeom::surface::Surface::param_range(s);
-            if !ur.is_finite() || !vr.is_finite() {
-                return None;
-            }
-            project_to_surface(s, p, [ur, vr]).map(|proj| proj.dist)
-        }
-    }
-}
-
-/// Analytic UV inversion for the surface classes the orientation check
-/// supports. Periodic `u` is returned in the base branch; callers unwrap.
-fn invert_uv(sg: &SurfaceGeom, p: Point3) -> Option<(f64, f64)> {
-    match sg {
-        SurfaceGeom::Plane(s) => {
-            let l = s.frame().to_local(p);
-            Some((l.x, l.y))
-        }
-        SurfaceGeom::Cylinder(s) => {
-            let l = s.frame().to_local(p);
-            Some((math::atan2(l.y, l.x), l.z))
-        }
-        SurfaceGeom::Cone(s) => {
-            let l = s.frame().to_local(p);
-            let cos_a = math::cos(s.half_angle());
-            Some((math::atan2(l.y, l.x), l.z / cos_a))
-        }
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1448,7 +1394,7 @@ mod tests {
     use kgeom::curve::{Circle, Line};
     use kgeom::frame::Frame;
     use kgeom::surface::{Cylinder, Plane, Sphere};
-    use kgeom::vec::Vec3;
+    use kgeom::vec::{Point3, Vec3};
 
     fn kinds(faults: &[Fault]) -> Vec<FaultKind> {
         faults.iter().map(|f| f.kind).collect()

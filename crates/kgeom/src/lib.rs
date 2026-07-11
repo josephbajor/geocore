@@ -21,6 +21,9 @@
 //! - [`nurbs`] — B-spline/NURBS engine (basis, evaluation, knot operations,
 //!   fitting) per Piegl & Tiller, *The NURBS Book*.
 //! - [`project`] — closest-point projection onto curves and surfaces.
+//! - [`surface_point`] — analytic inversion, periodic chart normalization,
+//!   and point-to-surface distance queries with deterministic projection
+//!   fallback.
 //! - [`tess`] — deterministic, tolerance-driven tessellation of trimmed faces,
 //!   with typed errors when refinement limits prevent meeting the request.
 //! - [`conformance`] — the evaluator conformance harness (finite-difference
@@ -42,5 +45,6 @@ pub mod nurbs;
 pub mod param;
 pub mod project;
 pub mod surface;
+pub mod surface_point;
 pub mod tess;
 pub mod vec;

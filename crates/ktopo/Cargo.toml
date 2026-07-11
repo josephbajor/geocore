@@ -3,6 +3,7 @@ name = "ktopo"
 description = "Kernel layer 2: B-rep topology (Parasolid entity hierarchy), Euler operators, body checker, primitive constructors, whole-body tessellation"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

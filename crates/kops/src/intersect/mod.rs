@@ -25,6 +25,7 @@ mod ellipse_ellipse;
 mod ellipse_nurbs;
 mod ellipse_sphere;
 mod ellipse_torus;
+mod geometry_class;
 mod line_circle;
 mod line_cone;
 mod line_cylinder;

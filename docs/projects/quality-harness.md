@@ -1,0 +1,398 @@
+# F7 quality, fuzzing, and performance harnesses
+
+Status: first slice implemented; benchmark and fuzz stages implementation-ready
+
+## Outcome
+
+Make toolchain compatibility, robustness exploration, and performance trends
+repeatable before modeling breadth grows. The harnesses protect observable
+kernel contracts and algorithmic scale. Elapsed time is a measurement, never a
+correctness oracle.
+
+This first slice establishes one explicit Rust contract:
+
+- `rust-toolchain.toml` pins Rust 1.93.0 with the minimal profile plus `rustfmt`
+  and `clippy`;
+- the workspace declares `rust-version = "1.93.0"`, inherited by every member;
+  and
+- the three-OS CI matrix installs that exact version instead of a floating
+  channel. The explicit workflow value prevents runner-level rustup overrides
+  from bypassing the repository file and must remain synchronized with it.
+
+The pinned version and MSRV are intentionally equal today. Lowering the MSRV
+requires a separate change that compiles and tests every target with the
+proposed version. Raising either value requires release notes and a CI-green
+toolchain commit. Do not claim compatibility with an untested compiler.
+
+No benchmark or fuzz dependency is introduced in this first slice.
+
+## Governing rules
+
+1. A benchmark verifies its result before recording a sample. Timing never
+   decides whether output is correct.
+2. Fixtures, operation sequences, tolerances, work limits, and seeds are named
+   and versioned. Random setup is never inside a timed section.
+3. Benchmark ladders change one scale dimension at a time and report semantic
+   work counts next to elapsed time where the implementation exposes them.
+4. CI smoke jobs prove that harnesses compile, terminate within fixed work/time
+   bounds, and retain invariants. Shared CI runners do not enforce wall-clock
+   regression thresholds.
+5. Performance comparisons are made on a named, stable benchmark host. A
+   baseline from a different host or compiler is informative, not comparable.
+6. Fuzz failures retain the exact input and toolchain identity. Minimized,
+   deterministic failures become ordinary regression tests.
+7. Fuzz targets may reject malformed input, report unsupported capability, or
+   return an indeterminate result. They must not panic, abort, leak unbounded
+   work, commit invalid topology, or claim unsupported completion evidence.
+8. Benchmark-only observability must not become a stable public kernel API.
+
+## Repository layout
+
+Land the following structure incrementally:
+
+```text
+benches/
+  README.md
+  baselines/
+    schema.json
+    <host>/<git-revision>.json
+crates/ktopo/benches/
+  transaction_commit.rs
+  body_tessellation.rs
+crates/kgeom/benches/
+  nurbs_isolation.rs
+crates/kxt/benches/
+  xt_io.rs
+fuzz/
+  Cargo.toml
+  rust-toolchain.toml
+  fuzz_targets/
+    xt_read.rs
+    nurbs_constructors.rs
+    intersection_result.rs
+    topology_transactions.rs
+  corpus/<target>/
+  regressions/<target>/
+```
+
+Use one workspace benchmark dependency and one workspace fuzzing stack rather
+than per-crate frameworks. Benchmark and fuzz packages stay outside normal
+workspace membership if their toolchain or dependency lifecycle would raise
+the kernel's MSRV. Normal `cargo test --workspace` must remain sufficient for
+all promoted regressions.
+
+## Stage Q0 — pinned toolchain contract
+
+Implemented by this slice.
+
+### Acceptance
+
+- `cargo metadata` reports Rust 1.93.0 for every workspace package.
+- invoking Cargo from the repository selects Rust 1.93.0 and has `rustfmt` and
+  `clippy` available;
+- CI retains format, warning-denied Clippy, and debug/release tests on Linux,
+  macOS, and Windows; and
+- no workflow selects `stable`, `beta`, or an unpinned nightly.
+
+## Stage Q1 — benchmark contract and runner
+
+Add a small shared benchmark support crate or module only after the concrete
+runner is selected. Prefer one established statistics runner over custom
+statistics code. Keep fixture construction and invariant checking in ordinary
+Rust helpers so benchmarks do not duplicate production algorithms.
+
+Every benchmark case has a stable path:
+
+```text
+<subsystem>/<operation>/<fixture>/<scale>/<policy>
+```
+
+Each run emits machine-readable metadata and measurements. Required metadata:
+
+- schema version and benchmark case path;
+- repository revision and dirty-worktree flag;
+- rustc/cargo versions, target triple, profile, and enabled features;
+- OS, architecture, CPU model, logical core count, and available memory;
+- runner version, warm-up/sample configuration, and process-affinity settings;
+- fixture version, size parameters, tolerance/policy values, and deterministic
+  seed; and
+- result counters relevant to the operation, such as affected bodies, emitted
+  triangles, candidates, parsed records, or output bytes.
+
+Store compact reviewed baselines under `benches/baselines/`. Large raw sample
+streams belong in CI artifacts, not Git. A baseline comparison must refuse to
+produce a pass/fail judgement when schema, host identity, compiler, target,
+profile, fixture version, or case parameters differ.
+
+### Regression policy
+
+- correctness/invariant failures fail everywhere;
+- compile-and-one-iteration smoke runs fail in pull-request CI;
+- elapsed-time and allocation regressions are advisory on shared CI;
+- a scheduled or manually triggered stable-host job may enforce reviewed
+  per-case thresholds; and
+- threshold changes include the before/after baseline and an explanation of
+  the intended algorithmic change.
+
+## Stage Q2 — topology commit and index-refresh ladder
+
+Owner: `ktopo`.
+
+Measure checked transaction cost through public transaction operations. Add a
+crate-private benchmark seam only for counters that cannot be observed through
+the public API; it may expose counts under a benchmark-only configuration, but
+must not expose mutable index representation.
+
+Fixtures:
+
+- `isolated_acorns`: many independent minimal bodies;
+- `primitive_mix`: deterministic box/cylinder/cone/sphere/torus repetitions;
+- `shared_geometry_fanout`: bodies that legally depend on the same immutable
+  geometry where the model supports it; and
+- `rejected_edit`: one deterministic mutation that fails checked commit.
+
+Ladders:
+
+| Case | Scale | Timed work | Required checks/counters |
+| --- | --- | --- | --- |
+| clean checked commit | 1, 10, 100, 1,000 bodies | begin plus no-op checked commit | body count unchanged; affected-body count |
+| local refresh | same store sizes | mutate one body's point/tolerance and commit | exactly expected body scope checked; index entries unchanged outside scope |
+| fanout refresh | 1, 10, 100 dependent bodies | mutate one referenced geometry and commit | deterministic affected-body set and order |
+| batched refresh | 1, 10, 100 edited bodies | perform deterministic edits in one transaction | one atomic commit; refreshed-body count |
+| rejected commit | 1, 10, 100 bodies | commit one invalid mutation | identical pre/post store digest and index digest |
+| full rebuild reference | 1, 10, 100, 1,000 bodies | explicitly rebuild/audit index through crate-private seam | rebuilt index equals committed incremental index |
+
+Record entity counts, affected/refreshed body counts, checker obligations, and
+allocation counts when allocation instrumentation becomes available. The
+rejected-edit case protects failure atomicity, not merely throughput.
+
+## Stage Q3 — body tessellation ladder
+
+Owner: `ktopo`, consuming `kgeom` tessellation.
+
+Fixtures use existing deterministic primitive constructors first, followed by
+trimmed NURBS fixtures promoted from the test corpus:
+
+- box, cylinder, cone, sphere, and torus;
+- a mixed multi-body store;
+- a periodic seam/pole case;
+- a face with a NURBS pcurve; and
+- a bounded trimmed NURBS patch with one and multiple loops.
+
+For each fixture, run chord tolerances `1e-2`, `3e-3`, `1e-3`, and `3e-4`
+where deterministic work bounds allow. Record source entity counts, boundary
+samples, vertices, triangles, refinement steps, and output digest. Before a
+sample is accepted, verify:
+
+- tessellation succeeds within configured limits;
+- the mesh is watertight when the fixture promises a closed body;
+- indices and coordinates are finite and in range;
+- orientation/volume expectations hold; and
+- repeated runs produce the same output digest.
+
+The ladder should reveal output-sensitive scaling. Do not compare different
+tolerances as though they perform the same amount of work.
+
+## Stage Q4 — NURBS isolation ladder
+
+Owner: `kgeom`.
+
+Exercise curve and surface subdivision/isolation independently from full
+intersection dispatch. Use generated deterministic fixtures whose control
+points and knots are checked into helpers, not sampled during the benchmark.
+
+Dimensions, varied one at a time:
+
+- degree: 2, 3, 5;
+- control points per direction: 4, 8, 16, 32;
+- knot-span/patch count: 1, 4, 16, 64;
+- polynomial versus rational weights;
+- separated, tangent, and clustered candidate geometry; and
+- candidate budgets around the expected completion boundary.
+
+Record extracted patches, BVH nodes/pairs, subdivisions, retained candidates,
+proof completion, and consumed/allowed work. Verify candidate covers against
+the existing certified classification contract. Budget exhaustion must retain
+the expected indeterminate reason and must never be benchmarked as a complete
+miss.
+
+## Stage Q5 — X_T I/O ladder
+
+Owner: `kxt`.
+
+Use only redistributable, versioned corpus fixtures. Define `tiny`, `small`,
+`medium`, and `large` by both byte count and record/entity count; never infer
+scale solely from filenames.
+
+Benchmark separately:
+
+- lexical parse to records;
+- record validation/reconstruction to a checked store;
+- complete read;
+- deterministic text planning/emission;
+- write to a byte sink; and
+- read-write-read round trip.
+
+Record input/output bytes, record counts by class, topology/geometry entity
+counts, unsupported capabilities, and store/output digests. Verify supported
+fixtures reconstruct checker-clean stores, writer output is bitwise stable,
+and round trips retain the documented semantic equivalence. Invalid fixtures
+belong in parser fuzz/regression suites, not throughput baselines unless a
+specific rejection path is named.
+
+## Stage Q6 — fuzz workspace and target contracts
+
+Pin the fuzz runner, its package versions, and any required nightly by exact
+version/date in `fuzz/`. That toolchain is isolated from the workspace MSRV.
+Check in seed corpora and regression inputs; do not check in generated crash
+artifacts containing duplicate or non-minimized data.
+
+### `xt_read`
+
+Input: arbitrary bytes plus a compact selector for parser/read options.
+
+Properties:
+
+- termination within the target's byte and work limits;
+- no panic, abort, out-of-bounds access, or unbounded allocation;
+- successful reads produce a store accepted by the appropriate checker
+  contract;
+- classified errors have valid stable codes; and
+- writing then reading any successfully imported supported model preserves the
+  documented semantic digest.
+
+Seed with the smallest valid header/model, one fixture per supported record
+class, truncations at token/record boundaries, and each existing malformed
+parser regression.
+
+### `nurbs_constructors`
+
+Input: a bounded structured encoding of degree, knots, control points, optional
+weights, and query parameters. Decode floats from raw bits but cap vector sizes
+before allocation.
+
+Properties:
+
+- constructors either reject the descriptor or establish all documented knot,
+  dimension, finiteness, and weight invariants;
+- accepted curves/surfaces evaluate only within explicit query domains and do
+  not panic on derivative, split, restriction, projection, or isolation calls;
+- equivalent repeated calls are bitwise deterministic; and
+- limit exhaustion remains classified and bounded.
+
+Keep separate curve and surface seed families even if one target dispatches
+between them.
+
+### `intersection_result`
+
+Input: bounded points, parameters, overlaps, orientation flags, and structured
+completion/indeterminate data for each result family.
+
+Properties:
+
+- canonicalization is idempotent;
+- output ordering is total and deterministic, with no non-finite public values;
+- swapping twice returns the original canonical result;
+- swapping preserves completion evidence and indeterminate causes;
+- deduplication does not convert indeterminate evidence into complete evidence;
+  and
+- serialization/debug formatting, if exercised, never controls equality.
+
+Start with curve/curve and surface/surface results, then extend the same common
+property helpers to curve/surface.
+
+### `topology_transactions`
+
+Input: a bounded bytecode of primitive creation and Euler/transaction
+operations using indices into previously created handles. Stale and
+out-of-range references are expected inputs, not harness bugs.
+
+Properties checked after every committed step and after every rejected step:
+
+- checked commits leave a checker-accepted store or return a classified model
+  rejection;
+- a rejected operation/commit leaves the pre-operation store and committed
+  index digests unchanged;
+- transaction state cannot become nested or remain active accidentally;
+- handles never alias a different generation after deletion/reuse; and
+- replaying the same bytecode yields the same journal, result classes, and
+  final digest.
+
+Cap operations, live entities, topology depth, checker work, and journal/output
+bytes independently. Seed with minimal successful sequences for each Euler
+operator plus one failure-atomic sequence per operator.
+
+## Stage Q7 — corpus minimization and promotion
+
+For each discovered failure:
+
+1. retain the raw crash artifact as a temporary CI artifact;
+2. minimize with the pinned runner while preserving the same stable failure
+   code or violated property;
+3. assign a descriptive regression identifier rather than a hash-only name;
+4. add the minimized input to `fuzz/regressions/<target>/`;
+5. promote it to an ordinary deterministic unit/integration test when it can
+   be expressed without the fuzz runtime; and
+6. record the fixing revision, target, original/minimized sizes, stable error or
+   property identity, and whether the seed corpus now covers the behavior.
+
+CI runs promoted tests on all three operating systems. The fuzz smoke job may
+run on Linux only because its purpose is bounded exploration, while the
+regression remains portable.
+
+## Stage Q8 — bounded CI jobs
+
+Add two jobs after Q1 and Q6 land.
+
+`benchmark-smoke`:
+
+- pinned workspace toolchain;
+- Linux only;
+- build every benchmark and run one warm-up/one measured iteration of the
+  smallest fixture;
+- verify invariants and metadata schema;
+- hard job timeout of 10 minutes; and
+- upload results for inspection without enforcing timing thresholds.
+
+`fuzz-smoke`:
+
+- exact fuzz toolchain and locked fuzz runner;
+- Linux only;
+- deterministic seed corpus plus a fixed seed;
+- each target gets a 20-second exploration budget, 256 KiB maximum input, and
+  explicit RSS/artifact limits;
+- hard job timeout of 10 minutes; and
+- crashes/timeouts upload minimized-or-raw artifacts and fail the job.
+
+A scheduled job may use longer budgets, rotating deterministic seeds, and a
+corpus cache. It must remain bounded and must not silently update checked-in
+corpora or baselines.
+
+## Atomic landing sequence
+
+1. **Q0:** toolchain file, workspace MSRV inheritance, pinned CI, this plan.
+2. **Q1:** benchmark runner, metadata schema, tiny fixture, smoke command.
+3. **Q2:** topology commit/index ladder and failure-atomic checks.
+4. **Q3:** tessellation ladder.
+5. **Q4:** NURBS isolation ladder.
+6. **Q5:** X_T I/O ladder.
+7. **Q6:** isolated fuzz workspace and four initial target contracts.
+8. **Q7:** minimization/promotion tooling and regression manifest.
+9. **Q8:** bounded CI smoke jobs; stable-host baseline workflow separately.
+
+Q2 through Q5 are independent after Q1 and should land in separate commits.
+The four fuzz targets are independent after Q6 establishes shared decoding and
+limit helpers. CI jobs land only after their local commands are documented and
+repeatable.
+
+## Exit criteria
+
+- compiler/MSRV changes are explicit and exercised across the existing matrix;
+- each benchmark family has named scale ladders, verified outputs, semantic
+  work counters, and comparable baseline metadata;
+- all four initial fuzz targets have bounded inputs/work, seed corpora, and
+  portable promoted regressions;
+- pull-request CI compiles and smoke-runs every harness within hard limits;
+- stable-host baselines can identify algorithmic regressions without treating
+  shared-runner timing noise as correctness; and
+- normal workspace tests remain independent of the benchmark/fuzz runners.

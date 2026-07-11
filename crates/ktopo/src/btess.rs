@@ -47,10 +47,9 @@ use crate::entity::{BodyId, Edge, EdgeId, FaceDomain, FaceId, FinPcurve, Sense, 
 use crate::geom::{Curve2dGeom, SurfaceGeom};
 use crate::store::Store;
 use kcore::error::{Error, Result};
-use kcore::math;
 use kgeom::curve::Curve;
-use kgeom::param::wrap_periodic;
 use kgeom::surface::Surface;
+use kgeom::surface_point::{invert_surface_point, normalize_surface_uv};
 pub use kgeom::tess::TessOptions;
 use kgeom::tess::{TrimLoop, TrimmedSurface, tessellate};
 use kgeom::vec::{Point3, Vec2};
@@ -188,44 +187,11 @@ fn point_seg_dist(p: Point3, a: Point3, b: Point3) -> f64 {
 /// Invert a point known to lie on the surface to UV coordinates, with
 /// periodic parameters wrapped into the surface's base range.
 fn invert_uv(sg: &SurfaceGeom, p: Point3) -> Result<Vec2> {
-    let tau = core::f64::consts::TAU;
-    Ok(match sg {
-        SurfaceGeom::Plane(s) => {
-            let l = s.frame().to_local(p);
-            Vec2::new(l.x, l.y)
-        }
-        SurfaceGeom::Cylinder(s) => {
-            let l = s.frame().to_local(p);
-            Vec2::new(wrap_periodic(math::atan2(l.y, l.x), 0.0, tau), l.z)
-        }
-        SurfaceGeom::Cone(s) => {
-            let l = s.frame().to_local(p);
-            let u = wrap_periodic(math::atan2(l.y, l.x), 0.0, tau);
-            // P_z = v cos α is exact and linear in v.
-            Vec2::new(u, l.z / math::cos(s.half_angle()))
-        }
-        SurfaceGeom::Sphere(s) => {
-            let l = s.frame().to_local(p);
-            let u = wrap_periodic(math::atan2(l.y, l.x), 0.0, tau);
-            Vec2::new(u, math::atan2(l.z, (l.x * l.x + l.y * l.y).sqrt()))
-        }
-        SurfaceGeom::Torus(s) => {
-            let l = s.frame().to_local(p);
-            let u = wrap_periodic(math::atan2(l.y, l.x), 0.0, tau);
-            let rho = (l.x * l.x + l.y * l.y).sqrt();
-            let v = wrap_periodic(math::atan2(l.z, rho - s.major_radius()), 0.0, tau);
-            Vec2::new(u, v)
-        }
-        SurfaceGeom::Nurbs(s) => {
-            let [ur, vr] = s.param_range();
-            let proj = kgeom::project::project_to_surface(s, p, [ur, vr]).ok_or(
-                Error::InvalidGeometry {
-                    reason: "closest-point projection onto NURBS surface failed",
-                },
-            )?;
-            Vec2::new(proj.uv[0], proj.uv[1])
-        }
-    })
+    let mapped = invert_surface_point(sg.as_surface(), p).map_err(|_| Error::InvalidGeometry {
+        reason: "closest-point projection onto NURBS surface failed",
+    })?;
+    let uv = normalize_surface_uv(sg.as_surface(), mapped.uv);
+    Ok(Vec2::new(uv[0], uv[1]))
 }
 
 /// Shift `uv` by whole periods so it lands nearest `prev`.
@@ -1555,6 +1521,7 @@ mod tests {
     use crate::entity::{Face, Fin, Loop, PcurveChart, ShellId};
     use crate::geom::CurveGeom;
     use crate::make::{block, cylinder, solid_body_scaffold};
+    use kcore::math;
     use kgeom::curve::Circle;
     use kgeom::frame::Frame;
     use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Torus};

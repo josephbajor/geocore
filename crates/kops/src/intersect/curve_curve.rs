@@ -2,6 +2,7 @@ use super::circle_ellipse::intersect_bounded_circle_ellipse;
 use super::circle_nurbs::intersect_bounded_circle_nurbs;
 use super::ellipse_ellipse::intersect_bounded_ellipses;
 use super::ellipse_nurbs::intersect_bounded_ellipse_nurbs;
+use super::geometry_class::CurveClass;
 use super::line_circle::intersect_bounded_line_circle;
 use super::line_ellipse::intersect_bounded_line_ellipse;
 use super::line_line::intersect_bounded_lines;
@@ -10,8 +11,7 @@ use super::nurbs_nurbs::intersect_bounded_nurbs_nurbs;
 use super::result::CurveCurveIntersections;
 use kcore::error::{Error, Result};
 use kcore::tolerance::Tolerances;
-use kgeom::curve::{Circle, Curve, Ellipse, Line};
-use kgeom::nurbs::NurbsCurve;
+use kgeom::curve::Curve;
 use kgeom::param::ParamRange;
 
 /// Intersect two curves restricted to finite parameter ranges where needed.
@@ -26,78 +26,63 @@ pub fn intersect_bounded_curves(
     range_b: ParamRange,
     tolerances: Tolerances,
 ) -> Result<CurveCurveIntersections> {
-    if let (Some(a), Some(b)) = (as_line(a), as_line(b)) {
-        return intersect_bounded_lines(a, range_a, b, range_b, tolerances);
+    match (CurveClass::inspect(a), CurveClass::inspect(b)) {
+        (Some(CurveClass::Line(a)), Some(CurveClass::Line(b))) => {
+            intersect_bounded_lines(a, range_a, b, range_b, tolerances)
+        }
+        (Some(CurveClass::Line(a)), Some(CurveClass::Circle(b))) => {
+            intersect_bounded_line_circle(a, range_a, b, range_b, tolerances)
+        }
+        (Some(CurveClass::Circle(a)), Some(CurveClass::Line(b))) => {
+            intersect_bounded_line_circle(b, range_b, a, range_a, tolerances)
+                .map(CurveCurveIntersections::swapped)
+        }
+        (Some(CurveClass::Line(a)), Some(CurveClass::Ellipse(b))) => {
+            intersect_bounded_line_ellipse(a, range_a, b, range_b, tolerances)
+        }
+        (Some(CurveClass::Ellipse(a)), Some(CurveClass::Line(b))) => {
+            intersect_bounded_line_ellipse(b, range_b, a, range_a, tolerances)
+                .map(CurveCurveIntersections::swapped)
+        }
+        (Some(CurveClass::Line(a)), Some(CurveClass::Nurbs(b))) => {
+            intersect_bounded_line_nurbs(a, range_a, b, range_b, tolerances)
+        }
+        (Some(CurveClass::Nurbs(a)), Some(CurveClass::Line(b))) => {
+            intersect_bounded_line_nurbs(b, range_b, a, range_a, tolerances)
+                .map(CurveCurveIntersections::swapped)
+        }
+        (Some(CurveClass::Circle(a)), Some(CurveClass::Circle(b))) => {
+            super::circle_circle::intersect_bounded_circles(a, range_a, b, range_b, tolerances)
+        }
+        (Some(CurveClass::Circle(a)), Some(CurveClass::Nurbs(b))) => {
+            intersect_bounded_circle_nurbs(a, range_a, b, range_b, tolerances)
+        }
+        (Some(CurveClass::Nurbs(a)), Some(CurveClass::Circle(b))) => {
+            intersect_bounded_circle_nurbs(b, range_b, a, range_a, tolerances)
+                .map(CurveCurveIntersections::swapped)
+        }
+        (Some(CurveClass::Circle(a)), Some(CurveClass::Ellipse(b))) => {
+            intersect_bounded_circle_ellipse(a, range_a, b, range_b, tolerances)
+        }
+        (Some(CurveClass::Ellipse(a)), Some(CurveClass::Circle(b))) => {
+            intersect_bounded_circle_ellipse(b, range_b, a, range_a, tolerances)
+                .map(CurveCurveIntersections::swapped)
+        }
+        (Some(CurveClass::Ellipse(a)), Some(CurveClass::Ellipse(b))) => {
+            intersect_bounded_ellipses(a, range_a, b, range_b, tolerances)
+        }
+        (Some(CurveClass::Ellipse(a)), Some(CurveClass::Nurbs(b))) => {
+            intersect_bounded_ellipse_nurbs(a, range_a, b, range_b, tolerances)
+        }
+        (Some(CurveClass::Nurbs(a)), Some(CurveClass::Ellipse(b))) => {
+            intersect_bounded_ellipse_nurbs(b, range_b, a, range_a, tolerances)
+                .map(CurveCurveIntersections::swapped)
+        }
+        (Some(CurveClass::Nurbs(a)), Some(CurveClass::Nurbs(b))) => {
+            intersect_bounded_nurbs_nurbs(a, range_a, b, range_b, tolerances)
+        }
+        _ => Err(Error::InvalidGeometry {
+            reason: "unsupported curve/curve intersection class",
+        }),
     }
-    if let (Some(a), Some(b)) = (as_line(a), as_circle(b)) {
-        return intersect_bounded_line_circle(a, range_a, b, range_b, tolerances);
-    }
-    if let (Some(a), Some(b)) = (as_circle(a), as_line(b)) {
-        return intersect_bounded_line_circle(b, range_b, a, range_a, tolerances)
-            .map(CurveCurveIntersections::swapped);
-    }
-    if let (Some(a), Some(b)) = (as_line(a), as_ellipse(b)) {
-        return intersect_bounded_line_ellipse(a, range_a, b, range_b, tolerances);
-    }
-    if let (Some(a), Some(b)) = (as_ellipse(a), as_line(b)) {
-        return intersect_bounded_line_ellipse(b, range_b, a, range_a, tolerances)
-            .map(CurveCurveIntersections::swapped);
-    }
-    if let (Some(a), Some(b)) = (as_line(a), as_nurbs(b)) {
-        return intersect_bounded_line_nurbs(a, range_a, b, range_b, tolerances);
-    }
-    if let (Some(a), Some(b)) = (as_nurbs(a), as_line(b)) {
-        return intersect_bounded_line_nurbs(b, range_b, a, range_a, tolerances)
-            .map(CurveCurveIntersections::swapped);
-    }
-    if let (Some(a), Some(b)) = (as_circle(a), as_circle(b)) {
-        return super::circle_circle::intersect_bounded_circles(a, range_a, b, range_b, tolerances);
-    }
-    if let (Some(a), Some(b)) = (as_circle(a), as_nurbs(b)) {
-        return intersect_bounded_circle_nurbs(a, range_a, b, range_b, tolerances);
-    }
-    if let (Some(a), Some(b)) = (as_nurbs(a), as_circle(b)) {
-        return intersect_bounded_circle_nurbs(b, range_b, a, range_a, tolerances)
-            .map(CurveCurveIntersections::swapped);
-    }
-    if let (Some(a), Some(b)) = (as_circle(a), as_ellipse(b)) {
-        return intersect_bounded_circle_ellipse(a, range_a, b, range_b, tolerances);
-    }
-    if let (Some(a), Some(b)) = (as_ellipse(a), as_circle(b)) {
-        return intersect_bounded_circle_ellipse(b, range_b, a, range_a, tolerances)
-            .map(CurveCurveIntersections::swapped);
-    }
-    if let (Some(a), Some(b)) = (as_ellipse(a), as_ellipse(b)) {
-        return intersect_bounded_ellipses(a, range_a, b, range_b, tolerances);
-    }
-    if let (Some(a), Some(b)) = (as_ellipse(a), as_nurbs(b)) {
-        return intersect_bounded_ellipse_nurbs(a, range_a, b, range_b, tolerances);
-    }
-    if let (Some(a), Some(b)) = (as_nurbs(a), as_ellipse(b)) {
-        return intersect_bounded_ellipse_nurbs(b, range_b, a, range_a, tolerances)
-            .map(CurveCurveIntersections::swapped);
-    }
-    if let (Some(a), Some(b)) = (as_nurbs(a), as_nurbs(b)) {
-        return intersect_bounded_nurbs_nurbs(a, range_a, b, range_b, tolerances);
-    }
-
-    Err(Error::InvalidGeometry {
-        reason: "unsupported curve/curve intersection class",
-    })
-}
-
-fn as_line(curve: &dyn Curve) -> Option<&Line> {
-    curve.as_any().downcast_ref()
-}
-
-fn as_circle(curve: &dyn Curve) -> Option<&Circle> {
-    curve.as_any().downcast_ref()
-}
-
-fn as_ellipse(curve: &dyn Curve) -> Option<&Ellipse> {
-    curve.as_any().downcast_ref()
-}
-
-fn as_nurbs(curve: &dyn Curve) -> Option<&NurbsCurve> {
-    curve.as_any().downcast_ref()
 }

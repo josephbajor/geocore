@@ -3,6 +3,7 @@ name = "kgeom"
 description = "Kernel layer 1: analytic and NURBS geometry, evaluators, intersections-support math, projection, tessellation"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 

@@ -7,6 +7,19 @@ explicit dependencies and exit criteria. Projects should preserve the kernel's
 existing determinism, failure atomicity, completion evidence, and checked
 topology boundaries.
 
+## Progress
+
+| Project | Current state |
+| --- | --- |
+| F0 | Implemented: curve/curve operand swapping preserves completion evidence and canonical order. |
+| F1 | Contract complete in `geometry-graph.md`; implementation stages G1-G5 remain. |
+| F2 | Contract complete in `operation-context.md`; implementation stages 0-6 remain. |
+| F3 | First slice implemented: shared leaf-class inspection and tuple-match curve/curve and surface/surface dispatch. Shared drivers and generic fallback remain. |
+| F4 | Contract complete in `error-capability-taxonomy.md`; shared identifiers and representative migrations remain. |
+| F5 | Pending F1/F2/F4 contract reconciliation; facade design is the next project. |
+| F6 | First slice implemented: shared surface inversion, chart normalization, and distance services consumed by checker and tessellation. Module splits remain. |
+| F7 | Q0 implemented: toolchain/MSRV pinned; `quality-harness.md` defines Q1-Q8 benchmark and fuzz rollout. |
+
 ## Dependency outline
 
 ```text

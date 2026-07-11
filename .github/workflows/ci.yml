@@ -19,9 +19,16 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Keep this exact version synchronized with rust-toolchain.toml and the
+      # workspace rust-version. An explicit input prevents runner-level rustup
+      # environment overrides from silently selecting a floating toolchain.
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.93.0
           components: rustfmt, clippy
+      - name: Report Rust toolchain
+        run: rustc --version --verbose
       - name: Format
         run: cargo fmt --all --check
       - name: Lint

@@ -3,11 +3,12 @@
 use kcore::error::Error;
 use kcore::math;
 use kcore::tolerance::Tolerances;
+use kgeom::aabb::Aabb3;
 use kgeom::curve::Curve;
 use kgeom::frame::Frame;
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::param::ParamRange;
-use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
+use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, SurfaceDerivs, Torus};
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
@@ -78,6 +79,30 @@ fn horizontal_plane(z: f64) -> Plane {
         )
         .unwrap(),
     )
+}
+
+struct UnsupportedSurface;
+
+impl Surface for UnsupportedSurface {
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
+    fn eval_derivs(&self, _uv: [f64; 2], _order: usize) -> SurfaceDerivs {
+        SurfaceDerivs::default()
+    }
+
+    fn param_range(&self) -> [ParamRange; 2] {
+        [ParamRange::new(0.0, 1.0), ParamRange::new(0.0, 1.0)]
+    }
+
+    fn periodicity(&self) -> [Option<f64>; 2] {
+        [None, None]
+    }
+
+    fn bounding_box(&self, _range: [ParamRange; 2]) -> Aabb3 {
+        Aabb3::from_points(&[Point3::new(0.0, 0.0, 0.0)])
+    }
 }
 
 fn vertical_plane_x(x: f64) -> Plane {
@@ -1312,6 +1337,27 @@ fn surface_surface_dispatches_plane_sphere_and_rejects_unsupported() {
         Tolerances::default(),
     )
     .unwrap_err();
+    assert_eq!(
+        err,
+        Error::InvalidGeometry {
+            reason: "unsupported surface/surface intersection class"
+        }
+    );
+}
+
+#[test]
+fn surface_surface_dispatch_rejects_unknown_surface_class() {
+    let unsupported = UnsupportedSurface;
+    let plane = horizontal_plane(0.0);
+    let err = intersect_bounded_surfaces(
+        &unsupported,
+        unsupported.param_range(),
+        &plane,
+        plane_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+
     assert_eq!(
         err,
         Error::InvalidGeometry {
