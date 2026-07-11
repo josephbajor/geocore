@@ -31,6 +31,14 @@ use kcore::error::{Error, Result};
 use kcore::predicates::{Orientation, orient2d};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod policy;
+
+pub use policy::{
+    FACE_TESSELLATION_BOUNDARY_DEPTH, FACE_TESSELLATION_BOUNDARY_DEPTH_LIMIT,
+    FACE_TESSELLATION_REFINEMENT_PASS_LIMIT, FACE_TESSELLATION_REFINEMENT_PASSES,
+    FaceTessellationBudgetProfile,
+};
+
 /// A closed polygonal trim loop in a surface's parameter space.
 ///
 /// The polygon is implicitly closed (last vertex connects to first). The
