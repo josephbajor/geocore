@@ -8,7 +8,7 @@
 use core::fmt;
 
 use crate::identifier::valid_identifier;
-use crate::operation::LimitSnapshot;
+use crate::operation::{LimitSnapshot, OperationPolicyError};
 
 /// A stable identifier failed lower-case dotted-path syntax validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,7 +161,13 @@ pub mod code {
     /// compatibility variant currently lives in `kcore::Error`.
     pub const TOPOLOGY_CHECK_FAILED: ErrorCode = known_error_code("ktopo.transaction.check-failed");
 
-    /// Every code exposed by the legacy shared error, in deterministic order.
+    /// Every code owned by the legacy shared error, in deterministic order.
+    ///
+    /// Operation-policy-owned codes are inventoried by
+    /// [`crate::operation::code::OWNED`] and are not duplicated here. Policy
+    /// limit failures delegate to [`RESOURCE_LIMIT`], so that same canonical
+    /// identity intentionally appears in both variants' returned-code
+    /// inventories.
     pub const ALL: &[ErrorCode] = &[
         STALE_HANDLE,
         OUTSIDE_SIZE_BOX,
@@ -178,7 +184,7 @@ pub mod code {
 }
 
 /// Errors produced by kernel operations.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Error {
     /// A handle referred to an entity that was removed (or never existed).
@@ -225,6 +231,13 @@ pub enum Error {
     ResourceLimit {
         /// Structured snapshot of the attempted usage that crossed the limit.
         snapshot: LimitSnapshot,
+    },
+    /// An operation policy, configuration, or deterministic accounting request
+    /// failed. This compatibility bridge retains and delegates the typed source
+    /// instead of erasing it into a legacy prose or geometry error.
+    OperationPolicy {
+        /// The original operation-policy failure.
+        source: OperationPolicyError,
     },
     /// A modeling transaction was requested while another transaction is
     /// already active on the same store. Nested modeling transactions are
@@ -280,6 +293,7 @@ impl fmt::Display for Error {
                 snapshot.consumed,
                 snapshot.allowed
             ),
+            Error::OperationPolicy { source } => write!(f, "operation policy failed: {source}"),
             Error::TransactionActive => {
                 write!(f, "a modeling transaction is already active on this store")
             }
@@ -294,7 +308,20 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::OperationPolicy { source } => Some(source),
+            _ => None,
+        }
+    }
+}
+
+impl From<OperationPolicyError> for Error {
+    fn from(source: OperationPolicyError) -> Self {
+        Self::OperationPolicy { source }
+    }
+}
 
 impl Error {
     /// Returns this error's broad semantic class.
@@ -308,6 +335,7 @@ impl Error {
             Self::ToleranceBudgetExceeded { .. }
             | Self::AlgorithmLimit { .. }
             | Self::ResourceLimit { .. } => ErrorClass::ResourceLimit,
+            Self::OperationPolicy { source } => source.class(),
             Self::TransactionActive | Self::TransactionInactive => ErrorClass::InvalidState,
             Self::TopologyCheckFailed { .. } => ErrorClass::ModelRejected,
         }
@@ -324,6 +352,7 @@ impl Error {
             Self::InvalidGeometry { .. } => code::INVALID_GEOMETRY,
             Self::AlgorithmLimit { .. } => code::ALGORITHM_LIMIT,
             Self::ResourceLimit { .. } => code::RESOURCE_LIMIT,
+            Self::OperationPolicy { source } => source.code(),
             Self::TransactionActive => code::TRANSACTION_ACTIVE,
             Self::TransactionInactive => code::TRANSACTION_INACTIVE,
             Self::TopologyCheckFailed { .. } => code::TOPOLOGY_CHECK_FAILED,
@@ -335,7 +364,10 @@ impl Error {
     /// No existing shared error variant represents unsupported work. Layer
     /// owners add typed variants during later F4 migration phases.
     pub const fn capability(&self) -> Option<CapabilityId> {
-        None
+        match self {
+            Self::OperationPolicy { source } => source.capability(),
+            _ => None,
+        }
     }
 
     /// Returns F2 structured limit data when present.
@@ -345,6 +377,7 @@ impl Error {
     pub const fn limit(&self) -> Option<LimitSnapshot> {
         match self {
             Self::ResourceLimit { snapshot } => Some(*snapshot),
+            Self::OperationPolicy { source } => source.limit(),
             _ => None,
         }
     }
@@ -374,6 +407,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::error::Error as _;
 
     use super::*;
 
@@ -456,5 +490,36 @@ mod tests {
             ErrorClass::ModelRejected
         );
         assert_eq!(Error::StaleHandle.capability(), None);
+    }
+
+    #[test]
+    fn operation_policy_bridge_preserves_source_classification_and_limit() {
+        let snapshot = LimitSnapshot {
+            stage: crate::operation::StageId::new("kcore.test.bridge-limit").unwrap(),
+            resource: crate::operation::ResourceKind::Work,
+            consumed: 9,
+            allowed: 8,
+        };
+        let source = OperationPolicyError::LimitReached(snapshot);
+        let wrapped: Error = source.clone().into();
+        let structured = Error::ResourceLimit { snapshot };
+
+        assert_eq!(wrapped.class(), source.class());
+        assert_eq!(wrapped.code(), source.code());
+        assert_eq!(source.code(), structured.code());
+        assert_eq!(wrapped.capability(), source.capability());
+        assert_eq!(wrapped.limit(), Some(snapshot));
+        assert!(wrapped.to_string().contains(&source.to_string()));
+        assert_eq!(
+            wrapped
+                .source()
+                .and_then(|error| error.downcast_ref::<OperationPolicyError>()),
+            Some(&source)
+        );
+
+        let validation: Error = OperationPolicyError::InvalidNumericalPolicy.into();
+        assert_eq!(validation.class(), ErrorClass::InvalidInput);
+        assert_eq!(validation.limit(), None);
+        assert!(validation.source().is_some());
     }
 }

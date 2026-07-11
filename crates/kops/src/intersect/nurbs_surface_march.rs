@@ -82,7 +82,7 @@ impl NurbsSurfaceMarchBudgetProfile {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) enum ContextMarchError {
     Kernel(Error),
     Limit(LimitSnapshot),

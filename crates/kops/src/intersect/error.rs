@@ -32,7 +32,7 @@ pub const SURFACE_SURFACE_CLASS_PAIR: CapabilityId =
     capability_id("kops.intersect.surface-surface.class-pair");
 
 /// Failures owned by the generic intersection dispatch boundary.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum IntersectionError {
     /// Both curve inputs are valid, but their class pair has no registered

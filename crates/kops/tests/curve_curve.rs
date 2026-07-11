@@ -445,7 +445,7 @@ fn supported_dispatch_preserves_kernel_error_classification_and_source() {
     let kernel = Error::InvalidGeometry {
         reason: "line intersection requires a finite non-reversed range",
     };
-    assert_eq!(err, IntersectionError::Kernel(kernel));
+    assert_eq!(err, IntersectionError::Kernel(kernel.clone()));
     assert_eq!(err.class(), kernel.class());
     assert_eq!(err.code(), kernel.code());
     assert_eq!(err.capability(), kernel.capability());

@@ -17,7 +17,7 @@ pub use context::{
     DiagnosticKind, DiagnosticLevel, OperationContext, OperationDiagnostic, OperationOutcome,
     OperationReport, OperationScope,
 };
-pub use id::{DiagnosticCode, OperationPolicyError, PolicyVersion, StageId};
+pub use id::{DiagnosticCode, OperationPolicyError, PolicyVersion, StageId, code};
 pub use policy::{
     ExecutionPolicy, NumericGuardKind, NumericalPolicy, ParameterScale, ParameterTolerance,
     SessionPolicy, SessionPrecision,

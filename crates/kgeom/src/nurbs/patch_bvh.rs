@@ -161,7 +161,7 @@ impl ImplicitIsolationLimits {
 }
 
 /// Failure to run contextual implicit isolation.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ContextImplicitIsolationError {
     /// Geometry validation or exact NURBS processing failed.
     Kernel(Error),

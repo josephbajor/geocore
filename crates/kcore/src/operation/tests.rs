@@ -1,4 +1,6 @@
-use crate::error::Error;
+use std::collections::BTreeSet;
+
+use crate::error::{ClassifiedError, Error, ErrorClass};
 use crate::tolerance::{ANGULAR_RESOLUTION, LINEAR_RESOLUTION, SIZE_BOX_HALF, Tolerances};
 
 use super::*;
@@ -22,6 +24,135 @@ fn plan() -> BudgetPlan {
         LimitSpec::new(STAGE_A, ResourceKind::Work, AccountingMode::Cumulative, 10),
     ])
     .expect("valid plan")
+}
+
+#[test]
+fn policy_error_variants_have_exhaustive_stable_classification() {
+    let snapshot = LimitSnapshot {
+        stage: STAGE_A,
+        resource: ResourceKind::Work,
+        consumed: 11,
+        allowed: 10,
+    };
+    let cases = [
+        (
+            OperationPolicyError::InvalidIdentifier,
+            ErrorClass::InvalidInput,
+            code::INVALID_IDENTIFIER,
+        ),
+        (
+            OperationPolicyError::InvalidSessionPrecision,
+            ErrorClass::InvalidInput,
+            code::INVALID_SESSION_PRECISION,
+        ),
+        (
+            OperationPolicyError::InvalidNumericalPolicy,
+            ErrorClass::InvalidInput,
+            code::INVALID_NUMERICAL_POLICY,
+        ),
+        (
+            OperationPolicyError::InvalidOperationTolerance,
+            ErrorClass::InvalidInput,
+            code::INVALID_OPERATION_TOLERANCE,
+        ),
+        (
+            OperationPolicyError::DuplicateLimit {
+                stage: STAGE_A,
+                resource: ResourceKind::Work,
+            },
+            ErrorClass::InvalidInput,
+            code::DUPLICATE_LIMIT,
+        ),
+        (
+            OperationPolicyError::InvalidLimitMode {
+                stage: STAGE_A,
+                resource: ResourceKind::Depth,
+            },
+            ErrorClass::InvalidInput,
+            code::INVALID_LIMIT_MODE,
+        ),
+        (
+            OperationPolicyError::UnknownLimit {
+                stage: STAGE_A,
+                resource: ResourceKind::Work,
+            },
+            ErrorClass::InvalidInput,
+            code::UNKNOWN_LIMIT,
+        ),
+        (
+            OperationPolicyError::AccountingModeMismatch {
+                stage: STAGE_A,
+                resource: ResourceKind::Depth,
+            },
+            ErrorClass::InvalidInput,
+            code::ACCOUNTING_MODE_MISMATCH,
+        ),
+        (
+            OperationPolicyError::LimitReached(snapshot),
+            ErrorClass::ResourceLimit,
+            code::LIMIT_REACHED,
+        ),
+        (
+            OperationPolicyError::AccountingOverflow {
+                stage: STAGE_A,
+                resource: ResourceKind::Work,
+            },
+            ErrorClass::InvalidInput,
+            code::ACCOUNTING_OVERFLOW,
+        ),
+        (
+            OperationPolicyError::InvalidChildOrdinal,
+            ErrorClass::InvalidState,
+            code::INVALID_CHILD_ORDINAL,
+        ),
+        (
+            OperationPolicyError::ChildReservationExceeded {
+                stage: STAGE_A,
+                resource: ResourceKind::Work,
+            },
+            ErrorClass::InvalidState,
+            code::CHILD_RESERVATION_EXCEEDED,
+        ),
+        (
+            OperationPolicyError::UnknownChildReservation,
+            ErrorClass::InvalidState,
+            code::UNKNOWN_CHILD_RESERVATION,
+        ),
+    ];
+
+    assert_eq!(cases.len(), code::ALL.len());
+    for (error, class, expected_code) in cases {
+        assert_eq!(error.class(), class, "wrong class for {error:?}");
+        assert_eq!(error.code(), expected_code, "wrong code for {error:?}");
+        assert_eq!(ClassifiedError::class(&error), class);
+        assert_eq!(ClassifiedError::code(&error), expected_code);
+        assert_eq!(error.capability(), None);
+        assert!(std::error::Error::source(&error).is_none());
+        let expected_limit =
+            (error == OperationPolicyError::LimitReached(snapshot)).then_some(snapshot);
+        assert_eq!(error.limit(), expected_limit);
+        assert_eq!(ClassifiedError::limit(&error), expected_limit);
+        assert!(!error.to_string().is_empty());
+    }
+}
+
+#[test]
+fn policy_error_code_inventory_has_one_intentional_canonical_delegation() {
+    let codes: BTreeSet<_> = code::ALL.iter().map(|code| code.as_str()).collect();
+    assert_eq!(codes.len(), code::ALL.len());
+    assert_eq!(code::OWNED.len() + 1, code::ALL.len());
+    assert!(
+        code::OWNED
+            .iter()
+            .all(|code| code.as_str().starts_with("kcore.operation."))
+    );
+    let shared: Vec<_> = crate::error::code::ALL
+        .iter()
+        .filter(|legacy| codes.contains(legacy.as_str()))
+        .copied()
+        .collect();
+    assert_eq!(shared, [crate::error::code::RESOURCE_LIMIT]);
+    assert_eq!(code::LIMIT_REACHED, crate::error::code::RESOURCE_LIMIT);
 }
 
 #[test]
