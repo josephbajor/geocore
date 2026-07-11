@@ -787,5 +787,4 @@ mod tests {
         assert_eq!(Some(audit), template.audit);
         verify_full_rebuild(case, audit);
     }
-
 }

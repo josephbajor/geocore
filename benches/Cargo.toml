@@ -21,6 +21,10 @@ harness = false
 name = "topology_commit"
 harness = false
 
+[[bench]]
+name = "body_tessellation"
+harness = false
+
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"

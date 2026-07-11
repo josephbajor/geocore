@@ -28,7 +28,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 22)
+        self.assertEqual(len(cases), 32)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -58,6 +58,28 @@ class BenchmarkBaselineTests(unittest.TestCase):
             all(
                 "output_digest" in case["expected_result_counters"]
                 for case in topology
+            )
+        )
+        tessellation = [
+            case for case in cases if case["benchmark_target"] == "body_tessellation"
+        ]
+        self.assertEqual(len(tessellation), 10)
+        self.assertTrue(
+            all(
+                case["deterministic_seed"] == 0x5154455353000003
+                for case in tessellation
+            )
+        )
+        self.assertEqual(
+            {case["tolerances"]["chord_tol"] for case in tessellation},
+            {1e-2, 1e-3},
+        )
+        self.assertTrue(
+            all(
+                case["expected_result_counters"]["watertight"]
+                and case["expected_result_counters"]["outward"]
+                and case["expected_result_counters"]["volume_within_tolerance"]
+                for case in tessellation
             )
         )
         benchmark.validate_report(self.example)

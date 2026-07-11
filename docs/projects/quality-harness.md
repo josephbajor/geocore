@@ -1,6 +1,6 @@
 # F7 quality, fuzzing, and performance harnesses
 
-Status: Q0 through Q2 implemented; remaining benchmark ladders and fuzz stages implementation-ready
+Status: Q0 through Q2 and the first Q3 analytic slice implemented; remaining benchmark and fuzz stages implementation-ready
 
 ## Outcome
 
@@ -202,6 +202,15 @@ rejected-edit case protects failure atomicity, not merely throughput.
 ## Stage Q3 — body tessellation ladder
 
 Owner: `ktopo`, consuming `kgeom` tessellation.
+
+Status: the first analytic closed-solid slice is implemented as ten registered
+cases: block, cylinder, cone, sphere, and torus at chord tolerances `1e-2` and
+`1e-3`. Cylinder, sphere, and torus exercise existing periodic seam/pole paths.
+Fixture construction and verification are excluded from the measured
+`tessellate_body` duration. Mixed-body, NURBS/pcurve, and tighter-tolerance
+cases remain implementation-ready follow-ups. Boundary/refinement and
+allocation counters remain deferred until those observations exist; Q3 does
+not infer them from output size.
 
 Fixtures use existing deterministic primitive constructors first, followed by
 trimmed NURBS fixtures promoted from the test corpus:

@@ -544,6 +544,346 @@
         "affected_order_digest": "8aa984d6299805c2",
         "output_digest": "11a6523bb4cc68bc"
       }
+    },
+    {
+      "path": "topology/body-tessellation/block-v1/1/chord-1e-2-v1",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v1",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1
+      },
+      "tolerances": {
+        "chord_tol": 0.01
+      },
+      "policy_values": {
+        "max_edge_len": "unbounded",
+        "validation": "closed-solid"
+      },
+      "expected_result_counters": {
+        "source_faces": 6,
+        "source_edges": 12,
+        "source_vertices": 8,
+        "mesh_vertices": 8,
+        "mesh_triangles": 12,
+        "face_ranges": 6,
+        "edge_polylines": 12,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "watertight": true,
+        "outward": true,
+        "volume_within_tolerance": true,
+        "mesh_digest": "37738ea0abf268a7",
+        "output_digest": "2b93737099765cda"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/block-v1/1/chord-1e-3-v1",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v1",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1
+      },
+      "tolerances": {
+        "chord_tol": 0.001
+      },
+      "policy_values": {
+        "max_edge_len": "unbounded",
+        "validation": "closed-solid"
+      },
+      "expected_result_counters": {
+        "source_faces": 6,
+        "source_edges": 12,
+        "source_vertices": 8,
+        "mesh_vertices": 8,
+        "mesh_triangles": 12,
+        "face_ranges": 6,
+        "edge_polylines": 12,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "watertight": true,
+        "outward": true,
+        "volume_within_tolerance": true,
+        "mesh_digest": "37738ea0abf268a7",
+        "output_digest": "2b93737099765cda"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/cylinder-v1/1/chord-1e-2-v1",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v1",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1
+      },
+      "tolerances": {
+        "chord_tol": 0.01
+      },
+      "policy_values": {
+        "max_edge_len": "unbounded",
+        "validation": "closed-solid"
+      },
+      "expected_result_counters": {
+        "source_faces": 3,
+        "source_edges": 2,
+        "source_vertices": 0,
+        "mesh_vertices": 2913,
+        "mesh_triangles": 5822,
+        "face_ranges": 3,
+        "edge_polylines": 2,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "watertight": true,
+        "outward": true,
+        "volume_within_tolerance": true,
+        "mesh_digest": "30474187c9d8a9ce",
+        "output_digest": "1383c6b7e58730b3"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/cylinder-v1/1/chord-1e-3-v1",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v1",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1
+      },
+      "tolerances": {
+        "chord_tol": 0.001
+      },
+      "policy_values": {
+        "max_edge_len": "unbounded",
+        "validation": "closed-solid"
+      },
+      "expected_result_counters": {
+        "source_faces": 3,
+        "source_edges": 2,
+        "source_vertices": 0,
+        "mesh_vertices": 85683,
+        "mesh_triangles": 171362,
+        "face_ranges": 3,
+        "edge_polylines": 2,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "watertight": true,
+        "outward": true,
+        "volume_within_tolerance": true,
+        "mesh_digest": "c18e8ba33c725d33",
+        "output_digest": "1300a8c159d7ab48"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/cone-v1/1/chord-1e-2-v1",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v1",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1
+      },
+      "tolerances": {
+        "chord_tol": 0.01
+      },
+      "policy_values": {
+        "max_edge_len": "unbounded",
+        "validation": "closed-solid"
+      },
+      "expected_result_counters": {
+        "source_faces": 3,
+        "source_edges": 2,
+        "source_vertices": 0,
+        "mesh_vertices": 2737,
+        "mesh_triangles": 5470,
+        "face_ranges": 3,
+        "edge_polylines": 2,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "watertight": true,
+        "outward": true,
+        "volume_within_tolerance": true,
+        "mesh_digest": "2ce0b59e91e22400",
+        "output_digest": "7a7c465b655f93c0"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/cone-v1/1/chord-1e-3-v1",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v1",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1
+      },
+      "tolerances": {
+        "chord_tol": 0.001
+      },
+      "policy_values": {
+        "max_edge_len": "unbounded",
+        "validation": "closed-solid"
+      },
+      "expected_result_counters": {
+        "source_faces": 3,
+        "source_edges": 2,
+        "source_vertices": 0,
+        "mesh_vertices": 54432,
+        "mesh_triangles": 108860,
+        "face_ranges": 3,
+        "edge_polylines": 2,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "watertight": true,
+        "outward": true,
+        "volume_within_tolerance": true,
+        "mesh_digest": "415997aeb0babc82",
+        "output_digest": "b06b9683b8034a21"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/sphere-v1/1/chord-1e-2-v1",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v1",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1
+      },
+      "tolerances": {
+        "chord_tol": 0.01
+      },
+      "policy_values": {
+        "max_edge_len": "unbounded",
+        "validation": "closed-solid"
+      },
+      "expected_result_counters": {
+        "source_faces": 1,
+        "source_edges": 0,
+        "source_vertices": 0,
+        "mesh_vertices": 2704,
+        "mesh_triangles": 5404,
+        "face_ranges": 1,
+        "edge_polylines": 0,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "watertight": true,
+        "outward": true,
+        "volume_within_tolerance": true,
+        "mesh_digest": "79f42a546c49f36f",
+        "output_digest": "1fd7f010353b6581"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/sphere-v1/1/chord-1e-3-v1",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v1",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1
+      },
+      "tolerances": {
+        "chord_tol": 0.001
+      },
+      "policy_values": {
+        "max_edge_len": "unbounded",
+        "validation": "closed-solid"
+      },
+      "expected_result_counters": {
+        "source_faces": 1,
+        "source_edges": 0,
+        "source_vertices": 0,
+        "mesh_vertices": 75430,
+        "mesh_triangles": 150856,
+        "face_ranges": 1,
+        "edge_polylines": 0,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "watertight": true,
+        "outward": true,
+        "volume_within_tolerance": true,
+        "mesh_digest": "f827bff6d90187a7",
+        "output_digest": "c0ef9392fad80d52"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/torus-v1/1/chord-1e-2-v1",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v1",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1
+      },
+      "tolerances": {
+        "chord_tol": 0.01
+      },
+      "policy_values": {
+        "max_edge_len": "unbounded",
+        "validation": "closed-solid"
+      },
+      "expected_result_counters": {
+        "source_faces": 1,
+        "source_edges": 0,
+        "source_vertices": 0,
+        "mesh_vertices": 11340,
+        "mesh_triangles": 22680,
+        "face_ranges": 1,
+        "edge_polylines": 0,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "watertight": true,
+        "outward": true,
+        "volume_within_tolerance": true,
+        "mesh_digest": "bec9d49d9830dc7e",
+        "output_digest": "4b2383743df88c46"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/torus-v1/1/chord-1e-3-v1",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v1",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1
+      },
+      "tolerances": {
+        "chord_tol": 0.001
+      },
+      "policy_values": {
+        "max_edge_len": "unbounded",
+        "validation": "closed-solid"
+      },
+      "expected_result_counters": {
+        "source_faces": 1,
+        "source_edges": 0,
+        "source_vertices": 0,
+        "mesh_vertices": 148178,
+        "mesh_triangles": 296356,
+        "face_ranges": 1,
+        "edge_polylines": 0,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "watertight": true,
+        "outward": true,
+        "volume_within_tolerance": true,
+        "mesh_digest": "39d6eb3f0319b7f7",
+        "output_digest": "1f8daf0017ea2cb6"
+      }
     }
   ]
 }

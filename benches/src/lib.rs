@@ -5,6 +5,7 @@
 
 use core::fmt;
 
+pub mod body_tessellation;
 pub mod topology;
 
 /// Stable path of the Q1 contract fixture.

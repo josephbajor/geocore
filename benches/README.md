@@ -53,6 +53,7 @@ contain no performance claim.
 cargo test --manifest-path benches/Cargo.toml
 cargo bench --manifest-path benches/Cargo.toml --bench benchmark_contract --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench topology_commit --no-run
+cargo bench --manifest-path benches/Cargo.toml --bench body_tessellation --no-run
 ```
 
 The Q1 target verifies the result digest before measurement and again in every
@@ -65,6 +66,14 @@ run outside the accumulated duration. Read-only full-rebuild samples reuse one
 verified prepared fixture so Criterion calibration does not repeat excluded
 cloning and snapshot work. Set `KERNEL_BENCH_SMOKE=1` and pass one full case
 path after `--` for a bounded local smoke run.
+
+The first Q3 slice registers ten analytic closed-solid cases: block, cylinder,
+cone, sphere, and torus at chord tolerances `1e-2` and `1e-3`. Cylinder,
+sphere, and torus exercise periodic seam/pole assembly. One immutable fixture
+is prepared per case; only `tessellate_body` is timed, while finite/range,
+watertightness, outward orientation, volume, repeatability, and exact mesh
+digest checks run outside the accumulated duration. Mixed-body and NURBS
+fixtures, boundary/refinement counters, and allocation counts remain deferred.
 
 ## Record a measured run
 

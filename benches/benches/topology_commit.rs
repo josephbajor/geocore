@@ -29,8 +29,7 @@ fn topology_commit(criterion: &mut Criterion) {
                 bencher.iter_custom(|iterations| {
                     let mut measured = Duration::ZERO;
                     for _ in 0..iterations {
-                        let (elapsed, audit) =
-                            black_box(fixture).measure_prepared_full_rebuild();
+                        let (elapsed, audit) = black_box(fixture).measure_prepared_full_rebuild();
                         verify_full_rebuild(case, audit);
                         black_box(audit);
                         measured += elapsed;
@@ -43,8 +42,7 @@ fn topology_commit(criterion: &mut Criterion) {
                 bencher.iter_custom(|iterations| {
                     let mut measured = Duration::ZERO;
                     for _ in 0..iterations {
-                        let (elapsed, result) =
-                            black_box(fixture).measure_once(case.ladder);
+                        let (elapsed, result) = black_box(fixture).measure_once(case.ladder);
                         verify(case, &result);
                         black_box(result);
                         measured += elapsed;
