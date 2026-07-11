@@ -5,12 +5,16 @@ use ktopo::entity::{
     Region as RawRegion, Shell as RawShell, Vertex as RawVertex,
 };
 
-use super::{BodyView, EdgeView, FaceView, FinView, LoopView, RegionView, ShellView, VertexView};
+use super::{
+    BodyView, CurveView, EdgeView, FaceView, FinView, LoopView, PcurveView, RegionView, ShellView,
+    SurfaceView, VertexView,
+};
 use crate::error::{EntityKind, Error, Result};
 use crate::session::Part;
 use crate::{
-    BodyId, BodyIds, EdgeId, EdgeIds, FaceId, FaceIds, FinId, FinIds, LoopId, LoopIds, PartId,
-    RegionId, RegionIds, ShellId, ShellIds, VertexId, VertexIds,
+    BodyId, BodyIds, CurveId, CurveIds, EdgeId, EdgeIds, FaceId, FaceIds, FinId, FinIds, LoopId,
+    LoopIds, PartId, PcurveId, PcurveIds, RegionId, RegionIds, ShellId, ShellIds, SurfaceId,
+    SurfaceIds, VertexId, VertexIds,
 };
 
 impl Part<'_> {
@@ -102,6 +106,39 @@ impl Part<'_> {
         )
     }
 
+    /// Enumerate live 3D curves in deterministic graph-arena slot order.
+    pub fn curves(&self) -> CurveIds<'_> {
+        let graph = self.state.store.geometry();
+        CurveIds::new(
+            graph
+                .curves()
+                .map(|(raw, _)| CurveId::new(self.id.clone(), raw)),
+            graph.curve_count(),
+        )
+    }
+
+    /// Enumerate live surfaces in deterministic graph-arena slot order.
+    pub fn surfaces(&self) -> SurfaceIds<'_> {
+        let graph = self.state.store.geometry();
+        SurfaceIds::new(
+            graph
+                .surfaces()
+                .map(|(raw, _)| SurfaceId::new(self.id.clone(), raw)),
+            graph.surface_count(),
+        )
+    }
+
+    /// Enumerate live pcurves in deterministic graph-arena slot order.
+    pub fn pcurves(&self) -> PcurveIds<'_> {
+        let graph = self.state.store.geometry();
+        PcurveIds::new(
+            graph
+                .curves_2d()
+                .map(|(raw, _)| PcurveId::new(self.id.clone(), raw)),
+            graph.curve2d_count(),
+        )
+    }
+
     /// Resolve a body ID into an immutable semantic view.
     pub fn body(&self, id: BodyId) -> Result<BodyView<'_>> {
         self.validate_id(id.part())?;
@@ -158,6 +195,36 @@ impl Part<'_> {
         Ok(VertexView::new(&self.state.store, id))
     }
 
+    /// Resolve a 3D curve ID into an immutable metadata view.
+    pub fn curve(&self, id: CurveId) -> Result<CurveView<'_>> {
+        self.validate_id(id.part())?;
+        self.require_geometry_live(
+            self.state.store.geometry().curve(id.raw()),
+            EntityKind::Curve,
+        )?;
+        Ok(CurveView::new(&self.state.store, id))
+    }
+
+    /// Resolve a surface ID into an immutable metadata view.
+    pub fn surface(&self, id: SurfaceId) -> Result<SurfaceView<'_>> {
+        self.validate_id(id.part())?;
+        self.require_geometry_live(
+            self.state.store.geometry().surface(id.raw()),
+            EntityKind::Surface,
+        )?;
+        Ok(SurfaceView::new(&self.state.store, id))
+    }
+
+    /// Resolve a pcurve ID into an immutable metadata view.
+    pub fn pcurve(&self, id: PcurveId) -> Result<PcurveView<'_>> {
+        self.validate_id(id.part())?;
+        self.require_geometry_live(
+            self.state.store.geometry().curve2d(id.raw()),
+            EntityKind::Pcurve,
+        )?;
+        Ok(PcurveView::new(&self.state.store, id))
+    }
+
     fn validate_id(&self, actual: &PartId) -> Result<()> {
         if actual != &self.id {
             return Err(Error::WrongPart {
@@ -170,5 +237,9 @@ impl Part<'_> {
 
     fn require_live<T>(&self, result: kcore::error::Result<&T>, kind: EntityKind) -> Result<()> {
         result.map(|_| ()).map_err(|_| Error::StaleEntity { kind })
+    }
+
+    fn require_geometry_live<T>(&self, value: Option<&T>, kind: EntityKind) -> Result<()> {
+        value.map(|_| ()).ok_or(Error::StaleEntity { kind })
     }
 }

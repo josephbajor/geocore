@@ -4,9 +4,9 @@ use ktopo::entity::{Edge as RawEdge, Vertex as RawVertex};
 use ktopo::store::Store;
 
 use crate::error::{Error, Result};
-use crate::{EdgeId, EntityTolerance, FinId, FinIds, Point3, VertexId};
+use crate::{CurveId, EdgeId, EntityTolerance, FinId, FinIds, Point3, VertexId};
 
-/// Read-only edge view. Supporting curve identity is deferred to K3.
+/// Read-only edge view.
 pub struct EdgeView<'part> {
     store: &'part Store,
     id: EdgeId,
@@ -40,6 +40,14 @@ impl<'part> EdgeView<'part> {
     /// Active edge parameter interval, absent for a full-period ring edge.
     pub fn bounds(&self) -> Option<(f64, f64)> {
         self.entity().bounds
+    }
+
+    /// Authoritative supporting-curve identity, absent for a curve-less
+    /// tolerant edge.
+    pub fn curve(&self) -> Option<CurveId> {
+        self.entity()
+            .curve
+            .map(|raw| CurveId::new(self.id.part().clone(), raw))
     }
 
     /// Fins in stored creation order.

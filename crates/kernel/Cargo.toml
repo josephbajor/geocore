@@ -1,6 +1,6 @@
 [package]
 name = "kernel"
-description = "Supported native Rust facade for kernel session, part, and read-only topology access"
+description = "Supported native Rust facade for kernel session, topology, and geometry identity access"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 kcore = { path = "../kcore" }
 kgeom = { path = "../kgeom" }
+kgraph = { path = "../kgraph" }
 ktopo = { path = "../ktopo" }
 
 [lints]

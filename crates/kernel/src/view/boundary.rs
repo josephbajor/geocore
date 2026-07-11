@@ -5,11 +5,11 @@ use ktopo::store::Store;
 
 use crate::error::{Error, Result};
 use crate::{
-    EdgeId, EntityTolerance, FaceDomain, FaceId, FinId, FinIds, LoopId, LoopIds, Sense, ShellId,
-    VertexId,
+    EdgeId, EntityTolerance, FaceDomain, FaceId, FinId, FinIds, LoopId, LoopIds, PcurveId, Sense,
+    ShellId, SurfaceId, VertexId,
 };
 
-/// Read-only face view. Geometry identity is intentionally deferred to K3.
+/// Read-only face view.
 pub struct FaceView<'part> {
     store: &'part Store,
     id: FaceId,
@@ -45,6 +45,11 @@ impl<'part> FaceView<'part> {
                 .map(|&raw| LoopId::new(self.id.part().clone(), raw)),
             loops.len(),
         )
+    }
+
+    /// Authoritative supporting-surface identity.
+    pub fn surface(&self) -> SurfaceId {
+        SurfaceId::new(self.id.part().clone(), self.entity().surface)
     }
 
     /// Face orientation relative to its supporting surface.
@@ -101,7 +106,7 @@ impl<'part> LoopView<'part> {
     }
 }
 
-/// Read-only fin view. Pcurve geometry identity is deferred to K3.
+/// Read-only fin view.
 pub struct FinView<'part> {
     store: &'part Store,
     id: FinId,
@@ -136,6 +141,13 @@ impl<'part> FinView<'part> {
     /// Traversal direction relative to the edge.
     pub fn sense(&self) -> Sense {
         self.entity().sense
+    }
+
+    /// Attached parameter-space curve identity, when authored.
+    pub fn pcurve(&self) -> Option<PcurveId> {
+        self.entity()
+            .pcurve
+            .map(|use_| PcurveId::new(self.id.part().clone(), use_.curve()))
     }
 
     /// Tail vertex in fin traversal direction, or `None` for a ring edge.

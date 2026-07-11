@@ -36,7 +36,7 @@ pub mod code {
     ];
 }
 
-/// Topology identity kind used in stale-ID diagnostics.
+/// Facade identity kind used in stale-ID diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum EntityKind {
@@ -56,9 +56,15 @@ pub enum EntityKind {
     Edge,
     /// Vertex.
     Vertex,
+    /// Three-dimensional curve geometry.
+    Curve,
+    /// Supporting-surface geometry.
+    Surface,
+    /// Parameter-space curve geometry.
+    Pcurve,
 }
 
-/// K1 façade failure.
+/// Façade lifecycle, identity, or read failure.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Error {

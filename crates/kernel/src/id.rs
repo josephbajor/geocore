@@ -5,6 +5,9 @@ use core::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use kcore::arena::Handle;
+use kgraph::{
+    Curve2dHandle as RawPcurveId, CurveHandle as RawCurveId, SurfaceHandle as RawSurfaceId,
+};
 use ktopo::entity::{
     BodyId as RawBodyId, EdgeId as RawEdgeId, FaceId as RawFaceId, FinId as RawFinId,
     LoopId as RawLoopId, RegionId as RawRegionId, ShellId as RawShellId, VertexId as RawVertexId,
@@ -84,7 +87,7 @@ impl fmt::Debug for PartId {
     }
 }
 
-macro_rules! topology_id {
+macro_rules! facade_id {
     ($name:ident, $raw:ty, $label:literal) => {
         #[doc = concat!("Opaque, part-qualified identity of one ", $label, ".")]
         #[derive(Clone, PartialEq, Eq, Hash)]
@@ -115,11 +118,15 @@ macro_rules! topology_id {
     };
 }
 
-topology_id!(BodyId, RawBodyId, "body");
-topology_id!(RegionId, RawRegionId, "region");
-topology_id!(ShellId, RawShellId, "shell");
-topology_id!(FaceId, RawFaceId, "face");
-topology_id!(LoopId, RawLoopId, "loop");
-topology_id!(FinId, RawFinId, "fin");
-topology_id!(EdgeId, RawEdgeId, "edge");
-topology_id!(VertexId, RawVertexId, "vertex");
+facade_id!(BodyId, RawBodyId, "body");
+facade_id!(RegionId, RawRegionId, "region");
+facade_id!(ShellId, RawShellId, "shell");
+facade_id!(FaceId, RawFaceId, "face");
+facade_id!(LoopId, RawLoopId, "loop");
+facade_id!(FinId, RawFinId, "fin");
+facade_id!(EdgeId, RawEdgeId, "edge");
+facade_id!(VertexId, RawVertexId, "vertex");
+
+facade_id!(CurveId, RawCurveId, "3D curve geometry node");
+facade_id!(SurfaceId, RawSurfaceId, "surface geometry node");
+facade_id!(PcurveId, RawPcurveId, "parameter-space curve geometry node");

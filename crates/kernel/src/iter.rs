@@ -2,7 +2,10 @@
 
 use core::iter::FusedIterator;
 
-use crate::{BodyId, EdgeId, FaceId, FinId, LoopId, PartId, RegionId, ShellId, VertexId};
+use crate::{
+    BodyId, CurveId, EdgeId, FaceId, FinId, LoopId, PartId, PcurveId, RegionId, ShellId, SurfaceId,
+    VertexId,
+};
 
 macro_rules! id_iterator {
     ($name:ident, $id:ty, $description:literal) => {
@@ -101,4 +104,19 @@ id_iterator!(
     VertexIds,
     VertexId,
     "Deterministically ordered vertex identities."
+);
+id_iterator!(
+    CurveIds,
+    CurveId,
+    "Deterministically ordered 3D curve geometry identities."
+);
+id_iterator!(
+    SurfaceIds,
+    SurfaceId,
+    "Deterministically ordered surface geometry identities."
+);
+id_iterator!(
+    PcurveIds,
+    PcurveId,
+    "Deterministically ordered parameter-space curve geometry identities."
 );
