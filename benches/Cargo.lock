@@ -198,6 +198,7 @@ name = "kernel-benchmarks"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "kcore",
  "kgeom",
  "ktopo",
  "serde_json",

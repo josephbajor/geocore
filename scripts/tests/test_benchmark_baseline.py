@@ -28,7 +28,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 32)
+        self.assertEqual(len(cases), 38)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -80,6 +80,28 @@ class BenchmarkBaselineTests(unittest.TestCase):
                 and case["expected_result_counters"]["outward"]
                 and case["expected_result_counters"]["volume_within_tolerance"]
                 for case in tessellation
+            )
+        )
+        isolation = [
+            case for case in cases if case["benchmark_target"] == "nurbs_isolation"
+        ]
+        self.assertEqual(len(isolation), 6)
+        self.assertTrue(
+            all(case["deterministic_seed"] == 0x51544E5552420004 for case in isolation)
+        )
+        limited = [
+            case
+            for case in isolation
+            if case["expected_result_counters"]["limit_kind"] != "none"
+        ]
+        self.assertEqual(len(limited), 2)
+        self.assertTrue(
+            all(
+                case["expected_result_counters"]["indeterminate"]
+                and case["expected_result_counters"]["conservative_cover"]
+                and not case["expected_result_counters"]["complete"]
+                and not case["expected_result_counters"]["proven_empty"]
+                for case in limited
             )
         )
         benchmark.validate_report(self.example)

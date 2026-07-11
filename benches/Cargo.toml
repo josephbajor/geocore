@@ -6,6 +6,7 @@ rust-version = "1.93.0"
 publish = false
 
 [dependencies]
+kcore = { path = "../crates/kcore" }
 kgeom = { path = "../crates/kgeom" }
 ktopo = { path = "../crates/ktopo", features = ["benchmark-internals"] }
 
@@ -23,6 +24,10 @@ harness = false
 
 [[bench]]
 name = "body_tessellation"
+harness = false
+
+[[bench]]
+name = "nurbs_isolation"
 harness = false
 
 [lints.rust]

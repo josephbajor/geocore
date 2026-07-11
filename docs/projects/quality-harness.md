@@ -1,6 +1,6 @@
 # F7 quality, fuzzing, and performance harnesses
 
-Status: Q0 through Q2 and the first Q3 analytic slice implemented; remaining benchmark and fuzz stages implementation-ready
+Status: Q0 through Q2 plus the first Q3 and Q4 slices implemented; remaining benchmark and fuzz stages implementation-ready
 
 ## Outcome
 
@@ -238,6 +238,16 @@ tolerances as though they perform the same amount of work.
 ## Stage Q4 — NURBS isolation ladder
 
 Owner: `kgeom`.
+
+Status: the first contextual implicit-isolation slice is implemented as six
+registered cases. It varies polynomial/rational representation, one/four
+Bezier patches, retained/separated implicit geometry, and the exact work and
+candidate-cover budget boundaries. Limited results must remain indeterminate,
+retain a deterministic conservative cover of the corresponding complete
+result, and never become a complete miss. Only contextual isolation is timed;
+surface/BVH/policy setup and verification are excluded. The broader degree,
+control-net, knot-span/patch-count, and deeper subdivision matrix remains
+deferred.
 
 Exercise curve and surface subdivision/isolation independently from full
 intersection dispatch. Use generated deterministic fixtures whose control

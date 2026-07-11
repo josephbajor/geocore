@@ -54,6 +54,7 @@ cargo test --manifest-path benches/Cargo.toml
 cargo bench --manifest-path benches/Cargo.toml --bench benchmark_contract --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench topology_commit --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench body_tessellation --no-run
+cargo bench --manifest-path benches/Cargo.toml --bench nurbs_isolation --no-run
 ```
 
 The Q1 target verifies the result digest before measurement and again in every
@@ -74,6 +75,14 @@ is prepared per case; only `tessellate_body` is timed, while finite/range,
 watertightness, outward orientation, volume, repeatability, and exact mesh
 digest checks run outside the accumulated duration. Mixed-body and NURBS
 fixtures, boundary/refinement counters, and allocation counts remain deferred.
+
+The first Q4 slice registers six contextual implicit-isolation cases. It varies
+polynomial versus rational single patches, one versus four extracted Bezier
+patches, retained candidates versus a certified separated miss, and exact
+`N-1` work/candidate budget crossings. Surface construction, Bezier extraction,
+BVH construction, operation-context setup, reports, digests, and conservative
+cover verification are excluded from the measured duration. Degree and larger
+control-net/patch-count ladders remain deferred.
 
 ## Record a measured run
 

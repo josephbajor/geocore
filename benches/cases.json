@@ -884,6 +884,276 @@
         "mesh_digest": "39d6eb3f0319b7f7",
         "output_digest": "1f8daf0017ea2cb6"
       }
+    },
+    {
+      "path": "geometry/nurbs-isolation/poly-single-v1/1/work-exact-v1",
+      "benchmark_target": "nurbs_isolation",
+      "fixture_version": "nurbs-isolation.v1",
+      "deterministic_seed": 5860395143475101700,
+      "size_parameters": {
+        "elements": 1,
+        "control_points": 4,
+        "patches": 1
+      },
+      "tolerances": {
+        "implicit_margin": 0
+      },
+      "policy_values": {
+        "requested_depth": 1,
+        "work_allowed": 1,
+        "candidates_allowed": 2,
+        "depth_allowed": 1,
+        "execution": "serial"
+      },
+      "expected_result_counters": {
+        "control_points": 4,
+        "extracted_patches": 1,
+        "bvh_nodes": 1,
+        "candidates": 2,
+        "requested_depth": 1,
+        "max_candidate_depth": 1,
+        "complete": true,
+        "proven_empty": false,
+        "indeterminate": false,
+        "conservative_cover": true,
+        "limit_kind": "none",
+        "limit_events": 0,
+        "limit_attempted_consumed": 0,
+        "limit_attempted_allowed": 0,
+        "work_consumed": 1,
+        "work_allowed": 1,
+        "candidate_high_water": 2,
+        "candidates_allowed": 2,
+        "depth_high_water": 1,
+        "depth_allowed": 1,
+        "candidate_digest": "6deeeb2a47955f67",
+        "output_digest": "3d29c8a22479d220"
+      }
+    },
+    {
+      "path": "geometry/nurbs-isolation/rational-single-v1/1/work-exact-v1",
+      "benchmark_target": "nurbs_isolation",
+      "fixture_version": "nurbs-isolation.v1",
+      "deterministic_seed": 5860395143475101700,
+      "size_parameters": {
+        "elements": 1,
+        "control_points": 4,
+        "patches": 1
+      },
+      "tolerances": {
+        "implicit_margin": 0
+      },
+      "policy_values": {
+        "requested_depth": 1,
+        "work_allowed": 1,
+        "candidates_allowed": 2,
+        "depth_allowed": 1,
+        "execution": "serial"
+      },
+      "expected_result_counters": {
+        "control_points": 4,
+        "extracted_patches": 1,
+        "bvh_nodes": 1,
+        "candidates": 2,
+        "requested_depth": 1,
+        "max_candidate_depth": 1,
+        "complete": true,
+        "proven_empty": false,
+        "indeterminate": false,
+        "conservative_cover": true,
+        "limit_kind": "none",
+        "limit_events": 0,
+        "limit_attempted_consumed": 0,
+        "limit_attempted_allowed": 0,
+        "work_consumed": 1,
+        "work_allowed": 1,
+        "candidate_high_water": 2,
+        "candidates_allowed": 2,
+        "depth_high_water": 1,
+        "depth_allowed": 1,
+        "candidate_digest": "9de17ff6683a1c15",
+        "output_digest": "1124ed099f1ea266"
+      }
+    },
+    {
+      "path": "geometry/nurbs-isolation/rational-four-patch-v1/4/retained-v1",
+      "benchmark_target": "nurbs_isolation",
+      "fixture_version": "nurbs-isolation.v1",
+      "deterministic_seed": 5860395143475101700,
+      "size_parameters": {
+        "elements": 4,
+        "control_points": 9,
+        "patches": 4
+      },
+      "tolerances": {
+        "implicit_margin": 0
+      },
+      "policy_values": {
+        "requested_depth": 1,
+        "work_allowed": 4,
+        "candidates_allowed": 8,
+        "depth_allowed": 1,
+        "execution": "serial"
+      },
+      "expected_result_counters": {
+        "control_points": 9,
+        "extracted_patches": 4,
+        "bvh_nodes": 7,
+        "candidates": 8,
+        "requested_depth": 1,
+        "max_candidate_depth": 1,
+        "complete": true,
+        "proven_empty": false,
+        "indeterminate": false,
+        "conservative_cover": true,
+        "limit_kind": "none",
+        "limit_events": 0,
+        "limit_attempted_consumed": 0,
+        "limit_attempted_allowed": 0,
+        "work_consumed": 4,
+        "work_allowed": 4,
+        "candidate_high_water": 8,
+        "candidates_allowed": 8,
+        "depth_high_water": 1,
+        "depth_allowed": 1,
+        "candidate_digest": "605d9d2d837c94fa",
+        "output_digest": "f18b8f2552a10df8"
+      }
+    },
+    {
+      "path": "geometry/nurbs-isolation/rational-four-patch-v1/4/separated-v1",
+      "benchmark_target": "nurbs_isolation",
+      "fixture_version": "nurbs-isolation.v1",
+      "deterministic_seed": 5860395143475101700,
+      "size_parameters": {
+        "elements": 4,
+        "control_points": 9,
+        "patches": 4
+      },
+      "tolerances": {
+        "implicit_margin": 0
+      },
+      "policy_values": {
+        "requested_depth": 1,
+        "work_allowed": 4,
+        "candidates_allowed": 8,
+        "depth_allowed": 1,
+        "execution": "serial"
+      },
+      "expected_result_counters": {
+        "control_points": 9,
+        "extracted_patches": 4,
+        "bvh_nodes": 7,
+        "candidates": 0,
+        "requested_depth": 1,
+        "max_candidate_depth": 0,
+        "complete": true,
+        "proven_empty": true,
+        "indeterminate": false,
+        "conservative_cover": true,
+        "limit_kind": "none",
+        "limit_events": 0,
+        "limit_attempted_consumed": 0,
+        "limit_attempted_allowed": 0,
+        "work_consumed": 0,
+        "work_allowed": 4,
+        "candidate_high_water": 0,
+        "candidates_allowed": 8,
+        "depth_high_water": 0,
+        "depth_allowed": 1,
+        "candidate_digest": "d1d486ddbbba946f",
+        "output_digest": "ef1cf8ebbf880336"
+      }
+    },
+    {
+      "path": "geometry/nurbs-isolation/poly-single-v1/1/work-low-v1",
+      "benchmark_target": "nurbs_isolation",
+      "fixture_version": "nurbs-isolation.v1",
+      "deterministic_seed": 5860395143475101700,
+      "size_parameters": {
+        "elements": 1,
+        "control_points": 4,
+        "patches": 1
+      },
+      "tolerances": {
+        "implicit_margin": 0
+      },
+      "policy_values": {
+        "requested_depth": 1,
+        "work_allowed": 0,
+        "candidates_allowed": 2,
+        "depth_allowed": 1,
+        "execution": "serial"
+      },
+      "expected_result_counters": {
+        "control_points": 4,
+        "extracted_patches": 1,
+        "bvh_nodes": 1,
+        "candidates": 1,
+        "requested_depth": 1,
+        "max_candidate_depth": 0,
+        "complete": false,
+        "proven_empty": false,
+        "indeterminate": true,
+        "conservative_cover": true,
+        "limit_kind": "work",
+        "limit_events": 1,
+        "limit_attempted_consumed": 1,
+        "limit_attempted_allowed": 0,
+        "work_consumed": 0,
+        "work_allowed": 0,
+        "candidate_high_water": 1,
+        "candidates_allowed": 2,
+        "depth_high_water": 1,
+        "depth_allowed": 1,
+        "candidate_digest": "4871aa3f190d2d1e",
+        "output_digest": "afd0f4e964d803d7"
+      }
+    },
+    {
+      "path": "geometry/nurbs-isolation/poly-single-v1/1/candidate-low-v1",
+      "benchmark_target": "nurbs_isolation",
+      "fixture_version": "nurbs-isolation.v1",
+      "deterministic_seed": 5860395143475101700,
+      "size_parameters": {
+        "elements": 1,
+        "control_points": 4,
+        "patches": 1
+      },
+      "tolerances": {
+        "implicit_margin": 0
+      },
+      "policy_values": {
+        "requested_depth": 1,
+        "work_allowed": 1,
+        "candidates_allowed": 1,
+        "depth_allowed": 1,
+        "execution": "serial"
+      },
+      "expected_result_counters": {
+        "control_points": 4,
+        "extracted_patches": 1,
+        "bvh_nodes": 1,
+        "candidates": 1,
+        "requested_depth": 1,
+        "max_candidate_depth": 0,
+        "complete": false,
+        "proven_empty": false,
+        "indeterminate": true,
+        "conservative_cover": true,
+        "limit_kind": "candidates",
+        "limit_events": 1,
+        "limit_attempted_consumed": 2,
+        "limit_attempted_allowed": 1,
+        "work_consumed": 1,
+        "work_allowed": 1,
+        "candidate_high_water": 1,
+        "candidates_allowed": 1,
+        "depth_high_water": 1,
+        "depth_allowed": 1,
+        "candidate_digest": "4871aa3f190d2d1e",
+        "output_digest": "91f282ce578b027f"
+      }
     }
   ]
 }
