@@ -113,11 +113,22 @@ def validate_case(case, path="case", include_target=False):
         if not isinstance(counters, dict) or not counters:
             raise ContractError("{}.expected_result_counters must be non-empty".format(path))
         _json_values(counters, path + ".expected_result_counters")
-        for key in ("wrapping_sum_hex", "output_digest"):
+        for key in ("output_digest",):
             if HEX64.fullmatch(str(counters.get(key, ""))) is None:
                 raise ContractError(
                     "{}.expected_result_counters.{} must be hex64".format(path, key)
                 )
+        wrapping_sum = counters.get("wrapping_sum_hex")
+        if case["benchmark_target"] == "benchmark_contract" and wrapping_sum is None:
+            raise ContractError(
+                "{}.expected_result_counters.wrapping_sum_hex is required for benchmark_contract".format(
+                    path
+                )
+            )
+        if wrapping_sum is not None and HEX64.fullmatch(str(wrapping_sum)) is None:
+            raise ContractError(
+                "{}.expected_result_counters.wrapping_sum_hex must be hex64".format(path)
+            )
 
 
 def load_cases(path=BENCHES / "cases.json"):

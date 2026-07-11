@@ -169,6 +169,8 @@ pub struct Store {
     index_dirty: bool,
     full_validation_required: bool,
     transaction_active: bool,
+    #[cfg(feature = "benchmark-internals")]
+    benchmark_observation: Option<crate::benchmark::CommitObservation>,
 }
 
 impl Clone for Store {
@@ -191,6 +193,8 @@ impl Clone for Store {
             index_dirty: self.index_dirty || self.transaction_active,
             full_validation_required: self.full_validation_required || self.transaction_active,
             transaction_active: false,
+            #[cfg(feature = "benchmark-internals")]
+            benchmark_observation: self.benchmark_observation,
         }
     }
 }
@@ -287,6 +291,19 @@ impl Store {
         self.index = index;
         self.index_dirty = false;
         self.full_validation_required = false;
+    }
+
+    #[cfg(feature = "benchmark-internals")]
+    pub(crate) fn set_benchmark_observation(
+        &mut self,
+        observation: crate::benchmark::CommitObservation,
+    ) {
+        self.benchmark_observation = Some(observation);
+    }
+
+    #[cfg(feature = "benchmark-internals")]
+    pub(crate) fn benchmark_observation(&self) -> Option<crate::benchmark::CommitObservation> {
+        self.benchmark_observation
     }
 
     pub(crate) fn commit_transaction(&mut self) -> Result<Vec<Mutation>> {

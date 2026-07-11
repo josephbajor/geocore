@@ -661,6 +661,20 @@ impl<'a> Transaction<'a> {
             }
         };
         let validate_all = self.store.full_validation_required();
+        #[cfg(feature = "benchmark-internals")]
+        let (candidate_index, refreshed_bodies) = if validate_all {
+            (
+                crate::index::StoreIndex::build(self.store),
+                self.store.count::<crate::entity::Body>(),
+            )
+        } else {
+            crate::index::StoreIndex::candidate_with_stats(
+                self.store,
+                self.store.committed_index(),
+                &pending,
+            )
+        };
+        #[cfg(not(feature = "benchmark-internals"))]
         let candidate_index = if validate_all {
             crate::index::StoreIndex::build(self.store)
         } else {
@@ -679,7 +693,7 @@ impl<'a> Transaction<'a> {
                 checked.push(body);
                 fault_count += crate::check::check_body(self.store, body)?.len();
             }
-            for body in affected {
+            for body in affected.iter().copied() {
                 if checked.contains(&body) || !self.store.contains(body) {
                     continue;
                 }
@@ -703,12 +717,34 @@ impl<'a> Transaction<'a> {
         })();
         if let Err(error) = validation {
             self.store.rollback_transaction()?;
+            #[cfg(feature = "benchmark-internals")]
+            self.store
+                .set_benchmark_observation(crate::benchmark::CommitObservation {
+                    committed: false,
+                    body_count: self.store.count::<crate::entity::Body>(),
+                    affected_bodies: affected.len(),
+                    refreshed_bodies,
+                    checked_bodies: checked.len(),
+                    mutations: pending.len(),
+                    affected_order_digest: crate::benchmark::affected_digest(self.store, &affected),
+                });
             self.finished = true;
             return Err(error);
         }
         let mutations = self.store.commit_transaction()?;
         debug_assert_eq!(mutations, pending);
         self.store.install_committed_index(candidate_index);
+        #[cfg(feature = "benchmark-internals")]
+        self.store
+            .set_benchmark_observation(crate::benchmark::CommitObservation {
+                committed: true,
+                body_count: self.store.count::<crate::entity::Body>(),
+                affected_bodies: affected.len(),
+                refreshed_bodies,
+                checked_bodies: checked.len(),
+                mutations: pending.len(),
+                affected_order_digest: crate::benchmark::affected_digest(self.store, &affected),
+            });
         self.finished = true;
         Ok(Journal::new(
             mutations,

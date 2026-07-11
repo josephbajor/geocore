@@ -19,6 +19,531 @@
         "wrapping_sum_hex": "babfef09cc07d280",
         "output_digest": "142890537c90ed65"
       }
+    },
+    {
+      "path": "topology/checked-commit/isolated-acorns-v1/1/clean-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "clean",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 1,
+        "affected_bodies": 0,
+        "refreshed_bodies": 0,
+        "checked_bodies": 0,
+        "mutations": 0,
+        "committed": true,
+        "affected_order_digest": "8aa984d6299805c2",
+        "output_digest": "57601e348d118f48"
+      }
+    },
+    {
+      "path": "topology/checked-commit/isolated-acorns-v1/10/clean-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 10,
+        "bodies": 10
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "clean",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 10,
+        "affected_bodies": 0,
+        "refreshed_bodies": 0,
+        "checked_bodies": 0,
+        "mutations": 0,
+        "committed": true,
+        "affected_order_digest": "8aa984d6299805c2",
+        "output_digest": "75267408688c9bbd"
+      }
+    },
+    {
+      "path": "topology/checked-commit/isolated-acorns-v1/100/clean-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 100,
+        "bodies": 100
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "clean",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 100,
+        "affected_bodies": 0,
+        "refreshed_bodies": 0,
+        "checked_bodies": 0,
+        "mutations": 0,
+        "committed": true,
+        "affected_order_digest": "8aa984d6299805c2",
+        "output_digest": "ef3958b6643039b3"
+      }
+    },
+    {
+      "path": "topology/checked-commit/isolated-acorns-v1/1000/clean-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 1000,
+        "bodies": 1000
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "clean",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 1000,
+        "affected_bodies": 0,
+        "refreshed_bodies": 0,
+        "checked_bodies": 0,
+        "mutations": 0,
+        "committed": true,
+        "affected_order_digest": "8aa984d6299805c2",
+        "output_digest": "07d2045f0918791c"
+      }
+    },
+    {
+      "path": "topology/index-refresh/isolated-acorns-v1/1/local-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "local",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 1,
+        "affected_bodies": 1,
+        "refreshed_bodies": 1,
+        "checked_bodies": 1,
+        "mutations": 1,
+        "committed": true,
+        "affected_order_digest": "030000b9a2c219c6",
+        "output_digest": "3c02beb5c4ce906a"
+      }
+    },
+    {
+      "path": "topology/index-refresh/isolated-acorns-v1/10/local-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 10,
+        "bodies": 10
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "local",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 10,
+        "affected_bodies": 1,
+        "refreshed_bodies": 1,
+        "checked_bodies": 1,
+        "mutations": 1,
+        "committed": true,
+        "affected_order_digest": "030000b9a2c219c6",
+        "output_digest": "f1763b67ec71baca"
+      }
+    },
+    {
+      "path": "topology/index-refresh/isolated-acorns-v1/100/local-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 100,
+        "bodies": 100
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "local",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 100,
+        "affected_bodies": 1,
+        "refreshed_bodies": 1,
+        "checked_bodies": 1,
+        "mutations": 1,
+        "committed": true,
+        "affected_order_digest": "030000b9a2c219c6",
+        "output_digest": "28a24a29d46d4c7c"
+      }
+    },
+    {
+      "path": "topology/index-refresh/isolated-acorns-v1/1000/local-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 1000,
+        "bodies": 1000
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "local",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 1000,
+        "affected_bodies": 1,
+        "refreshed_bodies": 1,
+        "checked_bodies": 1,
+        "mutations": 1,
+        "committed": true,
+        "affected_order_digest": "030000b9a2c219c6",
+        "output_digest": "d82f13d65f5cef19"
+      }
+    },
+    {
+      "path": "topology/index-refresh/shared-geometry-v1/1/fanout-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "fanout",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 1,
+        "affected_bodies": 1,
+        "refreshed_bodies": 1,
+        "checked_bodies": 1,
+        "mutations": 1,
+        "committed": true,
+        "affected_order_digest": "030000b9a2c219c6",
+        "output_digest": "ed4d2c28ab302bea"
+      }
+    },
+    {
+      "path": "topology/index-refresh/shared-geometry-v1/10/fanout-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 10,
+        "bodies": 10
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "fanout",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 10,
+        "affected_bodies": 10,
+        "refreshed_bodies": 10,
+        "checked_bodies": 10,
+        "mutations": 1,
+        "committed": true,
+        "affected_order_digest": "64f999dcdb3f1b07",
+        "output_digest": "b5a5131490fe0ae1"
+      }
+    },
+    {
+      "path": "topology/index-refresh/shared-geometry-v1/100/fanout-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 100,
+        "bodies": 100
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "fanout",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 100,
+        "affected_bodies": 100,
+        "refreshed_bodies": 100,
+        "checked_bodies": 100,
+        "mutations": 1,
+        "committed": true,
+        "affected_order_digest": "3334ddf207edaf46",
+        "output_digest": "8c6ed51af43f5fba"
+      }
+    },
+    {
+      "path": "topology/checked-commit/isolated-acorns-v1/1/batched-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "batched",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 1,
+        "affected_bodies": 1,
+        "refreshed_bodies": 1,
+        "checked_bodies": 1,
+        "mutations": 1,
+        "committed": true,
+        "affected_order_digest": "030000b9a2c219c6",
+        "output_digest": "3c02beb5c4ce906a"
+      }
+    },
+    {
+      "path": "topology/checked-commit/isolated-acorns-v1/10/batched-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 10,
+        "bodies": 10
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "batched",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 10,
+        "affected_bodies": 10,
+        "refreshed_bodies": 10,
+        "checked_bodies": 10,
+        "mutations": 10,
+        "committed": true,
+        "affected_order_digest": "64f999dcdb3f1b07",
+        "output_digest": "1a5352bc5dc4cc2d"
+      }
+    },
+    {
+      "path": "topology/checked-commit/isolated-acorns-v1/100/batched-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 100,
+        "bodies": 100
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "batched",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 100,
+        "affected_bodies": 100,
+        "refreshed_bodies": 100,
+        "checked_bodies": 100,
+        "mutations": 100,
+        "committed": true,
+        "affected_order_digest": "3334ddf207edaf46",
+        "output_digest": "5034a7d22cc3f692"
+      }
+    },
+    {
+      "path": "topology/checked-commit/rejected-edit-v1/1/rollback-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "rejected",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 1,
+        "affected_bodies": 1,
+        "refreshed_bodies": 1,
+        "checked_bodies": 1,
+        "mutations": 1,
+        "committed": false,
+        "affected_order_digest": "030000b9a2c219c6",
+        "output_digest": "54ca000d26fbd60a"
+      }
+    },
+    {
+      "path": "topology/checked-commit/rejected-edit-v1/10/rollback-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 10,
+        "bodies": 10
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "rejected",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 10,
+        "affected_bodies": 1,
+        "refreshed_bodies": 1,
+        "checked_bodies": 1,
+        "mutations": 1,
+        "committed": false,
+        "affected_order_digest": "030000b9a2c219c6",
+        "output_digest": "e4c0f2937e5f5f9f"
+      }
+    },
+    {
+      "path": "topology/checked-commit/rejected-edit-v1/100/rollback-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 100,
+        "bodies": 100
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "rejected",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 100,
+        "affected_bodies": 1,
+        "refreshed_bodies": 1,
+        "checked_bodies": 1,
+        "mutations": 1,
+        "committed": false,
+        "affected_order_digest": "030000b9a2c219c6",
+        "output_digest": "9f0f069ab3395355"
+      }
+    },
+    {
+      "path": "topology/index-audit/primitive-mix-v1/1/full-rebuild-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "full-rebuild",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 1,
+        "affected_bodies": 0,
+        "refreshed_bodies": 0,
+        "checked_bodies": 0,
+        "mutations": 0,
+        "committed": true,
+        "affected_order_digest": "8aa984d6299805c2",
+        "output_digest": "61144f04492f23c8"
+      }
+    },
+    {
+      "path": "topology/index-audit/primitive-mix-v1/10/full-rebuild-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 10,
+        "bodies": 10
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "full-rebuild",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 10,
+        "affected_bodies": 0,
+        "refreshed_bodies": 0,
+        "checked_bodies": 0,
+        "mutations": 0,
+        "committed": true,
+        "affected_order_digest": "8aa984d6299805c2",
+        "output_digest": "e11843f57e941eaf"
+      }
+    },
+    {
+      "path": "topology/index-audit/primitive-mix-v1/100/full-rebuild-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 100,
+        "bodies": 100
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "full-rebuild",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 100,
+        "affected_bodies": 0,
+        "refreshed_bodies": 0,
+        "checked_bodies": 0,
+        "mutations": 0,
+        "committed": true,
+        "affected_order_digest": "8aa984d6299805c2",
+        "output_digest": "4963c619e7476031"
+      }
+    },
+    {
+      "path": "topology/index-audit/primitive-mix-v1/1000/full-rebuild-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 1000,
+        "bodies": 1000
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "full-rebuild",
+        "checked_commit": "ordinary"
+      },
+      "expected_result_counters": {
+        "body_count": 1000,
+        "affected_bodies": 0,
+        "refreshed_bodies": 0,
+        "checked_bodies": 0,
+        "mutations": 0,
+        "committed": true,
+        "affected_order_digest": "8aa984d6299805c2",
+        "output_digest": "11a6523bb4cc68bc"
+      }
     }
   ]
 }

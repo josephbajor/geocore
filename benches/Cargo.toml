@@ -5,11 +5,20 @@ edition = "2024"
 rust-version = "1.93.0"
 publish = false
 
+[dependencies]
+kgeom = { path = "../crates/kgeom" }
+ktopo = { path = "../crates/ktopo", features = ["benchmark-internals"] }
+
 [dev-dependencies]
 criterion = { version = "=0.8.2", default-features = false, features = ["cargo_bench_support"] }
+serde_json = "1.0"
 
 [[bench]]
 name = "benchmark_contract"
+harness = false
+
+[[bench]]
+name = "topology_commit"
 harness = false
 
 [lints.rust]

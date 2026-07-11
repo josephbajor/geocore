@@ -28,11 +28,37 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 1)
+        self.assertEqual(len(cases), 22)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
             "142890537c90ed65",
+        )
+        topology = [
+            case for case in cases if case["benchmark_target"] == "topology_commit"
+        ]
+        self.assertEqual(len(topology), 21)
+        self.assertTrue(
+            all(case["deterministic_seed"] == 0x51544F504F000002 for case in topology)
+        )
+        self.assertTrue(
+            all(
+                case["size_parameters"]["elements"]
+                == case["size_parameters"]["bodies"]
+                for case in topology
+            )
+        )
+        self.assertTrue(
+            all(
+                "wrapping_sum_hex" not in case["expected_result_counters"]
+                for case in topology
+            )
+        )
+        self.assertTrue(
+            all(
+                "output_digest" in case["expected_result_counters"]
+                for case in topology
+            )
         )
         benchmark.validate_report(self.example)
         parsed = benchmark.parse_cargo_criterion(
@@ -46,6 +72,20 @@ class BenchmarkBaselineTests(unittest.TestCase):
         del report["host"]["cpu_model"]
         with self.assertRaises(benchmark.ContractError):
             benchmark.validate_report(report)
+
+    def test_q1_case_keeps_its_target_specific_wrapping_sum_contract(self):
+        case = copy.deepcopy(benchmark.load_cases()[0])
+        self.assertEqual(case["benchmark_target"], "benchmark_contract")
+        del case["expected_result_counters"]["wrapping_sum_hex"]
+        manifest = {
+            "schema_version": "kernel-benchmark-cases.v1",
+            "cases": [case],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cases.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaises(benchmark.ContractError):
+                benchmark.load_cases(path)
 
     def test_cargo_criterion_format_drift_fails_closed(self):
         messages = [json.loads(line) for line in self.measurement.splitlines()]

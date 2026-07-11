@@ -52,10 +52,19 @@ contain no performance claim.
 ```sh
 cargo test --manifest-path benches/Cargo.toml
 cargo bench --manifest-path benches/Cargo.toml --bench benchmark_contract --no-run
+cargo bench --manifest-path benches/Cargo.toml --bench topology_commit --no-run
 ```
 
 The Q1 target verifies the result digest before measurement and again in every
-timed iteration. Q2-Q5 add their subsystem fixtures as independent changes.
+timed iteration. The Q2 target provides the 21 checked-commit, incremental
+index-refresh, rejection, and full-rebuild cases in the quality contract. It
+times only the transaction edit and ordinary `commit_checked`, except that the
+full-rebuild ladder times the independent reference-index rebuild itself.
+Fixture cloning, store/index snapshots, rollback probes, and correctness checks
+run outside the accumulated duration. Read-only full-rebuild samples reuse one
+verified prepared fixture so Criterion calibration does not repeat excluded
+cloning and snapshot work. Set `KERNEL_BENCH_SMOKE=1` and pass one full case
+path after `--` for a bounded local smoke run.
 
 ## Record a measured run
 

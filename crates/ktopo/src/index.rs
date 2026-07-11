@@ -137,11 +137,12 @@ impl StoreIndex {
     /// Incrementally replace only body footprints implicated by the pending
     /// mutations. The committed index is assumed ownership-clean; callers use
     /// [`Self::build`] after topology-internal out-of-transaction mutation.
+    #[cfg(not(feature = "benchmark-internals"))]
     pub(crate) fn candidate(store: &Store, previous: &Self, mutations: &[Mutation]) -> Self {
         Self::candidate_with_stats(store, previous, mutations).0
     }
 
-    fn candidate_with_stats(
+    pub(crate) fn candidate_with_stats(
         store: &Store,
         previous: &Self,
         mutations: &[Mutation],
@@ -176,6 +177,89 @@ impl StoreIndex {
         }
         candidate.audit_mutated_topology(store, mutations, &removed);
         (candidate, rebuilt_bodies)
+    }
+
+    #[cfg(feature = "benchmark-internals")]
+    pub(crate) fn benchmark_snapshot(&self, store: &Store) -> crate::benchmark::IndexSnapshot {
+        use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
+        use std::collections::HashMap;
+
+        fn ordinals<T: Entity>(store: &Store) -> HashMap<Handle<T>, u64> {
+            store
+                .iter::<T>()
+                .enumerate()
+                .map(|(ordinal, (handle, _))| (handle, ordinal as u64))
+                .collect()
+        }
+        fn write_handles<T>(
+            digest: &mut crate::benchmark::StableHasher,
+            handles: &[Handle<T>],
+            ordinals: &HashMap<Handle<T>, u64>,
+        ) {
+            digest.write_count(handles.len());
+            for handle in handles {
+                digest.write_ordinal(ordinals.get(handle).copied());
+            }
+        }
+
+        let body_ordinals = ordinals::<Body>(store);
+        let region_ordinals = ordinals::<Region>(store);
+        let shell_ordinals = ordinals::<Shell>(store);
+        let face_ordinals = ordinals::<Face>(store);
+        let loop_ordinals = ordinals::<Loop>(store);
+        let fin_ordinals = ordinals::<Fin>(store);
+        let edge_ordinals = ordinals::<Edge>(store);
+        let vertex_ordinals = ordinals::<Vertex>(store);
+        let curve_ordinals = ordinals::<CurveGeom>(store);
+        let surface_ordinals = ordinals::<SurfaceGeom>(store);
+        let point_ordinals = ordinals::<kgeom::vec::Point3>(store);
+        let pcurve_ordinals = ordinals::<Curve2dGeom>(store);
+        let mut digest = crate::benchmark::StableHasher::new();
+        digest.write_tag(0x51);
+        digest.write_count(self.body_order.len());
+        for &body in &self.body_order {
+            digest.write_ordinal(body_ordinals.get(&body).copied());
+            if let Some(footprint) = self.footprints.get(&body) {
+                digest.write_tag(1);
+                write_handles(&mut digest, &footprint.regions, &region_ordinals);
+                write_handles(&mut digest, &footprint.shells, &shell_ordinals);
+                write_handles(&mut digest, &footprint.faces, &face_ordinals);
+                write_handles(&mut digest, &footprint.loops, &loop_ordinals);
+                write_handles(&mut digest, &footprint.fins, &fin_ordinals);
+                write_handles(&mut digest, &footprint.edges, &edge_ordinals);
+                write_handles(&mut digest, &footprint.vertices, &vertex_ordinals);
+                write_handles(&mut digest, &footprint.curves, &curve_ordinals);
+                write_handles(&mut digest, &footprint.surfaces, &surface_ordinals);
+                write_handles(&mut digest, &footprint.points, &point_ordinals);
+                write_handles(&mut digest, &footprint.pcurves, &pcurve_ordinals);
+            } else {
+                digest.write_tag(0);
+            }
+        }
+        digest.write_count(self.ownership_fault_count);
+        crate::benchmark::IndexSnapshot {
+            bodies: self.body_order.len(),
+            ownership_entries: self.regions.len()
+                + self.shells.len()
+                + self.faces.len()
+                + self.loops.len()
+                + self.fins.len()
+                + self.edges.len()
+                + self.vertices.len(),
+            dependency_entries: self
+                .body_order
+                .iter()
+                .filter_map(|body| self.footprints.get(body))
+                .map(|footprint| {
+                    footprint.curves.len()
+                        + footprint.surfaces.len()
+                        + footprint.points.len()
+                        + footprint.pcurves.len()
+                })
+                .sum(),
+            ownership_faults: self.ownership_fault_count,
+            digest: digest.finish_stable(),
+        }
     }
 
     /// Debug/test oracle: clean incremental candidates must equal a full

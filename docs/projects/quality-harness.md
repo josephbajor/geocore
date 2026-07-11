@@ -1,6 +1,6 @@
 # F7 quality, fuzzing, and performance harnesses
 
-Status: Q0 and Q1 implemented; benchmark ladders and fuzz stages implementation-ready
+Status: Q0 through Q2 implemented; remaining benchmark ladders and fuzz stages implementation-ready
 
 ## Outcome
 
@@ -162,10 +162,19 @@ Q1 implementation:
 
 Owner: `ktopo`.
 
-Measure checked transaction cost through public transaction operations. Add a
-crate-private benchmark seam only for counters that cannot be observed through
-the public API; it may expose counts under a benchmark-only configuration, but
-must not expose mutable index representation.
+Implemented as 21 registered cases in the isolated `benches/` package. The
+`benchmark-internals` feature adds only read-only commit counters, stable
+ordinal-based digests, store/index snapshots, and a full-rebuild audit; it is
+absent from normal `ktopo` builds. Fixture cloning, snapshots, and invariant
+verification are excluded from measured duration; the full-rebuild cases time
+the independent rebuild itself over one verified prepared fixture. Allocation
+counts remain deferred until allocation instrumentation exists.
+
+Measure checked transaction cost through public transaction operations. Since
+Criterion lives in the isolated external package, a doc-hidden public seam may
+exist only behind `benchmark-internals` for counters that cannot otherwise be
+observed. It must not expose mutable index representation and is absent without
+the feature.
 
 Fixtures:
 

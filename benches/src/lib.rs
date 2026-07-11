@@ -5,6 +5,8 @@
 
 use core::fmt;
 
+pub mod topology;
+
 /// Stable path of the Q1 contract fixture.
 pub const CONTRACT_CASE_PATH: &str = "harness/contract/tiny-v1/64/default-v1";
 

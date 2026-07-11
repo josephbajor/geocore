@@ -26,6 +26,9 @@
 //! - `loop_proof` / `shell_proof` — checker-v2 whole-entity certificates
 //!   kept private until their representation coverage is production-ready.
 
+#[cfg(feature = "benchmark-internals")]
+#[doc(hidden)]
+pub mod benchmark;
 pub mod btess;
 pub mod check;
 pub mod domain;
