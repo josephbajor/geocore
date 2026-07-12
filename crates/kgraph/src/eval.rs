@@ -420,6 +420,20 @@ impl<'g> EvalContext<'g> {
         Ok(classify_jacobian(derivatives, self.tolerances))
     }
 
+    /// Return the terminal leaf class beneath a surface descriptor chain.
+    ///
+    /// Offset descriptors are traversed with the same visit/depth accounting
+    /// as evaluation. This is useful when an algorithm needs a structural
+    /// capability proof (for example, that an offset chain terminates at an
+    /// exact plane) rather than a pointwise numerical guess.
+    pub fn surface_leaf_class(
+        &mut self,
+        surface: SurfaceHandle,
+    ) -> EvalResult<crate::SurfaceClass> {
+        self.begin_query();
+        self.surface_leaf_class_inner(surface)
+    }
+
     fn with_curve<T>(
         &mut self,
         handle: CurveHandle,
@@ -513,6 +527,27 @@ impl<'g> EvalContext<'g> {
                 self.surface_param_range_inner(basis)
             } else {
                 Ok(surface_leaf(descriptor).param_range())
+            }
+        })();
+        self.leave(geometry);
+        result
+    }
+
+    fn surface_leaf_class_inner(
+        &mut self,
+        surface: SurfaceHandle,
+    ) -> EvalResult<crate::SurfaceClass> {
+        let geometry = GeometryRef::Surface(surface);
+        self.enter(geometry)?;
+        let result = (|| {
+            let descriptor = self
+                .graph
+                .surface(surface)
+                .ok_or(EvalError::StaleGeometryHandle { geometry })?;
+            if let SurfaceDescriptor::Offset(offset) = descriptor {
+                self.surface_leaf_class_inner(offset.basis())
+            } else {
+                Ok(descriptor.class())
             }
         })();
         self.leave(geometry);

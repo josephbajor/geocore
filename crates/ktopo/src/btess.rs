@@ -49,13 +49,23 @@ use crate::entity::{
 use crate::geom::{Curve2dGeom, SurfaceGeom};
 use crate::store::Store;
 use kcore::error::Error;
-use kcore::operation::{LimitSnapshot, ResourceKind, StageId};
+use kcore::operation::{
+    AccountingMode, BudgetPlan, DiagnosticKind, ExecutionPolicy, LimitSnapshot, LimitSpec,
+    NumericalPolicy, OperationContext, OperationOutcome, OperationPolicyError, OperationScope,
+    PolicyVersion, ResourceKind, SessionPolicy, SessionPrecision, StageId,
+};
+use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::surface::Surface;
-use kgeom::surface_point::{invert_surface_point, normalize_surface_uv};
+use kgeom::surface_point::{invert_surface_point_in_scope, normalize_surface_uv};
 pub use kgeom::tess::TessOptions;
-use kgeom::tess::{TrimLoop, TrimmedSurface, tessellate};
+use kgeom::tess::{
+    FACE_TESSELLATION_BOUNDARY_DEPTH, FACE_TESSELLATION_BOUNDARY_DEPTH_LIMIT,
+    FACE_TESSELLATION_REFINEMENT_PASS_LIMIT, FACE_TESSELLATION_REFINEMENT_PASSES,
+    FaceTessellationBudgetProfile, TrimLoop, TrimmedSurface, tessellate_in_sequential_ledger,
+};
 use kgeom::vec::{Point3, Vec2};
+use kgraph::{EvalContext, EvalResult};
 mod error;
 mod offset;
 mod policy;
@@ -66,6 +76,7 @@ pub use error::{
     UNSUPPORTED_TESSELLATION,
 };
 use offset::{eval_surface_point, face_case_planar_offset, surface_periodicity};
+use policy::validate_body_tessellation_budget;
 pub use policy::{
     BODY_TESSELLATION_EDGE_DEPTH, BODY_TESSELLATION_EDGE_DEPTH_LIMIT,
     BODY_TESSELLATION_EDGE_DEPTH_LIMIT_REACHED, BODY_TESSELLATION_ISO_ARC_DEPTH,
@@ -185,13 +196,142 @@ struct MeshAcc {
 }
 
 impl MeshAcc {
-    fn push(&mut self, p: Point3) -> Result<u32> {
+    fn push(&mut self, p: Point3, work: &mut BodyTessellationWork<'_, '_, '_>) -> Result<u32> {
+        if u32::try_from(self.positions.len()).is_err() {
+            return work.reject_physical_mesh_vertex(self.positions.len());
+        }
+        work.charge_mesh_vertex()?;
         let i = mesh_vertex_index(self.positions.len())?;
         self.positions.push(p);
         Ok(i)
     }
     fn pos(&self, gid: u32) -> Point3 {
         self.positions[gid as usize]
+    }
+}
+
+/// Shared deterministic accounting for one whole-body tessellation.
+struct BodyTessellationWork<'scope, 'context, 'session> {
+    scope: &'scope mut OperationScope<'context, 'session>,
+}
+
+impl BodyTessellationWork<'_, '_, '_> {
+    fn charge_mesh_vertex(&mut self) -> Result<()> {
+        let result = self.scope.ledger_mut().charge_resource(
+            BODY_TESSELLATION_MESH_VERTICES,
+            ResourceKind::Items,
+            1,
+        );
+        self.direct_limit(
+            result,
+            BODY_TESSELLATION_MESH_VERTEX_LIMIT_REACHED,
+            "whole-body tessellation mesh vertex limit reached",
+        )
+    }
+
+    fn reject_physical_mesh_vertex(&mut self, current_items: usize) -> Result<u32> {
+        let snapshot = LimitSnapshot {
+            stage: BODY_TESSELLATION_MESH_VERTICES,
+            resource: ResourceKind::Items,
+            consumed: u64::try_from(current_items)
+                .unwrap_or(u64::MAX)
+                .saturating_add(1),
+            allowed: BODY_TESSELLATION_MESH_VERTEX_LIMIT,
+        };
+        let configured = self
+            .scope
+            .ledger()
+            .snapshots()
+            .into_iter()
+            .find(|entry| {
+                entry.stage == BODY_TESSELLATION_MESH_VERTICES
+                    && entry.resource == ResourceKind::Items
+            })
+            .expect("validated body profile retains mesh vertex accounting");
+        if configured.allowed <= BODY_TESSELLATION_MESH_VERTEX_LIMIT {
+            let result = self.scope.ledger_mut().charge_resource(
+                BODY_TESSELLATION_MESH_VERTICES,
+                ResourceKind::Items,
+                1,
+            );
+            let _ = self.direct_limit(
+                result,
+                BODY_TESSELLATION_MESH_VERTEX_LIMIT_REACHED,
+                "whole-body tessellation mesh vertex limit reached",
+            );
+        } else {
+            // Raising policy cannot enlarge the u32 mesh index address space.
+            // The physical rejection remains atomic and is diagnosed against
+            // the canonical format ceiling. It is intentionally not a ledger
+            // limit event: the configured ledger did not reject the unit.
+            self.scope.diagnose(
+                snapshot.stage,
+                BODY_TESSELLATION_MESH_VERTEX_LIMIT_REACHED,
+                DiagnosticKind::LimitReached(snapshot),
+                "whole-body tessellation mesh vertex format limit reached",
+            );
+        }
+        Err(Error::ResourceLimit { snapshot }.into())
+    }
+
+    fn observe_depth(
+        &mut self,
+        stage: StageId,
+        value: u64,
+        diagnostic: kcore::operation::DiagnosticCode,
+        message: &'static str,
+    ) -> Result<()> {
+        let local_allowed = if stage == BODY_TESSELLATION_EDGE_DEPTH {
+            BODY_TESSELLATION_EDGE_DEPTH_LIMIT
+        } else {
+            debug_assert_eq!(stage, BODY_TESSELLATION_ISO_ARC_DEPTH);
+            BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT
+        };
+        let plan = BudgetPlan::new([LimitSpec::new(
+            stage,
+            ResourceKind::Depth,
+            AccountingMode::HighWater,
+            local_allowed,
+        )])
+        .expect("built-in body refinement depth plan is valid");
+        let result = self
+            .scope
+            .ledger_mut()
+            .sequential(plan)
+            .and_then(|mut ledger| ledger.observe(stage, ResourceKind::Depth, value));
+        self.direct_limit(result, diagnostic, message)
+    }
+
+    fn direct_limit(
+        &mut self,
+        result: core::result::Result<(), OperationPolicyError>,
+        diagnostic: kcore::operation::DiagnosticCode,
+        message: &'static str,
+    ) -> Result<()> {
+        if let Err(OperationPolicyError::LimitReached(snapshot)) = result {
+            self.scope.diagnose(
+                snapshot.stage,
+                diagnostic,
+                DiagnosticKind::LimitReached(snapshot),
+                message,
+            );
+            return Err(Error::ResourceLimit { snapshot }.into());
+        }
+        result.map_err(Error::from).map_err(Into::into)
+    }
+
+    fn graph_query<T>(
+        &mut self,
+        store: &Store,
+        query: impl FnOnce(&mut EvalContext<'_>) -> EvalResult<T>,
+    ) -> Result<T> {
+        match crate::graph_work::query_sequential(self.scope, store, query) {
+            Err(OperationPolicyError::LimitReached(snapshot)) => {
+                Err(Error::ResourceLimit { snapshot }.into())
+            }
+            Err(error) => Err(Error::from(error).into()),
+            Ok(lower) => lower.map_err(Into::into),
+        }
     }
 }
 
@@ -211,19 +351,20 @@ fn mesh_vertex_index(current_items: usize) -> Result<u32> {
     })
 }
 
-fn next_refinement_depth(depth: usize, stage: StageId, allowed: u64) -> Result<usize> {
+fn next_refinement_depth(
+    depth: usize,
+    stage: StageId,
+    diagnostic: kcore::operation::DiagnosticCode,
+    message: &'static str,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
+) -> Result<usize> {
     let next = depth.saturating_add(1);
-    if next > MAX_DEPTH {
-        return Err(Error::ResourceLimit {
-            snapshot: LimitSnapshot {
-                stage,
-                resource: ResourceKind::Depth,
-                consumed: u64::try_from(next).unwrap_or(u64::MAX),
-                allowed,
-            },
-        }
-        .into());
-    }
+    work.observe_depth(
+        stage,
+        u64::try_from(next).unwrap_or(u64::MAX),
+        diagnostic,
+        message,
+    )?;
     Ok(next)
 }
 
@@ -248,11 +389,14 @@ fn require_leaf_surface(surface: &SurfaceGeom) -> Result<&dyn Surface> {
 
 /// Invert a point known to lie on the surface to UV coordinates, with
 /// periodic parameters wrapped into the surface's base range.
-fn invert_uv(sg: &SurfaceGeom, p: Point3) -> Result<Vec2> {
+fn invert_uv(
+    sg: &SurfaceGeom,
+    p: Point3,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
+) -> Result<Vec2> {
     let surface = require_leaf_surface(sg)?;
-    let mapped = invert_surface_point(surface, p).map_err(|_| Error::InvalidGeometry {
-        reason: "closest-point projection onto NURBS surface failed",
-    })?;
+    let mapped = invert_surface_point_in_scope(surface, p, work.scope)
+        .map_err(TessellationError::SurfacePoint)?;
     let uv = normalize_surface_uv(surface, mapped.uv);
     Ok(Vec2::new(uv[0], uv[1]))
 }
@@ -277,14 +421,19 @@ struct FaceUse<'a> {
 }
 
 impl FaceUse<'_> {
-    fn uv_at(&self, edge_parameter: f64, point: Point3) -> Result<Vec2> {
+    fn uv_at(
+        &self,
+        edge_parameter: f64,
+        point: Point3,
+        work: &mut BodyTessellationWork<'_, '_, '_>,
+    ) -> Result<Vec2> {
         match self.pcurve {
             Some((geometry, use_)) => Ok(use_.evaluate_uv(
                 geometry.as_curve(),
                 edge_parameter,
-                surface_periodicity(self.store, self.surface_id)?,
+                surface_periodicity(self.store, self.surface_id, work)?,
             )?),
-            None => invert_uv(self.surface, point),
+            None => invert_uv(self.surface, point, work),
         }
     }
 }
@@ -299,7 +448,11 @@ struct CurveRefine<'a> {
 }
 
 impl CurveRefine<'_> {
-    fn point_at(&self, edge_parameter: f64) -> Result<Point3> {
+    fn point_at(
+        &self,
+        edge_parameter: f64,
+        work: &mut BodyTessellationWork<'_, '_, '_>,
+    ) -> Result<Point3> {
         if let Some(curve) = self.curve {
             return Ok(curve.eval(edge_parameter));
         }
@@ -311,8 +464,12 @@ impl CurveRefine<'_> {
         }
         let mut xyz = [0.0; 3];
         for face_use in &self.face_uses {
-            let uv = face_use.uv_at(edge_parameter, Point3::new(f64::NAN, f64::NAN, f64::NAN))?;
-            let p = eval_surface_point(face_use.store, face_use.surface_id, uv)?;
+            let uv = face_use.uv_at(
+                edge_parameter,
+                Point3::new(f64::NAN, f64::NAN, f64::NAN),
+                work,
+            )?;
+            let p = eval_surface_point(face_use.store, face_use.surface_id, uv, work)?;
             xyz[0] += p.x;
             xyz[1] += p.y;
             xyz[2] += p.z;
@@ -321,23 +478,28 @@ impl CurveRefine<'_> {
         Ok(Point3::new(xyz[0] / n, xyz[1] / n, xyz[2] / n))
     }
 
-    fn needs_split(&self, a: (f64, Point3), b: (f64, Point3)) -> Result<bool> {
+    fn needs_split(
+        &self,
+        a: (f64, Point3),
+        b: (f64, Point3),
+        work: &mut BodyTessellationWork<'_, '_, '_>,
+    ) -> Result<bool> {
         if a.1.dist(b.1) > self.ctx.max_len {
             return Ok(true);
         }
-        let mid = self.point_at((a.0 + b.0) / 2.0)?;
+        let mid = self.point_at((a.0 + b.0) / 2.0, work)?;
         if point_seg_dist(mid, a.1, b.1) > self.ctx.tol {
             return Ok(true);
         }
         for face_use in &self.face_uses {
-            let ua = face_use.uv_at(a.0, a.1)?;
+            let ua = face_use.uv_at(a.0, a.1, work)?;
             let ub = unwrap_near(
-                face_use.uv_at(b.0, b.1)?,
+                face_use.uv_at(b.0, b.1, work)?,
                 ua,
-                surface_periodicity(face_use.store, face_use.surface_id)?,
+                surface_periodicity(face_use.store, face_use.surface_id, work)?,
             );
             let um = (ua + ub) / 2.0;
-            let q = eval_surface_point(face_use.store, face_use.surface_id, um)?;
+            let q = eval_surface_point(face_use.store, face_use.surface_id, um, work)?;
             if point_seg_dist(q, a.1, b.1) > self.ctx.tol {
                 return Ok(true);
             }
@@ -352,20 +514,23 @@ impl CurveRefine<'_> {
         b: (f64, Point3),
         depth: usize,
         out: &mut Vec<(f64, Point3)>,
+        work: &mut BodyTessellationWork<'_, '_, '_>,
     ) -> Result<()> {
-        if !self.needs_split(a, b)? {
+        if !self.needs_split(a, b, work)? {
             return Ok(());
         }
         let next_depth = next_refinement_depth(
             depth,
             BODY_TESSELLATION_EDGE_DEPTH,
-            BODY_TESSELLATION_EDGE_DEPTH_LIMIT,
+            BODY_TESSELLATION_EDGE_DEPTH_LIMIT_REACHED,
+            "whole-body exact-edge refinement depth limit reached",
+            work,
         )?;
         let tm = (a.0 + b.0) / 2.0;
-        let m = (tm, self.point_at(tm)?);
-        self.refine(a, m, next_depth, out)?;
+        let m = (tm, self.point_at(tm, work)?);
+        self.refine(a, m, next_depth, out, work)?;
         out.push(m);
-        self.refine(m, b, next_depth, out)
+        self.refine(m, b, next_depth, out, work)
     }
 }
 
@@ -378,6 +543,7 @@ fn refine_uv_seg(
     ctx: Ctx,
     depth: usize,
     out: &mut Vec<(Vec2, Point3)>,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
 ) -> Result<()> {
     let mid_uv = (a.0 + b.0) / 2.0;
     let mid_p = s.eval([mid_uv.x, mid_uv.y]);
@@ -387,12 +553,14 @@ fn refine_uv_seg(
     let next_depth = next_refinement_depth(
         depth,
         BODY_TESSELLATION_ISO_ARC_DEPTH,
-        BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT,
+        BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT_REACHED,
+        "whole-body iso-arc refinement depth limit reached",
+        work,
     )?;
     let m = (mid_uv, mid_p);
-    refine_uv_seg(s, a, m, ctx, next_depth, out)?;
+    refine_uv_seg(s, a, m, ctx, next_depth, out, work)?;
     out.push(m);
-    refine_uv_seg(s, m, b, ctx, next_depth, out)
+    refine_uv_seg(s, m, b, ctx, next_depth, out, work)
 }
 
 /// An iso/seam arc: UV points with their global vertex ids, endpoints
@@ -407,6 +575,7 @@ fn iso_arc(
     b: (Vec2, u32),
     acc: &mut MeshAcc,
     ctx: Ctx,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
 ) -> Result<Arc> {
     let mut interior = Vec::new();
     refine_uv_seg(
@@ -416,11 +585,12 @@ fn iso_arc(
         ctx,
         0,
         &mut interior,
+        work,
     )?;
     let mut arc = Vec::with_capacity(interior.len() + 2);
     arc.push(a);
     for (uv, p) in interior {
-        let gid = acc.push(p)?;
+        let gid = acc.push(p, work)?;
         arc.push((uv, gid));
     }
     arc.push(b);
@@ -472,6 +642,7 @@ fn discretize_edge(
     vgids: &[(VertexId, u32)],
     acc: &mut MeshAcc,
     ctx: Ctx,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
 ) -> Result<EdgeLine> {
     let e: &Edge = store.get(edge)?;
     let curve = match e.curve {
@@ -523,7 +694,7 @@ fn discretize_edge(
             let c = curve.ok_or(Error::InvalidGeometry {
                 reason: "curve-less tolerant ring edges are unsupported",
             })?;
-            let g = acc.push(c.eval(t0))?;
+            let g = acc.push(c.eval(t0), work)?;
             (g, g, true)
         }
         _ => {
@@ -572,7 +743,7 @@ fn discretize_edge(
     if closed {
         for k in 1..4 {
             let t = t0 + (t1 - t0) * f64::from(k) / 4.0;
-            seed.push((t, refine.point_at(t)?));
+            seed.push((t, refine.point_at(t, work)?));
         }
     }
     seed.push((t1, acc.pos(g_end)));
@@ -583,11 +754,11 @@ fn discretize_edge(
     }];
     for w in seed.windows(2) {
         let mut interior = Vec::new();
-        refine.refine(w[0], w[1], 0, &mut interior)?;
+        refine.refine(w[0], w[1], 0, &mut interior, work)?;
         for (parameter, point) in interior {
             samples.push(EdgeSample {
                 parameter,
-                vertex: acc.push(point)?,
+                vertex: acc.push(point, work)?,
             });
         }
         // Segment end: a seed interior point gets a fresh vertex; the
@@ -595,7 +766,7 @@ fn discretize_edge(
         if w[1].0 < t1 {
             samples.push(EdgeSample {
                 parameter: w[1].0,
-                vertex: acc.push(w[1].1)?,
+                vertex: acc.push(w[1].1, work)?,
             });
         }
     }
@@ -618,6 +789,12 @@ struct RawUvChain {
     declared_winding: Option<[i64; 2]>,
 }
 
+#[derive(Clone, Copy)]
+struct FaceChart<'a> {
+    surface_id: SurfaceId,
+    surface: &'a SurfaceGeom,
+}
+
 fn fin_sample_uv(
     store: &Store,
     surface_id: SurfaceId,
@@ -625,6 +802,7 @@ fn fin_sample_uv(
     acc: &MeshAcc,
     fin: &crate::entity::Fin,
     sample: EdgeSample,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
 ) -> Result<Vec2> {
     match fin.pcurve {
         Some(use_) => {
@@ -632,10 +810,10 @@ fn fin_sample_uv(
             Ok(use_.evaluate_uv(
                 curve,
                 sample.parameter,
-                surface_periodicity(store, surface_id)?,
+                surface_periodicity(store, surface_id, work)?,
             )?)
         }
-        None => invert_uv(sg, acc.pos(sample.vertex)),
+        None => invert_uv(sg, acc.pos(sample.vertex), work),
     }
 }
 
@@ -647,11 +825,11 @@ fn fin_sample_uv(
 fn loop_chain(
     store: &Store,
     elines: &EdgeLines,
-    surface_id: SurfaceId,
-    sg: &SurfaceGeom,
+    chart: FaceChart<'_>,
     acc: &MeshAcc,
     lp: crate::entity::LoopId,
     reverse: bool,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
 ) -> Result<RawUvChain> {
     let fins = &store.get(lp)?.fins;
     if fins.is_empty() {
@@ -696,25 +874,57 @@ fn loop_chain(
             for &sample in &line.samples[..line.samples.len() - 1] {
                 chain.push(RawUvSample {
                     vertex: sample.vertex,
-                    uv: fin_sample_uv(store, surface_id, sg, acc, fin, sample)?,
+                    uv: fin_sample_uv(
+                        store,
+                        chart.surface_id,
+                        chart.surface,
+                        acc,
+                        fin,
+                        sample,
+                        work,
+                    )?,
                 });
             }
             let sample = *line.samples.last().expect("at least two samples");
             close = Some(RawUvSample {
                 vertex: sample.vertex,
-                uv: fin_sample_uv(store, surface_id, sg, acc, fin, sample)?,
+                uv: fin_sample_uv(
+                    store,
+                    chart.surface_id,
+                    chart.surface,
+                    acc,
+                    fin,
+                    sample,
+                    work,
+                )?,
             });
         } else {
             for &sample in line.samples.iter().rev().take(line.samples.len() - 1) {
                 chain.push(RawUvSample {
                     vertex: sample.vertex,
-                    uv: fin_sample_uv(store, surface_id, sg, acc, fin, sample)?,
+                    uv: fin_sample_uv(
+                        store,
+                        chart.surface_id,
+                        chart.surface,
+                        acc,
+                        fin,
+                        sample,
+                        work,
+                    )?,
                 });
             }
             let sample = line.samples[0];
             close = Some(RawUvSample {
                 vertex: sample.vertex,
-                uv: fin_sample_uv(store, surface_id, sg, acc, fin, sample)?,
+                uv: fin_sample_uv(
+                    store,
+                    chart.surface_id,
+                    chart.surface,
+                    acc,
+                    fin,
+                    sample,
+                    work,
+                )?,
             });
         }
     }
@@ -813,13 +1023,60 @@ fn run_kgeom(
     flip: bool,
     acc: &mut MeshAcc,
     opts: &TessOptions,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
 ) -> Result<Vec<[u32; 3]>> {
     let mut trim_loops = Vec::with_capacity(loops_pts.len());
     for pts in loops_pts {
         trim_loops.push(TrimLoop::new(pts)?);
     }
     let face = TrimmedSurface::new(s, trim_loops)?;
-    let fm = tessellate(&face, opts)?;
+    let mut patch = work
+        .scope
+        .ledger_mut()
+        .sequential(FaceTessellationBudgetProfile::v1_defaults())
+        .map_err(Error::from)?;
+    let fm = tessellate_in_sequential_ledger(&face, opts, &mut patch);
+    drop(patch);
+    let fm = match fm {
+        Ok(mesh) => mesh,
+        Err(error) => {
+            let snapshot = match &error {
+                Error::OperationPolicy {
+                    source: OperationPolicyError::LimitReached(snapshot),
+                }
+                | Error::ResourceLimit { snapshot } => Some(*snapshot),
+                _ => None,
+            };
+            if let Some(snapshot) = snapshot {
+                let (code, message) = if snapshot.stage == FACE_TESSELLATION_BOUNDARY_DEPTH {
+                    (
+                        FACE_TESSELLATION_BOUNDARY_DEPTH_LIMIT,
+                        "face boundary refinement depth limit reached",
+                    )
+                } else if snapshot.stage == FACE_TESSELLATION_REFINEMENT_PASSES {
+                    (
+                        FACE_TESSELLATION_REFINEMENT_PASS_LIMIT,
+                        "face interior refinement pass limit reached",
+                    )
+                } else if snapshot.stage == kcore::operation::TOTAL_WORK_STAGE {
+                    (
+                        FACE_TESSELLATION_REFINEMENT_PASS_LIMIT,
+                        "face tessellation total work limit reached",
+                    )
+                } else {
+                    return Err(error.into());
+                };
+                work.scope.diagnose(
+                    snapshot.stage,
+                    code,
+                    DiagnosticKind::LimitReached(snapshot),
+                    message,
+                );
+                return Err(Error::ResourceLimit { snapshot }.into());
+            }
+            return Err(error.into());
+        }
+    };
 
     if fm.boundary.len() != loops_ids.len() {
         return Err(Error::InvalidGeometry {
@@ -846,7 +1103,7 @@ fn run_kgeom(
         .enumerate()
         .map(|(li, g)| match g {
             Some(gid) => Ok(gid),
-            None => acc.push(fm.positions[li]),
+            None => acc.push(fm.positions[li], work),
         })
         .collect::<Result<_>>()?;
 
@@ -871,6 +1128,7 @@ fn face_case_a(
     flip: bool,
     acc: &mut MeshAcc,
     opts: &TessOptions,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
 ) -> Result<Vec<[u32; 3]>> {
     let per = s.periodicity();
     let area = |pts: &[Vec2]| -> f64 {
@@ -911,7 +1169,7 @@ fn face_case_a(
         loops_pts.push(c.uvs.iter().map(|&uv| uv + shift).collect());
         loops_ids.push(c.ids.clone());
     }
-    run_kgeom(s, loops_pts, &loops_ids, flip, acc, opts)
+    run_kgeom(s, loops_pts, &loops_ids, flip, acc, opts, work)
 }
 
 /// Periodic side face (cylinder/cone-like): exactly one loop winds `+1`
@@ -925,6 +1183,7 @@ fn face_case_b(
     acc: &mut MeshAcc,
     opts: &TessOptions,
     ctx: Ctx,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
 ) -> Result<Vec<[u32; 3]>> {
     let s = require_leaf_surface(sg)?;
     let pu = s.periodicity()[0].ok_or(Error::InvalidGeometry {
@@ -950,7 +1209,7 @@ fn face_case_b(
         // A single winding loop bounds a polar cap: the missing second
         // boundary is the pole contained in the face.
         (Some(c), None) | (None, Some(c)) => {
-            return face_case_cap(sg, c, holes, flip, acc, opts, ctx);
+            return face_case_cap(sg, c, holes, acc, FaceRun { flip, opts, ctx }, work);
         }
         (None, None) => {
             return Err(Error::InvalidGeometry {
@@ -980,6 +1239,7 @@ fn face_case_b(
         (t_first, top.ids[0]),
         acc,
         ctx,
+        work,
     )?;
 
     let mut pts: Vec<Vec2> = Vec::new();
@@ -1016,7 +1276,7 @@ fn face_case_b(
         loops_pts.push(h.uvs.iter().map(|&uv| uv + Vec2::new(hs, 0.0)).collect());
         loops_ids.push(h.ids);
     }
-    run_kgeom(s, loops_pts, &loops_ids, flip, acc, opts)
+    run_kgeom(s, loops_pts, &loops_ids, flip, acc, opts, work)
 }
 
 /// The four boundary arcs of one rectangular-ish patch, each stored in
@@ -1027,6 +1287,13 @@ struct PatchArcs {
     right: Arc,
     top: Arc,
     left: Arc,
+}
+
+#[derive(Clone, Copy)]
+struct FaceRun<'a> {
+    flip: bool,
+    opts: &'a TessOptions,
+    ctx: Ctx,
 }
 
 /// Spherical polar cap: a face bounded by a single loop that winds the
@@ -1046,10 +1313,9 @@ fn face_case_cap(
     sg: &SurfaceGeom,
     chain: UvChain,
     holes: Vec<UvChain>,
-    flip: bool,
     acc: &mut MeshAcc,
-    opts: &TessOptions,
-    ctx: Ctx,
+    run: FaceRun<'_>,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
 ) -> Result<Vec<[u32; 3]>> {
     let SurfaceGeom::Sphere(sp) = sg else {
         // Cylinders and tori have no point that can close a single
@@ -1087,7 +1353,7 @@ fn face_case_cap(
         .into());
     }
 
-    let g_pole = acc.push(s.eval([cuvs[0].x, pole_v]))?;
+    let g_pole = acc.push(s.eval([cuvs[0].x, pole_v]), work)?;
     let pole_at = |u: f64| (Vec2::new(u, pole_v), g_pole);
 
     // Split at the existing chain sample nearest half a period around.
@@ -1115,9 +1381,9 @@ fn face_case_cap(
     // to the single pole vertex (density from the equator sagitta, like
     // the closed-sphere case).
     let r = sp.radius();
-    let mut theta = (8.0 * ctx.tol / r).sqrt().min(half);
-    if ctx.max_len.is_finite() {
-        theta = theta.min(ctx.max_len / r);
+    let mut theta = (8.0 * run.ctx.tol / r).sqrt().min(half);
+    if run.ctx.max_len.is_finite() {
+        theta = theta.min(run.ctx.max_len / r);
     }
     let row = |ua: f64, ub: f64| -> Arc {
         let m = (((ub - ua).abs() / theta).ceil() as usize).max(2);
@@ -1135,8 +1401,22 @@ fn face_case_cap(
 
     let patches: [PatchArcs; 2] = if w > 0 {
         // Chain below (travels +u), pole row above.
-        let m0 = iso_arc(s, (cuvs[0], cids[0]), pole_at(cuvs[0].x), acc, ctx)?;
-        let mk = iso_arc(s, (cuvs[k], cids[k]), pole_at(cuvs[k].x), acc, ctx)?;
+        let m0 = iso_arc(
+            s,
+            (cuvs[0], cids[0]),
+            pole_at(cuvs[0].x),
+            acc,
+            run.ctx,
+            work,
+        )?;
+        let mk = iso_arc(
+            s,
+            (cuvs[k], cids[k]),
+            pole_at(cuvs[k].x),
+            acc,
+            run.ctx,
+            work,
+        )?;
         [
             PatchArcs {
                 bottom: seg(0, k),
@@ -1154,8 +1434,22 @@ fn face_case_cap(
     } else {
         // Pole row below, chain above (travels -u); top arcs are stored
         // ascending in u, i.e. the chain segments reversed.
-        let m0 = iso_arc(s, pole_at(cuvs[0].x), (cuvs[0], cids[0]), acc, ctx)?;
-        let mk = iso_arc(s, pole_at(cuvs[k].x), (cuvs[k], cids[k]), acc, ctx)?;
+        let m0 = iso_arc(
+            s,
+            pole_at(cuvs[0].x),
+            (cuvs[0], cids[0]),
+            acc,
+            run.ctx,
+            work,
+        )?;
+        let mk = iso_arc(
+            s,
+            pole_at(cuvs[k].x),
+            (cuvs[k], cids[k]),
+            acc,
+            run.ctx,
+            work,
+        )?;
         [
             PatchArcs {
                 bottom: row(cuvs[k].x, cuvs[0].x),
@@ -1197,7 +1491,9 @@ fn face_case_cap(
             loops_pts.push(h.uvs);
             loops_ids.push(h.ids);
         }
-        tris.extend(run_kgeom(s, loops_pts, &loops_ids, flip, acc, opts)?);
+        tris.extend(run_kgeom(
+            s, loops_pts, &loops_ids, run.flip, acc, run.opts, work,
+        )?);
     }
     Ok(tris)
 }
@@ -1221,6 +1517,7 @@ fn face_case_bipolar_sphere(
     acc: &mut MeshAcc,
     opts: &TessOptions,
     ctx: Ctx,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
 ) -> Result<Vec<[u32; 3]>> {
     let half = core::f64::consts::FRAC_PI_2;
     let tau = core::f64::consts::TAU;
@@ -1349,7 +1646,7 @@ fn face_case_bipolar_sphere(
         );
         loops_ids.push(h.ids);
     }
-    run_kgeom(s, loops_pts, &loops_ids, flip, acc, opts)
+    run_kgeom(s, loops_pts, &loops_ids, flip, acc, opts, work)
 }
 
 /// Rectangular patch boundary assembled from four arcs (each including
@@ -1389,6 +1686,7 @@ fn face_case_c(
     acc: &mut MeshAcc,
     opts: &TessOptions,
     ctx: Ctx,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
 ) -> Result<Vec<[u32; 3]>> {
     let pi = core::f64::consts::PI;
     let tau = core::f64::consts::TAU;
@@ -1397,20 +1695,22 @@ fn face_case_c(
     match sg {
         SurfaceGeom::Sphere(sp) => {
             let half = core::f64::consts::FRAC_PI_2;
-            let g_s = acc.push(s.eval([0.0, -half]))?;
-            let g_n = acc.push(s.eval([0.0, half]))?;
+            let g_s = acc.push(s.eval([0.0, -half]), work)?;
+            let g_n = acc.push(s.eval([0.0, half]), work)?;
             // Meridian arcs at u = 0 and u = π; u = 2π reuses the first.
-            let meridian = |u: f64, acc: &mut MeshAcc| {
-                iso_arc(
-                    s,
-                    (Vec2::new(u, -half), g_s),
-                    (Vec2::new(u, half), g_n),
-                    acc,
-                    ctx,
-                )
-            };
-            let m0 = meridian(0.0, acc)?;
-            let m1 = meridian(pi, acc)?;
+            let meridian =
+                |u: f64, acc: &mut MeshAcc, work: &mut BodyTessellationWork<'_, '_, '_>| {
+                    iso_arc(
+                        s,
+                        (Vec2::new(u, -half), g_s),
+                        (Vec2::new(u, half), g_n),
+                        acc,
+                        ctx,
+                        work,
+                    )
+                };
+            let m0 = meridian(0.0, acc, work)?;
+            let m1 = meridian(pi, acc, work)?;
             let m2 = shift_arc(&m0, Vec2::new(tau, 0.0));
             // Pole-row sampling density from the equator sagitta.
             let r = sp.radius();
@@ -1427,7 +1727,7 @@ fn face_case_c(
                         .collect()
                 };
                 let (pts, ids) = patch_polygon(&row(-half, g_s), right, &row(half, g_n), left);
-                tris.extend(run_kgeom(s, vec![pts], &[ids], flip, acc, opts)?);
+                tris.extend(run_kgeom(s, vec![pts], &[ids], flip, acc, opts, work)?);
             }
         }
         SurfaceGeom::Torus(_) => {
@@ -1437,7 +1737,7 @@ fn face_case_c(
             for (i, gi) in g.iter_mut().enumerate() {
                 for (j, gij) in gi.iter_mut().enumerate() {
                     let [u, v] = corner(i, j);
-                    *gij = acc.push(s.eval([u, v]))?;
+                    *gij = acc.push(s.eval([u, v]), work)?;
                 }
             }
             let at = |i: usize, j: usize| {
@@ -1450,14 +1750,14 @@ fn face_case_c(
             for i in 0..2 {
                 let mut row = Vec::new();
                 for j in 0..2 {
-                    row.push(iso_arc(s, at(i, j), at(i + 1, j), acc, ctx)?);
+                    row.push(iso_arc(s, at(i, j), at(i + 1, j), acc, ctx, work)?);
                 }
                 au.push(row);
             }
             for j in 0..2 {
                 let mut col = Vec::new();
                 for i in 0..2 {
-                    col.push(iso_arc(s, at(i, j), at(i, j + 1), acc, ctx)?);
+                    col.push(iso_arc(s, at(i, j), at(i, j + 1), acc, ctx, work)?);
                 }
                 av.push(col);
             }
@@ -1476,7 +1776,7 @@ fn face_case_c(
                     };
                     let left = &av[j][i];
                     let (pts, ids) = patch_polygon(bottom, &right, &top, left);
-                    tris.extend(run_kgeom(s, vec![pts], &[ids], flip, acc, opts)?);
+                    tris.extend(run_kgeom(s, vec![pts], &[ids], flip, acc, opts, work)?);
                 }
             }
         }
@@ -1498,18 +1798,30 @@ fn tess_face(
     face_id: FaceId,
     opts: &TessOptions,
     ctx: Ctx,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
 ) -> Result<Vec<[u32; 3]>> {
     let face = store.get(face_id)?;
     let sg = store.get(face.surface)?;
     let flip = face.sense == Sense::Reversed;
 
     if face.loops.is_empty() {
-        return face_case_c(sg, flip, acc, opts, ctx);
+        return face_case_c(sg, flip, acc, opts, ctx, work);
     }
     let mut chains = Vec::with_capacity(face.loops.len());
-    let periods = surface_periodicity(store, face.surface)?;
+    let periods = surface_periodicity(store, face.surface, work)?;
     for &lp in &face.loops {
-        let raw = loop_chain(store, elines, face.surface, sg, acc, lp, flip)?;
+        let raw = loop_chain(
+            store,
+            elines,
+            FaceChart {
+                surface_id: face.surface,
+                surface: sg,
+            },
+            acc,
+            lp,
+            flip,
+            work,
+        )?;
         chains.push(chain_uv(periods, raw)?);
     }
     if let Some(domain) = face.domain {
@@ -1523,7 +1835,7 @@ fn tess_face(
                 capability: OFFSET_PERIODIC_WINDING,
             });
         }
-        return face_case_planar_offset(store, face.surface, chains, flip, acc, opts);
+        return face_case_planar_offset(store, face.surface, chains, flip, acc, opts, work);
     }
     // A meridional boundary can pass through both sphere poles while
     // acquiring either ±1 *or zero* winding from their arbitrary singular
@@ -1557,18 +1869,71 @@ fn tess_face(
                 acc,
                 opts,
                 ctx,
+                work,
             );
         }
     }
     if chains.iter().all(|c| c.winding == [0, 0]) {
-        face_case_a(require_leaf_surface(sg)?, chains, flip, acc, opts)
+        face_case_a(require_leaf_surface(sg)?, chains, flip, acc, opts, work)
     } else {
-        face_case_b(sg, chains, flip, acc, opts, ctx)
+        face_case_b(sg, chains, flip, acc, opts, ctx, work)
     }
 }
 
 /// Tessellate a body into one watertight mesh (see module docs).
 pub fn tessellate_body(store: &Store, body: BodyId, opts: &TessOptions) -> Result<BodyMesh> {
+    let session = SessionPolicy::new(
+        SessionPrecision::parasolid(),
+        NumericalPolicy::v1(),
+        ExecutionPolicy::Serial,
+        BodyTessellationBudgetProfile::v1_defaults(),
+        PolicyVersion::V1,
+    );
+    let context = OperationContext::new(&session, Tolerances::default())
+        .expect("validated default tolerances satisfy v1 session precision");
+    tessellate_body_with_context(store, body, opts, &context)
+        .expect("built-in v1 body-tessellation policy is valid")
+        .into_result()
+        .map_err(legacy_body_tessellation_error)
+}
+
+/// Tessellate a body with deterministic whole-operation accounting.
+///
+/// Body-family defaults fill omitted stages below matching session entries
+/// and explicit request overrides. The complete shared profile is validated
+/// before options, topology, or geometry are inspected.
+pub fn tessellate_body_with_context(
+    store: &Store,
+    body: BodyId,
+    opts: &TessOptions,
+    context: &OperationContext<'_>,
+) -> core::result::Result<OperationOutcome<BodyMesh, TessellationError>, OperationPolicyError> {
+    let context = context
+        .clone()
+        .with_family_budget_defaults(BodyTessellationBudgetProfile::v1_defaults());
+    let effective = context.effective_budget();
+    validate_body_tessellation_budget(|stage, resource, mode| {
+        effective.require_limit(stage, resource, mode)
+    })?;
+    let mut scope = OperationScope::new(&context);
+    let result = tessellate_body_in_scope(store, body, opts, &mut scope);
+    Ok(scope.finish_typed(result))
+}
+
+/// Tessellate a body using an existing operation scope.
+///
+/// All graph evaluation, projection, edge/iso refinement, retained mesh
+/// vertices, and face-patch refinement compose through the caller's ledger.
+pub fn tessellate_body_in_scope(
+    store: &Store,
+    body: BodyId,
+    opts: &TessOptions,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<BodyMesh> {
+    validate_body_tessellation_budget(|stage, resource, mode| {
+        scope.ledger().require_limit(stage, resource, mode)
+    })
+    .map_err(Error::from)?;
     if !opts.chord_tol.is_finite() || opts.chord_tol <= 0.0 {
         return Err(Error::InvalidTolerance {
             value: opts.chord_tol,
@@ -1596,16 +1961,17 @@ pub fn tessellate_body(store: &Store, body: BodyId, opts: &TessOptions) -> Resul
     let mut acc = MeshAcc {
         positions: Vec::new(),
     };
+    let mut work = BodyTessellationWork { scope };
     // One global vertex per topological vertex.
     let mut vgids: Vec<(VertexId, u32)> = Vec::new();
     for v in store.vertices_of_body(body)? {
-        let gid = acc.push(store.vertex_position(v)?)?;
+        let gid = acc.push(store.vertex_position(v)?, &mut work)?;
         vgids.push((v, gid));
     }
     // Every edge discretized exactly once.
     let mut elines: EdgeLines = Vec::new();
     for e in store.edges_of_body(body)? {
-        let line = discretize_edge(store, e, &vgids, &mut acc, ctx)?;
+        let line = discretize_edge(store, e, &vgids, &mut acc, ctx, &mut work)?;
         elines.push(line);
     }
     // Faces, assembled by index mapping.
@@ -1613,7 +1979,9 @@ pub fn tessellate_body(store: &Store, body: BodyId, opts: &TessOptions) -> Resul
     let mut face_ranges = Vec::with_capacity(faces.len());
     for face in faces {
         let start = triangles.len();
-        triangles.extend(tess_face(store, &elines, &mut acc, face, opts, ctx)?);
+        triangles.extend(tess_face(
+            store, &elines, &mut acc, face, opts, ctx, &mut work,
+        )?);
         face_ranges.push((face, start..triangles.len()));
     }
     Ok(BodyMesh {
@@ -1635,6 +2003,53 @@ pub fn tessellate_body(store: &Store, body: BodyId, opts: &TessOptions) -> Resul
     })
 }
 
+fn legacy_body_tessellation_error(error: TessellationError) -> TessellationError {
+    match error {
+        TessellationError::SurfacePoint(_) => Error::InvalidGeometry {
+            reason: "closest-point projection onto NURBS surface failed",
+        }
+        .into(),
+        TessellationError::Kernel(Error::OperationPolicy {
+            source: OperationPolicyError::LimitReached(snapshot),
+        }) => legacy_body_tessellation_error(Error::ResourceLimit { snapshot }.into()),
+        TessellationError::Kernel(Error::ResourceLimit { snapshot })
+            if snapshot.stage == kgraph::eval_stage::NODE_VISITS =>
+        {
+            TessellationError::Evaluation(kgraph::EvalError::NodeVisitLimitExceeded {
+                consumed: usize::try_from(snapshot.consumed).unwrap_or(usize::MAX),
+                limit: usize::try_from(snapshot.allowed).unwrap_or(usize::MAX),
+            })
+        }
+        TessellationError::Kernel(Error::ResourceLimit { snapshot })
+            if snapshot.stage == kgraph::eval_stage::DEPENDENCY_DEPTH =>
+        {
+            TessellationError::Evaluation(kgraph::EvalError::DependencyDepthExceeded {
+                consumed: usize::try_from(snapshot.consumed).unwrap_or(usize::MAX),
+                limit: usize::try_from(snapshot.allowed).unwrap_or(usize::MAX),
+            })
+        }
+        TessellationError::Kernel(Error::ResourceLimit { snapshot })
+            if snapshot.stage == FACE_TESSELLATION_BOUNDARY_DEPTH =>
+        {
+            Error::AlgorithmLimit {
+                operation: "tessellation boundary refinement depth",
+                limit: 16,
+            }
+            .into()
+        }
+        TessellationError::Kernel(Error::ResourceLimit { snapshot })
+            if snapshot.stage == FACE_TESSELLATION_REFINEMENT_PASSES =>
+        {
+            Error::AlgorithmLimit {
+                operation: "tessellation interior refinement passes",
+                limit: 24,
+            }
+            .into()
+        }
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1644,7 +2059,9 @@ mod tests {
     use crate::entity::{Face, Fin, Loop, PcurveChart, ShellId};
     use crate::geom::CurveGeom;
     use crate::make::{block, cylinder, planar_sheet, solid_body_scaffold};
+    use core::num::NonZeroUsize;
     use kcore::math;
+    use kcore::operation::DiagnosticLevel;
     use kgeom::curve::{Circle, Line};
     use kgeom::frame::Frame;
     use kgeom::nurbs::NurbsSurface;
@@ -1668,6 +2085,22 @@ mod tests {
         }
     }
 
+    macro_rules! with_body_work {
+        ($work:ident, $body:block) => {{
+            let session = SessionPolicy::new(
+                SessionPrecision::parasolid(),
+                NumericalPolicy::v1(),
+                ExecutionPolicy::Serial,
+                BodyTessellationBudgetProfile::v1_defaults(),
+                PolicyVersion::V1,
+            );
+            let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+            let mut scope = OperationScope::new(&context);
+            let mut $work = BodyTessellationWork { scope: &mut scope };
+            $body
+        }};
+    }
+
     fn assert_depth_limit(error: TessellationError, stage: StageId, allowed: u64) {
         let snapshot = LimitSnapshot {
             stage,
@@ -1683,57 +2116,548 @@ mod tests {
     }
 
     #[test]
-    fn curve_refinement_enforces_quality_at_n_minus_one_n_and_n_plus_one() {
-        let line = Line::new(Point3::default(), Vec3::new(1.0, 0.0, 0.0)).unwrap();
-        for required_depth in [MAX_DEPTH - 1, MAX_DEPTH] {
-            let refine = CurveRefine {
-                curve: Some(&line),
-                face_uses: Vec::new(),
-                ctx: Ctx {
-                    tol: 0.0,
-                    max_len: 2.0_f64.powi(-(required_depth as i32)),
-                },
-            };
-            let mut interior = Vec::new();
-            refine
-                .refine(
-                    (0.0, line.eval(0.0)),
-                    (1.0, line.eval(1.0)),
-                    0,
-                    &mut interior,
-                )
-                .unwrap();
-
-            let segment_count = 1_usize << required_depth;
-            assert_eq!(interior.len(), segment_count - 1);
-            for (i, &(parameter, point)) in interior.iter().enumerate() {
-                let expected = (i + 1) as f64 / segment_count as f64;
-                assert_eq!(parameter.to_bits(), expected.to_bits());
-                assert_eq!(point.x.to_bits(), expected.to_bits());
-            }
+    fn contextual_body_tessellation_matches_legacy_for_every_execution_policy() {
+        let mut store = Store::new();
+        let body = block(&mut store, &Frame::world(), [1.0, 2.0, 3.0]).unwrap();
+        let options = opts(0.25);
+        let legacy = tessellate_body(&store, body, &options).unwrap();
+        let executions = [
+            ExecutionPolicy::Serial,
+            ExecutionPolicy::AtMost(NonZeroUsize::new(1).unwrap()),
+            ExecutionPolicy::AtMost(NonZeroUsize::new(2).unwrap()),
+            ExecutionPolicy::Available,
+        ];
+        let mut reports = Vec::new();
+        for execution in executions {
+            let session = SessionPolicy::new(
+                SessionPrecision::parasolid(),
+                NumericalPolicy::v1(),
+                execution,
+                BodyTessellationBudgetProfile::v1_defaults(),
+                PolicyVersion::V1,
+            );
+            let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+            let outcome = tessellate_body_with_context(&store, body, &options, &context).unwrap();
+            assert_eq!(outcome.result(), Ok(&legacy));
+            reports.push(outcome.report().clone());
         }
+        assert!(reports.windows(2).all(|pair| pair[0] == pair[1]));
+        let consumed: Vec<_> = reports[0]
+            .usage()
+            .iter()
+            .map(|entry| (entry.stage, entry.resource, entry.consumed))
+            .collect();
+        assert_eq!(
+            consumed,
+            [
+                (
+                    kgeom::project::SURFACE_PROJECTION_HALVINGS,
+                    ResourceKind::Depth,
+                    0
+                ),
+                (
+                    kgeom::project::SURFACE_PROJECTION_CANDIDATES,
+                    ResourceKind::Items,
+                    0
+                ),
+                (
+                    kgeom::project::SURFACE_PROJECTION_NEWTON_ITERATIONS,
+                    ResourceKind::Depth,
+                    0
+                ),
+                (
+                    kgeom::project::SURFACE_PROJECTION_QUERIES,
+                    ResourceKind::Work,
+                    0
+                ),
+                (
+                    kgeom::project::SURFACE_PROJECTION_SAMPLES,
+                    ResourceKind::Items,
+                    0
+                ),
+                (FACE_TESSELLATION_BOUNDARY_DEPTH, ResourceKind::Depth, 0),
+                (FACE_TESSELLATION_REFINEMENT_PASSES, ResourceKind::Work, 0),
+                (kgraph::eval_stage::DEPENDENCY_DEPTH, ResourceKind::Depth, 1),
+                (kgraph::eval_stage::NODE_VISITS, ResourceKind::Work, 150),
+                (BODY_TESSELLATION_EDGE_DEPTH, ResourceKind::Depth, 0),
+                (BODY_TESSELLATION_ISO_ARC_DEPTH, ResourceKind::Depth, 0),
+                (BODY_TESSELLATION_MESH_VERTICES, ResourceKind::Items, 8),
+            ]
+        );
+        assert!(reports[0].limit_events().is_empty());
+        assert!(reports[0].diagnostics().is_empty());
+    }
 
-        let refine = CurveRefine {
-            curve: Some(&line),
-            face_uses: Vec::new(),
-            ctx: Ctx {
-                tol: 0.0,
-                max_len: 2.0_f64.powi(-((MAX_DEPTH + 1) as i32)),
-            },
-        };
-        let error = refine
-            .refine(
-                (0.0, line.eval(0.0)),
-                (1.0, line.eval(1.0)),
-                0,
-                &mut Vec::new(),
+    #[test]
+    fn shared_scope_budget_validation_precedes_options_and_topology() {
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            BudgetPlan::empty(),
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let mut scope = OperationScope::new(&context);
+        let mut source = Store::new();
+        let stale = block(&mut source, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
+        let store = Store::new();
+        assert_eq!(
+            tessellate_body_in_scope(
+                &store,
+                stale,
+                &TessOptions {
+                    chord_tol: f64::NAN,
+                    max_edge_len: None,
+                },
+                &mut scope,
+            ),
+            Err(TessellationError::Kernel(Error::OperationPolicy {
+                source: OperationPolicyError::UnknownLimit {
+                    stage: kgeom::project::SURFACE_PROJECTION_HALVINGS,
+                    resource: ResourceKind::Depth,
+                },
+            }))
+        );
+    }
+
+    #[test]
+    fn body_local_depth_cap_survives_a_looser_parent_override() {
+        let plan = BodyTessellationBudgetProfile::v1_defaults().overlaid(
+            &BudgetPlan::new([LimitSpec::new(
+                BODY_TESSELLATION_EDGE_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                17,
+            )])
+            .unwrap(),
+        );
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            plan,
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default())
+            .unwrap()
+            .with_diagnostics(DiagnosticLevel::Summary, 4);
+        let mut scope = OperationScope::new(&context);
+        let error = {
+            let mut work = BodyTessellationWork { scope: &mut scope };
+            next_refinement_depth(
+                MAX_DEPTH,
+                BODY_TESSELLATION_EDGE_DEPTH,
+                BODY_TESSELLATION_EDGE_DEPTH_LIMIT_REACHED,
+                "whole-body exact-edge refinement depth limit reached",
+                &mut work,
             )
-            .unwrap_err();
+            .unwrap_err()
+        };
         assert_depth_limit(
             error,
             BODY_TESSELLATION_EDGE_DEPTH,
             BODY_TESSELLATION_EDGE_DEPTH_LIMIT,
         );
+        let report = scope.finish_typed::<(), TessellationError>(Ok(()));
+        assert_eq!(
+            report.report().limit_events(),
+            &[LimitSnapshot {
+                stage: BODY_TESSELLATION_EDGE_DEPTH,
+                resource: ResourceKind::Depth,
+                consumed: 17,
+                allowed: 16,
+            }]
+        );
+        assert_eq!(report.report().diagnostics().len(), 1);
+        assert_eq!(
+            report.report().diagnostics()[0].code,
+            BODY_TESSELLATION_EDGE_DEPTH_LIMIT_REACHED
+        );
+    }
+
+    #[test]
+    fn configured_mesh_cap_rejects_atomically_with_report_evidence() {
+        let mut store = Store::new();
+        let body = block(&mut store, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
+        let plan = BodyTessellationBudgetProfile::v1_defaults().overlaid(
+            &BudgetPlan::new([LimitSpec::new(
+                BODY_TESSELLATION_MESH_VERTICES,
+                ResourceKind::Items,
+                AccountingMode::Cumulative,
+                7,
+            )])
+            .unwrap(),
+        );
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            plan,
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default())
+            .unwrap()
+            .with_diagnostics(DiagnosticLevel::Summary, 4);
+        let outcome = tessellate_body_with_context(&store, body, &opts(0.25), &context).unwrap();
+        let snapshot = LimitSnapshot {
+            stage: BODY_TESSELLATION_MESH_VERTICES,
+            resource: ResourceKind::Items,
+            consumed: 8,
+            allowed: 7,
+        };
+        assert_eq!(
+            outcome.result(),
+            Err(&TessellationError::Kernel(Error::ResourceLimit {
+                snapshot
+            }))
+        );
+        let usage = outcome
+            .report()
+            .usage()
+            .iter()
+            .find(|entry| entry.stage == BODY_TESSELLATION_MESH_VERTICES)
+            .unwrap();
+        assert_eq!(usage.consumed, 7);
+        assert_eq!(outcome.report().limit_events(), &[snapshot]);
+        assert_eq!(outcome.report().diagnostics().len(), 1);
+        assert_eq!(
+            outcome.report().diagnostics()[0].code,
+            BODY_TESSELLATION_MESH_VERTEX_LIMIT_REACHED
+        );
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn raised_mesh_policy_cannot_expand_the_physical_u32_index_space() {
+        let plan = BodyTessellationBudgetProfile::v1_defaults().overlaid(
+            &BudgetPlan::new([LimitSpec::new(
+                BODY_TESSELLATION_MESH_VERTICES,
+                ResourceKind::Items,
+                AccountingMode::Cumulative,
+                BODY_TESSELLATION_MESH_VERTEX_LIMIT + 10,
+            )])
+            .unwrap(),
+        );
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            plan,
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default())
+            .unwrap()
+            .with_diagnostics(DiagnosticLevel::Summary, 4);
+        let mut scope = OperationScope::new(&context);
+        scope
+            .ledger_mut()
+            .charge_resource(
+                BODY_TESSELLATION_MESH_VERTICES,
+                ResourceKind::Items,
+                BODY_TESSELLATION_MESH_VERTEX_LIMIT,
+            )
+            .unwrap();
+        let error = {
+            let mut work = BodyTessellationWork { scope: &mut scope };
+            work.reject_physical_mesh_vertex(BODY_TESSELLATION_MESH_VERTEX_LIMIT as usize)
+                .unwrap_err()
+        };
+        let physical = LimitSnapshot {
+            stage: BODY_TESSELLATION_MESH_VERTICES,
+            resource: ResourceKind::Items,
+            consumed: BODY_TESSELLATION_MESH_VERTEX_LIMIT + 1,
+            allowed: BODY_TESSELLATION_MESH_VERTEX_LIMIT,
+        };
+        assert_eq!(
+            error,
+            TessellationError::Kernel(Error::ResourceLimit { snapshot: physical })
+        );
+        let outcome = scope.finish_typed::<(), TessellationError>(Ok(()));
+        let usage = outcome
+            .report()
+            .usage()
+            .iter()
+            .find(|entry| entry.stage == BODY_TESSELLATION_MESH_VERTICES)
+            .unwrap();
+        assert_eq!(usage.consumed, BODY_TESSELLATION_MESH_VERTEX_LIMIT);
+        assert!(outcome.report().limit_events().is_empty());
+        assert_eq!(outcome.report().diagnostics().len(), 1);
+        assert_eq!(
+            outcome.report().diagnostics()[0].kind,
+            DiagnosticKind::LimitReached(physical)
+        );
+    }
+
+    #[test]
+    fn legacy_error_mapping_restores_graph_and_face_failure_shapes() {
+        let graph = LimitSnapshot {
+            stage: kgraph::eval_stage::NODE_VISITS,
+            resource: ResourceKind::Work,
+            consumed: 4097,
+            allowed: 4096,
+        };
+        assert_eq!(
+            legacy_body_tessellation_error(Error::ResourceLimit { snapshot: graph }.into()),
+            TessellationError::Evaluation(EvalError::NodeVisitLimitExceeded {
+                consumed: 4097,
+                limit: 4096,
+            })
+        );
+        for (stage, operation, limit) in [
+            (
+                FACE_TESSELLATION_BOUNDARY_DEPTH,
+                "tessellation boundary refinement depth",
+                16,
+            ),
+            (
+                FACE_TESSELLATION_REFINEMENT_PASSES,
+                "tessellation interior refinement passes",
+                24,
+            ),
+        ] {
+            let error = legacy_body_tessellation_error(
+                Error::ResourceLimit {
+                    snapshot: LimitSnapshot {
+                        stage,
+                        resource: if stage == FACE_TESSELLATION_BOUNDARY_DEPTH {
+                            ResourceKind::Depth
+                        } else {
+                            ResourceKind::Work
+                        },
+                        consumed: limit as u64 + 1,
+                        allowed: limit as u64,
+                    },
+                }
+                .into(),
+            );
+            assert_eq!(
+                error,
+                TessellationError::Kernel(Error::AlgorithmLimit { operation, limit })
+            );
+        }
+    }
+
+    #[test]
+    fn nurbs_inversion_uses_the_shared_projection_scope() {
+        let surface = SurfaceGeom::Nurbs(
+            NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![
+                    Vec3::new(0.0, 0.0, 0.0),
+                    Vec3::new(0.0, 1.0, 0.0),
+                    Vec3::new(1.0, 0.0, 0.0),
+                    Vec3::new(1.0, 1.0, 0.0),
+                ],
+                None,
+            )
+            .unwrap(),
+        );
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            BodyTessellationBudgetProfile::v1_defaults(),
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let mut scope = OperationScope::new(&context);
+        let mapped = {
+            let mut work = BodyTessellationWork { scope: &mut scope };
+            invert_uv(&surface, Point3::new(0.25, 0.75, 0.0), &mut work).unwrap()
+        };
+        assert!((mapped.x - 0.25).abs() < 1.0e-10);
+        assert!((mapped.y - 0.75).abs() < 1.0e-10);
+        let outcome = scope.finish_typed::<(), TessellationError>(Ok(()));
+        let usage = outcome.report().usage();
+        let consumed = |stage| {
+            usage
+                .iter()
+                .find(|entry| entry.stage == stage)
+                .unwrap()
+                .consumed
+        };
+        assert_eq!(consumed(kgeom::project::SURFACE_PROJECTION_QUERIES), 1);
+        assert_eq!(consumed(kgeom::project::SURFACE_PROJECTION_SAMPLES), 625);
+        assert!(outcome.report().limit_events().is_empty());
+
+        let limited = BodyTessellationBudgetProfile::v1_defaults().overlaid(
+            &BudgetPlan::new([LimitSpec::new(
+                kgeom::project::SURFACE_PROJECTION_QUERIES,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                0,
+            )])
+            .unwrap(),
+        );
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            limited,
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let mut scope = OperationScope::new(&context);
+        let error = {
+            let mut work = BodyTessellationWork { scope: &mut scope };
+            invert_uv(&surface, Point3::new(0.25, 0.75, 0.0), &mut work).unwrap_err()
+        };
+        assert!(matches!(
+            error,
+            TessellationError::SurfacePoint(
+                kgeom::surface_point::SurfacePointContextError::Projection(
+                    kgeom::project::ProjectionError::Policy(OperationPolicyError::LimitReached(
+                        LimitSnapshot {
+                            stage: kgeom::project::SURFACE_PROJECTION_QUERIES,
+                            resource: ResourceKind::Work,
+                            consumed: 1,
+                            allowed: 0,
+                        }
+                    ))
+                )
+            )
+        ));
+        let report = scope.finish_typed::<(), TessellationError>(Ok(()));
+        assert_eq!(
+            report.report().limit_events(),
+            &[LimitSnapshot {
+                stage: kgeom::project::SURFACE_PROJECTION_QUERIES,
+                resource: ResourceKind::Work,
+                consumed: 1,
+                allowed: 0,
+            }]
+        );
+    }
+
+    #[test]
+    fn face_refinement_aggregate_and_root_limits_retain_body_diagnostics() {
+        let mut store = Store::new();
+        let body = closed_body(&mut store, Sphere::new(Frame::world(), 1.0).unwrap().into());
+        let options = opts(0.1);
+        let run = |plan: BudgetPlan| {
+            let session = SessionPolicy::new(
+                SessionPrecision::parasolid(),
+                NumericalPolicy::v1(),
+                ExecutionPolicy::Serial,
+                plan,
+                PolicyVersion::V1,
+            );
+            let context = OperationContext::new(&session, Tolerances::default())
+                .unwrap()
+                .with_diagnostics(DiagnosticLevel::Summary, 4);
+            tessellate_body_with_context(&store, body, &options, &context).unwrap()
+        };
+        let baseline = run(BodyTessellationBudgetProfile::v1_defaults());
+        assert!(baseline.result().is_ok());
+        let passes = baseline
+            .report()
+            .usage()
+            .iter()
+            .find(|entry| entry.stage == FACE_TESSELLATION_REFINEMENT_PASSES)
+            .unwrap()
+            .consumed;
+        assert!(passes > 0);
+
+        for (plan, stage) in [
+            (
+                BodyTessellationBudgetProfile::v1_defaults().overlaid(
+                    &BudgetPlan::new([LimitSpec::new(
+                        FACE_TESSELLATION_REFINEMENT_PASSES,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        0,
+                    )])
+                    .unwrap(),
+                ),
+                FACE_TESSELLATION_REFINEMENT_PASSES,
+            ),
+            (
+                BodyTessellationBudgetProfile::v1_defaults().with_total_work_limit(0),
+                kcore::operation::TOTAL_WORK_STAGE,
+            ),
+        ] {
+            let outcome = run(plan);
+            let snapshot = LimitSnapshot {
+                stage,
+                resource: ResourceKind::Work,
+                consumed: 1,
+                allowed: 0,
+            };
+            assert_eq!(
+                outcome.result(),
+                Err(&TessellationError::Kernel(Error::ResourceLimit {
+                    snapshot
+                }))
+            );
+            assert_eq!(outcome.report().limit_events(), &[snapshot]);
+            assert_eq!(outcome.report().diagnostics().len(), 1);
+            assert_eq!(
+                outcome.report().diagnostics()[0].code,
+                FACE_TESSELLATION_REFINEMENT_PASS_LIMIT
+            );
+        }
+    }
+
+    #[test]
+    fn curve_refinement_enforces_quality_at_n_minus_one_n_and_n_plus_one() {
+        let line = Line::new(Point3::default(), Vec3::new(1.0, 0.0, 0.0)).unwrap();
+        with_body_work!(work, {
+            for required_depth in [MAX_DEPTH - 1, MAX_DEPTH] {
+                let refine = CurveRefine {
+                    curve: Some(&line),
+                    face_uses: Vec::new(),
+                    ctx: Ctx {
+                        tol: 0.0,
+                        max_len: 2.0_f64.powi(-(required_depth as i32)),
+                    },
+                };
+                let mut interior = Vec::new();
+                refine
+                    .refine(
+                        (0.0, line.eval(0.0)),
+                        (1.0, line.eval(1.0)),
+                        0,
+                        &mut interior,
+                        &mut work,
+                    )
+                    .unwrap();
+
+                let segment_count = 1_usize << required_depth;
+                assert_eq!(interior.len(), segment_count - 1);
+                for (i, &(parameter, point)) in interior.iter().enumerate() {
+                    let expected = (i + 1) as f64 / segment_count as f64;
+                    assert_eq!(parameter.to_bits(), expected.to_bits());
+                    assert_eq!(point.x.to_bits(), expected.to_bits());
+                }
+            }
+
+            let refine = CurveRefine {
+                curve: Some(&line),
+                face_uses: Vec::new(),
+                ctx: Ctx {
+                    tol: 0.0,
+                    max_len: 2.0_f64.powi(-((MAX_DEPTH + 1) as i32)),
+                },
+            };
+            let error = refine
+                .refine(
+                    (0.0, line.eval(0.0)),
+                    (1.0, line.eval(1.0)),
+                    0,
+                    &mut Vec::new(),
+                    &mut work,
+                )
+                .unwrap_err();
+            assert_depth_limit(
+                error,
+                BODY_TESSELLATION_EDGE_DEPTH,
+                BODY_TESSELLATION_EDGE_DEPTH_LIMIT,
+            );
+        });
     }
 
     #[test]
@@ -1741,47 +2665,51 @@ mod tests {
         let plane = Plane::new(Frame::world());
         let a = (Vec2::new(0.0, 0.0), plane.eval([0.0, 0.0]));
         let b = (Vec2::new(1.0, 0.0), plane.eval([1.0, 0.0]));
-        for required_depth in [MAX_DEPTH - 1, MAX_DEPTH] {
-            let mut interior = Vec::new();
-            refine_uv_seg(
+        with_body_work!(work, {
+            for required_depth in [MAX_DEPTH - 1, MAX_DEPTH] {
+                let mut interior = Vec::new();
+                refine_uv_seg(
+                    &plane,
+                    a,
+                    b,
+                    Ctx {
+                        tol: 0.0,
+                        max_len: 2.0_f64.powi(-(required_depth as i32)),
+                    },
+                    0,
+                    &mut interior,
+                    &mut work,
+                )
+                .unwrap();
+
+                let segment_count = 1_usize << required_depth;
+                assert_eq!(interior.len(), segment_count - 1);
+                for (i, &(uv, point)) in interior.iter().enumerate() {
+                    let expected = (i + 1) as f64 / segment_count as f64;
+                    assert_eq!(uv.x.to_bits(), expected.to_bits());
+                    assert_eq!(point.x.to_bits(), expected.to_bits());
+                }
+            }
+
+            let error = refine_uv_seg(
                 &plane,
                 a,
                 b,
                 Ctx {
                     tol: 0.0,
-                    max_len: 2.0_f64.powi(-(required_depth as i32)),
+                    max_len: 2.0_f64.powi(-((MAX_DEPTH + 1) as i32)),
                 },
                 0,
-                &mut interior,
+                &mut Vec::new(),
+                &mut work,
             )
-            .unwrap();
-
-            let segment_count = 1_usize << required_depth;
-            assert_eq!(interior.len(), segment_count - 1);
-            for (i, &(uv, point)) in interior.iter().enumerate() {
-                let expected = (i + 1) as f64 / segment_count as f64;
-                assert_eq!(uv.x.to_bits(), expected.to_bits());
-                assert_eq!(point.x.to_bits(), expected.to_bits());
-            }
-        }
-
-        let error = refine_uv_seg(
-            &plane,
-            a,
-            b,
-            Ctx {
-                tol: 0.0,
-                max_len: 2.0_f64.powi(-((MAX_DEPTH + 1) as i32)),
-            },
-            0,
-            &mut Vec::new(),
-        )
-        .unwrap_err();
-        assert_depth_limit(
-            error,
-            BODY_TESSELLATION_ISO_ARC_DEPTH,
-            BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT,
-        );
+            .unwrap_err();
+            assert_depth_limit(
+                error,
+                BODY_TESSELLATION_ISO_ARC_DEPTH,
+                BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT,
+            );
+        });
     }
 
     #[cfg(target_pointer_width = "64")]
@@ -1867,6 +2795,30 @@ mod tests {
                 .iter()
                 .all(|point| (point.z - 1.0).abs() <= 1.0e-12)
         );
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            BodyTessellationBudgetProfile::v1_defaults(),
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let contextual =
+            tessellate_body_with_context(&store, body, &opts(1.0e-4), &context).unwrap();
+        assert_eq!(contextual.result(), Ok(&mesh));
+        let usage = contextual.report().usage();
+        let consumed = |stage| {
+            usage
+                .iter()
+                .find(|entry| entry.stage == stage)
+                .unwrap()
+                .consumed
+        };
+        // Leaf proof, periodicity, exact sampling, and derivative-frame
+        // reconstruction all traverse the procedural graph explicitly.
+        assert!(consumed(kgraph::eval_stage::NODE_VISITS) >= 8);
+        assert_eq!(consumed(kgraph::eval_stage::DEPENDENCY_DEPTH), 2);
+        assert_eq!(consumed(kgeom::project::SURFACE_PROJECTION_QUERIES), 0);
 
         let max_edge_len = 0.2;
         let constrained = tessellate_body(
@@ -2118,23 +3070,47 @@ mod tests {
             positions: vec![point],
         };
         let sg = store.get(surface_id).unwrap();
-        let uv = fin_sample_uv(
-            &store,
-            surface_id,
-            sg,
-            &acc,
-            fin,
-            EdgeSample {
-                parameter: t,
-                vertex: 0,
-            },
-        )
-        .unwrap();
-        let inverted = invert_uv(sg, point).unwrap();
-        assert!((uv.x - inverted.x - tau).abs() < 1e-12);
+        with_body_work!(work, {
+            let uv = fin_sample_uv(
+                &store,
+                surface_id,
+                sg,
+                &acc,
+                fin,
+                EdgeSample {
+                    parameter: t,
+                    vertex: 0,
+                },
+                &mut work,
+            )
+            .unwrap();
+            let inverted = invert_uv(sg, point, &mut work).unwrap();
+            assert!((uv.x - inverted.x - tau).abs() < 1e-12);
+        });
 
         let mesh = tessellate_body(&store, body, &opts(1e-3)).unwrap();
         assert_watertight(&mesh);
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            BodyTessellationBudgetProfile::v1_defaults(),
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let contextual = tessellate_body_with_context(&store, body, &opts(1e-3), &context).unwrap();
+        assert_eq!(contextual.result(), Ok(&mesh));
+        assert_eq!(
+            contextual
+                .report()
+                .usage()
+                .iter()
+                .find(|entry| entry.stage == kgeom::project::SURFACE_PROJECTION_QUERIES)
+                .unwrap()
+                .consumed,
+            0,
+            "explicit pcurves must not fall back to surface projection"
+        );
     }
 
     fn tilted() -> Frame {

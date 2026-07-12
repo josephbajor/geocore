@@ -5,6 +5,7 @@ use core::fmt;
 use crate::entity::SurfaceId;
 use kcore::error::{CapabilityId, ClassifiedError, Error, ErrorClass, ErrorCode};
 use kcore::operation::LimitSnapshot;
+use kgeom::surface_point::SurfacePointContextError;
 use kgraph::EvalError;
 
 const fn error_code(value: &'static str) -> ErrorCode {
@@ -47,6 +48,8 @@ pub enum TessellationError {
     Kernel(Error),
     /// Exact graph evaluation failed, including singular and ill-conditioned offsets.
     Evaluation(EvalError),
+    /// Contextual point-to-surface inversion or projection failed.
+    SurfacePoint(SurfacePointContextError),
     /// This tessellation path does not implement the requested valid representation.
     Unsupported {
         /// Stable finite-support capability.
@@ -63,9 +66,10 @@ pub enum TessellationError {
 
 impl TessellationError {
     /// Broad failure class without erasing the concrete payload.
-    pub const fn class(&self) -> ErrorClass {
+    pub fn class(&self) -> ErrorClass {
         match self {
             Self::Kernel(error) => error.class(),
+            Self::SurfacePoint(error) => error.class(),
             Self::Evaluation(EvalError::DependencyDepthExceeded { .. })
             | Self::Evaluation(EvalError::NodeVisitLimitExceeded { .. }) => {
                 ErrorClass::ResourceLimit
@@ -85,9 +89,10 @@ impl TessellationError {
     }
 
     /// Stable failure identity.
-    pub const fn code(&self) -> ErrorCode {
+    pub fn code(&self) -> ErrorCode {
         match self {
             Self::Kernel(error) => error.code(),
+            Self::SurfacePoint(error) => error.code(),
             Self::Evaluation(EvalError::IllConditionedSurface { .. }) => REGULARITY_INDETERMINATE,
             Self::Evaluation(_) => EVALUATION_FAILED,
             Self::Unsupported { .. } => UNSUPPORTED_TESSELLATION,
@@ -96,9 +101,10 @@ impl TessellationError {
     }
 
     /// Finite capability whose absence caused this failure, when applicable.
-    pub const fn capability(&self) -> Option<CapabilityId> {
+    pub fn capability(&self) -> Option<CapabilityId> {
         match self {
             Self::Kernel(error) => error.capability(),
+            Self::SurfacePoint(error) => error.capability(),
             Self::Unsupported { capability } => Some(*capability),
             Self::Indeterminate { .. } => Some(SURFACE_REGULARITY_PROOF),
             Self::Evaluation(EvalError::IllConditionedSurface { .. }) => {
@@ -112,9 +118,10 @@ impl TessellationError {
     ///
     /// `EvalError` predates the shared F2 limit snapshot and therefore cannot
     /// reconstruct a truthful stage/resource record yet.
-    pub const fn limit(&self) -> Option<LimitSnapshot> {
+    pub fn limit(&self) -> Option<LimitSnapshot> {
         match self {
             Self::Kernel(error) => error.limit(),
+            Self::SurfacePoint(error) => error.limit(),
             _ => None,
         }
     }
@@ -124,6 +131,7 @@ impl fmt::Display for TessellationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Kernel(error) => error.fmt(formatter),
+            Self::SurfacePoint(error) => error.fmt(formatter),
             Self::Evaluation(error) => error.fmt(formatter),
             Self::Unsupported { capability } => {
                 write!(
@@ -152,6 +160,7 @@ impl std::error::Error for TessellationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Kernel(error) => Some(error),
+            Self::SurfacePoint(error) => Some(error),
             Self::Evaluation(error) => Some(error),
             Self::Indeterminate {
                 source: Some(error),
@@ -199,6 +208,12 @@ impl From<EvalError> for TessellationError {
     }
 }
 
+impl From<SurfacePointContextError> for TessellationError {
+    fn from(error: SurfacePointContextError) -> Self {
+        Self::SurfacePoint(error)
+    }
+}
+
 /// Result returned by whole-body tessellation.
 pub type TessellationResult<T> = core::result::Result<T, TessellationError>;
 
@@ -223,6 +238,18 @@ mod tests {
             ErrorClass::InvalidInput
         );
         assert!(evaluation.source().is_some());
+
+        let surface_point =
+            TessellationError::from(SurfacePointContextError::UnboundedProjectionWindow);
+        assert_eq!(
+            ClassifiedError::class(&surface_point),
+            ErrorClass::Unsupported
+        );
+        assert_eq!(
+            ClassifiedError::capability(&surface_point),
+            Some(kgeom::surface_point::capability::FINITE_PROJECTION_WINDOW)
+        );
+        assert!(surface_point.source().is_some());
 
         let unsupported = TessellationError::Unsupported {
             capability: PROCEDURAL_LEAF_ALGORITHM,

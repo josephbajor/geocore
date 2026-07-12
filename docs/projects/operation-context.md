@@ -1,6 +1,6 @@
 # Operation context and numerical policy
 
-Status: Stage 1b composition, the NURBS contact/minimizer scale gate, and representative Stage 2-4 pilots implemented; contextual projection/body tessellation and broader ratchets remain
+Status: Stage 1b composition, the NURBS contact/minimizer scale gate, and representative Stage 2-5 pilots implemented; contextual projection and whole-body tessellation entries have landed, while production adoption, allocation hardening, and broader ratchets remain
 
 ## Purpose
 
@@ -260,6 +260,14 @@ ledger infers the checked sum of its cumulative Work allowances; an explicit
 stricter child ceiling is preserved. This makes a valid completed child
 mergeable instead of allowing parent work to consume capacity already promised
 implicitly to the child.
+
+Strictly sequential nested algorithms use `SequentialWorkLedger` instead of a
+capacity reservation. Each invocation retains its local v1 cap while accepted
+units stream into the parent stage and root totals immediately; local limits
+win ties, parent failures keep aggregate coordinates, and a rejected unit
+mutates neither view. Whole-body tessellation uses this seam for each face
+patch and graph query, so local 24-pass and 4,096-visit caps restart without
+resetting operation-wide usage.
 
 The unit charged at each stage is part of that stage's documentation and tests. A
 "work" unit is not a time unit. Wall-clock deadlines are deliberately excluded because
@@ -667,10 +675,13 @@ turn these numerical guards into proof or acceptance authority.
 
 ### Stage 4 — Projection and tessellation
 
-Status: face tessellation now has contextual and shared-scope entry points,
-truthful boundary-depth and completed-pass accounting, exact structured limit
-evidence, and a bit-compatible legacy adapter. Contextual projection, body
-tessellation, and execution-policy equivalence remain.
+Status: projection and face/body tessellation now have contextual and
+shared-scope entry points. Whole-body tessellation owns one scope across graph
+queries, projection fallback, edge/iso depth, per-patch face work, and retained
+vertices; local caps, aggregate/root failures, diagnostics, legacy bits/errors,
+and Serial/fixed/available execution-policy equivalence are covered. Dedicated
+pre-allocation limits for prepared UV/patch scratch and triangle retention
+remain before the path is fully hostile-input bounded.
 
 - Add fallible contextual projection APIs and remove public panic behavior through the
   new path.
@@ -693,9 +704,9 @@ including canonical aggregate and root-total crossings. Policy stops roll back
 the exact transaction, allocator, index, and journal state; ordinary evaluator
 failures retain the checker's established fault ordering. Legacy wrappers use a
 non-binding aggregate allowance so compatibility does not acquire an accidental
-model-size ceiling. Contextual facade construction composition and body
-tessellation remain; projection has contextual entry points but still needs
-owning-caller composition and its legacy ratchet.
+model-size ceiling. Contextual facade construction composition remains;
+projection and body tessellation have contextual entries but still need
+remaining production-caller adoption and their internal legacy ratchets.
 
 - Route facade construction through one scope, including affected-body checking.
 - Add contextual checker APIs and structured Full verification gaps.

@@ -26,7 +26,7 @@ section and link the reason from the affected project file in the same change.
 | --- | --- |
 | F0 | Implemented: curve/curve operand swapping preserves completion evidence and canonical order. |
 | F1 | G1-G4a plus the F2 graph-budget adapter are implemented: `kgraph` and `ktopo::Store` own one transactional geometry graph; exact offsets evaluate through accepted/attempted node/depth accounting, check, tessellate, and round-trip through the declared X_T subset without basis duplication. The 14-file writer bundle is host-recertified and machine-fingerprinted; broader G4 corpus coverage and G5 remain. |
-| F2 | Stage 1, Stage 1b composition, the bounded NURBS/NURBS Stage 3 scale gate, two Stage 2 pilots, and contextual face-tessellation/projection/checker entries are implemented. `OperationContext` owns family-default < session < request budget precedence for graph evaluation, Full checking, face tessellation, and projection, including canonical root stops and accounting-mode validation. NURBS/NURBS conditioning, gradients, accepted progress, contact classification, collapsed ranges, and minimizer/local-search guards are normalized across parameter/model scales while residuals retain sole acceptance authority. Segment conditioning, overlap/input/dedup slack, structured numeric stops, projection caller composition/ratcheting, body tessellation, and broader migrations remain. |
+| F2 | Stage 1, Stage 1b composition, the bounded NURBS/NURBS Stage 3 scale gate, two Stage 2 pilots, and contextual face/body-tessellation, projection, and checker entries are implemented. `OperationContext` owns family-default < session < request budget precedence for graph evaluation, Full checking, tessellation, and projection, including canonical root stops and accounting-mode validation. Whole-body tessellation now owns one scope across graph evaluation, projection fallback, shared-edge/iso refinement, per-patch face tessellation, and retained mesh vertices while preserving legacy bits and errors. NURBS/NURBS conditioning, gradients, accepted progress, contact classification, collapsed ranges, and minimizer/local-search guards are normalized across parameter/model scales while residuals retain sole acceptance authority. Segment conditioning, overlap/input/dedup slack, structured numeric stops, contextual caller adoption/ratcheting, hostile-input tessellation allocation bounds, and broader migrations remain. |
 | F3 | Two slices implemented: centralized class dispatch plus shared periodic/range and first-wins candidate emission migrated through line/circle and plane/sphere. Broader driver migration and generic fallback remain. |
 | F4 | Phase 1, representative Phase 2 slices, and two Phase 3 pilots are implemented: graph evaluation owns stable classification, and one surface-intersection family retains ordered structured incomplete evidence through limits, numeric stops, canonicalization, and swapping. Broader result-family and legacy migrations remain. |
 | F5 | K1-K3, typed K4 interchange, and K5 adoption are implemented: the `kernel` facade owns lifecycle, opaque IDs, classified sources, one-scope outcomes, safe checker subjects, opaque journals, child-accounted procedural evaluation, and atomic typed X_T import/export. The standalone `kernel-lifecycle` client depends directly only on `kernel` and proves construction, semantic inspection, Full checking, surface evaluation, and byte-stable X_T export/import/re-export. Graph-aware intersection and semantic edit/journal iteration remain. |
@@ -48,16 +48,23 @@ current record. Host findings remain ratcheted in `docs/oracle-results.tsv`.
 
 ### Ordered code queue
 
-1. **Contextualize and ratchet the remaining foundation paths.** X_T
-   reconstruction and checked-commit Fast validation now share one facade-owned
-   scope and cumulative graph allowance. Compose projection through its owning
-   callers and close its legacy ratchet, then complete body tessellation before
-   expanding either facade surface. As each complete
-   contextual path proves legacy equivalence, forbid new
-   crate-internal calls to its legacy wrapper. K5 has now exercised the public
-   compatibility surface, so proven legacy wrappers may be deprecated when
-   their owning migration lands.
-2. **Resume algorithm/API expansion behind the completed gates.** F3's generic fallback
+1. **Adopt and ratchet the completed contextual paths.** X_T reconstruction
+   and checked-commit Fast validation share one facade-owned scope and
+   cumulative graph allowance. Whole-body tessellation now has equivalent
+   contextual and shared-scope entries, and composes its projection fallbacks;
+   migrate the remaining `ktopo`/`kxt` production callers before closing the
+   body and projection internal-use ratchets. As each owning path proves
+   equivalence, forbid new crate-internal calls to its legacy wrapper. K5 has
+   exercised the public compatibility surface, so proven legacy wrappers may
+   be deprecated when their owning migration lands.
+2. **Finish hostile-input tessellation accounting.** The contextual migration
+   accounts quality work and retained mesh vertices, but pole-row UV scratch,
+   prepared patch arrays, and triangle/output retention do not yet have
+   pre-allocation ceilings. Design cumulative edge/iso split work plus
+   deterministic prepared-patch and mesh-triangle item stages in `kgeom` and
+   `ktopo` before describing body tessellation as fully bounded; do not use
+   allocator-dependent byte counts.
+3. **Resume algorithm/API expansion behind the completed gates.** F3's generic fallback
    and facade graph-aware intersection follow the F2 scale/context work;
    semantic K4 edit transactions follow the K5 adoption pass. F6 splits and F4
    legacy cleanup land only with an owner-level behavioral migration. The Q2a
@@ -84,9 +91,11 @@ The original independent foundations have landed. Work is no longer scheduled
 as broad parallel expansion: Q8 made the harness protective; K5 tested the
 facade against a consumer; the completed F2 profile/scale gates make bounded F3
 fallback work eligible; X_T reconstruction and checked-commit Fast checking now
-share one graph child in one scope, while projection caller composition and body
-tessellation remain. The Q2a graph-build ladder now protects construction-scale
-work; reverse-index optimization still waits for comparative measurements.
+share one graph child in one scope. Contextual body tessellation now composes
+projection and sequential graph/face work in one scope; production caller
+adoption, retirement ratchets, and pre-allocation tessellation bounds remain.
+The Q2a graph-build ladder now protects construction-scale work; reverse-index
+optimization still waits for comparative measurements.
 
 ### Standing handoff ratchets
 
@@ -181,9 +190,10 @@ work.
 **Current convergence gate:** operation-family composition and the
 scale-sensitive contact/minimizer gate are complete. Contextual graph
 evaluation and checked commit use the same scope/child-reservation model.
-Projection's standalone contextual entries have landed, but owning-caller
-composition, its legacy ratchet, body tessellation, and facade construction
-composition remain.
+Projection's standalone contextual entries have landed and body tessellation
+now consumes them in one shared scope. Remaining production caller adoption,
+the projection/body legacy ratchets, hostile-input tessellation allocation
+bounds, and facade construction composition remain.
 
 ## F3 — Intersection engine consolidation
 

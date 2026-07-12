@@ -8,7 +8,7 @@ use kgeom::surface::{Cylinder, Plane, Sphere};
 use kgeom::vec::Vec3;
 use kgraph::{
     EvalContext, EvalError, EvalLimits, GeometryGraph, GeometryGraphError, GeometryRef,
-    OffsetSurfaceDescriptor, SurfaceDerivativeOrder, SurfaceValidity,
+    OffsetSurfaceDescriptor, SurfaceClass, SurfaceDerivativeOrder, SurfaceValidity,
 };
 
 fn evaluator(graph: &GeometryGraph) -> EvalContext<'_> {
@@ -284,4 +284,72 @@ fn nested_offsets_charge_every_dependency_visit() {
     );
     assert_eq!(eval.last_query_usage().node_visits(), 3);
     assert_eq!(eval.last_query_usage().dependency_depth(), 2);
+}
+
+#[test]
+fn surface_leaf_class_is_accounted_and_preserves_exact_limit_evidence() {
+    let mut graph = GeometryGraph::new();
+    let plane = graph.insert_surface(Plane::new(Frame::world())).unwrap();
+    let first = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(plane, 1.0))
+        .unwrap();
+    let nested = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(first, 2.0))
+        .unwrap();
+
+    let mut eval = evaluator(&graph);
+    assert_eq!(eval.surface_leaf_class(plane), Ok(SurfaceClass::Plane));
+    assert_eq!(eval.last_query_usage().node_visits(), 1);
+    assert_eq!(eval.last_query_usage().dependency_depth(), 1);
+    assert_eq!(eval.surface_leaf_class(nested), Ok(SurfaceClass::Plane));
+    assert_eq!(eval.last_query_usage().node_visits(), 3);
+    assert_eq!(eval.last_query_usage().dependency_depth(), 3);
+
+    let mut visit_limited = EvalContext::new(
+        &graph,
+        EvalLimits {
+            max_dependency_depth: 3,
+            max_node_visits_per_query: 2,
+        },
+        Tolerances::default(),
+    );
+    assert_eq!(
+        visit_limited.surface_leaf_class(nested),
+        Err(EvalError::NodeVisitLimitExceeded {
+            consumed: 3,
+            limit: 2,
+        })
+    );
+    assert_eq!(visit_limited.last_query_usage().node_visits(), 2);
+    assert_eq!(visit_limited.last_query_usage().dependency_depth(), 2);
+
+    let mut depth_limited = EvalContext::new(
+        &graph,
+        EvalLimits {
+            max_dependency_depth: 2,
+            max_node_visits_per_query: 3,
+        },
+        Tolerances::default(),
+    );
+    assert_eq!(
+        depth_limited.surface_leaf_class(nested),
+        Err(EvalError::DependencyDepthExceeded {
+            consumed: 3,
+            limit: 2,
+        })
+    );
+    assert_eq!(depth_limited.last_query_usage().node_visits(), 3);
+    assert_eq!(depth_limited.last_query_usage().dependency_depth(), 2);
+
+    let stale = graph.insert_surface(Plane::new(Frame::world())).unwrap();
+    graph.remove_surface(stale).unwrap();
+    let mut stale_eval = evaluator(&graph);
+    assert_eq!(
+        stale_eval.surface_leaf_class(stale),
+        Err(EvalError::StaleGeometryHandle {
+            geometry: GeometryRef::Surface(stale),
+        })
+    );
+    assert_eq!(stale_eval.last_query_usage().node_visits(), 1);
+    assert_eq!(stale_eval.last_query_usage().dependency_depth(), 1);
 }
