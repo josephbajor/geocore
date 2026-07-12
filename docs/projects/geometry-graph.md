@@ -758,13 +758,14 @@ F1 is complete only when all of the following are true:
   not rediscover it as a numerical failure. Defer the jet API until one of
   those consumers owns the end-to-end contract; never substitute production
   finite differences or zeros.
-- **Assembly-scale reverse indexing.** The implemented reverse-dependency index
-  and visited/order helpers favor simple deterministic vectors and linear
-  scans. Preserve that correctness baseline, but land the F7/Q2a graph-build
-  ladder before production-scale imports. A slot-indexed adjacency or other
-  replacement is justified only by measurements and must retain deterministic
-  insertion order, rollback, stale-handle behavior, and full-index audit
-  equality.
+- **Assembly-scale reverse indexing.** The reverse-dependency index now keeps
+  insertion-ordered adjacency vectors plus hash-backed key/membership lookup;
+  hash storage is never iterated for observable output. The F7/Q2a ladder
+  preserves graph and reverse-index digests, rollback, stale-handle behavior,
+  bounded entry-slot reuse, and full-index audit equality while pinning zero
+  full-order rebuilds. Graph
+  traversal visited/path helpers still use simple deterministic vectors and
+  remain a separate measured optimization before production-scale imports.
 - **Global regularity proof.** Bounding principal curvature over arbitrary
   NURBS regions is nontrivial. The first slice is useful with local evaluation
   and explicit indeterminate region proof; it must not overclaim certification.

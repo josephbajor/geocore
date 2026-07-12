@@ -76,9 +76,11 @@ at 1 through 10,000 nodes, offset dependency chains and shared-basis fanout at
 at 1 through 1,000 nodes. Descriptor policy and rollback control state are
 prepared outside timing. Only graph insertion, dependency maintenance, and
 rollback are timed; evaluation is deliberately absent. Every sample verifies
-node/edge counts, actual reverse-index registrations and complete-order
+node/edge counts, actual reverse-index registrations, zero complete-order
 rebuilds, stable iteration order, graph and reverse-index digests, validation,
-and rollback equality. The planned diamond row is deferred because current
+and rollback equality. The indexed replacement retains insertion-ordered
+adjacency and uses hash storage only for non-observable lookup/membership. The
+planned diamond row is deferred because current
 descriptors expose at most one dependency; the harness does not invent a
 benchmark-only graph shape.
 

@@ -139,82 +139,82 @@ const fn case(path: &'static str, ladder: Ladder, scale: usize) -> GraphBuildCas
             (Ladder::Independent, 1) => (
                 0x5c41_4503_e372_ce9b,
                 0xa007_3203_cc9c_feb4,
-                0x5c97_6e02_709a_9723,
+                0x72a3_0850_1363_9f00,
             ),
             (Ladder::Independent, 10) => (
                 0xb422_a04c_a195_f688,
                 0x37b1_9f46_62c0_705e,
-                0xb9c1_9292_2591_5cad,
+                0xecde_14ec_888f_3d77,
             ),
             (Ladder::Independent, 100) => (
                 0x2fec_b6a8_e55a_1843,
                 0x7b34_c7ff_2f41_43f1,
-                0xf9b4_eaf5_4768_c8ee,
+                0xcced_ddca_f844_91b2,
             ),
             (Ladder::Independent, 1_000) => (
                 0x6db7_056d_f18d_982a,
                 0xb118_8b03_54e2_e48c,
-                0x8f63_44a5_24db_609d,
+                0x8551_5fc6_a52c_467a,
             ),
             (Ladder::Independent, 10_000) => (
                 0x0554_149c_f309_e6ce,
                 0xc78b_7b06_64e6_f5a8,
-                0x6ad7_6ede_b73d_bbdb,
+                0x8530_c4c8_11ba_e154,
             ),
             (Ladder::Chain, 1) | (Ladder::Fanout, 1) => (
                 0x6a06_790f_bc13_37bd,
                 0xe10d_a8c2_67f6_0616,
-                0xc9c2_ece5_e620_7867,
+                0x784a_8103_0f60_fafd,
             ),
             (Ladder::Chain, 10) => (
                 0xe6e1_0cc1_2755_8f99,
                 0x471d_b684_3140_01fe,
-                0x8a2c_2e80_eab4_193c,
+                0x6f73_40ef_35f3_6d59,
             ),
             (Ladder::Chain, 100) => (
                 0x3953_b454_10da_73b7,
                 0x8419_f106_b33c_76d0,
-                0x50d9_fedc_a303_c57f,
+                0x1a5d_88ae_6973_9dc4,
             ),
             (Ladder::Chain, 1_000) => (
                 0x5e94_64ea_140c_5b57,
                 0xcc7e_6367_42c1_c33d,
-                0xe6b9_7295_4665_6269,
+                0x8649_f5cd_40de_4661,
             ),
             (Ladder::Fanout, 10) => (
                 0x0a28_1e1f_4f83_d9a8,
                 0xda26_9a8b_ba2d_5d34,
-                0xb007_3103_3276_14f5,
+                0xa909_e3a5_960b_d024,
             ),
             (Ladder::Fanout, 100) => (
                 0xe73f_8894_acf9_9c63,
                 0x520f_ca0b_5739_4374,
-                0x3500_aa14_82d3_5fcd,
+                0x7325_e03c_d193_10d6,
             ),
             (Ladder::Fanout, 1_000) => (
                 0x68e8_6a3e_a2a4_27bb,
                 0x3eba_19f1_6511_4864,
-                0xe814_f105_1234_775c,
+                0x7d75_7fc1_02e4_fad4,
             ),
             (Ladder::Rollback, 1) => (
                 0x5c41_4503_e372_ce9b,
                 0xa007_3203_cc9c_feb4,
-                0xc4cb_e324_74e6_5e74,
+                0x35e5_7adf_6f05_ec97,
             ),
             (Ladder::Rollback, 10) => (
                 0x5c41_4503_e372_ce9b,
                 0xa007_3203_cc9c_feb4,
-                0x0d41_a599_8403_c0b3,
+                0x8c7a_4a48_5304_3275,
             ),
             (Ladder::Rollback, 100) => (
                 0x5c41_4503_e372_ce9b,
                 0xa007_3203_cc9c_feb4,
-                0x0158_a68e_d000_497d,
+                0x6342_3822_272c_a3c9,
             ),
             (Ladder::Rollback, 1_000) => (
                 0x5c41_4503_e372_ce9b,
                 0xa007_3203_cc9c_feb4,
-                0xf4b5_db24_7d34_b4c5,
+                0x4aa3_39fb_918d_ac1a,
             ),
             _ => (0, 0, 0),
         };
@@ -416,16 +416,10 @@ impl GraphBuildResult {
 
 /// Verify exact counters and reviewed digests before accepting a sample.
 pub fn verify(case: GraphBuildCase, result: GraphBuildResult) {
-    let (nodes, edges, registered_nodes, registered_edges, rebuilds) = match case.ladder {
-        Ladder::Independent => (case.scale, 0, case.scale, 0, case.scale),
-        Ladder::Chain | Ladder::Fanout => (
-            case.scale + 1,
-            case.scale,
-            case.scale + 1,
-            case.scale,
-            case.scale + 1,
-        ),
-        Ladder::Rollback => (1, 0, case.scale, case.scale, case.scale),
+    let (nodes, edges, registered_nodes, registered_edges) = match case.ladder {
+        Ladder::Independent => (case.scale, 0, case.scale, 0),
+        Ladder::Chain | Ladder::Fanout => (case.scale + 1, case.scale, case.scale + 1, case.scale),
+        Ladder::Rollback => (1, 0, case.scale, case.scale),
     };
     assert_eq!(result.nodes, nodes);
     assert_eq!(result.dependency_edges, edges);
@@ -435,7 +429,7 @@ pub fn verify(case: GraphBuildCase, result: GraphBuildResult) {
         result.reverse_index_updates,
         registered_nodes + registered_edges
     );
-    assert_eq!(result.full_order_rebuilds, rebuilds);
+    assert_eq!(result.full_order_rebuilds, 0);
     assert!(result.stable_order);
     assert_eq!(result.rejected, case.ladder == Ladder::Rollback);
     assert_eq!(result.rolled_back, case.ladder == Ladder::Rollback);
@@ -689,18 +683,13 @@ mod tests {
                 .copied()
                 .find(|entry| entry["path"] == case.path)
                 .expect("Rust Q2a case must be registered");
-            let (nodes, dependency_edges, registered_nodes, registered_edges, rebuilds) =
-                match case.ladder {
-                    Ladder::Independent => (case.scale, 0, case.scale, 0, case.scale),
-                    Ladder::Chain | Ladder::Fanout => (
-                        case.scale + 1,
-                        case.scale,
-                        case.scale + 1,
-                        case.scale,
-                        case.scale + 1,
-                    ),
-                    Ladder::Rollback => (1, 0, case.scale, case.scale, case.scale),
-                };
+            let (nodes, dependency_edges, registered_nodes, registered_edges) = match case.ladder {
+                Ladder::Independent => (case.scale, 0, case.scale, 0),
+                Ladder::Chain | Ladder::Fanout => {
+                    (case.scale + 1, case.scale, case.scale + 1, case.scale)
+                }
+                Ladder::Rollback => (1, 0, case.scale, case.scale),
+            };
             let counters = &entry["expected_result_counters"];
             assert_eq!(entry["fixture_version"], FIXTURE_VERSION);
             assert_eq!(entry["deterministic_seed"], FIXTURE_SEED);
@@ -712,7 +701,7 @@ mod tests {
                 counters["reverse_index_updates"],
                 registered_nodes + registered_edges
             );
-            assert_eq!(counters["full_order_rebuilds"], rebuilds);
+            assert_eq!(counters["full_order_rebuilds"], 0);
             assert_eq!(counters["stable_order"], true);
             assert_eq!(
                 counters["graph_digest"],

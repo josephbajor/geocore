@@ -241,6 +241,36 @@ fn offset_insertion_and_cycle_replacement_are_failure_atomic() {
 }
 
 #[test]
+fn equivalent_replacement_preserves_dependent_insertion_order() {
+    let mut graph = GeometryGraph::new();
+    let basis = graph.insert_surface(Plane::new(Frame::world())).unwrap();
+    let first = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(basis, 1.0))
+        .unwrap();
+    let second = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(basis, 2.0))
+        .unwrap();
+    assert_eq!(
+        graph.dependents(GeometryRef::Surface(basis)).unwrap(),
+        vec![GeometryRef::Surface(first), GeometryRef::Surface(second)]
+    );
+
+    graph
+        .replace_surface(first, OffsetSurfaceDescriptor::new(basis, 1.5))
+        .unwrap();
+    assert_eq!(
+        graph.dependents(GeometryRef::Surface(basis)).unwrap(),
+        vec![GeometryRef::Surface(first), GeometryRef::Surface(second)]
+    );
+    graph.remove_surface(first).unwrap();
+    assert_eq!(
+        graph.dependents(GeometryRef::Surface(basis)).unwrap(),
+        vec![GeometryRef::Surface(second)]
+    );
+    graph.validate().unwrap();
+}
+
+#[test]
 fn nested_offsets_charge_every_dependency_visit() {
     let mut graph = GeometryGraph::new();
     let basis = graph.insert_surface(Plane::new(Frame::world())).unwrap();

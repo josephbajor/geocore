@@ -6,6 +6,7 @@ use crate::descriptor::{
 use crate::error::{GeometryGraphError, GeometryGraphResult};
 use kcore::arena::{Arena, ArenaChange, Handle};
 use kcore::error::Result as CoreResult;
+use std::collections::{HashMap, HashSet};
 
 /// Immutable 3D curve node. The descriptor is the node payload itself so
 /// topology's historical geometry-enum names can remain source compatible.
@@ -35,9 +36,21 @@ pub enum GeometryRef {
     Curve2d(Curve2dHandle),
 }
 
+#[derive(Debug, Clone)]
+struct ReverseDependencyEntry {
+    geometry: GeometryRef,
+    dependents: Vec<GeometryRef>,
+}
+
+// Observable dependent order lives only in `dependents`. Hash storage is used
+// strictly for identity lookup/membership and is never iterated to produce a
+// result, so randomized hash seeds cannot affect kernel determinism.
 #[derive(Debug, Clone, Default)]
 struct ReverseDependencyIndex {
-    entries: Vec<(GeometryRef, Vec<GeometryRef>)>,
+    entries: Vec<Option<ReverseDependencyEntry>>,
+    free_entries: Vec<usize>,
+    lookup: HashMap<GeometryRef, usize>,
+    membership: HashSet<(GeometryRef, GeometryRef)>,
 }
 
 /// Read-only construction counters for the isolated benchmark package.
@@ -83,42 +96,131 @@ impl GraphBuildObservation {
 
 impl ReverseDependencyIndex {
     fn register(&mut self, geometry: GeometryRef) {
-        self.entries.push((geometry, Vec::new()));
+        assert!(
+            !self.lookup.contains_key(&geometry),
+            "geometry registered exactly once"
+        );
+        let entry = ReverseDependencyEntry {
+            geometry,
+            dependents: Vec::new(),
+        };
+        let index = if let Some(index) = self.free_entries.pop() {
+            assert!(
+                self.entries[index].is_none(),
+                "free reverse-index slot is empty"
+            );
+            self.entries[index] = Some(entry);
+            index
+        } else {
+            let index = self.entries.len();
+            self.entries.push(Some(entry));
+            index
+        };
+        self.lookup.insert(geometry, index);
     }
 
     fn unregister(&mut self, geometry: GeometryRef) {
-        self.entries.retain(|(candidate, _)| *candidate != geometry);
-        for (_, dependents) in &mut self.entries {
-            dependents.retain(|candidate| *candidate != geometry);
+        if let Some(index) = self.lookup.remove(&geometry) {
+            let removed = self.entries[index].take();
+            debug_assert_eq!(removed.as_ref().map(|entry| entry.geometry), Some(geometry));
+            debug_assert!(
+                removed
+                    .as_ref()
+                    .is_none_or(|entry| entry.dependents.is_empty()),
+                "a geometry key is unregistered only after its dependents are gone"
+            );
+            debug_assert!(
+                !self.membership.iter().any(|(dependency, dependent)| {
+                    *dependency == geometry || *dependent == geometry
+                }),
+                "all reverse edges are detached before key removal"
+            );
+            self.free_entries.push(index);
         }
     }
 
     fn add(&mut self, dependency: GeometryRef, dependent: GeometryRef) {
-        if let Some((_, values)) = self.entries.iter_mut().find(|(key, _)| *key == dependency)
-            && !values.contains(&dependent)
+        if self.entry(dependency).is_some()
+            && self.membership.insert((dependency, dependent))
+            && let Some(entry) = self.entry_mut(dependency)
         {
-            values.push(dependent);
+            entry.dependents.push(dependent);
         }
     }
 
     fn remove_dependent(&mut self, dependency: GeometryRef, dependent: GeometryRef) {
-        if let Some((_, values)) = self.entries.iter_mut().find(|(key, _)| *key == dependency) {
-            values.retain(|candidate| *candidate != dependent);
+        if self.membership.remove(&(dependency, dependent))
+            && let Some(entry) = self.entry_mut(dependency)
+        {
+            entry.dependents.retain(|candidate| *candidate != dependent);
         }
     }
 
     fn dependents(&self, geometry: GeometryRef) -> &[GeometryRef] {
-        self.entries
-            .iter()
-            .find(|(key, _)| *key == geometry)
-            .map_or(&[], |(_, values)| values.as_slice())
+        self.entry(geometry)
+            .map_or(&[], |entry| entry.dependents.as_slice())
     }
 
     fn key_count(&self, geometry: GeometryRef) -> usize {
+        usize::from(self.entry(geometry).is_some())
+    }
+
+    fn entry(&self, geometry: GeometryRef) -> Option<&ReverseDependencyEntry> {
+        let index = *self.lookup.get(&geometry)?;
         self.entries
-            .iter()
-            .filter(|(candidate, _)| *candidate == geometry)
-            .count()
+            .get(index)?
+            .as_ref()
+            .filter(|entry| entry.geometry == geometry)
+    }
+
+    fn entry_mut(&mut self, geometry: GeometryRef) -> Option<&mut ReverseDependencyEntry> {
+        let index = *self.lookup.get(&geometry)?;
+        self.entries
+            .get_mut(index)?
+            .as_mut()
+            .filter(|entry| entry.geometry == geometry)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (GeometryRef, &[GeometryRef])> {
+        self.entries.iter().filter_map(|entry| {
+            entry
+                .as_ref()
+                .map(|entry| (entry.geometry, entry.dependents.as_slice()))
+        })
+    }
+
+    fn structure_mismatch(&self) -> Option<GeometryRef> {
+        let mut seen = HashSet::with_capacity(self.lookup.len());
+        let mut seen_free = HashSet::with_capacity(self.free_entries.len());
+        for &index in &self.free_entries {
+            if index >= self.entries.len()
+                || self.entries[index].is_some()
+                || !seen_free.insert(index)
+            {
+                return self.iter().next().map(|(geometry, _)| geometry);
+            }
+        }
+        let mut dependency_edges = 0usize;
+        for (index, entry) in self.entries.iter().enumerate() {
+            let Some(entry) = entry else {
+                continue;
+            };
+            if self.lookup.get(&entry.geometry) != Some(&index)
+                || !seen.insert(entry.geometry)
+                || entry
+                    .dependents
+                    .iter()
+                    .any(|dependent| !self.membership.contains(&(entry.geometry, *dependent)))
+            {
+                return Some(entry.geometry);
+            }
+            dependency_edges += entry.dependents.len();
+        }
+        (seen.len() != self.lookup.len()
+            || dependency_edges != self.membership.len()
+            || seen.len() + seen_free.len() != self.entries.len())
+        .then(|| self.iter().next().map(|(geometry, _)| geometry))
+        .flatten()
     }
 }
 
@@ -442,6 +544,9 @@ impl GeometryGraph {
 
     /// Check descriptor invariants, dependency liveness/cycles, and reverse-index agreement.
     pub fn validate(&self) -> GeometryGraphResult<()> {
+        if let Some(geometry) = self.reverse_dependencies.structure_mismatch() {
+            return Err(GeometryGraphError::ReverseDependencyMismatch { geometry });
+        }
         for geometry in self.geometry() {
             if self.reverse_dependencies.key_count(geometry) != 1 {
                 return Err(GeometryGraphError::ReverseDependencyMismatch { geometry });
@@ -472,11 +577,9 @@ impl GeometryGraph {
                 }
             }
         }
-        for (geometry, _) in &self.reverse_dependencies.entries {
-            if !self.contains(*geometry) {
-                return Err(GeometryGraphError::ReverseDependencyMismatch {
-                    geometry: *geometry,
-                });
+        for (geometry, _) in self.reverse_dependencies.iter() {
+            if !self.contains(geometry) {
+                return Err(GeometryGraphError::ReverseDependencyMismatch { geometry });
             }
         }
         for geometry in self.geometry() {
@@ -502,23 +605,6 @@ impl GeometryGraph {
                 self.benchmark_observation.registered_dependency_edges += 1;
             }
         }
-        self.sort_reverse_dependents();
-    }
-
-    fn sort_reverse_dependents(&mut self) {
-        #[cfg(feature = "benchmark-internals")]
-        {
-            self.benchmark_observation.full_order_rebuilds += 1;
-        }
-        let order: Vec<_> = self.geometry().collect();
-        for (_, dependents) in &mut self.reverse_dependencies.entries {
-            dependents.sort_by_key(|dependent| {
-                order
-                    .iter()
-                    .position(|candidate| candidate == dependent)
-                    .unwrap_or(usize::MAX)
-            });
-        }
     }
 
     fn prepare_replacement(
@@ -538,14 +624,17 @@ impl GeometryGraph {
             }
         }
         let old_dependencies = self.direct_dependencies(geometry)?;
-        for dependency in old_dependencies {
-            self.reverse_dependencies
-                .remove_dependent(dependency, geometry);
+        for &dependency in &old_dependencies {
+            if !new_dependencies.contains(&dependency) {
+                self.reverse_dependencies
+                    .remove_dependent(dependency, geometry);
+            }
         }
         for &dependency in new_dependencies {
-            self.reverse_dependencies.add(dependency, geometry);
+            if !old_dependencies.contains(&dependency) {
+                self.reverse_dependencies.add(dependency, geometry);
+            }
         }
-        self.sort_reverse_dependents();
         Ok(())
     }
 
@@ -671,6 +760,10 @@ impl GeometryGraph {
                 dependents,
             });
         }
+        for dependency in self.direct_dependencies(geometry)? {
+            self.reverse_dependencies
+                .remove_dependent(dependency, geometry);
+        }
         self.reverse_dependencies.unregister(geometry);
         Ok(())
     }
@@ -779,6 +872,49 @@ mod tests {
     use kgeom::vec::Vec3;
 
     #[test]
+    fn reverse_index_preserves_insertion_order_and_audits_membership() {
+        let mut graph = GeometryGraph::new();
+        let basis = GeometryRef::Curve(
+            graph
+                .insert_curve(Line::new(Vec3::default(), Vec3::new(1.0, 0.0, 0.0)).unwrap())
+                .unwrap(),
+        );
+        let first = GeometryRef::Curve(
+            graph
+                .insert_curve(
+                    Line::new(Vec3::new(0.0, 1.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+                )
+                .unwrap(),
+        );
+        let second = GeometryRef::Curve(
+            graph
+                .insert_curve(
+                    Line::new(Vec3::new(0.0, 2.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+                )
+                .unwrap(),
+        );
+        let mut index = ReverseDependencyIndex::default();
+        for geometry in [basis, first, second] {
+            index.register(geometry);
+        }
+        index.add(basis, first);
+        index.add(basis, second);
+        index.add(basis, first);
+        assert_eq!(index.dependents(basis), &[first, second]);
+        assert_eq!(index.structure_mismatch(), None);
+
+        index.remove_dependent(basis, second);
+        index.unregister(second);
+        let entry_slots = index.entries.len();
+        index.register(second);
+        assert_eq!(index.entries.len(), entry_slots);
+        assert_eq!(index.structure_mismatch(), None);
+
+        index.membership.remove(&(basis, first));
+        assert_eq!(index.structure_mismatch(), Some(basis));
+    }
+
+    #[test]
     fn removal_reports_live_graph_dependents_without_mutation() {
         let mut graph = GeometryGraph::new();
         let basis = graph
@@ -811,7 +947,7 @@ mod tests {
             GraphBuildObservation {
                 registered_nodes: 1,
                 registered_dependency_edges: 0,
-                full_order_rebuilds: 1,
+                full_order_rebuilds: 0,
             }
         );
 
@@ -830,7 +966,7 @@ mod tests {
             GraphBuildObservation {
                 registered_nodes: 1,
                 registered_dependency_edges: 1,
-                full_order_rebuilds: 1,
+                full_order_rebuilds: 0,
             },
             "read-only counters report attempted work and are not graph state"
         );

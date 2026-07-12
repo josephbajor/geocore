@@ -78,6 +78,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
         self.assertTrue(
             all(
                 case["expected_result_counters"]["stable_order"]
+                and case["expected_result_counters"]["full_order_rebuilds"] == 0
                 and "graph_digest" in case["expected_result_counters"]
                 and "reverse_index_digest" in case["expected_result_counters"]
                 for case in graph_build

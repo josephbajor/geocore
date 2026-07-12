@@ -204,7 +204,7 @@ rejected-edit case protects failure atomicity, not merely throughput.
 Owner: `kgraph`, with `ktopo` integration cases.
 
 Status: implemented as 17 registered, CI-compiled cases with one bounded smoke
-case. The diamond row is deliberately deferred because every current
+case, and used to land the reverse-index replacement. The diamond row is deliberately deferred because every current
 procedural descriptor reports at most one dependency; a benchmark-only fake
 descriptor would not measure the production graph.
 
@@ -233,7 +233,12 @@ observation snapshot; it exposes no mutable index representation. Stable graph
 and reverse-index digests, exact dependent order, graph validation, and
 rollback pre/post equality are checked outside every accumulated duration.
 Geometry evaluation is not called by this target. The registered scale ladders
-are complete for independent nodes, chains, fanout, and rollback.
+are complete for independent nodes, chains, fanout, and rollback. The
+replacement uses insertion-ordered adjacency vectors with hash-backed key and
+membership lookup that is never iterated for observable output. All 17 rows
+preserve graph/reverse-index digests and now pin zero full-order rebuilds.
+Removed entry slots are reused deterministically instead of accumulating
+tombstones. Traversal visited/path vectors remain a separate measured optimization.
 
 ## Stage Q3 — body tessellation ladder
 
