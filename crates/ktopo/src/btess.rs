@@ -69,6 +69,8 @@ use kgeom::tess::{
 };
 use kgeom::vec::{Point3, Vec2};
 use kgraph::{EvalContext, EvalResult};
+use std::collections::HashSet;
+use std::hash::Hash;
 mod error;
 mod offset;
 mod policy;
@@ -91,6 +93,7 @@ pub use policy::{
     BODY_TESSELLATION_MESH_VERTICES, BODY_TESSELLATION_PREPARED_PATCH_ITEM_LIMIT_REACHED,
     BODY_TESSELLATION_PREPARED_PATCH_ITEMS, BODY_TESSELLATION_RETAINED_TRIANGLE_LIMIT_REACHED,
     BODY_TESSELLATION_RETAINED_TRIANGLES, BODY_TESSELLATION_SPLIT_LIMIT,
+    BODY_TESSELLATION_STRUCTURAL_ITEM_LIMIT_REACHED, BODY_TESSELLATION_STRUCTURAL_ITEMS,
     BODY_TESSELLATION_TOTAL_WORK_LIMIT_REACHED, BodyTessellationBudgetProfile,
 };
 
@@ -303,6 +306,15 @@ impl BodyTessellationWork<'_, '_, '_> {
         )
     }
 
+    fn admit_structural_items(&mut self, amount: usize) -> Result<()> {
+        self.charge_items(
+            BODY_TESSELLATION_STRUCTURAL_ITEMS,
+            amount,
+            BODY_TESSELLATION_STRUCTURAL_ITEM_LIMIT_REACHED,
+            "whole-body tessellation structural item limit reached",
+        )
+    }
+
     fn preflight_items(
         &mut self,
         stage: StageId,
@@ -348,6 +360,15 @@ impl BodyTessellationWork<'_, '_, '_> {
             amount,
             BODY_TESSELLATION_EDGE_STORAGE_ITEM_LIMIT_REACHED,
             "whole-body tessellation edge-storage item limit reached",
+        )
+    }
+
+    fn preflight_structural_items(&mut self, amount: usize) -> Result<()> {
+        self.preflight_items(
+            BODY_TESSELLATION_STRUCTURAL_ITEMS,
+            amount,
+            BODY_TESSELLATION_STRUCTURAL_ITEM_LIMIT_REACHED,
+            "whole-body tessellation structural item limit reached",
         )
     }
 
@@ -533,6 +554,98 @@ fn checked_item_sum(stage: StageId, values: impl IntoIterator<Item = usize>) -> 
     values.into_iter().try_fold(0_usize, |total, value| {
         checked_item_add(stage, total, value)
     })
+}
+
+fn structural_capacity_error() -> TessellationError {
+    Error::from(OperationPolicyError::AccountingOverflow {
+        stage: BODY_TESSELLATION_STRUCTURAL_ITEMS,
+        resource: ResourceKind::Items,
+    })
+    .into()
+}
+
+/// Allocate exactly the prospective structural holder capacity after policy,
+/// arithmetic, and physical-capacity admission. The returned vector's slots
+/// are already charged; filling or moving those holders does not recharge them.
+fn structural_vec<T>(count: usize, work: &mut BodyTessellationWork<'_, '_, '_>) -> Result<Vec<T>> {
+    checked_vec_capacity::<T>(BODY_TESSELLATION_STRUCTURAL_ITEMS, count)?;
+    work.preflight_structural_items(count)?;
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(count)
+        .map_err(|_| structural_capacity_error())?;
+    work.admit_structural_items(count)?;
+    Ok(output)
+}
+
+fn structural_singleton<T>(item: T, work: &mut BodyTessellationWork<'_, '_, '_>) -> Result<Vec<T>> {
+    let mut output = structural_vec(1, work)?;
+    output.push(item);
+    Ok(output)
+}
+
+fn structural_vec_pair<A, B>(
+    count: usize,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
+) -> Result<(Vec<A>, Vec<B>)> {
+    checked_vec_capacity::<A>(BODY_TESSELLATION_STRUCTURAL_ITEMS, count)?;
+    checked_vec_capacity::<B>(BODY_TESSELLATION_STRUCTURAL_ITEMS, count)?;
+    let total = checked_item_add(BODY_TESSELLATION_STRUCTURAL_ITEMS, count, count)?;
+    work.preflight_structural_items(total)?;
+    let mut first = Vec::new();
+    let mut second = Vec::new();
+    first
+        .try_reserve_exact(count)
+        .map_err(|_| structural_capacity_error())?;
+    second
+        .try_reserve_exact(count)
+        .map_err(|_| structural_capacity_error())?;
+    work.admit_structural_items(total)?;
+    Ok((first, second))
+}
+
+/// Append one structural holder after admitting both its exact prospective
+/// length and any physical growth that the destination needs.
+fn push_structural_item<T>(
+    destination: &mut Vec<T>,
+    item: T,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
+) -> Result<()> {
+    let expected = checked_item_add(BODY_TESSELLATION_STRUCTURAL_ITEMS, destination.len(), 1)?;
+    checked_vec_capacity::<T>(BODY_TESSELLATION_STRUCTURAL_ITEMS, expected)?;
+    work.preflight_structural_items(1)?;
+    destination
+        .try_reserve(1)
+        .map_err(|_| structural_capacity_error())?;
+    work.admit_structural_items(1)?;
+    destination.push(item);
+    debug_assert_eq!(destination.len(), expected);
+    Ok(())
+}
+
+fn push_first_seen<T: Copy + Eq + Hash>(
+    seen: &mut HashSet<T>,
+    destination: &mut Vec<T>,
+    item: T,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
+) -> Result<()> {
+    if seen.contains(&item) {
+        return Ok(());
+    }
+    let expected = checked_item_add(BODY_TESSELLATION_STRUCTURAL_ITEMS, destination.len(), 1)?;
+    checked_vec_capacity::<T>(BODY_TESSELLATION_STRUCTURAL_ITEMS, expected)?;
+    work.preflight_structural_items(2)?;
+    seen.try_reserve(1)
+        .map_err(|_| structural_capacity_error())?;
+    destination
+        .try_reserve(1)
+        .map_err(|_| structural_capacity_error())?;
+    work.admit_structural_items(2)?;
+    let inserted = seen.insert(item);
+    debug_assert!(inserted);
+    destination.push(item);
+    debug_assert_eq!(destination.len(), expected);
+    Ok(())
 }
 
 /// Materialize one edge-storage sequence slot after proving its exact
@@ -873,6 +986,9 @@ fn refine_uv_seg(
     };
     let m = (mid_uv, mid_p);
     refine_uv_seg(s, a, m, ctx, next_depth, out, work)?;
+    // This scratch retains exactly one item per accepted iso split. The Work
+    // charge above is its pre-mutation allocation admission; prepared-patch
+    // accounting begins only when these points are copied into an Arc.
     out.push(m);
     refine_uv_seg(s, m, b, ctx, next_depth, out, work)
 }
@@ -880,6 +996,36 @@ fn refine_uv_seg(
 /// An iso/seam arc: UV points with their global vertex ids, endpoints
 /// included.
 type Arc = Vec<(Vec2, u32)>;
+type ArcGrid = Vec<Vec<Arc>>;
+
+fn torus_arc_holder_grids(
+    work: &mut BodyTessellationWork<'_, '_, '_>,
+) -> Result<(ArcGrid, ArcGrid)> {
+    const GRID: usize = 2;
+    const HOLDER_ITEMS: usize = 12; // four row-holder slots + eight Arc-holder slots
+    checked_vec_capacity::<Vec<Arc>>(BODY_TESSELLATION_STRUCTURAL_ITEMS, GRID)?;
+    checked_vec_capacity::<Arc>(BODY_TESSELLATION_STRUCTURAL_ITEMS, GRID)?;
+    work.preflight_structural_items(HOLDER_ITEMS)?;
+
+    let mut au = Vec::new();
+    let mut av = Vec::new();
+    au.try_reserve_exact(GRID)
+        .map_err(|_| structural_capacity_error())?;
+    av.try_reserve_exact(GRID)
+        .map_err(|_| structural_capacity_error())?;
+    let mut rows = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    for row in &mut rows {
+        row.try_reserve_exact(GRID)
+            .map_err(|_| structural_capacity_error())?;
+    }
+    work.admit_structural_items(HOLDER_ITEMS)?;
+    let [au0, au1, av0, av1] = rows;
+    au.push(au0);
+    au.push(au1);
+    av.push(av0);
+    av.push(av1);
+    Ok((au, av))
+}
 
 fn collect_prepared_arc(
     count: usize,
@@ -1085,6 +1231,76 @@ struct EdgeLine {
 
 /// The discretized edges of a body, parallel to [`Store::edges_of_body`].
 type EdgeLines = Vec<EdgeLine>;
+
+/// One admitted body traversal shared by all tessellation phases. The vectors
+/// preserve the legacy first-seen orders while deterministic membership sets
+/// remove the former repeated enumeration and quadratic `Vec::contains`
+/// searches.
+struct BodyTopologyPlan {
+    faces: Vec<FaceId>,
+    edges: Vec<EdgeId>,
+    vertices: Vec<VertexId>,
+}
+
+fn body_topology_plan(
+    store: &Store,
+    body: BodyId,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
+) -> Result<BodyTopologyPlan> {
+    let body_entity = store.get(body)?;
+    let mut faces = Vec::new();
+    for &region in &body_entity.regions {
+        for &shell in &store.get(region)?.shells {
+            for &face in &store.get(shell)?.faces {
+                push_structural_item(&mut faces, face, work)?;
+            }
+        }
+    }
+    if faces.is_empty() {
+        return Err(Error::InvalidGeometry {
+            reason: "body has no faces to tessellate",
+        }
+        .into());
+    }
+
+    let mut edges = Vec::new();
+    let mut edge_seen = HashSet::new();
+    for &face in &faces {
+        for &lp in &store.get(face)?.loops {
+            for &fin in &store.get(lp)?.fins {
+                push_first_seen(&mut edge_seen, &mut edges, store.get(fin)?.edge, work)?;
+            }
+        }
+    }
+    for &region in &body_entity.regions {
+        for &shell in &store.get(region)?.shells {
+            for &edge in &store.get(shell)?.edges {
+                push_first_seen(&mut edge_seen, &mut edges, edge, work)?;
+            }
+        }
+    }
+
+    let mut vertices = Vec::new();
+    let mut vertex_seen = HashSet::new();
+    for &edge in &edges {
+        for vertex in store.get(edge)?.vertices.into_iter().flatten() {
+            push_first_seen(&mut vertex_seen, &mut vertices, vertex, work)?;
+        }
+    }
+    for &region in &body_entity.regions {
+        for &shell in &store.get(region)?.shells {
+            if let Some(vertex) = store.get(shell)?.vertex {
+                push_first_seen(&mut vertex_seen, &mut vertices, vertex, work)?;
+            }
+        }
+    }
+
+    Ok(BodyTopologyPlan {
+        faces,
+        edges,
+        vertices,
+    })
+}
 
 fn find_eline(elines: &EdgeLines, edge: EdgeId) -> Result<&EdgeLine> {
     elines
@@ -1553,7 +1769,7 @@ fn run_kgeom(
     opts: &TessOptions,
     work: &mut BodyTessellationWork<'_, '_, '_>,
 ) -> Result<Vec<[u32; 3]>> {
-    let mut trim_loops = Vec::with_capacity(loops_pts.len());
+    let mut trim_loops = structural_vec(loops_pts.len(), work)?;
     for pts in loops_pts {
         let cleaned_items = TrimLoop::cleaned_point_count(&pts)?;
         checked_vec_capacity::<Vec2>(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, cleaned_items)?;
@@ -1692,8 +1908,8 @@ fn face_case_a(
     let mean_v = |c: &UvChain| c.uvs.iter().map(|p| p.y).sum::<f64>() / c.uvs.len() as f64;
     let (ou, ov) = (mean_u(&chains[outer_idx]), mean_v(&chains[outer_idx]));
 
-    let mut loops_pts: Vec<Vec<Vec2>> = Vec::with_capacity(chains.len());
-    let mut loops_ids: Vec<Vec<u32>> = Vec::with_capacity(chains.len());
+    let (mut loops_pts, mut loops_ids): (Vec<Vec<Vec2>>, Vec<Vec<u32>>) =
+        structural_vec_pair(chains.len(), work)?;
     let order = core::iter::once(outer_idx).chain((0..chains.len()).filter(|&i| i != outer_idx));
     for i in order {
         let c = &chains[i];
@@ -1745,7 +1961,7 @@ fn face_case_b(
         match c.winding {
             [1, 0] if bottom.is_none() => bottom = Some(c),
             [-1, 0] if top.is_none() => top = Some(c),
-            [0, 0] => holes.push(c),
+            [0, 0] => push_structural_item(&mut holes, c, work)?,
             _ => {
                 return Err(Error::InvalidGeometry {
                     reason: "unsupported loop winding configuration on periodic face",
@@ -1838,8 +2054,10 @@ fn face_case_b(
     debug_assert_eq!(pts.len(), patch_items);
     debug_assert_eq!(ids.len(), patch_items);
 
-    let mut loops_pts = vec![pts];
-    let mut loops_ids = vec![ids];
+    let loop_count = checked_item_add(BODY_TESSELLATION_STRUCTURAL_ITEMS, holes.len(), 1)?;
+    let (mut loops_pts, mut loops_ids) = structural_vec_pair(loop_count, work)?;
+    loops_pts.push(pts);
+    loops_ids.push(ids);
     let bu = bottom.uvs.iter().map(|p| p.x).sum::<f64>() / bottom.uvs.len() as f64;
     for h in holes {
         let hu = h.uvs.iter().map(|p| p.x).sum::<f64>() / h.uvs.len() as f64;
@@ -2085,14 +2303,16 @@ fn face_case_cap(
         }
         let hu = hu + hs;
         let first = if w > 0 { hu <= u_split } else { hu >= u_split };
-        patch_holes[if first { 0 } else { 1 }].push(h);
+        push_structural_item(&mut patch_holes[if first { 0 } else { 1 }], h, work)?;
     }
 
     let mut tris = Vec::new();
     for (patch, holes) in patches.iter().zip(patch_holes) {
         let (pts, ids) = patch_polygon(&patch.bottom, &patch.right, &patch.top, &patch.left, work)?;
-        let mut loops_pts = vec![pts];
-        let mut loops_ids = vec![ids];
+        let loop_count = checked_item_add(BODY_TESSELLATION_STRUCTURAL_ITEMS, holes.len(), 1)?;
+        let (mut loops_pts, mut loops_ids) = structural_vec_pair(loop_count, work)?;
+        loops_pts.push(pts);
+        loops_ids.push(ids);
         for h in holes {
             loops_pts.push(h.uvs);
             loops_ids.push(h.ids);
@@ -2237,8 +2457,10 @@ fn face_case_bipolar_sphere(
         patch_polygon(&patch.bottom, &patch.right, &patch.top, &patch.left, work)?;
 
     let center_u = outer_pts.iter().map(|uv| uv.x).sum::<f64>() / outer_pts.len() as f64;
-    let mut loops_pts = vec![outer_pts];
-    let mut loops_ids = vec![outer_ids];
+    let loop_count = checked_item_add(BODY_TESSELLATION_STRUCTURAL_ITEMS, holes.len(), 1)?;
+    let (mut loops_pts, mut loops_ids) = structural_vec_pair(loop_count, work)?;
+    loops_pts.push(outer_pts);
+    loops_ids.push(outer_ids);
     for h in holes {
         let hu = h.uvs.iter().map(|uv| uv.x).sum::<f64>() / h.uvs.len() as f64;
         let hs = tau * ((center_u - hu) / tau).round();
@@ -2348,7 +2570,8 @@ fn face_case_c(
                 let bottom = uniform_prepared_arc(u_lo, u_lo + pi, -half, g_s, n, work)?;
                 let top = uniform_prepared_arc(u_lo, u_lo + pi, half, g_n, n, work)?;
                 let (pts, ids) = patch_polygon(&bottom, right, &top, left, work)?;
-                let patch_triangles = run_kgeom(s, vec![pts], &[ids], flip, acc, opts, work)?;
+                let loops_pts = structural_singleton(pts, work)?;
+                let patch_triangles = run_kgeom(s, loops_pts, &[ids], flip, acc, opts, work)?;
                 extend_admitted_triangles(&mut tris, patch_triangles)?;
             }
         }
@@ -2367,21 +2590,16 @@ fn face_case_c(
                 (Vec2::new(u, v), g[i % 2][j % 2])
             };
             // u-arcs au[i][j]: (u_i → u_{i+1}) at v_j; v-arcs av[j][i].
-            let mut au = Vec::new();
-            let mut av = Vec::new();
-            for i in 0..2 {
-                let mut row = Vec::new();
+            let (mut au, mut av) = torus_arc_holder_grids(work)?;
+            for (i, row) in au.iter_mut().enumerate() {
                 for j in 0..2 {
                     row.push(iso_arc(s, at(i, j), at(i + 1, j), acc, ctx, work)?);
                 }
-                au.push(row);
             }
-            for j in 0..2 {
-                let mut col = Vec::new();
+            for (j, col) in av.iter_mut().enumerate() {
                 for i in 0..2 {
                     col.push(iso_arc(s, at(i, j), at(i, j + 1), acc, ctx, work)?);
                 }
-                av.push(col);
             }
             for i in 0..2 {
                 for j in 0..2 {
@@ -2398,7 +2616,8 @@ fn face_case_c(
                     };
                     let left = &av[j][i];
                     let (pts, ids) = patch_polygon(bottom, &right, &top, left, work)?;
-                    let patch_triangles = run_kgeom(s, vec![pts], &[ids], flip, acc, opts, work)?;
+                    let loops_pts = structural_singleton(pts, work)?;
+                    let patch_triangles = run_kgeom(s, loops_pts, &[ids], flip, acc, opts, work)?;
                     extend_admitted_triangles(&mut tris, patch_triangles)?;
                 }
             }
@@ -2430,7 +2649,7 @@ fn tess_face(
     if face.loops.is_empty() {
         return face_case_c(sg, flip, acc, opts, ctx, work);
     }
-    let mut chains = Vec::with_capacity(face.loops.len());
+    let mut chains = structural_vec(face.loops.len(), work)?;
     let periods = surface_periodicity(store, face.surface, work)?;
     for &lp in &face.loops {
         let raw = loop_chain(
@@ -2571,34 +2790,27 @@ pub fn tessellate_body_in_scope(
         max_len: opts.max_edge_len.unwrap_or(f64::INFINITY) * MARGIN,
     };
 
-    let faces = store.faces_of_body(body)?;
-    if faces.is_empty() {
-        return Err(Error::InvalidGeometry {
-            reason: "body has no faces to tessellate",
-        }
-        .into());
-    }
-
     let mut acc = MeshAcc {
         positions: Vec::new(),
     };
     let mut work = BodyTessellationWork { scope };
+    let topology = body_topology_plan(store, body, &mut work)?;
     // One global vertex per topological vertex.
-    let mut vgids: Vec<(VertexId, u32)> = Vec::new();
-    for v in store.vertices_of_body(body)? {
+    let mut vgids: Vec<(VertexId, u32)> = structural_vec(topology.vertices.len(), &mut work)?;
+    for v in topology.vertices {
         let gid = acc.push(store.vertex_position(v)?, &mut work)?;
         vgids.push((v, gid));
     }
     // Every edge discretized exactly once.
     let mut elines: EdgeLines = Vec::new();
-    for e in store.edges_of_body(body)? {
+    for e in topology.edges {
         let line = discretize_edge(store, e, &vgids, &mut acc, ctx, &mut work)?;
         push_edge_storage_item(&mut elines, line, &mut work)?;
     }
     // Faces, assembled by index mapping.
     let mut triangles: Vec<[u32; 3]> = Vec::new();
-    let mut face_ranges = Vec::with_capacity(faces.len());
-    for face in faces {
+    let mut face_ranges = structural_vec(topology.faces.len(), &mut work)?;
+    for face in topology.faces {
         let start = triangles.len();
         let face_triangles = tess_face(store, &elines, &mut acc, face, opts, ctx, &mut work)?;
         extend_admitted_triangles(&mut triangles, face_triangles)?;
@@ -3059,6 +3271,7 @@ mod tests {
                     ResourceKind::Items,
                     12
                 ),
+                (BODY_TESSELLATION_STRUCTURAL_ITEMS, ResourceKind::Items, 84),
             ]
         );
         assert!(reports[0].limit_events().is_empty());
@@ -3232,6 +3445,10 @@ mod tests {
                 BODY_TESSELLATION_RETAINED_TRIANGLES,
                 BODY_TESSELLATION_RETAINED_TRIANGLE_LIMIT_REACHED,
             ),
+            (
+                BODY_TESSELLATION_STRUCTURAL_ITEMS,
+                BODY_TESSELLATION_STRUCTURAL_ITEM_LIMIT_REACHED,
+            ),
         ] {
             let exact = consumed(&baseline, stage);
             assert!(exact > 0);
@@ -3263,6 +3480,74 @@ mod tests {
             assert_eq!(denied.report().diagnostics().len(), 1);
             assert_eq!(denied.report().diagnostics()[0].code, diagnostic);
         }
+    }
+
+    #[test]
+    fn topology_plan_preserves_store_orders_and_accounts_membership_scratch() {
+        let mut store = Store::new();
+        let body = block(&mut store, &Frame::world(), [1.0, 2.0, 3.0]).unwrap();
+        let expected_faces = store.faces_of_body(body).unwrap();
+        let expected_edges = store.edges_of_body(body).unwrap();
+        let expected_vertices = store.vertices_of_body(body).unwrap();
+
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            BodyTessellationBudgetProfile::v1_defaults(),
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let mut scope = OperationScope::new(&context);
+        let plan = {
+            let mut work = BodyTessellationWork { scope: &mut scope };
+            body_topology_plan(&store, body, &mut work).unwrap()
+        };
+        assert_eq!(plan.faces, expected_faces);
+        assert_eq!(plan.edges, expected_edges);
+        assert_eq!(plan.vertices, expected_vertices);
+        let outcome = scope.finish_typed::<(), TessellationError>(Ok(()));
+        assert_eq!(
+            consumed(&outcome, BODY_TESSELLATION_STRUCTURAL_ITEMS),
+            46,
+            "6 face slots + 12 edge slots/nodes + 8 vertex slots/nodes"
+        );
+    }
+
+    #[test]
+    fn paired_structural_holders_reject_without_partial_usage() {
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            item_limit_plan(BODY_TESSELLATION_STRUCTURAL_ITEMS, 3),
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default())
+            .unwrap()
+            .with_diagnostics(DiagnosticLevel::Summary, 4);
+        let mut scope = OperationScope::new(&context);
+        let error = {
+            let mut work = BodyTessellationWork { scope: &mut scope };
+            structural_vec_pair::<Vec2, u32>(2, &mut work).unwrap_err()
+        };
+        let snapshot = LimitSnapshot {
+            stage: BODY_TESSELLATION_STRUCTURAL_ITEMS,
+            resource: ResourceKind::Items,
+            consumed: 4,
+            allowed: 3,
+        };
+        assert_eq!(
+            error,
+            TessellationError::Kernel(Error::ResourceLimit { snapshot })
+        );
+        let outcome = scope.finish_typed::<(), TessellationError>(Ok(()));
+        assert_eq!(consumed(&outcome, BODY_TESSELLATION_STRUCTURAL_ITEMS), 0);
+        assert_eq!(outcome.report().limit_events(), &[snapshot]);
+        assert_eq!(
+            outcome.report().diagnostics()[0].code,
+            BODY_TESSELLATION_STRUCTURAL_ITEM_LIMIT_REACHED
+        );
     }
 
     #[test]
@@ -3318,6 +3603,7 @@ mod tests {
             checked_prepared_segment_count(f64::INFINITY, 2),
             checked_item_add(BODY_TESSELLATION_RETAINED_TRIANGLES, usize::MAX, 1),
             checked_item_add(BODY_TESSELLATION_EDGE_STORAGE_ITEMS, usize::MAX, 1),
+            checked_item_add(BODY_TESSELLATION_STRUCTURAL_ITEMS, usize::MAX, 1),
         ] {
             assert!(matches!(
                 result,
@@ -3337,6 +3623,15 @@ mod tests {
             Err(TessellationError::Kernel(Error::OperationPolicy {
                 source: OperationPolicyError::AccountingOverflow {
                     stage: BODY_TESSELLATION_EDGE_STORAGE_ITEMS,
+                    resource: ResourceKind::Items,
+                }
+            }))
+        ));
+        assert!(matches!(
+            checked_vec_capacity::<Vec<u32>>(BODY_TESSELLATION_STRUCTURAL_ITEMS, usize::MAX),
+            Err(TessellationError::Kernel(Error::OperationPolicy {
+                source: OperationPolicyError::AccountingOverflow {
+                    stage: BODY_TESSELLATION_STRUCTURAL_ITEMS,
                     resource: ResourceKind::Items,
                 }
             }))
@@ -3580,6 +3875,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sequential_bodies_accumulate_structural_items_in_one_scope() {
+        let mut store = Store::new();
+        let first_body = block(&mut store, &Frame::world(), [1.0, 2.0, 3.0]).unwrap();
+        let second_body = block(&mut store, &Frame::world(), [3.0, 2.0, 1.0]).unwrap();
+        let plan = item_limit_plan(BODY_TESSELLATION_STRUCTURAL_ITEMS, 167);
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            plan,
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default())
+            .unwrap()
+            .with_diagnostics(DiagnosticLevel::Summary, 4);
+        let mut scope = OperationScope::new(&context);
+        tessellate_body_in_scope(&store, first_body, &opts(0.25), &mut scope).unwrap();
+        let second = tessellate_body_in_scope(&store, second_body, &opts(0.25), &mut scope);
+        let snapshot = LimitSnapshot {
+            stage: BODY_TESSELLATION_STRUCTURAL_ITEMS,
+            resource: ResourceKind::Items,
+            consumed: 168,
+            allowed: 167,
+        };
+        assert_eq!(
+            second,
+            Err(TessellationError::Kernel(Error::ResourceLimit { snapshot }))
+        );
+        let outcome = scope.finish_typed::<(), TessellationError>(Ok(()));
+        assert_eq!(consumed(&outcome, BODY_TESSELLATION_STRUCTURAL_ITEMS), 167);
+        assert_eq!(outcome.report().limit_events(), &[snapshot]);
+        assert_eq!(
+            outcome.report().diagnostics()[0].code,
+            BODY_TESSELLATION_STRUCTURAL_ITEM_LIMIT_REACHED
+        );
+    }
+
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn prepared_item_u64_accounting_overflow_is_typed_and_atomic() {
@@ -3621,6 +3954,47 @@ mod tests {
         assert!(outcome.report().limit_events().is_empty());
     }
 
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn structural_item_u64_accounting_overflow_is_typed_and_atomic() {
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            BodyTessellationBudgetProfile::v1_defaults(),
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let mut scope = OperationScope::new(&context);
+        scope
+            .ledger_mut()
+            .charge_resource(
+                BODY_TESSELLATION_STRUCTURAL_ITEMS,
+                ResourceKind::Items,
+                u64::MAX,
+            )
+            .unwrap();
+        let error = {
+            let mut work = BodyTessellationWork { scope: &mut scope };
+            work.admit_structural_items(1).unwrap_err()
+        };
+        assert!(matches!(
+            error,
+            TessellationError::Kernel(Error::OperationPolicy {
+                source: OperationPolicyError::AccountingOverflow {
+                    stage: BODY_TESSELLATION_STRUCTURAL_ITEMS,
+                    resource: ResourceKind::Items,
+                }
+            })
+        ));
+        let outcome = scope.finish_typed::<(), TessellationError>(Ok(()));
+        assert_eq!(
+            consumed(&outcome, BODY_TESSELLATION_STRUCTURAL_ITEMS),
+            u64::MAX
+        );
+        assert!(outcome.report().limit_events().is_empty());
+    }
+
     #[test]
     fn closed_and_polar_patch_counters_match_independent_goldens() {
         let options = opts(0.05);
@@ -3636,7 +4010,8 @@ mod tests {
         );
         // Reviewed compatibility-v1 materialization goldens. These are
         // deliberately independent of the counter's own baseline result.
-        for (body, expected_prepared) in [(sphere, 587), (torus, 1_314)] {
+        for (body, expected_prepared, expected_structural) in [(sphere, 587, 6), (torus, 1_314, 22)]
+        {
             let outcome = contextual_body_outcome(
                 &closed_store,
                 body,
@@ -3651,6 +4026,11 @@ mod tests {
             assert_eq!(
                 consumed(&outcome, BODY_TESSELLATION_PREPARED_PATCH_ITEMS),
                 expected_prepared
+            );
+            assert_eq!(
+                consumed(&outcome, BODY_TESSELLATION_STRUCTURAL_ITEMS),
+                expected_structural,
+                "reviewed topology-plan, patch-holder, and TrimLoop-holder golden"
             );
         }
 
@@ -3684,6 +4064,44 @@ mod tests {
             consumed(&outcome, BODY_TESSELLATION_PREPARED_PATCH_ITEMS),
             // Reviewed polar-cap materialization golden.
             466
+        );
+    }
+
+    #[test]
+    fn torus_holder_batch_precedes_iso_arc_payload_allocation() {
+        let mut store = Store::new();
+        let torus = closed_body(
+            &mut store,
+            Torus::new(Frame::world(), 2.0, 0.5).unwrap().into(),
+        );
+        let outcome = contextual_body_outcome(
+            &store,
+            torus,
+            &opts(0.05),
+            item_limit_plan(BODY_TESSELLATION_STRUCTURAL_ITEMS, 13),
+        );
+        let snapshot = LimitSnapshot {
+            stage: BODY_TESSELLATION_STRUCTURAL_ITEMS,
+            resource: ResourceKind::Items,
+            consumed: 14,
+            allowed: 13,
+        };
+        assert_eq!(
+            outcome.result(),
+            Err(&TessellationError::Kernel(Error::ResourceLimit {
+                snapshot
+            }))
+        );
+        assert_eq!(consumed(&outcome, BODY_TESSELLATION_STRUCTURAL_ITEMS), 2);
+        assert_eq!(
+            consumed(&outcome, BODY_TESSELLATION_PREPARED_PATCH_ITEMS),
+            0
+        );
+        assert_eq!(consumed(&outcome, BODY_TESSELLATION_ISO_ARC_SPLITS), 0);
+        assert_eq!(outcome.report().limit_events(), &[snapshot]);
+        assert_eq!(
+            outcome.report().diagnostics()[0].code,
+            BODY_TESSELLATION_STRUCTURAL_ITEM_LIMIT_REACHED
         );
     }
 
@@ -3750,6 +4168,11 @@ mod tests {
             consumed(&outcome, BODY_TESSELLATION_PREPARED_PATCH_ITEMS),
             36,
             "12 shifted loop pairs, 12 cleaned TrimLoop points, and 12 l2g slots"
+        );
+        assert_eq!(
+            consumed(&outcome, BODY_TESSELLATION_STRUCTURAL_ITEMS),
+            9,
+            "three loops each own a point holder, id holder, and TrimLoop holder"
         );
     }
 

@@ -97,6 +97,18 @@ pub const BODY_TESSELLATION_RETAINED_TRIANGLES: StageId =
 pub const BODY_TESSELLATION_RETAINED_TRIANGLE_LIMIT_REACHED: DiagnosticCode =
     known_diagnostic("ktopo.body-tessellation.retained-triangles-limit");
 
+/// Cumulative body-owned topology/mapping and non-edge container slots.
+///
+/// One item is one heap sequence slot that holds a topology identity, a
+/// topology-to-mesh mapping, an owner range, deterministic membership scratch,
+/// or a non-edge container header. Payload already owned by the edge-storage,
+/// prepared-patch, mesh-vertex, or retained-triangle stages is excluded.
+pub const BODY_TESSELLATION_STRUCTURAL_ITEMS: StageId =
+    known_stage("ktopo.body-tessellation.structural-items");
+/// Diagnostic identity for exhausting body-owned structural items.
+pub const BODY_TESSELLATION_STRUCTURAL_ITEM_LIMIT_REACHED: DiagnosticCode =
+    known_diagnostic("ktopo.body-tessellation.structural-items-limit");
+
 /// Diagnostic identity for an ambiguous nested face root-work crossing.
 pub const BODY_TESSELLATION_TOTAL_WORK_LIMIT_REACHED: DiagnosticCode =
     known_diagnostic("ktopo.body-tessellation.total-work-limit");
@@ -122,7 +134,10 @@ pub const BODY_TESSELLATION_MESH_VERTEX_LIMIT: u64 = u32::MAX as u64 + 1;
 /// platform-sized evaluator limit. High-water limits compose truthfully and
 /// therefore retain the exact child-family defaults. Body-owned edge and iso
 /// splits use the u32 representability ceiling: every accepted split denotes
-/// one prospective interior point in its refinement scratch.
+/// one prospective interior point in its refinement scratch. Body-owned edge
+/// storage, prepared-patch copies, structural holders, and retained triangles
+/// are exact accounting seams whose compatibility allowances remain
+/// nonbinding until corpus-backed finite presets are reviewed.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BodyTessellationBudgetProfile;
 
@@ -217,6 +232,12 @@ impl BodyTessellationBudgetProfile {
                 ),
                 LimitSpec::new(
                     BODY_TESSELLATION_RETAINED_TRIANGLES,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    u64::MAX,
+                ),
+                LimitSpec::new(
+                    BODY_TESSELLATION_STRUCTURAL_ITEMS,
                     ResourceKind::Items,
                     AccountingMode::Cumulative,
                     u64::MAX,
@@ -404,6 +425,12 @@ mod tests {
                     AccountingMode::Cumulative,
                     u64::MAX
                 ),
+                limit(
+                    BODY_TESSELLATION_STRUCTURAL_ITEMS,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    u64::MAX
+                ),
             ]
         );
         assert_eq!(profile.total_work_limit(), None);
@@ -418,7 +445,7 @@ mod tests {
             .map(|entry| entry.stage.as_str())
             .collect::<Vec<_>>();
         assert!(stages.windows(2).all(|pair| pair[0] < pair[1]));
-        assert_eq!(stages.iter().copied().collect::<BTreeSet<_>>().len(), 20);
+        assert_eq!(stages.iter().copied().collect::<BTreeSet<_>>().len(), 21);
 
         let diagnostics = [
             BODY_TESSELLATION_EDGE_DEPTH_LIMIT_REACHED.as_str(),
@@ -429,6 +456,7 @@ mod tests {
             BODY_TESSELLATION_MESH_VERTEX_LIMIT_REACHED.as_str(),
             BODY_TESSELLATION_PREPARED_PATCH_ITEM_LIMIT_REACHED.as_str(),
             BODY_TESSELLATION_RETAINED_TRIANGLE_LIMIT_REACHED.as_str(),
+            BODY_TESSELLATION_STRUCTURAL_ITEM_LIMIT_REACHED.as_str(),
             BODY_TESSELLATION_TOTAL_WORK_LIMIT_REACHED.as_str(),
         ];
         assert_eq!(
@@ -442,10 +470,11 @@ mod tests {
                 "ktopo.body-tessellation.mesh-vertices-limit",
                 "ktopo.body-tessellation.prepared-patch-items-limit",
                 "ktopo.body-tessellation.retained-triangles-limit",
+                "ktopo.body-tessellation.structural-items-limit",
                 "ktopo.body-tessellation.total-work-limit",
             ]
         );
-        assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>().len(), 9);
+        assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>().len(), 10);
     }
 
     #[test]
@@ -475,6 +504,7 @@ mod tests {
         assert_eq!(allowed(FACE_TESSELLATION_MESH_VERTICES), u64::MAX);
         assert_eq!(allowed(BODY_TESSELLATION_PREPARED_PATCH_ITEMS), u64::MAX);
         assert_eq!(allowed(BODY_TESSELLATION_RETAINED_TRIANGLES), u64::MAX);
+        assert_eq!(allowed(BODY_TESSELLATION_STRUCTURAL_ITEMS), u64::MAX);
         assert_eq!(allowed(kgraph::eval_stage::NODE_VISITS), usize::MAX as u64);
         assert_eq!(allowed(SURFACE_PROJECTION_QUERIES), u64::MAX);
         for curve_stage in [
@@ -590,6 +620,6 @@ mod tests {
                 .allowed,
             1_000
         );
-        assert_eq!(effective.limits().len(), 20);
+        assert_eq!(effective.limits().len(), 21);
     }
 }

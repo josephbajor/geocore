@@ -1,6 +1,6 @@
 # Operation context and numerical policy
 
-Status: Stage 1b composition, the NURBS contact/minimizer scale gate, and representative Stage 2-5 pilots implemented; whole-body tessellation's `ktopo`/`kxt` production adoption and internal-use ratchet are complete, while projection adoption, allocation hardening, and broader ratchets remain
+Status: Stage 1b composition, the NURBS contact/minimizer scale gate, and representative Stage 2-5 pilots implemented; whole-body tessellation's `ktopo`/`kxt` production adoption, internal-use ratchet, and allocation-accounting boundary are complete, while projection adoption, corpus-backed bounded presets, and broader ratchets remain
 
 ## Purpose
 
@@ -693,11 +693,12 @@ split/preparation/output family now have exact pre-allocation admission and
 composition evidence. The prepared-patch stage intentionally starts at UV-chain
 construction; a distinct edge-storage stage now admits pre-UV face-use, seed,
 recursive-interior, retained-sample, and edge-record slots plus final polyline
-records and indices. Compatibility-v1 body-wide preparation, edge-storage, and
-triangle allowances remain accounting-only at `u64::MAX`. Topology enumeration
-and non-edge structural holder containers still need exact admission, followed
-by corpus-backed finite presets, before the product path is described as
-hostile-input bounded.
+records and indices. A structural-items stage now admits one shared topology
+plan, identity-membership scratch, topology/mesh mappings, owner ranges, and
+all remaining non-edge holder slots before allocation. Compatibility-v1 body-
+wide preparation, edge-storage, structural, and triangle allowances remain
+accounting-only at `u64::MAX`. Corpus-backed finite presets are now the
+remaining gate before the product path is described as hostile-input bounded.
 
 - Add fallible contextual projection APIs and remove public panic behavior through the
   new path.
@@ -731,7 +732,9 @@ land before any product cap is selected:
    Curvature decisions cache the one midpoint evaluation needed to establish
    the split. N/N+1, simultaneous depth/work, failure-atomicity, mixed body/face
    root aggregation, legacy output, and execution-policy evidence is in the
-   owning tests.
+   owning tests. Recursive iso-interior scratch has exactly one retained slot
+   per accepted iso split, so that allocation is governed one-for-one by this
+   Work stage rather than duplicated into prepared-patch item accounting.
 3. **Landed:** `ktopo` has prepared-patch and retained-body-triangle
    `Items/Cumulative` stages. Their compatibility-v1 allowances are `u64::MAX`:
    the counters and pre-allocation seams are exact, but finite aggregate caps
@@ -755,13 +758,20 @@ land before any product cap is selected:
    accounting overflow, final-polyline equality, and execution-policy/legacy
    equivalence are covered. Compatibility v1 uses `u64::MAX` because no truthful
    finite legacy aggregate is known.
-6. `ktopo` admits topology enumeration result collections and remaining non-
-   edge structural holder containers before allocation. This includes
-   `faces_of_body`, `edges_of_body`, `vertices_of_body`, `vgids`, `face_ranges`,
-   `chains`, `holes`/`patch_holes`, outer `loops_pts`/`loops_ids`, `trim_loops`,
-   and torus `au`/`av` holder rows. This is a separate ownership boundary from
-   retained content items and keeps the edge/prepared/output units stable.
-7. Q3 records every new counter. After corpus/import measurement, add explicit
+6. **Landed:** `ktopo` has a structural-items `Items/Cumulative` stage with a
+   compatibility-v1 allowance of `u64::MAX`. One admitted `BodyTopologyPlan`
+   replaces repeated `faces_of_body`/`edges_of_body`/`vertices_of_body`
+   temporaries and quadratic identity dedup while preserving first-seen order.
+   The stage charges plan identities, deterministic membership scratch,
+   `vgids`, `face_ranges`, `chains`, `holes`/`patch_holes`, outer
+   `loops_pts`/`loops_ids`, `trim_loops`, and torus `au`/`av` holder rows. It is
+   separate from retained content items, so payload moves do not recharge
+   edge/prepared/output units. The reviewed block golden is 84: 46 topology-
+   plan vector/membership items, 8 vertex mappings, 6 face ranges, and 24
+   ordinary loop/trim holders. Closed-sphere, torus, multi-hole, N/N+1, paired-
+   holder atomicity, shared-scope, overflow, diagnostic, legacy, and execution-
+   policy evidence is in the owning tests.
+7. **Next:** Q3 records every new counter. After corpus/import measurement, add explicit
    `FaceTessellationBudgetProfile::bounded_v1()` and
    `BodyTessellationBudgetProfile::bounded_v1()` presets with finite aggregate
    and root caps. Legacy wrappers stay on compatibility `v1_defaults`; facade,
