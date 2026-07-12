@@ -48,7 +48,10 @@ pub mod write;
 
 pub use error::{Result, XtCapability, XtError};
 pub use parse::{Header, Node, Value, XtFile, read_xt};
-pub use recon::{Reconstruction, reconstruct, reconstruct_in_scope, reconstruct_with_context};
+pub use recon::{
+    Reconstruction, reconstruct, reconstruct_in_scope, reconstruct_with_context,
+    reconstruction_budget_profile,
+};
 pub use write::export_text;
 
 use kcore::operation::{OperationContext, OperationOutcome, OperationPolicyError, OperationScope};
@@ -61,7 +64,8 @@ pub fn import(bytes: &[u8], store: &mut Store) -> Result<Reconstruction> {
     reconstruct(&file, store)
 }
 
-/// Parse and reconstruct with graph work charged to a fresh operation scope.
+/// Parse and reconstruct with graph and curve-projection work charged to a
+/// fresh operation scope.
 pub fn import_with_context(
     bytes: &[u8],
     store: &mut Store,
@@ -69,7 +73,7 @@ pub fn import_with_context(
 ) -> core::result::Result<OperationOutcome<Reconstruction, XtError>, OperationPolicyError> {
     let context = context
         .clone()
-        .with_family_budget_defaults(kgraph::EvalBudgetProfile::v1_defaults());
+        .with_family_budget_defaults(reconstruction_budget_profile());
     kgraph::EvalLimits::from_budget_plan(&context.effective_budget())?;
     let mut scope = OperationScope::new(&context);
     let result = read_xt(bytes).and_then(|file| reconstruct_in_scope(&file, store, &mut scope, 0));
@@ -79,8 +83,8 @@ pub fn import_with_context(
 /// Parse and reconstruct inside an existing caller-owned operation scope.
 ///
 /// The caller supplies the stable ordinal for the reconstruction's one graph
-/// child reservation and must have installed the graph evaluation family
-/// budget before creating `scope`.
+/// child reservation and must have installed the X_T reconstruction profile
+/// (graph evaluation plus aggregate curve projection) before creating `scope`.
 pub fn import_in_scope(
     bytes: &[u8],
     store: &mut Store,

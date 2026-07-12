@@ -1,7 +1,7 @@
 //! Typed X_T interchange at the supported facade boundary.
 
 use kcore::operation::OperationScope;
-use kgraph::{EvalBudgetProfile, EvalLimits};
+use kgraph::EvalLimits;
 
 use crate::error::{Error, Result};
 use crate::session::{Part, PartEdit};
@@ -162,7 +162,7 @@ impl PartEdit<'_> {
         let ImportXtRequest { bytes, settings } = request;
         let context = settings
             .context(self.policy)?
-            .with_family_budget_defaults(EvalBudgetProfile::v1_defaults());
+            .with_family_budget_defaults(kxt::reconstruction_budget_profile());
         EvalLimits::from_budget_plan(&context.effective_budget())?;
         let mut scope = OperationScope::new(&context);
         let part = self.id.clone();
@@ -502,7 +502,7 @@ T51 : TRANSMIT FILE created by modeller version 100023017 SCH_1000230_100040";
             failed.result().unwrap_err().code(),
             kxt::error::code::OUTSIDE_SIZE_BOX
         );
-        assert_eq!(failed.report().usage().len(), 2);
+        assert_eq!(failed.report().usage().len(), 7);
         let part = session.part(part_id.clone()).unwrap();
         assert_eq!(
             before,
@@ -539,7 +539,7 @@ T51 : TRANSMIT FILE created by modeller version 100023017 SCH_1000230_100040";
         let bytes = block_xt();
         let mut session = Kernel::new().create_session();
         let part_id = session.create_part();
-        let budget = EvalBudgetProfile::for_limits(64, 1);
+        let budget = kgraph::EvalBudgetProfile::for_limits(64, 1);
         let outcome = session
             .edit_part(part_id.clone())
             .unwrap()
@@ -598,7 +598,7 @@ T51 : TRANSMIT FILE created by modeller version 100023017 SCH_1000230_100040";
                 part.pcurves().len(),
             )
         };
-        let budget = EvalBudgetProfile::for_limits(64, 12);
+        let budget = kgraph::EvalBudgetProfile::for_limits(64, 12);
 
         let direct_policy = kcore::operation::SessionPolicy::v1();
         let direct_context = kcore::operation::OperationContext::new(
@@ -665,7 +665,7 @@ T51 : TRANSMIT FILE created by modeller version 100023017 SCH_1000230_100040";
         let bytes = block_xt();
         let mut session = Kernel::new().create_session();
         let part_id = session.create_part();
-        let budget = EvalBudgetProfile::for_limits(64, 64).with_total_work_limit(1);
+        let budget = kgraph::EvalBudgetProfile::for_limits(64, 64).with_total_work_limit(1);
         let outcome = session
             .edit_part(part_id.clone())
             .unwrap()

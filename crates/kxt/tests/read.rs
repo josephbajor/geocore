@@ -5,7 +5,9 @@
 //! and V28 (embedded schemas over base 13006); `longbar` is a V10 file
 //! that must be rejected.
 
-use kcore::operation::{OperationContext, ResourceKind, SessionPolicy};
+use kcore::operation::{
+    AccountingMode, BudgetPlan, LimitSpec, OperationContext, ResourceKind, SessionPolicy,
+};
 use kcore::tolerance::Tolerances;
 use kgeom::frame::Frame;
 use kgeom::vec::Point3;
@@ -131,7 +133,7 @@ fn contextual_parse_failure_keeps_the_precomposed_zero_usage_report() {
     let mut store = Store::new();
     let outcome = import_with_context(b"not an X_T file", &mut store, &context).unwrap();
     assert!(matches!(outcome.result(), Err(XtError::BadHeader { .. })));
-    assert_eq!(outcome.report().usage().len(), 2);
+    assert_eq!(outcome.report().usage().len(), 7);
     assert!(
         outcome
             .report()
@@ -141,6 +143,72 @@ fn contextual_parse_failure_keeps_the_precomposed_zero_usage_report() {
     );
     assert!(outcome.report().limit_events().is_empty());
     assert_eq!(store.count::<Body>(), 0);
+}
+
+#[test]
+fn contextual_nurbs_edge_import_accounts_both_endpoint_projections() {
+    let bytes = include_bytes!("../../../oracle/outbox/solid_block_nurbs_edge.x_t");
+    let mut legacy_store = Store::new();
+    let legacy = import(bytes, &mut legacy_store).unwrap();
+
+    let session = SessionPolicy::v1();
+    let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+    let mut contextual_store = Store::new();
+    let outcome = import_with_context(bytes, &mut contextual_store, &context).unwrap();
+    let (contextual, report) = outcome.into_parts();
+    let contextual = contextual.unwrap();
+
+    assert_eq!(contextual.bodies, legacy.bodies);
+    assert_eq!(contextual.skipped, legacy.skipped);
+    assert_eq!(contextual.journal, legacy.journal);
+    assert_eq!(
+        contextual_store.count::<ktopo::geom::CurveGeom>(),
+        legacy_store.count::<ktopo::geom::CurveGeom>()
+    );
+    let queries = report
+        .usage()
+        .iter()
+        .find(|snapshot| {
+            snapshot.stage == kgeom::project::CURVE_PROJECTION_QUERIES
+                && snapshot.resource == ResourceKind::Work
+        })
+        .unwrap();
+    assert_eq!((queries.consumed, queries.allowed), (2, u64::MAX));
+    assert!(report.limit_events().is_empty());
+}
+
+#[test]
+fn curve_projection_query_limit_is_exact_and_reconstruction_rolls_back() {
+    let bytes = include_bytes!("../../../oracle/outbox/solid_block_nurbs_edge.x_t");
+    let session = SessionPolicy::v1();
+    let request = BudgetPlan::new([LimitSpec::new(
+        kgeom::project::CURVE_PROJECTION_QUERIES,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        1,
+    )])
+    .unwrap();
+    let context = OperationContext::new(&session, Tolerances::default())
+        .unwrap()
+        .with_budget_overrides(request);
+    let mut store = Store::new();
+    let outcome = import_with_context(bytes, &mut store, &context).unwrap();
+    let result = outcome.result();
+    let error = result.as_ref().unwrap_err();
+    let limit = error.limit().expect("projection limit remains classified");
+    assert_eq!(limit.stage, kgeom::project::CURVE_PROJECTION_QUERIES);
+    assert_eq!((limit.consumed, limit.allowed), (2, 1));
+
+    let queries = outcome
+        .report()
+        .usage()
+        .iter()
+        .find(|snapshot| snapshot.stage == kgeom::project::CURVE_PROJECTION_QUERIES)
+        .unwrap();
+    assert_eq!((queries.consumed, queries.allowed), (1, 1));
+    assert_eq!(outcome.report().limit_events(), &[limit]);
+    assert_eq!(store.count::<Body>(), 0);
+    assert_eq!(store.geometry().len(), 0);
 }
 
 #[test]

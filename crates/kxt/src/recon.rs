@@ -34,13 +34,16 @@ use crate::error::{Result, XtCapability, XtError};
 use crate::parse::{Node, Value, XtFile};
 use crate::schema::code;
 use kcore::math;
-use kcore::operation::{OperationContext, OperationOutcome, OperationPolicyError, OperationScope};
+use kcore::operation::{
+    BudgetPlan, OperationContext, OperationOutcome, OperationPolicyError, OperationScope,
+};
 use kcore::tolerance::{LINEAR_RESOLUTION, Tolerances};
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::curve2d::{Curve2d, NurbsCurve2d};
 use kgeom::frame::Frame;
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::param::{ParamRange, wrap_periodic};
+use kgeom::project::{CurveProjection, ProjectionBudgetProfile, ProjectionError};
 use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Torus};
 use kgeom::vec::{Point2, Point3, Vec3};
 use kgraph::{EvalBudgetProfile, EvalLimits, OffsetSurfaceDescriptor, SurfaceDerivativeOrder};
@@ -55,6 +58,9 @@ use ktopo::store::Store;
 use ktopo::tolerance::EntityTolerance;
 use ktopo::transaction::{AssemblyStore, Journal, MutationKind};
 use std::collections::BTreeMap;
+
+type CurveProjector<'scope> = dyn FnMut(&dyn Curve, Point3, ParamRange) -> core::result::Result<CurveProjection, ProjectionError>
+    + 'scope;
 
 /// Everything produced by reconstructing one transmit file.
 #[derive(Debug)]
@@ -71,6 +77,27 @@ pub struct Reconstruction {
     pub journal: Journal,
 }
 
+/// Owner-level defaults for contextual X_T reconstruction.
+///
+/// Graph evaluation retains its finite aggregate/depth limits. Curve
+/// projection retains finite per-query high-water limits and an accounting-
+/// only aggregate query allowance until import-corpus evidence supports a
+/// finite model-level cap.
+pub fn reconstruction_budget_profile() -> BudgetPlan {
+    let graph = EvalBudgetProfile::v1_defaults();
+    let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
+    BudgetPlan::new(graph.limits().iter().chain(projection.limits()).copied())
+        .expect("built-in X_T reconstruction budget is valid")
+}
+
+fn reconstruction_compatibility_budget() -> BudgetPlan {
+    let graph =
+        EvalBudgetProfile::for_limits(EvalLimits::default().max_dependency_depth, usize::MAX);
+    let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
+    BudgetPlan::new(graph.limits().iter().chain(projection.limits()).copied())
+        .expect("built-in X_T compatibility budget is valid")
+}
+
 /// Reconstruct every body in the file into `store`.
 ///
 /// This compatibility wrapper discards operation accounting and uses a
@@ -84,20 +111,18 @@ pub fn reconstruct(file: &XtFile, store: &mut Store) -> Result<Reconstruction> {
     let session = kcore::operation::SessionPolicy::v1();
     let context = OperationContext::new(&session, Tolerances::default())
         .expect("built-in X_T reconstruction context is valid")
-        .with_budget_overrides(EvalBudgetProfile::for_limits(
-            EvalLimits::default().max_dependency_depth,
-            usize::MAX,
-        ));
+        .with_budget_overrides(reconstruction_compatibility_budget());
     reconstruct_with_context(file, store, &context)
         .expect("built-in X_T reconstruction budget is valid")
         .into_result()
 }
 
-/// Reconstruct with graph work charged to a fresh operation scope.
+/// Reconstruct with graph and curve-projection work charged to a fresh
+/// operation scope.
 ///
-/// Graph evaluation defaults fill only entries omitted by the caller;
+/// X_T reconstruction defaults fill only entries omitted by the caller;
 /// session policy and explicit operation overrides retain normal F2
-/// precedence.
+/// precedence across both families.
 pub fn reconstruct_with_context(
     file: &XtFile,
     store: &mut Store,
@@ -105,7 +130,7 @@ pub fn reconstruct_with_context(
 ) -> core::result::Result<OperationOutcome<Reconstruction, XtError>, OperationPolicyError> {
     let context = context
         .clone()
-        .with_family_budget_defaults(EvalBudgetProfile::v1_defaults());
+        .with_family_budget_defaults(reconstruction_budget_profile());
     EvalLimits::from_budget_plan(&context.effective_budget())?;
     let mut scope = OperationScope::new(&context);
     let result = reconstruct_in_scope(file, store, &mut scope, 0);
@@ -115,7 +140,7 @@ pub fn reconstruct_with_context(
 /// Reconstruct inside an existing caller-owned operation scope.
 ///
 /// `child_ordinal` is the stable work-item ordinal assigned by the caller.
-/// The scope must already contain the graph evaluation family budget; this
+/// The scope must already contain the X_T reconstruction budget profile; this
 /// nested entry point never installs defaults or resets accounting.
 pub fn reconstruct_in_scope(
     file: &XtFile,
@@ -134,7 +159,7 @@ pub fn reconstruct_in_scope(
     let (lower, mut graph) = {
         let mut assembly = transaction.assembly();
         let mut graph = graph;
-        let result = reconstruct_into(file, &mut assembly, &mut graph);
+        let result = reconstruct_into(file, &mut assembly, &mut graph, scope);
         (result, graph)
     };
     let mut reconstruction = match lower {
@@ -166,6 +191,7 @@ fn reconstruct_into(
     file: &XtFile,
     store: &mut AssemblyStore<'_>,
     graph: &mut GraphQueryWork,
+    scope: &mut OperationScope<'_, '_>,
 ) -> Result<Reconstruction> {
     let root = xnode(file, 1)?;
     let mut body_indices = Vec::new();
@@ -209,10 +235,14 @@ fn reconstruct_into(
         }
     }
 
+    let mut project_curve = |curve: &dyn Curve, point, range| {
+        kgeom::project::project_to_curve_in_scope(curve, point, range, scope)
+    };
     let mut recon = Recon {
         file,
         store,
         graph,
+        project_curve: &mut project_curve,
         curves: BTreeMap::new(),
         pcurves: BTreeMap::new(),
         surfaces: BTreeMap::new(),
@@ -359,10 +389,11 @@ fn in_size_box(p: Vec3) -> Result<Vec3> {
 
 // ---------------------------------------------------------------- body --
 
-struct Recon<'file, 'assembly, 'store, 'graph> {
+struct Recon<'file, 'assembly, 'store, 'graph, 'projector> {
     file: &'file XtFile,
     store: &'assembly mut AssemblyStore<'store>,
     graph: &'graph mut GraphQueryWork,
+    project_curve: &'projector mut CurveProjector<'projector>,
     /// XT curve index → (kernel curve, XT sense was `-`).
     curves: BTreeMap<u32, (CurveId, bool)>,
     /// XT 2D B-curve index → kernel pcurve geometry.
@@ -379,7 +410,7 @@ struct Recon<'file, 'assembly, 'store, 'graph> {
     edges: BTreeMap<u32, (EdgeId, bool)>,
 }
 
-impl Recon<'_, '_, '_, '_> {
+impl Recon<'_, '_, '_, '_, '_> {
     fn body(&mut self, body_idx: u32) -> Result<BodyId> {
         let file = self.file;
         let body_node = xnode(file, body_idx)?;
@@ -737,12 +768,25 @@ impl Recon<'_, '_, '_, '_> {
                 match curve {
                     Some(curve) => {
                         let curve_geom = self.store.get(curve)?;
-                        Some(edge_bounds(curve_geom, sp, ep, trim, curve_reversed).ok_or(
-                            XtError::BadField {
+                        let recovered = edge_bounds(
+                            curve_geom,
+                            sp,
+                            ep,
+                            trim,
+                            curve_reversed,
+                            self.project_curve,
+                        )
+                        .map_err(|error| match error {
+                            ProjectionError::Policy(error) => policy_error(error),
+                            _ => XtError::BadField {
                                 index: edge_idx,
                                 what: "could not recover edge parameter bounds on its curve",
                             },
-                        )?)
+                        })?;
+                        Some(recovered.ok_or(XtError::BadField {
+                            index: edge_idx,
+                            what: "could not recover edge parameter bounds on its curve",
+                        })?)
                     }
                     None => Some((0.0, 1.0)),
                 }
@@ -1355,19 +1399,20 @@ fn edge_bounds(
     end: Point3,
     trim: Option<(f64, f64)>,
     curve_reversed: bool,
-) -> Option<(f64, f64)> {
+    project_curve: &mut CurveProjector<'_>,
+) -> core::result::Result<Option<(f64, f64)>, ProjectionError> {
     if let Some((p1, p2)) = trim {
         // With a '+' basis sense parm_2 > parm_1; with '-' they come
         // reversed (the edge flip already swapped the vertices).
         let (lo, hi) = if curve_reversed { (p2, p1) } else { (p1, p2) };
-        return (hi > lo).then_some((lo, hi));
+        return Ok((hi > lo).then_some((lo, hi)));
     }
     let tau = core::f64::consts::TAU;
     match curve {
         CurveGeom::Line(line) => {
             let t0 = (start - line.origin()).dot(line.dir());
             let t1 = (end - line.origin()).dot(line.dir());
-            (t1 > t0).then_some((t0, t1))
+            Ok((t1 > t0).then_some((t0, t1)))
         }
         CurveGeom::Circle(c) => {
             let f = c.frame();
@@ -1376,7 +1421,7 @@ fn edge_bounds(
                 wrap_periodic(math::atan2(l.y, l.x), 0.0, tau)
             };
             let (t0, t1) = unwrap_interval(angle(start), angle(end), tau);
-            Some((t0, clamp_period_width(t0, t1, tau)))
+            Ok(Some((t0, clamp_period_width(t0, t1, tau))))
         }
         CurveGeom::Ellipse(e) => {
             let f = e.frame();
@@ -1389,15 +1434,15 @@ fn edge_bounds(
                 )
             };
             let (t0, t1) = unwrap_interval(angle(start), angle(end), tau);
-            Some((t0, clamp_period_width(t0, t1, tau)))
+            Ok(Some((t0, clamp_period_width(t0, t1, tau))))
         }
         CurveGeom::Nurbs(n) => {
             let range = n.param_range();
-            let t0 = kgeom::project::project_to_curve(n, start, range)?.t;
-            let t1 = kgeom::project::project_to_curve(n, end, range)?.t;
-            (t1 > t0).then_some((t0, t1))
+            let t0 = project_curve(n, start, range)?.t;
+            let t1 = project_curve(n, end, range)?.t;
+            Ok((t1 > t0).then_some((t0, t1)))
         }
-        _ => None,
+        _ => Ok(None),
     }
 }
 

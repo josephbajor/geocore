@@ -95,6 +95,24 @@ impl ProjectionBudgetProfile {
         .expect("built-in curve-projection budget is valid")
     }
 
+    /// Returns compatibility accounting for an owner that may issue multiple
+    /// sequential curve projections.
+    ///
+    /// Per-query high-water limits retain the exact legacy ceilings. The
+    /// aggregate query count is intentionally non-binding until an owning
+    /// corpus justifies a finite model-level cap; callers may replace it with
+    /// an explicit request override.
+    pub fn curve_aggregate_compatibility() -> BudgetPlan {
+        BudgetPlan::new(Self::curve_defaults().limits().iter().map(|limit| {
+            if limit.stage == CURVE_PROJECTION_QUERIES {
+                LimitSpec::new(limit.stage, limit.resource, limit.mode, u64::MAX)
+            } else {
+                *limit
+            }
+        }))
+        .expect("built-in aggregate curve-projection budget is valid")
+    }
+
     /// Returns the exact ceilings of one legacy surface projection.
     pub fn surface_defaults() -> BudgetPlan {
         BudgetPlan::new([
@@ -174,6 +192,21 @@ mod tests {
         assert_eq!(allowed(SURFACE_PROJECTION_HALVINGS), 30);
         assert_eq!(profile.total_work_limit(), None);
         assert_eq!(ProjectionBudgetProfile::curve_defaults().limits().len(), 5);
+        assert_eq!(
+            ProjectionBudgetProfile::curve_aggregate_compatibility()
+                .limits()
+                .len(),
+            5
+        );
+        assert_eq!(
+            ProjectionBudgetProfile::curve_aggregate_compatibility()
+                .limits()
+                .iter()
+                .find(|limit| limit.stage == CURVE_PROJECTION_QUERIES)
+                .unwrap()
+                .allowed,
+            u64::MAX
+        );
         assert_eq!(
             ProjectionBudgetProfile::surface_defaults().limits().len(),
             5

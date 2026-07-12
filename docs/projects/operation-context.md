@@ -594,10 +594,14 @@ Standalone `kgeom::project::project_to_surface` is also at state 3: contextual
 and shared-scope paths are proven in projection, surface-point services, and
 body tessellation, and the source audit permits the legacy symbol only in its
 public definition, focused tests, and the two compatibility surface-point
-wrappers that preserve the old invalid-query behavior. Curve projection remains
-at state 2 because X_T reconstruction and ellipse intersection can issue more
-than one query; their owner-level aggregate profile must land before closing
-the single-query wrapper.
+wrappers that preserve the old invalid-query behavior. X_T reconstruction now
+uses the contextual curve projector for both endpoints of every untrimmed NURBS
+edge under one graph-plus-projection owner profile. Its query aggregate is
+accounting-only at `u64::MAX` until broader import evidence supports a finite
+cap, while request overrides can impose an exact lower ceiling. Curve
+projection remains at state 2 only because ellipse intersection is still a
+legacy production owner; that driver must adopt shared-scope projection before
+closing the single-query wrapper.
 
 ## Rollout stages
 
@@ -822,8 +826,9 @@ failures retain the checker's established fault ordering. Legacy wrappers use a
 non-binding aggregate allowance so compatibility does not acquire an accidental
 model-size ceiling. Contextual facade construction composition remains;
 surface projection and body tessellation have contextual entries with their
-internal legacy ratchets closed. Curve projection still needs multi-query owner
-adoption and its internal legacy ratchet. Body tessellation's `ktopo`/`kxt`
+internal legacy ratchets closed. X_T NURBS-edge reconstruction accounts curve
+projection in its existing operation scope; ellipse intersection remains before
+the curve-projector ratchet. Body tessellation's `ktopo`/`kxt`
 callers are contextual and its
 production-use ratchet is enforced; public deprecation remains blocked on a
 facade replacement.
