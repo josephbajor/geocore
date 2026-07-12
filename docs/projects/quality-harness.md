@@ -1,6 +1,6 @@
 # F7 quality, fuzzing, and performance harnesses
 
-Status: Q0-Q2, Q8, and the first Q3-Q6 foundation slices implemented; Q2a graph-build baseline is next
+Status: Q0-Q2a, Q8, and the first Q3-Q6 foundation slices implemented; the Q2a diamond row awaits a real multi-dependency descriptor
 
 ## Outcome
 
@@ -203,10 +203,10 @@ rejected-edit case protects failure atomicity, not merely throughput.
 
 Owner: `kgraph`, with `ktopo` integration cases.
 
-Status: required after Q8 and before production-scale/assembly imports or a
-reverse-index representation change. This is a bounded exception to the
-benchmark-expansion freeze because the implemented index has a known scale
-question that must be measured before larger fixtures make it production debt.
+Status: implemented as 17 registered, CI-compiled cases with one bounded smoke
+case. The diamond row is deliberately deferred because every current
+procedural descriptor reports at most one dependency; a benchmark-only fake
+descriptor would not measure the production graph.
 
 Capture the current deterministic implementation as the baseline before
 optimizing it. Measure graph construction and dependency maintenance separately
@@ -217,7 +217,7 @@ from geometry evaluation with these one-dimension-at-a-time ladders:
 | independent nodes | 1, 10, 100, 1,000, 10,000 nodes | insert leaf nodes | node count, stable order, graph digest |
 | dependency chain | depth 1, 10, 100, 1,000 | insert dependency-first chain | accepted nodes, dependency visits, reverse-index digest |
 | shared fanout | 1, 10, 100, 1,000 dependents | insert offsets sharing one basis | exact dependent set and deterministic order |
-| diamond graph | 1, 10, 100, 1,000 diamonds | construct shared dependency diamonds | deduplicated traversal and graph digest |
+| diamond graph | deferred until a real descriptor has two or more dependencies | construct shared dependency diamonds | deduplicated traversal and graph digest |
 | transactional rollback | same representative scales | insert then reject/rollback a dependent subgraph | identical pre/post graph and reverse-index digests |
 
 Record nodes, dependency edges, reverse-index updates, and full-order rebuilds
@@ -226,6 +226,14 @@ construction outside the operation under test is excluded from timing. Any
 replacement—such as slot-indexed adjacency—must preserve insertion-ordered
 determinism, rollback behavior, stale-handle checks, and full-reconstruction
 audit equality before performance evidence can justify it.
+
+The implemented target records actual node/edge registrations and full-order
+rebuilds through a doc-hidden, read-only `kgraph/benchmark-internals`
+observation snapshot; it exposes no mutable index representation. Stable graph
+and reverse-index digests, exact dependent order, graph validation, and
+rollback pre/post equality are checked outside every accumulated duration.
+Geometry evaluation is not called by this target. The registered scale ladders
+are complete for independent nodes, chains, fanout, and rollback.
 
 ## Stage Q3 — body tessellation ladder
 
@@ -485,19 +493,17 @@ licensed-host validation described in `docs/oracle-loop.md`.
 
 ## Revised landing sequence from the current state
 
-1. **Q2a:** capture graph construction/reverse-dependency scale before large
-   imports or any index representation change.
-2. **Q7:** land minimization/promotion tooling and the regression manifest so
+1. **Q7:** land minimization/promotion tooling and the regression manifest so
    CI findings have one durable path into portable tests.
-3. **Q6 expansion:** add result-canonicalization and transaction/Euler targets
+2. **Q6 expansion:** add result-canonicalization and transaction/Euler targets
    only after the two existing targets run in CI.
-4. **Q3-Q5 expansion:** grow tessellation, NURBS isolation, and X_T size/class
+3. **Q3-Q5 expansion:** grow tessellation, NURBS isolation, and X_T size/class
    matrices only in response to an algorithm/adoption question or measured
    coverage gap.
 
-Q0-Q2, Q8, and the current Q3-Q6 foundation slices are completed milestones.
-Q2a is the next planned scale-baseline addition. Additional fuzz targets,
-benchmark families, and broad corpus expansion remain evidence-driven.
+Q0-Q2a, Q8, and the current Q3-Q6 foundation slices are completed milestones,
+apart from Q2a's explicitly descriptor-blocked diamond row. Additional fuzz
+targets, benchmark families, and broad corpus expansion remain evidence-driven.
 
 ## Exit criteria
 

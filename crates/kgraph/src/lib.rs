@@ -23,6 +23,9 @@ pub use eval::{
     EvalBudgetProfile, EvalContext, EvalLimits, EvalUsage, SurfaceDerivativeOrder, SurfaceValidity,
     ValidityGap,
 };
+#[cfg(feature = "benchmark-internals")]
+#[doc(hidden)]
+pub use graph::GraphBuildObservation;
 pub use graph::{
     Curve2dHandle, Curve2dNode, CurveHandle, CurveNode, GeometryChanges, GeometryGraph,
     GeometryRef, SurfaceHandle, SurfaceNode,

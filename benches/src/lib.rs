@@ -6,6 +6,7 @@
 use core::fmt;
 
 pub mod body_tessellation;
+pub mod graph_build;
 pub mod nurbs_isolation;
 pub mod topology;
 pub mod xt_io;

@@ -200,6 +200,7 @@ dependencies = [
  "criterion",
  "kcore",
  "kgeom",
+ "kgraph",
  "ktopo",
  "kxt",
  "serde_json",

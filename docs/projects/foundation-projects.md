@@ -26,12 +26,12 @@ section and link the reason from the affected project file in the same change.
 | --- | --- |
 | F0 | Implemented: curve/curve operand swapping preserves completion evidence and canonical order. |
 | F1 | G1-G4a plus the F2 graph-budget adapter are implemented: `kgraph` and `ktopo::Store` own one transactional geometry graph; exact offsets evaluate through accepted/attempted node/depth accounting, check, tessellate, and round-trip through the declared X_T subset without basis duplication. The 14-file writer bundle is host-recertified and machine-fingerprinted; broader G4 corpus coverage and G5 remain. |
-| F2 | Stage 1, Stage 1b composition, the bounded NURBS/NURBS Stage 3 scale gate, two Stage 2 pilots, and the first Stage 4 migration are implemented. `OperationContext` owns family-default < session < request budget precedence for graph evaluation, Full checking, and face tessellation, including canonical root stops and accounting-mode validation. NURBS/NURBS conditioning, gradients, accepted progress, contact classification, collapsed ranges, and minimizer/local-search guards are normalized across parameter/model scales while residuals retain sole acceptance authority. Segment conditioning, overlap/input/dedup slack, structured numeric stops, contextual projection, body tessellation, and broader migrations remain. |
+| F2 | Stage 1, Stage 1b composition, the bounded NURBS/NURBS Stage 3 scale gate, two Stage 2 pilots, and contextual face-tessellation/projection/checker entries are implemented. `OperationContext` owns family-default < session < request budget precedence for graph evaluation, Full checking, face tessellation, and projection, including canonical root stops and accounting-mode validation. NURBS/NURBS conditioning, gradients, accepted progress, contact classification, collapsed ranges, and minimizer/local-search guards are normalized across parameter/model scales while residuals retain sole acceptance authority. Segment conditioning, overlap/input/dedup slack, structured numeric stops, projection caller composition/ratcheting, body tessellation, and broader migrations remain. |
 | F3 | Two slices implemented: centralized class dispatch plus shared periodic/range and first-wins candidate emission migrated through line/circle and plane/sphere. Broader driver migration and generic fallback remain. |
 | F4 | Phase 1, representative Phase 2 slices, and two Phase 3 pilots are implemented: graph evaluation owns stable classification, and one surface-intersection family retains ordered structured incomplete evidence through limits, numeric stops, canonicalization, and swapping. Broader result-family and legacy migrations remain. |
 | F5 | K1-K3, typed K4 interchange, and K5 adoption are implemented: the `kernel` facade owns lifecycle, opaque IDs, classified sources, one-scope outcomes, safe checker subjects, opaque journals, child-accounted procedural evaluation, and atomic typed X_T import/export. The standalone `kernel-lifecycle` client depends directly only on `kernel` and proves construction, semantic inspection, Full checking, surface evaluation, and byte-stable X_T export/import/re-export. Graph-aware intersection and semantic edit/journal iteration remain. |
 | F6 | First slice implemented: shared surface inversion, chart normalization, and distance services consumed by checker and tessellation. Module splits remain. |
-| F7 | Q0-Q2, Q8, and the first Q3-Q6 slices are implemented: CI now enforces Python/oracle freshness, compiles and smoke-runs the excluded benchmark package, and runs both pinned fuzz targets within fixed limits. The offset-writer change that root CI missed is captured as the first Q8 registry regression. Q2a, Q3/Q4/Q5 expansion, more Q6 targets/corpora, and Q7 remain. |
+| F7 | Q0-Q2a, Q8, and the first Q3-Q6 slices are implemented: CI now enforces Python/oracle freshness, compiles and smoke-runs the excluded benchmark package including graph construction, and runs both pinned fuzz targets within fixed limits. Q2a covers every currently representable graph shape; its diamond row awaits a real multi-dependency descriptor. Q3/Q4/Q5 expansion, more Q6 targets/corpora, and Q7 remain. |
 
 ## Current direction and handoff order
 
@@ -57,14 +57,12 @@ current record. Host findings remain ratcheted in `docs/oracle-results.tsv`.
    crate-internal calls to its legacy wrapper. K5 has now exercised the public
    compatibility surface, so proven legacy wrappers may be deprecated when
    their owning migration lands.
-2. **Measure graph construction before large imports.** Land the Q2a
-   graph-build/reverse-dependency ladder before production-scale imports or a
-   reverse-index representation change. Optimize the current deterministic
-   linear index only against that measured baseline.
-3. **Resume algorithm/API expansion behind those gates.** F3's generic fallback
+2. **Resume algorithm/API expansion behind the completed gates.** F3's generic fallback
    and facade graph-aware intersection follow the F2 scale/context work;
    semantic K4 edit transactions follow the K5 adoption pass. F6 splits and F4
-   legacy cleanup land only with an owner-level behavioral migration.
+   legacy cleanup land only with an owner-level behavioral migration. The Q2a
+   ladder is now executable in CI; any reverse-index representation change
+   still requires a recorded stable-host before/after comparison.
 
 No C ABI, plugin ABI, broad topology privacy break, speculative facade family,
 or file-size-only module split is part of this convergence phase.
@@ -87,9 +85,8 @@ as broad parallel expansion: Q8 made the harness protective; K5 tested the
 facade against a consumer; the completed F2 profile/scale gates make bounded F3
 fallback work eligible; X_T reconstruction and checked-commit Fast checking now
 share one graph child in one scope, while projection caller composition and body
-tessellation remain.
-The Q2a graph-build
-baseline gates large imports and reverse-index optimization.
+tessellation remain. The Q2a graph-build ladder now protects construction-scale
+work; reverse-index optimization still waits for comparative measurements.
 
 ### Standing handoff ratchets
 
@@ -102,8 +99,9 @@ baseline gates large imports and reverse-index optimization.
 - The facade-only lifecycle client keeps exactly `kernel` as its direct
   dependency, and the reviewed `kernel` package inventory stays enforced in
   CI.
-- Large import claims wait for a graph-construction baseline; representation
-  optimization waits for measurements and preserves deterministic ordering.
+- Large-import work exercises the graph-construction ladder; representation
+  optimization includes a stable-host before/after measurement and preserves
+  deterministic ordering.
 
 ## Reconciled F1/F2/F4 boundary
 

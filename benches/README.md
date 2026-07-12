@@ -53,6 +53,7 @@ contain no performance claim.
 cargo test --manifest-path benches/Cargo.toml
 cargo bench --manifest-path benches/Cargo.toml --bench benchmark_contract --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench topology_commit --no-run
+cargo bench --manifest-path benches/Cargo.toml --bench graph_build --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench body_tessellation --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench nurbs_isolation --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench xt_io --no-run
@@ -68,6 +69,18 @@ run outside the accumulated duration. Read-only full-rebuild samples reuse one
 verified prepared fixture so Criterion calibration does not repeat excluded
 cloning and snapshot work. Set `KERNEL_BENCH_SMOKE=1` and pass one full case
 path after `--` for a bounded local smoke run.
+
+The Q2a target registers 17 graph-construction cases: independent plane nodes
+at 1 through 10,000 nodes, offset dependency chains and shared-basis fanout at
+1 through 1,000 edges, and rejected transient chains with exact undo rollback
+at 1 through 1,000 nodes. Descriptor policy and rollback control state are
+prepared outside timing. Only graph insertion, dependency maintenance, and
+rollback are timed; evaluation is deliberately absent. Every sample verifies
+node/edge counts, actual reverse-index registrations and complete-order
+rebuilds, stable iteration order, graph and reverse-index digests, validation,
+and rollback equality. The planned diamond row is deferred because current
+descriptors expose at most one dependency; the harness does not invent a
+benchmark-only graph shape.
 
 The first Q3 slice registers ten analytic closed-solid cases: block, cylinder,
 cone, sphere, and torus at chord tolerances `1e-2` and `1e-3`. Cylinder,

@@ -546,6 +546,176 @@
       }
     },
     {
+      "path": "graph/build/independent-planes-v1/1/default-v1",
+      "benchmark_target": "graph_build",
+      "fixture_version": "graph-build.v1",
+      "deterministic_seed": 5860364271066677254,
+      "size_parameters": {"elements": 1, "nodes": 1},
+      "tolerances": {},
+      "policy_values": {"shape": "independent", "evaluation": "excluded"},
+      "expected_result_counters": {"nodes": 1, "dependency_edges": 0, "registered_nodes": 1, "registered_dependency_edges": 0, "reverse_index_updates": 1, "full_order_rebuilds": 1, "stable_order": true, "graph_digest": "5c414503e372ce9b", "reverse_index_digest": "a0073203cc9cfeb4", "output_digest": "5c976e02709a9723"}
+    },
+    {
+      "path": "graph/build/independent-planes-v1/10/default-v1",
+      "benchmark_target": "graph_build",
+      "fixture_version": "graph-build.v1",
+      "deterministic_seed": 5860364271066677254,
+      "size_parameters": {"elements": 10, "nodes": 10},
+      "tolerances": {},
+      "policy_values": {"shape": "independent", "evaluation": "excluded"},
+      "expected_result_counters": {"nodes": 10, "dependency_edges": 0, "registered_nodes": 10, "registered_dependency_edges": 0, "reverse_index_updates": 10, "full_order_rebuilds": 10, "stable_order": true, "graph_digest": "b422a04ca195f688", "reverse_index_digest": "37b19f4662c0705e", "output_digest": "b9c1929225915cad"}
+    },
+    {
+      "path": "graph/build/independent-planes-v1/100/default-v1",
+      "benchmark_target": "graph_build",
+      "fixture_version": "graph-build.v1",
+      "deterministic_seed": 5860364271066677254,
+      "size_parameters": {"elements": 100, "nodes": 100},
+      "tolerances": {},
+      "policy_values": {"shape": "independent", "evaluation": "excluded"},
+      "expected_result_counters": {"nodes": 100, "dependency_edges": 0, "registered_nodes": 100, "registered_dependency_edges": 0, "reverse_index_updates": 100, "full_order_rebuilds": 100, "stable_order": true, "graph_digest": "2fecb6a8e55a1843", "reverse_index_digest": "7b34c7ff2f4143f1", "output_digest": "f9b4eaf54768c8ee"}
+    },
+    {
+      "path": "graph/build/independent-planes-v1/1000/default-v1",
+      "benchmark_target": "graph_build",
+      "fixture_version": "graph-build.v1",
+      "deterministic_seed": 5860364271066677254,
+      "size_parameters": {"elements": 1000, "nodes": 1000},
+      "tolerances": {},
+      "policy_values": {"shape": "independent", "evaluation": "excluded"},
+      "expected_result_counters": {"nodes": 1000, "dependency_edges": 0, "registered_nodes": 1000, "registered_dependency_edges": 0, "reverse_index_updates": 1000, "full_order_rebuilds": 1000, "stable_order": true, "graph_digest": "6db7056df18d982a", "reverse_index_digest": "b1188b0354e2e48c", "output_digest": "8f6344a524db609d"}
+    },
+    {
+      "path": "graph/build/independent-planes-v1/10000/default-v1",
+      "benchmark_target": "graph_build",
+      "fixture_version": "graph-build.v1",
+      "deterministic_seed": 5860364271066677254,
+      "size_parameters": {"elements": 10000, "nodes": 10000},
+      "tolerances": {},
+      "policy_values": {"shape": "independent", "evaluation": "excluded"},
+      "expected_result_counters": {"nodes": 10000, "dependency_edges": 0, "registered_nodes": 10000, "registered_dependency_edges": 0, "reverse_index_updates": 10000, "full_order_rebuilds": 10000, "stable_order": true, "graph_digest": "0554149cf309e6ce", "reverse_index_digest": "c78b7b0664e6f5a8", "output_digest": "6ad76edeb73dbbdb"}
+    },
+    {
+      "path": "graph/build/offset-chain-v1/1/default-v1",
+      "benchmark_target": "graph_build",
+      "fixture_version": "graph-build.v1",
+      "deterministic_seed": 5860364271066677254,
+      "size_parameters": {"elements": 1, "dependency_depth": 1},
+      "tolerances": {},
+      "policy_values": {"shape": "chain", "evaluation": "excluded"},
+      "expected_result_counters": {"nodes": 2, "dependency_edges": 1, "registered_nodes": 2, "registered_dependency_edges": 1, "reverse_index_updates": 3, "full_order_rebuilds": 2, "stable_order": true, "graph_digest": "6a06790fbc1337bd", "reverse_index_digest": "e10da8c267f60616", "output_digest": "c9c2ece5e6207867"}
+    },
+    {
+      "path": "graph/build/offset-chain-v1/10/default-v1",
+      "benchmark_target": "graph_build",
+      "fixture_version": "graph-build.v1",
+      "deterministic_seed": 5860364271066677254,
+      "size_parameters": {"elements": 10, "dependency_depth": 10},
+      "tolerances": {},
+      "policy_values": {"shape": "chain", "evaluation": "excluded"},
+      "expected_result_counters": {"nodes": 11, "dependency_edges": 10, "registered_nodes": 11, "registered_dependency_edges": 10, "reverse_index_updates": 21, "full_order_rebuilds": 11, "stable_order": true, "graph_digest": "e6e10cc127558f99", "reverse_index_digest": "471db684314001fe", "output_digest": "8a2c2e80eab4193c"}
+    },
+    {
+      "path": "graph/build/offset-chain-v1/100/default-v1",
+      "benchmark_target": "graph_build",
+      "fixture_version": "graph-build.v1",
+      "deterministic_seed": 5860364271066677254,
+      "size_parameters": {"elements": 100, "dependency_depth": 100},
+      "tolerances": {},
+      "policy_values": {"shape": "chain", "evaluation": "excluded"},
+      "expected_result_counters": {"nodes": 101, "dependency_edges": 100, "registered_nodes": 101, "registered_dependency_edges": 100, "reverse_index_updates": 201, "full_order_rebuilds": 101, "stable_order": true, "graph_digest": "3953b45410da73b7", "reverse_index_digest": "8419f106b33c76d0", "output_digest": "50d9fedca303c57f"}
+    },
+    {
+      "path": "graph/build/offset-chain-v1/1000/default-v1",
+      "benchmark_target": "graph_build",
+      "fixture_version": "graph-build.v1",
+      "deterministic_seed": 5860364271066677254,
+      "size_parameters": {"elements": 1000, "dependency_depth": 1000},
+      "tolerances": {},
+      "policy_values": {"shape": "chain", "evaluation": "excluded"},
+      "expected_result_counters": {"nodes": 1001, "dependency_edges": 1000, "registered_nodes": 1001, "registered_dependency_edges": 1000, "reverse_index_updates": 2001, "full_order_rebuilds": 1001, "stable_order": true, "graph_digest": "5e9464ea140c5b57", "reverse_index_digest": "cc7e636742c1c33d", "output_digest": "e6b9729546656269"}
+    },
+    {
+      "path": "graph/build/shared-offset-basis-v1/1/default-v1",
+      "benchmark_target": "graph_build",
+      "fixture_version": "graph-build.v1",
+      "deterministic_seed": 5860364271066677254,
+      "size_parameters": {"elements": 1, "dependents": 1},
+      "tolerances": {},
+      "policy_values": {"shape": "fanout", "evaluation": "excluded"},
+      "expected_result_counters": {"nodes": 2, "dependency_edges": 1, "registered_nodes": 2, "registered_dependency_edges": 1, "reverse_index_updates": 3, "full_order_rebuilds": 2, "stable_order": true, "graph_digest": "6a06790fbc1337bd", "reverse_index_digest": "e10da8c267f60616", "output_digest": "c9c2ece5e6207867"}
+    },
+    {
+      "path": "graph/build/shared-offset-basis-v1/10/default-v1",
+      "benchmark_target": "graph_build",
+      "fixture_version": "graph-build.v1",
+      "deterministic_seed": 5860364271066677254,
+      "size_parameters": {"elements": 10, "dependents": 10},
+      "tolerances": {},
+      "policy_values": {"shape": "fanout", "evaluation": "excluded"},
+      "expected_result_counters": {"nodes": 11, "dependency_edges": 10, "registered_nodes": 11, "registered_dependency_edges": 10, "reverse_index_updates": 21, "full_order_rebuilds": 11, "stable_order": true, "graph_digest": "0a281e1f4f83d9a8", "reverse_index_digest": "da269a8bba2d5d34", "output_digest": "b0073103327614f5"}
+    },
+    {
+      "path": "graph/build/shared-offset-basis-v1/100/default-v1",
+      "benchmark_target": "graph_build",
+      "fixture_version": "graph-build.v1",
+      "deterministic_seed": 5860364271066677254,
+      "size_parameters": {"elements": 100, "dependents": 100},
+      "tolerances": {},
+      "policy_values": {"shape": "fanout", "evaluation": "excluded"},
+      "expected_result_counters": {"nodes": 101, "dependency_edges": 100, "registered_nodes": 101, "registered_dependency_edges": 100, "reverse_index_updates": 201, "full_order_rebuilds": 101, "stable_order": true, "graph_digest": "e73f8894acf99c63", "reverse_index_digest": "520fca0b57394374", "output_digest": "3500aa1482d35fcd"}
+    },
+    {
+      "path": "graph/build/shared-offset-basis-v1/1000/default-v1",
+      "benchmark_target": "graph_build",
+      "fixture_version": "graph-build.v1",
+      "deterministic_seed": 5860364271066677254,
+      "size_parameters": {"elements": 1000, "dependents": 1000},
+      "tolerances": {},
+      "policy_values": {"shape": "fanout", "evaluation": "excluded"},
+      "expected_result_counters": {"nodes": 1001, "dependency_edges": 1000, "registered_nodes": 1001, "registered_dependency_edges": 1000, "reverse_index_updates": 2001, "full_order_rebuilds": 1001, "stable_order": true, "graph_digest": "68e86a3ea2a427bb", "reverse_index_digest": "3eba19f165114864", "output_digest": "e814f1051234775c"}
+    },
+    {
+      "path": "graph/rollback/dependent-chain-v1/1/rejected-v1",
+      "benchmark_target": "graph_build",
+      "fixture_version": "graph-build.v1",
+      "deterministic_seed": 5860364271066677254,
+      "size_parameters": {"elements": 1, "transient_nodes": 1},
+      "tolerances": {},
+      "policy_values": {"shape": "rollback-chain", "rejection": "non-finite-offset"},
+      "expected_result_counters": {"nodes": 1, "dependency_edges": 0, "registered_nodes": 1, "registered_dependency_edges": 1, "reverse_index_updates": 2, "full_order_rebuilds": 1, "stable_order": true, "rejected": true, "rolled_back": true, "graph_digest": "5c414503e372ce9b", "reverse_index_digest": "a0073203cc9cfeb4", "output_digest": "c4cbe32474e65e74"}
+    },
+    {
+      "path": "graph/rollback/dependent-chain-v1/10/rejected-v1",
+      "benchmark_target": "graph_build",
+      "fixture_version": "graph-build.v1",
+      "deterministic_seed": 5860364271066677254,
+      "size_parameters": {"elements": 10, "transient_nodes": 10},
+      "tolerances": {},
+      "policy_values": {"shape": "rollback-chain", "rejection": "non-finite-offset"},
+      "expected_result_counters": {"nodes": 1, "dependency_edges": 0, "registered_nodes": 10, "registered_dependency_edges": 10, "reverse_index_updates": 20, "full_order_rebuilds": 10, "stable_order": true, "rejected": true, "rolled_back": true, "graph_digest": "5c414503e372ce9b", "reverse_index_digest": "a0073203cc9cfeb4", "output_digest": "0d41a5998403c0b3"}
+    },
+    {
+      "path": "graph/rollback/dependent-chain-v1/100/rejected-v1",
+      "benchmark_target": "graph_build",
+      "fixture_version": "graph-build.v1",
+      "deterministic_seed": 5860364271066677254,
+      "size_parameters": {"elements": 100, "transient_nodes": 100},
+      "tolerances": {},
+      "policy_values": {"shape": "rollback-chain", "rejection": "non-finite-offset"},
+      "expected_result_counters": {"nodes": 1, "dependency_edges": 0, "registered_nodes": 100, "registered_dependency_edges": 100, "reverse_index_updates": 200, "full_order_rebuilds": 100, "stable_order": true, "rejected": true, "rolled_back": true, "graph_digest": "5c414503e372ce9b", "reverse_index_digest": "a0073203cc9cfeb4", "output_digest": "0158a68ed000497d"}
+    },
+    {
+      "path": "graph/rollback/dependent-chain-v1/1000/rejected-v1",
+      "benchmark_target": "graph_build",
+      "fixture_version": "graph-build.v1",
+      "deterministic_seed": 5860364271066677254,
+      "size_parameters": {"elements": 1000, "transient_nodes": 1000},
+      "tolerances": {},
+      "policy_values": {"shape": "rollback-chain", "rejection": "non-finite-offset"},
+      "expected_result_counters": {"nodes": 1, "dependency_edges": 0, "registered_nodes": 1000, "registered_dependency_edges": 1000, "reverse_index_updates": 2000, "full_order_rebuilds": 1000, "stable_order": true, "rejected": true, "rolled_back": true, "graph_digest": "5c414503e372ce9b", "reverse_index_digest": "a0073203cc9cfeb4", "output_digest": "f4b5db247d34b4c5"}
+    },
+    {
       "path": "topology/body-tessellation/block-v1/1/chord-1e-2-v1",
       "benchmark_target": "body_tessellation",
       "fixture_version": "body-tessellation.v1",

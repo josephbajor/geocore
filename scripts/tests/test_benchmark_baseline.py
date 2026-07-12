@@ -28,7 +28,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 46)
+        self.assertEqual(len(cases), 63)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -58,6 +58,28 @@ class BenchmarkBaselineTests(unittest.TestCase):
             all(
                 "output_digest" in case["expected_result_counters"]
                 for case in topology
+            )
+        )
+        graph_build = [
+            case for case in cases if case["benchmark_target"] == "graph_build"
+        ]
+        self.assertEqual(len(graph_build), 17)
+        self.assertTrue(
+            all(
+                case["deterministic_seed"] == 0x5154324147520006
+                for case in graph_build
+            )
+        )
+        self.assertEqual(
+            {case["policy_values"]["shape"] for case in graph_build},
+            {"independent", "chain", "fanout", "rollback-chain"},
+        )
+        self.assertTrue(
+            all(
+                case["expected_result_counters"]["stable_order"]
+                and "graph_digest" in case["expected_result_counters"]
+                and "reverse_index_digest" in case["expected_result_counters"]
+                for case in graph_build
             )
         )
         tessellation = [

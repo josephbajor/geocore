@@ -79,13 +79,17 @@ jobs:
       - name: Smoke the smallest fixture only
         env:
           KERNEL_BENCH_SMOKE: "1"
-        run: cargo bench --manifest-path benches/Cargo.toml --locked --bench benchmark_contract -- harness/contract/tiny-v1/64/default-v1
+        run: |
+          cargo bench --manifest-path benches/Cargo.toml --locked --bench benchmark_contract -- harness/contract/tiny-v1/64/default-v1
+          cargo bench --manifest-path benches/Cargo.toml --locked --bench graph_build -- graph/build/independent-planes-v1/1/default-v1
       - name: Upload advisory smoke samples
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-smoke-${{ github.sha }}
-          path: benches/target/criterion/harness_contract_tiny-v1_64/default-v1/new/
+          path: |
+            benches/target/criterion/harness_contract_tiny-v1_64/default-v1/new/
+            benches/target/criterion/graph_build_independent-planes-v1_1/default-v1/new/
           if-no-files-found: ignore
           retention-days: 7
 

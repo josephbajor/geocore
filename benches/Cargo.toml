@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 kcore = { path = "../crates/kcore" }
 kgeom = { path = "../crates/kgeom" }
+kgraph = { path = "../crates/kgraph", features = ["benchmark-internals"] }
 ktopo = { path = "../crates/ktopo", features = ["benchmark-internals"] }
 kxt = { path = "../crates/kxt" }
 
@@ -21,6 +22,10 @@ harness = false
 
 [[bench]]
 name = "topology_commit"
+harness = false
+
+[[bench]]
+name = "graph_build"
 harness = false
 
 [[bench]]

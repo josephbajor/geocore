@@ -40,6 +40,47 @@ struct ReverseDependencyIndex {
     entries: Vec<(GeometryRef, Vec<GeometryRef>)>,
 }
 
+/// Read-only construction counters for the isolated benchmark package.
+///
+/// This is not a stable kernel API. It is available only with the
+/// `benchmark-internals` feature and deliberately exposes no index storage.
+#[cfg(feature = "benchmark-internals")]
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GraphBuildObservation {
+    registered_nodes: usize,
+    registered_dependency_edges: usize,
+    full_order_rebuilds: usize,
+}
+
+#[cfg(feature = "benchmark-internals")]
+impl GraphBuildObservation {
+    /// Nodes registered in the reverse-dependency index.
+    pub const fn registered_nodes(self) -> usize {
+        self.registered_nodes
+    }
+
+    /// Dependency edges registered in the reverse-dependency index.
+    pub const fn registered_dependency_edges(self) -> usize {
+        self.registered_dependency_edges
+    }
+
+    /// Complete geometry orders rebuilt for deterministic dependent sorting.
+    pub const fn full_order_rebuilds(self) -> usize {
+        self.full_order_rebuilds
+    }
+
+    /// Difference between two cumulative observations from the same graph.
+    pub const fn since(self, earlier: Self) -> Self {
+        Self {
+            registered_nodes: self.registered_nodes - earlier.registered_nodes,
+            registered_dependency_edges: self.registered_dependency_edges
+                - earlier.registered_dependency_edges,
+            full_order_rebuilds: self.full_order_rebuilds - earlier.full_order_rebuilds,
+        }
+    }
+}
+
 impl ReverseDependencyIndex {
     fn register(&mut self, geometry: GeometryRef) {
         self.entries.push((geometry, Vec::new()));
@@ -89,6 +130,8 @@ pub struct GeometryGraph {
     curves_2d: Arena<Curve2dNode>,
     reverse_dependencies: ReverseDependencyIndex,
     undo_reverse_dependencies: Vec<ReverseDependencyIndex>,
+    #[cfg(feature = "benchmark-internals")]
+    benchmark_observation: GraphBuildObservation,
 }
 
 impl Clone for GeometryGraph {
@@ -99,6 +142,8 @@ impl Clone for GeometryGraph {
             curves_2d: self.curves_2d.clone(),
             reverse_dependencies: self.reverse_dependencies.clone(),
             undo_reverse_dependencies: Vec::new(),
+            #[cfg(feature = "benchmark-internals")]
+            benchmark_observation: self.benchmark_observation,
         }
     }
 }
@@ -138,6 +183,13 @@ impl GeometryGraph {
     /// Whether the graph contains no live nodes.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Snapshot cumulative graph-construction work for benchmark verification.
+    #[cfg(feature = "benchmark-internals")]
+    #[doc(hidden)]
+    pub const fn benchmark_observation(&self) -> GraphBuildObservation {
+        self.benchmark_observation
     }
 
     /// Start an undo frame spanning every geometry arena and dependency index.
@@ -439,13 +491,25 @@ impl GeometryGraph {
 
     fn register(&mut self, geometry: GeometryRef, dependencies: &[GeometryRef]) {
         self.reverse_dependencies.register(geometry);
+        #[cfg(feature = "benchmark-internals")]
+        {
+            self.benchmark_observation.registered_nodes += 1;
+        }
         for dependency in dependencies {
             self.reverse_dependencies.add(*dependency, geometry);
+            #[cfg(feature = "benchmark-internals")]
+            {
+                self.benchmark_observation.registered_dependency_edges += 1;
+            }
         }
         self.sort_reverse_dependents();
     }
 
     fn sort_reverse_dependents(&mut self) {
+        #[cfg(feature = "benchmark-internals")]
+        {
+            self.benchmark_observation.full_order_rebuilds += 1;
+        }
         let order: Vec<_> = self.geometry().collect();
         for (_, dependents) in &mut self.reverse_dependencies.entries {
             dependents.sort_by_key(|dependent| {
@@ -708,6 +772,10 @@ fn validate_curve2d(descriptor: &Curve2dDescriptor) -> GeometryGraphResult<()> {
 mod tests {
     use super::*;
     use kgeom::curve::Line;
+    #[cfg(feature = "benchmark-internals")]
+    use kgeom::frame::Frame;
+    #[cfg(feature = "benchmark-internals")]
+    use kgeom::surface::Plane;
     use kgeom::vec::Vec3;
 
     #[test]
@@ -731,5 +799,41 @@ mod tests {
             })
         );
         assert!(graph.curve(basis).is_some());
+    }
+
+    #[cfg(feature = "benchmark-internals")]
+    #[test]
+    fn benchmark_observation_counts_attempted_build_work_across_rollback() {
+        let mut graph = GeometryGraph::new();
+        let basis = graph.insert_surface(Plane::new(Frame::world())).unwrap();
+        assert_eq!(
+            graph.benchmark_observation(),
+            GraphBuildObservation {
+                registered_nodes: 1,
+                registered_dependency_edges: 0,
+                full_order_rebuilds: 1,
+            }
+        );
+
+        let before = graph.benchmark_observation();
+        graph.begin_undo_frame();
+        let transient = graph
+            .insert_surface(crate::OffsetSurfaceDescriptor::new(basis, 0.5))
+            .unwrap();
+        graph.rollback_undo_frame().unwrap();
+
+        assert!(graph.surface(transient).is_none());
+        assert_eq!(graph.len(), 1);
+        assert_eq!(graph.dependents(GeometryRef::Surface(basis)).unwrap(), []);
+        assert_eq!(
+            graph.benchmark_observation().since(before),
+            GraphBuildObservation {
+                registered_nodes: 1,
+                registered_dependency_edges: 1,
+                full_order_rebuilds: 1,
+            },
+            "read-only counters report attempted work and are not graph state"
+        );
+        graph.validate().unwrap();
     }
 }
