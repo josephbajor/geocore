@@ -49,6 +49,7 @@ use crate::entity::{
 use crate::geom::{Curve2dGeom, SurfaceGeom};
 use crate::store::Store;
 use kcore::error::Error;
+use kcore::operation::{LimitSnapshot, ResourceKind, StageId};
 use kgeom::curve::Curve;
 use kgeom::surface::Surface;
 use kgeom::surface_point::{invert_surface_point, normalize_surface_uv};
@@ -163,6 +164,34 @@ const MARGIN: f64 = 0.9;
 /// Recursion cap for edge / iso-arc refinement (2^16 segments).
 const MAX_DEPTH: usize = 16;
 
+/// Stable stage for exact-edge curve-refinement depth.
+pub const BODY_TESSELLATION_EDGE_DEPTH: StageId =
+    match StageId::new("ktopo.body-tessellation.edge-depth") {
+        Ok(stage) => stage,
+        Err(_) => panic!("valid body-tessellation edge-depth stage"),
+    };
+
+/// Stable stage for surface iso/seam arc-refinement depth.
+pub const BODY_TESSELLATION_ISO_ARC_DEPTH: StageId =
+    match StageId::new("ktopo.body-tessellation.iso-arc-depth") {
+        Ok(stage) => stage,
+        Err(_) => panic!("valid body-tessellation iso-arc-depth stage"),
+    };
+
+/// Stable stage for retained vertices in a whole-body mesh.
+pub const BODY_TESSELLATION_MESH_VERTICES: StageId =
+    match StageId::new("ktopo.body-tessellation.mesh-vertices") {
+        Ok(stage) => stage,
+        Err(_) => panic!("valid body-tessellation mesh-vertices stage"),
+    };
+
+/// Inclusive legacy exact-edge refinement depth allowance.
+pub const BODY_TESSELLATION_EDGE_DEPTH_LIMIT: u64 = MAX_DEPTH as u64;
+/// Inclusive legacy iso/seam arc refinement depth allowance.
+pub const BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT: u64 = MAX_DEPTH as u64;
+/// Inclusive number of vertices addressable by `u32` mesh indices.
+pub const BODY_TESSELLATION_MESH_VERTEX_LIMIT: u64 = u32::MAX as u64 + 1;
+
 /// Refinement tolerances, margin-scaled from the caller's [`TessOptions`].
 #[derive(Clone, Copy)]
 struct Ctx {
@@ -176,14 +205,46 @@ struct MeshAcc {
 }
 
 impl MeshAcc {
-    fn push(&mut self, p: Point3) -> u32 {
-        let i = u32::try_from(self.positions.len()).expect("mesh exceeded u32 vertex capacity");
+    fn push(&mut self, p: Point3) -> Result<u32> {
+        let i = mesh_vertex_index(self.positions.len())?;
         self.positions.push(p);
-        i
+        Ok(i)
     }
     fn pos(&self, gid: u32) -> Point3 {
         self.positions[gid as usize]
     }
+}
+
+fn mesh_vertex_index(current_items: usize) -> Result<u32> {
+    u32::try_from(current_items).map_err(|_| {
+        Error::ResourceLimit {
+            snapshot: LimitSnapshot {
+                stage: BODY_TESSELLATION_MESH_VERTICES,
+                resource: ResourceKind::Items,
+                consumed: u64::try_from(current_items)
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1),
+                allowed: BODY_TESSELLATION_MESH_VERTEX_LIMIT,
+            },
+        }
+        .into()
+    })
+}
+
+fn next_refinement_depth(depth: usize, stage: StageId, allowed: u64) -> Result<usize> {
+    let next = depth.saturating_add(1);
+    if next > MAX_DEPTH {
+        return Err(Error::ResourceLimit {
+            snapshot: LimitSnapshot {
+                stage,
+                resource: ResourceKind::Depth,
+                consumed: u64::try_from(next).unwrap_or(u64::MAX),
+                allowed,
+            },
+        }
+        .into());
+    }
+    Ok(next)
 }
 
 /// Distance from `p` to the 3D segment `[a, b]`.
@@ -312,14 +373,19 @@ impl CurveRefine<'_> {
         depth: usize,
         out: &mut Vec<(f64, Point3)>,
     ) -> Result<()> {
-        if depth >= MAX_DEPTH || !self.needs_split(a, b)? {
+        if !self.needs_split(a, b)? {
             return Ok(());
         }
+        let next_depth = next_refinement_depth(
+            depth,
+            BODY_TESSELLATION_EDGE_DEPTH,
+            BODY_TESSELLATION_EDGE_DEPTH_LIMIT,
+        )?;
         let tm = (a.0 + b.0) / 2.0;
         let m = (tm, self.point_at(tm)?);
-        self.refine(a, m, depth + 1, out)?;
+        self.refine(a, m, next_depth, out)?;
         out.push(m);
-        self.refine(m, b, depth + 1, out)
+        self.refine(m, b, next_depth, out)
     }
 }
 
@@ -332,19 +398,21 @@ fn refine_uv_seg(
     ctx: Ctx,
     depth: usize,
     out: &mut Vec<(Vec2, Point3)>,
-) {
-    if depth >= MAX_DEPTH {
-        return;
-    }
+) -> Result<()> {
     let mid_uv = (a.0 + b.0) / 2.0;
     let mid_p = s.eval([mid_uv.x, mid_uv.y]);
     if point_seg_dist(mid_p, a.1, b.1) <= ctx.tol && a.1.dist(b.1) <= ctx.max_len {
-        return;
+        return Ok(());
     }
+    let next_depth = next_refinement_depth(
+        depth,
+        BODY_TESSELLATION_ISO_ARC_DEPTH,
+        BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT,
+    )?;
     let m = (mid_uv, mid_p);
-    refine_uv_seg(s, a, m, ctx, depth + 1, out);
+    refine_uv_seg(s, a, m, ctx, next_depth, out)?;
     out.push(m);
-    refine_uv_seg(s, m, b, ctx, depth + 1, out);
+    refine_uv_seg(s, m, b, ctx, next_depth, out)
 }
 
 /// An iso/seam arc: UV points with their global vertex ids, endpoints
@@ -353,7 +421,13 @@ type Arc = Vec<(Vec2, u32)>;
 
 /// Build an arc between two existing global vertices by refining the
 /// straight UV segment; interior points become fresh global vertices.
-fn iso_arc(s: &dyn Surface, a: (Vec2, u32), b: (Vec2, u32), acc: &mut MeshAcc, ctx: Ctx) -> Arc {
+fn iso_arc(
+    s: &dyn Surface,
+    a: (Vec2, u32),
+    b: (Vec2, u32),
+    acc: &mut MeshAcc,
+    ctx: Ctx,
+) -> Result<Arc> {
     let mut interior = Vec::new();
     refine_uv_seg(
         s,
@@ -362,15 +436,15 @@ fn iso_arc(s: &dyn Surface, a: (Vec2, u32), b: (Vec2, u32), acc: &mut MeshAcc, c
         ctx,
         0,
         &mut interior,
-    );
+    )?;
     let mut arc = Vec::with_capacity(interior.len() + 2);
     arc.push(a);
     for (uv, p) in interior {
-        let gid = acc.push(p);
+        let gid = acc.push(p)?;
         arc.push((uv, gid));
     }
     arc.push(b);
-    arc
+    Ok(arc)
 }
 
 /// One trim loop expressed in the face surface's UV space: global vertex
@@ -469,7 +543,7 @@ fn discretize_edge(
             let c = curve.ok_or(Error::InvalidGeometry {
                 reason: "curve-less tolerant ring edges are unsupported",
             })?;
-            let g = acc.push(c.eval(t0));
+            let g = acc.push(c.eval(t0))?;
             (g, g, true)
         }
         _ => {
@@ -533,7 +607,7 @@ fn discretize_edge(
         for (parameter, point) in interior {
             samples.push(EdgeSample {
                 parameter,
-                vertex: acc.push(point),
+                vertex: acc.push(point)?,
             });
         }
         // Segment end: a seed interior point gets a fresh vertex; the
@@ -541,7 +615,7 @@ fn discretize_edge(
         if w[1].0 < t1 {
             samples.push(EdgeSample {
                 parameter: w[1].0,
-                vertex: acc.push(w[1].1),
+                vertex: acc.push(w[1].1)?,
             });
         }
     }
@@ -790,8 +864,11 @@ fn run_kgeom(
     let l2g: Vec<u32> = l2g
         .into_iter()
         .enumerate()
-        .map(|(li, g)| g.unwrap_or_else(|| acc.push(fm.positions[li])))
-        .collect();
+        .map(|(li, g)| match g {
+            Some(gid) => Ok(gid),
+            None => acc.push(fm.positions[li]),
+        })
+        .collect::<Result<_>>()?;
 
     let mut out = Vec::with_capacity(fm.triangles.len());
     for t in &fm.triangles {
@@ -923,7 +1000,7 @@ fn face_case_b(
         (t_first, top.ids[0]),
         acc,
         ctx,
-    );
+    )?;
 
     let mut pts: Vec<Vec2> = Vec::new();
     let mut ids: Vec<u32> = Vec::new();
@@ -1030,7 +1107,7 @@ fn face_case_cap(
         .into());
     }
 
-    let g_pole = acc.push(s.eval([cuvs[0].x, pole_v]));
+    let g_pole = acc.push(s.eval([cuvs[0].x, pole_v]))?;
     let pole_at = |u: f64| (Vec2::new(u, pole_v), g_pole);
 
     // Split at the existing chain sample nearest half a period around.
@@ -1078,8 +1155,8 @@ fn face_case_cap(
 
     let patches: [PatchArcs; 2] = if w > 0 {
         // Chain below (travels +u), pole row above.
-        let m0 = iso_arc(s, (cuvs[0], cids[0]), pole_at(cuvs[0].x), acc, ctx);
-        let mk = iso_arc(s, (cuvs[k], cids[k]), pole_at(cuvs[k].x), acc, ctx);
+        let m0 = iso_arc(s, (cuvs[0], cids[0]), pole_at(cuvs[0].x), acc, ctx)?;
+        let mk = iso_arc(s, (cuvs[k], cids[k]), pole_at(cuvs[k].x), acc, ctx)?;
         [
             PatchArcs {
                 bottom: seg(0, k),
@@ -1097,8 +1174,8 @@ fn face_case_cap(
     } else {
         // Pole row below, chain above (travels -u); top arcs are stored
         // ascending in u, i.e. the chain segments reversed.
-        let m0 = iso_arc(s, pole_at(cuvs[0].x), (cuvs[0], cids[0]), acc, ctx);
-        let mk = iso_arc(s, pole_at(cuvs[k].x), (cuvs[k], cids[k]), acc, ctx);
+        let m0 = iso_arc(s, pole_at(cuvs[0].x), (cuvs[0], cids[0]), acc, ctx)?;
+        let mk = iso_arc(s, pole_at(cuvs[k].x), (cuvs[k], cids[k]), acc, ctx)?;
         [
             PatchArcs {
                 bottom: row(cuvs[k].x, cuvs[0].x),
@@ -1340,8 +1417,8 @@ fn face_case_c(
     match sg {
         SurfaceGeom::Sphere(sp) => {
             let half = core::f64::consts::FRAC_PI_2;
-            let g_s = acc.push(s.eval([0.0, -half]));
-            let g_n = acc.push(s.eval([0.0, half]));
+            let g_s = acc.push(s.eval([0.0, -half]))?;
+            let g_n = acc.push(s.eval([0.0, half]))?;
             // Meridian arcs at u = 0 and u = π; u = 2π reuses the first.
             let meridian = |u: f64, acc: &mut MeshAcc| {
                 iso_arc(
@@ -1352,8 +1429,8 @@ fn face_case_c(
                     ctx,
                 )
             };
-            let m0 = meridian(0.0, acc);
-            let m1 = meridian(pi, acc);
+            let m0 = meridian(0.0, acc)?;
+            let m1 = meridian(pi, acc)?;
             let m2 = shift_arc(&m0, Vec2::new(tau, 0.0));
             // Pole-row sampling density from the equator sagitta.
             let r = sp.radius();
@@ -1380,7 +1457,7 @@ fn face_case_c(
             for (i, gi) in g.iter_mut().enumerate() {
                 for (j, gij) in gi.iter_mut().enumerate() {
                     let [u, v] = corner(i, j);
-                    *gij = acc.push(s.eval([u, v]));
+                    *gij = acc.push(s.eval([u, v]))?;
                 }
             }
             let at = |i: usize, j: usize| {
@@ -1393,14 +1470,14 @@ fn face_case_c(
             for i in 0..2 {
                 let mut row = Vec::new();
                 for j in 0..2 {
-                    row.push(iso_arc(s, at(i, j), at(i + 1, j), acc, ctx));
+                    row.push(iso_arc(s, at(i, j), at(i + 1, j), acc, ctx)?);
                 }
                 au.push(row);
             }
             for j in 0..2 {
                 let mut col = Vec::new();
                 for i in 0..2 {
-                    col.push(iso_arc(s, at(i, j), at(i, j + 1), acc, ctx));
+                    col.push(iso_arc(s, at(i, j), at(i, j + 1), acc, ctx)?);
                 }
                 av.push(col);
             }
@@ -1542,7 +1619,7 @@ pub fn tessellate_body(store: &Store, body: BodyId, opts: &TessOptions) -> Resul
     // One global vertex per topological vertex.
     let mut vgids: Vec<(VertexId, u32)> = Vec::new();
     for v in store.vertices_of_body(body)? {
-        let gid = acc.push(store.vertex_position(v)?);
+        let gid = acc.push(store.vertex_position(v)?)?;
         vgids.push((v, gid));
     }
     // Every edge discretized exactly once.
@@ -1588,7 +1665,7 @@ mod tests {
     use crate::geom::CurveGeom;
     use crate::make::{block, cylinder, planar_sheet, solid_body_scaffold};
     use kcore::math;
-    use kgeom::curve::Circle;
+    use kgeom::curve::{Circle, Line};
     use kgeom::frame::Frame;
     use kgeom::nurbs::NurbsSurface;
     use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Torus};
@@ -1609,6 +1686,143 @@ mod tests {
             chord_tol,
             max_edge_len: None,
         }
+    }
+
+    fn assert_depth_limit(error: TessellationError, stage: StageId, allowed: u64) {
+        let snapshot = LimitSnapshot {
+            stage,
+            resource: ResourceKind::Depth,
+            consumed: allowed + 1,
+            allowed,
+        };
+        assert_eq!(
+            error,
+            TessellationError::Kernel(Error::ResourceLimit { snapshot })
+        );
+        assert_eq!(error.limit(), Some(snapshot));
+    }
+
+    #[test]
+    fn curve_refinement_enforces_quality_at_n_minus_one_n_and_n_plus_one() {
+        let line = Line::new(Point3::default(), Vec3::new(1.0, 0.0, 0.0)).unwrap();
+        for required_depth in [MAX_DEPTH - 1, MAX_DEPTH] {
+            let refine = CurveRefine {
+                curve: Some(&line),
+                face_uses: Vec::new(),
+                ctx: Ctx {
+                    tol: 0.0,
+                    max_len: 2.0_f64.powi(-(required_depth as i32)),
+                },
+            };
+            let mut interior = Vec::new();
+            refine
+                .refine(
+                    (0.0, line.eval(0.0)),
+                    (1.0, line.eval(1.0)),
+                    0,
+                    &mut interior,
+                )
+                .unwrap();
+
+            let segment_count = 1_usize << required_depth;
+            assert_eq!(interior.len(), segment_count - 1);
+            for (i, &(parameter, point)) in interior.iter().enumerate() {
+                let expected = (i + 1) as f64 / segment_count as f64;
+                assert_eq!(parameter.to_bits(), expected.to_bits());
+                assert_eq!(point.x.to_bits(), expected.to_bits());
+            }
+        }
+
+        let refine = CurveRefine {
+            curve: Some(&line),
+            face_uses: Vec::new(),
+            ctx: Ctx {
+                tol: 0.0,
+                max_len: 2.0_f64.powi(-((MAX_DEPTH + 1) as i32)),
+            },
+        };
+        let error = refine
+            .refine(
+                (0.0, line.eval(0.0)),
+                (1.0, line.eval(1.0)),
+                0,
+                &mut Vec::new(),
+            )
+            .unwrap_err();
+        assert_depth_limit(
+            error,
+            BODY_TESSELLATION_EDGE_DEPTH,
+            BODY_TESSELLATION_EDGE_DEPTH_LIMIT,
+        );
+    }
+
+    #[test]
+    fn uv_refinement_enforces_quality_at_n_minus_one_n_and_n_plus_one() {
+        let plane = Plane::new(Frame::world());
+        let a = (Vec2::new(0.0, 0.0), plane.eval([0.0, 0.0]));
+        let b = (Vec2::new(1.0, 0.0), plane.eval([1.0, 0.0]));
+        for required_depth in [MAX_DEPTH - 1, MAX_DEPTH] {
+            let mut interior = Vec::new();
+            refine_uv_seg(
+                &plane,
+                a,
+                b,
+                Ctx {
+                    tol: 0.0,
+                    max_len: 2.0_f64.powi(-(required_depth as i32)),
+                },
+                0,
+                &mut interior,
+            )
+            .unwrap();
+
+            let segment_count = 1_usize << required_depth;
+            assert_eq!(interior.len(), segment_count - 1);
+            for (i, &(uv, point)) in interior.iter().enumerate() {
+                let expected = (i + 1) as f64 / segment_count as f64;
+                assert_eq!(uv.x.to_bits(), expected.to_bits());
+                assert_eq!(point.x.to_bits(), expected.to_bits());
+            }
+        }
+
+        let error = refine_uv_seg(
+            &plane,
+            a,
+            b,
+            Ctx {
+                tol: 0.0,
+                max_len: 2.0_f64.powi(-((MAX_DEPTH + 1) as i32)),
+            },
+            0,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert_depth_limit(
+            error,
+            BODY_TESSELLATION_ISO_ARC_DEPTH,
+            BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT,
+        );
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn mesh_vertex_index_reports_n_minus_one_n_and_n_plus_one_items() {
+        let capacity = BODY_TESSELLATION_MESH_VERTEX_LIMIT as usize;
+        assert_eq!(mesh_vertex_index(capacity - 2).unwrap(), u32::MAX - 1);
+        assert_eq!(mesh_vertex_index(capacity - 1).unwrap(), u32::MAX);
+
+        let error = mesh_vertex_index(capacity).unwrap_err();
+        let snapshot = LimitSnapshot {
+            stage: BODY_TESSELLATION_MESH_VERTICES,
+            resource: ResourceKind::Items,
+            consumed: BODY_TESSELLATION_MESH_VERTEX_LIMIT + 1,
+            allowed: BODY_TESSELLATION_MESH_VERTEX_LIMIT,
+        };
+        assert_eq!(
+            error,
+            TessellationError::Kernel(Error::ResourceLimit { snapshot })
+        );
+        assert_eq!(error.limit(), Some(snapshot));
     }
 
     #[test]
