@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1 and the K3 geometry-identity/read-view slice implemented; K2, operation-scoped K3 calls, K4, and K5 implementation-ready
+Status: K1, the first K2 contextual block/check slice, and the K3 geometry-identity/read-view slice implemented; remaining K2/K3 calls, K4, and K5 implementation-ready
 
 ## Outcome
 
@@ -650,6 +650,11 @@ Exit: a client with only a `kernel` dependency can enumerate and inspect a
 part, but cannot obtain or mutate a stored raw entity.
 
 ### K2 — F2/F4 contextual operation pilot
+
+Status: typed block construction and Fast/Full body checking now create one
+facade-owned context and scope, retain exact reports and classified sources,
+adapt checker subjects to opaque IDs, and expose committed journals without raw
+topology. A contextual tessellation/query path remains.
 
 - Re-export the landed F2 configuration types and construct one scope per
   facade call.

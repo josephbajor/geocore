@@ -1,6 +1,6 @@
 # Operation context and numerical policy
 
-Status: Stage 1, intersection and checker Stage 2 pilots, and the first contextual Stage 4 face-tessellation migration implemented
+Status: Stage 1, intersection and checker Stage 2 pilots, the first conditioning-only Stage 3 pilot, and the first contextual Stage 4 face-tessellation migration implemented
 
 ## Purpose
 
@@ -586,6 +586,12 @@ Exit: default results are bit-identical; candidate/depth exhaustion is visible a
 structured data; checker exhaustion remains indeterminate.
 
 ### Stage 3 — Numerical-policy pilot
+
+Status: the NURBS/NURBS Newton symmetric 2×2 conditioning decision now uses
+the shared numerical policy and normalized extreme-scale fallback while model
+residuals retain sole contact authority. Absolute gradient, parameter-progress,
+minimizer, segment-conditioning, and repeated parameter-tolerance guards remain
+separate migrations.
 
 - Replace the repeated NURBS intersection parameter-tolerance helpers with the
   scale-aware policy API.
