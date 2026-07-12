@@ -12,7 +12,7 @@ use kgeom::nurbs::NurbsCurve;
 use kgeom::param::ParamRange;
 use kgeom::vec::Point3;
 use kops::intersect::{
-    ContactKind, NURBS_CURVE_PAIR_COMPLETE_COVERAGE, NURBS_CURVE_PAIR_COVERAGE_INCOMPLETE,
+    ContactKind, NURBS_CURVE_PAIR_COVERAGE_INCOMPLETE,
     NURBS_CURVE_PAIR_ISOLATION_SUBDIVISION_LIMIT, NURBS_CURVE_PAIR_MINIMIZER_PARAMETER_RESOLUTION,
     NURBS_CURVE_PAIR_POLISH_FALLBACK, NURBS_CURVE_PAIR_POLISH_STATIONARY,
     NURBS_CURVE_PAIR_SEED_ATTEMPTS, NURBS_CURVE_PAIR_SEED_LIMIT, ParamOrientation,
@@ -71,18 +71,13 @@ fn nurbs_nurbs_crossing_tangent_and_range_filtering() {
     .unwrap();
     assert_eq!(hit.points.len(), 1);
     assert_eq!(hit.points[0].kind, ContactKind::Transverse);
-    assert!(!hit.is_complete());
-    assert_eq!(hit.incomplete_evidence().len(), 1);
-    assert_eq!(
-        hit.incomplete_evidence()[0],
-        IncompleteEvidence {
-            code: NURBS_CURVE_PAIR_COVERAGE_INCOMPLETE,
-            stage: NURBS_CURVE_PAIR_SEED_ATTEMPTS,
-            cause: IncompleteCause::ProofMethodUnavailable {
-                capability: NURBS_CURVE_PAIR_COMPLETE_COVERAGE,
-            },
-            message: "NURBS curve-pair candidate cells do not yet have complete root and overlap coverage",
-        }
+    assert!(hit.is_complete());
+    assert!(hit.incomplete_evidence().is_empty());
+    assert_eq!(hit.root_certificates().len(), 4);
+    assert!(
+        hit.root_certificates()
+            .iter()
+            .all(|certificate| certificate.determinant_lower_bound() > 0.0)
     );
     assert!(hit.points[0].point.dist(Point3::new(0.0, 0.0, 0.0)) < 1e-8);
     assert!((hit.points[0].t_a - 0.5).abs() < 1e-8);
@@ -111,6 +106,8 @@ fn nurbs_nurbs_crossing_tangent_and_range_filtering() {
     .unwrap();
     assert_eq!(hit.points.len(), 1);
     assert_eq!(hit.points[0].kind, ContactKind::Tangent);
+    assert!(!hit.is_complete());
+    assert!(hit.root_certificates().is_empty());
     assert!(hit.points[0].point.dist(Point3::new(0.0, 0.0, 0.0)) < 1e-8);
     assert!((hit.points[0].t_a - 0.5).abs() < 1e-8);
     assert!((hit.points[0].t_b - 0.5).abs() < 1e-8);
@@ -151,6 +148,8 @@ fn cell_local_discovery_retains_multiple_roots_and_verified_witnesses() {
     assert_eq!(forward.points.len(), 2, "{:?}", forward.points);
     assert_eq!(swapped.points.len(), 2);
     assert!(!forward.is_complete());
+    assert!(!forward.root_certificates().is_empty());
+    assert_eq!(forward.clone().swapped(), swapped);
     for (point, reversed) in forward.points.iter().zip(&swapped.points) {
         assert!(arch.param_range().contains(point.t_a));
         assert!(line.param_range().contains(point.t_b));
@@ -393,6 +392,8 @@ fn nurbs_nurbs_is_stable_under_small_and_large_parameter_reparameterization() {
             "parameter scale {parameter_scale:e}"
         );
         assert_eq!(legacy.points[0].kind, ContactKind::Transverse);
+        assert!(legacy.is_complete());
+        assert_eq!(legacy.root_certificates().len(), 4);
         assert!(legacy.points[0].point.dist(Point3::new(0.0, 0.0, 0.0)) <= 1.0e-8);
         assert!((legacy.points[0].t_a / parameter_scale - 0.5).abs() <= 1.0e-8);
         assert!((legacy.points[0].t_b / parameter_scale - 0.5).abs() <= 1.0e-8);

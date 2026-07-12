@@ -144,6 +144,16 @@ impl CurvePairRootCertificate {
     pub const fn determinant_lower_bound(self) -> f64 {
         self.determinant_lower_bound
     }
+
+    /// Swap the two parameter intervals while preserving the same geometric proof.
+    pub const fn swapped(self) -> Self {
+        Self {
+            first_range: self.second_range,
+            second_range: self.first_range,
+            projection_plane: self.projection_plane,
+            determinant_lower_bound: self.determinant_lower_bound,
+        }
+    }
 }
 
 impl CurvePairCandidateCell {
@@ -246,7 +256,7 @@ fn certify_projected_unique_root(
             component_value(first_points.last().copied()?, axes[0]),
             second_axis_min,
         ),
-    )?;
+    );
 
     let (first_other_min, first_other_max) = control_component_bounds(first, axes[1]);
     let second_low = component_value(second_points.first().copied()?, axes[1]);
@@ -256,10 +266,32 @@ fn certify_projected_unique_root(
         exact_difference_sign(first_other_max, second_low),
         exact_difference_sign(first_other_min, second_high),
         exact_difference_sign(first_other_max, second_high),
-    )?;
+    );
 
-    let sign_first = Interval::point(first_face_sign);
-    let sign_second = Interval::point(second_face_sign);
+    if let (Some(first_face_sign), Some(second_face_sign)) = (first_face_sign, second_face_sign)
+        && let Some(bound) =
+            certify_p_matrix(first, second, axes, [first_face_sign, second_face_sign])
+    {
+        return Some(bound);
+    }
+    if has_exact_common_corner(first, second) {
+        for signs in [[1.0, 1.0], [1.0, -1.0], [-1.0, 1.0], [-1.0, -1.0]] {
+            if let Some(bound) = certify_p_matrix(first, second, axes, signs) {
+                return Some(bound);
+            }
+        }
+    }
+    None
+}
+
+fn certify_p_matrix(
+    first: &NurbsCurve,
+    second: &NurbsCurve,
+    axes: [usize; 2],
+    signs: [f64; 2],
+) -> Option<f64> {
+    let sign_first = Interval::point(signs[0]);
+    let sign_second = Interval::point(signs[1]);
     let j00 = sign_first * derivative_component_interval(first, axes[0])?;
     let j01 = sign_first * -derivative_component_interval(second, axes[0])?;
     let j10 = sign_second * derivative_component_interval(first, axes[1])?;
@@ -269,6 +301,15 @@ fn certify_projected_unique_root(
     }
     let determinant = j00 * j11 - j01 * j10;
     (determinant.lo() > 0.0).then_some(determinant.lo())
+}
+
+fn has_exact_common_corner(first: &NurbsCurve, second: &NurbsCurve) -> bool {
+    let first = [first.points().first(), first.points().last()];
+    let second = [second.points().first(), second.points().last()];
+    first
+        .into_iter()
+        .flatten()
+        .any(|first| second.into_iter().flatten().any(|second| first == second))
 }
 
 fn face_orientation(low_min: i8, low_max: i8, high_min: i8, high_max: i8) -> Option<f64> {

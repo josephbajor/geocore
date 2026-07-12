@@ -8,7 +8,8 @@ use kcore::operation::{
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::nurbs::{
-    NURBS_CURVE_PAIR_CANDIDATES, NURBS_CURVE_PAIR_DEPTH, NURBS_CURVE_PAIR_SUBDIVISIONS, NurbsCurve,
+    CurvePairProjectionPlane, NURBS_CURVE_PAIR_CANDIDATES, NURBS_CURVE_PAIR_DEPTH,
+    NURBS_CURVE_PAIR_SUBDIVISIONS, NurbsCurve,
 };
 use kgeom::vec::Point3;
 use kops::intersect::{
@@ -86,11 +87,11 @@ pub const CASES: [CurvePairSolveCase; 6] = [
         4_096,
         expected(
             1,
-            false,
+            true,
             false,
             LimitKind::None,
             0x617e_1b7b_48fd_b84a,
-            0x3021_40c2_f432_be9b,
+            0x8dfb_ac0d_9e9d_1d0b,
         ),
     ),
     case(
@@ -103,7 +104,7 @@ pub const CASES: [CurvePairSolveCase; 6] = [
             false,
             LimitKind::None,
             0xd116_a5f6_4d2e_545a,
-            0x17d5_55a6_eed3_0a8b,
+            0x7fca_16ca_153e_d3c8,
         ),
     ),
     case(
@@ -116,7 +117,7 @@ pub const CASES: [CurvePairSolveCase; 6] = [
             false,
             LimitKind::None,
             0x617e_1c7b_48fd_b9fd,
-            0x213b_f389_1ed0_8b73,
+            0x9db6_67bc_8bf2_e7cc,
         ),
     ),
     case(
@@ -129,7 +130,7 @@ pub const CASES: [CurvePairSolveCase; 6] = [
             false,
             LimitKind::None,
             0x3606_10ba_1318_ae30,
-            0x0611_a40c_48f7_a174,
+            0x289f_9511_588a_2317,
         ),
     ),
     case(
@@ -142,7 +143,7 @@ pub const CASES: [CurvePairSolveCase; 6] = [
             true,
             LimitKind::None,
             0x6489_db2b_285b_d20f,
-            0xe85d_8ea4_dc2a_6298,
+            0x302a_fe5b_7cd2_afbf,
         ),
     ),
     case(
@@ -155,7 +156,7 @@ pub const CASES: [CurvePairSolveCase; 6] = [
             false,
             LimitKind::SeedAttempts,
             0x6489_db2b_285b_d20f,
-            0x0a80_09d0_c2f5_a0c4,
+            0x4b70_6ef0_2117_44ef,
         ),
     ),
 ];
@@ -269,6 +270,7 @@ impl CurvePairSolveFixture {
             .map_or((0, 0), |event| (event.consumed, event.allowed));
         let point_digest = point_digest(result);
         let incomplete_evidence_digest = incomplete_evidence_digest(result);
+        let root_certificate_digest = root_certificate_digest(result);
         let mut evidence = CurvePairSolveEvidence {
             control_points: self.first.points().len() + self.second.points().len(),
             points: result.points.len(),
@@ -288,6 +290,8 @@ impl CurvePairSolveFixture {
             seed_attempts_allowed: seeds.allowed,
             incomplete_evidence: result.incomplete_evidence().len(),
             incomplete_evidence_digest,
+            root_certificates: result.root_certificates().len(),
+            root_certificate_digest,
             point_digest,
             output_digest: 0,
         };
@@ -335,6 +339,10 @@ pub struct CurvePairSolveEvidence {
     pub incomplete_evidence: usize,
     /// Exact ordered incomplete-evidence digest.
     pub incomplete_evidence_digest: u64,
+    /// Exact unique-root certificates retained by the solve result.
+    pub root_certificates: usize,
+    /// Ordered exact root-certificate digest.
+    pub root_certificate_digest: u64,
     /// Exact ordered contact digest.
     pub point_digest: u64,
     /// Complete semantic evidence digest.
@@ -366,6 +374,8 @@ impl CurvePairSolveEvidence {
         digest.u64(self.seed_attempts_allowed);
         digest.count(self.incomplete_evidence);
         digest.u64(self.incomplete_evidence_digest);
+        digest.count(self.root_certificates);
+        digest.u64(self.root_certificate_digest);
         digest.u64(self.point_digest);
         digest.tag(case.fixture as u8);
         digest.finish()
@@ -396,8 +406,8 @@ pub fn verify(case: CurvePairSolveCase, evidence: CurvePairSolveEvidence) {
     assert_eq!(evidence.proven_empty, case.expected_proven_empty);
     assert_eq!(evidence.limit, case.expected_limit);
     assert!(evidence.verified_witnesses);
-    let expected_incomplete_evidence = match (case.fixture, case.expected_limit) {
-        (SolveFixture::HiddenMiss, _) => 0,
+    let expected_incomplete_evidence = match (case.expected_complete, case.expected_limit) {
+        (true, _) => 0,
         (_, LimitKind::SeedAttempts) => 2,
         _ => 1,
     };
@@ -550,6 +560,26 @@ fn incomplete_evidence_digest(result: &CurveCurveIntersections) -> u64 {
     digest.finish()
 }
 
+fn root_certificate_digest(result: &CurveCurveIntersections) -> u64 {
+    let mut digest = StableHasher::new();
+    digest.tag(0xb3);
+    digest.count(result.root_certificates().len());
+    for certificate in result.root_certificates() {
+        for range in [certificate.first_range(), certificate.second_range()] {
+            digest.f64(range.lo);
+            digest.f64(range.hi);
+        }
+        digest.tag(match certificate.projection_plane() {
+            CurvePairProjectionPlane::Xy => 0,
+            CurvePairProjectionPlane::Xz => 1,
+            CurvePairProjectionPlane::Yz => 2,
+            _ => 255,
+        });
+        digest.f64(certificate.determinant_lower_bound());
+    }
+    digest.finish()
+}
+
 struct StableHasher(u64);
 
 impl StableHasher {
@@ -673,6 +703,7 @@ mod tests {
                 ("depth_high_water", evidence.depth_high_water),
                 ("seed_attempts", evidence.seed_attempts),
                 ("incomplete_evidence", evidence.incomplete_evidence as u64),
+                ("root_certificates", evidence.root_certificates as u64),
             ] {
                 assert_eq!(counters[field].as_u64(), Some(actual), "{field}");
             }
@@ -685,6 +716,10 @@ mod tests {
                 assert_eq!(counters[field].as_bool(), Some(actual), "{field}");
             }
             assert_eq!(counters["limit_kind"], evidence.limit.as_str());
+            assert_eq!(
+                counters["root_certificate_digest"].as_str(),
+                Some(format!("{:016x}", evidence.root_certificate_digest).as_str())
+            );
             assert_eq!(
                 counters["incomplete_evidence_digest"].as_str(),
                 Some(format!("{:016x}", evidence.incomplete_evidence_digest).as_str())

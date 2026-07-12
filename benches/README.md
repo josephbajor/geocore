@@ -63,8 +63,10 @@ cargo bench --manifest-path benches/Cargo.toml --bench xt_io --no-run
 ```
 
 The curve-pair solve ladder pins ordered structured incomplete-proof evidence
-separately from emitted contact geometry, then folds both digests into its
-semantic output contract.
+and unique-root certificate counts/digests separately from emitted contact
+geometry, then folds all of them into its semantic output contract. Its
+polynomial transverse case is complete only because every isolated cell has a
+certificate and verified representative.
 The curve-pair isolation ladder separately pins unique-root certificate counts
 and ordered certificate digests; rational and resource-limited controls remain
 zero-certificate cases.

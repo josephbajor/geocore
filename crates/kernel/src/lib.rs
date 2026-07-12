@@ -257,6 +257,7 @@ pub use kcore::operation::{
 pub use kcore::proof::{IncompleteCause, IncompleteEvidence};
 pub use kcore::tolerance::Tolerances;
 pub use kgeom::frame::Frame;
+pub use kgeom::nurbs::{CurvePairProjectionPlane, CurvePairRootCertificate};
 pub use kgeom::param::ParamRange;
 pub use kgeom::surface::SurfaceDerivs;
 pub use kgeom::vec::{Point3, Vec3};

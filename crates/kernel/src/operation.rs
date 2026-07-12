@@ -397,6 +397,7 @@ pub struct CurveCurveIntersections {
     pub(crate) points: Vec<CurveCurvePoint>,
     pub(crate) overlaps: Vec<CurveCurveOverlap>,
     pub(crate) completion: IntersectionCompletion,
+    pub(crate) root_certificates: Vec<crate::CurvePairRootCertificate>,
     pub(crate) incomplete_evidence: Vec<crate::IncompleteEvidence>,
 }
 
@@ -424,6 +425,10 @@ impl CurveCurveIntersections {
     /// Structured lower-layer reasons why complete-domain proof remains unavailable.
     pub fn incomplete_evidence(&self) -> &[crate::IncompleteEvidence] {
         &self.incomplete_evidence
+    }
+    /// Exact unique-root certificates in deterministic parameter-cell order.
+    pub fn root_certificates(&self) -> &[crate::CurvePairRootCertificate] {
+        &self.root_certificates
     }
     /// True only when both requested intervals were completely covered.
     pub fn is_complete(&self) -> bool {

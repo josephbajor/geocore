@@ -2,7 +2,7 @@ use kcore::error::{Error, Result};
 use kcore::proof::{Completion, IncompleteEvidence};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
-use kgeom::nurbs::NurbsCurve;
+use kgeom::nurbs::{CurvePairProjectionPlane, CurvePairRootCertificate, NurbsCurve};
 use kgeom::param::ParamRange;
 use kgeom::surface::Surface;
 use kgeom::vec::Point3;
@@ -65,6 +65,7 @@ pub struct CurveCurveIntersections {
     /// Coincident intervals in deterministic parameter order.
     pub overlaps: Vec<CurveCurveOverlap>,
     completion: Completion,
+    root_certificates: Vec<CurvePairRootCertificate>,
     incomplete_evidence: Vec<IncompleteEvidence>,
 }
 
@@ -76,6 +77,7 @@ impl Default for CurveCurveIntersections {
             completion: Completion::Indeterminate {
                 reason: MISSING_COMPLETION_REASON,
             },
+            root_certificates: Vec::new(),
             incomplete_evidence: Vec::new(),
         }
     }
@@ -110,16 +112,41 @@ impl CurveCurveIntersections {
     /// Validate and sort verified partial evidence while retaining structured
     /// reasons why complete-domain proof remains unavailable.
     pub fn canonicalized_with_incomplete_evidence(
-        mut points: Vec<CurveCurvePoint>,
-        mut overlaps: Vec<CurveCurveOverlap>,
+        points: Vec<CurveCurvePoint>,
+        overlaps: Vec<CurveCurveOverlap>,
         reason: &'static str,
         incomplete_evidence: Vec<IncompleteEvidence>,
     ) -> Result<Self> {
+        Self::canonicalized_with_proof_evidence(
+            points,
+            overlaps,
+            Completion::Indeterminate { reason },
+            Vec::new(),
+            incomplete_evidence,
+        )
+    }
+
+    /// Validate and sort contacts together with exact root certificates and
+    /// structured unresolved proof obligations.
+    pub fn canonicalized_with_proof_evidence(
+        mut points: Vec<CurveCurvePoint>,
+        mut overlaps: Vec<CurveCurveOverlap>,
+        completion: Completion,
+        mut root_certificates: Vec<CurvePairRootCertificate>,
+        incomplete_evidence: Vec<IncompleteEvidence>,
+    ) -> Result<Self> {
+        if completion.is_complete() && !incomplete_evidence.is_empty() {
+            return Err(Error::InvalidGeometry {
+                reason: "complete curve intersection results cannot retain incomplete evidence",
+            });
+        }
         Self::validate_and_sort(&mut points, &mut overlaps)?;
+        root_certificates.sort_by(compare_root_certificates);
         Ok(Self {
             points,
             overlaps,
-            completion: Completion::Indeterminate { reason },
+            completion,
+            root_certificates,
             incomplete_evidence,
         })
     }
@@ -139,6 +166,7 @@ impl CurveCurveIntersections {
             points: Vec::new(),
             overlaps: Vec::new(),
             completion: Completion::Complete,
+            root_certificates: Vec::new(),
             incomplete_evidence: Vec::new(),
         }
     }
@@ -149,6 +177,7 @@ impl CurveCurveIntersections {
             points: Vec::new(),
             overlaps: Vec::new(),
             completion: Completion::Indeterminate { reason },
+            root_certificates: Vec::new(),
             incomplete_evidence: Vec::new(),
         }
     }
@@ -162,22 +191,23 @@ impl CurveCurveIntersections {
             points: Vec::new(),
             overlaps: Vec::new(),
             completion: Completion::Indeterminate { reason },
+            root_certificates: Vec::new(),
             incomplete_evidence,
         }
     }
 
     fn canonicalized_with_completion(
-        mut points: Vec<CurveCurvePoint>,
-        mut overlaps: Vec<CurveCurveOverlap>,
+        points: Vec<CurveCurvePoint>,
+        overlaps: Vec<CurveCurveOverlap>,
         completion: Completion,
     ) -> Result<Self> {
-        Self::validate_and_sort(&mut points, &mut overlaps)?;
-        Ok(Self {
+        Self::canonicalized_with_proof_evidence(
             points,
             overlaps,
             completion,
-            incomplete_evidence: Vec::new(),
-        })
+            Vec::new(),
+            Vec::new(),
+        )
     }
 
     fn validate_and_sort(
@@ -247,6 +277,11 @@ impl CurveCurveIntersections {
         &self.incomplete_evidence
     }
 
+    /// Exact unique-root certificates in deterministic parameter-cell order.
+    pub fn root_certificates(&self) -> &[CurvePairRootCertificate] {
+        &self.root_certificates
+    }
+
     /// True only for an empty result backed by complete-domain proof.
     pub fn is_proven_empty(&self) -> bool {
         self.is_complete() && self.is_empty()
@@ -260,6 +295,9 @@ impl CurveCurveIntersections {
         }
         for overlap in &mut self.overlaps {
             core::mem::swap(&mut overlap.a, &mut overlap.b);
+        }
+        for certificate in &mut self.root_certificates {
+            *certificate = certificate.swapped();
         }
         self.points.sort_by(|a, b| {
             a.t_a
@@ -275,7 +313,34 @@ impl CurveCurveIntersections {
                 .then(a.b.hi.total_cmp(&b.b.hi))
                 .then(a.orientation.cmp(&b.orientation))
         });
+        self.root_certificates.sort_by(compare_root_certificates);
         self
+    }
+}
+
+fn compare_root_certificates(
+    a: &CurvePairRootCertificate,
+    b: &CurvePairRootCertificate,
+) -> core::cmp::Ordering {
+    a.first_range()
+        .lo
+        .total_cmp(&b.first_range().lo)
+        .then(a.first_range().hi.total_cmp(&b.first_range().hi))
+        .then(a.second_range().lo.total_cmp(&b.second_range().lo))
+        .then(a.second_range().hi.total_cmp(&b.second_range().hi))
+        .then(projection_rank(a.projection_plane()).cmp(&projection_rank(b.projection_plane())))
+        .then(
+            a.determinant_lower_bound()
+                .total_cmp(&b.determinant_lower_bound()),
+        )
+}
+
+fn projection_rank(plane: CurvePairProjectionPlane) -> u8 {
+    match plane {
+        CurvePairProjectionPlane::Xy => 0,
+        CurvePairProjectionPlane::Xz => 1,
+        CurvePairProjectionPlane::Yz => 2,
+        _ => 255,
     }
 }
 

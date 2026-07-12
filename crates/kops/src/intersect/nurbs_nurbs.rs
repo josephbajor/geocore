@@ -14,12 +14,13 @@ use kcore::operation::{
     NumericalPolicy, OperationContext, OperationOutcome, OperationPolicyError, OperationScope,
     ResourceKind, SessionPolicy, StageId,
 };
-use kcore::proof::{IncompleteCause, IncompleteEvidence};
+use kcore::proof::{Completion, IncompleteCause, IncompleteEvidence};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::nurbs::{
-    ContextCurvePairIsolationError, CurvePairCandidateCell, CurvePairIsolationLimits, NurbsCurve,
-    NurbsCurvePairBudgetProfile, isolate_curve_pair_candidates_in_scope,
+    ContextCurvePairIsolationError, CurvePairCandidateCell, CurvePairIsolationLimits,
+    CurvePairRootCertificate, NurbsCurve, NurbsCurvePairBudgetProfile,
+    isolate_curve_pair_candidates_in_scope,
 };
 use kgeom::param::ParamRange;
 use kgeom::vec::Point3;
@@ -408,6 +409,7 @@ fn intersect_bounded_nurbs_nurbs_contextual_impl(
             ContextCurvePairIsolationError::Policy(error) => Error::from(error),
         })?;
         let incomplete_evidence = diagnose_curve_pair_isolation_limits(scope, isolation.limits());
+        let isolation_complete = isolation.is_complete();
         if isolation.is_proven_empty() && incomplete_evidence.is_empty() {
             return Ok(CurveCurveIntersections::complete_empty());
         }
@@ -423,6 +425,7 @@ fn intersect_bounded_nurbs_nurbs_contextual_impl(
             },
             scope,
             incomplete_evidence,
+            isolation_complete,
         );
     }
     degenerate_range_intersections(a, range_a, collapsed_a, b, range_b, tolerances, numerical)
@@ -533,6 +536,7 @@ fn intersect_bounded_nurbs_nurbs_candidates_impl(
     policy: PolishPolicy,
     scope: &mut OperationScope<'_, '_>,
     mut incomplete_evidence: Vec<IncompleteEvidence>,
+    isolation_complete: bool,
 ) -> Result<CurveCurveIntersections> {
     if let Some(overlap) = contained_overlap(
         a,
@@ -552,7 +556,10 @@ fn intersect_bounded_nurbs_nurbs_candidates_impl(
     }
 
     let mut points = Vec::new();
+    let mut root_certificates: Vec<CurvePairRootCertificate> = Vec::new();
+    let mut every_cell_certified = isolation_complete && !candidates.is_empty();
     for cell in candidates {
+        let root_certificate = cell.certify_unique_root();
         match scope.ledger_mut().charge(NURBS_CURVE_PAIR_SEED_ATTEMPTS, 1) {
             Ok(()) => {}
             Err(OperationPolicyError::LimitReached(snapshot)) => {
@@ -562,6 +569,7 @@ fn intersect_bounded_nurbs_nurbs_candidates_impl(
                     NURBS_CURVE_PAIR_SEED_LIMIT,
                     "NURBS curve-pair seed-attempt limit reached",
                 ));
+                every_cell_certified = false;
                 break;
             }
             Err(error) => return Err(error.into()),
@@ -592,20 +600,38 @@ fn intersect_bounded_nurbs_nurbs_candidates_impl(
             polished.t_b,
             policy.tolerances.linear(),
         ) else {
+            every_cell_certified = false;
             diagnose_minimizer_stops(scope, polished.minimizer_stops);
             diagnose_polish_stop(scope, polished.stop);
             continue;
         };
         let kind = contact_kind(a, seed.t_a, b, seed.t_b, policy.tolerances);
         push_distinct_point(&mut points, seed.into_point(kind), policy.tolerances);
+        if let Some(certificate) = root_certificate {
+            root_certificates.push(certificate);
+        } else {
+            every_cell_certified = false;
+        }
+    }
+    if every_cell_certified {
+        return CurveCurveIntersections::canonicalized_with_proof_evidence(
+            points,
+            Vec::new(),
+            Completion::Complete,
+            root_certificates,
+            Vec::new(),
+        );
     }
     if !candidates.is_empty() {
         incomplete_evidence.push(curve_pair_coverage_incomplete_evidence());
     }
-    CurveCurveIntersections::canonicalized_with_incomplete_evidence(
+    CurveCurveIntersections::canonicalized_with_proof_evidence(
         points,
         Vec::new(),
-        CURVE_PAIR_COMPLETION_REASON,
+        Completion::Indeterminate {
+            reason: CURVE_PAIR_COMPLETION_REASON,
+        },
+        root_certificates,
         incomplete_evidence,
     )
 }

@@ -748,8 +748,11 @@ true only for an empty complete result.
   Exact retained cells can now certify a unique transverse root for polynomial
   subcurves in a shared axis-aligned plane using Poincaré–Miranda face signs
   plus interval P-matrix univalence; Q4 pins certified-cell counts and proof
-  digests. Integrate those certificates into solver completion, then extend
-  them to rational/non-coplanar cases, generic curve/surface pairing, and
+  digests. Complete isolation plus a certificate and verified representative
+  for every retained cell now proves complete polynomial transverse results;
+  partial certificates remain visible without upgrading completion. Next,
+  extend certification to rational/non-coplanar cases and interval empty-cell
+  exclusion, then overlap extent, generic curve/surface pairing, and
   procedural/NURBS fields.
 - Analytic special cases and the generic solver feed the same canonical result type.
 - Consolidate the per-pair analytic curve/surface and SSI boilerplate (range

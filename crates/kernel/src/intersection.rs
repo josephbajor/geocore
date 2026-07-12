@@ -66,6 +66,7 @@ pub(crate) fn adapt_curve_intersections(
     lower: kops::intersect::CurveCurveIntersections,
 ) -> CurveCurveIntersections {
     let lower_completion = lower.completion();
+    let root_certificates = lower.root_certificates().to_vec();
     let incomplete_evidence = lower.incomplete_evidence().to_vec();
     let points = lower
         .points
@@ -110,6 +111,7 @@ pub(crate) fn adapt_curve_intersections(
         points,
         overlaps,
         completion,
+        root_certificates,
         incomplete_evidence,
     }
 }
@@ -309,10 +311,8 @@ mod tests {
             .unwrap();
         let result = outcome.into_result().unwrap();
         assert_eq!(result.points().len(), 1);
-        assert_eq!(result.incomplete_evidence().len(), 1);
-        assert_eq!(
-            result.incomplete_evidence()[0].code,
-            kops::intersect::NURBS_CURVE_PAIR_COVERAGE_INCOMPLETE
-        );
+        assert!(result.is_complete());
+        assert!(result.incomplete_evidence().is_empty());
+        assert_eq!(result.root_certificates().len(), 4);
     }
 }

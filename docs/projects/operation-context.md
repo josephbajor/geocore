@@ -672,9 +672,12 @@ face signs discharge Poincaré–Miranda existence and interval derivative hulls
 prove a strictly positive P-matrix Jacobian, giving one unique exact transverse
 root in the parameter rectangle. Exact expansion signs protect boundary
 equalities. Rational, non-coplanar, tangent/singular, multi-root, and interval-
-inconclusive cells return no certificate. This substrate does not yet change
-solver completion; integration must associate every retained cell certificate
-with a verified emitted representative before retiring the coverage gap.
+inconclusive cells return no certificate. The NURBS/NURBS solver now retires
+the coverage gap only when isolation completed and every retained cell has
+both a unique-root certificate and a verified emitted representative. A
+polynomial transverse crossing therefore completes, while partial certificates
+remain visible on indeterminate multi-root results and rational, tangent, and
+overlap cases continue to fail closed.
 
 That normalized boundary now has contextual and shared-scope public entries.
 The contextual entry composes the curve/curve family profile once and creates

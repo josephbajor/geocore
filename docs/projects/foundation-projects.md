@@ -101,10 +101,12 @@ Host findings remain ratcheted in `docs/oracle-results.tsv`.
    curve/curve dispatcher with exact report parity, identity precedence, and
    classified limit evidence. Exact adaptive NURBS pair exclusion now feeds
    one bounded cell-local seed/polish attempt per retained cell; accepted
-   discoveries carry re-evaluated tolerance witnesses and never grant
-   completion. The next algorithm slice integrates the landed unique-root
-   certificates into completion and extends their coverage, followed by
-   overlap extent/completeness.
+   discoveries carry re-evaluated tolerance witnesses. Complete isolation now
+   grants completion only when every retained cell also has a unique-root
+   certificate and verified representative; partial certificates remain
+   proof evidence on indeterminate results. The next algorithm slice extends
+   certificate coverage and interval empty-cell exclusion, followed by overlap
+   extent/completeness.
    Semantic K4 edit transactions follow the K5 adoption pass. F6 splits and F4
    legacy cleanup land only with an owner-level behavioral migration. The Q2a/
    Q2b ladders are executable in CI; any graph-index/traversal representation change
