@@ -691,11 +691,13 @@ Serial/fixed/available execution-policy equivalence are covered. Per-face
 boundary splits, mesh vertices, retained triangles, and every named body-owned
 split/preparation/output family now have exact pre-allocation admission and
 composition evidence. The prepared-patch stage intentionally starts at UV-chain
-construction; pre-UV `EdgeLine` seed/sample and final edge-polyline storage still
-need an exact admission slice. Compatibility-v1 body-wide preparation and
-triangle allowances remain accounting-only at `u64::MAX`; that edge-storage
-slice plus corpus-backed finite presets are required before the product path is
-described as hostile-input bounded.
+construction; a distinct edge-storage stage now admits pre-UV face-use, seed,
+recursive-interior, retained-sample, and edge-record slots plus final polyline
+records and indices. Compatibility-v1 body-wide preparation, edge-storage, and
+triangle allowances remain accounting-only at `u64::MAX`. Topology enumeration
+and non-edge structural holder containers still need exact admission, followed
+by corpus-backed finite presets, before the product path is described as
+hostile-input bounded.
 
 - Add fallible contextual projection APIs and remove public panic behavior through the
   new path.
@@ -743,12 +745,23 @@ land before any product cap is selected:
    result, charges only retained nondegenerate triangles, then allocates in the
    same deterministic order; later patch/face/body moves do not recharge the
    same output.
-5. `ktopo` adds an exact pre-allocation stage for pre-UV `EdgeLine` seed/sample
-   materialization and final body edge-polyline storage. Split work already
-   admits recursively created interiors, but fixed seed/sample vectors can
-   allocate before the later UV prepared-item boundary and therefore remain a
-   distinct hostile-input gap.
-6. Q3 records every new counter. After corpus/import measurement, add explicit
+5. **Landed:** `ktopo` has an edge-storage `Items/Cumulative` stage. It charges
+   every body-owned face-use scratch slot, fixed seed, recursive refinement
+   interior, retained parameter/global-id sample, pre-UV edge record, final
+   vertex-index copy, and final edge-polyline record before its first relevant
+   allocation. Intentional copies recharge; ownership moves do not. Checked
+   `usize`/physical-capacity arithmetic, exact block/ring goldens, N/N+1 atomic
+   denial, coupled mesh/sample precedence, shared-scope cumulative crossing,
+   accounting overflow, final-polyline equality, and execution-policy/legacy
+   equivalence are covered. Compatibility v1 uses `u64::MAX` because no truthful
+   finite legacy aggregate is known.
+6. `ktopo` admits topology enumeration result collections and remaining non-
+   edge structural holder containers before allocation. This includes
+   `faces_of_body`, `edges_of_body`, `vertices_of_body`, `vgids`, `face_ranges`,
+   `chains`, `holes`/`patch_holes`, outer `loops_pts`/`loops_ids`, `trim_loops`,
+   and torus `au`/`av` holder rows. This is a separate ownership boundary from
+   retained content items and keeps the edge/prepared/output units stable.
+7. Q3 records every new counter. After corpus/import measurement, add explicit
    `FaceTessellationBudgetProfile::bounded_v1()` and
    `BodyTessellationBudgetProfile::bounded_v1()` presets with finite aggregate
    and root caps. Legacy wrappers stay on compatibility `v1_defaults`; facade,

@@ -83,7 +83,8 @@ use policy::validate_body_tessellation_budget;
 pub use policy::{
     BODY_TESSELLATION_EDGE_DEPTH, BODY_TESSELLATION_EDGE_DEPTH_LIMIT,
     BODY_TESSELLATION_EDGE_DEPTH_LIMIT_REACHED, BODY_TESSELLATION_EDGE_SPLIT_LIMIT_REACHED,
-    BODY_TESSELLATION_EDGE_SPLITS, BODY_TESSELLATION_ISO_ARC_DEPTH,
+    BODY_TESSELLATION_EDGE_SPLITS, BODY_TESSELLATION_EDGE_STORAGE_ITEM_LIMIT_REACHED,
+    BODY_TESSELLATION_EDGE_STORAGE_ITEMS, BODY_TESSELLATION_ISO_ARC_DEPTH,
     BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT, BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT_REACHED,
     BODY_TESSELLATION_ISO_ARC_SPLIT_LIMIT_REACHED, BODY_TESSELLATION_ISO_ARC_SPLITS,
     BODY_TESSELLATION_MESH_VERTEX_LIMIT, BODY_TESSELLATION_MESH_VERTEX_LIMIT_REACHED,
@@ -216,6 +217,43 @@ impl MeshAcc {
     fn pos(&self, gid: u32) -> Point3 {
         self.positions[gid as usize]
     }
+
+    /// Atomically promote one evaluated edge point into both retained stores.
+    /// Mesh representability/policy has stable precedence over edge storage;
+    /// neither ledger nor vector mutates until both admissions are known to fit.
+    fn push_retained_edge_sample(
+        &mut self,
+        p: Point3,
+        parameter: f64,
+        samples: &mut Vec<EdgeSample>,
+        work: &mut BodyTessellationWork<'_, '_, '_>,
+    ) -> Result<()> {
+        if u32::try_from(self.positions.len()).is_err() {
+            return work
+                .reject_physical_mesh_vertex(self.positions.len())
+                .map(|_| ());
+        }
+        let position_count =
+            checked_item_add(BODY_TESSELLATION_MESH_VERTICES, self.positions.len(), 1)?;
+        checked_vec_capacity::<Point3>(BODY_TESSELLATION_MESH_VERTICES, position_count)?;
+        work.preflight_mesh_vertex()?;
+
+        let sample_count =
+            checked_item_add(BODY_TESSELLATION_EDGE_STORAGE_ITEMS, samples.len(), 1)?;
+        checked_vec_capacity::<EdgeSample>(BODY_TESSELLATION_EDGE_STORAGE_ITEMS, sample_count)?;
+        work.preflight_edge_storage_items(1)?;
+
+        // No intervening mutation touches either stage, so both checked charges
+        // are infallible unless the ledger contract itself is violated.
+        work.charge_mesh_vertex()?;
+        work.admit_edge_storage_items(1)?;
+        let vertex = mesh_vertex_index(self.positions.len())?;
+        self.positions.push(p);
+        samples.push(EdgeSample { parameter, vertex });
+        debug_assert_eq!(self.positions.len(), position_count);
+        debug_assert_eq!(samples.len(), sample_count);
+        Ok(())
+    }
 }
 
 /// Shared deterministic accounting for one whole-body tessellation.
@@ -253,6 +291,63 @@ impl BodyTessellationWork<'_, '_, '_> {
             amount,
             BODY_TESSELLATION_PREPARED_PATCH_ITEM_LIMIT_REACHED,
             "whole-body tessellation prepared-patch item limit reached",
+        )
+    }
+
+    fn admit_edge_storage_items(&mut self, amount: usize) -> Result<()> {
+        self.charge_items(
+            BODY_TESSELLATION_EDGE_STORAGE_ITEMS,
+            amount,
+            BODY_TESSELLATION_EDGE_STORAGE_ITEM_LIMIT_REACHED,
+            "whole-body tessellation edge-storage item limit reached",
+        )
+    }
+
+    fn preflight_items(
+        &mut self,
+        stage: StageId,
+        amount: usize,
+        diagnostic: DiagnosticCode,
+        message: &'static str,
+    ) -> Result<()> {
+        let amount = u64::try_from(amount).map_err(|_| {
+            Error::from(OperationPolicyError::AccountingOverflow {
+                stage,
+                resource: ResourceKind::Items,
+            })
+        })?;
+        let checked = self
+            .scope
+            .ledger()
+            .check_charge_resource(stage, ResourceKind::Items, amount);
+        if checked.is_ok() {
+            return Ok(());
+        }
+        // Repeat through the mutating API only on rejection so the canonical
+        // limit event and diagnostic are retained while accepted usage stays
+        // unchanged.
+        let recorded = self
+            .scope
+            .ledger_mut()
+            .charge_resource(stage, ResourceKind::Items, amount);
+        self.direct_limit(recorded, diagnostic, message)
+    }
+
+    fn preflight_mesh_vertex(&mut self) -> Result<()> {
+        self.preflight_items(
+            BODY_TESSELLATION_MESH_VERTICES,
+            1,
+            BODY_TESSELLATION_MESH_VERTEX_LIMIT_REACHED,
+            "whole-body tessellation mesh vertex limit reached",
+        )
+    }
+
+    fn preflight_edge_storage_items(&mut self, amount: usize) -> Result<()> {
+        self.preflight_items(
+            BODY_TESSELLATION_EDGE_STORAGE_ITEMS,
+            amount,
+            BODY_TESSELLATION_EDGE_STORAGE_ITEM_LIMIT_REACHED,
+            "whole-body tessellation edge-storage item limit reached",
         )
     }
 
@@ -438,6 +533,48 @@ fn checked_item_sum(stage: StageId, values: impl IntoIterator<Item = usize>) -> 
     values.into_iter().try_fold(0_usize, |total, value| {
         checked_item_add(stage, total, value)
     })
+}
+
+/// Materialize one edge-storage sequence slot after proving its exact
+/// prospective length and physical `Vec` capacity. The item is charged before
+/// `push`, which is the first operation that may allocate storage for it.
+fn push_edge_storage_item<T>(
+    destination: &mut Vec<T>,
+    item: T,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
+) -> Result<()> {
+    let expected = checked_item_add(BODY_TESSELLATION_EDGE_STORAGE_ITEMS, destination.len(), 1)?;
+    checked_vec_capacity::<T>(BODY_TESSELLATION_EDGE_STORAGE_ITEMS, expected)?;
+    work.admit_edge_storage_items(1)?;
+    destination.push(item);
+    debug_assert_eq!(destination.len(), expected);
+    Ok(())
+}
+
+/// Replace pre-UV edge lines with the public result representation. Every
+/// output index and outer record is an intentional new storage item; consuming
+/// the source records is an ownership move and is not charged again.
+fn materialize_edge_polylines(
+    elines: EdgeLines,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
+) -> Result<Vec<(EdgeId, Vec<u32>)>> {
+    checked_vec_capacity::<(EdgeId, Vec<u32>)>(BODY_TESSELLATION_EDGE_STORAGE_ITEMS, elines.len())?;
+    let output_items = checked_item_sum(
+        BODY_TESSELLATION_EDGE_STORAGE_ITEMS,
+        core::iter::once(elines.len()).chain(elines.iter().map(|line| line.samples.len())),
+    )?;
+    for line in &elines {
+        checked_vec_capacity::<u32>(BODY_TESSELLATION_EDGE_STORAGE_ITEMS, line.samples.len())?;
+    }
+    work.admit_edge_storage_items(output_items)?;
+
+    let mut output = Vec::with_capacity(elines.len());
+    for line in elines {
+        let mut vertices = Vec::with_capacity(line.samples.len());
+        vertices.extend(line.samples.into_iter().map(|sample| sample.vertex));
+        output.push((line.edge, vertices));
+    }
+    Ok(output)
 }
 
 fn checked_prepared_segment_count(value: f64, minimum: usize) -> Result<usize> {
@@ -692,7 +829,7 @@ impl CurveRefine<'_> {
             },
         );
         self.refine(a, m, next_depth, out, work)?;
-        out.push(m);
+        push_edge_storage_item(out, m, work)?;
         self.refine(m, b, next_depth, out, work)
     }
 }
@@ -1031,7 +1168,7 @@ fn discretize_edge(
     // Adjacent face uses in deterministic fin order. They are deliberately
     // not deduplicated by surface: two fins on the same periodic surface can
     // carry different pcurve branches.
-    let mut face_uses = Vec::with_capacity(e.fins.len());
+    let mut face_uses = Vec::new();
     for &fin_id in &e.fins {
         let fin = store.get(fin_id)?;
         let lp = fin.parent;
@@ -1046,12 +1183,17 @@ fn discretize_edge(
                 .into());
             }
         };
-        face_uses.push(FaceUse {
-            store,
-            surface_id: face.surface,
-            surface: store.get(face.surface)?,
-            pcurve,
-        });
+        let surface = store.get(face.surface)?;
+        push_edge_storage_item(
+            &mut face_uses,
+            FaceUse {
+                store,
+                surface_id: face.surface,
+                surface,
+                pcurve,
+            },
+            work,
+        )?;
     }
     let refine = CurveRefine {
         curve,
@@ -1062,41 +1204,45 @@ fn discretize_edge(
     // Seed: closed polylines start from quarter points (their full-span
     // chord is degenerate); open ones from the single endpoint chord.
     let mut seed: Vec<(f64, Point3)> = Vec::new();
-    seed.push((t0, acc.pos(g_start)));
+    push_edge_storage_item(&mut seed, (t0, acc.pos(g_start)), work)?;
     if closed {
         for k in 1..4 {
             let t = t0 + (t1 - t0) * f64::from(k) / 4.0;
-            seed.push((t, refine.point_at(t, work)?));
+            let point = refine.point_at(t, work)?;
+            push_edge_storage_item(&mut seed, (t, point), work)?;
         }
     }
-    seed.push((t1, acc.pos(g_end)));
+    push_edge_storage_item(&mut seed, (t1, acc.pos(g_end)), work)?;
 
-    let mut samples = vec![EdgeSample {
-        parameter: t0,
-        vertex: g_start,
-    }];
+    let mut samples = Vec::new();
+    push_edge_storage_item(
+        &mut samples,
+        EdgeSample {
+            parameter: t0,
+            vertex: g_start,
+        },
+        work,
+    )?;
     for w in seed.windows(2) {
         let mut interior = Vec::new();
         refine.refine(w[0], w[1], 0, &mut interior, work)?;
         for (parameter, point) in interior {
-            samples.push(EdgeSample {
-                parameter,
-                vertex: acc.push(point, work)?,
-            });
+            acc.push_retained_edge_sample(point, parameter, &mut samples, work)?;
         }
         // Segment end: a seed interior point gets a fresh vertex; the
         // final endpoint reuses its anchor id.
         if w[1].0 < t1 {
-            samples.push(EdgeSample {
-                parameter: w[1].0,
-                vertex: acc.push(w[1].1, work)?,
-            });
+            acc.push_retained_edge_sample(w[1].1, w[1].0, &mut samples, work)?;
         }
     }
-    samples.push(EdgeSample {
-        parameter: t1,
-        vertex: g_end,
-    });
+    push_edge_storage_item(
+        &mut samples,
+        EdgeSample {
+            parameter: t1,
+            vertex: g_end,
+        },
+        work,
+    )?;
     Ok(EdgeLine { edge, samples })
 }
 
@@ -2447,7 +2593,7 @@ pub fn tessellate_body_in_scope(
     let mut elines: EdgeLines = Vec::new();
     for e in store.edges_of_body(body)? {
         let line = discretize_edge(store, e, &vgids, &mut acc, ctx, &mut work)?;
-        elines.push(line);
+        push_edge_storage_item(&mut elines, line, &mut work)?;
     }
     // Faces, assembled by index mapping.
     let mut triangles: Vec<[u32; 3]> = Vec::new();
@@ -2458,22 +2604,12 @@ pub fn tessellate_body_in_scope(
         extend_admitted_triangles(&mut triangles, face_triangles)?;
         face_ranges.push((face, start..triangles.len()));
     }
+    let edge_polylines = materialize_edge_polylines(elines, &mut work)?;
     Ok(BodyMesh {
         positions: acc.positions,
         triangles,
         face_ranges,
-        edge_polylines: elines
-            .into_iter()
-            .map(|line| {
-                (
-                    line.edge,
-                    line.samples
-                        .into_iter()
-                        .map(|sample| sample.vertex)
-                        .collect(),
-                )
-            })
-            .collect(),
+        edge_polylines,
     })
 }
 
@@ -2855,6 +2991,11 @@ mod tests {
             let context = OperationContext::new(&session, Tolerances::default()).unwrap();
             let outcome = tessellate_body_with_context(&store, body, &options, &context).unwrap();
             assert_eq!(outcome.result(), Ok(&legacy));
+            assert_eq!(
+                outcome.result().unwrap().edge_polylines,
+                legacy.edge_polylines,
+                "contextual accounting must preserve final edge storage"
+            );
             reports.push(outcome.report().clone());
         }
         assert!(reports.windows(2).all(|pair| pair[0] == pair[1]));
@@ -2900,6 +3041,11 @@ mod tests {
                 (kgraph::eval_stage::NODE_VISITS, ResourceKind::Work, 150),
                 (BODY_TESSELLATION_EDGE_DEPTH, ResourceKind::Depth, 0),
                 (BODY_TESSELLATION_EDGE_SPLITS, ResourceKind::Work, 0),
+                (
+                    BODY_TESSELLATION_EDGE_STORAGE_ITEMS,
+                    ResourceKind::Items,
+                    120
+                ),
                 (BODY_TESSELLATION_ISO_ARC_DEPTH, ResourceKind::Depth, 0),
                 (BODY_TESSELLATION_ISO_ARC_SPLITS, ResourceKind::Work, 0),
                 (BODY_TESSELLATION_MESH_VERTICES, ResourceKind::Items, 8),
@@ -3061,7 +3207,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_and_retained_items_accept_n_and_reject_n_plus_one_atomically() {
+    fn body_owned_items_accept_n_and_reject_n_plus_one_atomically() {
         let mut store = Store::new();
         let body = block(&mut store, &Frame::world(), [1.0, 2.0, 3.0]).unwrap();
         let options = opts(0.25);
@@ -3074,6 +3220,10 @@ mod tests {
         let baseline_mesh = baseline.result().unwrap().clone();
 
         for (stage, diagnostic) in [
+            (
+                BODY_TESSELLATION_EDGE_STORAGE_ITEMS,
+                BODY_TESSELLATION_EDGE_STORAGE_ITEM_LIMIT_REACHED,
+            ),
             (
                 BODY_TESSELLATION_PREPARED_PATCH_ITEMS,
                 BODY_TESSELLATION_PREPARED_PATCH_ITEM_LIMIT_REACHED,
@@ -3167,6 +3317,7 @@ mod tests {
             inclusive_item_count(0, usize::MAX),
             checked_prepared_segment_count(f64::INFINITY, 2),
             checked_item_add(BODY_TESSELLATION_RETAINED_TRIANGLES, usize::MAX, 1),
+            checked_item_add(BODY_TESSELLATION_EDGE_STORAGE_ITEMS, usize::MAX, 1),
         ] {
             assert!(matches!(
                 result,
@@ -3181,6 +3332,252 @@ mod tests {
                 source: OperationPolicyError::AccountingOverflow { .. }
             }))
         ));
+        assert!(matches!(
+            checked_vec_capacity::<EdgeSample>(BODY_TESSELLATION_EDGE_STORAGE_ITEMS, usize::MAX),
+            Err(TessellationError::Kernel(Error::OperationPolicy {
+                source: OperationPolicyError::AccountingOverflow {
+                    stage: BODY_TESSELLATION_EDGE_STORAGE_ITEMS,
+                    resource: ResourceKind::Items,
+                }
+            }))
+        ));
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn edge_storage_u64_accounting_overflow_is_typed_and_atomic() {
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            BodyTessellationBudgetProfile::v1_defaults(),
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let mut scope = OperationScope::new(&context);
+        scope
+            .ledger_mut()
+            .charge_resource(
+                BODY_TESSELLATION_EDGE_STORAGE_ITEMS,
+                ResourceKind::Items,
+                u64::MAX,
+            )
+            .unwrap();
+        let error = {
+            let mut work = BodyTessellationWork { scope: &mut scope };
+            work.admit_edge_storage_items(1).unwrap_err()
+        };
+        assert!(matches!(
+            error,
+            TessellationError::Kernel(Error::OperationPolicy {
+                source: OperationPolicyError::AccountingOverflow {
+                    stage: BODY_TESSELLATION_EDGE_STORAGE_ITEMS,
+                    resource: ResourceKind::Items,
+                }
+            })
+        ));
+        let outcome = scope.finish_typed::<(), TessellationError>(Ok(()));
+        assert_eq!(
+            consumed(&outcome, BODY_TESSELLATION_EDGE_STORAGE_ITEMS),
+            u64::MAX
+        );
+        assert!(outcome.report().limit_events().is_empty());
+    }
+
+    fn coupled_edge_sample_outcome(
+        mesh_allowed: u64,
+        edge_allowed: u64,
+    ) -> OperationOutcome<(usize, usize), TessellationError> {
+        let plan = BodyTessellationBudgetProfile::v1_defaults().overlaid(
+            &BudgetPlan::new([
+                LimitSpec::new(
+                    BODY_TESSELLATION_MESH_VERTICES,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    mesh_allowed,
+                ),
+                LimitSpec::new(
+                    BODY_TESSELLATION_EDGE_STORAGE_ITEMS,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    edge_allowed,
+                ),
+            ])
+            .unwrap(),
+        );
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            plan,
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default())
+            .unwrap()
+            .with_diagnostics(DiagnosticLevel::Summary, 4);
+        let mut scope = OperationScope::new(&context);
+        let mut acc = MeshAcc {
+            positions: Vec::new(),
+        };
+        let mut samples = Vec::new();
+        let result = {
+            let mut work = BodyTessellationWork { scope: &mut scope };
+            acc.push_retained_edge_sample(Point3::new(1.0, 2.0, 3.0), 0.5, &mut samples, &mut work)
+        }
+        .map(|()| (acc.positions.len(), samples.len()));
+        scope.finish_typed(result)
+    }
+
+    #[test]
+    fn coupled_edge_sample_admission_is_atomic_with_mesh_first_precedence() {
+        let mesh_denied = coupled_edge_sample_outcome(0, 0);
+        let mesh_snapshot = LimitSnapshot {
+            stage: BODY_TESSELLATION_MESH_VERTICES,
+            resource: ResourceKind::Items,
+            consumed: 1,
+            allowed: 0,
+        };
+        assert_eq!(
+            mesh_denied.result(),
+            Err(&TessellationError::Kernel(Error::ResourceLimit {
+                snapshot: mesh_snapshot,
+            }))
+        );
+        assert_eq!(consumed(&mesh_denied, BODY_TESSELLATION_MESH_VERTICES), 0);
+        assert_eq!(
+            consumed(&mesh_denied, BODY_TESSELLATION_EDGE_STORAGE_ITEMS),
+            0
+        );
+        assert_eq!(mesh_denied.report().limit_events(), &[mesh_snapshot]);
+        assert_eq!(
+            mesh_denied.report().diagnostics()[0].code,
+            BODY_TESSELLATION_MESH_VERTEX_LIMIT_REACHED
+        );
+
+        let edge_denied = coupled_edge_sample_outcome(1, 0);
+        let edge_snapshot = LimitSnapshot {
+            stage: BODY_TESSELLATION_EDGE_STORAGE_ITEMS,
+            resource: ResourceKind::Items,
+            consumed: 1,
+            allowed: 0,
+        };
+        assert_eq!(
+            edge_denied.result(),
+            Err(&TessellationError::Kernel(Error::ResourceLimit {
+                snapshot: edge_snapshot,
+            }))
+        );
+        assert_eq!(
+            consumed(&edge_denied, BODY_TESSELLATION_MESH_VERTICES),
+            0,
+            "mesh preflight must not commit before edge admission"
+        );
+        assert_eq!(
+            consumed(&edge_denied, BODY_TESSELLATION_EDGE_STORAGE_ITEMS),
+            0
+        );
+        assert_eq!(edge_denied.report().limit_events(), &[edge_snapshot]);
+        assert_eq!(
+            edge_denied.report().diagnostics()[0].code,
+            BODY_TESSELLATION_EDGE_STORAGE_ITEM_LIMIT_REACHED
+        );
+
+        let accepted = coupled_edge_sample_outcome(1, 1);
+        assert_eq!(accepted.result(), Ok(&(1, 1)));
+        assert_eq!(consumed(&accepted, BODY_TESSELLATION_MESH_VERTICES), 1);
+        assert_eq!(consumed(&accepted, BODY_TESSELLATION_EDGE_STORAGE_ITEMS), 1);
+    }
+
+    #[test]
+    fn edge_storage_counters_match_block_and_closed_ring_goldens() {
+        let mut block_store = Store::new();
+        let block_body = block(&mut block_store, &Frame::world(), [1.0, 2.0, 3.0]).unwrap();
+        let block_outcome = contextual_body_outcome(
+            &block_store,
+            block_body,
+            &opts(0.25),
+            BodyTessellationBudgetProfile::v1_defaults(),
+        );
+        let block_mesh = block_outcome.result().unwrap();
+        assert_eq!(
+            consumed(&block_outcome, BODY_TESSELLATION_EDGE_STORAGE_ITEMS),
+            120,
+            "24 face uses + three copies of 24 seeds + two records for 12 edges"
+        );
+        assert_eq!(block_mesh.edge_polylines.len(), 12);
+        assert!(
+            block_mesh
+                .edge_polylines
+                .iter()
+                .all(|(_, line)| line.len() == 2)
+        );
+
+        let mut ring_store = Store::new();
+        let ring_body = cylinder_body(&mut ring_store, &Frame::world(), 1.0, 2.0);
+        let ring_outcome = contextual_body_outcome(
+            &ring_store,
+            ring_body,
+            &opts(1e-3),
+            BodyTessellationBudgetProfile::v1_defaults(),
+        );
+        let ring_mesh = ring_outcome.result().unwrap();
+        assert_eq!(consumed(&ring_outcome, BODY_TESSELLATION_EDGE_SPLITS), 248);
+        assert_eq!(
+            consumed(&ring_outcome, BODY_TESSELLATION_EDGE_STORAGE_ITEMS),
+            782,
+            "4 face uses + three copies of 10 seeds and 248 splits + four records"
+        );
+        assert_eq!(ring_mesh.edge_polylines.len(), 2);
+        assert!(
+            ring_mesh
+                .edge_polylines
+                .iter()
+                .all(|(_, line)| { line.len() == 129 && line.first() == line.last() })
+        );
+    }
+
+    #[test]
+    fn sequential_bodies_accumulate_edge_storage_and_reject_the_crossing_batch_atomically() {
+        let mut store = Store::new();
+        let first_body = block(&mut store, &Frame::world(), [1.0, 2.0, 3.0]).unwrap();
+        let second_body = block(&mut store, &Frame::world(), [3.0, 2.0, 1.0]).unwrap();
+        let plan = item_limit_plan(BODY_TESSELLATION_EDGE_STORAGE_ITEMS, 239);
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            plan,
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default())
+            .unwrap()
+            .with_diagnostics(DiagnosticLevel::Summary, 4);
+        let mut scope = OperationScope::new(&context);
+        let first = tessellate_body_in_scope(&store, first_body, &opts(0.25), &mut scope).unwrap();
+        assert_eq!(first.edge_polylines.len(), 12);
+
+        let second = tessellate_body_in_scope(&store, second_body, &opts(0.25), &mut scope);
+        let snapshot = LimitSnapshot {
+            stage: BODY_TESSELLATION_EDGE_STORAGE_ITEMS,
+            resource: ResourceKind::Items,
+            consumed: 240,
+            allowed: 239,
+        };
+        assert_eq!(
+            second,
+            Err(TessellationError::Kernel(Error::ResourceLimit { snapshot }))
+        );
+        let outcome = scope.finish_typed::<(), TessellationError>(Ok(()));
+        assert_eq!(
+            consumed(&outcome, BODY_TESSELLATION_EDGE_STORAGE_ITEMS),
+            204,
+            "the second body's 36-item final-output batch must not partially charge"
+        );
+        assert_eq!(outcome.report().limit_events(), &[snapshot]);
+        assert_eq!(
+            outcome.report().diagnostics()[0].code,
+            BODY_TESSELLATION_EDGE_STORAGE_ITEM_LIMIT_REACHED
+        );
     }
 
     #[cfg(target_pointer_width = "64")]
