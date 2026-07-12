@@ -1,6 +1,6 @@
 # F1 procedural geometry graph
 
-Status: G1-G4a implemented; broader corpus coverage and G5 remain
+Status: G1-G4a and the F2 evaluation-budget adapter implemented; broader corpus coverage and G5 remain
 
 ## Outcome
 

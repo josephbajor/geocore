@@ -304,6 +304,14 @@ specific rejection path is named.
 
 ## Stage Q6 — fuzz workspace and target contracts
 
+Status: the first `xt_read` foundation is implemented in an isolated pinned
+workspace. A direct selector-plus-payload target caps bytes and import records,
+checks stable error inventories, checker-clean successful bodies, failed-import
+atomicity, and transaction reuse, and replays seven licensed deterministic
+seeds including truncation boundaries. Stable host gates pass; the exact
+pinned-nightly 20-second fuzz smoke, semantic write/read digest property,
+broader class/regression corpus, and remaining targets are deferred.
+
 Pin the fuzz runner, its package versions, and any required nightly by exact
 version/date in `fuzz/`. That toolchain is isolated from the workspace MSRV.
 Check in seed corpora and regression inputs; do not check in generated crash

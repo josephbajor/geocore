@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1, the first K2 contextual block/check slice, and the K3 geometry-identity/read-view slice implemented; remaining K2/K3 calls, K4, and K5 implementation-ready
+Status: K1, the K2 contextual block/check/query pilot, and K3 geometry-identity/read-view/surface-evaluation slices implemented; graph-aware intersection, K4, and K5 implementation-ready
 
 ## Outcome
 
@@ -671,8 +671,10 @@ policy/report/error adapter chain without duplicated context or taxonomy.
 
 Status: opaque part-qualified curve, surface, and pcurve IDs; deterministic
 geometry views; topology attachments; class metadata; and shared offset-basis
-identity are implemented. Operation-scoped evaluation and graph-aware
-intersection requests remain.
+identity are implemented. Operation-scoped surface evaluation now reserves one
+F2 child ledger, retains accepted/attempted graph work and classified sources,
+and keeps graph limits, handles, evaluators, and descriptors private.
+Graph-aware intersection requests remain.
 
 This phase lands after F1 G2 or in the same integration window:
 
