@@ -2,11 +2,24 @@
 
 use core::f64::consts::{FRAC_PI_2, TAU};
 
+use kcore::error::ErrorClass;
+use kcore::operation::{
+    AccountingMode, BudgetPlan, ExecutionPolicy, LimitSpec, NumericalPolicy, OperationContext,
+    OperationPolicyError, OperationScope, PolicyVersion, ResourceKind, SessionPolicy,
+    SessionPrecision, TOTAL_WORK_STAGE,
+};
+use kcore::tolerance::Tolerances;
 use kgeom::frame::Frame;
 use kgeom::nurbs::NurbsSurface;
+use kgeom::project::{
+    ProjectionBudgetProfile, ProjectionError, SURFACE_PROJECTION_QUERIES,
+    SURFACE_PROJECTION_SAMPLES,
+};
 use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 use kgeom::surface_point::{
-    SurfacePointMethod, distance_to_surface, invert_surface_point, normalize_surface_uv,
+    SurfacePointContextError, SurfacePointMethod, capability, distance_to_surface,
+    distance_to_surface_in_scope, distance_to_surface_with_context, invert_surface_point,
+    invert_surface_point_in_scope, invert_surface_point_with_context, normalize_surface_uv,
 };
 use kgeom::vec::{Point3, Vec3};
 
@@ -24,6 +37,43 @@ fn assert_close(actual: f64, expected: f64, tolerance: f64) {
         (actual - expected).abs() <= tolerance,
         "{actual:?} differs from {expected:?} by more than {tolerance:?}"
     );
+}
+
+fn session(budget: BudgetPlan) -> SessionPolicy {
+    SessionPolicy::new(
+        SessionPrecision::parasolid(),
+        NumericalPolicy::v1(),
+        ExecutionPolicy::Serial,
+        budget,
+        PolicyVersion::V1,
+    )
+}
+
+fn override_limit(
+    stage: kcore::operation::StageId,
+    resource: ResourceKind,
+    mode: AccountingMode,
+    allowed: u64,
+) -> BudgetPlan {
+    BudgetPlan::new([LimitSpec::new(stage, resource, mode, allowed)]).unwrap()
+}
+
+fn nurbs_plane() -> NurbsSurface {
+    let knots = vec![0.0, 0.0, 1.0, 1.0];
+    NurbsSurface::new(
+        1,
+        1,
+        knots.clone(),
+        knots,
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 2.0, 0.0),
+            Point3::new(3.0, 0.0, 0.0),
+            Point3::new(3.0, 2.0, 0.0),
+        ],
+        None,
+    )
+    .unwrap()
 }
 
 fn assert_analytic_surface(
@@ -97,21 +147,7 @@ fn periodic_seams_and_analytic_singularities_are_deterministic() {
 
 #[test]
 fn nurbs_uses_finite_domain_projection_for_uv_and_distance() {
-    let knots = vec![0.0, 0.0, 1.0, 1.0];
-    let surface = NurbsSurface::new(
-        1,
-        1,
-        knots.clone(),
-        knots,
-        vec![
-            Point3::new(0.0, 0.0, 0.0),
-            Point3::new(0.0, 2.0, 0.0),
-            Point3::new(3.0, 0.0, 0.0),
-            Point3::new(3.0, 2.0, 0.0),
-        ],
-        None,
-    )
-    .unwrap();
+    let surface = nurbs_plane();
 
     let point = surface.eval([0.3, 0.7]);
     let mapped = invert_surface_point(&surface, point).unwrap();
@@ -123,4 +159,204 @@ fn nurbs_uses_finite_domain_projection_for_uv_and_distance() {
     let distance = distance_to_surface(&surface, point + Vec3::new(0.0, 0.0, 0.5)).unwrap();
     assert_eq!(distance.method, SurfacePointMethod::Projected);
     assert_close(distance.distance, 0.5, 2.0e-10);
+}
+
+#[test]
+fn contextual_analytic_queries_are_bit_equivalent_and_consume_zero_projection_work() {
+    let plane = Plane::new(tilted_frame());
+    let point = Point3::new(0.25, -0.5, 3.0);
+    let budget = override_limit(
+        SURFACE_PROJECTION_QUERIES,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        3,
+    );
+    let policy = session(budget);
+    let context = OperationContext::new(&policy, Tolerances::default()).unwrap();
+
+    let legacy_uv = invert_surface_point(&plane, point).unwrap();
+    let contextual_uv = invert_surface_point_with_context(&plane, point, &context).unwrap();
+    assert_eq!(contextual_uv.result(), Ok(&legacy_uv));
+    assert_eq!(contextual_uv.report().usage().len(), 1);
+    assert_eq!(contextual_uv.report().usage()[0].consumed, 0);
+
+    let legacy_distance = distance_to_surface(&plane, point).unwrap();
+    let contextual_distance = distance_to_surface_with_context(&plane, point, &context).unwrap();
+    assert_eq!(contextual_distance.result(), Ok(&legacy_distance));
+    assert_eq!(contextual_distance.report().usage().len(), 1);
+    assert_eq!(contextual_distance.report().usage()[0].consumed, 0);
+}
+
+#[test]
+fn contextual_nurbs_fallback_is_bit_equivalent_and_charges_one_query() {
+    let surface = nurbs_plane();
+    let point = surface.eval([0.3, 0.7]) + Vec3::new(0.0, 0.0, 0.5);
+    let policy = session(BudgetPlan::empty());
+    let context = OperationContext::new(&policy, Tolerances::default()).unwrap();
+
+    let legacy_uv = invert_surface_point(&surface, point).unwrap();
+    let contextual_uv = invert_surface_point_with_context(&surface, point, &context).unwrap();
+    assert_eq!(contextual_uv.result(), Ok(&legacy_uv));
+    let uv_queries = contextual_uv
+        .report()
+        .usage()
+        .iter()
+        .find(|snapshot| snapshot.stage == SURFACE_PROJECTION_QUERIES)
+        .unwrap();
+    assert_eq!(uv_queries.consumed, 1);
+
+    let legacy_distance = distance_to_surface(&surface, point).unwrap();
+    let contextual_distance = distance_to_surface_with_context(&surface, point, &context).unwrap();
+    assert_eq!(contextual_distance.result(), Ok(&legacy_distance));
+    let distance_queries = contextual_distance
+        .report()
+        .usage()
+        .iter()
+        .find(|snapshot| snapshot.stage == SURFACE_PROJECTION_QUERIES)
+        .unwrap();
+    assert_eq!(distance_queries.consumed, 1);
+}
+
+#[test]
+fn contextual_errors_preserve_projection_input_limits_classification_and_sources() {
+    let surface = nurbs_plane();
+    let policy = session(BudgetPlan::empty());
+    let context = OperationContext::new(&policy, Tolerances::default()).unwrap();
+
+    let invalid =
+        invert_surface_point_with_context(&surface, Point3::new(f64::NAN, 0.0, 0.0), &context)
+            .unwrap();
+    let invalid = invalid.into_result().unwrap_err();
+    assert!(matches!(
+        invalid,
+        SurfacePointContextError::Projection(ProjectionError::InvalidQueryPoint)
+    ));
+    assert_eq!(invalid.class(), ErrorClass::InvalidInput);
+    assert!(std::error::Error::source(&invalid).is_some());
+
+    let analytic_invalid = distance_to_surface_with_context(
+        &Plane::new(Frame::world()),
+        Point3::new(0.0, f64::INFINITY, 0.0),
+        &context,
+    )
+    .unwrap()
+    .into_result()
+    .unwrap_err();
+    assert!(matches!(
+        analytic_invalid,
+        SurfacePointContextError::Projection(ProjectionError::InvalidQueryPoint)
+    ));
+    assert_eq!(analytic_invalid.class(), ErrorClass::InvalidInput);
+
+    let denied_context = OperationContext::new(&policy, Tolerances::default())
+        .unwrap()
+        .with_budget_overrides(override_limit(
+            SURFACE_PROJECTION_QUERIES,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            0,
+        ));
+    let denied = distance_to_surface_with_context(&surface, Point3::default(), &denied_context)
+        .unwrap()
+        .into_result()
+        .unwrap_err();
+    let snapshot = denied.limit().expect("projection limit remains structured");
+    assert_eq!(snapshot.stage, SURFACE_PROJECTION_QUERIES);
+    assert_eq!(snapshot.consumed, 1);
+    assert_eq!(snapshot.allowed, 0);
+    assert_eq!(denied.class(), ErrorClass::ResourceLimit);
+    assert_eq!(denied.code(), kcore::error::code::RESOURCE_LIMIT);
+    let projection_source = std::error::Error::source(&denied).unwrap();
+    assert!(projection_source.source().is_some());
+    assert!(matches!(
+        denied,
+        SurfacePointContextError::Projection(ProjectionError::Policy(
+            OperationPolicyError::LimitReached(_)
+        ))
+    ));
+
+    let unsupported = SurfacePointContextError::UnboundedProjectionWindow;
+    assert_eq!(unsupported.class(), ErrorClass::Unsupported);
+    assert_eq!(
+        unsupported.capability(),
+        Some(capability::FINITE_PROJECTION_WINDOW)
+    );
+}
+
+#[test]
+fn analytic_queries_ignore_invalid_fallback_contracts_but_fallbacks_validate_them() {
+    let mismatched = BudgetPlan::new([LimitSpec::new(
+        SURFACE_PROJECTION_SAMPLES,
+        ResourceKind::Items,
+        AccountingMode::Cumulative,
+        625,
+    )])
+    .unwrap();
+    let policy = session(mismatched);
+    let context = OperationContext::new(&policy, Tolerances::default()).unwrap();
+
+    assert!(
+        invert_surface_point_with_context(&Plane::new(Frame::world()), Point3::default(), &context)
+            .unwrap()
+            .result()
+            .is_ok()
+    );
+    assert!(matches!(
+        invert_surface_point_with_context(&nurbs_plane(), Point3::default(), &context),
+        Err(OperationPolicyError::AccountingModeMismatch {
+            stage: SURFACE_PROJECTION_SAMPLES,
+            resource: ResourceKind::Items,
+        })
+    ));
+}
+
+#[test]
+fn shared_scope_queries_accumulate_and_root_total_work_keeps_precedence() {
+    let surface = nurbs_plane();
+    let point = surface.eval([0.25, 0.75]);
+    let repeated_policy = session(BudgetPlan::empty());
+    let repeated_context = OperationContext::new(&repeated_policy, Tolerances::default())
+        .unwrap()
+        .with_family_budget_defaults(ProjectionBudgetProfile::surface_defaults())
+        .with_budget_overrides(override_limit(
+            SURFACE_PROJECTION_QUERIES,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            2,
+        ));
+    let mut repeated_scope = OperationScope::new(&repeated_context);
+    invert_surface_point_in_scope(&surface, point, &mut repeated_scope).unwrap();
+    distance_to_surface_in_scope(&surface, point, &mut repeated_scope).unwrap();
+    let repeated_queries = repeated_scope
+        .ledger()
+        .snapshots()
+        .into_iter()
+        .find(|snapshot| snapshot.stage == SURFACE_PROJECTION_QUERIES)
+        .unwrap();
+    assert_eq!(repeated_queries.consumed, 2);
+
+    let policy = session(BudgetPlan::empty().with_total_work_limit(1));
+    let context = OperationContext::new(&policy, Tolerances::default())
+        .unwrap()
+        .with_family_budget_defaults(ProjectionBudgetProfile::surface_defaults())
+        .with_budget_overrides(override_limit(
+            SURFACE_PROJECTION_QUERIES,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            2,
+        ));
+    let mut scope = OperationScope::new(&context);
+
+    let first = invert_surface_point_in_scope(&surface, point, &mut scope).unwrap();
+    assert_eq!(first, invert_surface_point(&surface, point).unwrap());
+    let second = distance_to_surface_in_scope(&surface, point, &mut scope).unwrap_err();
+    assert!(matches!(
+        second,
+        SurfacePointContextError::Projection(ProjectionError::Policy(
+            OperationPolicyError::LimitReached(snapshot)
+        )) if snapshot.stage == TOTAL_WORK_STAGE
+            && snapshot.consumed == 2
+            && snapshot.allowed == 1
+    ));
+    assert_eq!(second.limit().unwrap().stage, TOTAL_WORK_STAGE);
 }

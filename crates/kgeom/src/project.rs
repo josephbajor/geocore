@@ -601,6 +601,17 @@ pub fn project_to_surface_with_context(
     context: &OperationContext<'_>,
 ) -> core::result::Result<OperationOutcome<SurfaceProjection, ProjectionError>, OperationPolicyError>
 {
+    let context = compose_surface_projection_context(context)?;
+    let mut scope = OperationScope::new(&context);
+    let result = project_to_surface_in_scope(surface, p, window, &mut scope);
+    Ok(scope.finish_typed(result))
+}
+
+/// Composes and validates the surface-projection family profile for a
+/// top-level contextual operation that may delegate to projection.
+pub(crate) fn compose_surface_projection_context<'session>(
+    context: &OperationContext<'session>,
+) -> core::result::Result<OperationContext<'session>, OperationPolicyError> {
     let context = context
         .clone()
         .with_family_budget_defaults(ProjectionBudgetProfile::surface_defaults());
@@ -609,9 +620,7 @@ pub fn project_to_surface_with_context(
             .effective_budget()
             .require_limit(stage, resource, mode)
     })?;
-    let mut scope = OperationScope::new(&context);
-    let result = project_to_surface_in_scope(surface, p, window, &mut scope);
-    Ok(scope.finish_typed(result))
+    Ok(context)
 }
 
 /// Project onto a surface using the caller's existing operation scope.
