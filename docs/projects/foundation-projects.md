@@ -13,12 +13,12 @@ topology boundaries.
 | --- | --- |
 | F0 | Implemented: curve/curve operand swapping preserves completion evidence and canonical order. |
 | F1 | G1-G4a implemented: `kgraph` and `ktopo::Store` own one transactional geometry graph; exact offsets evaluate, check, tessellate, and round-trip through the declared X_T subset without basis duplication. Broader G4 corpus coverage and G5 remain. |
-| F2 | Stage 1 and two Stage 2 pilots are implemented: the scoped NURBS proof/march path and Full face-domain checker retain accepted usage, attempted limit events, numeric-resolution stops, structured gaps, and compatibility parity. Stage 4 tessellation vocabulary names the two truthful legacy ceilings without changing behavior; broader contextual migrations remain. |
+| F2 | Stage 1, two Stage 2 pilots, and the first Stage 4 migration are implemented: scoped NURBS proof/march, Full face-domain checking, and face tessellation share deterministic ledgers while retaining accepted usage, attempted limit events, numeric-resolution stops, structured gaps, compatibility parity, and exact legacy precedence. Contextual projection, body tessellation, and broader migrations remain. |
 | F3 | Two slices implemented: centralized class dispatch plus shared periodic/range and first-wins candidate emission migrated through line/circle and plane/sphere. Broader driver migration and generic fallback remain. |
 | F4 | Phase 1, representative Phase 2 slices, and two Phase 3 pilots are implemented: graph evaluation owns stable classification, and one surface-intersection family retains ordered structured incomplete evidence through limits, numeric stops, canonicalization, and swapping. Broader result-family and legacy migrations remain. |
-| F5 | K1 implemented: the `kernel` facade owns session/part lifecycle, opaque part-qualified IDs, classified source-preserving errors, and lazy deterministic read views; K2-K5 remain. |
+| F5 | K1 and the K3 geometry-identity/read-view slice are implemented: the `kernel` facade owns session/part lifecycle, opaque part-qualified topology and graph IDs, classified source-preserving errors, deterministic views, and shared offset-basis identity without descriptor leakage. K2, operation-scoped K3 calls, K4, and K5 remain. |
 | F6 | First slice implemented: shared surface inversion, chart normalization, and distance services consumed by checker and tessellation. Module splits remain. |
-| F7 | Q0-Q2 plus the first Q3 analytic slice are implemented: the isolated runner now covers topology commits/indexes and ten exact body-tessellation cases with semantic digests and bounded smokes. Mixed/NURBS Q3 cases and Q4-Q8 remain. |
+| F7 | Q0-Q2, the first Q3 analytic slice, and the first Q4 NURBS-isolation slice are implemented: the isolated runner covers topology commits/indexes, ten exact body-tessellation cases, and six representation/patch/relation/budget isolation cases with semantic evidence and bounded smokes. Mixed/NURBS Q3 expansion, the broader Q4 matrix, and Q5-Q8 remain. |
 
 ## Dependency outline
 

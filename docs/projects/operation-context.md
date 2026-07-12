@@ -1,6 +1,6 @@
 # Operation context and numerical policy
 
-Status: Stage 1, intersection and checker Stage 2 pilots, and truthful Stage 4 tessellation vocabulary implemented
+Status: Stage 1, intersection and checker Stage 2 pilots, and the first contextual Stage 4 face-tessellation migration implemented
 
 ## Purpose
 
@@ -599,6 +599,11 @@ Exit: candidate acceptance still depends on model residuals; parameter/condition
 guards have no direct proof authority; scale tests pass.
 
 ### Stage 4 — Projection and tessellation
+
+Status: face tessellation now has contextual and shared-scope entry points,
+truthful boundary-depth and completed-pass accounting, exact structured limit
+evidence, and a bit-compatible legacy adapter. Contextual projection, body
+tessellation, and execution-policy equivalence remain.
 
 - Add fallible contextual projection APIs and remove public panic behavior through the
   new path.

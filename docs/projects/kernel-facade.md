@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1 implemented; K2-K5 implementation-ready
+Status: K1 and the K3 geometry-identity/read-view slice implemented; K2, operation-scoped K3 calls, K4, and K5 implementation-ready
 
 ## Outcome
 
@@ -663,6 +663,11 @@ Exit: one read operation and one state-changing operation prove the complete
 policy/report/error adapter chain without duplicated context or taxonomy.
 
 ### K3 — F1 G2 geometry identity integration
+
+Status: opaque part-qualified curve, surface, and pcurve IDs; deterministic
+geometry views; topology attachments; class metadata; and shared offset-basis
+identity are implemented. Operation-scoped evaluation and graph-aware
+intersection requests remain.
 
 This phase lands after F1 G2 or in the same integration window:
 
