@@ -588,9 +588,10 @@ structured data; checker exhaustion remains indeterminate.
 ### Stage 3 — Numerical-policy pilot
 
 Status: NURBS/NURBS Newton symmetric 2×2 conditioning, collapsed-range routing,
-and accepted-step progress now use shared scale-aware policy recipes while
-model residuals retain sole contact authority. Absolute gradient, minimizer,
-segment-conditioning, legacy overlap/input/local-search slack, and structured
+accepted-step progress, and normalized directional-gradient stationarity now
+use shared scale-aware policy recipes while model residuals retain sole contact
+authority. Minimizer width/value, segment-conditioning, legacy
+overlap/input/local-search slack, contact-classification scaling, and structured
 numeric-resolution reporting remain separate migrations.
 
 - Replace the repeated NURBS intersection parameter-tolerance helpers with the

@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1, the K2 contextual block/check/query pilot, and K3 geometry-identity/read-view/surface-evaluation slices implemented; graph-aware intersection, K4, and K5 implementation-ready
+Status: K1, the K2 contextual block/check/query pilot, K3 geometry-identity/read-view/surface-evaluation slices, and the first K4 typed interchange slice implemented; graph-aware intersection, semantic K4 edits/journal iteration, and K5 implementation-ready
 
 ## Outcome
 
@@ -689,6 +689,11 @@ Exit: moving geometry arenas into `GeometryGraph` causes no ordinary facade API
 change, and an offset basis remains shared and hidden behind opaque IDs.
 
 ### K4 — Transactions, journals, and interchange
+
+Status: typed X_T import/export now returns opaque body IDs, skipped-schema
+summaries, deterministic text, classified source chains, and the exact opaque
+commit journal. Import into populated parts is rollback- and allocator-clean;
+semantic edit transactions and facade-ID journal iterators remain.
 
 - Add the semantic `EditTransaction` wrapper over currently public checked
   transaction methods.

@@ -304,13 +304,13 @@ specific rejection path is named.
 
 ## Stage Q6 — fuzz workspace and target contracts
 
-Status: the first `xt_read` foundation is implemented in an isolated pinned
-workspace. A direct selector-plus-payload target caps bytes and import records,
-checks stable error inventories, checker-clean successful bodies, failed-import
-atomicity, and transaction reuse, and replays seven licensed deterministic
-seeds including truncation boundaries. Stable host gates pass; the exact
-pinned-nightly 20-second fuzz smoke, semantic write/read digest property,
-broader class/regression corpus, and remaining targets are deferred.
+Status: `xt_read` and `nurbs_constructors` foundations are implemented in an
+isolated pinned workspace. Direct capped targets check stable errors, import
+atomicity, constructor invariants, and deterministic bounded queries across
+seven X_T and nine curve/surface polynomial/rational seed cases. The constructor
+contract also closed a production curve non-finite-control-point gap. Stable
+host gates pass; exact pinned-nightly 20-second smokes, semantic X_T write/read
+digest property, broader corpora, and remaining targets are deferred.
 
 Pin the fuzz runner, its package versions, and any required nightly by exact
 version/date in `fuzz/`. That toolchain is isolated from the workspace MSRV.
