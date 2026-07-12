@@ -26,69 +26,55 @@ pub fn intersect_bounded_curves(
     range_b: ParamRange,
     tolerances: Tolerances,
 ) -> IntersectionResult<CurveCurveIntersections> {
-    let class_a = CurveDispatch::inspect(a);
-    let class_b = CurveDispatch::inspect(b);
+    let original_a = CurveDispatch::inspect(a);
+    let original_b = CurveDispatch::inspect(b);
+    let (Some(mut class_a), Some(mut class_b)) = (original_a, original_b) else {
+        return Err(IntersectionError::UnsupportedCurvePair {
+            class_a: original_a.map(|class| class.class().key()),
+            class_b: original_b.map(|class| class.class().key()),
+        });
+    };
+    let (mut range_a, mut range_b) = (range_a, range_b);
+    let swapped = class_a.class() > class_b.class();
+    if swapped {
+        core::mem::swap(&mut class_a, &mut class_b);
+        core::mem::swap(&mut range_a, &mut range_b);
+    }
+
     let result = match (class_a, class_b) {
-        (Some(CurveDispatch::Line(a)), Some(CurveDispatch::Line(b))) => {
+        (CurveDispatch::Line(a), CurveDispatch::Line(b)) => {
             intersect_bounded_lines(a, range_a, b, range_b, tolerances)
         }
-        (Some(CurveDispatch::Line(a)), Some(CurveDispatch::Circle(b))) => {
+        (CurveDispatch::Line(a), CurveDispatch::Circle(b)) => {
             intersect_bounded_line_circle(a, range_a, b, range_b, tolerances)
         }
-        (Some(CurveDispatch::Circle(a)), Some(CurveDispatch::Line(b))) => {
-            intersect_bounded_line_circle(b, range_b, a, range_a, tolerances)
-                .map(CurveCurveIntersections::swapped)
-        }
-        (Some(CurveDispatch::Line(a)), Some(CurveDispatch::Ellipse(b))) => {
+        (CurveDispatch::Line(a), CurveDispatch::Ellipse(b)) => {
             intersect_bounded_line_ellipse(a, range_a, b, range_b, tolerances)
         }
-        (Some(CurveDispatch::Ellipse(a)), Some(CurveDispatch::Line(b))) => {
-            intersect_bounded_line_ellipse(b, range_b, a, range_a, tolerances)
-                .map(CurveCurveIntersections::swapped)
-        }
-        (Some(CurveDispatch::Line(a)), Some(CurveDispatch::Nurbs(b))) => {
+        (CurveDispatch::Line(a), CurveDispatch::Nurbs(b)) => {
             intersect_bounded_line_nurbs(a, range_a, b, range_b, tolerances)
         }
-        (Some(CurveDispatch::Nurbs(a)), Some(CurveDispatch::Line(b))) => {
-            intersect_bounded_line_nurbs(b, range_b, a, range_a, tolerances)
-                .map(CurveCurveIntersections::swapped)
-        }
-        (Some(CurveDispatch::Circle(a)), Some(CurveDispatch::Circle(b))) => {
+        (CurveDispatch::Circle(a), CurveDispatch::Circle(b)) => {
             super::circle_circle::intersect_bounded_circles(a, range_a, b, range_b, tolerances)
         }
-        (Some(CurveDispatch::Circle(a)), Some(CurveDispatch::Nurbs(b))) => {
-            intersect_bounded_circle_nurbs(a, range_a, b, range_b, tolerances)
-        }
-        (Some(CurveDispatch::Nurbs(a)), Some(CurveDispatch::Circle(b))) => {
-            intersect_bounded_circle_nurbs(b, range_b, a, range_a, tolerances)
-                .map(CurveCurveIntersections::swapped)
-        }
-        (Some(CurveDispatch::Circle(a)), Some(CurveDispatch::Ellipse(b))) => {
+        (CurveDispatch::Circle(a), CurveDispatch::Ellipse(b)) => {
             intersect_bounded_circle_ellipse(a, range_a, b, range_b, tolerances)
         }
-        (Some(CurveDispatch::Ellipse(a)), Some(CurveDispatch::Circle(b))) => {
-            intersect_bounded_circle_ellipse(b, range_b, a, range_a, tolerances)
-                .map(CurveCurveIntersections::swapped)
+        (CurveDispatch::Circle(a), CurveDispatch::Nurbs(b)) => {
+            intersect_bounded_circle_nurbs(a, range_a, b, range_b, tolerances)
         }
-        (Some(CurveDispatch::Ellipse(a)), Some(CurveDispatch::Ellipse(b))) => {
+        (CurveDispatch::Ellipse(a), CurveDispatch::Ellipse(b)) => {
             intersect_bounded_ellipses(a, range_a, b, range_b, tolerances)
         }
-        (Some(CurveDispatch::Ellipse(a)), Some(CurveDispatch::Nurbs(b))) => {
+        (CurveDispatch::Ellipse(a), CurveDispatch::Nurbs(b)) => {
             intersect_bounded_ellipse_nurbs(a, range_a, b, range_b, tolerances)
         }
-        (Some(CurveDispatch::Nurbs(a)), Some(CurveDispatch::Ellipse(b))) => {
-            intersect_bounded_ellipse_nurbs(b, range_b, a, range_a, tolerances)
-                .map(CurveCurveIntersections::swapped)
-        }
-        (Some(CurveDispatch::Nurbs(a)), Some(CurveDispatch::Nurbs(b))) => {
+        (CurveDispatch::Nurbs(a), CurveDispatch::Nurbs(b)) => {
             intersect_bounded_nurbs_nurbs(a, range_a, b, range_b, tolerances)
         }
-        _ => {
-            return Err(IntersectionError::UnsupportedCurvePair {
-                class_a: class_a.map(|class| class.class().key()),
-                class_b: class_b.map(|class| class.class().key()),
-            });
-        }
+        _ => unreachable!("curve classes are normalized into canonical order"),
     };
-    result.map_err(IntersectionError::from)
+    result
+        .map(|result| if swapped { result.swapped() } else { result })
+        .map_err(IntersectionError::from)
 }

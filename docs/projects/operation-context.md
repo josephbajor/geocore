@@ -606,6 +606,13 @@ therefore at state 3 and closed to new production callers. The aggregate
 compatibility profile admits the algorithms' terminal Newton/backtracking
 sentinel observation; strict single-query defaults retain their existing stop.
 
+Curve/curve dispatch now normalizes the complete current class matrix before
+specialized routing. Each unordered class pair has one dispatch arm; reversed
+calls swap the canonical result afterward, preserving completion and first-
+operand ordering without a second algorithm path. The future certified fallback
+enters at this same normalized boundary and must return indeterminate evidence
+until complete-domain exclusion is proven.
+
 ## Rollout stages
 
 ### Stage 0 — Audit and vocabulary lock
