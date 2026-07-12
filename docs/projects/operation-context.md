@@ -632,12 +632,24 @@ candidate/depth high-water; a denied split retains its parent cell, and an
 unrepresentable midpoint records numeric resolution without dropping cover.
 Only an empty complete cover upgrades the intersection to a proven miss.
 
+Retained curve-pair cells now drive discovery directly instead of being
+discarded before a second global fixed-grid search. Each cell contributes at
+most one deterministic chord-or-midpoint seed, one statically bounded
+safeguarded polish attempt, and—only after re-evaluation inside both cell
+ranges—a tolerance-level contact witness. The composed curve/curve profile
+charges these attempts cumulatively at
+`kops.intersect.nurbs-curve-pair-seed-attempts`; its 4,096 allowance matches
+the isolation cover ceiling. Exhaustion returns the discoveries accumulated so
+far with indeterminate completion and an exact report crossing. A verified
+tolerance witness proves only that emitted contact, not root uniqueness,
+complete-domain discovery, or coincident-interval extent.
+
 That normalized boundary now has contextual and shared-scope public entries.
 The contextual entry composes the curve/curve family profile once and creates
 one scope; ellipse/ellipse borrows it for every projection, while NURBS/NURBS
-uses the same scope for exact pair isolation and the caller's numerical policy
-without creating a nested report. The legacy generic entry is an exact v1
-adapter. Focused evidence pins
+uses the same scope for exact pair isolation, bounded seed attempts, and the
+caller's numerical policy without creating a nested report. The legacy generic
+entry is an exact v1 adapter. Focused evidence pins
 legacy result equivalence, shared-scope report equality, exact projection
 N/N+1 failure, exact isolation boundaries, reversal/completion preservation,
 and custom NURBS numerical stops through the generic dispatcher.

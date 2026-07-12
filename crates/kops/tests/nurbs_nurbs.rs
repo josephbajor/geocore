@@ -10,8 +10,9 @@ use kgeom::nurbs::NurbsCurve;
 use kgeom::param::ParamRange;
 use kgeom::vec::Point3;
 use kops::intersect::{
-    ContactKind, ParamOrientation, intersect_bounded_curves_with_context,
-    intersect_bounded_nurbs_nurbs, intersect_bounded_nurbs_nurbs_with_context,
+    ContactKind, NURBS_CURVE_PAIR_SEED_ATTEMPTS, ParamOrientation,
+    intersect_bounded_curves_with_context, intersect_bounded_nurbs_nurbs,
+    intersect_bounded_nurbs_nurbs_with_context,
 };
 
 fn line_nurbs(start: Point3, end: Point3) -> NurbsCurve {
@@ -98,6 +99,52 @@ fn nurbs_nurbs_crossing_tangent_and_range_filtering() {
 }
 
 #[test]
+fn cell_local_discovery_retains_multiple_roots_and_verified_witnesses() {
+    let arch = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(-1.0, 0.0, 0.0),
+            Point3::new(0.0, 2.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+        ],
+        None,
+    )
+    .unwrap();
+    let line = line_nurbs(Point3::new(-2.0, 0.5, 0.0), Point3::new(2.0, 0.5, 0.0));
+    let tolerances = Tolerances::default();
+    let forward = intersect_bounded_nurbs_nurbs(
+        &arch,
+        arch.param_range(),
+        &line,
+        line.param_range(),
+        tolerances,
+    )
+    .unwrap();
+    let swapped = intersect_bounded_nurbs_nurbs(
+        &line,
+        line.param_range(),
+        &arch,
+        arch.param_range(),
+        tolerances,
+    )
+    .unwrap();
+
+    assert_eq!(forward.points.len(), 2, "{:?}", forward.points);
+    assert_eq!(swapped.points.len(), 2);
+    assert!(!forward.is_complete());
+    for (point, reversed) in forward.points.iter().zip(&swapped.points) {
+        assert!(arch.param_range().contains(point.t_a));
+        assert!(line.param_range().contains(point.t_b));
+        assert!(point.residual <= tolerances.linear());
+        assert_eq!(point.t_a, reversed.t_b);
+        assert_eq!(point.t_b, reversed.t_a);
+        assert_eq!(point.point, reversed.point);
+        assert_eq!(point.residual, reversed.residual);
+    }
+}
+
+#[test]
 fn nurbs_nurbs_reports_simple_contained_overlaps() {
     let a = line_nurbs(Point3::new(0.0, 0.0, 0.0), Point3::new(3.0, 0.0, 0.0));
     let b = line_nurbs(Point3::new(0.0, 0.0, 0.0), Point3::new(3.0, 0.0, 0.0));
@@ -177,7 +224,17 @@ fn contextual_v1_entry_is_exactly_legacy_compatible() {
         );
         assert_eq!(contextual.result(), legacy.as_ref());
         assert_eq!(contextual.report().policy_version(), PolicyVersion::V1);
-        assert_eq!(contextual.report().usage().len(), 3);
+        assert_eq!(contextual.report().usage().len(), 4);
+        assert!(
+            contextual
+                .report()
+                .usage()
+                .iter()
+                .find(|usage| usage.stage == NURBS_CURVE_PAIR_SEED_ATTEMPTS)
+                .unwrap()
+                .consumed
+                > 0
+        );
         assert!(
             contextual
                 .report()
@@ -206,6 +263,74 @@ fn contextual_v1_entry_is_exactly_legacy_compatible() {
         &context,
     );
     assert_eq!(contextual.result(), legacy.as_ref());
+}
+
+#[test]
+fn cell_local_seed_budget_has_exact_boundaries_and_never_grants_completion() {
+    let a = tangent_parabola();
+    let b = line_nurbs(Point3::new(-2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0));
+    let tolerances = Tolerances::default();
+    let session = SessionPolicy::v1();
+    let context = OperationContext::new(&session, tolerances).unwrap();
+    let default = intersect_bounded_nurbs_nurbs_with_context(
+        &a,
+        a.param_range(),
+        &b,
+        b.param_range(),
+        &context,
+    );
+    let reviewed = default.result().unwrap();
+    assert_eq!(reviewed.points.len(), 1);
+    assert!(!reviewed.is_complete());
+    let used = default
+        .report()
+        .usage()
+        .iter()
+        .find(|usage| usage.stage == NURBS_CURVE_PAIR_SEED_ATTEMPTS)
+        .unwrap()
+        .consumed;
+    assert!(used > 0);
+
+    let exact = BudgetPlan::new([LimitSpec::new(
+        NURBS_CURVE_PAIR_SEED_ATTEMPTS,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        used,
+    )])
+    .unwrap();
+    let exact_context = context.clone().with_budget_overrides(exact);
+    let exact = intersect_bounded_nurbs_nurbs_with_context(
+        &a,
+        a.param_range(),
+        &b,
+        b.param_range(),
+        &exact_context,
+    );
+    assert_eq!(exact.result(), Ok(reviewed));
+    assert!(exact.report().limit_events().is_empty());
+
+    let denied = BudgetPlan::new([LimitSpec::new(
+        NURBS_CURVE_PAIR_SEED_ATTEMPTS,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        0,
+    )])
+    .unwrap();
+    let denied_context = context.with_budget_overrides(denied);
+    let denied = intersect_bounded_nurbs_nurbs_with_context(
+        &a,
+        a.param_range(),
+        &b,
+        b.param_range(),
+        &denied_context,
+    );
+    let result = denied.result().unwrap();
+    assert!(result.is_empty());
+    assert!(!result.is_complete());
+    assert_eq!(denied.report().limit_events().len(), 1);
+    let crossing = denied.report().limit_events()[0];
+    assert_eq!(crossing.stage, NURBS_CURVE_PAIR_SEED_ATTEMPTS);
+    assert_eq!((crossing.consumed, crossing.allowed), (1, 0));
 }
 
 #[test]

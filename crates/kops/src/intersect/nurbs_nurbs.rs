@@ -10,13 +10,14 @@ use super::result::{
 };
 use kcore::error::{Error, Result};
 use kcore::operation::{
-    NumericalPolicy, OperationContext, OperationOutcome, OperationScope, SessionPolicy,
+    AccountingMode, BudgetPlan, LimitSpec, NumericalPolicy, OperationContext, OperationOutcome,
+    OperationPolicyError, OperationScope, ResourceKind, SessionPolicy, StageId,
 };
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::nurbs::{
-    ContextCurvePairIsolationError, NurbsCurve, NurbsCurvePairBudgetProfile,
-    isolate_curve_pair_candidates_in_scope,
+    ContextCurvePairIsolationError, CurvePairCandidateCell, NurbsCurve,
+    NurbsCurvePairBudgetProfile, isolate_curve_pair_candidates_in_scope,
 };
 use kgeom::param::ParamRange;
 use kgeom::vec::Point3;
@@ -26,6 +27,48 @@ const MAX_STEPS: usize = 384;
 const MAX_POLISH_STEPS: usize = 32;
 const MAX_MINIMIZE_STEPS: usize = 80;
 const OVERLAP_SAMPLES: usize = 32;
+const DEFAULT_SEED_ATTEMPTS: u64 = 4_096;
+
+const fn stage(value: &'static str) -> StageId {
+    match StageId::new(value) {
+        Ok(stage) => stage,
+        Err(_) => panic!("invalid NURBS curve-pair solve stage"),
+    }
+}
+
+/// Cumulative bounded cell-local seed and polish attempts.
+pub const NURBS_CURVE_PAIR_SEED_ATTEMPTS: StageId =
+    stage("kops.intersect.nurbs-curve-pair-seed-attempts");
+
+/// Version-1 composed profile for exact isolation plus cell-local discovery.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct NurbsCurvePairSolveBudgetProfile;
+
+impl NurbsCurvePairSolveBudgetProfile {
+    /// At most one statically bounded polish attempt per retained isolation
+    /// cell. The isolation profile itself caps that cover at 4,096 cells.
+    pub fn v1_defaults() -> BudgetPlan {
+        let isolation = NurbsCurvePairBudgetProfile::v1_defaults();
+        BudgetPlan::new(isolation.limits().iter().copied().chain([LimitSpec::new(
+            NURBS_CURVE_PAIR_SEED_ATTEMPTS,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            DEFAULT_SEED_ATTEMPTS,
+        )]))
+        .expect("built-in NURBS curve-pair solve profile is valid")
+    }
+
+    /// Require isolation and discovery stages with canonical accounting.
+    pub fn validate(plan: &BudgetPlan) -> core::result::Result<(), OperationPolicyError> {
+        NurbsCurvePairBudgetProfile::validate(plan)?;
+        plan.require_limit(
+            NURBS_CURVE_PAIR_SEED_ATTEMPTS,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+        )?;
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 struct Sample {
@@ -41,12 +84,67 @@ struct PolishPolicy {
     numerical: NumericalPolicy,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct VerifiedCurvePairSeed {
+    t_a: f64,
+    t_b: f64,
+    point_a: Point3,
+    point_b: Point3,
+    residual: f64,
+}
+
+impl VerifiedCurvePairSeed {
+    fn verify(
+        a: &NurbsCurve,
+        range_a: ParamRange,
+        t_a: f64,
+        b: &NurbsCurve,
+        range_b: ParamRange,
+        t_b: f64,
+        tolerance: f64,
+    ) -> Option<Self> {
+        if !t_a.is_finite() || !t_b.is_finite() || !range_a.contains(t_a) || !range_b.contains(t_b)
+        {
+            return None;
+        }
+        let point_a = a.eval(t_a);
+        let point_b = b.eval(t_b);
+        if [
+            point_a.x, point_a.y, point_a.z, point_b.x, point_b.y, point_b.z,
+        ]
+        .into_iter()
+        .any(|value| !value.is_finite())
+        {
+            return None;
+        }
+        let residual = point_a.dist(point_b);
+        (residual.is_finite() && residual <= tolerance).then_some(Self {
+            t_a,
+            t_b,
+            point_a,
+            point_b,
+            residual,
+        })
+    }
+
+    fn into_point(self, kind: ContactKind) -> CurveCurvePoint {
+        CurveCurvePoint {
+            point: (self.point_a + self.point_b) / 2.0,
+            t_a: self.t_a,
+            t_b: self.t_b,
+            residual: self.residual,
+            kind,
+        }
+    }
+}
+
 /// Intersect two clamped NURBS curves restricted to finite ranges.
 ///
-/// This is the first general NURBS/NURBS curve bridge: it discovers candidate
-/// contacts from closest sampled segment pairs, polishes them by Newton
-/// iteration on the two curve parameters, and reports simple contained spans
-/// when the first curve range is proven to lie on the second.
+/// This is the first general NURBS/NURBS curve bridge: it isolates exact
+/// conservative subcurve-pair cells, chooses one deterministic local seed per
+/// cell, polishes it by safeguarded Newton iteration, and emits only
+/// re-evaluated tolerance witnesses. It also reports simple contained spans
+/// when the first curve range is provisionally found to lie on the second.
 pub fn intersect_bounded_nurbs_nurbs(
     a: &NurbsCurve,
     range_a: ParamRange,
@@ -78,7 +176,7 @@ pub fn intersect_bounded_nurbs_nurbs_with_context(
 ) -> OperationOutcome<CurveCurveIntersections> {
     let context = context
         .clone()
-        .with_family_budget_defaults(NurbsCurvePairBudgetProfile::v1_defaults());
+        .with_family_budget_defaults(NurbsCurvePairSolveBudgetProfile::v1_defaults());
     let mut scope = OperationScope::new(&context);
     let result = intersect_bounded_nurbs_nurbs_contextual_impl(a, range_a, b, range_b, &mut scope);
     scope.finish(result)
@@ -104,7 +202,7 @@ fn intersect_bounded_nurbs_nurbs_contextual_impl(
 ) -> Result<CurveCurveIntersections> {
     let tolerances = scope.context().tolerances();
     let numerical = scope.context().session().numerical();
-    NurbsCurvePairBudgetProfile::validate(&scope.context().effective_budget())?;
+    NurbsCurvePairSolveBudgetProfile::validate(&scope.context().effective_budget())?;
     validate_ranges(a, range_a, b, range_b, tolerances)?;
     let range_a = clamp_to_domain(range_a, a.param_range());
     let range_b = clamp_to_domain(range_b, b.param_range());
@@ -127,92 +225,92 @@ fn intersect_bounded_nurbs_nurbs_contextual_impl(
         if isolation.is_proven_empty() {
             return Ok(CurveCurveIntersections::complete_empty());
         }
-    }
-    intersect_bounded_nurbs_nurbs_impl(a, range_a, b, range_b, tolerances, numerical)
-}
-
-fn intersect_bounded_nurbs_nurbs_impl(
-    a: &NurbsCurve,
-    range_a: ParamRange,
-    b: &NurbsCurve,
-    range_b: ParamRange,
-    tolerances: Tolerances,
-    numerical: NumericalPolicy,
-) -> Result<CurveCurveIntersections> {
-    validate_ranges(a, range_a, b, range_b, tolerances)?;
-
-    let range_a = clamp_to_domain(range_a, a.param_range());
-    let range_b = clamp_to_domain(range_b, b.param_range());
-    if control_hulls_prove_separation(a, range_a, b, range_b, tolerances) {
-        return Ok(CurveCurveIntersections::complete_empty());
-    }
-    let collapsed_a = range_has_no_parameter_progress(range_a, tolerances, numerical);
-    let collapsed_b = range_has_no_parameter_progress(range_b, tolerances, numerical);
-    if collapsed_a || collapsed_b {
-        return degenerate_range_intersections(
+        return intersect_bounded_nurbs_nurbs_candidates_impl(
             a,
-            range_a,
-            collapsed_a,
             b,
-            range_b,
-            tolerances,
-            numerical,
+            isolation.candidates(),
+            PolishPolicy {
+                range_a,
+                range_b,
+                tolerances,
+                numerical,
+            },
+            scope,
         );
     }
+    degenerate_range_intersections(a, range_a, collapsed_a, b, range_b, tolerances, numerical)
+}
 
-    if let Some(overlap) = contained_overlap(a, range_a, b, range_b, tolerances, numerical) {
+fn intersect_bounded_nurbs_nurbs_candidates_impl(
+    a: &NurbsCurve,
+    b: &NurbsCurve,
+    candidates: &[CurvePairCandidateCell],
+    policy: PolishPolicy,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<CurveCurveIntersections> {
+    if let Some(overlap) = contained_overlap(
+        a,
+        policy.range_a,
+        b,
+        policy.range_b,
+        policy.tolerances,
+        policy.numerical,
+    ) {
         return CurveCurveIntersections::canonicalized(Vec::new(), vec![overlap]);
     }
 
-    let samples_a = sample_curve(a, range_a);
-    let samples_b = sample_curve(b, range_b);
-    let seed_tol = seed_tolerance(&samples_a, &samples_b, tolerances);
-    let polish = PolishPolicy {
-        range_a,
-        range_b,
-        tolerances,
-        numerical,
-    };
     let mut points = Vec::new();
-    for pair_a in samples_a.windows(2) {
-        let [a0, a1] = pair_a else {
+    for cell in candidates {
+        match scope.ledger_mut().charge(NURBS_CURVE_PAIR_SEED_ATTEMPTS, 1) {
+            Ok(()) => {}
+            Err(OperationPolicyError::LimitReached(_)) => break,
+            Err(error) => return Err(error.into()),
+        }
+        let cell_range_a = cell.first_range();
+        let cell_range_b = cell.second_range();
+        let (seed_a, seed_b) = seed_for_candidate_cell(a, cell_range_a, b, cell_range_b);
+        let polish = PolishPolicy {
+            range_a: cell_range_a,
+            range_b: cell_range_b,
+            ..policy
+        };
+        let (t_a, t_b) = polish_candidate(a, b, seed_a, seed_b, polish);
+        let Some(seed) = VerifiedCurvePairSeed::verify(
+            a,
+            cell_range_a,
+            t_a,
+            b,
+            cell_range_b,
+            t_b,
+            policy.tolerances.linear(),
+        ) else {
             continue;
         };
-        for pair_b in samples_b.windows(2) {
-            let [b0, b1] = pair_b else {
-                continue;
-            };
-            let (s, t, distance) =
-                closest_segment_parameters(a0.point, a1.point, b0.point, b1.point);
-            if distance > seed_tol {
-                continue;
-            }
-            let t_a = a0.t + (a1.t - a0.t) * s;
-            let t_b = b0.t + (b1.t - b0.t) * t;
-            if let Some((t_a, t_b)) = polish_candidate(a, b, t_a, t_b, polish) {
-                push_root_candidate(a, t_a, b, t_b, &mut points, tolerances);
-            }
-        }
+        let kind = contact_kind(a, seed.t_a, b, seed.t_b, policy.tolerances);
+        push_distinct_point(&mut points, seed.into_point(kind), policy.tolerances);
     }
-
     CurveCurveIntersections::canonicalized(points, Vec::new())
 }
 
-/// Prove that every point on the first exact restricted NURBS lies farther
-/// than the model tolerance from every point on the second. Positive rational
-/// weights keep both restricted control hulls conservative. Inflating exactly
-/// one hull preserves the inclusive tolerance boundary: touching inflated
-/// boxes remain candidates and only strict separation grants completion.
-fn control_hulls_prove_separation(
+fn seed_for_candidate_cell(
     a: &NurbsCurve,
     range_a: ParamRange,
     b: &NurbsCurve,
     range_b: ParamRange,
-    tolerances: Tolerances,
-) -> bool {
-    !a.bounding_box(range_a)
-        .inflated(tolerances.linear())
-        .intersects(b.bounding_box(range_b))
+) -> (f64, f64) {
+    let a_lo = a.eval(range_a.lo);
+    let a_hi = a.eval(range_a.hi);
+    let b_lo = b.eval(range_b.lo);
+    let b_hi = b.eval(range_b.hi);
+    let (s, t, chord_distance) = closest_segment_parameters(a_lo, a_hi, b_lo, b_hi);
+    let chord_seed = (range_a.lerp(s), range_b.lerp(t));
+    let midpoint_seed = (range_a.lerp(0.5), range_b.lerp(0.5));
+    let midpoint_distance = a.eval(midpoint_seed.0).dist(b.eval(midpoint_seed.1));
+    if midpoint_distance < chord_distance {
+        midpoint_seed
+    } else {
+        chord_seed
+    }
 }
 
 fn degenerate_range_intersections(
@@ -302,22 +400,6 @@ fn sample_curve(curve: &NurbsCurve, range: ParamRange) -> Vec<Sample> {
         .collect()
 }
 
-fn seed_tolerance(a: &[Sample], b: &[Sample], tolerances: Tolerances) -> f64 {
-    let chord_a = max_chord(a);
-    let chord_b = max_chord(b);
-    tolerances
-        .linear()
-        .max((chord_a.max(chord_b)).sqrt() * tolerances.linear().sqrt())
-        .max((chord_a + chord_b) * 0.25)
-}
-
-fn max_chord(samples: &[Sample]) -> f64 {
-    samples
-        .windows(2)
-        .map(|pair| pair[0].point.dist(pair[1].point))
-        .fold(0.0, f64::max)
-}
-
 fn closest_segment_parameters(p0: Point3, p1: Point3, q0: Point3, q1: Point3) -> (f64, f64, f64) {
     let d1 = p1 - p0;
     let d2 = q1 - q0;
@@ -364,7 +446,7 @@ fn polish_candidate(
     t_a: f64,
     t_b: f64,
     policy: PolishPolicy,
-) -> Option<(f64, f64)> {
+) -> (f64, f64) {
     let (mut t_a, mut t_b) = newton_polish_pair(a, b, t_a, t_b, policy);
     let distance = a.eval(t_a).dist(b.eval(t_b));
     if distance <= policy.tolerances.linear() * 16.0 {
@@ -381,7 +463,7 @@ fn polish_candidate(
             (t_a, t_b) = newton_polish_pair(a, b, refined_a, refined_b, policy);
         }
     }
-    Some((t_a, t_b))
+    (t_a, t_b)
 }
 
 fn newton_polish_pair(
@@ -799,6 +881,58 @@ mod tests {
     }
 
     #[test]
+    fn solve_profile_matches_the_isolation_cover_ceiling() {
+        let profile = NurbsCurvePairSolveBudgetProfile::v1_defaults();
+        NurbsCurvePairSolveBudgetProfile::validate(&profile).unwrap();
+        let seeds = profile
+            .limits()
+            .iter()
+            .find(|limit| limit.stage == NURBS_CURVE_PAIR_SEED_ATTEMPTS)
+            .unwrap();
+        let cells = profile
+            .limits()
+            .iter()
+            .find(|limit| limit.stage == kgeom::nurbs::NURBS_CURVE_PAIR_CANDIDATES)
+            .unwrap();
+        assert_eq!(seeds.resource, ResourceKind::Work);
+        assert_eq!(seeds.mode, AccountingMode::Cumulative);
+        assert_eq!(seeds.allowed, cells.allowed);
+        assert_eq!(profile.limits().len(), 4);
+    }
+
+    #[test]
+    fn missing_seed_stage_is_rejected_before_a_separated_early_exit() {
+        let first = line_with_domain(Point3::new(-1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0), 1.0);
+        let second = line_with_domain(
+            Point3::new(-1.0, 10.0, 0.0),
+            Point3::new(1.0, 10.0, 0.0),
+            1.0,
+        );
+        let session = SessionPolicy::v1();
+        let context = OperationContext::new(&session, Tolerances::default())
+            .unwrap()
+            .with_family_budget_defaults(NurbsCurvePairBudgetProfile::v1_defaults());
+        let mut scope = OperationScope::new(&context);
+        let error = intersect_bounded_nurbs_nurbs_contextual_impl(
+            &first,
+            first.param_range(),
+            &second,
+            second.param_range(),
+            &mut scope,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            Error::OperationPolicy {
+                source: OperationPolicyError::UnknownLimit {
+                    stage: NURBS_CURVE_PAIR_SEED_ATTEMPTS,
+                    resource: ResourceKind::Work,
+                },
+            }
+        );
+    }
+
+    #[test]
     fn newton_conditioning_is_invariant_under_large_parameter_rescaling() {
         let parameter_scale = 1.0e8;
         let horizontal = line_with_domain(
@@ -981,18 +1115,20 @@ mod tests {
         let point = ParamRange::new(0.5, 0.5);
         let tolerances = Tolerances::default();
 
-        let forward = intersect_bounded_nurbs_nurbs_impl(
+        let forward = degenerate_range_intersections(
             &horizontal,
             full,
+            false,
             &vertical,
             point,
             tolerances,
             NumericalPolicy::v1(),
         )
         .unwrap();
-        let swapped = intersect_bounded_nurbs_nurbs_impl(
+        let swapped = degenerate_range_intersections(
             &vertical,
             point,
+            true,
             &horizontal,
             full,
             tolerances,

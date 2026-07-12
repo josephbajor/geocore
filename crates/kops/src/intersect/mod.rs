@@ -105,7 +105,10 @@ pub use line_sphere::intersect_bounded_line_sphere;
 pub use line_torus::intersect_bounded_line_torus;
 pub use nurbs_cone::intersect_bounded_nurbs_cone;
 pub use nurbs_cylinder::intersect_bounded_nurbs_cylinder;
-pub use nurbs_nurbs::{intersect_bounded_nurbs_nurbs, intersect_bounded_nurbs_nurbs_with_context};
+pub use nurbs_nurbs::{
+    NURBS_CURVE_PAIR_SEED_ATTEMPTS, intersect_bounded_nurbs_nurbs,
+    intersect_bounded_nurbs_nurbs_with_context,
+};
 pub use nurbs_plane::intersect_bounded_nurbs_plane;
 pub use nurbs_sphere::intersect_bounded_nurbs_sphere;
 pub use nurbs_surface_march::{

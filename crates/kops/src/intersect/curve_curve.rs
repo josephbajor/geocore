@@ -8,13 +8,13 @@ use super::line_circle::intersect_bounded_line_circle;
 use super::line_ellipse::intersect_bounded_line_ellipse;
 use super::line_line::intersect_bounded_lines;
 use super::line_nurbs::intersect_bounded_line_nurbs;
+use super::nurbs_nurbs::NurbsCurvePairSolveBudgetProfile;
 use super::nurbs_nurbs::intersect_bounded_nurbs_nurbs_in_scope;
 use super::result::CurveCurveIntersections;
 use kcore::operation::{
     BudgetPlan, OperationContext, OperationOutcome, OperationScope, SessionPolicy,
 };
 use kgeom::curve::Curve;
-use kgeom::nurbs::NurbsCurvePairBudgetProfile;
 use kgeom::param::ParamRange;
 use kgeom::project::ProjectionBudgetProfile;
 
@@ -23,15 +23,15 @@ use kgeom::project::ProjectionBudgetProfile;
 pub struct CurveCurveBudgetProfile;
 
 impl CurveCurveBudgetProfile {
-    /// Curve projection plus exact NURBS pair-isolation defaults.
+    /// Curve projection plus exact NURBS pair isolation and seed defaults.
     pub fn v1_defaults() -> BudgetPlan {
         let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-        let isolation = NurbsCurvePairBudgetProfile::v1_defaults();
+        let nurbs_pair = NurbsCurvePairSolveBudgetProfile::v1_defaults();
         BudgetPlan::new(
             projection
                 .limits()
                 .iter()
-                .chain(isolation.limits())
+                .chain(nurbs_pair.limits())
                 .copied(),
         )
         .expect("built-in curve/curve family budget is valid")
@@ -61,8 +61,8 @@ pub fn intersect_bounded_curves(
 /// The complete curve-projection compatibility profile is composed before one
 /// operation scope is created, so specialized ellipse projection can borrow
 /// the same report. Analytic paths that require no iterative work leave those
-/// counters at zero. NURBS/NURBS consumes the caller's numerical policy even
-/// though its current compatibility path has no resource counters yet.
+/// counters at zero. NURBS/NURBS consumes the caller's numerical policy and
+/// accounts exact isolation plus bounded cell-local seed attempts.
 pub fn intersect_bounded_curves_with_context(
     a: &dyn Curve,
     range_a: ParamRange,
@@ -81,7 +81,8 @@ pub fn intersect_bounded_curves_with_context(
 /// Intersect two bounded curves inside an existing owner operation scope.
 ///
 /// Owners must compose [`CurveCurveBudgetProfile::v1_defaults`] before creating
-/// `scope` so projection and certified NURBS pair isolation share one report.
+/// `scope` so projection, certified NURBS pair isolation, and local seed
+/// attempts share one report.
 /// The function never creates or finishes a nested scope.
 pub fn intersect_bounded_curves_in_scope(
     a: &dyn Curve,

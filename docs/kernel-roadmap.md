@@ -71,7 +71,7 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, topology-internal Euler operators, transaction-owned public Euler edits, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, checked transaction-scoped assembly, and deterministic journals exist; general bodies and several degenerate topology classes remain. |
 | M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance and transaction-owned aggregate budgets; shared incidence validation; a complete transaction-owned public Euler surface with mandatory pcurve creation and derived/split/merge/delete lineage; private generic Store mutation; transaction-scoped low-level assembly whose only public persistence path uses deterministic mutation preview, incrementally replaced per-body ownership/shared-geometry dependency footprints, affected-root Fast checks, and complete ownership closure; pcurve-driven tessellation; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; a reusable validated simple-polygon planar profile; checked X_T reconstruction; explicit face metadata; certified imported domains; adaptive full-active-interval analytic/clamped-NURBS face-domain containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring loop proofs; and convex-planar, whole sphere/torus, sphere-cap, and single-planar-face shell embedding proofs have landed. General NURBS/mixed-parameter incidence, periodic/unclamped and unsupported exact/mixed-boundary containment, profiles with holes/curves, operation-specific tolerance propagation rules, curved-loop/general curved-shell proofs, production seam/singularity interchange fixtures, geometry graph, higher-operation migration, and multi-body performance baselines remain. |
 | M3 X_T | IN PROGRESS | The modern-schema subset reads both wire encodings and writes text, including bounded tolerant edges as trimmed SP-curves over finite 2D B-curves; production coverage and external certification remain. |
-| M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases, explicit `Complete`/`Indeterminate` result evidence, exact NURBS patch subdivision/BVH, analytic implicit-surface exclusion, deterministic recursive candidate covers with structured limits and proof-bearing SSI miss exits, and sampled NURBS experiments exist; certified root discovery and boolean-ready paired-pcurve branches do not. |
+| M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases, explicit `Complete`/`Indeterminate` result evidence, exact NURBS patch subdivision/BVH, analytic implicit-surface exclusion, deterministic recursive candidate covers with structured limits and proof-bearing miss exits, plus bounded cell-local curve-pair polishing with verified tolerance witnesses exist; interval-certified root discovery and boolean-ready paired-pcurve branches do not. |
 | M5–M8 | NOT STARTED | No end-to-end booleans, general modeling, blends, stable API, or production hardening. |
 
 The machine-readable companion [kernel-support.tsv](kernel-support.tsv) is the capability
@@ -736,8 +736,12 @@ true only for an empty complete result.
   with conservative covers and structured limits, proof-bearing analytic/NURBS SSI
   empty exits, and deterministic exact NURBS curve-pair subdivision with
   conservative covers and structured limits for complete curve/curve misses.
-  Extend it to generic curve/surface pairing, verified seed existence,
-  safeguarded Newton polishing, conditioning diagnostics, and procedural/NURBS fields.
+  Retained curve-pair cells now feed deterministic chord/midpoint seeds into
+  safeguarded local Newton polishing; a finite seed-attempt stage bounds the
+  work, and only re-evaluated in-cell residual witnesses are emitted. These
+  discoveries remain indeterminate. Extend this to interval root-existence and
+  polishing-stop certificates, generic curve/surface pairing, conditioning
+  diagnostics, and procedural/NURBS fields.
 - Analytic special cases and the generic solver feed the same canonical result type.
 - Consolidate the per-pair analytic curve/surface and SSI boilerplate (range
   validation, parameter fitting, dedup, branch emission — currently repeated across
@@ -908,8 +912,9 @@ that queue must eventually discharge.
 - M2.5: finish parameter-space incidence and ratcheted Full-checker proofs for
   periodic/mixed boundaries, multi-loop containment, and curved shells.
 - M4: extend completion evidence with paired pcurves, coincident regions,
-  singular events, structured limits, and verified residual bounds; turn
-  retained NURBS cells into verified root seeds only after the F2 scale gates.
+  singular events, structured polishing stops, and verified residual bounds;
+  upgrade the landed bounded in-cell tolerance witnesses to interval-certified
+  root existence and complete overlap extent.
 - M5: grow planar profiles and booleans only after facade adoption and the
   checker, rollback, lineage, tolerance, determinism, corpus, performance, and
   independent-oracle gates.
