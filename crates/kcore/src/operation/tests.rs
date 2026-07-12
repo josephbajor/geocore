@@ -605,6 +605,353 @@ fn overflow_is_rejected_without_mutating_usage() {
 }
 
 #[test]
+fn sequential_local_cap_wins_and_is_forwarded_once_without_failed_usage() {
+    let parent_plan = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        5,
+    )])
+    .unwrap();
+    let local_plan = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        2,
+    )])
+    .unwrap();
+    let mut parent = WorkLedger::new(parent_plan);
+    parent.charge(STAGE_A, 3).unwrap();
+    let snapshot = {
+        let mut sequential = parent.sequential(local_plan).unwrap();
+        sequential.charge(STAGE_A, 2).unwrap();
+        let snapshot = match sequential.charge(STAGE_A, 1) {
+            Err(OperationPolicyError::LimitReached(snapshot)) => snapshot,
+            other => panic!("unexpected local-cap result: {other:?}"),
+        };
+        assert_eq!(
+            snapshot,
+            LimitSnapshot {
+                stage: STAGE_A,
+                resource: ResourceKind::Work,
+                consumed: 3,
+                allowed: 2,
+            }
+        );
+        assert_eq!(sequential.snapshots()[0].consumed, 2);
+        assert_eq!(sequential.limit_events(), &[snapshot]);
+        assert_eq!(
+            sequential.charge(STAGE_A, 1),
+            Err(OperationPolicyError::LimitReached(snapshot))
+        );
+        assert_eq!(sequential.limit_events(), &[snapshot]);
+        snapshot
+    };
+    assert_eq!(parent.snapshots()[0].consumed, 5);
+    assert_eq!(parent.limit_events(), &[snapshot]);
+}
+
+#[test]
+fn sequential_parent_stage_limit_uses_aggregate_coordinates_and_is_atomic() {
+    let parent_plan = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        5,
+    )])
+    .unwrap();
+    let local_plan = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        10,
+    )])
+    .unwrap();
+    let mut parent = WorkLedger::new(parent_plan);
+    parent.charge(STAGE_A, 3).unwrap();
+    let snapshot = {
+        let mut sequential = parent.sequential(local_plan).unwrap();
+        sequential.charge(STAGE_A, 2).unwrap();
+        let snapshot = match sequential.charge(STAGE_A, 1) {
+            Err(OperationPolicyError::LimitReached(snapshot)) => snapshot,
+            other => panic!("unexpected aggregate-stage result: {other:?}"),
+        };
+        assert_eq!(
+            snapshot,
+            LimitSnapshot {
+                stage: STAGE_A,
+                resource: ResourceKind::Work,
+                consumed: 6,
+                allowed: 5,
+            }
+        );
+        assert_eq!(sequential.snapshots()[0].consumed, 2);
+        assert!(sequential.limit_events().is_empty());
+        snapshot
+    };
+    assert_eq!(parent.snapshots()[0].consumed, 5);
+    assert_eq!(parent.limit_events(), &[snapshot]);
+}
+
+#[test]
+fn sequential_parent_root_precedes_no_local_crossing_and_keeps_root_coordinates() {
+    let parent_plan = BudgetPlan::new([
+        LimitSpec::new(STAGE_A, ResourceKind::Work, AccountingMode::Cumulative, 100),
+        LimitSpec::new(STAGE_B, ResourceKind::Work, AccountingMode::Cumulative, 100),
+    ])
+    .unwrap()
+    .with_total_work_limit(4);
+    let local_plan = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        10,
+    )])
+    .unwrap();
+    let mut parent = WorkLedger::new(parent_plan);
+    parent.charge(STAGE_B, 1).unwrap();
+    let snapshot = {
+        let mut sequential = parent.sequential(local_plan).unwrap();
+        sequential.charge(STAGE_A, 3).unwrap();
+        let snapshot = match sequential.charge(STAGE_A, 1) {
+            Err(OperationPolicyError::LimitReached(snapshot)) => snapshot,
+            other => panic!("unexpected aggregate-root result: {other:?}"),
+        };
+        assert_eq!(
+            snapshot,
+            LimitSnapshot {
+                stage: TOTAL_WORK_STAGE,
+                resource: ResourceKind::Work,
+                consumed: 5,
+                allowed: 4,
+            }
+        );
+        assert_eq!(sequential.snapshots()[0].consumed, 3);
+        snapshot
+    };
+    assert_eq!(parent.total_work_consumed(), 4);
+    assert_eq!(parent.limit_events(), &[snapshot]);
+}
+
+#[test]
+fn sequential_local_root_is_forwarded_with_its_exact_coordinates() {
+    let stage_plan = || {
+        BudgetPlan::new([LimitSpec::new(
+            STAGE_A,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            100,
+        )])
+        .unwrap()
+    };
+    let mut parent = WorkLedger::new(stage_plan().with_total_work_limit(100));
+    let snapshot = {
+        let mut sequential = parent
+            .sequential(stage_plan().with_total_work_limit(2))
+            .unwrap();
+        sequential.charge(STAGE_A, 2).unwrap();
+        match sequential.charge(STAGE_A, 1) {
+            Err(OperationPolicyError::LimitReached(snapshot)) => snapshot,
+            other => panic!("unexpected local-root result: {other:?}"),
+        }
+    };
+    assert_eq!(
+        snapshot,
+        LimitSnapshot {
+            stage: TOTAL_WORK_STAGE,
+            resource: ResourceKind::Work,
+            consumed: 3,
+            allowed: 2,
+        }
+    );
+    assert_eq!(parent.total_work_consumed(), 2);
+    assert_eq!(parent.limit_events(), &[snapshot]);
+}
+
+#[test]
+fn sequential_depth_is_local_per_invocation_and_parent_high_water_is_aggregate() {
+    let parent_plan = BudgetPlan::new([LimitSpec::new(
+        STAGE_B,
+        ResourceKind::Depth,
+        AccountingMode::HighWater,
+        5,
+    )])
+    .unwrap();
+    let local_plan = BudgetPlan::new([LimitSpec::new(
+        STAGE_B,
+        ResourceKind::Depth,
+        AccountingMode::HighWater,
+        8,
+    )])
+    .unwrap();
+    let mut parent = WorkLedger::new(parent_plan);
+    let snapshot = {
+        let mut sequential = parent.sequential(local_plan).unwrap();
+        sequential.observe(STAGE_B, ResourceKind::Depth, 5).unwrap();
+        let snapshot = match sequential.observe(STAGE_B, ResourceKind::Depth, 6) {
+            Err(OperationPolicyError::LimitReached(snapshot)) => snapshot,
+            other => panic!("unexpected depth result: {other:?}"),
+        };
+        assert_eq!(sequential.snapshots()[0].consumed, 5);
+        assert!(sequential.limit_events().is_empty());
+        snapshot
+    };
+    assert_eq!(snapshot.consumed, 6);
+    assert_eq!(snapshot.allowed, 5);
+    assert_eq!(parent.snapshots()[0].consumed, 5);
+    assert_eq!(parent.limit_events(), &[snapshot]);
+}
+
+#[test]
+fn sequential_constructor_and_overflow_fail_without_mutation() {
+    let work = |stage, allowed| {
+        BudgetPlan::new([LimitSpec::new(
+            stage,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            allowed,
+        )])
+        .unwrap()
+    };
+    let mut parent = WorkLedger::new(work(STAGE_A, u64::MAX));
+    assert!(matches!(
+        parent.sequential(work(STAGE_C, 1)),
+        Err(OperationPolicyError::UnknownLimit {
+            stage: STAGE_C,
+            resource: ResourceKind::Work,
+        })
+    ));
+
+    let parent_items = BudgetPlan::new([LimitSpec::new(
+        STAGE_C,
+        ResourceKind::Items,
+        AccountingMode::Cumulative,
+        10,
+    )])
+    .unwrap();
+    let local_items = BudgetPlan::new([LimitSpec::new(
+        STAGE_C,
+        ResourceKind::Items,
+        AccountingMode::HighWater,
+        10,
+    )])
+    .unwrap();
+    let mut mode_parent = WorkLedger::new(parent_items);
+    assert!(matches!(
+        mode_parent.sequential(local_items),
+        Err(OperationPolicyError::AccountingModeMismatch {
+            stage: STAGE_C,
+            resource: ResourceKind::Items,
+        })
+    ));
+
+    {
+        let mut sequential = parent.sequential(work(STAGE_A, u64::MAX)).unwrap();
+        sequential.charge(STAGE_A, u64::MAX).unwrap();
+        assert_eq!(
+            sequential.charge(STAGE_A, 1),
+            Err(OperationPolicyError::AccountingOverflow {
+                stage: STAGE_A,
+                resource: ResourceKind::Work,
+            })
+        );
+        assert_eq!(sequential.snapshots()[0].consumed, u64::MAX);
+    }
+    assert_eq!(parent.snapshots()[0].consumed, u64::MAX);
+
+    {
+        let mut sequential = parent.sequential(work(STAGE_A, u64::MAX)).unwrap();
+        assert_eq!(
+            sequential.charge(STAGE_A, 1),
+            Err(OperationPolicyError::AccountingOverflow {
+                stage: STAGE_A,
+                resource: ResourceKind::Work,
+            })
+        );
+        assert_eq!(sequential.snapshots()[0].consumed, 0);
+    }
+    assert_eq!(parent.snapshots()[0].consumed, u64::MAX);
+}
+
+#[test]
+fn sequential_accounting_preserves_active_reservation_capacity() {
+    let parent_plan = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        10,
+    )])
+    .unwrap()
+    .with_total_work_limit(10);
+    let child_plan = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        4,
+    )])
+    .unwrap();
+    let local_plan = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        10,
+    )])
+    .unwrap();
+    let mut parent = WorkLedger::new(parent_plan);
+    let mut child = parent.reserve_child(1, child_plan).unwrap();
+    child.ledger_mut().charge(STAGE_A, 4).unwrap();
+    let snapshot = {
+        let mut sequential = parent.sequential(local_plan).unwrap();
+        sequential.charge(STAGE_A, 6).unwrap();
+        match sequential.charge(STAGE_A, 1) {
+            Err(OperationPolicyError::LimitReached(snapshot)) => snapshot,
+            other => panic!("unexpected reservation-protection result: {other:?}"),
+        }
+    };
+    assert_eq!(snapshot.consumed, 7);
+    assert_eq!(snapshot.allowed, 6);
+    parent.merge_children(vec![child]).unwrap();
+    assert_eq!(parent.total_work_consumed(), 10);
+    assert_eq!(parent.limit_events(), &[snapshot]);
+}
+
+#[test]
+fn sequential_evidence_flows_into_operation_reports_in_real_time() {
+    let session = session_with_budget(
+        BudgetPlan::new([LimitSpec::new(
+            STAGE_A,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            10,
+        )])
+        .unwrap(),
+    );
+    let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+    let mut scope = OperationScope::new(&context);
+    let local_plan = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        1,
+    )])
+    .unwrap();
+    let snapshot = {
+        let mut sequential = scope.ledger_mut().sequential(local_plan).unwrap();
+        sequential.record_numeric_resolution(STAGE_B);
+        sequential.record_numeric_resolution(STAGE_B);
+        sequential.charge(STAGE_A, 1).unwrap();
+        match sequential.charge(STAGE_A, 1) {
+            Err(OperationPolicyError::LimitReached(snapshot)) => snapshot,
+            other => panic!("unexpected report-evidence result: {other:?}"),
+        }
+    };
+    let report = scope.finish(Ok(())).report().clone();
+    assert_eq!(report.usage()[0].consumed, 1);
+    assert_eq!(report.limit_events(), &[snapshot]);
+    assert_eq!(report.numeric_resolution_stages(), &[STAGE_B]);
+}
+
+#[test]
 fn child_merge_is_ordinal_ordered_and_input_order_independent() {
     let child_plan = BudgetPlan::new([LimitSpec::new(
         STAGE_A,

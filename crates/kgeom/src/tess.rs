@@ -31,7 +31,7 @@ use kcore::error::{Error, Result};
 use kcore::operation::{
     AccountingMode, ChildWorkLedger, DiagnosticKind, ExecutionPolicy, LimitSnapshot,
     NumericalPolicy, OperationContext, OperationOutcome, OperationPolicyError, OperationScope,
-    PolicyVersion, ResourceKind, SessionPolicy, SessionPrecision, WorkLedger,
+    PolicyVersion, ResourceKind, SequentialWorkLedger, SessionPolicy, SessionPrecision,
 };
 use kcore::predicates::{Orientation, orient2d};
 use kcore::tolerance::Tolerances;
@@ -295,13 +295,28 @@ pub fn tessellate_in_child_ledger(
     tessellate_accounted(face, opts, child)
 }
 
+/// Tessellate one face with invocation-local caps and real-time parent usage.
+///
+/// This seam is for strictly sequential higher-level tessellators. The
+/// sequential ledger keeps the face profile local to this invocation while
+/// forwarding every accepted unit and evidence event to its borrowed parent.
+/// Unlike [`tessellate_in_child_ledger`], no capacity is reserved and no join
+/// step is required.
+pub fn tessellate_in_sequential_ledger(
+    face: &TrimmedSurface<'_>,
+    opts: &TessOptions,
+    ledger: &mut SequentialWorkLedger<'_>,
+) -> Result<FaceMesh> {
+    tessellate_accounted(face, opts, ledger)
+}
+
 fn tessellate_accounted(
     face: &TrimmedSurface<'_>,
     opts: &TessOptions,
     accounting: &mut impl TessellationAccounting,
 ) -> Result<FaceMesh> {
     validate_tessellation_budget(|stage, resource, mode| {
-        accounting.ledger().require_limit(stage, resource, mode)
+        accounting.require_limit(stage, resource, mode)
     })
     .map_err(Error::from)?;
     if !opts.chord_tol.is_finite() || opts.chord_tol <= 0.0 {
@@ -430,8 +445,28 @@ fn tessellate_accounted(
 }
 
 trait TessellationAccounting {
-    fn ledger(&self) -> &WorkLedger;
-    fn ledger_mut(&mut self) -> &mut WorkLedger;
+    fn require_limit(
+        &self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+        mode: AccountingMode,
+    ) -> core::result::Result<(), OperationPolicyError>;
+    fn check_charge(
+        &self,
+        stage: kcore::operation::StageId,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError>;
+    fn charge(
+        &mut self,
+        stage: kcore::operation::StageId,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError>;
+    fn observe(
+        &mut self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+        value: u64,
+    ) -> core::result::Result<(), OperationPolicyError>;
     fn diagnose_limit(
         &mut self,
         snapshot: LimitSnapshot,
@@ -441,12 +476,38 @@ trait TessellationAccounting {
 }
 
 impl TessellationAccounting for OperationScope<'_, '_> {
-    fn ledger(&self) -> &WorkLedger {
-        OperationScope::ledger(self)
+    fn require_limit(
+        &self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+        mode: AccountingMode,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        OperationScope::ledger(self).require_limit(stage, resource, mode)
     }
 
-    fn ledger_mut(&mut self) -> &mut WorkLedger {
-        OperationScope::ledger_mut(self)
+    fn check_charge(
+        &self,
+        stage: kcore::operation::StageId,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        OperationScope::ledger(self).check_charge(stage, amount)
+    }
+
+    fn charge(
+        &mut self,
+        stage: kcore::operation::StageId,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        OperationScope::ledger_mut(self).charge(stage, amount)
+    }
+
+    fn observe(
+        &mut self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+        value: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        OperationScope::ledger_mut(self).observe(stage, resource, value)
     }
 
     fn diagnose_limit(
@@ -465,12 +526,82 @@ impl TessellationAccounting for OperationScope<'_, '_> {
 }
 
 impl TessellationAccounting for ChildWorkLedger {
-    fn ledger(&self) -> &WorkLedger {
-        ChildWorkLedger::ledger(self)
+    fn require_limit(
+        &self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+        mode: AccountingMode,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        ChildWorkLedger::ledger(self).require_limit(stage, resource, mode)
     }
 
-    fn ledger_mut(&mut self) -> &mut WorkLedger {
-        ChildWorkLedger::ledger_mut(self)
+    fn check_charge(
+        &self,
+        stage: kcore::operation::StageId,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        ChildWorkLedger::ledger(self).check_charge(stage, amount)
+    }
+
+    fn charge(
+        &mut self,
+        stage: kcore::operation::StageId,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        ChildWorkLedger::ledger_mut(self).charge(stage, amount)
+    }
+
+    fn observe(
+        &mut self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+        value: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        ChildWorkLedger::ledger_mut(self).observe(stage, resource, value)
+    }
+
+    fn diagnose_limit(
+        &mut self,
+        _snapshot: LimitSnapshot,
+        _code: kcore::operation::DiagnosticCode,
+        _message: &'static str,
+    ) {
+    }
+}
+
+impl TessellationAccounting for SequentialWorkLedger<'_> {
+    fn require_limit(
+        &self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+        mode: AccountingMode,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        SequentialWorkLedger::require_limit(self, stage, resource, mode)
+    }
+
+    fn check_charge(
+        &self,
+        stage: kcore::operation::StageId,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        SequentialWorkLedger::check_charge(self, stage, amount)
+    }
+
+    fn charge(
+        &mut self,
+        stage: kcore::operation::StageId,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        SequentialWorkLedger::charge(self, stage, amount)
+    }
+
+    fn observe(
+        &mut self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+        value: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        SequentialWorkLedger::observe(self, stage, resource, value)
     }
 
     fn diagnose_limit(
@@ -516,10 +647,7 @@ fn legacy_tessellation_error(error: Error) -> Error {
 }
 
 fn charge_refinement_pass(accounting: &mut impl TessellationAccounting) -> Result<()> {
-    match accounting
-        .ledger_mut()
-        .charge(FACE_TESSELLATION_REFINEMENT_PASSES, 1)
-    {
+    match accounting.charge(FACE_TESSELLATION_REFINEMENT_PASSES, 1) {
         Ok(()) => Ok(()),
         Err(OperationPolicyError::LimitReached(snapshot)) => {
             accounting.diagnose_limit(
@@ -537,10 +665,7 @@ fn preflight_refinement_pass(
     accounting: &mut impl TessellationAccounting,
     triangle_count: usize,
 ) -> Result<()> {
-    match accounting
-        .ledger()
-        .check_charge(FACE_TESSELLATION_REFINEMENT_PASSES, 1)
-    {
+    match accounting.check_charge(FACE_TESSELLATION_REFINEMENT_PASSES, 1) {
         Ok(()) => {}
         Err(OperationPolicyError::LimitReached(_)) => {
             return charge_refinement_pass(accounting);
@@ -664,11 +789,7 @@ fn refine_edge(
 }
 
 fn observe_boundary_depth(accounting: &mut impl TessellationAccounting, depth: u64) -> Result<()> {
-    match accounting.ledger_mut().observe(
-        FACE_TESSELLATION_BOUNDARY_DEPTH,
-        ResourceKind::Depth,
-        depth,
-    ) {
+    match accounting.observe(FACE_TESSELLATION_BOUNDARY_DEPTH, ResourceKind::Depth, depth) {
         Ok(()) => Ok(()),
         Err(OperationPolicyError::LimitReached(snapshot)) => {
             accounting.diagnose_limit(
@@ -1607,6 +1728,190 @@ mod tests {
             expected_passes * 2
         );
         assert!(report.limit_events().is_empty());
+    }
+
+    #[test]
+    fn sequential_ledgers_keep_each_patch_cap_while_parent_usage_accumulates() {
+        let cylinder = Cylinder::new(Frame::world(), 2.0).unwrap();
+        let face = TrimmedSurface::rectangle(
+            &cylinder,
+            [
+                ParamRange::new(0.0, core::f64::consts::PI),
+                ParamRange::new(0.0, 2.0),
+            ],
+        )
+        .unwrap();
+        let opts = TessOptions {
+            chord_tol: 1e-3,
+            max_edge_len: None,
+        };
+        let baseline_session = tessellation_session(ExecutionPolicy::Serial);
+        let baseline_context =
+            OperationContext::new(&baseline_session, Tolerances::default()).unwrap();
+        let baseline = tessellate_with_context(&face, &opts, &baseline_context).unwrap();
+        let expected_mesh = baseline.result().unwrap();
+        let expected_boundary =
+            usage_for(baseline.report(), FACE_TESSELLATION_BOUNDARY_DEPTH).consumed;
+        let expected_passes =
+            usage_for(baseline.report(), FACE_TESSELLATION_REFINEMENT_PASSES).consumed;
+
+        let parent_budget = FaceTessellationBudgetProfile::v1_defaults().overlaid(&override_limit(
+            FACE_TESSELLATION_REFINEMENT_PASSES,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            (MAX_REFINE_PASSES * 2) as u64,
+        ));
+        let parent_session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            parent_budget,
+            PolicyVersion::V1,
+        );
+        let parent_context = OperationContext::new(&parent_session, Tolerances::default()).unwrap();
+        let mut parent = OperationScope::new(&parent_context);
+
+        for _ in 0..2 {
+            let mut patch = parent
+                .ledger_mut()
+                .sequential(FaceTessellationBudgetProfile::v1_defaults())
+                .unwrap();
+            assert_eq!(
+                tessellate_in_sequential_ledger(&face, &opts, &mut patch).as_ref(),
+                Ok(expected_mesh)
+            );
+            let snapshots = patch.snapshots();
+            assert_eq!(
+                snapshot_for(&snapshots, FACE_TESSELLATION_BOUNDARY_DEPTH),
+                LimitSnapshot {
+                    stage: FACE_TESSELLATION_BOUNDARY_DEPTH,
+                    resource: ResourceKind::Depth,
+                    consumed: expected_boundary,
+                    allowed: MAX_BOUNDARY_DEPTH as u64,
+                }
+            );
+            assert_eq!(
+                snapshot_for(&snapshots, FACE_TESSELLATION_REFINEMENT_PASSES),
+                LimitSnapshot {
+                    stage: FACE_TESSELLATION_REFINEMENT_PASSES,
+                    resource: ResourceKind::Work,
+                    consumed: expected_passes,
+                    allowed: MAX_REFINE_PASSES as u64,
+                }
+            );
+        }
+
+        let report = parent.finish(Ok(())).report().clone();
+        assert_eq!(
+            usage_for(&report, FACE_TESSELLATION_BOUNDARY_DEPTH).consumed,
+            expected_boundary
+        );
+        assert_eq!(
+            usage_for(&report, FACE_TESSELLATION_REFINEMENT_PASSES).consumed,
+            expected_passes * 2
+        );
+        assert!(report.limit_events().is_empty());
+    }
+
+    #[test]
+    fn sequential_tessellation_reports_tighter_parent_stage_and_root_coordinates() {
+        let cylinder = Cylinder::new(Frame::world(), 2.0).unwrap();
+        let face = TrimmedSurface::rectangle(
+            &cylinder,
+            [
+                ParamRange::new(0.0, core::f64::consts::PI),
+                ParamRange::new(0.0, 2.0),
+            ],
+        )
+        .unwrap();
+        let opts = TessOptions {
+            chord_tol: 1e-3,
+            max_edge_len: None,
+        };
+        let baseline_session = tessellation_session(ExecutionPolicy::Serial);
+        let baseline_context =
+            OperationContext::new(&baseline_session, Tolerances::default()).unwrap();
+        let baseline = tessellate_with_context(&face, &opts, &baseline_context).unwrap();
+        let expected_mesh = baseline.result().unwrap();
+        let expected_passes =
+            usage_for(baseline.report(), FACE_TESSELLATION_REFINEMENT_PASSES).consumed;
+        assert!(expected_passes > 0);
+
+        for (parent_budget, expected_stage) in [
+            (
+                FaceTessellationBudgetProfile::v1_defaults().overlaid(&override_limit(
+                    FACE_TESSELLATION_REFINEMENT_PASSES,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    expected_passes,
+                )),
+                FACE_TESSELLATION_REFINEMENT_PASSES,
+            ),
+            (
+                FaceTessellationBudgetProfile::v1_defaults()
+                    .overlaid(&override_limit(
+                        FACE_TESSELLATION_REFINEMENT_PASSES,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        (MAX_REFINE_PASSES * 2) as u64,
+                    ))
+                    .with_total_work_limit(expected_passes),
+                kcore::operation::TOTAL_WORK_STAGE,
+            ),
+        ] {
+            let parent_session = SessionPolicy::new(
+                SessionPrecision::parasolid(),
+                NumericalPolicy::v1(),
+                ExecutionPolicy::Serial,
+                parent_budget,
+                PolicyVersion::V1,
+            );
+            let parent_context =
+                OperationContext::new(&parent_session, Tolerances::default()).unwrap();
+            let mut parent = OperationScope::new(&parent_context);
+            {
+                let mut first = parent
+                    .ledger_mut()
+                    .sequential(FaceTessellationBudgetProfile::v1_defaults())
+                    .unwrap();
+                assert_eq!(
+                    tessellate_in_sequential_ledger(&face, &opts, &mut first).as_ref(),
+                    Ok(expected_mesh)
+                );
+            }
+
+            let snapshot = {
+                let mut second = parent
+                    .ledger_mut()
+                    .sequential(FaceTessellationBudgetProfile::v1_defaults())
+                    .unwrap();
+                let snapshot = match tessellate_in_sequential_ledger(&face, &opts, &mut second) {
+                    Err(Error::ResourceLimit { snapshot }) => snapshot,
+                    other => panic!("unexpected tighter-parent result: {other:?}"),
+                };
+                assert_eq!(
+                    snapshot_for(&second.snapshots(), FACE_TESSELLATION_REFINEMENT_PASSES).consumed,
+                    0,
+                    "the parent rejection must roll back the attempted local pass"
+                );
+                snapshot
+            };
+            assert_eq!(
+                snapshot,
+                LimitSnapshot {
+                    stage: expected_stage,
+                    resource: ResourceKind::Work,
+                    consumed: expected_passes + 1,
+                    allowed: expected_passes,
+                }
+            );
+            let report = parent.finish(Ok(())).report().clone();
+            assert_eq!(
+                usage_for(&report, FACE_TESSELLATION_REFINEMENT_PASSES).consumed,
+                expected_passes
+            );
+            assert_eq!(report.limit_events(), &[snapshot]);
+        }
     }
 
     #[test]

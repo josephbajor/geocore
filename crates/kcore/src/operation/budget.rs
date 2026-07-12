@@ -349,6 +349,20 @@ impl WorkLedger {
         Ok(())
     }
 
+    /// Starts a strictly sequential nested ledger with invocation-local caps.
+    ///
+    /// Unlike [`Self::reserve_child`], this does not reserve capacity or defer
+    /// accounting until a join. Every accepted unit is reflected in the
+    /// parent immediately, while `plan` independently limits this one nested
+    /// invocation. Borrowing the parent for the ledger's lifetime makes that
+    /// real-time composition strictly sequential.
+    pub fn sequential(
+        &mut self,
+        plan: BudgetPlan,
+    ) -> core::result::Result<SequentialWorkLedger<'_>, OperationPolicyError> {
+        SequentialWorkLedger::new(self, plan)
+    }
+
     /// Reserves deterministic child allowances under a stable work ordinal.
     ///
     /// Reservations must be planned in increasing ordinal order. Parent work
@@ -635,6 +649,188 @@ impl WorkLedger {
                         resource: ResourceKind::Work,
                     })
             })
+    }
+}
+
+/// Strictly sequential nested accounting with local and aggregate limits.
+///
+/// Each charge or observation must fit both this invocation's local plan and
+/// the borrowed parent's current aggregate allowance. Local limits are tested
+/// first. An accepted unit mutates both ledgers exactly once; a rejected unit
+/// mutates neither usage ledger. Limit and numeric-resolution evidence is
+/// forwarded to the parent immediately so operation reports remain complete.
+#[derive(Debug)]
+pub struct SequentialWorkLedger<'parent> {
+    parent: &'parent mut WorkLedger,
+    local: WorkLedger,
+}
+
+impl<'parent> SequentialWorkLedger<'parent> {
+    /// Creates a sequential nested ledger after validating its stage schema.
+    ///
+    /// Every local stage/resource pair must exist in the parent with the same
+    /// accounting mode. A local total-work ceiling is independent of whether
+    /// the parent has a root ceiling: it is an invocation-local cap, not a
+    /// capacity reservation.
+    pub fn new(
+        parent: &'parent mut WorkLedger,
+        plan: BudgetPlan,
+    ) -> core::result::Result<Self, OperationPolicyError> {
+        for spec in plan.limits() {
+            parent.require_limit(spec.stage, spec.resource, spec.mode)?;
+        }
+        Ok(Self {
+            parent,
+            local: WorkLedger::new(plan),
+        })
+    }
+
+    /// Requires a configured local stage/resource pair and accounting mode.
+    pub fn require_limit(
+        &self,
+        stage: StageId,
+        resource: ResourceKind,
+        mode: AccountingMode,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        self.local.require_limit(stage, resource, mode)
+    }
+
+    /// Checks a cumulative local and parent work charge without mutation.
+    pub fn check_charge(
+        &self,
+        stage: StageId,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        self.check_charge_resource(stage, ResourceKind::Work, amount)
+    }
+
+    /// Checks a cumulative local and parent resource charge without mutation.
+    pub fn check_charge_resource(
+        &self,
+        stage: StageId,
+        resource: ResourceKind,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        self.local.check_charge_resource(stage, resource, amount)?;
+        self.parent.check_charge_resource(stage, resource, amount)
+    }
+
+    /// Charges cumulative work against the local and parent plans atomically.
+    pub fn charge(
+        &mut self,
+        stage: StageId,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        self.charge_resource(stage, ResourceKind::Work, amount)
+    }
+
+    /// Charges a cumulative resource against both plans atomically.
+    pub fn charge_resource(
+        &mut self,
+        stage: StageId,
+        resource: ResourceKind,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        if let Err(error) = self.local.check_charge_resource(stage, resource, amount) {
+            if let OperationPolicyError::LimitReached(snapshot) = error {
+                self.local.record_limit(snapshot);
+                self.parent.record_limit(snapshot);
+                return Err(OperationPolicyError::LimitReached(snapshot));
+            }
+            return Err(error);
+        }
+        if let Err(error) = self.parent.check_charge_resource(stage, resource, amount) {
+            if let OperationPolicyError::LimitReached(snapshot) = error {
+                self.parent.record_limit(snapshot);
+                return Err(OperationPolicyError::LimitReached(snapshot));
+            }
+            return Err(error);
+        }
+
+        apply_checked_charge(&mut self.local, stage, resource, amount);
+        apply_checked_charge(self.parent, stage, resource, amount);
+        Ok(())
+    }
+
+    /// Observes a high-water value against both plans atomically.
+    pub fn observe(
+        &mut self,
+        stage: StageId,
+        resource: ResourceKind,
+        value: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        let local_index = self.local.entry_index(stage, resource)?;
+        if self.local.entries[local_index].spec.mode != AccountingMode::HighWater {
+            return Err(OperationPolicyError::AccountingModeMismatch { stage, resource });
+        }
+        let local_attempted = self.local.entries[local_index].consumed.max(value);
+        if let Some(snapshot) = self
+            .local
+            .stage_limit_crossing(local_index, local_attempted)?
+        {
+            self.local.record_limit(snapshot);
+            self.parent.record_limit(snapshot);
+            return Err(OperationPolicyError::LimitReached(snapshot));
+        }
+
+        let parent_index = self.parent.entry_index(stage, resource)?;
+        if self.parent.entries[parent_index].spec.mode != AccountingMode::HighWater {
+            return Err(OperationPolicyError::AccountingModeMismatch { stage, resource });
+        }
+        let parent_attempted = self.parent.entries[parent_index].consumed.max(value);
+        if let Some(snapshot) = self
+            .parent
+            .stage_limit_crossing(parent_index, parent_attempted)?
+        {
+            self.parent.record_limit(snapshot);
+            return Err(OperationPolicyError::LimitReached(snapshot));
+        }
+
+        self.local.entries[local_index].consumed = local_attempted;
+        self.parent.entries[parent_index].consumed = parent_attempted;
+        Ok(())
+    }
+
+    /// Retains numeric-resolution evidence locally and in the parent.
+    pub fn record_numeric_resolution(&mut self, stage: StageId) {
+        self.local.record_numeric_resolution(stage);
+        self.parent.record_numeric_resolution(stage);
+    }
+
+    /// Returns invocation-local usage snapshots, including zeros.
+    pub fn snapshots(&self) -> Vec<LimitSnapshot> {
+        self.local.snapshots()
+    }
+
+    /// Returns invocation-local limit events in first-observed order.
+    pub fn limit_events(&self) -> &[LimitSnapshot] {
+        self.local.limit_events()
+    }
+
+    /// Returns invocation-local numeric-resolution evidence.
+    pub fn numeric_resolution_stages(&self) -> &[StageId] {
+        self.local.numeric_resolution_stages()
+    }
+}
+
+fn apply_checked_charge(
+    ledger: &mut WorkLedger,
+    stage: StageId,
+    resource: ResourceKind,
+    amount: u64,
+) {
+    let index = ledger
+        .entry_index(stage, resource)
+        .expect("a checked charge retains its configured stage");
+    ledger.entries[index].consumed = ledger.entries[index]
+        .consumed
+        .checked_add(amount)
+        .expect("a checked charge cannot overflow stage usage");
+    if resource == ResourceKind::Work {
+        ledger.total_work_consumed = ledger
+            .total_work_consumed
+            .checked_add(amount)
+            .expect("a checked charge cannot overflow total work");
     }
 }
 

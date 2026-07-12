@@ -11,7 +11,7 @@ mod policy;
 
 pub use budget::{
     AccountingMode, BudgetPlan, ChildWorkLedger, LimitSnapshot, LimitSpec, ResourceKind,
-    TOTAL_WORK_STAGE, WorkLedger,
+    SequentialWorkLedger, TOTAL_WORK_STAGE, WorkLedger,
 };
 pub use context::{
     DiagnosticKind, DiagnosticLevel, OperationContext, OperationDiagnostic, OperationOutcome,
