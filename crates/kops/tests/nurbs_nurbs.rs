@@ -36,6 +36,21 @@ fn tangent_parabola() -> NurbsCurve {
     .unwrap()
 }
 
+fn tangent_parabola_at_with_domain(vertex_parameter: f64, hi: f64) -> NurbsCurve {
+    let q = vertex_parameter;
+    NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, hi, hi, hi],
+        vec![
+            Point3::new(-1.0, q * q, 0.0),
+            Point3::new(0.0, q * q - q, 0.0),
+            Point3::new(1.0, (1.0 - q) * (1.0 - q), 0.0),
+        ],
+        None,
+    )
+    .unwrap()
+}
+
 #[test]
 fn nurbs_nurbs_crossing_tangent_and_range_filtering() {
     let diagonal = line_nurbs(Point3::new(-1.0, -1.0, 0.0), Point3::new(1.0, 1.0, 0.0));
@@ -231,6 +246,122 @@ fn coarse_custom_progress_policy_can_stop_but_cannot_accept_a_contact() {
     let stopped = intersect_bounded_nurbs_nurbs_with_context(
         &diagonal,
         diagonal.param_range(),
+        &horizontal,
+        horizontal.param_range(),
+        &context,
+    );
+    let stopped = stopped.result().unwrap();
+    assert!(stopped.points.is_empty());
+    assert!(stopped.overlaps.is_empty());
+    assert!(!stopped.is_complete());
+}
+
+#[test]
+fn normalized_gradient_stop_is_reparameterization_swap_and_context_stable() {
+    let q = 0.371_234;
+    let expected_point = Point3::new(2.0 * q - 1.0, 0.0, 0.0);
+    let expected_horizontal_parameter = (2.0 * q + 1.0) / 4.0;
+    let tolerances = Tolerances::default();
+    let session = SessionPolicy::v1();
+
+    for parameter_scale in [1.0e-6, 1.0, 1.0e3] {
+        let parabola = tangent_parabola_at_with_domain(q, parameter_scale);
+        let horizontal = line_nurbs_with_domain(
+            Point3::new(-2.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+            parameter_scale,
+        );
+        let forward = intersect_bounded_nurbs_nurbs(
+            &parabola,
+            parabola.param_range(),
+            &horizontal,
+            horizontal.param_range(),
+            tolerances,
+        )
+        .unwrap();
+        let swapped = intersect_bounded_nurbs_nurbs(
+            &horizontal,
+            horizontal.param_range(),
+            &parabola,
+            parabola.param_range(),
+            tolerances,
+        )
+        .unwrap();
+        assert_eq!(
+            forward.points.len(),
+            1,
+            "parameter scale {parameter_scale:e}: {:?}",
+            forward.points
+        );
+        assert_eq!(
+            swapped.points.len(),
+            1,
+            "parameter scale {parameter_scale:e}"
+        );
+        assert_eq!(forward.points[0].kind, ContactKind::Tangent);
+        assert_eq!(swapped.points[0].kind, ContactKind::Tangent);
+        assert!(
+            forward.points[0].point.dist(expected_point) <= tolerances.linear().sqrt(),
+            "parameter scale {parameter_scale:e}: {:?} != {expected_point:?}",
+            forward.points[0]
+        );
+        assert!(
+            swapped.points[0].point.dist(expected_point) <= tolerances.linear().sqrt(),
+            "parameter scale {parameter_scale:e}: {:?} != {expected_point:?}",
+            swapped.points[0]
+        );
+        assert!((forward.points[0].t_a / parameter_scale - q).abs() <= 1.0e-4);
+        assert!(
+            (forward.points[0].t_b / parameter_scale - expected_horizontal_parameter).abs()
+                <= 1.0e-4
+        );
+        assert_eq!(forward.points[0].t_a, swapped.points[0].t_b);
+        assert_eq!(forward.points[0].t_b, swapped.points[0].t_a);
+        assert_eq!(forward.points[0].point, swapped.points[0].point);
+        assert_eq!(forward.points[0].residual, swapped.points[0].residual);
+
+        if parameter_scale == 1.0 {
+            let context = OperationContext::new(&session, tolerances).unwrap();
+            let contextual = intersect_bounded_nurbs_nurbs_with_context(
+                &parabola,
+                parabola.param_range(),
+                &horizontal,
+                horizontal.param_range(),
+                &context,
+            );
+            assert_eq!(contextual.result(), Ok(&forward));
+        }
+    }
+}
+
+#[test]
+fn coarse_custom_gradient_policy_can_stop_but_cannot_accept_a_contact() {
+    let q = 0.371_234;
+    let parabola = tangent_parabola_at_with_domain(q, 1.0);
+    let horizontal = line_nurbs(Point3::new(-2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0));
+    let tolerances = Tolerances::default();
+    let default = intersect_bounded_nurbs_nurbs(
+        &parabola,
+        parabola.param_range(),
+        &horizontal,
+        horizontal.param_range(),
+        tolerances,
+    )
+    .unwrap();
+    assert_eq!(default.points.len(), 1);
+
+    let numerical = NumericalPolicy::try_new(1.0e16, 64.0, 128.0 * f64::EPSILON).unwrap();
+    let session = SessionPolicy::new(
+        SessionPrecision::parasolid(),
+        numerical,
+        ExecutionPolicy::Available,
+        BudgetPlan::empty(),
+        PolicyVersion::V1,
+    );
+    let context = OperationContext::new(&session, tolerances).unwrap();
+    let stopped = intersect_bounded_nurbs_nurbs_with_context(
+        &parabola,
+        parabola.param_range(),
         &horizontal,
         horizontal.param_range(),
         &context,

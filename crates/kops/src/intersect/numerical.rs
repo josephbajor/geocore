@@ -1,6 +1,46 @@
 //! Shared numerical-policy adapters for intersection solvers.
 
-use kcore::operation::{NumericalPolicy, ParameterScale};
+use kcore::operation::{NumericGuardKind, NumericalPolicy, ParameterScale};
+use kgeom::vec::Vec3;
+
+/// Returns whether both Newton directional gradients are numerically zero.
+///
+/// Each residual/derivative dot product is normalized by the two vector
+/// magnitudes before comparison with the policy's dimensionless coefficient-
+/// cancellation guard. This decision may stop polishing, but cannot accept a
+/// contact or prove a miss. A zero vector contributes an exact zero gradient;
+/// non-finite vectors stop conservatively.
+pub(super) fn directional_gradients_are_numerically_zero(
+    policy: NumericalPolicy,
+    residual: Vec3,
+    derivative_a: Vec3,
+    derivative_b: Vec3,
+) -> bool {
+    let Some(a) = normalized_abs_dot(residual, derivative_a) else {
+        return true;
+    };
+    let Some(b) = normalized_abs_dot(residual, derivative_b) else {
+        return true;
+    };
+    let threshold = policy.rounding_guard(NumericGuardKind::CoefficientCancellation, 1.0);
+    a.max(b) <= threshold
+}
+
+fn normalized_abs_dot(a: Vec3, b: Vec3) -> Option<f64> {
+    let scale_a = a.x.abs().max(a.y.abs()).max(a.z.abs());
+    let scale_b = b.x.abs().max(b.y.abs()).max(b.z.abs());
+    if !scale_a.is_finite() || !scale_b.is_finite() {
+        return None;
+    }
+    if scale_a == 0.0 || scale_b == 0.0 {
+        return Some(0.0);
+    }
+    let a = a / scale_a;
+    let b = b / scale_b;
+    let denominator = (a.dot(a) * b.dot(b)).sqrt();
+    let value = a.dot(b).abs() / denominator;
+    value.is_finite().then_some(value.min(1.0))
+}
 
 /// Derives a scale-aware parameter-progress step with no acceptance authority.
 ///
@@ -89,6 +129,51 @@ pub(super) fn solve_symmetric_2x2(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalized_gradient_stop_is_invariant_across_vector_scales() {
+        let policy = NumericalPolicy::v1();
+        for scale in [1.0e-200, 1.0, 1.0e200] {
+            let residual = Vec3::new(scale, 0.0, 0.0);
+            let orthogonal = Vec3::new(0.0, scale, 0.0);
+            let aligned = Vec3::new(scale, scale, 0.0);
+            assert!(directional_gradients_are_numerically_zero(
+                policy, residual, orthogonal, orthogonal
+            ));
+            assert!(!directional_gradients_are_numerically_zero(
+                policy, residual, aligned, orthogonal
+            ));
+        }
+    }
+
+    #[test]
+    fn normalized_gradient_stop_honors_policy_and_rejects_invalid_vectors() {
+        let residual = Vec3::new(1.0, 0.0, 0.0);
+        let derivative = Vec3::new(1.0, 2.0, 0.0);
+        assert!(!directional_gradients_are_numerically_zero(
+            NumericalPolicy::v1(),
+            residual,
+            derivative,
+            derivative,
+        ));
+        assert!(!directional_gradients_are_numerically_zero(
+            NumericalPolicy::v1(),
+            residual,
+            Vec3::default(),
+            derivative,
+        ));
+
+        let coarse = NumericalPolicy::try_new(1.0e16, 64.0, 128.0 * f64::EPSILON).unwrap();
+        assert!(directional_gradients_are_numerically_zero(
+            coarse, residual, derivative, derivative,
+        ));
+        assert!(directional_gradients_are_numerically_zero(
+            NumericalPolicy::v1(),
+            Vec3::new(f64::NAN, 0.0, 0.0),
+            derivative,
+            derivative,
+        ));
+    }
 
     #[test]
     fn parameter_progress_step_tracks_small_and_large_parameter_scales() {

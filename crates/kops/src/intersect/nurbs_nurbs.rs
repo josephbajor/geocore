@@ -1,4 +1,6 @@
-use super::numerical::{parameter_progress_step, solve_symmetric_2x2};
+use super::numerical::{
+    directional_gradients_are_numerically_zero, parameter_progress_step, solve_symmetric_2x2,
+};
 use super::result::{
     ContactKind, CurveCurveIntersections, CurveCurveOverlap, CurveCurvePoint, ParamOrientation,
     accept_curve_curve_candidate,
@@ -55,11 +57,13 @@ pub fn intersect_bounded_nurbs_nurbs(
 /// Context-aware bounded NURBS/NURBS curve intersection.
 ///
 /// The operation's numerical policy controls the Newton system conditioning
-/// guard, collapsed-parameter detection, and Newton parameter-progress stop.
+/// guard, normalized directional-gradient stop, collapsed-parameter detection,
+/// and Newton parameter-progress stop.
 /// These guards never grant candidate or overlap acceptance: candidates retain
 /// their model-space residual checks, while overlap and input parameter slack
-/// retain their legacy v1 semantics. Other progress guards also remain legacy
-/// for now.
+/// retain their legacy v1 semantics. Absolute minimizer width/value and segment
+/// degeneracy guards, plus contact-classification scaling, also remain separate
+/// migrations.
 pub fn intersect_bounded_nurbs_nurbs_with_context(
     a: &NurbsCurve,
     range_a: ParamRange,
@@ -302,16 +306,13 @@ fn newton_polish_pair(
     mut t_b: f64,
     policy: PolishPolicy,
 ) -> (f64, f64) {
-    let gradient_tol =
-        (policy.tolerances.linear() * policy.tolerances.linear() * policy.tolerances.linear())
-            .max(1e-30);
     for _ in 0..MAX_POLISH_STEPS {
         let da = a.eval_derivs(t_a, 2);
         let db = b.eval_derivs(t_b, 2);
         let r = da.d[0] - db.d[0];
         let g0 = r.dot(da.d[1]);
         let g1 = -r.dot(db.d[1]);
-        if g0.abs().max(g1.abs()) <= gradient_tol {
+        if directional_gradients_are_numerically_zero(policy.numerical, r, da.d[1], db.d[1]) {
             break;
         }
 
@@ -776,6 +777,45 @@ mod tests {
         let stopped =
             newton_polish_pair(&parabola, &horizontal, 0.75, 0.75, policy(coarse_progress));
         assert!(parabola.eval(stopped.0).dist(horizontal.eval(stopped.1)) > 1.0e-4);
+
+        let mut accepted = Vec::new();
+        push_root_candidate(
+            &parabola,
+            stopped.0,
+            &horizontal,
+            stopped.1,
+            &mut accepted,
+            Tolerances::default(),
+        );
+        assert!(accepted.is_empty());
+    }
+
+    #[test]
+    fn newton_normalized_gradient_stop_honors_policy_without_accepting_contact() {
+        let parabola = tangent_parabola_with_domain(1.0);
+        let horizontal =
+            line_with_domain(Point3::new(-1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0), 1.0);
+        let range = ParamRange::new(0.0, 1.0);
+        let policy = |numerical| PolishPolicy {
+            range_a: range,
+            range_b: range,
+            tolerances: Tolerances::default(),
+            numerical,
+        };
+
+        let v1 = newton_polish_pair(
+            &parabola,
+            &horizontal,
+            0.75,
+            0.75,
+            policy(NumericalPolicy::v1()),
+        );
+        assert!(parabola.eval(v1.0).dist(horizontal.eval(v1.1)) <= Tolerances::default().linear());
+
+        let coarse_rounding = NumericalPolicy::try_new(1.0e16, 64.0, 128.0 * f64::EPSILON).unwrap();
+        let stopped =
+            newton_polish_pair(&parabola, &horizontal, 0.75, 0.75, policy(coarse_rounding));
+        assert_eq!(stopped, (0.75, 0.75));
 
         let mut accepted = Vec::new();
         push_root_candidate(
