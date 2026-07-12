@@ -2771,7 +2771,7 @@
       "size_parameters": { "elements": 1, "control_points": 5 },
       "tolerances": { "linear": 1e-8 },
       "policy_values": { "requested_depth": 3, "work_allowed": 1366, "candidates_allowed": 4096, "depth_allowed": 3, "execution": "serial" },
-      "expected_result_counters": { "candidates": 4, "max_candidate_depth": 3, "complete": true, "proven_empty": false, "indeterminate": false, "conservative_cover": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "work_consumed": 10, "candidate_high_water": 5, "depth_high_water": 3, "candidate_digest": "c6d0acd6f4712a52", "output_digest": "be9c27aa2b89685a" }
+      "expected_result_counters": { "candidates": 4, "max_candidate_depth": 3, "complete": true, "proven_empty": false, "indeterminate": false, "conservative_cover": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "work_consumed": 10, "candidate_high_water": 5, "depth_high_water": 3, "unique_root_cells": 2, "root_certificate_digest": "a27c18148dffd3ad", "candidate_digest": "c6d0acd6f4712a52", "output_digest": "4d6fb6f5809c4b32" }
     },
     {
       "path": "geometry/curve-pair-isolation/rational-retained-v1/1/depth-3-v1",
@@ -2781,7 +2781,7 @@
       "size_parameters": { "elements": 1, "control_points": 5 },
       "tolerances": { "linear": 1e-8 },
       "policy_values": { "requested_depth": 3, "work_allowed": 1366, "candidates_allowed": 4096, "depth_allowed": 3, "execution": "serial" },
-      "expected_result_counters": { "candidates": 2, "max_candidate_depth": 3, "complete": true, "proven_empty": false, "indeterminate": false, "conservative_cover": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "work_consumed": 7, "candidate_high_water": 3, "depth_high_water": 3, "candidate_digest": "4f994d431116fb10", "output_digest": "afd970ebe72ca0b3" }
+      "expected_result_counters": { "candidates": 2, "max_candidate_depth": 3, "complete": true, "proven_empty": false, "indeterminate": false, "conservative_cover": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "work_consumed": 7, "candidate_high_water": 3, "depth_high_water": 3, "unique_root_cells": 0, "root_certificate_digest": "54b9300d07e25d05", "candidate_digest": "4f994d431116fb10", "output_digest": "69ec7d5300f96a42" }
     },
     {
       "path": "geometry/curve-pair-isolation/poly-separated-v1/1/depth-3-v1",
@@ -2791,7 +2791,7 @@
       "size_parameters": { "elements": 1, "control_points": 5 },
       "tolerances": { "linear": 1e-8 },
       "policy_values": { "requested_depth": 3, "work_allowed": 1366, "candidates_allowed": 4096, "depth_allowed": 3, "execution": "serial" },
-      "expected_result_counters": { "candidates": 0, "max_candidate_depth": 0, "complete": true, "proven_empty": true, "indeterminate": false, "conservative_cover": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "work_consumed": 2, "candidate_high_water": 1, "depth_high_water": 1, "candidate_digest": "2de48551deac70df", "output_digest": "cba364bdaae994ee" }
+      "expected_result_counters": { "candidates": 0, "max_candidate_depth": 0, "complete": true, "proven_empty": true, "indeterminate": false, "conservative_cover": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "work_consumed": 2, "candidate_high_water": 1, "depth_high_water": 1, "unique_root_cells": 0, "root_certificate_digest": "54b9300d07e25d05", "candidate_digest": "2de48551deac70df", "output_digest": "218cff54d8fe44f3" }
     },
     {
       "path": "geometry/curve-pair-isolation/poly-retained-v1/1/work-low-v1",
@@ -2801,7 +2801,7 @@
       "size_parameters": { "elements": 1, "control_points": 5 },
       "tolerances": { "linear": 1e-8 },
       "policy_values": { "requested_depth": 3, "work_allowed": 1, "candidates_allowed": 4096, "depth_allowed": 3, "execution": "serial" },
-      "expected_result_counters": { "candidates": 1, "max_candidate_depth": 0, "complete": false, "proven_empty": false, "indeterminate": true, "conservative_cover": true, "limit_kind": "work", "limit_events": 1, "limit_attempted_consumed": 2, "limit_attempted_allowed": 1, "work_consumed": 1, "candidate_high_water": 1, "depth_high_water": 1, "candidate_digest": "bf049d39485cbe6a", "output_digest": "1c2356e8d432708e" }
+      "expected_result_counters": { "candidates": 1, "max_candidate_depth": 0, "complete": false, "proven_empty": false, "indeterminate": true, "conservative_cover": true, "limit_kind": "work", "limit_events": 1, "limit_attempted_consumed": 2, "limit_attempted_allowed": 1, "work_consumed": 1, "candidate_high_water": 1, "depth_high_water": 1, "unique_root_cells": 0, "root_certificate_digest": "54b9300d07e25d05", "candidate_digest": "bf049d39485cbe6a", "output_digest": "2d909abebc52fd4b" }
     },
     {
       "path": "geometry/curve-pair-isolation/poly-retained-v1/1/candidate-low-v1",
@@ -2811,7 +2811,7 @@
       "size_parameters": { "elements": 1, "control_points": 5 },
       "tolerances": { "linear": 1e-8 },
       "policy_values": { "requested_depth": 3, "work_allowed": 1366, "candidates_allowed": 1, "depth_allowed": 3, "execution": "serial" },
-      "expected_result_counters": { "candidates": 1, "max_candidate_depth": 0, "complete": false, "proven_empty": false, "indeterminate": true, "conservative_cover": true, "limit_kind": "candidates", "limit_events": 1, "limit_attempted_consumed": 4, "limit_attempted_allowed": 1, "work_consumed": 2, "candidate_high_water": 1, "depth_high_water": 1, "candidate_digest": "bf049d39485cbe6a", "output_digest": "ea433e79da4dfe1f" }
+      "expected_result_counters": { "candidates": 1, "max_candidate_depth": 0, "complete": false, "proven_empty": false, "indeterminate": true, "conservative_cover": true, "limit_kind": "candidates", "limit_events": 1, "limit_attempted_consumed": 4, "limit_attempted_allowed": 1, "work_consumed": 2, "candidate_high_water": 1, "depth_high_water": 1, "unique_root_cells": 0, "root_certificate_digest": "54b9300d07e25d05", "candidate_digest": "bf049d39485cbe6a", "output_digest": "a98c3dae4ad9e8e6" }
     },
     {
       "path": "geometry/curve-pair-isolation/poly-retained-v1/1/depth-low-v1",
@@ -2821,7 +2821,7 @@
       "size_parameters": { "elements": 1, "control_points": 5 },
       "tolerances": { "linear": 1e-8 },
       "policy_values": { "requested_depth": 3, "work_allowed": 1366, "candidates_allowed": 4096, "depth_allowed": 0, "execution": "serial" },
-      "expected_result_counters": { "candidates": 1, "max_candidate_depth": 0, "complete": false, "proven_empty": false, "indeterminate": true, "conservative_cover": true, "limit_kind": "depth", "limit_events": 1, "limit_attempted_consumed": 1, "limit_attempted_allowed": 0, "work_consumed": 1, "candidate_high_water": 1, "depth_high_water": 0, "candidate_digest": "bf049d39485cbe6a", "output_digest": "0397acce85ab7f9c" }
+      "expected_result_counters": { "candidates": 1, "max_candidate_depth": 0, "complete": false, "proven_empty": false, "indeterminate": true, "conservative_cover": true, "limit_kind": "depth", "limit_events": 1, "limit_attempted_consumed": 1, "limit_attempted_allowed": 0, "work_consumed": 1, "candidate_high_water": 1, "depth_high_water": 0, "unique_root_cells": 0, "root_certificate_digest": "54b9300d07e25d05", "candidate_digest": "bf049d39485cbe6a", "output_digest": "a461a399e70b0a99" }
     },
     {
       "path": "geometry/curve-pair-solve/poly-transverse-v1/1/default-v1",

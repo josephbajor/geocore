@@ -8,8 +8,9 @@ use kcore::operation::{
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::nurbs::{
-    CurvePairIsolation, NURBS_CURVE_PAIR_CANDIDATES, NURBS_CURVE_PAIR_DEPTH,
-    NURBS_CURVE_PAIR_SUBDIVISIONS, NurbsCurve, isolate_curve_pair_candidates_in_scope,
+    CurvePairIsolation, CurvePairProjectionPlane, NURBS_CURVE_PAIR_CANDIDATES,
+    NURBS_CURVE_PAIR_DEPTH, NURBS_CURVE_PAIR_SUBDIVISIONS, NurbsCurve,
+    isolate_curve_pair_candidates_in_scope,
 };
 use kgeom::vec::Point3;
 
@@ -105,7 +106,7 @@ pub const CASES: [CurvePairIsolationCase; 6] = [
             false,
             LimitKind::None,
             0xc6d0_acd6_f471_2a52,
-            0xbe9c_27aa_2b89_685a,
+            0x4d6f_b6f5_809c_4b32,
         ),
     ),
     case(
@@ -119,7 +120,7 @@ pub const CASES: [CurvePairIsolationCase; 6] = [
             false,
             LimitKind::None,
             0x4f99_4d43_1116_fb10,
-            0xafd9_70eb_e72c_a0b3,
+            0x69ec_7d53_00f9_6a42,
         ),
     ),
     case(
@@ -133,7 +134,7 @@ pub const CASES: [CurvePairIsolationCase; 6] = [
             true,
             LimitKind::None,
             0x2de4_8551_deac_70df,
-            0xcba3_64bd_aae9_94ee,
+            0x218c_ff54_d8fe_44f3,
         ),
     ),
     case(
@@ -147,7 +148,7 @@ pub const CASES: [CurvePairIsolationCase; 6] = [
             false,
             LimitKind::Work,
             0xbf04_9d39_485c_be6a,
-            0x1c23_56e8_d432_708e,
+            0x2d90_9abe_bc52_fd4b,
         ),
     ),
     case(
@@ -161,7 +162,7 @@ pub const CASES: [CurvePairIsolationCase; 6] = [
             false,
             LimitKind::Candidates,
             0xbf04_9d39_485c_be6a,
-            0xea43_3e79_da4d_fe1f,
+            0xa98c_3dae_4ad9_e8e6,
         ),
     ),
     case(
@@ -175,7 +176,7 @@ pub const CASES: [CurvePairIsolationCase; 6] = [
             false,
             LimitKind::Depth,
             0xbf04_9d39_485c_be6a,
-            0x0397_acce_85ab_7f9c,
+            0xa461_a399_e70b_0a99,
         ),
     ),
 ];
@@ -305,6 +306,7 @@ impl CurvePairIsolationFixture {
             .first()
             .map_or((0, 0), |snapshot| (snapshot.consumed, snapshot.allowed));
         let candidate_digest = candidate_digest(isolation);
+        let root_certificate_digest = root_certificate_digest(isolation);
         let mut evidence = CurvePairIsolationEvidence {
             control_points: self.first.points().len() + self.second.points().len(),
             candidates: isolation.candidates().len(),
@@ -330,6 +332,12 @@ impl CurvePairIsolationFixture {
             candidates_allowed: candidates.allowed,
             depth_high_water: depth.consumed,
             depth_allowed: depth.allowed,
+            unique_root_cells: isolation
+                .candidates()
+                .iter()
+                .filter(|cell| cell.certify_unique_root().is_some())
+                .count(),
+            root_certificate_digest,
             candidate_digest,
             output_digest: 0,
         };
@@ -377,6 +385,10 @@ pub struct CurvePairIsolationEvidence {
     pub depth_high_water: u64,
     /// Depth allowance.
     pub depth_allowed: u64,
+    /// Retained cells with an exact unique transverse-root certificate.
+    pub unique_root_cells: usize,
+    /// Ordered exact root-certificate digest.
+    pub root_certificate_digest: u64,
     /// Exact candidate digest.
     pub candidate_digest: u64,
     /// Complete semantic evidence digest.
@@ -410,6 +422,8 @@ impl CurvePairIsolationEvidence {
         digest.u64(self.candidates_allowed);
         digest.u64(self.depth_high_water);
         digest.u64(self.depth_allowed);
+        digest.count(self.unique_root_cells);
+        digest.u64(self.root_certificate_digest);
         digest.u64(self.candidate_digest);
         digest.tag(match case.fixture {
             CurveFixture::Polynomial => 0,
@@ -571,6 +585,31 @@ fn candidate_digest(isolation: &CurvePairIsolation) -> u64 {
     digest.finish()
 }
 
+fn root_certificate_digest(isolation: &CurvePairIsolation) -> u64 {
+    let mut digest = StableHasher::new();
+    digest.tag(0xa2);
+    let certificates = isolation
+        .candidates()
+        .iter()
+        .filter_map(|candidate| candidate.certify_unique_root())
+        .collect::<Vec<_>>();
+    digest.count(certificates.len());
+    for certificate in certificates {
+        for range in [certificate.first_range(), certificate.second_range()] {
+            digest.f64(range.lo);
+            digest.f64(range.hi);
+        }
+        digest.tag(match certificate.projection_plane() {
+            CurvePairProjectionPlane::Xy => 0,
+            CurvePairProjectionPlane::Xz => 1,
+            CurvePairProjectionPlane::Yz => 2,
+            _ => 255,
+        });
+        digest.f64(certificate.determinant_lower_bound());
+    }
+    digest.finish()
+}
+
 struct StableHasher(u64);
 
 impl StableHasher {
@@ -695,6 +734,7 @@ mod tests {
                 ("work_consumed", evidence.work_consumed),
                 ("candidate_high_water", evidence.candidate_high_water),
                 ("depth_high_water", evidence.depth_high_water),
+                ("unique_root_cells", evidence.unique_root_cells as u64),
             ] {
                 assert_eq!(counters[field].as_u64(), Some(actual), "{field}");
             }
@@ -707,6 +747,10 @@ mod tests {
                 assert_eq!(counters[field].as_bool(), Some(actual), "{field}");
             }
             assert_eq!(counters["limit_kind"], evidence.limit.as_str());
+            assert_eq!(
+                counters["root_certificate_digest"].as_str(),
+                Some(format!("{:016x}", evidence.root_certificate_digest).as_str())
+            );
             assert_eq!(
                 counters["candidate_digest"].as_str(),
                 Some(format!("{:016x}", evidence.candidate_digest).as_str())

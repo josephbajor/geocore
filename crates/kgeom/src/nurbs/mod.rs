@@ -35,9 +35,9 @@ mod patch_bvh;
 
 pub use curve_pair::{
     ContextCurvePairIsolationError, CurvePairCandidateCell, CurvePairIsolation,
-    CurvePairIsolationLimits, NURBS_CURVE_PAIR_CANDIDATES, NURBS_CURVE_PAIR_DEPTH,
-    NURBS_CURVE_PAIR_SUBDIVISIONS, NurbsCurvePairBudgetProfile,
-    isolate_curve_pair_candidates_in_scope,
+    CurvePairIsolationLimits, CurvePairProjectionPlane, CurvePairRootCertificate,
+    NURBS_CURVE_PAIR_CANDIDATES, NURBS_CURVE_PAIR_DEPTH, NURBS_CURVE_PAIR_SUBDIVISIONS,
+    NurbsCurvePairBudgetProfile, isolate_curve_pair_candidates_in_scope,
 };
 pub use fit::interpolate;
 pub use knots::KnotVector;

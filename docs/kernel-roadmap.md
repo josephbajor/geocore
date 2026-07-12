@@ -745,7 +745,11 @@ true only for an empty complete result.
   parameter-resolution, invalid-objective, and iteration-bound termination.
   Ordered incomplete proof obligations survive canonicalization, swapping,
   generic dispatch, and facade adaptation, and Q4 pins their semantic digest.
-  Extend this to interval root-existence, generic curve/surface pairing, and
+  Exact retained cells can now certify a unique transverse root for polynomial
+  subcurves in a shared axis-aligned plane using Poincaré–Miranda face signs
+  plus interval P-matrix univalence; Q4 pins certified-cell counts and proof
+  digests. Integrate those certificates into solver completion, then extend
+  them to rational/non-coplanar cases, generic curve/surface pairing, and
   procedural/NURBS fields.
 - Analytic special cases and the generic solver feed the same canonical result type.
 - Consolidate the per-pair analytic curve/surface and SSI boilerplate (range
@@ -919,7 +923,8 @@ that queue must eventually discharge.
 - M4: extend completion evidence with paired pcurves, coincident regions,
   singular events, and verified residual bounds; upgrade the landed bounded
   in-cell tolerance witnesses and typed local-solver stops to
-  interval-certified root existence and complete overlap extent.
+  solver-integrated/general interval-certified root existence and complete
+  overlap extent.
 - M5: grow planar profiles and booleans only after facade adoption and the
   checker, rollback, lineage, tolerance, determinism, corpus, performance, and
   independent-oracle gates.

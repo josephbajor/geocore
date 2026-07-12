@@ -114,6 +114,23 @@ impl Interval {
         let hi = self.hi.sqrt().next_up();
         Some(Interval { lo, hi })
     }
+
+    /// Conservative division when the divisor interval excludes zero.
+    ///
+    /// Returns `None` for a zero-containing or non-finite divisor rather than
+    /// manufacturing an unbounded interval.
+    pub fn checked_div(self, rhs: Self) -> Option<Self> {
+        if rhs.contains_zero()
+            || !rhs.lo.is_finite()
+            || !rhs.hi.is_finite()
+            || !self.lo.is_finite()
+            || !self.hi.is_finite()
+        {
+            return None;
+        }
+        let reciprocal = Self::widened(1.0 / rhs.hi, 1.0 / rhs.lo);
+        Some(self * reciprocal)
+    }
 }
 
 impl core::ops::Add for Interval {
@@ -232,5 +249,25 @@ mod tests {
         assert_eq!(widened_nonnegative.lo(), 0.0);
         assert!(widened_nonnegative.contains(2.0));
         assert!(Interval::new(-4.0, -1.0).sqrt().is_none());
+    }
+
+    #[test]
+    fn checked_division_brackets_both_divisor_signs_and_rejects_zero() {
+        let positive = Interval::new(2.0, 4.0)
+            .checked_div(Interval::new(4.0, 8.0))
+            .unwrap();
+        assert!(positive.contains(0.25));
+        assert!(positive.contains(1.0));
+
+        let negative = Interval::new(2.0, 4.0)
+            .checked_div(Interval::new(-8.0, -4.0))
+            .unwrap();
+        assert!(negative.contains(-1.0));
+        assert!(negative.contains(-0.25));
+        assert!(
+            Interval::new(1.0, 2.0)
+                .checked_div(Interval::new(-1.0, 1.0))
+                .is_none()
+        );
     }
 }

@@ -666,6 +666,16 @@ overlap coverage capability stay ordered through canonicalization, swapping,
 generic dispatch, and the facade. Q4 hashes this evidence separately from
 contact geometry and folds both into its semantic output digest.
 
+The first root-existence substrate is also landed on exact curve-pair cells.
+For polynomial subcurves in an exactly shared axis-aligned plane, control-hull
+face signs discharge Poincaré–Miranda existence and interval derivative hulls
+prove a strictly positive P-matrix Jacobian, giving one unique exact transverse
+root in the parameter rectangle. Exact expansion signs protect boundary
+equalities. Rational, non-coplanar, tangent/singular, multi-root, and interval-
+inconclusive cells return no certificate. This substrate does not yet change
+solver completion; integration must associate every retained cell certificate
+with a verified emitted representative before retiring the coverage gap.
+
 That normalized boundary now has contextual and shared-scope public entries.
 The contextual entry composes the curve/curve family profile once and creates
 one scope; ellipse/ellipse borrows it for every projection, while NURBS/NURBS

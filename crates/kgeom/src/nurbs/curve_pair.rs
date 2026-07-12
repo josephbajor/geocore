@@ -5,6 +5,8 @@ use crate::aabb::Aabb3;
 use crate::curve::Curve;
 use crate::param::ParamRange;
 use kcore::error::{Error, Result};
+use kcore::expansion;
+use kcore::interval::Interval;
 use kcore::operation::{
     AccountingMode, BudgetPlan, LimitSnapshot, LimitSpec, OperationPolicyError, OperationScope,
     ResourceKind, StageId,
@@ -95,6 +97,55 @@ pub struct CurvePairCandidateCell {
     depth: u32,
 }
 
+/// Axis-aligned plane used by an exact unique-root certificate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CurvePairProjectionPlane {
+    /// Both subcurves lie in one exact constant-z plane.
+    Xy,
+    /// Both subcurves lie in one exact constant-y plane.
+    Xz,
+    /// Both subcurves lie in one exact constant-x plane.
+    Yz,
+}
+
+/// Proof that one retained polynomial NURBS pair cell contains exactly one
+/// transverse root.
+///
+/// The certificate combines Poincaré–Miranda face signs for existence with a
+/// strictly positive interval P-matrix Jacobian for global injectivity on the
+/// parameter rectangle. The remaining model coordinate is exactly constant
+/// across both control hulls, so the projected root is a full 3D root.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CurvePairRootCertificate {
+    first_range: ParamRange,
+    second_range: ParamRange,
+    projection_plane: CurvePairProjectionPlane,
+    determinant_lower_bound: f64,
+}
+
+impl CurvePairRootCertificate {
+    /// Certified first-curve parameter interval.
+    pub const fn first_range(self) -> ParamRange {
+        self.first_range
+    }
+
+    /// Certified second-curve parameter interval.
+    pub const fn second_range(self) -> ParamRange {
+        self.second_range
+    }
+
+    /// Exact common coordinate plane used by the proof.
+    pub const fn projection_plane(self) -> CurvePairProjectionPlane {
+        self.projection_plane
+    }
+
+    /// Strict lower bound for the oriented projected Jacobian determinant.
+    pub const fn determinant_lower_bound(self) -> f64 {
+        self.determinant_lower_bound
+    }
+}
+
 impl CurvePairCandidateCell {
     /// Exact first subcurve.
     pub const fn first_curve(&self) -> &NurbsCurve {
@@ -129,6 +180,167 @@ impl CurvePairCandidateCell {
     /// Number of exact pair-subdivision rounds from the requested root pair.
     pub const fn depth(&self) -> u32 {
         self.depth
+    }
+
+    /// Certify one exact unique transverse root in this retained cell.
+    ///
+    /// This first interval-proof slice accepts polynomial subcurves lying in
+    /// one exact axis-aligned plane. Rational, non-coplanar, tangent, singular,
+    /// and interval-inconclusive cells return `None` without weakening the
+    /// conservative candidate cover.
+    pub fn certify_unique_root(&self) -> Option<CurvePairRootCertificate> {
+        if self.first.is_rational()
+            || self.second.is_rational()
+            || self.first.degree() == 0
+            || self.second.degree() == 0
+        {
+            return None;
+        }
+        for (plane, axes, normal) in [
+            (CurvePairProjectionPlane::Xy, [0, 1], 2),
+            (CurvePairProjectionPlane::Xz, [0, 2], 1),
+            (CurvePairProjectionPlane::Yz, [1, 2], 0),
+        ] {
+            if !share_exact_coordinate_plane(&self.first, &self.second, normal) {
+                continue;
+            }
+            for axes in [axes, [axes[1], axes[0]]] {
+                if let Some(determinant_lower_bound) =
+                    certify_projected_unique_root(&self.first, &self.second, axes)
+                {
+                    return Some(CurvePairRootCertificate {
+                        first_range: self.first_range(),
+                        second_range: self.second_range(),
+                        projection_plane: plane,
+                        determinant_lower_bound,
+                    });
+                }
+            }
+        }
+        None
+    }
+}
+
+fn certify_projected_unique_root(
+    first: &NurbsCurve,
+    second: &NurbsCurve,
+    axes: [usize; 2],
+) -> Option<f64> {
+    let (second_axis_min, second_axis_max) = control_component_bounds(second, axes[0]);
+    let first_points = first.points();
+    let second_points = second.points();
+    let first_face_sign = face_orientation(
+        exact_difference_sign(
+            component_value(first_points.first().copied()?, axes[0]),
+            second_axis_max,
+        ),
+        exact_difference_sign(
+            component_value(first_points.first().copied()?, axes[0]),
+            second_axis_min,
+        ),
+        exact_difference_sign(
+            component_value(first_points.last().copied()?, axes[0]),
+            second_axis_max,
+        ),
+        exact_difference_sign(
+            component_value(first_points.last().copied()?, axes[0]),
+            second_axis_min,
+        ),
+    )?;
+
+    let (first_other_min, first_other_max) = control_component_bounds(first, axes[1]);
+    let second_low = component_value(second_points.first().copied()?, axes[1]);
+    let second_high = component_value(second_points.last().copied()?, axes[1]);
+    let second_face_sign = face_orientation(
+        exact_difference_sign(first_other_min, second_low),
+        exact_difference_sign(first_other_max, second_low),
+        exact_difference_sign(first_other_min, second_high),
+        exact_difference_sign(first_other_max, second_high),
+    )?;
+
+    let sign_first = Interval::point(first_face_sign);
+    let sign_second = Interval::point(second_face_sign);
+    let j00 = sign_first * derivative_component_interval(first, axes[0])?;
+    let j01 = sign_first * -derivative_component_interval(second, axes[0])?;
+    let j10 = sign_second * derivative_component_interval(first, axes[1])?;
+    let j11 = sign_second * -derivative_component_interval(second, axes[1])?;
+    if j00.lo() <= 0.0 || j11.lo() <= 0.0 {
+        return None;
+    }
+    let determinant = j00 * j11 - j01 * j10;
+    (determinant.lo() > 0.0).then_some(determinant.lo())
+}
+
+fn face_orientation(low_min: i8, low_max: i8, high_min: i8, high_max: i8) -> Option<f64> {
+    if low_max <= 0 && high_min >= 0 {
+        Some(1.0)
+    } else if low_min >= 0 && high_max <= 0 {
+        Some(-1.0)
+    } else {
+        None
+    }
+}
+
+fn exact_difference_sign(first: f64, second: f64) -> i8 {
+    let (rounded, residue) = expansion::two_diff(first, second);
+    expansion::sign(&expansion::from_two(rounded, residue))
+}
+
+fn share_exact_coordinate_plane(first: &NurbsCurve, second: &NurbsCurve, axis: usize) -> bool {
+    let Some(value) = first
+        .points()
+        .first()
+        .map(|point| component_value(*point, axis))
+    else {
+        return false;
+    };
+    first
+        .points()
+        .iter()
+        .chain(second.points())
+        .all(|point| component_value(*point, axis) == value)
+}
+
+fn control_component_bounds(curve: &NurbsCurve, axis: usize) -> (f64, f64) {
+    let mut values = curve
+        .points()
+        .iter()
+        .map(|point| component_value(*point, axis));
+    let first = values.next().expect("validated NURBS has control points");
+    let (lo, hi) = values.fold((first, first), |(lo, hi), value| {
+        (lo.min(value), hi.max(value))
+    });
+    (lo, hi)
+}
+
+fn derivative_component_interval(curve: &NurbsCurve, axis: usize) -> Option<Interval> {
+    let degree = curve.degree();
+    let knots = curve.knots().as_slice();
+    let mut hull: Option<Interval> = None;
+    for index in 0..curve.points().len().checked_sub(1)? {
+        let difference = Interval::point(component_value(curve.points()[index + 1], axis))
+            - Interval::point(component_value(curve.points()[index], axis));
+        let numerator = Interval::point(degree as f64) * difference;
+        let denominator =
+            Interval::point(knots[index + degree + 1]) - Interval::point(knots[index + 1]);
+        let derivative = numerator.checked_div(denominator)?;
+        hull = Some(match hull {
+            Some(current) => Interval::new(
+                current.lo().min(derivative.lo()),
+                current.hi().max(derivative.hi()),
+            ),
+            None => derivative,
+        });
+    }
+    hull
+}
+
+fn component_value(point: crate::vec::Point3, axis: usize) -> f64 {
+    match axis {
+        0 => point.x,
+        1 => point.y,
+        2 => point.z,
+        _ => unreachable!("3D coordinate axis"),
     }
 }
 
@@ -542,6 +754,10 @@ mod tests {
         .unwrap()
     }
 
+    fn segment(start: Point3, end: Point3, weights: Option<Vec<f64>>) -> NurbsCurve {
+        NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![start, end], weights).unwrap()
+    }
+
     fn run(
         first: &NurbsCurve,
         second: &NurbsCurve,
@@ -619,6 +835,90 @@ mod tests {
             .collect::<Vec<_>>();
         swapped_ranges.sort_by(|a, b| a.0.lo.total_cmp(&b.0.lo).then(a.1.lo.total_cmp(&b.1.lo)));
         assert_eq!(swapped_ranges, forward_ranges);
+    }
+
+    #[test]
+    fn interval_certificate_proves_only_unique_coplanar_polynomial_roots() {
+        let diagonal = segment(
+            Point3::new(-1.0, -1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            None,
+        );
+        let horizontal = line(0.0);
+        let cell = candidate_cell(diagonal.clone(), horizontal.clone(), 0, 0.0).unwrap();
+        let certificate = cell.certify_unique_root().unwrap();
+        assert_eq!(certificate.first_range(), ParamRange::new(0.0, 1.0));
+        assert_eq!(certificate.second_range(), ParamRange::new(0.0, 1.0));
+        assert_eq!(certificate.projection_plane(), CurvePairProjectionPlane::Xy);
+        assert!(certificate.determinant_lower_bound() > 0.0);
+
+        let swapped = candidate_cell(horizontal.clone(), diagonal, 0, 0.0)
+            .unwrap()
+            .certify_unique_root()
+            .unwrap();
+        assert_eq!(swapped.projection_plane(), CurvePairProjectionPlane::Xy);
+        assert!(swapped.determinant_lower_bound() > 0.0);
+
+        for parameter_scale in [1.0e-13, 1.0, 1.0e13] {
+            for model_scale in [1.0e-6, 1.0, 1.0e2] {
+                let diagonal = NurbsCurve::new(
+                    1,
+                    vec![0.0, 0.0, parameter_scale, parameter_scale],
+                    vec![
+                        Point3::new(7.0 - model_scale, -3.0 - model_scale, 2.0),
+                        Point3::new(7.0 + model_scale, -3.0 + model_scale, 2.0),
+                    ],
+                    None,
+                )
+                .unwrap();
+                let horizontal = NurbsCurve::new(
+                    1,
+                    vec![0.0, 0.0, parameter_scale, parameter_scale],
+                    vec![
+                        Point3::new(7.0 - 2.0 * model_scale, -3.0, 2.0),
+                        Point3::new(7.0 + 2.0 * model_scale, -3.0, 2.0),
+                    ],
+                    None,
+                )
+                .unwrap();
+                let certificate = candidate_cell(diagonal, horizontal, 0, 0.0)
+                    .unwrap()
+                    .certify_unique_root()
+                    .unwrap();
+                assert_eq!(
+                    certificate.first_range(),
+                    ParamRange::new(0.0, parameter_scale)
+                );
+                assert!(certificate.determinant_lower_bound() > 0.0);
+            }
+        }
+
+        let rational = segment(
+            Point3::new(-1.0, -1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Some(vec![1.0, 1.5]),
+        );
+        assert!(
+            candidate_cell(rational, horizontal.clone(), 0, 0.0)
+                .unwrap()
+                .certify_unique_root()
+                .is_none()
+        );
+
+        let two_roots = candidate_cell(arch(), line(0.5), 0, 0.0).unwrap();
+        assert!(two_roots.certify_unique_root().is_none());
+
+        let spatial = segment(
+            Point3::new(0.0, -1.0, -1.0),
+            Point3::new(0.0, 1.0, 1.0),
+            None,
+        );
+        assert!(
+            candidate_cell(horizontal, spatial, 0, 0.0)
+                .unwrap()
+                .certify_unique_root()
+                .is_none()
+        );
     }
 
     #[test]
