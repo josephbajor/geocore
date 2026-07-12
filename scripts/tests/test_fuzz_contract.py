@@ -45,16 +45,7 @@ class FuzzContractTests(unittest.TestCase):
         self.assertEqual(target["max_import_records"], 4096)
         self.assertIn("pub const MAX_PAYLOAD_BYTES: usize = 256 * 1024;", rust)
         self.assertIn("pub const MAX_IMPORT_RECORDS: usize = 4_096;", rust)
-        command = (
-            "cargo fuzz run xt_read --features fuzzing corpus/xt_read -- "
-            f'-seed={target["smoke_seed"]} '
-            f'-max_len={target["selector_bytes"] + target["max_payload_bytes"]} '
-            f'-timeout={target["timeout_seconds"]} '
-            f'-rss_limit_mb={target["rss_limit_mb"]} '
-            f'-max_total_time={target["smoke_seconds"]} '
-            "-artifact_prefix=artifacts/xt_read/"
-        )
-        self.assertIn(command, readme)
+        self.assertIn("python3 scripts/fuzz_smoke.py xt_read", readme)
 
     def test_checked_corpus_is_exactly_reproducible(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -154,17 +145,7 @@ class FuzzContractTests(unittest.TestCase):
         )
         self.assertEqual(target["max_isolation_depth"], 2)
         self.assertEqual(target["max_isolation_candidate_cells"], 32)
-        command = (
-            "cargo fuzz run nurbs_constructors --features fuzzing "
-            "corpus/nurbs_constructors -- "
-            f'-seed={target["smoke_seed"]} '
-            f'-max_len={target["max_input_bytes"]} '
-            f'-timeout={target["timeout_seconds"]} '
-            f'-rss_limit_mb={target["rss_limit_mb"]} '
-            f'-max_total_time={target["smoke_seconds"]} '
-            "-artifact_prefix=artifacts/nurbs_constructors/"
-        )
-        self.assertIn(command, readme)
+        self.assertIn("python3 scripts/fuzz_smoke.py nurbs_constructors", readme)
 
     def test_nurbs_corpus_is_exactly_reproducible_and_bounded(self):
         with tempfile.TemporaryDirectory() as directory:

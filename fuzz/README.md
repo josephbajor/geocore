@@ -34,13 +34,17 @@ python3 -m unittest scripts.tests.test_fuzz_contract -v
 cargo test --manifest-path fuzz/Cargo.toml --locked --no-default-features
 ```
 
-Install and run the exact fuzz runner with the pinned nightly:
+Install the exact fuzz runner with the pinned nightly, then use the shared
+bounded runner. It copies the checked seeds into a fresh disposable corpus and
+enforces the same 45-second process deadline as CI, because libFuzzer may grow
+its input corpus or fail to honor its own 20-second exploration deadline. The
+runner targets the repository's supported POSIX development/CI hosts (Linux and
+macOS) so it can terminate the complete cargo-fuzz process group.
 
 ```sh
 cargo install cargo-fuzz --version 0.13.2 --locked
-cd fuzz
-cargo fuzz run xt_read --features fuzzing corpus/xt_read -- -seed=5860406134146269190 -max_len=262145 -timeout=5 -rss_limit_mb=2048 -max_total_time=20 -artifact_prefix=artifacts/xt_read/
-cargo fuzz run nurbs_constructors --features fuzzing corpus/nurbs_constructors -- -seed=5860395143475101702 -max_len=4096 -timeout=5 -rss_limit_mb=2048 -max_total_time=20 -artifact_prefix=artifacts/nurbs_constructors/
+python3 scripts/fuzz_smoke.py xt_read
+python3 scripts/fuzz_smoke.py nurbs_constructors
 ```
 
 The 20-second duration is a smoke budget, not a correctness threshold. Generated

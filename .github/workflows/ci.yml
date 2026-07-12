@@ -38,3 +38,130 @@ jobs:
       - name: Test (release)
         # Optimized codegen must not change numeric results either.
         run: cargo test --workspace --release
+
+  quality-contracts:
+    name: Python and oracle contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+      - name: Validate Python tooling contracts
+        run: |
+          python3 -m unittest discover -s scripts/tests -v
+          python3 scripts/benchmark_baseline.py smoke
+          python3 scripts/benchmark_baseline.py validate
+      - name: Regenerate the exact oracle bundle
+        run: cargo run --locked --release -p kxt --bin xt_oracle -- export "$RUNNER_TEMP/oracle-outbox"
+      - name: Verify licensed-host certification freshness
+        run: python3 scripts/oracle_loop.py certification-check --outbox "$RUNNER_TEMP/oracle-outbox"
+
+  benchmark-smoke:
+    name: Benchmark contracts and bounded smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+      - name: Validate excluded benchmark package and lock
+        run: |
+          cargo metadata --manifest-path benches/Cargo.toml --locked --format-version 1 --no-deps > /dev/null
+          cargo test --manifest-path benches/Cargo.toml --locked
+      - name: Compile every benchmark target
+        run: cargo bench --manifest-path benches/Cargo.toml --locked --no-run
+      - name: Smoke the smallest fixture only
+        env:
+          KERNEL_BENCH_SMOKE: "1"
+        run: cargo bench --manifest-path benches/Cargo.toml --locked --bench benchmark_contract -- harness/contract/tiny-v1/64/default-v1
+      - name: Upload advisory smoke samples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-smoke-${{ github.sha }}
+          path: benches/target/criterion/harness_contract_tiny-v1_64/default-v1/new/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  fuzz-smoke:
+    name: Bounded fuzz smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RUSTUP_TOOLCHAIN: nightly-2026-01-22
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install exact fuzz toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-01-22
+      - name: Install exact fuzz runner
+        run: |
+          cargo install cargo-fuzz --version 0.13.2 --locked --root "$RUNNER_TEMP/cargo-fuzz"
+          echo "$RUNNER_TEMP/cargo-fuzz/bin" >> "$GITHUB_PATH"
+      - name: Verify fuzz tool versions
+        working-directory: fuzz
+        run: |
+          rustc --version --verbose
+          test "$(cargo fuzz --version)" = "cargo-fuzz 0.13.2"
+      - name: Validate deterministic fuzz contract
+        run: python3 -m unittest scripts.tests.test_fuzz_contract -v
+      - name: Validate locked fuzz package and stage writable corpora
+        working-directory: fuzz
+        run: |
+          cargo fetch --locked
+          cargo metadata --locked --offline --format-version 1 > /dev/null
+          cargo test --locked --offline --no-default-features
+          CARGO_NET_OFFLINE=true cargo fuzz build xt_read --features fuzzing
+          CARGO_NET_OFFLINE=true cargo fuzz build nurbs_constructors --features fuzzing
+          sha256sum Cargo.toml Cargo.lock contract.json > "$RUNNER_TEMP/fuzz-contract.sha256"
+          mkdir -p artifacts/xt_read artifacts/nurbs_constructors
+      - id: fuzz_xt_read
+        name: Fuzz X_T read contract (20 seconds)
+        continue-on-error: true
+        env:
+          CARGO_NET_OFFLINE: "true"
+        run: python3 scripts/fuzz_smoke.py xt_read
+      - id: fuzz_nurbs
+        name: Fuzz NURBS constructors contract (20 seconds)
+        continue-on-error: true
+        env:
+          CARGO_NET_OFFLINE: "true"
+        run: python3 scripts/fuzz_smoke.py nurbs_constructors
+      - name: Verify fuzz contract files stayed locked
+        if: always()
+        working-directory: fuzz
+        run: |
+          sha256sum --check "$RUNNER_TEMP/fuzz-contract.sha256"
+          git diff --exit-code -- Cargo.toml Cargo.lock contract.json corpus
+      - name: Upload X_T failure artifact
+        if: ${{ always() && steps.fuzz_xt_read.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-xt-read-${{ github.run_id }}
+          path: fuzz/artifacts/xt_read/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload NURBS failure artifact
+        if: ${{ always() && steps.fuzz_nurbs.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-nurbs-constructors-${{ github.run_id }}
+          path: fuzz/artifacts/nurbs_constructors/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Enforce fuzz outcomes
+        if: always()
+        env:
+          XT_OUTCOME: ${{ steps.fuzz_xt_read.outcome }}
+          NURBS_OUTCOME: ${{ steps.fuzz_nurbs.outcome }}
+        run: |
+          if [ "$XT_OUTCOME" != success ] || [ "$NURBS_OUTCOME" != success ]; then
+            echo "fuzz-smoke failed: xt_read=$XT_OUTCOME nurbs_constructors=$NURBS_OUTCOME"
+            exit 1
+          fi

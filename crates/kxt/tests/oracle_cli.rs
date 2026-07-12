@@ -41,6 +41,7 @@ const EXPECTED_FILES: &[&str] = &[
     "wire_polyline_open.x_t",
     "wire_polyline_closed.x_t",
     "acorn_point.x_t",
+    "offset_plane.x_t",
 ];
 
 #[test]
@@ -86,6 +87,21 @@ fn export_is_complete_deterministic_and_self_importable() {
         let faults = ktopo::check::check_body(&store, recon.bodies[0]).expect("check");
         assert!(faults.is_empty(), "{name}: checker faults: {faults:?}");
     }
+}
+
+#[test]
+fn export_rejects_stale_transport_entries() {
+    let dir = bundle_dir("oracle_bundle_stale_entry");
+    std::fs::create_dir_all(&dir).expect("create bundle dir");
+    std::fs::write(dir.join("obsolete.x_t"), b"stale").expect("write stale entry");
+    let output = Command::new(env!("CARGO_BIN_EXE_xt_oracle"))
+        .arg("export")
+        .arg(&dir)
+        .output()
+        .expect("running xt_oracle export");
+    assert!(!output.status.success(), "stale entry must fail export");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("stale or unexpected entries"), "{stderr}");
 }
 
 #[test]

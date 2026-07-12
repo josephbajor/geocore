@@ -48,7 +48,14 @@ def writer_identity():
     return revision or "-"
 
 
-def results_row(result, date, revision, reexport_ok="-", compare_ok="-"):
+def results_row(
+    result,
+    date,
+    revision,
+    reexport_ok="-",
+    compare_ok="-",
+    bundle_identity=None,
+):
     """Format one docs/oracle-results.tsv row for a fixture verdict."""
     note = "writer={}".format(revision)
     if result.accepted:
@@ -57,6 +64,8 @@ def results_row(result, date, revision, reexport_ok="-", compare_ok="-"):
         note += "; {}".format(result.reason or "rejected without a reason")
         if result.classification:
             note += " [{}]".format(result.classification)
+    if bundle_identity:
+        note += "; bundle={}".format(bundle_identity)
     return "\t".join(
         [
             date,
@@ -127,7 +136,7 @@ def command_init(_args):
     return 0
 
 
-def run_paths(args, paths):
+def run_paths(args, paths, bundle_identity=None):
     """Upload each path, optionally re-export/compare, and report."""
     transport = ApiKeyTransport.from_environment()
     config = load_config(ROOT / CONFIG_PATH)
@@ -161,7 +170,16 @@ def run_paths(args, paths):
                 print("  re-export of {} failed: {}".format(result.name, error))
                 reexport_ok = "error"
         print(verdict_line(result))
-        rows.append(results_row(result, date, revision, reexport_ok, compare_ok))
+        rows.append(
+            results_row(
+                result,
+                date,
+                revision,
+                reexport_ok,
+                compare_ok,
+                bundle_identity=bundle_identity,
+            )
+        )
         imports_accepted += int(result.accepted)
         compares_clean += int(compare_ok == "yes")
         if not result.accepted or compare_ok == "no":
@@ -181,16 +199,58 @@ def command_run(args):
     return run_paths(args, [Path(p) for p in args.files])
 
 
+def bundle_paths(outbox):
+    """Return the exact manifest-declared bundle or fail on transport residue."""
+    outbox = Path(outbox)
+    manifest_path = outbox / "manifest.tsv"
+    try:
+        lines = manifest_path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        raise OracleError("missing bundle manifest: {}".format(manifest_path))
+    if not lines or not lines[0].startswith("file\tbody_kind\t"):
+        raise OracleError("invalid bundle manifest header: {}".format(manifest_path))
+    names = []
+    for line in lines[1:]:
+        name = line.partition("\t")[0]
+        if not name.endswith(".x_t") or Path(name).name != name or name in names:
+            raise OracleError("invalid or duplicate bundle fixture name: {!r}".format(name))
+        names.append(name)
+    if not names:
+        raise OracleError("bundle manifest contains no fixtures: {}".format(manifest_path))
+    paths = [outbox / name for name in names]
+    missing = [path.name for path in paths if not path.is_file()]
+    if missing:
+        raise OracleError("bundle is missing manifest fixtures: {}".format(", ".join(missing)))
+    actual = {path.name for path in outbox.glob("*.x_t")}
+    expected = set(names)
+    if actual != expected:
+        raise OracleError(
+            "bundle contains stale or unexpected fixtures: expected {}, found {}".format(
+                sorted(expected), sorted(actual)
+            )
+        )
+    return paths
+
+
 def command_bundle(args):
     """Upload every fixture in the generated outbox bundle."""
-    outbox = Path(args.outbox)
-    paths = sorted(outbox.glob("*.x_t"))
-    if not paths:
-        raise OracleError(
-            "no .x_t files in {}; generate the bundle first: "
-            "cargo run --release -p kxt --bin xt_oracle -- export oracle/outbox".format(outbox)
-        )
-    return run_paths(args, paths)
+    from .certification import observed_identity
+
+    paths = bundle_paths(args.outbox)
+    identity = observed_identity(args.outbox)["bundle_sha256"]
+    return run_paths(args, paths, bundle_identity=identity)
+
+
+def command_certification_check(args):
+    """Verify the committed licensed-host evidence against current bytes."""
+    from .certification import check_certification
+
+    check_certification(
+        args.outbox,
+        record_path=args.record,
+        require_current=args.require_current,
+    )
+    return 0
 
 
 def build_parser():
@@ -226,6 +286,17 @@ def build_parser():
     bundle.add_argument("--outbox", default=str(DEFAULT_OUTBOX))
     add_loop_arguments(bundle)
     bundle.set_defaults(func=command_bundle)
+
+    certification = commands.add_parser(
+        "certification-check",
+        help="compare current writer/bundle bytes with committed host evidence",
+    )
+    certification.add_argument("--outbox", default=str(DEFAULT_OUTBOX))
+    certification.add_argument(
+        "--record", default=str(ROOT / "docs" / "oracle-certification.json")
+    )
+    certification.add_argument("--require-current", action="store_true")
+    certification.set_defaults(func=command_certification_check)
 
     return parser
 

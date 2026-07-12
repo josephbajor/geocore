@@ -27,7 +27,7 @@ impl XtFixtureKind {
     pub const fn version(self) -> &'static str {
         match self {
             Self::BlockText => "xt-io.block-text.v1",
-            Self::OffsetPlane => "xt-io.offset-plane.v1",
+            Self::OffsetPlane => "xt-io.offset-plane.v2",
         }
     }
 }
@@ -116,40 +116,40 @@ pub const CASES: [XtIoCase; 8] = [
         0x6981_e9fa_592d_6834,
     ),
     case(
-        "interchange/xt-parse/offset-plane-v1/2952/default-v1",
+        "interchange/xt-parse/offset-plane-v2/2974/default-v1",
         XtFixtureKind::OffsetPlane,
         XtPhase::ParseRecords,
-        2_952,
-        71,
+        2_974,
+        72,
         0,
-        0x4b7c_ef50_0e23_1b6d,
+        0x797e_d4e3_4f77_e356,
     ),
     case(
-        "interchange/xt-read/offset-plane-v1/2952/default-v1",
+        "interchange/xt-read/offset-plane-v2/2974/default-v1",
         XtFixtureKind::OffsetPlane,
         XtPhase::FullRead,
-        2_952,
-        71,
+        2_974,
+        72,
         0,
-        0x6d13_ea4c_5241_56a7,
+        0xf5dd_feb8_88e4_e0ed,
     ),
     case(
-        "interchange/xt-write/offset-plane-v1/2952/default-v1",
+        "interchange/xt-write/offset-plane-v2/2974/default-v1",
         XtFixtureKind::OffsetPlane,
         XtPhase::WriteText,
-        2_952,
-        71,
-        2_952,
-        0xcc20_8c3a_832a_c8a9,
+        2_974,
+        72,
+        2_974,
+        0x0c16_f8f8_c1f5_b8f5,
     ),
     case(
-        "interchange/xt-roundtrip/offset-plane-v1/2952/default-v1",
+        "interchange/xt-roundtrip/offset-plane-v2/2974/default-v1",
         XtFixtureKind::OffsetPlane,
         XtPhase::RoundTrip,
-        2_952,
-        71,
-        2_952,
-        0x546d_63d8_f344_75d1,
+        2_974,
+        72,
+        2_974,
+        0x3d73_d288_9330_044b,
     ),
 ];
 

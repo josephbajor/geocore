@@ -1456,14 +1456,14 @@
       }
     },
     {
-      "path": "interchange/xt-parse/offset-plane-v1/2952/default-v1",
+      "path": "interchange/xt-parse/offset-plane-v2/2974/default-v1",
       "benchmark_target": "xt_io",
-      "fixture_version": "xt-io.offset-plane.v1",
+      "fixture_version": "xt-io.offset-plane.v2",
       "deterministic_seed": 5860406134146269189,
       "size_parameters": {
-        "elements": 2952,
-        "input_bytes": 2952,
-        "input_records": 71
+        "elements": 2974,
+        "input_bytes": 2974,
+        "input_records": 72
       },
       "tolerances": {},
       "policy_values": {
@@ -1473,8 +1473,8 @@
         "schema_base": 13006
       },
       "expected_result_counters": {
-        "input_bytes": 2952,
-        "input_records": 71,
+        "input_bytes": 2974,
+        "input_records": 72,
         "input_classes": 21,
         "input_record_classes": {
           "12": 1,
@@ -1497,11 +1497,11 @@
           "135": 4,
           "136": 4,
           "137": 4,
-          "141": 8
+          "141": 9
         },
-        "input_class_digest": "f73f7d880fa6441c",
-        "input_parse_digest": "fe9b009e7cca1450",
-        "input_byte_digest": "47686d5ec37c5507",
+        "input_class_digest": "163a44911a958e3d",
+        "input_parse_digest": "5d6dd7b8b4463790",
+        "input_byte_digest": "2c31f313a44c8f8f",
         "output_bytes": 0,
         "output_records": 0,
         "output_classes": 0,
@@ -1531,18 +1531,18 @@
         "surfaces": 0,
         "pcurves": 0,
         "semantic_digest": "0000000000000000",
-        "output_digest": "4b7cef500e231b6d"
+        "output_digest": "797ed4e34f77e356"
       }
     },
     {
-      "path": "interchange/xt-read/offset-plane-v1/2952/default-v1",
+      "path": "interchange/xt-read/offset-plane-v2/2974/default-v1",
       "benchmark_target": "xt_io",
-      "fixture_version": "xt-io.offset-plane.v1",
+      "fixture_version": "xt-io.offset-plane.v2",
       "deterministic_seed": 5860406134146269189,
       "size_parameters": {
-        "elements": 2952,
-        "input_bytes": 2952,
-        "input_records": 71
+        "elements": 2974,
+        "input_bytes": 2974,
+        "input_records": 72
       },
       "tolerances": {},
       "policy_values": {
@@ -1552,8 +1552,8 @@
         "schema_base": 13006
       },
       "expected_result_counters": {
-        "input_bytes": 2952,
-        "input_records": 71,
+        "input_bytes": 2974,
+        "input_records": 72,
         "input_classes": 21,
         "input_record_classes": {
           "12": 1,
@@ -1576,11 +1576,11 @@
           "135": 4,
           "136": 4,
           "137": 4,
-          "141": 8
+          "141": 9
         },
-        "input_class_digest": "f73f7d880fa6441c",
-        "input_parse_digest": "fe9b009e7cca1450",
-        "input_byte_digest": "47686d5ec37c5507",
+        "input_class_digest": "163a44911a958e3d",
+        "input_parse_digest": "5d6dd7b8b4463790",
+        "input_byte_digest": "2c31f313a44c8f8f",
         "output_bytes": 0,
         "output_records": 0,
         "output_classes": 0,
@@ -1591,7 +1591,7 @@
         "phase_imports": 1,
         "phase_exports": 0,
         "journal_mutations": 31,
-        "skipped_records": 8,
+        "skipped_records": 9,
         "unsupported_capabilities": 0,
         "checker_ran": true,
         "checker_clean": true,
@@ -1610,18 +1610,18 @@
         "surfaces": 2,
         "pcurves": 4,
         "semantic_digest": "b2b7057c049f9813",
-        "output_digest": "6d13ea4c524156a7"
+        "output_digest": "f5ddfeb888e4e0ed"
       }
     },
     {
-      "path": "interchange/xt-write/offset-plane-v1/2952/default-v1",
+      "path": "interchange/xt-write/offset-plane-v2/2974/default-v1",
       "benchmark_target": "xt_io",
-      "fixture_version": "xt-io.offset-plane.v1",
+      "fixture_version": "xt-io.offset-plane.v2",
       "deterministic_seed": 5860406134146269189,
       "size_parameters": {
-        "elements": 2952,
-        "input_bytes": 2952,
-        "input_records": 71
+        "elements": 2974,
+        "input_bytes": 2974,
+        "input_records": 72
       },
       "tolerances": {},
       "policy_values": {
@@ -1631,8 +1631,8 @@
         "schema_base": 13006
       },
       "expected_result_counters": {
-        "input_bytes": 2952,
-        "input_records": 71,
+        "input_bytes": 2974,
+        "input_records": 72,
         "input_classes": 21,
         "input_record_classes": {
           "12": 1,
@@ -1655,13 +1655,13 @@
           "135": 4,
           "136": 4,
           "137": 4,
-          "141": 8
+          "141": 9
         },
-        "input_class_digest": "f73f7d880fa6441c",
-        "input_parse_digest": "fe9b009e7cca1450",
-        "input_byte_digest": "47686d5ec37c5507",
-        "output_bytes": 2952,
-        "output_records": 71,
+        "input_class_digest": "163a44911a958e3d",
+        "input_parse_digest": "5d6dd7b8b4463790",
+        "input_byte_digest": "2c31f313a44c8f8f",
+        "output_bytes": 2974,
+        "output_records": 72,
         "output_classes": 21,
         "output_record_classes": {
           "12": 1,
@@ -1684,11 +1684,11 @@
           "135": 4,
           "136": 4,
           "137": 4,
-          "141": 8
+          "141": 9
         },
-        "output_class_digest": "f73f7d880fa6441c",
-        "output_parse_digest": "fe9b009e7cca1450",
-        "output_byte_digest": "47686d5ec37c5507",
+        "output_class_digest": "163a44911a958e3d",
+        "output_parse_digest": "5d6dd7b8b4463790",
+        "output_byte_digest": "2c31f313a44c8f8f",
         "phase_imports": 0,
         "phase_exports": 1,
         "journal_mutations": 0,
@@ -1711,18 +1711,18 @@
         "surfaces": 2,
         "pcurves": 4,
         "semantic_digest": "b2b7057c049f9813",
-        "output_digest": "cc208c3a832ac8a9"
+        "output_digest": "0c16f8f8c1f5b8f5"
       }
     },
     {
-      "path": "interchange/xt-roundtrip/offset-plane-v1/2952/default-v1",
+      "path": "interchange/xt-roundtrip/offset-plane-v2/2974/default-v1",
       "benchmark_target": "xt_io",
-      "fixture_version": "xt-io.offset-plane.v1",
+      "fixture_version": "xt-io.offset-plane.v2",
       "deterministic_seed": 5860406134146269189,
       "size_parameters": {
-        "elements": 2952,
-        "input_bytes": 2952,
-        "input_records": 71
+        "elements": 2974,
+        "input_bytes": 2974,
+        "input_records": 72
       },
       "tolerances": {},
       "policy_values": {
@@ -1732,8 +1732,8 @@
         "schema_base": 13006
       },
       "expected_result_counters": {
-        "input_bytes": 2952,
-        "input_records": 71,
+        "input_bytes": 2974,
+        "input_records": 72,
         "input_classes": 21,
         "input_record_classes": {
           "12": 1,
@@ -1756,13 +1756,13 @@
           "135": 4,
           "136": 4,
           "137": 4,
-          "141": 8
+          "141": 9
         },
-        "input_class_digest": "f73f7d880fa6441c",
-        "input_parse_digest": "fe9b009e7cca1450",
-        "input_byte_digest": "47686d5ec37c5507",
-        "output_bytes": 2952,
-        "output_records": 71,
+        "input_class_digest": "163a44911a958e3d",
+        "input_parse_digest": "5d6dd7b8b4463790",
+        "input_byte_digest": "2c31f313a44c8f8f",
+        "output_bytes": 2974,
+        "output_records": 72,
         "output_classes": 21,
         "output_record_classes": {
           "12": 1,
@@ -1785,15 +1785,15 @@
           "135": 4,
           "136": 4,
           "137": 4,
-          "141": 8
+          "141": 9
         },
-        "output_class_digest": "f73f7d880fa6441c",
-        "output_parse_digest": "fe9b009e7cca1450",
-        "output_byte_digest": "47686d5ec37c5507",
+        "output_class_digest": "163a44911a958e3d",
+        "output_parse_digest": "5d6dd7b8b4463790",
+        "output_byte_digest": "2c31f313a44c8f8f",
         "phase_imports": 2,
         "phase_exports": 1,
         "journal_mutations": 62,
-        "skipped_records": 16,
+        "skipped_records": 18,
         "unsupported_capabilities": 0,
         "checker_ran": true,
         "checker_clean": true,
@@ -1812,7 +1812,7 @@
         "surfaces": 2,
         "pcurves": 4,
         "semantic_digest": "b2b7057c049f9813",
-        "output_digest": "546d63d8f34475d1"
+        "output_digest": "3d73d2889330044b"
       }
     }
   ]

@@ -639,14 +639,12 @@ impl Plan {
                 adjacent(&self.surfaces, position, 1),
                 adjacent(&self.surfaces, position, -1),
             );
-            common[5] = ptr(
-                offset_basis_owners
-                    .iter()
-                    .find(|&&(basis, _, _)| basis == surface_id)
-                    .map(|&(_, owner, _)| owner)
-                    .or_else(|| self.surface_geometric_owner(store, surface_id))
-                    .unwrap_or(0),
-            );
+            common[5] = ptr(offset_basis_owners
+                .iter()
+                .find(|&&(basis, _, _)| basis == surface_id)
+                .map(|&(_, owner, _)| owner)
+                .or_else(|| self.surface_geometric_owner(store, surface_id))
+                .unwrap_or(0));
             let aux = if matches!(store.get(surface_id)?, SurfaceGeom::Nurbs(_)) {
                 let ids = SurfaceAuxIds::allocate(&mut next_aux);
                 push_surface_aux_nodes(&mut out, store.get(surface_id)?, ids)?;

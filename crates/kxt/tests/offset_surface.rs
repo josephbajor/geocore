@@ -156,7 +156,10 @@ fn assert_fin_pcurves_agree_with_edges(store: &Store, body: ktopo::entity::BodyI
 fn regenerate_offset_plane_fixture() {
     let (store, body, _, _) = offset_sheet();
     std::fs::write(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/offset_plane.x_t"),
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/offset_plane.x_t"
+        ),
         export_text(&store, body).unwrap(),
     )
     .unwrap();

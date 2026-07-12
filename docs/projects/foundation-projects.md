@@ -25,13 +25,13 @@ section and link the reason from the affected project file in the same change.
 | Project | Current state |
 | --- | --- |
 | F0 | Implemented: curve/curve operand swapping preserves completion evidence and canonical order. |
-| F1 | G1-G4a plus the F2 graph-budget adapter are implemented: `kgraph` and `ktopo::Store` own one transactional geometry graph; exact offsets evaluate through accepted/attempted node/depth accounting, check, tessellate, and round-trip through the declared X_T subset without basis duplication. Broader G4 corpus coverage, current writer host recertification, and G5 remain. |
+| F1 | G1-G4a plus the F2 graph-budget adapter are implemented: `kgraph` and `ktopo::Store` own one transactional geometry graph; exact offsets evaluate through accepted/attempted node/depth accounting, check, tessellate, and round-trip through the declared X_T subset without basis duplication. The 14-file writer bundle is host-recertified and machine-fingerprinted; broader G4 corpus coverage and G5 remain. |
 | F2 | Stage 1, two Stage 2 pilots, three bounded Stage 3 pilots, and the first Stage 4 migration are implemented: scoped NURBS proof/march, Full face-domain checking, face tessellation, and NURBS/NURBS Newton conditioning/progress/gradient stationarity use shared policy/report vocabulary with compatibility, scale, and swap tests. Minimizer/contact-classification/legacy-slack guards, contextual projection, body tessellation, and broader migrations remain. |
 | F3 | Two slices implemented: centralized class dispatch plus shared periodic/range and first-wins candidate emission migrated through line/circle and plane/sphere. Broader driver migration and generic fallback remain. |
 | F4 | Phase 1, representative Phase 2 slices, and two Phase 3 pilots are implemented: graph evaluation owns stable classification, and one surface-intersection family retains ordered structured incomplete evidence through limits, numeric stops, canonicalization, and swapping. Broader result-family and legacy migrations remain. |
 | F5 | K1, the K2 block/check/query pilot, K3 identity/read/surface-evaluation slices, and the first K4 interchange slice are implemented: the `kernel` facade owns lifecycle, opaque IDs, classified sources, one-scope outcomes, safe checker subjects, opaque journals, child-accounted procedural evaluation, and atomic typed X_T import/export without lower-layer leakage. Graph-aware intersection, semantic edit/journal iteration, and K5 remain. |
 | F6 | First slice implemented: shared surface inversion, chart normalization, and distance services consumed by checker and tessellation. Module splits remain. |
-| F7 | Q0-Q2 plus first Q3-Q6 slices are implemented: reproducible benchmarks cover topology, analytic body tessellation, NURBS isolation, and truthful X_T I/O; the isolated fuzz workspace now has bounded `xt_read` and `nurbs_constructors` contracts, stable error/invariant checks, atomicity, and licensed/generated seeds. Q2a, Q3/Q4/Q5 expansion, pinned-nightly smokes, more Q6 targets/corpora, and Q7-Q8 remain. |
+| F7 | Q0-Q2, Q8, and the first Q3-Q6 slices are implemented: CI now enforces Python/oracle freshness, compiles and smoke-runs the excluded benchmark package, and runs both pinned fuzz targets within fixed limits. The offset-writer change that root CI missed is captured as the first Q8 registry regression. Q2a, Q3/Q4/Q5 expansion, more Q6 targets/corpora, and Q7 remain. |
 
 ## Current direction and handoff order
 
@@ -39,45 +39,37 @@ The foundation has enough vertical proof. The current phase prioritizes
 convergence, adoption, and continuous enforcement over adding more parallel
 surface area:
 
-### Immediate external-evidence lane
+### External-evidence lane — current
 
-Regenerate the oracle bundle and run all 13 current authoring fixtures plus
-`crates/kxt/tests/fixtures/offset_plane.x_t` through Onshape now. This lane can
-run in parallel with the code queue, but current writer-host conformance claims
-are blocked until it completes. The last licensed-host evidence predates graph
-migration, offset emission, and facade interchange; the offset writer path has
-only self-round-trip evidence. Follow `docs/oracle-loop.md`, append rather than
-rewrite `docs/oracle-results.tsv`, and record the writer revision and bundle
-identity with the new results.
+The exact 14-file bundle, including `offset_plane.x_t`, is current against
+Onshape. `docs/oracle-certification.json` fingerprints the certified writer
+inputs and every host payload; Q8 regenerates the bundle and rejects a falsely
+current record. Host findings remain ratcheted in `docs/oracle-results.tsv`.
 
 ### Ordered code queue
 
-1. **Activate F7/Q8 first.** Run the existing benchmark contracts, fuzz
-   contracts, and Python contract tests in bounded CI. Add the non-host oracle
-   staleness check described by `docs/oracle-loop.md`; host access remains a
-   human workflow, but stale certification must be visible automatically.
-2. **Pull F5/K5 adoption forward.** Migrate one real tool/example to depend only
+1. **Pull F5/K5 adoption forward.** Migrate one real tool/example to depend only
    on `kernel`, audit the resulting accessor and packaging gaps, and keep the
    public facade otherwise stable during that pass. No additional facade family
    lands before this consumer has exercised the existing lifecycle.
-3. **Finish F2 contract consolidation.** Land one `kcore` operation-family
+2. **Finish F2 contract consolidation.** Land one `kcore` operation-family
    profile
    composition rule: family defaults fill missing stages, session entries
    override those defaults, and explicit request overrides are the only allowed
    later override.
    Finish the NURBS contact-classification/minimizer scale guards that bound the
    future generic intersection fallback.
-4. **Contextualize and ratchet the remaining foundation paths.** Migrate body
+3. **Contextualize and ratchet the remaining foundation paths.** Migrate body
    tessellation,
    projection, and X_T reconstruction's nested graph evaluation onto shared
    scopes and child reservations before expanding their facade APIs. As each
    contextual path proves legacy equivalence, forbid new crate-internal calls
    to its legacy wrapper; public deprecation waits for the K5 consumer audit.
-5. **Measure graph construction before large imports.** After Q8, land the Q2a
+4. **Measure graph construction before large imports.** Land the Q2a
    graph-build/reverse-dependency ladder before production-scale imports or a
    reverse-index representation change. Optimize the current deterministic
    linear index only against that measured baseline.
-6. **Resume algorithm/API expansion behind those gates.** F3's generic fallback
+5. **Resume algorithm/API expansion behind those gates.** F3's generic fallback
    and facade graph-aware intersection follow the F2 scale/context work;
    semantic K4 edit transactions follow the K5 adoption pass. F6 splits and F4
    legacy cleanup land only with an owner-level behavioral migration.

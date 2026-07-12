@@ -1,6 +1,6 @@
 # F7 quality, fuzzing, and performance harnesses
 
-Status: Q0-Q2 and the first Q3-Q6 foundation slices implemented; Q8 bounded CI activation is next
+Status: Q0-Q2, Q8, and the first Q3-Q6 foundation slices implemented; Q2a graph-build baseline is next
 
 ## Outcome
 
@@ -440,12 +440,12 @@ regression remains portable.
 
 ## Stage Q8 — bounded CI jobs
 
-Status: next F7 milestone. Existing benchmark targets and the two current fuzz
-targets are sufficient to activate the bounded jobs; more matrices and targets
-do not block this stage.
+Status: implemented. Existing benchmark targets and the two current fuzz
+targets run in bounded Linux jobs; more matrices and targets remain behind the
+post-Q8 landing order.
 
-Add two bounded jobs for the existing Q1 and Q6 assets. Also make the Python
-contract surface load-bearing: CI runs
+CI has three bounded jobs/surfaces for the existing Q1 and Q6 assets. The
+Python contract surface is load-bearing: CI runs
 `python -m unittest discover -s scripts/tests` and validates the excluded
 `benches/` and `fuzz/` manifests/locks rather than assuming root-workspace CI
 covers them.
@@ -454,8 +454,8 @@ covers them.
 
 - pinned workspace toolchain;
 - Linux only;
-- build every benchmark and run one warm-up/one measured iteration of the
-  smallest fixture;
+- build every benchmark and run the smallest fixture with Criterion's bounded
+  100 ms warm-up, 10-sample, 200 ms measurement smoke;
 - verify invariants and metadata schema;
 - hard job timeout of 10 minutes; and
 - upload results for inspection without enforcing timing thresholds.
@@ -467,6 +467,8 @@ covers them.
 - deterministic seed corpus plus a fixed seed;
 - each target gets a 20-second exploration budget, 256 KiB maximum input, and
   explicit RSS/artifact limits;
+- each already-built target also runs beneath a 45-second OS deadline so a
+  runner-level timeout defect cannot consume the job or skip its sibling;
 - hard job timeout of 10 minutes; and
 - crashes/timeouts upload minimized-or-raw artifacts and fail the job.
 
@@ -474,32 +476,28 @@ A scheduled job may use longer budgets, rotating deterministic seeds, and a
 corpus cache. It must remain bounded and must not silently update checked-in
 corpora or baselines.
 
-Add a non-host oracle-certification status check to the tooling contracts. It
-compares the current writer/bundle identity with the last committed licensed-
-host identity. CI must reject a falsely “current” status, report an explicitly
+CI includes a non-host oracle-certification status check in the tooling
+contracts. It compares the current writer/bundle identity with the last
+committed licensed-host identity. CI must reject a falsely “current” status, report an explicitly
 acknowledged stale status prominently, and reserve a failing stale-evidence
 gate for writer-conformance/release claims. It does not pretend to perform the
 licensed-host validation described in `docs/oracle-loop.md`.
 
 ## Revised landing sequence from the current state
 
-1. **Q8:** activate bounded benchmark and fuzz smoke jobs for the existing
-   targets, locked corpora, fixed seeds, Python contract tests, excluded-
-   workspace validation, and oracle-staleness reporting.
-2. **Q2a:** capture graph construction/reverse-dependency scale before large
+1. **Q2a:** capture graph construction/reverse-dependency scale before large
    imports or any index representation change.
-3. **Q7:** land minimization/promotion tooling and the regression manifest so
+2. **Q7:** land minimization/promotion tooling and the regression manifest so
    CI findings have one durable path into portable tests.
-4. **Q6 expansion:** add result-canonicalization and transaction/Euler targets
+3. **Q6 expansion:** add result-canonicalization and transaction/Euler targets
    only after the two existing targets run in CI.
-5. **Q3-Q5 expansion:** grow tessellation, NURBS isolation, and X_T size/class
+4. **Q3-Q5 expansion:** grow tessellation, NURBS isolation, and X_T size/class
    matrices only in response to an algorithm/adoption question or measured
    coverage gap.
 
-Q0-Q2 and the current Q3-Q6 foundation slices are completed milestones. Q2a is
-the one planned scale-baseline addition after Q8. No
-additional fuzz target, benchmark family, or broad corpus expansion should land
-before Q8 unless it is the regression for a concrete production defect.
+Q0-Q2, Q8, and the current Q3-Q6 foundation slices are completed milestones.
+Q2a is the next planned scale-baseline addition. Additional fuzz targets,
+benchmark families, and broad corpus expansion remain evidence-driven.
 
 ## Exit criteria
 

@@ -54,7 +54,8 @@ its re-export leg is unavailable.
 cargo run --release -p kxt --bin xt_oracle -- export oracle/outbox
 ```
 
-This writes one `.x_t` file per declared Tier 1 writer capability plus `manifest.tsv`
+This writes the exact 14-file certified set—one `.x_t` file per declared Tier 1
+writer capability plus the canonical `offset_plane.x_t`—and `manifest.tsv`
 (expected topology counts, enclosed volume, checker outcomes, byte count, FNV-1a hash).
 Generation is deterministic — same source, same bytes — and every file is re-imported
 and re-checked locally before it is written, so a host is never handed a file this
@@ -64,6 +65,19 @@ committed record is `docs/oracle-results.tsv`.
 The bundle deliberately includes `solid_block_nurbs_face.x_t` (a B_SURFACE part).
 **Every host run must include it** until a licensed host confirms or corrects the
 provisional B-surface pole ordering in `kxt::recon`.
+
+The exporter rejects stale or unexpected outbox entries, and the API CLI reads
+the manifest order rather than globbing transport residue. After generation,
+the offline freshness gate is:
+
+```sh
+python3 scripts/oracle_loop.py certification-check --outbox oracle/outbox
+```
+
+`docs/oracle-certification.json` records the certified writer-input, bundle,
+and per-fixture SHA-256 identities. A `current` mismatch fails CI. An explicitly
+`stale` record must carry a reason and passes ordinary development CI with a
+prominent warning; release/conformance gates add `--require-current`.
 
 ## 2. Run the loop (Onshape API CLI — primary)
 

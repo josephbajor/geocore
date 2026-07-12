@@ -1,0 +1,30 @@
+{
+  "schema_version": "kernel-oracle-certification.v1",
+  "status": "current",
+  "reason": "",
+  "certified_at": "2026-07-11",
+  "host": "onshape",
+  "host_version": "cloud-2026-07-11",
+  "writer_revision": "2beb267+certified-worktree",
+  "recorded_by_commit": "edace7f",
+  "results_reference": "docs/oracle-results.tsv rows dated 2026-07-11 after the offset GEOMETRIC_OWNER fix",
+  "writer_inputs_sha256": "a9fb231a80837e92f92a0a31ecd031d24af41f41e14504605e910d1dea8fbdb2",
+  "bundle_sha256": "078a33c9b6addd0260823541957cec82d55e520d66333e0aab4aa604f6a0e2f0",
+  "fixture_count": 14,
+  "fixtures_sha256": {
+    "acorn_point.x_t": "01409760bf7f764429a44ff515fe87a4779650afebe251c60a3497e9caccd422",
+    "offset_plane.x_t": "94fb3e5516ad9b605a2087d974af618341debd97f2561155db9b25809381f554",
+    "sheet_cylinder_seam.x_t": "94af58ef0905b5bca7596966510f6da3b1f2832fe50cd07518189d1fd48926d6",
+    "sheet_plane_polygon.x_t": "38cec426b656aba55e949d16e50bbf66c1a084941bf333f5f26a2d64f3d9391c",
+    "solid_block.x_t": "4f9cfea95849168edfce9bbeac7d21ea9db26aa3515cc55177c4e001f49f007f",
+    "solid_block_nurbs_edge.x_t": "6aeaea0d7baaeebcdda7cd9d78c67ca1515c395a36b5e4f5d01707dc0c062b99",
+    "solid_block_nurbs_face.x_t": "410831b258864b3f55a221f329a49743b3863c664f1d2a53435f74a72ea5d9db",
+    "solid_block_tolerant_edge.x_t": "49e1c858c73200f82816b6c352b2a4e92b7af7d45e8f82f10e00abb6d4edf831",
+    "solid_cone.x_t": "992f0f47cd3bc869be7b606ec3dfba256ba222bf57cb8e8296cbc0d26e755e52",
+    "solid_cylinder.x_t": "f1f2389c98ca323a8e5aef2f19ed2e88f406f8569c2c87a14d86c79111c6a9c4",
+    "solid_sphere.x_t": "d514bf3e50cfef5dc667671f9108ec761496eec3c1466f1a7f33c83967348375",
+    "solid_torus.x_t": "357124dc39154f30260169c448d4afbb8f3a9c5864cdbfe19d79c09966a786b5",
+    "wire_polyline_closed.x_t": "f32710e0020e0026290b6a1224a69d5eccbab9476cea30539495a0c1ae21d8d4",
+    "wire_polyline_open.x_t": "6bf9212b4ea926a030b5e923d7e9646f54bad6cfcc547cb545199c23315da3b4"
+  }
+}

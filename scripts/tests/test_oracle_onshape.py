@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from oracle import onshape  # noqa: E402
-from oracle.cli import results_row, verdict_line  # noqa: E402
+from oracle.cli import bundle_paths, results_row, verdict_line  # noqa: E402
 
 
 class FakeTransport:
@@ -145,6 +145,33 @@ class ConfigTests(unittest.TestCase):
                     "element_id": "c" * 24,
                 },
             )
+
+
+class BundleManifestTests(unittest.TestCase):
+    def test_manifest_order_is_authoritative(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outbox = Path(tmp)
+            (outbox / "manifest.tsv").write_text(
+                "file\tbody_kind\tprobe\n" "b.x_t\tsolid\tb\n" "a.x_t\tsheet\ta\n"
+            )
+            (outbox / "a.x_t").write_bytes(b"a")
+            (outbox / "b.x_t").write_bytes(b"b")
+            self.assertEqual(
+                [path.name for path in bundle_paths(outbox)], ["b.x_t", "a.x_t"]
+            )
+
+    def test_missing_and_stale_files_fail_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outbox = Path(tmp)
+            (outbox / "manifest.tsv").write_text(
+                "file\tbody_kind\tprobe\n" "expected.x_t\tsolid\tprobe\n"
+            )
+            with self.assertRaises(onshape.OracleError):
+                bundle_paths(outbox)
+            (outbox / "expected.x_t").write_bytes(b"expected")
+            (outbox / "stale.x_t").write_bytes(b"stale")
+            with self.assertRaises(onshape.OracleError):
+                bundle_paths(outbox)
 
 
 class TranslationLoopTests(unittest.TestCase):
@@ -338,6 +365,24 @@ class ReportingTests(unittest.TestCase):
         self.assertIn("Invalid or corrupt input file", fields[9])
         self.assertIn("[parse-level]", fields[9])
         self.assertIn("parse-level", verdict_line(rejected))
+
+    def test_bundle_rows_carry_the_exact_host_payload_identity(self):
+        accepted = onshape.FixtureResult(
+            name="solid_block.x_t",
+            size=6300,
+            state="DONE",
+            reason="",
+            classification="",
+        )
+        row = results_row(
+            accepted,
+            "2026-07-11",
+            "abc1234",
+            "yes",
+            "yes",
+            bundle_identity="0123456789abcdef",
+        )
+        self.assertIn("; bundle=0123456789abcdef", row.split("\t")[9])
 
 
 if __name__ == "__main__":

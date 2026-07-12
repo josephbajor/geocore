@@ -15,6 +15,7 @@
 //!   geometry-class histograms, entity tolerances, checker cleanliness,
 //!   watertightness, and enclosed volume, and exits nonzero on any mismatch.
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::Path;
 use std::process::ExitCode;
@@ -107,6 +108,7 @@ struct Fixture {
 
 const PI: f64 = std::f64::consts::PI;
 const BLOCK_VOLUME: f64 = 0.2 * 0.3 * 0.4;
+const OFFSET_PLANE_BYTES: &[u8] = include_bytes!("../../tests/fixtures/offset_plane.x_t");
 
 /// Bundle definition. Order is the manifest order; keep it stable.
 const FIXTURES: &[Fixture] = &[
@@ -681,6 +683,43 @@ fn fnv64(bytes: &[u8]) -> u64 {
     hash
 }
 
+fn append_manifest_row(
+    manifest: &mut String,
+    file_name: &str,
+    probe: &str,
+    exact_volume: Option<f64>,
+    measured: &Measured,
+    bytes: &[u8],
+) {
+    let volume_exact =
+        exact_volume.map_or_else(|| "-".to_string(), |value| format!("{value:.12e}"));
+    let volume_mesh = measured
+        .volume
+        .map_or_else(|| "-".to_string(), |value| format!("{value:.12e}"));
+    let watertight = measured
+        .watertight
+        .map_or("-", |value| if value { "true" } else { "false" });
+    let _ = writeln!(
+        manifest,
+        "{file_name}\t{kind}\t{probe}\t{regions}\t{shells}\t{faces}\t{loops}\t{fins}\
+         \t{edges}\t{vertices}\t{volume_exact}\t{volume_mesh}\t{watertight}\
+         \t{fast_faults}\t{full_outcome}\t{full_gaps}\t{bytes}\t{fnv:016x}",
+        kind = kind_name(measured.kind),
+        regions = measured.regions,
+        shells = measured.shells,
+        faces = measured.faces,
+        loops = measured.loops,
+        fins = measured.fins,
+        edges = measured.edges,
+        vertices = measured.vertices,
+        fast_faults = measured.fast_faults,
+        full_outcome = outcome_name(measured.full_outcome),
+        full_gaps = measured.full_gaps,
+        bytes = bytes.len(),
+        fnv = fnv64(bytes),
+    );
+}
+
 fn export_bundle(dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|error| format!("creating {}: {error}", dir.display()))?;
 
@@ -758,45 +797,82 @@ fn export_bundle(dir: &Path) -> Result<(), String> {
         std::fs::write(&path, text.as_bytes())
             .map_err(|error| format!("writing {}: {error}", path.display()))?;
 
-        let volume_exact = fixture
-            .exact_volume
-            .map_or_else(|| "-".to_string(), |v| format!("{v:.12e}"));
-        let volume_mesh = measured
-            .volume
-            .map_or_else(|| "-".to_string(), |v| format!("{v:.12e}"));
-        let watertight = measured
-            .watertight
-            .map_or("-", |w| if w { "true" } else { "false" });
-        let _ = writeln!(
-            manifest,
-            "{file_name}\t{kind}\t{probe}\t{regions}\t{shells}\t{faces}\t{loops}\t{fins}\
-             \t{edges}\t{vertices}\t{volume_exact}\t{volume_mesh}\t{watertight}\
-             \t{fast_faults}\t{full_outcome}\t{full_gaps}\t{bytes}\t{fnv:016x}",
-            kind = kind_name(measured.kind),
-            probe = fixture.probe,
-            regions = measured.regions,
-            shells = measured.shells,
-            faces = measured.faces,
-            loops = measured.loops,
-            fins = measured.fins,
-            edges = measured.edges,
-            vertices = measured.vertices,
-            fast_faults = measured.fast_faults,
-            full_outcome = outcome_name(measured.full_outcome),
-            full_gaps = measured.full_gaps,
-            bytes = text.len(),
-            fnv = fnv64(text.as_bytes()),
+        append_manifest_row(
+            &mut manifest,
+            &file_name,
+            fixture.probe,
+            fixture.exact_volume,
+            &measured,
+            text.as_bytes(),
         );
         println!("wrote {}", path.display());
     }
+
+    // OFFSET_SURF is the first procedural writer capability. Keep its exact
+    // host-certified canonical bytes in the authoritative bundle even though
+    // its topology constructor is not part of the Tier-1 make fixture table.
+    let mut offset_store = Store::new();
+    let offset_recon = kxt::import(OFFSET_PLANE_BYTES, &mut offset_store)
+        .map_err(|error| format!("offset_plane: self import: {error:?}"))?;
+    if offset_recon.bodies.len() != 1 {
+        return Err(format!(
+            "offset_plane: self import produced {} bodies",
+            offset_recon.bodies.len()
+        ));
+    }
+    let offset_body = offset_recon.bodies[0];
+    let offset_measured = measure(&offset_store, offset_body)
+        .map_err(|error| format!("offset_plane: measuring source body: {error}"))?;
+    if offset_measured.fast_faults != 0 {
+        return Err("offset_plane: source body is not checker-clean".to_string());
+    }
+    let offset_text = kxt::export_text(&offset_store, offset_body)
+        .map_err(|error| format!("offset_plane: export: {error:?}"))?;
+    if offset_text.as_bytes() != OFFSET_PLANE_BYTES {
+        return Err(
+            "offset_plane: committed canonical fixture is not writer-byte-stable".to_string(),
+        );
+    }
+    let offset_name = "offset_plane.x_t";
+    let offset_path = dir.join(offset_name);
+    std::fs::write(&offset_path, OFFSET_PLANE_BYTES)
+        .map_err(|error| format!("writing {}: {error}", offset_path.display()))?;
+    append_manifest_row(
+        &mut manifest,
+        offset_name,
+        "OFFSET_SURF with basis GEOMETRIC_OWNER ring",
+        None,
+        &offset_measured,
+        OFFSET_PLANE_BYTES,
+    );
+    println!("wrote {}", offset_path.display());
 
     let manifest_path = dir.join("manifest.tsv");
     std::fs::write(&manifest_path, manifest.as_bytes())
         .map_err(|error| format!("writing {}: {error}", manifest_path.display()))?;
     println!("wrote {}", manifest_path.display());
+    let expected: BTreeSet<String> = FIXTURES
+        .iter()
+        .map(|fixture| format!("{}.x_t", fixture.name))
+        .chain([offset_name.to_string(), "manifest.tsv".to_string()])
+        .collect();
+    let actual: BTreeSet<String> = std::fs::read_dir(dir)
+        .map_err(|error| format!("reading {}: {error}", dir.display()))?
+        .map(|entry| {
+            entry
+                .map_err(|error| format!("reading {} entry: {error}", dir.display()))
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        })
+        .collect::<Result<_, _>>()?;
+    if actual != expected {
+        return Err(format!(
+            "{} contains stale or unexpected entries: expected {expected:?}, found {actual:?}",
+            dir.display()
+        ));
+    }
     println!(
         "bundle complete: {} fixtures; next step is docs/oracle-loop.md",
-        FIXTURES.len()
+        FIXTURES.len() + 1
     );
     Ok(())
 }

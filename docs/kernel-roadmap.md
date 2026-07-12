@@ -896,9 +896,11 @@ This is not an execution-priority list. The authoritative handoff queue is the
 foundation portfolio; this section preserves the larger milestone obligations
 that queue must eventually discharge.
 
-- M3b: run the current oracle procedure, including its writer-byte
-  invalidation rule. The immediate evidence debt is the regenerated 13-fixture
-  bundle plus `offset_plane.x_t` in Onshape.
+- M3b: keep the exact 14-file oracle bundle and its writer-byte invalidation
+  rule current. The 2026-07-11 Onshape run is machine-fingerprinted; remaining
+  evidence is the named wire/acorn rejection, host-canonicalized analytic NURBS
+  fixtures, offset-sheet re-export gap, and two preserved host re-export reader
+  gaps.
 - M3c: implement periodic/closed B-geometry, the live exemplar reconstruction
   blocker, and independently verify imported intersection curves.
 - M2.5: finish parameter-space incidence and ratcheted Full-checker proofs for
