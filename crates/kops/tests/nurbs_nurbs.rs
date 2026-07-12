@@ -127,6 +127,31 @@ fn nurbs_nurbs_reports_simple_contained_overlaps() {
     assert_eq!(hit.overlaps[0].a, ParamRange::new(0.0, 1.0));
     assert_eq!(hit.overlaps[0].b, ParamRange::new(0.0, 1.0));
     assert_eq!(hit.overlaps[0].orientation, ParamOrientation::Reversed);
+
+    let parameter_scale = 1.0e13;
+    let scaled_a = line_nurbs_with_domain(
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(3.0, 0.0, 0.0),
+        parameter_scale,
+    );
+    let scaled_b = line_nurbs_with_domain(
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(3.0, 0.0, 0.0),
+        parameter_scale,
+    );
+    let scaled = intersect_bounded_nurbs_nurbs(
+        &scaled_a,
+        scaled_a.param_range(),
+        &scaled_b,
+        scaled_b.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(scaled.points.is_empty());
+    assert_eq!(scaled.overlaps.len(), 1);
+    assert_eq!(scaled.overlaps[0].a, ParamRange::new(0.0, parameter_scale));
+    assert_eq!(scaled.overlaps[0].b, ParamRange::new(0.0, parameter_scale));
+    assert_eq!(scaled.overlaps[0].orientation, ParamOrientation::Same);
 }
 
 #[test]
@@ -202,6 +227,7 @@ fn nurbs_nurbs_is_stable_under_small_and_large_parameter_reparameterization() {
             1,
             "parameter scale {parameter_scale:e}"
         );
+        assert_eq!(legacy.points[0].kind, ContactKind::Transverse);
         assert!(legacy.points[0].point.dist(Point3::new(0.0, 0.0, 0.0)) <= 1.0e-8);
         assert!((legacy.points[0].t_a / parameter_scale - 0.5).abs() <= 1.0e-8);
         assert!((legacy.points[0].t_b / parameter_scale - 0.5).abs() <= 1.0e-8);
@@ -215,6 +241,94 @@ fn nurbs_nurbs_is_stable_under_small_and_large_parameter_reparameterization() {
             &context,
         );
         assert_eq!(contextual.result(), Ok(&legacy));
+
+        let swapped = intersect_bounded_nurbs_nurbs(
+            &horizontal,
+            horizontal.param_range(),
+            &diagonal,
+            diagonal.param_range(),
+            tolerances,
+        )
+        .unwrap();
+        assert_eq!(swapped.points.len(), 1);
+        assert_eq!(swapped.points[0].kind, ContactKind::Transverse);
+        assert_eq!(legacy.points[0].t_a, swapped.points[0].t_b);
+        assert_eq!(legacy.points[0].t_b, swapped.points[0].t_a);
+        assert_eq!(legacy.points[0].point, swapped.points[0].point);
+        assert_eq!(legacy.points[0].residual, swapped.points[0].residual);
+
+        let swapped_contextual = intersect_bounded_nurbs_nurbs_with_context(
+            &horizontal,
+            horizontal.param_range(),
+            &diagonal,
+            diagonal.param_range(),
+            &context,
+        );
+        assert_eq!(swapped_contextual.result(), Ok(&swapped));
+    }
+}
+
+#[test]
+fn contact_classification_is_stable_under_model_scale_translation_and_near_miss() {
+    let parameter_scale = 1.0e13;
+    let tolerances = Tolerances::default();
+    let session = SessionPolicy::v1();
+    for model_scale in [1.0e-6, 1.0, 1.0e2] {
+        let origin = Point3::new(7.0, -3.0, 2.0);
+        let diagonal = line_nurbs_with_domain(
+            Point3::new(origin.x - model_scale, origin.y - model_scale, origin.z),
+            Point3::new(origin.x + model_scale, origin.y + model_scale, origin.z),
+            parameter_scale,
+        );
+        let horizontal = line_nurbs_with_domain(
+            Point3::new(origin.x - 2.0 * model_scale, origin.y, origin.z),
+            Point3::new(origin.x + 2.0 * model_scale, origin.y, origin.z),
+            parameter_scale,
+        );
+        let forward = intersect_bounded_nurbs_nurbs(
+            &diagonal,
+            diagonal.param_range(),
+            &horizontal,
+            horizontal.param_range(),
+            tolerances,
+        )
+        .unwrap();
+        assert_eq!(forward.points.len(), 1, "model scale {model_scale:e}");
+        assert_eq!(forward.points[0].kind, ContactKind::Transverse);
+        assert!(forward.points[0].point.dist(origin) <= tolerances.linear());
+
+        let context = OperationContext::new(&session, tolerances).unwrap();
+        let contextual = intersect_bounded_nurbs_nurbs_with_context(
+            &diagonal,
+            diagonal.param_range(),
+            &horizontal,
+            horizontal.param_range(),
+            &context,
+        );
+        assert_eq!(contextual.result(), Ok(&forward));
+
+        let near_miss = line_nurbs_with_domain(
+            Point3::new(
+                origin.x - 2.0 * model_scale,
+                origin.y,
+                origin.z + 2.0 * tolerances.linear(),
+            ),
+            Point3::new(
+                origin.x + 2.0 * model_scale,
+                origin.y,
+                origin.z + 2.0 * tolerances.linear(),
+            ),
+            parameter_scale,
+        );
+        let miss = intersect_bounded_nurbs_nurbs(
+            &diagonal,
+            diagonal.param_range(),
+            &near_miss,
+            near_miss.param_range(),
+            tolerances,
+        )
+        .unwrap();
+        assert!(miss.points.is_empty(), "model scale {model_scale:e}");
     }
 }
 
@@ -257,81 +371,48 @@ fn coarse_custom_progress_policy_can_stop_but_cannot_accept_a_contact() {
 }
 
 #[test]
-fn normalized_gradient_stop_is_reparameterization_swap_and_context_stable() {
+fn tangent_end_to_end_is_stable_at_the_small_parameter_extreme_and_under_swap() {
     let q = 0.371_234;
     let expected_point = Point3::new(2.0 * q - 1.0, 0.0, 0.0);
     let expected_horizontal_parameter = (2.0 * q + 1.0) / 4.0;
     let tolerances = Tolerances::default();
-    let session = SessionPolicy::v1();
-
-    for parameter_scale in [1.0e-6, 1.0, 1.0e3] {
-        let parabola = tangent_parabola_at_with_domain(q, parameter_scale);
-        let horizontal = line_nurbs_with_domain(
-            Point3::new(-2.0, 0.0, 0.0),
-            Point3::new(2.0, 0.0, 0.0),
-            parameter_scale,
-        );
-        let forward = intersect_bounded_nurbs_nurbs(
-            &parabola,
-            parabola.param_range(),
-            &horizontal,
-            horizontal.param_range(),
-            tolerances,
-        )
-        .unwrap();
-        let swapped = intersect_bounded_nurbs_nurbs(
-            &horizontal,
-            horizontal.param_range(),
-            &parabola,
-            parabola.param_range(),
-            tolerances,
-        )
-        .unwrap();
-        assert_eq!(
-            forward.points.len(),
-            1,
-            "parameter scale {parameter_scale:e}: {:?}",
-            forward.points
-        );
-        assert_eq!(
-            swapped.points.len(),
-            1,
-            "parameter scale {parameter_scale:e}"
-        );
-        assert_eq!(forward.points[0].kind, ContactKind::Tangent);
-        assert_eq!(swapped.points[0].kind, ContactKind::Tangent);
-        assert!(
-            forward.points[0].point.dist(expected_point) <= tolerances.linear().sqrt(),
-            "parameter scale {parameter_scale:e}: {:?} != {expected_point:?}",
-            forward.points[0]
-        );
-        assert!(
-            swapped.points[0].point.dist(expected_point) <= tolerances.linear().sqrt(),
-            "parameter scale {parameter_scale:e}: {:?} != {expected_point:?}",
-            swapped.points[0]
-        );
-        assert!((forward.points[0].t_a / parameter_scale - q).abs() <= 1.0e-4);
-        assert!(
-            (forward.points[0].t_b / parameter_scale - expected_horizontal_parameter).abs()
-                <= 1.0e-4
-        );
-        assert_eq!(forward.points[0].t_a, swapped.points[0].t_b);
-        assert_eq!(forward.points[0].t_b, swapped.points[0].t_a);
-        assert_eq!(forward.points[0].point, swapped.points[0].point);
-        assert_eq!(forward.points[0].residual, swapped.points[0].residual);
-
-        if parameter_scale == 1.0 {
-            let context = OperationContext::new(&session, tolerances).unwrap();
-            let contextual = intersect_bounded_nurbs_nurbs_with_context(
-                &parabola,
-                parabola.param_range(),
-                &horizontal,
-                horizontal.param_range(),
-                &context,
-            );
-            assert_eq!(contextual.result(), Ok(&forward));
-        }
-    }
+    let parameter_scale = 1.0e-13;
+    let parabola = tangent_parabola_at_with_domain(q, parameter_scale);
+    let horizontal = line_nurbs_with_domain(
+        Point3::new(-2.0, 0.0, 0.0),
+        Point3::new(2.0, 0.0, 0.0),
+        parameter_scale,
+    );
+    let forward = intersect_bounded_nurbs_nurbs(
+        &parabola,
+        parabola.param_range(),
+        &horizontal,
+        horizontal.param_range(),
+        tolerances,
+    )
+    .unwrap();
+    let swapped = intersect_bounded_nurbs_nurbs(
+        &horizontal,
+        horizontal.param_range(),
+        &parabola,
+        parabola.param_range(),
+        tolerances,
+    )
+    .unwrap();
+    assert_eq!(forward.points.len(), 1, "{:?}", forward.points);
+    assert_eq!(swapped.points.len(), 1);
+    assert_eq!(forward.points[0].kind, ContactKind::Tangent);
+    assert_eq!(swapped.points[0].kind, ContactKind::Tangent);
+    assert!(forward.points[0].point.dist(expected_point) <= tolerances.linear().sqrt());
+    assert!(swapped.points[0].point.dist(expected_point) <= tolerances.linear().sqrt());
+    assert!((forward.points[0].t_a / parameter_scale - q).abs() <= 1.0e-4);
+    assert!(
+        (forward.points[0].t_b / parameter_scale - expected_horizontal_parameter).abs() <= 1.0e-4
+    );
+    assert_eq!(forward.points[0].t_a, swapped.points[0].t_b);
+    assert_eq!(forward.points[0].t_b, swapped.points[0].t_a);
+    assert_eq!(forward.points[0].point, swapped.points[0].point);
+    assert_eq!(forward.points[0].residual, swapped.points[0].residual);
 }
 
 #[test]

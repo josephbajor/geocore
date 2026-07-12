@@ -623,11 +623,11 @@ test covers malformed cyclic and singular cases.
 
 ### G5 — Operations adapter and follow-on descriptors
 
-Priority gate: graph-aware intersection work starts only after F2 owns the
-operation-family profile composition rule, the NURBS scale guards required by
-the generic fallback are complete, and X_T nested graph evaluation consumes
-caller-owned child reservations. The existing facade evaluation adapter is the
-reference accounting contract.
+Priority gate: F2 now owns operation-family profile composition and the NURBS
+scale guards required by the generic fallback are complete. X_T nested graph
+evaluation must still consume caller-owned child reservations before G5
+starts. The existing facade evaluation adapter is the reference accounting
+contract.
 
 - Add graph-aware `kops` inspection/evaluation adapters without rewriting
   analytic solvers.

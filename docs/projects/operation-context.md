@@ -1,6 +1,6 @@
 # Operation context and numerical policy
 
-Status: Stage 1b composition and representative Stage 2-4 pilots implemented; NURBS contact/minimizer scale guards are the next gate
+Status: Stage 1b composition, the NURBS contact/minimizer scale gate, and representative Stage 2-4 pilots implemented; contextual projection/body tessellation and broader ratchets remain
 
 ## Purpose
 
@@ -639,10 +639,13 @@ structured data; checker exhaustion remains indeterminate.
 
 Status: NURBS/NURBS Newton symmetric 2×2 conditioning, collapsed-range routing,
 accepted-step progress, and normalized directional-gradient stationarity now
-use shared scale-aware policy recipes while model residuals retain sole contact
-authority. Minimizer width/value, segment-conditioning, legacy
-overlap/input/local-search slack, contact-classification scaling, and structured
-numeric-resolution reporting remain separate migrations.
+use shared scale-aware policy recipes. Contact classification now uses
+overflow-safe normalized tangent directions; point/curve minimizers use
+relative objective and unit-parameter progress guards; local search is scaled
+only by its owning range; and clamped Newton steps use their actual accepted
+displacement. Model residuals retain sole contact and overlap authority.
+Segment conditioning, legacy overlap/input and parameter-deduplication slack,
+and structured numeric-resolution reporting remain separate migrations.
 
 - Replace the repeated NURBS intersection parameter-tolerance helpers with the
   scale-aware policy API.
@@ -655,10 +658,12 @@ numeric-resolution reporting remain separate migrations.
 Exit: candidate acceptance still depends on model residuals; parameter/conditioning
 guards have no direct proof authority; scale tests pass.
 
-Before F3's generic fallback grows, migrate the remaining NURBS/NURBS
-contact-classification and minimizer/progress scale guards that currently bound
-the verified reparameterization range. Broader pair-file migration waits for
-that gate; it does not proceed merely because the contextual entry point exists.
+The NURBS/NURBS contact-classification and minimizer/progress gate required by
+F3 is complete. Evidence covers parameter domains `1e-13`, `1`, and `1e13`,
+model scaling and translation, operand swapping, V1 contextual equivalence,
+zero derivatives, affine-offset representability, and negative residual gates.
+Broader pair-file migration still follows the portfolio order and does not
+turn these numerical guards into proof or acceptance authority.
 
 ### Stage 4 — Projection and tessellation
 

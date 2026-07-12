@@ -42,6 +42,80 @@ fn normalized_abs_dot(a: Vec3, b: Vec3) -> Option<f64> {
     value.is_finite().then_some(value.min(1.0))
 }
 
+/// Returns the sine of the angle between two non-zero finite directions.
+///
+/// Component-wise scaling keeps the cross product and magnitude calculation
+/// away from overflow and underflow. `None` identifies a singular or invalid
+/// direction pair; callers must not use this arithmetic guard to accept a
+/// geometric candidate.
+pub(super) fn normalized_cross_magnitude(a: Vec3, b: Vec3) -> Option<f64> {
+    let scale_a = a.x.abs().max(a.y.abs()).max(a.z.abs());
+    let scale_b = b.x.abs().max(b.y.abs()).max(b.z.abs());
+    if !scale_a.is_finite() || !scale_b.is_finite() || scale_a == 0.0 || scale_b == 0.0 {
+        return None;
+    }
+    let a = a / scale_a;
+    let b = b / scale_b;
+    let denominator = (a.dot(a) * b.dot(b)).sqrt();
+    let value = a.cross(b).norm() / denominator;
+    value.is_finite().then_some(value.min(1.0))
+}
+
+/// Compares finite non-negative objective values on a dimensionless scale.
+///
+/// This only controls an iterative search branch. It cannot accept a contact
+/// or prove a miss. Invalid or negative objectives return `None` so callers can
+/// stop conservatively.
+pub(super) fn nonnegative_values_are_numerically_equal(
+    policy: NumericalPolicy,
+    a: f64,
+    b: f64,
+) -> Option<bool> {
+    if !a.is_finite() || !b.is_finite() || a < 0.0 || b < 0.0 {
+        return None;
+    }
+    let scale = a.max(b);
+    if scale == 0.0 {
+        return Some(true);
+    }
+    let difference = (a / scale - b / scale).abs();
+    Some(difference <= policy.rounding_guard(NumericGuardKind::CoefficientCancellation, 1.0))
+}
+
+/// Returns whether a ternary-search interval cannot make useful progress.
+///
+/// The active width is measured in coordinates normalized by the original
+/// search span. Exact comparisons with the proposed interior points catch
+/// affine-offset cases where floating-point arithmetic cannot represent a
+/// smaller interval. This is a termination guard only.
+pub(super) fn ternary_interval_has_no_progress(
+    policy: NumericalPolicy,
+    original_span: f64,
+    lo: f64,
+    left: f64,
+    right: f64,
+    hi: f64,
+) -> bool {
+    if !original_span.is_finite()
+        || original_span <= 0.0
+        || !lo.is_finite()
+        || !left.is_finite()
+        || !right.is_finite()
+        || !hi.is_finite()
+        || !(lo < left && left < right && right < hi)
+    {
+        return true;
+    }
+    let normalized_width = (hi - lo) / original_span;
+    if !normalized_width.is_finite() || normalized_width <= 0.0 {
+        return true;
+    }
+    let Some(threshold) = parameter_progress_step(policy, 1.0, 1.0, 1.0) else {
+        return true;
+    };
+    normalized_width <= threshold
+}
+
 /// Derives a scale-aware parameter-progress step with no acceptance authority.
 ///
 /// Callers must still check their model-space residual before accepting a
@@ -172,6 +246,92 @@ mod tests {
             Vec3::new(f64::NAN, 0.0, 0.0),
             derivative,
             derivative,
+        ));
+    }
+
+    #[test]
+    fn normalized_cross_magnitude_is_invariant_across_extreme_vector_scales() {
+        for scale in [1.0e-200, 1.0, 1.0e200] {
+            assert_eq!(
+                normalized_cross_magnitude(Vec3::new(scale, 0.0, 0.0), Vec3::new(0.0, scale, 0.0),),
+                Some(1.0)
+            );
+            assert_eq!(
+                normalized_cross_magnitude(Vec3::new(scale, 0.0, 0.0), Vec3::new(-scale, 0.0, 0.0),),
+                Some(0.0)
+            );
+        }
+        assert_eq!(
+            normalized_cross_magnitude(Vec3::default(), Vec3::new(1.0, 0.0, 0.0)),
+            None
+        );
+        assert_eq!(
+            normalized_cross_magnitude(
+                Vec3::new(f64::INFINITY, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn objective_comparison_is_relative_and_policy_controlled() {
+        let policy = NumericalPolicy::v1();
+        for scale in [1.0e-200, 1.0, 1.0e200] {
+            assert_eq!(
+                nonnegative_values_are_numerically_equal(
+                    policy,
+                    scale,
+                    scale * (1.0 + 8.0 * f64::EPSILON),
+                ),
+                Some(true)
+            );
+            assert_eq!(
+                nonnegative_values_are_numerically_equal(
+                    policy,
+                    scale,
+                    scale * (1.0 + 256.0 * f64::EPSILON),
+                ),
+                Some(false)
+            );
+        }
+        assert_eq!(
+            nonnegative_values_are_numerically_equal(policy, 0.0, 0.0),
+            Some(true)
+        );
+        assert_eq!(
+            nonnegative_values_are_numerically_equal(policy, -1.0, 1.0),
+            None
+        );
+    }
+
+    #[test]
+    fn ternary_progress_is_relative_and_detects_unrepresentable_bounds() {
+        let policy = NumericalPolicy::v1();
+        for scale in [1.0e-13, 1.0, 1.0e13] {
+            assert!(!ternary_interval_has_no_progress(
+                policy,
+                scale,
+                0.0,
+                scale / 3.0,
+                scale * 2.0 / 3.0,
+                scale,
+            ));
+        }
+        let coarse = NumericalPolicy::try_new(32.0, 1.0e16, 128.0 * f64::EPSILON).unwrap();
+        assert!(ternary_interval_has_no_progress(
+            coarse,
+            1.0,
+            0.0,
+            1.0 / 3.0,
+            2.0 / 3.0,
+            1.0,
+        ));
+
+        let lo = 1.0e16;
+        let hi = lo + 2.0;
+        assert!(ternary_interval_has_no_progress(
+            policy, 2.0, lo, lo, hi, hi,
         ));
     }
 

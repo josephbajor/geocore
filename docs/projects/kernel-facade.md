@@ -695,9 +695,10 @@ F2 child ledger, retains accepted/attempted graph work and classified sources,
 and keeps graph limits, handles, evaluators, and descriptors private.
 Graph-aware intersection requests remain.
 
-The graph-aware request resumes after F2 profile composition and the NURBS
-scale gates required by F3's generic fallback are complete, and after the K5
-consumer audit confirms the request shape.
+F2 profile composition, the NURBS scale gate, and the K5 consumer audit are now
+complete. The graph-aware request is eligible but remains queued behind the
+portfolio's contextualization and graph-measurement work; it must preserve the
+accounting and API-shape evidence from those gates.
 
 This phase lands after F1 G2 or in the same integration window:
 

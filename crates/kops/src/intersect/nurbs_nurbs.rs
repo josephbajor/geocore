@@ -1,5 +1,7 @@
 use super::numerical::{
-    directional_gradients_are_numerically_zero, parameter_progress_step, solve_symmetric_2x2,
+    directional_gradients_are_numerically_zero, nonnegative_values_are_numerically_equal,
+    normalized_cross_magnitude, parameter_progress_step, solve_symmetric_2x2,
+    ternary_interval_has_no_progress,
 };
 use super::result::{
     ContactKind, CurveCurveIntersections, CurveCurveOverlap, CurveCurvePoint, ParamOrientation,
@@ -58,12 +60,11 @@ pub fn intersect_bounded_nurbs_nurbs(
 ///
 /// The operation's numerical policy controls the Newton system conditioning
 /// guard, normalized directional-gradient stop, collapsed-parameter detection,
-/// and Newton parameter-progress stop.
+/// Newton parameter-progress stop, and minimizer progress/value guards.
 /// These guards never grant candidate or overlap acceptance: candidates retain
 /// their model-space residual checks, while overlap and input parameter slack
-/// retain their legacy v1 semantics. Absolute minimizer width/value and segment
-/// degeneracy guards, plus contact-classification scaling, also remain separate
-/// migrations.
+/// retain their legacy v1 semantics. Segment degeneracy and parameter-based
+/// candidate deduplication remain separate migrations.
 pub fn intersect_bounded_nurbs_nurbs_with_context(
     a: &NurbsCurve,
     range_a: ParamRange,
@@ -98,10 +99,18 @@ fn intersect_bounded_nurbs_nurbs_impl(
     let collapsed_a = range_has_no_parameter_progress(range_a, tolerances, numerical);
     let collapsed_b = range_has_no_parameter_progress(range_b, tolerances, numerical);
     if collapsed_a || collapsed_b {
-        return degenerate_range_intersections(a, range_a, collapsed_a, b, range_b, tolerances);
+        return degenerate_range_intersections(
+            a,
+            range_a,
+            collapsed_a,
+            b,
+            range_b,
+            tolerances,
+            numerical,
+        );
     }
 
-    if let Some(overlap) = contained_overlap(a, range_a, b, range_b, tolerances) {
+    if let Some(overlap) = contained_overlap(a, range_a, b, range_b, tolerances, numerical) {
         return CurveCurveIntersections::canonicalized(Vec::new(), vec![overlap]);
     }
 
@@ -146,14 +155,15 @@ fn degenerate_range_intersections(
     b: &NurbsCurve,
     range_b: ParamRange,
     tolerances: Tolerances,
+    numerical: NumericalPolicy,
 ) -> Result<CurveCurveIntersections> {
     let (t_a, t_b) = if collapsed_a {
         let t_a = range_a.lo;
-        let t_b = closest_parameter_to_point(b, range_b, a.eval(t_a));
+        let t_b = closest_parameter_to_point(b, range_b, a.eval(t_a), numerical);
         (t_a, t_b)
     } else {
         let t_b = range_b.lo;
-        let t_a = closest_parameter_to_point(a, range_a, b.eval(t_b));
+        let t_a = closest_parameter_to_point(a, range_a, b.eval(t_b), numerical);
         (t_a, t_b)
     };
     let mut points = Vec::new();
@@ -167,12 +177,13 @@ fn contained_overlap(
     b: &NurbsCurve,
     range_b: ParamRange,
     tolerances: Tolerances,
+    numerical: NumericalPolicy,
 ) -> Option<CurveCurveOverlap> {
     let mut mapped = Vec::with_capacity(OVERLAP_SAMPLES + 1);
     for i in 0..=OVERLAP_SAMPLES {
         let t_a = range_a.lerp(i as f64 / OVERLAP_SAMPLES as f64);
         let point = a.eval(t_a);
-        let t_b = closest_parameter_to_point(b, range_b, point);
+        let t_b = closest_parameter_to_point(b, range_b, point, numerical);
         if point.dist(b.eval(t_b)) > tolerances.linear() {
             return None;
         }
@@ -290,8 +301,15 @@ fn polish_candidate(
     let (mut t_a, mut t_b) = newton_polish_pair(a, b, t_a, t_b, policy);
     let distance = a.eval(t_a).dist(b.eval(t_b));
     if distance <= policy.tolerances.linear() * 16.0 {
-        let (refined_a, refined_b) =
-            refine_local_pair(a, b, t_a, t_b, policy.range_a, policy.range_b);
+        let (refined_a, refined_b) = refine_local_pair(
+            a,
+            b,
+            t_a,
+            t_b,
+            policy.range_a,
+            policy.range_b,
+            policy.numerical,
+        );
         if a.eval(refined_a).dist(b.eval(refined_b)) < distance {
             (t_a, t_b) = newton_polish_pair(a, b, refined_a, refined_b, policy);
         }
@@ -324,14 +342,16 @@ fn newton_polish_pair(
             break;
         };
 
-        let old = r.norm_sq();
+        let old_residual = r.norm_sq();
+        let old_t_a = t_a;
+        let old_t_b = t_b;
         let mut scale = 1.0;
         let mut accepted = false;
         for _ in 0..16 {
             let next_a = (t_a + step_a * scale).clamp(policy.range_a.lo, policy.range_a.hi);
             let next_b = (t_b + step_b * scale).clamp(policy.range_b.lo, policy.range_b.hi);
             let next = a.eval(next_a).dist(b.eval(next_b));
-            if next * next <= old {
+            if next * next <= old_residual {
                 accepted = true;
                 t_a = next_a;
                 t_b = next_b;
@@ -343,15 +363,13 @@ fn newton_polish_pair(
             break;
         }
         let stopped_a = parameter_step_has_no_progress(
-            step_a * scale,
-            t_a,
+            t_a - old_t_a,
             policy.range_a,
             policy.tolerances,
             policy.numerical,
         );
         let stopped_b = parameter_step_has_no_progress(
-            step_b * scale,
-            t_b,
+            t_b - old_t_b,
             policy.range_b,
             policy.tolerances,
             policy.numerical,
@@ -370,11 +388,10 @@ fn refine_local_pair(
     t_b: f64,
     range_a: ParamRange,
     range_b: ParamRange,
+    numerical: NumericalPolicy,
 ) -> (f64, f64) {
-    let width_a = (range_a.width() / MIN_STEPS as f64 * 2.0)
-        .max(legacy_parameter_slack(range_a, Tolerances::default()));
-    let width_b = (range_b.width() / MIN_STEPS as f64 * 2.0)
-        .max(legacy_parameter_slack(range_b, Tolerances::default()));
+    let width_a = range_a.width() / MIN_STEPS as f64 * 2.0;
+    let width_b = range_b.width() / MIN_STEPS as f64 * 2.0;
 
     let a0 = minimize_curve_to_curve_distance(
         a,
@@ -384,8 +401,9 @@ fn refine_local_pair(
             (t_a + width_a).min(range_a.hi),
         ),
         range_b,
+        numerical,
     );
-    let b0 = closest_parameter_to_point(b, range_b, a.eval(a0));
+    let b0 = closest_parameter_to_point(b, range_b, a.eval(a0), numerical);
 
     let b1 = minimize_curve_to_curve_distance(
         b,
@@ -395,8 +413,9 @@ fn refine_local_pair(
             (t_b + width_b).min(range_b.hi),
         ),
         range_a,
+        numerical,
     );
-    let a1 = closest_parameter_to_point(a, range_a, b.eval(b1));
+    let a1 = closest_parameter_to_point(a, range_a, b.eval(b1), numerical);
 
     if a.eval(a0).dist(b.eval(b0)) <= a.eval(a1).dist(b.eval(b1)) {
         (a0, b0)
@@ -410,17 +429,31 @@ fn minimize_curve_to_curve_distance(
     other: &NurbsCurve,
     mut range: ParamRange,
     other_range: ParamRange,
+    numerical: NumericalPolicy,
 ) -> f64 {
+    let original_span = range.width();
     for _ in 0..MAX_MINIMIZE_STEPS {
-        if range.width() <= 1e-12 {
-            break;
-        }
         let third = range.width() / 3.0;
         let left = range.lo + third;
         let right = range.hi - third;
-        let f_left = distance_from_point_to_curve(curve.eval(left), other, other_range);
-        let f_right = distance_from_point_to_curve(curve.eval(right), other, other_range);
-        if (f_left - f_right).abs() <= 1e-18 {
+        if ternary_interval_has_no_progress(
+            numerical,
+            original_span,
+            range.lo,
+            left,
+            right,
+            range.hi,
+        ) {
+            break;
+        }
+        let f_left = distance_from_point_to_curve(curve.eval(left), other, other_range, numerical);
+        let f_right =
+            distance_from_point_to_curve(curve.eval(right), other, other_range, numerical);
+        let Some(equal) = nonnegative_values_are_numerically_equal(numerical, f_left, f_right)
+        else {
+            break;
+        };
+        if equal {
             range = ParamRange::new(left, right);
         } else if f_left < f_right {
             range = ParamRange::new(range.lo, right);
@@ -431,8 +464,13 @@ fn minimize_curve_to_curve_distance(
     range.lerp(0.5)
 }
 
-fn distance_from_point_to_curve(point: Point3, curve: &NurbsCurve, range: ParamRange) -> f64 {
-    let t = closest_parameter_to_point(curve, range, point);
+fn distance_from_point_to_curve(
+    point: Point3,
+    curve: &NurbsCurve,
+    range: ParamRange,
+    numerical: NumericalPolicy,
+) -> f64 {
+    let t = closest_parameter_to_point(curve, range, point, numerical);
     point.dist(curve.eval(t))
 }
 
@@ -469,13 +507,10 @@ fn contact_kind(
 ) -> ContactKind {
     let da = a.eval_derivs(t_a, 1).d[1];
     let db = b.eval_derivs(t_b, 1).d[1];
-    let scale = da.norm() * db.norm();
-    if scale <= tolerances.linear() {
-        ContactKind::Singular
-    } else if da.cross(db).norm() > scale * working_angular_tolerance(tolerances) {
-        ContactKind::Transverse
-    } else {
-        ContactKind::Tangent
+    match normalized_cross_magnitude(da, db) {
+        None => ContactKind::Singular,
+        Some(sine) if sine > working_angular_tolerance(tolerances) => ContactKind::Transverse,
+        Some(_) => ContactKind::Tangent,
     }
 }
 
@@ -525,7 +560,12 @@ fn working_angular_tolerance(tolerances: Tolerances) -> f64 {
     tolerances.angular().max(tolerances.linear().sqrt())
 }
 
-fn closest_parameter_to_point(curve: &NurbsCurve, range: ParamRange, point: Point3) -> f64 {
+fn closest_parameter_to_point(
+    curve: &NurbsCurve,
+    range: ParamRange,
+    point: Point3,
+    numerical: NumericalPolicy,
+) -> f64 {
     let samples = sample_curve(curve, range);
     let (best_idx, _) = samples
         .iter()
@@ -535,20 +575,31 @@ fn closest_parameter_to_point(curve: &NurbsCurve, range: ParamRange, point: Poin
         .expect("sample_curve always returns at least one sample");
     let lo = samples[best_idx.saturating_sub(1)].t;
     let hi = samples[(best_idx + 1).min(samples.len() - 1)].t;
-    minimize_point_distance(curve, lo, hi, point)
+    minimize_point_distance(curve, lo, hi, point, numerical)
 }
 
-fn minimize_point_distance(curve: &NurbsCurve, mut lo: f64, mut hi: f64, point: Point3) -> f64 {
+fn minimize_point_distance(
+    curve: &NurbsCurve,
+    mut lo: f64,
+    mut hi: f64,
+    point: Point3,
+    numerical: NumericalPolicy,
+) -> f64 {
+    let original_span = hi - lo;
     for _ in 0..MAX_MINIMIZE_STEPS {
-        if hi - lo <= 1e-12 {
-            break;
-        }
         let third = (hi - lo) / 3.0;
         let left = lo + third;
         let right = hi - third;
+        if ternary_interval_has_no_progress(numerical, original_span, lo, left, right, hi) {
+            break;
+        }
         let f_left = curve.eval(left).dist(point);
         let f_right = curve.eval(right).dist(point);
-        if (f_left - f_right).abs() <= 1e-18 {
+        let Some(equal) = nonnegative_values_are_numerically_equal(numerical, f_left, f_right)
+        else {
+            break;
+        };
+        if equal {
             lo = left;
             hi = right;
         } else if f_left < f_right {
@@ -557,7 +608,7 @@ fn minimize_point_distance(curve: &NurbsCurve, mut lo: f64, mut hi: f64, point: 
             lo = left;
         }
     }
-    (lo + hi) / 2.0
+    lo + (hi - lo) * 0.5
 }
 
 fn clamp_to_domain(range: ParamRange, domain: ParamRange) -> ParamRange {
@@ -583,35 +634,34 @@ fn range_has_no_parameter_progress(
     numerical: NumericalPolicy,
 ) -> bool {
     let span = range.width();
-    span == 0.0
-        || parameter_progress_step(
-            numerical,
-            range.lo.abs().max(range.hi.abs()),
-            span,
-            tolerances.linear(),
-        )
-        .is_none_or(|step| span <= step)
+    if !span.is_finite() || span <= 0.0 {
+        return true;
+    }
+    let midpoint = range.lo + span * 0.5;
+    if !(midpoint.is_finite() && range.lo < midpoint && midpoint < range.hi) {
+        return true;
+    }
+    parameter_progress_step(numerical, 1.0, 1.0, tolerances.linear()).is_none_or(|step| 1.0 <= step)
 }
 
 fn parameter_step_has_no_progress(
     step: f64,
-    coordinate: f64,
     range: ParamRange,
     tolerances: Tolerances,
     numerical: NumericalPolicy,
 ) -> bool {
-    parameter_progress_step(
-        numerical,
-        coordinate.abs(),
-        range.width(),
-        tolerances.linear(),
-    )
-    .is_none_or(|threshold| step.abs() <= threshold)
+    let span = range.width();
+    if !step.is_finite() || !span.is_finite() || span <= 0.0 {
+        return true;
+    }
+    let normalized_step = step.abs() / span;
+    parameter_progress_step(numerical, 1.0, 1.0, tolerances.linear())
+        .is_none_or(|threshold| !normalized_step.is_finite() || normalized_step <= threshold)
 }
 
-/// Legacy parameter slack retained for overlap/input semantics and local-search
-/// sizing. It is deliberately not represented as a numerical-policy guard:
-/// migrating these uses requires a separate proof-compatibility review.
+/// Legacy parameter slack retained for overlap and input semantics. It is
+/// deliberately not represented as a numerical-policy guard: migrating these
+/// uses requires a separate proof-compatibility review.
 fn legacy_parameter_slack(range: ParamRange, tolerances: Tolerances) -> f64 {
     (range.width().abs() * 1e-10)
         .max(tolerances.angular())
@@ -625,10 +675,14 @@ fn validate_ranges(
     range_b: ParamRange,
     tolerances: Tolerances,
 ) -> Result<()> {
+    let width_a = range_a.width();
+    let width_b = range_b.width();
     if !range_a.is_finite()
         || !range_b.is_finite()
-        || range_a.width() < 0.0
-        || range_b.width() < 0.0
+        || !width_a.is_finite()
+        || !width_b.is_finite()
+        || width_a < 0.0
+        || width_b < 0.0
     {
         return Err(Error::InvalidGeometry {
             reason: "nurbs/nurbs intersection requires finite non-reversed ranges",
@@ -791,6 +845,27 @@ mod tests {
     }
 
     #[test]
+    fn clamped_newton_progress_uses_the_actual_accepted_displacement() {
+        let range = ParamRange::new(0.0, 1.0);
+        let old = range.hi;
+        let proposed_step = 0.25;
+        let accepted = (old + proposed_step).clamp(range.lo, range.hi);
+        assert_eq!(accepted, old);
+        assert!(parameter_step_has_no_progress(
+            accepted - old,
+            range,
+            Tolerances::default(),
+            NumericalPolicy::v1(),
+        ));
+        assert!(!parameter_step_has_no_progress(
+            proposed_step,
+            range,
+            Tolerances::default(),
+            NumericalPolicy::v1(),
+        ));
+    }
+
+    #[test]
     fn newton_normalized_gradient_stop_honors_policy_without_accepting_contact() {
         let parabola = tangent_parabola_with_domain(1.0);
         let horizontal =
@@ -863,6 +938,101 @@ mod tests {
         assert_eq!(forward.points[0].point, swapped.points[0].point);
         assert_eq!(forward.points[0].t_a, swapped.points[0].t_b);
         assert_eq!(forward.points[0].t_b, swapped.points[0].t_a);
+    }
+
+    #[test]
+    fn collapsed_range_decision_is_scale_invariant_and_detects_affine_offset_limits() {
+        let tolerances = Tolerances::default();
+        let numerical = NumericalPolicy::v1();
+        for scale in [1.0e-200, 1.0, 1.0e200] {
+            assert!(!range_has_no_parameter_progress(
+                ParamRange::new(0.0, scale),
+                tolerances,
+                numerical,
+            ));
+        }
+        assert!(!range_has_no_parameter_progress(
+            ParamRange::new(1.0e16, 1.0e16 + 4.0),
+            tolerances,
+            numerical,
+        ));
+        assert!(range_has_no_parameter_progress(
+            ParamRange::new(1.0e16, 1.0e16 + 2.0),
+            tolerances,
+            numerical,
+        ));
+
+        let coarse = NumericalPolicy::try_new(32.0, 1.0e16, 128.0 * f64::EPSILON).unwrap();
+        assert!(range_has_no_parameter_progress(
+            ParamRange::new(0.0, 1.0),
+            tolerances,
+            coarse,
+        ));
+    }
+
+    #[test]
+    fn contact_classification_is_directly_invariant_across_parameter_scales() {
+        let tolerances = Tolerances::default();
+        for parameter_scale in [1.0e-13, 1.0, 1.0e13] {
+            let tangent = tangent_parabola_with_domain(parameter_scale);
+            let horizontal = line_with_domain(
+                Point3::new(-1.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                parameter_scale,
+            );
+            let vertical = line_with_domain(
+                Point3::new(0.0, -1.0, 0.0),
+                Point3::new(0.0, 1.0, 0.0),
+                parameter_scale,
+            );
+            let t = parameter_scale * 0.5;
+            assert_eq!(
+                contact_kind(&tangent, t, &horizontal, t, tolerances),
+                ContactKind::Tangent,
+                "parameter scale {parameter_scale:e}",
+            );
+            assert_eq!(
+                contact_kind(&horizontal, t, &vertical, t, tolerances),
+                ContactKind::Transverse,
+                "parameter scale {parameter_scale:e}",
+            );
+        }
+    }
+
+    #[test]
+    fn zero_derivative_contact_is_singular() {
+        let stationary = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+            ],
+            None,
+        )
+        .unwrap();
+        let vertical =
+            line_with_domain(Point3::new(0.0, -1.0, 0.0), Point3::new(0.0, 1.0, 0.0), 1.0);
+        assert_eq!(
+            contact_kind(&stationary, 0.0, &vertical, 0.5, Tolerances::default()),
+            ContactKind::Singular,
+        );
+    }
+
+    #[test]
+    fn finite_ranges_with_overflowing_width_are_rejected() {
+        let a = line_with_domain(Point3::new(-1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0), 1.0);
+        let overflowing = ParamRange {
+            lo: -f64::MAX,
+            hi: f64::MAX,
+        };
+        assert_eq!(
+            validate_ranges(&a, overflowing, &a, a.param_range(), Tolerances::default(),),
+            Err(Error::InvalidGeometry {
+                reason: "nurbs/nurbs intersection requires finite non-reversed ranges",
+            }),
+        );
     }
 
     #[test]
