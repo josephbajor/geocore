@@ -11,9 +11,10 @@ use kgeom::nurbs::NurbsCurve;
 use kgeom::param::ParamRange;
 use kgeom::vec::Point3;
 use kops::intersect::{
-    ContactKind, NURBS_CURVE_PAIR_POLISH_FALLBACK, NURBS_CURVE_PAIR_POLISH_STATIONARY,
-    NURBS_CURVE_PAIR_SEED_ATTEMPTS, ParamOrientation, intersect_bounded_curves_with_context,
-    intersect_bounded_nurbs_nurbs, intersect_bounded_nurbs_nurbs_with_context,
+    ContactKind, NURBS_CURVE_PAIR_MINIMIZER_PARAMETER_RESOLUTION, NURBS_CURVE_PAIR_POLISH_FALLBACK,
+    NURBS_CURVE_PAIR_POLISH_STATIONARY, NURBS_CURVE_PAIR_SEED_ATTEMPTS, ParamOrientation,
+    intersect_bounded_curves_with_context, intersect_bounded_nurbs_nurbs,
+    intersect_bounded_nurbs_nurbs_with_context,
 };
 
 fn line_nurbs(start: Point3, end: Point3) -> NurbsCurve {
@@ -743,4 +744,12 @@ fn near_tangent_fallback_and_failed_stationarity_are_reported_without_acceptance
         diagnostic.code == NURBS_CURVE_PAIR_POLISH_STATIONARY
             && diagnostic.kind == DiagnosticKind::ProofIncomplete
     }));
+    assert!(outcome.report().diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == NURBS_CURVE_PAIR_MINIMIZER_PARAMETER_RESOLUTION
+            && diagnostic.kind == DiagnosticKind::NumericResolution
+    }));
+    assert_eq!(
+        outcome.report().numeric_resolution_stages(),
+        &[NURBS_CURVE_PAIR_SEED_ATTEMPTS]
+    );
 }

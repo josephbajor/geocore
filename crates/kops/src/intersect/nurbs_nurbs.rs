@@ -66,6 +66,15 @@ pub const NURBS_CURVE_PAIR_POLISH_ITERATION_LIMIT: DiagnosticCode =
 /// The bounded local minimization fallback was selected.
 pub const NURBS_CURVE_PAIR_POLISH_FALLBACK: DiagnosticCode =
     diagnostic("kops.intersect.nurbs-curve-pair-polish-fallback");
+/// A fallback minimizer reached arithmetic parameter resolution.
+pub const NURBS_CURVE_PAIR_MINIMIZER_PARAMETER_RESOLUTION: DiagnosticCode =
+    diagnostic("kops.intersect.nurbs-curve-pair-minimizer-parameter-resolution");
+/// A fallback minimizer observed a non-finite or negative objective.
+pub const NURBS_CURVE_PAIR_MINIMIZER_INVALID_OBJECTIVE: DiagnosticCode =
+    diagnostic("kops.intersect.nurbs-curve-pair-minimizer-invalid-objective");
+/// A fallback minimizer consumed its fixed iteration bound.
+pub const NURBS_CURVE_PAIR_MINIMIZER_ITERATION_LIMIT: DiagnosticCode =
+    diagnostic("kops.intersect.nurbs-curve-pair-minimizer-iteration-limit");
 
 /// Every diagnostic identity owned by NURBS curve-pair polishing.
 pub const NURBS_CURVE_PAIR_POLISH_DIAGNOSTICS: &[DiagnosticCode] = &[
@@ -75,6 +84,13 @@ pub const NURBS_CURVE_PAIR_POLISH_DIAGNOSTICS: &[DiagnosticCode] = &[
     NURBS_CURVE_PAIR_POLISH_PARAMETER_RESOLUTION,
     NURBS_CURVE_PAIR_POLISH_ITERATION_LIMIT,
     NURBS_CURVE_PAIR_POLISH_FALLBACK,
+];
+
+/// Every diagnostic identity owned by NURBS curve-pair fallback minimization.
+pub const NURBS_CURVE_PAIR_MINIMIZER_DIAGNOSTICS: &[DiagnosticCode] = &[
+    NURBS_CURVE_PAIR_MINIMIZER_PARAMETER_RESOLUTION,
+    NURBS_CURVE_PAIR_MINIMIZER_INVALID_OBJECTIVE,
+    NURBS_CURVE_PAIR_MINIMIZER_ITERATION_LIMIT,
 ];
 
 /// Version-1 composed profile for exact isolation plus cell-local discovery.
@@ -158,6 +174,62 @@ struct PolishCandidateOutcome {
     t_b: f64,
     stop: NewtonPolishStop,
     fallback_selected: bool,
+    minimizer_stops: MinimizerStopSet,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MinimizerStop {
+    ParameterResolution,
+    InvalidObjective,
+    IterationLimit,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct MinimizerStopSet(u8);
+
+impl MinimizerStopSet {
+    const PARAMETER_RESOLUTION: u8 = 1 << 0;
+    const INVALID_OBJECTIVE: u8 = 1 << 1;
+    const ITERATION_LIMIT: u8 = 1 << 2;
+
+    const fn one(stop: MinimizerStop) -> Self {
+        Self(match stop {
+            MinimizerStop::ParameterResolution => Self::PARAMETER_RESOLUTION,
+            MinimizerStop::InvalidObjective => Self::INVALID_OBJECTIVE,
+            MinimizerStop::IterationLimit => Self::ITERATION_LIMIT,
+        })
+    }
+
+    fn insert(&mut self, stop: MinimizerStop) {
+        self.0 |= Self::one(stop).0;
+    }
+
+    fn extend(&mut self, other: Self) {
+        self.0 |= other.0;
+    }
+
+    const fn contains(self, stop: MinimizerStop) -> bool {
+        self.0 & Self::one(stop).0 != 0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MinimizeOutcome {
+    parameter: f64,
+    stop: MinimizerStop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct NestedMinimizeOutcome {
+    parameter: f64,
+    stops: MinimizerStopSet,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct LocalRefinementOutcome {
+    t_a: f64,
+    t_b: f64,
+    stops: MinimizerStopSet,
 }
 
 impl VerifiedCurvePairSeed {
@@ -359,6 +431,7 @@ fn intersect_bounded_nurbs_nurbs_candidates_impl(
             polished.t_b,
             policy.tolerances.linear(),
         ) else {
+            diagnose_minimizer_stops(scope, polished.minimizer_stops);
             diagnose_polish_stop(scope, polished.stop);
             continue;
         };
@@ -527,9 +600,10 @@ fn polish_candidate(
     let (mut t_a, mut t_b) = outcome.parameters();
     let distance = a.eval(t_a).dist(b.eval(t_b));
     let mut fallback_selected = false;
+    let mut minimizer_stops = MinimizerStopSet::default();
     if needs_local_refinement(distance, policy.tolerances.linear()) {
         fallback_selected = true;
-        let (refined_a, refined_b) = refine_local_pair(
+        let refined = refine_local_pair(
             a,
             b,
             t_a,
@@ -538,8 +612,9 @@ fn polish_candidate(
             policy.range_b,
             policy.numerical,
         );
-        if a.eval(refined_a).dist(b.eval(refined_b)) < distance {
-            outcome = newton_polish_pair_outcome(a, b, refined_a, refined_b, policy);
+        minimizer_stops = refined.stops;
+        if a.eval(refined.t_a).dist(b.eval(refined.t_b)) < distance {
+            outcome = newton_polish_pair_outcome(a, b, refined.t_a, refined.t_b, policy);
             (t_a, t_b) = outcome.parameters();
         }
     }
@@ -548,6 +623,7 @@ fn polish_candidate(
         t_b,
         stop: outcome.stop,
         fallback_selected,
+        minimizer_stops,
     }
 }
 
@@ -684,6 +760,39 @@ fn diagnose_polish_stop(scope: &mut OperationScope<'_, '_>, stop: NewtonPolishSt
     scope.diagnose(NURBS_CURVE_PAIR_SEED_ATTEMPTS, code, kind, message);
 }
 
+fn diagnose_minimizer_stops(scope: &mut OperationScope<'_, '_>, stops: MinimizerStopSet) {
+    for stop in [
+        MinimizerStop::ParameterResolution,
+        MinimizerStop::InvalidObjective,
+        MinimizerStop::IterationLimit,
+    ] {
+        if !stops.contains(stop) {
+            continue;
+        }
+        let (code, kind, message) = match stop {
+            MinimizerStop::ParameterResolution => {
+                scope.record_numeric_resolution(NURBS_CURVE_PAIR_SEED_ATTEMPTS);
+                (
+                    NURBS_CURVE_PAIR_MINIMIZER_PARAMETER_RESOLUTION,
+                    DiagnosticKind::NumericResolution,
+                    "NURBS curve-pair fallback minimization reached parameter resolution",
+                )
+            }
+            MinimizerStop::InvalidObjective => (
+                NURBS_CURVE_PAIR_MINIMIZER_INVALID_OBJECTIVE,
+                DiagnosticKind::ProofIncomplete,
+                "NURBS curve-pair fallback minimization observed an invalid objective",
+            ),
+            MinimizerStop::IterationLimit => (
+                NURBS_CURVE_PAIR_MINIMIZER_ITERATION_LIMIT,
+                DiagnosticKind::ProofIncomplete,
+                "NURBS curve-pair fallback minimization reached its fixed iteration bound",
+            ),
+        };
+        scope.diagnose(NURBS_CURVE_PAIR_SEED_ATTEMPTS, code, kind, message);
+    }
+}
+
 fn refine_local_pair(
     a: &NurbsCurve,
     b: &NurbsCurve,
@@ -692,7 +801,7 @@ fn refine_local_pair(
     range_a: ParamRange,
     range_b: ParamRange,
     numerical: NumericalPolicy,
-) -> (f64, f64) {
+) -> LocalRefinementOutcome {
     let width_a = range_a.width() / MIN_STEPS as f64 * 2.0;
     let width_b = range_b.width() / MIN_STEPS as f64 * 2.0;
 
@@ -706,7 +815,7 @@ fn refine_local_pair(
         range_b,
         numerical,
     );
-    let b0 = closest_parameter_to_point(b, range_b, a.eval(a0), numerical);
+    let b0 = closest_parameter_to_point_outcome(b, range_b, a.eval(a0.parameter), numerical);
 
     let b1 = minimize_curve_to_curve_distance(
         b,
@@ -718,12 +827,26 @@ fn refine_local_pair(
         range_a,
         numerical,
     );
-    let a1 = closest_parameter_to_point(a, range_a, b.eval(b1), numerical);
+    let a1 = closest_parameter_to_point_outcome(a, range_a, b.eval(b1.parameter), numerical);
 
-    if a.eval(a0).dist(b.eval(b0)) <= a.eval(a1).dist(b.eval(b1)) {
-        (a0, b0)
+    let mut stops = a0.stops;
+    stops.insert(b0.stop);
+    stops.extend(b1.stops);
+    stops.insert(a1.stop);
+    if a.eval(a0.parameter).dist(b.eval(b0.parameter))
+        <= a.eval(a1.parameter).dist(b.eval(b1.parameter))
+    {
+        LocalRefinementOutcome {
+            t_a: a0.parameter,
+            t_b: b0.parameter,
+            stops,
+        }
     } else {
-        (a1, b1)
+        LocalRefinementOutcome {
+            t_a: a1.parameter,
+            t_b: b1.parameter,
+            stops,
+        }
     }
 }
 
@@ -733,8 +856,10 @@ fn minimize_curve_to_curve_distance(
     mut range: ParamRange,
     other_range: ParamRange,
     numerical: NumericalPolicy,
-) -> f64 {
+) -> NestedMinimizeOutcome {
     let original_span = range.width();
+    let mut stops = MinimizerStopSet::default();
+    let mut outer_stop = MinimizerStop::IterationLimit;
     for _ in 0..MAX_MINIMIZE_STEPS {
         let third = range.width() / 3.0;
         let left = range.lo + third;
@@ -747,34 +872,53 @@ fn minimize_curve_to_curve_distance(
             right,
             range.hi,
         ) {
+            outer_stop = MinimizerStop::ParameterResolution;
             break;
         }
-        let f_left = distance_from_point_to_curve(curve.eval(left), other, other_range, numerical);
+        let f_left =
+            distance_from_point_to_curve_outcome(curve.eval(left), other, other_range, numerical);
         let f_right =
-            distance_from_point_to_curve(curve.eval(right), other, other_range, numerical);
-        let Some(equal) = nonnegative_values_are_numerically_equal(numerical, f_left, f_right)
+            distance_from_point_to_curve_outcome(curve.eval(right), other, other_range, numerical);
+        stops.extend(f_left.stops);
+        stops.extend(f_right.stops);
+        let Some(equal) =
+            nonnegative_values_are_numerically_equal(numerical, f_left.distance, f_right.distance)
         else {
+            outer_stop = MinimizerStop::InvalidObjective;
             break;
         };
         if equal {
             range = ParamRange::new(left, right);
-        } else if f_left < f_right {
+        } else if f_left.distance < f_right.distance {
             range = ParamRange::new(range.lo, right);
         } else {
             range = ParamRange::new(left, range.hi);
         }
     }
-    range.lerp(0.5)
+    stops.insert(outer_stop);
+    NestedMinimizeOutcome {
+        parameter: range.lerp(0.5),
+        stops,
+    }
 }
 
-fn distance_from_point_to_curve(
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct DistanceMinimizeOutcome {
+    distance: f64,
+    stops: MinimizerStopSet,
+}
+
+fn distance_from_point_to_curve_outcome(
     point: Point3,
     curve: &NurbsCurve,
     range: ParamRange,
     numerical: NumericalPolicy,
-) -> f64 {
-    let t = closest_parameter_to_point(curve, range, point, numerical);
-    point.dist(curve.eval(t))
+) -> DistanceMinimizeOutcome {
+    let outcome = closest_parameter_to_point_outcome(curve, range, point, numerical);
+    DistanceMinimizeOutcome {
+        distance: point.dist(curve.eval(outcome.parameter)),
+        stops: MinimizerStopSet::one(outcome.stop),
+    }
 }
 
 fn push_root_candidate(
@@ -869,6 +1013,15 @@ fn closest_parameter_to_point(
     point: Point3,
     numerical: NumericalPolicy,
 ) -> f64 {
+    closest_parameter_to_point_outcome(curve, range, point, numerical).parameter
+}
+
+fn closest_parameter_to_point_outcome(
+    curve: &NurbsCurve,
+    range: ParamRange,
+    point: Point3,
+    numerical: NumericalPolicy,
+) -> MinimizeOutcome {
     let samples = sample_curve(curve, range);
     let (best_idx, _) = samples
         .iter()
@@ -878,28 +1031,31 @@ fn closest_parameter_to_point(
         .expect("sample_curve always returns at least one sample");
     let lo = samples[best_idx.saturating_sub(1)].t;
     let hi = samples[(best_idx + 1).min(samples.len() - 1)].t;
-    minimize_point_distance(curve, lo, hi, point, numerical)
+    minimize_point_distance_outcome(curve, lo, hi, point, numerical)
 }
 
-fn minimize_point_distance(
+fn minimize_point_distance_outcome(
     curve: &NurbsCurve,
     mut lo: f64,
     mut hi: f64,
     point: Point3,
     numerical: NumericalPolicy,
-) -> f64 {
+) -> MinimizeOutcome {
     let original_span = hi - lo;
+    let mut stop = MinimizerStop::IterationLimit;
     for _ in 0..MAX_MINIMIZE_STEPS {
         let third = (hi - lo) / 3.0;
         let left = lo + third;
         let right = hi - third;
         if ternary_interval_has_no_progress(numerical, original_span, lo, left, right, hi) {
+            stop = MinimizerStop::ParameterResolution;
             break;
         }
         let f_left = curve.eval(left).dist(point);
         let f_right = curve.eval(right).dist(point);
         let Some(equal) = nonnegative_values_are_numerically_equal(numerical, f_left, f_right)
         else {
+            stop = MinimizerStop::InvalidObjective;
             break;
         };
         if equal {
@@ -911,7 +1067,10 @@ fn minimize_point_distance(
             lo = left;
         }
     }
-    lo + (hi - lo) * 0.5
+    MinimizeOutcome {
+        parameter: lo + (hi - lo) * 0.5,
+        stop,
+    }
 }
 
 fn clamp_to_domain(range: ParamRange, domain: ParamRange) -> ParamRange {
@@ -1119,6 +1278,97 @@ mod tests {
             &[NURBS_CURVE_PAIR_SEED_ATTEMPTS]
         );
         assert_eq!(outcome.report().dropped_diagnostics(), 0);
+    }
+
+    #[test]
+    fn fallback_minimizer_stops_are_exact_typed_and_reportable() {
+        let unique = NURBS_CURVE_PAIR_MINIMIZER_DIAGNOSTICS
+            .iter()
+            .map(|code| code.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(unique.len(), NURBS_CURVE_PAIR_MINIMIZER_DIAGNOSTICS.len());
+        assert!(
+            unique
+                .iter()
+                .all(|code| code.starts_with("kops.intersect.nurbs-curve-pair-minimizer-"))
+        );
+
+        let line = line_with_domain(Point3::new(-1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0), 1.0);
+        let resolved = minimize_point_distance_outcome(
+            &line,
+            0.0,
+            1.0,
+            Point3::new(0.0, 1.0, 0.0),
+            NumericalPolicy::v1(),
+        );
+        assert_eq!(resolved.stop, MinimizerStop::ParameterResolution);
+        assert!((resolved.parameter - 0.5).abs() <= 64.0 * f64::EPSILON);
+
+        let invalid = minimize_point_distance_outcome(
+            &line,
+            0.0,
+            1.0,
+            Point3::new(f64::NAN, 0.0, 0.0),
+            NumericalPolicy::v1(),
+        );
+        assert_eq!(invalid.stop, MinimizerStop::InvalidObjective);
+
+        let tiny_progress = NumericalPolicy::try_new(1.0e-300, 1.0e-300, f64::EPSILON).unwrap();
+        let limited = minimize_point_distance_outcome(
+            &line,
+            0.0,
+            1.0,
+            Point3::new(-10.0, 1.0, 0.0),
+            tiny_progress,
+        );
+        assert_eq!(limited.stop, MinimizerStop::IterationLimit);
+
+        let session = SessionPolicy::v1();
+        let context = OperationContext::new(&session, Tolerances::default())
+            .unwrap()
+            .with_diagnostics(DiagnosticLevel::Summary, 3);
+        let mut scope = OperationScope::new(&context);
+        let mut stops = MinimizerStopSet::default();
+        stops.insert(MinimizerStop::ParameterResolution);
+        stops.insert(MinimizerStop::InvalidObjective);
+        stops.insert(MinimizerStop::IterationLimit);
+        diagnose_minimizer_stops(&mut scope, stops);
+        let outcome = scope.finish(Ok(()));
+        let diagnostics = outcome.report().diagnostics();
+        assert_eq!(diagnostics.len(), 3);
+        assert_eq!(
+            diagnostics[0].code,
+            NURBS_CURVE_PAIR_MINIMIZER_PARAMETER_RESOLUTION
+        );
+        assert_eq!(diagnostics[0].kind, DiagnosticKind::NumericResolution);
+        assert_eq!(
+            diagnostics[1].code,
+            NURBS_CURVE_PAIR_MINIMIZER_INVALID_OBJECTIVE
+        );
+        assert_eq!(diagnostics[1].kind, DiagnosticKind::ProofIncomplete);
+        assert_eq!(
+            diagnostics[2].code,
+            NURBS_CURVE_PAIR_MINIMIZER_ITERATION_LIMIT
+        );
+        assert_eq!(diagnostics[2].kind, DiagnosticKind::ProofIncomplete);
+        assert_eq!(
+            outcome.report().numeric_resolution_stages(),
+            &[NURBS_CURVE_PAIR_SEED_ATTEMPTS]
+        );
+        assert_eq!(outcome.report().dropped_diagnostics(), 0);
+
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let mut scope = OperationScope::new(&context);
+        diagnose_minimizer_stops(
+            &mut scope,
+            MinimizerStopSet::one(MinimizerStop::ParameterResolution),
+        );
+        let diagnostics_off = scope.finish(Ok(()));
+        assert!(diagnostics_off.report().diagnostics().is_empty());
+        assert_eq!(
+            diagnostics_off.report().numeric_resolution_stages(),
+            &[NURBS_CURVE_PAIR_SEED_ATTEMPTS]
+        );
     }
 
     #[test]

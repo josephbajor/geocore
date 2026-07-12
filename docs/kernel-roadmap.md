@@ -741,9 +741,10 @@ true only for an empty complete result.
   work, and only re-evaluated in-cell residual witnesses are emitted. These
   discoveries remain indeterminate. Newton stops and fallback selection now
   have stable bounded diagnostics, with parameter-resolution retained even
-  when diagnostics are off. Extend this to interval root-existence, typed
-  minimizer termination, generic curve/surface pairing, and procedural/NURBS
-  fields.
+  when diagnostics are off. Nested fallback minimizers now retain typed
+  parameter-resolution, invalid-objective, and iteration-bound termination.
+  Extend this to interval root-existence, generic curve/surface pairing, and
+  procedural/NURBS fields.
 - Analytic special cases and the generic solver feed the same canonical result type.
 - Consolidate the per-pair analytic curve/surface and SSI boilerplate (range
   validation, parameter fitting, dedup, branch emission — currently repeated across
@@ -915,8 +916,8 @@ that queue must eventually discharge.
   periodic/mixed boundaries, multi-loop containment, and curved shells.
 - M4: extend completion evidence with paired pcurves, coincident regions,
   singular events, and verified residual bounds; upgrade the landed bounded
-  in-cell tolerance witnesses and typed Newton stops to interval-certified root
-  existence, typed minimizer termination, and complete overlap extent.
+  in-cell tolerance witnesses and typed local-solver stops to
+  interval-certified root existence and complete overlap extent.
 - M5: grow planar profiles and booleans only after facade adoption and the
   checker, rollback, lineage, tolerance, determinism, corpus, performance, and
   independent-oracle gates.

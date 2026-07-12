@@ -442,12 +442,14 @@ partial evidence with an indeterminate status in its result record.
 ### Phase 3 — Proof-bearing results and graph integration
 
 Status: SSI carries structured incomplete evidence through swapping and
-canonicalization. NURBS curve-pair polishing now owns a stable six-code
-diagnostic inventory for stationary, ill-conditioned, no-descent,
-parameter-resolution, iteration-bound, and fallback observations; diagnostics
-remain bounded and opt-in, while parameter-resolution stages remain always-on
-report evidence. Curve/curve results still need first-class structured
-incomplete evidence before prose completion reasons can retire.
+canonicalization. NURBS curve-pair polishing owns a stable six-code diagnostic
+inventory for stationary, ill-conditioned, no-descent, parameter-resolution,
+iteration-bound, and fallback observations. Its nested fallback minimizers own
+a separate stable three-code inventory for parameter-resolution,
+invalid-objective, and iteration-bound termination. Diagnostics remain bounded
+and opt-in, while parameter-resolution stages remain always-on report evidence.
+Curve/curve results still need first-class structured incomplete evidence
+before prose completion reasons can retire.
 
 - Add structured incomplete evidence to intersection result types and verify
   it survives swapping, canonicalization, and fallback routing.

@@ -650,6 +650,12 @@ iteration bound. A failed witness emits the corresponding stable `kops`
 diagnostic when bounded summary diagnostics are enabled; parameter-resolution
 stops also remain in the report's always-on numeric-resolution stage evidence.
 Selecting the bounded local minimizer emits a separate fallback diagnostic.
+The fallback's nested point/curve and curve/curve searches also return typed
+parameter-resolution, invalid-objective, or iteration-bound stops. Their
+observed categories are unioned in a stable order so inner termination cannot
+disappear; when the attempted fallback still produces no verified witness,
+bounded diagnostics retain those categories and parameter resolution remains
+always-on stage evidence.
 Accepted residual witnesses remain authoritative and do not become failures
 merely because Newton ended at a stationary or ill-conditioned state.
 
@@ -753,7 +759,8 @@ relative objective and unit-parameter progress guards; local search is scaled
 only by its owning range; and clamped Newton steps use their actual accepted
 displacement. Model residuals retain sole contact and overlap authority.
 Segment conditioning, legacy overlap/input and parameter-deduplication slack,
-and typed minimizer termination remain separate migrations.
+and migration of the other intersection-family minimizers remain separate
+work.
 
 - Replace the repeated NURBS intersection parameter-tolerance helpers with the
   scale-aware policy API.
