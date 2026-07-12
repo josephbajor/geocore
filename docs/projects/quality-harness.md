@@ -355,15 +355,17 @@ tolerances as though they perform the same amount of work.
 
 Owner: `kgeom`.
 
-Status: the first contextual implicit-isolation slice is implemented as six
-registered cases. It varies polynomial/rational representation, one/four
-Bezier patches, retained/separated implicit geometry, and the exact work and
-candidate-cover budget boundaries. Limited results must remain indeterminate,
-retain a deterministic conservative cover of the corresponding complete
-result, and never become a complete miss. Only contextual isolation is timed;
-surface/BVH/policy setup and verification are excluded. The broader degree,
-control-net, knot-span/patch-count, and deeper subdivision matrix remains
-deferred.
+Status: two contextual isolation slices are implemented as six registered
+cases each. The implicit-surface ladder varies polynomial/rational
+representation, one/four Bezier patches, retained/separated implicit geometry,
+and exact work/candidate-cover budget boundaries. The curve-pair ladder varies
+polynomial/rational curves, retained endpoint contacts, a subdivision-proven
+hidden miss, and independent exact work, candidate-high-water, and depth
+stops. Limited results must remain indeterminate, retain a deterministic
+conservative cover of the corresponding complete result, and never become a
+complete miss. Only contextual isolation is timed; geometry/BVH/policy setup
+and verification are excluded. The broader degree, control-net,
+knot-span/patch-count, and deeper subdivision matrix remains deferred.
 
 Exercise curve and surface subdivision/isolation independently from full
 intersection dispatch. Use generated deterministic fixtures whose control

@@ -57,6 +57,7 @@ cargo bench --manifest-path benches/Cargo.toml --bench graph_build --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench graph_traversal --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench body_tessellation --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench nurbs_isolation --no-run
+cargo bench --manifest-path benches/Cargo.toml --bench curve_pair_isolation --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench xt_io --no-run
 ```
 
@@ -157,6 +158,13 @@ patches, retained candidates versus a certified separated miss, and exact
 BVH construction, operation-context setup, reports, digests, and conservative
 cover verification are excluded from the measured duration. Degree and larger
 control-net/patch-count ladders remain deferred.
+
+The curve-pair Q4 slice adds six deterministic exact-subdivision cases. It
+varies polynomial/rational curves, retained endpoint contacts versus a hidden
+separated miss, and independent work, candidate-high-water, and depth stops.
+Every limited result must retain its conservative parent cover and remain
+indeterminate. Curve and policy construction, operation-context setup, report
+extraction, and evidence verification remain outside the measured duration.
 
 The first Q5 slice uses only the repository's Apache-2.0 hand-authored
 `block.x_t` and `offset_plane.x_t` fixtures. Eight cases time the public

@@ -6,6 +6,7 @@
 use core::fmt;
 
 pub mod body_tessellation;
+pub mod curve_pair_isolation;
 pub mod face_tessellation;
 pub mod graph_build;
 pub mod graph_traversal;

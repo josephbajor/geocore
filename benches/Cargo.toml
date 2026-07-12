@@ -45,6 +45,10 @@ name = "nurbs_isolation"
 harness = false
 
 [[bench]]
+name = "curve_pair_isolation"
+harness = false
+
+[[bench]]
 name = "xt_io"
 harness = false
 

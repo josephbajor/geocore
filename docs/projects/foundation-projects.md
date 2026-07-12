@@ -306,7 +306,7 @@ projection; later moves are behavior-preserving.
 modeling operations land.
 
 **Scope:** pin the Rust toolchain/MSRV; add benchmark ladders for checked commit,
-index refresh, tessellation, NURBS isolation, and X_T I/O; add initial fuzz
+index refresh, tessellation, implicit and curve-pair NURBS isolation, and X_T I/O; add initial fuzz
 targets for X_T parsing, NURBS constructors, result canonicalization, and
 transaction/Euler sequences; retain minimized regressions.
 

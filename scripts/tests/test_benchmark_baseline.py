@@ -29,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 83)
+        self.assertEqual(len(cases), 89)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -290,6 +290,47 @@ class BenchmarkBaselineTests(unittest.TestCase):
                 for case in limited
             )
         )
+        curve_pair_isolation = [
+            case
+            for case in cases
+            if case["benchmark_target"] == "curve_pair_isolation"
+        ]
+        self.assertEqual(len(curve_pair_isolation), 6)
+        self.assertTrue(
+            all(
+                case["deterministic_seed"] == 0x5154435041490009
+                and case["fixture_version"] == "curve-pair-isolation.v1"
+                for case in curve_pair_isolation
+            )
+        )
+        curve_pair_limited = [
+            case
+            for case in curve_pair_isolation
+            if case["expected_result_counters"]["limit_kind"] != "none"
+        ]
+        self.assertEqual(
+            {
+                case["expected_result_counters"]["limit_kind"]
+                for case in curve_pair_limited
+            },
+            {"work", "candidates", "depth"},
+        )
+        self.assertTrue(
+            all(
+                case["expected_result_counters"]["indeterminate"]
+                and case["expected_result_counters"]["conservative_cover"]
+                and not case["expected_result_counters"]["complete"]
+                and not case["expected_result_counters"]["proven_empty"]
+                for case in curve_pair_limited
+            )
+        )
+        curve_pair_misses = [
+            case
+            for case in curve_pair_isolation
+            if case["expected_result_counters"]["proven_empty"]
+        ]
+        self.assertEqual(len(curve_pair_misses), 1)
+        self.assertTrue(curve_pair_misses[0]["expected_result_counters"]["complete"])
         xt_io = [case for case in cases if case["benchmark_target"] == "xt_io"]
         self.assertEqual(len(xt_io), 8)
         self.assertTrue(
