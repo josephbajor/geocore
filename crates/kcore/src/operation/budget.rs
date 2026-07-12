@@ -352,7 +352,10 @@ impl WorkLedger {
     /// Reserves deterministic child allowances under a stable work ordinal.
     ///
     /// Reservations must be planned in increasing ordinal order. Parent work
-    /// cannot consume reserved capacity until children are merged.
+    /// cannot consume reserved capacity until children are merged. Additive
+    /// resources reserve the checked sum of child allowances. `Depth` is a
+    /// branch high-water value, so parent observations and child allowances
+    /// reserve only their maximum.
     ///
     /// When the parent has a root total-work ceiling and the child plan omits
     /// one, the child root reservation is inferred as the checked sum of its
@@ -395,14 +398,18 @@ impl WorkLedger {
                 });
             }
             let already_reserved = self.reserved_for(spec.stage, spec.resource)?;
-            let required = already_reserved.checked_add(spec.allowed).ok_or(
-                OperationPolicyError::AccountingOverflow {
-                    stage: spec.stage,
-                    resource: spec.resource,
-                },
-            )?;
-            let available = parent.spec.allowed.saturating_sub(parent.consumed);
-            if required > available {
+            let fits = if spec.resource == ResourceKind::Depth {
+                parent.consumed.max(already_reserved).max(spec.allowed) <= parent.spec.allowed
+            } else {
+                let required = already_reserved.checked_add(spec.allowed).ok_or(
+                    OperationPolicyError::AccountingOverflow {
+                        stage: spec.stage,
+                        resource: spec.resource,
+                    },
+                )?;
+                required <= parent.spec.allowed.saturating_sub(parent.consumed)
+            };
+            if !fits {
                 return Err(OperationPolicyError::ChildReservationExceeded {
                     stage: spec.stage,
                     resource: spec.resource,
@@ -563,8 +570,12 @@ impl WorkLedger {
         attempted: u64,
     ) -> core::result::Result<Option<LimitSnapshot>, OperationPolicyError> {
         let entry = self.entries[index];
-        let reserved = self.reserved_for(entry.spec.stage, entry.spec.resource)?;
-        let usable = entry.spec.allowed.saturating_sub(reserved);
+        let usable = if entry.spec.resource == ResourceKind::Depth {
+            entry.spec.allowed
+        } else {
+            let reserved = self.reserved_for(entry.spec.stage, entry.spec.resource)?;
+            entry.spec.allowed.saturating_sub(reserved)
+        };
         if attempted > usable {
             return Ok(Some(LimitSnapshot {
                 stage: entry.spec.stage,
@@ -593,17 +604,23 @@ impl WorkLedger {
     ) -> core::result::Result<u64, OperationPolicyError> {
         self.reservations
             .iter()
-            .filter_map(|reservation| {
-                reservation
+            .try_fold(0_u64, |reserved, reservation| {
+                let Some(allowed) = reservation
                     .plan
                     .limits
                     .iter()
                     .find(|spec| spec.stage == stage && spec.resource == resource)
                     .map(|spec| spec.allowed)
-            })
-            .try_fold(0_u64, |sum, value| {
-                sum.checked_add(value)
-                    .ok_or(OperationPolicyError::AccountingOverflow { stage, resource })
+                else {
+                    return Ok(reserved);
+                };
+                if resource == ResourceKind::Depth {
+                    Ok(reserved.max(allowed))
+                } else {
+                    reserved
+                        .checked_add(allowed)
+                        .ok_or(OperationPolicyError::AccountingOverflow { stage, resource })
+                }
             })
     }
 

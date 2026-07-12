@@ -638,6 +638,119 @@ fn child_merge_is_ordinal_ordered_and_input_order_independent() {
 }
 
 #[test]
+fn depth_child_reservations_share_branch_high_water_and_merge_by_ordinal() {
+    let depth_plan = BudgetPlan::new([LimitSpec::new(
+        STAGE_B,
+        ResourceKind::Depth,
+        AccountingMode::HighWater,
+        8,
+    )])
+    .unwrap();
+    let mut parent = WorkLedger::new(depth_plan.clone());
+    parent
+        .observe(STAGE_B, ResourceKind::Depth, 5)
+        .expect("existing parent depth");
+    let mut first = parent.reserve_child(2, depth_plan.clone()).unwrap();
+    let mut second = parent.reserve_child(9, depth_plan).unwrap();
+
+    parent
+        .observe(STAGE_B, ResourceKind::Depth, 8)
+        .expect("a reserved branch does not reduce the shared depth ceiling");
+    first
+        .ledger_mut()
+        .observe(STAGE_B, ResourceKind::Depth, 6)
+        .unwrap();
+    second
+        .ledger_mut()
+        .observe(STAGE_B, ResourceKind::Depth, 7)
+        .unwrap();
+
+    assert_eq!(
+        parent.merge_children(vec![first.clone()]),
+        Err(OperationPolicyError::UnknownChildReservation)
+    );
+    assert_eq!(parent.snapshots()[0].consumed, 8);
+    parent
+        .merge_children(vec![second, first])
+        .expect("failed joins retain reservations and input order is immaterial");
+    assert_eq!(parent.snapshots()[0].consumed, 8);
+}
+
+#[test]
+fn mixed_child_reservations_sum_work_and_bytes_but_share_depth() {
+    let parent_plan = BudgetPlan::new([
+        LimitSpec::new(STAGE_A, ResourceKind::Work, AccountingMode::Cumulative, 6),
+        LimitSpec::new(STAGE_B, ResourceKind::Depth, AccountingMode::HighWater, 8),
+        LimitSpec::new(STAGE_C, ResourceKind::Bytes, AccountingMode::HighWater, 10),
+    ])
+    .unwrap()
+    .with_total_work_limit(6);
+    let child_plan = BudgetPlan::new([
+        LimitSpec::new(STAGE_A, ResourceKind::Work, AccountingMode::Cumulative, 3),
+        LimitSpec::new(STAGE_B, ResourceKind::Depth, AccountingMode::HighWater, 8),
+        LimitSpec::new(STAGE_C, ResourceKind::Bytes, AccountingMode::HighWater, 5),
+    ])
+    .unwrap();
+    let mut parent = WorkLedger::new(parent_plan);
+    parent.reserve_child(1, child_plan.clone()).unwrap();
+    parent
+        .reserve_child(2, child_plan)
+        .expect("depth is max-composed while work, bytes, and root work sum");
+
+    assert_eq!(
+        parent.reserve_child(
+            3,
+            BudgetPlan::new([LimitSpec::new(
+                STAGE_C,
+                ResourceKind::Bytes,
+                AccountingMode::HighWater,
+                1,
+            )])
+            .unwrap(),
+        ),
+        Err(OperationPolicyError::ChildReservationExceeded {
+            stage: STAGE_C,
+            resource: ResourceKind::Bytes,
+        })
+    );
+}
+
+#[test]
+fn byte_high_water_reservations_protect_concurrently_live_child_capacity() {
+    let parent_plan = BudgetPlan::new([LimitSpec::new(
+        STAGE_C,
+        ResourceKind::Bytes,
+        AccountingMode::HighWater,
+        10,
+    )])
+    .unwrap();
+    let child_plan = BudgetPlan::new([LimitSpec::new(
+        STAGE_C,
+        ResourceKind::Bytes,
+        AccountingMode::HighWater,
+        6,
+    )])
+    .unwrap();
+    let mut parent = WorkLedger::new(parent_plan);
+    let child = parent.reserve_child(1, child_plan.clone()).unwrap();
+
+    assert_eq!(
+        parent.reserve_child(2, child_plan),
+        Err(OperationPolicyError::ChildReservationExceeded {
+            stage: STAGE_C,
+            resource: ResourceKind::Bytes,
+        })
+    );
+    let snapshot = match parent.observe(STAGE_C, ResourceKind::Bytes, 5) {
+        Err(OperationPolicyError::LimitReached(snapshot)) => snapshot,
+        other => panic!("unexpected reserved-byte result: {other:?}"),
+    };
+    assert_eq!(snapshot.consumed, 5);
+    assert_eq!(snapshot.allowed, 4);
+    parent.merge_children(vec![child]).unwrap();
+}
+
+#[test]
 fn child_reservations_protect_stage_and_root_capacity() {
     let child_plan = BudgetPlan::new([LimitSpec::new(
         STAGE_A,
