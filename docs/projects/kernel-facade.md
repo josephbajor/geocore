@@ -750,6 +750,14 @@ expansion.
   inventory the pre-existing path-dependency version work required for full
   package verification.
 
+Exit: the adopted path has only `kernel` as a direct kernel dependency and
+completes a supported application lifecycle across construction or import,
+semantic inspection, checking, surface evaluation, and X_T export. Every
+lower-crate import discovered during migration is either removed through an
+owner-provided semantic accessor or recorded as a named facade gap; it is not
+papered over with a raw escape hatch. Record the friction before adding another
+public operation family.
+
 F5 does not remove or privatize existing public fields in this additive phase.
 Once all in-repository consumers use accessors, a separately announced
 low-level breaking release may make entity fields crate-private and replace

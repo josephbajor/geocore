@@ -750,8 +750,18 @@ F1 is complete only when all of the following are true:
   graph representation permissive, but require a modern Parasolid oracle before
   claiming shared-basis writer conformance.
 - **Third derivatives.** Exact second derivatives of an offset require a larger
-  surface jet. Defer the API until a real consumer needs it, but keep the typed
-  unavailable result so callers cannot assume zeros.
+  surface jet. M4 SSI marching and curvature-driven tessellation are the known
+  future consumers and must treat `DerivativeUnavailable` as an explicit gate,
+  not rediscover it as a numerical failure. Defer the jet API until one of
+  those consumers owns the end-to-end contract; never substitute production
+  finite differences or zeros.
+- **Assembly-scale reverse indexing.** The implemented reverse-dependency index
+  and visited/order helpers favor simple deterministic vectors and linear
+  scans. Preserve that correctness baseline, but land the F7/Q2a graph-build
+  ladder before production-scale imports. A slot-indexed adjacency or other
+  replacement is justified only by measurements and must retain deterministic
+  insertion order, rollback, stale-handle behavior, and full-index audit
+  equality.
 - **Global regularity proof.** Bounding principal curvature over arbitrary
   NURBS regions is nontrivial. The first slice is useful with local evaluation
   and explicit indeterminate region proof; it must not overclaim certification.

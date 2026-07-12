@@ -548,8 +548,30 @@ The project is additive and staged. There is no repository-wide signature rewrit
 6. Do not require leaf analytic evaluators or simple arena accessors to accept context.
    Context appears where work can be iterative, recursive, procedural, parallel,
    diagnostic-bearing, or state-changing.
-7. Deprecation of tolerance-only overloads is a later facade/API decision, not an F2
-   exit criterion.
+7. Once a contextual path passes bit/result/error/report equivalence, close the
+   old entry point to new crate-internal production callers with Clippy
+   `disallowed-methods` or an equivalent targeted source audit. Compatibility
+   tests may call it under an explicit local allowance. Public `#[deprecated]`
+   follows only after K5 proves the supported replacement against a real
+   consumer; removal remains a separately announced compatibility decision.
+
+### Legacy API retirement ratchet
+
+Every migrated entry point moves monotonically through these states:
+
+1. **contextual alternative available** — both generations remain callable;
+2. **equivalence proven** — v1 defaults match outputs, errors, completion,
+   reports, journals, rollback, and determinism;
+3. **internal legacy use closed** — new production code cannot call the legacy
+   wrapper, while focused equivalence tests keep it exercised;
+4. **publicly deprecated** — only after facade adoption confirms that the
+   contextual/facade replacement is sufficient; and
+5. **removed** — only under the repository's explicit compatibility policy.
+
+The owner project records the state when it migrates an entry point. This
+ratchet applies to tessellation, checking, NURBS marching, intersection slack,
+and future contextual families; “opportunistic migration” is not permission to
+add new legacy callers.
 
 ## Rollout stages
 
@@ -664,6 +686,8 @@ unchanged under the compatibility policy.
   them.
 - Add a review lint or targeted source audit that rejects new unclassified production
   epsilon/work-limit constants in migrated modules.
+- Add each equivalence-proven legacy entry point to the internal-use retirement
+  ratchet; focused wrapper-equivalence tests receive the only local allowances.
 - Publish policy version and limit metrics in the corpus tooling.
 
 Exit: adding a solver stage requires a named profile entry and structured stop; migrated

@@ -199,6 +199,34 @@ Record entity counts, affected/refreshed body counts, checker obligations, and
 allocation counts when allocation instrumentation becomes available. The
 rejected-edit case protects failure atomicity, not merely throughput.
 
+## Stage Q2a — geometry graph construction and reverse-dependency ladder
+
+Owner: `kgraph`, with `ktopo` integration cases.
+
+Status: required after Q8 and before production-scale/assembly imports or a
+reverse-index representation change. This is a bounded exception to the
+benchmark-expansion freeze because the implemented index has a known scale
+question that must be measured before larger fixtures make it production debt.
+
+Capture the current deterministic implementation as the baseline before
+optimizing it. Measure graph construction and dependency maintenance separately
+from geometry evaluation with these one-dimension-at-a-time ladders:
+
+| Case | Scale | Timed work | Required checks/counters |
+| --- | --- | --- | --- |
+| independent nodes | 1, 10, 100, 1,000, 10,000 nodes | insert leaf nodes | node count, stable order, graph digest |
+| dependency chain | depth 1, 10, 100, 1,000 | insert dependency-first chain | accepted nodes, dependency visits, reverse-index digest |
+| shared fanout | 1, 10, 100, 1,000 dependents | insert offsets sharing one basis | exact dependent set and deterministic order |
+| diamond graph | 1, 10, 100, 1,000 diamonds | construct shared dependency diamonds | deduplicated traversal and graph digest |
+| transactional rollback | same representative scales | insert then reject/rollback a dependent subgraph | identical pre/post graph and reverse-index digests |
+
+Record nodes, dependency edges, reverse-index updates, and full-order rebuilds
+when those counters can be exposed behind `benchmark-internals`. Fixture
+construction outside the operation under test is excluded from timing. Any
+replacement—such as slot-indexed adjacency—must preserve insertion-ordered
+determinism, rollback behavior, stale-handle checks, and full-reconstruction
+audit equality before performance evidence can justify it.
+
 ## Stage Q3 — body tessellation ladder
 
 Owner: `ktopo`, consuming `kgeom` tessellation.
@@ -416,7 +444,11 @@ Status: next F7 milestone. Existing benchmark targets and the two current fuzz
 targets are sufficient to activate the bounded jobs; more matrices and targets
 do not block this stage.
 
-Add two jobs after Q1 and Q6 land.
+Add two bounded jobs for the existing Q1 and Q6 assets. Also make the Python
+contract surface load-bearing: CI runs
+`python -m unittest discover -s scripts/tests` and validates the excluded
+`benches/` and `fuzz/` manifests/locks rather than assuming root-workspace CI
+covers them.
 
 `benchmark-smoke`:
 
@@ -442,19 +474,30 @@ A scheduled job may use longer budgets, rotating deterministic seeds, and a
 corpus cache. It must remain bounded and must not silently update checked-in
 corpora or baselines.
 
+Add a non-host oracle-certification status check to the tooling contracts. It
+compares the current writer/bundle identity with the last committed licensed-
+host identity. CI must reject a falsely “current” status, report an explicitly
+acknowledged stale status prominently, and reserve a failing stale-evidence
+gate for writer-conformance/release claims. It does not pretend to perform the
+licensed-host validation described in `docs/oracle-loop.md`.
+
 ## Revised landing sequence from the current state
 
 1. **Q8:** activate bounded benchmark and fuzz smoke jobs for the existing
-   targets, locked corpora, fixed seeds, and documented commands.
-2. **Q7:** land minimization/promotion tooling and the regression manifest so
+   targets, locked corpora, fixed seeds, Python contract tests, excluded-
+   workspace validation, and oracle-staleness reporting.
+2. **Q2a:** capture graph construction/reverse-dependency scale before large
+   imports or any index representation change.
+3. **Q7:** land minimization/promotion tooling and the regression manifest so
    CI findings have one durable path into portable tests.
-3. **Q6 expansion:** add result-canonicalization and transaction/Euler targets
+4. **Q6 expansion:** add result-canonicalization and transaction/Euler targets
    only after the two existing targets run in CI.
-4. **Q3-Q5 expansion:** grow tessellation, NURBS isolation, and X_T size/class
+5. **Q3-Q5 expansion:** grow tessellation, NURBS isolation, and X_T size/class
    matrices only in response to an algorithm/adoption question or measured
    coverage gap.
 
-Q0-Q2 and the current Q3-Q6 foundation slices are completed milestones. No
+Q0-Q2 and the current Q3-Q6 foundation slices are completed milestones. Q2a is
+the one planned scale-baseline addition after Q8. No
 additional fuzz target, benchmark family, or broad corpus expansion should land
 before Q8 unless it is the regression for a concrete production defect.
 

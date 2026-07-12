@@ -1,9 +1,15 @@
 # Kernel Construction Roadmap
 
 Companion to [kernel-spec.md](kernel-spec.md). The specification defines the target
-contract; this document defines implementation order, current evidence, and the gates
-that prevent a locally successful prototype from being mistaken for a conformant CAD
-kernel.
+contract; this document defines milestone dependency order, current evidence, and the
+gates that prevent a locally successful prototype from being mistaken for a conformant
+CAD kernel.
+
+For handoff and day-to-day sequencing,
+[`projects/foundation-projects.md`](projects/foundation-projects.md) is the
+single authoritative current queue. This roadmap owns milestone contracts,
+dependency rationale, and long-horizon evidence gates; sections below that
+describe milestone backlog do not independently reorder active foundation work.
 
 Effort calibration, stated honestly: Parasolid represents decades of engineering and
 millions of lines of code. A small focused team may reach a useful analytic modeling
@@ -645,21 +651,22 @@ closed.
 The gate fixture for the import half of this matrix is `exemplar.x_t`
 (owner-contributed Onshape/Parasolid 37.1 production part, 2026-07-11: 96 faces
 of which 44 sit on offset surfaces and 68 reference B-surfaces, 110 intersection
-curves, 131 curve-less tolerant edges, 7,423 nodes). It parses fully today and
-reconstruction stops, by design, at its first offset surface. Its manifest row is
-the committed progress meter: `reconstruct: unsupported → pass`, then
-`tessellate: pass`, then full-checker gaps shrinking toward `valid`. Ordered
-plan:
+curves, 131 curve-less tolerant edges, 7,423 nodes). It parses fully today, and
+the geometry-graph/offset reconstruction slice is complete. Reconstruction now
+stops at periodic/closed B-geometry with the named capability
+`xt.geometry.periodic-nurbs-surfaces`; this is step 3 below, not an offset
+surface blocker. Its manifest row remains the committed progress meter:
+`reconstruct: unsupported → pass`, then `tessellate: pass`, then full-checker
+gaps shrinking toward `valid`. Dependency plan:
 
-1. **Geometry graph with the offset-surface evaluator as its first import
-   client.** Build the M2.5-B evaluation context and land `OFFSET_SURF`
+1. **COMPLETE — geometry graph with the offset-surface evaluator as its first
+   import client.** The M2.5-B evaluation context and `OFFSET_SURF`
    reconstruction on it: point/derivative evaluation through the basis
    surface's curvature, validity domains (an offset is singular where the
    distance reaches the basis's minimum concave radius of curvature),
-   conservative work boxes, and pcurve-driven tessellation. This is the single
-   blocker for exemplar reconstruction and the same graph the M4 proof
-   substrate needs; its descriptors must serve both clients without duplicated
-   owned geometry.
+   conservative work boxes, and pcurve-driven tessellation are landed. This is
+   the graph substrate shared by exemplar reconstruction and future M4 proofs;
+   its descriptors serve both clients without duplicated owned geometry.
 2. **Verified import of intersection curves.** Consume stored XT `INTERSECTION`
    geometry by verification, not recomputation: certify the transmitted
    B-spline representation against both owning surfaces with residual bounds
@@ -667,7 +674,8 @@ plan:
    certified-imported-domain pattern for pcurves. Re-deriving boolean scars
    through our own surface/surface intersector remains an M4 concern; import
    must not wait on it.
-3. **Periodic/closed B-geometry.** Extend `kgeom` NURBS evaluation,
+3. **LIVE RECONSTRUCTION BLOCKER — periodic/closed B-geometry.** Extend
+   `kgeom` NURBS evaluation,
    reconstruction, and the writer beyond clamped non-periodic forms (the M1
    debt line). The pcurve chart machinery already carries integer period
    shifts, so the work concentrates in evaluation/knot handling, edge-bound
@@ -871,44 +879,28 @@ obligation is not progress. Any intentional baseline change must update the capa
 ledger and include an adversarial regression that distinguishes `Invalid`,
 `Indeterminate`, and `Valid`.
 
-## Immediate implementation queue
+## Milestone dependency backlog
 
-1. Run the external oracle loop now: generate the Tier 1 authoring bundle with
-   `xt_oracle export`, import every file into a licensed Parasolid host (Solid Edge
-   Community Edition first; Onshape as a second Parasolid-backed host), record host
-   import/checker outcomes and mass properties, re-export, diff with
-   `xt_oracle compare`, and ratchet outcomes in `docs/oracle-results.tsv`. The first
-   run must settle the provisional B-surface pole ordering. This loop is
-   calendar-bound, requires a human with host access, and blocks nothing else —
-   start immediately and re-run as writer capabilities grow.
-2. Finish parameter-space incidence: acquire production seam/pole/apex fixtures, extend
-   full-interval face-domain containment to periodic/unclamped NURBS and unsupported
-   exact/mixed boundaries, migrate higher callers to the landed pcurve-aware transaction
-   Euler API, and add non-identity chart interchange.
-3. Add multi-body performance baselines for the landed incremental ownership/shared-
-   geometry dependency index and optimize body-order refresh if measurements require it,
-   retaining full reconstruction audit tests; migrate future modeling/healing consumers
-   to checked transactions and the landed tolerance budgets; add operation-specific
-   propagation rules, journal composition, and partition history.
-4. Discharge the remaining checker-v2 `Full` gaps: extend incidence certificates to
-   Bezier-extracted NURBS and mixed-parameter pcurves, extend loop proofs to curved
-   periodic charts, then prove multi-loop containment and curved/non-convex shell
-   self-intersection/orientation adaptively. Wire `Full` checking into an opt-in
-   commit gate as coverage grows so the certificates become load-bearing at runtime.
-5. Add the geometry graph and extend the landed intersection completion evidence with
-   paired pcurves, coincident regions, singular events, structured limits, and verified
-   residual bounds.
-6. Turn cells retained by the landed exact adaptive NURBS/implicit isolation into verified
-   root seeds; add safeguarded polishing and conditioning diagnostics, then construct the
-   branch graph while keeping analytic cases as accelerators of the same result contract.
-7. Extend the landed simple planar profile to regions with holes/curve loops, then ship
-   checked copy/transform, extrude/revolve, and the classifiers needed by a narrow M5a
-   boolean vertical slice.
-8. Expand the landed X_T manifest/stage-rate harness in parallel to licensed production-scale,
-   tolerant, NURBS, transformed, multi-body, and assembly corpora; complete external M3b
-   validation and externally certify the bounded tolerant-edge SP-curve subset.
-9. Broaden booleans only after the vertical slice passes its checker, rollback, lineage,
-   tolerance, determinism, corpus, performance, and independent-oracle gates.
+This is not an execution-priority list. The authoritative handoff queue is the
+foundation portfolio; this section preserves the larger milestone obligations
+that queue must eventually discharge.
+
+- M3b: run the current oracle procedure, including its writer-byte
+  invalidation rule. The immediate evidence debt is the regenerated 13-fixture
+  bundle plus `offset_plane.x_t` in Onshape.
+- M3c: implement periodic/closed B-geometry, the live exemplar reconstruction
+  blocker, and independently verify imported intersection curves.
+- M2.5: finish parameter-space incidence and ratcheted Full-checker proofs for
+  periodic/mixed boundaries, multi-loop containment, and curved shells.
+- M4: extend completion evidence with paired pcurves, coincident regions,
+  singular events, structured limits, and verified residual bounds; turn
+  retained NURBS cells into verified root seeds only after the F2 scale gates.
+- M5: grow planar profiles and booleans only after facade adoption and the
+  checker, rollback, lineage, tolerance, determinism, corpus, performance, and
+  independent-oracle gates.
+- Production-scale and assembly imports wait for the Q2a graph-construction
+  benchmark. Reverse-index and body-order optimization follow measurements and
+  retain deterministic full-reconstruction audits.
 
 ## After the kernel
 

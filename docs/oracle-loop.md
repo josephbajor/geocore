@@ -8,6 +8,38 @@ zero checker errors and survive a there-and-back comparison. This document is th
 operating procedure for that loop. It requires a human with host access; nothing else in
 the roadmap waits on it, so run it early and re-run it whenever writer capabilities grow.
 
+## Certification invalidation rule
+
+Licensed-host evidence certifies the exact writer behavior that produced the
+tested bytes, not the repository's writer in perpetuity. A change to
+`crates/kxt/src/write.rs`, writer planning/schema code, writer-reachable geometry
+serialization, or any generated fixture bytes makes the corresponding prior
+host evidence stale. Treat “writer bytes changed since the last oracle run” as
+a standing re-test trigger even when local round-trip and checker tests pass.
+
+After such a change:
+
+1. regenerate the deterministic bundle and retain its manifest hashes;
+2. identify every fixture whose bytes changed, conservatively treating an
+   unclear impact as the full bundle;
+3. re-run those bytes in a licensed Parasolid host before making a current
+   writer-conformance claim; and
+4. append results with the writer Git revision and bundle identity in the
+   notes field of `docs/oracle-results.tsv` until those fields receive a
+   versioned schema of their own.
+
+CI does not replace the licensed host. Q8 should add a deterministic staleness
+check that compares the current writer/bundle identity with the last committed
+certified identity and reports certification as stale. That gate blocks a
+writer-conformance claim, not unrelated kernel development.
+
+**Current handoff state:** certification is stale. The writer changed after the
+last 13-fixture Onshape run through graph migration, offset emission, and facade
+interchange, and `offset_plane.x_t` has never been exercised by a licensed
+Parasolid host. Regenerate the bundle, re-run all 13 current authoring fixtures
+plus `crates/kxt/tests/fixtures/offset_plane.x_t`, and append the results before
+calling the current writer host-verified.
+
 ## 1. Generate the bundle
 
 ```sh
