@@ -287,7 +287,16 @@ T51 : TRANSMIT FILE created by modeller version 100023017 SCH_1000230_100040";
         let mut direct = Store::new();
         let direct_existing =
             ktopo::make::block(&mut direct, &Frame::world(), [1.0, 2.0, 3.0]).unwrap();
-        let direct_import = kxt::import(block_xt.as_bytes(), &mut direct).unwrap();
+        let direct_policy = kcore::operation::SessionPolicy::v1();
+        let direct_context = kcore::operation::OperationContext::new(
+            &direct_policy,
+            kcore::tolerance::Tolerances::default(),
+        )
+        .unwrap();
+        let direct_outcome =
+            kxt::import_with_context(block_xt.as_bytes(), &mut direct, &direct_context).unwrap();
+        let direct_report = direct_outcome.report().clone();
+        let direct_import = direct_outcome.into_result().unwrap();
 
         let mut session = Kernel::new().create_session();
         let part_id = session.create_part();
@@ -305,12 +314,13 @@ T51 : TRANSMIT FILE created by modeller version 100023017 SCH_1000230_100040";
             .unwrap()
             .import_xt(ImportXtRequest::new(block_xt.as_bytes()))
             .unwrap();
+        assert_eq!(facade.report(), &direct_report);
         assert_eq!(
             report_snapshot(&facade, kgraph::eval_stage::NODE_VISITS, ResourceKind::Work,),
             LimitSnapshot {
                 stage: kgraph::eval_stage::NODE_VISITS,
                 resource: ResourceKind::Work,
-                consumed: 12,
+                consumed: 30,
                 allowed: 4_096,
             }
         );
@@ -556,6 +566,98 @@ T51 : TRANSMIT FILE created by modeller version 100023017 SCH_1000230_100040";
             1
         );
         assert_eq!(session.part(part_id).unwrap().bodies().len(), 0);
+    }
+
+    #[test]
+    fn checked_commit_graph_limit_matches_direct_import_and_rolls_back_populated_store() {
+        let bytes = block_xt();
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let existing = session
+            .edit_part(part_id.clone())
+            .unwrap()
+            .create_block(BlockRequest::new(Frame::world(), [1.0, 2.0, 3.0]))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let mut control = {
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            edit.store_mut_for_test().clone()
+        };
+        let mut direct = control.clone();
+        let before = {
+            let part = session.part(part_id.clone()).unwrap();
+            (
+                part.bodies().len(),
+                part.faces().len(),
+                part.edges().len(),
+                part.vertices().len(),
+                part.curves().len(),
+                part.surfaces().len(),
+                part.pcurves().len(),
+            )
+        };
+        let budget = EvalBudgetProfile::for_limits(64, 12);
+
+        let direct_policy = kcore::operation::SessionPolicy::v1();
+        let direct_context = kcore::operation::OperationContext::new(
+            &direct_policy,
+            kcore::tolerance::Tolerances::default(),
+        )
+        .unwrap()
+        .with_budget_overrides(budget.clone());
+        let direct_outcome =
+            kxt::import_with_context(bytes.as_bytes(), &mut direct, &direct_context).unwrap();
+        let facade = session
+            .edit_part(part_id.clone())
+            .unwrap()
+            .import_xt(
+                ImportXtRequest::new(bytes.as_bytes())
+                    .with_settings(OperationSettings::new().with_budget_overrides(budget)),
+            )
+            .unwrap();
+        let expected = LimitSnapshot {
+            stage: kgraph::eval_stage::NODE_VISITS,
+            resource: ResourceKind::Work,
+            consumed: 13,
+            allowed: 12,
+        };
+        assert_eq!(direct_outcome.result().unwrap_err().limit(), Some(expected));
+        assert_eq!(facade.result().unwrap_err().limit(), Some(expected));
+        assert_eq!(facade.report(), direct_outcome.report());
+        assert_eq!(facade.report().limit_events(), &[expected]);
+
+        let part = session.part(part_id.clone()).unwrap();
+        assert_eq!(
+            before,
+            (
+                part.bodies().len(),
+                part.faces().len(),
+                part.edges().len(),
+                part.vertices().len(),
+                part.curves().len(),
+                part.surfaces().len(),
+                part.pcurves().len(),
+            )
+        );
+        assert_eq!(part.body(existing).unwrap().kind(), crate::BodyKind::Solid);
+        assert_store_shape(&part, &direct);
+
+        let future = {
+            let mut edit = session.edit_part(part_id).unwrap();
+            ktopo::make::block_with_journal(
+                edit.store_mut_for_test(),
+                &Frame::world(),
+                [4.0, 5.0, 6.0],
+            )
+            .unwrap()
+        };
+        let expected_future =
+            ktopo::make::block_with_journal(&mut control, &Frame::world(), [4.0, 5.0, 6.0])
+                .unwrap();
+        assert_eq!(future.body(), expected_future.body());
+        assert_eq!(future.journal(), expected_future.journal());
     }
 
     #[test]

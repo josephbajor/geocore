@@ -720,8 +720,9 @@ commit journal. Import into populated parts is rollback- and allocator-clean;
 semantic edit transactions and facade-ID journal iterators remain.
 
 Those remaining semantic edit surfaces resume after the K5 adoption pass. The
-interchange facade stays thin while `kxt` first gains truthful contextual child
-accounting for its nested graph evaluation.
+interchange facade stays thin: `kxt` reconstruction and checked-commit Fast
+validation share one contextual graph child and return one truthful
+facade report.
 
 - Add the semantic `EditTransaction` wrapper over currently public checked
   transaction methods.

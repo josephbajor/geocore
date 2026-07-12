@@ -87,7 +87,8 @@ fn facade_only_client_can_construct_and_check_a_block_with_reports() {
         .unwrap();
     assert_eq!(check.result().unwrap().outcome(), CheckOutcome::Valid);
     assert!(check.result().unwrap().faults().is_empty());
-    assert!(check.report().usage().is_empty());
+    assert!(!check.report().usage().is_empty());
+    assert!(check.report().limit_events().is_empty());
 }
 
 #[test]

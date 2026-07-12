@@ -10,13 +10,16 @@ use crate::entity::{
     SurfaceParameter,
 };
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
+use crate::graph_work::GraphQueryWork;
 use crate::store::Store;
 use kcore::error::Result as KernelResult;
 use kcore::math;
+use kcore::operation::OperationPolicyError;
 use kgeom::curve::Curve;
+use kgeom::curve2d::Curve2d;
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
-use kgeom::surface::{Dir, Surface};
+use kgeom::surface::{Degeneracy, Dir, Surface};
 use kgeom::vec::{Point2, Point3, Vec2, Vec3};
 use kgraph::{EvalLimits, SurfaceDerivativeOrder};
 
@@ -32,6 +35,45 @@ pub(crate) enum PcurveIssue {
     BadSingularity,
     BadSeam,
     OffSurface,
+}
+
+pub(crate) enum ContextualPcurveError {
+    Issue(PcurveIssue),
+    Policy(OperationPolicyError),
+}
+
+pub(crate) struct ContextualGraphQueries<'a> {
+    graph: &'a mut GraphQueryWork,
+    tolerances: kcore::tolerance::Tolerances,
+}
+
+impl<'a> ContextualGraphQueries<'a> {
+    pub(crate) fn new(
+        graph: &'a mut GraphQueryWork,
+        tolerances: kcore::tolerance::Tolerances,
+    ) -> Self {
+        Self { graph, tolerances }
+    }
+}
+
+impl From<PcurveIssue> for ContextualPcurveError {
+    fn from(value: PcurveIssue) -> Self {
+        Self::Issue(value)
+    }
+}
+
+fn contextual_query<T>(
+    result: core::result::Result<kgraph::EvalResult<T>, OperationPolicyError>,
+    issue: PcurveIssue,
+) -> core::result::Result<T, ContextualPcurveError> {
+    let lower = result.map_err(ContextualPcurveError::Policy)?;
+    lower.map_err(|error| {
+        error
+            .limit()
+            .map_or(ContextualPcurveError::Issue(issue), |snapshot| {
+                ContextualPcurveError::Policy(OperationPolicyError::LimitReached(snapshot))
+            })
+    })
 }
 
 /// Whether a whole-interval incidence proof is currently available.
@@ -145,12 +187,37 @@ pub(crate) fn check_pcurve_chart(
     surface_id: SurfaceId,
     pcurve_use: FinPcurve,
 ) -> core::result::Result<(), PcurveIssue> {
+    let periods = graph_surface_periodicity(store, surface_id)?;
+    check_pcurve_chart_with_periods(store, pcurve_use, periods)
+}
+
+pub(crate) fn check_pcurve_chart_contextual(
+    store: &Store,
+    surface_id: SurfaceId,
+    pcurve_use: FinPcurve,
+    queries: &mut ContextualGraphQueries<'_>,
+) -> core::result::Result<(), ContextualPcurveError> {
+    let periods = contextual_query(
+        queries
+            .graph
+            .query_with_tolerances(store, queries.tolerances, |eval| {
+                eval.surface_periodicity(surface_id)
+            }),
+        PcurveIssue::BadChart,
+    )?;
+    check_pcurve_chart_with_periods(store, pcurve_use, periods).map_err(Into::into)
+}
+
+fn check_pcurve_chart_with_periods(
+    store: &Store,
+    pcurve_use: FinPcurve,
+    periods: [Option<f64>; 2],
+) -> core::result::Result<(), PcurveIssue> {
     check_pcurve_definition(store, pcurve_use)?;
     let pcurve = store
         .get(pcurve_use.curve())
         .map_err(|_| PcurveIssue::StaleReference)?
         .as_curve();
-    let periods = graph_surface_periodicity(store, surface_id)?;
     for q in [pcurve_use.range().lo, pcurve_use.range().hi] {
         pcurve_use
             .chart()
@@ -161,6 +228,7 @@ pub(crate) fn check_pcurve_chart(
 }
 
 /// Validate optional closed-use winding and singular endpoint metadata.
+#[cfg(test)]
 pub(crate) fn check_pcurve_metadata(
     store: &Store,
     edge: &Edge,
@@ -185,6 +253,71 @@ pub(crate) fn check_pcurve_metadata(
         )
         .surface_degeneracies(surface_id)
         .map_err(|_| PcurveIssue::BadSingularity)?;
+    check_pcurve_metadata_resolved(
+        store,
+        edge,
+        face_domain,
+        pcurve_use,
+        pcurve,
+        periods,
+        &degeneracies,
+    )
+}
+
+pub(crate) fn check_pcurve_metadata_contextual(
+    store: &Store,
+    edge: &Edge,
+    surface_id: SurfaceId,
+    face_domain: Option<FaceDomain>,
+    pcurve_use: FinPcurve,
+    queries: &mut ContextualGraphQueries<'_>,
+) -> core::result::Result<(), ContextualPcurveError> {
+    check_pcurve_definition(store, pcurve_use)?;
+    check_pcurve_chart_contextual(store, surface_id, pcurve_use, queries)?;
+    let pcurve = store
+        .get(pcurve_use.curve())
+        .map_err(|_| PcurveIssue::StaleReference)?
+        .as_curve();
+    store
+        .get(surface_id)
+        .map_err(|_| PcurveIssue::StaleReference)?;
+    let periods = contextual_query(
+        queries
+            .graph
+            .query_with_tolerances(store, queries.tolerances, |eval| {
+                eval.surface_periodicity(surface_id)
+            }),
+        PcurveIssue::BadChart,
+    )?;
+    let degeneracies = contextual_query(
+        queries
+            .graph
+            .query_with_tolerances(store, queries.tolerances, |eval| {
+                eval.surface_degeneracies(surface_id)
+            }),
+        PcurveIssue::BadSingularity,
+    )?;
+    check_pcurve_metadata_resolved(
+        store,
+        edge,
+        face_domain,
+        pcurve_use,
+        pcurve,
+        periods,
+        &degeneracies,
+    )
+    .map_err(Into::into)
+}
+
+fn check_pcurve_metadata_resolved(
+    store: &Store,
+    edge: &Edge,
+    face_domain: Option<FaceDomain>,
+    pcurve_use: FinPcurve,
+    pcurve: &dyn Curve2d,
+    periods: [Option<f64>; 2],
+    degeneracies: &[Degeneracy],
+) -> core::result::Result<(), PcurveIssue> {
     let closed =
         edge.bounds.is_none() || edge.vertices[0].is_some() && edge.vertices[0] == edge.vertices[1];
 
@@ -374,6 +507,94 @@ pub(crate) fn check_pcurve_incidence(
             .p;
         if point.dist(curve.eval(t)) > tolerance {
             return Err(PcurveIssue::OffSurface);
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn check_pcurve_incidence_contextual(
+    store: &Store,
+    curve_id: CurveId,
+    bounds: Option<(f64, f64)>,
+    surface_id: SurfaceId,
+    pcurve_use: FinPcurve,
+    tolerance: f64,
+    queries: &mut ContextualGraphQueries<'_>,
+) -> core::result::Result<(), ContextualPcurveError> {
+    check_pcurve_definition(store, pcurve_use)?;
+    check_pcurve_chart_contextual(store, surface_id, pcurve_use, queries)?;
+    if !tolerance.is_finite() || tolerance < 0.0 {
+        return Err(PcurveIssue::BadRange.into());
+    }
+    let curve_geometry = store
+        .get(curve_id)
+        .map_err(|_| PcurveIssue::StaleReference)?;
+    let curve = curve_geometry.as_curve();
+    let edge_range = match bounds {
+        Some(_) => {
+            check_pcurve_parameterization(store, bounds, pcurve_use)?;
+            edge_range(bounds)?
+        }
+        None => {
+            let range = curve.param_range();
+            if !range.is_finite() || range.lo >= range.hi {
+                return Err(PcurveIssue::BadRange.into());
+            }
+            range
+        }
+    };
+
+    let pcurve_range = pcurve_use.range();
+    if bounds.is_none() {
+        let q0 = pcurve_use.parameter_at_edge(edge_range.lo);
+        let q1 = pcurve_use.parameter_at_edge(edge_range.hi);
+        if !q0.is_finite()
+            || !q1.is_finite()
+            || !parameter_close(q0.min(q1), pcurve_range.lo)
+            || !parameter_close(q0.max(q1), pcurve_range.hi)
+        {
+            return Err(PcurveIssue::BadRange.into());
+        }
+    }
+
+    let pcurve_geometry = store
+        .get(pcurve_use.curve())
+        .map_err(|_| PcurveIssue::StaleReference)?;
+    let pcurve = pcurve_geometry.as_curve();
+    let periods = contextual_query(
+        queries
+            .graph
+            .query_with_tolerances(store, queries.tolerances, |eval| {
+                eval.surface_periodicity(surface_id)
+            }),
+        PcurveIssue::BadChart,
+    )?;
+    let evaluation_tolerances = kcore::tolerance::Tolerances::with_linear(
+        tolerance.max(kcore::tolerance::LINEAR_RESOLUTION),
+    )
+    .map_err(|_| PcurveIssue::BadRange)?;
+    for i in 0..=INCIDENCE_SAMPLES {
+        let t = edge_range.lerp(i as f64 / INCIDENCE_SAMPLES as f64);
+        let q = pcurve_use.parameter_at_edge(t);
+        if q < pcurve_range.lo - parameter_slack(q, pcurve_range.lo)
+            || q > pcurve_range.hi + parameter_slack(q, pcurve_range.hi)
+        {
+            return Err(PcurveIssue::BadRange.into());
+        }
+        let uv = pcurve_use
+            .evaluate_uv(pcurve, t, periods)
+            .map_err(|_| PcurveIssue::BadChart)?;
+        let point = contextual_query(
+            queries
+                .graph
+                .query_with_tolerances(store, evaluation_tolerances, |eval| {
+                    eval.eval_surface(surface_id, [uv.x, uv.y], SurfaceDerivativeOrder::Position)
+                }),
+            PcurveIssue::OffSurface,
+        )?
+        .p;
+        if point.dist(curve.eval(t)) > tolerance {
+            return Err(PcurveIssue::OffSurface.into());
         }
     }
     Ok(())

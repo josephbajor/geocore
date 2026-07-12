@@ -627,9 +627,10 @@ Priority gate: F2 owns operation-family profile composition and the NURBS
 scale guards required by the generic fallback are complete. X_T
 reconstruction-owned graph evaluation now consumes one caller-owned child
 reservation across face-domain metadata and SP-curve validation, including
-aggregate and root-total limit reconciliation. Checked commit's broader Fast
-checker evaluation remains part of F2 Stage 5 rather than this G5 gate. The
-existing facade evaluation adapter remains the reference accounting contract.
+aggregate and root-total limit reconciliation. The same child spans every
+Fast-reachable checked-commit graph query, so import reports cover both phases
+without resetting the aggregate allowance. The shared topology graph-work
+adapter is now the accounting contract used by both phases.
 
 - Add graph-aware `kops` inspection/evaluation adapters without rewriting
   analytic solvers.

@@ -34,10 +34,7 @@ use crate::error::{Result, XtCapability, XtError};
 use crate::parse::{Node, Value, XtFile};
 use crate::schema::code;
 use kcore::math;
-use kcore::operation::{
-    AccountingMode, BudgetPlan, ChildWorkLedger, LimitSnapshot, LimitSpec, OperationContext,
-    OperationOutcome, OperationPolicyError, OperationScope, ResourceKind, TOTAL_WORK_STAGE,
-};
+use kcore::operation::{OperationContext, OperationOutcome, OperationPolicyError, OperationScope};
 use kcore::tolerance::{LINEAR_RESOLUTION, Tolerances};
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::curve2d::{Curve2d, NurbsCurve2d};
@@ -46,16 +43,14 @@ use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::param::{ParamRange, wrap_periodic};
 use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Torus};
 use kgeom::vec::{Point2, Point3, Vec3};
-use kgraph::{
-    EvalBudgetProfile, EvalContext, EvalLimits, EvalUsage, OffsetSurfaceDescriptor,
-    SurfaceDerivativeOrder,
-};
+use kgraph::{EvalBudgetProfile, EvalLimits, OffsetSurfaceDescriptor, SurfaceDerivativeOrder};
 use ktopo::entity::{
     Body, BodyId, BodyKind, Curve2dId, CurveId, Edge, EdgeId, Face, FaceDomain, FaceId, Fin,
     FinPcurve, Loop, ParamMap1d, PcurveEndpointKind, Region, RegionId, RegionKind, Sense, Shell,
     ShellId, SurfaceId, Vertex, VertexId,
 };
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
+use ktopo::graph_work::GraphQueryWork;
 use ktopo::store::Store;
 use ktopo::tolerance::EntityTolerance;
 use ktopo::transaction::{AssemblyStore, Journal, MutationKind};
@@ -128,32 +123,34 @@ pub fn reconstruct_in_scope(
     scope: &mut OperationScope<'_, '_>,
     child_ordinal: u64,
 ) -> Result<Reconstruction> {
-    let (child_plan, limits) = graph_child_plan(scope).map_err(policy_error)?;
-    let child = scope
-        .ledger_mut()
-        .reserve_child(child_ordinal, child_plan)
-        .map_err(policy_error)?;
+    let graph = GraphQueryWork::reserve(scope, child_ordinal).map_err(policy_error)?;
     let mut transaction = match store.transaction() {
         Ok(transaction) => transaction,
         Err(error) => {
-            scope
-                .ledger_mut()
-                .merge_children(vec![child])
-                .map_err(policy_error)?;
+            graph.merge(scope).map_err(policy_error)?;
             return Err(error.into());
         }
     };
-    let (lower, child) = {
+    let (lower, mut graph) = {
         let mut assembly = transaction.assembly();
-        let mut graph = ReconstructionGraphWork::new(child, limits, scope.context().tolerances());
+        let mut graph = graph;
         let result = reconstruct_into(file, &mut assembly, &mut graph);
-        (result, graph.finish())
+        (result, graph)
     };
-    if let Err(error) = scope.ledger_mut().merge_children(vec![child]) {
-        return Err(policy_error(error));
-    }
-    let mut reconstruction = lower?;
-    reconstruction.journal = transaction.commit_checked(&reconstruction.bodies)?;
+    let mut reconstruction = match lower {
+        Ok(reconstruction) => reconstruction,
+        Err(error) => {
+            graph.merge(scope).map_err(policy_error)?;
+            return Err(error);
+        }
+    };
+    let commit = transaction.commit_checked_with_graph(&reconstruction.bodies, &mut graph);
+    let accounting = graph.merge(scope).map_err(policy_error);
+    reconstruction.journal = match (commit, accounting) {
+        (Err(error), _) => return Err(error.into()),
+        (Ok(_), Err(error)) => return Err(error),
+        (Ok(journal), Ok(())) => journal,
+    };
     debug_assert!(
         reconstruction
             .journal
@@ -168,7 +165,7 @@ pub fn reconstruct_in_scope(
 fn reconstruct_into(
     file: &XtFile,
     store: &mut AssemblyStore<'_>,
-    graph: &mut ReconstructionGraphWork,
+    graph: &mut GraphQueryWork,
 ) -> Result<Reconstruction> {
     let root = xnode(file, 1)?;
     let mut body_indices = Vec::new();
@@ -270,198 +267,6 @@ fn policy_error(error: OperationPolicyError) -> XtError {
     XtError::Kernel(error.into())
 }
 
-fn graph_child_plan(
-    scope: &OperationScope<'_, '_>,
-) -> core::result::Result<(BudgetPlan, EvalLimits), OperationPolicyError> {
-    let ledger = scope.ledger();
-    ledger.require_limit(
-        kgraph::eval_stage::NODE_VISITS,
-        ResourceKind::Work,
-        AccountingMode::Cumulative,
-    )?;
-    ledger.require_limit(
-        kgraph::eval_stage::DEPENDENCY_DEPTH,
-        ResourceKind::Depth,
-        AccountingMode::HighWater,
-    )?;
-    let snapshots = ledger.snapshots();
-    let node = snapshot(
-        &snapshots,
-        kgraph::eval_stage::NODE_VISITS,
-        ResourceKind::Work,
-    )?;
-    let depth = snapshot(
-        &snapshots,
-        kgraph::eval_stage::DEPENDENCY_DEPTH,
-        ResourceKind::Depth,
-    )?;
-    let node_remaining = node.allowed.saturating_sub(node.consumed);
-    let mut plan = BudgetPlan::new([
-        LimitSpec::new(
-            node.stage,
-            node.resource,
-            AccountingMode::Cumulative,
-            node_remaining,
-        ),
-        LimitSpec::new(
-            depth.stage,
-            depth.resource,
-            AccountingMode::HighWater,
-            depth.allowed,
-        ),
-    ])?;
-    if let Some(total) = snapshots
-        .iter()
-        .find(|entry| entry.stage == TOTAL_WORK_STAGE && entry.resource == ResourceKind::Work)
-    {
-        plan = plan.with_total_work_limit(
-            total
-                .allowed
-                .saturating_sub(total.consumed)
-                .min(node_remaining),
-        );
-    }
-    let limits = EvalLimits {
-        max_dependency_depth: usize::try_from(depth.allowed).map_err(|_| {
-            OperationPolicyError::AccountingOverflow {
-                stage: depth.stage,
-                resource: depth.resource,
-            }
-        })?,
-        max_node_visits_per_query: usize::try_from(node_remaining).map_err(|_| {
-            OperationPolicyError::AccountingOverflow {
-                stage: node.stage,
-                resource: node.resource,
-            }
-        })?,
-    };
-    Ok((plan, limits))
-}
-
-fn snapshot(
-    snapshots: &[LimitSnapshot],
-    stage: kcore::operation::StageId,
-    resource: ResourceKind,
-) -> core::result::Result<LimitSnapshot, OperationPolicyError> {
-    snapshots
-        .iter()
-        .copied()
-        .find(|entry| entry.stage == stage && entry.resource == resource)
-        .ok_or(OperationPolicyError::UnknownLimit { stage, resource })
-}
-
-struct ReconstructionGraphWork {
-    child: ChildWorkLedger,
-    limits: EvalLimits,
-    tolerances: Tolerances,
-}
-
-impl ReconstructionGraphWork {
-    fn new(child: ChildWorkLedger, limits: EvalLimits, tolerances: Tolerances) -> Self {
-        Self {
-            child,
-            limits,
-            tolerances,
-        }
-    }
-
-    fn finish(self) -> ChildWorkLedger {
-        self.child
-    }
-
-    fn query<T>(
-        &mut self,
-        store: &Store,
-        query: impl FnOnce(&mut EvalContext<'_>) -> kgraph::EvalResult<T>,
-    ) -> Result<T> {
-        let snapshots = self.child.ledger().snapshots();
-        let node = snapshot(
-            &snapshots,
-            kgraph::eval_stage::NODE_VISITS,
-            ResourceKind::Work,
-        )
-        .map_err(policy_error)?;
-        let mut remaining = node.allowed.saturating_sub(node.consumed);
-        if let Some(total) = snapshots
-            .iter()
-            .find(|entry| entry.stage == TOTAL_WORK_STAGE && entry.resource == ResourceKind::Work)
-        {
-            remaining = remaining.min(total.allowed.saturating_sub(total.consumed));
-        }
-        let execution_limits = EvalLimits {
-            max_dependency_depth: self.limits.max_dependency_depth,
-            max_node_visits_per_query: usize::try_from(remaining).map_err(|_| {
-                policy_error(OperationPolicyError::AccountingOverflow {
-                    stage: node.stage,
-                    resource: node.resource,
-                })
-            })?,
-        };
-        let mut evaluator = EvalContext::new(store.geometry(), execution_limits, self.tolerances);
-        let lower = query(&mut evaluator);
-        let usage = evaluator.last_query_usage();
-        self.account(usage, lower.as_ref().err())?;
-        lower.map_err(XtError::Evaluation)
-    }
-
-    fn account(&mut self, usage: EvalUsage, failure: Option<&kgraph::EvalError>) -> Result<()> {
-        let visits = u64::try_from(usage.node_visits()).map_err(|_| {
-            policy_error(OperationPolicyError::AccountingOverflow {
-                stage: kgraph::eval_stage::NODE_VISITS,
-                resource: ResourceKind::Work,
-            })
-        })?;
-        let depth = u64::try_from(usage.dependency_depth()).map_err(|_| {
-            policy_error(OperationPolicyError::AccountingOverflow {
-                stage: kgraph::eval_stage::DEPENDENCY_DEPTH,
-                resource: ResourceKind::Depth,
-            })
-        })?;
-        self.child
-            .ledger_mut()
-            .charge(kgraph::eval_stage::NODE_VISITS, visits)
-            .map_err(policy_error)?;
-        self.child
-            .ledger_mut()
-            .observe(
-                kgraph::eval_stage::DEPENDENCY_DEPTH,
-                ResourceKind::Depth,
-                depth,
-            )
-            .map_err(policy_error)?;
-
-        let Some(snapshot) = failure.and_then(kgraph::EvalError::limit) else {
-            return Ok(());
-        };
-        let crossing = match snapshot.resource {
-            ResourceKind::Work => self.child.ledger_mut().charge_resource(
-                snapshot.stage,
-                snapshot.resource,
-                snapshot.consumed.saturating_sub(visits),
-            ),
-            ResourceKind::Depth => self.child.ledger_mut().observe(
-                snapshot.stage,
-                snapshot.resource,
-                snapshot.consumed,
-            ),
-            _ => {
-                return Err(policy_error(OperationPolicyError::UnknownLimit {
-                    stage: snapshot.stage,
-                    resource: snapshot.resource,
-                }));
-            }
-        };
-        match crossing {
-            Err(OperationPolicyError::LimitReached(actual)) if actual == snapshot => Ok(()),
-            Err(error) => Err(policy_error(error)),
-            Ok(()) => Err(policy_error(OperationPolicyError::UnknownLimit {
-                stage: snapshot.stage,
-                resource: snapshot.resource,
-            })),
-        }
-    }
-}
-
 // ------------------------------------------------------- field helpers --
 
 fn xnode(file: &XtFile, index: u32) -> Result<&Node> {
@@ -557,7 +362,7 @@ fn in_size_box(p: Vec3) -> Result<Vec3> {
 struct Recon<'file, 'assembly, 'store, 'graph> {
     file: &'file XtFile,
     store: &'assembly mut AssemblyStore<'store>,
-    graph: &'graph mut ReconstructionGraphWork,
+    graph: &'graph mut GraphQueryWork,
     /// XT curve index → (kernel curve, XT sense was `-`).
     curves: BTreeMap<u32, (CurveId, bool)>,
     /// XT 2D B-curve index → kernel pcurve geometry.
@@ -736,12 +541,20 @@ impl Recon<'_, '_, '_, '_> {
             self.lp(face, loop_idx)?;
             loop_idx = next;
         }
-        let natural = self.graph.query(self.store, |evaluator| {
-            evaluator.surface_param_range(surface)
-        })?;
-        let periods = self.graph.query(self.store, |evaluator| {
-            evaluator.surface_periodicity(surface)
-        })?;
+        let natural = self
+            .graph
+            .query(self.store, |evaluator| {
+                evaluator.surface_param_range(surface)
+            })
+            .map_err(policy_error)?
+            .map_err(XtError::Evaluation)?;
+        let periods = self
+            .graph
+            .query(self.store, |evaluator| {
+                evaluator.surface_periodicity(surface)
+            })
+            .map_err(policy_error)?
+            .map_err(XtError::Evaluation)?;
         let domain =
             ktopo::domain::derive_face_domain_from_metadata(self.store, face, natural, periods)?;
         self.store.get_mut(face)?.domain = domain;
@@ -1058,13 +871,17 @@ impl Recon<'_, '_, '_, '_> {
             .graph
             .query(self.store, |evaluator| {
                 evaluator.eval_surface(surface, [uv1.x, uv1.y], SurfaceDerivativeOrder::Position)
-            })?
+            })
+            .map_err(policy_error)?
+            .map_err(XtError::Evaluation)?
             .p;
         let point2 = self
             .graph
             .query(self.store, |evaluator| {
                 evaluator.eval_surface(surface, [uv2.x, uv2.y], SurfaceDerivativeOrder::Position)
-            })?
+            })
+            .map_err(policy_error)?
+            .map_err(XtError::Evaluation)?
             .p;
         if point1.dist(trim_point_1) > tolerance || point2.dist(trim_point_2) > tolerance {
             return Err(XtError::BadField {
@@ -1072,9 +889,13 @@ impl Recon<'_, '_, '_, '_> {
                 what: "TRIMMED_CURVE points do not match its SP-curve parameters",
             });
         }
-        let degeneracies = self.graph.query(self.store, |evaluator| {
-            evaluator.surface_degeneracies(surface)
-        })?;
+        let degeneracies = self
+            .graph
+            .query(self.store, |evaluator| {
+                evaluator.surface_degeneracies(surface)
+            })
+            .map_err(policy_error)?
+            .map_err(XtError::Evaluation)?;
         let endpoint_kinds = infer_pcurve_endpoint_kinds(&degeneracies, curve, map, [t0, t1]);
         let use_ = FinPcurve::new(pcurve, ParamRange::new(p1.min(p2), p1.max(p2)), map)
             .map_err(XtError::Kernel)?

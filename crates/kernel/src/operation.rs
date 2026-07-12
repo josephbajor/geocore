@@ -4,6 +4,7 @@ use core::fmt;
 
 use kcore::operation::{ChildWorkLedger, OperationContext, OperationPolicyError, OperationScope};
 use kgraph::{EvalBudgetProfile, EvalContext, EvalLimits, EvalUsage};
+#[cfg(test)]
 use ktopo::check::FullCheckBudgetProfile;
 use ktopo::entity::EntityRef;
 
@@ -486,11 +487,12 @@ impl Part<'_> {
             settings,
         } = request;
         self.body(body.clone())?;
-        let mut context = settings.context(self.policy)?;
-        if level == CheckLevel::Full {
-            context = context.with_family_budget_defaults(FullCheckBudgetProfile::v1_defaults());
+        let context = settings
+            .context(self.policy)?
+            .with_family_budget_defaults(ktopo::check::CheckBudgetProfile::v1_defaults(level));
+        {
             let effective = context.effective_budget();
-            for required in FullCheckBudgetProfile::v1_defaults().limits() {
+            for required in ktopo::check::CheckBudgetProfile::v1_defaults(level).limits() {
                 effective.require_limit(required.stage, required.resource, required.mode)?;
             }
         }
@@ -808,7 +810,25 @@ mod tests {
         let facade_check = part
             .check_body(CheckBodyRequest::new(created.body(), CheckLevel::Fast))
             .unwrap();
-        assert!(facade_check.report().usage().is_empty());
+        assert_eq!(
+            report_usage(
+                facade_check.report(),
+                kgraph::eval_stage::NODE_VISITS,
+                ResourceKind::Work,
+            )
+            .consumed,
+            306
+        );
+        assert_eq!(
+            report_usage(
+                facade_check.report(),
+                kgraph::eval_stage::DEPENDENCY_DEPTH,
+                ResourceKind::Depth,
+            )
+            .consumed,
+            1
+        );
+        assert!(facade_check.report().limit_events().is_empty());
         let expected = adapt_check_report(&part_id, &direct_store, direct_check).unwrap();
         assert_eq!(facade_check.result(), Ok(&expected));
     }

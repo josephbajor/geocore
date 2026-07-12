@@ -111,7 +111,7 @@ fn legacy_import_matches_contextual_v1_result_and_reports_graph_work() {
                 && snapshot.resource == ResourceKind::Work
         })
         .unwrap();
-    assert_eq!((visits.consumed, visits.allowed), (12, 4_096));
+    assert_eq!((visits.consumed, visits.allowed), (30, 4_096));
     let depth = report
         .usage()
         .iter()

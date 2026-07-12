@@ -690,8 +690,11 @@ mod tests {
     use crate::entity::{BodyKind, RegionKind};
     use crate::geom::CurveGeom;
     use crate::transaction::MutationKind;
+    use kcore::operation::{OperationContext, SessionPolicy};
+    use kcore::tolerance::Tolerances;
     use kgeom::curve::Line;
     use kgeom::frame::Frame;
+    use kgraph::EvalBudgetProfile;
 
     #[test]
     fn add_get_roundtrip_and_stale_handles() {
@@ -735,6 +738,37 @@ mod tests {
             Err(Error::TopologyCheckFailed { fault_count }) if fault_count > 0
         ));
         assert!(store.get(invalid).unwrap().regions.is_empty());
+    }
+
+    #[test]
+    fn contextual_checked_commit_limit_rolls_back_arena_and_allocator_exactly() {
+        let mut store = Store::new();
+        let body = crate::make::block(&mut store, &Frame::world(), [1.0; 3]).unwrap();
+        let before = store.count::<Point3>();
+        let mut transaction = store.transaction().unwrap();
+        let rolled_back = transaction.assembly().add(Point3::new(7.0, 8.0, 9.0));
+
+        let session = SessionPolicy::v1();
+        let context = OperationContext::new(&session, Tolerances::default())
+            .unwrap()
+            .with_budget_overrides(EvalBudgetProfile::for_limits(64, 8).with_total_work_limit(1));
+        let outcome = transaction
+            .commit_checked_body_with_context(body, &context)
+            .unwrap();
+        let expected = kcore::operation::LimitSnapshot {
+            stage: kcore::operation::TOTAL_WORK_STAGE,
+            resource: kcore::operation::ResourceKind::Work,
+            consumed: 2,
+            allowed: 1,
+        };
+        assert_eq!(
+            outcome.result().as_ref().unwrap_err().limit(),
+            Some(expected)
+        );
+        assert_eq!(outcome.report().limit_events(), &[expected]);
+        assert_eq!(store.count::<Point3>(), before);
+        let reused = store.add(Point3::new(7.0, 8.0, 9.0));
+        assert_eq!(reused, rolled_back);
     }
 
     #[test]

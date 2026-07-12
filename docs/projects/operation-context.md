@@ -683,19 +683,21 @@ thread-count variants produce identical mesh bits and semantic reports.
 
 ### Stage 5 — Checker/make integration
 
-Status: X_T reconstruction-owned graph queries are contextual. Facade import
-installs the graph family profile before parsing, owns one scope, and reserves
-one deterministic child for the complete reconstruction. SP-curve endpoint
-validation and face-domain range/periodicity metadata charge accepted visits,
-depth high-water, synthetic aggregate crossings, and root-total precedence to
-that child; any resulting failure is rollback-clean and retains matching typed
-error/report limit evidence. The legacy face-domain API still maps unavailable
-metadata to `None`, while the trusted reconstruction seam supplies already
-charged metadata and propagates graph failures. Checked commit's Fast-check
-evaluation, contextual construction/check integration, body tessellation, and
-projection remain.
+Status: X_T reconstruction and checked-commit Fast validation are contextual.
+Facade import installs one graph family profile before parsing, owns one scope,
+and gives reconstruction plus checked commit one deterministic child spanning
+both phases.
+Face metadata, SP-curve validation, face-domain validation, and procedural
+checker samples share cumulative node visits and dependency-depth high-water,
+including canonical aggregate and root-total crossings. Policy stops roll back
+the exact transaction, allocator, index, and journal state; ordinary evaluator
+failures retain the checker's established fault ordering. Legacy wrappers use a
+non-binding aggregate allowance so compatibility does not acquire an accidental
+model-size ceiling. Contextual facade construction composition and body
+tessellation remain; projection has contextual entry points but still needs
+owning-caller composition and its legacy ratchet.
 
-- Route checked construction through one scope, including affected-body checking.
+- Route facade construction through one scope, including affected-body checking.
 - Add contextual checker APIs and structured Full verification gaps.
 - Route X_T reconstruction's nested graph evaluation through the caller's
   scope and deterministic child reservations; do not report uncharged default

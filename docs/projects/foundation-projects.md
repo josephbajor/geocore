@@ -48,11 +48,12 @@ current record. Host findings remain ratcheted in `docs/oracle-results.tsv`.
 
 ### Ordered code queue
 
-1. **Contextualize and ratchet the remaining foundation paths.** X_T's
-   reconstruction phase now uses one facade-owned scope and child reservation;
-   contextual checked commit is the mandatory next half of that import path.
-   Then migrate projection and body tessellation before expanding their facade
-   APIs. As each complete contextual path proves legacy equivalence, forbid new
+1. **Contextualize and ratchet the remaining foundation paths.** X_T
+   reconstruction and checked-commit Fast validation now share one facade-owned
+   scope and cumulative graph allowance. Compose projection through its owning
+   callers and close its legacy ratchet, then complete body tessellation before
+   expanding either facade surface. As each complete
+   contextual path proves legacy equivalence, forbid new
    crate-internal calls to its legacy wrapper. K5 has now exercised the public
    compatibility surface, so proven legacy wrappers may be deprecated when
    their owning migration lands.
@@ -84,8 +85,10 @@ F7 Quality and performance harnesses             (independent and continuous)
 The original independent foundations have landed. Work is no longer scheduled
 as broad parallel expansion: Q8 made the harness protective; K5 tested the
 facade against a consumer; the completed F2 profile/scale gates make bounded F3
-fallback work eligible; the X_T reconstruction path now owns its graph child,
-while checked-commit checking and body tessellation remain. The Q2a graph-build
+fallback work eligible; X_T reconstruction and checked-commit Fast checking now
+share one graph child in one scope, while projection caller composition and body
+tessellation remain.
+The Q2a graph-build
 baseline gates large imports and reverse-index optimization.
 
 ### Standing handoff ratchets
@@ -179,9 +182,10 @@ work.
 
 **Current convergence gate:** operation-family composition and the
 scale-sensitive contact/minimizer gate are complete. Contextual graph
-evaluation, projection, and body tessellation use the same
-scope/child-reservation model: X_T reconstruction is now migrated, while
-projection, body tessellation, and checked construction remain.
+evaluation and checked commit use the same scope/child-reservation model.
+Projection's standalone contextual entries have landed, but owning-caller
+composition, its legacy ratchet, body tessellation, and facade construction
+composition remain.
 
 ## F3 — Intersection engine consolidation
 

@@ -14,12 +14,15 @@ use crate::entity::{
 };
 use crate::euler::{FinPcurvePair, Mef, Mekr, Mev, Mvfs};
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
+use crate::graph_work::GraphQueryWork;
 use crate::store::{ArenaEntity, MutableEntity, Store};
 use crate::tolerance::EntityTolerance;
 use core::ops::Deref;
 use kcore::arena::Handle;
 use kcore::error::{Error, Result};
+use kcore::operation::{OperationContext, OperationOutcome, OperationPolicyError, OperationScope};
 use kcore::tolerance::{LINEAR_RESOLUTION, Tolerances};
+use kgraph::{EvalBudgetProfile, EvalLimits};
 
 /// Net kind of one committed entity mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -664,7 +667,64 @@ impl<'a> Transaction<'a> {
     /// closure, so low-level assembly cannot hide an invalid unlisted body or
     /// orphan topology. Any fault or validation error rolls the entire
     /// transaction back.
-    pub fn commit_checked(mut self, bodies: &[BodyId]) -> Result<Journal> {
+    pub fn commit_checked(self, bodies: &[BodyId]) -> Result<Journal> {
+        let session = kcore::operation::SessionPolicy::v1();
+        let context = OperationContext::new(&session, Tolerances::default())
+            .expect("built-in checked-commit context is valid")
+            .with_budget_overrides(EvalBudgetProfile::for_limits(
+                EvalLimits::default().max_dependency_depth,
+                usize::MAX,
+            ));
+        self.commit_checked_with_context(bodies, &context)
+            .expect("built-in checked-commit graph budget is valid")
+            .into_result()
+    }
+
+    /// Validate and commit while retaining graph-query accounting.
+    pub fn commit_checked_with_context(
+        self,
+        bodies: &[BodyId],
+        context: &OperationContext<'_>,
+    ) -> core::result::Result<OperationOutcome<Journal>, OperationPolicyError> {
+        let context = context
+            .clone()
+            .with_family_budget_defaults(EvalBudgetProfile::v1_defaults());
+        EvalLimits::from_budget_plan(&context.effective_budget())?;
+        let mut scope = OperationScope::new(&context);
+        let result = self.commit_checked_in_scope(bodies, &mut scope, 0);
+        Ok(scope.finish(result))
+    }
+
+    /// Validate and commit inside one caller-owned operation scope.
+    ///
+    /// `child_ordinal` is stable within the caller's current reservation set.
+    /// This nested seam never installs defaults or resets accounting.
+    pub fn commit_checked_in_scope(
+        self,
+        bodies: &[BodyId],
+        scope: &mut OperationScope<'_, '_>,
+        child_ordinal: u64,
+    ) -> Result<Journal> {
+        let mut graph = GraphQueryWork::reserve(scope, child_ordinal).map_err(Error::from)?;
+        let result = self.commit_checked_with_graph(bodies, &mut graph);
+        let accounting = graph.merge(scope).map_err(Error::from);
+        match (result, accounting) {
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(error),
+            (Ok(journal), Ok(())) => Ok(journal),
+        }
+    }
+
+    /// Checked commit using an already-reserved graph child.
+    ///
+    /// Reviewed compound operations use this seam when graph work before and
+    /// during Fast validation must share one indivisible aggregate allowance.
+    #[doc(hidden)]
+    pub fn commit_checked_with_graph(
+        mut self,
+        bodies: &[BodyId],
+        graph: &mut GraphQueryWork,
+    ) -> Result<Journal> {
         let pending = match self.store.pending_transaction_mutations() {
             Ok(pending) => pending,
             Err(error) => {
@@ -704,14 +764,24 @@ impl<'a> Transaction<'a> {
                     continue;
                 }
                 checked.push(body);
-                fault_count += crate::check::check_body(self.store, body)?.len();
+                let body_value = self.store.get(body)?;
+                fault_count += crate::check::check_body_fast_report_with_graph(
+                    self.store, body, body_value, graph,
+                )?
+                .faults
+                .len();
             }
             for body in affected.iter().copied() {
                 if checked.contains(&body) || !self.store.contains(body) {
                     continue;
                 }
                 checked.push(body);
-                fault_count += crate::check::check_body(self.store, body)?.len();
+                let body_value = self.store.get(body)?;
+                fault_count += crate::check::check_body_fast_report_with_graph(
+                    self.store, body, body_value, graph,
+                )?
+                .faults
+                .len();
             }
             if validate_all {
                 for (body, _) in self.store.iter::<crate::entity::Body>() {
@@ -719,7 +789,14 @@ impl<'a> Transaction<'a> {
                         continue;
                     }
                     checked.push(body);
-                    fault_count += crate::check::check_body(self.store, body)?.len();
+                    fault_count += crate::check::check_body_fast_report_with_graph(
+                        self.store,
+                        body,
+                        self.store.get(body)?,
+                        graph,
+                    )?
+                    .faults
+                    .len();
                 }
             }
             if fault_count == 0 {
@@ -770,6 +847,25 @@ impl<'a> Transaction<'a> {
     /// Validate one result body and commit atomically.
     pub fn commit_checked_body(self, body: BodyId) -> Result<Journal> {
         self.commit_checked(&[body])
+    }
+
+    /// Contextual one-body checked commit retaining the operation report.
+    pub fn commit_checked_body_with_context(
+        self,
+        body: BodyId,
+        context: &OperationContext<'_>,
+    ) -> core::result::Result<OperationOutcome<Journal>, OperationPolicyError> {
+        self.commit_checked_with_context(&[body], context)
+    }
+
+    /// Nested contextual one-body checked commit.
+    pub fn commit_checked_body_in_scope(
+        self,
+        body: BodyId,
+        scope: &mut OperationScope<'_, '_>,
+        child_ordinal: u64,
+    ) -> Result<Journal> {
+        self.commit_checked_in_scope(&[body], scope, child_ordinal)
     }
 
     /// Explicitly restore the transaction entry state. Dropping without

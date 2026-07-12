@@ -57,16 +57,18 @@ use crate::entity::{
     SeamSide, ShellId, VertexId,
 };
 use crate::geom::SurfaceGeom;
+use crate::graph_work::GraphQueryWork;
 use crate::incidence::{
-    IncidenceCertification, PcurveIssue, certify_edge_surface_incidence, certify_pcurve_incidence,
-    check_pcurve_chart, check_pcurve_incidence, check_pcurve_metadata,
+    ContextualGraphQueries, ContextualPcurveError, IncidenceCertification, PcurveIssue,
+    certify_edge_surface_incidence, certify_pcurve_incidence, check_pcurve_chart_contextual,
+    check_pcurve_incidence_contextual, check_pcurve_metadata_contextual,
     check_pcurve_parameterization,
 };
 use crate::loop_proof::{LoopSimplicity, certify_loop_simplicity};
 use crate::shell_proof::{ShellEmbedding, ShellOrientation, certify_shell};
 use crate::store::{Entity, Store};
 use kcore::arena::Handle;
-use kcore::error::{CapabilityId, Result};
+use kcore::error::{CapabilityId, Error, Result};
 use kcore::operation::{
     BudgetPlan, ExecutionPolicy, LimitSnapshot, NumericalPolicy, OperationContext,
     OperationOutcome, OperationPolicyError, OperationScope, PolicyVersion, SessionPolicy,
@@ -75,7 +77,7 @@ use kcore::operation::{
 use kcore::tolerance::{LINEAR_RESOLUTION, SIZE_BOX_HALF, Tolerances};
 use kgeom::param::ParamRange;
 use kgeom::surface_point::{distance_to_surface, invert_surface_point};
-use kgraph::{EvalError, EvalLimits, SurfaceDerivativeOrder};
+use kgraph::{EvalBudgetProfile, EvalError, EvalLimits, SurfaceDerivativeOrder};
 
 /// What is wrong, attached to the offending entity in a [`Fault`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,6 +219,21 @@ impl FullCheckBudgetProfile {
     }
 }
 
+/// Version-1 aggregate budget for Fast graph queries plus optional Full proofs.
+pub struct CheckBudgetProfile;
+
+impl CheckBudgetProfile {
+    /// Defaults for one requested assurance level.
+    pub fn v1_defaults(level: CheckLevel) -> BudgetPlan {
+        let graph = EvalBudgetProfile::v1_defaults();
+        if level == CheckLevel::Full {
+            graph.overlaid(&FullCheckBudgetProfile::v1_defaults())
+        } else {
+            graph
+        }
+    }
+}
+
 /// Overall checker result at the requested assurance level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckOutcome {
@@ -326,14 +343,11 @@ pub fn check_body(store: &Store, body: BodyId) -> Result<Vec<Fault>> {
 /// obligations land, clean bodies generally return `Indeterminate` at that
 /// level.
 pub fn check_body_report(store: &Store, body: BodyId, level: CheckLevel) -> Result<CheckReport> {
-    if level == CheckLevel::Fast {
-        return check_body_fast_report(store, body);
-    }
     let session = SessionPolicy::new(
         SessionPrecision::parasolid(),
         NumericalPolicy::v1(),
         ExecutionPolicy::Serial,
-        FullCheckBudgetProfile::v1_defaults(),
+        legacy_check_budget(level),
         PolicyVersion::V1,
     );
     let context = OperationContext::new(&session, Tolerances::default())
@@ -345,7 +359,8 @@ pub fn check_body_report(store: &Store, body: BodyId, level: CheckLevel) -> Resu
 
 /// Check a body while retaining deterministic operation accounting.
 ///
-/// Full-check family defaults fill stages omitted by the caller. Matching
+/// Checker family defaults fill graph stages (and Full proof stages when
+/// requested) omitted by the caller. Matching
 /// session entries override those defaults, and explicit request overrides
 /// have final precedence. Fast checking does not install or consume the Full
 /// proof budget.
@@ -355,12 +370,11 @@ pub fn check_body_report_with_context(
     level: CheckLevel,
     context: &OperationContext<'_>,
 ) -> core::result::Result<OperationOutcome<CheckReport>, OperationPolicyError> {
-    let family_context = (level == CheckLevel::Full).then(|| {
-        context
-            .clone()
-            .with_family_budget_defaults(FullCheckBudgetProfile::v1_defaults())
-    });
-    let context = family_context.as_ref().unwrap_or(context);
+    let family_context = context
+        .clone()
+        .with_family_budget_defaults(contextual_check_budget(level));
+    let context = &family_context;
+    EvalLimits::from_budget_plan(&context.effective_budget())?;
     if level == CheckLevel::Full {
         validate_full_check_budget(context)?;
     }
@@ -380,42 +394,64 @@ pub fn check_body_report_in_scope(
     level: CheckLevel,
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<CheckReport> {
-    if level == CheckLevel::Fast {
-        return check_body_fast_report(store, body);
-    }
     let b = store.get(body)?;
-    let mut checker = Checker {
-        store,
-        tol: Tolerances::default(),
-        faults: Vec::new(),
-    };
-    checker.run(body, b);
-    let (proof_faults, gaps) = if checker.faults.is_empty() {
+    let mut graph = GraphQueryWork::reserve(scope, 0).map_err(Error::from)?;
+    let fast = check_body_fast_report_with_graph(store, body, b, &mut graph);
+    graph.merge(scope).map_err(Error::from)?;
+    let mut report = fast?;
+    if level == CheckLevel::Fast {
+        return Ok(report);
+    }
+    let (proof_faults, gaps) = if report.faults.is_empty() {
         collect_full_verification(store, body, b, scope)?
     } else {
         (Vec::new(), Vec::new())
     };
-    checker.faults.extend(proof_faults);
-    Ok(CheckReport {
-        level,
-        faults: checker.faults,
-        gaps,
-    })
+    report.level = level;
+    report.faults.extend(proof_faults);
+    report.gaps = gaps;
+    Ok(report)
 }
 
-fn check_body_fast_report(store: &Store, body: BodyId) -> Result<CheckReport> {
-    let b = store.get(body)?;
+pub(crate) fn check_body_fast_report_with_graph(
+    store: &Store,
+    body: BodyId,
+    b: &Body,
+    graph: &mut GraphQueryWork,
+) -> Result<CheckReport> {
     let mut checker = Checker {
         store,
+        // Fast validity remains tied to the kernel's fixed checker tolerance;
+        // an operation request may budget work but may not weaken acceptance.
         tol: Tolerances::default(),
         faults: Vec::new(),
+        graph,
+        policy_error: None,
     };
     checker.run(body, b);
+    let policy_error = checker.policy_error.take();
+    if let Some(error) = policy_error {
+        return Err(error.into());
+    }
     Ok(CheckReport {
         level: CheckLevel::Fast,
         faults: checker.faults,
         gaps: Vec::new(),
     })
+}
+
+fn contextual_check_budget(level: CheckLevel) -> BudgetPlan {
+    CheckBudgetProfile::v1_defaults(level)
+}
+
+fn legacy_check_budget(level: CheckLevel) -> BudgetPlan {
+    let graph =
+        EvalBudgetProfile::for_limits(EvalLimits::default().max_dependency_depth, usize::MAX);
+    if level == CheckLevel::Full {
+        graph.overlaid(&FullCheckBudgetProfile::v1_defaults())
+    } else {
+        graph
+    }
 }
 
 fn validate_full_check_budget(
@@ -567,10 +603,12 @@ const EDGE_SAMPLES: usize = 5;
 /// Sample points per fin when computing a loop's UV winding.
 const ORIENTATION_SAMPLES: usize = 8;
 
-struct Checker<'a> {
+struct Checker<'a, 'graph> {
     store: &'a Store,
     tol: Tolerances,
     faults: Vec<Fault>,
+    graph: &'graph mut GraphQueryWork,
+    policy_error: Option<OperationPolicyError>,
 }
 
 /// One edge reachable from the body, with the faces using it.
@@ -581,9 +619,33 @@ struct EdgeUse {
     wire_only: bool,
 }
 
-impl<'a> Checker<'a> {
+impl<'a> Checker<'a, '_> {
     fn fault(&mut self, entity: EntityRef, kind: FaultKind) {
         self.faults.push(Fault { entity, kind });
+    }
+
+    fn graph_query<T>(
+        &mut self,
+        tolerances: Tolerances,
+        query: impl FnOnce(&mut kgraph::EvalContext<'_>) -> kgraph::EvalResult<T>,
+    ) -> Option<kgraph::EvalResult<T>> {
+        if self.policy_error.is_some() {
+            return None;
+        }
+        match self
+            .graph
+            .query_with_tolerances(self.store, tolerances, query)
+        {
+            Ok(Err(error)) if error.limit().is_some() => {
+                self.policy_error = error.limit().map(OperationPolicyError::LimitReached);
+                None
+            }
+            Ok(result) => Some(result),
+            Err(error) => {
+                self.policy_error = Some(error);
+                None
+            }
+        }
     }
 
     /// Borrow a live entity or record a stale-reference fault against the
@@ -768,9 +830,9 @@ impl<'a> Checker<'a> {
             self.fault(EntityRef::Face(fid), FaultKind::BadTolerance);
         }
         if let (Some(domain), Some(_)) = (face.domain, surface) {
-            if !valid_face_domain(self.store, face.surface, domain) {
+            if !valid_face_domain(self, face.surface, domain) {
                 self.fault(EntityRef::Face(fid), FaultKind::BadFaceDomain);
-            } else if !face_domain_contains_pcurve_endpoints(self.store, face, domain) {
+            } else if !face_domain_contains_pcurve_endpoints(self, face, domain) {
                 self.fault(
                     EntityRef::Face(fid),
                     FaultKind::FaceDomainMissesPcurveEndpoint,
@@ -922,19 +984,28 @@ impl<'a> Checker<'a> {
         // Structural pcurve obligations are independent of whether surface
         // evaluation can be classified. Prove or fault them before any
         // procedural regularity precheck can return Indeterminate.
-        let structural = check_pcurve_chart(self.store, face.surface, pcurve_use)
-            .and_then(|()| {
-                if edge.bounds.is_some() {
-                    check_pcurve_parameterization(self.store, edge.bounds, pcurve_use)
-                } else {
-                    Ok(())
-                }
-            })
-            .and_then(|()| {
-                check_pcurve_metadata(self.store, edge, face.surface, face.domain, pcurve_use)
-            });
-        if let Err(issue) = structural {
+        let mut queries = ContextualGraphQueries::new(self.graph, self.tol);
+        let chart =
+            check_pcurve_chart_contextual(self.store, face.surface, pcurve_use, &mut queries);
+        if !self.record_contextual_pcurve(at, chart) {
+            return;
+        }
+        if edge.bounds.is_some()
+            && let Err(issue) = check_pcurve_parameterization(self.store, edge.bounds, pcurve_use)
+        {
             self.record_pcurve_issue(at, issue);
+            return;
+        }
+        let mut queries = ContextualGraphQueries::new(self.graph, self.tol);
+        let metadata = check_pcurve_metadata_contextual(
+            self.store,
+            edge,
+            face.surface,
+            face.domain,
+            pcurve_use,
+            &mut queries,
+        );
+        if !self.record_contextual_pcurve(at, metadata) {
             return;
         }
 
@@ -950,7 +1021,8 @@ impl<'a> Checker<'a> {
         let Some(curve) = edge.curve else {
             return;
         };
-        let result = check_pcurve_incidence(
+        let mut queries = ContextualGraphQueries::new(self.graph, self.tol);
+        let result = check_pcurve_incidence_contextual(
             self.store,
             curve,
             edge.bounds,
@@ -960,9 +1032,28 @@ impl<'a> Checker<'a> {
                 .map(crate::tolerance::EntityTolerance::value)
                 .unwrap_or(0.0)
                 .max(self.tol.linear()),
+            &mut queries,
         );
-        if let Err(issue) = result {
-            self.record_pcurve_issue(at, issue);
+        self.record_contextual_pcurve(at, result);
+    }
+
+    fn record_contextual_pcurve(
+        &mut self,
+        at: EntityRef,
+        result: core::result::Result<(), ContextualPcurveError>,
+    ) -> bool {
+        match result {
+            Ok(()) => true,
+            Err(ContextualPcurveError::Issue(issue)) => {
+                self.record_pcurve_issue(at, issue);
+                false
+            }
+            Err(ContextualPcurveError::Policy(error)) => {
+                if self.policy_error.is_none() {
+                    self.policy_error = Some(error);
+                }
+                false
+            }
         }
     }
 
@@ -987,11 +1078,12 @@ impl<'a> Checker<'a> {
         surface: crate::entity::SurfaceId,
         pcurve_use: crate::entity::FinPcurve,
     ) -> bool {
-        let periods = match self
-            .store
-            .eval_context(EvalLimits::default(), self.tol)
-            .surface_periodicity(surface)
-        {
+        let Some(periods_result) =
+            self.graph_query(self.tol, |eval| eval.surface_periodicity(surface))
+        else {
+            return false;
+        };
+        let periods = match periods_result {
             Ok(periods) => periods,
             Err(error) => {
                 self.fault(
@@ -1030,10 +1122,11 @@ impl<'a> Checker<'a> {
                 // The immediately following legacy validation reports BadChart/BadRange.
                 return true;
             };
-            let result = self
-                .store
-                .eval_context(EvalLimits::default(), self.tol)
-                .eval_surface(surface, [uv.x, uv.y], SurfaceDerivativeOrder::Position);
+            let Some(result) = self.graph_query(self.tol, |eval| {
+                eval.eval_surface(surface, [uv.x, uv.y], SurfaceDerivativeOrder::Position)
+            }) else {
+                return false;
+            };
             if let Err(error) = result {
                 if let Some(kind) = surface_eval_fault(&error) {
                     self.fault(at, kind);
@@ -1297,10 +1390,11 @@ impl<'a> Checker<'a> {
             ) else {
                 continue;
             };
-            let periods_result = self
-                .store
-                .eval_context(kgraph::EvalLimits::default(), self.tol)
-                .surface_periodicity(face.surface);
+            let Some(periods_result) =
+                self.graph_query(self.tol, |eval| eval.surface_periodicity(face.surface))
+            else {
+                continue;
+            };
             let periods = match periods_result {
                 Ok(periods) => periods,
                 Err(error) => {
@@ -1327,14 +1421,15 @@ impl<'a> Checker<'a> {
                 let Ok(uv) = pcurve_use.evaluate_uv(pcurve, t, periods) else {
                     continue;
                 };
-                let evaluation = self
-                    .store
-                    .eval_context(kgraph::EvalLimits::default(), self.tol)
-                    .eval_surface(
+                let Some(evaluation) = self.graph_query(self.tol, |eval| {
+                    eval.eval_surface(
                         surface,
                         [uv.x, uv.y],
                         kgraph::SurfaceDerivativeOrder::Position,
-                    );
+                    )
+                }) else {
+                    continue;
+                };
                 let value = match evaluation {
                     Ok(value) => value,
                     Err(error) => {
@@ -1591,7 +1686,7 @@ fn surface_eval_fault(error: &EvalError) -> Option<FaultKind> {
 }
 
 fn valid_face_domain(
-    store: &Store,
+    checker: &mut Checker<'_, '_>,
     surface: crate::entity::SurfaceId,
     domain: crate::entity::FaceDomain,
 ) -> bool {
@@ -1602,11 +1697,19 @@ fn valid_face_domain(
     {
         return false;
     }
-    let mut evaluator = store.eval_context(kgraph::EvalLimits::default(), Tolerances::default());
-    let Ok(natural) = evaluator.surface_param_range(surface) else {
+    let Some(natural) = checker.graph_query(checker.tol, |eval| eval.surface_param_range(surface))
+    else {
         return false;
     };
-    let Ok(periodicity) = evaluator.surface_periodicity(surface) else {
+    let Ok(natural) = natural else {
+        return false;
+    };
+    let Some(periodicity) =
+        checker.graph_query(checker.tol, |eval| eval.surface_periodicity(surface))
+    else {
+        return false;
+    };
+    let Ok(periodicity) = periodicity else {
         return false;
     };
     ranges
@@ -1617,26 +1720,28 @@ fn valid_face_domain(
 }
 
 fn face_domain_contains_pcurve_endpoints(
-    store: &Store,
+    checker: &mut Checker<'_, '_>,
     face: &crate::entity::Face,
     domain: crate::entity::FaceDomain,
 ) -> bool {
-    let Ok(periods) = store
-        .eval_context(kgraph::EvalLimits::default(), Tolerances::default())
-        .surface_periodicity(face.surface)
+    let Some(periods) =
+        checker.graph_query(checker.tol, |eval| eval.surface_periodicity(face.surface))
     else {
         return false;
     };
+    let Ok(periods) = periods else {
+        return false;
+    };
     for &loop_id in &face.loops {
-        let Ok(loop_) = store.get(loop_id) else {
+        let Ok(loop_) = checker.store.get(loop_id) else {
             continue;
         };
         for &fin_id in &loop_.fins {
-            let Ok(fin) = store.get(fin_id) else {
+            let Ok(fin) = checker.store.get(fin_id) else {
                 continue;
             };
             let Some(use_) = fin.pcurve else { continue };
-            let Ok(curve) = store.get(use_.curve()) else {
+            let Ok(curve) = checker.store.get(use_.curve()) else {
                 continue;
             };
             for q in [use_.range().lo, use_.range().hi] {
@@ -1722,6 +1827,7 @@ mod tests {
     use kgeom::param::ParamRange;
     use kgeom::surface::{Cylinder, Plane, Sphere};
     use kgeom::vec::{Point2, Point3, Vec3};
+    use kgraph::OffsetSurfaceDescriptor;
 
     fn checker_session(default_budget: kcore::operation::BudgetPlan) -> SessionPolicy {
         SessionPolicy::new(
@@ -1747,6 +1853,27 @@ mod tests {
 
     fn clean_block(store: &mut Store) -> BodyId {
         block(store, &Frame::world(), [2.0, 3.0, 4.0]).unwrap()
+    }
+
+    fn zero_offset_sheet(store: &mut Store) -> BodyId {
+        let body = planar_sheet(
+            store,
+            &Frame::world(),
+            &[
+                Point2::new(-1.0, -1.0),
+                Point2::new(1.0, -1.0),
+                Point2::new(1.0, 1.0),
+                Point2::new(-1.0, 1.0),
+            ],
+        )
+        .unwrap();
+        let face = store.faces_of_body(body).unwrap()[0];
+        let basis = store.get(face).unwrap().surface;
+        let offset = store
+            .insert_surface(OffsetSurfaceDescriptor::new(basis, 0.0).into())
+            .unwrap();
+        store.get_mut(face).unwrap().surface = offset;
+        body
     }
 
     fn adaptive_domain_sheet(store: &mut Store) -> (BodyId, FaceId) {
@@ -2032,6 +2159,104 @@ mod tests {
     }
 
     #[test]
+    fn contextual_fast_check_preserves_validity_and_accounts_procedural_queries() {
+        let mut store = Store::new();
+        let body = zero_offset_sheet(&mut store);
+        let legacy = check_body_report(&store, body, CheckLevel::Fast).unwrap();
+        assert_eq!(legacy.outcome(), CheckOutcome::Valid);
+
+        let session = checker_session(BudgetPlan::empty());
+        let loose = Tolerances::with_linear(1.0e-3).unwrap();
+        let context = OperationContext::new(&session, loose).unwrap();
+        let contextual =
+            check_body_report_with_context(&store, body, CheckLevel::Fast, &context).unwrap();
+        assert_eq!(contextual.result(), Ok(&legacy));
+        assert_eq!(
+            contextual
+                .report()
+                .usage()
+                .iter()
+                .find(|snapshot| snapshot.stage == kgraph::eval_stage::DEPENDENCY_DEPTH)
+                .unwrap()
+                .consumed,
+            2
+        );
+        assert!(
+            contextual
+                .report()
+                .usage()
+                .iter()
+                .find(|snapshot| snapshot.stage == kgraph::eval_stage::NODE_VISITS)
+                .unwrap()
+                .consumed
+                > 0
+        );
+    }
+
+    #[test]
+    fn contextual_fast_check_reconciles_leaf_and_root_limits_after_root_resolution() {
+        let mut store = Store::new();
+        let body = clean_block(&mut store);
+        let run = |budget| {
+            let session = checker_session(budget);
+            let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+            check_body_report_with_context(&store, body, CheckLevel::Fast, &context).unwrap()
+        };
+
+        let leaf = run(EvalBudgetProfile::for_limits(64, 0));
+        let leaf_limit = LimitSnapshot {
+            stage: kgraph::eval_stage::NODE_VISITS,
+            resource: ResourceKind::Work,
+            consumed: 1,
+            allowed: 0,
+        };
+        assert_eq!(
+            leaf.result().as_ref().unwrap_err().limit(),
+            Some(leaf_limit)
+        );
+        assert_eq!(leaf.report().limit_events(), &[leaf_limit]);
+
+        let root = run(EvalBudgetProfile::for_limits(64, 8).with_total_work_limit(1));
+        let root_limit = LimitSnapshot {
+            stage: kcore::operation::TOTAL_WORK_STAGE,
+            resource: ResourceKind::Work,
+            consumed: 2,
+            allowed: 1,
+        };
+        assert_eq!(
+            root.result().as_ref().unwrap_err().limit(),
+            Some(root_limit)
+        );
+        assert_eq!(root.report().limit_events(), &[root_limit]);
+
+        let offset = zero_offset_sheet(&mut store);
+        let session = checker_session(EvalBudgetProfile::for_limits(1, 64));
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let depth =
+            check_body_report_with_context(&store, offset, CheckLevel::Fast, &context).unwrap();
+        let depth_limit = LimitSnapshot {
+            stage: kgraph::eval_stage::DEPENDENCY_DEPTH,
+            resource: ResourceKind::Depth,
+            consumed: 2,
+            allowed: 1,
+        };
+        assert_eq!(
+            depth.result().as_ref().unwrap_err().limit(),
+            Some(depth_limit)
+        );
+        assert_eq!(depth.report().limit_events(), &[depth_limit]);
+
+        let stale = clean_block(&mut store);
+        store.remove(stale).unwrap();
+        let session = checker_session(EvalBudgetProfile::for_limits(64, 0));
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let stale =
+            check_body_report_with_context(&store, stale, CheckLevel::Fast, &context).unwrap();
+        assert!(matches!(stale.result(), Err(Error::StaleHandle)));
+        assert!(stale.report().limit_events().is_empty());
+    }
+
+    #[test]
     fn full_check_profile_composes_current_leaf_and_has_an_additive_growth_seam() {
         let leaf = crate::domain::FaceDomainContainmentBudgetProfile::v1_defaults();
         let aggregate = FullCheckBudgetProfile::v1_defaults();
@@ -2072,12 +2297,26 @@ mod tests {
         assert_eq!(contextual.result(), Ok(&legacy));
         assert_eq!(
             contextual.report().usage(),
-            [LimitSnapshot {
-                stage: crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
-                resource: ResourceKind::Items,
-                consumed: 1,
-                allowed: 4096,
-            }]
+            [
+                LimitSnapshot {
+                    stage: kgraph::eval_stage::DEPENDENCY_DEPTH,
+                    resource: ResourceKind::Depth,
+                    consumed: 1,
+                    allowed: 64,
+                },
+                LimitSnapshot {
+                    stage: kgraph::eval_stage::NODE_VISITS,
+                    resource: ResourceKind::Work,
+                    consumed: 306,
+                    allowed: 4096,
+                },
+                LimitSnapshot {
+                    stage: crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
+                    resource: ResourceKind::Items,
+                    consumed: 1,
+                    allowed: 4096,
+                },
+            ]
         );
 
         const CALLER_STAGE: kcore::operation::StageId =
@@ -2086,7 +2325,7 @@ mod tests {
                 Err(_) => panic!("valid test stage"),
             };
         let composed = kcore::operation::BudgetPlan::new(
-            FullCheckBudgetProfile::v1_defaults()
+            CheckBudgetProfile::v1_defaults(CheckLevel::Full)
                 .limits()
                 .iter()
                 .copied()
@@ -2121,6 +2360,18 @@ mod tests {
             report.usage(),
             [
                 LimitSnapshot {
+                    stage: kgraph::eval_stage::DEPENDENCY_DEPTH,
+                    resource: ResourceKind::Depth,
+                    consumed: 1,
+                    allowed: 64,
+                },
+                LimitSnapshot {
+                    stage: kgraph::eval_stage::NODE_VISITS,
+                    resource: ResourceKind::Work,
+                    consumed: 612,
+                    allowed: 4096,
+                },
+                LimitSnapshot {
                     stage: CALLER_STAGE,
                     resource: ResourceKind::Work,
                     consumed: 3,
@@ -2147,7 +2398,13 @@ mod tests {
         let baseline =
             check_body_report_with_context(&store, body, CheckLevel::Full, &default_context)
                 .unwrap();
-        let needed = baseline.report().usage()[0].consumed;
+        let needed = baseline
+            .report()
+            .usage()
+            .iter()
+            .find(|snapshot| snapshot.stage == crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS)
+            .unwrap()
+            .consumed;
         assert!(needed > 1 && needed < 4096);
         assert!(baseline.result().as_ref().unwrap().gaps.iter().all(|gap| {
             gap.entity != EntityRef::Face(face)

@@ -51,6 +51,8 @@ pub mod domain;
 pub mod entity;
 pub mod euler;
 pub mod geom;
+#[doc(hidden)]
+pub mod graph_work;
 pub(crate) mod incidence;
 pub(crate) mod index;
 pub(crate) mod loop_proof;
