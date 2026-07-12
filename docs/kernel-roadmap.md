@@ -752,9 +752,11 @@ true only for an empty complete result.
   for every retained cell now proves complete polynomial transverse results;
   partial certificates remain visible without upgrading completion. Next,
   positive-weight rational derivative hulls now extend that proof substrate
-  without weakening inconclusive cases. Next, extend certification to
-  non-coplanar cases and interval empty-cell exclusion, then overlap extent,
-  generic curve/surface pairing, and
+  without weakening inconclusive cases. Exact affine-plane detection also
+  removes the axis-alignment restriction using robust orientation predicates
+  and an injective coordinate projection. Next, extend certification to
+  genuinely spatial cases and interval empty-cell exclusion, then overlap
+  extent, generic curve/surface pairing, and
   procedural/NURBS fields.
 - Analytic special cases and the generic solver feed the same canonical result type.
 - Consolidate the per-pair analytic curve/surface and SSI boilerplate (range

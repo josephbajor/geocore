@@ -26,6 +26,8 @@ pub enum CurveFixture {
     Polynomial,
     /// Positive-weight rational quadratic arch.
     Rational,
+    /// Polynomial arch and line in an exact tilted affine plane.
+    TiltedPolynomial,
 }
 
 /// Exact geometric relation.
@@ -93,8 +95,9 @@ pub struct CurvePairIsolationCase {
     pub expected_output_digest: u64,
 }
 
-/// Six cases covering representation, hidden separation, and all resource stops.
-pub const CASES: [CurvePairIsolationCase; 6] = [
+/// Seven cases covering representation, plane orientation, hidden separation,
+/// and all resource stops.
+pub const CASES: [CurvePairIsolationCase; 7] = [
     case(
         "geometry/curve-pair-isolation/poly-retained-v1/1/depth-3-v1",
         CurveFixture::Polynomial,
@@ -121,6 +124,20 @@ pub const CASES: [CurvePairIsolationCase; 6] = [
             LimitKind::None,
             0x4f99_4d43_1116_fb10,
             0x6141_c7e5_8af0_3d3b,
+        ),
+    ),
+    case(
+        "geometry/curve-pair-isolation/poly-tilted-retained-v1/1/depth-3-v1",
+        CurveFixture::TiltedPolynomial,
+        GeometryRelation::Retained,
+        policy(3, 1_366, 4_096, 3),
+        expected(
+            4,
+            true,
+            false,
+            LimitKind::None,
+            0xf318_c6de_18a5_8992,
+            0x243c_13b7_d862_2e50,
         ),
     ),
     case(
@@ -428,6 +445,7 @@ impl CurvePairIsolationEvidence {
         digest.tag(match case.fixture {
             CurveFixture::Polynomial => 0,
             CurveFixture::Rational => 1,
+            CurveFixture::TiltedPolynomial => 2,
         });
         digest.tag(match case.relation {
             GeometryRelation::Retained => 0,
@@ -439,12 +457,13 @@ impl CurvePairIsolationEvidence {
 
 /// Construct one prepared curve pair and contextual policy.
 pub fn fixture(case: CurvePairIsolationCase) -> CurvePairIsolationFixture {
-    let first = arch(case.fixture == CurveFixture::Rational);
     let second_y = match case.relation {
         GeometryRelation::Retained => 0.0,
         GeometryRelation::Separated => 1.5,
     };
-    let second = line(second_y);
+    let tilted = case.fixture == CurveFixture::TiltedPolynomial;
+    let first = arch(case.fixture == CurveFixture::Rational, tilted);
+    let second = line(second_y, tilted);
     let budget = BudgetPlan::new([
         LimitSpec::new(
             NURBS_CURVE_PAIR_SUBDIVISIONS,
@@ -501,13 +520,13 @@ pub fn verify(case: CurvePairIsolationCase, evidence: CurvePairIsolationEvidence
     assert_eq!(evidence.output_digest, case.expected_output_digest);
 }
 
-fn arch(rational: bool) -> NurbsCurve {
+fn arch(rational: bool, tilted: bool) -> NurbsCurve {
     NurbsCurve::new(
         2,
         vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
         vec![
             Point3::new(-1.0, 0.0, 0.0),
-            Point3::new(0.0, 2.0, 0.0),
+            Point3::new(0.0, 2.0, if tilted { 2.0 } else { 0.0 }),
             Point3::new(1.0, 0.0, 0.0),
         ],
         rational.then_some(vec![1.0, 0.75, 1.25]),
@@ -515,11 +534,14 @@ fn arch(rational: bool) -> NurbsCurve {
     .expect("valid Q4 arch")
 }
 
-fn line(y: f64) -> NurbsCurve {
+fn line(y: f64, tilted: bool) -> NurbsCurve {
     NurbsCurve::new(
         1,
         vec![0.0, 0.0, 1.0, 1.0],
-        vec![Point3::new(-1.0, y, 0.0), Point3::new(1.0, y, 0.0)],
+        vec![
+            Point3::new(-1.0, y, if tilted { y } else { 0.0 }),
+            Point3::new(1.0, y, if tilted { y } else { 0.0 }),
+        ],
         None,
     )
     .expect("valid Q4 line")

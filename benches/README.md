@@ -70,7 +70,8 @@ certificate and verified representative.
 The curve-pair isolation ladder separately pins unique-root certificate counts
 and ordered certificate digests. Its positive-weight rational case now proves
 both retained cells through interval quotient-rule derivative bounds, while
-resource-limited controls remain zero-certificate cases.
+the tilted-plane case pins exact affine coplanarity and injective projection.
+Resource-limited controls remain zero-certificate cases.
 
 The Q1 target verifies the result digest before measurement and again in every
 timed iteration. The Q2 target provides the 21 checked-commit, incremental

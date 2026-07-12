@@ -668,11 +668,13 @@ contact geometry and folds both into its semantic output digest.
 
 The first root-existence substrate is also landed on exact curve-pair cells.
 For polynomial or positive-weight rational subcurves in an exactly shared
-axis-aligned plane, control-hull face signs discharge Poincaré–Miranda
-existence and interval derivative hulls prove a strictly positive P-matrix
-Jacobian, giving one unique exact transverse root in the parameter rectangle.
-Rational derivatives use homogeneous numerator/weight hulls and the interval
-quotient rule. Exact expansion signs protect boundary equalities. Non-coplanar,
+affine plane, control-hull face signs discharge Poincaré–Miranda existence and
+interval derivative hulls prove a strictly positive P-matrix Jacobian, giving
+one unique exact transverse root in the parameter rectangle. Exact robust
+orientation predicates prove coplanarity and choose an injective XY, XZ, or YZ
+projection without normalizing a floating plane normal. Rational derivatives
+use homogeneous numerator/weight hulls and the interval quotient rule. Exact
+expansion signs protect boundary equalities. Genuinely non-coplanar,
 tangent/singular, multi-root, and interval-inconclusive cells return no
 certificate. The NURBS/NURBS solver now retires
 the coverage gap only when isolation completed and every retained cell has

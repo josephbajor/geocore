@@ -11,6 +11,7 @@ use kcore::operation::{
     AccountingMode, BudgetPlan, LimitSnapshot, LimitSpec, OperationPolicyError, OperationScope,
     ResourceKind, StageId,
 };
+use kcore::predicates::{Orientation, orient2d, orient3d};
 
 const DEFAULT_DEPTH: u32 = 6;
 const DEFAULT_CANDIDATES: u64 = 4_096;
@@ -101,11 +102,11 @@ pub struct CurvePairCandidateCell {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CurvePairProjectionPlane {
-    /// Both subcurves lie in one exact constant-z plane.
+    /// Root equations use the x/y projection.
     Xy,
-    /// Both subcurves lie in one exact constant-y plane.
+    /// Root equations use the x/z projection.
     Xz,
-    /// Both subcurves lie in one exact constant-x plane.
+    /// Root equations use the y/z projection.
     Yz,
 }
 
@@ -113,8 +114,8 @@ pub enum CurvePairProjectionPlane {
 ///
 /// The certificate combines Poincaré–Miranda face signs for existence with a
 /// strictly positive interval P-matrix Jacobian for global injectivity on the
-/// parameter rectangle. The remaining model coordinate is exactly constant
-/// across both control hulls, so the projected root is a full 3D root.
+/// parameter rectangle. Exact coplanarity and an injective coordinate
+/// projection make the projected root a full 3D root.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CurvePairRootCertificate {
     first_range: ParamRange,
@@ -194,32 +195,24 @@ impl CurvePairCandidateCell {
     /// Certify one exact unique transverse root in this retained cell.
     ///
     /// This interval-proof slice accepts positive-weight polynomial or rational
-    /// subcurves lying in one exact axis-aligned plane. Non-coplanar, tangent,
-    /// singular, and interval-inconclusive cells return `None` without
-    /// weakening the conservative candidate cover.
+    /// subcurves lying in one exact affine plane. Non-coplanar, tangent,
+    /// singular, and interval-inconclusive cells return `None` without weakening
+    /// the conservative candidate cover.
     pub fn certify_unique_root(&self) -> Option<CurvePairRootCertificate> {
         if self.first.degree() == 0 || self.second.degree() == 0 {
             return None;
         }
-        for (plane, axes, normal) in [
-            (CurvePairProjectionPlane::Xy, [0, 1], 2),
-            (CurvePairProjectionPlane::Xz, [0, 2], 1),
-            (CurvePairProjectionPlane::Yz, [1, 2], 0),
-        ] {
-            if !share_exact_coordinate_plane(&self.first, &self.second, normal) {
-                continue;
-            }
-            for axes in [axes, [axes[1], axes[0]]] {
-                if let Some(determinant_lower_bound) =
-                    certify_projected_unique_root(&self.first, &self.second, axes)
-                {
-                    return Some(CurvePairRootCertificate {
-                        first_range: self.first_range(),
-                        second_range: self.second_range(),
-                        projection_plane: plane,
-                        determinant_lower_bound,
-                    });
-                }
+        let (plane, axes) = exact_common_plane_projection(&self.first, &self.second)?;
+        for axes in [axes, [axes[1], axes[0]]] {
+            if let Some(determinant_lower_bound) =
+                certify_projected_unique_root(&self.first, &self.second, axes)
+            {
+                return Some(CurvePairRootCertificate {
+                    first_range: self.first_range(),
+                    second_range: self.second_range(),
+                    projection_plane: plane,
+                    determinant_lower_bound,
+                });
             }
         }
         None
@@ -322,19 +315,61 @@ fn exact_difference_sign(first: f64, second: f64) -> i8 {
     expansion::sign(&expansion::from_two(rounded, residue))
 }
 
-fn share_exact_coordinate_plane(first: &NurbsCurve, second: &NurbsCurve, axis: usize) -> bool {
-    let Some(value) = first
-        .points()
-        .first()
-        .map(|point| component_value(*point, axis))
-    else {
-        return false;
+fn exact_common_plane_projection(
+    first: &NurbsCurve,
+    second: &NurbsCurve,
+) -> Option<(CurvePairProjectionPlane, [usize; 2])> {
+    let first_count = first.points().len();
+    let point_count = first_count + second.points().len();
+    let point = |index: usize| {
+        if index < first_count {
+            first.points()[index]
+        } else {
+            second.points()[index - first_count]
+        }
     };
-    first
-        .points()
-        .iter()
-        .chain(second.points())
-        .all(|point| component_value(*point, axis) == value)
+    for (plane, axes) in [
+        (CurvePairProjectionPlane::Xy, [0, 1]),
+        (CurvePairProjectionPlane::Xz, [0, 2]),
+        (CurvePairProjectionPlane::Yz, [1, 2]),
+    ] {
+        for first_index in 0..point_count.saturating_sub(2) {
+            for second_index in first_index + 1..point_count.saturating_sub(1) {
+                for third_index in second_index + 1..point_count {
+                    let a = point(first_index);
+                    let b = point(second_index);
+                    let c = point(third_index);
+                    if orient2d(
+                        projected_point(a, axes),
+                        projected_point(b, axes),
+                        projected_point(c, axes),
+                    ) == Orientation::Zero
+                    {
+                        continue;
+                    }
+                    let a = point_coordinates(a);
+                    let b = point_coordinates(b);
+                    let c = point_coordinates(c);
+                    let coplanar = (0..point_count).all(|index| {
+                        orient3d(a, b, c, point_coordinates(point(index))) == Orientation::Zero
+                    });
+                    return coplanar.then_some((plane, axes));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn projected_point(point: crate::vec::Point3, axes: [usize; 2]) -> [f64; 2] {
+    [
+        component_value(point, axes[0]),
+        component_value(point, axes[1]),
+    ]
+}
+
+fn point_coordinates(point: crate::vec::Point3) -> [f64; 3] {
+    [point.x, point.y, point.z]
 }
 
 fn control_component_bounds(curve: &NurbsCurve, axis: usize) -> (f64, f64) {
@@ -1025,8 +1060,35 @@ mod tests {
             Point3::new(0.0, 1.0, 1.0),
             None,
         );
+        let tilted = candidate_cell(horizontal.clone(), spatial.clone(), 0, 0.0)
+            .unwrap()
+            .certify_unique_root()
+            .unwrap();
+        assert_eq!(tilted.projection_plane(), CurvePairProjectionPlane::Xy);
+        assert!(tilted.determinant_lower_bound() > 0.0);
+        let tilted_swapped = candidate_cell(spatial, horizontal.clone(), 0, 0.0)
+            .unwrap()
+            .certify_unique_root()
+            .unwrap();
+        assert_eq!(
+            tilted_swapped.projection_plane(),
+            CurvePairProjectionPlane::Xy
+        );
+        assert!(tilted_swapped.determinant_lower_bound() > 0.0);
+
+        let non_coplanar = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(-1.0, -1.0, 0.0),
+                Point3::new(0.0, 0.0, 1.0),
+                Point3::new(1.0, 1.0, 0.0),
+            ],
+            None,
+        )
+        .unwrap();
         assert!(
-            candidate_cell(horizontal, spatial, 0, 0.0)
+            candidate_cell(horizontal, non_coplanar, 0, 0.0)
                 .unwrap()
                 .certify_unique_root()
                 .is_none()
@@ -1056,6 +1118,41 @@ mod tests {
                 assert!(interval.lo() <= component && component <= interval.hi());
             }
         }
+    }
+
+    #[test]
+    fn exact_affine_plane_detection_selects_an_injective_coordinate_projection() {
+        let x_axis = segment(
+            Point3::new(-1.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            None,
+        );
+        let z_axis = segment(
+            Point3::new(0.0, 0.0, -1.0),
+            Point3::new(0.0, 0.0, 1.0),
+            None,
+        );
+        let xz = candidate_cell(x_axis, z_axis, 0, 0.0)
+            .unwrap()
+            .certify_unique_root()
+            .unwrap();
+        assert_eq!(xz.projection_plane(), CurvePairProjectionPlane::Xz);
+
+        let y_axis = segment(
+            Point3::new(0.0, -1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            None,
+        );
+        let z_axis = segment(
+            Point3::new(0.0, 0.0, -1.0),
+            Point3::new(0.0, 0.0, 1.0),
+            None,
+        );
+        let yz = candidate_cell(y_axis, z_axis, 0, 0.0)
+            .unwrap()
+            .certify_unique_root()
+            .unwrap();
+        assert_eq!(yz.projection_plane(), CurvePairProjectionPlane::Yz);
     }
 
     #[test]
