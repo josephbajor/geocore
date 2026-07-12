@@ -31,7 +31,7 @@ section and link the reason from the affected project file in the same change.
 | F4 | Phase 1, representative Phase 2 slices, and two Phase 3 pilots are implemented: graph evaluation owns stable classification, and one surface-intersection family retains ordered structured incomplete evidence through limits, numeric stops, canonicalization, and swapping. Broader result-family and legacy migrations remain. |
 | F5 | K1-K3, typed K4 interchange, and K5 adoption are implemented: the `kernel` facade owns lifecycle, opaque IDs, classified sources, one-scope outcomes, safe checker subjects, opaque journals, child-accounted procedural evaluation, and atomic typed X_T import/export. The standalone `kernel-lifecycle` client depends directly only on `kernel` and proves construction, semantic inspection, Full checking, surface evaluation, and byte-stable X_T export/import/re-export. Graph-aware intersection and semantic edit/journal iteration remain. |
 | F6 | First slice implemented: shared surface inversion, chart normalization, and distance services consumed by checker and tessellation. Module splits remain. |
-| F7 | Q0-Q2a, Q8, and the first Q3-Q6 slices are implemented: CI now enforces Python/oracle freshness, compiles and smoke-runs the excluded benchmark package including graph construction, and runs both pinned fuzz targets within fixed limits. Q2a covers every currently representable graph shape; its diamond row awaits a real multi-dependency descriptor. Q3/Q4/Q5 expansion, more Q6 targets/corpora, and Q7 remain. |
+| F7 | Q0-Q2a, Q8, and the first Q3-Q6 slices are implemented: CI now enforces Python/oracle freshness, compiles and smoke-runs the excluded benchmark package including graph construction and contextual body tessellation, and runs both pinned fuzz targets within fixed limits. Q3's analytic v2 ladder pins all 21 body/face/graph/projection counters without changing mesh bits; mixed/NURBS/import measurements still gate finite presets. Q2a covers every currently representable graph shape; its diamond row awaits a real multi-dependency descriptor. Q3/Q4/Q5 expansion, more Q6 targets/corpora, and Q7 remain. |
 
 ## Current direction and handoff order
 
@@ -73,8 +73,11 @@ current record. Host findings remain ratcheted in `docs/oracle-results.tsv`.
    membership scratch, `vgids`, `face_ranges`, outer loop/chain and patch-hole
    collections, `trim_loops`, and torus arc-row holders. The reviewed block total is 84, and
    closed-surface, multi-hole, atomic N/N+1, shared-scope, overflow, diagnostic,
-   legacy, and execution-policy evidence has landed. Q3 corpus/import
-   measurement and reviewed opt-in `bounded_v1` face/body presets are next.
+   legacy, and execution-policy evidence has landed. Q3's contextual analytic
+   ladder now records all 21 aggregate stages and preserves the reviewed mesh
+   bits. Mixed/NURBS-pcurve/import measurement remains next and must precede
+   reviewed opt-in `bounded_v1` face/body presets; the analytic zero-use stages
+   are not cap-selection evidence.
    Do not describe product-facing tessellation as hostile-input bounded, use
    allocator-dependent byte counts, or silently tune the legacy v1 wrapper.
 3. **Resume algorithm/API expansion behind the completed gates.** F3's generic fallback

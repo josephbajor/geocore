@@ -82,13 +82,27 @@ and rollback equality. The planned diamond row is deferred because current
 descriptors expose at most one dependency; the harness does not invent a
 benchmark-only graph shape.
 
-The first Q3 slice registers ten analytic closed-solid cases: block, cylinder,
+The Q3 v2 contract registers ten analytic closed-solid cases: block, cylinder,
 cone, sphere, and torus at chord tolerances `1e-2` and `1e-3`. Cylinder,
 sphere, and torus exercise periodic seam/pole assembly. One immutable fixture
-is prepared per case; only `tessellate_body` is timed, while finite/range,
-watertightness, outward orientation, volume, repeatability, and exact mesh
-digest checks run outside the accumulated duration. Mixed-body and NURBS
-fixtures, boundary/refinement counters, and allocation counts remain deferred.
+and one Serial compatibility-v1 operation context are prepared per case. Only
+the `tessellate_body_with_context` call is timed; outcome unpacking,
+finite/range, watertightness, orientation, volume, and exact mesh/report
+repeatability checks run outside the accumulated duration.
+
+`usage_consumed` follows the closed `q3-usage.v1` order:
+
+1. surface projection halvings, candidates, Newton iterations, queries, samples;
+2. face boundary depth, boundary splits, interior passes, triangles, vertices;
+3. graph dependency depth and node visits; and
+4. body edge depth, edge splits, edge-storage items, iso depth, iso splits,
+   mesh vertices, prepared-patch items, retained triangles, and structural items.
+
+Every case pins all 21 values, a profile/policy/stage digest, contextual API and
+execution identity, and zero completion-event counts. Existing mesh bits and
+digests remain unchanged. These analytic measurements do not justify finite
+`bounded_v1` caps: projection and face-boundary use is zero throughout, so
+mixed-body, NURBS/pcurve, and imported-corpus measurements are still required.
 
 The first Q4 slice registers six contextual implicit-isolation cases. It varies
 polynomial versus rational single patches, one versus four extracted Bezier

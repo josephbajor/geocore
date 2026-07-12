@@ -716,9 +716,9 @@
       "expected_result_counters": {"nodes": 1, "dependency_edges": 0, "registered_nodes": 1000, "registered_dependency_edges": 1000, "reverse_index_updates": 2000, "full_order_rebuilds": 1000, "stable_order": true, "rejected": true, "rolled_back": true, "graph_digest": "5c414503e372ce9b", "reverse_index_digest": "a0073203cc9cfeb4", "output_digest": "f4b5db247d34b4c5"}
     },
     {
-      "path": "topology/body-tessellation/block-v1/1/chord-1e-2-v1",
+      "path": "topology/body-tessellation/block-v2/1/chord-1e-2-v2",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v1",
+      "fixture_version": "body-tessellation.v2",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -728,7 +728,12 @@
         "chord_tol": 0.01
       },
       "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
         "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
         "validation": "closed-solid"
       },
       "expected_result_counters": {
@@ -745,14 +750,21 @@
         "watertight": true,
         "outward": true,
         "volume_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 0, 2, 24, 1, 150, 0, 0, 120, 0, 0, 8, 120, 12, 84],
+        "usage_stage_digest": "bf3b615d9b62211b",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
         "mesh_digest": "37738ea0abf268a7",
-        "output_digest": "2b93737099765cda"
+        "output_digest": "d5d4e021744132d8"
       }
     },
     {
-      "path": "topology/body-tessellation/block-v1/1/chord-1e-3-v1",
+      "path": "topology/body-tessellation/block-v2/1/chord-1e-3-v2",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v1",
+      "fixture_version": "body-tessellation.v2",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -762,7 +774,12 @@
         "chord_tol": 0.001
       },
       "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
         "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
         "validation": "closed-solid"
       },
       "expected_result_counters": {
@@ -779,14 +796,21 @@
         "watertight": true,
         "outward": true,
         "volume_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 0, 2, 24, 1, 150, 0, 0, 120, 0, 0, 8, 120, 12, 84],
+        "usage_stage_digest": "bf3b615d9b62211b",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
         "mesh_digest": "37738ea0abf268a7",
-        "output_digest": "2b93737099765cda"
+        "output_digest": "d5d4e021744132d8"
       }
     },
     {
-      "path": "topology/body-tessellation/cylinder-v1/1/chord-1e-2-v1",
+      "path": "topology/body-tessellation/cylinder-v2/1/chord-1e-2-v2",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v1",
+      "fixture_version": "body-tessellation.v2",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -796,7 +820,12 @@
         "chord_tol": 0.01
       },
       "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
         "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
         "validation": "closed-solid"
       },
       "expected_result_counters": {
@@ -813,14 +842,21 @@
         "watertight": true,
         "outward": true,
         "volume_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 5, 5762, 2979, 1, 647, 3, 56, 206, 0, 0, 2913, 3497, 5822, 23],
+        "usage_stage_digest": "7a3d7472ee4990c7",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
         "mesh_digest": "30474187c9d8a9ce",
-        "output_digest": "1383c6b7e58730b3"
+        "output_digest": "b964249718cf75e6"
       }
     },
     {
-      "path": "topology/body-tessellation/cylinder-v1/1/chord-1e-3-v1",
+      "path": "topology/body-tessellation/cylinder-v2/1/chord-1e-3-v2",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v1",
+      "fixture_version": "body-tessellation.v2",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -830,7 +866,12 @@
         "chord_tol": 0.001
       },
       "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
         "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
         "validation": "closed-solid"
       },
       "expected_result_counters": {
@@ -847,14 +888,21 @@
         "watertight": true,
         "outward": true,
         "volume_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 7, 171110, 85941, 1, 2567, 5, 248, 782, 0, 0, 85683, 87995, 171362, 23],
+        "usage_stage_digest": "39fce57f8d9bef9b",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
         "mesh_digest": "c18e8ba33c725d33",
-        "output_digest": "1300a8c159d7ab48"
+        "output_digest": "5f29ed511dd07c8b"
       }
     },
     {
-      "path": "topology/body-tessellation/cone-v1/1/chord-1e-2-v1",
+      "path": "topology/body-tessellation/cone-v2/1/chord-1e-2-v2",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v1",
+      "fixture_version": "body-tessellation.v2",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -864,7 +912,12 @@
         "chord_tol": 0.01
       },
       "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
         "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
         "validation": "closed-solid"
       },
       "expected_result_counters": {
@@ -881,14 +934,21 @@
         "watertight": true,
         "outward": true,
         "volume_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 5, 5410, 2803, 1, 647, 3, 56, 206, 0, 0, 2737, 3321, 5470, 23],
+        "usage_stage_digest": "54384a78bc47d770",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
         "mesh_digest": "2ce0b59e91e22400",
-        "output_digest": "7a7c465b655f93c0"
+        "output_digest": "b6023ef68ee4c2ee"
       }
     },
     {
-      "path": "topology/body-tessellation/cone-v1/1/chord-1e-3-v1",
+      "path": "topology/body-tessellation/cone-v2/1/chord-1e-3-v2",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v1",
+      "fixture_version": "body-tessellation.v2",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -898,7 +958,12 @@
         "chord_tol": 0.001
       },
       "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
         "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
         "validation": "closed-solid"
       },
       "expected_result_counters": {
@@ -915,14 +980,21 @@
         "watertight": true,
         "outward": true,
         "volume_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 7, 108672, 54626, 1, 1927, 5, 184, 590, 0, 0, 54432, 56168, 108860, 23],
+        "usage_stage_digest": "1e568d215d3434c3",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
         "mesh_digest": "415997aeb0babc82",
-        "output_digest": "b06b9683b8034a21"
+        "output_digest": "4266bd859caf2548"
       }
     },
     {
-      "path": "topology/body-tessellation/sphere-v1/1/chord-1e-2-v1",
+      "path": "topology/body-tessellation/sphere-v2/1/chord-1e-2-v2",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v1",
+      "fixture_version": "body-tessellation.v2",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -932,7 +1004,12 @@
         "chord_tol": 0.01
       },
       "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
         "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
         "validation": "closed-solid"
       },
       "expected_result_counters": {
@@ -949,14 +1026,21 @@
         "watertight": true,
         "outward": true,
         "volume_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 10, 2728, 2788, 0, 0, 0, 0, 0, 4, 30, 2704, 3127, 5404, 6],
+        "usage_stage_digest": "340666f2a5737072",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
         "mesh_digest": "79f42a546c49f36f",
-        "output_digest": "1fd7f010353b6581"
+        "output_digest": "93969a9a2e3e2b9d"
       }
     },
     {
-      "path": "topology/body-tessellation/sphere-v1/1/chord-1e-3-v1",
+      "path": "topology/body-tessellation/sphere-v2/1/chord-1e-3-v2",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v1",
+      "fixture_version": "body-tessellation.v2",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -966,7 +1050,12 @@
         "chord_tol": 0.001
       },
       "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
         "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
         "validation": "closed-solid"
       },
       "expected_result_counters": {
@@ -983,14 +1072,21 @@
         "watertight": true,
         "outward": true,
         "volume_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 12, 75506, 75714, 0, 0, 0, 0, 0, 6, 126, 75430, 76893, 150856, 6],
+        "usage_stage_digest": "9edf8608c7123093",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
         "mesh_digest": "f827bff6d90187a7",
-        "output_digest": "c0ef9392fad80d52"
+        "output_digest": "65a59f05ace3e62f"
       }
     },
     {
-      "path": "topology/body-tessellation/torus-v1/1/chord-1e-2-v1",
+      "path": "topology/body-tessellation/torus-v2/1/chord-1e-2-v2",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v1",
+      "fixture_version": "body-tessellation.v2",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1000,7 +1096,12 @@
         "chord_tol": 0.01
       },
       "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
         "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
         "validation": "closed-solid"
       },
       "expected_result_counters": {
@@ -1017,14 +1118,21 @@
         "watertight": true,
         "outward": true,
         "volume_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 20, 6244, 11504, 0, 0, 0, 0, 0, 5, 152, 11340, 12480, 22680, 22],
+        "usage_stage_digest": "e7d813a7f1cb300b",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
         "mesh_digest": "bec9d49d9830dc7e",
-        "output_digest": "4b2383743df88c46"
+        "output_digest": "49b3c184bb15572c"
       }
     },
     {
-      "path": "topology/body-tessellation/torus-v1/1/chord-1e-3-v1",
+      "path": "topology/body-tessellation/torus-v2/1/chord-1e-3-v2",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v1",
+      "fixture_version": "body-tessellation.v2",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1034,7 +1142,12 @@
         "chord_tol": 0.001
       },
       "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
         "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
         "validation": "closed-solid"
       },
       "expected_result_counters": {
@@ -1051,8 +1164,15 @@
         "watertight": true,
         "outward": true,
         "volume_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 28, 76164, 148566, 0, 0, 0, 0, 0, 6, 376, 148178, 150886, 296356, 22],
+        "usage_stage_digest": "2135eeba3fb0dfa7",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
         "mesh_digest": "39d6eb3f0319b7f7",
-        "output_digest": "1f8daf0017ea2cb6"
+        "output_digest": "9492ef5035aa53ed"
       }
     },
     {

@@ -239,14 +239,32 @@ are complete for independent nodes, chains, fanout, and rollback.
 
 Owner: `ktopo`, consuming `kgeom` tessellation.
 
-Status: the first analytic closed-solid slice is implemented as ten registered
-cases: block, cylinder, cone, sphere, and torus at chord tolerances `1e-2` and
-`1e-3`. Cylinder, sphere, and torus exercise existing periodic seam/pole paths.
-Fixture construction and verification are excluded from the measured
-`tessellate_body` duration. Mixed-body, NURBS/pcurve, and tighter-tolerance
-cases remain implementation-ready follow-ups. Boundary/refinement and
-allocation counters remain deferred until those observations exist; Q3 does
-not infer them from output size.
+Status: the analytic closed-solid ladder is upgraded to the contextual v2
+contract across ten registered cases: block, cylinder, cone, sphere, and torus
+at chord tolerances `1e-2` and `1e-3`. Each case uses a Serial,
+compatibility-v1 session and measures only `tessellate_body_with_context`;
+session/context construction, outcome unpacking, and verification remain
+outside timing. Repetition proves both the mesh and complete operation report
+are identical. Existing mesh counts, bits, ownership order, volume evidence,
+and mesh digests remain pinned unchanged.
+
+The `q3-usage.v1` evidence records all 21 canonical report stages in profile
+order, not output-size proxies: five surface-projection stages, five face-
+tessellation stages, graph dependency depth and node visits, then nine body-
+tessellation stages from edge depth through structural items. Each case pins
+the ordered consumed values, stage count, and a portable digest over the
+profile/policy identity plus stage, resource, accounting mode, and consumption.
+The active platform's allowances are asserted against the profile at runtime
+but excluded from the checked-in digest because graph node visits uses
+`usize::MAX`. Policy/API/execution identity and zero limit, numeric-stop,
+diagnostic, and dropped-diagnostic counts are also explicit.
+
+This v2 slice proves counter plumbing and analytic-solid measurements; it is
+not enough evidence to select finite `bounded_v1` allowances. Surface
+projection and face-boundary counters are zero for all ten cases, and the
+sphere/torus cases also have zero graph use. Mixed-body, NURBS/pcurve, imported
+corpus, and tighter-tolerance cases remain the required next measurement slice
+before corpus-backed caps are proposed.
 
 Fixtures use existing deterministic primitive constructors first, followed by
 trimmed NURBS fixtures promoted from the test corpus:

@@ -98,6 +98,36 @@ class BenchmarkBaselineTests(unittest.TestCase):
         )
         self.assertTrue(
             all(
+                case["fixture_version"] == "body-tessellation.v2"
+                and case["policy_values"]["api"]
+                == "tessellate_body_with_context"
+                and case["policy_values"]["budget_profile"]
+                == "body-tessellation.compatibility-v1"
+                and case["policy_values"]["execution"] == "serial"
+                and case["policy_values"]["policy_version"] == "v1"
+                and case["policy_values"]["usage_contract"] == "q3-usage.v1"
+                for case in tessellation
+            )
+        )
+        self.assertTrue(
+            all(
+                case["expected_result_counters"]["usage_stage_count"] == 21
+                and len(case["expected_result_counters"]["usage_consumed"]) == 21
+                and len(case["expected_result_counters"]["usage_stage_digest"])
+                == 16
+                and case["expected_result_counters"]["limit_event_count"] == 0
+                and case["expected_result_counters"][
+                    "numeric_resolution_stage_count"
+                ]
+                == 0
+                and case["expected_result_counters"]["diagnostic_count"] == 0
+                and case["expected_result_counters"]["dropped_diagnostic_count"]
+                == 0
+                for case in tessellation
+            )
+        )
+        self.assertTrue(
+            all(
                 case["expected_result_counters"]["watertight"]
                 and case["expected_result_counters"]["outward"]
                 and case["expected_result_counters"]["volume_within_tolerance"]
