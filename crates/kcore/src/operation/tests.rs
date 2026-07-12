@@ -186,6 +186,45 @@ fn rejects_duplicate_and_invalid_limits() {
 }
 
 #[test]
+fn required_limit_validation_is_consistent_and_read_only_for_plans_and_ledgers() {
+    let plan = plan();
+    let ledger = WorkLedger::new(plan.clone());
+    let before = ledger.clone();
+
+    for result in [
+        plan.require_limit(STAGE_A, ResourceKind::Work, AccountingMode::Cumulative),
+        ledger.require_limit(STAGE_A, ResourceKind::Work, AccountingMode::Cumulative),
+    ] {
+        assert_eq!(result, Ok(()));
+    }
+    for result in [
+        plan.require_limit(STAGE_A, ResourceKind::Work, AccountingMode::HighWater),
+        ledger.require_limit(STAGE_A, ResourceKind::Work, AccountingMode::HighWater),
+    ] {
+        assert_eq!(
+            result,
+            Err(OperationPolicyError::AccountingModeMismatch {
+                stage: STAGE_A,
+                resource: ResourceKind::Work,
+            })
+        );
+    }
+    for result in [
+        plan.require_limit(STAGE_B, ResourceKind::Work, AccountingMode::Cumulative),
+        ledger.require_limit(STAGE_B, ResourceKind::Work, AccountingMode::Cumulative),
+    ] {
+        assert_eq!(
+            result,
+            Err(OperationPolicyError::UnknownLimit {
+                stage: STAGE_B,
+                resource: ResourceKind::Work,
+            })
+        );
+    }
+    assert_eq!(ledger, before);
+}
+
+#[test]
 fn cumulative_and_high_water_accounting_use_inclusive_boundaries() {
     let mut ledger = WorkLedger::new(plan());
     ledger.charge(STAGE_A, 4).expect("inside limit");
@@ -210,6 +249,61 @@ fn cumulative_and_high_water_accounting_use_inclusive_boundaries() {
     ));
     assert_eq!(ledger.snapshots()[0].consumed, 10);
     assert_eq!(ledger.snapshots()[1].consumed, 8);
+}
+
+#[test]
+fn charge_preflight_is_strictly_read_only_with_reservations_and_diagnostics() {
+    let session = SessionPolicy::new(
+        SessionPrecision::parasolid(),
+        NumericalPolicy::v1(),
+        ExecutionPolicy::Serial,
+        plan().with_total_work_limit(10),
+        PolicyVersion::V1,
+    );
+    let context = OperationContext::new(&session, Tolerances::default())
+        .unwrap()
+        .with_diagnostics(DiagnosticLevel::Summary, 2);
+    let mut scope = OperationScope::new(&context);
+    let child_plan = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        2,
+    )])
+    .unwrap()
+    .with_total_work_limit(2);
+    let _child = scope.ledger_mut().reserve_child(0, child_plan).unwrap();
+    scope.diagnose(
+        STAGE_A,
+        CODE_A,
+        DiagnosticKind::ProofIncomplete,
+        "pre-existing diagnostic",
+    );
+    let before = scope.ledger().clone();
+
+    scope
+        .ledger()
+        .check_charge(STAGE_A, 8)
+        .expect("exact unreserved allowance remains available");
+    assert!(matches!(
+        scope.ledger().check_charge(STAGE_A, 9),
+        Err(OperationPolicyError::LimitReached(LimitSnapshot {
+            stage: STAGE_A,
+            consumed: 9,
+            allowed: 8,
+            ..
+        }))
+    ));
+    assert_eq!(scope.ledger(), &before);
+
+    let outcome = scope.finish(Ok(()));
+    assert_eq!(outcome.report().usage()[0].consumed, 0);
+    assert!(outcome.report().limit_events().is_empty());
+    assert_eq!(outcome.report().diagnostics().len(), 1);
+    assert_eq!(
+        outcome.report().diagnostics()[0].message,
+        "pre-existing diagnostic"
+    );
 }
 
 #[test]

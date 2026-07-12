@@ -136,6 +136,24 @@ impl BudgetPlan {
         &self.limits
     }
 
+    /// Requires a configured stage/resource pair with the expected
+    /// accounting mode.
+    ///
+    /// This is a read-only configuration check for algorithms that must
+    /// reject an incompatible effective plan before starting work.
+    pub fn require_limit(
+        &self,
+        stage: StageId,
+        resource: ResourceKind,
+        mode: AccountingMode,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        let index = self
+            .limits
+            .binary_search_by_key(&(stage, resource), |limit| (limit.stage, limit.resource))
+            .map_err(|_| OperationPolicyError::UnknownLimit { stage, resource })?;
+        require_accounting_mode(self.limits[index], mode)
+    }
+
     /// Returns the root total-work ceiling, when configured.
     pub const fn total_work_limit(&self) -> Option<u64> {
         self.total_work_allowed
@@ -208,9 +226,39 @@ impl WorkLedger {
         self.charge_resource(stage, ResourceKind::Work, amount)
     }
 
-    /// Charges a cumulative resource at a stage.
-    pub fn charge_resource(
-        &mut self,
+    /// Requires a configured stage/resource pair with the expected
+    /// accounting mode without mutating usage or evidence.
+    ///
+    /// Shared-scope algorithms use this to validate the actual ledger they
+    /// will charge before inspecting operation inputs or evaluating geometry.
+    pub fn require_limit(
+        &self,
+        stage: StageId,
+        resource: ResourceKind,
+        mode: AccountingMode,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        let index = self.entry_index(stage, resource)?;
+        require_accounting_mode(self.entries[index].spec, mode)
+    }
+
+    /// Checks whether cumulative `Work` could be charged without mutating
+    /// accepted usage or limit-event evidence.
+    ///
+    /// This supports algorithms whose semantic unit is completed work: they
+    /// can preserve limit precedence before starting an atomic unit, then
+    /// perform the real [`Self::charge`] only after that unit succeeds.
+    pub fn check_charge(
+        &self,
+        stage: StageId,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        self.check_charge_resource(stage, ResourceKind::Work, amount)
+    }
+
+    /// Checks whether a cumulative resource charge would fit without
+    /// mutating this ledger.
+    pub fn check_charge_resource(
+        &self,
         stage: StageId,
         resource: ResourceKind,
         amount: u64,
@@ -219,14 +267,52 @@ impl WorkLedger {
         if self.entries[index].spec.mode != AccountingMode::Cumulative {
             return Err(OperationPolicyError::AccountingModeMismatch { stage, resource });
         }
+        let attempted = self.entries[index]
+            .consumed
+            .checked_add(amount)
+            .ok_or(OperationPolicyError::AccountingOverflow { stage, resource })?;
+        if let Some(snapshot) = self.stage_limit_crossing(index, attempted)? {
+            return Err(OperationPolicyError::LimitReached(snapshot));
+        }
+        if resource == ResourceKind::Work {
+            let attempted_total = self
+                .total_work_consumed
+                .checked_add(amount)
+                .ok_or(OperationPolicyError::AccountingOverflow { stage, resource })?;
+            if let Some(allowed) = self.total_work_allowed {
+                let usable = allowed.saturating_sub(self.reserved_total_work()?);
+                if attempted_total > usable {
+                    return Err(OperationPolicyError::LimitReached(LimitSnapshot {
+                        stage: TOTAL_WORK_STAGE,
+                        resource,
+                        consumed: attempted_total,
+                        allowed: usable,
+                    }));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Charges a cumulative resource at a stage.
+    pub fn charge_resource(
+        &mut self,
+        stage: StageId,
+        resource: ResourceKind,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        if let Err(error) = self.check_charge_resource(stage, resource, amount) {
+            if let OperationPolicyError::LimitReached(snapshot) = error {
+                self.record_limit(snapshot);
+                return Err(OperationPolicyError::LimitReached(snapshot));
+            }
+            return Err(error);
+        }
+        let index = self.entry_index(stage, resource)?;
         let current = self.entries[index].consumed;
         let attempted = current
             .checked_add(amount)
             .ok_or(OperationPolicyError::AccountingOverflow { stage, resource })?;
-        if let Some(snapshot) = self.stage_limit_crossing(index, attempted)? {
-            self.record_limit(snapshot);
-            return Err(OperationPolicyError::LimitReached(snapshot));
-        }
         let attempted_total = if resource == ResourceKind::Work {
             Some(
                 self.total_work_consumed
@@ -236,19 +322,6 @@ impl WorkLedger {
         } else {
             None
         };
-        if let (Some(total), Some(allowed)) = (attempted_total, self.total_work_allowed) {
-            let usable = allowed.saturating_sub(self.reserved_total_work()?);
-            if total > usable {
-                let snapshot = LimitSnapshot {
-                    stage: TOTAL_WORK_STAGE,
-                    resource,
-                    consumed: total,
-                    allowed: usable,
-                };
-                self.record_limit(snapshot);
-                return Err(OperationPolicyError::LimitReached(snapshot));
-            }
-        }
         self.entries[index].consumed = attempted;
         if let Some(total) = attempted_total {
             self.total_work_consumed = total;
@@ -546,6 +619,19 @@ impl WorkLedger {
                     })
             })
     }
+}
+
+fn require_accounting_mode(
+    spec: LimitSpec,
+    mode: AccountingMode,
+) -> core::result::Result<(), OperationPolicyError> {
+    if spec.mode != mode {
+        return Err(OperationPolicyError::AccountingModeMismatch {
+            stage: spec.stage,
+            resource: spec.resource,
+        });
+    }
+    Ok(())
 }
 
 /// A deterministically reserved child ledger.

@@ -28,7 +28,13 @@ use crate::param::ParamRange;
 use crate::surface::Surface;
 use crate::vec::{Point3, Vec2};
 use kcore::error::{Error, Result};
+use kcore::operation::{
+    AccountingMode, DiagnosticKind, ExecutionPolicy, NumericalPolicy, OperationContext,
+    OperationOutcome, OperationPolicyError, OperationScope, PolicyVersion, ResourceKind,
+    SessionPolicy, SessionPrecision,
+};
 use kcore::predicates::{Orientation, orient2d};
+use kcore::tolerance::Tolerances;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod policy;
@@ -218,6 +224,58 @@ const MAX_BOUNDARY_DEPTH: usize = 16;
 /// exactly one triangle iff it is a consecutive pair in
 /// [`FaceMesh::boundary`].
 pub fn tessellate(face: &TrimmedSurface<'_>, opts: &TessOptions) -> Result<FaceMesh> {
+    let session = SessionPolicy::new(
+        SessionPrecision::parasolid(),
+        NumericalPolicy::v1(),
+        ExecutionPolicy::Serial,
+        FaceTessellationBudgetProfile::v1_defaults(),
+        PolicyVersion::V1,
+    );
+    let context = OperationContext::new(&session, Tolerances::default())
+        .expect("validated default tolerances satisfy v1 session precision");
+    tessellate_with_context(face, opts, &context)
+        .expect("built-in v1 face-tessellation policy is valid")
+        .into_result()
+        .map_err(legacy_tessellation_error)
+}
+
+/// Tessellate a trimmed face with deterministic resource accounting.
+///
+/// The context's effective budget must contain the stages from
+/// [`FaceTessellationBudgetProfile::v1_defaults`]. Configuration errors are
+/// returned separately from geometry and limit failures. Budget validation
+/// precedes option validation and geometry evaluation.
+pub fn tessellate_with_context(
+    face: &TrimmedSurface<'_>,
+    opts: &TessOptions,
+    context: &OperationContext<'_>,
+) -> core::result::Result<OperationOutcome<FaceMesh>, OperationPolicyError> {
+    let effective_budget = context.effective_budget();
+    validate_tessellation_budget(|stage, resource, mode| {
+        effective_budget.require_limit(stage, resource, mode)
+    })?;
+    let mut scope = OperationScope::new(context);
+    let result = tessellate_in_scope(face, opts, &mut scope);
+    Ok(scope.finish(result))
+}
+
+/// Tessellate a trimmed face using an existing operation scope.
+///
+/// Higher-level tessellation composes through this seam so nested work reuses
+/// the caller's ledger instead of resetting the face-level allowances. The
+/// active ledger is validated before options or geometry are inspected; an
+/// incompatible shared scope is returned as [`Error::OperationPolicy`], while
+/// [`tessellate_with_context`] retains configuration errors in its outer
+/// [`OperationPolicyError`] result.
+pub fn tessellate_in_scope(
+    face: &TrimmedSurface<'_>,
+    opts: &TessOptions,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<FaceMesh> {
+    validate_tessellation_budget(|stage, resource, mode| {
+        scope.ledger().require_limit(stage, resource, mode)
+    })
+    .map_err(Error::from)?;
     if !opts.chord_tol.is_finite() || opts.chord_tol <= 0.0 {
         return Err(Error::InvalidTolerance {
             value: opts.chord_tol,
@@ -240,7 +298,7 @@ pub fn tessellate(face: &TrimmedSurface<'_>, opts: &TessOptions) -> Result<FaceM
     let mut positions: Vec<Point3> = Vec::new();
     let mut boundary: Vec<Vec<u32>> = Vec::new();
     for l in &face.loops {
-        let refined = refine_loop(&ctx, &l.points)?;
+        let refined = refine_loop(&ctx, &l.points, scope)?;
         let start = uvs.len();
         let mut indices = Vec::with_capacity(refined.len());
         for (uv, p) in refined {
@@ -260,7 +318,7 @@ pub fn tessellate(face: &TrimmedSurface<'_>, opts: &TessOptions) -> Result<FaceM
     let mut triangles = earclip(&uvs, &merged)?;
 
     // Stage 3: conforming interior refinement.
-    for pass in 0..=MAX_REFINE_PASSES {
+    loop {
         let mut marked: BTreeSet<(u32, u32)> = BTreeSet::new();
         let mut centroid_tris: Vec<usize> = Vec::new();
         for tri in &triangles {
@@ -304,18 +362,7 @@ pub fn tessellate(face: &TrimmedSurface<'_>, opts: &TessOptions) -> Result<FaceM
         if marked.is_empty() && centroid_tris.is_empty() {
             break;
         }
-        if pass == MAX_REFINE_PASSES {
-            return Err(Error::AlgorithmLimit {
-                operation: "tessellation interior refinement passes",
-                limit: MAX_REFINE_PASSES,
-            });
-        }
-        if triangles.len() >= MAX_TRIANGLES {
-            return Err(Error::AlgorithmLimit {
-                operation: "tessellation triangle count",
-                limit: MAX_TRIANGLES,
-            });
-        }
+        preflight_refinement_pass(scope, triangles.len())?;
 
         // Allocate midpoint vertices (sorted edge order → deterministic ids).
         let mut midpoint: BTreeMap<(u32, u32), u32> = BTreeMap::new();
@@ -342,6 +389,7 @@ pub fn tessellate(face: &TrimmedSurface<'_>, opts: &TessOptions) -> Result<FaceM
                 limit: MAX_TRIANGLES,
             });
         }
+        charge_refinement_pass(scope)?;
         triangles = next;
     }
 
@@ -351,6 +399,90 @@ pub fn tessellate(face: &TrimmedSurface<'_>, opts: &TessOptions) -> Result<FaceM
         triangles,
         boundary,
     })
+}
+
+fn validate_tessellation_budget(
+    mut require_limit: impl FnMut(
+        kcore::operation::StageId,
+        ResourceKind,
+        AccountingMode,
+    ) -> core::result::Result<(), OperationPolicyError>,
+) -> core::result::Result<(), OperationPolicyError> {
+    for (stage, resource, mode) in [
+        (
+            FACE_TESSELLATION_BOUNDARY_DEPTH,
+            ResourceKind::Depth,
+            AccountingMode::HighWater,
+        ),
+        (
+            FACE_TESSELLATION_REFINEMENT_PASSES,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+        ),
+    ] {
+        require_limit(stage, resource, mode)?;
+    }
+    Ok(())
+}
+
+fn legacy_tessellation_error(error: Error) -> Error {
+    match error {
+        Error::ResourceLimit { snapshot } if snapshot.stage == FACE_TESSELLATION_BOUNDARY_DEPTH => {
+            Error::AlgorithmLimit {
+                operation: "tessellation boundary refinement depth",
+                limit: MAX_BOUNDARY_DEPTH,
+            }
+        }
+        Error::ResourceLimit { snapshot }
+            if snapshot.stage == FACE_TESSELLATION_REFINEMENT_PASSES =>
+        {
+            Error::AlgorithmLimit {
+                operation: "tessellation interior refinement passes",
+                limit: MAX_REFINE_PASSES,
+            }
+        }
+        other => other,
+    }
+}
+
+fn charge_refinement_pass(scope: &mut OperationScope<'_, '_>) -> Result<()> {
+    match scope
+        .ledger_mut()
+        .charge(FACE_TESSELLATION_REFINEMENT_PASSES, 1)
+    {
+        Ok(()) => Ok(()),
+        Err(OperationPolicyError::LimitReached(snapshot)) => {
+            scope.diagnose(
+                snapshot.stage,
+                FACE_TESSELLATION_REFINEMENT_PASS_LIMIT,
+                DiagnosticKind::LimitReached(snapshot),
+                "face tessellation interior-refinement pass limit reached",
+            );
+            Err(Error::ResourceLimit { snapshot })
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn preflight_refinement_pass(
+    scope: &mut OperationScope<'_, '_>,
+    triangle_count: usize,
+) -> Result<()> {
+    match scope
+        .ledger()
+        .check_charge(FACE_TESSELLATION_REFINEMENT_PASSES, 1)
+    {
+        Ok(()) => {}
+        Err(OperationPolicyError::LimitReached(_)) => return charge_refinement_pass(scope),
+        Err(error) => return Err(error.into()),
+    }
+    if triangle_count >= MAX_TRIANGLES {
+        return Err(Error::AlgorithmLimit {
+            operation: "tessellation triangle count",
+            limit: MAX_TRIANGLES,
+        });
+    }
+    Ok(())
 }
 
 /// Shared refinement inputs.
@@ -386,7 +518,11 @@ fn point_segment_dist(p: Point3, a: Point3, b: Point3) -> f64 {
 /// Refine one loop: every edge is midpoint-split until the surface point at
 /// the parameter midpoint is within tolerance of the 3D chord (and the chord
 /// respects `max_len`).
-fn refine_loop(ctx: &RefineCtx<'_>, points: &[Vec2]) -> Result<Vec<(Vec2, Point3)>> {
+fn refine_loop(
+    ctx: &RefineCtx<'_>,
+    points: &[Vec2],
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<Vec<(Vec2, Point3)>> {
     let n = points.len();
     let mut out: Vec<(Vec2, Point3)> = Vec::with_capacity(n);
     for i in 0..n {
@@ -395,7 +531,7 @@ fn refine_loop(ctx: &RefineCtx<'_>, points: &[Vec2]) -> Result<Vec<(Vec2, Point3
         let pa = ctx.surface.eval([a.x, a.y]);
         let pb = ctx.surface.eval([b.x, b.y]);
         out.push((a, pa));
-        refine_edge(ctx, (a, pa), (b, pb), 0, &mut out)?;
+        refine_edge(ctx, (a, pa), (b, pb), 0, &mut out, scope)?;
     }
     Ok(out)
 }
@@ -406,25 +542,73 @@ fn refine_edge(
     ctx: &RefineCtx<'_>,
     a: (Vec2, Point3),
     b: (Vec2, Point3),
-    depth: usize,
+    depth: u64,
     out: &mut Vec<(Vec2, Point3)>,
+    scope: &mut OperationScope<'_, '_>,
 ) -> Result<()> {
-    let mid_uv = (a.0 + b.0) / 2.0;
-    let mid_p = ctx.surface.eval([mid_uv.x, mid_uv.y]);
-    let deviation = point_segment_dist(mid_p, a.1, b.1);
-    if deviation <= ctx.tol && a.1.dist(b.1) <= ctx.max_len {
-        return Ok(());
+    #[derive(Clone, Copy)]
+    enum Task {
+        Segment {
+            a: (Vec2, Point3),
+            b: (Vec2, Point3),
+            depth: u64,
+        },
+        Emit((Vec2, Point3)),
     }
-    if depth >= MAX_BOUNDARY_DEPTH {
-        return Err(Error::AlgorithmLimit {
-            operation: "tessellation boundary refinement depth",
-            limit: MAX_BOUNDARY_DEPTH,
-        });
+
+    let mut tasks = vec![Task::Segment { a, b, depth }];
+    while let Some(task) = tasks.pop() {
+        match task {
+            Task::Emit(midpoint) => out.push(midpoint),
+            Task::Segment { a, b, depth } => {
+                let mid_uv = (a.0 + b.0) / 2.0;
+                let mid_p = ctx.surface.eval([mid_uv.x, mid_uv.y]);
+                let deviation = point_segment_dist(mid_p, a.1, b.1);
+                if deviation <= ctx.tol && a.1.dist(b.1) <= ctx.max_len {
+                    continue;
+                }
+                let next_depth = depth.checked_add(1).ok_or_else(|| {
+                    Error::from(OperationPolicyError::AccountingOverflow {
+                        stage: FACE_TESSELLATION_BOUNDARY_DEPTH,
+                        resource: ResourceKind::Depth,
+                    })
+                })?;
+                observe_boundary_depth(scope, next_depth)?;
+                let midpoint = (mid_uv, mid_p);
+                tasks.push(Task::Segment {
+                    a: midpoint,
+                    b,
+                    depth: next_depth,
+                });
+                tasks.push(Task::Emit(midpoint));
+                tasks.push(Task::Segment {
+                    a,
+                    b: midpoint,
+                    depth: next_depth,
+                });
+            }
+        }
     }
-    let m = (mid_uv, mid_p);
-    refine_edge(ctx, a, m, depth + 1, out)?;
-    out.push(m);
-    refine_edge(ctx, m, b, depth + 1, out)
+    Ok(())
+}
+
+fn observe_boundary_depth(scope: &mut OperationScope<'_, '_>, depth: u64) -> Result<()> {
+    match scope
+        .ledger_mut()
+        .observe(FACE_TESSELLATION_BOUNDARY_DEPTH, ResourceKind::Depth, depth)
+    {
+        Ok(()) => Ok(()),
+        Err(OperationPolicyError::LimitReached(snapshot)) => {
+            scope.diagnose(
+                snapshot.stage,
+                FACE_TESSELLATION_BOUNDARY_DEPTH_LIMIT,
+                DiagnosticKind::LimitReached(snapshot),
+                "face tessellation boundary-refinement depth limit reached",
+            );
+            Err(Error::ResourceLimit { snapshot })
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn edge_needs_split(
@@ -758,7 +942,87 @@ mod tests {
     use super::*;
     use crate::frame::Frame;
     use crate::surface::{Cylinder, Plane};
+    use std::cell::Cell;
     use std::collections::BTreeMap;
+    use std::num::NonZeroUsize;
+
+    struct CountingSurface<S> {
+        inner: S,
+        evaluations: Cell<usize>,
+    }
+
+    impl<S> CountingSurface<S> {
+        fn new(inner: S) -> Self {
+            Self {
+                inner,
+                evaluations: Cell::new(0),
+            }
+        }
+
+        fn evaluations(&self) -> usize {
+            self.evaluations.get()
+        }
+    }
+
+    impl<S: Surface> Surface for CountingSurface<S> {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn eval_derivs(&self, uv: [f64; 2], order: usize) -> crate::surface::SurfaceDerivs {
+            self.evaluations.set(self.evaluations.get() + 1);
+            self.inner.eval_derivs(uv, order)
+        }
+
+        fn param_range(&self) -> [ParamRange; 2] {
+            self.inner.param_range()
+        }
+
+        fn periodicity(&self) -> [Option<f64>; 2] {
+            self.inner.periodicity()
+        }
+
+        fn degeneracies(&self) -> Vec<crate::surface::Degeneracy> {
+            self.inner.degeneracies()
+        }
+
+        fn bounding_box(&self, range: [ParamRange; 2]) -> crate::aabb::Aabb3 {
+            self.inner.bounding_box(range)
+        }
+    }
+
+    fn tessellation_session(execution: ExecutionPolicy) -> SessionPolicy {
+        SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            execution,
+            FaceTessellationBudgetProfile::v1_defaults(),
+            PolicyVersion::V1,
+        )
+    }
+
+    fn override_limit(
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+        mode: AccountingMode,
+        allowed: u64,
+    ) -> kcore::operation::BudgetPlan {
+        kcore::operation::BudgetPlan::new([kcore::operation::LimitSpec::new(
+            stage, resource, mode, allowed,
+        )])
+        .unwrap()
+    }
+
+    fn usage_for(
+        report: &kcore::operation::OperationReport,
+        stage: kcore::operation::StageId,
+    ) -> kcore::operation::LimitSnapshot {
+        *report
+            .usage()
+            .iter()
+            .find(|snapshot| snapshot.stage == stage)
+            .unwrap()
+    }
 
     /// Watertightness: every directed edge appears at most once; undirected
     /// edges are shared by exactly two triangles except boundary edges,
@@ -834,23 +1098,37 @@ mod tests {
             tol: 1e-12,
             max_len: f64::INFINITY,
         };
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            FaceTessellationBudgetProfile::v1_defaults(),
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let mut scope = OperationScope::new(&context);
         let a_uv = Vec2::new(0.0, 0.0);
         let b_uv = Vec2::new(core::f64::consts::PI, 0.0);
         let mut out = Vec::new();
+        let expected = kcore::operation::LimitSnapshot {
+            stage: FACE_TESSELLATION_BOUNDARY_DEPTH,
+            resource: ResourceKind::Depth,
+            consumed: 17,
+            allowed: 16,
+        };
         assert_eq!(
             refine_edge(
                 &ctx,
                 (a_uv, cylinder.eval([a_uv.x, a_uv.y])),
                 (b_uv, cylinder.eval([b_uv.x, b_uv.y])),
-                MAX_BOUNDARY_DEPTH,
+                MAX_BOUNDARY_DEPTH as u64,
                 &mut out,
+                &mut scope,
             ),
-            Err(Error::AlgorithmLimit {
-                operation: "tessellation boundary refinement depth",
-                limit: MAX_BOUNDARY_DEPTH,
-            })
+            Err(Error::ResourceLimit { snapshot: expected })
         );
         assert!(out.is_empty());
+        assert_eq!(scope.ledger().limit_events(), &[expected]);
     }
 
     #[test]
@@ -1010,6 +1288,331 @@ mod tests {
         };
         assert_eq!(bits(&m1), bits(&m2), "positions must be bit-identical");
         assert_watertight(&m1);
+    }
+
+    #[test]
+    fn contextual_tessellation_preserves_bits_and_accounts_both_refinement_stages() {
+        let cylinder = Cylinder::new(Frame::world(), 2.0).unwrap();
+        let face = TrimmedSurface::rectangle(
+            &cylinder,
+            [
+                ParamRange::new(0.0, core::f64::consts::PI),
+                ParamRange::new(0.0, 2.0),
+            ],
+        )
+        .unwrap();
+        let opts = TessOptions {
+            chord_tol: 1e-3,
+            max_edge_len: None,
+        };
+        let legacy = tessellate(&face, &opts).unwrap();
+        let session = tessellation_session(ExecutionPolicy::Serial);
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let baseline = tessellate_with_context(&face, &opts, &context).unwrap();
+        assert_eq!(baseline.result(), Ok(&legacy));
+
+        let boundary = usage_for(baseline.report(), FACE_TESSELLATION_BOUNDARY_DEPTH).consumed;
+        let passes = usage_for(baseline.report(), FACE_TESSELLATION_REFINEMENT_PASSES).consumed;
+        assert!(boundary > 0 && boundary < MAX_BOUNDARY_DEPTH as u64);
+        assert!(passes > 0 && passes < MAX_REFINE_PASSES as u64);
+
+        let run = |stage, resource, mode, allowed, diagnostics| {
+            let context = OperationContext::new(&session, Tolerances::default())
+                .unwrap()
+                .with_budget_overrides(override_limit(stage, resource, mode, allowed))
+                .with_diagnostics(diagnostics, 4);
+            tessellate_with_context(&face, &opts, &context).unwrap()
+        };
+
+        for (stage, resource, mode, needed, diagnostic) in [
+            (
+                FACE_TESSELLATION_BOUNDARY_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                boundary,
+                FACE_TESSELLATION_BOUNDARY_DEPTH_LIMIT,
+            ),
+            (
+                FACE_TESSELLATION_REFINEMENT_PASSES,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                passes,
+                FACE_TESSELLATION_REFINEMENT_PASS_LIMIT,
+            ),
+        ] {
+            let below = run(
+                stage,
+                resource,
+                mode,
+                needed - 1,
+                kcore::operation::DiagnosticLevel::Off,
+            );
+            let snapshot = kcore::operation::LimitSnapshot {
+                stage,
+                resource,
+                consumed: needed,
+                allowed: needed - 1,
+            };
+            assert_eq!(below.result(), Err(&Error::ResourceLimit { snapshot }));
+            assert_eq!(below.report().limit_events(), &[snapshot]);
+            assert!(below.report().diagnostics().is_empty());
+
+            let diagnosed = run(
+                stage,
+                resource,
+                mode,
+                needed - 1,
+                kcore::operation::DiagnosticLevel::Summary,
+            );
+            assert_eq!(diagnosed.result(), Err(&Error::ResourceLimit { snapshot }));
+            assert_eq!(diagnosed.report().limit_events(), &[snapshot]);
+            assert!(diagnosed.report().diagnostics().iter().any(|entry| {
+                entry.stage == stage
+                    && entry.code == diagnostic
+                    && entry.kind == DiagnosticKind::LimitReached(snapshot)
+            }));
+
+            let exact = run(
+                stage,
+                resource,
+                mode,
+                needed,
+                kcore::operation::DiagnosticLevel::Off,
+            );
+            let above = run(
+                stage,
+                resource,
+                mode,
+                needed + 1,
+                kcore::operation::DiagnosticLevel::Off,
+            );
+            assert_eq!(exact.result(), Ok(&legacy));
+            assert_eq!(above.result(), Ok(&legacy));
+            assert_eq!(usage_for(exact.report(), stage).consumed, needed);
+            assert_eq!(usage_for(above.report(), stage).consumed, needed);
+            assert!(exact.report().limit_events().is_empty());
+            assert!(above.report().limit_events().is_empty());
+        }
+
+        let parallel_session =
+            tessellation_session(ExecutionPolicy::AtMost(NonZeroUsize::new(2).unwrap()));
+        let parallel_context =
+            OperationContext::new(&parallel_session, Tolerances::default()).unwrap();
+        let parallel = tessellate_with_context(&face, &opts, &parallel_context).unwrap();
+        assert_eq!(parallel, baseline);
+
+        let shared_budget = FaceTessellationBudgetProfile::v1_defaults().overlaid(&override_limit(
+            FACE_TESSELLATION_REFINEMENT_PASSES,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            passes * 2,
+        ));
+        let shared_session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            shared_budget,
+            PolicyVersion::V1,
+        );
+        let shared_context = OperationContext::new(&shared_session, Tolerances::default()).unwrap();
+        let mut scope = OperationScope::new(&shared_context);
+        assert_eq!(
+            tessellate_in_scope(&face, &opts, &mut scope),
+            Ok(legacy.clone())
+        );
+        assert_eq!(tessellate_in_scope(&face, &opts, &mut scope), Ok(legacy));
+        assert_eq!(
+            scope
+                .ledger()
+                .snapshots()
+                .iter()
+                .find(|snapshot| snapshot.stage == FACE_TESSELLATION_BOUNDARY_DEPTH)
+                .unwrap()
+                .consumed,
+            boundary
+        );
+        assert_eq!(
+            scope
+                .ledger()
+                .snapshots()
+                .iter()
+                .find(|snapshot| snapshot.stage == FACE_TESSELLATION_REFINEMENT_PASSES)
+                .unwrap()
+                .consumed,
+            passes * 2
+        );
+    }
+
+    #[test]
+    fn legacy_boundary_limit_keeps_the_algorithm_limit_shape() {
+        let cylinder = Cylinder::new(Frame::world(), 1.0).unwrap();
+        let face = TrimmedSurface::rectangle(
+            &cylinder,
+            [
+                ParamRange::new(0.0, core::f64::consts::PI),
+                ParamRange::new(0.0, 1.0),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            tessellate(
+                &face,
+                &TessOptions {
+                    chord_tol: 1e-12,
+                    max_edge_len: None,
+                },
+            ),
+            Err(Error::AlgorithmLimit {
+                operation: "tessellation boundary refinement depth",
+                limit: MAX_BOUNDARY_DEPTH,
+            })
+        );
+
+        assert_eq!(
+            legacy_tessellation_error(Error::ResourceLimit {
+                snapshot: kcore::operation::LimitSnapshot {
+                    stage: FACE_TESSELLATION_REFINEMENT_PASSES,
+                    resource: ResourceKind::Work,
+                    consumed: 25,
+                    allowed: 24,
+                },
+            }),
+            Error::AlgorithmLimit {
+                operation: "tessellation interior refinement passes",
+                limit: MAX_REFINE_PASSES,
+            }
+        );
+    }
+
+    #[test]
+    fn pass_preflight_preserves_legacy_precedence_and_completed_usage() {
+        let denied_budget = FaceTessellationBudgetProfile::v1_defaults().overlaid(&override_limit(
+            FACE_TESSELLATION_REFINEMENT_PASSES,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            0,
+        ));
+        let denied_session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            denied_budget,
+            PolicyVersion::V1,
+        );
+        let denied_context = OperationContext::new(&denied_session, Tolerances::default()).unwrap();
+        let mut denied_scope = OperationScope::new(&denied_context);
+        let snapshot = kcore::operation::LimitSnapshot {
+            stage: FACE_TESSELLATION_REFINEMENT_PASSES,
+            resource: ResourceKind::Work,
+            consumed: 1,
+            allowed: 0,
+        };
+        assert_eq!(
+            preflight_refinement_pass(&mut denied_scope, MAX_TRIANGLES),
+            Err(Error::ResourceLimit { snapshot }),
+            "pass exhaustion retains precedence over the triangle backstop"
+        );
+        assert_eq!(denied_scope.ledger().limit_events(), &[snapshot]);
+
+        let triangle_session = tessellation_session(ExecutionPolicy::Serial);
+        let triangle_context =
+            OperationContext::new(&triangle_session, Tolerances::default()).unwrap();
+        let mut triangle_scope = OperationScope::new(&triangle_context);
+        assert_eq!(
+            preflight_refinement_pass(&mut triangle_scope, MAX_TRIANGLES),
+            Err(Error::AlgorithmLimit {
+                operation: "tessellation triangle count",
+                limit: MAX_TRIANGLES,
+            })
+        );
+        assert_eq!(
+            usage_for(
+                &triangle_scope.finish(Ok(())).report().clone(),
+                FACE_TESSELLATION_REFINEMENT_PASSES,
+            )
+            .consumed,
+            0,
+            "a triangle-backstop failure did not complete a pass"
+        );
+    }
+
+    #[test]
+    fn contextual_entry_rejects_a_missing_budget_before_tessellation() {
+        let plane = Plane::new(Frame::world());
+        let face = TrimmedSurface::rectangle(
+            &plane,
+            [ParamRange::new(0.0, 1.0), ParamRange::new(0.0, 1.0)],
+        )
+        .unwrap();
+        let session = SessionPolicy::v1();
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        assert_eq!(
+            tessellate_with_context(&face, &TessOptions::default(), &context),
+            Err(OperationPolicyError::UnknownLimit {
+                stage: FACE_TESSELLATION_BOUNDARY_DEPTH,
+                resource: ResourceKind::Depth,
+            })
+        );
+        assert_eq!(
+            tessellate_with_context(
+                &face,
+                &TessOptions {
+                    chord_tol: 0.0,
+                    max_edge_len: None,
+                },
+                &context,
+            ),
+            Err(OperationPolicyError::UnknownLimit {
+                stage: FACE_TESSELLATION_BOUNDARY_DEPTH,
+                resource: ResourceKind::Depth,
+            }),
+            "configuration validation precedes option validation"
+        );
+    }
+
+    #[test]
+    fn shared_scope_rejects_missing_budget_before_planar_or_curved_work() {
+        let session = SessionPolicy::v1();
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let expected = Error::OperationPolicy {
+            source: OperationPolicyError::UnknownLimit {
+                stage: FACE_TESSELLATION_BOUNDARY_DEPTH,
+                resource: ResourceKind::Depth,
+            },
+        };
+
+        let plane = CountingSurface::new(Plane::new(Frame::world()));
+        let planar_face = TrimmedSurface::rectangle(
+            &plane,
+            [ParamRange::new(0.0, 1.0), ParamRange::new(0.0, 1.0)],
+        )
+        .unwrap();
+        let mut planar_scope = OperationScope::new(&context);
+        let planar_ledger = planar_scope.ledger().clone();
+        assert_eq!(
+            tessellate_in_scope(&planar_face, &TessOptions::default(), &mut planar_scope,),
+            Err(expected.clone())
+        );
+        assert_eq!(plane.evaluations(), 0);
+        assert_eq!(planar_scope.ledger(), &planar_ledger);
+
+        let cylinder = CountingSurface::new(Cylinder::new(Frame::world(), 1.0).unwrap());
+        let curved_face = TrimmedSurface::rectangle(
+            &cylinder,
+            [
+                ParamRange::new(0.0, core::f64::consts::PI),
+                ParamRange::new(0.0, 1.0),
+            ],
+        )
+        .unwrap();
+        let mut curved_scope = OperationScope::new(&context);
+        let curved_ledger = curved_scope.ledger().clone();
+        assert_eq!(
+            tessellate_in_scope(&curved_face, &TessOptions::default(), &mut curved_scope,),
+            Err(expected)
+        );
+        assert_eq!(cylinder.evaluations(), 0);
+        assert_eq!(curved_scope.ledger(), &curved_ledger);
     }
 
     #[test]
