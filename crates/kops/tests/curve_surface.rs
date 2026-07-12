@@ -1,15 +1,20 @@
 //! Bounded curve/surface intersection behavior.
 
+use std::error::Error as _;
+
+use kcore::error::{ClassifiedError, Error, ErrorClass};
 use kcore::math;
 use kcore::tolerance::Tolerances;
-use kgeom::curve::{Circle, Curve, Ellipse, Line};
+use kgeom::aabb::Aabb3;
+use kgeom::curve::{Circle, Curve, CurveDerivs, Ellipse, Line};
 use kgeom::frame::Frame;
-use kgeom::nurbs::NurbsCurve;
+use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::param::ParamRange;
-use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
+use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, SurfaceDerivs, Torus};
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
-    ContactKind, intersect_bounded_circle_cone, intersect_bounded_circle_cylinder,
+    CURVE_SURFACE_CLASS_PAIR, ContactKind, CurveClass, IntersectionError, SurfaceClass,
+    UNSUPPORTED_CLASS_PAIR, intersect_bounded_circle_cone, intersect_bounded_circle_cylinder,
     intersect_bounded_circle_plane, intersect_bounded_circle_sphere,
     intersect_bounded_circle_torus, intersect_bounded_curve_surface,
     intersect_bounded_ellipse_cone, intersect_bounded_ellipse_cylinder,
@@ -47,6 +52,71 @@ fn torus_window() -> [ParamRange; 2] {
         ParamRange::new(0.0, core::f64::consts::TAU),
         ParamRange::new(0.0, core::f64::consts::TAU),
     ]
+}
+
+fn bilinear_nurbs_surface() -> NurbsSurface {
+    NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+        ],
+        None,
+    )
+    .unwrap()
+}
+
+struct UnsupportedCurve;
+
+impl Curve for UnsupportedCurve {
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
+    fn eval_derivs(&self, _t: f64, _order: usize) -> CurveDerivs {
+        CurveDerivs::default()
+    }
+
+    fn param_range(&self) -> ParamRange {
+        ParamRange::new(0.0, 1.0)
+    }
+
+    fn periodicity(&self) -> Option<f64> {
+        None
+    }
+
+    fn bounding_box(&self, _range: ParamRange) -> Aabb3 {
+        Aabb3::from_points(&[Point3::new(0.0, 0.0, 0.0)])
+    }
+}
+
+struct UnsupportedSurface;
+
+impl Surface for UnsupportedSurface {
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
+    fn eval_derivs(&self, _uv: [f64; 2], _order: usize) -> SurfaceDerivs {
+        SurfaceDerivs::default()
+    }
+
+    fn param_range(&self) -> [ParamRange; 2] {
+        [ParamRange::new(0.0, 1.0), ParamRange::new(0.0, 1.0)]
+    }
+
+    fn periodicity(&self) -> [Option<f64>; 2] {
+        [None, None]
+    }
+
+    fn bounding_box(&self, _range: [ParamRange; 2]) -> Aabb3 {
+        Aabb3::from_points(&[Point3::new(0.0, 0.0, 0.0)])
+    }
 }
 
 fn vertical_conic_frame() -> Frame {
@@ -2373,4 +2443,136 @@ fn curve_surface_dispatches_supported_cases_and_rejects_unsupported() {
     )
     .unwrap();
     assert_eq!(hit.points.len(), 4);
+}
+
+#[test]
+fn curve_surface_dispatch_matches_specialized_analytic_and_nurbs_routes() {
+    let tolerances = Tolerances::default();
+    let plane = Plane::new(Frame::world());
+    let surface_range = plane_window();
+
+    let line = make_line([0.0, 0.0, -1.0], [0.0, 0.0, 1.0]);
+    let line_range = ParamRange::new(0.0, 2.0);
+    let direct =
+        intersect_bounded_line_plane(&line, line_range, &plane, surface_range, tolerances).unwrap();
+    let dispatched =
+        intersect_bounded_curve_surface(&line, line_range, &plane, surface_range, tolerances)
+            .unwrap();
+    assert_eq!(dispatched, direct);
+
+    let nurbs = crossing_nurbs();
+    let direct = intersect_bounded_nurbs_plane(
+        &nurbs,
+        nurbs.param_range(),
+        &plane,
+        surface_range,
+        tolerances,
+    )
+    .unwrap();
+    let dispatched = intersect_bounded_curve_surface(
+        &nurbs,
+        nurbs.param_range(),
+        &plane,
+        surface_range,
+        tolerances,
+    )
+    .unwrap();
+    assert_eq!(dispatched, direct);
+}
+
+#[test]
+fn curve_surface_dispatch_reports_structured_unsupported_pair() {
+    let line = make_line([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    let surface = bilinear_nurbs_surface();
+    let err = intersect_bounded_curve_surface(
+        &line,
+        ParamRange::new(0.0, 1.0),
+        &surface,
+        surface.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err,
+        IntersectionError::UnsupportedCurveSurfacePair {
+            curve_class: Some(CurveClass::Line.key()),
+            surface_class: Some(SurfaceClass::Nurbs.key()),
+        }
+    );
+    assert_eq!(err.class(), ErrorClass::Unsupported);
+    assert_eq!(err.code(), UNSUPPORTED_CLASS_PAIR);
+    assert_eq!(err.capability(), Some(CURVE_SURFACE_CLASS_PAIR));
+    assert!(err.source().is_none());
+
+    let classified: &dyn ClassifiedError = &err;
+    assert_eq!(classified.class(), ErrorClass::Unsupported);
+}
+
+#[test]
+fn curve_surface_dispatch_preserves_unknown_operand_identity() {
+    let curve = UnsupportedCurve;
+    let plane = Plane::new(Frame::world());
+    let err = intersect_bounded_curve_surface(
+        &curve,
+        curve.param_range(),
+        &plane,
+        plane_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        IntersectionError::UnsupportedCurveSurfacePair {
+            curve_class: None,
+            surface_class: Some(SurfaceClass::Plane.key()),
+        }
+    );
+
+    let line = make_line([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    let surface = UnsupportedSurface;
+    let err = intersect_bounded_curve_surface(
+        &line,
+        ParamRange::new(0.0, 1.0),
+        &surface,
+        surface.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        IntersectionError::UnsupportedCurveSurfacePair {
+            curve_class: Some(CurveClass::Line.key()),
+            surface_class: None,
+        }
+    );
+}
+
+#[test]
+fn curve_surface_dispatch_preserves_kernel_error_classification_and_source() {
+    let line = make_line([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    let plane = Plane::new(Frame::world());
+    let invalid_range = ParamRange { lo: 1.0, hi: 0.0 };
+    let err = intersect_bounded_curve_surface(
+        &line,
+        invalid_range,
+        &plane,
+        plane_window(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
+
+    let kernel = Error::InvalidGeometry {
+        reason: "line/plane intersection requires a finite non-reversed line range",
+    };
+    assert_eq!(err, IntersectionError::Kernel(kernel.clone()));
+    assert_eq!(err.class(), kernel.class());
+    assert_eq!(err.code(), kernel.code());
+    assert_eq!(err.capability(), kernel.capability());
+    assert_eq!(err.limit(), kernel.limit());
+    assert_eq!(
+        err.source()
+            .and_then(|source| source.downcast_ref::<Error>()),
+        Some(&kernel)
+    );
 }

@@ -46,6 +46,7 @@ pub fn intersect_bounded_ellipses(
         Err(IntersectionError::Kernel(error)) => Err(error),
         Err(
             IntersectionError::UnsupportedCurvePair { .. }
+            | IntersectionError::UnsupportedCurveSurfacePair { .. }
             | IntersectionError::UnsupportedSurfacePair { .. },
         ) => {
             unreachable!("the concrete ellipse solver has no unsupported dispatch")

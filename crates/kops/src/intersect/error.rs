@@ -27,6 +27,10 @@ pub const UNSUPPORTED_CLASS_PAIR: ErrorCode = error_code("kops.intersect.unsuppo
 pub const CURVE_CURVE_CLASS_PAIR: CapabilityId =
     capability_id("kops.intersect.curve-curve.class-pair");
 
+/// Finite support-matrix capability for curve/surface class-pair dispatch.
+pub const CURVE_SURFACE_CLASS_PAIR: CapabilityId =
+    capability_id("kops.intersect.curve-surface.class-pair");
+
 /// Finite support-matrix capability for surface/surface class-pair dispatch.
 pub const SURFACE_SURFACE_CLASS_PAIR: CapabilityId =
     capability_id("kops.intersect.surface-surface.class-pair");
@@ -44,6 +48,16 @@ pub enum IntersectionError {
         /// Canonical class key for the second operand, or `None` when the
         /// valid trait implementation is not in the current registry.
         class_b: Option<GeometryClassKey>,
+    },
+    /// The curve and surface inputs are valid, but their class pair has no
+    /// registered solver in this kernel version.
+    UnsupportedCurveSurfacePair {
+        /// Canonical class key for the curve, or `None` when the valid trait
+        /// implementation is not in the current registry.
+        curve_class: Option<GeometryClassKey>,
+        /// Canonical class key for the surface, or `None` when the valid trait
+        /// implementation is not in the current registry.
+        surface_class: Option<GeometryClassKey>,
     },
     /// Both surface inputs are valid, but their class pair has no registered
     /// solver in this kernel version.
@@ -64,9 +78,9 @@ impl IntersectionError {
     /// Returns the broad semantic class.
     pub const fn class(&self) -> ErrorClass {
         match self {
-            Self::UnsupportedCurvePair { .. } | Self::UnsupportedSurfacePair { .. } => {
-                ErrorClass::Unsupported
-            }
+            Self::UnsupportedCurvePair { .. }
+            | Self::UnsupportedCurveSurfacePair { .. }
+            | Self::UnsupportedSurfacePair { .. } => ErrorClass::Unsupported,
             Self::Kernel(error) => error.class(),
         }
     }
@@ -74,9 +88,9 @@ impl IntersectionError {
     /// Returns the stable failure identity.
     pub const fn code(&self) -> ErrorCode {
         match self {
-            Self::UnsupportedCurvePair { .. } | Self::UnsupportedSurfacePair { .. } => {
-                UNSUPPORTED_CLASS_PAIR
-            }
+            Self::UnsupportedCurvePair { .. }
+            | Self::UnsupportedCurveSurfacePair { .. }
+            | Self::UnsupportedSurfacePair { .. } => UNSUPPORTED_CLASS_PAIR,
             Self::Kernel(error) => error.code(),
         }
     }
@@ -86,6 +100,7 @@ impl IntersectionError {
     pub const fn capability(&self) -> Option<CapabilityId> {
         match self {
             Self::UnsupportedCurvePair { .. } => Some(CURVE_CURVE_CLASS_PAIR),
+            Self::UnsupportedCurveSurfacePair { .. } => Some(CURVE_SURFACE_CLASS_PAIR),
             Self::UnsupportedSurfacePair { .. } => Some(SURFACE_SURFACE_CLASS_PAIR),
             Self::Kernel(error) => error.capability(),
         }
@@ -95,7 +110,9 @@ impl IntersectionError {
     pub const fn limit(&self) -> Option<LimitSnapshot> {
         match self {
             Self::Kernel(error) => error.limit(),
-            Self::UnsupportedCurvePair { .. } | Self::UnsupportedSurfacePair { .. } => None,
+            Self::UnsupportedCurvePair { .. }
+            | Self::UnsupportedCurveSurfacePair { .. }
+            | Self::UnsupportedSurfacePair { .. } => None,
         }
     }
 }
@@ -106,6 +123,10 @@ impl fmt::Display for IntersectionError {
             Self::UnsupportedCurvePair { class_a, class_b } => {
                 write_class_pair(formatter, "curve/curve", *class_a, *class_b)
             }
+            Self::UnsupportedCurveSurfacePair {
+                curve_class,
+                surface_class,
+            } => write_class_pair(formatter, "curve/surface", *curve_class, *surface_class),
             Self::UnsupportedSurfacePair { class_a, class_b } => {
                 write_class_pair(formatter, "surface/surface", *class_a, *class_b)
             }
@@ -132,7 +153,9 @@ impl std::error::Error for IntersectionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Kernel(error) => Some(error),
-            Self::UnsupportedCurvePair { .. } | Self::UnsupportedSurfacePair { .. } => None,
+            Self::UnsupportedCurvePair { .. }
+            | Self::UnsupportedCurveSurfacePair { .. }
+            | Self::UnsupportedSurfacePair { .. } => None,
         }
     }
 }

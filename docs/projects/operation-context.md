@@ -619,6 +619,13 @@ differs from the public class enum order so the cone/cylinder specialization
 retains its established cone-first contract. Result swapping restores caller
 order for points, branches, pcurves, and completion evidence.
 
+Curve/surface dispatch now uses the same centralized runtime class inspection
+and one typed arm per supported pair. Analytic pairs and the provisional NURBS
+curve bridges therefore enter through one driver boundary, while unsupported
+known and custom classes retain both operand identities in the structured
+`curve-surface.class-pair` capability error. The NURBS bridges remain
+`Indeterminate`; typed routing does not upgrade discovery evidence to a proof.
+
 ## Rollout stages
 
 ### Stage 0 — Audit and vocabulary lock

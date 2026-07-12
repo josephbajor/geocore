@@ -87,8 +87,8 @@ pub use ellipse_nurbs::intersect_bounded_ellipse_nurbs;
 pub use ellipse_sphere::intersect_bounded_ellipse_sphere;
 pub use ellipse_torus::intersect_bounded_ellipse_torus;
 pub use error::{
-    CURVE_CURVE_CLASS_PAIR, IntersectionError, IntersectionResult, SURFACE_SURFACE_CLASS_PAIR,
-    UNSUPPORTED_CLASS_PAIR,
+    CURVE_CURVE_CLASS_PAIR, CURVE_SURFACE_CLASS_PAIR, IntersectionError, IntersectionResult,
+    SURFACE_SURFACE_CLASS_PAIR, UNSUPPORTED_CLASS_PAIR,
 };
 pub use kgraph::{CurveClass, GeometryClassKey, SurfaceClass};
 pub use line_circle::intersect_bounded_line_circle;

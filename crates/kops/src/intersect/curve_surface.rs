@@ -6,6 +6,8 @@ use super::ellipse_cone::intersect_bounded_ellipse_cone;
 use super::ellipse_cylinder::intersect_bounded_ellipse_cylinder;
 use super::ellipse_sphere::intersect_bounded_ellipse_sphere;
 use super::ellipse_torus::intersect_bounded_ellipse_torus;
+use super::error::{IntersectionError, IntersectionResult};
+use super::geometry_class::{CurveDispatch, SurfaceDispatch};
 use super::line_cone::intersect_bounded_line_cone;
 use super::line_cylinder::intersect_bounded_line_cylinder;
 use super::line_plane::intersect_bounded_line_plane;
@@ -18,251 +20,114 @@ use super::nurbs_sphere::intersect_bounded_nurbs_sphere;
 use super::nurbs_torus::intersect_bounded_nurbs_torus;
 use super::planar_curve_plane::{intersect_bounded_circle_plane, intersect_bounded_ellipse_plane};
 use super::result::CurveSurfaceIntersections;
-use kcore::error::{Error, Result};
 use kcore::tolerance::Tolerances;
-use kgeom::curve::{Circle, Curve, Ellipse, Line};
-use kgeom::nurbs::NurbsCurve;
+use kgeom::curve::Curve;
 use kgeom::param::ParamRange;
-use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
+use kgeom::surface::Surface;
 
 /// Intersect a curve with a surface over finite curve and surface windows.
 ///
-/// This currently dispatches bounded line/surface analytic cases, planar
-/// circle-or-ellipse/plane cases, NURBS/plane/sphere/cylinder/cone/torus cases,
-/// circle/cone/cylinder/sphere/torus cases, and ellipse/sphere/cylinder/
-/// cone/torus cases.
-/// Unsupported curve or surface classes fail explicitly; broader analytic
-/// cases and the general subdivision/Newton curve/surface solver remain later
-/// M4 work.
+/// Inputs are inspected once and routed through one typed arm per supported
+/// class pair. Unsupported curve or surface classes fail explicitly; broader
+/// analytic cases and the certified subdivision/Newton curve/surface solver
+/// remain later M4 work.
 pub fn intersect_bounded_curve_surface(
     curve: &dyn Curve,
     curve_range: ParamRange,
     surface: &dyn Surface,
     surface_range: [ParamRange; 2],
     tolerances: Tolerances,
-) -> Result<CurveSurfaceIntersections> {
-    if let Some(line) = as_line(curve) {
-        if let Some(plane) = as_plane(surface) {
-            return intersect_bounded_line_plane(
-                line,
-                curve_range,
-                plane,
-                surface_range,
-                tolerances,
-            );
-        }
-        if let Some(cylinder) = as_cylinder(surface) {
-            return intersect_bounded_line_cylinder(
-                line,
-                curve_range,
-                cylinder,
-                surface_range,
-                tolerances,
-            );
-        }
-        if let Some(cone) = as_cone(surface) {
-            return intersect_bounded_line_cone(line, curve_range, cone, surface_range, tolerances);
-        }
-        if let Some(sphere) = as_sphere(surface) {
-            return intersect_bounded_line_sphere(
-                line,
-                curve_range,
-                sphere,
-                surface_range,
-                tolerances,
-            );
-        }
-        if let Some(torus) = as_torus(surface) {
-            return intersect_bounded_line_torus(
-                line,
-                curve_range,
-                torus,
-                surface_range,
-                tolerances,
-            );
-        }
-    }
-    if let Some(plane) = as_plane(surface) {
-        if let Some(circle) = as_circle(curve) {
-            return intersect_bounded_circle_plane(
-                circle,
-                curve_range,
-                plane,
-                surface_range,
-                tolerances,
-            );
-        }
-        if let Some(ellipse) = as_ellipse(curve) {
-            return intersect_bounded_ellipse_plane(
-                ellipse,
-                curve_range,
-                plane,
-                surface_range,
-                tolerances,
-            );
-        }
-        if let Some(nurbs) = as_nurbs(curve) {
-            return intersect_bounded_nurbs_plane(
-                nurbs,
-                curve_range,
-                plane,
-                surface_range,
-                tolerances,
-            );
-        }
-    }
-    if let Some(sphere) = as_sphere(surface)
-        && let Some(circle) = as_circle(curve)
-    {
-        return intersect_bounded_circle_sphere(
-            circle,
-            curve_range,
-            sphere,
-            surface_range,
-            tolerances,
-        );
-    }
-    if let Some(sphere) = as_sphere(surface)
-        && let Some(ellipse) = as_ellipse(curve)
-    {
-        return intersect_bounded_ellipse_sphere(
-            ellipse,
-            curve_range,
-            sphere,
-            surface_range,
-            tolerances,
-        );
-    }
-    if let Some(sphere) = as_sphere(surface)
-        && let Some(nurbs) = as_nurbs(curve)
-    {
-        return intersect_bounded_nurbs_sphere(
-            nurbs,
-            curve_range,
-            sphere,
-            surface_range,
-            tolerances,
-        );
-    }
-    if let Some(cylinder) = as_cylinder(surface)
-        && let Some(circle) = as_circle(curve)
-    {
-        return intersect_bounded_circle_cylinder(
-            circle,
-            curve_range,
-            cylinder,
-            surface_range,
-            tolerances,
-        );
-    }
-    if let Some(cylinder) = as_cylinder(surface)
-        && let Some(ellipse) = as_ellipse(curve)
-    {
-        return intersect_bounded_ellipse_cylinder(
-            ellipse,
-            curve_range,
-            cylinder,
-            surface_range,
-            tolerances,
-        );
-    }
-    if let Some(cylinder) = as_cylinder(surface)
-        && let Some(nurbs) = as_nurbs(curve)
-    {
-        return intersect_bounded_nurbs_cylinder(
-            nurbs,
-            curve_range,
-            cylinder,
-            surface_range,
-            tolerances,
-        );
-    }
-    if let Some(cone) = as_cone(surface)
-        && let Some(circle) = as_circle(curve)
-    {
-        return intersect_bounded_circle_cone(circle, curve_range, cone, surface_range, tolerances);
-    }
-    if let Some(torus) = as_torus(surface)
-        && let Some(circle) = as_circle(curve)
-    {
-        return intersect_bounded_circle_torus(
-            circle,
-            curve_range,
-            torus,
-            surface_range,
-            tolerances,
-        );
-    }
-    if let Some(cone) = as_cone(surface)
-        && let Some(ellipse) = as_ellipse(curve)
-    {
-        return intersect_bounded_ellipse_cone(
-            ellipse,
-            curve_range,
-            cone,
-            surface_range,
-            tolerances,
-        );
-    }
-    if let Some(cone) = as_cone(surface)
-        && let Some(nurbs) = as_nurbs(curve)
-    {
-        return intersect_bounded_nurbs_cone(nurbs, curve_range, cone, surface_range, tolerances);
-    }
-    if let Some(torus) = as_torus(surface)
-        && let Some(ellipse) = as_ellipse(curve)
-    {
-        return intersect_bounded_ellipse_torus(
-            ellipse,
-            curve_range,
-            torus,
-            surface_range,
-            tolerances,
-        );
-    }
-    if let Some(torus) = as_torus(surface)
-        && let Some(nurbs) = as_nurbs(curve)
-    {
-        return intersect_bounded_nurbs_torus(nurbs, curve_range, torus, surface_range, tolerances);
-    }
+) -> IntersectionResult<CurveSurfaceIntersections> {
+    let curve = CurveDispatch::inspect(curve);
+    let surface = SurfaceDispatch::inspect(surface);
+    let (Some(curve), Some(surface)) = (curve, surface) else {
+        return unsupported(curve, surface);
+    };
 
-    Err(Error::InvalidGeometry {
-        reason: "unsupported curve/surface intersection class",
+    let result = match (curve, surface) {
+        (CurveDispatch::Line(curve), SurfaceDispatch::Plane(surface)) => {
+            intersect_bounded_line_plane(curve, curve_range, surface, surface_range, tolerances)
+        }
+        (CurveDispatch::Line(curve), SurfaceDispatch::Cylinder(surface)) => {
+            intersect_bounded_line_cylinder(curve, curve_range, surface, surface_range, tolerances)
+        }
+        (CurveDispatch::Line(curve), SurfaceDispatch::Cone(surface)) => {
+            intersect_bounded_line_cone(curve, curve_range, surface, surface_range, tolerances)
+        }
+        (CurveDispatch::Line(curve), SurfaceDispatch::Sphere(surface)) => {
+            intersect_bounded_line_sphere(curve, curve_range, surface, surface_range, tolerances)
+        }
+        (CurveDispatch::Line(curve), SurfaceDispatch::Torus(surface)) => {
+            intersect_bounded_line_torus(curve, curve_range, surface, surface_range, tolerances)
+        }
+        (CurveDispatch::Circle(curve), SurfaceDispatch::Plane(surface)) => {
+            intersect_bounded_circle_plane(curve, curve_range, surface, surface_range, tolerances)
+        }
+        (CurveDispatch::Circle(curve), SurfaceDispatch::Cylinder(surface)) => {
+            intersect_bounded_circle_cylinder(
+                curve,
+                curve_range,
+                surface,
+                surface_range,
+                tolerances,
+            )
+        }
+        (CurveDispatch::Circle(curve), SurfaceDispatch::Cone(surface)) => {
+            intersect_bounded_circle_cone(curve, curve_range, surface, surface_range, tolerances)
+        }
+        (CurveDispatch::Circle(curve), SurfaceDispatch::Sphere(surface)) => {
+            intersect_bounded_circle_sphere(curve, curve_range, surface, surface_range, tolerances)
+        }
+        (CurveDispatch::Circle(curve), SurfaceDispatch::Torus(surface)) => {
+            intersect_bounded_circle_torus(curve, curve_range, surface, surface_range, tolerances)
+        }
+        (CurveDispatch::Ellipse(curve), SurfaceDispatch::Plane(surface)) => {
+            intersect_bounded_ellipse_plane(curve, curve_range, surface, surface_range, tolerances)
+        }
+        (CurveDispatch::Ellipse(curve), SurfaceDispatch::Cylinder(surface)) => {
+            intersect_bounded_ellipse_cylinder(
+                curve,
+                curve_range,
+                surface,
+                surface_range,
+                tolerances,
+            )
+        }
+        (CurveDispatch::Ellipse(curve), SurfaceDispatch::Cone(surface)) => {
+            intersect_bounded_ellipse_cone(curve, curve_range, surface, surface_range, tolerances)
+        }
+        (CurveDispatch::Ellipse(curve), SurfaceDispatch::Sphere(surface)) => {
+            intersect_bounded_ellipse_sphere(curve, curve_range, surface, surface_range, tolerances)
+        }
+        (CurveDispatch::Ellipse(curve), SurfaceDispatch::Torus(surface)) => {
+            intersect_bounded_ellipse_torus(curve, curve_range, surface, surface_range, tolerances)
+        }
+        (CurveDispatch::Nurbs(curve), SurfaceDispatch::Plane(surface)) => {
+            intersect_bounded_nurbs_plane(curve, curve_range, surface, surface_range, tolerances)
+        }
+        (CurveDispatch::Nurbs(curve), SurfaceDispatch::Cylinder(surface)) => {
+            intersect_bounded_nurbs_cylinder(curve, curve_range, surface, surface_range, tolerances)
+        }
+        (CurveDispatch::Nurbs(curve), SurfaceDispatch::Cone(surface)) => {
+            intersect_bounded_nurbs_cone(curve, curve_range, surface, surface_range, tolerances)
+        }
+        (CurveDispatch::Nurbs(curve), SurfaceDispatch::Sphere(surface)) => {
+            intersect_bounded_nurbs_sphere(curve, curve_range, surface, surface_range, tolerances)
+        }
+        (CurveDispatch::Nurbs(curve), SurfaceDispatch::Torus(surface)) => {
+            intersect_bounded_nurbs_torus(curve, curve_range, surface, surface_range, tolerances)
+        }
+        _ => return unsupported(Some(curve), Some(surface)),
+    };
+    result.map_err(IntersectionError::from)
+}
+
+fn unsupported<T>(
+    curve: Option<CurveDispatch<'_>>,
+    surface: Option<SurfaceDispatch<'_>>,
+) -> IntersectionResult<T> {
+    Err(IntersectionError::UnsupportedCurveSurfacePair {
+        curve_class: curve.map(|class| class.class().key()),
+        surface_class: surface.map(|class| class.class().key()),
     })
-}
-
-fn as_line(curve: &dyn Curve) -> Option<&Line> {
-    curve.as_any().downcast_ref()
-}
-
-fn as_circle(curve: &dyn Curve) -> Option<&Circle> {
-    curve.as_any().downcast_ref()
-}
-
-fn as_ellipse(curve: &dyn Curve) -> Option<&Ellipse> {
-    curve.as_any().downcast_ref()
-}
-
-fn as_nurbs(curve: &dyn Curve) -> Option<&NurbsCurve> {
-    curve.as_any().downcast_ref()
-}
-
-fn as_plane(surface: &dyn Surface) -> Option<&Plane> {
-    surface.as_any().downcast_ref()
-}
-
-fn as_cylinder(surface: &dyn Surface) -> Option<&Cylinder> {
-    surface.as_any().downcast_ref()
-}
-
-fn as_cone(surface: &dyn Surface) -> Option<&Cone> {
-    surface.as_any().downcast_ref()
-}
-
-fn as_sphere(surface: &dyn Surface) -> Option<&Sphere> {
-    surface.as_any().downcast_ref()
-}
-
-fn as_torus(surface: &dyn Surface) -> Option<&Torus> {
-    surface.as_any().downcast_ref()
 }
