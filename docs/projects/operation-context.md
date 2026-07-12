@@ -621,6 +621,13 @@ operand ordering without a second algorithm path. The future certified fallback
 enters at this same normalized boundary and must return indeterminate evidence
 until complete-domain exclusion is proven.
 
+Its first exclusion rung is now live for NURBS/NURBS: exact restricted
+positive-weight control hulls can prove a complete miss before fixed-grid
+candidate discovery. Exactly one hull is outward-inflated by the model
+tolerance, so strict separation is sufficient while contact at the inclusive
+tolerance boundary remains an indeterminate candidate. Adaptive pair
+subdivision and its work/depth/candidate stages remain the next rung.
+
 That normalized boundary now has contextual and shared-scope public entries.
 The contextual entry composes the aggregate curve-projection profile once and
 creates one scope; ellipse/ellipse borrows it for every projection, while

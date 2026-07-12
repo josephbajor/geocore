@@ -115,6 +115,9 @@ fn intersect_bounded_nurbs_nurbs_impl(
 
     let range_a = clamp_to_domain(range_a, a.param_range());
     let range_b = clamp_to_domain(range_b, b.param_range());
+    if control_hulls_prove_separation(a, range_a, b, range_b, tolerances) {
+        return Ok(CurveCurveIntersections::complete_empty());
+    }
     let collapsed_a = range_has_no_parameter_progress(range_a, tolerances, numerical);
     let collapsed_b = range_has_no_parameter_progress(range_b, tolerances, numerical);
     if collapsed_a || collapsed_b {
@@ -165,6 +168,23 @@ fn intersect_bounded_nurbs_nurbs_impl(
     }
 
     CurveCurveIntersections::canonicalized(points, Vec::new())
+}
+
+/// Prove that every point on the first exact restricted NURBS lies farther
+/// than the model tolerance from every point on the second. Positive rational
+/// weights keep both restricted control hulls conservative. Inflating exactly
+/// one hull preserves the inclusive tolerance boundary: touching inflated
+/// boxes remain candidates and only strict separation grants completion.
+fn control_hulls_prove_separation(
+    a: &NurbsCurve,
+    range_a: ParamRange,
+    b: &NurbsCurve,
+    range_b: ParamRange,
+    tolerances: Tolerances,
+) -> bool {
+    !a.bounding_box(range_a)
+        .inflated(tolerances.linear())
+        .intersects(b.bounding_box(range_b))
 }
 
 fn degenerate_range_intersections(

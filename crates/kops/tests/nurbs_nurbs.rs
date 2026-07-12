@@ -65,6 +65,7 @@ fn nurbs_nurbs_crossing_tangent_and_range_filtering() {
     .unwrap();
     assert_eq!(hit.points.len(), 1);
     assert_eq!(hit.points[0].kind, ContactKind::Transverse);
+    assert!(!hit.is_complete());
     assert!(hit.points[0].point.dist(Point3::new(0.0, 0.0, 0.0)) < 1e-8);
     assert!((hit.points[0].t_a - 0.5).abs() < 1e-8);
     assert!((hit.points[0].t_b - 0.5).abs() < 1e-8);
@@ -78,6 +79,7 @@ fn nurbs_nurbs_crossing_tangent_and_range_filtering() {
     )
     .unwrap();
     assert!(range_miss.is_empty());
+    assert!(range_miss.is_proven_empty());
 
     let tangent = tangent_parabola();
     let hit = intersect_bounded_nurbs_nurbs(
@@ -329,7 +331,29 @@ fn contact_classification_is_stable_under_model_scale_translation_and_near_miss(
         )
         .unwrap();
         assert!(miss.points.is_empty(), "model scale {model_scale:e}");
+        assert!(miss.is_proven_empty(), "model scale {model_scale:e}");
     }
+}
+
+#[test]
+fn control_hull_exclusion_keeps_the_tolerance_boundary_inclusive() {
+    let tolerances = Tolerances::default();
+    let base = line_nurbs(Point3::new(-1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0));
+    let boundary = line_nurbs(
+        Point3::new(-1.0, 0.0, tolerances.linear()),
+        Point3::new(1.0, 0.0, tolerances.linear()),
+    );
+    let result = intersect_bounded_nurbs_nurbs(
+        &base,
+        base.param_range(),
+        &boundary,
+        boundary.param_range(),
+        tolerances,
+    )
+    .unwrap();
+
+    assert!(!result.is_proven_empty());
+    assert!(!result.is_complete());
 }
 
 #[test]

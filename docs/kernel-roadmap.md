@@ -733,8 +733,10 @@ true only for an empty complete result.
   boxes, a reusable deterministic AABB BVH with outward-rounded separation queries, and
   interval-certified affine-plane patch exclusion, analytic plane/sphere/cylinder/cone/
   torus implicit fields over outward-inflated boxes, exact adaptive U/V subpatch isolation
-  with conservative covers and structured limits, and proof-bearing analytic/NURBS SSI
-  empty exits. Extend it to generic curve/surface pairing, verified seed existence,
+  with conservative covers and structured limits, proof-bearing analytic/NURBS SSI
+  empty exits, and exact restricted NURBS curve control-hull separation for complete
+  curve/curve misses. Extend it to adaptive curve-pair subdivision, generic
+  curve/surface pairing, verified seed existence,
   safeguarded Newton polishing, conditioning diagnostics, and procedural/NURBS fields.
 - Analytic special cases and the generic solver feed the same canonical result type.
 - Consolidate the per-pair analytic curve/surface and SSI boilerplate (range

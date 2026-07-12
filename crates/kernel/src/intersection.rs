@@ -118,7 +118,9 @@ mod tests {
     use kcore::operation::{AccountingMode, BudgetPlan, LimitSpec, OperationContext, ResourceKind};
     use kgeom::curve::Ellipse;
     use kgeom::frame::Frame;
+    use kgeom::nurbs::NurbsCurve;
     use kgeom::param::ParamRange;
+    use kgeom::vec::Point3;
     use ktopo::geom::CurveGeom;
 
     use super::*;
@@ -241,5 +243,49 @@ mod tests {
                 kind: EntityKind::Curve
             })
         ));
+    }
+
+    #[test]
+    fn separated_nurbs_control_hulls_remain_a_proven_miss_through_the_facade() {
+        let first = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(-1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
+            None,
+        )
+        .unwrap();
+        let second = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(-1.0, 0.0, 1.0), Point3::new(1.0, 0.0, 1.0)],
+            None,
+        )
+        .unwrap();
+        let range = ParamRange::new(0.0, 1.0);
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let (first_id, second_id) = {
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let store = edit.store_mut_for_test();
+            let first = store.insert_curve(CurveGeom::Nurbs(first)).unwrap();
+            let second = store.insert_curve(CurveGeom::Nurbs(second)).unwrap();
+            (
+                CurveId::new(part_id.clone(), first),
+                CurveId::new(part_id.clone(), second),
+            )
+        };
+
+        let outcome = session
+            .part(part_id)
+            .unwrap()
+            .intersect_curves(IntersectCurvesRequest::new(
+                BoundedCurve::new(first_id.clone(), range),
+                BoundedCurve::new(second_id.clone(), range),
+            ))
+            .unwrap();
+        let result = outcome.into_result().unwrap();
+        assert_eq!(result.first(), first_id);
+        assert_eq!(result.second(), second_id);
+        assert!(result.is_proven_empty());
     }
 }
