@@ -9,6 +9,7 @@ publish = false
 kcore = { path = "../crates/kcore" }
 kgeom = { path = "../crates/kgeom" }
 ktopo = { path = "../crates/ktopo", features = ["benchmark-internals"] }
+kxt = { path = "../crates/kxt" }
 
 [dev-dependencies]
 criterion = { version = "=0.8.2", default-features = false, features = ["cargo_bench_support"] }
@@ -28,6 +29,10 @@ harness = false
 
 [[bench]]
 name = "nurbs_isolation"
+harness = false
+
+[[bench]]
+name = "xt_io"
 harness = false
 
 [lints.rust]

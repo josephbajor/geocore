@@ -55,6 +55,7 @@ cargo bench --manifest-path benches/Cargo.toml --bench benchmark_contract --no-r
 cargo bench --manifest-path benches/Cargo.toml --bench topology_commit --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench body_tessellation --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench nurbs_isolation --no-run
+cargo bench --manifest-path benches/Cargo.toml --bench xt_io --no-run
 ```
 
 The Q1 target verifies the result digest before measurement and again in every
@@ -83,6 +84,18 @@ patches, retained candidates versus a certified separated miss, and exact
 BVH construction, operation-context setup, reports, digests, and conservative
 cover verification are excluded from the measured duration. Degree and larger
 control-net/patch-count ladders remain deferred.
+
+The first Q5 slice uses only the repository's Apache-2.0 hand-authored
+`block.x_t` and `offset_plane.x_t` fixtures. Eight cases time the public
+parse-to-records API, complete import/reconstruction, combined writer
+validation/planning/text emission, and read-write-read round trip separately.
+The writer phase includes the mandatory body check performed by `export_text`;
+the current API does not expose that check, writer planning, serialization, or
+the byte sink as independent phases, so Q5 does not claim those boundaries.
+Fixture loading, prepared source import, additional benchmark checker
+verification, record/store/byte digests, and round-trip comparison remain
+outside measured duration. Neutral binary and larger redistributable corpora
+remain follow-ups.
 
 ## Record a measured run
 

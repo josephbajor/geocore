@@ -1,6 +1,6 @@
 # F7 quality, fuzzing, and performance harnesses
 
-Status: Q0 through Q2 plus the first Q3 and Q4 slices implemented; remaining benchmark and fuzz stages implementation-ready
+Status: Q0 through Q2 plus the first Q3 through Q5 slices implemented; remaining benchmark and fuzz stages implementation-ready
 
 ## Outcome
 
@@ -271,6 +271,16 @@ miss.
 ## Stage Q5 — X_T I/O ladder
 
 Owner: `kxt`.
+
+Status: the first bounded slice is implemented as eight cases over the
+Apache-2.0 hand-authored block and offset-plane text fixtures. It separately
+times public parse-to-records, complete import/reconstruction, combined writer
+validation/planning/text emission, and read-write-read round trip. The writer
+phase includes the mandatory body check performed by `export_text`. The current
+public APIs do not isolate lexer-only, writer-check-only, writer-planning-only,
+serialization-only, or byte-sink phases, so this slice makes no claims for
+them. Neutral binary, additional size tiers, and larger redistributable corpora
+remain deferred.
 
 Use only redistributable, versioned corpus fixtures. Define `tiny`, `small`,
 `medium`, and `large` by both byte count and record/entity count; never infer

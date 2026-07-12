@@ -201,6 +201,7 @@ dependencies = [
  "kcore",
  "kgeom",
  "ktopo",
+ "kxt",
  "serde_json",
 ]
 
@@ -226,6 +227,16 @@ dependencies = [
  "kcore",
  "kgeom",
  "kgraph",
+]
+
+[[package]]
+name = "kxt"
+version = "0.1.0"
+dependencies = [
+ "kcore",
+ "kgeom",
+ "kgraph",
+ "ktopo",
 ]
 
 [[package]]

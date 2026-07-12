@@ -28,7 +28,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 38)
+        self.assertEqual(len(cases), 46)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -102,6 +102,28 @@ class BenchmarkBaselineTests(unittest.TestCase):
                 and not case["expected_result_counters"]["complete"]
                 and not case["expected_result_counters"]["proven_empty"]
                 for case in limited
+            )
+        )
+        xt_io = [case for case in cases if case["benchmark_target"] == "xt_io"]
+        self.assertEqual(len(xt_io), 8)
+        self.assertTrue(
+            all(case["deterministic_seed"] == 0x51545854494F0005 for case in xt_io)
+        )
+        self.assertEqual(
+            {case["policy_values"]["phase"] for case in xt_io},
+            {"parse-records", "full-read", "write-text", "round-trip"},
+        )
+        self.assertTrue(
+            all(
+                case["expected_result_counters"]["unsupported_capabilities"] == 0
+                for case in xt_io
+            )
+        )
+        self.assertTrue(
+            all(
+                case["expected_result_counters"]["roundtrip_equal"]
+                for case in xt_io
+                if case["policy_values"]["phase"] == "round-trip"
             )
         )
         benchmark.validate_report(self.example)
