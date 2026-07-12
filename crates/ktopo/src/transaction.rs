@@ -177,6 +177,15 @@ pub struct Journal {
 /// transaction and are therefore rollback-safe and journaled. Public callers
 /// can retain assembly changes only through a checked commit, which validates
 /// every affected body and the store's complete topology ownership closure.
+///
+/// # Stability
+///
+/// `AssemblyStore` is an unstable trusted-adapter seam, not an application
+/// modeling API. Its reviewed cross-crate users are X_T reconstruction and the
+/// X_T external-oracle fixture generator. New interchange formats must keep raw
+/// assembly inside their lower-layer adapters. A future breaking release may
+/// seal or replace this type after those consumers migrate; ordinary facade
+/// clients must not depend on its methods or raw entity layout.
 pub struct AssemblyStore<'a> {
     store: &'a mut Store,
 }
@@ -330,7 +339,11 @@ impl<'a> Transaction<'a> {
         self.store
     }
 
-    /// Open the low-level reconstruction/assembly facade for this transaction.
+    /// Open the unstable low-level reconstruction/assembly seam for this
+    /// transaction.
+    ///
+    /// This is reserved for reviewed kernel builders and trusted interchange
+    /// adapters. Ordinary modeling uses semantic transaction operations.
     pub fn assembly(&mut self) -> AssemblyStore<'_> {
         AssemblyStore { store: self.store }
     }

@@ -29,7 +29,7 @@ section and link the reason from the affected project file in the same change.
 | F2 | Stage 1, two Stage 2 pilots, three bounded Stage 3 pilots, and the first Stage 4 migration are implemented: scoped NURBS proof/march, Full face-domain checking, face tessellation, and NURBS/NURBS Newton conditioning/progress/gradient stationarity use shared policy/report vocabulary with compatibility, scale, and swap tests. Minimizer/contact-classification/legacy-slack guards, contextual projection, body tessellation, and broader migrations remain. |
 | F3 | Two slices implemented: centralized class dispatch plus shared periodic/range and first-wins candidate emission migrated through line/circle and plane/sphere. Broader driver migration and generic fallback remain. |
 | F4 | Phase 1, representative Phase 2 slices, and two Phase 3 pilots are implemented: graph evaluation owns stable classification, and one surface-intersection family retains ordered structured incomplete evidence through limits, numeric stops, canonicalization, and swapping. Broader result-family and legacy migrations remain. |
-| F5 | K1, the K2 block/check/query pilot, K3 identity/read/surface-evaluation slices, and the first K4 interchange slice are implemented: the `kernel` facade owns lifecycle, opaque IDs, classified sources, one-scope outcomes, safe checker subjects, opaque journals, child-accounted procedural evaluation, and atomic typed X_T import/export without lower-layer leakage. Graph-aware intersection, semantic edit/journal iteration, and K5 remain. |
+| F5 | K1-K3, typed K4 interchange, and K5 adoption are implemented: the `kernel` facade owns lifecycle, opaque IDs, classified sources, one-scope outcomes, safe checker subjects, opaque journals, child-accounted procedural evaluation, and atomic typed X_T import/export. The standalone `kernel-lifecycle` client depends directly only on `kernel` and proves construction, semantic inspection, Full checking, surface evaluation, and byte-stable X_T export/import/re-export. Graph-aware intersection and semantic edit/journal iteration remain. |
 | F6 | First slice implemented: shared surface inversion, chart normalization, and distance services consumed by checker and tessellation. Module splits remain. |
 | F7 | Q0-Q2, Q8, and the first Q3-Q6 slices are implemented: CI now enforces Python/oracle freshness, compiles and smoke-runs the excluded benchmark package, and runs both pinned fuzz targets within fixed limits. The offset-writer change that root CI missed is captured as the first Q8 registry regression. Q2a, Q3/Q4/Q5 expansion, more Q6 targets/corpora, and Q7 remain. |
 
@@ -48,28 +48,26 @@ current record. Host findings remain ratcheted in `docs/oracle-results.tsv`.
 
 ### Ordered code queue
 
-1. **Pull F5/K5 adoption forward.** Migrate one real tool/example to depend only
-   on `kernel`, audit the resulting accessor and packaging gaps, and keep the
-   public facade otherwise stable during that pass. No additional facade family
-   lands before this consumer has exercised the existing lifecycle.
-2. **Finish F2 contract consolidation.** Land one `kcore` operation-family
+1. **Finish F2 contract consolidation.** Land one `kcore` operation-family
    profile
    composition rule: family defaults fill missing stages, session entries
    override those defaults, and explicit request overrides are the only allowed
    later override.
    Finish the NURBS contact-classification/minimizer scale guards that bound the
    future generic intersection fallback.
-3. **Contextualize and ratchet the remaining foundation paths.** Migrate body
+2. **Contextualize and ratchet the remaining foundation paths.** Migrate body
    tessellation,
    projection, and X_T reconstruction's nested graph evaluation onto shared
    scopes and child reservations before expanding their facade APIs. As each
    contextual path proves legacy equivalence, forbid new crate-internal calls
-   to its legacy wrapper; public deprecation waits for the K5 consumer audit.
-4. **Measure graph construction before large imports.** Land the Q2a
+   to its legacy wrapper. K5 has now exercised the public compatibility
+   surface, so proven legacy wrappers may be deprecated when their owning
+   migration lands.
+3. **Measure graph construction before large imports.** Land the Q2a
    graph-build/reverse-dependency ladder before production-scale imports or a
    reverse-index representation change. Optimize the current deterministic
    linear index only against that measured baseline.
-5. **Resume algorithm/API expansion behind those gates.** F3's generic fallback
+4. **Resume algorithm/API expansion behind those gates.** F3's generic fallback
    and facade graph-aware intersection follow the F2 scale/context work;
    semantic K4 edit transactions follow the K5 adoption pass. F6 splits and F4
    legacy cleanup land only with an owner-level behavioral migration.
@@ -91,7 +89,7 @@ F7 Quality and performance harnesses             (independent and continuous)
 ```
 
 The original independent foundations have landed. Work is no longer scheduled
-as broad parallel expansion: Q8 makes the harness protective; K5 tests the
+as broad parallel expansion: Q8 made the harness protective; K5 tested the
 facade against a consumer; F2 profile/scale convergence gates F3; contextual
 X_T/body-tessellation work gates the corresponding facade operations; and the
 Q2a graph-build baseline gates large imports and reverse-index optimization.
@@ -104,6 +102,9 @@ Q2a graph-build baseline gates large imports and reverse-index optimization.
   calls even while source-compatible public wrappers remain.
 - Excluded benchmark, fuzz, and Python tooling is protective only when its
   contracts run in CI.
+- The facade-only lifecycle client keeps exactly `kernel` as its direct
+  dependency, and the reviewed `kernel` package inventory stays enforced in
+  CI.
 - Large import claims wait for a graph-construction baseline; representation
   optimization waits for measurements and preserves deterministic ordering.
 

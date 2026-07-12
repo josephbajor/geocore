@@ -30,7 +30,7 @@ impl<'part> EdgeView<'part> {
 
     /// Start/end vertices in edge direction; both are absent for a ring edge.
     pub fn vertices(&self) -> [Option<VertexId>; 2] {
-        let [start, end] = self.entity().vertices;
+        let [start, end] = self.entity().vertices();
         [
             start.map(|raw| VertexId::new(self.id.part().clone(), raw)),
             end.map(|raw| VertexId::new(self.id.part().clone(), raw)),
@@ -39,20 +39,20 @@ impl<'part> EdgeView<'part> {
 
     /// Active edge parameter interval, absent for a full-period ring edge.
     pub fn bounds(&self) -> Option<(f64, f64)> {
-        self.entity().bounds
+        self.entity().bounds()
     }
 
     /// Authoritative supporting-curve identity, absent for a curve-less
     /// tolerant edge.
     pub fn curve(&self) -> Option<CurveId> {
         self.entity()
-            .curve
+            .curve()
             .map(|raw| CurveId::new(self.id.part().clone(), raw))
     }
 
     /// Fins in stored creation order.
     pub fn fins(&self) -> FinIds<'_> {
-        let fins = &self.entity().fins;
+        let fins = self.entity().fins();
         FinIds::new(
             fins.iter()
                 .map(|&raw| FinId::new(self.id.part().clone(), raw)),
@@ -62,7 +62,7 @@ impl<'part> EdgeView<'part> {
 
     /// Tolerant-edge metric data, when present.
     pub fn tolerance(&self) -> Option<EntityTolerance> {
-        self.entity().tolerance
+        self.entity().tolerance()
     }
 }
 
@@ -97,6 +97,6 @@ impl<'part> VertexView<'part> {
 
     /// Tolerant-vertex metric data, when present.
     pub fn tolerance(&self) -> Option<EntityTolerance> {
-        self.entity().tolerance
+        self.entity().tolerance()
     }
 }

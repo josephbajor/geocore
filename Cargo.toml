@@ -9,6 +9,7 @@ members = [
     "crates/ktopo",
     "crates/kops",
     "crates/kxt",
+    "examples/kernel-lifecycle",
 ]
 
 [workspace.package]

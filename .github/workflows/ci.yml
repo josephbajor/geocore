@@ -54,6 +54,7 @@ jobs:
           python3 -m unittest discover -s scripts/tests -v
           python3 scripts/benchmark_baseline.py smoke
           python3 scripts/benchmark_baseline.py validate
+          python3 scripts/package_contract.py
       - name: Regenerate the exact oracle bundle
         run: cargo run --locked --release -p kxt --bin xt_oracle -- export "$RUNNER_TEMP/oracle-outbox"
       - name: Verify licensed-host certification freshness

@@ -1,0 +1,172 @@
+//! Facade-only executable covering one supported application lifecycle.
+
+use std::error::Error;
+use std::ffi::OsString;
+use std::io;
+use std::path::PathBuf;
+
+use kernel::{
+    BlockRequest, CheckBodyRequest, CheckLevel, CheckOutcome, ExportXtRequest, Frame,
+    FullCheckBudgetProfile, ImportXtRequest, Kernel, OperationSettings, SurfaceDerivativeOrder,
+    SurfaceEvaluationRequest,
+};
+
+fn output_path() -> Result<PathBuf, io::Error> {
+    let mut arguments = std::env::args_os();
+    let executable = arguments
+        .next()
+        .unwrap_or_else(|| OsString::from("kernel-lifecycle"));
+    let output = arguments.next().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("usage: {} OUTPUT.x_t", PathBuf::from(executable).display()),
+        )
+    })?;
+    if arguments.next().is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "expected exactly one output path",
+        ));
+    }
+    Ok(output.into())
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let output_path = output_path()?;
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+
+    let created = session
+        .edit_part(part_id.clone())?
+        .create_block(BlockRequest::new(Frame::world(), [2.0, 3.0, 4.0]))?
+        .into_result()?;
+    let construction_mutations = created.journal().mutation_count();
+    let body_id = created.body();
+    let full_check_settings =
+        || OperationSettings::new().with_budget_overrides(FullCheckBudgetProfile::v1_defaults());
+
+    let (body_kind, face_count, edge_count, vertex_count, surface_class, point, authored_xt) = {
+        let part = session.part(part_id.clone())?;
+        let body = part.body(body_id.clone())?;
+        let face_ids = body.faces()?.collect::<Vec<_>>();
+        let edge_count = body.edges()?.len();
+        let vertex_count = body.vertices()?.len();
+        let face_id = face_ids
+            .first()
+            .cloned()
+            .ok_or_else(|| io::Error::other("constructed body has no face"))?;
+        let face = part.face(face_id)?;
+        let surface_id = face.surface();
+        let uv = face
+            .domain()
+            .ok_or_else(|| io::Error::other("constructed face has no finite domain"))?
+            .center();
+        let surface_class = part.surface(surface_id.clone())?.class_key().as_str();
+
+        let checked = part
+            .check_body(
+                CheckBodyRequest::new(body_id.clone(), CheckLevel::Full)
+                    .with_settings(full_check_settings()),
+            )?
+            .into_result()?;
+        if checked.outcome() != CheckOutcome::Valid {
+            return Err(io::Error::other(format!(
+                "constructed body did not check as valid: {:?}",
+                checked.outcome()
+            ))
+            .into());
+        }
+
+        let evaluated = part
+            .evaluate_surface(SurfaceEvaluationRequest::new(
+                surface_id,
+                uv,
+                SurfaceDerivativeOrder::First,
+            ))?
+            .into_result()?;
+        let point = evaluated.position();
+        if !point
+            .to_array()
+            .iter()
+            .all(|coordinate| coordinate.is_finite())
+        {
+            return Err(io::Error::other("surface evaluation returned a non-finite point").into());
+        }
+
+        let authored_xt = part
+            .export_xt(ExportXtRequest::new(body_id.clone()))?
+            .into_result()?
+            .into_text();
+        (
+            body.kind(),
+            face_ids.len(),
+            edge_count,
+            vertex_count,
+            surface_class,
+            point,
+            authored_xt,
+        )
+    };
+
+    let imported_part_id = session.create_part();
+    let imported = session
+        .edit_part(imported_part_id.clone())?
+        .import_xt(ImportXtRequest::new(authored_xt.as_bytes()))?
+        .into_result()?;
+    let import_mutations = imported.journal().mutation_count();
+    let imported_body_id = imported
+        .bodies()
+        .first()
+        .cloned()
+        .ok_or_else(|| io::Error::other("facade import returned no body"))?;
+    if imported.bodies().len() != 1 {
+        return Err(io::Error::other("facade import returned more than one body").into());
+    }
+
+    let imported_xt = {
+        let part = session.part(imported_part_id)?;
+        let imported_body = part.body(imported_body_id.clone())?;
+        if imported_body.faces()?.len() != face_count
+            || imported_body.edges()?.len() != edge_count
+            || imported_body.vertices()?.len() != vertex_count
+        {
+            return Err(io::Error::other("imported topology summary changed").into());
+        }
+        let checked = part
+            .check_body(
+                CheckBodyRequest::new(imported_body_id.clone(), CheckLevel::Full)
+                    .with_settings(full_check_settings()),
+            )?
+            .into_result()?;
+        if checked.outcome() != CheckOutcome::Valid {
+            return Err(io::Error::other(format!(
+                "imported body did not check as valid: {:?}",
+                checked.outcome()
+            ))
+            .into());
+        }
+        part.export_xt(ExportXtRequest::new(imported_body_id))?
+            .into_result()?
+            .into_text()
+    };
+
+    if authored_xt != imported_xt {
+        return Err(io::Error::other("facade X_T round trip changed deterministic bytes").into());
+    }
+    session.part(part_id)?.body(body_id)?;
+    std::fs::write(&output_path, imported_xt.as_bytes())?;
+
+    println!(
+        "kind={body_kind:?} faces={} edges={} vertices={} check={:?} surface={} point={:?} bytes={} construction_mutations={} import_mutations={} imported_bodies=1 byte_stable=true original_live=true",
+        face_count,
+        edge_count,
+        vertex_count,
+        CheckOutcome::Valid,
+        surface_class,
+        point.to_array(),
+        imported_xt.len(),
+        construction_mutations,
+        import_mutations,
+    );
+    Ok(())
+}

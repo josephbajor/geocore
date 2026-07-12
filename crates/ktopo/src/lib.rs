@@ -4,6 +4,22 @@
 //! (`BODY → REGION → SHELL → FACE → LOOP → FIN → EDGE → VERTEX`) over
 //! generational arenas, with geometry attached by handles into `kgraph`.
 //!
+//! # Stability boundary
+//!
+//! This crate is a lower kernel layer, not the supported application facade.
+//! Ordinary application and product code should use `kernel`. Public raw entity
+//! fields, handles, [`store::Store`], and [`transaction::AssemblyStore`] remain
+//! available for in-repository kernel development and reviewed trusted adapters,
+//! but their representation and assembly shape are not compatibility promises.
+//! A separately announced breaking encapsulation pass may make raw fields
+//! private or replace the assembly seam without changing facade behavior.
+//!
+//! The currently reviewed cross-crate assembly consumers are X_T
+//! reconstruction and the external-oracle fixture generator in `kxt`. Adding a
+//! new consumer is an architecture-boundary change. Every persisted assembly
+//! still passes through checked commit; this instability notice does not create
+//! an unchecked persistence path.
+//!
 //! Module map:
 //! - [`entity`] — the entity structs, typed handles, senses, and the
 //!   orientation/adjacency invariants (documented there, enforced by

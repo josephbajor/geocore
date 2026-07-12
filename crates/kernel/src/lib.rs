@@ -2,10 +2,11 @@
 //!
 //! The implemented foundation owns sessions and independent parts, exposes
 //! opaque part-qualified topology and geometry identities, and returns
-//! immutable semantic views. The contextual-operation pilot adds checked block
-//! construction and body checking with F2 reports and delegated classified
-//! errors. Broader modeling, journal views, operation-scoped geometry
-//! evaluation/intersection, and interchange remain later façade stages.
+//! immutable semantic views. Contextual operations cover checked block
+//! construction, body checking, operation-scoped surface evaluation, and typed
+//! X_T import/export with F2 reports and delegated classified errors. Broader
+//! modeling, semantic journal views, and graph-aware intersections remain later
+//! façade stages.
 //!
 //! Raw lower-layer storage is not reachable through this crate:
 //!

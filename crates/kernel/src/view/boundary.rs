@@ -35,6 +35,14 @@ impl FaceDomain {
         self.v
     }
 
+    /// Midpoint of this finite conservative parameter-space work box.
+    ///
+    /// This is a deterministic interior sample for application inspection;
+    /// it does not prove that the point lies inside the face's trimmed region.
+    pub fn center(self) -> [f64; 2] {
+        [self.u.lerp(0.5), self.v.lerp(0.5)]
+    }
+
     /// Whether a parameter lies in this conservative box.
     pub fn contains(self, uv: [f64; 2]) -> bool {
         self.u.contains(uv[0]) && self.v.contains(uv[1])
@@ -65,12 +73,12 @@ impl<'part> FaceView<'part> {
 
     /// Owning shell.
     pub fn shell(&self) -> ShellId {
-        ShellId::new(self.id.part().clone(), self.entity().shell)
+        ShellId::new(self.id.part().clone(), self.entity().shell())
     }
 
     /// Boundary loops in stored topological order.
     pub fn loops(&self) -> LoopIds<'_> {
-        let loops = &self.entity().loops;
+        let loops = self.entity().loops();
         LoopIds::new(
             loops
                 .iter()
@@ -81,22 +89,22 @@ impl<'part> FaceView<'part> {
 
     /// Authoritative supporting-surface identity.
     pub fn surface(&self) -> SurfaceId {
-        SurfaceId::new(self.id.part().clone(), self.entity().surface)
+        SurfaceId::new(self.id.part().clone(), self.entity().surface())
     }
 
     /// Face orientation relative to its supporting surface.
     pub fn sense(&self) -> Sense {
-        self.entity().sense
+        self.entity().sense()
     }
 
     /// Conservative finite parameter domain, when known.
     pub fn domain(&self) -> Option<FaceDomain> {
-        self.entity().domain.map(FaceDomain::from_raw)
+        self.entity().domain().map(FaceDomain::from_raw)
     }
 
     /// Imported or operation tolerance, when present.
     pub fn tolerance(&self) -> Option<EntityTolerance> {
-        self.entity().tolerance
+        self.entity().tolerance()
     }
 }
 
@@ -124,12 +132,12 @@ impl<'part> LoopView<'part> {
 
     /// Owning face.
     pub fn face(&self) -> FaceId {
-        FaceId::new(self.id.part().clone(), self.entity().face)
+        FaceId::new(self.id.part().clone(), self.entity().face())
     }
 
     /// Fins in stored loop traversal order.
     pub fn fins(&self) -> FinIds<'_> {
-        let fins = &self.entity().fins;
+        let fins = self.entity().fins();
         FinIds::new(
             fins.iter()
                 .map(|&raw| FinId::new(self.id.part().clone(), raw)),
@@ -162,23 +170,23 @@ impl<'part> FinView<'part> {
 
     /// Owning loop.
     pub fn loop_(&self) -> LoopId {
-        LoopId::new(self.id.part().clone(), self.entity().parent)
+        LoopId::new(self.id.part().clone(), self.entity().parent())
     }
 
     /// Edge used by this fin.
     pub fn edge(&self) -> EdgeId {
-        EdgeId::new(self.id.part().clone(), self.entity().edge)
+        EdgeId::new(self.id.part().clone(), self.entity().edge())
     }
 
     /// Traversal direction relative to the edge.
     pub fn sense(&self) -> Sense {
-        self.entity().sense
+        self.entity().sense()
     }
 
     /// Attached parameter-space curve identity, when authored.
     pub fn pcurve(&self) -> Option<PcurveId> {
         self.entity()
-            .pcurve
+            .pcurve()
             .map(|use_| PcurveId::new(self.id.part().clone(), use_.curve()))
     }
 
@@ -196,5 +204,21 @@ impl<'part> FinView<'part> {
             .fin_head(self.id.raw())
             .map(|value| value.map(|raw| VertexId::new(self.id.part().clone(), raw)))
             .map_err(|source| Error::InconsistentTopology { source })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn face_domain_center_is_deterministic_and_contained() {
+        let domain = FaceDomain {
+            u: ParamRange::new(-2.0, 6.0),
+            v: ParamRange::new(3.0, 5.0),
+        };
+
+        assert_eq!(domain.center(), [2.0, 4.0]);
+        assert!(domain.contains(domain.center()));
     }
 }

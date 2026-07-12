@@ -18,6 +18,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernel-lifecycle"
+version = "0.1.0"
+dependencies = [
+ "kernel",
+]
+
+[[package]]
 name = "kgeom"
 version = "0.1.0"
 dependencies = [

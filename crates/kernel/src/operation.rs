@@ -299,6 +299,11 @@ impl SurfaceEvaluation {
         self.surface.clone()
     }
 
+    /// Evaluated model-space position.
+    pub const fn position(&self) -> Point3 {
+        self.derivatives.p
+    }
+
     /// Position and requested partial derivatives.
     pub const fn derivatives(&self) -> kgeom::surface::SurfaceDerivs {
         self.derivatives
@@ -376,6 +381,18 @@ pub struct CheckFault {
     pub kind: FaultKind,
 }
 
+impl CheckFault {
+    /// Smallest facade-safe entity or value carrying the fault.
+    pub const fn entity(&self) -> &CheckEntity {
+        &self.entity
+    }
+
+    /// Proven invariant violation.
+    pub const fn kind(&self) -> FaultKind {
+        self.kind
+    }
+}
+
 /// One unresolved Full-check proof obligation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CheckGap {
@@ -385,6 +402,23 @@ pub struct CheckGap {
     pub kind: VerificationGapKind,
     /// Structured stop or unsupported cause, when supplied by the checker.
     pub cause: Option<VerificationGapCause>,
+}
+
+impl CheckGap {
+    /// Smallest facade-safe entity or value carrying the proof obligation.
+    pub const fn entity(&self) -> &CheckEntity {
+        &self.entity
+    }
+
+    /// Proof category.
+    pub const fn kind(&self) -> VerificationGapKind {
+        self.kind
+    }
+
+    /// Structured stop or unsupported cause, when supplied by the checker.
+    pub const fn cause(&self) -> Option<VerificationGapCause> {
+        self.cause
+    }
 }
 
 /// Checker report with lower raw entity references adapted to facade identity.
@@ -794,6 +828,26 @@ mod tests {
     }
 
     #[test]
+    fn checker_finding_accessors_preserve_semantic_values() {
+        let entity = CheckEntity::Point(Point3::new(1.0, 2.0, 3.0));
+        let fault = CheckFault {
+            entity: entity.clone(),
+            kind: FaultKind::OutsideSizeBox,
+        };
+        assert_eq!(fault.entity(), &entity);
+        assert_eq!(fault.kind(), FaultKind::OutsideSizeBox);
+
+        let gap = CheckGap {
+            entity: entity.clone(),
+            kind: VerificationGapKind::LoopSelfIntersection,
+            cause: None,
+        };
+        assert_eq!(gap.entity(), &entity);
+        assert_eq!(gap.kind(), VerificationGapKind::LoopSelfIntersection);
+        assert_eq!(gap.cause(), None);
+    }
+
+    #[test]
     fn full_check_matches_direct_contextual_result_and_exact_report() {
         let policy = full_check_policy();
         let mut direct_store = Store::new();
@@ -989,6 +1043,7 @@ mod tests {
             .unwrap();
         let value = outcome.result().unwrap();
         assert_eq!(value.surface(), surface);
+        assert_eq!(value.position(), expected.p);
         assert_eq!(value.derivatives(), expected);
         assert_eq!(
             report_usage(

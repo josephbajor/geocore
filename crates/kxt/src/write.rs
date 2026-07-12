@@ -165,19 +165,19 @@ impl Plan {
         let mut surface_handles = Vec::new();
         for &face in &face_handles {
             let f = store.get(face)?;
-            if f.tolerance.is_some() {
+            if f.tolerance().is_some() {
                 return Err(XtError::Unsupported {
                     capability: XtCapability::FaceTolerances,
                     what: "schema-13006 FACE tolerance is required to be null",
                 });
             }
-            plan_surface_dependencies(store, f.surface, &mut surface_handles)?;
-            for &lp in &f.loops {
-                if store.get(lp)?.fins.is_empty() {
+            plan_surface_dependencies(store, f.surface(), &mut surface_handles)?;
+            for &lp in f.loops() {
+                if store.get(lp)?.fins().is_empty() {
                     return Err(XtError::InvalidModel { what: "empty loop" });
                 }
                 loop_handles.push(lp);
-                fin_handles.extend_from_slice(&store.get(lp)?.fins);
+                fin_handles.extend_from_slice(store.get(lp)?.fins());
             }
         }
         let mut curve_handles = Vec::new();
@@ -185,12 +185,12 @@ impl Plan {
         let mut dummy_fin_specs = Vec::new();
         for &edge in &edge_handles {
             let e = store.get(edge)?;
-            validate_edge_fin_count(e, b.kind)?;
-            push_dummy_fins(&mut dummy_fin_specs, edge, e, b.kind);
-            match e.curve {
+            validate_edge_fin_count(e, b.kind())?;
+            push_dummy_fins(&mut dummy_fin_specs, edge, e, b.kind());
+            match e.curve() {
                 Some(curve) => {
                     push_interned(&mut curve_handles, curve);
-                    match (store.get(curve)?, e.vertices, e.bounds) {
+                    match (store.get(curve)?, e.vertices(), e.bounds()) {
                         (CurveGeom::Line(_), [Some(_), Some(_)], Some(_)) => {}
                         (CurveGeom::Circle(_), [None, None], None) => {}
                         (CurveGeom::Circle(_), [Some(_), Some(_)], Some(_)) => {}
@@ -208,13 +208,13 @@ impl Plan {
                     }
                 }
                 None => {
-                    if e.fins.is_empty() {
+                    if e.fins().is_empty() {
                         return Err(XtError::Unsupported {
                             capability: XtCapability::TolerantWireEdges,
                             what: "curve-less tolerant wire edges",
                         });
                     }
-                    for &fin in &e.fins {
+                    for &fin in e.fins() {
                         pcurve_nurbs(store, fin)?;
                         fin_pcurve_handles.push(fin);
                     }
@@ -226,9 +226,12 @@ impl Plan {
         // SP_CURVE, in the already-deterministic fin traversal order.
         for &fin in &fin_handles {
             let fin_value = store.get(fin)?;
-            let face = store.get(fin_value.parent)?.face;
-            if matches!(store.get(store.get(face)?.surface)?, SurfaceGeom::Offset(_)) {
-                if fin_value.pcurve.is_none() {
+            let face = store.get(fin_value.parent())?.face();
+            if matches!(
+                store.get(store.get(face)?.surface())?,
+                SurfaceGeom::Offset(_)
+            ) {
+                if fin_value.pcurve().is_none() {
                     return Err(XtError::InvalidModel {
                         what: "offset-face fin requires an authored pcurve for X_T export",
                     });
@@ -240,8 +243,8 @@ impl Plan {
         let mut point_handles = Vec::new();
         for &vertex in &vertex_handles {
             let v = store.get(vertex)?;
-            check_in_size_box(store.get(v.point)?.to_array())?;
-            push_interned(&mut point_handles, v.point);
+            check_in_size_box(store.get(v.point())?.to_array())?;
+            push_interned(&mut point_handles, v.point());
         }
         for &surface in &surface_handles {
             match store.get(surface)? {
@@ -294,7 +297,7 @@ impl Plan {
             what: "too many tolerant fin pcurves",
         })?;
         Ok(Plan {
-            body_kind: b.kind,
+            body_kind: b.kind(),
             faces,
             loops,
             fins,
@@ -364,7 +367,7 @@ impl Plan {
 
         for (position, &(face_id, index)) in self.faces.iter().enumerate() {
             let face = store.get(face_id)?;
-            let first_loop = face.loops.first().map_or(0, |&lp| id_of(&self.loops, lp));
+            let first_loop = face.loops().first().map_or(0, |&lp| id_of(&self.loops, lp));
             let next = adjacent(&self.faces, position, 1);
             let previous = adjacent(&self.faces, position, -1);
             let surface_faces: Vec<_> = self
@@ -374,7 +377,7 @@ impl Plan {
                 .filter(|&(candidate, _)| {
                     store
                         .get(candidate)
-                        .is_ok_and(|f| f.surface == face.surface)
+                        .is_ok_and(|f| f.surface() == face.surface())
                 })
                 .collect();
             let surface_position = surface_faces
@@ -392,8 +395,8 @@ impl Plan {
                     ptr(previous),
                     ptr(first_loop),
                     ptr(self.shell_id),
-                    ptr(id_of(&self.surfaces, face.surface)),
-                    sense(face.sense),
+                    ptr(id_of(&self.surfaces, face.surface())),
+                    sense(face.sense()),
                     ptr(adjacent(&surface_faces, surface_position, 1)),
                     ptr(adjacent(&surface_faces, surface_position, -1)),
                     // Solid faces front the void-region shell; sheet faces
@@ -413,14 +416,14 @@ impl Plan {
         for &(loop_id, index) in &self.loops {
             let lp = store.get(loop_id)?;
             let position = store
-                .get(lp.face)?
-                .loops
+                .get(lp.face())?
+                .loops()
                 .iter()
                 .position(|&candidate| candidate == loop_id)
                 .ok_or(XtError::InvalidModel {
                     what: "loop missing from face",
                 })?;
-            let face_loops = &store.get(lp.face)?.loops;
+            let face_loops = store.get(lp.face())?.loops();
             let next = face_loops
                 .get(position + 1)
                 .map_or(0, |&v| id_of(&self.loops, v));
@@ -430,44 +433,44 @@ impl Plan {
                 values: vec![
                     int(index),
                     ptr(0),
-                    ptr(id_of(&self.fins, lp.fins[0])),
-                    ptr(id_of(&self.faces, lp.face)),
+                    ptr(id_of(&self.fins, lp.fins()[0])),
+                    ptr(id_of(&self.faces, lp.face())),
                     ptr(next),
                 ],
             });
         }
         for &(fin_id, index) in &self.fins {
             let fin = store.get(fin_id)?;
-            let lp = store.get(fin.parent)?;
+            let lp = store.get(fin.parent())?;
             let position =
-                lp.fins
+                lp.fins()
                     .iter()
                     .position(|&v| v == fin_id)
                     .ok_or(XtError::InvalidModel {
                         what: "fin missing from loop",
                     })?;
-            let forward = lp.fins[(position + 1) % lp.fins.len()];
-            let backward = lp.fins[(position + lp.fins.len() - 1) % lp.fins.len()];
-            let edge = store.get(fin.edge)?;
+            let forward = lp.fins()[(position + 1) % lp.fins().len()];
+            let backward = lp.fins()[(position + lp.fins().len() - 1) % lp.fins().len()];
+            let edge = store.get(fin.edge())?;
             let other = edge
-                .fins
+                .fins()
                 .iter()
                 .copied()
                 .find(|&v| v != fin_id)
                 .map(|fin| id_of(&self.fins, fin))
-                .or_else(|| self.dummy_fin_id(fin.edge, DummyFinRole::SheetBoundary));
+                .or_else(|| self.dummy_fin_id(fin.edge(), DummyFinRole::SheetBoundary));
             let head = store.fin_head(fin_id)?;
             out.push(OutNode {
                 code: code::FIN,
                 index,
                 values: vec![
                     ptr(0),
-                    ptr(id_of(&self.loops, fin.parent)),
+                    ptr(id_of(&self.loops, fin.parent())),
                     ptr(id_of(&self.fins, forward)),
                     ptr(id_of(&self.fins, backward)),
                     ptr(head.map_or(0, |v| id_of(&self.vertices, v))),
                     ptr(other.unwrap_or(0)),
-                    ptr(id_of(&self.edges, fin.edge)),
+                    ptr(id_of(&self.edges, fin.edge())),
                     ptr(self.fin_pcurve_id(fin_id).unwrap_or(0)),
                     ptr(match head {
                         Some(v) => self
@@ -477,7 +480,7 @@ impl Plan {
                             .unwrap_or(0),
                         None => 0,
                     }),
-                    sense(fin.sense),
+                    sense(fin.sense()),
                 ],
             });
         }
@@ -486,7 +489,7 @@ impl Plan {
             let edge = store.get(edge_id)?;
             let (vertex, other, fin_sense) = match dummy.role {
                 DummyFinRole::SheetBoundary => {
-                    let [actual_fin] = edge.fins.as_slice() else {
+                    let [actual_fin] = edge.fins() else {
                         return Err(XtError::InvalidModel {
                             what: "sheet boundary dummy FIN edge must have exactly one real fin",
                         });
@@ -496,10 +499,14 @@ impl Plan {
                     let tail = store.fin_tail(actual_fin)?.ok_or(XtError::InvalidModel {
                         what: "sheet boundary dummy FIN edge has no tail vertex",
                     })?;
-                    (tail, id_of(&self.fins, actual_fin), actual.sense.flipped())
+                    (
+                        tail,
+                        id_of(&self.fins, actual_fin),
+                        actual.sense().flipped(),
+                    )
                 }
                 DummyFinRole::WireEnd => {
-                    let vertex = edge.vertices[1].ok_or(XtError::InvalidModel {
+                    let vertex = edge.vertices()[1].ok_or(XtError::InvalidModel {
                         what: "wire dummy FIN edge has no end vertex",
                     })?;
                     let other = self.dummy_fin_id(edge_id, DummyFinRole::WireStart).ok_or(
@@ -510,7 +517,7 @@ impl Plan {
                     (vertex, other, Sense::Forward)
                 }
                 DummyFinRole::WireStart => {
-                    let vertex = edge.vertices[0].ok_or(XtError::InvalidModel {
+                    let vertex = edge.vertices()[0].ok_or(XtError::InvalidModel {
                         what: "wire dummy FIN edge has no start vertex",
                     })?;
                     let other = self.dummy_fin_id(edge_id, DummyFinRole::WireEnd).ok_or(
@@ -554,11 +561,11 @@ impl Plan {
             // sheet boundary edge whose single real fin is reversed, the
             // positive fin is the dummy partner.
             let positive_fin = edge
-                .fins
+                .fins()
                 .iter()
                 .copied()
-                .find(|&fin| store.get(fin).is_ok_and(|f| f.sense == Sense::Forward));
-            let first_fin = match (positive_fin, edge.fins.first()) {
+                .find(|&fin| store.get(fin).is_ok_and(|f| f.sense() == Sense::Forward));
+            let first_fin = match (positive_fin, edge.fins().first()) {
                 (Some(fin), _) => id_of(&self.fins, fin),
                 (None, Some(&fin)) => self
                     .dummy_fin_id(edge_id, DummyFinRole::SheetBoundary)
@@ -573,7 +580,7 @@ impl Plan {
                 values: vec![
                     int(index),
                     ptr(0),
-                    optional_double(edge.tolerance.map(EntityTolerance::value)),
+                    optional_double(edge.tolerance().map(EntityTolerance::value)),
                     ptr(first_fin),
                     ptr(adjacent(&self.edges, position, -1)),
                     ptr(adjacent(&self.edges, position, 1)),
@@ -581,7 +588,7 @@ impl Plan {
                     // exact bounded edges (block.x_t, plate.x_t); parameter
                     // bounds are implied by the vertices. TRIMMED_CURVE
                     // wrapping stays reserved for tolerant fin SP-curves.
-                    ptr(match edge.curve {
+                    ptr(match edge.curve() {
                         Some(curve) => id_of(&self.curves, curve),
                         None => 0,
                     }),
@@ -610,8 +617,8 @@ impl Plan {
                     ptr(first_fin),
                     ptr(adjacent(&self.vertices, position, -1)),
                     ptr(adjacent(&self.vertices, position, 1)),
-                    ptr(id_of(&self.points, vertex.point)),
-                    optional_double(vertex.tolerance.map(EntityTolerance::value)),
+                    ptr(id_of(&self.points, vertex.point())),
+                    optional_double(vertex.tolerance().map(EntityTolerance::value)),
                     ptr(1),
                 ],
             });
@@ -631,7 +638,7 @@ impl Plan {
         }
         for (position, &(surface_id, index)) in self.surfaces.iter().enumerate() {
             let face = self.faces.iter().find_map(|&(face, _)| {
-                (store.get(face).ok()?.surface == surface_id).then_some(face)
+                (store.get(face).ok()?.surface() == surface_id).then_some(face)
             });
             let mut common = geom_common(
                 index,
@@ -677,7 +684,7 @@ impl Plan {
         }
         for (position, &(curve_id, index)) in self.curves.iter().enumerate() {
             let direct_owner = self.edges.iter().find_map(|&(edge, id)| {
-                (store.get(edge).ok()?.curve == Some(curve_id)).then_some(id)
+                (store.get(edge).ok()?.curve() == Some(curve_id)).then_some(id)
             });
             let common = geom_common(
                 index,
@@ -704,7 +711,9 @@ impl Plan {
             let owner = self
                 .vertices
                 .iter()
-                .find_map(|&(vertex, id)| (store.get(vertex).ok()?.point == point_id).then_some(id))
+                .find_map(|&(vertex, id)| {
+                    (store.get(vertex).ok()?.point() == point_id).then_some(id)
+                })
                 .unwrap_or(1);
             out.push(OutNode {
                 code: code::POINT,
@@ -744,13 +753,13 @@ impl Plan {
         let edge = store.get(dummy.edge).ok()?;
         match dummy.role {
             DummyFinRole::SheetBoundary => {
-                let &[actual_fin] = edge.fins.as_slice() else {
+                let &[actual_fin] = edge.fins() else {
                     return None;
                 };
                 store.fin_tail(actual_fin).ok().flatten()
             }
-            DummyFinRole::WireEnd => edge.vertices[1],
-            DummyFinRole::WireStart => edge.vertices[0],
+            DummyFinRole::WireEnd => edge.vertices()[1],
+            DummyFinRole::WireStart => edge.vertices()[0],
         }
     }
 
@@ -783,9 +792,9 @@ impl Plan {
             .iter()
             .filter_map(|plan| {
                 let fin = store.get(plan.fin).ok()?;
-                let lp = store.get(fin.parent).ok()?;
-                let face = store.get(lp.face).ok()?;
-                (face.surface == surface).then_some((plan.fin, plan.surface_geometric_owner))
+                let lp = store.get(fin.parent()).ok()?;
+                let face = store.get(lp.face()).ok()?;
+                (face.surface() == surface).then_some((plan.fin, plan.surface_geometric_owner))
             })
             .collect()
     }
@@ -804,24 +813,24 @@ impl Plan {
         out: &mut Vec<OutNode>,
     ) -> Result<()> {
         let fin = store.get(plan.fin)?;
-        let use_ = fin.pcurve.ok_or(XtError::InvalidModel {
+        let use_ = fin.pcurve().ok_or(XtError::InvalidModel {
             what: "curve-less tolerant edge fin has no pcurve",
         })?;
-        let edge = store.get(fin.edge)?;
-        let (t0, t1) = edge.bounds.ok_or(XtError::InvalidModel {
+        let edge = store.get(fin.edge())?;
+        let (t0, t1) = edge.bounds().ok_or(XtError::InvalidModel {
             what: "curve-less tolerant edge has no logical bounds",
         })?;
         let q0 = use_.parameter_at_edge(t0);
         let q1 = use_.parameter_at_edge(t1);
-        let lp = store.get(fin.parent)?;
-        let face = store.get(lp.face)?;
+        let lp = store.get(fin.parent())?;
+        let face = store.get(lp.face())?;
         let pcurve = store.get(use_.curve())?.as_curve();
         let uv0 = pcurve.eval(q0);
         let uv1 = pcurve.eval(q1);
         let mut eval = store.eval_context(EvalLimits::default(), Tolerances::default());
         let point0 = eval
             .eval_surface(
-                face.surface,
+                face.surface(),
                 [uv0.x, uv0.y],
                 SurfaceDerivativeOrder::Position,
             )
@@ -829,7 +838,7 @@ impl Plan {
             .p;
         let point1 = eval
             .eval_surface(
-                face.surface,
+                face.surface(),
                 [uv1.x, uv1.y],
                 SurfaceDerivativeOrder::Position,
             )
@@ -870,7 +879,7 @@ impl Plan {
         sp_values[5] = ptr(plan.sp_geometric_owner);
         sp_values[6] = Value::Char(if q1 > q0 { '+' } else { '-' });
         sp_values.extend([
-            ptr(id_of(&self.surfaces, face.surface)),
+            ptr(id_of(&self.surfaces, face.surface())),
             ptr(plan.b_curve),
             ptr(0),
             Value::Null,
@@ -902,7 +911,7 @@ impl Plan {
                 ptr(plan.sp_curve),
             ],
         });
-        let surface_owners = self.surface_geometric_owners(store, face.surface);
+        let surface_owners = self.surface_geometric_owners(store, face.surface());
         let surface_position = surface_owners
             .iter()
             .position(|&(fin, _)| fin == plan.fin)
@@ -916,7 +925,7 @@ impl Plan {
                 ptr(surface_owners
                     [(surface_position + surface_owners.len() - 1) % surface_owners.len()]
                 .1),
-                ptr(id_of(&self.surfaces, face.surface)),
+                ptr(id_of(&self.surfaces, face.surface())),
             ],
         });
         Ok(())
@@ -1116,7 +1125,7 @@ impl Plan {
 
 impl Scaffold {
     fn validate(store: &Store, body: &ktopo::entity::Body) -> Result<Self> {
-        match body.kind {
+        match body.kind() {
             BodyKind::Solid => Self::solid(store, body),
             BodyKind::Sheet => Self::sheet(store, body),
             BodyKind::Wire => Self::wire(store, body),
@@ -1125,30 +1134,33 @@ impl Scaffold {
     }
 
     fn solid(store: &Store, body: &ktopo::entity::Body) -> Result<Self> {
-        if body.regions.len() != 2 {
+        if body.regions().len() != 2 {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterBodyTopology,
                 what: "solid text writing requires one void and one solid region",
             });
         }
-        let void_region = body.regions[0];
-        let solid_region = body.regions[1];
+        let void_region = body.regions()[0];
+        let solid_region = body.regions()[1];
         let vr = store.get(void_region)?;
         let sr = store.get(solid_region)?;
-        if vr.kind != RegionKind::Void || !vr.shells.is_empty() || sr.kind != RegionKind::Solid {
+        if vr.kind() != RegionKind::Void
+            || !vr.shells().is_empty()
+            || sr.kind() != RegionKind::Solid
+        {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterBodyTopology,
                 what: "solid text writing requires the standard solid region scaffold",
             });
         }
-        let [shell] = sr.shells.as_slice() else {
+        let [shell] = sr.shells() else {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterBodyTopology,
                 what: "solid text writing requires exactly one solid shell",
             });
         };
         let sh = store.get(*shell)?;
-        if sh.faces.is_empty() || !sh.edges.is_empty() || sh.vertex.is_some() {
+        if sh.faces().is_empty() || !sh.edges().is_empty() || sh.vertex().is_some() {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterBodyTopology,
                 what: "wireframe, acorn, and empty shells are not writable yet",
@@ -1161,24 +1173,24 @@ impl Scaffold {
     }
 
     fn sheet(store: &Store, body: &ktopo::entity::Body) -> Result<Self> {
-        let [void_region] = body.regions.as_slice() else {
+        let [void_region] = body.regions() else {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterBodyTopology,
                 what: "sheet text writing requires one void region",
             });
         };
         let region = store.get(*void_region)?;
-        let [shell] = region.shells.as_slice() else {
+        let [shell] = region.shells() else {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterBodyTopology,
                 what: "sheet text writing requires exactly one shell",
             });
         };
         let shell = store.get(*shell)?;
-        if region.kind != RegionKind::Void
-            || shell.faces.is_empty()
-            || !shell.edges.is_empty()
-            || shell.vertex.is_some()
+        if region.kind() != RegionKind::Void
+            || shell.faces().is_empty()
+            || !shell.edges().is_empty()
+            || shell.vertex().is_some()
         {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterBodyTopology,
@@ -1192,24 +1204,24 @@ impl Scaffold {
     }
 
     fn wire(store: &Store, body: &ktopo::entity::Body) -> Result<Self> {
-        let [void_region] = body.regions.as_slice() else {
+        let [void_region] = body.regions() else {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterBodyTopology,
                 what: "wire text writing requires one void region",
             });
         };
         let region = store.get(*void_region)?;
-        let [shell] = region.shells.as_slice() else {
+        let [shell] = region.shells() else {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterBodyTopology,
                 what: "wire text writing requires exactly one shell",
             });
         };
         let shell = store.get(*shell)?;
-        if region.kind != RegionKind::Void
-            || !shell.faces.is_empty()
-            || shell.edges.is_empty()
-            || shell.vertex.is_some()
+        if region.kind() != RegionKind::Void
+            || !shell.faces().is_empty()
+            || shell.edges().is_empty()
+            || shell.vertex().is_some()
         {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterBodyTopology,
@@ -1223,24 +1235,24 @@ impl Scaffold {
     }
 
     fn acorn(store: &Store, body: &ktopo::entity::Body) -> Result<Self> {
-        let [void_region] = body.regions.as_slice() else {
+        let [void_region] = body.regions() else {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterBodyTopology,
                 what: "acorn text writing requires one void region",
             });
         };
         let region = store.get(*void_region)?;
-        let [shell] = region.shells.as_slice() else {
+        let [shell] = region.shells() else {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterBodyTopology,
                 what: "acorn text writing requires exactly one shell",
             });
         };
         let shell = store.get(*shell)?;
-        if region.kind != RegionKind::Void
-            || !shell.faces.is_empty()
-            || !shell.edges.is_empty()
-            || shell.vertex.is_none()
+        if region.kind() != RegionKind::Void
+            || !shell.faces().is_empty()
+            || !shell.edges().is_empty()
+            || shell.vertex().is_none()
         {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterBodyTopology,
@@ -1298,27 +1310,29 @@ fn body_type(kind: BodyKind) -> i64 {
 
 fn validate_edge_fin_count(edge: &Edge, kind: BodyKind) -> Result<()> {
     match kind {
-        BodyKind::Solid if edge.fins.len() != 2 => {
+        BodyKind::Solid if edge.fins().len() != 2 => {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterEdgeTopology,
                 what: "solid edges must have exactly two fins",
             });
         }
-        BodyKind::Sheet if edge.fins.len() == 2 => {}
+        BodyKind::Sheet if edge.fins().len() == 2 => {}
         BodyKind::Sheet
-            if edge.fins.len() == 1 && edge.vertices == [None, None] && edge.bounds.is_none() => {}
+            if edge.fins().len() == 1
+                && edge.vertices() == [None, None]
+                && edge.bounds().is_none() => {}
         BodyKind::Sheet
-            if edge.fins.len() == 1
-                && edge.vertices[0].is_some()
-                && edge.vertices[1].is_some()
-                && edge.bounds.is_some() => {}
+            if edge.fins().len() == 1
+                && edge.vertices()[0].is_some()
+                && edge.vertices()[1].is_some()
+                && edge.bounds().is_some() => {}
         BodyKind::Sheet => {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterEdgeTopology,
                 what: "unsupported sheet edge fin topology",
             });
         }
-        BodyKind::Wire if !edge.fins.is_empty() => {
+        BodyKind::Wire if !edge.fins().is_empty() => {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterEdgeTopology,
                 what: "wire edges must not have real fins",
@@ -1333,10 +1347,10 @@ fn validate_edge_fin_count(edge: &Edge, kind: BodyKind) -> Result<()> {
 fn push_dummy_fins(out: &mut Vec<DummyFin>, edge_id: EdgeId, edge: &Edge, kind: BodyKind) {
     match kind {
         BodyKind::Sheet
-            if edge.fins.len() == 1
-                && edge.vertices[0].is_some()
-                && edge.vertices[1].is_some()
-                && edge.bounds.is_some() =>
+            if edge.fins().len() == 1
+                && edge.vertices()[0].is_some()
+                && edge.vertices()[1].is_some()
+                && edge.bounds().is_some() =>
         {
             out.push(DummyFin {
                 edge: edge_id,
@@ -1344,10 +1358,10 @@ fn push_dummy_fins(out: &mut Vec<DummyFin>, edge_id: EdgeId, edge: &Edge, kind: 
             });
         }
         BodyKind::Wire
-            if edge.fins.is_empty()
-                && edge.vertices[0].is_some()
-                && edge.vertices[1].is_some()
-                && edge.bounds.is_some() =>
+            if edge.fins().is_empty()
+                && edge.vertices()[0].is_some()
+                && edge.vertices()[1].is_some()
+                && edge.bounds().is_some() =>
         {
             out.push(DummyFin {
                 edge: edge_id,
@@ -1477,12 +1491,12 @@ fn plan_surface_dependencies(
 fn reject_direct_faces_on_offset_bases(store: &Store, faces: &[FaceId]) -> Result<()> {
     let mut bases = Vec::new();
     for &face in faces {
-        if let SurfaceGeom::Offset(offset) = store.get(store.get(face)?.surface)? {
+        if let SurfaceGeom::Offset(offset) = store.get(store.get(face)?.surface())? {
             bases.push(offset.basis());
         }
     }
     for &face in faces {
-        if bases.contains(&store.get(face)?.surface) {
+        if bases.contains(&store.get(face)?.surface()) {
             return Err(XtError::Unsupported {
                 capability: XtCapability::SharedOffsetBasisExport,
                 what: "a face sits directly on another face's offset basis",
@@ -1769,7 +1783,7 @@ fn flatten_pcurve_poles(curve: &NurbsCurve2d) -> Vec<f64> {
 }
 
 fn pcurve_nurbs(store: &Store, fin_id: FinId) -> Result<NurbsCurve2d> {
-    let use_: FinPcurve = store.get(fin_id)?.pcurve.ok_or(XtError::InvalidModel {
+    let use_: FinPcurve = store.get(fin_id)?.pcurve().ok_or(XtError::InvalidModel {
         what: "curve-less tolerant edge fin has no pcurve",
     })?;
     if !use_.chart().is_identity() || use_.seam().is_some() {

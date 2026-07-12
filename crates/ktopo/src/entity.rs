@@ -126,6 +126,18 @@ pub struct Body {
     pub regions: Vec<RegionId>,
 }
 
+impl Body {
+    /// What this body's point-set is.
+    pub const fn kind(&self) -> BodyKind {
+        self.kind
+    }
+
+    /// Regions partitioning space, in stored ownership order.
+    pub fn regions(&self) -> &[RegionId] {
+        &self.regions
+    }
+}
+
 /// A connected open subset of space, bounded by shells.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Region {
@@ -135,6 +147,23 @@ pub struct Region {
     pub kind: RegionKind,
     /// Shells bounding this region.
     pub shells: Vec<ShellId>,
+}
+
+impl Region {
+    /// Body that owns this region.
+    pub const fn body(&self) -> BodyId {
+        self.body
+    }
+
+    /// Whether this region contains material or void space.
+    pub const fn kind(&self) -> RegionKind {
+        self.kind
+    }
+
+    /// Shells bounding this region, in stored ownership order.
+    pub fn shells(&self) -> &[ShellId] {
+        &self.shells
+    }
 }
 
 /// A connected boundary component of a region.
@@ -150,6 +179,28 @@ pub struct Shell {
     pub edges: Vec<EdgeId>,
     /// The lone vertex of an acorn body's shell, if any.
     pub vertex: Option<VertexId>,
+}
+
+impl Shell {
+    /// Region that owns this shell.
+    pub const fn region(&self) -> RegionId {
+        self.region
+    }
+
+    /// Faces belonging to this shell, in stored ownership order.
+    pub fn faces(&self) -> &[FaceId] {
+        &self.faces
+    }
+
+    /// Wireframe edges belonging to this shell, in stored ownership order.
+    pub fn edges(&self) -> &[EdgeId] {
+        &self.edges
+    }
+
+    /// Lone vertex of an acorn shell, when present.
+    pub const fn vertex(&self) -> Option<VertexId> {
+        self.vertex
+    }
 }
 
 /// A finite conservative parameter-space work box for one face.
@@ -242,6 +293,38 @@ pub struct Face {
     pub tolerance: Option<EntityTolerance>,
 }
 
+impl Face {
+    /// Shell that owns this face.
+    pub const fn shell(&self) -> ShellId {
+        self.shell
+    }
+
+    /// Boundary loops in stored topological order.
+    pub fn loops(&self) -> &[LoopId] {
+        &self.loops
+    }
+
+    /// Supporting surface geometry.
+    pub const fn surface(&self) -> SurfaceId {
+        self.surface
+    }
+
+    /// Face-normal orientation relative to the supporting surface normal.
+    pub const fn sense(&self) -> Sense {
+        self.sense
+    }
+
+    /// Finite conservative parameter-space work box, when known.
+    pub const fn domain(&self) -> Option<FaceDomain> {
+        self.domain
+    }
+
+    /// Imported or operation tolerance, when present.
+    pub const fn tolerance(&self) -> Option<EntityTolerance> {
+        self.tolerance
+    }
+}
+
 /// A closed ring of fins bounding a face.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Loop {
@@ -249,6 +332,18 @@ pub struct Loop {
     pub face: FaceId,
     /// Fins in traversal order (see module docs for orientation).
     pub fins: Vec<FinId>,
+}
+
+impl Loop {
+    /// Face that owns this loop.
+    pub const fn face(&self) -> FaceId {
+        self.face
+    }
+
+    /// Fins in loop-traversal order.
+    pub fn fins(&self) -> &[FinId] {
+        &self.fins
+    }
 }
 
 /// A validated affine correspondence from a 3D edge parameter `t` to a
@@ -579,6 +674,28 @@ pub struct Fin {
     pub pcurve: Option<FinPcurve>,
 }
 
+impl Fin {
+    /// Loop that owns this fin.
+    pub const fn parent(&self) -> LoopId {
+        self.parent
+    }
+
+    /// Edge traversed by this fin.
+    pub const fn edge(&self) -> EdgeId {
+        self.edge
+    }
+
+    /// Traversal direction relative to the edge direction.
+    pub const fn sense(&self) -> Sense {
+        self.sense
+    }
+
+    /// Parameter-space curve use attached to this fin, when authored.
+    pub const fn pcurve(&self) -> Option<FinPcurve> {
+        self.pcurve
+    }
+}
+
 /// A bounded, connected subset of one curve.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Edge {
@@ -605,6 +722,33 @@ pub struct Edge {
     pub tolerance: Option<EntityTolerance>,
 }
 
+impl Edge {
+    /// Supporting curve geometry, absent for a curve-less tolerant edge.
+    pub const fn curve(&self) -> Option<CurveId> {
+        self.curve
+    }
+
+    /// Start and end vertices in edge direction.
+    pub const fn vertices(&self) -> [Option<VertexId>; 2] {
+        self.vertices
+    }
+
+    /// Active edge-parameter interval, absent for a full-period ring edge.
+    pub const fn bounds(&self) -> Option<(f64, f64)> {
+        self.bounds
+    }
+
+    /// Fins using this edge, in stored creation order.
+    pub fn fins(&self) -> &[FinId] {
+        &self.fins
+    }
+
+    /// Validated tolerant-edge metric data, when present.
+    pub const fn tolerance(&self) -> Option<EntityTolerance> {
+        self.tolerance
+    }
+}
+
 /// A point of the model, shared by all edges that end there.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Vertex {
@@ -613,6 +757,18 @@ pub struct Vertex {
     /// Validated tolerance and provenance for a tolerant vertex (≥ session
     /// linear resolution), or `None` for an exact vertex.
     pub tolerance: Option<EntityTolerance>,
+}
+
+impl Vertex {
+    /// Attached point geometry.
+    pub const fn point(&self) -> PointId {
+        self.point
+    }
+
+    /// Validated tolerant-vertex metric data, when present.
+    pub const fn tolerance(&self) -> Option<EntityTolerance> {
+        self.tolerance
+    }
 }
 
 /// A type-erased reference to any entity, for diagnostics ([`crate::check`])

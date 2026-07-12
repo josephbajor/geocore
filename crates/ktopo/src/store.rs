@@ -1,6 +1,16 @@
 //! The entity store: typed generational arenas for topology and points plus
 //! one authoritative geometry graph, with uniform compatibility reads,
 //! deterministic traversal, and copy-on-write transaction entry points.
+//!
+//! # Stability boundary
+//!
+//! `Store` is lower-layer kernel infrastructure. Its deterministic reads and
+//! checked transaction contracts are documented here for kernel implementors,
+//! but its entity representation, handle vocabulary, and generic storage API
+//! are not the supported application interface. Ordinary clients should use
+//! the `kernel` facade. Trusted interchange code may currently read this store
+//! and may assemble through [`crate::transaction::AssemblyStore`]; those seams
+//! are explicitly subject to a later breaking encapsulation pass.
 
 use crate::entity::{
     Body, BodyId, Curve2dId, CurveId, Edge, EdgeId, EntityRef, Face, FaceId, Fin, FinId, Loop,
@@ -125,6 +135,8 @@ macro_rules! geometry_entity {
 /// Generic entity mutation is deliberately not public. Use checked body
 /// builders or [`crate::transaction::Transaction`] methods; low-level import
 /// reconstruction uses transaction-scoped [`crate::transaction::AssemblyStore`].
+/// The concrete store/entity boundary is intentionally unstable for ordinary
+/// external clients even where a lower-layer read method is currently public.
 ///
 /// ```compile_fail
 /// use ktopo::entity::{Body, BodyKind};

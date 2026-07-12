@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1-K3 pilots and typed K4 interchange implemented; K5 adoption is the next gate before further public facade expansion
+Status: K1-K3 pilots, typed K4 interchange, and K5 adoption implemented; graph-aware requests and semantic K4 edits remain
 
 ## Outcome
 
@@ -735,8 +735,8 @@ export a body without importing raw topology structs.
 
 ### K5 — Adoption and lower-layer encapsulation preparation
 
-Priority: next facade milestone; it now precedes the remaining K3/K4 API
-expansion.
+Status: implemented. This adoption gate remains the prerequisite evidence for
+the remaining K3/K4 API expansion.
 
 - Migrate at least one real product/tool/example path to a `kernel`-only direct
   dependency before attempting broad adoption.
@@ -765,6 +765,47 @@ cross-crate raw assembly with a sealed reconstruction seam. That change is not
 allowed to alter the `kernel` API or behavior. This sequencing preserves
 existing APIs during F5 without accidentally promising that raw topology
 layout is stable forever.
+
+#### K5 adoption evidence and recorded friction
+
+`examples/kernel-lifecycle` is a standalone, publish-disabled workspace
+package whose only direct dependency is `kernel`. Its executed path constructs
+a block, retains its committed-journal summary, traverses semantic topology,
+performs a budgeted Full check, evaluates a supporting surface at the center of
+its finite face domain, exports X_T, imports into another part, checks and
+re-exports that body, proves byte stability, and resolves the original opaque
+body ID after the unrelated import. The example's structural test and
+`scripts/package_contract.py` reject any new direct dependency, including a
+development-only lower-layer dependency.
+
+The adoption pass added only semantic polish exposed by that path:
+`FaceDomain::center`, `SurfaceEvaluation::position`, and checker-finding
+accessors. It did not add a facade operation family or a raw escape hatch.
+Topology-owned getters now cover every production read of raw Body-through-
+Vertex fields in the facade views and X_T writer. Public fields remain source
+compatible during this additive phase.
+
+The remaining pressure is explicit:
+
+- facade body tessellation is still absent and belongs to the later
+  contextual body-tessellation migration, not K5;
+- `xt_inspect` intentionally mines transport nodes/schema and `xt_oracle`
+  intentionally authors conformance fixtures, so neither is an ordinary
+  application client;
+- X_T reconstruction and oracle fixture authoring remain reviewed trusted raw
+  assembly seams pending a separately announced sealed-reconstruction change;
+- semantic edit transactions and facade journal iteration remain K4 work; and
+- `cargo package -p kernel --list` is now an exact CI-reviewed inventory with
+  the facade README and lifecycle tests, while full package creation remains
+  blocked by the five versionless direct path dependencies (19 internal path
+  edges across current workspace members after adding the publish-disabled
+  example). Registry versioning/publication is a separate workstream.
+
+The facade still re-exports selected F2/F1 value types such as derivative order
+and derivative values rather than copying them into facade-owned mirrors. The
+client audit found that acceptable for the current Rust boundary;
+classification and opaque identity prevent storage or evaluator leakage.
+Revisit those value types only with concrete semver pressure.
 
 ## Required tests
 

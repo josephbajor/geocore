@@ -33,12 +33,12 @@ impl<'part> BodyView<'part> {
 
     /// Point-set kind.
     pub fn kind(&self) -> BodyKind {
-        self.entity().kind
+        self.entity().kind()
     }
 
     /// Regions in stored ownership order.
     pub fn regions(&self) -> RegionIds<'_> {
-        let regions = &self.entity().regions;
+        let regions = self.entity().regions();
         RegionIds::new(
             regions
                 .iter()
@@ -51,33 +51,33 @@ impl<'part> BodyView<'part> {
     pub fn faces(&self) -> Result<FaceIds<'_>> {
         let body = self.entity();
         let mut count = 0;
-        for &region in &body.regions {
+        for &region in body.regions() {
             let region = self
                 .store
                 .get(region)
                 .map_err(|source| Error::InconsistentTopology { source })?;
-            for &shell in &region.shells {
+            for &shell in region.shells() {
                 let shell = self
                     .store
                     .get(shell)
                     .map_err(|source| Error::InconsistentTopology { source })?;
-                count += shell.faces.len();
+                count += shell.faces().len();
             }
         }
 
         let store = self.store;
         let part = self.id.part().clone();
-        let faces = body.regions.iter().flat_map(move |region| {
+        let faces = body.regions().iter().flat_map(move |region| {
             store
                 .get(*region)
                 .expect("validated body region remains live during immutable traversal")
-                .shells
+                .shells()
                 .iter()
                 .flat_map(move |shell| {
                     store
                         .get(*shell)
                         .expect("validated region shell remains live during immutable traversal")
-                        .faces
+                        .faces()
                         .iter()
                         .copied()
                 })
@@ -145,17 +145,17 @@ impl<'part> RegionView<'part> {
 
     /// Owning body.
     pub fn body(&self) -> BodyId {
-        BodyId::new(self.id.part().clone(), self.entity().body)
+        BodyId::new(self.id.part().clone(), self.entity().body())
     }
 
     /// Whether this region contains material.
     pub fn kind(&self) -> RegionKind {
-        self.entity().kind
+        self.entity().kind()
     }
 
     /// Shells in stored ownership order.
     pub fn shells(&self) -> ShellIds<'_> {
-        let shells = &self.entity().shells;
+        let shells = self.entity().shells();
         ShellIds::new(
             shells
                 .iter()
@@ -189,12 +189,12 @@ impl<'part> ShellView<'part> {
 
     /// Owning region.
     pub fn region(&self) -> RegionId {
-        RegionId::new(self.id.part().clone(), self.entity().region)
+        RegionId::new(self.id.part().clone(), self.entity().region())
     }
 
     /// Faces in stored ownership order.
     pub fn faces(&self) -> FaceIds<'_> {
-        let faces = &self.entity().faces;
+        let faces = self.entity().faces();
         FaceIds::new(
             faces
                 .iter()
@@ -205,7 +205,7 @@ impl<'part> ShellView<'part> {
 
     /// Wireframe edges in stored ownership order.
     pub fn edges(&self) -> EdgeIds<'_> {
-        let edges = &self.entity().edges;
+        let edges = self.entity().edges();
         EdgeIds::new(
             edges
                 .iter()
@@ -217,7 +217,7 @@ impl<'part> ShellView<'part> {
     /// Acorn vertex, when present.
     pub fn vertex(&self) -> Option<VertexId> {
         self.entity()
-            .vertex
+            .vertex()
             .map(|raw| VertexId::new(self.id.part().clone(), raw))
     }
 }
