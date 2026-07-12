@@ -3,6 +3,10 @@
 use std::error::Error as _;
 
 use kcore::error::{ClassifiedError, Error, ErrorClass};
+use kcore::operation::{
+    AccountingMode, BudgetPlan, LimitSpec, OperationContext, OperationScope, ResourceKind,
+    SessionPolicy,
+};
 use kcore::proof::Completion;
 use kcore::tolerance::Tolerances;
 use kgeom::aabb::Aabb3;
@@ -10,10 +14,12 @@ use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::frame::Frame;
 use kgeom::nurbs::NurbsCurve;
 use kgeom::param::ParamRange;
+use kgeom::project::ProjectionBudgetProfile;
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
     CURVE_CURVE_CLASS_PAIR, ContactKind, CurveClass, IntersectionError, ParamOrientation,
-    UNSUPPORTED_CLASS_PAIR, intersect_bounded_curves,
+    UNSUPPORTED_CLASS_PAIR, intersect_bounded_curves, intersect_bounded_curves_in_scope,
+    intersect_bounded_curves_with_context,
 };
 
 fn line(origin: [f64; 3], direction: [f64; 3]) -> Line {
@@ -397,6 +403,55 @@ fn dispatches_circle_ellipse_and_ellipse_ellipse() {
     )
     .unwrap();
     assert_eq!(hit.points.len(), 4);
+}
+
+#[test]
+fn contextual_dispatch_reuses_one_scope_and_preserves_projection_limits() {
+    let a = Ellipse::new(Frame::world(), 3.0, 1.0).unwrap();
+    let b = Ellipse::new(Frame::world(), 2.0, 1.5).unwrap();
+    let range = ParamRange::new(0.0, core::f64::consts::TAU);
+    let tolerances = Tolerances::default();
+    let legacy = intersect_bounded_curves(&a, range, &b, range, tolerances).unwrap();
+
+    let session = SessionPolicy::v1();
+    let context = OperationContext::new(&session, tolerances).unwrap();
+    let contextual = intersect_bounded_curves_with_context(&a, range, &b, range, &context);
+    assert_eq!(contextual.result(), Ok(&legacy));
+    let queries = contextual
+        .report()
+        .usage()
+        .iter()
+        .find(|snapshot| snapshot.stage == kgeom::project::CURVE_PROJECTION_QUERIES)
+        .unwrap();
+    assert!(queries.consumed > 1);
+
+    let composed = context
+        .clone()
+        .with_family_budget_defaults(ProjectionBudgetProfile::curve_aggregate_compatibility());
+    let mut scope = OperationScope::new(&composed);
+    let scoped = intersect_bounded_curves_in_scope(&a, range, &b, range, &mut scope);
+    let scoped = scope.finish_typed(scoped);
+    assert_eq!(scoped, contextual);
+
+    let allowed = queries.consumed - 1;
+    let limited = BudgetPlan::new([LimitSpec::new(
+        kgeom::project::CURVE_PROJECTION_QUERIES,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        allowed,
+    )])
+    .unwrap();
+    let limited_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(limited);
+    let outcome = intersect_bounded_curves_with_context(&a, range, &b, range, &limited_context);
+    let crossing = outcome.result().as_ref().unwrap_err().limit().unwrap();
+    assert_eq!(crossing.stage, kgeom::project::CURVE_PROJECTION_QUERIES);
+    assert_eq!(
+        (crossing.consumed, crossing.allowed),
+        (queries.consumed, allowed)
+    );
+    assert_eq!(outcome.report().limit_events(), &[crossing]);
 }
 
 #[test]

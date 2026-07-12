@@ -10,8 +10,8 @@ use kgeom::nurbs::NurbsCurve;
 use kgeom::param::ParamRange;
 use kgeom::vec::Point3;
 use kops::intersect::{
-    ContactKind, ParamOrientation, intersect_bounded_nurbs_nurbs,
-    intersect_bounded_nurbs_nurbs_with_context,
+    ContactKind, ParamOrientation, intersect_bounded_curves_with_context,
+    intersect_bounded_nurbs_nurbs, intersect_bounded_nurbs_nurbs_with_context,
 };
 
 fn line_nurbs(start: Point3, end: Point3) -> NurbsCurve {
@@ -368,6 +368,14 @@ fn coarse_custom_progress_policy_can_stop_but_cannot_accept_a_contact() {
     assert!(stopped.points.is_empty());
     assert!(stopped.overlaps.is_empty());
     assert!(!stopped.is_complete());
+    let generic = intersect_bounded_curves_with_context(
+        &diagonal,
+        diagonal.param_range(),
+        &horizontal,
+        horizontal.param_range(),
+        &context,
+    );
+    assert_eq!(generic.result(), Ok(stopped));
 }
 
 #[test]

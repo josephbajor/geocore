@@ -613,6 +613,15 @@ operand ordering without a second algorithm path. The future certified fallback
 enters at this same normalized boundary and must return indeterminate evidence
 until complete-domain exclusion is proven.
 
+That normalized boundary now has contextual and shared-scope public entries.
+The contextual entry composes the aggregate curve-projection profile once and
+creates one scope; ellipse/ellipse borrows it for every projection, while
+NURBS/NURBS consumes the caller's numerical policy without creating a nested
+report. The legacy generic entry is an exact v1 adapter. Focused evidence pins
+legacy result equivalence, shared-scope report equality, exact projection
+N/N+1 failure, reversal/completion preservation, and custom NURBS numerical
+stops through the generic dispatcher.
+
 Surface/surface dispatch uses the same single-arm rule. Its internal canonical
 rank is Plane, Cone, Cylinder, Sphere, Torus, then NURBS; this intentionally
 differs from the public class enum order so the cone/cylinder specialization

@@ -1,3 +1,4 @@
+use super::error::{IntersectionError, IntersectionResult};
 use super::numerical::{
     directional_gradients_are_numerically_zero, nonnegative_values_are_numerically_equal,
     normalized_cross_magnitude, parameter_progress_step, solve_symmetric_2x2,
@@ -82,6 +83,24 @@ pub fn intersect_bounded_nurbs_nurbs_with_context(
         context.session().numerical(),
     );
     scope.finish(result)
+}
+
+pub(super) fn intersect_bounded_nurbs_nurbs_in_scope(
+    a: &NurbsCurve,
+    range_a: ParamRange,
+    b: &NurbsCurve,
+    range_b: ParamRange,
+    scope: &mut OperationScope<'_, '_>,
+) -> IntersectionResult<CurveCurveIntersections> {
+    intersect_bounded_nurbs_nurbs_impl(
+        a,
+        range_a,
+        b,
+        range_b,
+        scope.context().tolerances(),
+        scope.context().session().numerical(),
+    )
+    .map_err(IntersectionError::from)
 }
 
 fn intersect_bounded_nurbs_nurbs_impl(

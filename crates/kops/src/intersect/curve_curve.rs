@@ -1,6 +1,6 @@
 use super::circle_ellipse::intersect_bounded_circle_ellipse;
 use super::circle_nurbs::intersect_bounded_circle_nurbs;
-use super::ellipse_ellipse::intersect_bounded_ellipses;
+use super::ellipse_ellipse::intersect_bounded_ellipses_in_scope;
 use super::ellipse_nurbs::intersect_bounded_ellipse_nurbs;
 use super::error::{IntersectionError, IntersectionResult};
 use super::geometry_class::CurveDispatch;
@@ -8,11 +8,12 @@ use super::line_circle::intersect_bounded_line_circle;
 use super::line_ellipse::intersect_bounded_line_ellipse;
 use super::line_line::intersect_bounded_lines;
 use super::line_nurbs::intersect_bounded_line_nurbs;
-use super::nurbs_nurbs::intersect_bounded_nurbs_nurbs;
+use super::nurbs_nurbs::intersect_bounded_nurbs_nurbs_in_scope;
 use super::result::CurveCurveIntersections;
-use kcore::tolerance::Tolerances;
+use kcore::operation::{OperationContext, OperationOutcome, OperationScope, SessionPolicy};
 use kgeom::curve::Curve;
 use kgeom::param::ParamRange;
+use kgeom::project::ProjectionBudgetProfile;
 
 /// Intersect two curves restricted to finite parameter ranges where needed.
 ///
@@ -24,7 +25,47 @@ pub fn intersect_bounded_curves(
     range_a: ParamRange,
     b: &dyn Curve,
     range_b: ParamRange,
-    tolerances: Tolerances,
+    tolerances: kcore::tolerance::Tolerances,
+) -> IntersectionResult<CurveCurveIntersections> {
+    let session = SessionPolicy::v1();
+    let context = OperationContext::new(&session, tolerances)
+        .expect("validated Tolerances always satisfy v1 session precision");
+    intersect_bounded_curves_with_context(a, range_a, b, range_b, &context).into_result()
+}
+
+/// Intersect two bounded curves with caller-owned numerical policy and work accounting.
+///
+/// The complete curve-projection compatibility profile is composed before one
+/// operation scope is created, so specialized ellipse projection can borrow
+/// the same report. Analytic paths that require no iterative work leave those
+/// counters at zero. NURBS/NURBS consumes the caller's numerical policy even
+/// though its current compatibility path has no resource counters yet.
+pub fn intersect_bounded_curves_with_context(
+    a: &dyn Curve,
+    range_a: ParamRange,
+    b: &dyn Curve,
+    range_b: ParamRange,
+    context: &OperationContext<'_>,
+) -> OperationOutcome<CurveCurveIntersections, IntersectionError> {
+    let context = context
+        .clone()
+        .with_family_budget_defaults(ProjectionBudgetProfile::curve_aggregate_compatibility());
+    let mut scope = OperationScope::new(&context);
+    let result = intersect_bounded_curves_in_scope(a, range_a, b, range_b, &mut scope);
+    scope.finish_typed(result)
+}
+
+/// Intersect two bounded curves inside an existing owner operation scope.
+///
+/// Owners must compose [`ProjectionBudgetProfile::curve_aggregate_compatibility`]
+/// before creating `scope` when the current matrix can route to ellipse/ellipse.
+/// The function never creates or finishes a nested scope.
+pub fn intersect_bounded_curves_in_scope(
+    a: &dyn Curve,
+    range_a: ParamRange,
+    b: &dyn Curve,
+    range_b: ParamRange,
+    scope: &mut OperationScope<'_, '_>,
 ) -> IntersectionResult<CurveCurveIntersections> {
     let original_a = CurveDispatch::inspect(a);
     let original_b = CurveDispatch::inspect(b);
@@ -40,6 +81,7 @@ pub fn intersect_bounded_curves(
         core::mem::swap(&mut class_a, &mut class_b);
         core::mem::swap(&mut range_a, &mut range_b);
     }
+    let tolerances = scope.context().tolerances();
 
     let result = match (class_a, class_b) {
         (CurveDispatch::Line(a), CurveDispatch::Line(b)) => {
@@ -64,13 +106,15 @@ pub fn intersect_bounded_curves(
             intersect_bounded_circle_nurbs(a, range_a, b, range_b, tolerances)
         }
         (CurveDispatch::Ellipse(a), CurveDispatch::Ellipse(b)) => {
-            intersect_bounded_ellipses(a, range_a, b, range_b, tolerances)
+            return intersect_bounded_ellipses_in_scope(a, range_a, b, range_b, scope)
+                .map(|result| if swapped { result.swapped() } else { result });
         }
         (CurveDispatch::Ellipse(a), CurveDispatch::Nurbs(b)) => {
             intersect_bounded_ellipse_nurbs(a, range_a, b, range_b, tolerances)
         }
         (CurveDispatch::Nurbs(a), CurveDispatch::Nurbs(b)) => {
-            intersect_bounded_nurbs_nurbs(a, range_a, b, range_b, tolerances)
+            return intersect_bounded_nurbs_nurbs_in_scope(a, range_a, b, range_b, scope)
+                .map(|result| if swapped { result.swapped() } else { result });
         }
         _ => unreachable!("curve classes are normalized into canonical order"),
     };
