@@ -130,6 +130,72 @@ impl ClassifiedError for GeometryEvaluationError {
     }
 }
 
+/// Classified geometry-intersection failure with lower implementation details
+/// kept out of the facade representation.
+///
+/// Stable classification accessors delegate unchanged, and the exact solver
+/// failure remains available through the standard error source chain.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeometryIntersectionError {
+    source: kops::intersect::IntersectionError,
+}
+
+impl GeometryIntersectionError {
+    pub(crate) const fn new(source: kops::intersect::IntersectionError) -> Self {
+        Self { source }
+    }
+
+    /// Returns the lower failure's broad semantic class.
+    pub const fn class(&self) -> ErrorClass {
+        self.source.class()
+    }
+
+    /// Returns the lower failure's stable machine-readable identity.
+    pub const fn code(&self) -> ErrorCode {
+        self.source.code()
+    }
+
+    /// Returns the unavailable intersection capability when applicable.
+    pub const fn capability(&self) -> Option<CapabilityId> {
+        self.source.capability()
+    }
+
+    /// Returns the exact deterministic limit crossing when applicable.
+    pub const fn limit(&self) -> Option<LimitSnapshot> {
+        self.source.limit()
+    }
+}
+
+impl fmt::Display for GeometryIntersectionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("geometry intersection failed")
+    }
+}
+
+impl std::error::Error for GeometryIntersectionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+impl ClassifiedError for GeometryIntersectionError {
+    fn class(&self) -> ErrorClass {
+        self.class()
+    }
+
+    fn code(&self) -> ErrorCode {
+        self.code()
+    }
+
+    fn capability(&self) -> Option<CapabilityId> {
+        self.capability()
+    }
+
+    fn limit(&self) -> Option<LimitSnapshot> {
+        self.limit()
+    }
+}
+
 /// Classified X_T interchange failure with transport details kept out of its
 /// public representation.
 ///
@@ -233,6 +299,11 @@ pub enum KernelError {
         /// Facade-safe classified adapter retaining the exact source chain.
         source: GeometryEvaluationError,
     },
+    /// A geometry intersection solver failed.
+    GeometryIntersection {
+        /// Facade-safe classified adapter retaining the exact source chain.
+        source: GeometryIntersectionError,
+    },
     /// X_T parsing, reconstruction, or deterministic writing failed.
     Interchange {
         /// Facade-safe classified adapter retaining the exact source chain.
@@ -251,6 +322,7 @@ impl fmt::Display for KernelError {
             }
             Self::Core { source } => write!(f, "kernel operation failed: {source}"),
             Self::GeometryEvaluation { source } => source.fmt(f),
+            Self::GeometryIntersection { source } => source.fmt(f),
             Self::Interchange { source } => source.fmt(f),
         }
     }
@@ -261,6 +333,7 @@ impl std::error::Error for KernelError {
         match self {
             Self::InconsistentTopology { source } | Self::Core { source } => Some(source),
             Self::GeometryEvaluation { source } => Some(source),
+            Self::GeometryIntersection { source } => Some(source),
             Self::Interchange { source } => Some(source),
             Self::UnknownPart | Self::WrongPart { .. } | Self::StaleEntity { .. } => None,
         }
@@ -271,6 +344,12 @@ impl KernelError {
     pub(crate) const fn from_graph(source: kgraph::EvalError) -> Self {
         Self::GeometryEvaluation {
             source: GeometryEvaluationError::new(source),
+        }
+    }
+
+    pub(crate) const fn from_intersection(source: kops::intersect::IntersectionError) -> Self {
+        Self::GeometryIntersection {
+            source: GeometryIntersectionError::new(source),
         }
     }
 
@@ -289,6 +368,7 @@ impl KernelError {
             Self::InconsistentTopology { .. } => ErrorClass::InternalInvariant,
             Self::Core { source } => source.class(),
             Self::GeometryEvaluation { source } => source.class(),
+            Self::GeometryIntersection { source } => source.class(),
             Self::Interchange { source } => source.class(),
         }
     }
@@ -302,6 +382,7 @@ impl KernelError {
             Self::InconsistentTopology { .. } => code::INCONSISTENT_TOPOLOGY,
             Self::Core { source } => source.code(),
             Self::GeometryEvaluation { source } => source.code(),
+            Self::GeometryIntersection { source } => source.code(),
             Self::Interchange { source } => source.code(),
         }
     }
@@ -311,6 +392,7 @@ impl KernelError {
         match self {
             Self::Core { source } => source.capability(),
             Self::GeometryEvaluation { source } => source.capability(),
+            Self::GeometryIntersection { source } => source.capability(),
             Self::Interchange { source } => source.capability(),
             Self::UnknownPart
             | Self::WrongPart { .. }
@@ -324,6 +406,7 @@ impl KernelError {
         match self {
             Self::Core { source } => source.limit(),
             Self::GeometryEvaluation { source } => source.limit(),
+            Self::GeometryIntersection { source } => source.limit(),
             Self::Interchange { source } => source.limit(),
             Self::UnknownPart
             | Self::WrongPart { .. }
@@ -427,6 +510,29 @@ mod tests {
             error
                 .source()
                 .and_then(|source| source.downcast_ref::<kcore::error::Error>()),
+            Some(found) if found == &source
+        ));
+    }
+
+    #[test]
+    fn intersection_sources_delegate_every_shared_classification_accessor() {
+        let source = kops::intersect::IntersectionError::UnsupportedCurvePair {
+            class_a: None,
+            class_b: None,
+        };
+        let error = KernelError::from_intersection(source.clone());
+        assert_eq!(error.class(), source.class());
+        assert_eq!(error.code(), source.code());
+        assert_eq!(error.capability(), source.capability());
+        assert_eq!(error.limit(), source.limit());
+        let intersection = error
+            .source()
+            .and_then(|source| source.downcast_ref::<GeometryIntersectionError>())
+            .unwrap();
+        assert!(matches!(
+            intersection
+                .source()
+                .and_then(|source| source.downcast_ref::<kops::intersect::IntersectionError>()),
             Some(found) if found == &source
         ));
     }

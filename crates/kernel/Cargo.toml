@@ -12,6 +12,7 @@ readme = "README.md"
 kcore = { path = "../kcore" }
 kgeom = { path = "../kgeom" }
 kgraph = { path = "../kgraph" }
+kops = { path = "../kops" }
 ktopo = { path = "../ktopo" }
 kxt = { path = "../kxt" }
 

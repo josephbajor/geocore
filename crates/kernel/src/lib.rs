@@ -4,9 +4,9 @@
 //! opaque part-qualified topology and geometry identities, and returns
 //! immutable semantic views. Contextual operations cover checked block
 //! construction, body checking, operation-scoped surface evaluation, and typed
-//! X_T import/export with F2 reports and delegated classified errors. Broader
-//! modeling, semantic journal views, and graph-aware intersections remain later
-//! façade stages.
+//! X_T import/export plus graph-owned bounded curve intersection with F2 reports
+//! and delegated classified errors. Broader modeling and semantic journal views
+//! remain later façade stages.
 //!
 //! Raw lower-layer storage is not reachable through this crate:
 //!
@@ -136,6 +136,24 @@
 //! }
 //! ```
 //!
+//! Intersection errors retain lower sources without exposing their solver
+//! payload as a public field:
+//!
+//! ```compile_fail
+//! fn raw_intersection_error(error: kernel::GeometryIntersectionError) {
+//!     let _ = error.source;
+//! }
+//! ```
+//!
+//! Intersection results expose facade accessors rather than mutable lower
+//! result collections:
+//!
+//! ```compile_fail
+//! fn raw_intersections(mut result: kernel::CurveCurveIntersections) {
+//!     result.points.clear();
+//! }
+//! ```
+//!
 //! Surface-evaluation results retain opaque facade identity rather than a
 //! graph handle:
 //!
@@ -196,14 +214,15 @@
 mod error;
 mod id;
 mod interchange;
+mod intersection;
 mod iter;
 mod operation;
 mod session;
 mod view;
 
 pub use error::{
-    EntityKind, Error, GeometryEvaluationError, KernelError, Result, XtInterchangeError,
-    code as error_code,
+    EntityKind, Error, GeometryEvaluationError, GeometryIntersectionError, KernelError, Result,
+    XtInterchangeError, code as error_code,
 };
 pub use id::{
     BodyId, CurveId, EdgeId, FaceId, FinId, LoopId, PartId, PcurveId, RegionId, ShellId, SurfaceId,
@@ -217,8 +236,11 @@ pub use iter::{
     SurfaceIds, VertexIds,
 };
 pub use operation::{
-    BlockRequest, BodyCreated, ChangeJournal, CheckBodyRequest, CheckEntity, CheckFault, CheckGap,
-    CheckReport, OperationOutcome, OperationSettings, SurfaceEvaluation, SurfaceEvaluationRequest,
+    BlockRequest, BodyCreated, BoundedCurve, ChangeJournal, CheckBodyRequest, CheckEntity,
+    CheckFault, CheckGap, CheckReport, CurveContactKind, CurveCurveIntersections,
+    CurveCurveOverlap, CurveCurvePoint, CurveOverlapOrientation, IntersectCurvesRequest,
+    IntersectionCompletion, OperationOutcome, OperationSettings, SurfaceEvaluation,
+    SurfaceEvaluationRequest,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use view::{

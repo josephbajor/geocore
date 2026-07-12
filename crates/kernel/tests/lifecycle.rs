@@ -1,8 +1,9 @@
 //! Facade-only lifecycle tests: no lower-layer crate is imported.
 
 use kernel::{
-    BlockRequest, CheckBodyRequest, CheckLevel, CheckOutcome, Error, ExportXtRequest, Frame,
-    ImportXtRequest, Kernel, SessionPolicy, SurfaceDerivativeOrder, SurfaceEvaluationRequest,
+    BlockRequest, BoundedCurve, CheckBodyRequest, CheckLevel, CheckOutcome, Error, ExportXtRequest,
+    Frame, ImportXtRequest, IntersectCurvesRequest, Kernel, ParamRange, SessionPolicy,
+    SurfaceDerivativeOrder, SurfaceEvaluationRequest,
 };
 
 #[test]
@@ -156,6 +157,137 @@ fn facade_only_client_can_evaluate_an_opaque_surface_with_one_report() {
             .iter()
             .all(|usage| usage.consumed == 1)
     );
+}
+
+#[test]
+fn facade_only_client_can_intersect_graph_owned_curves_with_identity_and_one_report() {
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let body = session
+        .edit_part(part_id.clone())
+        .unwrap()
+        .create_block(BlockRequest::new(Frame::world(), [2.0, 3.0, 4.0]))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .body();
+    let part = session.part(part_id).unwrap();
+    let edges = part
+        .body(body)
+        .unwrap()
+        .edges()
+        .unwrap()
+        .map(|edge_id| {
+            let edge = part.edge(edge_id).unwrap();
+            let (lo, hi) = edge.bounds().expect("block edges are bounded");
+            (
+                BoundedCurve::new(
+                    edge.curve().expect("block edges have supporting curves"),
+                    ParamRange::new(lo, hi),
+                ),
+                edge.vertices(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let (first, second) = (0..edges.len())
+        .find_map(|left| {
+            ((left + 1)..edges.len()).find_map(|right| {
+                let share_vertex = edges[left].1.iter().flatten().any(|left_vertex| {
+                    edges[right]
+                        .1
+                        .iter()
+                        .flatten()
+                        .any(|right_vertex| right_vertex == left_vertex)
+                });
+                share_vertex.then(|| (edges[left].0.clone(), edges[right].0.clone()))
+            })
+        })
+        .expect("a block has adjacent bounded edges");
+    let first_id = first.curve();
+    let second_id = second.curve();
+
+    let outcome = part
+        .intersect_curves(IntersectCurvesRequest::new(first, second))
+        .unwrap();
+    let result = outcome.result();
+    let intersections = result.as_ref().unwrap();
+    assert_eq!(intersections.first(), first_id);
+    assert_eq!(intersections.second(), second_id);
+    assert!(intersections.is_complete());
+    assert!(!intersections.is_empty());
+    assert_eq!(intersections.points().len(), 1);
+    assert!(intersections.overlaps().is_empty());
+    assert_eq!(outcome.report().usage().len(), 5);
+    assert!(
+        outcome
+            .report()
+            .usage()
+            .iter()
+            .all(|usage| usage.consumed == 0)
+    );
+    assert!(outcome.report().limit_events().is_empty());
+}
+
+#[test]
+fn curve_intersection_rejects_foreign_identity_before_starting_an_operation() {
+    let mut session = Kernel::new().create_session();
+    let first_part_id = session.create_part();
+    let first_body = session
+        .edit_part(first_part_id.clone())
+        .unwrap()
+        .create_block(BlockRequest::new(Frame::world(), [1.0, 1.0, 1.0]))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .body();
+    let second_part_id = session.create_part();
+    let second_body = session
+        .edit_part(second_part_id.clone())
+        .unwrap()
+        .create_block(BlockRequest::new(Frame::world(), [1.0, 1.0, 1.0]))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .body();
+
+    let foreign = {
+        let part = session.part(first_part_id).unwrap();
+        let edge = part
+            .edge(
+                part.body(first_body)
+                    .unwrap()
+                    .edges()
+                    .unwrap()
+                    .next()
+                    .unwrap(),
+            )
+            .unwrap();
+        let (lo, hi) = edge.bounds().unwrap();
+        BoundedCurve::new(edge.curve().unwrap(), ParamRange::new(lo, hi))
+    };
+    let local = {
+        let part = session.part(second_part_id.clone()).unwrap();
+        let edge = part
+            .edge(
+                part.body(second_body)
+                    .unwrap()
+                    .edges()
+                    .unwrap()
+                    .next()
+                    .unwrap(),
+            )
+            .unwrap();
+        let (lo, hi) = edge.bounds().unwrap();
+        BoundedCurve::new(edge.curve().unwrap(), ParamRange::new(lo, hi))
+    };
+
+    assert!(matches!(
+        session
+            .part(second_part_id)
+            .unwrap()
+            .intersect_curves(IntersectCurvesRequest::new(foreign, local)),
+        Err(Error::WrongPart { .. })
+    ));
 }
 
 #[test]

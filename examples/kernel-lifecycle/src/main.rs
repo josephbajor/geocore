@@ -6,9 +6,9 @@ use std::io;
 use std::path::PathBuf;
 
 use kernel::{
-    BlockRequest, CheckBodyRequest, CheckLevel, CheckOutcome, ExportXtRequest, Frame,
-    FullCheckBudgetProfile, ImportXtRequest, Kernel, OperationSettings, SurfaceDerivativeOrder,
-    SurfaceEvaluationRequest,
+    BlockRequest, BoundedCurve, CheckBodyRequest, CheckLevel, CheckOutcome, ExportXtRequest, Frame,
+    FullCheckBudgetProfile, ImportXtRequest, IntersectCurvesRequest, Kernel, OperationSettings,
+    ParamRange, SurfaceDerivativeOrder, SurfaceEvaluationRequest,
 };
 
 fn output_path() -> Result<PathBuf, io::Error> {
@@ -49,7 +49,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         let part = session.part(part_id.clone())?;
         let body = part.body(body_id.clone())?;
         let face_ids = body.faces()?.collect::<Vec<_>>();
-        let edge_count = body.edges()?.len();
+        let edge_ids = body.edges()?.collect::<Vec<_>>();
+        let edge_count = edge_ids.len();
         let vertex_count = body.vertices()?.len();
         let face_id = face_ids
             .first()
@@ -91,6 +92,51 @@ fn main() -> Result<(), Box<dyn Error>> {
             .all(|coordinate| coordinate.is_finite())
         {
             return Err(io::Error::other("surface evaluation returned a non-finite point").into());
+        }
+
+        let bounded_edges = edge_ids
+            .into_iter()
+            .map(|edge_id| {
+                let edge = part.edge(edge_id)?;
+                let (lo, hi) = edge
+                    .bounds()
+                    .ok_or_else(|| io::Error::other("constructed block has an unbounded edge"))?;
+                let curve = edge.curve().ok_or_else(|| {
+                    io::Error::other("constructed block has a curve-less tolerant edge")
+                })?;
+                Ok::<_, Box<dyn Error>>((
+                    BoundedCurve::new(curve, ParamRange::new(lo, hi)),
+                    edge.vertices(),
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let (first, second) = (0..bounded_edges.len())
+            .find_map(|left| {
+                ((left + 1)..bounded_edges.len()).find_map(|right| {
+                    let adjacent = bounded_edges[left].1.iter().flatten().any(|left_vertex| {
+                        bounded_edges[right]
+                            .1
+                            .iter()
+                            .flatten()
+                            .any(|right_vertex| right_vertex == left_vertex)
+                    });
+                    adjacent.then(|| {
+                        (
+                            bounded_edges[left].0.clone(),
+                            bounded_edges[right].0.clone(),
+                        )
+                    })
+                })
+            })
+            .ok_or_else(|| io::Error::other("constructed block has no adjacent edge pair"))?;
+        let intersections = part
+            .intersect_curves(IntersectCurvesRequest::new(first, second))?
+            .into_result()?;
+        if !intersections.is_complete() || intersections.points().is_empty() {
+            return Err(io::Error::other(
+                "adjacent facade curves did not produce a complete isolated intersection",
+            )
+            .into());
         }
 
         let authored_xt = part

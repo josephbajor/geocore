@@ -18,6 +18,7 @@ KERNEL_PACKAGE_FILES = {
     "README.md",
     "src/error.rs",
     "src/id.rs",
+    "src/intersection.rs",
     "src/interchange.rs",
     "src/iter.rs",
     "src/lib.rs",

@@ -29,7 +29,7 @@ section and link the reason from the affected project file in the same change.
 | F2 | Stage 1, Stage 1b composition, the bounded NURBS/NURBS Stage 3 scale gate, two Stage 2 pilots, and contextual face/body-tessellation, projection, checker, and generic curve/curve entries are implemented. `OperationContext` owns family-default < session < request budget precedence for graph evaluation, Full checking, tessellation, and projection, including canonical root stops and accounting-mode validation. Whole-body tessellation owns one scope across graph evaluation, projection fallback, refinement/storage, per-patch work, and retained output. X_T reconstruction and generic curve/curve dispatch now account owned curve projection through one scope; exact compatibility, N/N+1 query limits, numerical-policy propagation, and rollback/completion evidence are pinned. Body/standalone-face tessellation and both standalone projection wrappers are closed to new production callers by the CI retirement ratchet. NURBS/NURBS scale guards are normalized while residuals retain sole acceptance authority. Segment conditioning, overlap/input/dedup slack, structured numeric stops, other contextual caller adoption/ratcheting, corpus-backed bounded tessellation presets, and broader migrations remain. |
 | F3 | Seven slices implemented: centralized class inspection; shared periodic/scalar fitting and first-wins candidate emission through line/circle and plane/sphere; shared curve/surface finite-range validation and two-axis window fitting across analytic line/planar-conic plane paths, the NURBS/plane bridge, and the general NURBS marcher; canonical unordered-pair normalization across both current curve/curve and surface/surface matrices; typed one-arm-per-pair curve/surface routing across the analytic and provisional NURBS bridges; and contextual/shared-scope generic curve/curve dispatch. Reversed symmetric calls share one specialized arm and recover first-operand ordering through completion-preserving result swapping; SSI uses an explicit internal rank so cone/cylinder keeps its natural solver convention. Curve/surface reports unsupported valid pairs through the structured capability boundary instead of `InvalidGeometry`. Broader shared per-pair solver drivers and the certified subdivision fallback remain. |
 | F4 | Phase 1, representative Phase 2 slices, and two Phase 3 pilots are implemented: graph evaluation owns stable classification, and one surface-intersection family retains ordered structured incomplete evidence through limits, numeric stops, canonicalization, and swapping. Broader result-family and legacy migrations remain. |
-| F5 | K1-K3, typed K4 interchange, and K5 adoption are implemented: the `kernel` facade owns lifecycle, opaque IDs, classified sources, one-scope outcomes, safe checker subjects, opaque journals, child-accounted procedural evaluation, and atomic typed X_T import/export. The standalone `kernel-lifecycle` client depends directly only on `kernel` and proves construction, semantic inspection, Full checking, surface evaluation, and byte-stable X_T export/import/re-export. Graph-aware intersection and semantic edit/journal iteration remain. |
+| F5 | K1-K3, typed K4 interchange, and K5 adoption are implemented: the `kernel` facade owns lifecycle, opaque IDs, classified sources, one-scope outcomes, safe checker subjects, opaque journals, child-accounted procedural evaluation, atomic typed X_T import/export, and graph-owned bounded curve/curve intersection with facade-owned proof results. The standalone `kernel-lifecycle` client depends directly only on `kernel` and proves construction, semantic inspection, Full checking, curve intersection, surface evaluation, and byte-stable X_T export/import/re-export. Semantic edit/journal iteration and facade body tessellation remain. |
 | F6 | First slice implemented: shared surface inversion, chart normalization, and distance services consumed by checker and tessellation. Module splits remain. |
 | F7 | Q0-Q2b, Q8, and the first Q3-Q6 slices are implemented: CI now enforces Python/oracle freshness, compiles and smoke-runs the excluded benchmark package including graph construction/traversal plus contextual body and standalone face tessellation, and runs both pinned fuzz targets within fixed limits. Q2a drove the reverse-index replacement and pins zero full-order rebuilds without graph/index digest drift; Q2b pins deterministic closure/path evidence through 1,000 edges after traversal membership indexing. Q2a's diamond row awaits a real multi-dependency descriptor. Q3's body ladder pins all 21 composed counters; certified B-surface rows activate projection work, tolerant-edge rows cover the explicit SP-curve/NURBS-pcurve path, mixed block/cylinder/sphere stores prove target-body isolation after identity shifts, and the certified analytic cylinder supplies the first broader curved-solid import plus a four-point tolerance ladder exposing discrete refinement transitions. A separate half-cylinder ladder activates all five face stages because body tessellation deliberately freezes pre-refined boundaries. Broader representation/corpus measurements still gate finite presets. Q3-Q5 expansion, more Q6 targets/corpora, and Q7 remain. |
 
@@ -93,9 +93,11 @@ current record. Host findings remain ratcheted in `docs/oracle-results.tsv`.
    evidence.
    Do not describe product-facing tessellation as hostile-input bounded, use
    allocator-dependent byte counts, or silently tune the legacy v1 wrapper.
-3. **Resume algorithm/API expansion behind the completed gates.** F3's generic fallback
-   and facade graph-aware intersection follow the F2 scale/context work;
-   semantic K4 edit transactions follow the K5 adoption pass. F6 splits and F4
+3. **Resume algorithm/API expansion behind the completed gates.** The first facade
+   graph-aware intersection family now adopts F3's contextual generic
+   curve/curve dispatcher with exact report parity, identity precedence, and
+   classified limit evidence. The next algorithm slice is F3's certified generic
+   fallback; semantic K4 edit transactions follow the K5 adoption pass. F6 splits and F4
    legacy cleanup land only with an owner-level behavioral migration. The Q2a/
    Q2b ladders are executable in CI; any graph-index/traversal representation change
    still requires a recorded stable-host before/after comparison.
@@ -124,8 +126,9 @@ share one graph child in one scope. Contextual body tessellation now composes
 projection and sequential graph/face work in one scope; its `ktopo`/`kxt`
 production callers are contextual and its internal legacy-use ratchet is
 enforced. Exact body edge-line and remaining structural-holder admission have
-landed. Corpus-backed bounded tessellation presets and broader contextual
-intersection adoption remain.
+landed. The first graph-owned facade curve/curve family is adopted.
+Corpus-backed bounded tessellation presets, facade body tessellation, and
+broader contextual intersection families remain.
 The Q2a/Q2b ladders now protect graph construction, reverse indexing, and
 dependency traversal through the current 1,000-edge procedural scale.
 
@@ -138,8 +141,8 @@ dependency traversal through the current 1,000-edge procedural scale.
 - Excluded benchmark, fuzz, and Python tooling is protective only when its
   contracts run in CI.
 - The facade-only lifecycle client keeps exactly `kernel` as its direct
-  dependency, and the reviewed `kernel` package inventory stays enforced in
-  CI.
+  dependency, exercises graph-owned curve intersection as well as the original
+  lifecycle, and the reviewed `kernel` package inventory stays enforced in CI.
 - Large-import work exercises the graph-construction ladder; representation
   optimization includes a stable-host before/after measurement and preserves
   deterministic ordering.

@@ -606,6 +606,14 @@ therefore at state 3 and closed to new production callers. The aggregate
 compatibility profile admits the algorithms' terminal Newton/backtracking
 sentinel observation; strict single-query defaults retain their existing stop.
 
+The `kernel` facade now adopts the contextual generic curve/curve dispatcher
+through `Part::intersect_curves`. It composes the aggregate projection profile
+before one scope, preserves exact lower report and limit snapshots, and adapts
+results to part-qualified identities without exposing the scope or descriptors.
+This is the first public owner replacement for that operation family; broader
+intersection families still follow their own contextual proof and adoption
+gates.
+
 Curve/curve dispatch now normalizes the complete current class matrix before
 specialized routing. Each unordered class pair has one dispatch arm; reversed
 calls swap the canonical result afterward, preserving completion and first-
@@ -988,8 +996,8 @@ modules contain no unexplained numerical or work-cap literals.
   avoid broad solver migration before F2 Stage 2/3 types stabilize.
 - **F4 error/capability taxonomy:** consume `StageId`, `DiagnosticCode`, and
   `LimitSnapshot`; decide the final error mapping without redefining work data.
-- **F5 kernel facade:** eventually owns/shares `SessionPolicy` and exposes contextual
-  request/result APIs. F2 remains usable without it.
+- **F5 kernel facade:** owns/shares `SessionPolicy` and exposes contextual
+  request/result APIs for adopted families. F2 remains usable without it.
 - **F7 benchmarks/fuzzing:** record policy version and budget profile with results; fuzz
   policy validation and limit boundaries.
 

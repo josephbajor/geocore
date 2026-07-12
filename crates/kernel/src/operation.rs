@@ -3,6 +3,7 @@
 use core::fmt;
 
 use kcore::operation::{ChildWorkLedger, OperationContext, OperationPolicyError, OperationScope};
+use kgeom::param::ParamRange;
 use kgraph::{EvalBudgetProfile, EvalContext, EvalLimits, EvalUsage};
 #[cfg(test)]
 use ktopo::check::FullCheckBudgetProfile;
@@ -229,6 +230,208 @@ pub struct SurfaceEvaluationRequest {
     uv: [f64; 2],
     order: kgraph::SurfaceDerivativeOrder,
     settings: OperationSettings,
+}
+
+/// One facade curve identity restricted to a finite parameter interval.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoundedCurve {
+    pub(crate) curve: CurveId,
+    pub(crate) range: ParamRange,
+}
+
+impl BoundedCurve {
+    /// Bind a facade curve identity to the requested parameter interval.
+    pub const fn new(curve: CurveId, range: ParamRange) -> Self {
+        Self { curve, range }
+    }
+
+    /// Exact graph-owned curve identity.
+    pub fn curve(&self) -> CurveId {
+        self.curve.clone()
+    }
+
+    /// Requested parameter interval.
+    pub const fn range(&self) -> ParamRange {
+        self.range
+    }
+}
+
+/// Typed request for one graph-aware bounded curve/curve intersection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IntersectCurvesRequest {
+    pub(crate) first: BoundedCurve,
+    pub(crate) second: BoundedCurve,
+    pub(crate) settings: OperationSettings,
+}
+
+impl IntersectCurvesRequest {
+    /// Construct a request with default operation settings.
+    pub fn new(first: BoundedCurve, second: BoundedCurve) -> Self {
+        Self {
+            first,
+            second,
+            settings: OperationSettings::default(),
+        }
+    }
+
+    /// Replace contextual operation settings.
+    pub fn with_settings(mut self, settings: OperationSettings) -> Self {
+        self.settings = settings;
+        self
+    }
+
+    /// First bounded facade curve.
+    pub const fn first(&self) -> &BoundedCurve {
+        &self.first
+    }
+
+    /// Second bounded facade curve.
+    pub const fn second(&self) -> &BoundedCurve {
+        &self.second
+    }
+
+    /// Contextual operation settings.
+    pub const fn settings(&self) -> &OperationSettings {
+        &self.settings
+    }
+}
+
+/// Local character of one isolated curve/curve contact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CurveContactKind {
+    /// Curve tangents are independent at the contact.
+    Transverse,
+    /// Curves touch without crossing, including overlap endpoints.
+    Tangent,
+    /// At least one curve is singular at the contact.
+    Singular,
+    /// A newer lower-layer contact classification is not yet named here.
+    Unclassified,
+}
+
+/// One isolated facade curve/curve intersection.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CurveCurvePoint {
+    pub(crate) point: Point3,
+    pub(crate) first_parameter: f64,
+    pub(crate) second_parameter: f64,
+    pub(crate) residual: f64,
+    pub(crate) kind: CurveContactKind,
+}
+
+impl CurveCurvePoint {
+    /// Symmetric model-space representative point.
+    pub const fn point(&self) -> Point3 {
+        self.point
+    }
+    /// Parameter on the first requested curve.
+    pub const fn first_parameter(&self) -> f64 {
+        self.first_parameter
+    }
+    /// Parameter on the second requested curve.
+    pub const fn second_parameter(&self) -> f64 {
+        self.second_parameter
+    }
+    /// Distance between the two evaluated curve points.
+    pub const fn residual(&self) -> f64 {
+        self.residual
+    }
+    /// Local contact character.
+    pub const fn kind(&self) -> CurveContactKind {
+        self.kind
+    }
+}
+
+/// Direction correspondence between coincident parameter intervals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CurveOverlapOrientation {
+    /// Low parameter corresponds to low parameter.
+    Same,
+    /// Low parameter corresponds to high parameter.
+    Reversed,
+}
+
+/// One positive-length coincident interval between facade curves.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CurveCurveOverlap {
+    pub(crate) first_range: ParamRange,
+    pub(crate) second_range: ParamRange,
+    pub(crate) orientation: CurveOverlapOrientation,
+}
+
+impl CurveCurveOverlap {
+    /// Coincident interval on the first requested curve.
+    pub const fn first_range(&self) -> ParamRange {
+        self.first_range
+    }
+    /// Coincident interval on the second requested curve.
+    pub const fn second_range(&self) -> ParamRange {
+        self.second_range
+    }
+    /// Parameter direction correspondence.
+    pub const fn orientation(&self) -> CurveOverlapOrientation {
+        self.orientation
+    }
+}
+
+/// Proof status over both complete requested parameter intervals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum IntersectionCompletion {
+    /// All obligations over the requested intervals were discharged.
+    Complete,
+    /// Returned contacts are verified, but exclusion evidence is incomplete.
+    Indeterminate {
+        /// Stable lower-layer explanation for the missing exclusion proof.
+        reason: &'static str,
+    },
+}
+
+/// Curve/curve intersection evidence tied to exact facade identity.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CurveCurveIntersections {
+    pub(crate) first: CurveId,
+    pub(crate) second: CurveId,
+    pub(crate) points: Vec<CurveCurvePoint>,
+    pub(crate) overlaps: Vec<CurveCurveOverlap>,
+    pub(crate) completion: IntersectionCompletion,
+}
+
+impl CurveCurveIntersections {
+    /// First requested curve identity.
+    pub fn first(&self) -> CurveId {
+        self.first.clone()
+    }
+    /// Second requested curve identity.
+    pub fn second(&self) -> CurveId {
+        self.second.clone()
+    }
+    /// Isolated contacts in deterministic first-curve parameter order.
+    pub fn points(&self) -> &[CurveCurvePoint] {
+        &self.points
+    }
+    /// Coincident intervals in deterministic first-curve parameter order.
+    pub fn overlaps(&self) -> &[CurveCurveOverlap] {
+        &self.overlaps
+    }
+    /// Complete-domain proof status.
+    pub const fn completion(&self) -> IntersectionCompletion {
+        self.completion
+    }
+    /// True only when both requested intervals were completely covered.
+    pub fn is_complete(&self) -> bool {
+        matches!(self.completion, IntersectionCompletion::Complete)
+    }
+    /// True when no contacts or overlaps were discovered.
+    pub fn is_empty(&self) -> bool {
+        self.points.is_empty() && self.overlaps.is_empty()
+    }
+    /// True only for an empty result backed by complete-domain proof.
+    pub fn is_proven_empty(&self) -> bool {
+        self.is_complete() && self.is_empty()
+    }
 }
 
 impl SurfaceEvaluationRequest {

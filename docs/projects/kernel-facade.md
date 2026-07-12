@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1-K3 pilots, typed K4 interchange, and K5 adoption implemented; graph-aware requests and semantic K4 edits remain
+Status: K1-K3, typed K4 interchange, and K5 adoption implemented; semantic K4 edits and facade body tessellation remain
 
 ## Outcome
 
@@ -371,17 +371,15 @@ pub struct CheckBodyRequest<'a> {
     pub settings: OperationSettings<'a>,
 }
 
-pub struct IntersectCurvesRequest<'a> {
-    pub first: BoundedCurve,
-    pub second: BoundedCurve,
-    pub settings: OperationSettings<'a>,
+pub struct IntersectCurvesRequest {
+    // private facade BoundedCurve operands and OperationSettings
 }
 
 impl Part<'_> {
     pub fn check_body(&self, request: CheckBodyRequest<'_>)
         -> OperationOutcome<CheckReport>;
-    pub fn intersect_curves(&self, request: IntersectCurvesRequest<'_>)
-        -> OperationOutcome<CurveCurveIntersections>;
+    pub fn intersect_curves(&self, request: IntersectCurvesRequest)
+        -> Result<OperationOutcome<CurveCurveIntersections>>;
 }
 ```
 
@@ -636,11 +634,11 @@ points, and keeps the workspace green.
 Exit: ownership, ordering, and error ownership are unambiguous; no source API
 changes.
 
-### Current convergence gate — adoption before expansion
+### Completed convergence gate — adoption before expansion
 
-The implemented facade is now large enough to validate against a real consumer.
-Before adding graph-aware intersection, semantic edit transactions, more
-operation families, or any ABI layer:
+The facade was validated against a real consumer before graph-aware
+intersection was added. The same gate remains mandatory before semantic edit
+transactions, more operation families, or any ABI layer:
 
 - migrate one in-repository tool/example to depend only on `kernel`;
 - audit every lower-crate import or raw-field access that migration still
@@ -688,17 +686,20 @@ policy/report/error adapter chain without duplicated context or taxonomy.
 
 ### K3 — F1 G2 geometry identity integration
 
-Status: opaque part-qualified curve, surface, and pcurve IDs; deterministic
+Status: implemented. Opaque part-qualified curve, surface, and pcurve IDs; deterministic
 geometry views; topology attachments; class metadata; and shared offset-basis
 identity are implemented. Operation-scoped surface evaluation now reserves one
 F2 child ledger, retains accepted/attempted graph work and classified sources,
 and keeps graph limits, handles, evaluators, and descriptors private.
-Graph-aware intersection requests remain.
-
-F2 profile composition, the NURBS scale gate, and the K5 consumer audit are now
-complete. The graph-aware request is eligible but remains queued behind the
-portfolio's contextualization and graph-measurement work; it must preserve the
-accounting and API-shape evidence from those gates.
+`Part::intersect_curves` resolves opaque graph-owned leaf curves without
+copying descriptors, rejects wrong-part/stale identity before scope creation,
+and delegates to the contextual generic `kops` dispatcher through one scope.
+Facade-owned points, overlaps, contact/orientation values, operand identities,
+and `Complete`/`Indeterminate` evidence prevent raw result leakage. Direct
+ellipse/ellipse parity pins the exact report and smallest projection-limit crossing;
+the facade-only lifecycle client exercises an analytic graph-owned edge pair.
+Future procedural curve descriptors must add truthful graph child accounting
+instead of retroactively charging today's leaf borrow.
 
 This phase lands after F1 G2 or in the same integration window:
 
@@ -774,9 +775,10 @@ layout is stable forever.
 package whose only direct dependency is `kernel`. Its executed path constructs
 a block, retains its committed-journal summary, traverses semantic topology,
 performs a budgeted Full check, evaluates a supporting surface at the center of
-its finite face domain, exports X_T, imports into another part, checks and
-re-exports that body, proves byte stability, and resolves the original opaque
-body ID after the unrelated import. The example's structural test and
+its finite face domain, intersects two adjacent graph-owned edge curves,
+exports X_T, imports into another part, checks and re-exports that body, proves
+byte stability, and resolves the original opaque body ID after the unrelated
+import. The example's structural test and
 `scripts/package_contract.py` reject any new direct dependency, including a
 development-only lower-layer dependency.
 
@@ -819,6 +821,7 @@ examples that:
 - create `Kernel`, `Session`, and a part;
 - create a block through a typed request and retain its journal;
 - enumerate body faces/edges/vertices through deterministic views;
+- intersect bounded graph-owned curves through opaque curve IDs;
 - check and tessellate/export the body through operation outcomes;
 - import X_T into an empty part and inspect returned bodies; and
 - retain an opaque body ID across unrelated successful operations in the same
@@ -861,6 +864,8 @@ Lower-layer tests also retain the existing compile-fail guarantees against
 - F1 leaf and offset identities map one-to-one through topology and geometry
   views; no descriptor is copied into the facade.
 - Contextual graph evaluation is charged once to the parent operation report.
+- Contextual curve intersection preserves the direct lower-layer result and
+  exact projection report, including classified limit snapshots.
 - X_T wrapped errors retain class, code, capability, node/offset context, and
   limit data.
 - Complete and indeterminate proof results survive facade mapping unchanged.
