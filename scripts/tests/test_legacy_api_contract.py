@@ -5,11 +5,13 @@ from pathlib import Path
 
 from scripts.legacy_api_contract import (
     BODY_TESSELLATION_DEFINITION,
+    CURVE_PROJECTION_DEFINITION,
     FACE_TESSELLATION_DEFINITION,
     SURFACE_POINT_COMPATIBILITY,
     SURFACE_PROJECTION_DEFINITION,
     audit_repository,
     find_legacy_body_tessellation_uses,
+    find_legacy_curve_projection_uses,
     find_legacy_face_tessellation_uses,
     find_legacy_surface_projection_uses,
 )
@@ -223,6 +225,35 @@ use kgeom::project::{project_to_surface_in_scope, project_to_surface_with_contex
 
     def test_current_production_sources_are_closed(self) -> None:
         self.assertEqual(audit_repository(ROOT), [])
+
+
+class CurveProjectionRatchetTests(unittest.TestCase):
+    def test_production_import_and_call_are_rejected(self) -> None:
+        path = Path("crates/kops/src/new_curve_client.rs")
+        source = """\
+use kgeom::project::project_to_curve;
+fn run() { project_to_curve(&curve, point, range); }
+"""
+        self.assertEqual(
+            find_legacy_curve_projection_uses({path: source}),
+            [f"{path}:1", f"{path}:2"],
+        )
+
+    def test_public_definition_and_cfg_test_clients_are_allowed(self) -> None:
+        source = """\
+pub fn project_to_curve() {}
+#[cfg(test)]
+mod tests { fn compatibility() { project_to_curve(); } }
+"""
+        self.assertEqual(
+            find_legacy_curve_projection_uses({CURVE_PROJECTION_DEFINITION: source}),
+            [],
+        )
+
+    def test_contextual_names_do_not_match(self) -> None:
+        path = Path("crates/kops/src/contextual_curve.rs")
+        source = "use kgeom::project::project_to_curve_in_scope;\n"
+        self.assertEqual(find_legacy_curve_projection_uses({path: source}), [])
 
 
 if __name__ == "__main__":

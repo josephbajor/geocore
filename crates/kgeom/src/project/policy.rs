@@ -106,6 +106,10 @@ impl ProjectionBudgetProfile {
         BudgetPlan::new(Self::curve_defaults().limits().iter().map(|limit| {
             if limit.stage == CURVE_PROJECTION_QUERIES {
                 LimitSpec::new(limit.stage, limit.resource, limit.mode, u64::MAX)
+            } else if limit.stage == CURVE_PROJECTION_NEWTON_ITERATIONS
+                || limit.stage == CURVE_PROJECTION_HALVINGS
+            {
+                LimitSpec::new(limit.stage, limit.resource, limit.mode, limit.allowed + 1)
             } else {
                 *limit
             }
@@ -206,6 +210,15 @@ mod tests {
                 .unwrap()
                 .allowed,
             u64::MAX
+        );
+        assert_eq!(
+            ProjectionBudgetProfile::curve_aggregate_compatibility()
+                .limits()
+                .iter()
+                .find(|limit| limit.stage == CURVE_PROJECTION_HALVINGS)
+                .unwrap()
+                .allowed,
+            (MAX_HALVINGS + 1) as u64
         );
         assert_eq!(
             ProjectionBudgetProfile::surface_defaults().limits().len(),

@@ -82,7 +82,7 @@ pub use cylinder_sphere::intersect_bounded_cylinder_sphere;
 pub use cylinder_torus::intersect_bounded_cylinder_torus;
 pub use ellipse_cone::intersect_bounded_ellipse_cone;
 pub use ellipse_cylinder::intersect_bounded_ellipse_cylinder;
-pub use ellipse_ellipse::intersect_bounded_ellipses;
+pub use ellipse_ellipse::{intersect_bounded_ellipses, intersect_bounded_ellipses_with_context};
 pub use ellipse_nurbs::intersect_bounded_ellipse_nurbs;
 pub use ellipse_sphere::intersect_bounded_ellipse_sphere;
 pub use ellipse_torus::intersect_bounded_ellipse_torus;

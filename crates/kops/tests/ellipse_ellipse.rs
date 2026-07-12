@@ -1,11 +1,17 @@
 //! Bounded analytic ellipse/ellipse intersection behavior.
 
+use kcore::operation::{
+    AccountingMode, BudgetPlan, LimitSpec, OperationContext, ResourceKind, SessionPolicy,
+};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Ellipse;
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
 use kgeom::vec::{Point3, Vec3};
-use kops::intersect::{ContactKind, ParamOrientation, intersect_bounded_ellipses};
+use kops::intersect::{
+    ContactKind, ParamOrientation, intersect_bounded_ellipses,
+    intersect_bounded_ellipses_with_context,
+};
 
 fn ellipse(center: [f64; 3], normal: [f64; 3], x_hint: [f64; 3], r1: f64, r2: f64) -> Ellipse {
     Ellipse::new(
@@ -64,6 +70,57 @@ fn coplanar_secant_returns_four_contacts() {
         assert_contains(&hit.points, expected);
     }
     assert!(hit.overlaps.is_empty());
+}
+
+#[test]
+fn contextual_projection_is_exact_and_query_limit_is_the_smallest_crossing() {
+    let a = world_ellipse(3.0, 1.0);
+    let b = world_ellipse(2.0, 1.5);
+    let range = ParamRange::new(0.0, core::f64::consts::TAU);
+    let tolerances = Tolerances::default();
+    let legacy = intersect_bounded_ellipses(&a, range, &b, range, tolerances).unwrap();
+
+    let session = SessionPolicy::v1();
+    let context = OperationContext::new(&session, tolerances).unwrap();
+    let contextual = intersect_bounded_ellipses_with_context(&a, range, &b, range, &context);
+    assert_eq!(contextual.result(), Ok(&legacy));
+    let queries = contextual
+        .report()
+        .usage()
+        .iter()
+        .find(|snapshot| snapshot.stage == kgeom::project::CURVE_PROJECTION_QUERIES)
+        .unwrap();
+    assert!(queries.consumed > 1);
+    assert_eq!(queries.allowed, u64::MAX);
+
+    let allowed = queries.consumed - 1;
+    let request = BudgetPlan::new([LimitSpec::new(
+        kgeom::project::CURVE_PROJECTION_QUERIES,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        allowed,
+    )])
+    .unwrap();
+    let limited_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(request);
+    let limited = intersect_bounded_ellipses_with_context(&a, range, &b, range, &limited_context);
+    let limit = limited
+        .result()
+        .as_ref()
+        .unwrap_err()
+        .limit()
+        .expect("projection limit remains classified");
+    assert_eq!(limit.stage, kgeom::project::CURVE_PROJECTION_QUERIES);
+    assert_eq!((limit.consumed, limit.allowed), (queries.consumed, allowed));
+    let accepted = limited
+        .report()
+        .usage()
+        .iter()
+        .find(|snapshot| snapshot.stage == kgeom::project::CURVE_PROJECTION_QUERIES)
+        .unwrap();
+    assert_eq!((accepted.consumed, accepted.allowed), (allowed, allowed));
+    assert_eq!(limited.report().limit_events(), &[limit]);
 }
 
 #[test]

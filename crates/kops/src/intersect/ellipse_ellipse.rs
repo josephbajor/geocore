@@ -3,16 +3,18 @@ use super::conic::{
     canonical_angle, ellipse_parameter, fit_periodic_parameter, parameter_tolerance,
     polynomial_derivative, real_polynomial_roots,
 };
+use super::error::{IntersectionError, IntersectionResult};
 use super::line_ellipse::intersect_bounded_line_ellipse;
 use super::result::{
     ContactKind, CurveCurveIntersections, CurveCurveOverlap, CurveCurvePoint, ParamOrientation,
     accept_curve_curve_candidate,
 };
 use kcore::error::{Error, Result};
+use kcore::operation::{OperationContext, OperationOutcome, OperationScope, SessionPolicy};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::param::ParamRange;
-use kgeom::project::project_to_curve;
+use kgeom::project::{ProjectionBudgetProfile, ProjectionError, project_to_curve_in_scope};
 use kgeom::vec::Point3;
 
 struct EllipsePair<'a> {
@@ -35,6 +37,46 @@ pub fn intersect_bounded_ellipses(
     range_b: ParamRange,
     tolerances: Tolerances,
 ) -> Result<CurveCurveIntersections> {
+    let session = SessionPolicy::v1();
+    let context = OperationContext::new(&session, tolerances)
+        .expect("validated Tolerances always satisfy v1 session precision")
+        .with_family_budget_defaults(ProjectionBudgetProfile::curve_aggregate_compatibility());
+    match intersect_bounded_ellipses_with_context(a, range_a, b, range_b, &context).into_result() {
+        Ok(result) => Ok(result),
+        Err(IntersectionError::Kernel(error)) => Err(error),
+        Err(
+            IntersectionError::UnsupportedCurvePair { .. }
+            | IntersectionError::UnsupportedSurfacePair { .. },
+        ) => {
+            unreachable!("the concrete ellipse solver has no unsupported dispatch")
+        }
+    }
+}
+
+/// Context-aware ellipse/ellipse intersection with shared projection accounting.
+pub fn intersect_bounded_ellipses_with_context(
+    a: &Ellipse,
+    range_a: ParamRange,
+    b: &Ellipse,
+    range_b: ParamRange,
+    context: &OperationContext<'_>,
+) -> OperationOutcome<CurveCurveIntersections, IntersectionError> {
+    let context = context
+        .clone()
+        .with_family_budget_defaults(ProjectionBudgetProfile::curve_aggregate_compatibility());
+    let mut scope = OperationScope::new(&context);
+    let result = intersect_bounded_ellipses_in_scope(a, range_a, b, range_b, &mut scope);
+    scope.finish_typed(result)
+}
+
+pub(crate) fn intersect_bounded_ellipses_in_scope(
+    a: &Ellipse,
+    range_a: ParamRange,
+    b: &Ellipse,
+    range_b: ParamRange,
+    scope: &mut OperationScope<'_, '_>,
+) -> IntersectionResult<CurveCurveIntersections> {
+    let tolerances = scope.context().tolerances();
     validate_ranges(
         range_a,
         range_b,
@@ -45,10 +87,10 @@ pub fn intersect_bounded_ellipses(
 
     let normal_cross = a.frame().z().cross(b.frame().z());
     if normal_cross.norm() <= tolerances.angular() {
-        return intersect_parallel_plane(a, range_a, b, range_b, tolerances);
+        return intersect_parallel_plane(a, range_a, b, range_b, tolerances, scope);
     }
 
-    intersect_plane_crossing(a, range_a, b, range_b, tolerances)
+    intersect_plane_crossing(a, range_a, b, range_b, tolerances, scope)
 }
 
 fn intersect_parallel_plane(
@@ -57,7 +99,8 @@ fn intersect_parallel_plane(
     b: &Ellipse,
     range_b: ParamRange,
     tolerances: Tolerances,
-) -> Result<CurveCurveIntersections> {
+    scope: &mut OperationScope<'_, '_>,
+) -> IntersectionResult<CurveCurveIntersections> {
     let center_delta = b.frame().origin() - a.frame().origin();
     if center_delta.dot(a.frame().z()).abs() > tolerances.linear() {
         return Ok(CurveCurveIntersections::complete_empty());
@@ -66,14 +109,18 @@ fn intersect_parallel_plane(
     if ellipse_is_circle(a, tolerances) && ellipse_is_circle(b, tolerances) {
         let ca = Circle::new(*a.frame(), a.major_radius())?;
         let cb = Circle::new(*b.frame(), b.major_radius())?;
-        return intersect_bounded_circles(&ca, range_a, &cb, range_b, tolerances);
+        return Ok(intersect_bounded_circles(
+            &ca, range_a, &cb, range_b, tolerances,
+        )?);
     }
 
     if ellipses_are_coincident(a, b, tolerances) {
-        return intersect_coincident_ellipses(a, range_a, b, range_b, tolerances);
+        return Ok(intersect_coincident_ellipses(
+            a, range_a, b, range_b, tolerances,
+        )?);
     }
 
-    intersect_coplanar_distinct(a, range_a, b, range_b, tolerances)
+    intersect_coplanar_distinct(a, range_a, b, range_b, tolerances, scope)
 }
 
 fn intersect_plane_crossing(
@@ -82,7 +129,8 @@ fn intersect_plane_crossing(
     b: &Ellipse,
     range_b: ParamRange,
     tolerances: Tolerances,
-) -> Result<CurveCurveIntersections> {
+    _scope: &mut OperationScope<'_, '_>,
+) -> IntersectionResult<CurveCurveIntersections> {
     let n1 = a.frame().z();
     let n2 = b.frame().z();
     let direction = n1.cross(n2);
@@ -111,7 +159,10 @@ fn intersect_plane_crossing(
         let point = a.eval(line_hit.t_b);
         push_candidate_from_point(&pair, point, &mut points);
     }
-    CurveCurveIntersections::canonicalized_complete(points, Vec::new())
+    Ok(CurveCurveIntersections::canonicalized_complete(
+        points,
+        Vec::new(),
+    )?)
 }
 
 fn intersect_coplanar_distinct(
@@ -120,7 +171,8 @@ fn intersect_coplanar_distinct(
     b: &Ellipse,
     range_b: ParamRange,
     tolerances: Tolerances,
-) -> Result<CurveCurveIntersections> {
+    scope: &mut OperationScope<'_, '_>,
+) -> IntersectionResult<CurveCurveIntersections> {
     let pair = EllipsePair {
         a,
         range_a,
@@ -130,20 +182,24 @@ fn intersect_coplanar_distinct(
         tolerances,
     };
     let mut points = Vec::new();
-    for (t_b, tangent_hint) in coplanar_candidate_parameters(a, b, tolerances) {
-        push_projected_from_b(&pair, t_b, tangent_hint, &mut points);
+    for (t_b, tangent_hint) in coplanar_candidate_parameters(a, b, tolerances, scope)? {
+        push_projected_from_b(&pair, t_b, tangent_hint, &mut points, scope)?;
     }
-    for (t_a, tangent_hint) in coplanar_candidate_parameters(b, a, tolerances) {
-        push_projected_from_a(&pair, t_a, tangent_hint, &mut points);
+    for (t_a, tangent_hint) in coplanar_candidate_parameters(b, a, tolerances, scope)? {
+        push_projected_from_a(&pair, t_a, tangent_hint, &mut points, scope)?;
     }
-    CurveCurveIntersections::canonicalized_complete(points, Vec::new())
+    Ok(CurveCurveIntersections::canonicalized_complete(
+        points,
+        Vec::new(),
+    )?)
 }
 
 fn coplanar_candidate_parameters(
     target: &Ellipse,
     source: &Ellipse,
     tolerances: Tolerances,
-) -> Vec<(f64, bool)> {
+    scope: &mut OperationScope<'_, '_>,
+) -> IntersectionResult<Vec<(f64, bool)>> {
     let poly = ellipse_into_ellipse_quartic(target, source);
     let mut roots = Vec::new();
     for z in real_polynomial_roots(&poly) {
@@ -152,23 +208,25 @@ fn coplanar_candidate_parameters(
     for z in real_polynomial_roots(&polynomial_derivative(&poly)) {
         let t = canonical_angle(2.0 * kcore::math::atan(z));
         let point = source.eval(t);
-        if project_to_curve(target, point, target.param_range())
-            .is_some_and(|projection| projection.dist <= tolerances.linear())
+        if project_to_curve_in_scope(target, point, target.param_range(), scope)
+            .map_err(projection_error)?
+            .dist
+            <= tolerances.linear()
         {
             push_parameter_candidate(&mut roots, t, true);
         }
     }
     let point = source.eval(core::f64::consts::PI);
-    if let Some(projection) = project_to_curve(target, point, target.param_range())
-        && projection.dist <= tolerances.linear()
-    {
+    let projection = project_to_curve_in_scope(target, point, target.param_range(), scope)
+        .map_err(projection_error)?;
+    if projection.dist <= tolerances.linear() {
         push_parameter_candidate(
             &mut roots,
             core::f64::consts::PI,
             projection.dist > kcore::tolerance::LINEAR_RESOLUTION,
         );
     }
-    roots
+    Ok(roots)
 }
 
 fn push_parameter_candidate(candidates: &mut Vec<(f64, bool)>, t: f64, tangent_hint: bool) {
@@ -326,21 +384,22 @@ fn push_projected_from_b(
     t_b: f64,
     tangent_hint: bool,
     points: &mut Vec<CurveCurvePoint>,
-) {
+    scope: &mut OperationScope<'_, '_>,
+) -> IntersectionResult<()> {
     let Some(t_b) = fit_periodic_parameter(t_b, pair.range_b, pair.parameter_tol) else {
-        return;
+        return Ok(());
     };
     let point_b = pair.b.eval(t_b);
-    let Some(projection) = project_to_curve(pair.a, point_b, pair.a.param_range()) else {
-        return;
-    };
+    let projection = project_to_curve_in_scope(pair.a, point_b, pair.a.param_range(), scope)
+        .map_err(projection_error)?;
     if projection.dist > pair.tolerances.linear() {
-        return;
+        return Ok(());
     }
     let Some(t_a) = fit_periodic_parameter(projection.t, pair.range_a, pair.parameter_tol) else {
-        return;
+        return Ok(());
     };
     push_candidate_from_params(pair, t_a, t_b, tangent_hint, points);
+    Ok(())
 }
 
 fn push_projected_from_a(
@@ -348,21 +407,31 @@ fn push_projected_from_a(
     t_a: f64,
     tangent_hint: bool,
     points: &mut Vec<CurveCurvePoint>,
-) {
+    scope: &mut OperationScope<'_, '_>,
+) -> IntersectionResult<()> {
     let Some(t_a) = fit_periodic_parameter(t_a, pair.range_a, pair.parameter_tol) else {
-        return;
+        return Ok(());
     };
     let point_a = pair.a.eval(t_a);
-    let Some(projection) = project_to_curve(pair.b, point_a, pair.b.param_range()) else {
-        return;
-    };
+    let projection = project_to_curve_in_scope(pair.b, point_a, pair.b.param_range(), scope)
+        .map_err(projection_error)?;
     if projection.dist > pair.tolerances.linear() {
-        return;
+        return Ok(());
     }
     let Some(t_b) = fit_periodic_parameter(projection.t, pair.range_b, pair.parameter_tol) else {
-        return;
+        return Ok(());
     };
     push_candidate_from_params(pair, t_a, t_b, tangent_hint, points);
+    Ok(())
+}
+
+fn projection_error(error: ProjectionError) -> IntersectionError {
+    match error {
+        ProjectionError::Policy(error) => IntersectionError::Kernel(error.into()),
+        _ => IntersectionError::Kernel(Error::InvalidGeometry {
+            reason: "ellipse intersection projection failed",
+        }),
+    }
 }
 
 fn push_candidate_from_point(

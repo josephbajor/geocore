@@ -598,10 +598,13 @@ wrappers that preserve the old invalid-query behavior. X_T reconstruction now
 uses the contextual curve projector for both endpoints of every untrimmed NURBS
 edge under one graph-plus-projection owner profile. Its query aggregate is
 accounting-only at `u64::MAX` until broader import evidence supports a finite
-cap, while request overrides can impose an exact lower ceiling. Curve
-projection remains at state 2 only because ellipse intersection is still a
-legacy production owner; that driver must adopt shared-scope projection before
-closing the single-query wrapper.
+cap, while request overrides can impose an exact lower ceiling. Ellipse
+intersection now owns one contextual scope for all of its candidate projections
+and preserves complete-result bits under compatibility defaults. Its exact
+query N/N+1 crossing is pinned. Both standalone projection wrappers are
+therefore at state 3 and closed to new production callers. The aggregate
+compatibility profile admits the algorithms' terminal Newton/backtracking
+sentinel observation; strict single-query defaults retain their existing stop.
 
 ## Rollout stages
 
@@ -826,9 +829,9 @@ failures retain the checker's established fault ordering. Legacy wrappers use a
 non-binding aggregate allowance so compatibility does not acquire an accidental
 model-size ceiling. Contextual facade construction composition remains;
 surface projection and body tessellation have contextual entries with their
-internal legacy ratchets closed. X_T NURBS-edge reconstruction accounts curve
-projection in its existing operation scope; ellipse intersection remains before
-the curve-projector ratchet. Body tessellation's `ktopo`/`kxt`
+internal legacy ratchets closed. X_T NURBS-edge reconstruction and ellipse
+intersection account curve projection in their owner scopes, and the curve-
+projector ratchet is closed. Body tessellation's `ktopo`/`kxt`
 callers are contextual and its
 production-use ratchet is enforced; public deprecation remains blocked on a
 facade replacement.

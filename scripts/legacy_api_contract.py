@@ -18,6 +18,7 @@ SOURCE_ROOTS = (
 LEGACY_BODY_TESSELLATION = re.compile(r"\btessellate_body\b")
 LEGACY_FACE_TESSELLATION = re.compile(r"\btessellate\b")
 LEGACY_SURFACE_PROJECTION = re.compile(r"\bproject_to_surface\b")
+LEGACY_CURVE_PROJECTION = re.compile(r"\bproject_to_curve\b")
 TEST_MODULE = re.compile(
     r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*"
     r"(?:#\s*\[[^\]]*\]\s*)*"
@@ -27,6 +28,7 @@ TEST_MODULE = re.compile(
 BODY_TESSELLATION_DEFINITION = Path("crates/ktopo/src/btess.rs")
 FACE_TESSELLATION_DEFINITION = Path("crates/kgeom/src/tess.rs")
 SURFACE_PROJECTION_DEFINITION = Path("crates/kgeom/src/project.rs")
+CURVE_PROJECTION_DEFINITION = Path("crates/kgeom/src/project.rs")
 SURFACE_POINT_COMPATIBILITY = Path("crates/kgeom/src/surface_point.rs")
 
 
@@ -246,6 +248,15 @@ def find_legacy_surface_projection_uses(sources: Mapping[Path, str]) -> list[str
     )
 
 
+def find_legacy_curve_projection_uses(sources: Mapping[Path, str]) -> list[str]:
+    """Return forbidden production references to the legacy curve projector."""
+    return _find_legacy_uses(
+        sources,
+        LEGACY_CURVE_PROJECTION,
+        CURVE_PROJECTION_DEFINITION,
+    )
+
+
 def audit_repository(repository: Path) -> list[str]:
     """Audit the crate production trees governed by this ratchet."""
     sources = {}
@@ -256,6 +267,7 @@ def audit_repository(repository: Path) -> list[str]:
         find_legacy_body_tessellation_uses(sources)
         + find_legacy_face_tessellation_uses(sources)
         + find_legacy_surface_projection_uses(sources)
+        + find_legacy_curve_projection_uses(sources)
     )
 
 
