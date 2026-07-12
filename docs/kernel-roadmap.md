@@ -751,8 +751,10 @@ true only for an empty complete result.
   digests. Complete isolation plus a certificate and verified representative
   for every retained cell now proves complete polynomial transverse results;
   partial certificates remain visible without upgrading completion. Next,
-  extend certification to rational/non-coplanar cases and interval empty-cell
-  exclusion, then overlap extent, generic curve/surface pairing, and
+  positive-weight rational derivative hulls now extend that proof substrate
+  without weakening inconclusive cases. Next, extend certification to
+  non-coplanar cases and interval empty-cell exclusion, then overlap extent,
+  generic curve/surface pairing, and
   procedural/NURBS fields.
 - Analytic special cases and the generic solver feed the same canonical result type.
 - Consolidate the per-pair analytic curve/surface and SSI boilerplate (range

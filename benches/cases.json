@@ -2781,7 +2781,7 @@
       "size_parameters": { "elements": 1, "control_points": 5 },
       "tolerances": { "linear": 1e-8 },
       "policy_values": { "requested_depth": 3, "work_allowed": 1366, "candidates_allowed": 4096, "depth_allowed": 3, "execution": "serial" },
-      "expected_result_counters": { "candidates": 2, "max_candidate_depth": 3, "complete": true, "proven_empty": false, "indeterminate": false, "conservative_cover": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "work_consumed": 7, "candidate_high_water": 3, "depth_high_water": 3, "unique_root_cells": 0, "root_certificate_digest": "54b9300d07e25d05", "candidate_digest": "4f994d431116fb10", "output_digest": "69ec7d5300f96a42" }
+      "expected_result_counters": { "candidates": 2, "max_candidate_depth": 3, "complete": true, "proven_empty": false, "indeterminate": false, "conservative_cover": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "work_consumed": 7, "candidate_high_water": 3, "depth_high_water": 3, "unique_root_cells": 2, "root_certificate_digest": "2fece8841d82beb4", "candidate_digest": "4f994d431116fb10", "output_digest": "6141c7e58af03d3b" }
     },
     {
       "path": "geometry/curve-pair-isolation/poly-separated-v1/1/depth-3-v1",

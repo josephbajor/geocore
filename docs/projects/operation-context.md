@@ -667,12 +667,14 @@ generic dispatch, and the facade. Q4 hashes this evidence separately from
 contact geometry and folds both into its semantic output digest.
 
 The first root-existence substrate is also landed on exact curve-pair cells.
-For polynomial subcurves in an exactly shared axis-aligned plane, control-hull
-face signs discharge Poincaré–Miranda existence and interval derivative hulls
-prove a strictly positive P-matrix Jacobian, giving one unique exact transverse
-root in the parameter rectangle. Exact expansion signs protect boundary
-equalities. Rational, non-coplanar, tangent/singular, multi-root, and interval-
-inconclusive cells return no certificate. The NURBS/NURBS solver now retires
+For polynomial or positive-weight rational subcurves in an exactly shared
+axis-aligned plane, control-hull face signs discharge Poincaré–Miranda
+existence and interval derivative hulls prove a strictly positive P-matrix
+Jacobian, giving one unique exact transverse root in the parameter rectangle.
+Rational derivatives use homogeneous numerator/weight hulls and the interval
+quotient rule. Exact expansion signs protect boundary equalities. Non-coplanar,
+tangent/singular, multi-root, and interval-inconclusive cells return no
+certificate. The NURBS/NURBS solver now retires
 the coverage gap only when isolation completed and every retained cell has
 both a unique-root certificate and a verified emitted representative. A
 polynomial transverse crossing therefore completes, while partial certificates

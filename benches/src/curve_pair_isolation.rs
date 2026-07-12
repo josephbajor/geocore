@@ -120,7 +120,7 @@ pub const CASES: [CurvePairIsolationCase; 6] = [
             false,
             LimitKind::None,
             0x4f99_4d43_1116_fb10,
-            0x69ec_7d53_00f9_6a42,
+            0x6141_c7e5_8af0_3d3b,
         ),
     ),
     case(

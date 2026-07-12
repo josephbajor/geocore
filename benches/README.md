@@ -68,8 +68,9 @@ geometry, then folds all of them into its semantic output contract. Its
 polynomial transverse case is complete only because every isolated cell has a
 certificate and verified representative.
 The curve-pair isolation ladder separately pins unique-root certificate counts
-and ordered certificate digests; rational and resource-limited controls remain
-zero-certificate cases.
+and ordered certificate digests. Its positive-weight rational case now proves
+both retained cells through interval quotient-rule derivative bounds, while
+resource-limited controls remain zero-certificate cases.
 
 The Q1 target verifies the result digest before measurement and again in every
 timed iteration. The Q2 target provides the 21 checked-commit, incremental

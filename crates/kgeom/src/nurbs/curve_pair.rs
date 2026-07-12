@@ -109,8 +109,7 @@ pub enum CurvePairProjectionPlane {
     Yz,
 }
 
-/// Proof that one retained polynomial NURBS pair cell contains exactly one
-/// transverse root.
+/// Proof that one retained NURBS pair cell contains exactly one transverse root.
 ///
 /// The certificate combines Poincaré–Miranda face signs for existence with a
 /// strictly positive interval P-matrix Jacobian for global injectivity on the
@@ -194,16 +193,12 @@ impl CurvePairCandidateCell {
 
     /// Certify one exact unique transverse root in this retained cell.
     ///
-    /// This first interval-proof slice accepts polynomial subcurves lying in
-    /// one exact axis-aligned plane. Rational, non-coplanar, tangent, singular,
-    /// and interval-inconclusive cells return `None` without weakening the
-    /// conservative candidate cover.
+    /// This interval-proof slice accepts positive-weight polynomial or rational
+    /// subcurves lying in one exact axis-aligned plane. Non-coplanar, tangent,
+    /// singular, and interval-inconclusive cells return `None` without
+    /// weakening the conservative candidate cover.
     pub fn certify_unique_root(&self) -> Option<CurvePairRootCertificate> {
-        if self.first.is_rational()
-            || self.second.is_rational()
-            || self.first.degree() == 0
-            || self.second.degree() == 0
-        {
+        if self.first.degree() == 0 || self.second.degree() == 0 {
             return None;
         }
         for (plane, axes, normal) in [
@@ -355,13 +350,57 @@ fn control_component_bounds(curve: &NurbsCurve, axis: usize) -> (f64, f64) {
 }
 
 fn derivative_component_interval(curve: &NurbsCurve, axis: usize) -> Option<Interval> {
+    let Some(weights) = curve.weights() else {
+        return polynomial_derivative_component_interval(curve, axis);
+    };
+    let coordinate = homogeneous_control_interval(curve, axis, weights);
+    let weight = scalar_control_interval(weights);
+    let coordinate_derivative = homogeneous_derivative_component_interval(curve, axis, weights)?;
+    let weight_derivative = scalar_derivative_interval(curve, weights)?;
+    let numerator = coordinate_derivative * weight - coordinate * weight_derivative;
+    numerator.checked_div(weight * weight)
+}
+
+fn polynomial_derivative_component_interval(curve: &NurbsCurve, axis: usize) -> Option<Interval> {
+    derivative_control_interval(curve, |index| {
+        Interval::point(component_value(curve.points()[index], axis))
+    })
+}
+
+fn homogeneous_control_interval(curve: &NurbsCurve, axis: usize, weights: &[f64]) -> Interval {
+    hull_intervals(curve.points().iter().zip(weights).map(|(point, weight)| {
+        Interval::point(component_value(*point, axis)) * Interval::point(*weight)
+    }))
+}
+
+fn scalar_control_interval(values: &[f64]) -> Interval {
+    hull_intervals(values.iter().map(|value| Interval::point(*value)))
+}
+
+fn homogeneous_derivative_component_interval(
+    curve: &NurbsCurve,
+    axis: usize,
+    weights: &[f64],
+) -> Option<Interval> {
+    derivative_control_interval(curve, |index| {
+        Interval::point(component_value(curve.points()[index], axis))
+            * Interval::point(weights[index])
+    })
+}
+
+fn scalar_derivative_interval(curve: &NurbsCurve, values: &[f64]) -> Option<Interval> {
+    derivative_control_interval(curve, |index| Interval::point(values[index]))
+}
+
+fn derivative_control_interval(
+    curve: &NurbsCurve,
+    value: impl Fn(usize) -> Interval,
+) -> Option<Interval> {
     let degree = curve.degree();
     let knots = curve.knots().as_slice();
     let mut hull: Option<Interval> = None;
     for index in 0..curve.points().len().checked_sub(1)? {
-        let difference = Interval::point(component_value(curve.points()[index + 1], axis))
-            - Interval::point(component_value(curve.points()[index], axis));
-        let numerator = Interval::point(degree as f64) * difference;
+        let numerator = Interval::point(degree as f64) * (value(index + 1) - value(index));
         let denominator =
             Interval::point(knots[index + degree + 1]) - Interval::point(knots[index + 1]);
         let derivative = numerator.checked_div(denominator)?;
@@ -374,6 +413,15 @@ fn derivative_component_interval(curve: &NurbsCurve, axis: usize) -> Option<Inte
         });
     }
     hull
+}
+
+fn hull_intervals(values: impl IntoIterator<Item = Interval>) -> Interval {
+    values
+        .into_iter()
+        .reduce(|current, value| {
+            Interval::new(current.lo().min(value.lo()), current.hi().max(value.hi()))
+        })
+        .expect("validated NURBS has control values")
 }
 
 fn component_value(point: crate::vec::Point3, axis: usize) -> f64 {
@@ -879,7 +927,7 @@ mod tests {
     }
 
     #[test]
-    fn interval_certificate_proves_only_unique_coplanar_polynomial_roots() {
+    fn interval_certificate_proves_unique_coplanar_polynomial_and_rational_roots() {
         let diagonal = segment(
             Point3::new(-1.0, -1.0, 0.0),
             Point3::new(1.0, 1.0, 0.0),
@@ -939,12 +987,35 @@ mod tests {
             Point3::new(1.0, 1.0, 0.0),
             Some(vec![1.0, 1.5]),
         );
-        assert!(
-            candidate_cell(rational, horizontal.clone(), 0, 0.0)
-                .unwrap()
-                .certify_unique_root()
-                .is_none()
-        );
+        let rational = candidate_cell(rational, horizontal.clone(), 0, 0.0)
+            .unwrap()
+            .certify_unique_root()
+            .unwrap();
+        assert_eq!(rational.projection_plane(), CurvePairProjectionPlane::Xy);
+        assert!(rational.determinant_lower_bound() > 0.0);
+        for parameter_scale in [1.0e-13, 1.0, 1.0e13] {
+            for weight_scale in [1.0e-50, 1.0, 1.0e50] {
+                let rational = NurbsCurve::new(
+                    1,
+                    vec![0.0, 0.0, parameter_scale, parameter_scale],
+                    vec![Point3::new(-1.0, -1.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+                    Some(vec![weight_scale, 1.5 * weight_scale]),
+                )
+                .unwrap();
+                let horizontal = NurbsCurve::new(
+                    1,
+                    vec![0.0, 0.0, parameter_scale, parameter_scale],
+                    vec![Point3::new(-2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0)],
+                    None,
+                )
+                .unwrap();
+                let certificate = candidate_cell(rational, horizontal, 0, 0.0)
+                    .unwrap()
+                    .certify_unique_root()
+                    .unwrap();
+                assert!(certificate.determinant_lower_bound() > 0.0);
+            }
+        }
 
         let two_roots = candidate_cell(arch(), line(0.5), 0, 0.0).unwrap();
         assert!(two_roots.certify_unique_root().is_none());
@@ -960,6 +1031,31 @@ mod tests {
                 .certify_unique_root()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn rational_derivative_hulls_enclose_evaluated_first_derivatives() {
+        let curve = segment(
+            Point3::new(-2.0, -1.0, 0.5),
+            Point3::new(3.0, 4.0, 0.5),
+            Some(vec![1.0, 10.0]),
+        );
+        let intervals = [
+            derivative_component_interval(&curve, 0).unwrap(),
+            derivative_component_interval(&curve, 1).unwrap(),
+            derivative_component_interval(&curve, 2).unwrap(),
+        ];
+        for sample in 0..=100 {
+            let parameter = f64::from(sample) / 100.0;
+            let derivative = curve.eval_derivs(parameter, 1).d[1];
+            for (interval, component) in
+                intervals
+                    .iter()
+                    .zip([derivative.x, derivative.y, derivative.z])
+            {
+                assert!(interval.lo() <= component && component <= interval.hi());
+            }
+        }
     }
 
     #[test]
