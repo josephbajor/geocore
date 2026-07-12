@@ -33,6 +33,14 @@ doc = false
 bench = false
 required-features = ["fuzzing"]
 
+[[bin]]
+name = "nurbs_constructors"
+path = "fuzz_targets/nurbs_constructors.rs"
+test = false
+doc = false
+bench = false
+required-features = ["fuzzing"]
+
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"

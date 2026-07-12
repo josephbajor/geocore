@@ -49,6 +49,14 @@ impl NurbsCurve {
                 reason: "control point count does not match knot vector",
             });
         }
+        if points
+            .iter()
+            .any(|point| !point.x.is_finite() || !point.y.is_finite() || !point.z.is_finite())
+        {
+            return Err(Error::InvalidGeometry {
+                reason: "curve control points must be finite",
+            });
+        }
         if let Some(w) = &weights {
             if w.len() != points.len() {
                 return Err(Error::InvalidGeometry {
@@ -606,6 +614,10 @@ mod tests {
         );
         // Decreasing knots.
         assert!(NurbsCurve::new(2, vec![0.0, 0.0, 0.5, 0.2, 1.0, 1.0], pts, None).is_err());
+        // Non-finite control point.
+        let mut non_finite = vec![Point3::new(0.0, 0.0, 0.0); 3];
+        non_finite[1].x = f64::NAN;
+        assert!(NurbsCurve::new(2, vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], non_finite, None,).is_err());
 
         // Insertion beyond degree multiplicity.
         let c = cubic_polynomial();
