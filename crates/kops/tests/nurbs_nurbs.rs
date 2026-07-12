@@ -1,8 +1,9 @@
 //! Bounded NURBS/NURBS curve intersections.
 
 use kcore::operation::{
-    AccountingMode, BudgetPlan, ExecutionPolicy, LimitSpec, NumericalPolicy, OperationContext,
-    PolicyVersion, ResourceKind, SessionPolicy, SessionPrecision,
+    AccountingMode, BudgetPlan, DiagnosticKind, DiagnosticLevel, ExecutionPolicy, LimitSpec,
+    NumericalPolicy, OperationContext, PolicyVersion, ResourceKind, SessionPolicy,
+    SessionPrecision,
 };
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
@@ -10,9 +11,9 @@ use kgeom::nurbs::NurbsCurve;
 use kgeom::param::ParamRange;
 use kgeom::vec::Point3;
 use kops::intersect::{
-    ContactKind, NURBS_CURVE_PAIR_SEED_ATTEMPTS, ParamOrientation,
-    intersect_bounded_curves_with_context, intersect_bounded_nurbs_nurbs,
-    intersect_bounded_nurbs_nurbs_with_context,
+    ContactKind, NURBS_CURVE_PAIR_POLISH_FALLBACK, NURBS_CURVE_PAIR_POLISH_STATIONARY,
+    NURBS_CURVE_PAIR_SEED_ATTEMPTS, ParamOrientation, intersect_bounded_curves_with_context,
+    intersect_bounded_nurbs_nurbs, intersect_bounded_nurbs_nurbs_with_context,
 };
 
 fn line_nurbs(start: Point3, end: Point3) -> NurbsCurve {
@@ -593,10 +594,10 @@ fn coarse_custom_progress_policy_can_stop_but_cannot_accept_a_contact() {
         horizontal.param_range(),
         &context,
     );
-    let stopped = stopped.result().unwrap();
-    assert!(stopped.points.is_empty());
-    assert!(stopped.overlaps.is_empty());
-    assert!(!stopped.is_complete());
+    let stopped_result = stopped.result().unwrap();
+    assert!(stopped_result.points.is_empty());
+    assert!(stopped_result.overlaps.is_empty());
+    assert!(!stopped_result.is_complete());
     let generic = intersect_bounded_curves_with_context(
         &diagonal,
         diagonal.param_range(),
@@ -604,7 +605,7 @@ fn coarse_custom_progress_policy_can_stop_but_cannot_accept_a_contact() {
         horizontal.param_range(),
         &context,
     );
-    assert_eq!(generic.result(), Ok(stopped));
+    assert_eq!(generic.result(), Ok(stopped_result));
 }
 
 #[test]
@@ -676,7 +677,9 @@ fn coarse_custom_gradient_policy_can_stop_but_cannot_accept_a_contact() {
         BudgetPlan::empty(),
         PolicyVersion::V1,
     );
-    let context = OperationContext::new(&session, tolerances).unwrap();
+    let context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_diagnostics(DiagnosticLevel::Summary, 32);
     let stopped = intersect_bounded_nurbs_nurbs_with_context(
         &parabola,
         parabola.param_range(),
@@ -684,8 +687,60 @@ fn coarse_custom_gradient_policy_can_stop_but_cannot_accept_a_contact() {
         horizontal.param_range(),
         &context,
     );
+    assert!(stopped.report().diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == NURBS_CURVE_PAIR_POLISH_STATIONARY
+            && diagnostic.kind == DiagnosticKind::ProofIncomplete
+    }));
     let stopped = stopped.result().unwrap();
     assert!(stopped.points.is_empty());
     assert!(stopped.overlaps.is_empty());
     assert!(!stopped.is_complete());
+}
+
+#[test]
+fn near_tangent_fallback_and_failed_stationarity_are_reported_without_acceptance() {
+    let tolerances = Tolerances::default();
+    let offset = tolerances.linear() * (1.0 + 1.0e-6);
+    let near_tangent = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(-1.0, 0.25 + offset, 0.0),
+            Point3::new(0.0, -0.25 + offset, 0.0),
+            Point3::new(1.0, 0.25 + offset, 0.0),
+        ],
+        None,
+    )
+    .unwrap();
+    let horizontal = line_nurbs(Point3::new(-2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0));
+    let session = SessionPolicy::v1();
+    let retain_root = BudgetPlan::new([LimitSpec::new(
+        kgeom::nurbs::NURBS_CURVE_PAIR_DEPTH,
+        ResourceKind::Depth,
+        AccountingMode::HighWater,
+        0,
+    )])
+    .unwrap();
+    let context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(retain_root)
+        .with_diagnostics(DiagnosticLevel::Summary, 32);
+    let outcome = intersect_bounded_nurbs_nurbs_with_context(
+        &near_tangent,
+        near_tangent.param_range(),
+        &horizontal,
+        horizontal.param_range(),
+        &context,
+    );
+    let result = outcome.result().unwrap();
+    assert!(result.is_empty());
+    assert!(!result.is_complete());
+    assert!(outcome.report().diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == NURBS_CURVE_PAIR_POLISH_FALLBACK
+            && diagnostic.kind == DiagnosticKind::FallbackSelected
+    }));
+    assert!(outcome.report().diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == NURBS_CURVE_PAIR_POLISH_STATIONARY
+            && diagnostic.kind == DiagnosticKind::ProofIncomplete
+    }));
 }

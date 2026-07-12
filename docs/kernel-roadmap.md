@@ -739,9 +739,11 @@ true only for an empty complete result.
   Retained curve-pair cells now feed deterministic chord/midpoint seeds into
   safeguarded local Newton polishing; a finite seed-attempt stage bounds the
   work, and only re-evaluated in-cell residual witnesses are emitted. These
-  discoveries remain indeterminate. Extend this to interval root-existence and
-  polishing-stop certificates, generic curve/surface pairing, conditioning
-  diagnostics, and procedural/NURBS fields.
+  discoveries remain indeterminate. Newton stops and fallback selection now
+  have stable bounded diagnostics, with parameter-resolution retained even
+  when diagnostics are off. Extend this to interval root-existence, typed
+  minimizer termination, generic curve/surface pairing, and procedural/NURBS
+  fields.
 - Analytic special cases and the generic solver feed the same canonical result type.
 - Consolidate the per-pair analytic curve/surface and SSI boilerplate (range
   validation, parameter fitting, dedup, branch emission — currently repeated across
@@ -912,9 +914,9 @@ that queue must eventually discharge.
 - M2.5: finish parameter-space incidence and ratcheted Full-checker proofs for
   periodic/mixed boundaries, multi-loop containment, and curved shells.
 - M4: extend completion evidence with paired pcurves, coincident regions,
-  singular events, structured polishing stops, and verified residual bounds;
-  upgrade the landed bounded in-cell tolerance witnesses to interval-certified
-  root existence and complete overlap extent.
+  singular events, and verified residual bounds; upgrade the landed bounded
+  in-cell tolerance witnesses and typed Newton stops to interval-certified root
+  existence, typed minimizer termination, and complete overlap extent.
 - M5: grow planar profiles and booleans only after facade adoption and the
   checker, rollback, lineage, tolerance, determinism, corpus, performance, and
   independent-oracle gates.

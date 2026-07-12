@@ -644,6 +644,15 @@ far with indeterminate completion and an exact report crossing. A verified
 tolerance witness proves only that emitted contact, not root uniqueness,
 complete-domain discovery, or coincident-interval extent.
 
+Newton termination is now typed internally as gradient stationarity,
+ill-conditioning, failure to find descent, parameter resolution, or the fixed
+iteration bound. A failed witness emits the corresponding stable `kops`
+diagnostic when bounded summary diagnostics are enabled; parameter-resolution
+stops also remain in the report's always-on numeric-resolution stage evidence.
+Selecting the bounded local minimizer emits a separate fallback diagnostic.
+Accepted residual witnesses remain authoritative and do not become failures
+merely because Newton ended at a stationary or ill-conditioned state.
+
 That normalized boundary now has contextual and shared-scope public entries.
 The contextual entry composes the curve/curve family profile once and creates
 one scope; ellipse/ellipse borrows it for every projection, while NURBS/NURBS
@@ -736,13 +745,15 @@ structured data; checker exhaustion remains indeterminate.
 
 Status: NURBS/NURBS Newton symmetric 2×2 conditioning, collapsed-range routing,
 accepted-step progress, and normalized directional-gradient stationarity now
-use shared scale-aware policy recipes. Contact classification now uses
+use shared scale-aware policy recipes. Every Newton termination has a typed
+internal outcome and stable bounded report diagnostic; parameter-resolution
+failures also retain always-on stage evidence. Contact classification now uses
 overflow-safe normalized tangent directions; point/curve minimizers use
 relative objective and unit-parameter progress guards; local search is scaled
 only by its owning range; and clamped Newton steps use their actual accepted
 displacement. Model residuals retain sole contact and overlap authority.
 Segment conditioning, legacy overlap/input and parameter-deduplication slack,
-and structured numeric-resolution reporting remain separate migrations.
+and typed minimizer termination remain separate migrations.
 
 - Replace the repeated NURBS intersection parameter-tolerance helpers with the
   scale-aware policy API.

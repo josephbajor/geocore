@@ -10,8 +10,9 @@ use super::result::{
 };
 use kcore::error::{Error, Result};
 use kcore::operation::{
-    AccountingMode, BudgetPlan, LimitSpec, NumericalPolicy, OperationContext, OperationOutcome,
-    OperationPolicyError, OperationScope, ResourceKind, SessionPolicy, StageId,
+    AccountingMode, BudgetPlan, DiagnosticCode, DiagnosticKind, LimitSpec, NumericalPolicy,
+    OperationContext, OperationOutcome, OperationPolicyError, OperationScope, ResourceKind,
+    SessionPolicy, StageId,
 };
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
@@ -39,6 +40,42 @@ const fn stage(value: &'static str) -> StageId {
 /// Cumulative bounded cell-local seed and polish attempts.
 pub const NURBS_CURVE_PAIR_SEED_ATTEMPTS: StageId =
     stage("kops.intersect.nurbs-curve-pair-seed-attempts");
+
+const fn diagnostic(value: &'static str) -> DiagnosticCode {
+    match DiagnosticCode::new(value) {
+        Ok(code) => code,
+        Err(_) => panic!("invalid NURBS curve-pair diagnostic"),
+    }
+}
+
+/// Newton stopped at a numerically stationary directional gradient without a witness.
+pub const NURBS_CURVE_PAIR_POLISH_STATIONARY: DiagnosticCode =
+    diagnostic("kops.intersect.nurbs-curve-pair-polish-stationary");
+/// Newton's symmetric system was too ill-conditioned to solve safely.
+pub const NURBS_CURVE_PAIR_POLISH_ILL_CONDITIONED: DiagnosticCode =
+    diagnostic("kops.intersect.nurbs-curve-pair-polish-ill-conditioned");
+/// Damped Newton found no non-increasing step.
+pub const NURBS_CURVE_PAIR_POLISH_NO_DESCENT: DiagnosticCode =
+    diagnostic("kops.intersect.nurbs-curve-pair-polish-no-descent");
+/// Accepted parameter displacement reached arithmetic resolution without a witness.
+pub const NURBS_CURVE_PAIR_POLISH_PARAMETER_RESOLUTION: DiagnosticCode =
+    diagnostic("kops.intersect.nurbs-curve-pair-polish-parameter-resolution");
+/// Newton consumed its fixed iteration bound without a witness.
+pub const NURBS_CURVE_PAIR_POLISH_ITERATION_LIMIT: DiagnosticCode =
+    diagnostic("kops.intersect.nurbs-curve-pair-polish-iteration-limit");
+/// The bounded local minimization fallback was selected.
+pub const NURBS_CURVE_PAIR_POLISH_FALLBACK: DiagnosticCode =
+    diagnostic("kops.intersect.nurbs-curve-pair-polish-fallback");
+
+/// Every diagnostic identity owned by NURBS curve-pair polishing.
+pub const NURBS_CURVE_PAIR_POLISH_DIAGNOSTICS: &[DiagnosticCode] = &[
+    NURBS_CURVE_PAIR_POLISH_STATIONARY,
+    NURBS_CURVE_PAIR_POLISH_ILL_CONDITIONED,
+    NURBS_CURVE_PAIR_POLISH_NO_DESCENT,
+    NURBS_CURVE_PAIR_POLISH_PARAMETER_RESOLUTION,
+    NURBS_CURVE_PAIR_POLISH_ITERATION_LIMIT,
+    NURBS_CURVE_PAIR_POLISH_FALLBACK,
+];
 
 /// Version-1 composed profile for exact isolation plus cell-local discovery.
 #[derive(Debug, Clone, Copy, Default)]
@@ -91,6 +128,36 @@ struct VerifiedCurvePairSeed {
     point_a: Point3,
     point_b: Point3,
     residual: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NewtonPolishStop {
+    GradientStationary,
+    IllConditioned,
+    NoDescent,
+    ParameterResolution,
+    IterationLimit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct NewtonPolishOutcome {
+    t_a: f64,
+    t_b: f64,
+    stop: NewtonPolishStop,
+}
+
+impl NewtonPolishOutcome {
+    const fn parameters(self) -> (f64, f64) {
+        (self.t_a, self.t_b)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PolishCandidateOutcome {
+    t_a: f64,
+    t_b: f64,
+    stop: NewtonPolishStop,
+    fallback_selected: bool,
 }
 
 impl VerifiedCurvePairSeed {
@@ -274,16 +341,25 @@ fn intersect_bounded_nurbs_nurbs_candidates_impl(
             range_b: cell_range_b,
             ..policy
         };
-        let (t_a, t_b) = polish_candidate(a, b, seed_a, seed_b, polish);
+        let polished = polish_candidate(a, b, seed_a, seed_b, polish);
+        if polished.fallback_selected {
+            scope.diagnose(
+                NURBS_CURVE_PAIR_SEED_ATTEMPTS,
+                NURBS_CURVE_PAIR_POLISH_FALLBACK,
+                DiagnosticKind::FallbackSelected,
+                "NURBS curve-pair polishing selected bounded local minimization",
+            );
+        }
         let Some(seed) = VerifiedCurvePairSeed::verify(
             a,
             cell_range_a,
-            t_a,
+            polished.t_a,
             b,
             cell_range_b,
-            t_b,
+            polished.t_b,
             policy.tolerances.linear(),
         ) else {
+            diagnose_polish_stop(scope, polished.stop);
             continue;
         };
         let kind = contact_kind(a, seed.t_a, b, seed.t_b, policy.tolerances);
@@ -446,10 +522,13 @@ fn polish_candidate(
     t_a: f64,
     t_b: f64,
     policy: PolishPolicy,
-) -> (f64, f64) {
-    let (mut t_a, mut t_b) = newton_polish_pair(a, b, t_a, t_b, policy);
+) -> PolishCandidateOutcome {
+    let mut outcome = newton_polish_pair_outcome(a, b, t_a, t_b, policy);
+    let (mut t_a, mut t_b) = outcome.parameters();
     let distance = a.eval(t_a).dist(b.eval(t_b));
+    let mut fallback_selected = false;
     if needs_local_refinement(distance, policy.tolerances.linear()) {
+        fallback_selected = true;
         let (refined_a, refined_b) = refine_local_pair(
             a,
             b,
@@ -460,23 +539,40 @@ fn polish_candidate(
             policy.numerical,
         );
         if a.eval(refined_a).dist(b.eval(refined_b)) < distance {
-            (t_a, t_b) = newton_polish_pair(a, b, refined_a, refined_b, policy);
+            outcome = newton_polish_pair_outcome(a, b, refined_a, refined_b, policy);
+            (t_a, t_b) = outcome.parameters();
         }
     }
-    (t_a, t_b)
+    PolishCandidateOutcome {
+        t_a,
+        t_b,
+        stop: outcome.stop,
+        fallback_selected,
+    }
 }
 
 fn needs_local_refinement(distance: f64, tolerance: f64) -> bool {
     distance > tolerance && distance <= tolerance * 16.0
 }
 
+#[cfg(test)]
 fn newton_polish_pair(
+    a: &NurbsCurve,
+    b: &NurbsCurve,
+    t_a: f64,
+    t_b: f64,
+    policy: PolishPolicy,
+) -> (f64, f64) {
+    newton_polish_pair_outcome(a, b, t_a, t_b, policy).parameters()
+}
+
+fn newton_polish_pair_outcome(
     a: &NurbsCurve,
     b: &NurbsCurve,
     mut t_a: f64,
     mut t_b: f64,
     policy: PolishPolicy,
-) -> (f64, f64) {
+) -> NewtonPolishOutcome {
     for _ in 0..MAX_POLISH_STEPS {
         let da = a.eval_derivs(t_a, 2);
         let db = b.eval_derivs(t_b, 2);
@@ -484,7 +580,11 @@ fn newton_polish_pair(
         let g0 = r.dot(da.d[1]);
         let g1 = -r.dot(db.d[1]);
         if directional_gradients_are_numerically_zero(policy.numerical, r, da.d[1], db.d[1]) {
-            break;
+            return NewtonPolishOutcome {
+                t_a,
+                t_b,
+                stop: NewtonPolishStop::GradientStationary,
+            };
         }
 
         let h00 = da.d[1].dot(da.d[1]) + r.dot(da.d[2]);
@@ -492,7 +592,11 @@ fn newton_polish_pair(
         let h11 = db.d[1].dot(db.d[1]) - r.dot(db.d[2]);
         let Some((step_a, step_b)) = solve_symmetric_2x2(policy.numerical, h00, h01, h11, -g0, -g1)
         else {
-            break;
+            return NewtonPolishOutcome {
+                t_a,
+                t_b,
+                stop: NewtonPolishStop::IllConditioned,
+            };
         };
 
         let old_residual = r.norm_sq();
@@ -513,7 +617,11 @@ fn newton_polish_pair(
             scale *= 0.5;
         }
         if !accepted {
-            break;
+            return NewtonPolishOutcome {
+                t_a,
+                t_b,
+                stop: NewtonPolishStop::NoDescent,
+            };
         }
         let stopped_a = parameter_step_has_no_progress(
             t_a - old_t_a,
@@ -528,10 +636,52 @@ fn newton_polish_pair(
             policy.numerical,
         );
         if stopped_a && stopped_b {
-            break;
+            return NewtonPolishOutcome {
+                t_a,
+                t_b,
+                stop: NewtonPolishStop::ParameterResolution,
+            };
         }
     }
-    (t_a, t_b)
+    NewtonPolishOutcome {
+        t_a,
+        t_b,
+        stop: NewtonPolishStop::IterationLimit,
+    }
+}
+
+fn diagnose_polish_stop(scope: &mut OperationScope<'_, '_>, stop: NewtonPolishStop) {
+    let (code, kind, message) = match stop {
+        NewtonPolishStop::GradientStationary => (
+            NURBS_CURVE_PAIR_POLISH_STATIONARY,
+            DiagnosticKind::ProofIncomplete,
+            "NURBS curve-pair polish was stationary without a tolerance witness",
+        ),
+        NewtonPolishStop::IllConditioned => (
+            NURBS_CURVE_PAIR_POLISH_ILL_CONDITIONED,
+            DiagnosticKind::IllConditioned,
+            "NURBS curve-pair polish was too ill-conditioned for a safe Newton step",
+        ),
+        NewtonPolishStop::NoDescent => (
+            NURBS_CURVE_PAIR_POLISH_NO_DESCENT,
+            DiagnosticKind::ProofIncomplete,
+            "NURBS curve-pair polish found no non-increasing damped step",
+        ),
+        NewtonPolishStop::ParameterResolution => {
+            scope.record_numeric_resolution(NURBS_CURVE_PAIR_SEED_ATTEMPTS);
+            (
+                NURBS_CURVE_PAIR_POLISH_PARAMETER_RESOLUTION,
+                DiagnosticKind::NumericResolution,
+                "NURBS curve-pair polish stopped at parameter resolution without a witness",
+            )
+        }
+        NewtonPolishStop::IterationLimit => (
+            NURBS_CURVE_PAIR_POLISH_ITERATION_LIMIT,
+            DiagnosticKind::ProofIncomplete,
+            "NURBS curve-pair polish reached its fixed iteration bound without a witness",
+        ),
+    };
+    scope.diagnose(NURBS_CURVE_PAIR_SEED_ATTEMPTS, code, kind, message);
 }
 
 fn refine_local_pair(
@@ -864,6 +1014,10 @@ fn validate_ranges(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
+    use kcore::operation::DiagnosticLevel;
+
     use super::*;
 
     fn line_with_domain(start: Point3, end: Point3, hi: f64) -> NurbsCurve {
@@ -915,6 +1069,56 @@ mod tests {
             tolerance * 16.0 + tolerance,
             tolerance
         ));
+    }
+
+    #[test]
+    fn polish_diagnostics_are_unique_typed_and_bounded_by_context() {
+        let unique = NURBS_CURVE_PAIR_POLISH_DIAGNOSTICS
+            .iter()
+            .map(|code| code.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(unique.len(), NURBS_CURVE_PAIR_POLISH_DIAGNOSTICS.len());
+        assert!(
+            unique
+                .iter()
+                .all(|code| code.starts_with("kops.intersect.nurbs-curve-pair-polish-"))
+        );
+
+        let session = SessionPolicy::v1();
+        let context = OperationContext::new(&session, Tolerances::default())
+            .unwrap()
+            .with_diagnostics(DiagnosticLevel::Summary, 5);
+        let mut scope = OperationScope::new(&context);
+        for stop in [
+            NewtonPolishStop::GradientStationary,
+            NewtonPolishStop::IllConditioned,
+            NewtonPolishStop::NoDescent,
+            NewtonPolishStop::ParameterResolution,
+            NewtonPolishStop::IterationLimit,
+        ] {
+            diagnose_polish_stop(&mut scope, stop);
+        }
+        let outcome = scope.finish(Ok(()));
+        let diagnostics = outcome.report().diagnostics();
+        assert_eq!(diagnostics.len(), 5);
+        assert_eq!(diagnostics[0].code, NURBS_CURVE_PAIR_POLISH_STATIONARY);
+        assert_eq!(diagnostics[0].kind, DiagnosticKind::ProofIncomplete);
+        assert_eq!(diagnostics[1].code, NURBS_CURVE_PAIR_POLISH_ILL_CONDITIONED);
+        assert_eq!(diagnostics[1].kind, DiagnosticKind::IllConditioned);
+        assert_eq!(diagnostics[2].code, NURBS_CURVE_PAIR_POLISH_NO_DESCENT);
+        assert_eq!(diagnostics[2].kind, DiagnosticKind::ProofIncomplete);
+        assert_eq!(
+            diagnostics[3].code,
+            NURBS_CURVE_PAIR_POLISH_PARAMETER_RESOLUTION
+        );
+        assert_eq!(diagnostics[3].kind, DiagnosticKind::NumericResolution);
+        assert_eq!(diagnostics[4].code, NURBS_CURVE_PAIR_POLISH_ITERATION_LIMIT);
+        assert_eq!(diagnostics[4].kind, DiagnosticKind::ProofIncomplete);
+        assert_eq!(
+            outcome.report().numeric_resolution_stages(),
+            &[NURBS_CURVE_PAIR_SEED_ATTEMPTS]
+        );
+        assert_eq!(outcome.report().dropped_diagnostics(), 0);
     }
 
     #[test]
@@ -1015,8 +1219,9 @@ mod tests {
         assert!((v1.1 - 0.5).abs() <= 4.0 * f64::EPSILON);
 
         let strict = NumericalPolicy::try_new(32.0, 64.0, 0.5).unwrap();
-        let stopped = newton_polish_pair(&horizontal, &shallow, 0.4, 0.6, policy(strict));
-        assert_eq!(stopped, (0.4, 0.6));
+        let stopped = newton_polish_pair_outcome(&horizontal, &shallow, 0.4, 0.6, policy(strict));
+        assert_eq!(stopped.parameters(), (0.4, 0.6));
+        assert_eq!(stopped.stop, NewtonPolishStop::IllConditioned);
     }
 
     #[test]
@@ -1047,15 +1252,21 @@ mod tests {
 
         let coarse_progress = NumericalPolicy::try_new(32.0, 1.0e15, 128.0 * f64::EPSILON).unwrap();
         let stopped =
-            newton_polish_pair(&parabola, &horizontal, 0.75, 0.75, policy(coarse_progress));
-        assert!(parabola.eval(stopped.0).dist(horizontal.eval(stopped.1)) > 1.0e-4);
+            newton_polish_pair_outcome(&parabola, &horizontal, 0.75, 0.75, policy(coarse_progress));
+        assert!(
+            parabola
+                .eval(stopped.t_a)
+                .dist(horizontal.eval(stopped.t_b))
+                > 1.0e-4
+        );
+        assert_eq!(stopped.stop, NewtonPolishStop::ParameterResolution);
 
         let mut accepted = Vec::new();
         push_root_candidate(
             &parabola,
-            stopped.0,
+            stopped.t_a,
             &horizontal,
-            stopped.1,
+            stopped.t_b,
             &mut accepted,
             Tolerances::default(),
         );
@@ -1107,15 +1318,16 @@ mod tests {
 
         let coarse_rounding = NumericalPolicy::try_new(1.0e16, 64.0, 128.0 * f64::EPSILON).unwrap();
         let stopped =
-            newton_polish_pair(&parabola, &horizontal, 0.75, 0.75, policy(coarse_rounding));
-        assert_eq!(stopped, (0.75, 0.75));
+            newton_polish_pair_outcome(&parabola, &horizontal, 0.75, 0.75, policy(coarse_rounding));
+        assert_eq!(stopped.parameters(), (0.75, 0.75));
+        assert_eq!(stopped.stop, NewtonPolishStop::GradientStationary);
 
         let mut accepted = Vec::new();
         push_root_candidate(
             &parabola,
-            stopped.0,
+            stopped.t_a,
             &horizontal,
-            stopped.1,
+            stopped.t_b,
             &mut accepted,
             Tolerances::default(),
         );
