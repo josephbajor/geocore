@@ -617,25 +617,30 @@ gates.
 Curve/curve dispatch now normalizes the complete current class matrix before
 specialized routing. Each unordered class pair has one dispatch arm; reversed
 calls swap the canonical result afterward, preserving completion and first-
-operand ordering without a second algorithm path. The future certified fallback
-enters at this same normalized boundary and must return indeterminate evidence
-until complete-domain exclusion is proven.
+operand ordering without a second algorithm path. The certified fallback enters
+at this same normalized boundary and returns indeterminate evidence until
+complete-domain exclusion is proven.
 
 Its first exclusion rung is now live for NURBS/NURBS: exact restricted
 positive-weight control hulls can prove a complete miss before fixed-grid
 candidate discovery. Exactly one hull is outward-inflated by the model
 tolerance, so strict separation is sufficient while contact at the inclusive
-tolerance boundary remains an indeterminate candidate. Adaptive pair
-subdivision and its work/depth/candidate stages remain the next rung.
+tolerance boundary remains an indeterminate candidate. Exact binary subdivision
+of both curves now refines every retained subcurve pair deterministically. Its
+composed family profile accounts setup/subdivision work cumulatively and
+candidate/depth high-water; a denied split retains its parent cell, and an
+unrepresentable midpoint records numeric resolution without dropping cover.
+Only an empty complete cover upgrades the intersection to a proven miss.
 
 That normalized boundary now has contextual and shared-scope public entries.
-The contextual entry composes the aggregate curve-projection profile once and
-creates one scope; ellipse/ellipse borrows it for every projection, while
-NURBS/NURBS consumes the caller's numerical policy without creating a nested
-report. The legacy generic entry is an exact v1 adapter. Focused evidence pins
+The contextual entry composes the curve/curve family profile once and creates
+one scope; ellipse/ellipse borrows it for every projection, while NURBS/NURBS
+uses the same scope for exact pair isolation and the caller's numerical policy
+without creating a nested report. The legacy generic entry is an exact v1
+adapter. Focused evidence pins
 legacy result equivalence, shared-scope report equality, exact projection
-N/N+1 failure, reversal/completion preservation, and custom NURBS numerical
-stops through the generic dispatcher.
+N/N+1 failure, exact isolation boundaries, reversal/completion preservation,
+and custom NURBS numerical stops through the generic dispatcher.
 
 Surface/surface dispatch uses the same single-arm rule. Its internal canonical
 rank is Plane, Cone, Cylinder, Sphere, Torus, then NURBS; this intentionally

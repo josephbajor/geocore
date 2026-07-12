@@ -1,8 +1,8 @@
 //! Bounded NURBS/NURBS curve intersections.
 
 use kcore::operation::{
-    BudgetPlan, ExecutionPolicy, NumericalPolicy, OperationContext, PolicyVersion, SessionPolicy,
-    SessionPrecision,
+    AccountingMode, BudgetPlan, ExecutionPolicy, LimitSpec, NumericalPolicy, OperationContext,
+    PolicyVersion, ResourceKind, SessionPolicy, SessionPrecision,
 };
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
@@ -177,7 +177,14 @@ fn contextual_v1_entry_is_exactly_legacy_compatible() {
         );
         assert_eq!(contextual.result(), legacy.as_ref());
         assert_eq!(contextual.report().policy_version(), PolicyVersion::V1);
-        assert!(contextual.report().usage().is_empty());
+        assert_eq!(contextual.report().usage().len(), 3);
+        assert!(
+            contextual
+                .report()
+                .usage()
+                .iter()
+                .any(|usage| usage.consumed > 0)
+        );
         assert!(contextual.report().limit_events().is_empty());
         assert!(contextual.report().diagnostics().is_empty());
     }
@@ -354,6 +361,79 @@ fn control_hull_exclusion_keeps_the_tolerance_boundary_inclusive() {
 
     assert!(!result.is_proven_empty());
     assert!(!result.is_complete());
+}
+
+#[test]
+fn adaptive_control_hull_cover_proves_hidden_miss_and_limits_remain_indeterminate() {
+    let arch = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(-1.0, 0.0, 0.0),
+            Point3::new(0.0, 2.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+        ],
+        None,
+    )
+    .unwrap();
+    let separated = line_nurbs(Point3::new(-1.0, 1.5, 0.0), Point3::new(1.0, 1.5, 0.0));
+    assert!(
+        arch.bounding_box(arch.param_range())
+            .intersects(separated.bounding_box(separated.param_range()))
+    );
+    let session = SessionPolicy::v1();
+    let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+    let forward = intersect_bounded_nurbs_nurbs_with_context(
+        &arch,
+        arch.param_range(),
+        &separated,
+        separated.param_range(),
+        &context,
+    );
+    assert!(forward.result().unwrap().is_proven_empty());
+    let reversed = intersect_bounded_nurbs_nurbs_with_context(
+        &separated,
+        separated.param_range(),
+        &arch,
+        arch.param_range(),
+        &context,
+    );
+    assert!(reversed.result().unwrap().is_proven_empty());
+
+    let work = *forward
+        .report()
+        .usage()
+        .iter()
+        .find(|usage| usage.stage == kgeom::nurbs::NURBS_CURVE_PAIR_SUBDIVISIONS)
+        .unwrap();
+    assert!(work.consumed > 1);
+    let allowed = work.consumed - 1;
+    let limited = BudgetPlan::new([LimitSpec::new(
+        kgeom::nurbs::NURBS_CURVE_PAIR_SUBDIVISIONS,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        allowed,
+    )])
+    .unwrap();
+    let limited_context = OperationContext::new(&session, Tolerances::default())
+        .unwrap()
+        .with_budget_overrides(limited);
+    let limited = intersect_bounded_nurbs_nurbs_with_context(
+        &arch,
+        arch.param_range(),
+        &separated,
+        separated.param_range(),
+        &limited_context,
+    );
+    let result = limited.result().unwrap();
+    assert!(result.is_empty());
+    assert!(!result.is_complete());
+    let crossing = *limited.report().limit_events().last().unwrap();
+    assert_eq!(crossing.stage, kgeom::nurbs::NURBS_CURVE_PAIR_SUBDIVISIONS);
+    assert_eq!(
+        (crossing.consumed, crossing.allowed),
+        (work.consumed, allowed)
+    );
 }
 
 #[test]

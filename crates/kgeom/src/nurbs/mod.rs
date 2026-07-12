@@ -11,6 +11,8 @@
 //!   implementing [`crate::surface::Surface`];
 //! - homogeneous knot insertion/refinement, exact curve and surface
 //!   splitting/restriction, and curve-segment/surface-patch Bezier extraction;
+//! - bounded exact NURBS curve-pair subdivision with conservative contact
+//!   covers and structured operation accounting;
 //! - global curve interpolation ([`interpolate`]).
 //!
 //! Deliberately deferred (with rationale):
@@ -23,6 +25,7 @@
 //!   topology checker's job in M2; `degeneracies()` returns empty for now.
 
 pub mod basis;
+mod curve_pair;
 mod fit;
 mod knots;
 mod ncurve;
@@ -30,6 +33,12 @@ mod nsurface;
 pub(crate) mod ops;
 mod patch_bvh;
 
+pub use curve_pair::{
+    ContextCurvePairIsolationError, CurvePairCandidateCell, CurvePairIsolation,
+    CurvePairIsolationLimits, NURBS_CURVE_PAIR_CANDIDATES, NURBS_CURVE_PAIR_DEPTH,
+    NURBS_CURVE_PAIR_SUBDIVISIONS, NurbsCurvePairBudgetProfile,
+    isolate_curve_pair_candidates_in_scope,
+};
 pub use fit::interpolate;
 pub use knots::KnotVector;
 pub use ncurve::NurbsCurve;

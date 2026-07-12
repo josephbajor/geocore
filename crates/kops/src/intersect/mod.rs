@@ -75,7 +75,7 @@ pub use cone_nurbs_surface::intersect_bounded_cone_nurbs_surface;
 pub use cone_sphere::intersect_bounded_cone_sphere;
 pub use cone_torus::intersect_bounded_cone_torus;
 pub use curve_curve::{
-    intersect_bounded_curves, intersect_bounded_curves_in_scope,
+    CurveCurveBudgetProfile, intersect_bounded_curves, intersect_bounded_curves_in_scope,
     intersect_bounded_curves_with_context,
 };
 pub use curve_surface::intersect_bounded_curve_surface;

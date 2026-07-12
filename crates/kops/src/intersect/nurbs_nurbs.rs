@@ -14,7 +14,10 @@ use kcore::operation::{
 };
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
-use kgeom::nurbs::NurbsCurve;
+use kgeom::nurbs::{
+    ContextCurvePairIsolationError, NurbsCurve, NurbsCurvePairBudgetProfile,
+    isolate_curve_pair_candidates_in_scope,
+};
 use kgeom::param::ParamRange;
 use kgeom::vec::Point3;
 
@@ -73,15 +76,11 @@ pub fn intersect_bounded_nurbs_nurbs_with_context(
     range_b: ParamRange,
     context: &OperationContext<'_>,
 ) -> OperationOutcome<CurveCurveIntersections> {
-    let scope = OperationScope::new(context);
-    let result = intersect_bounded_nurbs_nurbs_impl(
-        a,
-        range_a,
-        b,
-        range_b,
-        context.tolerances(),
-        context.session().numerical(),
-    );
+    let context = context
+        .clone()
+        .with_family_budget_defaults(NurbsCurvePairBudgetProfile::v1_defaults());
+    let mut scope = OperationScope::new(&context);
+    let result = intersect_bounded_nurbs_nurbs_contextual_impl(a, range_a, b, range_b, &mut scope);
     scope.finish(result)
 }
 
@@ -92,15 +91,44 @@ pub(super) fn intersect_bounded_nurbs_nurbs_in_scope(
     range_b: ParamRange,
     scope: &mut OperationScope<'_, '_>,
 ) -> IntersectionResult<CurveCurveIntersections> {
-    intersect_bounded_nurbs_nurbs_impl(
-        a,
-        range_a,
-        b,
-        range_b,
-        scope.context().tolerances(),
-        scope.context().session().numerical(),
-    )
-    .map_err(IntersectionError::from)
+    intersect_bounded_nurbs_nurbs_contextual_impl(a, range_a, b, range_b, scope)
+        .map_err(IntersectionError::from)
+}
+
+fn intersect_bounded_nurbs_nurbs_contextual_impl(
+    a: &NurbsCurve,
+    range_a: ParamRange,
+    b: &NurbsCurve,
+    range_b: ParamRange,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<CurveCurveIntersections> {
+    let tolerances = scope.context().tolerances();
+    let numerical = scope.context().session().numerical();
+    NurbsCurvePairBudgetProfile::validate(&scope.context().effective_budget())?;
+    validate_ranges(a, range_a, b, range_b, tolerances)?;
+    let range_a = clamp_to_domain(range_a, a.param_range());
+    let range_b = clamp_to_domain(range_b, b.param_range());
+    let collapsed_a = range_has_no_parameter_progress(range_a, tolerances, numerical);
+    let collapsed_b = range_has_no_parameter_progress(range_b, tolerances, numerical);
+    if !collapsed_a && !collapsed_b {
+        let isolation = isolate_curve_pair_candidates_in_scope(
+            a,
+            range_a,
+            b,
+            range_b,
+            tolerances.linear(),
+            NurbsCurvePairBudgetProfile::default_depth(),
+            scope,
+        )
+        .map_err(|error| match error {
+            ContextCurvePairIsolationError::Kernel(error) => error,
+            ContextCurvePairIsolationError::Policy(error) => Error::from(error),
+        })?;
+        if isolation.is_proven_empty() {
+            return Ok(CurveCurveIntersections::complete_empty());
+        }
+    }
+    intersect_bounded_nurbs_nurbs_impl(a, range_a, b, range_b, tolerances, numerical)
 }
 
 fn intersect_bounded_nurbs_nurbs_impl(

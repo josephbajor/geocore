@@ -1,7 +1,6 @@
 //! Graph-aware intersection execution and facade result adaptation.
 
 use kcore::operation::OperationScope;
-use kgeom::project::ProjectionBudgetProfile;
 
 use crate::error::{Error, Result};
 use crate::operation::{
@@ -33,7 +32,7 @@ impl Part<'_> {
 
         let context = settings
             .context(self.policy)?
-            .with_family_budget_defaults(ProjectionBudgetProfile::curve_aggregate_compatibility());
+            .with_family_budget_defaults(kops::intersect::CurveCurveBudgetProfile::v1_defaults());
         let mut scope = OperationScope::new(&context);
         let first_node = self
             .state

@@ -14,12 +14,11 @@ use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::frame::Frame;
 use kgeom::nurbs::NurbsCurve;
 use kgeom::param::ParamRange;
-use kgeom::project::ProjectionBudgetProfile;
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
-    CURVE_CURVE_CLASS_PAIR, ContactKind, CurveClass, IntersectionError, ParamOrientation,
-    UNSUPPORTED_CLASS_PAIR, intersect_bounded_curves, intersect_bounded_curves_in_scope,
-    intersect_bounded_curves_with_context,
+    CURVE_CURVE_CLASS_PAIR, ContactKind, CurveClass, CurveCurveBudgetProfile, IntersectionError,
+    ParamOrientation, UNSUPPORTED_CLASS_PAIR, intersect_bounded_curves,
+    intersect_bounded_curves_in_scope, intersect_bounded_curves_with_context,
 };
 
 fn line(origin: [f64; 3], direction: [f64; 3]) -> Line {
@@ -427,7 +426,7 @@ fn contextual_dispatch_reuses_one_scope_and_preserves_projection_limits() {
 
     let composed = context
         .clone()
-        .with_family_budget_defaults(ProjectionBudgetProfile::curve_aggregate_compatibility());
+        .with_family_budget_defaults(CurveCurveBudgetProfile::v1_defaults());
     let mut scope = OperationScope::new(&composed);
     let scoped = intersect_bounded_curves_in_scope(&a, range, &b, range, &mut scope);
     let scoped = scope.finish_typed(scoped);
