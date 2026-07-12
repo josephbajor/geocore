@@ -2,9 +2,10 @@
 //!
 //! The implemented foundation owns sessions and independent parts, exposes
 //! opaque part-qualified topology and geometry identities, and returns
-//! immutable semantic views. Modeling operations, journals, operation-scoped
-//! geometry evaluation/intersection, interchange, and contextual error
-//! adaptation remain later façade stages.
+//! immutable semantic views. The contextual-operation pilot adds checked block
+//! construction and body checking with F2 reports and delegated classified
+//! errors. Broader modeling, journal views, operation-scoped geometry
+//! evaluation/intersection, and interchange remain later façade stages.
 //!
 //! Raw lower-layer storage is not reachable through this crate:
 //!
@@ -99,6 +100,32 @@
 //! }
 //! ```
 //!
+//! Contextual operations do not expose their active operation scope:
+//!
+//! ```compile_fail
+//! fn scope(part: kernel::Part<'_>) {
+//!     let _ = part.operation_scope();
+//! }
+//! ```
+//!
+//! Committed journals expose semantic summaries, not a raw transaction
+//! journal or its entity handles:
+//!
+//! ```compile_fail
+//! fn raw_journal(created: &kernel::BodyCreated) {
+//!     let _ = created.journal().raw();
+//! }
+//! ```
+//!
+//! Operation settings are extended through typed builders rather than direct
+//! field mutation:
+//!
+//! ```compile_fail
+//! fn mutate_settings(mut settings: kernel::OperationSettings) {
+//!     settings.diagnostic_capacity = usize::MAX;
+//! }
+//! ```
+//!
 //! Sessions uniquely own their parts and therefore are not cloneable:
 //!
 //! ```compile_fail
@@ -110,10 +137,11 @@
 mod error;
 mod id;
 mod iter;
+mod operation;
 mod session;
 mod view;
 
-pub use error::{EntityKind, Error, Result, code as error_code};
+pub use error::{EntityKind, Error, KernelError, Result, code as error_code};
 pub use id::{
     BodyId, CurveId, EdgeId, FaceId, FinId, LoopId, PartId, PcurveId, RegionId, ShellId, SurfaceId,
     VertexId,
@@ -122,15 +150,30 @@ pub use iter::{
     BodyIds, CurveIds, EdgeIds, FaceIds, FinIds, LoopIds, PartIds, PcurveIds, RegionIds, ShellIds,
     SurfaceIds, VertexIds,
 };
+pub use operation::{
+    BlockRequest, BodyCreated, ChangeJournal, CheckBodyRequest, CheckEntity, CheckFault, CheckGap,
+    CheckReport, OperationOutcome, OperationSettings,
+};
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use view::{
     BodyView, CurveView, EdgeView, FaceView, FinView, LoopView, PcurveView, RegionView, ShellView,
     SurfaceView, VertexView,
 };
 
-pub use kcore::operation::SessionPolicy;
+pub use kcore::error::{CapabilityId, ClassifiedError, ErrorClass, ErrorCode};
+pub use kcore::operation::{
+    AccountingMode, BudgetPlan, DiagnosticLevel, ExecutionPolicy, LimitSnapshot, LimitSpec,
+    NumericalPolicy, OperationPolicyError, OperationReport, PolicyVersion, ResourceKind,
+    SessionPolicy, SessionPrecision, StageId,
+};
+pub use kcore::tolerance::Tolerances;
+pub use kgeom::frame::Frame;
 pub use kgeom::param::ParamRange;
 pub use kgeom::vec::{Point3, Vec3};
 pub use kgraph::GeometryClassKey;
+pub use ktopo::check::{
+    CheckLevel, CheckOutcome, FaultKind, FullCheckBudgetProfile, VerificationGapCause,
+    VerificationGapKind,
+};
 pub use ktopo::entity::{BodyKind, FaceDomain, RegionKind, Sense};
 pub use ktopo::tolerance::{EntityTolerance, ToleranceOrigin};

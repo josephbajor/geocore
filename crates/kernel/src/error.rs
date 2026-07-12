@@ -64,10 +64,10 @@ pub enum EntityKind {
     Pcurve,
 }
 
-/// Façade lifecycle, identity, or read failure.
+/// Classified façade failure that retains any lower-layer source.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub enum Error {
+pub enum KernelError {
     /// A part ID belongs to another session or no longer resolves.
     UnknownPart,
     /// An entity ID was presented to a different part.
@@ -87,9 +87,17 @@ pub enum Error {
         /// Exact lower-layer failure encountered while following the relationship.
         source: kcore::error::Error,
     },
+    /// A lower kernel layer rejected an operation.
+    ///
+    /// Classification, stable identity, capability, and structured limit
+    /// data are delegated unchanged to `source`.
+    Core {
+        /// Exact lower-layer failure.
+        source: kcore::error::Error,
+    },
 }
 
-impl fmt::Display for Error {
+impl fmt::Display for KernelError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownPart => f.write_str("part does not belong to this session or is stale"),
@@ -98,20 +106,21 @@ impl fmt::Display for Error {
             Self::InconsistentTopology { .. } => {
                 f.write_str("stored topology is inconsistent during deterministic traversal")
             }
+            Self::Core { source } => write!(f, "kernel operation failed: {source}"),
         }
     }
 }
 
-impl std::error::Error for Error {
+impl std::error::Error for KernelError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::InconsistentTopology { source } => Some(source),
+            Self::InconsistentTopology { source } | Self::Core { source } => Some(source),
             Self::UnknownPart | Self::WrongPart { .. } | Self::StaleEntity { .. } => None,
         }
     }
 }
 
-impl Error {
+impl KernelError {
     /// Returns this façade error's broad semantic class.
     pub const fn class(&self) -> ErrorClass {
         match self {
@@ -119,6 +128,7 @@ impl Error {
                 ErrorClass::InvalidInput
             }
             Self::InconsistentTopology { .. } => ErrorClass::InternalInvariant,
+            Self::Core { source } => source.class(),
         }
     }
 
@@ -129,21 +139,34 @@ impl Error {
             Self::WrongPart { .. } => code::WRONG_PART,
             Self::StaleEntity { .. } => code::STALE_ENTITY,
             Self::InconsistentTopology { .. } => code::INCONSISTENT_TOPOLOGY,
+            Self::Core { source } => source.code(),
         }
     }
 
     /// Returns the unavailable capability when unsupported work caused the failure.
     pub const fn capability(&self) -> Option<CapabilityId> {
-        None
+        match self {
+            Self::Core { source } => source.capability(),
+            Self::UnknownPart
+            | Self::WrongPart { .. }
+            | Self::StaleEntity { .. }
+            | Self::InconsistentTopology { .. } => None,
+        }
     }
 
     /// Returns structured deterministic-limit data when applicable.
     pub const fn limit(&self) -> Option<LimitSnapshot> {
-        None
+        match self {
+            Self::Core { source } => source.limit(),
+            Self::UnknownPart
+            | Self::WrongPart { .. }
+            | Self::StaleEntity { .. }
+            | Self::InconsistentTopology { .. } => None,
+        }
     }
 }
 
-impl ClassifiedError for Error {
+impl ClassifiedError for KernelError {
     fn class(&self) -> ErrorClass {
         self.class()
     }
@@ -161,8 +184,23 @@ impl ClassifiedError for Error {
     }
 }
 
-/// K1 façade result.
-pub type Result<T> = core::result::Result<T, Error>;
+impl From<kcore::error::Error> for KernelError {
+    fn from(source: kcore::error::Error) -> Self {
+        Self::Core { source }
+    }
+}
+
+impl From<kcore::operation::OperationPolicyError> for KernelError {
+    fn from(source: kcore::operation::OperationPolicyError) -> Self {
+        kcore::error::Error::from(source).into()
+    }
+}
+
+/// Backward-compatible short name for [`KernelError`].
+pub type Error = KernelError;
+
+/// Façade result for lifecycle and pre-operation failures.
+pub type Result<T> = core::result::Result<T, KernelError>;
 
 #[cfg(test)]
 mod tests {
@@ -201,6 +239,28 @@ mod tests {
         assert!(matches!(
             error.source().and_then(|source| source.downcast_ref()),
             Some(kcore::error::Error::StaleHandle)
+        ));
+    }
+
+    #[test]
+    fn core_sources_delegate_every_shared_classification_accessor() {
+        let snapshot = LimitSnapshot {
+            stage: kcore::operation::TOTAL_WORK_STAGE,
+            resource: kcore::operation::ResourceKind::Work,
+            consumed: 2,
+            allowed: 1,
+        };
+        let source = kcore::error::Error::ResourceLimit { snapshot };
+        let error = KernelError::from(source.clone());
+        assert_eq!(error.class(), source.class());
+        assert_eq!(error.code(), source.code());
+        assert_eq!(error.capability(), source.capability());
+        assert_eq!(error.limit(), source.limit());
+        assert!(matches!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<kcore::error::Error>()),
+            Some(found) if found == &source
         ));
     }
 }

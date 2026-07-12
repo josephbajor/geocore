@@ -1,6 +1,9 @@
 //! Facade-only lifecycle tests: no lower-layer crate is imported.
 
-use kernel::{Error, Kernel, SessionPolicy};
+use kernel::{
+    BlockRequest, CheckBodyRequest, CheckLevel, CheckOutcome, Error, Frame, FullCheckBudgetProfile,
+    Kernel, OperationSettings, SessionPolicy,
+};
 
 #[test]
 fn sessions_own_independent_parts_and_policy() {
@@ -60,4 +63,54 @@ fn exclusive_part_capability_still_allows_read_views() {
     assert_eq!(edit.id(), id);
     assert_eq!(edit.policy(), &expected_policy);
     assert_eq!(edit.as_part().bodies().len(), 0);
+}
+
+#[test]
+fn facade_only_client_can_construct_and_check_a_block_with_reports() {
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let creation = session
+        .edit_part(part_id.clone())
+        .unwrap()
+        .create_block(BlockRequest::new(Frame::world(), [2.0, 3.0, 4.0]))
+        .unwrap();
+    assert!(creation.report().usage().is_empty());
+    let created = creation.into_result().unwrap();
+    assert_eq!(created.journal().part(), part_id);
+    assert!(created.journal().mutation_count() > 0);
+    assert_eq!(created.journal().lineage_count(), 0);
+
+    let check = session
+        .part(part_id)
+        .unwrap()
+        .check_body(CheckBodyRequest::new(created.body(), CheckLevel::Fast))
+        .unwrap();
+    assert_eq!(check.result().unwrap().outcome(), CheckOutcome::Valid);
+    assert!(check.result().unwrap().faults().is_empty());
+    assert!(check.report().usage().is_empty());
+}
+
+#[test]
+fn facade_only_client_can_configure_a_full_check() {
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let body = session
+        .edit_part(part_id.clone())
+        .unwrap()
+        .create_block(BlockRequest::new(Frame::world(), [2.0, 3.0, 4.0]))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .body();
+    let settings =
+        OperationSettings::new().with_budget_overrides(FullCheckBudgetProfile::v1_defaults());
+
+    let check = session
+        .part(part_id)
+        .unwrap()
+        .check_body(CheckBodyRequest::new(body, CheckLevel::Full).with_settings(settings))
+        .unwrap();
+
+    assert_eq!(check.result().unwrap().outcome(), CheckOutcome::Valid);
+    assert!(!check.report().usage().is_empty());
 }

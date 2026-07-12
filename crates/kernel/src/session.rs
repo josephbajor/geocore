@@ -144,9 +144,9 @@ impl Part<'_> {
 /// K1 exposes reads through [`PartEdit::as_part`]. Semantic operations and
 /// edit transactions are added in later façade stages without exposing Store.
 pub struct PartEdit<'session> {
-    policy: &'session SessionPolicy,
-    id: PartId,
-    state: &'session mut PartState,
+    pub(crate) policy: &'session SessionPolicy,
+    pub(crate) id: PartId,
+    pub(crate) state: &'session mut PartState,
 }
 
 impl PartEdit<'_> {

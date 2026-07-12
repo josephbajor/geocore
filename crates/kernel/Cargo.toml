@@ -1,6 +1,6 @@
 [package]
 name = "kernel"
-description = "Supported native Rust facade for kernel session, topology, and geometry identity access"
+description = "Supported native Rust facade for kernel lifecycle, contextual operations, and semantic model access"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
