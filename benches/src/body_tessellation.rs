@@ -59,6 +59,14 @@ pub const IMPORTED_TOLERANT_EDGE_SHA256: &str =
 pub const IMPORTED_TOLERANT_EDGE_BYTE_DIGEST: u64 = 0x1483_6dc5_5d6d_8a71;
 const IMPORTED_TOLERANT_EDGE_BYTES: &[u8] =
     include_bytes!("../../oracle/outbox/solid_block_tolerant_edge.x_t");
+/// Exact licensed-host-certified cylinder used for broader imported-corpus coverage.
+pub const IMPORTED_CYLINDER_IDENTITY: &str = "solid_cylinder.x_t@onshape-cloud-2026-07-11";
+/// SHA-256 pinned by `docs/oracle-certification.json` for the imported cylinder.
+pub const IMPORTED_CYLINDER_SHA256: &str =
+    "f1f2389c98ca323a8e5aef2f19ed2e88f406f8569c2c87a14d86c79111c6a9c4";
+/// Portable in-harness byte digest for the exact certified cylinder bytes.
+pub const IMPORTED_CYLINDER_BYTE_DIGEST: u64 = 0x57b8_9bfc_e92d_c85a;
+const IMPORTED_CYLINDER_BYTES: &[u8] = include_bytes!("../../oracle/outbox/solid_cylinder.x_t");
 
 /// Closed solid represented by one Q3 case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +87,8 @@ pub enum FixtureKind {
     ImportedNurbsFace,
     /// Certified X_T block with one curve-less tolerant edge and two NURBS pcurves.
     ImportedTolerantEdge,
+    /// Certified X_T cylinder reconstructed into analytic curved topology.
+    ImportedCylinder,
 }
 
 /// Stable Q3 case definition.
@@ -116,8 +126,8 @@ pub struct BodyTessellationCase {
     pub expected_usage_stage_digest: u64,
 }
 
-/// Twelve analytic/store-shape cases plus four certified imported corpus rows.
-pub const CASES: [BodyTessellationCase; 16] = [
+/// Twelve analytic/store-shape cases plus six certified imported corpus rows.
+pub const CASES: [BodyTessellationCase; 18] = [
     case(
         "topology/body-tessellation/block-v2/1/chord-1e-2-v2",
         FixtureKind::Block,
@@ -262,6 +272,24 @@ pub const CASES: [BodyTessellationCase; 16] = [
         0x226e_dd2a_120c_74b0,
         0xe30c_4f87_158c_d78e,
     ),
+    case(
+        "topology/body-tessellation/imported-cylinder-v2/1/chord-1e-2-v2",
+        FixtureKind::ImportedCylinder,
+        1.0e-2,
+        202,
+        400,
+        0xf770_2f5f_5022_0f95,
+        0x2eef_9932_85f8_11dc,
+    ),
+    case(
+        "topology/body-tessellation/imported-cylinder-v2/1/chord-1e-3-v2",
+        FixtureKind::ImportedCylinder,
+        1.0e-3,
+        2_320,
+        4_636,
+        0xc4ba_635c_11a1_e117,
+        0xcf79_fce5_b7bf_d10d,
+    ),
 ];
 
 const fn case(
@@ -277,7 +305,10 @@ const fn case(
         FixtureKind::Block | FixtureKind::ImportedNurbsFace | FixtureKind::ImportedTolerantEdge => {
             (6, 12, 8)
         }
-        FixtureKind::Cylinder | FixtureKind::MixedStoreCylinder | FixtureKind::Cone => (3, 2, 0),
+        FixtureKind::Cylinder
+        | FixtureKind::MixedStoreCylinder
+        | FixtureKind::ImportedCylinder
+        | FixtureKind::Cone => (3, 2, 0),
         FixtureKind::Sphere | FixtureKind::Torus => (1, 0, 0),
     };
     let store_bodies = match fixture_kind {
@@ -385,6 +416,19 @@ const fn reviewed_accounting(
                 0, 0, 0, 0, 0, 0, 0, 0, 2, 24, 1, 66, 0, 0, 120, 0, 0, 8, 120, 12, 84,
             ],
             0x0604_73f6_2ba7_442f,
+        ),
+        (FixtureKind::ImportedCylinder, false) => (
+            [
+                0, 0, 0, 0, 0, 0, 0, 3, 372, 236, 1, 131, 2, 24, 110, 0, 0, 202, 498, 400, 23,
+            ],
+            0x6ee8_a7e7_c94f_6b33,
+        ),
+        (FixtureKind::ImportedCylinder, true) => (
+            [
+                0, 0, 0, 0, 0, 0, 0, 5, 4_576, 2_386, 1, 259, 3, 56, 206, 0, 0, 2_320, 2_904,
+                4_636, 23,
+            ],
+            0xd07b_2989_d806_bb46,
         ),
     }
 }
@@ -954,6 +998,41 @@ pub fn fixture(case: BodyTessellationCase) -> BodyTessellationFixture {
             )));
             (body, 0.024, 1.0 - 1.0e-12)
         }
+        FixtureKind::ImportedCylinder => {
+            assert_eq!(IMPORTED_CYLINDER_BYTES.len(), 2_309);
+            let mut source_digest = StableHasher::new();
+            source_digest.bytes(IMPORTED_CYLINDER_BYTES);
+            assert_eq!(
+                source_digest.finish(),
+                IMPORTED_CYLINDER_BYTE_DIGEST,
+                "certified Q3 cylinder fixture bytes drifted"
+            );
+            let reconstruction = kxt::import(IMPORTED_CYLINDER_BYTES, &mut store)
+                .expect("certified Q3 cylinder fixture must import");
+            assert!(reconstruction.skipped.is_empty());
+            assert_eq!(reconstruction.bodies.len(), 1);
+            let body = reconstruction.bodies[0];
+            assert_eq!(store.faces_of_body(body).expect("live cylinder").len(), 3);
+            let cylinder_faces = store
+                .faces_of_body(body)
+                .expect("certified Q3 cylinder body must be live")
+                .into_iter()
+                .filter(|&face| {
+                    let surface = store.get(face).expect("live face").surface;
+                    matches!(
+                        store.get(surface).expect("live surface"),
+                        SurfaceGeom::Cylinder(_)
+                    )
+                })
+                .count();
+            assert_eq!(cylinder_faces, 1);
+            let minimum_volume_ratio = if case.chord_tol < 5.0e-3 { 0.99 } else { 0.94 };
+            (
+                body,
+                core::f64::consts::PI * 0.13 * 0.13 * 0.2,
+                minimum_volume_ratio,
+            )
+        }
     };
     assert_eq!(
         store.count::<Body>(),
@@ -1083,8 +1162,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn registry_contains_exactly_sixteen_unique_canonical_cases() {
-        assert_eq!(CASES.len(), 16);
+    fn registry_contains_exactly_eighteen_unique_canonical_cases() {
+        assert_eq!(CASES.len(), 18);
         let unique: BTreeSet<_> = CASES.iter().map(|case| case.path).collect();
         assert_eq!(unique.len(), CASES.len());
         for case in CASES {
@@ -1167,6 +1246,24 @@ mod tests {
                     assert_eq!(
                         entry["expected_result_counters"]["skipped_geometric_owners"].as_u64(),
                         Some(4)
+                    );
+                }
+                FixtureKind::ImportedCylinder => {
+                    assert_eq!(
+                        entry["size_parameters"]["input_bytes"].as_u64(),
+                        Some(IMPORTED_CYLINDER_BYTES.len() as u64)
+                    );
+                    assert_eq!(
+                        entry["policy_values"]["source_fixture"],
+                        IMPORTED_CYLINDER_IDENTITY
+                    );
+                    assert_eq!(
+                        entry["policy_values"]["source_sha256"],
+                        IMPORTED_CYLINDER_SHA256
+                    );
+                    assert_eq!(
+                        entry["policy_values"]["volume_ratio_floor"].as_f64(),
+                        Some(if case.chord_tol < 5.0e-3 { 0.99 } else { 0.94 })
                     );
                 }
                 FixtureKind::MixedStoreCylinder => {

@@ -86,6 +86,7 @@ jobs:
           cargo bench --manifest-path benches/Cargo.toml --locked --bench graph_traversal -- graph/traverse/offset-chain-closure-v1/1/dependency-first-v1
           cargo bench --manifest-path benches/Cargo.toml --locked --bench body_tessellation -- topology/body-tessellation/block-v2/1/chord-1e-2-v2
           cargo bench --manifest-path benches/Cargo.toml --locked --bench body_tessellation -- topology/body-tessellation/mixed-store-cylinder-v2/1/chord-1e-2-v2
+          cargo bench --manifest-path benches/Cargo.toml --locked --bench body_tessellation -- topology/body-tessellation/imported-cylinder-v2/1/chord-1e-2-v2
           cargo bench --manifest-path benches/Cargo.toml --locked --bench face_tessellation -- geometry/face-tessellation/cylinder-half-v1/1/chord-1e-2-v1
       - name: Upload advisory smoke samples
         if: always()

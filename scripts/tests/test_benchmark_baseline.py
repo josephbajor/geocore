@@ -29,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 79)
+        self.assertEqual(len(cases), 81)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -106,7 +106,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
         tessellation = [
             case for case in cases if case["benchmark_target"] == "body_tessellation"
         ]
-        self.assertEqual(len(tessellation), 16)
+        self.assertEqual(len(tessellation), 18)
         self.assertTrue(
             all(
                 case["deterministic_seed"] == 0x5154455353000003
@@ -189,6 +189,30 @@ class BenchmarkBaselineTests(unittest.TestCase):
                 case["size_parameters"]["input_bytes"] == len(fixture_bytes)
                 and case["policy_values"]["source_sha256"] == expected_sha256
                 for case in imported_nurbs
+            )
+        )
+        imported_cylinder = [
+            case
+            for case in tessellation
+            if case["policy_values"].get("source_fixture")
+            == "solid_cylinder.x_t@onshape-cloud-2026-07-11"
+        ]
+        self.assertEqual(len(imported_cylinder), 2)
+        cylinder_sha256 = certified["fixtures_sha256"]["solid_cylinder.x_t"]
+        cylinder_bytes = (
+            ROOT / "oracle" / "outbox" / "solid_cylinder.x_t"
+        ).read_bytes()
+        self.assertEqual(len(cylinder_bytes), 2_309)
+        self.assertEqual(hashlib.sha256(cylinder_bytes).hexdigest(), cylinder_sha256)
+        self.assertTrue(
+            all(
+                case["size_parameters"]["input_bytes"] == len(cylinder_bytes)
+                and case["policy_values"]["source_sha256"] == cylinder_sha256
+                and case["expected_result_counters"]["source_faces"] == 3
+                and case["expected_result_counters"]["source_edges"] == 2
+                and case["policy_values"]["volume_ratio_floor"]
+                == (0.99 if case["tolerances"]["chord_tol"] < 5e-3 else 0.94)
+                for case in imported_cylinder
             )
         )
         imported_tolerant = [

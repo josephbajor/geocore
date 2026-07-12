@@ -93,17 +93,17 @@ node count and order digest, and repeatability. Traversal output and cycle paths
 remain vector-ordered, while active/completed membership uses hash lookup that
 is never iterated. The smallest closure row runs in CI.
 
-The Q3 v2 contract registers sixteen closed-solid cases: ten analytic block,
+The Q3 v2 contract registers eighteen closed-solid cases: ten analytic block,
 cylinder, cone, sphere, and torus rows, two mixed-store target-cylinder rows,
-plus certified imported NURBS-face and tolerant-edge blocks, all at chord
-tolerances `1e-2` and `1e-3`. Cylinder,
-sphere, and torus exercise periodic seam/pole assembly. The NURBS fixture is an
+plus six certified imported NURBS-face, tolerant-edge, and cylinder rows, all
+at chord tolerances `1e-2` and `1e-3`. Cylinder, sphere, and torus exercise
+periodic seam/pole assembly. The NURBS fixture is an
 exact benchmark-owned copy of `solid_block_nurbs_face.x_t`; setup asserts its
 6,488-byte identity, portable digest, one B-surface, and absence of pcurves.
 The tolerant fixture references the current certified oracle outbox and asserts
 its 7,172-byte identity, portable digest, one curve-less tolerant edge, two
 NURBS pcurve uses, and four intentionally skipped geometric-owner records. The
-Python contract checks both SHA-256 values against
+Python contract checks all three imported SHA-256 values against
 `docs/oracle-certification.json`. One immutable fixture and one Serial
 compatibility-v1 operation context are prepared per case. Import, context
 construction, outcome unpacking, finite/range, watertightness, orientation,
@@ -124,11 +124,17 @@ digests remain unchanged. The NURBS-face rows activate projection candidates,
 Newton depth, queries, and samples; the tolerant rows prove the explicit
 SP-curve/NURBS-pcurve path remains projection-free and account for its graph
 queries. These measurements do not justify finite `bounded_v1` caps:
-projection backtracking remains zero, and genuinely curved NURBS, broader
-imported-corpus, and tighter-tolerance measurements are still required. The
+projection backtracking remains zero, and genuinely curved NURBS, more imported
+representations, and tighter-tolerance measurements are still required. The
 mixed-store rows prepare a block, the target cylinder, and a sphere; they pin
 three stored bodies, a shifted target identity, and exact equality with the
 standalone cylinder's normalized output and complete report.
+
+The 2,309-byte imported cylinder pins the certified SHA-256, analytic curved
+surface class, three faces, two vertex-less ring edges, and scale-sensitive
+mesh/accounting evidence. Its coarse and fine volume ratios are approximately
+`0.94968` and `0.99436`; the reviewed lower floors are explicitly `0.94` and
+`0.99` because the coarse chord request is about 7.7% of the fixture radius.
 
 The standalone Q3 face ladder separately measures a half-cylinder trimmed
 surface at chord tolerances `1e-2` and `1e-3` through
