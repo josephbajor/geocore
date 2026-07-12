@@ -1,5 +1,6 @@
 //! Ownership, validation, limits, determinism, and clone contract tests.
 
+use kcore::operation::{AccountingMode, ResourceKind};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Line;
 use kgeom::curve2d::Line2d;
@@ -9,8 +10,8 @@ use kgeom::param::ParamRange;
 use kgeom::surface::Plane;
 use kgeom::vec::{Vec2, Vec3};
 use kgraph::{
-    EvalContext, EvalError, EvalLimits, GeometryGraph, GeometryGraphError, GeometryRef,
-    SurfaceDerivativeOrder,
+    EvalBudgetProfile, EvalContext, EvalError, EvalLimits, GeometryGraph, GeometryGraphError,
+    GeometryRef, SurfaceDerivativeOrder, eval_stage,
 };
 
 fn line(origin: [f64; 3]) -> Line {
@@ -118,6 +119,8 @@ fn evaluation_validates_parameters_ranges_orders_and_resets_query_budget() {
             limit: 0
         })
     );
+    assert_eq!(no_visits.last_query_usage().node_visits(), 0);
+    assert_eq!(no_visits.last_query_usage().dependency_depth(), 0);
 
     let mut no_depth = EvalContext::new(
         &graph,
@@ -134,6 +137,27 @@ fn evaluation_validates_parameters_ranges_orders_and_resets_query_budget() {
             limit: 0
         })
     );
+    assert_eq!(no_depth.last_query_usage().node_visits(), 1);
+    assert_eq!(no_depth.last_query_usage().dependency_depth(), 0);
+}
+
+#[test]
+fn evaluation_limits_round_trip_through_the_owned_f2_profile() {
+    let defaults = EvalLimits::default();
+    let plan = EvalBudgetProfile::v1_defaults();
+    assert_eq!(EvalLimits::from_budget_plan(&plan).unwrap(), defaults);
+    plan.require_limit(
+        eval_stage::NODE_VISITS,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+    )
+    .unwrap();
+    plan.require_limit(
+        eval_stage::DEPENDENCY_DEPTH,
+        ResourceKind::Depth,
+        AccountingMode::HighWater,
+    )
+    .unwrap();
 }
 
 #[test]

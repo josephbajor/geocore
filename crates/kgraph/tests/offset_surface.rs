@@ -265,6 +265,8 @@ fn nested_offsets_charge_every_dependency_visit() {
             limit: 2
         })
     );
+    assert_eq!(eval.last_query_usage().node_visits(), 2);
+    assert_eq!(eval.last_query_usage().dependency_depth(), 2);
     let mut eval = EvalContext::new(
         &graph,
         EvalLimits {
@@ -280,4 +282,6 @@ fn nested_offsets_charge_every_dependency_visit() {
             limit: 2
         })
     );
+    assert_eq!(eval.last_query_usage().node_visits(), 3);
+    assert_eq!(eval.last_query_usage().dependency_depth(), 2);
 }

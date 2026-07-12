@@ -2,7 +2,7 @@
 
 use kernel::{
     BlockRequest, CheckBodyRequest, CheckLevel, CheckOutcome, Error, Frame, FullCheckBudgetProfile,
-    Kernel, OperationSettings, SessionPolicy,
+    Kernel, OperationSettings, SessionPolicy, SurfaceDerivativeOrder, SurfaceEvaluationRequest,
 };
 
 #[test]
@@ -113,4 +113,49 @@ fn facade_only_client_can_configure_a_full_check() {
 
     assert_eq!(check.result().unwrap().outcome(), CheckOutcome::Valid);
     assert!(!check.report().usage().is_empty());
+}
+
+#[test]
+fn facade_only_client_can_evaluate_an_opaque_surface_with_one_report() {
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let body = session
+        .edit_part(part_id.clone())
+        .unwrap()
+        .create_block(BlockRequest::new(Frame::world(), [2.0, 3.0, 4.0]))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .body();
+    let part = session.part(part_id).unwrap();
+    let face = part.body(body).unwrap().faces().unwrap().next().unwrap();
+    let surface = part.face(face).unwrap().surface();
+
+    let evaluation = part
+        .evaluate_surface(SurfaceEvaluationRequest::new(
+            surface.clone(),
+            [0.0, 0.0],
+            SurfaceDerivativeOrder::First,
+        ))
+        .unwrap();
+
+    assert_eq!(evaluation.result().unwrap().surface(), surface);
+    assert!(
+        evaluation
+            .result()
+            .unwrap()
+            .derivatives()
+            .p
+            .to_array()
+            .iter()
+            .all(|v| v.is_finite())
+    );
+    assert_eq!(evaluation.report().usage().len(), 2);
+    assert!(
+        evaluation
+            .report()
+            .usage()
+            .iter()
+            .all(|usage| usage.consumed == 1)
+    );
 }

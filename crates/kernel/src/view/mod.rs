@@ -7,6 +7,6 @@ mod geometry;
 mod part;
 
 pub use body::{BodyView, RegionView, ShellView};
-pub use boundary::{FaceView, FinView, LoopView};
+pub use boundary::{FaceDomain, FaceView, FinView, LoopView};
 pub use edge::{EdgeView, VertexView};
 pub use geometry::{CurveView, PcurveView, SurfaceView};

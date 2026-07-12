@@ -19,7 +19,10 @@ pub use error::{
     EvalError, EvalResult, GeometryGraphError, GeometryGraphResult, capability as eval_capability,
     code as eval_error_code, stage as eval_stage,
 };
-pub use eval::{EvalContext, EvalLimits, SurfaceDerivativeOrder, SurfaceValidity, ValidityGap};
+pub use eval::{
+    EvalBudgetProfile, EvalContext, EvalLimits, EvalUsage, SurfaceDerivativeOrder, SurfaceValidity,
+    ValidityGap,
+};
 pub use graph::{
     Curve2dHandle, Curve2dNode, CurveHandle, CurveNode, GeometryChanges, GeometryGraph,
     GeometryRef, SurfaceHandle, SurfaceNode,

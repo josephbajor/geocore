@@ -1,13 +1,45 @@
 //! Face, loop, and fin boundary views.
 
-use ktopo::entity::{Face as RawFace, Fin as RawFin, Loop as RawLoop};
+use ktopo::entity::{Face as RawFace, FaceDomain as RawFaceDomain, Fin as RawFin, Loop as RawLoop};
 use ktopo::store::Store;
 
 use crate::error::{Error, Result};
 use crate::{
-    EdgeId, EntityTolerance, FaceDomain, FaceId, FinId, FinIds, LoopId, LoopIds, PcurveId, Sense,
+    EdgeId, EntityTolerance, FaceId, FinId, FinIds, LoopId, LoopIds, ParamRange, PcurveId, Sense,
     ShellId, SurfaceId, VertexId,
 };
+
+/// Conservative finite parameter-space work box exposed without a supporting
+/// graph descriptor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FaceDomain {
+    u: ParamRange,
+    v: ParamRange,
+}
+
+impl FaceDomain {
+    pub(crate) const fn from_raw(domain: RawFaceDomain) -> Self {
+        Self {
+            u: domain.u,
+            v: domain.v,
+        }
+    }
+
+    /// Conservative range in the surface's first parameter.
+    pub const fn u(self) -> ParamRange {
+        self.u
+    }
+
+    /// Conservative range in the surface's second parameter.
+    pub const fn v(self) -> ParamRange {
+        self.v
+    }
+
+    /// Whether a parameter lies in this conservative box.
+    pub fn contains(self, uv: [f64; 2]) -> bool {
+        self.u.contains(uv[0]) && self.v.contains(uv[1])
+    }
+}
 
 /// Read-only face view.
 pub struct FaceView<'part> {
@@ -59,7 +91,7 @@ impl<'part> FaceView<'part> {
 
     /// Conservative finite parameter domain, when known.
     pub fn domain(&self) -> Option<FaceDomain> {
-        self.entity().domain
+        self.entity().domain.map(FaceDomain::from_raw)
     }
 
     /// Imported or operation tolerance, when present.

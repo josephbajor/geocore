@@ -126,6 +126,41 @@
 //! }
 //! ```
 //!
+//! Geometry-evaluation errors retain lower sources without exposing their
+//! graph-specific payload as a public field:
+//!
+//! ```compile_fail
+//! fn raw_evaluation(error: kernel::GeometryEvaluationError) {
+//!     let _ = error.source;
+//! }
+//! ```
+//!
+//! Surface-evaluation results retain opaque facade identity rather than a
+//! graph handle:
+//!
+//! ```compile_fail
+//! fn raw_surface(result: kernel::SurfaceEvaluation) {
+//!     let _ = result.surface().raw();
+//! }
+//! ```
+//!
+//! The facade exposes the typed budget profile, not an independently
+//! configurable graph evaluator limit object:
+//!
+//! ```compile_fail
+//! fn graph_limits() {
+//!     let _ = kernel::EvalLimits::default();
+//! }
+//! ```
+//!
+//! Facade face domains do not accept raw graph descriptors:
+//!
+//! ```compile_fail
+//! fn raw_natural(surface: &kgraph::SurfaceDescriptor) {
+//!     let _ = kernel::FaceDomain::natural(surface);
+//! }
+//! ```
+//!
 //! Sessions uniquely own their parts and therefore are not cloneable:
 //!
 //! ```compile_fail
@@ -141,7 +176,9 @@ mod operation;
 mod session;
 mod view;
 
-pub use error::{EntityKind, Error, KernelError, Result, code as error_code};
+pub use error::{
+    EntityKind, Error, GeometryEvaluationError, KernelError, Result, code as error_code,
+};
 pub use id::{
     BodyId, CurveId, EdgeId, FaceId, FinId, LoopId, PartId, PcurveId, RegionId, ShellId, SurfaceId,
     VertexId,
@@ -152,12 +189,12 @@ pub use iter::{
 };
 pub use operation::{
     BlockRequest, BodyCreated, ChangeJournal, CheckBodyRequest, CheckEntity, CheckFault, CheckGap,
-    CheckReport, OperationOutcome, OperationSettings,
+    CheckReport, OperationOutcome, OperationSettings, SurfaceEvaluation, SurfaceEvaluationRequest,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use view::{
-    BodyView, CurveView, EdgeView, FaceView, FinView, LoopView, PcurveView, RegionView, ShellView,
-    SurfaceView, VertexView,
+    BodyView, CurveView, EdgeView, FaceDomain, FaceView, FinView, LoopView, PcurveView, RegionView,
+    ShellView, SurfaceView, VertexView,
 };
 
 pub use kcore::error::{CapabilityId, ClassifiedError, ErrorClass, ErrorCode};
@@ -169,11 +206,12 @@ pub use kcore::operation::{
 pub use kcore::tolerance::Tolerances;
 pub use kgeom::frame::Frame;
 pub use kgeom::param::ParamRange;
+pub use kgeom::surface::SurfaceDerivs;
 pub use kgeom::vec::{Point3, Vec3};
-pub use kgraph::GeometryClassKey;
+pub use kgraph::{EvalBudgetProfile, GeometryClassKey, SurfaceDerivativeOrder};
 pub use ktopo::check::{
     CheckLevel, CheckOutcome, FaultKind, FullCheckBudgetProfile, VerificationGapCause,
     VerificationGapKind,
 };
-pub use ktopo::entity::{BodyKind, FaceDomain, RegionKind, Sense};
+pub use ktopo::entity::{BodyKind, RegionKind, Sense};
 pub use ktopo::tolerance::{EntityTolerance, ToleranceOrigin};

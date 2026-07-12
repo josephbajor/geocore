@@ -64,6 +64,72 @@ pub enum EntityKind {
     Pcurve,
 }
 
+/// Classified graph-evaluation failure with no raw graph types in its public
+/// representation.
+///
+/// The exact lower-layer error remains available through the standard error
+/// source chain, while stable classification accessors delegate unchanged.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeometryEvaluationError {
+    source: kgraph::EvalError,
+}
+
+impl GeometryEvaluationError {
+    pub(crate) const fn new(source: kgraph::EvalError) -> Self {
+        Self { source }
+    }
+
+    /// Returns the lower failure's broad semantic class.
+    pub const fn class(&self) -> ErrorClass {
+        self.source.class()
+    }
+
+    /// Returns the lower failure's stable machine-readable identity.
+    pub const fn code(&self) -> ErrorCode {
+        self.source.code()
+    }
+
+    /// Returns the unavailable capability when applicable.
+    pub const fn capability(&self) -> Option<CapabilityId> {
+        self.source.capability()
+    }
+
+    /// Returns the exact graph-recursion limit crossing when applicable.
+    pub const fn limit(&self) -> Option<LimitSnapshot> {
+        self.source.limit()
+    }
+}
+
+impl fmt::Display for GeometryEvaluationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("geometry evaluation failed")
+    }
+}
+
+impl std::error::Error for GeometryEvaluationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+impl ClassifiedError for GeometryEvaluationError {
+    fn class(&self) -> ErrorClass {
+        self.class()
+    }
+
+    fn code(&self) -> ErrorCode {
+        self.code()
+    }
+
+    fn capability(&self) -> Option<CapabilityId> {
+        self.capability()
+    }
+
+    fn limit(&self) -> Option<LimitSnapshot> {
+        self.limit()
+    }
+}
+
 /// Classified façade failure that retains any lower-layer source.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -95,6 +161,11 @@ pub enum KernelError {
         /// Exact lower-layer failure.
         source: kcore::error::Error,
     },
+    /// A bounded geometry-graph query failed.
+    GeometryEvaluation {
+        /// Facade-safe classified adapter retaining the exact source chain.
+        source: GeometryEvaluationError,
+    },
 }
 
 impl fmt::Display for KernelError {
@@ -107,6 +178,7 @@ impl fmt::Display for KernelError {
                 f.write_str("stored topology is inconsistent during deterministic traversal")
             }
             Self::Core { source } => write!(f, "kernel operation failed: {source}"),
+            Self::GeometryEvaluation { source } => source.fmt(f),
         }
     }
 }
@@ -115,6 +187,7 @@ impl std::error::Error for KernelError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InconsistentTopology { source } | Self::Core { source } => Some(source),
+            Self::GeometryEvaluation { source } => Some(source),
             Self::UnknownPart | Self::WrongPart { .. } | Self::StaleEntity { .. } => None,
         }
     }
@@ -129,6 +202,7 @@ impl KernelError {
             }
             Self::InconsistentTopology { .. } => ErrorClass::InternalInvariant,
             Self::Core { source } => source.class(),
+            Self::GeometryEvaluation { source } => source.class(),
         }
     }
 
@@ -140,6 +214,7 @@ impl KernelError {
             Self::StaleEntity { .. } => code::STALE_ENTITY,
             Self::InconsistentTopology { .. } => code::INCONSISTENT_TOPOLOGY,
             Self::Core { source } => source.code(),
+            Self::GeometryEvaluation { source } => source.code(),
         }
     }
 
@@ -147,6 +222,7 @@ impl KernelError {
     pub const fn capability(&self) -> Option<CapabilityId> {
         match self {
             Self::Core { source } => source.capability(),
+            Self::GeometryEvaluation { source } => source.capability(),
             Self::UnknownPart
             | Self::WrongPart { .. }
             | Self::StaleEntity { .. }
@@ -158,6 +234,7 @@ impl KernelError {
     pub const fn limit(&self) -> Option<LimitSnapshot> {
         match self {
             Self::Core { source } => source.limit(),
+            Self::GeometryEvaluation { source } => source.limit(),
             Self::UnknownPart
             | Self::WrongPart { .. }
             | Self::StaleEntity { .. }
@@ -193,6 +270,14 @@ impl From<kcore::error::Error> for KernelError {
 impl From<kcore::operation::OperationPolicyError> for KernelError {
     fn from(source: kcore::operation::OperationPolicyError) -> Self {
         kcore::error::Error::from(source).into()
+    }
+}
+
+impl From<kgraph::EvalError> for KernelError {
+    fn from(source: kgraph::EvalError) -> Self {
+        Self::GeometryEvaluation {
+            source: GeometryEvaluationError::new(source),
+        }
     }
 }
 

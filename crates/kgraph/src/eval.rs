@@ -1,5 +1,6 @@
 //! Bounded, fallible graph evaluation.
 
+use kcore::operation::{AccountingMode, BudgetPlan, LimitSpec, OperationPolicyError, ResourceKind};
 use kcore::tolerance::Tolerances;
 use kgeom::aabb::{Aabb2, Aabb3};
 use kgeom::curve::{Curve, CurveDerivs};
@@ -9,6 +10,7 @@ use kgeom::surface::{Degeneracy, Surface, SurfaceDerivs};
 
 use crate::SurfaceClass;
 use crate::descriptor::{Curve2dDescriptor, CurveDescriptor, SurfaceDescriptor};
+use crate::error::stage;
 use crate::error::{EvalError, EvalResult};
 use crate::graph::{Curve2dHandle, CurveHandle, GeometryGraph, GeometryRef, SurfaceHandle};
 
@@ -54,6 +56,109 @@ impl Default for EvalLimits {
     }
 }
 
+impl EvalLimits {
+    /// Derive graph-recursion limits from an F2 budget plan.
+    ///
+    /// The plan must contain the graph-owned node-visit and dependency-depth
+    /// stages with their canonical accounting modes.
+    pub fn from_budget_plan(plan: &BudgetPlan) -> core::result::Result<Self, OperationPolicyError> {
+        fn allowed(
+            plan: &BudgetPlan,
+            stage: kcore::operation::StageId,
+            resource: ResourceKind,
+            mode: AccountingMode,
+        ) -> core::result::Result<usize, OperationPolicyError> {
+            plan.require_limit(stage, resource, mode)?;
+            let allowed = plan
+                .limits()
+                .iter()
+                .find(|limit| limit.stage == stage && limit.resource == resource)
+                .expect("required limit was just resolved")
+                .allowed;
+            usize::try_from(allowed)
+                .map_err(|_| OperationPolicyError::AccountingOverflow { stage, resource })
+        }
+
+        Ok(Self {
+            max_dependency_depth: allowed(
+                plan,
+                stage::DEPENDENCY_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+            )?,
+            max_node_visits_per_query: allowed(
+                plan,
+                stage::NODE_VISITS,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+            )?,
+        })
+    }
+
+    /// Represent these graph-recursion limits as an F2 child budget plan.
+    pub fn budget_plan(self) -> BudgetPlan {
+        BudgetPlan::new([
+            LimitSpec::new(
+                stage::DEPENDENCY_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                self.max_dependency_depth as u64,
+            ),
+            LimitSpec::new(
+                stage::NODE_VISITS,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                self.max_node_visits_per_query as u64,
+            ),
+        ])
+        .expect("built-in graph evaluation accounting modes are valid")
+    }
+}
+
+/// Version-1 standalone graph-query budget defaults.
+///
+/// Higher layers use this as a fallback profile, then reserve its stages from
+/// their active F2 operation scope rather than creating an uncharged evaluator.
+pub struct EvalBudgetProfile;
+
+impl EvalBudgetProfile {
+    /// Returns the exact F1 defaults represented in F2 budget vocabulary.
+    pub fn v1_defaults() -> BudgetPlan {
+        EvalLimits::default().budget_plan()
+    }
+
+    /// Returns an F2 budget plan for explicit inclusive graph-query limits.
+    pub fn for_limits(max_dependency_depth: usize, max_node_visits_per_query: usize) -> BudgetPlan {
+        EvalLimits {
+            max_dependency_depth,
+            max_node_visits_per_query,
+        }
+        .budget_plan()
+    }
+}
+
+/// Accepted graph-recursion usage from the most recent public query.
+///
+/// An attempted visit or depth crossing remains on [`EvalError::limit`]; this
+/// value contains only the usage accepted before that crossing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EvalUsage {
+    node_visits: usize,
+    dependency_depth: usize,
+}
+
+impl EvalUsage {
+    /// Accepted descriptor visits.
+    pub const fn node_visits(self) -> usize {
+        self.node_visits
+    }
+
+    /// Accepted dependency-stack high-water depth.
+    pub const fn dependency_depth(self) -> usize {
+        self.dependency_depth
+    }
+}
+
 /// Requested exact surface derivative order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceDerivativeOrder {
@@ -85,6 +190,7 @@ pub struct EvalContext<'g> {
     tolerances: Tolerances,
     active: Vec<GeometryRef>,
     node_visits: usize,
+    dependency_depth: usize,
 }
 
 impl<'g> EvalContext<'g> {
@@ -96,6 +202,7 @@ impl<'g> EvalContext<'g> {
             tolerances,
             active: Vec::new(),
             node_visits: 0,
+            dependency_depth: 0,
         }
     }
 
@@ -110,6 +217,14 @@ impl<'g> EvalContext<'g> {
     /// Model acceptance tolerances supplied by the caller.
     pub const fn tolerances(&self) -> Tolerances {
         self.tolerances
+    }
+
+    /// Accepted usage from the most recent public query.
+    pub const fn last_query_usage(&self) -> EvalUsage {
+        EvalUsage {
+            node_visits: self.node_visits,
+            dependency_depth: self.dependency_depth,
+        }
     }
 
     /// Evaluate a 3D curve through exact derivative `order` (0 through 3).
@@ -556,16 +671,18 @@ impl<'g> EvalContext<'g> {
     fn begin_query(&mut self) {
         self.active.clear();
         self.node_visits = 0;
+        self.dependency_depth = 0;
     }
 
     fn enter(&mut self, geometry: GeometryRef) -> EvalResult<()> {
-        self.node_visits += 1;
-        if self.node_visits > self.limits.max_node_visits_per_query {
+        let attempted_visits = self.node_visits.saturating_add(1);
+        if attempted_visits > self.limits.max_node_visits_per_query {
             return Err(EvalError::NodeVisitLimitExceeded {
-                consumed: self.node_visits,
+                consumed: attempted_visits,
                 limit: self.limits.max_node_visits_per_query,
             });
         }
+        self.node_visits = attempted_visits;
         if let Some(start) = self
             .active
             .iter()
@@ -582,6 +699,7 @@ impl<'g> EvalContext<'g> {
                 limit: self.limits.max_dependency_depth,
             });
         }
+        self.dependency_depth = self.dependency_depth.max(consumed);
         self.active.push(geometry);
         Ok(())
     }

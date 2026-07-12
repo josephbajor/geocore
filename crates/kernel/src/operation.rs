@@ -2,7 +2,8 @@
 
 use core::fmt;
 
-use kcore::operation::{OperationContext, OperationScope};
+use kcore::operation::{ChildWorkLedger, OperationContext, OperationPolicyError, OperationScope};
+use kgraph::{EvalBudgetProfile, EvalContext, EvalLimits, EvalUsage};
 use ktopo::check::FullCheckBudgetProfile;
 use ktopo::entity::EntityRef;
 
@@ -79,6 +80,22 @@ impl OperationSettings {
     ) -> Result<OperationContext<'session>> {
         Ok(OperationContext::new(policy, self.tolerances)?
             .with_budget_overrides(self.budget_overrides.clone())
+            .with_diagnostics(self.diagnostic_level, self.diagnostic_capacity))
+    }
+
+    fn context_with_missing_budget_defaults<'session>(
+        &self,
+        policy: &'session SessionPolicy,
+        defaults: &BudgetPlan,
+    ) -> Result<OperationContext<'session>> {
+        // The operation-specific profile supplies only stages omitted by the
+        // session. Existing session limits remain authoritative, while an
+        // explicit operation override retains normal F2 precedence.
+        let effective = defaults
+            .overlaid(policy.default_budget())
+            .overlaid(&self.budget_overrides);
+        Ok(OperationContext::new(policy, self.tolerances)?
+            .with_budget_overrides(effective)
             .with_diagnostics(self.diagnostic_level, self.diagnostic_capacity))
     }
 }
@@ -209,6 +226,74 @@ pub struct CheckBodyRequest {
     body: BodyId,
     level: CheckLevel,
     settings: OperationSettings,
+}
+
+/// Typed request for one bounded surface evaluation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SurfaceEvaluationRequest {
+    surface: SurfaceId,
+    uv: [f64; 2],
+    order: kgraph::SurfaceDerivativeOrder,
+    settings: OperationSettings,
+}
+
+impl SurfaceEvaluationRequest {
+    /// Construct a request using graph evaluation's version-1 defaults for
+    /// stages omitted by the session policy. Existing session limits remain
+    /// authoritative and are never widened by this constructor.
+    pub fn new(surface: SurfaceId, uv: [f64; 2], order: kgraph::SurfaceDerivativeOrder) -> Self {
+        Self {
+            surface,
+            uv,
+            order,
+            settings: OperationSettings::default(),
+        }
+    }
+
+    /// Replace contextual operation settings.
+    pub fn with_settings(mut self, settings: OperationSettings) -> Self {
+        self.settings = settings;
+        self
+    }
+
+    /// Surface identity to evaluate.
+    pub fn surface(&self) -> SurfaceId {
+        self.surface.clone()
+    }
+
+    /// Surface parameter pair.
+    pub const fn uv(&self) -> [f64; 2] {
+        self.uv
+    }
+
+    /// Requested exact derivative order.
+    pub const fn order(&self) -> kgraph::SurfaceDerivativeOrder {
+        self.order
+    }
+
+    /// Contextual operation settings.
+    pub const fn settings(&self) -> &OperationSettings {
+        &self.settings
+    }
+}
+
+/// Successful bounded evaluation of one exact facade surface identity.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SurfaceEvaluation {
+    surface: SurfaceId,
+    derivatives: kgeom::surface::SurfaceDerivs,
+}
+
+impl SurfaceEvaluation {
+    /// Exact queried identity, including for procedural offset surfaces.
+    pub fn surface(&self) -> SurfaceId {
+        self.surface.clone()
+    }
+
+    /// Position and requested partial derivatives.
+    pub const fn derivatives(&self) -> kgeom::surface::SurfaceDerivs {
+        self.derivatives
+    }
 }
 
 impl CheckBodyRequest {
@@ -397,6 +482,143 @@ impl Part<'_> {
         };
         Ok(scope.finish_typed(result))
     }
+
+    /// Evaluate one surface through a facade-owned operation scope and one
+    /// deterministically reserved graph child ledger.
+    ///
+    /// Wrong-part and stale identities, invalid settings, and incompatible
+    /// graph budget modes are rejected before the operation scope starts.
+    /// Graph evaluation's v1 profile supplies only budget stages omitted by
+    /// the session; session limits and explicit request overrides retain F2
+    /// precedence.
+    /// Once started, accepted graph work and any typed limit crossing are
+    /// merged into the exact returned F2 report.
+    pub fn evaluate_surface(
+        &self,
+        request: SurfaceEvaluationRequest,
+    ) -> Result<OperationOutcome<SurfaceEvaluation>> {
+        let SurfaceEvaluationRequest {
+            surface,
+            uv,
+            order,
+            settings,
+        } = request;
+        self.surface(surface.clone())?;
+
+        let defaults = EvalBudgetProfile::v1_defaults();
+        let context = settings.context_with_missing_budget_defaults(self.policy, &defaults)?;
+        let effective = context.effective_budget();
+        let limits = EvalLimits::from_budget_plan(&effective)?;
+
+        let mut child_plan = limits.budget_plan();
+        if let Some(total_work) = effective.total_work_limit() {
+            let node_visits = u64::try_from(limits.max_node_visits_per_query).map_err(|_| {
+                OperationPolicyError::AccountingOverflow {
+                    stage: kgraph::eval_stage::NODE_VISITS,
+                    resource: crate::ResourceKind::Work,
+                }
+            })?;
+            child_plan = child_plan.with_total_work_limit(total_work.min(node_visits));
+        }
+
+        // EvalContext can stop only on graph-owned recursion limits. Clamp
+        // its visit allowance to the reserved child root ceiling so a strict
+        // TOTAL_WORK limit stops before accepting excess graph work. The
+        // child ledger still owns canonical precedence and translates that
+        // synthetic visit stop back to TOTAL_WORK during reconciliation.
+        let execution_node_visits = match child_plan.total_work_limit() {
+            Some(allowed) => {
+                usize::try_from(allowed).map_err(|_| OperationPolicyError::AccountingOverflow {
+                    stage: kgraph::eval_stage::NODE_VISITS,
+                    resource: crate::ResourceKind::Work,
+                })?
+            }
+            None => limits.max_node_visits_per_query,
+        };
+        let execution_limits = EvalLimits {
+            max_dependency_depth: limits.max_dependency_depth,
+            max_node_visits_per_query: execution_node_visits,
+        };
+
+        let mut scope = OperationScope::new(&context);
+        let mut child = scope.ledger_mut().reserve_child(0, child_plan)?;
+        let mut evaluator = EvalContext::new(
+            self.state.store.geometry(),
+            execution_limits,
+            context.tolerances(),
+        );
+        let lower = evaluator.eval_surface(surface.raw(), uv, order);
+        let usage = evaluator.last_query_usage();
+        let accounting = account_graph_query(&mut child, usage, lower.as_ref().err());
+        let merge = scope.ledger_mut().merge_children(vec![child]);
+        let result = match accounting.and(merge) {
+            Ok(()) => lower
+                .map(|derivatives| SurfaceEvaluation {
+                    surface,
+                    derivatives,
+                })
+                .map_err(Error::from),
+            Err(source) => Err(Error::from(source)),
+        };
+        Ok(scope.finish_typed(result))
+    }
+}
+
+fn account_graph_query(
+    child: &mut ChildWorkLedger,
+    usage: EvalUsage,
+    failure: Option<&kgraph::EvalError>,
+) -> core::result::Result<(), OperationPolicyError> {
+    let visits = u64::try_from(usage.node_visits()).map_err(|_| {
+        OperationPolicyError::AccountingOverflow {
+            stage: kgraph::eval_stage::NODE_VISITS,
+            resource: crate::ResourceKind::Work,
+        }
+    })?;
+    let depth = u64::try_from(usage.dependency_depth()).map_err(|_| {
+        OperationPolicyError::AccountingOverflow {
+            stage: kgraph::eval_stage::DEPENDENCY_DEPTH,
+            resource: crate::ResourceKind::Depth,
+        }
+    })?;
+    child
+        .ledger_mut()
+        .charge(kgraph::eval_stage::NODE_VISITS, visits)?;
+    child.ledger_mut().observe(
+        kgraph::eval_stage::DEPENDENCY_DEPTH,
+        crate::ResourceKind::Depth,
+        depth,
+    )?;
+
+    let Some(snapshot) = failure.and_then(kgraph::EvalError::limit) else {
+        return Ok(());
+    };
+    let crossing = match snapshot.resource {
+        crate::ResourceKind::Work => child.ledger_mut().charge_resource(
+            snapshot.stage,
+            snapshot.resource,
+            snapshot.consumed.saturating_sub(visits),
+        ),
+        crate::ResourceKind::Depth => {
+            child
+                .ledger_mut()
+                .observe(snapshot.stage, snapshot.resource, snapshot.consumed)
+        }
+        _ => {
+            return Err(OperationPolicyError::UnknownLimit {
+                stage: snapshot.stage,
+                resource: snapshot.resource,
+            });
+        }
+    };
+    match crossing {
+        Err(OperationPolicyError::LimitReached(actual)) if actual == snapshot => Ok(()),
+        Err(other) => Err(other),
+        Ok(()) => Err(OperationPolicyError::UnknownLimit {
+            stage: snapshot.stage,
+            resource: snapshot.resource,
+        }),
+    }
 }
 
 fn adapt_check_report(
@@ -465,14 +687,17 @@ mod tests {
     use kcore::error::ErrorClass;
     use kcore::operation::{
         AccountingMode, ExecutionPolicy, LimitSpec, NumericalPolicy, PolicyVersion, ResourceKind,
-        SessionPrecision,
+        SessionPrecision, TOTAL_WORK_STAGE,
     };
+    use kgeom::surface::Plane;
+    use kgraph::{EvalBudgetProfile, EvalError, OffsetSurfaceDescriptor};
     use ktopo::check::VerificationGapCause;
     use ktopo::entity::{Body as RawBody, Edge as RawEdge, Face as RawFace, Vertex as RawVertex};
+    use ktopo::geom::SurfaceGeom;
     use ktopo::store::Store;
 
     use super::*;
-    use crate::{Kernel, KernelError};
+    use crate::{GeometryEvaluationError, Kernel, KernelError};
 
     fn full_check_policy() -> SessionPolicy {
         SessionPolicy::new(
@@ -482,6 +707,47 @@ mod tests {
             FullCheckBudgetProfile::v1_defaults(),
             PolicyVersion::V1,
         )
+    }
+
+    fn add_surface_chain(
+        session: &mut crate::Session,
+        part: &PartId,
+        offsets: &[f64],
+    ) -> Vec<SurfaceId> {
+        let mut edit = session.edit_part(part.clone()).unwrap();
+        let store = edit.store_mut_for_test();
+        let basis = store
+            .insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())))
+            .unwrap();
+        let mut handles = vec![basis];
+        for &distance in offsets {
+            let next = store
+                .insert_surface(
+                    OffsetSurfaceDescriptor::new(*handles.last().unwrap(), distance).into(),
+                )
+                .unwrap();
+            handles.push(next);
+        }
+        handles
+            .into_iter()
+            .map(|raw| SurfaceId::new(part.clone(), raw))
+            .collect()
+    }
+
+    fn graph_settings(depth: usize, visits: usize) -> OperationSettings {
+        OperationSettings::new().with_budget_overrides(EvalBudgetProfile::for_limits(depth, visits))
+    }
+
+    fn report_usage(
+        report: &kcore::operation::OperationReport,
+        stage: crate::StageId,
+        resource: ResourceKind,
+    ) -> kcore::operation::LimitSnapshot {
+        *report
+            .usage()
+            .iter()
+            .find(|snapshot| snapshot.stage == stage && snapshot.resource == resource)
+            .unwrap()
     }
 
     #[test]
@@ -681,5 +947,474 @@ mod tests {
                 .check_body(CheckBodyRequest::new(body, CheckLevel::Fast)),
             Err(KernelError::WrongPart { .. })
         ));
+    }
+
+    #[test]
+    fn default_surface_evaluation_matches_direct_graph_bits_and_accounting() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let surface = add_surface_chain(&mut session, &part_id, &[])
+            .pop()
+            .unwrap();
+        let expected = {
+            let part = session.part(part_id.clone()).unwrap();
+            let mut direct = EvalContext::new(
+                part.state.store.geometry(),
+                EvalLimits::default(),
+                Tolerances::default(),
+            );
+            direct
+                .eval_surface(
+                    surface.raw(),
+                    [2.0, -3.0],
+                    kgraph::SurfaceDerivativeOrder::First,
+                )
+                .unwrap()
+        };
+
+        let outcome = session
+            .part(part_id)
+            .unwrap()
+            .evaluate_surface(SurfaceEvaluationRequest::new(
+                surface.clone(),
+                [2.0, -3.0],
+                kgraph::SurfaceDerivativeOrder::First,
+            ))
+            .unwrap();
+        let value = outcome.result().unwrap();
+        assert_eq!(value.surface(), surface);
+        assert_eq!(value.derivatives(), expected);
+        assert_eq!(
+            report_usage(
+                outcome.report(),
+                kgraph::eval_stage::NODE_VISITS,
+                ResourceKind::Work,
+            ),
+            kcore::operation::LimitSnapshot {
+                stage: kgraph::eval_stage::NODE_VISITS,
+                resource: ResourceKind::Work,
+                consumed: 1,
+                allowed: EvalLimits::default().max_node_visits_per_query as u64,
+            }
+        );
+        assert_eq!(
+            report_usage(
+                outcome.report(),
+                kgraph::eval_stage::DEPENDENCY_DEPTH,
+                ResourceKind::Depth,
+            )
+            .consumed,
+            1
+        );
+        assert!(outcome.report().limit_events().is_empty());
+    }
+
+    #[test]
+    fn nested_offset_evaluation_retains_identity_and_charges_each_dependency_once() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let surfaces = add_surface_chain(&mut session, &part_id, &[0.25, 0.5]);
+        let basis = surfaces[0].clone();
+        let first = surfaces[1].clone();
+        let nested = surfaces[2].clone();
+        let part = session.part(part_id).unwrap();
+        assert_eq!(
+            part.surface(nested.clone()).unwrap().offset_basis(),
+            Some(first.clone())
+        );
+        assert_eq!(part.surface(first).unwrap().offset_basis(), Some(basis));
+
+        let outcome = part
+            .evaluate_surface(SurfaceEvaluationRequest::new(
+                nested.clone(),
+                [1.0, -1.0],
+                kgraph::SurfaceDerivativeOrder::First,
+            ))
+            .unwrap();
+        assert_eq!(outcome.result().unwrap().surface(), nested);
+        assert_eq!(outcome.result().unwrap().derivatives().p.z, 0.75);
+        assert_eq!(
+            report_usage(
+                outcome.report(),
+                kgraph::eval_stage::NODE_VISITS,
+                ResourceKind::Work,
+            )
+            .consumed,
+            3
+        );
+        assert_eq!(
+            report_usage(
+                outcome.report(),
+                kgraph::eval_stage::DEPENDENCY_DEPTH,
+                ResourceKind::Depth,
+            )
+            .consumed,
+            3
+        );
+    }
+
+    #[test]
+    fn graph_child_limits_have_exact_n_minus_one_and_n_boundaries() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let nested = add_surface_chain(&mut session, &part_id, &[0.25, 0.5])
+            .pop()
+            .unwrap();
+        let part = session.part(part_id).unwrap();
+
+        let node_failure = part
+            .evaluate_surface(
+                SurfaceEvaluationRequest::new(
+                    nested.clone(),
+                    [0.0, 0.0],
+                    kgraph::SurfaceDerivativeOrder::First,
+                )
+                .with_settings(graph_settings(8, 2)),
+            )
+            .unwrap();
+        let node_snapshot = kcore::operation::LimitSnapshot {
+            stage: kgraph::eval_stage::NODE_VISITS,
+            resource: ResourceKind::Work,
+            consumed: 3,
+            allowed: 2,
+        };
+        assert_eq!(
+            node_failure.result().unwrap_err().limit(),
+            Some(node_snapshot)
+        );
+        assert_eq!(node_failure.report().limit_events(), &[node_snapshot]);
+        assert_eq!(
+            report_usage(
+                node_failure.report(),
+                kgraph::eval_stage::NODE_VISITS,
+                ResourceKind::Work,
+            )
+            .consumed,
+            2
+        );
+
+        let depth_failure = part
+            .evaluate_surface(
+                SurfaceEvaluationRequest::new(
+                    nested.clone(),
+                    [0.0, 0.0],
+                    kgraph::SurfaceDerivativeOrder::First,
+                )
+                .with_settings(graph_settings(2, 8)),
+            )
+            .unwrap();
+        let depth_snapshot = kcore::operation::LimitSnapshot {
+            stage: kgraph::eval_stage::DEPENDENCY_DEPTH,
+            resource: ResourceKind::Depth,
+            consumed: 3,
+            allowed: 2,
+        };
+        assert_eq!(
+            depth_failure.result().unwrap_err().limit(),
+            Some(depth_snapshot)
+        );
+        assert_eq!(depth_failure.report().limit_events(), &[depth_snapshot]);
+        assert_eq!(
+            report_usage(
+                depth_failure.report(),
+                kgraph::eval_stage::NODE_VISITS,
+                ResourceKind::Work,
+            )
+            .consumed,
+            3
+        );
+        assert_eq!(
+            report_usage(
+                depth_failure.report(),
+                kgraph::eval_stage::DEPENDENCY_DEPTH,
+                ResourceKind::Depth,
+            )
+            .consumed,
+            2
+        );
+
+        let exact = part
+            .evaluate_surface(
+                SurfaceEvaluationRequest::new(
+                    nested,
+                    [0.0, 0.0],
+                    kgraph::SurfaceDerivativeOrder::First,
+                )
+                .with_settings(graph_settings(3, 3)),
+            )
+            .unwrap();
+        assert!(exact.result().is_ok());
+        assert_eq!(
+            report_usage(
+                exact.report(),
+                kgraph::eval_stage::NODE_VISITS,
+                ResourceKind::Work,
+            )
+            .consumed,
+            3
+        );
+        assert_eq!(
+            report_usage(
+                exact.report(),
+                kgraph::eval_stage::DEPENDENCY_DEPTH,
+                ResourceKind::Depth,
+            )
+            .consumed,
+            3
+        );
+    }
+
+    #[test]
+    fn root_total_work_precedes_a_more_permissive_graph_stage() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let nested = add_surface_chain(&mut session, &part_id, &[0.25, 0.5])
+            .pop()
+            .unwrap();
+        let budget = EvalBudgetProfile::for_limits(8, 8).with_total_work_limit(2);
+        let outcome = session
+            .part(part_id)
+            .unwrap()
+            .evaluate_surface(
+                SurfaceEvaluationRequest::new(
+                    nested,
+                    [0.0, 0.0],
+                    kgraph::SurfaceDerivativeOrder::First,
+                )
+                .with_settings(OperationSettings::new().with_budget_overrides(budget)),
+            )
+            .unwrap();
+        let snapshot = kcore::operation::LimitSnapshot {
+            stage: TOTAL_WORK_STAGE,
+            resource: ResourceKind::Work,
+            consumed: 3,
+            allowed: 2,
+        };
+        assert_eq!(outcome.result().unwrap_err().limit(), Some(snapshot));
+        assert_eq!(outcome.report().limit_events(), &[snapshot]);
+        assert_eq!(
+            report_usage(
+                outcome.report(),
+                kgraph::eval_stage::NODE_VISITS,
+                ResourceKind::Work,
+            )
+            .consumed,
+            2,
+            "accepted graph work up to the root ceiling remains accounted"
+        );
+        let error = outcome.result().unwrap_err();
+        assert_eq!(error.class(), ErrorClass::ResourceLimit);
+        assert_eq!(error.code(), kcore::error::code::RESOURCE_LIMIT);
+        assert!(matches!(
+            error.source().and_then(|source| source.downcast_ref()),
+            Some(kcore::error::Error::OperationPolicy {
+                source: OperationPolicyError::LimitReached(actual)
+            }) if actual == &snapshot
+        ));
+    }
+
+    #[test]
+    fn evaluation_failure_retains_report_classification_and_source_chain() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let surface = add_surface_chain(&mut session, &part_id, &[])
+            .pop()
+            .unwrap();
+        let outcome = session
+            .part(part_id)
+            .unwrap()
+            .evaluate_surface(SurfaceEvaluationRequest::new(
+                surface,
+                [f64::NAN, 0.0],
+                kgraph::SurfaceDerivativeOrder::Position,
+            ))
+            .unwrap();
+        let error = outcome.result().unwrap_err();
+        assert_eq!(error.class(), ErrorClass::InvalidInput);
+        assert_eq!(error.code(), kgraph::eval_error_code::INVALID_PARAMETER);
+        let facade_source = error
+            .source()
+            .and_then(|source| source.downcast_ref::<GeometryEvaluationError>())
+            .unwrap();
+        assert!(matches!(
+            facade_source
+                .source()
+                .and_then(|source| source.downcast_ref::<EvalError>()),
+            Some(EvalError::InvalidParameter)
+        ));
+        assert!(outcome.report().limit_events().is_empty());
+        assert_eq!(
+            report_usage(
+                outcome.report(),
+                kgraph::eval_stage::NODE_VISITS,
+                ResourceKind::Work,
+            )
+            .consumed,
+            0
+        );
+    }
+
+    #[test]
+    fn surface_identity_precedes_invalid_operation_settings_for_wrong_and_stale_ids() {
+        let strict_policy = SessionPolicy::new(
+            SessionPrecision::try_new(1.0e-6, 1.0e-11, 500.0).unwrap(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            BudgetPlan::empty(),
+            PolicyVersion::V1,
+        );
+        let mut session = Kernel::with_default_policy(strict_policy).create_session();
+        let first = session.create_part();
+        let second = session.create_part();
+        let first_surface = add_surface_chain(&mut session, &first, &[]).pop().unwrap();
+        let second_surface = add_surface_chain(&mut session, &second, &[]).pop().unwrap();
+        assert_eq!(first_surface.raw(), second_surface.raw());
+
+        assert!(matches!(
+            session
+                .part(second)
+                .unwrap()
+                .evaluate_surface(SurfaceEvaluationRequest::new(
+                    first_surface.clone(),
+                    [0.0, 0.0],
+                    kgraph::SurfaceDerivativeOrder::Position,
+                )),
+            Err(KernelError::WrongPart { .. })
+        ));
+
+        {
+            let mut edit = session.edit_part(first.clone()).unwrap();
+            let mut transaction = edit.store_mut_for_test().transaction().unwrap();
+            transaction
+                .assembly()
+                .remove_surface(first_surface.raw())
+                .unwrap();
+            transaction.commit_checked(&[]).unwrap();
+        }
+        assert!(matches!(
+            session
+                .part(first)
+                .unwrap()
+                .evaluate_surface(SurfaceEvaluationRequest::new(
+                    first_surface,
+                    [0.0, 0.0],
+                    kgraph::SurfaceDerivativeOrder::Position,
+                )),
+            Err(KernelError::StaleEntity {
+                kind: crate::EntityKind::Surface
+            })
+        ));
+    }
+
+    #[test]
+    fn request_defaults_do_not_widen_a_stricter_session_graph_limit() {
+        let session_budget = BudgetPlan::new([LimitSpec::new(
+            kgraph::eval_stage::NODE_VISITS,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            1,
+        )])
+        .unwrap();
+        let policy = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            session_budget,
+            PolicyVersion::V1,
+        );
+        let mut session = Kernel::with_default_policy(policy).create_session();
+        let part_id = session.create_part();
+        let surface = add_surface_chain(&mut session, &part_id, &[0.25])
+            .pop()
+            .unwrap();
+        let outcome = session
+            .part(part_id)
+            .unwrap()
+            .evaluate_surface(SurfaceEvaluationRequest::new(
+                surface,
+                [0.0, 0.0],
+                kgraph::SurfaceDerivativeOrder::First,
+            ))
+            .unwrap();
+        let snapshot = kcore::operation::LimitSnapshot {
+            stage: kgraph::eval_stage::NODE_VISITS,
+            resource: ResourceKind::Work,
+            consumed: 2,
+            allowed: 1,
+        };
+        assert_eq!(outcome.result().unwrap_err().limit(), Some(snapshot));
+        assert_eq!(outcome.report().limit_events(), &[snapshot]);
+        assert_eq!(
+            report_usage(
+                outcome.report(),
+                kgraph::eval_stage::NODE_VISITS,
+                ResourceKind::Work,
+            ),
+            kcore::operation::LimitSnapshot {
+                stage: kgraph::eval_stage::NODE_VISITS,
+                resource: ResourceKind::Work,
+                consumed: 1,
+                allowed: 1,
+            }
+        );
+        assert_eq!(
+            report_usage(
+                outcome.report(),
+                kgraph::eval_stage::DEPENDENCY_DEPTH,
+                ResourceKind::Depth,
+            )
+            .allowed,
+            EvalLimits::default().max_dependency_depth as u64,
+            "the graph default fills only the session's missing depth stage"
+        );
+    }
+
+    #[test]
+    fn explicit_graph_override_has_normal_precedence_over_a_strict_session_stage() {
+        let session_budget = BudgetPlan::new([LimitSpec::new(
+            kgraph::eval_stage::NODE_VISITS,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            1,
+        )])
+        .unwrap();
+        let policy = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            session_budget,
+            PolicyVersion::V1,
+        );
+        let mut session = Kernel::with_default_policy(policy).create_session();
+        let part_id = session.create_part();
+        let surface = add_surface_chain(&mut session, &part_id, &[0.25])
+            .pop()
+            .unwrap();
+        let outcome = session
+            .part(part_id)
+            .unwrap()
+            .evaluate_surface(
+                SurfaceEvaluationRequest::new(
+                    surface,
+                    [0.0, 0.0],
+                    kgraph::SurfaceDerivativeOrder::First,
+                )
+                .with_settings(graph_settings(8, 2)),
+            )
+            .unwrap();
+        assert!(outcome.result().is_ok());
+        assert_eq!(
+            report_usage(
+                outcome.report(),
+                kgraph::eval_stage::NODE_VISITS,
+                ResourceKind::Work,
+            ),
+            kcore::operation::LimitSnapshot {
+                stage: kgraph::eval_stage::NODE_VISITS,
+                resource: ResourceKind::Work,
+                consumed: 2,
+                allowed: 2,
+            }
+        );
     }
 }
