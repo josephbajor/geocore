@@ -1,6 +1,7 @@
 """Offline regression tests for benchmark metadata and format drift."""
 
 import copy
+import hashlib
 import json
 import sys
 import tempfile
@@ -28,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 63)
+        self.assertEqual(len(cases), 65)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -85,7 +86,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
         tessellation = [
             case for case in cases if case["benchmark_target"] == "body_tessellation"
         ]
-        self.assertEqual(len(tessellation), 10)
+        self.assertEqual(len(tessellation), 12)
         self.assertTrue(
             all(
                 case["deterministic_seed"] == 0x5154455353000003
@@ -132,6 +133,27 @@ class BenchmarkBaselineTests(unittest.TestCase):
                 and case["expected_result_counters"]["outward"]
                 and case["expected_result_counters"]["volume_within_tolerance"]
                 for case in tessellation
+            )
+        )
+        imported_nurbs = [
+            case
+            for case in tessellation
+            if case["policy_values"].get("source_fixture")
+            == "solid_block_nurbs_face.x_t@onshape-cloud-2026-07-11"
+        ]
+        self.assertEqual(len(imported_nurbs), 2)
+        certified = benchmark.load_json(ROOT / "docs" / "oracle-certification.json")
+        expected_sha256 = certified["fixtures_sha256"]["solid_block_nurbs_face.x_t"]
+        fixture_bytes = (
+            ROOT / "benches" / "testdata" / "solid_block_nurbs_face.certified.x_t"
+        ).read_bytes()
+        self.assertEqual(len(fixture_bytes), 6_488)
+        self.assertEqual(hashlib.sha256(fixture_bytes).hexdigest(), expected_sha256)
+        self.assertTrue(
+            all(
+                case["size_parameters"]["input_bytes"] == len(fixture_bytes)
+                and case["policy_values"]["source_sha256"] == expected_sha256
+                for case in imported_nurbs
             )
         )
         isolation = [

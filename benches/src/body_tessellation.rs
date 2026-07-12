@@ -1,4 +1,4 @@
-//! Deterministic Q3 analytic body-tessellation fixtures and evidence.
+//! Deterministic Q3 body-tessellation fixtures and evidence.
 
 use kcore::operation::{
     AccountingMode, ExecutionPolicy, NumericalPolicy, OperationContext, OperationOutcome,
@@ -23,6 +23,7 @@ use ktopo::btess::{
     TessellationError, check_watertight, signed_volume, tessellate_body_with_context,
 };
 use ktopo::entity::{BodyId, EdgeId, FaceId};
+use ktopo::geom::{Curve2dGeom, SurfaceGeom};
 use ktopo::make;
 use ktopo::store::Store;
 
@@ -38,10 +39,20 @@ pub const PROFILE_IDENTITY: &str = "body-tessellation.compatibility-v1";
 pub const EXECUTION_IDENTITY: &str = "serial";
 /// Canonical number of body, face, graph, and projection usage stages.
 pub const USAGE_STAGE_COUNT: usize = 21;
+/// Exact licensed-host-certified corpus identity used by the first Q3 NURBS slice.
+pub const IMPORTED_NURBS_FACE_IDENTITY: &str =
+    "solid_block_nurbs_face.x_t@onshape-cloud-2026-07-11";
+/// SHA-256 pinned by `docs/oracle-certification.json` for the imported NURBS fixture.
+pub const IMPORTED_NURBS_FACE_SHA256: &str =
+    "410831b258864b3f55a221f329a49743b3863c664f1d2a53435f74a72ea5d9db";
+/// Portable in-harness byte digest for the exact certified NURBS fixture copy.
+pub const IMPORTED_NURBS_FACE_BYTE_DIGEST: u64 = 0x7aaf_75cc_f251_e6b9;
+const IMPORTED_NURBS_FACE_BYTES: &[u8] =
+    include_bytes!("../testdata/solid_block_nurbs_face.certified.x_t");
 
-/// Analytic closed solid represented by one Q3 case.
+/// Closed solid represented by one Q3 case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Primitive {
+pub enum FixtureKind {
     /// Six planar faces and straight edges.
     Block,
     /// Periodic side face with two closed seam boundaries.
@@ -52,6 +63,8 @@ pub enum Primitive {
     Sphere,
     /// One doubly periodic closed face.
     Torus,
+    /// Certified X_T block with one exact planar B-surface face and no pcurves.
+    ImportedNurbsFace,
 }
 
 /// Stable Q3 case definition.
@@ -59,8 +72,8 @@ pub enum Primitive {
 pub struct BodyTessellationCase {
     /// Five-segment benchmark path.
     pub path: &'static str,
-    /// Analytic fixture kind.
-    pub primitive: Primitive,
+    /// Fixture kind.
+    pub fixture_kind: FixtureKind,
     /// Chordal tessellation tolerance.
     pub chord_tol: f64,
     /// Reviewed complete semantic output digest.
@@ -87,11 +100,11 @@ pub struct BodyTessellationCase {
     pub expected_usage_stage_digest: u64,
 }
 
-/// Ten analytic-solid cases: five primitives at coarse and fine tolerances.
-pub const CASES: [BodyTessellationCase; 10] = [
+/// Ten analytic-solid cases plus two certified imported NURBS-face rows.
+pub const CASES: [BodyTessellationCase; 12] = [
     case(
         "topology/body-tessellation/block-v2/1/chord-1e-2-v2",
-        Primitive::Block,
+        FixtureKind::Block,
         1.0e-2,
         8,
         12,
@@ -100,7 +113,7 @@ pub const CASES: [BodyTessellationCase; 10] = [
     ),
     case(
         "topology/body-tessellation/block-v2/1/chord-1e-3-v2",
-        Primitive::Block,
+        FixtureKind::Block,
         1.0e-3,
         8,
         12,
@@ -109,7 +122,7 @@ pub const CASES: [BodyTessellationCase; 10] = [
     ),
     case(
         "topology/body-tessellation/cylinder-v2/1/chord-1e-2-v2",
-        Primitive::Cylinder,
+        FixtureKind::Cylinder,
         1.0e-2,
         2_913,
         5_822,
@@ -118,7 +131,7 @@ pub const CASES: [BodyTessellationCase; 10] = [
     ),
     case(
         "topology/body-tessellation/cylinder-v2/1/chord-1e-3-v2",
-        Primitive::Cylinder,
+        FixtureKind::Cylinder,
         1.0e-3,
         85_683,
         171_362,
@@ -127,7 +140,7 @@ pub const CASES: [BodyTessellationCase; 10] = [
     ),
     case(
         "topology/body-tessellation/cone-v2/1/chord-1e-2-v2",
-        Primitive::Cone,
+        FixtureKind::Cone,
         1.0e-2,
         2_737,
         5_470,
@@ -136,7 +149,7 @@ pub const CASES: [BodyTessellationCase; 10] = [
     ),
     case(
         "topology/body-tessellation/cone-v2/1/chord-1e-3-v2",
-        Primitive::Cone,
+        FixtureKind::Cone,
         1.0e-3,
         54_432,
         108_860,
@@ -145,7 +158,7 @@ pub const CASES: [BodyTessellationCase; 10] = [
     ),
     case(
         "topology/body-tessellation/sphere-v2/1/chord-1e-2-v2",
-        Primitive::Sphere,
+        FixtureKind::Sphere,
         1.0e-2,
         2_704,
         5_404,
@@ -154,7 +167,7 @@ pub const CASES: [BodyTessellationCase; 10] = [
     ),
     case(
         "topology/body-tessellation/sphere-v2/1/chord-1e-3-v2",
-        Primitive::Sphere,
+        FixtureKind::Sphere,
         1.0e-3,
         75_430,
         150_856,
@@ -163,7 +176,7 @@ pub const CASES: [BodyTessellationCase; 10] = [
     ),
     case(
         "topology/body-tessellation/torus-v2/1/chord-1e-2-v2",
-        Primitive::Torus,
+        FixtureKind::Torus,
         1.0e-2,
         11_340,
         22_680,
@@ -172,33 +185,51 @@ pub const CASES: [BodyTessellationCase; 10] = [
     ),
     case(
         "topology/body-tessellation/torus-v2/1/chord-1e-3-v2",
-        Primitive::Torus,
+        FixtureKind::Torus,
         1.0e-3,
         148_178,
         296_356,
         0x39d6_eb3f_0319_b7f7,
         0x9492_ef50_35aa_53ed,
     ),
+    case(
+        "topology/body-tessellation/imported-nurbs-face-v2/1/chord-1e-2-v2",
+        FixtureKind::ImportedNurbsFace,
+        1.0e-2,
+        8,
+        12,
+        0x226e_dd2a_120c_74b0,
+        0x621e_45af_fa38_7187,
+    ),
+    case(
+        "topology/body-tessellation/imported-nurbs-face-v2/1/chord-1e-3-v2",
+        FixtureKind::ImportedNurbsFace,
+        1.0e-3,
+        8,
+        12,
+        0x226e_dd2a_120c_74b0,
+        0x621e_45af_fa38_7187,
+    ),
 ];
 
 const fn case(
     path: &'static str,
-    primitive: Primitive,
+    fixture_kind: FixtureKind,
     chord_tol: f64,
     expected_mesh_vertices: usize,
     expected_mesh_triangles: usize,
     expected_mesh_digest: u64,
     expected_output_digest: u64,
 ) -> BodyTessellationCase {
-    let (source_faces, source_edges, source_vertices) = match primitive {
-        Primitive::Block => (6, 12, 8),
-        Primitive::Cylinder | Primitive::Cone => (3, 2, 0),
-        Primitive::Sphere | Primitive::Torus => (1, 0, 0),
+    let (source_faces, source_edges, source_vertices) = match fixture_kind {
+        FixtureKind::Block | FixtureKind::ImportedNurbsFace => (6, 12, 8),
+        FixtureKind::Cylinder | FixtureKind::Cone => (3, 2, 0),
+        FixtureKind::Sphere | FixtureKind::Torus => (1, 0, 0),
     };
-    let (usage, usage_stage_digest) = reviewed_accounting(primitive, chord_tol);
+    let (usage, usage_stage_digest) = reviewed_accounting(fixture_kind, chord_tol);
     BodyTessellationCase {
         path,
-        primitive,
+        fixture_kind,
         chord_tol,
         expected_output_digest,
         expected_mesh_digest,
@@ -215,72 +246,80 @@ const fn case(
 }
 
 const fn reviewed_accounting(
-    primitive: Primitive,
+    fixture_kind: FixtureKind,
     chord_tol: f64,
 ) -> ([u64; USAGE_STAGE_COUNT], u64) {
-    assert!(chord_tol.to_bits() == 1.0e-2_f64.to_bits() || chord_tol.to_bits() == 1.0e-3_f64.to_bits());
+    assert!(
+        chord_tol.to_bits() == 1.0e-2_f64.to_bits() || chord_tol.to_bits() == 1.0e-3_f64.to_bits()
+    );
     let fine = chord_tol < 5.0e-3;
-    match (primitive, fine) {
-        (Primitive::Block, _) => (
+    match (fixture_kind, fine) {
+        (FixtureKind::Block, _) => (
             [
                 0, 0, 0, 0, 0, 0, 0, 0, 2, 24, 1, 150, 0, 0, 120, 0, 0, 8, 120, 12, 84,
             ],
             0xbf3b_615d_9b62_211b,
         ),
-        (Primitive::Cylinder, false) => (
+        (FixtureKind::Cylinder, false) => (
             [
                 0, 0, 0, 0, 0, 0, 0, 5, 5_762, 2_979, 1, 647, 3, 56, 206, 0, 0, 2_913, 3_497,
                 5_822, 23,
             ],
             0x7a3d_7472_ee49_90c7,
         ),
-        (Primitive::Cylinder, true) => (
+        (FixtureKind::Cylinder, true) => (
             [
                 0, 0, 0, 0, 0, 0, 0, 7, 171_110, 85_941, 1, 2_567, 5, 248, 782, 0, 0, 85_683,
                 87_995, 171_362, 23,
             ],
             0x39fc_e57f_8d9b_ef9b,
         ),
-        (Primitive::Cone, false) => (
+        (FixtureKind::Cone, false) => (
             [
                 0, 0, 0, 0, 0, 0, 0, 5, 5_410, 2_803, 1, 647, 3, 56, 206, 0, 0, 2_737, 3_321,
                 5_470, 23,
             ],
             0x5438_4a78_bc47_d770,
         ),
-        (Primitive::Cone, true) => (
+        (FixtureKind::Cone, true) => (
             [
                 0, 0, 0, 0, 0, 0, 0, 7, 108_672, 54_626, 1, 1_927, 5, 184, 590, 0, 0, 54_432,
                 56_168, 108_860, 23,
             ],
             0x1e56_8d21_5d34_34c3,
         ),
-        (Primitive::Sphere, false) => (
+        (FixtureKind::Sphere, false) => (
             [
                 0, 0, 0, 0, 0, 0, 0, 10, 2_728, 2_788, 0, 0, 0, 0, 0, 4, 30, 2_704, 3_127, 5_404, 6,
             ],
             0x3406_66f2_a573_7072,
         ),
-        (Primitive::Sphere, true) => (
+        (FixtureKind::Sphere, true) => (
             [
                 0, 0, 0, 0, 0, 0, 0, 12, 75_506, 75_714, 0, 0, 0, 0, 0, 6, 126, 75_430, 76_893,
                 150_856, 6,
             ],
             0x9edf_8608_c712_3093,
         ),
-        (Primitive::Torus, false) => (
+        (FixtureKind::Torus, false) => (
             [
                 0, 0, 0, 0, 0, 0, 0, 20, 6_244, 11_504, 0, 0, 0, 0, 0, 5, 152, 11_340, 12_480,
                 22_680, 22,
             ],
             0xe7d8_13a7_f1cb_300b,
         ),
-        (Primitive::Torus, true) => (
+        (FixtureKind::Torus, true) => (
             [
                 0, 0, 0, 0, 0, 0, 0, 28, 76_164, 148_566, 0, 0, 0, 0, 0, 6, 376, 148_178, 150_886,
                 296_356, 22,
             ],
             0x2135_eeba_3fb0_dfa7,
+        ),
+        (FixtureKind::ImportedNurbsFace, _) => (
+            [
+                0, 1, 1, 16, 625, 0, 0, 0, 2, 24, 1, 54, 0, 0, 120, 0, 0, 8, 120, 12, 84,
+            ],
+            0x8e9a_f09b_d104_3a00,
         ),
     }
 }
@@ -730,32 +769,62 @@ pub fn fixture(case: BodyTessellationCase) -> BodyTessellationFixture {
     )
     .expect("valid Q3 fixture frame");
     let mut store = Store::new();
-    let (body, exact_volume, minimum_volume_ratio) = match case.primitive {
-        Primitive::Block => (
+    let (body, exact_volume, minimum_volume_ratio) = match case.fixture_kind {
+        FixtureKind::Block => (
             make::block(&mut store, &frame, [2.0, 3.0, 4.0]).expect("valid block fixture"),
             24.0,
             1.0 - 1.0e-12,
         ),
-        Primitive::Cylinder => (
+        FixtureKind::Cylinder => (
             make::cylinder(&mut store, &frame, 1.3, 2.0).expect("valid cylinder fixture"),
             core::f64::consts::PI * 1.3 * 1.3 * 2.0,
             0.98,
         ),
-        Primitive::Cone => (
+        FixtureKind::Cone => (
             make::cone(&mut store, &frame, 1.5, 0.6, 2.0).expect("valid cone fixture"),
             core::f64::consts::PI * 2.0 * (1.5 * 1.5 + 1.5 * 0.6 + 0.6 * 0.6) / 3.0,
             0.98,
         ),
-        Primitive::Sphere => (
+        FixtureKind::Sphere => (
             make::sphere(&mut store, &frame, 1.1).expect("valid sphere fixture"),
             4.0 / 3.0 * core::f64::consts::PI * 1.1_f64.powi(3),
             0.98,
         ),
-        Primitive::Torus => (
+        FixtureKind::Torus => (
             make::torus(&mut store, &frame, 2.0, 0.7).expect("valid torus fixture"),
             2.0 * core::f64::consts::PI * core::f64::consts::PI * 2.0 * 0.7 * 0.7,
             0.98,
         ),
+        FixtureKind::ImportedNurbsFace => {
+            assert_eq!(IMPORTED_NURBS_FACE_BYTES.len(), 6_488);
+            let mut source_digest = StableHasher::new();
+            source_digest.bytes(IMPORTED_NURBS_FACE_BYTES);
+            assert_eq!(
+                source_digest.finish(),
+                IMPORTED_NURBS_FACE_BYTE_DIGEST,
+                "certified Q3 NURBS fixture bytes drifted"
+            );
+            let reconstruction = kxt::import(IMPORTED_NURBS_FACE_BYTES, &mut store)
+                .expect("certified Q3 NURBS fixture must import");
+            assert!(reconstruction.skipped.is_empty());
+            assert_eq!(reconstruction.bodies.len(), 1);
+            let body = reconstruction.bodies[0];
+            assert_eq!(store.count::<Curve2dGeom>(), 0);
+            let nurbs_faces = store
+                .faces_of_body(body)
+                .expect("certified Q3 NURBS body must be live")
+                .into_iter()
+                .filter(|&face| {
+                    let surface = store.get(face).expect("live face").surface;
+                    matches!(
+                        store.get(surface).expect("live surface"),
+                        SurfaceGeom::Nurbs(_)
+                    )
+                })
+                .count();
+            assert_eq!(nurbs_faces, 1);
+            (body, 0.024, 1.0 - 1.0e-12)
+        }
     };
     let expected_faces = store.faces_of_body(body).expect("valid body");
     let expected_edges = store.edges_of_body(body).expect("valid body");
@@ -880,8 +949,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn registry_contains_exactly_ten_unique_canonical_cases() {
-        assert_eq!(CASES.len(), 10);
+    fn registry_contains_exactly_twelve_unique_canonical_cases() {
+        assert_eq!(CASES.len(), 12);
         let unique: BTreeSet<_> = CASES.iter().map(|case| case.path).collect();
         assert_eq!(unique.len(), CASES.len());
         for case in CASES {
@@ -922,6 +991,24 @@ mod tests {
             assert_eq!(entry["policy_values"]["execution"], EXECUTION_IDENTITY);
             assert_eq!(entry["policy_values"]["policy_version"], "v1");
             assert_eq!(entry["policy_values"]["usage_contract"], "q3-usage.v1");
+            if case.fixture_kind == FixtureKind::ImportedNurbsFace {
+                assert_eq!(
+                    entry["size_parameters"]["input_bytes"].as_u64(),
+                    Some(IMPORTED_NURBS_FACE_BYTES.len() as u64)
+                );
+                assert_eq!(
+                    entry["policy_values"]["source_fixture"],
+                    IMPORTED_NURBS_FACE_IDENTITY
+                );
+                assert_eq!(
+                    entry["policy_values"]["source_sha256"],
+                    IMPORTED_NURBS_FACE_SHA256
+                );
+            } else {
+                assert!(entry["size_parameters"]["input_bytes"].is_null());
+                assert!(entry["policy_values"]["source_fixture"].is_null());
+                assert!(entry["policy_values"]["source_sha256"].is_null());
+            }
 
             let counters = &entry["expected_result_counters"];
             assert_eq!(

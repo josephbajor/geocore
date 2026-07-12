@@ -239,14 +239,15 @@ are complete for independent nodes, chains, fanout, and rollback.
 
 Owner: `ktopo`, consuming `kgeom` tessellation.
 
-Status: the analytic closed-solid ladder is upgraded to the contextual v2
-contract across ten registered cases: block, cylinder, cone, sphere, and torus
-at chord tolerances `1e-2` and `1e-3`. Each case uses a Serial,
-compatibility-v1 session and measures only `tessellate_body_with_context`;
+Status: the closed-solid ladder uses the contextual v2 contract across twelve
+registered cases: ten analytic block, cylinder, cone, sphere, and torus rows
+plus two certified imported NURBS-face rows at chord tolerances `1e-2` and
+`1e-3`. Each case uses a Serial, compatibility-v1 session and measures only
+`tessellate_body_with_context`; primitive construction or X_T import,
 session/context construction, outcome unpacking, and verification remain
 outside timing. Repetition proves both the mesh and complete operation report
-are identical. Existing mesh counts, bits, ownership order, volume evidence,
-and mesh digests remain pinned unchanged.
+are identical. Existing analytic mesh counts, bits, ownership order, volume
+evidence, and mesh digests remain pinned unchanged.
 
 The `q3-usage.v1` evidence records all 21 canonical report stages in profile
 order, not output-size proxies: five surface-projection stages, five face-
@@ -259,12 +260,17 @@ but excluded from the checked-in digest because graph node visits uses
 `usize::MAX`. Policy/API/execution identity and zero limit, numeric-stop,
 diagnostic, and dropped-diagnostic counts are also explicit.
 
-This v2 slice proves counter plumbing and analytic-solid measurements; it is
-not enough evidence to select finite `bounded_v1` allowances. Surface
-projection and face-boundary counters are zero for all ten cases, and the
-sphere/torus cases also have zero graph use. Mixed-body, NURBS/pcurve, imported
-corpus, and tighter-tolerance cases remain the required next measurement slice
-before corpus-backed caps are proposed.
+The benchmark-owned imported fixture is the exact 6,488-byte
+`solid_block_nurbs_face.x_t` output accepted by the licensed Onshape host on
+2026-07-11. Setup asserts its portable byte digest, one B-surface, and zero
+pcurves; the Python contract checks its SHA-256 against the oracle
+certification. Its legacy exact fins therefore exercise the legitimate NURBS
+projection fallback: candidates, Newton depth, queries, and samples are now
+nonzero without changing the 21-stage evidence contract. Projection
+backtracking and face-boundary counters remain zero; the sphere/torus cases
+also have zero graph use. Mixed-body, NURBS-pcurve, broader imported-corpus,
+and tighter-tolerance cases remain required before corpus-backed finite
+`bounded_v1` allowances are proposed.
 
 Fixtures use existing deterministic primitive constructors first, followed by
 trimmed NURBS fixtures promoted from the test corpus:

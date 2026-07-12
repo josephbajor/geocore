@@ -82,13 +82,18 @@ and rollback equality. The planned diamond row is deferred because current
 descriptors expose at most one dependency; the harness does not invent a
 benchmark-only graph shape.
 
-The Q3 v2 contract registers ten analytic closed-solid cases: block, cylinder,
-cone, sphere, and torus at chord tolerances `1e-2` and `1e-3`. Cylinder,
-sphere, and torus exercise periodic seam/pole assembly. One immutable fixture
-and one Serial compatibility-v1 operation context are prepared per case. Only
-the `tessellate_body_with_context` call is timed; outcome unpacking,
-finite/range, watertightness, orientation, volume, and exact mesh/report
-repeatability checks run outside the accumulated duration.
+The Q3 v2 contract registers twelve closed-solid cases: ten analytic block,
+cylinder, cone, sphere, and torus rows plus a certified imported block with one
+NURBS face, all at chord tolerances `1e-2` and `1e-3`. Cylinder, sphere, and
+torus exercise periodic seam/pole assembly. The imported fixture is an exact
+benchmark-owned copy of `solid_block_nurbs_face.x_t`; its 6,488-byte identity,
+portable byte digest, one B-surface, and absence of pcurves are asserted during
+setup. The Python contract independently checks its SHA-256 against
+`docs/oracle-certification.json`. One immutable fixture and one Serial
+compatibility-v1 operation context are prepared per case. Import, context
+construction, outcome unpacking, finite/range, watertightness, orientation,
+volume, and exact mesh/report repeatability checks run outside timing. Only the
+`tessellate_body_with_context` call is measured.
 
 `usage_consumed` follows the closed `q3-usage.v1` order:
 
@@ -100,9 +105,11 @@ repeatability checks run outside the accumulated duration.
 
 Every case pins all 21 values, a profile/policy/stage digest, contextual API and
 execution identity, and zero completion-event counts. Existing mesh bits and
-digests remain unchanged. These analytic measurements do not justify finite
-`bounded_v1` caps: projection and face-boundary use is zero throughout, so
-mixed-body, NURBS/pcurve, and imported-corpus measurements are still required.
+digests remain unchanged. The NURBS-face rows activate projection candidates,
+Newton depth, queries, and samples while preserving the same evidence contract.
+These measurements do not justify finite `bounded_v1` caps: projection
+backtracking and face-boundary use remain zero, and mixed-body, NURBS-pcurve,
+broader imported-corpus, and tighter-tolerance measurements are still required.
 
 The first Q4 slice registers six contextual implicit-isolation cases. It varies
 polynomial versus rational single patches, one versus four extracted Bezier

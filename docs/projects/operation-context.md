@@ -771,12 +771,14 @@ land before any product cap is selected:
    ordinary loop/trim holders. Closed-sphere, torus, multi-hole, N/N+1, paired-
    holder atomicity, shared-scope, overflow, diagnostic, legacy, and execution-
    policy evidence is in the owning tests.
-7. **Analytic evidence implemented; corpus evidence next:** Q3's contextual v2
-   ladder records all 21 aggregate stages for ten analytic solids, preserves
-   the legacy mesh bits, and verifies identical reports on repetition. This
-   proves the accounting seam, not finite cap selection: surface projection
-   and face-boundary use is zero throughout the analytic ladder. Add mixed,
-   NURBS-pcurve, and imported-corpus measurements before proposing explicit
+7. **Analytic evidence plus the first certified corpus slice implemented:**
+   Q3's contextual v2 ladder records all 21 aggregate stages for ten analytic
+   solids and two imported NURBS-face rows, preserves the legacy analytic mesh
+   bits, and verifies identical reports on repetition. The certified B-surface
+   fixture activates projection candidates, Newton depth, queries, and samples;
+   projection backtracking and face-boundary use remain zero. Add mixed,
+   NURBS-pcurve, broader imported-corpus, and tighter-tolerance measurements
+   before proposing explicit
    `FaceTessellationBudgetProfile::bounded_v1()` and
    `BodyTessellationBudgetProfile::bounded_v1()` presets with finite aggregate
    and root caps. Legacy wrappers stay on compatibility `v1_defaults`; facade,

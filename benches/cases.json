@@ -1176,6 +1176,104 @@
       }
     },
     {
+      "path": "topology/body-tessellation/imported-nurbs-face-v2/1/chord-1e-2-v2",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v2",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1,
+        "input_bytes": 6488
+      },
+      "tolerances": {
+        "chord_tol": 0.01
+      },
+      "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
+        "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "source_fixture": "solid_block_nurbs_face.x_t@onshape-cloud-2026-07-11",
+        "source_sha256": "410831b258864b3f55a221f329a49743b3863c664f1d2a53435f74a72ea5d9db",
+        "usage_contract": "q3-usage.v1",
+        "validation": "closed-solid"
+      },
+      "expected_result_counters": {
+        "source_faces": 6,
+        "source_edges": 12,
+        "source_vertices": 8,
+        "mesh_vertices": 8,
+        "mesh_triangles": 12,
+        "face_ranges": 6,
+        "edge_polylines": 12,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "watertight": true,
+        "outward": true,
+        "volume_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 1, 1, 16, 625, 0, 0, 0, 2, 24, 1, 54, 0, 0, 120, 0, 0, 8, 120, 12, 84],
+        "usage_stage_digest": "8e9af09bd1043a00",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
+        "mesh_digest": "226edd2a120c74b0",
+        "output_digest": "621e45affa387187"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/imported-nurbs-face-v2/1/chord-1e-3-v2",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v2",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1,
+        "input_bytes": 6488
+      },
+      "tolerances": {
+        "chord_tol": 0.001
+      },
+      "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
+        "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "source_fixture": "solid_block_nurbs_face.x_t@onshape-cloud-2026-07-11",
+        "source_sha256": "410831b258864b3f55a221f329a49743b3863c664f1d2a53435f74a72ea5d9db",
+        "usage_contract": "q3-usage.v1",
+        "validation": "closed-solid"
+      },
+      "expected_result_counters": {
+        "source_faces": 6,
+        "source_edges": 12,
+        "source_vertices": 8,
+        "mesh_vertices": 8,
+        "mesh_triangles": 12,
+        "face_ranges": 6,
+        "edge_polylines": 12,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "watertight": true,
+        "outward": true,
+        "volume_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 1, 1, 16, 625, 0, 0, 0, 2, 24, 1, 54, 0, 0, 120, 0, 0, 8, 120, 12, 84],
+        "usage_stage_digest": "8e9af09bd1043a00",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
+        "mesh_digest": "226edd2a120c74b0",
+        "output_digest": "621e45affa387187"
+      }
+    },
+    {
       "path": "geometry/nurbs-isolation/poly-single-v1/1/work-exact-v1",
       "benchmark_target": "nurbs_isolation",
       "fixture_version": "nurbs-isolation.v1",
