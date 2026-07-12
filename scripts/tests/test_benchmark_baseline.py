@@ -29,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 77)
+        self.assertEqual(len(cases), 79)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -106,7 +106,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
         tessellation = [
             case for case in cases if case["benchmark_target"] == "body_tessellation"
         ]
-        self.assertEqual(len(tessellation), 14)
+        self.assertEqual(len(tessellation), 16)
         self.assertTrue(
             all(
                 case["deterministic_seed"] == 0x5154455353000003
@@ -153,6 +153,21 @@ class BenchmarkBaselineTests(unittest.TestCase):
                 and case["expected_result_counters"]["outward"]
                 and case["expected_result_counters"]["volume_within_tolerance"]
                 for case in tessellation
+            )
+        )
+        mixed_store = [
+            case
+            for case in tessellation
+            if case["policy_values"].get("store_shape")
+            == "block-cylinder-sphere; target=cylinder"
+        ]
+        self.assertEqual(len(mixed_store), 2)
+        self.assertTrue(
+            all(
+                case["size_parameters"]["bodies"] == 3
+                and case["expected_result_counters"]["source_faces"] == 3
+                and case["expected_result_counters"]["source_edges"] == 2
+                for case in mixed_store
             )
         )
         imported_nurbs = [

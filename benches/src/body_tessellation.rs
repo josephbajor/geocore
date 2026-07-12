@@ -22,7 +22,7 @@ use ktopo::btess::{
     BODY_TESSELLATION_STRUCTURAL_ITEMS, BodyMesh, BodyTessellationBudgetProfile, TessOptions,
     TessellationError, check_watertight, signed_volume, tessellate_body_with_context,
 };
-use ktopo::entity::{BodyId, EdgeId, FaceId};
+use ktopo::entity::{Body, BodyId, EdgeId, FaceId};
 use ktopo::geom::{Curve2dGeom, SurfaceGeom};
 use ktopo::make;
 use ktopo::store::Store;
@@ -67,6 +67,8 @@ pub enum FixtureKind {
     Block,
     /// Periodic side face with two closed seam boundaries.
     Cylinder,
+    /// Cylinder tessellated from a store that also owns a block and sphere.
+    MixedStoreCylinder,
     /// Periodic conical side face with two closed seam boundaries.
     Cone,
     /// One closed face with a periodic seam and two parameter poles.
@@ -102,6 +104,8 @@ pub struct BodyTessellationCase {
     pub expected_source_edges: usize,
     /// Reviewed source vertex count.
     pub expected_source_vertices: usize,
+    /// Reviewed total body count in the prepared store.
+    pub expected_store_bodies: usize,
     /// Reviewed face-range count.
     pub expected_face_ranges: usize,
     /// Reviewed edge-polyline count.
@@ -112,8 +116,8 @@ pub struct BodyTessellationCase {
     pub expected_usage_stage_digest: u64,
 }
 
-/// Ten analytic-solid cases plus four certified imported corpus rows.
-pub const CASES: [BodyTessellationCase; 14] = [
+/// Twelve analytic/store-shape cases plus four certified imported corpus rows.
+pub const CASES: [BodyTessellationCase; 16] = [
     case(
         "topology/body-tessellation/block-v2/1/chord-1e-2-v2",
         FixtureKind::Block,
@@ -144,6 +148,24 @@ pub const CASES: [BodyTessellationCase; 14] = [
     case(
         "topology/body-tessellation/cylinder-v2/1/chord-1e-3-v2",
         FixtureKind::Cylinder,
+        1.0e-3,
+        85_683,
+        171_362,
+        0xc18e_8ba3_3c72_5d33,
+        0x5f29_ed51_1dd0_7c8b,
+    ),
+    case(
+        "topology/body-tessellation/mixed-store-cylinder-v2/1/chord-1e-2-v2",
+        FixtureKind::MixedStoreCylinder,
+        1.0e-2,
+        2_913,
+        5_822,
+        0x3047_4187_c9d8_a9ce,
+        0xb964_2497_18cf_75e6,
+    ),
+    case(
+        "topology/body-tessellation/mixed-store-cylinder-v2/1/chord-1e-3-v2",
+        FixtureKind::MixedStoreCylinder,
         1.0e-3,
         85_683,
         171_362,
@@ -255,8 +277,12 @@ const fn case(
         FixtureKind::Block | FixtureKind::ImportedNurbsFace | FixtureKind::ImportedTolerantEdge => {
             (6, 12, 8)
         }
-        FixtureKind::Cylinder | FixtureKind::Cone => (3, 2, 0),
+        FixtureKind::Cylinder | FixtureKind::MixedStoreCylinder | FixtureKind::Cone => (3, 2, 0),
         FixtureKind::Sphere | FixtureKind::Torus => (1, 0, 0),
+    };
+    let store_bodies = match fixture_kind {
+        FixtureKind::MixedStoreCylinder => 3,
+        _ => 1,
     };
     let (usage, usage_stage_digest) = reviewed_accounting(fixture_kind, chord_tol);
     BodyTessellationCase {
@@ -270,6 +296,7 @@ const fn case(
         expected_source_faces: source_faces,
         expected_source_edges: source_edges,
         expected_source_vertices: source_vertices,
+        expected_store_bodies: store_bodies,
         expected_face_ranges: source_faces,
         expected_edge_polylines: source_edges,
         expected_usage: usage,
@@ -292,14 +319,14 @@ const fn reviewed_accounting(
             ],
             0xbf3b_615d_9b62_211b,
         ),
-        (FixtureKind::Cylinder, false) => (
+        (FixtureKind::Cylinder | FixtureKind::MixedStoreCylinder, false) => (
             [
                 0, 0, 0, 0, 0, 0, 0, 5, 5_762, 2_979, 1, 647, 3, 56, 206, 0, 0, 2_913, 3_497,
                 5_822, 23,
             ],
             0x7a3d_7472_ee49_90c7,
         ),
-        (FixtureKind::Cylinder, true) => (
+        (FixtureKind::Cylinder | FixtureKind::MixedStoreCylinder, true) => (
             [
                 0, 0, 0, 0, 0, 0, 0, 7, 171_110, 85_941, 1, 2_567, 5, 248, 782, 0, 0, 85_683,
                 87_995, 171_362, 23,
@@ -818,6 +845,26 @@ pub fn fixture(case: BodyTessellationCase) -> BodyTessellationFixture {
             core::f64::consts::PI * 1.3 * 1.3 * 2.0,
             0.98,
         ),
+        FixtureKind::MixedStoreCylinder => {
+            let block_frame = Frame::new(
+                Point3::new(-12.0, 3.0, -4.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .expect("valid mixed-store block frame");
+            make::block(&mut store, &block_frame, [1.0, 2.0, 3.0])
+                .expect("valid mixed-store block");
+            let body = make::cylinder(&mut store, &frame, 1.3, 2.0)
+                .expect("valid mixed-store target cylinder");
+            let sphere_frame = Frame::new(
+                Point3::new(11.0, -2.0, 5.0),
+                Vec3::new(0.0, 1.0, 1.0),
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .expect("valid mixed-store sphere frame");
+            make::sphere(&mut store, &sphere_frame, 0.75).expect("valid mixed-store sphere");
+            (body, core::f64::consts::PI * 1.3 * 1.3 * 2.0, 0.98)
+        }
         FixtureKind::Cone => (
             make::cone(&mut store, &frame, 1.5, 0.6, 2.0).expect("valid cone fixture"),
             core::f64::consts::PI * 2.0 * (1.5 * 1.5 + 1.5 * 0.6 + 0.6 * 0.6) / 3.0,
@@ -908,6 +955,11 @@ pub fn fixture(case: BodyTessellationCase) -> BodyTessellationFixture {
             (body, 0.024, 1.0 - 1.0e-12)
         }
     };
+    assert_eq!(
+        store.count::<Body>(),
+        case.expected_store_bodies,
+        "prepared Q3 store body count drifted"
+    );
     let expected_faces = store.faces_of_body(body).expect("valid body");
     let expected_edges = store.edges_of_body(body).expect("valid body");
     let source_faces = expected_faces.len();
@@ -1031,8 +1083,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn registry_contains_exactly_fourteen_unique_canonical_cases() {
-        assert_eq!(CASES.len(), 14);
+    fn registry_contains_exactly_sixteen_unique_canonical_cases() {
+        assert_eq!(CASES.len(), 16);
         let unique: BTreeSet<_> = CASES.iter().map(|case| case.path).collect();
         assert_eq!(unique.len(), CASES.len());
         for case in CASES {
@@ -1061,7 +1113,10 @@ mod tests {
             assert_eq!(entry["fixture_version"], FIXTURE_VERSION);
             assert_eq!(entry["deterministic_seed"].as_u64(), Some(FIXTURE_SEED));
             assert_eq!(entry["size_parameters"]["elements"].as_u64(), Some(1));
-            assert_eq!(entry["size_parameters"]["bodies"].as_u64(), Some(1));
+            assert_eq!(
+                entry["size_parameters"]["bodies"].as_u64(),
+                Some(case.expected_store_bodies as u64)
+            );
             assert_eq!(
                 entry["tolerances"]["chord_tol"].as_f64(),
                 Some(case.chord_tol)
@@ -1113,6 +1168,15 @@ mod tests {
                         entry["expected_result_counters"]["skipped_geometric_owners"].as_u64(),
                         Some(4)
                     );
+                }
+                FixtureKind::MixedStoreCylinder => {
+                    assert!(entry["size_parameters"]["input_bytes"].is_null());
+                    assert_eq!(
+                        entry["policy_values"]["store_shape"],
+                        "block-cylinder-sphere; target=cylinder"
+                    );
+                    assert!(entry["policy_values"]["source_fixture"].is_null());
+                    assert!(entry["policy_values"]["source_sha256"].is_null());
                 }
                 _ => {
                     assert!(entry["size_parameters"]["input_bytes"].is_null());
@@ -1215,6 +1279,42 @@ mod tests {
             assert_eq!(first, second, "repeatability drift for {}", case.path);
             verify(case, first);
         }
+    }
+
+    #[test]
+    fn mixed_store_target_is_isolated_from_unrelated_bodies() {
+        let standalone_case = CASES
+            .into_iter()
+            .find(|case| {
+                case.fixture_kind == FixtureKind::Cylinder
+                    && case.chord_tol.to_bits() == 1.0e-2_f64.to_bits()
+            })
+            .unwrap();
+        let mixed_case = CASES
+            .into_iter()
+            .find(|case| {
+                case.fixture_kind == FixtureKind::MixedStoreCylinder
+                    && case.chord_tol.to_bits() == standalone_case.chord_tol.to_bits()
+            })
+            .unwrap();
+        let standalone = fixture(standalone_case);
+        let mixed = fixture(mixed_case);
+        assert_eq!(standalone.store.count::<Body>(), 1);
+        assert_eq!(mixed.store.count::<Body>(), 3);
+        assert_ne!(
+            standalone.body, mixed.body,
+            "mixed setup must shift identity"
+        );
+
+        let session = compatibility_session();
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let standalone_run = standalone.tessellate(standalone_case.chord_tol, &context);
+        let mixed_run = mixed.tessellate(mixed_case.chord_tol, &context);
+        assert_eq!(mixed_run.report, standalone_run.report);
+        assert_eq!(
+            mixed.evidence(&mixed_run),
+            standalone.evidence(&standalone_run)
+        );
     }
 
     #[test]

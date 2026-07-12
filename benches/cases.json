@@ -980,6 +980,100 @@
       }
     },
     {
+      "path": "topology/body-tessellation/mixed-store-cylinder-v2/1/chord-1e-2-v2",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v2",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 3
+      },
+      "tolerances": {
+        "chord_tol": 0.01
+      },
+      "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
+        "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "store_shape": "block-cylinder-sphere; target=cylinder",
+        "usage_contract": "q3-usage.v1",
+        "validation": "closed-solid"
+      },
+      "expected_result_counters": {
+        "source_faces": 3,
+        "source_edges": 2,
+        "source_vertices": 0,
+        "mesh_vertices": 2913,
+        "mesh_triangles": 5822,
+        "face_ranges": 3,
+        "edge_polylines": 2,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "watertight": true,
+        "outward": true,
+        "volume_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 5, 5762, 2979, 1, 647, 3, 56, 206, 0, 0, 2913, 3497, 5822, 23],
+        "usage_stage_digest": "7a3d7472ee4990c7",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
+        "mesh_digest": "30474187c9d8a9ce",
+        "output_digest": "b964249718cf75e6"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/mixed-store-cylinder-v2/1/chord-1e-3-v2",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v2",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 3
+      },
+      "tolerances": {
+        "chord_tol": 0.001
+      },
+      "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
+        "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "store_shape": "block-cylinder-sphere; target=cylinder",
+        "usage_contract": "q3-usage.v1",
+        "validation": "closed-solid"
+      },
+      "expected_result_counters": {
+        "source_faces": 3,
+        "source_edges": 2,
+        "source_vertices": 0,
+        "mesh_vertices": 85683,
+        "mesh_triangles": 171362,
+        "face_ranges": 3,
+        "edge_polylines": 2,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "watertight": true,
+        "outward": true,
+        "volume_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 7, 171110, 85941, 1, 2567, 5, 248, 782, 0, 0, 85683, 87995, 171362, 23],
+        "usage_stage_digest": "39fce57f8d9bef9b",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
+        "mesh_digest": "c18e8ba33c725d33",
+        "output_digest": "5f29ed511dd07c8b"
+      }
+    },
+    {
       "path": "topology/body-tessellation/cone-v2/1/chord-1e-2-v2",
       "benchmark_target": "body_tessellation",
       "fixture_version": "body-tessellation.v2",

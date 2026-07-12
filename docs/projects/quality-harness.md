@@ -264,10 +264,11 @@ after it is captured in a named stable-host baseline.
 
 Owner: `ktopo`, consuming `kgeom` tessellation.
 
-Status: the closed-solid ladder uses the contextual v2 contract across fourteen
-registered cases: ten analytic block, cylinder, cone, sphere, and torus rows
-plus certified imported NURBS-face and tolerant-edge rows at chord tolerances
-`1e-2` and `1e-3`. Each case uses a Serial, compatibility-v1 session and
+Status: the closed-solid ladder uses the contextual v2 contract across sixteen
+registered cases: ten analytic block, cylinder, cone, sphere, and torus rows,
+two mixed-store target-cylinder rows, plus certified imported NURBS-face and
+tolerant-edge rows at chord tolerances `1e-2` and `1e-3`. Each case uses a
+Serial, compatibility-v1 session and
 measures only `tessellate_body_with_context`; primitive construction or X_T import,
 session/context construction, outcome unpacking, and verification remain
 outside timing. Repetition proves both the mesh and complete operation report
@@ -296,8 +297,11 @@ backtracking remains zero; the sphere/torus cases also have zero graph use.
 The certified tolerant-edge fixture adds one curve-less tolerant edge, two
 trimmed SP-curve/NURBS-pcurve uses, and their graph queries while correctly
 leaving projection at zero. Its four skipped geometric-owner records are
-explicitly pinned rather than silently ignored. Mixed-body, genuinely curved
-NURBS, broader imported-corpus, and tighter-tolerance cases remain required
+explicitly pinned rather than silently ignored. The mixed-store rows prepare a
+block, the target cylinder, and a sphere in that order, proving the shifted
+target identity has exactly the standalone cylinder's normalized mesh and
+21-stage report at both tolerances. Genuinely curved NURBS, broader
+imported-corpus, and tighter-tolerance cases remain required
 before corpus-backed finite body `bounded_v1` allowances are proposed.
 
 Face-profile evidence is owned by a separate standalone ladder. Whole-body
@@ -315,7 +319,8 @@ Fixtures use existing deterministic primitive constructors first, followed by
 trimmed NURBS fixtures promoted from the test corpus:
 
 - box, cylinder, cone, sphere, and torus;
-- a mixed multi-body store;
+- a mixed multi-body store (landed for a block/cylinder/sphere store with the
+  cylinder selected as the operation target);
 - a periodic seam/pole case;
 - a face with a NURBS pcurve; and
 - a bounded trimmed NURBS patch with one and multiple loops.

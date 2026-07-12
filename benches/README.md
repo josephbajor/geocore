@@ -93,9 +93,10 @@ node count and order digest, and repeatability. Traversal output and cycle paths
 remain vector-ordered, while active/completed membership uses hash lookup that
 is never iterated. The smallest closure row runs in CI.
 
-The Q3 v2 contract registers fourteen closed-solid cases: ten analytic block,
-cylinder, cone, sphere, and torus rows plus certified imported NURBS-face and
-tolerant-edge blocks, all at chord tolerances `1e-2` and `1e-3`. Cylinder,
+The Q3 v2 contract registers sixteen closed-solid cases: ten analytic block,
+cylinder, cone, sphere, and torus rows, two mixed-store target-cylinder rows,
+plus certified imported NURBS-face and tolerant-edge blocks, all at chord
+tolerances `1e-2` and `1e-3`. Cylinder,
 sphere, and torus exercise periodic seam/pole assembly. The NURBS fixture is an
 exact benchmark-owned copy of `solid_block_nurbs_face.x_t`; setup asserts its
 6,488-byte identity, portable digest, one B-surface, and absence of pcurves.
@@ -123,8 +124,11 @@ digests remain unchanged. The NURBS-face rows activate projection candidates,
 Newton depth, queries, and samples; the tolerant rows prove the explicit
 SP-curve/NURBS-pcurve path remains projection-free and account for its graph
 queries. These measurements do not justify finite `bounded_v1` caps:
-projection backtracking remains zero, and mixed-body, genuinely curved NURBS,
-broader imported-corpus, and tighter-tolerance measurements are still required.
+projection backtracking remains zero, and genuinely curved NURBS, broader
+imported-corpus, and tighter-tolerance measurements are still required. The
+mixed-store rows prepare a block, the target cylinder, and a sphere; they pin
+three stored bodies, a shifted target identity, and exact equality with the
+standalone cylinder's normalized output and complete report.
 
 The standalone Q3 face ladder separately measures a half-cylinder trimmed
 surface at chord tolerances `1e-2` and `1e-3` through
