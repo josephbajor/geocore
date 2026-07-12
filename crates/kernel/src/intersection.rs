@@ -66,6 +66,7 @@ pub(crate) fn adapt_curve_intersections(
     lower: kops::intersect::CurveCurveIntersections,
 ) -> CurveCurveIntersections {
     let lower_completion = lower.completion();
+    let incomplete_evidence = lower.incomplete_evidence().to_vec();
     let points = lower
         .points
         .into_iter()
@@ -109,6 +110,7 @@ pub(crate) fn adapt_curve_intersections(
         points,
         overlaps,
         completion,
+        incomplete_evidence,
     }
 }
 
@@ -260,22 +262,31 @@ mod tests {
             None,
         )
         .unwrap();
+        let crossing = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(0.0, -1.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+            None,
+        )
+        .unwrap();
         let range = ParamRange::new(0.0, 1.0);
         let mut session = Kernel::new().create_session();
         let part_id = session.create_part();
-        let (first_id, second_id) = {
+        let (first_id, second_id, crossing_id) = {
             let mut edit = session.edit_part(part_id.clone()).unwrap();
             let store = edit.store_mut_for_test();
             let first = store.insert_curve(CurveGeom::Nurbs(first)).unwrap();
             let second = store.insert_curve(CurveGeom::Nurbs(second)).unwrap();
+            let crossing = store.insert_curve(CurveGeom::Nurbs(crossing)).unwrap();
             (
                 CurveId::new(part_id.clone(), first),
                 CurveId::new(part_id.clone(), second),
+                CurveId::new(part_id.clone(), crossing),
             )
         };
 
         let outcome = session
-            .part(part_id)
+            .part(part_id.clone())
             .unwrap()
             .intersect_curves(IntersectCurvesRequest::new(
                 BoundedCurve::new(first_id.clone(), range),
@@ -286,5 +297,22 @@ mod tests {
         assert_eq!(result.first(), first_id);
         assert_eq!(result.second(), second_id);
         assert!(result.is_proven_empty());
+        assert!(result.incomplete_evidence().is_empty());
+
+        let outcome = session
+            .part(part_id)
+            .unwrap()
+            .intersect_curves(IntersectCurvesRequest::new(
+                BoundedCurve::new(first_id, range),
+                BoundedCurve::new(crossing_id, range),
+            ))
+            .unwrap();
+        let result = outcome.into_result().unwrap();
+        assert_eq!(result.points().len(), 1);
+        assert_eq!(result.incomplete_evidence().len(), 1);
+        assert_eq!(
+            result.incomplete_evidence()[0].code,
+            kops::intersect::NURBS_CURVE_PAIR_COVERAGE_INCOMPLETE
+        );
     }
 }

@@ -659,6 +659,13 @@ always-on stage evidence.
 Accepted residual witnesses remain authoritative and do not become failures
 merely because Newton ended at a stationary or ill-conditioned state.
 
+Curve/curve results now retain the unresolved proof obligations themselves,
+not only the prose completion reason. Exact isolation limits, arithmetic and
+method stops, the cell-local seed crossing, and the remaining complete root /
+overlap coverage capability stay ordered through canonicalization, swapping,
+generic dispatch, and the facade. Q4 hashes this evidence separately from
+contact geometry and folds both into its semantic output digest.
+
 That normalized boundary now has contextual and shared-scope public entries.
 The contextual entry composes the curve/curve family profile once and creates
 one scope; ellipse/ellipse borrows it for every projection, while NURBS/NURBS

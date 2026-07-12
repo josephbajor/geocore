@@ -65,6 +65,7 @@ pub struct CurveCurveIntersections {
     /// Coincident intervals in deterministic parameter order.
     pub overlaps: Vec<CurveCurveOverlap>,
     completion: Completion,
+    incomplete_evidence: Vec<IncompleteEvidence>,
 }
 
 impl Default for CurveCurveIntersections {
@@ -75,6 +76,7 @@ impl Default for CurveCurveIntersections {
             completion: Completion::Indeterminate {
                 reason: MISSING_COMPLETION_REASON,
             },
+            incomplete_evidence: Vec::new(),
         }
     }
 }
@@ -105,6 +107,23 @@ impl CurveCurveIntersections {
         Self::canonicalized_with_completion(points, overlaps, Completion::Indeterminate { reason })
     }
 
+    /// Validate and sort verified partial evidence while retaining structured
+    /// reasons why complete-domain proof remains unavailable.
+    pub fn canonicalized_with_incomplete_evidence(
+        mut points: Vec<CurveCurvePoint>,
+        mut overlaps: Vec<CurveCurveOverlap>,
+        reason: &'static str,
+        incomplete_evidence: Vec<IncompleteEvidence>,
+    ) -> Result<Self> {
+        Self::validate_and_sort(&mut points, &mut overlaps)?;
+        Ok(Self {
+            points,
+            overlaps,
+            completion: Completion::Indeterminate { reason },
+            incomplete_evidence,
+        })
+    }
+
     /// Validate and sort evidence whose solver covered the complete requested
     /// domain.
     pub fn canonicalized_complete(
@@ -120,6 +139,7 @@ impl CurveCurveIntersections {
             points: Vec::new(),
             overlaps: Vec::new(),
             completion: Completion::Complete,
+            incomplete_evidence: Vec::new(),
         }
     }
 
@@ -129,6 +149,20 @@ impl CurveCurveIntersections {
             points: Vec::new(),
             overlaps: Vec::new(),
             completion: Completion::Indeterminate { reason },
+            incomplete_evidence: Vec::new(),
+        }
+    }
+
+    /// Empty verified partial result with structured missing-proof evidence.
+    pub fn indeterminate_empty_with_evidence(
+        reason: &'static str,
+        incomplete_evidence: Vec<IncompleteEvidence>,
+    ) -> Self {
+        Self {
+            points: Vec::new(),
+            overlaps: Vec::new(),
+            completion: Completion::Indeterminate { reason },
+            incomplete_evidence,
         }
     }
 
@@ -137,6 +171,19 @@ impl CurveCurveIntersections {
         mut overlaps: Vec<CurveCurveOverlap>,
         completion: Completion,
     ) -> Result<Self> {
+        Self::validate_and_sort(&mut points, &mut overlaps)?;
+        Ok(Self {
+            points,
+            overlaps,
+            completion,
+            incomplete_evidence: Vec::new(),
+        })
+    }
+
+    fn validate_and_sort(
+        points: &mut [CurveCurvePoint],
+        overlaps: &mut [CurveCurveOverlap],
+    ) -> Result<()> {
         if points.iter().any(|p| {
             !p.point.x.is_finite()
                 || !p.point.y.is_finite()
@@ -171,11 +218,7 @@ impl CurveCurveIntersections {
                 .then(a.b.hi.total_cmp(&b.b.hi))
                 .then(a.orientation.cmp(&b.orientation))
         });
-        Ok(Self {
-            points,
-            overlaps,
-            completion,
-        })
+        Ok(())
     }
 
     /// True when no contacts or overlaps were discovered. Consult
@@ -193,6 +236,15 @@ impl CurveCurveIntersections {
     /// True only when the solver covered the complete requested domains.
     pub fn is_complete(&self) -> bool {
         self.completion.is_complete()
+    }
+
+    /// Structured reasons why complete-domain proof remains unavailable.
+    ///
+    /// Evidence remains in deterministic proof-obligation order and survives
+    /// canonicalization and operand swapping. Complete constructors always
+    /// return an empty slice.
+    pub fn incomplete_evidence(&self) -> &[IncompleteEvidence] {
+        &self.incomplete_evidence
     }
 
     /// True only for an empty result backed by complete-domain proof.

@@ -743,6 +743,8 @@ true only for an empty complete result.
   have stable bounded diagnostics, with parameter-resolution retained even
   when diagnostics are off. Nested fallback minimizers now retain typed
   parameter-resolution, invalid-objective, and iteration-bound termination.
+  Ordered incomplete proof obligations survive canonicalization, swapping,
+  generic dispatch, and facade adaptation, and Q4 pins their semantic digest.
   Extend this to interval root-existence, generic curve/surface pairing, and
   procedural/NURBS fields.
 - Analytic special cases and the generic solver feed the same canonical result type.

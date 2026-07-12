@@ -62,6 +62,10 @@ cargo bench --manifest-path benches/Cargo.toml --bench curve_pair_solve --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench xt_io --no-run
 ```
 
+The curve-pair solve ladder pins ordered structured incomplete-proof evidence
+separately from emitted contact geometry, then folds both digests into its
+semantic output contract.
+
 The Q1 target verifies the result digest before measurement and again in every
 timed iteration. The Q2 target provides the 21 checked-commit, incremental
 index-refresh, rejection, and full-rebuild cases in the quality contract. It

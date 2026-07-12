@@ -254,6 +254,7 @@ pub use kcore::operation::{
     NumericalPolicy, OperationPolicyError, OperationReport, PolicyVersion, ResourceKind,
     SessionPolicy, SessionPrecision, StageId,
 };
+pub use kcore::proof::{IncompleteCause, IncompleteEvidence};
 pub use kcore::tolerance::Tolerances;
 pub use kgeom::frame::Frame;
 pub use kgeom::param::ParamRange;

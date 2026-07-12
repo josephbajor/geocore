@@ -397,6 +397,7 @@ pub struct CurveCurveIntersections {
     pub(crate) points: Vec<CurveCurvePoint>,
     pub(crate) overlaps: Vec<CurveCurveOverlap>,
     pub(crate) completion: IntersectionCompletion,
+    pub(crate) incomplete_evidence: Vec<crate::IncompleteEvidence>,
 }
 
 impl CurveCurveIntersections {
@@ -419,6 +420,10 @@ impl CurveCurveIntersections {
     /// Complete-domain proof status.
     pub const fn completion(&self) -> IntersectionCompletion {
         self.completion
+    }
+    /// Structured lower-layer reasons why complete-domain proof remains unavailable.
+    pub fn incomplete_evidence(&self) -> &[crate::IncompleteEvidence] {
+        &self.incomplete_evidence
     }
     /// True only when both requested intervals were completely covered.
     pub fn is_complete(&self) -> bool {

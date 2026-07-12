@@ -2831,7 +2831,7 @@
       "size_parameters": { "elements": 1, "control_points": 4 },
       "tolerances": { "linear": 1e-8 },
       "policy_values": { "seed_attempts_allowed": 4096, "execution": "serial", "policy_version": "v1", "api": "intersect_bounded_nurbs_nurbs_with_context" },
-      "expected_result_counters": { "points": 1, "overlaps": 0, "complete": false, "proven_empty": false, "indeterminate": true, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 22, "candidate_high_water": 4, "depth_high_water": 6, "seed_attempts": 4, "point_digest": "617e1b7b48fdb84a", "output_digest": "c99bc6119a17d017" }
+      "expected_result_counters": { "points": 1, "overlaps": 0, "complete": false, "proven_empty": false, "indeterminate": true, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 22, "candidate_high_water": 4, "depth_high_water": 6, "seed_attempts": 4, "incomplete_evidence": 1, "incomplete_evidence_digest": "f2e277f833dc186d", "point_digest": "617e1b7b48fdb84a", "output_digest": "302140c2f432be9b" }
     },
     {
       "path": "geometry/curve-pair-solve/rational-transverse-v1/1/default-v1",
@@ -2841,7 +2841,7 @@
       "size_parameters": { "elements": 1, "control_points": 4 },
       "tolerances": { "linear": 1e-8 },
       "policy_values": { "seed_attempts_allowed": 4096, "execution": "serial", "policy_version": "v1", "api": "intersect_bounded_nurbs_nurbs_with_context" },
-      "expected_result_counters": { "points": 1, "overlaps": 0, "complete": false, "proven_empty": false, "indeterminate": true, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 12, "candidate_high_water": 2, "depth_high_water": 6, "seed_attempts": 2, "point_digest": "d116a5f64d2e545a", "output_digest": "ae98eb78710f82f7" }
+      "expected_result_counters": { "points": 1, "overlaps": 0, "complete": false, "proven_empty": false, "indeterminate": true, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 12, "candidate_high_water": 2, "depth_high_water": 6, "seed_attempts": 2, "incomplete_evidence": 1, "incomplete_evidence_digest": "f2e277f833dc186d", "point_digest": "d116a5f64d2e545a", "output_digest": "17d555a6eed30a8b" }
     },
     {
       "path": "geometry/curve-pair-solve/poly-tangent-v1/1/default-v1",
@@ -2851,7 +2851,7 @@
       "size_parameters": { "elements": 1, "control_points": 5 },
       "tolerances": { "linear": 1e-8 },
       "policy_values": { "seed_attempts_allowed": 4096, "execution": "serial", "policy_version": "v1", "api": "intersect_bounded_nurbs_nurbs_with_context" },
-      "expected_result_counters": { "points": 1, "overlaps": 0, "complete": false, "proven_empty": false, "indeterminate": true, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 22, "candidate_high_water": 4, "depth_high_water": 6, "seed_attempts": 4, "point_digest": "617e1c7b48fdb9fd", "output_digest": "c721089022fd1e63" }
+      "expected_result_counters": { "points": 1, "overlaps": 0, "complete": false, "proven_empty": false, "indeterminate": true, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 22, "candidate_high_water": 4, "depth_high_water": 6, "seed_attempts": 4, "incomplete_evidence": 1, "incomplete_evidence_digest": "f2e277f833dc186d", "point_digest": "617e1c7b48fdb9fd", "output_digest": "213bf3891ed08b73" }
     },
     {
       "path": "geometry/curve-pair-solve/poly-two-root-v1/2/default-v1",
@@ -2861,7 +2861,7 @@
       "size_parameters": { "elements": 2, "control_points": 5 },
       "tolerances": { "linear": 1e-8 },
       "policy_values": { "seed_attempts_allowed": 4096, "execution": "serial", "policy_version": "v1", "api": "intersect_bounded_nurbs_nurbs_with_context" },
-      "expected_result_counters": { "points": 2, "overlaps": 0, "complete": false, "proven_empty": false, "indeterminate": true, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 22, "candidate_high_water": 5, "depth_high_water": 6, "seed_attempts": 4, "point_digest": "360610ba1318ae30", "output_digest": "acaefb54bd62cadc" }
+      "expected_result_counters": { "points": 2, "overlaps": 0, "complete": false, "proven_empty": false, "indeterminate": true, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 22, "candidate_high_water": 5, "depth_high_water": 6, "seed_attempts": 4, "incomplete_evidence": 1, "incomplete_evidence_digest": "f2e277f833dc186d", "point_digest": "360610ba1318ae30", "output_digest": "0611a40c48f7a174" }
     },
     {
       "path": "geometry/curve-pair-solve/poly-hidden-miss-v1/0/default-v1",
@@ -2871,7 +2871,7 @@
       "size_parameters": { "elements": 0, "control_points": 5 },
       "tolerances": { "linear": 1e-8 },
       "policy_values": { "seed_attempts_allowed": 4096, "execution": "serial", "policy_version": "v1", "api": "intersect_bounded_nurbs_nurbs_with_context" },
-      "expected_result_counters": { "points": 0, "overlaps": 0, "complete": true, "proven_empty": true, "indeterminate": false, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 2, "candidate_high_water": 1, "depth_high_water": 1, "seed_attempts": 0, "point_digest": "6489db2b285bd20f", "output_digest": "86e0f166d13cc969" }
+      "expected_result_counters": { "points": 0, "overlaps": 0, "complete": true, "proven_empty": true, "indeterminate": false, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 2, "candidate_high_water": 1, "depth_high_water": 1, "seed_attempts": 0, "incomplete_evidence": 0, "incomplete_evidence_digest": "8b5e85e65191be35", "point_digest": "6489db2b285bd20f", "output_digest": "e85d8ea4dc2a6298" }
     },
     {
       "path": "geometry/curve-pair-solve/poly-tangent-v1/1/seed-denied-v1",
@@ -2881,7 +2881,7 @@
       "size_parameters": { "elements": 1, "control_points": 5 },
       "tolerances": { "linear": 1e-8 },
       "policy_values": { "seed_attempts_allowed": 0, "execution": "serial", "policy_version": "v1", "api": "intersect_bounded_nurbs_nurbs_with_context" },
-      "expected_result_counters": { "points": 0, "overlaps": 0, "complete": false, "proven_empty": false, "indeterminate": true, "verified_witnesses": true, "limit_kind": "seed-attempts", "limit_events": 1, "limit_attempted_consumed": 1, "limit_attempted_allowed": 0, "isolation_work": 22, "candidate_high_water": 4, "depth_high_water": 6, "seed_attempts": 0, "point_digest": "6489db2b285bd20f", "output_digest": "bb45774d77701b6f" }
+      "expected_result_counters": { "points": 0, "overlaps": 0, "complete": false, "proven_empty": false, "indeterminate": true, "verified_witnesses": true, "limit_kind": "seed-attempts", "limit_events": 1, "limit_attempted_consumed": 1, "limit_attempted_allowed": 0, "isolation_work": 22, "candidate_high_water": 4, "depth_high_water": 6, "seed_attempts": 0, "incomplete_evidence": 2, "incomplete_evidence_digest": "bd273a2451cef1e3", "point_digest": "6489db2b285bd20f", "output_digest": "0a8009d0c2f5a0c4" }
     }
   ]
 }

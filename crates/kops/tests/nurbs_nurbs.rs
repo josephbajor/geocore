@@ -5,14 +5,17 @@ use kcore::operation::{
     NumericalPolicy, OperationContext, PolicyVersion, ResourceKind, SessionPolicy,
     SessionPrecision,
 };
+use kcore::proof::{IncompleteCause, IncompleteEvidence};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::nurbs::NurbsCurve;
 use kgeom::param::ParamRange;
 use kgeom::vec::Point3;
 use kops::intersect::{
-    ContactKind, NURBS_CURVE_PAIR_MINIMIZER_PARAMETER_RESOLUTION, NURBS_CURVE_PAIR_POLISH_FALLBACK,
-    NURBS_CURVE_PAIR_POLISH_STATIONARY, NURBS_CURVE_PAIR_SEED_ATTEMPTS, ParamOrientation,
+    ContactKind, NURBS_CURVE_PAIR_COMPLETE_COVERAGE, NURBS_CURVE_PAIR_COVERAGE_INCOMPLETE,
+    NURBS_CURVE_PAIR_ISOLATION_SUBDIVISION_LIMIT, NURBS_CURVE_PAIR_MINIMIZER_PARAMETER_RESOLUTION,
+    NURBS_CURVE_PAIR_POLISH_FALLBACK, NURBS_CURVE_PAIR_POLISH_STATIONARY,
+    NURBS_CURVE_PAIR_SEED_ATTEMPTS, NURBS_CURVE_PAIR_SEED_LIMIT, ParamOrientation,
     intersect_bounded_curves_with_context, intersect_bounded_nurbs_nurbs,
     intersect_bounded_nurbs_nurbs_with_context,
 };
@@ -69,6 +72,18 @@ fn nurbs_nurbs_crossing_tangent_and_range_filtering() {
     assert_eq!(hit.points.len(), 1);
     assert_eq!(hit.points[0].kind, ContactKind::Transverse);
     assert!(!hit.is_complete());
+    assert_eq!(hit.incomplete_evidence().len(), 1);
+    assert_eq!(
+        hit.incomplete_evidence()[0],
+        IncompleteEvidence {
+            code: NURBS_CURVE_PAIR_COVERAGE_INCOMPLETE,
+            stage: NURBS_CURVE_PAIR_SEED_ATTEMPTS,
+            cause: IncompleteCause::ProofMethodUnavailable {
+                capability: NURBS_CURVE_PAIR_COMPLETE_COVERAGE,
+            },
+            message: "NURBS curve-pair candidate cells do not yet have complete root and overlap coverage",
+        }
+    );
     assert!(hit.points[0].point.dist(Point3::new(0.0, 0.0, 0.0)) < 1e-8);
     assert!((hit.points[0].t_a - 0.5).abs() < 1e-8);
     assert!((hit.points[0].t_b - 0.5).abs() < 1e-8);
@@ -83,6 +98,7 @@ fn nurbs_nurbs_crossing_tangent_and_range_filtering() {
     .unwrap();
     assert!(range_miss.is_empty());
     assert!(range_miss.is_proven_empty());
+    assert!(range_miss.incomplete_evidence().is_empty());
 
     let tangent = tangent_parabola();
     let hit = intersect_bounded_nurbs_nurbs(
@@ -333,6 +349,19 @@ fn cell_local_seed_budget_has_exact_boundaries_and_never_grants_completion() {
     let crossing = denied.report().limit_events()[0];
     assert_eq!(crossing.stage, NURBS_CURVE_PAIR_SEED_ATTEMPTS);
     assert_eq!((crossing.consumed, crossing.allowed), (1, 0));
+    assert_eq!(result.incomplete_evidence().len(), 2);
+    assert_eq!(
+        result.incomplete_evidence()[0].code,
+        NURBS_CURVE_PAIR_SEED_LIMIT
+    );
+    assert_eq!(
+        result.incomplete_evidence()[0].cause,
+        IncompleteCause::Limit { snapshot: crossing }
+    );
+    assert_eq!(
+        result.incomplete_evidence()[1].code,
+        NURBS_CURVE_PAIR_COVERAGE_INCOMPLETE
+    );
 }
 
 #[test]
@@ -392,6 +421,7 @@ fn nurbs_nurbs_is_stable_under_small_and_large_parameter_reparameterization() {
         assert_eq!(legacy.points[0].t_b, swapped.points[0].t_a);
         assert_eq!(legacy.points[0].point, swapped.points[0].point);
         assert_eq!(legacy.points[0].residual, swapped.points[0].residual);
+        assert_eq!(legacy.incomplete_evidence(), swapped.incomplete_evidence());
 
         let swapped_contextual = intersect_bounded_nurbs_nurbs_with_context(
             &horizontal,
@@ -560,6 +590,20 @@ fn adaptive_control_hull_cover_proves_hidden_miss_and_limits_remain_indeterminat
     assert_eq!(
         (crossing.consumed, crossing.allowed),
         (work.consumed, allowed)
+    );
+    assert_eq!(result.incomplete_evidence().len(), 2);
+    assert_eq!(
+        result.incomplete_evidence()[0],
+        IncompleteEvidence {
+            code: NURBS_CURVE_PAIR_ISOLATION_SUBDIVISION_LIMIT,
+            stage: crossing.stage,
+            cause: IncompleteCause::Limit { snapshot: crossing },
+            message: "NURBS curve-pair isolation subdivision limit reached",
+        }
+    );
+    assert_eq!(
+        result.incomplete_evidence()[1].code,
+        NURBS_CURVE_PAIR_COVERAGE_INCOMPLETE
     );
 }
 

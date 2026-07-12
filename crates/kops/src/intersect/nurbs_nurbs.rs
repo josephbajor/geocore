@@ -8,16 +8,17 @@ use super::result::{
     ContactKind, CurveCurveIntersections, CurveCurveOverlap, CurveCurvePoint, ParamOrientation,
     accept_curve_curve_candidate,
 };
-use kcore::error::{Error, Result};
+use kcore::error::{CapabilityId, Error, Result};
 use kcore::operation::{
-    AccountingMode, BudgetPlan, DiagnosticCode, DiagnosticKind, LimitSpec, NumericalPolicy,
-    OperationContext, OperationOutcome, OperationPolicyError, OperationScope, ResourceKind,
-    SessionPolicy, StageId,
+    AccountingMode, BudgetPlan, DiagnosticCode, DiagnosticKind, LimitSnapshot, LimitSpec,
+    NumericalPolicy, OperationContext, OperationOutcome, OperationPolicyError, OperationScope,
+    ResourceKind, SessionPolicy, StageId,
 };
+use kcore::proof::{IncompleteCause, IncompleteEvidence};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::nurbs::{
-    ContextCurvePairIsolationError, CurvePairCandidateCell, NurbsCurve,
+    ContextCurvePairIsolationError, CurvePairCandidateCell, CurvePairIsolationLimits, NurbsCurve,
     NurbsCurvePairBudgetProfile, isolate_curve_pair_candidates_in_scope,
 };
 use kgeom::param::ParamRange;
@@ -29,6 +30,8 @@ const MAX_POLISH_STEPS: usize = 32;
 const MAX_MINIMIZE_STEPS: usize = 80;
 const OVERLAP_SAMPLES: usize = 32;
 const DEFAULT_SEED_ATTEMPTS: u64 = 4_096;
+const CURVE_PAIR_COMPLETION_REASON: &str =
+    "NURBS curve-pair candidate cells do not yet have complete root and overlap coverage";
 
 const fn stage(value: &'static str) -> StageId {
     match StageId::new(value) {
@@ -47,6 +50,38 @@ const fn diagnostic(value: &'static str) -> DiagnosticCode {
         Err(_) => panic!("invalid NURBS curve-pair diagnostic"),
     }
 }
+
+const fn capability(value: &'static str) -> CapabilityId {
+    match CapabilityId::new(value) {
+        Ok(capability) => capability,
+        Err(_) => panic!("invalid NURBS curve-pair capability"),
+    }
+}
+
+/// Complete root and overlap coverage for retained NURBS curve-pair cells.
+pub const NURBS_CURVE_PAIR_COMPLETE_COVERAGE: CapabilityId =
+    capability("kops.intersect.nurbs-curve-pair-complete-coverage");
+/// Exact isolation subdivision work stopped before full requested coverage.
+pub const NURBS_CURVE_PAIR_ISOLATION_SUBDIVISION_LIMIT: DiagnosticCode =
+    diagnostic("kops.intersect.nurbs-curve-pair-isolation-subdivision-limit");
+/// Exact isolation retained-cell capacity stopped before full coverage.
+pub const NURBS_CURVE_PAIR_ISOLATION_CANDIDATE_LIMIT: DiagnosticCode =
+    diagnostic("kops.intersect.nurbs-curve-pair-isolation-candidate-limit");
+/// Exact isolation depth stopped before full requested coverage.
+pub const NURBS_CURVE_PAIR_ISOLATION_DEPTH_LIMIT: DiagnosticCode =
+    diagnostic("kops.intersect.nurbs-curve-pair-isolation-depth-limit");
+/// Exact isolation stopped at arithmetic parameter resolution.
+pub const NURBS_CURVE_PAIR_ISOLATION_PARAMETER_RESOLUTION: DiagnosticCode =
+    diagnostic("kops.intersect.nurbs-curve-pair-isolation-parameter-resolution");
+/// Exact subdivision was unavailable for a valid retained cell.
+pub const NURBS_CURVE_PAIR_ISOLATION_METHOD_UNAVAILABLE: DiagnosticCode =
+    diagnostic("kops.intersect.nurbs-curve-pair-isolation-method-unavailable");
+/// Cell-local seed work stopped before every retained cell was attempted.
+pub const NURBS_CURVE_PAIR_SEED_LIMIT: DiagnosticCode =
+    diagnostic("kops.intersect.nurbs-curve-pair-seed-limit");
+/// Retained cells still lack a complete root/overlap proof method.
+pub const NURBS_CURVE_PAIR_COVERAGE_INCOMPLETE: DiagnosticCode =
+    diagnostic("kops.intersect.nurbs-curve-pair-coverage-incomplete");
 
 /// Newton stopped at a numerically stationary directional gradient without a witness.
 pub const NURBS_CURVE_PAIR_POLISH_STATIONARY: DiagnosticCode =
@@ -91,6 +126,17 @@ pub const NURBS_CURVE_PAIR_MINIMIZER_DIAGNOSTICS: &[DiagnosticCode] = &[
     NURBS_CURVE_PAIR_MINIMIZER_PARAMETER_RESOLUTION,
     NURBS_CURVE_PAIR_MINIMIZER_INVALID_OBJECTIVE,
     NURBS_CURVE_PAIR_MINIMIZER_ITERATION_LIMIT,
+];
+
+/// Every stable incomplete-proof identity owned by NURBS curve-pair solving.
+pub const NURBS_CURVE_PAIR_PROOF_DIAGNOSTICS: &[DiagnosticCode] = &[
+    NURBS_CURVE_PAIR_ISOLATION_SUBDIVISION_LIMIT,
+    NURBS_CURVE_PAIR_ISOLATION_CANDIDATE_LIMIT,
+    NURBS_CURVE_PAIR_ISOLATION_DEPTH_LIMIT,
+    NURBS_CURVE_PAIR_ISOLATION_PARAMETER_RESOLUTION,
+    NURBS_CURVE_PAIR_ISOLATION_METHOD_UNAVAILABLE,
+    NURBS_CURVE_PAIR_SEED_LIMIT,
+    NURBS_CURVE_PAIR_COVERAGE_INCOMPLETE,
 ];
 
 /// Version-1 composed profile for exact isolation plus cell-local discovery.
@@ -361,7 +407,8 @@ fn intersect_bounded_nurbs_nurbs_contextual_impl(
             ContextCurvePairIsolationError::Kernel(error) => error,
             ContextCurvePairIsolationError::Policy(error) => Error::from(error),
         })?;
-        if isolation.is_proven_empty() {
+        let incomplete_evidence = diagnose_curve_pair_isolation_limits(scope, isolation.limits());
+        if isolation.is_proven_empty() && incomplete_evidence.is_empty() {
             return Ok(CurveCurveIntersections::complete_empty());
         }
         return intersect_bounded_nurbs_nurbs_candidates_impl(
@@ -375,9 +422,108 @@ fn intersect_bounded_nurbs_nurbs_contextual_impl(
                 numerical,
             },
             scope,
+            incomplete_evidence,
         );
     }
     degenerate_range_intersections(a, range_a, collapsed_a, b, range_b, tolerances, numerical)
+}
+
+fn curve_pair_coverage_incomplete_evidence() -> IncompleteEvidence {
+    IncompleteEvidence {
+        code: NURBS_CURVE_PAIR_COVERAGE_INCOMPLETE,
+        stage: NURBS_CURVE_PAIR_SEED_ATTEMPTS,
+        cause: IncompleteCause::ProofMethodUnavailable {
+            capability: NURBS_CURVE_PAIR_COMPLETE_COVERAGE,
+        },
+        message: CURVE_PAIR_COMPLETION_REASON,
+    }
+}
+
+/// Evidence order follows the proof pipeline: subdivision work, retained
+/// candidates, depth, arithmetic resolution, then method availability.
+fn diagnose_curve_pair_isolation_limits(
+    scope: &mut OperationScope<'_, '_>,
+    limits: CurvePairIsolationLimits,
+) -> Vec<IncompleteEvidence> {
+    let mut evidence = Vec::new();
+    if let Some(snapshot) = limits.subdivision_work() {
+        evidence.push(diagnose_curve_pair_limit(
+            scope,
+            snapshot,
+            NURBS_CURVE_PAIR_ISOLATION_SUBDIVISION_LIMIT,
+            "NURBS curve-pair isolation subdivision limit reached",
+        ));
+    }
+    if let Some(snapshot) = limits.candidate_cells() {
+        evidence.push(diagnose_curve_pair_limit(
+            scope,
+            snapshot,
+            NURBS_CURVE_PAIR_ISOLATION_CANDIDATE_LIMIT,
+            "NURBS curve-pair isolation candidate-cover limit reached",
+        ));
+    }
+    if let Some(snapshot) = limits.subdivision_depth() {
+        evidence.push(diagnose_curve_pair_limit(
+            scope,
+            snapshot,
+            NURBS_CURVE_PAIR_ISOLATION_DEPTH_LIMIT,
+            "NURBS curve-pair isolation depth limit reached",
+        ));
+    }
+    if limits.parameter_resolution() {
+        const MESSAGE: &str =
+            "NURBS curve-pair isolation stopped at floating-point parameter resolution";
+        scope.diagnose(
+            kgeom::nurbs::NURBS_CURVE_PAIR_DEPTH,
+            NURBS_CURVE_PAIR_ISOLATION_PARAMETER_RESOLUTION,
+            DiagnosticKind::NumericResolution,
+            MESSAGE,
+        );
+        evidence.push(IncompleteEvidence {
+            code: NURBS_CURVE_PAIR_ISOLATION_PARAMETER_RESOLUTION,
+            stage: kgeom::nurbs::NURBS_CURVE_PAIR_DEPTH,
+            cause: IncompleteCause::NumericResolution,
+            message: MESSAGE,
+        });
+    }
+    if limits.subdivision_unavailable() {
+        const MESSAGE: &str = "NURBS curve-pair exact subdivision is unavailable for this cell";
+        scope.diagnose(
+            kgeom::nurbs::NURBS_CURVE_PAIR_DEPTH,
+            NURBS_CURVE_PAIR_ISOLATION_METHOD_UNAVAILABLE,
+            DiagnosticKind::ProofIncomplete,
+            MESSAGE,
+        );
+        evidence.push(IncompleteEvidence {
+            code: NURBS_CURVE_PAIR_ISOLATION_METHOD_UNAVAILABLE,
+            stage: kgeom::nurbs::NURBS_CURVE_PAIR_DEPTH,
+            cause: IncompleteCause::ProofMethodUnavailable {
+                capability: NURBS_CURVE_PAIR_COMPLETE_COVERAGE,
+            },
+            message: MESSAGE,
+        });
+    }
+    evidence
+}
+
+fn diagnose_curve_pair_limit(
+    scope: &mut OperationScope<'_, '_>,
+    snapshot: LimitSnapshot,
+    code: DiagnosticCode,
+    message: &'static str,
+) -> IncompleteEvidence {
+    scope.diagnose(
+        snapshot.stage,
+        code,
+        DiagnosticKind::LimitReached(snapshot),
+        message,
+    );
+    IncompleteEvidence {
+        code,
+        stage: snapshot.stage,
+        cause: IncompleteCause::Limit { snapshot },
+        message,
+    }
 }
 
 fn intersect_bounded_nurbs_nurbs_candidates_impl(
@@ -386,6 +532,7 @@ fn intersect_bounded_nurbs_nurbs_candidates_impl(
     candidates: &[CurvePairCandidateCell],
     policy: PolishPolicy,
     scope: &mut OperationScope<'_, '_>,
+    mut incomplete_evidence: Vec<IncompleteEvidence>,
 ) -> Result<CurveCurveIntersections> {
     if let Some(overlap) = contained_overlap(
         a,
@@ -395,14 +542,28 @@ fn intersect_bounded_nurbs_nurbs_candidates_impl(
         policy.tolerances,
         policy.numerical,
     ) {
-        return CurveCurveIntersections::canonicalized(Vec::new(), vec![overlap]);
+        incomplete_evidence.push(curve_pair_coverage_incomplete_evidence());
+        return CurveCurveIntersections::canonicalized_with_incomplete_evidence(
+            Vec::new(),
+            vec![overlap],
+            CURVE_PAIR_COMPLETION_REASON,
+            incomplete_evidence,
+        );
     }
 
     let mut points = Vec::new();
     for cell in candidates {
         match scope.ledger_mut().charge(NURBS_CURVE_PAIR_SEED_ATTEMPTS, 1) {
             Ok(()) => {}
-            Err(OperationPolicyError::LimitReached(_)) => break,
+            Err(OperationPolicyError::LimitReached(snapshot)) => {
+                incomplete_evidence.push(diagnose_curve_pair_limit(
+                    scope,
+                    snapshot,
+                    NURBS_CURVE_PAIR_SEED_LIMIT,
+                    "NURBS curve-pair seed-attempt limit reached",
+                ));
+                break;
+            }
             Err(error) => return Err(error.into()),
         }
         let cell_range_a = cell.first_range();
@@ -438,7 +599,15 @@ fn intersect_bounded_nurbs_nurbs_candidates_impl(
         let kind = contact_kind(a, seed.t_a, b, seed.t_b, policy.tolerances);
         push_distinct_point(&mut points, seed.into_point(kind), policy.tolerances);
     }
-    CurveCurveIntersections::canonicalized(points, Vec::new())
+    if !candidates.is_empty() {
+        incomplete_evidence.push(curve_pair_coverage_incomplete_evidence());
+    }
+    CurveCurveIntersections::canonicalized_with_incomplete_evidence(
+        points,
+        Vec::new(),
+        CURVE_PAIR_COMPLETION_REASON,
+        incomplete_evidence,
+    )
 }
 
 fn seed_for_candidate_cell(
@@ -482,7 +651,12 @@ fn degenerate_range_intersections(
     };
     let mut points = Vec::new();
     push_root_candidate(a, t_a, b, t_b, &mut points, tolerances);
-    CurveCurveIntersections::canonicalized(points, Vec::new())
+    CurveCurveIntersections::canonicalized_with_incomplete_evidence(
+        points,
+        Vec::new(),
+        CURVE_PAIR_COMPLETION_REASON,
+        vec![curve_pair_coverage_incomplete_evidence()],
+    )
 }
 
 fn contained_overlap(
@@ -1368,6 +1542,24 @@ mod tests {
         assert_eq!(
             diagnostics_off.report().numeric_resolution_stages(),
             &[NURBS_CURVE_PAIR_SEED_ATTEMPTS]
+        );
+    }
+
+    #[test]
+    fn curve_pair_proof_diagnostics_are_unique_and_namespaced() {
+        let unique = NURBS_CURVE_PAIR_PROOF_DIAGNOSTICS
+            .iter()
+            .map(|code| code.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(unique.len(), NURBS_CURVE_PAIR_PROOF_DIAGNOSTICS.len());
+        assert!(
+            unique
+                .iter()
+                .all(|code| code.starts_with("kops.intersect.nurbs-curve-pair-"))
+        );
+        assert_eq!(
+            NURBS_CURVE_PAIR_COMPLETE_COVERAGE.as_str(),
+            "kops.intersect.nurbs-curve-pair-complete-coverage"
         );
     }
 
