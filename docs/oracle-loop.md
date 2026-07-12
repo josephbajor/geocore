@@ -33,8 +33,8 @@ check that compares the current writer/bundle identity with the last committed
 certified identity and reports certification as stale. That gate blocks a
 writer-conformance claim, not unrelated kernel development.
 
-**Current handoff state (2026-07-11, writer=2beb267):** certification is
-current. The full 14-fixture loop ran through the API CLI: 11/14 imports
+**Last licensed-host run (2026-07-11, writer=2beb267):** the full 14-fixture
+loop ran through the API CLI: 11/14 imports
 accepted (wire/acorn remain the known parse-level rejections), and the first
 there-and-back leg in project history compared 6/9 exports clean — block,
 cylinder, sphere, torus, and both sheets round-trip through Onshape's kernel
@@ -47,6 +47,12 @@ genuinely curved fixtures; Onshape's cone and tolerant-edge re-exports fail
 our reconstruction (preserved as `*_onshape_reexport.x_t` reader-gap
 fixtures); and the accepted offset sheet materializes no exportable body, so
 its re-export leg is unavailable.
+
+**Current certification state (2026-07-12): stale.** Commit `2d7b8dc`
+changed `kxt/src/write.rs` during the facade accessor migration after that host
+run. Regenerating the full bundle produces the same 14 payload identities, but
+the standing writer-byte rule still requires a licensed-host rerun before the
+record can return to `current`.
 
 ## 1. Generate the bundle
 

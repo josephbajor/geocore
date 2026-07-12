@@ -1,7 +1,7 @@
 {
   "schema_version": "kernel-oracle-certification.v1",
-  "status": "current",
-  "reason": "",
+  "status": "stale",
+  "reason": "kxt/src/write.rs changed in 2d7b8dc for the facade accessor migration after the 2026-07-11 host run; the regenerated 14-fixture bundle is byte-identical, but the writer-byte invalidation rule requires a licensed-host rerun",
   "certified_at": "2026-07-11",
   "host": "onshape",
   "host_version": "cloud-2026-07-11",
