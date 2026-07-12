@@ -1,8 +1,9 @@
+use super::parameter::{fit_parameter_pair, fit_scalar_parameter, validate_curve_surface_ranges};
 use super::result::{
     ContactKind, CurveSurfaceIntersections, CurveSurfaceOverlap, CurveSurfacePoint,
     accept_curve_surface_candidate,
 };
-use kcore::error::{Error, Result};
+use kcore::error::Result;
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Line;
 use kgeom::param::ParamRange;
@@ -34,11 +35,12 @@ pub fn intersect_bounded_line_plane(
 
     if local_direction.z.abs() > tolerances.angular() {
         let t_line = -local_origin.z / local_direction.z;
-        let Some(t_line) = fit_line_parameter(t_line, line_range, tolerances.linear()) else {
+        let Some(t_line) = fit_scalar_parameter(t_line, line_range, tolerances.linear()) else {
             return Ok(CurveSurfaceIntersections::complete_empty());
         };
         let local = local_origin + local_direction * t_line;
-        let Some(uv) = fit_uv([local.x, local.y], plane_range, tolerances.linear()) else {
+        let Some(uv) = fit_parameter_pair([local.x, local.y], plane_range, tolerances.linear())
+        else {
             return Ok(CurveSurfaceIntersections::complete_empty());
         };
         let points = accept_curve_surface_candidate(
@@ -109,7 +111,7 @@ fn contained_line_interval(
     }
 
     let t_line = ((interval.lo + interval.hi) / 2.0).clamp(line_range.lo, line_range.hi);
-    let Some(uv) = fit_uv(
+    let Some(uv) = fit_parameter_pair(
         uv_at(local_origin, local_direction, t_line),
         plane_range,
         tolerances.linear(),
@@ -121,25 +123,6 @@ fn contained_line_interval(
             .into_iter()
             .collect::<Vec<CurveSurfacePoint>>();
     CurveSurfaceIntersections::canonicalized_complete(points, Vec::new())
-}
-
-fn fit_line_parameter(candidate: f64, range: ParamRange, tolerance: f64) -> Option<f64> {
-    if candidate < range.lo - tolerance || candidate > range.hi + tolerance {
-        None
-    } else {
-        Some(candidate.clamp(range.lo, range.hi))
-    }
-}
-
-fn fit_uv(candidate: [f64; 2], range: [ParamRange; 2], tolerance: f64) -> Option<[f64; 2]> {
-    let mut uv = [0.0; 2];
-    for i in 0..2 {
-        if candidate[i] < range[i].lo - tolerance || candidate[i] > range[i].hi + tolerance {
-            return None;
-        }
-        uv[i] = candidate[i].clamp(range[i].lo, range[i].hi);
-    }
-    Some(uv)
 }
 
 fn clip_linear_interval(
@@ -177,18 +160,10 @@ fn uv_at(local_origin: Vec3, local_direction: Vec3, t: f64) -> [f64; 2] {
 }
 
 fn validate_ranges(line_range: ParamRange, plane_range: [ParamRange; 2]) -> Result<()> {
-    if !line_range.is_finite() || line_range.width() < 0.0 {
-        return Err(Error::InvalidGeometry {
-            reason: "line/plane intersection requires a finite non-reversed line range",
-        });
-    }
-    if plane_range
-        .iter()
-        .any(|range| !range.is_finite() || range.width() < 0.0)
-    {
-        return Err(Error::InvalidGeometry {
-            reason: "line/plane intersection requires finite non-reversed surface ranges",
-        });
-    }
-    Ok(())
+    validate_curve_surface_ranges(
+        line_range,
+        plane_range,
+        "line/plane intersection requires a finite non-reversed line range",
+        "line/plane intersection requires finite non-reversed surface ranges",
+    )
 }

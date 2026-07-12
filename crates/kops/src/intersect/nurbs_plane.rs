@@ -1,3 +1,4 @@
+use super::parameter::{fit_parameter_pair, validate_curve_surface_ranges};
 use super::result::{
     ContactKind, CurveSurfaceIntersections, CurveSurfaceOverlap, CurveSurfacePoint,
     accept_curve_surface_candidate,
@@ -170,7 +171,7 @@ fn collect_contained_intervals(
 
     if range.width() <= parameter_tolerance(global_range, tolerances) || depth >= MAX_CLIP_DEPTH {
         let mid_uv = plane_uv(bezier.eval(range.lerp(0.5)), plane);
-        if fit_uv(mid_uv, plane_range, tolerances).is_some() {
+        if fit_parameter_pair(mid_uv, plane_range, tolerances.linear()).is_some() {
             push_contained_overlap(bezier, plane, plane_range, tolerances, overlaps);
         }
         return Ok(());
@@ -210,10 +211,10 @@ fn single_parameter_intersection(
             COMPLETION_REASON,
         ));
     }
-    let Some(uv) = fit_uv(
+    let Some(uv) = fit_parameter_pair(
         plane_uv(curve.eval(t_curve), plane),
         plane_range,
-        tolerances,
+        tolerances.linear(),
     ) else {
         return Ok(CurveSurfaceIntersections::indeterminate_empty(
             COMPLETION_REASON,
@@ -260,10 +261,10 @@ fn push_root_candidate(
     if signed_distance(curve.eval(t_curve), plane).abs() > tolerances.linear() {
         return;
     }
-    let Some(uv) = fit_uv(
+    let Some(uv) = fit_parameter_pair(
         plane_uv(curve.eval(t_curve), plane),
         plane_range,
-        tolerances,
+        tolerances.linear(),
     ) else {
         return;
     };
@@ -291,17 +292,17 @@ fn push_contained_overlap(
     if range.width() <= parameter_tolerance(range, tolerances) {
         return;
     }
-    let Some(uv_start) = fit_uv(
+    let Some(uv_start) = fit_parameter_pair(
         plane_uv(curve.eval(range.lo), plane),
         plane_range,
-        tolerances,
+        tolerances.linear(),
     ) else {
         return;
     };
-    let Some(uv_end) = fit_uv(
+    let Some(uv_end) = fit_parameter_pair(
         plane_uv(curve.eval(range.hi), plane),
         plane_range,
-        tolerances,
+        tolerances.linear(),
     ) else {
         return;
     };
@@ -391,19 +392,6 @@ fn contact_kind(
 fn plane_uv(point: Point3, plane: &Plane) -> [f64; 2] {
     let local = plane.frame().to_local(point);
     [local.x, local.y]
-}
-
-fn fit_uv(candidate: [f64; 2], range: [ParamRange; 2], tolerances: Tolerances) -> Option<[f64; 2]> {
-    let mut uv = [0.0; 2];
-    for i in 0..2 {
-        if candidate[i] < range[i].lo - tolerances.linear()
-            || candidate[i] > range[i].hi + tolerances.linear()
-        {
-            return None;
-        }
-        uv[i] = candidate[i].clamp(range[i].lo, range[i].hi);
-    }
-    Some(uv)
 }
 
 fn control_uv_bounds(curve: &NurbsCurve, plane: &Plane) -> [[f64; 2]; 2] {
@@ -524,19 +512,12 @@ fn validate_ranges(
     plane_range: [ParamRange; 2],
     tolerances: Tolerances,
 ) -> Result<()> {
-    if !curve_range.is_finite() || curve_range.width() < 0.0 {
-        return Err(Error::InvalidGeometry {
-            reason: "nurbs/plane intersection requires a finite non-reversed curve range",
-        });
-    }
-    if plane_range
-        .iter()
-        .any(|range| !range.is_finite() || range.width() < 0.0)
-    {
-        return Err(Error::InvalidGeometry {
-            reason: "nurbs/plane intersection requires finite non-reversed surface ranges",
-        });
-    }
+    validate_curve_surface_ranges(
+        curve_range,
+        plane_range,
+        "nurbs/plane intersection requires a finite non-reversed curve range",
+        "nurbs/plane intersection requires finite non-reversed surface ranges",
+    )?;
     if !curve.knots().is_clamped() {
         return Err(Error::InvalidGeometry {
             reason: "nurbs/plane intersection requires a clamped NURBS curve",

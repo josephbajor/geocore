@@ -17,6 +17,18 @@ pub(super) fn validate_finite_ranges(ranges: &[ParamRange], reason: &'static str
     }
 }
 
+/// Validates a bounded curve range before its paired surface window while
+/// preserving the owning solver's public error reasons and precedence.
+pub(super) fn validate_curve_surface_ranges(
+    curve_range: ParamRange,
+    surface_range: [ParamRange; 2],
+    curve_reason: &'static str,
+    surface_reason: &'static str,
+) -> Result<()> {
+    validate_finite_ranges(&[curve_range], curve_reason)?;
+    validate_finite_ranges(&surface_range, surface_reason)
+}
+
 /// Rejects a bounded periodic range spanning more than one period.
 pub(super) fn validate_period_span(
     range: ParamRange,
@@ -44,6 +56,19 @@ pub(super) fn fit_scalar_parameter(
     } else {
         Some(candidate.clamp(range.lo, range.hi))
     }
+}
+
+/// Fits a two-dimensional parameter to a bounded surface window using the
+/// same inclusive endpoint and tolerance-spill semantics as scalar fitting.
+pub(super) fn fit_parameter_pair(
+    candidate: [f64; 2],
+    range: [ParamRange; 2],
+    tolerance: f64,
+) -> Option<[f64; 2]> {
+    Some([
+        fit_scalar_parameter(candidate[0], range[0], tolerance)?,
+        fit_scalar_parameter(candidate[1], range[1], tolerance)?,
+    ])
 }
 
 /// Selects the earliest periodic representative accepted by `range`, then
@@ -80,6 +105,16 @@ mod tests {
         assert_eq!(fit_scalar_parameter(4.0 + 1e-6, range, 1e-6), Some(4.0));
         assert_eq!(fit_scalar_parameter(3.0, range, 0.0), Some(3.0));
         assert_eq!(fit_scalar_parameter(2.0 - 2e-6, range, 1e-6), None);
+    }
+
+    #[test]
+    fn paired_fitting_is_scalar_equivalent_and_axis_ordered() {
+        let ranges = [ParamRange::new(2.0, 4.0), ParamRange::new(-1.0, 1.0)];
+        assert_eq!(
+            fit_parameter_pair([2.0 - 1e-6, 1.0 + 1e-6], ranges, 1e-6),
+            Some([2.0, 1.0])
+        );
+        assert_eq!(fit_parameter_pair([3.0, 1.0 + 2e-6], ranges, 1e-6), None);
     }
 
     #[test]
@@ -122,6 +157,35 @@ mod tests {
             ),
             Err(Error::InvalidGeometry {
                 reason: "one period"
+            })
+        );
+
+        let curve_reason = "owner curve range";
+        let surface_reason = "owner surface range";
+        let invalid = ParamRange {
+            lo: f64::NAN,
+            hi: 1.0,
+        };
+        assert_eq!(
+            validate_curve_surface_ranges(
+                invalid,
+                [invalid, ParamRange::new(0.0, 1.0)],
+                curve_reason,
+                surface_reason,
+            ),
+            Err(Error::InvalidGeometry {
+                reason: curve_reason,
+            })
+        );
+        assert_eq!(
+            validate_curve_surface_ranges(
+                ParamRange::new(0.0, 1.0),
+                [invalid, ParamRange::new(0.0, 1.0)],
+                curve_reason,
+                surface_reason,
+            ),
+            Err(Error::InvalidGeometry {
+                reason: surface_reason,
             })
         );
     }

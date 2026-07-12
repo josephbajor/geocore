@@ -625,6 +625,9 @@ curve bridges therefore enter through one driver boundary, while unsupported
 known and custom classes retain both operand identities in the structured
 `curve-surface.class-pair` capability error. The NURBS bridges remain
 `Indeterminate`; typed routing does not upgrade discovery evidence to a proof.
+Finite curve/surface range validation and two-axis surface-window fitting now
+share one ordered contract across analytic plane families, NURBS/plane, and the
+general NURBS curve marcher while retaining each solver's public error reason.
 
 ## Rollout stages
 

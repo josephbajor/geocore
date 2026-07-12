@@ -1,3 +1,4 @@
+use super::parameter::validate_curve_surface_ranges;
 use super::result::{
     ContactKind, CurveSurfaceIntersections, CurveSurfaceOverlap, CurveSurfacePoint,
     accept_curve_surface_candidate,
@@ -335,20 +336,12 @@ fn parameter_tolerance(range: ParamRange, tolerances: Tolerances) -> f64 {
 }
 
 fn validate_ranges(config: CurveMarchConfig<'_>) -> Result<()> {
-    if !config.curve_range.is_finite() || config.curve_range.width() < 0.0 {
-        return Err(Error::InvalidGeometry {
-            reason: config.finite_curve_range_reason,
-        });
-    }
-    if config
-        .surface_range
-        .iter()
-        .any(|range| !range.is_finite() || range.width() < 0.0)
-    {
-        return Err(Error::InvalidGeometry {
-            reason: config.finite_surface_range_reason,
-        });
-    }
+    validate_curve_surface_ranges(
+        config.curve_range,
+        config.surface_range,
+        config.finite_curve_range_reason,
+        config.finite_surface_range_reason,
+    )?;
     if !config.curve.knots().is_clamped() {
         return Err(Error::InvalidGeometry {
             reason: config.clamped_curve_reason,

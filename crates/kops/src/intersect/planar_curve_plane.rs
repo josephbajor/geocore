@@ -1,4 +1,5 @@
 use super::conic::trig_linear_roots;
+use super::parameter::fit_parameter_pair;
 use super::result::{
     ContactKind, CurveSurfaceIntersections, CurveSurfaceOverlap, CurveSurfacePoint,
     accept_curve_surface_candidate,
@@ -85,10 +86,10 @@ fn intersect_planar_conic_plane(
 
     let mut points = Vec::new();
     for (t_curve, tangent) in trig_linear_roots(a, b, c, curve_range, tolerances.linear()) {
-        let Some(uv) = fit_uv(
+        let Some(uv) = fit_parameter_pair(
             plane_uv(conic.curve.eval(t_curve), plane),
             plane_range,
-            tolerances,
+            tolerances.linear(),
         ) else {
             continue;
         };
@@ -120,10 +121,10 @@ fn contained_planar_conic(
 ) -> Result<CurveSurfaceIntersections> {
     if curve_range.width() <= tolerances.linear() {
         let t_curve = curve_range.lo;
-        let Some(uv) = fit_uv(
+        let Some(uv) = fit_parameter_pair(
             plane_uv(conic.curve.eval(t_curve), plane),
             plane_range,
-            tolerances,
+            tolerances.linear(),
         ) else {
             return Ok(CurveSurfaceIntersections::complete_empty());
         };
@@ -161,26 +162,26 @@ fn contained_planar_conic(
             continue;
         }
         let mid = (lo + hi) / 2.0;
-        if fit_uv(
+        if fit_parameter_pair(
             plane_uv(conic.curve.eval(mid), plane),
             plane_range,
-            tolerances,
+            tolerances.linear(),
         )
         .is_none()
         {
             continue;
         }
-        let Some(uv_start) = fit_uv(
+        let Some(uv_start) = fit_parameter_pair(
             plane_uv(conic.curve.eval(lo), plane),
             plane_range,
-            tolerances,
+            tolerances.linear(),
         ) else {
             continue;
         };
-        let Some(uv_end) = fit_uv(
+        let Some(uv_end) = fit_parameter_pair(
             plane_uv(conic.curve.eval(hi), plane),
             plane_range,
-            tolerances,
+            tolerances.linear(),
         ) else {
             continue;
         };
@@ -201,7 +202,9 @@ fn contained_planar_conic(
         }) {
             continue;
         }
-        let Some(uv) = fit_uv(plane_uv(cut_point, plane), plane_range, tolerances) else {
+        let Some(uv) =
+            fit_parameter_pair(plane_uv(cut_point, plane), plane_range, tolerances.linear())
+        else {
             continue;
         };
         if let Some(point) = accept_curve_surface_candidate(
@@ -258,19 +261,6 @@ fn dedup_sorted(values: &mut Vec<f64>, tolerances: Tolerances) {
 fn plane_uv(point: Point3, plane: &Plane) -> [f64; 2] {
     let local = plane.frame().to_local(point);
     [local.x, local.y]
-}
-
-fn fit_uv(candidate: [f64; 2], range: [ParamRange; 2], tolerances: Tolerances) -> Option<[f64; 2]> {
-    let mut uv = [0.0; 2];
-    for i in 0..2 {
-        if candidate[i] < range[i].lo - tolerances.linear()
-            || candidate[i] > range[i].hi + tolerances.linear()
-        {
-            return None;
-        }
-        uv[i] = candidate[i].clamp(range[i].lo, range[i].hi);
-    }
-    Some(uv)
 }
 
 fn push_distinct(
