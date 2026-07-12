@@ -1,8 +1,12 @@
+use super::numerical::solve_symmetric_2x2;
 use super::result::{
     ContactKind, CurveCurveIntersections, CurveCurveOverlap, CurveCurvePoint, ParamOrientation,
     accept_curve_curve_candidate,
 };
 use kcore::error::{Error, Result};
+use kcore::operation::{
+    NumericalPolicy, OperationContext, OperationOutcome, OperationScope, SessionPolicy,
+};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::nurbs::NurbsCurve;
@@ -21,6 +25,14 @@ struct Sample {
     point: Point3,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PolishPolicy {
+    range_a: ParamRange,
+    range_b: ParamRange,
+    tolerances: Tolerances,
+    numerical: NumericalPolicy,
+}
+
 /// Intersect two clamped NURBS curves restricted to finite ranges.
 ///
 /// This is the first general NURBS/NURBS curve bridge: it discovers candidate
@@ -33,6 +45,45 @@ pub fn intersect_bounded_nurbs_nurbs(
     b: &NurbsCurve,
     range_b: ParamRange,
     tolerances: Tolerances,
+) -> Result<CurveCurveIntersections> {
+    let session = SessionPolicy::v1();
+    let context = OperationContext::new(&session, tolerances)
+        .expect("validated Tolerances always satisfy v1 session precision");
+    intersect_bounded_nurbs_nurbs_with_context(a, range_a, b, range_b, &context).into_result()
+}
+
+/// Context-aware bounded NURBS/NURBS curve intersection.
+///
+/// In this conditioning-only pilot, the operation's numerical policy controls
+/// the Newton system conditioning guard. Candidate acceptance remains
+/// independently governed by the context's model-space tolerances. Other
+/// parameter-progress guards retain their legacy v1 behavior for now.
+pub fn intersect_bounded_nurbs_nurbs_with_context(
+    a: &NurbsCurve,
+    range_a: ParamRange,
+    b: &NurbsCurve,
+    range_b: ParamRange,
+    context: &OperationContext<'_>,
+) -> OperationOutcome<CurveCurveIntersections> {
+    let scope = OperationScope::new(context);
+    let result = intersect_bounded_nurbs_nurbs_impl(
+        a,
+        range_a,
+        b,
+        range_b,
+        context.tolerances(),
+        context.session().numerical(),
+    );
+    scope.finish(result)
+}
+
+fn intersect_bounded_nurbs_nurbs_impl(
+    a: &NurbsCurve,
+    range_a: ParamRange,
+    b: &NurbsCurve,
+    range_b: ParamRange,
+    tolerances: Tolerances,
+    numerical: NumericalPolicy,
 ) -> Result<CurveCurveIntersections> {
     validate_ranges(a, range_a, b, range_b, tolerances)?;
 
@@ -51,6 +102,12 @@ pub fn intersect_bounded_nurbs_nurbs(
     let samples_a = sample_curve(a, range_a);
     let samples_b = sample_curve(b, range_b);
     let seed_tol = seed_tolerance(&samples_a, &samples_b, tolerances);
+    let polish = PolishPolicy {
+        range_a,
+        range_b,
+        tolerances,
+        numerical,
+    };
     let mut points = Vec::new();
     for pair_a in samples_a.windows(2) {
         let [a0, a1] = pair_a else {
@@ -67,8 +124,7 @@ pub fn intersect_bounded_nurbs_nurbs(
             }
             let t_a = a0.t + (a1.t - a0.t) * s;
             let t_b = b0.t + (b1.t - b0.t) * t;
-            if let Some((t_a, t_b)) = polish_candidate(a, b, t_a, t_b, range_a, range_b, tolerances)
-            {
+            if let Some((t_a, t_b)) = polish_candidate(a, b, t_a, t_b, polish) {
                 push_root_candidate(a, t_a, b, t_b, &mut points, tolerances);
             }
         }
@@ -215,17 +271,15 @@ fn polish_candidate(
     b: &NurbsCurve,
     t_a: f64,
     t_b: f64,
-    range_a: ParamRange,
-    range_b: ParamRange,
-    tolerances: Tolerances,
+    policy: PolishPolicy,
 ) -> Option<(f64, f64)> {
-    let (mut t_a, mut t_b) = newton_polish_pair(a, b, t_a, t_b, range_a, range_b, tolerances);
+    let (mut t_a, mut t_b) = newton_polish_pair(a, b, t_a, t_b, policy);
     let distance = a.eval(t_a).dist(b.eval(t_b));
-    if distance <= tolerances.linear() * 16.0 {
-        let (refined_a, refined_b) = refine_local_pair(a, b, t_a, t_b, range_a, range_b);
+    if distance <= policy.tolerances.linear() * 16.0 {
+        let (refined_a, refined_b) =
+            refine_local_pair(a, b, t_a, t_b, policy.range_a, policy.range_b);
         if a.eval(refined_a).dist(b.eval(refined_b)) < distance {
-            (t_a, t_b) =
-                newton_polish_pair(a, b, refined_a, refined_b, range_a, range_b, tolerances);
+            (t_a, t_b) = newton_polish_pair(a, b, refined_a, refined_b, policy);
         }
     }
     Some((t_a, t_b))
@@ -236,11 +290,11 @@ fn newton_polish_pair(
     b: &NurbsCurve,
     mut t_a: f64,
     mut t_b: f64,
-    range_a: ParamRange,
-    range_b: ParamRange,
-    tolerances: Tolerances,
+    policy: PolishPolicy,
 ) -> (f64, f64) {
-    let gradient_tol = (tolerances.linear() * tolerances.linear() * tolerances.linear()).max(1e-30);
+    let gradient_tol =
+        (policy.tolerances.linear() * policy.tolerances.linear() * policy.tolerances.linear())
+            .max(1e-30);
     for _ in 0..MAX_POLISH_STEPS {
         let da = a.eval_derivs(t_a, 2);
         let db = b.eval_derivs(t_b, 2);
@@ -254,10 +308,8 @@ fn newton_polish_pair(
         let h00 = da.d[1].dot(da.d[1]) + r.dot(da.d[2]);
         let h01 = -da.d[1].dot(db.d[1]);
         let h11 = db.d[1].dot(db.d[1]) - r.dot(db.d[2]);
-        let det = h00 * h11 - h01 * h01;
-        let (step_a, step_b) = if det.abs() > 1e-24 {
-            ((-g0 * h11 + h01 * g1) / det, (h01 * g0 - h00 * g1) / det)
-        } else {
+        let Some((step_a, step_b)) = solve_symmetric_2x2(policy.numerical, h00, h01, h11, -g0, -g1)
+        else {
             break;
         };
 
@@ -265,8 +317,8 @@ fn newton_polish_pair(
         let mut scale = 1.0;
         let mut accepted = false;
         for _ in 0..16 {
-            let next_a = (t_a + step_a * scale).clamp(range_a.lo, range_a.hi);
-            let next_b = (t_b + step_b * scale).clamp(range_b.lo, range_b.hi);
+            let next_a = (t_a + step_a * scale).clamp(policy.range_a.lo, policy.range_a.hi);
+            let next_b = (t_b + step_b * scale).clamp(policy.range_b.lo, policy.range_b.hi);
             let next = a.eval(next_a).dist(b.eval(next_b));
             if next * next <= old {
                 accepted = true;
@@ -538,4 +590,123 @@ fn validate_ranges(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line_with_domain(start: Point3, end: Point3, hi: f64) -> NurbsCurve {
+        NurbsCurve::new(1, vec![0.0, 0.0, hi, hi], vec![start, end], None).unwrap()
+    }
+
+    #[test]
+    fn newton_conditioning_is_invariant_under_large_parameter_rescaling() {
+        let parameter_scale = 1.0e8;
+        let horizontal = line_with_domain(
+            Point3::new(-1.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            parameter_scale,
+        );
+        let vertical = line_with_domain(
+            Point3::new(0.0, -1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            parameter_scale,
+        );
+        let range = ParamRange::new(0.0, parameter_scale);
+        let start_a = 0.4 * parameter_scale;
+        let start_b = 0.6 * parameter_scale;
+        let da = horizontal.eval_derivs(start_a, 1).d[1];
+        let db = vertical.eval_derivs(start_b, 1).d[1];
+        let old_absolute_determinant = da.dot(da) * db.dot(db) - da.dot(db) * da.dot(db);
+        assert!(old_absolute_determinant.abs() < 1.0e-24);
+
+        let (polished_a, polished_b) = newton_polish_pair(
+            &horizontal,
+            &vertical,
+            start_a,
+            start_b,
+            PolishPolicy {
+                range_a: range,
+                range_b: range,
+                tolerances: Tolerances::default(),
+                numerical: NumericalPolicy::v1(),
+            },
+        );
+        assert!((polished_a / parameter_scale - 0.5).abs() <= f64::EPSILON);
+        assert!((polished_b / parameter_scale - 0.5).abs() <= f64::EPSILON);
+        assert!(horizontal.eval(polished_a).dist(vertical.eval(polished_b)) <= f64::EPSILON);
+    }
+
+    #[test]
+    fn newton_polish_honors_the_supplied_numerical_policy() {
+        let horizontal =
+            line_with_domain(Point3::new(-1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0), 1.0);
+        let shallow = line_with_domain(
+            Point3::new(-1.0, -0.2, 0.0),
+            Point3::new(1.0, 0.2, 0.0),
+            1.0,
+        );
+        let range = ParamRange::new(0.0, 1.0);
+        let policy = |numerical| PolishPolicy {
+            range_a: range,
+            range_b: range,
+            tolerances: Tolerances::default(),
+            numerical,
+        };
+
+        let v1 = newton_polish_pair(
+            &horizontal,
+            &shallow,
+            0.4,
+            0.6,
+            policy(NumericalPolicy::v1()),
+        );
+        assert!((v1.0 - 0.5).abs() <= 4.0 * f64::EPSILON);
+        assert!((v1.1 - 0.5).abs() <= 4.0 * f64::EPSILON);
+
+        let strict = NumericalPolicy::try_new(32.0, 64.0, 0.5).unwrap();
+        let stopped = newton_polish_pair(&horizontal, &shallow, 0.4, 0.6, policy(strict));
+        assert_eq!(stopped, (0.4, 0.6));
+    }
+
+    #[test]
+    fn conditioning_stop_cannot_accept_a_model_residual() {
+        let parameter_scale = 1.0e8;
+        let a = line_with_domain(
+            Point3::new(-1.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            parameter_scale,
+        );
+        let b = line_with_domain(
+            Point3::new(-1.0, 1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            parameter_scale,
+        );
+        let range = ParamRange::new(0.0, parameter_scale);
+        let start_a = 0.4 * parameter_scale;
+        let start_b = 0.6 * parameter_scale;
+        let (stopped_a, stopped_b) = newton_polish_pair(
+            &a,
+            &b,
+            start_a,
+            start_b,
+            PolishPolicy {
+                range_a: range,
+                range_b: range,
+                tolerances: Tolerances::default(),
+                numerical: NumericalPolicy::v1(),
+            },
+        );
+        let mut accepted = Vec::new();
+        push_root_candidate(
+            &a,
+            stopped_a,
+            &b,
+            stopped_b,
+            &mut accepted,
+            Tolerances::default(),
+        );
+        assert!(accepted.is_empty());
+    }
 }

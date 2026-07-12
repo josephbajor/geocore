@@ -1,11 +1,15 @@
 //! Bounded NURBS/NURBS curve intersections.
 
+use kcore::operation::{OperationContext, PolicyVersion, SessionPolicy};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::nurbs::NurbsCurve;
 use kgeom::param::ParamRange;
 use kgeom::vec::Point3;
-use kops::intersect::{ContactKind, ParamOrientation, intersect_bounded_nurbs_nurbs};
+use kops::intersect::{
+    ContactKind, ParamOrientation, intersect_bounded_nurbs_nurbs,
+    intersect_bounded_nurbs_nurbs_with_context,
+};
 
 fn line_nurbs(start: Point3, end: Point3) -> NurbsCurve {
     NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![start, end], None).unwrap()
@@ -101,4 +105,49 @@ fn nurbs_nurbs_reports_simple_contained_overlaps() {
     assert_eq!(hit.overlaps[0].a, ParamRange::new(0.0, 1.0));
     assert_eq!(hit.overlaps[0].b, ParamRange::new(0.0, 1.0));
     assert_eq!(hit.overlaps[0].orientation, ParamOrientation::Reversed);
+}
+
+#[test]
+fn contextual_v1_entry_is_exactly_legacy_compatible() {
+    let a = tangent_parabola();
+    let b = line_nurbs(Point3::new(-2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0));
+    let session = SessionPolicy::v1();
+    for tolerances in [
+        Tolerances::default(),
+        Tolerances::with_linear(1.0e-5).unwrap(),
+    ] {
+        let legacy =
+            intersect_bounded_nurbs_nurbs(&a, a.param_range(), &b, b.param_range(), tolerances);
+        let context = OperationContext::new(&session, tolerances).unwrap();
+        let contextual = intersect_bounded_nurbs_nurbs_with_context(
+            &a,
+            a.param_range(),
+            &b,
+            b.param_range(),
+            &context,
+        );
+        assert_eq!(contextual.result(), legacy.as_ref());
+        assert_eq!(contextual.report().policy_version(), PolicyVersion::V1);
+        assert!(contextual.report().usage().is_empty());
+        assert!(contextual.report().limit_events().is_empty());
+        assert!(contextual.report().diagnostics().is_empty());
+    }
+
+    let invalid_range = ParamRange { lo: 0.75, hi: 0.25 };
+    let legacy = intersect_bounded_nurbs_nurbs(
+        &a,
+        invalid_range,
+        &b,
+        b.param_range(),
+        Tolerances::default(),
+    );
+    let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+    let contextual = intersect_bounded_nurbs_nurbs_with_context(
+        &a,
+        invalid_range,
+        &b,
+        b.param_range(),
+        &context,
+    );
+    assert_eq!(contextual.result(), legacy.as_ref());
 }
