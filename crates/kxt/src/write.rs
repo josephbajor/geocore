@@ -275,6 +275,7 @@ impl Plan {
             }
         }
         reject_shared_offset_bases(store, &surface_handles)?;
+        reject_direct_faces_on_offset_bases(store, &face_handles)?;
 
         let mut next = scaffold.first_entity_id();
         let faces = assign(&face_handles, &mut next);
@@ -615,6 +616,19 @@ impl Plan {
                 ],
             });
         }
+        // Every real corpus OFFSET_SURF registers in its basis surface's
+        // geometric-owner ring (exemplar.x_t, 44/44: a self-ring
+        // GEOMETRIC_OWNER owned by the offset with shared_geometry = basis,
+        // and the basis's geometric_owner backlink pointing at it); Onshape
+        // rejects the offset body as corrupt without it.
+        let mut offset_basis_owners = Vec::new();
+        for &(surface_id, index) in &self.surfaces {
+            if let SurfaceGeom::Offset(offset) = store.get(surface_id)? {
+                let owner = next_aux;
+                next_aux += 1;
+                offset_basis_owners.push((offset.basis(), owner, index));
+            }
+        }
         for (position, &(surface_id, index)) in self.surfaces.iter().enumerate() {
             let face = self.faces.iter().find_map(|&(face, _)| {
                 (store.get(face).ok()?.surface == surface_id).then_some(face)
@@ -625,7 +639,14 @@ impl Plan {
                 adjacent(&self.surfaces, position, 1),
                 adjacent(&self.surfaces, position, -1),
             );
-            common[5] = ptr(self.surface_geometric_owner(store, surface_id).unwrap_or(0));
+            common[5] = ptr(
+                offset_basis_owners
+                    .iter()
+                    .find(|&&(basis, _, _)| basis == surface_id)
+                    .map(|&(_, owner, _)| owner)
+                    .or_else(|| self.surface_geometric_owner(store, surface_id))
+                    .unwrap_or(0),
+            );
             let aux = if matches!(store.get(surface_id)?, SurfaceGeom::Nurbs(_)) {
                 let ids = SurfaceAuxIds::allocate(&mut next_aux);
                 push_surface_aux_nodes(&mut out, store.get(surface_id)?, ids)?;
@@ -640,6 +661,21 @@ impl Plan {
                 aux,
                 &self.surfaces,
             )?);
+            if let Some(&(basis, owner, _)) = offset_basis_owners
+                .iter()
+                .find(|&&(_, _, offset)| offset == index)
+            {
+                out.push(OutNode {
+                    code: code::GEOMETRIC_OWNER,
+                    index: owner,
+                    values: vec![
+                        ptr(index),
+                        ptr(owner),
+                        ptr(owner),
+                        ptr(id_of(&self.surfaces, basis)),
+                    ],
+                });
+            }
         }
         for (position, &(curve_id, index)) in self.curves.iter().enumerate() {
             let direct_owner = self.edges.iter().find_map(|&(edge, id)| {
@@ -1436,6 +1472,28 @@ fn plan_surface_dependencies(
     Ok(())
 }
 
+/// A basis that also carries a face directly would need its geometric-owner
+/// ring merged across the offset's entry and that face's SP-curve entries;
+/// no real corpus file exercises that shape, so exporting it is refused
+/// rather than guessed.
+fn reject_direct_faces_on_offset_bases(store: &Store, faces: &[FaceId]) -> Result<()> {
+    let mut bases = Vec::new();
+    for &face in faces {
+        if let SurfaceGeom::Offset(offset) = store.get(store.get(face)?.surface)? {
+            bases.push(offset.basis());
+        }
+    }
+    for &face in faces {
+        if bases.contains(&store.get(face)?.surface) {
+            return Err(XtError::Unsupported {
+                capability: XtCapability::SharedOffsetBasisExport,
+                what: "a face sits directly on another face's offset basis",
+            });
+        }
+    }
+    Ok(())
+}
+
 fn reject_shared_offset_bases(store: &Store, surfaces: &[SurfaceId]) -> Result<()> {
     let mut bases = Vec::<SurfaceId>::new();
     for &surface in surfaces {
@@ -1631,8 +1689,11 @@ fn push_surface_aux_nodes(
 fn aux_node_count(store: &Store, surfaces: &[SurfaceId], curves: &[CurveId]) -> Result<u32> {
     let mut count = 0u32;
     for &surface in surfaces {
-        if matches!(store.get(surface)?, SurfaceGeom::Nurbs(_)) {
-            count += 6;
+        match store.get(surface)? {
+            SurfaceGeom::Nurbs(_) => count += 6,
+            // One GEOMETRIC_OWNER ring entry ties each offset to its basis.
+            SurfaceGeom::Offset(_) => count += 1,
+            _ => {}
         }
     }
     for &curve in curves {

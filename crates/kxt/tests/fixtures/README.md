@@ -83,6 +83,14 @@ statement accompanied the individual files.
   full-circle edges carry no vertex, and `EDGE.fin` points at the
   positive-sense fin (as in every modern real file). Passes every
   local stage.
+- `solid_cone_onshape_reexport.x_t` and
+  `solid_block_tolerant_edge_onshape_reexport.x_t` — Onshape's PS-37
+  re-exports of this repository's own accepted fixtures, captured by the
+  automated there-and-back loop (2026-07-11). Both parse cleanly and both
+  fail reconstruction with checked-topology-commit invariant faults (1 and
+  2 respectively) — the first real reader-gap regression fixtures produced
+  by the compare leg. The tolerant re-export retains one curve-less
+  tolerant edge with per-fin trimmed SP chains.
 
 Metadata-only discoveries from SCOREC/pumi-meshes at commit `684e480`:
 

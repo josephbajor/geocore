@@ -1,0 +1,240 @@
+"""Command-line orchestration for the automated Onshape oracle loop."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+from .onshape import (
+    CONFIG_PATH,
+    ApiKeyTransport,
+    OracleError,
+    find_translated_part_studio,
+    load_config,
+    load_env_file,
+    reexport_element,
+    run_fixture,
+    session_info,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+
+CONFIG_TEMPLATE = {
+    "document_id": "<24-hex id from the Onshape document URL: /documents/{id}/...>",
+    "workspace_id": "<24-hex id from .../w/{id}/...>",
+    "element_id": "<24-hex id of the blob element receiving uploads: .../e/{id}>",
+}
+
+DEFAULT_OUTBOX = ROOT / "oracle" / "outbox"
+DEFAULT_INBOX = ROOT / "oracle" / "inbox" / "onshape"
+
+
+def writer_identity():
+    """Best-effort short git revision for oracle-results.tsv notes."""
+    try:
+        revision = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "-"
+    return revision or "-"
+
+
+def results_row(result, date, revision, reexport_ok="-", compare_ok="-"):
+    """Format one docs/oracle-results.tsv row for a fixture verdict."""
+    note = "writer={}".format(revision)
+    if result.accepted:
+        note += "; accepted"
+    else:
+        note += "; {}".format(result.reason or "rejected without a reason")
+        if result.classification:
+            note += " [{}]".format(result.classification)
+    return "\t".join(
+        [
+            date,
+            "onshape",
+            "cloud-{}".format(date),
+            result.name,
+            "yes" if result.accepted else "no",
+            "none" if result.accepted else "-",
+            "-",
+            reexport_ok,
+            compare_ok,
+            note,
+        ]
+    )
+
+
+def verdict_line(result):
+    """One human-readable status line per fixture."""
+    if result.accepted:
+        return "{:<36} {:>7}B  accepted".format(result.name, result.size)
+    return "{:<36} {:>7}B  {}: {} [{}]".format(
+        result.name, result.size, result.state, result.reason, result.classification
+    )
+
+
+def compare_files(outbox_file, inbox_file):
+    """Run xt_oracle compare; returns yes/no/error per its exit-code contract."""
+    completed = subprocess.run(
+        [
+            "cargo",
+            "run",
+            "--release",
+            "-p",
+            "kxt",
+            "--bin",
+            "xt_oracle",
+            "--",
+            "compare",
+            str(outbox_file),
+            str(inbox_file),
+        ],
+        cwd=ROOT,
+    )
+    if completed.returncode == 0:
+        return "yes"
+    if completed.returncode == 1:
+        return "no"
+    return "error"
+
+
+def command_check(_args):
+    """Verify API-key credentials against the live host."""
+    info = session_info(ApiKeyTransport.from_environment())
+    name = info.get("name") or info.get("id") or "unknown session"
+    print("authenticated: {}".format(name))
+    return 0
+
+
+def command_init(_args):
+    """Write the untracked config template if it does not exist yet."""
+    path = ROOT / CONFIG_PATH
+    if path.exists():
+        print("{} already exists; not overwriting".format(path))
+        return 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(CONFIG_TEMPLATE, indent=2) + "\n", encoding="utf-8")
+    print("wrote {}; fill in the ids from the Onshape document URL".format(path))
+    return 0
+
+
+def run_paths(args, paths):
+    """Upload each path, optionally re-export/compare, and report."""
+    transport = ApiKeyTransport.from_environment()
+    config = load_config(ROOT / CONFIG_PATH)
+    date = time.strftime("%Y-%m-%d")
+    revision = writer_identity()
+    rows = []
+    failures = 0
+    imports_accepted = 0
+    compares_clean = 0
+    for path in paths:
+        result = run_fixture(transport, config, path)
+        reexport_ok = "-"
+        compare_ok = "-"
+        if result.accepted and args.reexport:
+            # Must run before the next upload: each translation rewrites the
+            # document's single derived part studio.
+            try:
+                element_id = (
+                    result.result_element_ids[0]
+                    if result.result_element_ids
+                    else find_translated_part_studio(transport, config)
+                )
+                inbox = Path(args.inbox)
+                inbox.mkdir(parents=True, exist_ok=True)
+                inbox_file = inbox / result.name
+                inbox_file.write_bytes(reexport_element(transport, config, element_id))
+                reexport_ok = "yes"
+                if args.compare:
+                    compare_ok = compare_files(path, inbox_file)
+            except OracleError as error:
+                print("  re-export of {} failed: {}".format(result.name, error))
+                reexport_ok = "error"
+        print(verdict_line(result))
+        rows.append(results_row(result, date, revision, reexport_ok, compare_ok))
+        imports_accepted += int(result.accepted)
+        compares_clean += int(compare_ok == "yes")
+        if not result.accepted or compare_ok == "no":
+            failures += 1
+    if args.results_rows:
+        print("\nappend to docs/oracle-results.tsv:")
+        for row in rows:
+            print(row)
+    print("\nimports: {}/{} accepted".format(imports_accepted, len(paths)))
+    if args.reexport and args.compare:
+        print("there-and-back: {}/{} compared clean".format(compares_clean, imports_accepted))
+    return 1 if failures else 0
+
+
+def command_run(args):
+    """Upload explicitly named fixture files."""
+    return run_paths(args, [Path(p) for p in args.files])
+
+
+def command_bundle(args):
+    """Upload every fixture in the generated outbox bundle."""
+    outbox = Path(args.outbox)
+    paths = sorted(outbox.glob("*.x_t"))
+    if not paths:
+        raise OracleError(
+            "no .x_t files in {}; generate the bundle first: "
+            "cargo run --release -p kxt --bin xt_oracle -- export oracle/outbox".format(outbox)
+        )
+    return run_paths(args, paths)
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="oracle_loop",
+        description="Automated Onshape oracle loop (docs/oracle-loop.md)",
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    commands.add_parser("check", help="verify API-key credentials").set_defaults(
+        func=command_check
+    )
+    commands.add_parser("init", help="write the oracle/config.json template").set_defaults(
+        func=command_init
+    )
+
+    def add_loop_arguments(sub):
+        sub.add_argument("--reexport", action="store_true", help="download host re-exports")
+        sub.add_argument("--compare", action="store_true", help="run xt_oracle compare")
+        sub.add_argument("--inbox", default=str(DEFAULT_INBOX), help="re-export directory")
+        sub.add_argument(
+            "--results-rows",
+            action="store_true",
+            help="print docs/oracle-results.tsv rows for the run",
+        )
+
+    run = commands.add_parser("run", help="upload named .x_t files")
+    run.add_argument("files", nargs="+")
+    add_loop_arguments(run)
+    run.set_defaults(func=command_run)
+
+    bundle = commands.add_parser("bundle", help="upload the generated outbox bundle")
+    bundle.add_argument("--outbox", default=str(DEFAULT_OUTBOX))
+    add_loop_arguments(bundle)
+    bundle.set_defaults(func=command_bundle)
+
+    return parser
+
+
+def main(argv=None):
+    load_env_file(ROOT / ".env")
+    args = build_parser().parse_args(argv)
+    try:
+        return args.func(args)
+    except OracleError as error:
+        print("error: {}".format(error), file=sys.stderr)
+        return 2

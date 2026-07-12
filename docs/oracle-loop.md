@@ -33,12 +33,20 @@ check that compares the current writer/bundle identity with the last committed
 certified identity and reports certification as stale. That gate blocks a
 writer-conformance claim, not unrelated kernel development.
 
-**Current handoff state:** certification is stale. The writer changed after the
-last 13-fixture Onshape run through graph migration, offset emission, and facade
-interchange, and `offset_plane.x_t` has never been exercised by a licensed
-Parasolid host. Regenerate the bundle, re-run all 13 current authoring fixtures
-plus `crates/kxt/tests/fixtures/offset_plane.x_t`, and append the results before
-calling the current writer host-verified.
+**Current handoff state (2026-07-11, writer=2beb267):** certification is
+current. The full 14-fixture loop ran through the API CLI: 11/14 imports
+accepted (wire/acorn remain the known parse-level rejections), and the first
+there-and-back leg in project history compared 6/9 exports clean — block,
+cylinder, sphere, torus, and both sheets round-trip through Onshape's kernel
+with matching topology, geometry classes, and volume. `offset_plane.x_t` was
+rejected as corrupt until the writer registered each OFFSET_SURF in its basis
+surface's geometric-owner ring (exemplar evidence: 44/44); it now imports.
+Open findings from the compare leg: the two exactly-analytic NURBS fixtures
+come back host-canonicalized (line/plane), so class-preservation needs
+genuinely curved fixtures; Onshape's cone and tolerant-edge re-exports fail
+our reconstruction (preserved as `*_onshape_reexport.x_t` reader-gap
+fixtures); and the accepted offset sheet materializes no exportable body, so
+its re-export leg is unavailable.
 
 ## 1. Generate the bundle
 
@@ -57,7 +65,58 @@ The bundle deliberately includes `solid_block_nurbs_face.x_t` (a B_SURFACE part)
 **Every host run must include it** until a licensed host confirms or corrects the
 provisional B-surface pole ordering in `kxt::recon`.
 
-## 2. Import into a Parasolid host
+## 2. Run the loop (Onshape API CLI — primary)
+
+`scripts/oracle_loop.py` drives the entire loop through Onshape's REST API
+using a developer API key pair — no browser, no cookie session, no manual
+uploads — so any human, agent, or bounded CI job with the two environment
+variables can certify a bundle. One-time setup:
+
+1. Create an API key pair at <https://dev-portal.onshape.com> (available on
+   free plans) and export it in the environment:
+
+   ```sh
+   export ONSHAPE_ACCESS_KEY=... ONSHAPE_SECRET_KEY=...
+   ```
+
+   Keys are secrets: never committed. Either export them in the environment
+   or put both lines in `.env` at the repository root — the CLI loads it
+   automatically, real environment variables take precedence, and `/.env` is
+   gitignored.
+
+2. Create a disposable Onshape document containing one blob element to
+   receive uploads (free-plan documents are public — upload nothing
+   confidential), then record its coordinates once:
+
+   ```sh
+   python3 scripts/oracle_loop.py init   # writes untracked oracle/config.json
+   # fill in document_id/workspace_id/element_id from the document URL:
+   #   https://cad.onshape.com/documents/{did}/w/{wid}/e/{eid}
+   python3 scripts/oracle_loop.py check  # verifies the credentials
+   ```
+
+Each certification run is then:
+
+```sh
+cargo run --release -p kxt --bin xt_oracle -- export oracle/outbox
+python3 scripts/oracle_loop.py bundle --reexport --compare --results-rows
+```
+
+`bundle` uploads every outbox fixture, waits for each translation verdict,
+classifies any `failureReason` against the taxonomy in the appendix,
+downloads the host's Parasolid re-export into `oracle/inbox/onshape/`, runs
+`xt_oracle compare` on each outbox/inbox pair, and prints ready-to-append
+`docs/oracle-results.tsv` rows stamped with the writer git revision. A
+nonzero exit means at least one rejection or compare mismatch.
+`run FILE... --results-rows` does the same for individual files when
+bisecting a single writer defect.
+
+The upload/poll endpoints are host-proven from the original loop. The
+export-back pair (`partstudios .../translations` + `externaldata` download)
+follows Onshape's published API but predates any live run here: confirm it on
+first use and correct this document if the response shapes differ.
+
+## 3. Manual host import (alternative hosts)
 
 Accessible Parasolid-backed hosts, in preference order:
 
@@ -82,7 +141,7 @@ M6 STEP support lands here.
 For each file record in `docs/oracle-results.tsv`: did import succeed, did the host
 checker report anything, does the host-measured volume match the manifest.
 
-## 3. Re-export and compare
+## 4. Re-export and compare (manual flow)
 
 Re-export each part from the host as Parasolid text (`.x_t`) into
 `oracle/inbox/<host>/`, keeping the file name, then run:
@@ -102,7 +161,7 @@ finding worth a fixture. Hosts typically write their own newer schema with embed
 edit scripts; the reader supports that mechanism, so a parse failure is signal, not
 noise.
 
-## 4. Record the outcome
+## 5. Record the outcome
 
 Append one row per (host, fixture) run to `docs/oracle-results.tsv`. That file is the
 committed, non-shrinking record the M3b exit gate ratchets on: 100% of the declared
@@ -111,11 +170,15 @@ comparison. Failures stay in the table with their resolution commit; do not dele
 rows. If a host rejects or repairs a file, minimize the difference, fix the writer,
 regenerate the bundle, and re-run.
 
-## Appendix: the fast API loop (Onshape)
+## Appendix: the cookie-session fallback loop (Onshape)
 
-When iterating on a writer defect, the manual upload flow is too slow. With an
-Onshape document open in a logged-in browser session, its REST API drives the
-loop in seconds per experiment:
+The API-key CLI in section 2 supersedes this flow. Use it only when no key
+pair is provisioned: the committed helper
+`scripts/oracle/browser_fallback.js`, pasted into the devtools console (or
+injected via browser tooling) on a logged-in Onshape document page, installs
+`window.__oracle` and borrows the human's session cookies. Each experiment is
+then `await __oracle.run(name, base64Bytes)`. The underlying endpoints are the
+same two the CLI uses:
 
 1. `POST /api/v6/blobelements/d/{did}/w/{wid}/e/{eid}` with a multipart `file`
    field replaces a blob element's content **and starts a translation

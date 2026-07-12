@@ -147,6 +147,21 @@ fn assert_fin_pcurves_agree_with_edges(store: &Store, body: ktopo::entity::BodyI
     }
 }
 
+/// Re-pin the committed fixture after an intentional writer change:
+/// `cargo test -p kxt --test offset_surface -- --ignored regenerate`.
+/// Fixture re-pins are reviewed events; the byte-stable test below is the
+/// gate that makes accidental drift fail.
+#[test]
+#[ignore = "rewrites the committed canonical fixture"]
+fn regenerate_offset_plane_fixture() {
+    let (store, body, _, _) = offset_sheet();
+    std::fs::write(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/offset_plane.x_t"),
+        export_text(&store, body).unwrap(),
+    )
+    .unwrap();
+}
+
 #[test]
 fn single_offset_round_trip_is_class_preserving_and_byte_stable() {
     let (store, body, offset, basis) = offset_sheet();

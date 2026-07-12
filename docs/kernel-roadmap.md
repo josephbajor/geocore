@@ -624,8 +624,19 @@ read before its corresponding kernel geometry exists.
   solid (block, cylinder, cone, sphere, torus), the B-surface and B-curve
   blocks, the tolerant SP-curve block, and both sheets. Wire and acorn
   bodies remain rejected as corrupt with no real exemplar to bisect
-  against. The import leg of the gate is proven for those ten; the
-  re-export/compare leg remains.
+  against. The third run (2026-07-11, writer=2beb267, fully automated via
+  `scripts/oracle_loop.py`) added `offset_plane.x_t` — rejected as corrupt
+  until the writer registered each OFFSET_SURF in its basis surface's
+  geometric-owner ring (exemplar: 44/44) — and executed the first
+  there-and-back leg: 6 of 9 re-exports compare clean (block, cylinder,
+  sphere, torus, both sheets — topology, classes, and volume all match).
+  The three mismatches are themselves findings: the exactly-analytic NURBS
+  fixtures come back host-canonicalized to line/plane (class-preservation
+  testing needs genuinely curved B-geometry), and Onshape's cone and
+  tolerant-edge re-exports fail our reconstruction with checked-commit
+  faults (preserved as `*_onshape_reexport.x_t` reader-gap fixtures).
+  The accepted offset sheet materializes no exportable body on the host,
+  so its compare leg is unavailable.
 - The bundle must include a B-surface part in every host run until the provisional
   v-fastest B-surface pole ordering (`kxt::recon`) is confirmed or corrected by a
   licensed host; self-round-trip structurally cannot detect a transposed convention

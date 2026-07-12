@@ -8,6 +8,7 @@ parametric CAD application; feature history and regeneration are later layers.
 - **Specification:** [docs/kernel-spec.md](docs/kernel-spec.md)
 - **Construction roadmap:** [docs/kernel-roadmap.md](docs/kernel-roadmap.md)
 - **Machine-readable capability ledger:** [docs/kernel-support.tsv](docs/kernel-support.tsv)
+- **Licensed-host certification loop:** [docs/oracle-loop.md](docs/oracle-loop.md) — automated via `scripts/oracle_loop.py`
 
 ## Layout
 
