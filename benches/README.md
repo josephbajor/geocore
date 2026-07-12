@@ -111,6 +111,15 @@ These measurements do not justify finite `bounded_v1` caps: projection
 backtracking and face-boundary use remain zero, and mixed-body, NURBS-pcurve,
 broader imported-corpus, and tighter-tolerance measurements are still required.
 
+The standalone Q3 face ladder separately measures a half-cylinder trimmed
+surface at chord tolerances `1e-2` and `1e-3` through
+`tessellate_with_context`. This split is intentional: whole-body tessellation
+pre-refines every shared edge with a safety margin and then freezes it, so a
+nested face-boundary split would be a crack-prevention failure. The standalone
+rows activate all five face stages and pin boundary depth/splits, interior
+passes, mesh triangles/vertices, complete reports, and mesh bits. Fixture,
+trim, session, context, and verification remain outside timing.
+
 The first Q4 slice registers six contextual implicit-isolation cases. It varies
 polynomial versus rational single patches, one versus four extracted Bezier
 patches, retained candidates versus a certified separated miss, and exact

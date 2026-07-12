@@ -269,8 +269,19 @@ projection fallback: candidates, Newton depth, queries, and samples are now
 nonzero without changing the 21-stage evidence contract. Projection
 backtracking and face-boundary counters remain zero; the sphere/torus cases
 also have zero graph use. Mixed-body, NURBS-pcurve, broader imported-corpus,
-and tighter-tolerance cases remain required before corpus-backed finite
+and tighter-tolerance cases remain required before corpus-backed finite body
 `bounded_v1` allowances are proposed.
+
+Face-profile evidence is owned by a separate standalone ladder. Whole-body
+tessellation pre-refines each shared edge against every adjacent surface with a
+safety margin and passes the resulting frozen UV boundary into `kgeom`; a
+nested face-boundary insertion would be a crack-prevention error, not useful
+body-corpus coverage. The standalone ladder therefore measures a half-cylinder
+trim through `tessellate_with_context` at `1e-2` and `1e-3`. Both rows activate
+all five canonical face stages and pin boundary depth/splits, interior passes,
+mesh triangles/vertices, mesh bits, and complete repeatable reports. Cylinder
+and trim construction plus session/context setup stay outside timing. Broader
+plane/NURBS, hole, and multi-loop rows remain before selecting finite face caps.
 
 Fixtures use existing deterministic primitive constructors first, followed by
 trimmed NURBS fixtures promoted from the test corpus:

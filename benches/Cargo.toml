@@ -33,6 +33,10 @@ name = "body_tessellation"
 harness = false
 
 [[bench]]
+name = "face_tessellation"
+harness = false
+
+[[bench]]
 name = "nurbs_isolation"
 harness = false
 

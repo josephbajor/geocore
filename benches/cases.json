@@ -1274,6 +1274,88 @@
       }
     },
     {
+      "path": "geometry/face-tessellation/cylinder-half-v1/1/chord-1e-2-v1",
+      "benchmark_target": "face_tessellation",
+      "fixture_version": "face-tessellation.v1",
+      "deterministic_seed": 5860386261231271943,
+      "size_parameters": {
+        "elements": 1,
+        "faces": 1
+      },
+      "tolerances": {
+        "chord_tol": 0.01
+      },
+      "policy_values": {
+        "api": "tessellate_with_context",
+        "budget_profile": "face-tessellation.compatibility-v1",
+        "execution": "serial",
+        "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-face-usage.v1"
+      },
+      "expected_result_counters": {
+        "mesh_vertices": 543,
+        "mesh_triangles": 1050,
+        "boundary_loops": 1,
+        "boundary_vertices": 34,
+        "positions_finite": true,
+        "uvs_finite": true,
+        "indices_valid": true,
+        "coordinates_aligned": true,
+        "triangles_oriented": true,
+        "usage_stage_count": 5,
+        "usage_consumed": [4, 30, 4, 1050, 543],
+        "usage_digest": "03527d7b7a511949",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
+        "mesh_digest": "d7aedd965c8561f7",
+        "output_digest": "1fccc2a909863748"
+      }
+    },
+    {
+      "path": "geometry/face-tessellation/cylinder-half-v1/1/chord-1e-3-v1",
+      "benchmark_target": "face_tessellation",
+      "fixture_version": "face-tessellation.v1",
+      "deterministic_seed": 5860386261231271943,
+      "size_parameters": {
+        "elements": 1,
+        "faces": 1
+      },
+      "tolerances": {
+        "chord_tol": 0.001
+      },
+      "policy_values": {
+        "api": "tessellate_with_context",
+        "budget_profile": "face-tessellation.compatibility-v1",
+        "execution": "serial",
+        "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-face-usage.v1"
+      },
+      "expected_result_counters": {
+        "mesh_vertices": 18841,
+        "mesh_triangles": 37550,
+        "boundary_loops": 1,
+        "boundary_vertices": 130,
+        "positions_finite": true,
+        "uvs_finite": true,
+        "indices_valid": true,
+        "coordinates_aligned": true,
+        "triangles_oriented": true,
+        "usage_stage_count": 5,
+        "usage_consumed": [6, 126, 6, 37550, 18841],
+        "usage_digest": "34465daae185880c",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
+        "mesh_digest": "f57c3dd38a9f0da8",
+        "output_digest": "a96b3eb91af566d7"
+      }
+    },
+    {
       "path": "geometry/nurbs-isolation/poly-single-v1/1/work-exact-v1",
       "benchmark_target": "nurbs_isolation",
       "fixture_version": "nurbs-isolation.v1",

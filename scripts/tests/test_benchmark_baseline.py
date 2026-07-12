@@ -29,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 65)
+        self.assertEqual(len(cases), 67)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -154,6 +154,30 @@ class BenchmarkBaselineTests(unittest.TestCase):
                 case["size_parameters"]["input_bytes"] == len(fixture_bytes)
                 and case["policy_values"]["source_sha256"] == expected_sha256
                 for case in imported_nurbs
+            )
+        )
+        face_tessellation = [
+            case for case in cases if case["benchmark_target"] == "face_tessellation"
+        ]
+        self.assertEqual(len(face_tessellation), 2)
+        self.assertTrue(
+            all(
+                case["deterministic_seed"] == 0x5154464143450007
+                and case["fixture_version"] == "face-tessellation.v1"
+                and case["policy_values"]["api"] == "tessellate_with_context"
+                and case["policy_values"]["budget_profile"]
+                == "face-tessellation.compatibility-v1"
+                and case["policy_values"]["execution"] == "serial"
+                and case["policy_values"]["policy_version"] == "v1"
+                and case["policy_values"]["usage_contract"]
+                == "q3-face-usage.v1"
+                and case["expected_result_counters"]["usage_stage_count"] == 5
+                and len(case["expected_result_counters"]["usage_consumed"]) == 5
+                and all(
+                    consumed > 0
+                    for consumed in case["expected_result_counters"]["usage_consumed"]
+                )
+                for case in face_tessellation
             )
         )
         isolation = [

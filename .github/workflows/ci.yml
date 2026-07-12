@@ -84,6 +84,7 @@ jobs:
           cargo bench --manifest-path benches/Cargo.toml --locked --bench benchmark_contract -- harness/contract/tiny-v1/64/default-v1
           cargo bench --manifest-path benches/Cargo.toml --locked --bench graph_build -- graph/build/independent-planes-v1/1/default-v1
           cargo bench --manifest-path benches/Cargo.toml --locked --bench body_tessellation -- topology/body-tessellation/block-v2/1/chord-1e-2-v2
+          cargo bench --manifest-path benches/Cargo.toml --locked --bench face_tessellation -- geometry/face-tessellation/cylinder-half-v1/1/chord-1e-2-v1
       - name: Upload advisory smoke samples
         if: always()
         uses: actions/upload-artifact@v4
@@ -93,6 +94,7 @@ jobs:
             benches/target/criterion/harness_contract_tiny-v1_64/default-v1/new/
             benches/target/criterion/graph_build_independent-planes-v1_1/default-v1/new/
             benches/target/criterion/topology_body-tessellation_block-v2_1/chord-1e-2-v2/new/
+            benches/target/criterion/geometry_face-tessellation_cylinder-half-v1_1/chord-1e-2-v1/new/
           if-no-files-found: ignore
           retention-days: 7
 
