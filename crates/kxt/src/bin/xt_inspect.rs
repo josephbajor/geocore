@@ -1,6 +1,8 @@
 //! JSON-lines corpus inspector for XT parse/reconstruct/check/tess stages.
 
-use ktopo::btess::{TessOptions, tessellate_body};
+use kcore::operation::{OperationContext, SessionPolicy};
+use kcore::tolerance::Tolerances;
+use ktopo::btess::{TessOptions, tessellate_body_with_context};
 use ktopo::check::{CheckLevel, CheckOutcome, check_body_report};
 use ktopo::store::Store;
 use kxt::parse::{Value, XtFile};
@@ -239,14 +241,21 @@ fn inspect(path: &Path) -> (String, bool) {
             {
                 continue;
             }
-            match tessellate_body(
+            let policy = SessionPolicy::v1();
+            let context = OperationContext::new(&policy, Tolerances::default())
+                .expect("v1 inspector tessellation context is valid");
+            match tessellate_body_with_context(
                 &store,
                 body,
                 &TessOptions {
                     chord_tol: 1e-3,
                     max_edge_len: None,
                 },
-            ) {
+                &context,
+            )
+            .expect("v1 body-tessellation policy is valid")
+            .into_result()
+            {
                 Ok(mesh) => {
                     tessellated += 1;
                     triangles += mesh.triangles.len();

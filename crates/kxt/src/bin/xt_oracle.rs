@@ -20,13 +20,16 @@ use std::fmt::Write as _;
 use std::path::Path;
 use std::process::ExitCode;
 
-use kcore::tolerance::LINEAR_RESOLUTION;
+use kcore::operation::{OperationContext, SessionPolicy};
+use kcore::tolerance::{LINEAR_RESOLUTION, Tolerances};
 use kgeom::curve2d::{Line2d, NurbsCurve2d};
 use kgeom::frame::Frame;
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::param::ParamRange;
 use kgeom::vec::{Point2, Point3, Vec3};
-use ktopo::btess::{TessOptions, check_watertight, signed_volume, tessellate_body};
+use ktopo::btess::{
+    BodyMesh, TessOptions, check_watertight, signed_volume, tessellate_body_with_context,
+};
 use ktopo::check::{CheckLevel, CheckOutcome, check_body, check_body_report};
 use ktopo::entity::{
     BodyId, BodyKind, Edge, EdgeId, FaceDomain, FaceId, Fin, FinPcurve, Loop, ParamMap1d, Region,
@@ -634,14 +637,20 @@ fn measure(store: &Store, body: BodyId) -> Result<Measured, String> {
     vertex_tolerances.sort_by(f64::total_cmp);
 
     let (volume, watertight) = if kind == BodyKind::Solid {
-        let mesh = tessellate_body(
+        let policy = SessionPolicy::v1();
+        let context = OperationContext::new(&policy, Tolerances::default())
+            .expect("v1 oracle tessellation context is valid");
+        let mesh: BodyMesh = tessellate_body_with_context(
             store,
             body,
             &TessOptions {
                 chord_tol: CHORD_TOL,
                 max_edge_len: None,
             },
+            &context,
         )
+        .expect("v1 body-tessellation policy is valid")
+        .into_result()
         .map_err(|error| format!("tessellation: {error:?}"))?;
         (
             Some(signed_volume(&mesh)),

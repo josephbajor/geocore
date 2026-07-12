@@ -51,19 +51,22 @@ current record. Host findings remain ratcheted in `docs/oracle-results.tsv`.
 1. **Adopt and ratchet the completed contextual paths.** X_T reconstruction
    and checked-commit Fast validation share one facade-owned scope and
    cumulative graph allowance. Whole-body tessellation now has equivalent
-   contextual and shared-scope entries, and composes its projection fallbacks;
-   migrate the remaining `ktopo`/`kxt` production callers before closing the
-   body and projection internal-use ratchets. As each owning path proves
-   equivalence, forbid new crate-internal calls to its legacy wrapper. K5 has
-   exercised the public compatibility surface, so proven legacy wrappers may
-   be deprecated when their owning migration lands.
+   contextual and shared-scope entries, composes its projection fallbacks, and
+   its remaining `ktopo`/`kxt` production clients now use one contextual
+   operation per body. The enforced legacy-API source audit closes new
+   production calls to the body wrapper while preserving compatibility tests.
+   Projection production adoption and its internal-use ratchet remain. Public
+   body-tessellation deprecation still waits for an adopted facade replacement.
 2. **Finish hostile-input tessellation accounting.** The contextual migration
    accounts quality work and retained mesh vertices, but pole-row UV scratch,
    prepared patch arrays, and triangle/output retention do not yet have
-   pre-allocation ceilings. Design cumulative edge/iso split work plus
-   deterministic prepared-patch and mesh-triangle item stages in `kgeom` and
-   `ktopo` before describing body tessellation as fully bounded; do not use
-   allocator-dependent byte counts.
+   pre-allocation ceilings. Land exact split-work, prepared-item, and retained-
+   triangle stages first with compatibility-safe v1 defaults; body-wide patch
+   and triangle totals remain accounting-only where no truthful finite legacy
+   cap exists. Expand Q3 measurements, then add reviewed opt-in `bounded_v1`
+   face/body presets before describing product-facing tessellation as hostile-
+   input bounded. Do not use allocator-dependent byte counts or silently tune
+   the legacy v1 wrapper.
 3. **Resume algorithm/API expansion behind the completed gates.** F3's generic fallback
    and facade graph-aware intersection follow the F2 scale/context work;
    semantic K4 edit transactions follow the K5 adoption pass. F6 splits and F4
@@ -92,8 +95,10 @@ as broad parallel expansion: Q8 made the harness protective; K5 tested the
 facade against a consumer; the completed F2 profile/scale gates make bounded F3
 fallback work eligible; X_T reconstruction and checked-commit Fast checking now
 share one graph child in one scope. Contextual body tessellation now composes
-projection and sequential graph/face work in one scope; production caller
-adoption, retirement ratchets, and pre-allocation tessellation bounds remain.
+projection and sequential graph/face work in one scope; its `ktopo`/`kxt`
+production callers are contextual and its internal legacy-use ratchet is
+enforced. Projection adoption/ratcheting and pre-allocation tessellation bounds
+remain.
 The Q2a graph-build ladder now protects construction-scale work; reverse-index
 optimization still waits for comparative measurements.
 
@@ -191,9 +196,10 @@ work.
 scale-sensitive contact/minimizer gate are complete. Contextual graph
 evaluation and checked commit use the same scope/child-reservation model.
 Projection's standalone contextual entries have landed and body tessellation
-now consumes them in one shared scope. Remaining production caller adoption,
-the projection/body legacy ratchets, hostile-input tessellation allocation
-bounds, and facade construction composition remain.
+now consumes them in one shared scope. Body production callers and its
+internal-use ratchet are complete. Projection caller adoption/ratcheting,
+hostile-input tessellation allocation bounds, and facade construction
+composition remain.
 
 ## F3 — Intersection engine consolidation
 

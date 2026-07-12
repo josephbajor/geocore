@@ -1,6 +1,6 @@
 # Operation context and numerical policy
 
-Status: Stage 1b composition, the NURBS contact/minimizer scale gate, and representative Stage 2-5 pilots implemented; contextual projection and whole-body tessellation entries have landed, while production adoption, allocation hardening, and broader ratchets remain
+Status: Stage 1b composition, the NURBS contact/minimizer scale gate, and representative Stage 2-5 pilots implemented; whole-body tessellation's `ktopo`/`kxt` production adoption and internal-use ratchet are complete, while projection adoption, allocation hardening, and broader ratchets remain
 
 ## Purpose
 
@@ -581,6 +581,13 @@ ratchet applies to tessellation, checking, NURBS marching, intersection slack,
 and future contextual families; “opportunistic migration” is not permission to
 add new legacy callers.
 
+Whole-body tessellation is at state 3 for `ktopo`/`kxt`: production callers use
+`tessellate_body_with_context` with one operation per body, and
+`scripts/legacy_api_contract.py` rejects new production references while
+allowing the public definition and `#[cfg(test)]` compatibility clients. The
+wrapper is not publicly deprecated because `kernel` does not yet expose an
+adopted facade replacement for this family.
+
 ## Rollout stages
 
 ### Stage 0 — Audit and vocabulary lock
@@ -692,6 +699,41 @@ remain before the path is fully hostile-input bounded.
 Exit: quality failures are never silent, reports identify the limiting stage, and all
 thread-count variants produce identical mesh bits and semantic reports.
 
+#### Immediate tessellation allocation-hardening slices
+
+The contextual path is not yet a complete hostile-input allocation boundary.
+The next slices are ordered so accounting vocabulary and compatibility evidence
+land before any product cap is selected:
+
+1. `kgeom` adds per-patch boundary-split `Work/Cumulative`, prepared-trim
+   `Items/Cumulative`, and triangle `Items/HighWater` stages. Compatibility v1
+   uses the u32 representability ceiling for split/trim items and the existing
+   200,000-triangle backstop; admission happens before midpoint, trim, earclip,
+   or refinement-generation allocation.
+2. The body profile composes those names, then adds body-wide edge/iso split
+   `Work/Cumulative` stages with the u32 vertex ceiling. Split work contributes
+   to root total work and is charged after depth acceptance but before midpoint
+   evaluation or retention.
+3. `ktopo` adds prepared-patch and retained-body-triangle `Items/Cumulative`
+   stages. Their compatibility v1 allowances are `u64::MAX`: the counters and
+   pre-allocation seams are exact, but finite aggregate caps require corpus
+   evidence because legacy accepts arbitrarily many faces and patches.
+4. Patch builders charge logical `(uv, global-id)` items before materializing
+   arcs, rows, shifted loops, and patch polygons. Body triangle accounting scans
+   the mapped face result, charges only retained nondegenerate triangles, then
+   allocates and appends them.
+5. Q3 records every new counter. After corpus/import measurement, add explicit
+   `FaceTessellationBudgetProfile::bounded_v1()` and
+   `BodyTessellationBudgetProfile::bounded_v1()` presets with finite aggregate
+   and root caps. Legacy wrappers stay on compatibility `v1_defaults`; facade,
+   import, and fuzz clients opt into the bounded presets before any later policy
+   version considers promoting those values.
+
+`TrimLoop::new(Vec<_>)` receives an already allocated caller-owned vector, so a
+future genuinely pre-allocation public path needs an iterator/builder seam that
+charges a declared count before collection. An “accounted” constructor that
+still accepts `Vec<_>` can protect only its cleaned/refined copy.
+
 ### Stage 5 — Checker/make integration
 
 Status: X_T reconstruction and checked-commit Fast validation are contextual.
@@ -706,7 +748,10 @@ failures retain the checker's established fault ordering. Legacy wrappers use a
 non-binding aggregate allowance so compatibility does not acquire an accidental
 model-size ceiling. Contextual facade construction composition remains;
 projection and body tessellation have contextual entries but still need
-remaining production-caller adoption and their internal legacy ratchets.
+remaining projection production-caller adoption and its internal legacy
+ratchet. Body tessellation's `ktopo`/`kxt` callers are contextual and its
+production-use ratchet is enforced; public deprecation remains blocked on a
+facade replacement.
 
 - Route facade construction through one scope, including affected-body checking.
 - Add contextual checker APIs and structured Full verification gaps.
