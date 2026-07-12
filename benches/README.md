@@ -58,6 +58,7 @@ cargo bench --manifest-path benches/Cargo.toml --bench graph_traversal --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench body_tessellation --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench nurbs_isolation --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench curve_pair_isolation --no-run
+cargo bench --manifest-path benches/Cargo.toml --bench curve_pair_solve --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench xt_io --no-run
 ```
 
@@ -165,6 +166,14 @@ separated miss, and independent work, candidate-high-water, and depth stops.
 Every limited result must retain its conservative parent cover and remain
 indeterminate. Curve and policy construction, operation-context setup, report
 extraction, and evidence verification remain outside the measured duration.
+
+The solve-level Q4 slice adds six contextual cases over the exact-cell-driven
+NURBS/NURBS path: polynomial and rational transverse contacts, tangency, two
+roots, a subdivision-proven hidden miss, and zero seed admission. It pins all
+four report stages, ordered contact/output digests, exact in-cell witness
+re-evaluation, and the seed-limit crossing. Geometry, session, request
+overrides, and evidence verification are outside timing; the public contextual
+solve, including profile composition and report finalization, is timed.
 
 The first Q5 slice uses only the repository's Apache-2.0 hand-authored
 `block.x_t` and `offset_plane.x_t` fixtures. Eight cases time the public

@@ -29,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 89)
+        self.assertEqual(len(cases), 95)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -331,6 +331,39 @@ class BenchmarkBaselineTests(unittest.TestCase):
         ]
         self.assertEqual(len(curve_pair_misses), 1)
         self.assertTrue(curve_pair_misses[0]["expected_result_counters"]["complete"])
+        curve_pair_solve = [
+            case for case in cases if case["benchmark_target"] == "curve_pair_solve"
+        ]
+        self.assertEqual(len(curve_pair_solve), 6)
+        self.assertTrue(
+            all(
+                case["deterministic_seed"] == 0x51544350534F000A
+                and case["fixture_version"] == "curve-pair-solve.v1"
+                and case["policy_values"]["policy_version"] == "v1"
+                and case["policy_values"]["execution"] == "serial"
+                and case["policy_values"]["api"]
+                == "intersect_bounded_nurbs_nurbs_with_context"
+                and case["expected_result_counters"]["verified_witnesses"]
+                for case in curve_pair_solve
+            )
+        )
+        solve_limited = [
+            case
+            for case in curve_pair_solve
+            if case["expected_result_counters"]["limit_kind"] != "none"
+        ]
+        self.assertEqual(len(solve_limited), 1)
+        self.assertTrue(
+            solve_limited[0]["expected_result_counters"]["indeterminate"]
+        )
+        self.assertFalse(solve_limited[0]["expected_result_counters"]["complete"])
+        solve_miss = [
+            case
+            for case in curve_pair_solve
+            if case["expected_result_counters"]["proven_empty"]
+        ]
+        self.assertEqual(len(solve_miss), 1)
+        self.assertTrue(solve_miss[0]["expected_result_counters"]["complete"])
         xt_io = [case for case in cases if case["benchmark_target"] == "xt_io"]
         self.assertEqual(len(xt_io), 8)
         self.assertTrue(

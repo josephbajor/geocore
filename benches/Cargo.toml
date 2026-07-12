@@ -9,6 +9,7 @@ publish = false
 kcore = { path = "../crates/kcore" }
 kgeom = { path = "../crates/kgeom" }
 kgraph = { path = "../crates/kgraph", features = ["benchmark-internals"] }
+kops = { path = "../crates/kops" }
 ktopo = { path = "../crates/ktopo", features = ["benchmark-internals"] }
 kxt = { path = "../crates/kxt" }
 
@@ -46,6 +47,10 @@ harness = false
 
 [[bench]]
 name = "curve_pair_isolation"
+harness = false
+
+[[bench]]
+name = "curve_pair_solve"
 harness = false
 
 [[bench]]

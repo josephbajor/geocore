@@ -449,7 +449,7 @@ fn polish_candidate(
 ) -> (f64, f64) {
     let (mut t_a, mut t_b) = newton_polish_pair(a, b, t_a, t_b, policy);
     let distance = a.eval(t_a).dist(b.eval(t_b));
-    if distance <= policy.tolerances.linear() * 16.0 {
+    if needs_local_refinement(distance, policy.tolerances.linear()) {
         let (refined_a, refined_b) = refine_local_pair(
             a,
             b,
@@ -464,6 +464,10 @@ fn polish_candidate(
         }
     }
     (t_a, t_b)
+}
+
+fn needs_local_refinement(distance: f64, tolerance: f64) -> bool {
+    distance > tolerance && distance <= tolerance * 16.0
 }
 
 fn newton_polish_pair(
@@ -898,6 +902,19 @@ mod tests {
         assert_eq!(seeds.mode, AccountingMode::Cumulative);
         assert_eq!(seeds.allowed, cells.allowed);
         assert_eq!(profile.limits().len(), 4);
+    }
+
+    #[test]
+    fn accepted_witnesses_skip_fallback_refinement_at_the_exact_boundary() {
+        let tolerance = Tolerances::default().linear();
+        assert!(!needs_local_refinement(0.0, tolerance));
+        assert!(!needs_local_refinement(tolerance, tolerance));
+        assert!(needs_local_refinement(tolerance * 2.0, tolerance));
+        assert!(needs_local_refinement(tolerance * 16.0, tolerance));
+        assert!(!needs_local_refinement(
+            tolerance * 16.0 + tolerance,
+            tolerance
+        ));
     }
 
     #[test]
