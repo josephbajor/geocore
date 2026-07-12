@@ -239,11 +239,11 @@ are complete for independent nodes, chains, fanout, and rollback.
 
 Owner: `ktopo`, consuming `kgeom` tessellation.
 
-Status: the closed-solid ladder uses the contextual v2 contract across twelve
+Status: the closed-solid ladder uses the contextual v2 contract across fourteen
 registered cases: ten analytic block, cylinder, cone, sphere, and torus rows
-plus two certified imported NURBS-face rows at chord tolerances `1e-2` and
-`1e-3`. Each case uses a Serial, compatibility-v1 session and measures only
-`tessellate_body_with_context`; primitive construction or X_T import,
+plus certified imported NURBS-face and tolerant-edge rows at chord tolerances
+`1e-2` and `1e-3`. Each case uses a Serial, compatibility-v1 session and
+measures only `tessellate_body_with_context`; primitive construction or X_T import,
 session/context construction, outcome unpacking, and verification remain
 outside timing. Repetition proves both the mesh and complete operation report
 are identical. Existing analytic mesh counts, bits, ownership order, volume
@@ -267,10 +267,13 @@ pcurves; the Python contract checks its SHA-256 against the oracle
 certification. Its legacy exact fins therefore exercise the legitimate NURBS
 projection fallback: candidates, Newton depth, queries, and samples are now
 nonzero without changing the 21-stage evidence contract. Projection
-backtracking and face-boundary counters remain zero; the sphere/torus cases
-also have zero graph use. Mixed-body, NURBS-pcurve, broader imported-corpus,
-and tighter-tolerance cases remain required before corpus-backed finite body
-`bounded_v1` allowances are proposed.
+backtracking remains zero; the sphere/torus cases also have zero graph use.
+The certified tolerant-edge fixture adds one curve-less tolerant edge, two
+trimmed SP-curve/NURBS-pcurve uses, and their graph queries while correctly
+leaving projection at zero. Its four skipped geometric-owner records are
+explicitly pinned rather than silently ignored. Mixed-body, genuinely curved
+NURBS, broader imported-corpus, and tighter-tolerance cases remain required
+before corpus-backed finite body `bounded_v1` allowances are proposed.
 
 Face-profile evidence is owned by a separate standalone ladder. Whole-body
 tessellation pre-refines each shared edge against every adjacent surface with a

@@ -82,13 +82,16 @@ and rollback equality. The planned diamond row is deferred because current
 descriptors expose at most one dependency; the harness does not invent a
 benchmark-only graph shape.
 
-The Q3 v2 contract registers twelve closed-solid cases: ten analytic block,
-cylinder, cone, sphere, and torus rows plus a certified imported block with one
-NURBS face, all at chord tolerances `1e-2` and `1e-3`. Cylinder, sphere, and
-torus exercise periodic seam/pole assembly. The imported fixture is an exact
-benchmark-owned copy of `solid_block_nurbs_face.x_t`; its 6,488-byte identity,
-portable byte digest, one B-surface, and absence of pcurves are asserted during
-setup. The Python contract independently checks its SHA-256 against
+The Q3 v2 contract registers fourteen closed-solid cases: ten analytic block,
+cylinder, cone, sphere, and torus rows plus certified imported NURBS-face and
+tolerant-edge blocks, all at chord tolerances `1e-2` and `1e-3`. Cylinder,
+sphere, and torus exercise periodic seam/pole assembly. The NURBS fixture is an
+exact benchmark-owned copy of `solid_block_nurbs_face.x_t`; setup asserts its
+6,488-byte identity, portable digest, one B-surface, and absence of pcurves.
+The tolerant fixture references the current certified oracle outbox and asserts
+its 7,172-byte identity, portable digest, one curve-less tolerant edge, two
+NURBS pcurve uses, and four intentionally skipped geometric-owner records. The
+Python contract checks both SHA-256 values against
 `docs/oracle-certification.json`. One immutable fixture and one Serial
 compatibility-v1 operation context are prepared per case. Import, context
 construction, outcome unpacking, finite/range, watertightness, orientation,
@@ -106,9 +109,10 @@ volume, and exact mesh/report repeatability checks run outside timing. Only the
 Every case pins all 21 values, a profile/policy/stage digest, contextual API and
 execution identity, and zero completion-event counts. Existing mesh bits and
 digests remain unchanged. The NURBS-face rows activate projection candidates,
-Newton depth, queries, and samples while preserving the same evidence contract.
-These measurements do not justify finite `bounded_v1` caps: projection
-backtracking and face-boundary use remain zero, and mixed-body, NURBS-pcurve,
+Newton depth, queries, and samples; the tolerant rows prove the explicit
+SP-curve/NURBS-pcurve path remains projection-free and account for its graph
+queries. These measurements do not justify finite `bounded_v1` caps:
+projection backtracking remains zero, and mixed-body, genuinely curved NURBS,
 broader imported-corpus, and tighter-tolerance measurements are still required.
 
 The standalone Q3 face ladder separately measures a half-cylinder trimmed

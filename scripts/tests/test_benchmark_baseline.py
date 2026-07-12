@@ -29,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 67)
+        self.assertEqual(len(cases), 69)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -86,7 +86,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
         tessellation = [
             case for case in cases if case["benchmark_target"] == "body_tessellation"
         ]
-        self.assertEqual(len(tessellation), 12)
+        self.assertEqual(len(tessellation), 14)
         self.assertTrue(
             all(
                 case["deterministic_seed"] == 0x5154455353000003
@@ -154,6 +154,30 @@ class BenchmarkBaselineTests(unittest.TestCase):
                 case["size_parameters"]["input_bytes"] == len(fixture_bytes)
                 and case["policy_values"]["source_sha256"] == expected_sha256
                 for case in imported_nurbs
+            )
+        )
+        imported_tolerant = [
+            case
+            for case in tessellation
+            if case["policy_values"].get("source_fixture")
+            == "solid_block_tolerant_edge.x_t@onshape-cloud-2026-07-11"
+        ]
+        self.assertEqual(len(imported_tolerant), 2)
+        tolerant_sha256 = certified["fixtures_sha256"]["solid_block_tolerant_edge.x_t"]
+        tolerant_bytes = (
+            ROOT / "oracle" / "outbox" / "solid_block_tolerant_edge.x_t"
+        ).read_bytes()
+        self.assertEqual(len(tolerant_bytes), 7_172)
+        self.assertEqual(hashlib.sha256(tolerant_bytes).hexdigest(), tolerant_sha256)
+        self.assertTrue(
+            all(
+                case["size_parameters"]["input_bytes"] == len(tolerant_bytes)
+                and case["policy_values"]["source_sha256"] == tolerant_sha256
+                and case["expected_result_counters"]["tolerant_edges"] == 1
+                and case["expected_result_counters"]["pcurve_uses"] == 2
+                and case["expected_result_counters"]["skipped_geometric_owners"]
+                == 4
+                for case in imported_tolerant
             )
         )
         face_tessellation = [

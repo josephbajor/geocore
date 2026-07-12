@@ -771,17 +771,19 @@ land before any product cap is selected:
    ordinary loop/trim holders. Closed-sphere, torus, multi-hole, N/N+1, paired-
    holder atomicity, shared-scope, overflow, diagnostic, legacy, and execution-
    policy evidence is in the owning tests.
-7. **Analytic evidence plus the first certified corpus slice implemented:**
+7. **Analytic evidence plus the first certified corpus slices implemented:**
    Q3's contextual v2 ladder records all 21 aggregate stages for ten analytic
-   solids and two imported NURBS-face rows, preserves the legacy analytic mesh
-   bits, and verifies identical reports on repetition. The certified B-surface
-   fixture activates projection candidates, Newton depth, queries, and samples.
+   solids, two imported NURBS-face rows, and two tolerant-edge/pcurve rows,
+   preserves the legacy analytic mesh bits, and verifies identical reports on
+   repetition. The certified B-surface fixture activates projection candidates,
+   Newton depth, queries, and samples. The certified tolerant edge proves two
+   explicit NURBS pcurve uses remain projection-free while graph work composes.
    Body-level face-boundary use remains zero by design: shared edges are
    pre-refined and frozen, and any nested boundary insertion is a crack-
    prevention error. A separate contextual half-cylinder ladder activates and
    pins all five face-profile stages at two tolerances. Expand the face
-   representation/trim matrix and add mixed, NURBS-pcurve, broader imported-
-   corpus, and tighter-tolerance body measurements before proposing explicit
+   representation/trim matrix and add mixed, genuinely curved NURBS, broader
+   imported-corpus, and tighter-tolerance body measurements before proposing explicit
    `FaceTessellationBudgetProfile::bounded_v1()` and
    `BodyTessellationBudgetProfile::bounded_v1()` presets with finite aggregate
    and root caps. Legacy wrappers stay on compatibility `v1_defaults`; facade,

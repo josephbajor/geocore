@@ -49,6 +49,16 @@ pub const IMPORTED_NURBS_FACE_SHA256: &str =
 pub const IMPORTED_NURBS_FACE_BYTE_DIGEST: u64 = 0x7aaf_75cc_f251_e6b9;
 const IMPORTED_NURBS_FACE_BYTES: &[u8] =
     include_bytes!("../testdata/solid_block_nurbs_face.certified.x_t");
+/// Exact licensed-host-certified corpus identity for the first tolerant-edge slice.
+pub const IMPORTED_TOLERANT_EDGE_IDENTITY: &str =
+    "solid_block_tolerant_edge.x_t@onshape-cloud-2026-07-11";
+/// SHA-256 pinned by `docs/oracle-certification.json` for the tolerant-edge fixture.
+pub const IMPORTED_TOLERANT_EDGE_SHA256: &str =
+    "49e1c858c73200f82816b6c352b2a4e92b7af7d45e8f82f10e00abb6d4edf831";
+/// Portable in-harness byte digest for the exact certified tolerant-edge fixture.
+pub const IMPORTED_TOLERANT_EDGE_BYTE_DIGEST: u64 = 0x1483_6dc5_5d6d_8a71;
+const IMPORTED_TOLERANT_EDGE_BYTES: &[u8] =
+    include_bytes!("../../oracle/outbox/solid_block_tolerant_edge.x_t");
 
 /// Closed solid represented by one Q3 case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,6 +75,8 @@ pub enum FixtureKind {
     Torus,
     /// Certified X_T block with one exact planar B-surface face and no pcurves.
     ImportedNurbsFace,
+    /// Certified X_T block with one curve-less tolerant edge and two NURBS pcurves.
+    ImportedTolerantEdge,
 }
 
 /// Stable Q3 case definition.
@@ -100,8 +112,8 @@ pub struct BodyTessellationCase {
     pub expected_usage_stage_digest: u64,
 }
 
-/// Ten analytic-solid cases plus two certified imported NURBS-face rows.
-pub const CASES: [BodyTessellationCase; 12] = [
+/// Ten analytic-solid cases plus four certified imported corpus rows.
+pub const CASES: [BodyTessellationCase; 14] = [
     case(
         "topology/body-tessellation/block-v2/1/chord-1e-2-v2",
         FixtureKind::Block,
@@ -210,6 +222,24 @@ pub const CASES: [BodyTessellationCase; 12] = [
         0x226e_dd2a_120c_74b0,
         0x621e_45af_fa38_7187,
     ),
+    case(
+        "topology/body-tessellation/imported-tolerant-edge-v2/1/chord-1e-2-v2",
+        FixtureKind::ImportedTolerantEdge,
+        1.0e-2,
+        8,
+        12,
+        0x226e_dd2a_120c_74b0,
+        0xe30c_4f87_158c_d78e,
+    ),
+    case(
+        "topology/body-tessellation/imported-tolerant-edge-v2/1/chord-1e-3-v2",
+        FixtureKind::ImportedTolerantEdge,
+        1.0e-3,
+        8,
+        12,
+        0x226e_dd2a_120c_74b0,
+        0xe30c_4f87_158c_d78e,
+    ),
 ];
 
 const fn case(
@@ -222,7 +252,9 @@ const fn case(
     expected_output_digest: u64,
 ) -> BodyTessellationCase {
     let (source_faces, source_edges, source_vertices) = match fixture_kind {
-        FixtureKind::Block | FixtureKind::ImportedNurbsFace => (6, 12, 8),
+        FixtureKind::Block | FixtureKind::ImportedNurbsFace | FixtureKind::ImportedTolerantEdge => {
+            (6, 12, 8)
+        }
         FixtureKind::Cylinder | FixtureKind::Cone => (3, 2, 0),
         FixtureKind::Sphere | FixtureKind::Torus => (1, 0, 0),
     };
@@ -320,6 +352,12 @@ const fn reviewed_accounting(
                 0, 1, 1, 16, 625, 0, 0, 0, 2, 24, 1, 54, 0, 0, 120, 0, 0, 8, 120, 12, 84,
             ],
             0x8e9a_f09b_d104_3a00,
+        ),
+        (FixtureKind::ImportedTolerantEdge, _) => (
+            [
+                0, 0, 0, 0, 0, 0, 0, 0, 2, 24, 1, 66, 0, 0, 120, 0, 0, 8, 120, 12, 84,
+            ],
+            0x0604_73f6_2ba7_442f,
         ),
     }
 }
@@ -825,6 +863,50 @@ pub fn fixture(case: BodyTessellationCase) -> BodyTessellationFixture {
             assert_eq!(nurbs_faces, 1);
             (body, 0.024, 1.0 - 1.0e-12)
         }
+        FixtureKind::ImportedTolerantEdge => {
+            assert_eq!(IMPORTED_TOLERANT_EDGE_BYTES.len(), 7_172);
+            let mut source_digest = StableHasher::new();
+            source_digest.bytes(IMPORTED_TOLERANT_EDGE_BYTES);
+            assert_eq!(
+                source_digest.finish(),
+                IMPORTED_TOLERANT_EDGE_BYTE_DIGEST,
+                "certified Q3 tolerant-edge fixture bytes drifted"
+            );
+            let reconstruction = kxt::import(IMPORTED_TOLERANT_EDGE_BYTES, &mut store)
+                .expect("certified Q3 tolerant-edge fixture must import");
+            assert_eq!(
+                reconstruction.skipped,
+                vec![(kxt::schema::code::GEOMETRIC_OWNER, 4)]
+            );
+            assert_eq!(reconstruction.bodies.len(), 1);
+            let body = reconstruction.bodies[0];
+            assert_eq!(store.count::<Curve2dGeom>(), 2);
+            assert_eq!(
+                store
+                    .edges_of_body(body)
+                    .expect("certified Q3 tolerant-edge body must be live")
+                    .into_iter()
+                    .filter(|&edge| {
+                        let edge = store.get(edge).expect("live tolerant edge");
+                        edge.curve().is_none() && edge.tolerance().is_some()
+                    })
+                    .count(),
+                1
+            );
+            let pcurves: Vec<_> = store
+                .edges_of_body(body)
+                .expect("certified Q3 tolerant-edge body must be live")
+                .into_iter()
+                .flat_map(|edge| store.get(edge).expect("live edge").fins().to_vec())
+                .filter_map(|fin| store.get(fin).expect("live fin").pcurve())
+                .collect();
+            assert_eq!(pcurves.len(), 2);
+            assert!(pcurves.into_iter().all(|pcurve| matches!(
+                store.get(pcurve.curve()).expect("live NURBS pcurve"),
+                Curve2dGeom::Nurbs(_)
+            )));
+            (body, 0.024, 1.0 - 1.0e-12)
+        }
     };
     let expected_faces = store.faces_of_body(body).expect("valid body");
     let expected_edges = store.edges_of_body(body).expect("valid body");
@@ -949,8 +1031,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn registry_contains_exactly_twelve_unique_canonical_cases() {
-        assert_eq!(CASES.len(), 12);
+    fn registry_contains_exactly_fourteen_unique_canonical_cases() {
+        assert_eq!(CASES.len(), 14);
         let unique: BTreeSet<_> = CASES.iter().map(|case| case.path).collect();
         assert_eq!(unique.len(), CASES.len());
         for case in CASES {
@@ -991,23 +1073,52 @@ mod tests {
             assert_eq!(entry["policy_values"]["execution"], EXECUTION_IDENTITY);
             assert_eq!(entry["policy_values"]["policy_version"], "v1");
             assert_eq!(entry["policy_values"]["usage_contract"], "q3-usage.v1");
-            if case.fixture_kind == FixtureKind::ImportedNurbsFace {
-                assert_eq!(
-                    entry["size_parameters"]["input_bytes"].as_u64(),
-                    Some(IMPORTED_NURBS_FACE_BYTES.len() as u64)
-                );
-                assert_eq!(
-                    entry["policy_values"]["source_fixture"],
-                    IMPORTED_NURBS_FACE_IDENTITY
-                );
-                assert_eq!(
-                    entry["policy_values"]["source_sha256"],
-                    IMPORTED_NURBS_FACE_SHA256
-                );
-            } else {
-                assert!(entry["size_parameters"]["input_bytes"].is_null());
-                assert!(entry["policy_values"]["source_fixture"].is_null());
-                assert!(entry["policy_values"]["source_sha256"].is_null());
+            match case.fixture_kind {
+                FixtureKind::ImportedNurbsFace => {
+                    assert_eq!(
+                        entry["size_parameters"]["input_bytes"].as_u64(),
+                        Some(IMPORTED_NURBS_FACE_BYTES.len() as u64)
+                    );
+                    assert_eq!(
+                        entry["policy_values"]["source_fixture"],
+                        IMPORTED_NURBS_FACE_IDENTITY
+                    );
+                    assert_eq!(
+                        entry["policy_values"]["source_sha256"],
+                        IMPORTED_NURBS_FACE_SHA256
+                    );
+                }
+                FixtureKind::ImportedTolerantEdge => {
+                    assert_eq!(
+                        entry["size_parameters"]["input_bytes"].as_u64(),
+                        Some(IMPORTED_TOLERANT_EDGE_BYTES.len() as u64)
+                    );
+                    assert_eq!(
+                        entry["policy_values"]["source_fixture"],
+                        IMPORTED_TOLERANT_EDGE_IDENTITY
+                    );
+                    assert_eq!(
+                        entry["policy_values"]["source_sha256"],
+                        IMPORTED_TOLERANT_EDGE_SHA256
+                    );
+                    assert_eq!(
+                        entry["expected_result_counters"]["tolerant_edges"].as_u64(),
+                        Some(1)
+                    );
+                    assert_eq!(
+                        entry["expected_result_counters"]["pcurve_uses"].as_u64(),
+                        Some(2)
+                    );
+                    assert_eq!(
+                        entry["expected_result_counters"]["skipped_geometric_owners"].as_u64(),
+                        Some(4)
+                    );
+                }
+                _ => {
+                    assert!(entry["size_parameters"]["input_bytes"].is_null());
+                    assert!(entry["policy_values"]["source_fixture"].is_null());
+                    assert!(entry["policy_values"]["source_sha256"].is_null());
+                }
             }
 
             let counters = &entry["expected_result_counters"];
