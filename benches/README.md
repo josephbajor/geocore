@@ -54,6 +54,7 @@ cargo test --manifest-path benches/Cargo.toml
 cargo bench --manifest-path benches/Cargo.toml --bench benchmark_contract --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench topology_commit --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench graph_build --no-run
+cargo bench --manifest-path benches/Cargo.toml --bench graph_traversal --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench body_tessellation --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench nurbs_isolation --no-run
 cargo bench --manifest-path benches/Cargo.toml --bench xt_io --no-run
@@ -83,6 +84,14 @@ adjacency and uses hash storage only for non-observable lookup/membership. The
 planned diamond row is deferred because current
 descriptors expose at most one dependency; the harness does not invent a
 benchmark-only graph shape.
+
+The Q2b target registers eight prepared-chain traversal cases. Dependency-
+first closure and a deterministic missing-path search each run at 1, 10, 100,
+and 1,000 dependency edges. Graph construction, validation, and stable ordinal
+indexing stay outside timing; every sample pins result presence, exact returned
+node count and order digest, and repeatability. Traversal output and cycle paths
+remain vector-ordered, while active/completed membership uses hash lookup that
+is never iterated. The smallest closure row runs in CI.
 
 The Q3 v2 contract registers fourteen closed-solid cases: ten analytic block,
 cylinder, cone, sphere, and torus rows plus certified imported NURBS-face and

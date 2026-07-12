@@ -763,9 +763,10 @@ F1 is complete only when all of the following are true:
   hash storage is never iterated for observable output. The F7/Q2a ladder
   preserves graph and reverse-index digests, rollback, stale-handle behavior,
   bounded entry-slot reuse, and full-index audit equality while pinning zero
-  full-order rebuilds. Graph
-  traversal visited/path helpers still use simple deterministic vectors and
-  remain a separate measured optimization before production-scale imports.
+  full-order rebuilds. The separate F7/Q2b ladder now protects indexed active/
+  completed traversal membership through 1,000-edge closure and missing-path
+  cases. Ordered vectors remain the sole source of closure output and exact
+  cycle paths; hash storage is never iterated for observable results.
 - **Global regularity proof.** Bounding principal curvature over arbitrary
   NURBS regions is nontrivial. The first slice is useful with local evaluation
   and explicit indeterminate region proof; it must not overclaim certification.

@@ -25,13 +25,13 @@ section and link the reason from the affected project file in the same change.
 | Project | Current state |
 | --- | --- |
 | F0 | Implemented: curve/curve operand swapping preserves completion evidence and canonical order. |
-| F1 | G1-G4a plus the F2 graph-budget adapter are implemented: `kgraph` and `ktopo::Store` own one transactional geometry graph; exact offsets evaluate through accepted/attempted node/depth accounting, check, tessellate, and round-trip through the declared X_T subset without basis duplication. Reverse dependencies now use deterministic insertion-ordered adjacency with direct key/membership lookup and no full-order rebuilds, preserving the Q2a graph/index digests and rollback contract. The 14-file writer bundle is host-recertified and machine-fingerprinted; broader G4 corpus coverage, traversal scratch scaling, and G5 remain. |
+| F1 | G1-G4a plus the F2 graph-budget adapter are implemented: `kgraph` and `ktopo::Store` own one transactional geometry graph; exact offsets evaluate through accepted/attempted node/depth accounting, check, tessellate, and round-trip through the declared X_T subset without basis duplication. Reverse dependencies use deterministic insertion-ordered adjacency with direct key/membership lookup and no full-order rebuilds; traversal keeps vector-defined output/path order with indexed active/completed membership. Q2a/Q2b preserve exact graph, index, traversal, rollback, and accounting evidence. The 14-file writer bundle is host-recertified and machine-fingerprinted; broader G4 corpus coverage and G5 remain. |
 | F2 | Stage 1, Stage 1b composition, the bounded NURBS/NURBS Stage 3 scale gate, two Stage 2 pilots, and contextual face/body-tessellation, projection, and checker entries are implemented. `OperationContext` owns family-default < session < request budget precedence for graph evaluation, Full checking, tessellation, and projection, including canonical root stops and accounting-mode validation. Whole-body tessellation now owns one scope across graph evaluation, projection fallback, shared-edge/iso refinement and storage, prepared UV/patch materialization, topology/holder structural storage, per-patch face tessellation, retained mesh vertices, and retained output triangles while preserving legacy bits and errors. Body and standalone-face legacy tessellation wrappers are closed to new production callers by the CI retirement ratchet. NURBS/NURBS conditioning, gradients, accepted progress, contact classification, collapsed ranges, and minimizer/local-search guards are normalized across parameter/model scales while residuals retain sole acceptance authority. Segment conditioning, overlap/input/dedup slack, structured numeric stops, other contextual caller adoption/ratcheting, corpus-backed bounded tessellation presets, and broader migrations remain. |
 | F3 | Two slices implemented: centralized class dispatch plus shared periodic/range and first-wins candidate emission migrated through line/circle and plane/sphere. Broader driver migration and generic fallback remain. |
 | F4 | Phase 1, representative Phase 2 slices, and two Phase 3 pilots are implemented: graph evaluation owns stable classification, and one surface-intersection family retains ordered structured incomplete evidence through limits, numeric stops, canonicalization, and swapping. Broader result-family and legacy migrations remain. |
 | F5 | K1-K3, typed K4 interchange, and K5 adoption are implemented: the `kernel` facade owns lifecycle, opaque IDs, classified sources, one-scope outcomes, safe checker subjects, opaque journals, child-accounted procedural evaluation, and atomic typed X_T import/export. The standalone `kernel-lifecycle` client depends directly only on `kernel` and proves construction, semantic inspection, Full checking, surface evaluation, and byte-stable X_T export/import/re-export. Graph-aware intersection and semantic edit/journal iteration remain. |
 | F6 | First slice implemented: shared surface inversion, chart normalization, and distance services consumed by checker and tessellation. Module splits remain. |
-| F7 | Q0-Q2a, Q8, and the first Q3-Q6 slices are implemented: CI now enforces Python/oracle freshness, compiles and smoke-runs the excluded benchmark package including graph construction plus contextual body and standalone face tessellation, and runs both pinned fuzz targets within fixed limits. Q2a drove the reverse-index replacement and now pins zero full-order rebuilds without graph/index digest drift; its diamond row awaits a real multi-dependency descriptor. Q3's body ladder pins all 21 composed counters; certified B-surface rows activate projection work and tolerant-edge rows cover the explicit SP-curve/NURBS-pcurve path. A separate half-cylinder ladder activates all five face stages because body tessellation deliberately freezes pre-refined boundaries. Broader representation/corpus measurements still gate finite presets. Q3-Q5 expansion, more Q6 targets/corpora, and Q7 remain. |
+| F7 | Q0-Q2b, Q8, and the first Q3-Q6 slices are implemented: CI now enforces Python/oracle freshness, compiles and smoke-runs the excluded benchmark package including graph construction/traversal plus contextual body and standalone face tessellation, and runs both pinned fuzz targets within fixed limits. Q2a drove the reverse-index replacement and pins zero full-order rebuilds without graph/index digest drift; Q2b pins deterministic closure/path evidence through 1,000 edges after traversal membership indexing. Q2a's diamond row awaits a real multi-dependency descriptor. Q3's body ladder pins all 21 composed counters; certified B-surface rows activate projection work and tolerant-edge rows cover the explicit SP-curve/NURBS-pcurve path. A separate half-cylinder ladder activates all five face stages because body tessellation deliberately freezes pre-refined boundaries. Broader representation/corpus measurements still gate finite presets. Q3-Q5 expansion, more Q6 targets/corpora, and Q7 remain. |
 
 ## Current direction and handoff order
 
@@ -89,8 +89,8 @@ current record. Host findings remain ratcheted in `docs/oracle-results.tsv`.
 3. **Resume algorithm/API expansion behind the completed gates.** F3's generic fallback
    and facade graph-aware intersection follow the F2 scale/context work;
    semantic K4 edit transactions follow the K5 adoption pass. F6 splits and F4
-   legacy cleanup land only with an owner-level behavioral migration. The Q2a
-   ladder is now executable in CI; any reverse-index representation change
+   legacy cleanup land only with an owner-level behavioral migration. The Q2a/
+   Q2b ladders are executable in CI; any graph-index/traversal representation change
    still requires a recorded stable-host before/after comparison.
 
 No C ABI, plugin ABI, broad topology privacy break, speculative facade family,
@@ -119,8 +119,8 @@ production callers are contextual and its internal legacy-use ratchet is
 enforced. Exact body edge-line and remaining structural-holder admission have
 landed. Projection adoption/ratcheting and corpus-backed bounded tessellation
 presets remain.
-The Q2a graph-build ladder now protects construction-scale work; reverse-index
-optimization still waits for comparative measurements.
+The Q2a/Q2b ladders now protect graph construction, reverse indexing, and
+dependency traversal through the current 1,000-edge procedural scale.
 
 ### Standing handoff ratchets
 

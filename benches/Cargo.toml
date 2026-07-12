@@ -29,6 +29,10 @@ name = "graph_build"
 harness = false
 
 [[bench]]
+name = "graph_traversal"
+harness = false
+
+[[bench]]
 name = "body_tessellation"
 harness = false
 

@@ -911,9 +911,11 @@ that queue must eventually discharge.
 - M5: grow planar profiles and booleans only after facade adoption and the
   checker, rollback, lineage, tolerance, determinism, corpus, performance, and
   independent-oracle gates.
-- Production-scale and assembly imports wait for the Q2a graph-construction
-  benchmark. Reverse-index and body-order optimization follow measurements and
-  retain deterministic full-reconstruction audits.
+- Production-scale and assembly imports must exercise the Q2a construction and
+  Q2b traversal ladders. Reverse-index and traversal membership indexing have
+  landed against deterministic audit/digest evidence; future representation or
+  body-order optimization still follows named-host measurements and retains
+  full-reconstruction audits.
 
 ## After the kernel
 

@@ -7,6 +7,7 @@ use kgeom::curve::{Curve, CurveDerivs};
 use kgeom::curve2d::{Curve2d, Curve2dDerivs};
 use kgeom::param::ParamRange;
 use kgeom::surface::{Degeneracy, Surface, SurfaceDerivs};
+use std::collections::HashMap;
 
 use crate::SurfaceClass;
 use crate::descriptor::{Curve2dDescriptor, CurveDescriptor, SurfaceDescriptor};
@@ -189,6 +190,7 @@ pub struct EvalContext<'g> {
     limits: EvalLimits,
     tolerances: Tolerances,
     active: Vec<GeometryRef>,
+    active_positions: HashMap<GeometryRef, usize>,
     node_visits: usize,
     dependency_depth: usize,
 }
@@ -201,6 +203,7 @@ impl<'g> EvalContext<'g> {
             limits,
             tolerances,
             active: Vec::new(),
+            active_positions: HashMap::new(),
             node_visits: 0,
             dependency_depth: 0,
         }
@@ -705,6 +708,7 @@ impl<'g> EvalContext<'g> {
 
     fn begin_query(&mut self) {
         self.active.clear();
+        self.active_positions.clear();
         self.node_visits = 0;
         self.dependency_depth = 0;
     }
@@ -718,11 +722,7 @@ impl<'g> EvalContext<'g> {
             });
         }
         self.node_visits = attempted_visits;
-        if let Some(start) = self
-            .active
-            .iter()
-            .position(|candidate| *candidate == geometry)
-        {
+        if let Some(&start) = self.active_positions.get(&geometry) {
             let mut path = self.active[start..].to_vec();
             path.push(geometry);
             return Err(EvalError::DependencyCycle { path });
@@ -735,6 +735,7 @@ impl<'g> EvalContext<'g> {
             });
         }
         self.dependency_depth = self.dependency_depth.max(consumed);
+        self.active_positions.insert(geometry, self.active.len());
         self.active.push(geometry);
         Ok(())
     }
@@ -742,6 +743,8 @@ impl<'g> EvalContext<'g> {
     fn leave(&mut self, geometry: GeometryRef) {
         let popped = self.active.pop();
         debug_assert_eq!(popped, Some(geometry));
+        let removed = self.active_positions.remove(&geometry);
+        debug_assert!(removed.is_some());
     }
 }
 

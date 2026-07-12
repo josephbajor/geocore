@@ -1,6 +1,6 @@
 # F7 quality, fuzzing, and performance harnesses
 
-Status: Q0-Q2a, Q8, and the first Q3-Q6 foundation slices implemented; the Q2a diamond row awaits a real multi-dependency descriptor
+Status: Q0-Q2b, Q8, and the first Q3-Q6 foundation slices implemented; the Q2a diamond row awaits a real multi-dependency descriptor
 
 ## Outcome
 
@@ -238,7 +238,27 @@ replacement uses insertion-ordered adjacency vectors with hash-backed key and
 membership lookup that is never iterated for observable output. All 17 rows
 preserve graph/reverse-index digests and now pin zero full-order rebuilds.
 Removed entry slots are reused deterministically instead of accumulating
-tombstones. Traversal visited/path vectors remain a separate measured optimization.
+tombstones.
+
+## Stage Q2b — geometry graph traversal ladder
+
+Owner: `kgraph`.
+
+Status: implemented as eight registered and CI-smoked cases.
+
+The prepared offset-chain fixture measures dependency-first closure and a
+deterministic missing dependency-path search at 1, 10, 100, and 1,000 edges.
+Construction, graph validation, ordinal indexing, and repeated-result checking
+are excluded from timing. Every iteration verifies exact result presence,
+returned node count, stable node-order digest, and repeatability.
+
+The ladder protects the traversal scratch replacement: ordered vectors remain
+the sole source of closure results and cycle paths, while hash maps/sets provide
+active and completed membership without being iterated for observable output.
+`EvalContext` uses the same active-position pattern and retains exact node-visit,
+dependency-depth, and cycle-path evidence. A local advisory smoke measured the
+1,000-edge closure at roughly 120–123 µs; elapsed time becomes comparable only
+after it is captured in a named stable-host baseline.
 
 ## Stage Q3 — body tessellation ladder
 
@@ -544,7 +564,7 @@ licensed-host validation described in `docs/oracle-loop.md`.
    matrices only in response to an algorithm/adoption question or measured
    coverage gap.
 
-Q0-Q2a, Q8, and the current Q3-Q6 foundation slices are completed milestones,
+Q0-Q2b, Q8, and the current Q3-Q6 foundation slices are completed milestones,
 apart from Q2a's explicitly descriptor-blocked diamond row. Additional fuzz
 targets, benchmark families, and broad corpus expansion remain evidence-driven.
 

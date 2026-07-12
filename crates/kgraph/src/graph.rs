@@ -478,8 +478,16 @@ impl GeometryGraph {
     /// Dependency-first transitive closure, including `root`, with duplicates removed.
     pub fn dependency_closure(&self, root: GeometryRef) -> GeometryGraphResult<Vec<GeometryRef>> {
         let mut complete = Vec::new();
+        let mut complete_membership = HashSet::new();
         let mut active = Vec::new();
-        self.visit_dependency_first(root, &mut active, &mut complete)?;
+        let mut active_positions = HashMap::new();
+        self.visit_dependency_first(
+            root,
+            &mut active,
+            &mut active_positions,
+            &mut complete,
+            &mut complete_membership,
+        )?;
         Ok(complete)
     }
 
@@ -510,8 +518,15 @@ impl GeometryGraph {
             return Err(stale(target));
         }
         let mut active = Vec::new();
-        let mut complete = Vec::new();
-        if self.find_dependency_path(from, target, &mut active, &mut complete)? {
+        let mut active_positions = HashMap::new();
+        let mut complete = HashSet::new();
+        if self.find_dependency_path(
+            from,
+            target,
+            &mut active,
+            &mut active_positions,
+            &mut complete,
+        )? {
             Ok(Some(active))
         } else {
             Ok(None)
@@ -700,28 +715,32 @@ impl GeometryGraph {
         geometry: GeometryRef,
         target: GeometryRef,
         active: &mut Vec<GeometryRef>,
-        complete: &mut Vec<GeometryRef>,
+        active_positions: &mut HashMap<GeometryRef, usize>,
+        complete: &mut HashSet<GeometryRef>,
     ) -> GeometryGraphResult<bool> {
         if complete.contains(&geometry) {
             return Ok(false);
         }
-        if let Some(start) = active.iter().position(|candidate| *candidate == geometry) {
+        if let Some(&start) = active_positions.get(&geometry) {
             let mut path = active[start..].to_vec();
             path.push(geometry);
             return Err(GeometryGraphError::DependencyCycle { path });
         }
+        active_positions.insert(geometry, active.len());
         active.push(geometry);
         if geometry == target {
             return Ok(true);
         }
         for dependency in self.direct_dependencies(geometry)? {
-            if self.find_dependency_path(dependency, target, active, complete)? {
+            if self.find_dependency_path(dependency, target, active, active_positions, complete)? {
                 return Ok(true);
             }
         }
         let popped = active.pop();
         debug_assert_eq!(popped, Some(geometry));
-        complete.push(geometry);
+        let removed = active_positions.remove(&geometry);
+        debug_assert!(removed.is_some());
+        complete.insert(geometry);
         Ok(false)
     }
 
@@ -729,22 +748,34 @@ impl GeometryGraph {
         &self,
         geometry: GeometryRef,
         active: &mut Vec<GeometryRef>,
+        active_positions: &mut HashMap<GeometryRef, usize>,
         complete: &mut Vec<GeometryRef>,
+        complete_membership: &mut HashSet<GeometryRef>,
     ) -> GeometryGraphResult<()> {
-        if complete.contains(&geometry) {
+        if complete_membership.contains(&geometry) {
             return Ok(());
         }
-        if let Some(start) = active.iter().position(|candidate| *candidate == geometry) {
+        if let Some(&start) = active_positions.get(&geometry) {
             let mut path = active[start..].to_vec();
             path.push(geometry);
             return Err(GeometryGraphError::DependencyCycle { path });
         }
+        active_positions.insert(geometry, active.len());
         active.push(geometry);
         for dependency in self.direct_dependencies(geometry)? {
-            self.visit_dependency_first(dependency, active, complete)?;
+            self.visit_dependency_first(
+                dependency,
+                active,
+                active_positions,
+                complete,
+                complete_membership,
+            )?;
         }
         let popped = active.pop();
         debug_assert_eq!(popped, Some(geometry));
+        let removed = active_positions.remove(&geometry);
+        debug_assert!(removed.is_some());
+        complete_membership.insert(geometry);
         complete.push(geometry);
         Ok(())
     }

@@ -29,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 69)
+        self.assertEqual(len(cases), 77)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -70,6 +70,25 @@ class BenchmarkBaselineTests(unittest.TestCase):
                 case["deterministic_seed"] == 0x5154324147520006
                 for case in graph_build
             )
+        )
+        graph_traversal = [
+            case for case in cases if case["benchmark_target"] == "graph_traversal"
+        ]
+        self.assertEqual(len(graph_traversal), 8)
+        self.assertTrue(
+            all(
+                case["deterministic_seed"] == 0x5154325452410008
+                and case["fixture_version"] == "graph-traversal.v1"
+                and case["policy_values"]["membership"] == "indexed"
+                and case["expected_result_counters"]["stable"]
+                and len(case["expected_result_counters"]["result_digest"]) == 16
+                and len(case["expected_result_counters"]["output_digest"]) == 16
+                for case in graph_traversal
+            )
+        )
+        self.assertEqual(
+            {case["policy_values"]["operation"] for case in graph_traversal},
+            {"dependency-closure", "dependency-path-miss"},
         )
         self.assertEqual(
             {case["policy_values"]["shape"] for case in graph_build},

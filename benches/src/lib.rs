@@ -8,6 +8,7 @@ use core::fmt;
 pub mod body_tessellation;
 pub mod face_tessellation;
 pub mod graph_build;
+pub mod graph_traversal;
 pub mod nurbs_isolation;
 pub mod topology;
 pub mod xt_io;

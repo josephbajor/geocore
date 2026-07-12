@@ -317,6 +317,37 @@ fn nested_offsets_charge_every_dependency_visit() {
 }
 
 #[test]
+fn deep_offset_evaluation_preserves_exact_stack_accounting() {
+    const DEPENDENCIES: usize = 256;
+    let mut graph = GeometryGraph::new();
+    let basis = graph.insert_surface(Plane::new(Frame::world())).unwrap();
+    let mut root = basis;
+    let mut expected_z = 0.0;
+    for ordinal in 0..DEPENDENCIES {
+        let distance = (ordinal + 1) as f64 * 1.0e-6;
+        expected_z += distance;
+        root = graph
+            .insert_surface(OffsetSurfaceDescriptor::new(root, distance))
+            .unwrap();
+    }
+
+    let mut eval = EvalContext::new(
+        &graph,
+        EvalLimits {
+            max_dependency_depth: DEPENDENCIES + 1,
+            max_node_visits_per_query: DEPENDENCIES + 1,
+        },
+        Tolerances::default(),
+    );
+    let value = eval
+        .eval_surface(root, [0.25, -0.5], SurfaceDerivativeOrder::Position)
+        .unwrap();
+    assert_eq!(value.p, Vec3::new(0.25, -0.5, expected_z));
+    assert_eq!(eval.last_query_usage().node_visits(), DEPENDENCIES + 1);
+    assert_eq!(eval.last_query_usage().dependency_depth(), DEPENDENCIES + 1);
+}
+
+#[test]
 fn surface_leaf_class_is_accounted_and_preserves_exact_limit_evidence() {
     let mut graph = GeometryGraph::new();
     let plane = graph.insert_surface(Plane::new(Frame::world())).unwrap();

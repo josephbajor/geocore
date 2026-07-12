@@ -716,6 +716,86 @@
       "expected_result_counters": {"nodes": 1, "dependency_edges": 0, "registered_nodes": 1000, "registered_dependency_edges": 1000, "reverse_index_updates": 2000, "full_order_rebuilds": 0, "stable_order": true, "rejected": true, "rolled_back": true, "graph_digest": "5c414503e372ce9b", "reverse_index_digest": "a0073203cc9cfeb4", "output_digest": "4aa339fb918dac1a"}
     },
     {
+      "path": "graph/traverse/offset-chain-closure-v1/1/dependency-first-v1",
+      "benchmark_target": "graph_traversal",
+      "fixture_version": "graph-traversal.v1",
+      "deterministic_seed": 5860364352854491144,
+      "size_parameters": {"elements": 1, "dependency_depth": 1},
+      "tolerances": {},
+      "policy_values": {"shape": "chain", "operation": "dependency-closure", "membership": "indexed"},
+      "expected_result_counters": {"nodes": 3, "dependency_edges": 1, "result_nodes": 2, "reached": true, "stable": true, "result_digest": "9578eae9bd94f605", "output_digest": "d32a43f888855691"}
+    },
+    {
+      "path": "graph/traverse/offset-chain-closure-v1/10/dependency-first-v1",
+      "benchmark_target": "graph_traversal",
+      "fixture_version": "graph-traversal.v1",
+      "deterministic_seed": 5860364352854491144,
+      "size_parameters": {"elements": 10, "dependency_depth": 10},
+      "tolerances": {},
+      "policy_values": {"shape": "chain", "operation": "dependency-closure", "membership": "indexed"},
+      "expected_result_counters": {"nodes": 12, "dependency_edges": 10, "result_nodes": 11, "reached": true, "stable": true, "result_digest": "1cd0fa287c3ea2e6", "output_digest": "9cf1e3631a474c8c"}
+    },
+    {
+      "path": "graph/traverse/offset-chain-closure-v1/100/dependency-first-v1",
+      "benchmark_target": "graph_traversal",
+      "fixture_version": "graph-traversal.v1",
+      "deterministic_seed": 5860364352854491144,
+      "size_parameters": {"elements": 100, "dependency_depth": 100},
+      "tolerances": {},
+      "policy_values": {"shape": "chain", "operation": "dependency-closure", "membership": "indexed"},
+      "expected_result_counters": {"nodes": 102, "dependency_edges": 100, "result_nodes": 101, "reached": true, "stable": true, "result_digest": "2b71683e6f9381a7", "output_digest": "569e4ec5e87b41e6"}
+    },
+    {
+      "path": "graph/traverse/offset-chain-closure-v1/1000/dependency-first-v1",
+      "benchmark_target": "graph_traversal",
+      "fixture_version": "graph-traversal.v1",
+      "deterministic_seed": 5860364352854491144,
+      "size_parameters": {"elements": 1000, "dependency_depth": 1000},
+      "tolerances": {},
+      "policy_values": {"shape": "chain", "operation": "dependency-closure", "membership": "indexed"},
+      "expected_result_counters": {"nodes": 1002, "dependency_edges": 1000, "result_nodes": 1001, "reached": true, "stable": true, "result_digest": "2ae0c28ccd5a92e7", "output_digest": "0ef422c476a566ab"}
+    },
+    {
+      "path": "graph/traverse/offset-chain-miss-v1/1/deterministic-v1",
+      "benchmark_target": "graph_traversal",
+      "fixture_version": "graph-traversal.v1",
+      "deterministic_seed": 5860364352854491144,
+      "size_parameters": {"elements": 1, "dependency_depth": 1},
+      "tolerances": {},
+      "policy_values": {"shape": "chain-plus-unrelated-target", "operation": "dependency-path-miss", "membership": "indexed"},
+      "expected_result_counters": {"nodes": 3, "dependency_edges": 1, "result_nodes": 0, "reached": false, "stable": true, "result_digest": "0934d007b5c6e019", "output_digest": "7612e6bc420a1036"}
+    },
+    {
+      "path": "graph/traverse/offset-chain-miss-v1/10/deterministic-v1",
+      "benchmark_target": "graph_traversal",
+      "fixture_version": "graph-traversal.v1",
+      "deterministic_seed": 5860364352854491144,
+      "size_parameters": {"elements": 10, "dependency_depth": 10},
+      "tolerances": {},
+      "policy_values": {"shape": "chain-plus-unrelated-target", "operation": "dependency-path-miss", "membership": "indexed"},
+      "expected_result_counters": {"nodes": 12, "dependency_edges": 10, "result_nodes": 0, "reached": false, "stable": true, "result_digest": "0934d007b5c6e019", "output_digest": "4cea5b14113307ea"}
+    },
+    {
+      "path": "graph/traverse/offset-chain-miss-v1/100/deterministic-v1",
+      "benchmark_target": "graph_traversal",
+      "fixture_version": "graph-traversal.v1",
+      "deterministic_seed": 5860364352854491144,
+      "size_parameters": {"elements": 100, "dependency_depth": 100},
+      "tolerances": {},
+      "policy_values": {"shape": "chain-plus-unrelated-target", "operation": "dependency-path-miss", "membership": "indexed"},
+      "expected_result_counters": {"nodes": 102, "dependency_edges": 100, "result_nodes": 0, "reached": false, "stable": true, "result_digest": "0934d007b5c6e019", "output_digest": "a6d3b09a13ca0ed6"}
+    },
+    {
+      "path": "graph/traverse/offset-chain-miss-v1/1000/deterministic-v1",
+      "benchmark_target": "graph_traversal",
+      "fixture_version": "graph-traversal.v1",
+      "deterministic_seed": 5860364352854491144,
+      "size_parameters": {"elements": 1000, "dependency_depth": 1000},
+      "tolerances": {},
+      "policy_values": {"shape": "chain-plus-unrelated-target", "operation": "dependency-path-miss", "membership": "indexed"},
+      "expected_result_counters": {"nodes": 1002, "dependency_edges": 1000, "result_nodes": 0, "reached": false, "stable": true, "result_digest": "0934d007b5c6e019", "output_digest": "4f962c8064e3d636"}
+    },
+    {
       "path": "topology/body-tessellation/block-v2/1/chord-1e-2-v2",
       "benchmark_target": "body_tessellation",
       "fixture_version": "body-tessellation.v2",
