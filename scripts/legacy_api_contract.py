@@ -9,13 +9,19 @@ from pathlib import Path
 from typing import Mapping
 
 
-SOURCE_ROOTS = (Path("crates/ktopo/src"), Path("crates/kxt/src"))
+SOURCE_ROOTS = (
+    Path("crates/kgeom/src"),
+    Path("crates/ktopo/src"),
+    Path("crates/kxt/src"),
+)
 LEGACY_BODY_TESSELLATION = re.compile(r"\btessellate_body\b")
+LEGACY_FACE_TESSELLATION = re.compile(r"\btessellate\b")
 TEST_MODULE = re.compile(
     r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*mod\s+[A-Za-z_][A-Za-z0-9_]*\s*\{",
     re.MULTILINE,
 )
 BODY_TESSELLATION_DEFINITION = Path("crates/ktopo/src/btess.rs")
+FACE_TESSELLATION_DEFINITION = Path("crates/kgeom/src/tess.rs")
 
 
 class ContractError(RuntimeError):
@@ -144,24 +150,46 @@ def _without_test_modules(source: str) -> str:
     return "".join(masked)
 
 
-def find_legacy_body_tessellation_uses(sources: Mapping[Path, str]) -> list[str]:
-    """Return forbidden production references as stable path:line entries."""
+def _find_legacy_uses(
+    sources: Mapping[Path, str],
+    symbol: re.Pattern[str],
+    definition_path: Path,
+) -> list[str]:
+    """Return forbidden production references for one legacy symbol."""
     violations = []
     for path in sorted(sources, key=lambda item: item.as_posix()):
         source = _without_test_modules(sources[path])
-        for match in LEGACY_BODY_TESSELLATION.finditer(source):
+        for match in symbol.finditer(source):
             line_start = source.rfind("\n", 0, match.start()) + 1
             line_end = source.find("\n", match.end())
             if line_end == -1:
                 line_end = len(source)
             line = source[line_start:line_end]
-            if path == BODY_TESSELLATION_DEFINITION and re.search(
-                r"\bpub\s+fn\s+tessellate_body\b", line
+            if path == definition_path and re.search(
+                rf"\bpub\s+fn\s+{re.escape(match.group())}\b", line
             ):
                 continue
             line_number = source.count("\n", 0, match.start()) + 1
             violations.append(f"{path.as_posix()}:{line_number}")
     return violations
+
+
+def find_legacy_body_tessellation_uses(sources: Mapping[Path, str]) -> list[str]:
+    """Return forbidden production body-wrapper references."""
+    return _find_legacy_uses(
+        sources,
+        LEGACY_BODY_TESSELLATION,
+        BODY_TESSELLATION_DEFINITION,
+    )
+
+
+def find_legacy_face_tessellation_uses(sources: Mapping[Path, str]) -> list[str]:
+    """Return forbidden production standalone-face-wrapper references."""
+    return _find_legacy_uses(
+        sources,
+        LEGACY_FACE_TESSELLATION,
+        FACE_TESSELLATION_DEFINITION,
+    )
 
 
 def audit_repository(repository: Path) -> list[str]:
@@ -170,7 +198,10 @@ def audit_repository(repository: Path) -> list[str]:
     for root in SOURCE_ROOTS:
         for path in sorted((repository / root).rglob("*.rs")):
             sources[path.relative_to(repository)] = path.read_text(encoding="utf-8")
-    return find_legacy_body_tessellation_uses(sources)
+    return sorted(
+        find_legacy_body_tessellation_uses(sources)
+        + find_legacy_face_tessellation_uses(sources)
+    )
 
 
 def main() -> int:
@@ -179,11 +210,11 @@ def main() -> int:
     if violations:
         joined = "\n  ".join(violations)
         raise ContractError(
-            "legacy `tessellate_body` is closed to production ktopo/kxt callers; "
-            "use `tessellate_body_with_context` or `tessellate_body_in_scope`:\n  "
+            "legacy body/face tessellation wrappers are closed to production callers; "
+            "use the contextual or in-scope entry points:\n  "
             f"{joined}"
         )
-    print("legacy body-tessellation production-use ratchet is closed")
+    print("legacy body/face tessellation production-use ratchet is closed")
     return 0
 
 

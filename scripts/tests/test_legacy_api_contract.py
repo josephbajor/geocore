@@ -5,8 +5,10 @@ from pathlib import Path
 
 from scripts.legacy_api_contract import (
     BODY_TESSELLATION_DEFINITION,
+    FACE_TESSELLATION_DEFINITION,
     audit_repository,
     find_legacy_body_tessellation_uses,
+    find_legacy_face_tessellation_uses,
 )
 
 
@@ -94,6 +96,53 @@ fn production_after_tests() {
         self.assertEqual(
             find_legacy_body_tessellation_uses({path: source}), [f"{path}:13"]
         )
+
+
+class FaceTessellationRatchetTests(unittest.TestCase):
+    def test_production_import_and_call_are_rejected(self) -> None:
+        path = Path("crates/ktopo/src/new_face_client.rs")
+        source = """\
+use kgeom::tess::tessellate;
+
+fn run() {
+    let _ = tessellate(&face, &options);
+}
+"""
+        self.assertEqual(
+            find_legacy_face_tessellation_uses({path: source}),
+            [f"{path}:1", f"{path}:4"],
+        )
+
+    def test_public_wrapper_and_cfg_test_clients_remain_allowed(self) -> None:
+        source = """\
+pub fn tessellate() {}
+
+#[cfg(test)]
+mod tests {
+    use super::tessellate;
+
+    #[test]
+    fn compatibility() {
+        tessellate();
+    }
+}
+"""
+        self.assertEqual(
+            find_legacy_face_tessellation_uses(
+                {FACE_TESSELLATION_DEFINITION: source}
+            ),
+            [],
+        )
+
+    def test_contextual_and_in_scope_names_do_not_match(self) -> None:
+        path = Path("crates/ktopo/src/contextual_face.rs")
+        source = """\
+use kgeom::tess::{tessellate_in_scope, tessellate_with_context};
+"""
+        self.assertEqual(find_legacy_face_tessellation_uses({path: source}), [])
+
+    def test_current_production_sources_are_closed(self) -> None:
+        self.assertEqual(audit_repository(ROOT), [])
 
 
 if __name__ == "__main__":

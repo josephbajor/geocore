@@ -1,6 +1,6 @@
 # Operation context and numerical policy
 
-Status: Stage 1b composition, the NURBS contact/minimizer scale gate, and representative Stage 2-5 pilots implemented; whole-body tessellation's `ktopo`/`kxt` production adoption, internal-use ratchet, and allocation-accounting boundary are complete, while projection adoption, corpus-backed bounded presets, and broader ratchets remain
+Status: Stage 1b composition, the NURBS contact/minimizer scale gate, and representative Stage 2-5 pilots implemented; whole-body and standalone-face tessellation internal-use ratchets plus the body allocation-accounting boundary are complete, while projection adoption, corpus-backed bounded presets, and broader ratchets remain
 
 ## Purpose
 
@@ -585,8 +585,11 @@ Whole-body tessellation is at state 3 for `ktopo`/`kxt`: production callers use
 `tessellate_body_with_context` with one operation per body, and
 `scripts/legacy_api_contract.py` rejects new production references while
 allowing the public definition and `#[cfg(test)]` compatibility clients. The
-wrapper is not publicly deprecated because `kernel` does not yet expose an
-adopted facade replacement for this family.
+standalone `kgeom::tess::tessellate` wrapper is also at state 3 after the
+contextual half-cylinder ladder proved all five stages and exact mesh/report
+repeatability. The same audit rejects new production references to it across
+`kgeom`, `ktopo`, and `kxt`. Neither wrapper is publicly deprecated because
+`kernel` does not yet expose an adopted facade replacement for these families.
 
 ## Rollout stages
 
