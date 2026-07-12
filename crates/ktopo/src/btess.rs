@@ -87,7 +87,9 @@ pub use policy::{
     BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT, BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT_REACHED,
     BODY_TESSELLATION_ISO_ARC_SPLIT_LIMIT_REACHED, BODY_TESSELLATION_ISO_ARC_SPLITS,
     BODY_TESSELLATION_MESH_VERTEX_LIMIT, BODY_TESSELLATION_MESH_VERTEX_LIMIT_REACHED,
-    BODY_TESSELLATION_MESH_VERTICES, BODY_TESSELLATION_SPLIT_LIMIT,
+    BODY_TESSELLATION_MESH_VERTICES, BODY_TESSELLATION_PREPARED_PATCH_ITEM_LIMIT_REACHED,
+    BODY_TESSELLATION_PREPARED_PATCH_ITEMS, BODY_TESSELLATION_RETAINED_TRIANGLE_LIMIT_REACHED,
+    BODY_TESSELLATION_RETAINED_TRIANGLES, BODY_TESSELLATION_SPLIT_LIMIT,
     BODY_TESSELLATION_TOTAL_WORK_LIMIT_REACHED, BodyTessellationBudgetProfile,
 };
 
@@ -222,6 +224,47 @@ struct BodyTessellationWork<'scope, 'context, 'session> {
 }
 
 impl BodyTessellationWork<'_, '_, '_> {
+    fn charge_items(
+        &mut self,
+        stage: StageId,
+        amount: usize,
+        diagnostic: DiagnosticCode,
+        message: &'static str,
+    ) -> Result<()> {
+        let amount = u64::try_from(amount).map_err(|_| {
+            Error::from(OperationPolicyError::AccountingOverflow {
+                stage,
+                resource: ResourceKind::Items,
+            })
+        })?;
+        if amount == 0 {
+            return Ok(());
+        }
+        let result = self
+            .scope
+            .ledger_mut()
+            .charge_resource(stage, ResourceKind::Items, amount);
+        self.direct_limit(result, diagnostic, message)
+    }
+
+    fn admit_prepared_items(&mut self, amount: usize) -> Result<()> {
+        self.charge_items(
+            BODY_TESSELLATION_PREPARED_PATCH_ITEMS,
+            amount,
+            BODY_TESSELLATION_PREPARED_PATCH_ITEM_LIMIT_REACHED,
+            "whole-body tessellation prepared-patch item limit reached",
+        )
+    }
+
+    fn admit_retained_triangles(&mut self, amount: usize) -> Result<()> {
+        self.charge_items(
+            BODY_TESSELLATION_RETAINED_TRIANGLES,
+            amount,
+            BODY_TESSELLATION_RETAINED_TRIANGLE_LIMIT_REACHED,
+            "whole-body tessellation retained-triangle limit reached",
+        )
+    }
+
     fn charge_split(
         &mut self,
         stage: StageId,
@@ -360,6 +403,73 @@ impl BodyTessellationWork<'_, '_, '_> {
             Ok(lower) => lower.map_err(Into::into),
         }
     }
+}
+
+fn checked_item_add(stage: StageId, lhs: usize, rhs: usize) -> Result<usize> {
+    lhs.checked_add(rhs).ok_or_else(|| {
+        Error::from(OperationPolicyError::AccountingOverflow {
+            stage,
+            resource: ResourceKind::Items,
+        })
+        .into()
+    })
+}
+
+fn checked_vec_capacity<T>(stage: StageId, count: usize) -> Result<()> {
+    let bytes = count
+        .checked_mul(core::mem::size_of::<T>())
+        .ok_or_else(|| {
+            TessellationError::from(Error::from(OperationPolicyError::AccountingOverflow {
+                stage,
+                resource: ResourceKind::Items,
+            }))
+        })?;
+    if bytes > isize::MAX as usize {
+        return Err(Error::from(OperationPolicyError::AccountingOverflow {
+            stage,
+            resource: ResourceKind::Items,
+        })
+        .into());
+    }
+    Ok(())
+}
+
+fn checked_item_sum(stage: StageId, values: impl IntoIterator<Item = usize>) -> Result<usize> {
+    values.into_iter().try_fold(0_usize, |total, value| {
+        checked_item_add(stage, total, value)
+    })
+}
+
+fn checked_prepared_segment_count(value: f64, minimum: usize) -> Result<usize> {
+    let ceiled = value.ceil();
+    if !ceiled.is_finite() || ceiled < 0.0 || ceiled >= usize::MAX as f64 {
+        return Err(Error::from(OperationPolicyError::AccountingOverflow {
+            stage: BODY_TESSELLATION_PREPARED_PATCH_ITEMS,
+            resource: ResourceKind::Items,
+        })
+        .into());
+    }
+    Ok((ceiled as usize).max(minimum))
+}
+
+/// Append triangles that were already admitted at `run_kgeom`. Moving the
+/// same logical output through patch, face, and body aggregation does not
+/// recharge it, but every destination-length calculation remains fallible.
+fn extend_admitted_triangles(destination: &mut Vec<[u32; 3]>, source: Vec<[u32; 3]>) -> Result<()> {
+    let expected = checked_item_add(
+        BODY_TESSELLATION_RETAINED_TRIANGLES,
+        destination.len(),
+        source.len(),
+    )?;
+    checked_vec_capacity::<[u32; 3]>(BODY_TESSELLATION_RETAINED_TRIANGLES, expected)?;
+    destination.extend(source);
+    if destination.len() != expected {
+        return Err(Error::InvalidGeometry {
+            reason: "internal: retained triangle append count mismatch",
+        }
+        .into());
+    }
+    Ok(())
 }
 
 /// A refinement decision may already own the midpoint evaluation required to
@@ -634,6 +744,149 @@ fn refine_uv_seg(
 /// included.
 type Arc = Vec<(Vec2, u32)>;
 
+fn collect_prepared_arc(
+    count: usize,
+    items: impl Iterator<Item = (Vec2, u32)>,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
+) -> Result<Arc> {
+    if items.size_hint() != (count, Some(count)) {
+        return Err(Error::InvalidGeometry {
+            reason: "internal: prepared arc count mismatch",
+        }
+        .into());
+    }
+    checked_vec_capacity::<(Vec2, u32)>(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, count)?;
+    work.admit_prepared_items(count)?;
+    let mut arc = Vec::with_capacity(count);
+    arc.extend(items);
+    if arc.len() != count {
+        return Err(Error::InvalidGeometry {
+            reason: "internal: exact-size prepared arc changed length",
+        }
+        .into());
+    }
+    Ok(arc)
+}
+
+fn collect_prepared_pairs(
+    count: usize,
+    items: impl Iterator<Item = (Vec2, u32)>,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
+) -> Result<(Vec<Vec2>, Vec<u32>)> {
+    if items.size_hint() != (count, Some(count)) {
+        return Err(Error::InvalidGeometry {
+            reason: "internal: prepared pair count mismatch",
+        }
+        .into());
+    }
+    checked_vec_capacity::<Vec2>(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, count)?;
+    checked_vec_capacity::<u32>(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, count)?;
+    work.admit_prepared_items(count)?;
+    let mut points = Vec::with_capacity(count);
+    let mut ids = Vec::with_capacity(count);
+    for (point, id) in items {
+        points.push(point);
+        ids.push(id);
+    }
+    if points.len() != count || ids.len() != count {
+        return Err(Error::InvalidGeometry {
+            reason: "internal: exact-size prepared pairs changed length",
+        }
+        .into());
+    }
+    Ok((points, ids))
+}
+
+fn clone_prepared_arc(arc: &Arc, work: &mut BodyTessellationWork<'_, '_, '_>) -> Result<Arc> {
+    collect_prepared_arc(arc.len(), arc.iter().copied(), work)
+}
+
+fn inclusive_item_count(lo: usize, hi: usize) -> Result<usize> {
+    let span = hi.checked_sub(lo).ok_or_else(|| {
+        TessellationError::from(Error::InvalidGeometry {
+            reason: "internal: prepared range is reversed",
+        })
+    })?;
+    checked_item_add(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, span, 1)
+}
+
+fn uniform_prepared_arc(
+    ua: f64,
+    ub: f64,
+    v: f64,
+    gid: u32,
+    segments: usize,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
+) -> Result<Arc> {
+    let count = checked_item_add(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, segments, 1)?;
+    collect_prepared_arc(
+        count,
+        (0..=segments).map(|index| {
+            (
+                Vec2::new(ua + (ub - ua) * index as f64 / segments as f64, v),
+                gid,
+            )
+        }),
+        work,
+    )
+}
+
+fn slice_prepared_arc(
+    uvs: &[Vec2],
+    ids: &[u32],
+    lo: usize,
+    hi: usize,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
+) -> Result<Arc> {
+    let count = inclusive_item_count(lo, hi)?;
+    collect_prepared_arc(count, (lo..=hi).map(|index| (uvs[index], ids[index])), work)
+}
+
+fn cyclic_prepared_arc(
+    chain: &UvChain,
+    from: usize,
+    to: usize,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
+) -> Result<Arc> {
+    let n = chain.uvs.len();
+    if n == 0 || chain.ids.len() != n || from >= n || to >= n {
+        return Err(Error::InvalidGeometry {
+            reason: "internal: invalid cyclic prepared arc",
+        }
+        .into());
+    }
+    let count = if to >= from {
+        inclusive_item_count(from, to)?
+    } else {
+        let wrapped = checked_item_add(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, to, 1)?;
+        checked_item_sum(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, [n - from, wrapped])?
+    };
+    checked_vec_capacity::<(Vec2, u32)>(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, count)?;
+    work.admit_prepared_items(count)?;
+    let period_shift = Vec2::new(chain.close_uv.x - chain.uvs[0].x, 0.0);
+    let mut out = Vec::with_capacity(count);
+    let mut index = from;
+    let mut shift = Vec2::new(0.0, 0.0);
+    loop {
+        out.push((chain.uvs[index] + shift, chain.ids[index]));
+        if index == to {
+            break;
+        }
+        index += 1;
+        if index == n {
+            index = 0;
+            shift = period_shift;
+        }
+    }
+    if out.len() != count {
+        return Err(Error::InvalidGeometry {
+            reason: "internal: cyclic prepared arc count mismatch",
+        }
+        .into());
+    }
+    Ok(out)
+}
+
 /// Build an arc between two existing global vertices by refining the
 /// straight UV segment; interior points become fresh global vertices.
 fn iso_arc(
@@ -654,7 +907,10 @@ fn iso_arc(
         &mut interior,
         work,
     )?;
-    let mut arc = Vec::with_capacity(interior.len() + 2);
+    let arc_items = checked_item_add(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, interior.len(), 2)?;
+    checked_vec_capacity::<(Vec2, u32)>(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, arc_items)?;
+    work.admit_prepared_items(arc_items)?;
+    let mut arc = Vec::with_capacity(arc_items);
     arc.push(a);
     for (uv, p) in interior {
         let gid = acc.push(p, work)?;
@@ -905,7 +1161,6 @@ fn loop_chain(
         }
         .into());
     }
-    let mut chain = Vec::new();
     let mut close = None;
     let declared_winding = if fins.len() == 1 {
         let fin = store.get(fins[0])?;
@@ -922,12 +1177,34 @@ fn loop_chain(
     } else {
         None
     };
-    let ordered: Vec<_> = if reverse {
-        fins.iter().rev().copied().collect()
-    } else {
-        fins.to_vec()
+    let fin_at = |index: usize| {
+        if reverse {
+            fins[fins.len() - 1 - index]
+        } else {
+            fins[index]
+        }
     };
-    for fin_id in ordered {
+    let raw_items = (0..fins.len()).try_fold(0_usize, |total, index| {
+        let fin = store.get(fin_at(index))?;
+        let line = find_eline(elines, fin.edge)?;
+        let count = line.samples.len().checked_sub(1).ok_or_else(|| {
+            TessellationError::from(Error::InvalidGeometry {
+                reason: "edge polyline has fewer than two parameter samples",
+            })
+        })?;
+        if count == 0 {
+            return Err(Error::InvalidGeometry {
+                reason: "edge polyline has fewer than two parameter samples",
+            }
+            .into());
+        }
+        checked_item_add(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, total, count)
+    })?;
+    checked_vec_capacity::<RawUvSample>(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, raw_items)?;
+    work.admit_prepared_items(raw_items)?;
+    let mut chain = Vec::with_capacity(raw_items);
+    for index in 0..fins.len() {
+        let fin_id = fin_at(index);
         let fin = store.get(fin_id)?;
         let line = find_eline(elines, fin.edge)?;
         if line.samples.len() < 2 {
@@ -995,6 +1272,7 @@ fn loop_chain(
             });
         }
     }
+    debug_assert_eq!(chain.len(), raw_items);
     let close = close.expect("non-empty fin list");
     if chain
         .first()
@@ -1014,7 +1292,14 @@ fn loop_chain(
 
 /// Unwrap a raw per-fin pcurve chain with periodic continuity and measure
 /// its winding. The explicit closing sample is essential for seam loops.
-fn chain_uv(per: [Option<f64>; 2], raw: RawUvChain) -> Result<UvChain> {
+fn chain_uv(
+    per: [Option<f64>; 2],
+    raw: RawUvChain,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
+) -> Result<UvChain> {
+    checked_vec_capacity::<u32>(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, raw.samples.len())?;
+    checked_vec_capacity::<Vec2>(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, raw.samples.len())?;
+    work.admit_prepared_items(raw.samples.len())?;
     let mut ids = Vec::with_capacity(raw.samples.len());
     let mut uvs: Vec<Vec2> = Vec::with_capacity(raw.samples.len());
     for sample in raw.samples {
@@ -1124,6 +1409,9 @@ fn run_kgeom(
 ) -> Result<Vec<[u32; 3]>> {
     let mut trim_loops = Vec::with_capacity(loops_pts.len());
     for pts in loops_pts {
+        let cleaned_items = TrimLoop::cleaned_point_count(&pts)?;
+        checked_vec_capacity::<Vec2>(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, cleaned_items)?;
+        work.admit_prepared_items(cleaned_items)?;
         trim_loops.push(TrimLoop::new(pts)?);
     }
     let face = TrimmedSurface::new(s, trim_loops)?;
@@ -1167,6 +1455,11 @@ fn run_kgeom(
         }
         .into());
     }
+    checked_vec_capacity::<Option<u32>>(
+        BODY_TESSELLATION_PREPARED_PATCH_ITEMS,
+        fm.positions.len(),
+    )?;
+    work.admit_prepared_items(fm.positions.len())?;
     let mut l2g: Vec<Option<u32>> = vec![None; fm.positions.len()];
     for (bl, ids) in fm.boundary.iter().zip(loops_ids) {
         if bl.len() != ids.len() {
@@ -1181,25 +1474,38 @@ fn run_kgeom(
             l2g[li as usize] = Some(gid);
         }
     }
-    let l2g: Vec<u32> = l2g
-        .into_iter()
-        .enumerate()
-        .map(|(li, g)| match g {
-            Some(gid) => Ok(gid),
-            None => acc.push(fm.positions[li], work),
-        })
-        .collect::<Result<_>>()?;
-
-    let mut out = Vec::with_capacity(fm.triangles.len());
-    for t in &fm.triangles {
-        let mut m = t.map(|i| l2g[i as usize]);
-        if flip {
-            m.swap(1, 2);
+    for (li, gid) in l2g.iter_mut().enumerate() {
+        if gid.is_none() {
+            *gid = Some(acc.push(fm.positions[li], work)?);
         }
+    }
+    let map_triangle = |triangle: &[u32; 3]| {
+        let mut mapped = triangle.map(|index| {
+            l2g[index as usize].expect("every local face vertex has a global mapping")
+        });
+        if flip {
+            mapped.swap(1, 2);
+        }
+        mapped
+    };
+    let retained = fm.triangles.iter().try_fold(0_usize, |count, triangle| {
+        let mapped = map_triangle(triangle);
+        if mapped[0] == mapped[1] || mapped[1] == mapped[2] || mapped[2] == mapped[0] {
+            Ok(count)
+        } else {
+            checked_item_add(BODY_TESSELLATION_RETAINED_TRIANGLES, count, 1)
+        }
+    })?;
+    checked_vec_capacity::<[u32; 3]>(BODY_TESSELLATION_RETAINED_TRIANGLES, retained)?;
+    work.admit_retained_triangles(retained)?;
+    let mut out = Vec::with_capacity(retained);
+    for t in &fm.triangles {
+        let m = map_triangle(t);
         if m[0] != m[1] && m[1] != m[2] && m[2] != m[0] {
             out.push(m);
         }
     }
+    debug_assert_eq!(out.len(), retained);
     Ok(out)
 }
 
@@ -1219,16 +1525,22 @@ fn face_case_a(
         (0..n).map(|i| pts[i].cross(pts[(i + 1) % n])).sum::<f64>() / 2.0
     };
     let outer_idx = {
-        let mut positive: Vec<usize> = (0..chains.len())
-            .filter(|&i| area(&chains[i].uvs) > 0.0)
-            .collect();
-        if positive.len() != 1 {
+        let mut positive = None;
+        for (index, chain) in chains.iter().enumerate() {
+            if area(&chain.uvs) > 0.0 && positive.replace(index).is_some() {
+                return Err(Error::InvalidGeometry {
+                    reason: "face must have exactly one counterclockwise (outer) loop",
+                }
+                .into());
+            }
+        }
+        let Some(outer) = positive else {
             return Err(Error::InvalidGeometry {
                 reason: "face must have exactly one counterclockwise (outer) loop",
             }
             .into());
-        }
-        positive.pop().expect("one outer loop")
+        };
+        outer
     };
     let mean_u = |c: &UvChain| c.uvs.iter().map(|p| p.x).sum::<f64>() / c.uvs.len() as f64;
     let mean_v = |c: &UvChain| c.uvs.iter().map(|p| p.y).sum::<f64>() / c.uvs.len() as f64;
@@ -1249,8 +1561,17 @@ fn face_case_a(
                 shift.y = p * ((ov - mean_v(c)) / p).round();
             }
         }
-        loops_pts.push(c.uvs.iter().map(|&uv| uv + shift).collect());
-        loops_ids.push(c.ids.clone());
+        let (points, ids) = collect_prepared_pairs(
+            c.uvs.len(),
+            c.uvs
+                .iter()
+                .copied()
+                .zip(c.ids.iter().copied())
+                .map(|(uv, id)| (uv + shift, id)),
+            work,
+        )?;
+        loops_pts.push(points);
+        loops_ids.push(ids);
     }
     run_kgeom(s, loops_pts, &loops_ids, flip, acc, opts, work)
 }
@@ -1325,8 +1646,27 @@ fn face_case_b(
         work,
     )?;
 
-    let mut pts: Vec<Vec2> = Vec::new();
-    let mut ids: Vec<u32> = Vec::new();
+    let seam_interior = seam.len().checked_sub(2).ok_or_else(|| {
+        TessellationError::from(Error::InvalidGeometry {
+            reason: "internal: seam arc has fewer than two endpoints",
+        })
+    })?;
+    let patch_items = checked_item_sum(
+        BODY_TESSELLATION_PREPARED_PATCH_ITEMS,
+        [
+            bottom.uvs.len(),
+            1,
+            seam_interior,
+            top.uvs.len(),
+            1,
+            seam_interior,
+        ],
+    )?;
+    checked_vec_capacity::<Vec2>(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, patch_items)?;
+    checked_vec_capacity::<u32>(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, patch_items)?;
+    work.admit_prepared_items(patch_items)?;
+    let mut pts: Vec<Vec2> = Vec::with_capacity(patch_items);
+    let mut ids: Vec<u32> = Vec::with_capacity(patch_items);
     // Bottom chain, including its closing point (the right seam's base).
     pts.extend_from_slice(&bottom.uvs);
     pts.push(bottom.close_uv);
@@ -1349,6 +1689,8 @@ fn face_case_b(
         pts.push(uv - Vec2::new(pu, 0.0));
         ids.push(gid);
     }
+    debug_assert_eq!(pts.len(), patch_items);
+    debug_assert_eq!(ids.len(), patch_items);
 
     let mut loops_pts = vec![pts];
     let mut loops_ids = vec![ids];
@@ -1356,8 +1698,16 @@ fn face_case_b(
     for h in holes {
         let hu = h.uvs.iter().map(|p| p.x).sum::<f64>() / h.uvs.len() as f64;
         let hs = pu * ((bu - hu) / pu).round();
-        loops_pts.push(h.uvs.iter().map(|&uv| uv + Vec2::new(hs, 0.0)).collect());
-        loops_ids.push(h.ids);
+        let (points, ids) = collect_prepared_pairs(
+            h.uvs.len(),
+            h.uvs
+                .into_iter()
+                .zip(h.ids.into_iter())
+                .map(|(uv, id)| (uv + Vec2::new(hs, 0.0), id)),
+            work,
+        )?;
+        loops_pts.push(points);
+        loops_ids.push(ids);
     }
     run_kgeom(s, loops_pts, &loops_ids, flip, acc, opts, work)
 }
@@ -1414,10 +1764,18 @@ fn face_case_cap(
     let w = chain.winding[0];
 
     // The chain including its closing point, one period around.
-    let mut cuvs = chain.uvs.clone();
-    cuvs.push(chain.close_uv);
-    let mut cids = chain.ids.clone();
-    cids.push(chain.ids[0]);
+    let closed_items =
+        checked_item_add(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, chain.uvs.len(), 1)?;
+    let first_id = chain.ids[0];
+    let (cuvs, cids) = collect_prepared_pairs(
+        closed_items,
+        chain
+            .uvs
+            .into_iter()
+            .zip(chain.ids)
+            .chain(core::iter::once((chain.close_uv, first_id))),
+        work,
+    )?;
     let n = cuvs.len() - 1;
     if n < 2 {
         return Err(Error::InvalidGeometry {
@@ -1468,19 +1826,10 @@ fn face_case_cap(
     if run.ctx.max_len.is_finite() {
         theta = theta.min(run.ctx.max_len / r);
     }
-    let row = |ua: f64, ub: f64| -> Arc {
-        let m = (((ub - ua).abs() / theta).ceil() as usize).max(2);
-        (0..=m)
-            .map(|i| {
-                (
-                    Vec2::new(ua + (ub - ua) * i as f64 / m as f64, pole_v),
-                    g_pole,
-                )
-            })
-            .collect()
+    let rev = |mut arc: Arc| -> Arc {
+        arc.reverse();
+        arc
     };
-    let seg = |lo: usize, hi: usize| -> Arc { (lo..=hi).map(|i| (cuvs[i], cids[i])).collect() };
-    let rev = |arc: Arc| -> Arc { arc.into_iter().rev().collect() };
 
     let patches: [PatchArcs; 2] = if w > 0 {
         // Chain below (travels +u), pole row above.
@@ -1502,15 +1851,29 @@ fn face_case_cap(
         )?;
         [
             PatchArcs {
-                bottom: seg(0, k),
-                right: mk.clone(),
-                top: row(cuvs[0].x, cuvs[k].x),
-                left: m0.clone(),
+                bottom: slice_prepared_arc(&cuvs, &cids, 0, k, work)?,
+                right: clone_prepared_arc(&mk, work)?,
+                top: uniform_prepared_arc(
+                    cuvs[0].x,
+                    cuvs[k].x,
+                    pole_v,
+                    g_pole,
+                    checked_prepared_segment_count((cuvs[k].x - cuvs[0].x).abs() / theta, 2)?,
+                    work,
+                )?,
+                left: clone_prepared_arc(&m0, work)?,
             },
             PatchArcs {
-                bottom: seg(k, n),
-                right: shift_arc(&m0, Vec2::new(tau, 0.0)),
-                top: row(cuvs[k].x, cuvs[n].x),
+                bottom: slice_prepared_arc(&cuvs, &cids, k, n, work)?,
+                right: shift_arc(&m0, Vec2::new(tau, 0.0), work)?,
+                top: uniform_prepared_arc(
+                    cuvs[k].x,
+                    cuvs[n].x,
+                    pole_v,
+                    g_pole,
+                    checked_prepared_segment_count((cuvs[n].x - cuvs[k].x).abs() / theta, 2)?,
+                    work,
+                )?,
                 left: mk,
             },
         ]
@@ -1535,16 +1898,30 @@ fn face_case_cap(
         )?;
         [
             PatchArcs {
-                bottom: row(cuvs[k].x, cuvs[0].x),
-                right: m0.clone(),
-                top: rev(seg(0, k)),
-                left: mk.clone(),
+                bottom: uniform_prepared_arc(
+                    cuvs[k].x,
+                    cuvs[0].x,
+                    pole_v,
+                    g_pole,
+                    checked_prepared_segment_count((cuvs[0].x - cuvs[k].x).abs() / theta, 2)?,
+                    work,
+                )?,
+                right: clone_prepared_arc(&m0, work)?,
+                top: rev(slice_prepared_arc(&cuvs, &cids, 0, k, work)?),
+                left: clone_prepared_arc(&mk, work)?,
             },
             PatchArcs {
-                bottom: row(cuvs[n].x, cuvs[k].x),
+                bottom: uniform_prepared_arc(
+                    cuvs[n].x,
+                    cuvs[k].x,
+                    pole_v,
+                    g_pole,
+                    checked_prepared_segment_count((cuvs[k].x - cuvs[n].x).abs() / theta, 2)?,
+                    work,
+                )?,
                 right: mk,
-                top: rev(seg(k, n)),
-                left: shift_arc(&m0, Vec2::new(-tau, 0.0)),
+                top: rev(slice_prepared_arc(&cuvs, &cids, k, n, work)?),
+                left: shift_arc(&m0, Vec2::new(-tau, 0.0), work)?,
             },
         ]
     };
@@ -1567,16 +1944,15 @@ fn face_case_cap(
 
     let mut tris = Vec::new();
     for (patch, holes) in patches.iter().zip(patch_holes) {
-        let (pts, ids) = patch_polygon(&patch.bottom, &patch.right, &patch.top, &patch.left);
+        let (pts, ids) = patch_polygon(&patch.bottom, &patch.right, &patch.top, &patch.left, work)?;
         let mut loops_pts = vec![pts];
         let mut loops_ids = vec![ids];
         for h in holes {
             loops_pts.push(h.uvs);
             loops_ids.push(h.ids);
         }
-        tris.extend(run_kgeom(
-            s, loops_pts, &loops_ids, run.flip, acc, run.opts, work,
-        )?);
+        let patch_triangles = run_kgeom(s, loops_pts, &loops_ids, run.flip, acc, run.opts, work)?;
+        extend_admitted_triangles(&mut tris, patch_triangles)?;
     }
     Ok(tris)
 }
@@ -1619,27 +1995,8 @@ fn face_case_bipolar_sphere(
     // Follow the already sense-normalized loop cyclically. Samples after a
     // wrap receive the loop's measured period shift, preserving the branch
     // established by chain_uv.
-    let cyclic_arc = |from: usize, to: usize| -> Arc {
-        let n = chain.uvs.len();
-        let period_shift = Vec2::new(chain.close_uv.x - chain.uvs[0].x, 0.0);
-        let mut out = Vec::new();
-        let mut i = from;
-        let mut shift = Vec2::new(0.0, 0.0);
-        loop {
-            out.push((chain.uvs[i] + shift, chain.ids[i]));
-            if i == to {
-                break;
-            }
-            i += 1;
-            if i == n {
-                i = 0;
-                shift = period_shift;
-            }
-        }
-        out
-    };
-    let mut right = cyclic_arc(south, north); // south -> north
-    let mut left_desc = cyclic_arc(north, south); // north -> south
+    let mut right = cyclic_prepared_arc(&chain, south, north, work)?; // south -> north
+    let mut left_desc = cyclic_prepared_arc(&chain, north, south, work)?; // north -> south
     if right.len() < 3 || left_desc.len() < 3 {
         return Err(Error::InvalidGeometry {
             reason: "bipolar sphere boundary needs a non-pole sample on each side",
@@ -1660,7 +2017,8 @@ fn face_case_bipolar_sphere(
     right[rlast].0.y = half;
     left_desc[0].0.y = half;
     left_desc[llast].0.y = -half;
-    let mut left: Arc = left_desc.into_iter().rev().collect(); // south -> north
+    left_desc.reverse();
+    let mut left = left_desc; // south -> north
 
     // Put the right side on the first equivalent periodic branch strictly
     // to the right of the left side. The resulting width chooses the
@@ -1693,19 +2051,36 @@ fn face_case_bipolar_sphere(
     if ctx.max_len.is_finite() {
         theta = theta.min(ctx.max_len / r);
     }
-    let row = |ua: f64, ub: f64, v: f64, gid: u32| -> Arc {
-        let m = (((ub - ua).abs() / theta).ceil() as usize).max(2);
-        (0..=m)
-            .map(|i| (Vec2::new(ua + (ub - ua) * i as f64 / m as f64, v), gid))
-            .collect()
-    };
-    let bottom = row(left[0].0.x, right[0].0.x, -half, left[0].1);
-    let top = row(
-        left.last().expect("non-empty left arc").0.x,
-        right.last().expect("non-empty right arc").0.x,
+    let bottom_segments =
+        checked_prepared_segment_count((right[0].0.x - left[0].0.x).abs() / theta, 2)?;
+    let bottom = uniform_prepared_arc(
+        left[0].0.x,
+        right[0].0.x,
+        -half,
+        left[0].1,
+        bottom_segments,
+        work,
+    )?;
+    let top_left = *left.last().ok_or_else(|| {
+        TessellationError::from(Error::InvalidGeometry {
+            reason: "internal: bipolar left arc is empty",
+        })
+    })?;
+    let top_right = *right.last().ok_or_else(|| {
+        TessellationError::from(Error::InvalidGeometry {
+            reason: "internal: bipolar right arc is empty",
+        })
+    })?;
+    let top_segments =
+        checked_prepared_segment_count((top_right.0.x - top_left.0.x).abs() / theta, 2)?;
+    let top = uniform_prepared_arc(
+        top_left.0.x,
+        top_right.0.x,
         half,
-        left.last().expect("non-empty left arc").1,
-    );
+        top_left.1,
+        top_segments,
+        work,
+    )?;
     let patch = PatchArcs {
         bottom,
         right,
@@ -1713,7 +2088,7 @@ fn face_case_bipolar_sphere(
         left: core::mem::take(&mut left),
     };
     let (outer_pts, outer_ids) =
-        patch_polygon(&patch.bottom, &patch.right, &patch.top, &patch.left);
+        patch_polygon(&patch.bottom, &patch.right, &patch.top, &patch.left, work)?;
 
     let center_u = outer_pts.iter().map(|uv| uv.x).sum::<f64>() / outer_pts.len() as f64;
     let mut loops_pts = vec![outer_pts];
@@ -1721,13 +2096,16 @@ fn face_case_bipolar_sphere(
     for h in holes {
         let hu = h.uvs.iter().map(|uv| uv.x).sum::<f64>() / h.uvs.len() as f64;
         let hs = tau * ((center_u - hu) / tau).round();
-        loops_pts.push(
+        let (points, ids) = collect_prepared_pairs(
+            h.uvs.len(),
             h.uvs
                 .into_iter()
-                .map(|uv| uv + Vec2::new(hs, 0.0))
-                .collect(),
-        );
-        loops_ids.push(h.ids);
+                .zip(h.ids)
+                .map(|(uv, id)| (uv + Vec2::new(hs, 0.0), id)),
+            work,
+        )?;
+        loops_pts.push(points);
+        loops_ids.push(ids);
     }
     run_kgeom(s, loops_pts, &loops_ids, flip, acc, opts, work)
 }
@@ -1736,26 +2114,43 @@ fn face_case_bipolar_sphere(
 /// both endpoints): bottom, right, top, left in counterclockwise order.
 /// Each side contributes all points except its last, so corners appear
 /// exactly once.
-fn patch_polygon(bottom: &Arc, right: &Arc, top: &Arc, left: &Arc) -> (Vec<Vec2>, Vec<u32>) {
-    let mut pts = Vec::new();
-    let mut ids = Vec::new();
-    let mut side = |arc: &[(Vec2, u32)]| {
-        for &(uv, gid) in &arc[..arc.len() - 1] {
-            pts.push(uv);
-            ids.push(gid);
-        }
+fn patch_polygon(
+    bottom: &Arc,
+    right: &Arc,
+    top: &Arc,
+    left: &Arc,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
+) -> Result<(Vec<Vec2>, Vec<u32>)> {
+    let side_count = |arc: &Arc| {
+        arc.len().checked_sub(1).ok_or_else(|| {
+            TessellationError::from(Error::InvalidGeometry {
+                reason: "internal: patch arc is empty",
+            })
+        })
     };
-    side(bottom);
-    side(right);
-    let top_rev: Vec<_> = top.iter().rev().copied().collect();
-    side(&top_rev);
-    let left_rev: Vec<_> = left.iter().rev().copied().collect();
-    side(&left_rev);
-    (pts, ids)
+    let count = checked_item_sum(
+        BODY_TESSELLATION_PREPARED_PATCH_ITEMS,
+        [
+            side_count(bottom)?,
+            side_count(right)?,
+            side_count(top)?,
+            side_count(left)?,
+        ],
+    )?;
+    collect_prepared_pairs(
+        count,
+        bottom[..bottom.len() - 1]
+            .iter()
+            .copied()
+            .chain(right[..right.len() - 1].iter().copied())
+            .chain(top.iter().rev().take(top.len() - 1).copied())
+            .chain(left.iter().rev().take(left.len() - 1).copied()),
+        work,
+    )
 }
 
-fn shift_arc(arc: &Arc, d: Vec2) -> Arc {
-    arc.iter().map(|&(uv, gid)| (uv + d, gid)).collect()
+fn shift_arc(arc: &Arc, d: Vec2, work: &mut BodyTessellationWork<'_, '_, '_>) -> Result<Arc> {
+    collect_prepared_arc(arc.len(), arc.iter().map(|&(uv, gid)| (uv + d, gid)), work)
 }
 
 /// Zero-loop face covering a closed surface. Sphere: two half-period
@@ -1794,23 +2189,21 @@ fn face_case_c(
                 };
             let m0 = meridian(0.0, acc, work)?;
             let m1 = meridian(pi, acc, work)?;
-            let m2 = shift_arc(&m0, Vec2::new(tau, 0.0));
+            let m2 = shift_arc(&m0, Vec2::new(tau, 0.0), work)?;
             // Pole-row sampling density from the equator sagitta.
             let r = sp.radius();
             let mut theta = (8.0 * ctx.tol / r).sqrt().min(half);
             if ctx.max_len.is_finite() {
                 theta = theta.min(ctx.max_len / r);
             }
-            let n = ((pi / theta).ceil() as usize).max(2);
+            let n = checked_prepared_segment_count(pi / theta, 2)?;
             for (patch, (left, right)) in [(0, (&m0, &m1)), (1, (&m1, &m2))] {
                 let u_lo = pi * f64::from(patch);
-                let row = |v: f64, g: u32| -> Arc {
-                    (0..=n)
-                        .map(|i| (Vec2::new(u_lo + pi * i as f64 / n as f64, v), g))
-                        .collect()
-                };
-                let (pts, ids) = patch_polygon(&row(-half, g_s), right, &row(half, g_n), left);
-                tris.extend(run_kgeom(s, vec![pts], &[ids], flip, acc, opts, work)?);
+                let bottom = uniform_prepared_arc(u_lo, u_lo + pi, -half, g_s, n, work)?;
+                let top = uniform_prepared_arc(u_lo, u_lo + pi, half, g_n, n, work)?;
+                let (pts, ids) = patch_polygon(&bottom, right, &top, left, work)?;
+                let patch_triangles = run_kgeom(s, vec![pts], &[ids], flip, acc, opts, work)?;
+                extend_admitted_triangles(&mut tris, patch_triangles)?;
             }
         }
         SurfaceGeom::Torus(_) => {
@@ -1848,18 +2241,19 @@ fn face_case_c(
                 for j in 0..2 {
                     let bottom = &au[i][j];
                     let right = if i == 1 {
-                        shift_arc(&av[j][0], Vec2::new(tau, 0.0))
+                        shift_arc(&av[j][0], Vec2::new(tau, 0.0), work)?
                     } else {
-                        av[j][i + 1].clone()
+                        clone_prepared_arc(&av[j][i + 1], work)?
                     };
                     let top = if j == 1 {
-                        shift_arc(&au[i][0], Vec2::new(0.0, tau))
+                        shift_arc(&au[i][0], Vec2::new(0.0, tau), work)?
                     } else {
-                        au[i][j + 1].clone()
+                        clone_prepared_arc(&au[i][j + 1], work)?
                     };
                     let left = &av[j][i];
-                    let (pts, ids) = patch_polygon(bottom, &right, &top, left);
-                    tris.extend(run_kgeom(s, vec![pts], &[ids], flip, acc, opts, work)?);
+                    let (pts, ids) = patch_polygon(bottom, &right, &top, left, work)?;
+                    let patch_triangles = run_kgeom(s, vec![pts], &[ids], flip, acc, opts, work)?;
+                    extend_admitted_triangles(&mut tris, patch_triangles)?;
                 }
             }
         }
@@ -1905,7 +2299,7 @@ fn tess_face(
             flip,
             work,
         )?;
-        chains.push(chain_uv(periods, raw)?);
+        chains.push(chain_uv(periods, raw, work)?);
     }
     if let Some(domain) = face.domain {
         for chain in &mut chains {
@@ -1930,18 +2324,16 @@ fn tess_face(
             chain.uvs.iter().any(|uv| (uv.y - half).abs() <= eps)
                 && chain.uvs.iter().any(|uv| (uv.y + half).abs() <= eps)
         };
-        let bipolar: Vec<_> = chains
-            .iter()
-            .enumerate()
-            .filter_map(|(i, chain)| touches_both(chain).then_some(i))
-            .collect();
-        if bipolar.len() > 1 {
-            return Err(Error::InvalidGeometry {
-                reason: "sphere face has multiple loops passing through both poles",
+        let mut bipolar = None;
+        for (index, chain) in chains.iter().enumerate() {
+            if touches_both(chain) && bipolar.replace(index).is_some() {
+                return Err(Error::InvalidGeometry {
+                    reason: "sphere face has multiple loops passing through both poles",
+                }
+                .into());
             }
-            .into());
         }
-        if let Some(&outer) = bipolar.first() {
+        if let Some(outer) = bipolar {
             let chain = chains.remove(outer);
             return face_case_bipolar_sphere(
                 sp,
@@ -2062,9 +2454,8 @@ pub fn tessellate_body_in_scope(
     let mut face_ranges = Vec::with_capacity(faces.len());
     for face in faces {
         let start = triangles.len();
-        triangles.extend(tess_face(
-            store, &elines, &mut acc, face, opts, ctx, &mut work,
-        )?);
+        let face_triangles = tess_face(store, &elines, &mut acc, face, opts, ctx, &mut work)?;
+        extend_admitted_triangles(&mut triangles, face_triangles)?;
         face_ranges.push((face, start..triangles.len()));
     }
     Ok(BodyMesh {
@@ -2512,6 +2903,16 @@ mod tests {
                 (BODY_TESSELLATION_ISO_ARC_DEPTH, ResourceKind::Depth, 0),
                 (BODY_TESSELLATION_ISO_ARC_SPLITS, ResourceKind::Work, 0),
                 (BODY_TESSELLATION_MESH_VERTICES, ResourceKind::Items, 8),
+                (
+                    BODY_TESSELLATION_PREPARED_PATCH_ITEMS,
+                    ResourceKind::Items,
+                    120
+                ),
+                (
+                    BODY_TESSELLATION_RETAINED_TRIANGLES,
+                    ResourceKind::Items,
+                    12
+                ),
             ]
         );
         assert!(reports[0].limit_events().is_empty());
@@ -2618,6 +3019,37 @@ mod tests {
         )
     }
 
+    fn item_limit_plan(stage: StageId, allowed: u64) -> BudgetPlan {
+        BodyTessellationBudgetProfile::v1_defaults().overlaid(
+            &BudgetPlan::new([LimitSpec::new(
+                stage,
+                ResourceKind::Items,
+                AccountingMode::Cumulative,
+                allowed,
+            )])
+            .unwrap(),
+        )
+    }
+
+    fn contextual_body_outcome(
+        store: &Store,
+        body: BodyId,
+        options: &TessOptions,
+        plan: BudgetPlan,
+    ) -> OperationOutcome<BodyMesh, TessellationError> {
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            plan,
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default())
+            .unwrap()
+            .with_diagnostics(DiagnosticLevel::Summary, 8);
+        tessellate_body_with_context(store, body, options, &context).unwrap()
+    }
+
     fn consumed(outcome: &OperationOutcome<impl Sized, TessellationError>, stage: StageId) -> u64 {
         outcome
             .report()
@@ -2626,6 +3058,302 @@ mod tests {
             .find(|entry| entry.stage == stage)
             .expect("stage exists in body report")
             .consumed
+    }
+
+    #[test]
+    fn prepared_and_retained_items_accept_n_and_reject_n_plus_one_atomically() {
+        let mut store = Store::new();
+        let body = block(&mut store, &Frame::world(), [1.0, 2.0, 3.0]).unwrap();
+        let options = opts(0.25);
+        let baseline = contextual_body_outcome(
+            &store,
+            body,
+            &options,
+            BodyTessellationBudgetProfile::v1_defaults(),
+        );
+        let baseline_mesh = baseline.result().unwrap().clone();
+
+        for (stage, diagnostic) in [
+            (
+                BODY_TESSELLATION_PREPARED_PATCH_ITEMS,
+                BODY_TESSELLATION_PREPARED_PATCH_ITEM_LIMIT_REACHED,
+            ),
+            (
+                BODY_TESSELLATION_RETAINED_TRIANGLES,
+                BODY_TESSELLATION_RETAINED_TRIANGLE_LIMIT_REACHED,
+            ),
+        ] {
+            let exact = consumed(&baseline, stage);
+            assert!(exact > 0);
+            let accepted =
+                contextual_body_outcome(&store, body, &options, item_limit_plan(stage, exact));
+            assert_eq!(accepted.result(), Ok(&baseline_mesh));
+            assert_eq!(consumed(&accepted, stage), exact);
+            assert!(accepted.report().limit_events().is_empty());
+
+            let denied =
+                contextual_body_outcome(&store, body, &options, item_limit_plan(stage, exact - 1));
+            let snapshot = LimitSnapshot {
+                stage,
+                resource: ResourceKind::Items,
+                consumed: exact,
+                allowed: exact - 1,
+            };
+            assert_eq!(
+                denied.result(),
+                Err(&TessellationError::Kernel(Error::ResourceLimit {
+                    snapshot
+                }))
+            );
+            assert!(
+                consumed(&denied, stage) < exact,
+                "the denied batch must not partially mutate usage"
+            );
+            assert_eq!(denied.report().limit_events(), &[snapshot]);
+            assert_eq!(denied.report().diagnostics().len(), 1);
+            assert_eq!(denied.report().diagnostics()[0].code, diagnostic);
+        }
+    }
+
+    #[test]
+    fn prepared_item_copies_and_trim_cleaning_are_counted_exactly() {
+        let plan = BodyTessellationBudgetProfile::v1_defaults();
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            plan,
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let mut scope = OperationScope::new(&context);
+        {
+            let mut work = BodyTessellationWork { scope: &mut scope };
+            let source = [
+                (Vec2::new(0.0, 0.0), 0),
+                (Vec2::new(1.0, 0.0), 1),
+                (Vec2::new(0.0, 1.0), 2),
+            ];
+            let first =
+                collect_prepared_pairs(source.len(), source.into_iter(), &mut work).unwrap();
+            let _second =
+                collect_prepared_pairs(first.0.len(), first.0.into_iter().zip(first.1), &mut work)
+                    .unwrap();
+
+            let raw = vec![
+                Vec2::new(0.0, 0.0),
+                Vec2::new(1.0, 0.0),
+                Vec2::new(1.0, 0.0),
+                Vec2::new(0.0, 1.0),
+                Vec2::new(0.0, 0.0),
+            ];
+            let cleaned = TrimLoop::cleaned_point_count(&raw).unwrap();
+            assert_eq!(cleaned, 3);
+            work.admit_prepared_items(cleaned).unwrap();
+            assert_eq!(TrimLoop::new(raw).unwrap().points.len(), cleaned);
+        }
+        let outcome = scope.finish_typed::<(), TessellationError>(Ok(()));
+        assert_eq!(
+            consumed(&outcome, BODY_TESSELLATION_PREPARED_PATCH_ITEMS),
+            9,
+            "each three-item copy plus the cleaned TrimLoop copy is charged"
+        );
+    }
+
+    #[test]
+    fn prepared_item_arithmetic_overflow_is_typed_and_preallocation() {
+        for result in [
+            checked_item_add(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, usize::MAX, 1),
+            inclusive_item_count(0, usize::MAX),
+            checked_prepared_segment_count(f64::INFINITY, 2),
+            checked_item_add(BODY_TESSELLATION_RETAINED_TRIANGLES, usize::MAX, 1),
+        ] {
+            assert!(matches!(
+                result,
+                Err(TessellationError::Kernel(Error::OperationPolicy {
+                    source: OperationPolicyError::AccountingOverflow { .. }
+                }))
+            ));
+        }
+        assert!(matches!(
+            checked_vec_capacity::<[u8; 2]>(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, usize::MAX),
+            Err(TessellationError::Kernel(Error::OperationPolicy {
+                source: OperationPolicyError::AccountingOverflow { .. }
+            }))
+        ));
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn prepared_item_u64_accounting_overflow_is_typed_and_atomic() {
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            BodyTessellationBudgetProfile::v1_defaults(),
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let mut scope = OperationScope::new(&context);
+        scope
+            .ledger_mut()
+            .charge_resource(
+                BODY_TESSELLATION_PREPARED_PATCH_ITEMS,
+                ResourceKind::Items,
+                u64::MAX,
+            )
+            .unwrap();
+        let error = {
+            let mut work = BodyTessellationWork { scope: &mut scope };
+            work.admit_prepared_items(1).unwrap_err()
+        };
+        assert!(matches!(
+            error,
+            TessellationError::Kernel(Error::OperationPolicy {
+                source: OperationPolicyError::AccountingOverflow {
+                    stage: BODY_TESSELLATION_PREPARED_PATCH_ITEMS,
+                    resource: ResourceKind::Items,
+                }
+            })
+        ));
+        let outcome = scope.finish_typed::<(), TessellationError>(Ok(()));
+        assert_eq!(
+            consumed(&outcome, BODY_TESSELLATION_PREPARED_PATCH_ITEMS),
+            u64::MAX
+        );
+        assert!(outcome.report().limit_events().is_empty());
+    }
+
+    #[test]
+    fn closed_and_polar_patch_counters_match_independent_goldens() {
+        let options = opts(0.05);
+
+        let mut closed_store = Store::new();
+        let sphere = closed_body(
+            &mut closed_store,
+            Sphere::new(Frame::world(), 1.0).unwrap().into(),
+        );
+        let torus = closed_body(
+            &mut closed_store,
+            Torus::new(Frame::world(), 2.0, 0.5).unwrap().into(),
+        );
+        // Reviewed compatibility-v1 materialization goldens. These are
+        // deliberately independent of the counter's own baseline result.
+        for (body, expected_prepared) in [(sphere, 587), (torus, 1_314)] {
+            let outcome = contextual_body_outcome(
+                &closed_store,
+                body,
+                &options,
+                BodyTessellationBudgetProfile::v1_defaults(),
+            );
+            let triangle_count = outcome.result().unwrap().triangles.len();
+            assert_eq!(
+                consumed(&outcome, BODY_TESSELLATION_RETAINED_TRIANGLES),
+                triangle_count as u64
+            );
+            assert_eq!(
+                consumed(&outcome, BODY_TESSELLATION_PREPARED_PATCH_ITEMS),
+                expected_prepared
+            );
+        }
+
+        let mut cap_store = Store::new();
+        let radius = 1.0;
+        let cut = 0.25;
+        let cap = cut_sphere_body(
+            &mut cap_store,
+            Sphere::new(Frame::world(), radius).unwrap(),
+            Frame::new(
+                Point3::new(0.0, 0.0, cut),
+                Vec3::new(0.0, 0.0, 1.0),
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap(),
+            (radius * radius - cut * cut).sqrt(),
+            true,
+        );
+        let outcome = contextual_body_outcome(
+            &cap_store,
+            cap,
+            &options,
+            BodyTessellationBudgetProfile::v1_defaults(),
+        );
+        let triangle_count = outcome.result().unwrap().triangles.len();
+        assert_eq!(
+            consumed(&outcome, BODY_TESSELLATION_RETAINED_TRIANGLES),
+            triangle_count as u64
+        );
+        assert_eq!(
+            consumed(&outcome, BODY_TESSELLATION_PREPARED_PATCH_ITEMS),
+            // Reviewed polar-cap materialization golden.
+            466
+        );
+    }
+
+    #[test]
+    fn multi_hole_patch_accounts_every_prepared_copy_and_retained_triangle() {
+        let plane = Plane::new(Frame::world());
+        let loops = [
+            vec![
+                Vec2::new(0.0, 0.0),
+                Vec2::new(4.0, 0.0),
+                Vec2::new(4.0, 4.0),
+                Vec2::new(0.0, 4.0),
+            ],
+            vec![
+                Vec2::new(1.0, 1.0),
+                Vec2::new(1.0, 2.0),
+                Vec2::new(2.0, 2.0),
+                Vec2::new(2.0, 1.0),
+            ],
+            vec![
+                Vec2::new(2.5, 1.0),
+                Vec2::new(2.5, 2.0),
+                Vec2::new(3.5, 2.0),
+                Vec2::new(3.5, 1.0),
+            ],
+        ];
+        let mut positions = Vec::new();
+        let mut chains = Vec::new();
+        for points in loops {
+            let start = positions.len();
+            positions.extend(points.iter().map(|uv| plane.eval([uv.x, uv.y])));
+            let ids = (start..positions.len())
+                .map(|index| u32::try_from(index).unwrap())
+                .collect::<Vec<_>>();
+            chains.push(UvChain {
+                close_uv: points[0],
+                uvs: points,
+                ids,
+                winding: [0, 0],
+            });
+        }
+
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            BodyTessellationBudgetProfile::v1_defaults(),
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let mut scope = OperationScope::new(&context);
+        let result = {
+            let mut work = BodyTessellationWork { scope: &mut scope };
+            let mut acc = MeshAcc { positions };
+            face_case_a(&plane, chains, false, &mut acc, &opts(10.0), &mut work)
+        };
+        let outcome = scope.finish_typed(result);
+        let triangle_count = outcome.result().unwrap().len();
+        assert_eq!(
+            consumed(&outcome, BODY_TESSELLATION_RETAINED_TRIANGLES),
+            triangle_count as u64
+        );
+        assert_eq!(
+            consumed(&outcome, BODY_TESSELLATION_PREPARED_PATCH_ITEMS),
+            36,
+            "12 shifted loop pairs, 12 cleaned TrimLoop points, and 12 l2g slots"
+        );
     }
 
     #[test]

@@ -61,35 +61,68 @@ pub struct TrimLoop {
 }
 
 impl TrimLoop {
-    /// Build a loop from vertices, removing consecutive (and closing)
-    /// duplicate points. Fails if fewer than 3 distinct vertices remain or
-    /// the signed area is degenerate (zero).
-    pub fn new(points: Vec<Vec2>) -> Result<TrimLoop> {
-        let mut cleaned: Vec<Vec2> = Vec::with_capacity(points.len());
-        for p in points {
-            if !p.x.is_finite() || !p.y.is_finite() {
+    /// Return the number of points retained by [`TrimLoop::new`] without
+    /// allocating its cleaned copy.
+    ///
+    /// Higher-level accounted builders use this inspection seam to admit the
+    /// exact cleaned-copy length before construction. Validation and floating-
+    /// point accumulation deliberately match [`TrimLoop::new`].
+    pub fn cleaned_point_count(points: &[Vec2]) -> Result<usize> {
+        let mut first = None;
+        let mut previous = None;
+        let mut count = 0_usize;
+        let mut twice_area = 0.0;
+        for &point in points {
+            if !point.x.is_finite() || !point.y.is_finite() {
                 return Err(Error::InvalidGeometry {
                     reason: "trim loop vertex is not finite",
                 });
             }
-            if cleaned.last() != Some(&p) {
-                cleaned.push(p);
+            if previous == Some(point) {
+                continue;
             }
+            if let Some(previous) = previous {
+                twice_area += previous.cross(point);
+            } else {
+                first = Some(point);
+            }
+            previous = Some(point);
+            count = count.checked_add(1).ok_or(Error::InvalidGeometry {
+                reason: "trim loop point count exceeds platform capacity",
+            })?;
         }
-        if cleaned.len() > 1 && cleaned.first() == cleaned.last() {
-            cleaned.pop();
+        if count > 1 && first == previous {
+            count -= 1;
+        } else if let (Some(previous), Some(first)) = (previous, first) {
+            twice_area += previous.cross(first);
         }
-        if cleaned.len() < 3 {
+        if count < 3 {
             return Err(Error::InvalidGeometry {
                 reason: "trim loop needs at least 3 distinct vertices",
             });
         }
-        let l = TrimLoop { points: cleaned };
-        if l.signed_area() == 0.0 {
+        if twice_area / 2.0 == 0.0 {
             return Err(Error::InvalidGeometry {
                 reason: "trim loop has zero area",
             });
         }
+        Ok(count)
+    }
+
+    /// Build a loop from vertices, removing consecutive (and closing)
+    /// duplicate points. Fails if fewer than 3 distinct vertices remain or
+    /// the signed area is degenerate (zero).
+    pub fn new(points: Vec<Vec2>) -> Result<TrimLoop> {
+        let cleaned_count = Self::cleaned_point_count(&points)?;
+        let mut cleaned: Vec<Vec2> = Vec::with_capacity(cleaned_count);
+        for p in points {
+            if cleaned.len() < cleaned_count && cleaned.last() != Some(&p) {
+                cleaned.push(p);
+            }
+        }
+        debug_assert_eq!(cleaned.len(), cleaned_count);
+        let l = TrimLoop { points: cleaned };
+        debug_assert_ne!(l.signed_area(), 0.0);
         Ok(l)
     }
 
@@ -1881,6 +1914,36 @@ mod tests {
                 Vec2::new(2.0, 0.0),
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn trim_loop_cleaned_count_matches_the_exact_allocated_copy() {
+        let points = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1.0, 0.0),
+            Vec2::new(1.0, 0.0),
+            Vec2::new(0.0, 1.0),
+            Vec2::new(0.0, 0.0),
+        ];
+        assert_eq!(TrimLoop::cleaned_point_count(&points), Ok(3));
+        let loop_ = TrimLoop::new(points).unwrap();
+        assert_eq!(loop_.points.len(), 3);
+        assert_eq!(
+            loop_.points,
+            [
+                Vec2::new(0.0, 0.0),
+                Vec2::new(1.0, 0.0),
+                Vec2::new(0.0, 1.0)
+            ]
+        );
+
+        let nonfinite = [Vec2::new(0.0, 0.0), Vec2::new(f64::NAN, 1.0)];
+        assert_eq!(
+            TrimLoop::cleaned_point_count(&nonfinite),
+            Err(Error::InvalidGeometry {
+                reason: "trim loop vertex is not finite"
+            })
         );
     }
 

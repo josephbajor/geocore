@@ -1,9 +1,9 @@
 //! Stable operation-policy vocabulary for deterministic whole-body tessellation.
 //!
-//! Whole-body tessellation will eventually own one shared operation scope
-//! across edge discretization, face tessellation, graph evaluation, and
-//! surface projection. This module defines and validates that aggregate
-//! profile without changing the legacy algorithm's control flow yet.
+//! Whole-body tessellation owns one shared operation scope across edge
+//! discretization, patch preparation, face tessellation, graph evaluation,
+//! surface projection, and output retention. This module defines and validates
+//! that aggregate profile while compatibility defaults preserve legacy output.
 
 use kcore::operation::{
     AccountingMode, BudgetPlan, DiagnosticCode, LimitSpec, OperationPolicyError, ResourceKind,
@@ -63,6 +63,27 @@ pub const BODY_TESSELLATION_MESH_VERTICES: StageId =
 /// Diagnostic identity for exhausting the `u32` mesh-vertex address space.
 pub const BODY_TESSELLATION_MESH_VERTEX_LIMIT_REACHED: DiagnosticCode =
     known_diagnostic("ktopo.body-tessellation.mesh-vertices-limit");
+
+/// Cumulative body-owned logical items materialized while preparing UV patches.
+///
+/// One item is one sequence slot in a raw/unwrapped `(uv, global-id)` chain,
+/// arc, row, shifted loop, patch polygon, cleaned trim copy, or local/global
+/// map. An intentional copy is a new item; ownership moves are not.
+pub const BODY_TESSELLATION_PREPARED_PATCH_ITEMS: StageId =
+    known_stage("ktopo.body-tessellation.prepared-patch-items");
+/// Diagnostic identity for exhausting body-owned UV/patch preparation items.
+pub const BODY_TESSELLATION_PREPARED_PATCH_ITEM_LIMIT_REACHED: DiagnosticCode =
+    known_diagnostic("ktopo.body-tessellation.prepared-patch-items-limit");
+
+/// Cumulative nondegenerate triangles retained for the whole-body result.
+///
+/// A triangle is charged once before its first body-owned output allocation.
+/// Moving it through patch, face, and body aggregation does not recharge it.
+pub const BODY_TESSELLATION_RETAINED_TRIANGLES: StageId =
+    known_stage("ktopo.body-tessellation.retained-triangles");
+/// Diagnostic identity for exhausting retained whole-body triangles.
+pub const BODY_TESSELLATION_RETAINED_TRIANGLE_LIMIT_REACHED: DiagnosticCode =
+    known_diagnostic("ktopo.body-tessellation.retained-triangles-limit");
 
 /// Diagnostic identity for an ambiguous nested face root-work crossing.
 pub const BODY_TESSELLATION_TOTAL_WORK_LIMIT_REACHED: DiagnosticCode =
@@ -169,6 +190,18 @@ impl BodyTessellationBudgetProfile {
                     ResourceKind::Items,
                     AccountingMode::Cumulative,
                     BODY_TESSELLATION_MESH_VERTEX_LIMIT,
+                ),
+                LimitSpec::new(
+                    BODY_TESSELLATION_PREPARED_PATCH_ITEMS,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    u64::MAX,
+                ),
+                LimitSpec::new(
+                    BODY_TESSELLATION_RETAINED_TRIANGLES,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    u64::MAX,
                 ),
             ]
             .into_iter()
@@ -335,6 +368,18 @@ mod tests {
                     AccountingMode::Cumulative,
                     1_u64 << 32
                 ),
+                limit(
+                    BODY_TESSELLATION_PREPARED_PATCH_ITEMS,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    u64::MAX
+                ),
+                limit(
+                    BODY_TESSELLATION_RETAINED_TRIANGLES,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    u64::MAX
+                ),
             ]
         );
         assert_eq!(profile.total_work_limit(), None);
@@ -349,7 +394,7 @@ mod tests {
             .map(|entry| entry.stage.as_str())
             .collect::<Vec<_>>();
         assert!(stages.windows(2).all(|pair| pair[0] < pair[1]));
-        assert_eq!(stages.iter().copied().collect::<BTreeSet<_>>().len(), 17);
+        assert_eq!(stages.iter().copied().collect::<BTreeSet<_>>().len(), 19);
 
         let diagnostics = [
             BODY_TESSELLATION_EDGE_DEPTH_LIMIT_REACHED.as_str(),
@@ -357,6 +402,8 @@ mod tests {
             BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT_REACHED.as_str(),
             BODY_TESSELLATION_ISO_ARC_SPLIT_LIMIT_REACHED.as_str(),
             BODY_TESSELLATION_MESH_VERTEX_LIMIT_REACHED.as_str(),
+            BODY_TESSELLATION_PREPARED_PATCH_ITEM_LIMIT_REACHED.as_str(),
+            BODY_TESSELLATION_RETAINED_TRIANGLE_LIMIT_REACHED.as_str(),
             BODY_TESSELLATION_TOTAL_WORK_LIMIT_REACHED.as_str(),
         ];
         assert_eq!(
@@ -367,10 +414,12 @@ mod tests {
                 "ktopo.body-tessellation.iso-arc-depth-limit",
                 "ktopo.body-tessellation.iso-arc-splits-limit",
                 "ktopo.body-tessellation.mesh-vertices-limit",
+                "ktopo.body-tessellation.prepared-patch-items-limit",
+                "ktopo.body-tessellation.retained-triangles-limit",
                 "ktopo.body-tessellation.total-work-limit",
             ]
         );
-        assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>().len(), 6);
+        assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>().len(), 8);
     }
 
     #[test]
@@ -397,6 +446,8 @@ mod tests {
         assert_eq!(allowed(BODY_TESSELLATION_EDGE_SPLITS), 1_u64 << 32);
         assert_eq!(allowed(BODY_TESSELLATION_ISO_ARC_SPLITS), 1_u64 << 32);
         assert_eq!(allowed(FACE_TESSELLATION_MESH_VERTICES), u64::MAX);
+        assert_eq!(allowed(BODY_TESSELLATION_PREPARED_PATCH_ITEMS), u64::MAX);
+        assert_eq!(allowed(BODY_TESSELLATION_RETAINED_TRIANGLES), u64::MAX);
         assert_eq!(allowed(kgraph::eval_stage::NODE_VISITS), usize::MAX as u64);
         assert_eq!(allowed(SURFACE_PROJECTION_QUERIES), u64::MAX);
         for curve_stage in [
@@ -512,6 +563,6 @@ mod tests {
                 .allowed,
             1_000
         );
-        assert_eq!(effective.limits().len(), 17);
+        assert_eq!(effective.limits().len(), 19);
     }
 }

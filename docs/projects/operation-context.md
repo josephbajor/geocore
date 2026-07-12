@@ -684,13 +684,18 @@ turn these numerical guards into proof or acceptance authority.
 
 Status: projection and face/body tessellation now have contextual and
 shared-scope entry points. Whole-body tessellation owns one scope across graph
-queries, projection fallback, edge/iso depth and split work, per-patch face
-work, and retained vertices; local caps, aggregate/root failures, diagnostics,
-legacy bits/errors, and Serial/fixed/available execution-policy equivalence are
-covered. Per-face boundary splits, mesh vertices, retained triangles, and
-body-owned edge/iso splits now have exact pre-allocation admission and
-composition evidence. Dedicated body-wide limits for prepared UV/patch scratch
-and triangle retention remain before the path is fully hostile-input bounded.
+queries, projection fallback, edge/iso depth and split work, prepared UV/patch
+items, per-patch face work, retained vertices, and retained body triangles;
+local caps, aggregate/root failures, diagnostics, legacy bits/errors, and
+Serial/fixed/available execution-policy equivalence are covered. Per-face
+boundary splits, mesh vertices, retained triangles, and every named body-owned
+split/preparation/output family now have exact pre-allocation admission and
+composition evidence. The prepared-patch stage intentionally starts at UV-chain
+construction; pre-UV `EdgeLine` seed/sample and final edge-polyline storage still
+need an exact admission slice. Compatibility-v1 body-wide preparation and
+triangle allowances remain accounting-only at `u64::MAX`; that edge-storage
+slice plus corpus-backed finite presets are required before the product path is
+described as hostile-input bounded.
 
 - Add fallible contextual projection APIs and remove public panic behavior through the
   new path.
@@ -725,25 +730,37 @@ land before any product cap is selected:
    the split. N/N+1, simultaneous depth/work, failure-atomicity, mixed body/face
    root aggregation, legacy output, and execution-policy evidence is in the
    owning tests.
-3. `ktopo` adds prepared-patch and retained-body-triangle `Items/Cumulative`
-   stages. Their compatibility v1 allowances are `u64::MAX`: the counters and
-   pre-allocation seams are exact, but finite aggregate caps require corpus
-   evidence because legacy accepts arbitrarily many faces and patches.
-4. Patch builders charge logical `(uv, global-id)` items before materializing
-   arcs, rows, shifted loops, and patch polygons. Body triangle accounting scans
-   the mapped face result, charges only retained nondegenerate triangles, then
-   allocates and appends them.
-5. Q3 records every new counter. After corpus/import measurement, add explicit
+3. **Landed:** `ktopo` has prepared-patch and retained-body-triangle
+   `Items/Cumulative` stages. Their compatibility-v1 allowances are `u64::MAX`:
+   the counters and pre-allocation seams are exact, but finite aggregate caps
+   require corpus evidence because legacy accepts arbitrarily many faces and
+   patches.
+4. **Landed:** patch builders charge each logical `(uv, global-id)` item before
+   materializing raw/unwrapped chains, arcs, rows, shifted loop copies, patch
+   polygons, cleaned `TrimLoop` copies, or local/global map slots. Checked
+   inclusive/`usize`/physical-capacity arithmetic fails with typed accounting
+   overflow before allocation. Body triangle accounting scans the mapped face
+   result, charges only retained nondegenerate triangles, then allocates in the
+   same deterministic order; later patch/face/body moves do not recharge the
+   same output.
+5. `ktopo` adds an exact pre-allocation stage for pre-UV `EdgeLine` seed/sample
+   materialization and final body edge-polyline storage. Split work already
+   admits recursively created interiors, but fixed seed/sample vectors can
+   allocate before the later UV prepared-item boundary and therefore remain a
+   distinct hostile-input gap.
+6. Q3 records every new counter. After corpus/import measurement, add explicit
    `FaceTessellationBudgetProfile::bounded_v1()` and
    `BodyTessellationBudgetProfile::bounded_v1()` presets with finite aggregate
    and root caps. Legacy wrappers stay on compatibility `v1_defaults`; facade,
    import, and fuzz clients opt into the bounded presets before any later policy
    version considers promoting those values.
 
-`TrimLoop::new(Vec<_>)` receives an already allocated caller-owned vector, so a
-future genuinely pre-allocation public path needs an iterator/builder seam that
-charges a declared count before collection. An “accounted” constructor that
-still accepts `Vec<_>` can protect only its cleaned/refined copy.
+`TrimLoop::cleaned_point_count` now lets the body path validate and admit the
+exact cleaned copy before `TrimLoop::new` allocates it. The original input
+`Vec<_>` is already accounted at every body-owned builder site. A future public
+path that accepts caller-created raw trim vectors still needs an iterator or
+declared-count builder seam to govern that caller-side collection; accepting an
+already materialized `Vec<_>` can protect only later copies.
 
 ### Stage 5 — Checker/make integration
 
