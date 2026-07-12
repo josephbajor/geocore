@@ -684,13 +684,13 @@ turn these numerical guards into proof or acceptance authority.
 
 Status: projection and face/body tessellation now have contextual and
 shared-scope entry points. Whole-body tessellation owns one scope across graph
-queries, projection fallback, edge/iso depth, per-patch face work, and retained
-vertices; local caps, aggregate/root failures, diagnostics, legacy bits/errors,
-and Serial/fixed/available execution-policy equivalence are covered. Per-face
-boundary splits, mesh vertices, and retained triangles now have exact
-pre-allocation admission and composition evidence. Dedicated body-wide limits
-for prepared UV/patch scratch and triangle retention remain before the path is
-fully hostile-input bounded.
+queries, projection fallback, edge/iso depth and split work, per-patch face
+work, and retained vertices; local caps, aggregate/root failures, diagnostics,
+legacy bits/errors, and Serial/fixed/available execution-policy equivalence are
+covered. Per-face boundary splits, mesh vertices, retained triangles, and
+body-owned edge/iso splits now have exact pre-allocation admission and
+composition evidence. Dedicated body-wide limits for prepared UV/patch scratch
+and triangle retention remain before the path is fully hostile-input bounded.
 
 - Add fallible contextual projection APIs and remove public panic behavior through the
   new path.
@@ -715,11 +715,16 @@ land before any product cap is selected:
    allocation. Exact N/N+1, physical-cap, atomic-precedence, child/sequential
    composition, root-work, execution-policy, and multi-hole output evidence is
    in the owning tests.
-2. **Partially landed:** the body profile composes the per-face names and maps
-   every leaf plus generic root failure to stable diagnostics. Body-wide
-   edge/iso split `Work/Cumulative` stages with the u32 vertex ceiling remain.
-   Split work must contribute to root total work and be charged after depth
-   acceptance but before midpoint evaluation or retention.
+2. **Landed:** the body profile composes the per-face names and maps every leaf
+   plus generic root failure to stable diagnostics. Body-wide exact-edge and
+   iso-arc split `Work/Cumulative` stages use the u32 representability ceiling
+   in compatibility v1 and contribute to root total work. Each split observes
+   and accepts the next local depth first, then atomically admits leaf and root
+   work before retained-midpoint evaluation, scratch mutation, or recursion.
+   Curvature decisions cache the one midpoint evaluation needed to establish
+   the split. N/N+1, simultaneous depth/work, failure-atomicity, mixed body/face
+   root aggregation, legacy output, and execution-policy evidence is in the
+   owning tests.
 3. `ktopo` adds prepared-patch and retained-body-triangle `Items/Cumulative`
    stages. Their compatibility v1 allowances are `u64::MAX`: the counters and
    pre-allocation seams are exact, but finite aggregate caps require corpus

@@ -60,9 +60,12 @@ current record. Host findings remain ratcheted in `docs/oracle-results.tsv`.
 2. **Finish hostile-input tessellation accounting.** The contextual migration
    now has exact per-face boundary-split work, mesh-vertex admission, and
    triangle high-water ceilings, including physical u32 enforcement and
-   child/sequential/root composition. Whole-body edge/iso split work, pole-row
-   UV scratch, prepared patch arrays, and retained output triangles still need
-   pre-allocation stages. Body-wide patch and triangle totals remain
+   child/sequential/root composition. Whole-body exact-edge and iso-arc splits
+   now have separate cumulative work stages with depth-first admission,
+   root-work composition, atomic rejection, and compatibility-v1 allowances at
+   the u32 representability ceiling. Pole-row UV scratch, prepared patch arrays,
+   and retained output triangles still need pre-allocation stages. Body-wide
+   patch and triangle totals remain
    accounting-only where no truthful finite legacy cap exists. Expand Q3
    measurements, then add reviewed opt-in `bounded_v1` face/body presets before
    describing product-facing tessellation as hostile-input bounded. Do not use

@@ -82,11 +82,13 @@ use offset::{eval_surface_point, face_case_planar_offset, surface_periodicity};
 use policy::validate_body_tessellation_budget;
 pub use policy::{
     BODY_TESSELLATION_EDGE_DEPTH, BODY_TESSELLATION_EDGE_DEPTH_LIMIT,
-    BODY_TESSELLATION_EDGE_DEPTH_LIMIT_REACHED, BODY_TESSELLATION_ISO_ARC_DEPTH,
+    BODY_TESSELLATION_EDGE_DEPTH_LIMIT_REACHED, BODY_TESSELLATION_EDGE_SPLIT_LIMIT_REACHED,
+    BODY_TESSELLATION_EDGE_SPLITS, BODY_TESSELLATION_ISO_ARC_DEPTH,
     BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT, BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT_REACHED,
+    BODY_TESSELLATION_ISO_ARC_SPLIT_LIMIT_REACHED, BODY_TESSELLATION_ISO_ARC_SPLITS,
     BODY_TESSELLATION_MESH_VERTEX_LIMIT, BODY_TESSELLATION_MESH_VERTEX_LIMIT_REACHED,
-    BODY_TESSELLATION_MESH_VERTICES, BODY_TESSELLATION_TOTAL_WORK_LIMIT_REACHED,
-    BodyTessellationBudgetProfile,
+    BODY_TESSELLATION_MESH_VERTICES, BODY_TESSELLATION_SPLIT_LIMIT,
+    BODY_TESSELLATION_TOTAL_WORK_LIMIT_REACHED, BodyTessellationBudgetProfile,
 };
 
 type Result<T> = TessellationResult<T>;
@@ -220,6 +222,19 @@ struct BodyTessellationWork<'scope, 'context, 'session> {
 }
 
 impl BodyTessellationWork<'_, '_, '_> {
+    fn charge_split(
+        &mut self,
+        stage: StageId,
+        diagnostic: DiagnosticCode,
+        message: &'static str,
+    ) -> Result<()> {
+        let result = self
+            .scope
+            .ledger_mut()
+            .charge_resource(stage, ResourceKind::Work, 1);
+        self.direct_limit(result, diagnostic, message)
+    }
+
     fn charge_mesh_vertex(&mut self) -> Result<()> {
         let result = self.scope.ledger_mut().charge_resource(
             BODY_TESSELLATION_MESH_VERTICES,
@@ -313,6 +328,14 @@ impl BodyTessellationWork<'_, '_, '_> {
         message: &'static str,
     ) -> Result<()> {
         if let Err(OperationPolicyError::LimitReached(snapshot)) = result {
+            let (diagnostic, message) = if snapshot.stage == kcore::operation::TOTAL_WORK_STAGE {
+                (
+                    BODY_TESSELLATION_TOTAL_WORK_LIMIT_REACHED,
+                    "whole-body tessellation total work limit reached",
+                )
+            } else {
+                (diagnostic, message)
+            };
             self.scope.diagnose(
                 snapshot.stage,
                 diagnostic,
@@ -337,6 +360,14 @@ impl BodyTessellationWork<'_, '_, '_> {
             Ok(lower) => lower.map_err(Into::into),
         }
     }
+}
+
+/// A refinement decision may already own the midpoint evaluation required to
+/// establish curvature error. Length-forced splits deliberately defer that
+/// evaluation until depth and split/root admission have both succeeded.
+enum SplitDecision<T> {
+    Keep,
+    Split { evaluated_midpoint: Option<T> },
 }
 
 fn mesh_vertex_index(current_items: usize) -> Result<u32> {
@@ -482,18 +513,22 @@ impl CurveRefine<'_> {
         Ok(Point3::new(xyz[0] / n, xyz[1] / n, xyz[2] / n))
     }
 
-    fn needs_split(
+    fn split_decision(
         &self,
         a: (f64, Point3),
         b: (f64, Point3),
         work: &mut BodyTessellationWork<'_, '_, '_>,
-    ) -> Result<bool> {
+    ) -> Result<SplitDecision<Point3>> {
         if a.1.dist(b.1) > self.ctx.max_len {
-            return Ok(true);
+            return Ok(SplitDecision::Split {
+                evaluated_midpoint: None,
+            });
         }
         let mid = self.point_at((a.0 + b.0) / 2.0, work)?;
         if point_seg_dist(mid, a.1, b.1) > self.ctx.tol {
-            return Ok(true);
+            return Ok(SplitDecision::Split {
+                evaluated_midpoint: Some(mid),
+            });
         }
         for face_use in &self.face_uses {
             let ua = face_use.uv_at(a.0, a.1, work)?;
@@ -505,10 +540,12 @@ impl CurveRefine<'_> {
             let um = (ua + ub) / 2.0;
             let q = eval_surface_point(face_use.store, face_use.surface_id, um, work)?;
             if point_seg_dist(q, a.1, b.1) > self.ctx.tol {
-                return Ok(true);
+                return Ok(SplitDecision::Split {
+                    evaluated_midpoint: Some(mid),
+                });
             }
         }
-        Ok(false)
+        Ok(SplitDecision::Keep)
     }
 
     /// Append the interior refinement points of `(a, b)` (exclusive).
@@ -520,9 +557,10 @@ impl CurveRefine<'_> {
         out: &mut Vec<(f64, Point3)>,
         work: &mut BodyTessellationWork<'_, '_, '_>,
     ) -> Result<()> {
-        if !self.needs_split(a, b, work)? {
-            return Ok(());
-        }
+        let evaluated_midpoint = match self.split_decision(a, b, work)? {
+            SplitDecision::Keep => return Ok(()),
+            SplitDecision::Split { evaluated_midpoint } => evaluated_midpoint,
+        };
         let next_depth = next_refinement_depth(
             depth,
             BODY_TESSELLATION_EDGE_DEPTH,
@@ -530,8 +568,19 @@ impl CurveRefine<'_> {
             "whole-body exact-edge refinement depth limit reached",
             work,
         )?;
+        work.charge_split(
+            BODY_TESSELLATION_EDGE_SPLITS,
+            BODY_TESSELLATION_EDGE_SPLIT_LIMIT_REACHED,
+            "whole-body exact-edge refinement split limit reached",
+        )?;
         let tm = (a.0 + b.0) / 2.0;
-        let m = (tm, self.point_at(tm, work)?);
+        let m = (
+            tm,
+            match evaluated_midpoint {
+                Some(midpoint) => midpoint,
+                None => self.point_at(tm, work)?,
+            },
+        );
         self.refine(a, m, next_depth, out, work)?;
         out.push(m);
         self.refine(m, b, next_depth, out, work)
@@ -550,10 +599,15 @@ fn refine_uv_seg(
     work: &mut BodyTessellationWork<'_, '_, '_>,
 ) -> Result<()> {
     let mid_uv = (a.0 + b.0) / 2.0;
-    let mid_p = s.eval([mid_uv.x, mid_uv.y]);
-    if point_seg_dist(mid_p, a.1, b.1) <= ctx.tol && a.1.dist(b.1) <= ctx.max_len {
-        return Ok(());
-    }
+    let evaluated_midpoint = if a.1.dist(b.1) > ctx.max_len {
+        None
+    } else {
+        let midpoint = s.eval([mid_uv.x, mid_uv.y]);
+        if point_seg_dist(midpoint, a.1, b.1) <= ctx.tol {
+            return Ok(());
+        }
+        Some(midpoint)
+    };
     let next_depth = next_refinement_depth(
         depth,
         BODY_TESSELLATION_ISO_ARC_DEPTH,
@@ -561,6 +615,15 @@ fn refine_uv_seg(
         "whole-body iso-arc refinement depth limit reached",
         work,
     )?;
+    work.charge_split(
+        BODY_TESSELLATION_ISO_ARC_SPLITS,
+        BODY_TESSELLATION_ISO_ARC_SPLIT_LIMIT_REACHED,
+        "whole-body iso-arc refinement split limit reached",
+    )?;
+    let mid_p = match evaluated_midpoint {
+        Some(midpoint) => midpoint,
+        None => s.eval([mid_uv.x, mid_uv.y]),
+    };
     let m = (mid_uv, mid_p);
     refine_uv_seg(s, a, m, ctx, next_depth, out, work)?;
     out.push(m);
@@ -2091,12 +2154,15 @@ mod tests {
     use core::num::NonZeroUsize;
     use kcore::math;
     use kcore::operation::DiagnosticLevel;
-    use kgeom::curve::{Circle, Line};
+    use kgeom::aabb::Aabb3;
+    use kgeom::curve::{Circle, CurveDerivs, Line};
     use kgeom::frame::Frame;
     use kgeom::nurbs::NurbsSurface;
-    use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Torus};
+    use kgeom::param::ParamRange;
+    use kgeom::surface::{Cone, Cylinder, Plane, Sphere, SurfaceDerivs, Torus};
     use kgeom::vec::Vec3;
     use kgraph::{EvalError, GeometryRef, OffsetSurfaceDescriptor};
+    use std::cell::Cell;
 
     fn assert_watertight(mesh: &BodyMesh) {
         let problems = check_watertight(mesh);
@@ -2142,6 +2208,236 @@ mod tests {
             TessellationError::Kernel(Error::ResourceLimit { snapshot })
         );
         assert_eq!(error.limit(), Some(snapshot));
+    }
+
+    struct CountingCurve<C> {
+        inner: C,
+        evaluations: Cell<usize>,
+    }
+
+    impl<C> CountingCurve<C> {
+        fn new(inner: C) -> Self {
+            Self {
+                inner,
+                evaluations: Cell::new(0),
+            }
+        }
+
+        fn evaluations(&self) -> usize {
+            self.evaluations.get()
+        }
+
+        fn reset(&self) {
+            self.evaluations.set(0);
+        }
+    }
+
+    impl<C: Curve> Curve for CountingCurve<C> {
+        fn as_any(&self) -> &dyn core::any::Any {
+            self
+        }
+
+        fn eval_derivs(&self, t: f64, order: usize) -> CurveDerivs {
+            self.evaluations.set(self.evaluations.get() + 1);
+            self.inner.eval_derivs(t, order)
+        }
+
+        fn param_range(&self) -> ParamRange {
+            self.inner.param_range()
+        }
+
+        fn periodicity(&self) -> Option<f64> {
+            self.inner.periodicity()
+        }
+
+        fn bounding_box(&self, range: ParamRange) -> Aabb3 {
+            self.inner.bounding_box(range)
+        }
+    }
+
+    struct CountingSurface<S> {
+        inner: S,
+        evaluations: Cell<usize>,
+    }
+
+    impl<S> CountingSurface<S> {
+        fn new(inner: S) -> Self {
+            Self {
+                inner,
+                evaluations: Cell::new(0),
+            }
+        }
+
+        fn evaluations(&self) -> usize {
+            self.evaluations.get()
+        }
+
+        fn reset(&self) {
+            self.evaluations.set(0);
+        }
+    }
+
+    impl<S: Surface> Surface for CountingSurface<S> {
+        fn as_any(&self) -> &dyn core::any::Any {
+            self
+        }
+
+        fn eval_derivs(&self, uv: [f64; 2], order: usize) -> SurfaceDerivs {
+            self.evaluations.set(self.evaluations.get() + 1);
+            self.inner.eval_derivs(uv, order)
+        }
+
+        fn param_range(&self) -> [ParamRange; 2] {
+            self.inner.param_range()
+        }
+
+        fn periodicity(&self) -> [Option<f64>; 2] {
+            self.inner.periodicity()
+        }
+
+        fn degeneracies(&self) -> Vec<kgeom::surface::Degeneracy> {
+            self.inner.degeneracies()
+        }
+
+        fn bounding_box(&self, range: [ParamRange; 2]) -> Aabb3 {
+            self.inner.bounding_box(range)
+        }
+    }
+
+    struct TentCurve;
+
+    impl Curve for TentCurve {
+        fn as_any(&self) -> &dyn core::any::Any {
+            self
+        }
+
+        fn eval_derivs(&self, t: f64, _order: usize) -> CurveDerivs {
+            let height = if t <= 0.5 { 2.0 * t } else { 2.0 * (1.0 - t) };
+            let mut result = CurveDerivs::default();
+            result.d[0] = Point3::new(t, height, 0.0);
+            result
+        }
+
+        fn param_range(&self) -> ParamRange {
+            ParamRange::new(0.0, 1.0)
+        }
+
+        fn periodicity(&self) -> Option<f64> {
+            None
+        }
+
+        fn bounding_box(&self, _range: ParamRange) -> Aabb3 {
+            Aabb3::from_points(&[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.5, 1.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+            ])
+        }
+    }
+
+    struct TentSurface;
+
+    impl Surface for TentSurface {
+        fn as_any(&self) -> &dyn core::any::Any {
+            self
+        }
+
+        fn eval_derivs(&self, uv: [f64; 2], _order: usize) -> SurfaceDerivs {
+            let height = if uv[0] <= 0.5 {
+                2.0 * uv[0]
+            } else {
+                2.0 * (1.0 - uv[0])
+            };
+            SurfaceDerivs {
+                p: Point3::new(uv[0], uv[1], height),
+                ..SurfaceDerivs::default()
+            }
+        }
+
+        fn param_range(&self) -> [ParamRange; 2] {
+            [ParamRange::new(0.0, 1.0), ParamRange::new(0.0, 1.0)]
+        }
+
+        fn periodicity(&self) -> [Option<f64>; 2] {
+            [None, None]
+        }
+
+        fn bounding_box(&self, _range: [ParamRange; 2]) -> Aabb3 {
+            Aabb3::from_points(&[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.5, 0.0, 1.0),
+                Point3::new(1.0, 1.0, 0.0),
+            ])
+        }
+    }
+
+    fn curve_refinement_outcome(
+        curve: &dyn Curve,
+        max_len: f64,
+        plan: BudgetPlan,
+    ) -> OperationOutcome<Vec<(f64, Point3)>, TessellationError> {
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            plan,
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default())
+            .unwrap()
+            .with_diagnostics(DiagnosticLevel::Summary, 8);
+        let mut scope = OperationScope::new(&context);
+        let mut interior = Vec::new();
+        let result = {
+            let refine = CurveRefine {
+                curve: Some(curve),
+                face_uses: Vec::new(),
+                ctx: Ctx { tol: 0.0, max_len },
+            };
+            let mut work = BodyTessellationWork { scope: &mut scope };
+            refine.refine(
+                (0.0, curve.eval(0.0)),
+                (1.0, curve.eval(1.0)),
+                0,
+                &mut interior,
+                &mut work,
+            )
+        };
+        scope.finish_typed(result.map(|()| interior))
+    }
+
+    fn iso_refinement_outcome(
+        surface: &dyn Surface,
+        max_len: f64,
+        plan: BudgetPlan,
+    ) -> OperationOutcome<Vec<(Vec2, Point3)>, TessellationError> {
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            plan,
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default())
+            .unwrap()
+            .with_diagnostics(DiagnosticLevel::Summary, 8);
+        let mut scope = OperationScope::new(&context);
+        let mut interior = Vec::new();
+        let a_uv = Vec2::new(0.0, 0.0);
+        let b_uv = Vec2::new(1.0, 0.0);
+        let result = {
+            let mut work = BodyTessellationWork { scope: &mut scope };
+            refine_uv_seg(
+                surface,
+                (a_uv, surface.eval([a_uv.x, a_uv.y])),
+                (b_uv, surface.eval([b_uv.x, b_uv.y])),
+                Ctx { tol: 0.0, max_len },
+                0,
+                &mut interior,
+                &mut work,
+            )
+        };
+        scope.finish_typed(result.map(|()| interior))
     }
 
     #[test]
@@ -2212,7 +2508,9 @@ mod tests {
                 (kgraph::eval_stage::DEPENDENCY_DEPTH, ResourceKind::Depth, 1),
                 (kgraph::eval_stage::NODE_VISITS, ResourceKind::Work, 150),
                 (BODY_TESSELLATION_EDGE_DEPTH, ResourceKind::Depth, 0),
+                (BODY_TESSELLATION_EDGE_SPLITS, ResourceKind::Work, 0),
                 (BODY_TESSELLATION_ISO_ARC_DEPTH, ResourceKind::Depth, 0),
+                (BODY_TESSELLATION_ISO_ARC_SPLITS, ResourceKind::Work, 0),
                 (BODY_TESSELLATION_MESH_VERTICES, ResourceKind::Items, 8),
             ]
         );
@@ -2306,6 +2604,369 @@ mod tests {
             report.report().diagnostics()[0].code,
             BODY_TESSELLATION_EDGE_DEPTH_LIMIT_REACHED
         );
+    }
+
+    fn split_limit_plan(stage: StageId, allowed: u64) -> BudgetPlan {
+        BodyTessellationBudgetProfile::v1_defaults().overlaid(
+            &BudgetPlan::new([LimitSpec::new(
+                stage,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                allowed,
+            )])
+            .unwrap(),
+        )
+    }
+
+    fn consumed(outcome: &OperationOutcome<impl Sized, TessellationError>, stage: StageId) -> u64 {
+        outcome
+            .report()
+            .usage()
+            .iter()
+            .find(|entry| entry.stage == stage)
+            .expect("stage exists in body report")
+            .consumed
+    }
+
+    #[test]
+    fn edge_and_iso_split_work_accept_n_and_reject_n_plus_one_atomically() {
+        let line = Line::new(Point3::default(), Vec3::new(1.0, 0.0, 0.0)).unwrap();
+        let accepted = curve_refinement_outcome(
+            &line,
+            0.5,
+            split_limit_plan(BODY_TESSELLATION_EDGE_SPLITS, 1),
+        );
+        assert_eq!(accepted.result().as_ref().unwrap().len(), 1);
+        assert_eq!(consumed(&accepted, BODY_TESSELLATION_EDGE_SPLITS), 1);
+        assert!(accepted.report().limit_events().is_empty());
+
+        let rejected = curve_refinement_outcome(
+            &line,
+            0.49,
+            split_limit_plan(BODY_TESSELLATION_EDGE_SPLITS, 1),
+        );
+        let edge_snapshot = LimitSnapshot {
+            stage: BODY_TESSELLATION_EDGE_SPLITS,
+            resource: ResourceKind::Work,
+            consumed: 2,
+            allowed: 1,
+        };
+        assert_eq!(
+            rejected.result(),
+            Err(&TessellationError::Kernel(Error::ResourceLimit {
+                snapshot: edge_snapshot,
+            }))
+        );
+        assert_eq!(consumed(&rejected, BODY_TESSELLATION_EDGE_SPLITS), 1);
+        assert_eq!(rejected.report().limit_events(), &[edge_snapshot]);
+        assert_eq!(
+            rejected.report().diagnostics()[0].code,
+            BODY_TESSELLATION_EDGE_SPLIT_LIMIT_REACHED
+        );
+
+        let plane = Plane::new(Frame::world());
+        let accepted = iso_refinement_outcome(
+            &plane,
+            0.5,
+            split_limit_plan(BODY_TESSELLATION_ISO_ARC_SPLITS, 1),
+        );
+        assert_eq!(accepted.result().as_ref().unwrap().len(), 1);
+        assert_eq!(consumed(&accepted, BODY_TESSELLATION_ISO_ARC_SPLITS), 1);
+        assert!(accepted.report().limit_events().is_empty());
+
+        let rejected = iso_refinement_outcome(
+            &plane,
+            0.49,
+            split_limit_plan(BODY_TESSELLATION_ISO_ARC_SPLITS, 1),
+        );
+        let iso_snapshot = LimitSnapshot {
+            stage: BODY_TESSELLATION_ISO_ARC_SPLITS,
+            resource: ResourceKind::Work,
+            consumed: 2,
+            allowed: 1,
+        };
+        assert_eq!(
+            rejected.result(),
+            Err(&TessellationError::Kernel(Error::ResourceLimit {
+                snapshot: iso_snapshot,
+            }))
+        );
+        assert_eq!(consumed(&rejected, BODY_TESSELLATION_ISO_ARC_SPLITS), 1);
+        assert_eq!(rejected.report().limit_events(), &[iso_snapshot]);
+        assert_eq!(
+            rejected.report().diagnostics()[0].code,
+            BODY_TESSELLATION_ISO_ARC_SPLIT_LIMIT_REACHED
+        );
+    }
+
+    #[test]
+    fn depth_precedes_split_work_and_length_denial_skips_midpoint_evaluation() {
+        let edge =
+            CountingCurve::new(Line::new(Point3::default(), Vec3::new(1.0, 0.0, 0.0)).unwrap());
+        let edge_plan = |depth, splits| {
+            BodyTessellationBudgetProfile::v1_defaults().overlaid(
+                &BudgetPlan::new([
+                    LimitSpec::new(
+                        BODY_TESSELLATION_EDGE_DEPTH,
+                        ResourceKind::Depth,
+                        AccountingMode::HighWater,
+                        depth,
+                    ),
+                    LimitSpec::new(
+                        BODY_TESSELLATION_EDGE_SPLITS,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        splits,
+                    ),
+                ])
+                .unwrap(),
+            )
+        };
+        let depth_denied = curve_refinement_outcome(&edge, 0.5, edge_plan(0, 0));
+        assert!(matches!(
+            depth_denied.result(),
+            Err(TessellationError::Kernel(Error::ResourceLimit {
+                snapshot: LimitSnapshot {
+                    stage: BODY_TESSELLATION_EDGE_DEPTH,
+                    consumed: 1,
+                    allowed: 0,
+                    ..
+                }
+            }))
+        ));
+        assert_eq!(edge.evaluations(), 2, "only the two caller endpoints ran");
+        assert_eq!(consumed(&depth_denied, BODY_TESSELLATION_EDGE_SPLITS), 0);
+
+        edge.reset();
+        let split_denied = curve_refinement_outcome(&edge, 0.5, edge_plan(1, 0));
+        assert!(matches!(
+            split_denied.result(),
+            Err(TessellationError::Kernel(Error::ResourceLimit {
+                snapshot: LimitSnapshot {
+                    stage: BODY_TESSELLATION_EDGE_SPLITS,
+                    consumed: 1,
+                    allowed: 0,
+                    ..
+                }
+            }))
+        ));
+        assert_eq!(
+            edge.evaluations(),
+            2,
+            "denied split did not evaluate midpoint"
+        );
+        assert_eq!(consumed(&split_denied, BODY_TESSELLATION_EDGE_DEPTH), 1);
+
+        let iso = CountingSurface::new(Plane::new(Frame::world()));
+        let iso_plan = |depth, splits| {
+            BodyTessellationBudgetProfile::v1_defaults().overlaid(
+                &BudgetPlan::new([
+                    LimitSpec::new(
+                        BODY_TESSELLATION_ISO_ARC_DEPTH,
+                        ResourceKind::Depth,
+                        AccountingMode::HighWater,
+                        depth,
+                    ),
+                    LimitSpec::new(
+                        BODY_TESSELLATION_ISO_ARC_SPLITS,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        splits,
+                    ),
+                ])
+                .unwrap(),
+            )
+        };
+        let depth_denied = iso_refinement_outcome(&iso, 0.5, iso_plan(0, 0));
+        assert!(matches!(
+            depth_denied.result(),
+            Err(TessellationError::Kernel(Error::ResourceLimit {
+                snapshot: LimitSnapshot {
+                    stage: BODY_TESSELLATION_ISO_ARC_DEPTH,
+                    consumed: 1,
+                    allowed: 0,
+                    ..
+                }
+            }))
+        ));
+        assert_eq!(iso.evaluations(), 2, "only the two caller endpoints ran");
+        assert_eq!(consumed(&depth_denied, BODY_TESSELLATION_ISO_ARC_SPLITS), 0);
+
+        iso.reset();
+        let split_denied = iso_refinement_outcome(&iso, 0.5, iso_plan(1, 0));
+        assert!(matches!(
+            split_denied.result(),
+            Err(TessellationError::Kernel(Error::ResourceLimit {
+                snapshot: LimitSnapshot {
+                    stage: BODY_TESSELLATION_ISO_ARC_SPLITS,
+                    consumed: 1,
+                    allowed: 0,
+                    ..
+                }
+            }))
+        ));
+        assert_eq!(
+            iso.evaluations(),
+            2,
+            "denied split did not evaluate midpoint"
+        );
+        assert_eq!(consumed(&split_denied, BODY_TESSELLATION_ISO_ARC_DEPTH), 1);
+    }
+
+    #[test]
+    fn curvature_decision_midpoints_are_cached_across_split_admission() {
+        let edge = CountingCurve::new(TentCurve);
+        let accepted = curve_refinement_outcome(
+            &edge,
+            f64::INFINITY,
+            split_limit_plan(BODY_TESSELLATION_EDGE_SPLITS, 1),
+        );
+        assert_eq!(accepted.result().as_ref().unwrap().len(), 1);
+        assert_eq!(edge.evaluations(), 5);
+        assert_eq!(consumed(&accepted, BODY_TESSELLATION_EDGE_SPLITS), 1);
+
+        edge.reset();
+        let denied = curve_refinement_outcome(
+            &edge,
+            f64::INFINITY,
+            split_limit_plan(BODY_TESSELLATION_EDGE_SPLITS, 0),
+        );
+        assert!(denied.result().is_err());
+        assert_eq!(edge.evaluations(), 3);
+        assert_eq!(consumed(&denied, BODY_TESSELLATION_EDGE_SPLITS), 0);
+
+        let iso = CountingSurface::new(TentSurface);
+        let accepted = iso_refinement_outcome(
+            &iso,
+            f64::INFINITY,
+            split_limit_plan(BODY_TESSELLATION_ISO_ARC_SPLITS, 1),
+        );
+        assert_eq!(accepted.result().as_ref().unwrap().len(), 1);
+        assert_eq!(iso.evaluations(), 5);
+        assert_eq!(consumed(&accepted, BODY_TESSELLATION_ISO_ARC_SPLITS), 1);
+
+        iso.reset();
+        let denied = iso_refinement_outcome(
+            &iso,
+            f64::INFINITY,
+            split_limit_plan(BODY_TESSELLATION_ISO_ARC_SPLITS, 0),
+        );
+        assert!(denied.result().is_err());
+        assert_eq!(iso.evaluations(), 3);
+        assert_eq!(consumed(&denied, BODY_TESSELLATION_ISO_ARC_SPLITS), 0);
+    }
+
+    #[test]
+    fn root_work_aggregates_body_and_face_splits_and_rolls_back_the_crossing() {
+        let plan = BodyTessellationBudgetProfile::v1_defaults().with_total_work_limit(4);
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            plan,
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default())
+            .unwrap()
+            .with_diagnostics(DiagnosticLevel::Summary, 8);
+        let mut scope = OperationScope::new(&context);
+        let error = {
+            let mut work = BodyTessellationWork { scope: &mut scope };
+            work.charge_split(
+                BODY_TESSELLATION_EDGE_SPLITS,
+                BODY_TESSELLATION_EDGE_SPLIT_LIMIT_REACHED,
+                "edge split",
+            )
+            .unwrap();
+            work.charge_split(
+                BODY_TESSELLATION_ISO_ARC_SPLITS,
+                BODY_TESSELLATION_ISO_ARC_SPLIT_LIMIT_REACHED,
+                "iso split",
+            )
+            .unwrap();
+            work.scope
+                .ledger_mut()
+                .charge_resource(FACE_TESSELLATION_BOUNDARY_SPLITS, ResourceKind::Work, 1)
+                .unwrap();
+            work.scope
+                .ledger_mut()
+                .charge_resource(FACE_TESSELLATION_REFINEMENT_PASSES, ResourceKind::Work, 1)
+                .unwrap();
+            work.charge_split(
+                BODY_TESSELLATION_EDGE_SPLITS,
+                BODY_TESSELLATION_EDGE_SPLIT_LIMIT_REACHED,
+                "edge split",
+            )
+            .unwrap_err()
+        };
+        let snapshot = LimitSnapshot {
+            stage: kcore::operation::TOTAL_WORK_STAGE,
+            resource: ResourceKind::Work,
+            consumed: 5,
+            allowed: 4,
+        };
+        assert_eq!(
+            error,
+            TessellationError::Kernel(Error::ResourceLimit { snapshot })
+        );
+        let outcome = scope.finish_typed::<(), TessellationError>(Ok(()));
+        for stage in [
+            BODY_TESSELLATION_EDGE_SPLITS,
+            BODY_TESSELLATION_ISO_ARC_SPLITS,
+            FACE_TESSELLATION_BOUNDARY_SPLITS,
+            FACE_TESSELLATION_REFINEMENT_PASSES,
+        ] {
+            assert_eq!(consumed(&outcome, stage), 1);
+        }
+        assert_eq!(outcome.report().limit_events(), &[snapshot]);
+        assert_eq!(outcome.report().diagnostics().len(), 1);
+        assert_eq!(
+            outcome.report().diagnostics()[0].code,
+            BODY_TESSELLATION_TOTAL_WORK_LIMIT_REACHED
+        );
+    }
+
+    #[test]
+    fn positive_split_work_is_execution_policy_equivalent() {
+        let mut store = Store::new();
+        let block_body = block(&mut store, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
+        let sphere_body = closed_body(&mut store, Sphere::new(Frame::world(), 1.0).unwrap().into());
+        let cases = [
+            (
+                block_body,
+                TessOptions {
+                    chord_tol: 0.1,
+                    max_edge_len: Some(0.4),
+                },
+                BODY_TESSELLATION_EDGE_SPLITS,
+            ),
+            (sphere_body, opts(0.25), BODY_TESSELLATION_ISO_ARC_SPLITS),
+        ];
+        for (body, options, expected_stage) in cases {
+            let legacy = tessellate_body(&store, body, &options).unwrap();
+            let mut reports = Vec::new();
+            for execution in [
+                ExecutionPolicy::Serial,
+                ExecutionPolicy::AtMost(NonZeroUsize::new(1).unwrap()),
+                ExecutionPolicy::AtMost(NonZeroUsize::new(2).unwrap()),
+                ExecutionPolicy::Available,
+            ] {
+                let session = SessionPolicy::new(
+                    SessionPrecision::parasolid(),
+                    NumericalPolicy::v1(),
+                    execution,
+                    BodyTessellationBudgetProfile::v1_defaults(),
+                    PolicyVersion::V1,
+                );
+                let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+                let outcome =
+                    tessellate_body_with_context(&store, body, &options, &context).unwrap();
+                assert_eq!(outcome.result(), Ok(&legacy));
+                assert!(consumed(&outcome, expected_stage) > 0);
+                reports.push(outcome.report().clone());
+            }
+            assert!(reports.windows(2).all(|pair| pair[0] == pair[1]));
+        }
     }
 
     #[test]

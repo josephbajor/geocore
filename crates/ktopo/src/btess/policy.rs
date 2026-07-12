@@ -37,6 +37,12 @@ pub const BODY_TESSELLATION_EDGE_DEPTH: StageId = known_stage("ktopo.body-tessel
 /// Diagnostic identity for reaching the exact-edge refinement depth ceiling.
 pub const BODY_TESSELLATION_EDGE_DEPTH_LIMIT_REACHED: DiagnosticCode =
     known_diagnostic("ktopo.body-tessellation.edge-depth-limit");
+/// Cumulative accepted exact-edge refinement splits.
+pub const BODY_TESSELLATION_EDGE_SPLITS: StageId =
+    known_stage("ktopo.body-tessellation.edge-splits");
+/// Diagnostic identity for exhausting exact-edge refinement split work.
+pub const BODY_TESSELLATION_EDGE_SPLIT_LIMIT_REACHED: DiagnosticCode =
+    known_diagnostic("ktopo.body-tessellation.edge-splits-limit");
 
 /// High-water stage for surface iso/seam arc-refinement depth.
 pub const BODY_TESSELLATION_ISO_ARC_DEPTH: StageId =
@@ -44,6 +50,12 @@ pub const BODY_TESSELLATION_ISO_ARC_DEPTH: StageId =
 /// Diagnostic identity for reaching the iso/seam refinement depth ceiling.
 pub const BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT_REACHED: DiagnosticCode =
     known_diagnostic("ktopo.body-tessellation.iso-arc-depth-limit");
+/// Cumulative accepted surface iso/seam arc-refinement splits.
+pub const BODY_TESSELLATION_ISO_ARC_SPLITS: StageId =
+    known_stage("ktopo.body-tessellation.iso-arc-splits");
+/// Diagnostic identity for exhausting surface iso/seam arc-refinement work.
+pub const BODY_TESSELLATION_ISO_ARC_SPLIT_LIMIT_REACHED: DiagnosticCode =
+    known_diagnostic("ktopo.body-tessellation.iso-arc-splits-limit");
 
 /// Cumulative retained vertices in a whole-body mesh.
 pub const BODY_TESSELLATION_MESH_VERTICES: StageId =
@@ -60,6 +72,8 @@ pub const BODY_TESSELLATION_TOTAL_WORK_LIMIT_REACHED: DiagnosticCode =
 pub const BODY_TESSELLATION_EDGE_DEPTH_LIMIT: u64 = MAX_DEPTH as u64;
 /// Inclusive legacy iso/seam arc refinement depth allowance.
 pub const BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT: u64 = MAX_DEPTH as u64;
+/// Compatibility-v1 aggregate accepted split allowance per refinement family.
+pub const BODY_TESSELLATION_SPLIT_LIMIT: u64 = u32::MAX as u64 + 1;
 /// Inclusive number of vertices addressable by `u32` mesh indices.
 pub const BODY_TESSELLATION_MESH_VERTEX_LIMIT: u64 = u32::MAX as u64 + 1;
 
@@ -73,7 +87,9 @@ pub const BODY_TESSELLATION_MESH_VERTEX_LIMIT: u64 = u32::MAX as u64 + 1;
 /// graph visits, and one surface projection invocation). The graph aggregate
 /// uses `usize::MAX` because graph visit accounting converts back to the
 /// platform-sized evaluator limit. High-water limits compose truthfully and
-/// therefore retain the exact child-family defaults.
+/// therefore retain the exact child-family defaults. Body-owned edge and iso
+/// splits use the u32 representability ceiling: every accepted split denotes
+/// one prospective interior point in its refinement scratch.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BodyTessellationBudgetProfile;
 
@@ -131,10 +147,22 @@ impl BodyTessellationBudgetProfile {
                     BODY_TESSELLATION_EDGE_DEPTH_LIMIT,
                 ),
                 LimitSpec::new(
+                    BODY_TESSELLATION_EDGE_SPLITS,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    BODY_TESSELLATION_SPLIT_LIMIT,
+                ),
+                LimitSpec::new(
                     BODY_TESSELLATION_ISO_ARC_DEPTH,
                     ResourceKind::Depth,
                     AccountingMode::HighWater,
                     BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT,
+                ),
+                LimitSpec::new(
+                    BODY_TESSELLATION_ISO_ARC_SPLITS,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    BODY_TESSELLATION_SPLIT_LIMIT,
                 ),
                 LimitSpec::new(
                     BODY_TESSELLATION_MESH_VERTICES,
@@ -284,10 +312,22 @@ mod tests {
                     16
                 ),
                 limit(
+                    BODY_TESSELLATION_EDGE_SPLITS,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    1_u64 << 32
+                ),
+                limit(
                     BODY_TESSELLATION_ISO_ARC_DEPTH,
                     ResourceKind::Depth,
                     AccountingMode::HighWater,
                     16
+                ),
+                limit(
+                    BODY_TESSELLATION_ISO_ARC_SPLITS,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    1_u64 << 32
                 ),
                 limit(
                     BODY_TESSELLATION_MESH_VERTICES,
@@ -309,11 +349,13 @@ mod tests {
             .map(|entry| entry.stage.as_str())
             .collect::<Vec<_>>();
         assert!(stages.windows(2).all(|pair| pair[0] < pair[1]));
-        assert_eq!(stages.iter().copied().collect::<BTreeSet<_>>().len(), 15);
+        assert_eq!(stages.iter().copied().collect::<BTreeSet<_>>().len(), 17);
 
         let diagnostics = [
             BODY_TESSELLATION_EDGE_DEPTH_LIMIT_REACHED.as_str(),
+            BODY_TESSELLATION_EDGE_SPLIT_LIMIT_REACHED.as_str(),
             BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT_REACHED.as_str(),
+            BODY_TESSELLATION_ISO_ARC_SPLIT_LIMIT_REACHED.as_str(),
             BODY_TESSELLATION_MESH_VERTEX_LIMIT_REACHED.as_str(),
             BODY_TESSELLATION_TOTAL_WORK_LIMIT_REACHED.as_str(),
         ];
@@ -321,12 +363,14 @@ mod tests {
             diagnostics,
             [
                 "ktopo.body-tessellation.edge-depth-limit",
+                "ktopo.body-tessellation.edge-splits-limit",
                 "ktopo.body-tessellation.iso-arc-depth-limit",
+                "ktopo.body-tessellation.iso-arc-splits-limit",
                 "ktopo.body-tessellation.mesh-vertices-limit",
                 "ktopo.body-tessellation.total-work-limit",
             ]
         );
-        assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>().len(), 4);
+        assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>().len(), 6);
     }
 
     #[test]
@@ -350,6 +394,8 @@ mod tests {
         };
         assert_eq!(allowed(FACE_TESSELLATION_REFINEMENT_PASSES), u64::MAX);
         assert_eq!(allowed(FACE_TESSELLATION_BOUNDARY_SPLITS), u64::MAX);
+        assert_eq!(allowed(BODY_TESSELLATION_EDGE_SPLITS), 1_u64 << 32);
+        assert_eq!(allowed(BODY_TESSELLATION_ISO_ARC_SPLITS), 1_u64 << 32);
         assert_eq!(allowed(FACE_TESSELLATION_MESH_VERTICES), u64::MAX);
         assert_eq!(allowed(kgraph::eval_stage::NODE_VISITS), usize::MAX as u64);
         assert_eq!(allowed(SURFACE_PROJECTION_QUERIES), u64::MAX);
@@ -466,6 +512,6 @@ mod tests {
                 .allowed,
             1_000
         );
-        assert_eq!(effective.limits().len(), 15);
+        assert_eq!(effective.limits().len(), 17);
     }
 }
