@@ -10,7 +10,10 @@ use kcore::operation::{
     StageId,
 };
 use kgeom::project::{ProjectionBudgetProfile, SURFACE_PROJECTION_QUERIES};
-use kgeom::tess::{FACE_TESSELLATION_REFINEMENT_PASSES, FaceTessellationBudgetProfile};
+use kgeom::tess::{
+    FACE_TESSELLATION_BOUNDARY_SPLITS, FACE_TESSELLATION_MESH_VERTICES,
+    FACE_TESSELLATION_REFINEMENT_PASSES, FaceTessellationBudgetProfile,
+};
 use kgraph::EvalBudgetProfile;
 
 use super::MAX_DEPTH;
@@ -49,6 +52,10 @@ pub const BODY_TESSELLATION_MESH_VERTICES: StageId =
 pub const BODY_TESSELLATION_MESH_VERTEX_LIMIT_REACHED: DiagnosticCode =
     known_diagnostic("ktopo.body-tessellation.mesh-vertices-limit");
 
+/// Diagnostic identity for an ambiguous nested face root-work crossing.
+pub const BODY_TESSELLATION_TOTAL_WORK_LIMIT_REACHED: DiagnosticCode =
+    known_diagnostic("ktopo.body-tessellation.total-work-limit");
+
 /// Inclusive legacy exact-edge refinement depth allowance.
 pub const BODY_TESSELLATION_EDGE_DEPTH_LIMIT: u64 = MAX_DEPTH as u64;
 /// Inclusive legacy iso/seam arc refinement depth allowance.
@@ -74,12 +81,26 @@ impl BodyTessellationBudgetProfile {
     /// Returns canonical whole-body family defaults without a root work cap.
     pub fn v1_defaults() -> BudgetPlan {
         let face = FaceTessellationBudgetProfile::v1_defaults().overlaid(
-            &BudgetPlan::new([LimitSpec::new(
-                FACE_TESSELLATION_REFINEMENT_PASSES,
-                ResourceKind::Work,
-                AccountingMode::Cumulative,
-                u64::MAX,
-            )])
+            &BudgetPlan::new([
+                LimitSpec::new(
+                    FACE_TESSELLATION_BOUNDARY_SPLITS,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    u64::MAX,
+                ),
+                LimitSpec::new(
+                    FACE_TESSELLATION_REFINEMENT_PASSES,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    u64::MAX,
+                ),
+                LimitSpec::new(
+                    FACE_TESSELLATION_MESH_VERTICES,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    u64::MAX,
+                ),
+            ])
             .expect("body face-tessellation aggregate override is valid"),
         );
         let graph = EvalBudgetProfile::v1_defaults().overlaid(
@@ -164,7 +185,7 @@ mod tests {
         SURFACE_PROJECTION_HALVINGS, SURFACE_PROJECTION_NEWTON_ITERATIONS,
         SURFACE_PROJECTION_SAMPLES,
     };
-    use kgeom::tess::FACE_TESSELLATION_BOUNDARY_DEPTH;
+    use kgeom::tess::{FACE_TESSELLATION_BOUNDARY_DEPTH, FACE_TESSELLATION_MESH_TRIANGLES};
 
     use super::*;
 
@@ -221,8 +242,26 @@ mod tests {
                     16
                 ),
                 limit(
+                    FACE_TESSELLATION_BOUNDARY_SPLITS,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    u64::MAX
+                ),
+                limit(
                     FACE_TESSELLATION_REFINEMENT_PASSES,
                     ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    u64::MAX
+                ),
+                limit(
+                    FACE_TESSELLATION_MESH_TRIANGLES,
+                    ResourceKind::Items,
+                    AccountingMode::HighWater,
+                    200_000
+                ),
+                limit(
+                    FACE_TESSELLATION_MESH_VERTICES,
+                    ResourceKind::Items,
                     AccountingMode::Cumulative,
                     u64::MAX
                 ),
@@ -270,12 +309,13 @@ mod tests {
             .map(|entry| entry.stage.as_str())
             .collect::<Vec<_>>();
         assert!(stages.windows(2).all(|pair| pair[0] < pair[1]));
-        assert_eq!(stages.iter().copied().collect::<BTreeSet<_>>().len(), 12);
+        assert_eq!(stages.iter().copied().collect::<BTreeSet<_>>().len(), 15);
 
         let diagnostics = [
             BODY_TESSELLATION_EDGE_DEPTH_LIMIT_REACHED.as_str(),
             BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT_REACHED.as_str(),
             BODY_TESSELLATION_MESH_VERTEX_LIMIT_REACHED.as_str(),
+            BODY_TESSELLATION_TOTAL_WORK_LIMIT_REACHED.as_str(),
         ];
         assert_eq!(
             diagnostics,
@@ -283,9 +323,10 @@ mod tests {
                 "ktopo.body-tessellation.edge-depth-limit",
                 "ktopo.body-tessellation.iso-arc-depth-limit",
                 "ktopo.body-tessellation.mesh-vertices-limit",
+                "ktopo.body-tessellation.total-work-limit",
             ]
         );
-        assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>().len(), 3);
+        assert_eq!(diagnostics.into_iter().collect::<BTreeSet<_>>().len(), 4);
     }
 
     #[test]
@@ -308,6 +349,8 @@ mod tests {
             entry.allowed
         };
         assert_eq!(allowed(FACE_TESSELLATION_REFINEMENT_PASSES), u64::MAX);
+        assert_eq!(allowed(FACE_TESSELLATION_BOUNDARY_SPLITS), u64::MAX);
+        assert_eq!(allowed(FACE_TESSELLATION_MESH_VERTICES), u64::MAX);
         assert_eq!(allowed(kgraph::eval_stage::NODE_VISITS), usize::MAX as u64);
         assert_eq!(allowed(SURFACE_PROJECTION_QUERIES), u64::MAX);
         for curve_stage in [
@@ -423,6 +466,6 @@ mod tests {
                 .allowed,
             1_000
         );
-        assert_eq!(effective.limits().len(), 12);
+        assert_eq!(effective.limits().len(), 15);
     }
 }

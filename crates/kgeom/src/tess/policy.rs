@@ -1,19 +1,20 @@
 //! Stable operation-policy vocabulary for deterministic face tessellation.
 //!
-//! This module records the version-1 ceilings already enforced by
-//! [`super::tessellate`] without changing its control flow. Surface evaluations
-//! and triangle output intentionally have no v1 budget entries: the existing
-//! API does not bound trim-loop input size, and the triangle backstop applies
-//! only after interior refinement is required. There is therefore no truthful
-//! finite ceiling for either resource that preserves every currently accepted
-//! call. Contextual accounting can add those stages once input and
-//! nested-operation limits are defined.
+//! Compatibility v1 preserves the existing refinement ceilings while making
+//! the output-sized allocation boundaries explicit. Derived index and task
+//! scratch remains linearly bounded by admitted vertices and triangles. The
+//! u32-addressable mesh-vertex ceiling is intentionally nonbinding for
+//! existing inputs; the triangle ceiling is the existing 200,000-item
+//! backstop.
 
 use kcore::operation::{
     AccountingMode, BudgetPlan, DiagnosticCode, LimitSpec, ResourceKind, StageId,
 };
 
-use super::{MAX_BOUNDARY_DEPTH, MAX_REFINE_PASSES};
+use super::{MAX_BOUNDARY_DEPTH, MAX_REFINE_PASSES, MAX_TRIANGLES};
+
+/// Inclusive number of mesh vertices addressable by u32 indices.
+pub const FACE_TESSELLATION_U32_ITEM_LIMIT: u64 = u32::MAX as u64 + 1;
 
 const fn known_stage(value: &'static str) -> StageId {
     match StageId::new(value) {
@@ -36,6 +37,13 @@ pub const FACE_TESSELLATION_BOUNDARY_DEPTH: StageId = known_stage("kgeom.tess.bo
 pub const FACE_TESSELLATION_BOUNDARY_DEPTH_LIMIT: DiagnosticCode =
     known_diagnostic("kgeom.tess.boundary-depth-limit");
 
+/// Cumulative work for accepted boundary midpoint splits.
+pub const FACE_TESSELLATION_BOUNDARY_SPLITS: StageId = known_stage("kgeom.tess.boundary-splits");
+
+/// Diagnostic identity for exhausting the boundary-split allowance.
+pub const FACE_TESSELLATION_BOUNDARY_SPLIT_LIMIT: DiagnosticCode =
+    known_diagnostic("kgeom.tess.boundary-splits-limit");
+
 /// Cumulative-work stage for completed interior-refinement passes.
 pub const FACE_TESSELLATION_REFINEMENT_PASSES: StageId =
     known_stage("kgeom.tess.interior-refinement-passes");
@@ -44,10 +52,26 @@ pub const FACE_TESSELLATION_REFINEMENT_PASSES: StageId =
 pub const FACE_TESSELLATION_REFINEMENT_PASS_LIMIT: DiagnosticCode =
     known_diagnostic("kgeom.tess.interior-refinement-pass-limit");
 
+/// High-water count of triangle allocations admitted during the invocation.
+pub const FACE_TESSELLATION_MESH_TRIANGLES: StageId = known_stage("kgeom.tess.mesh-triangles");
+
+/// Diagnostic identity for reaching the admitted-triangle ceiling.
+pub const FACE_TESSELLATION_MESH_TRIANGLE_LIMIT: DiagnosticCode =
+    known_diagnostic("kgeom.tess.mesh-triangles-limit");
+
+/// Cumulative face-mesh vertex allocations admitted during the invocation.
+pub const FACE_TESSELLATION_MESH_VERTICES: StageId = known_stage("kgeom.tess.mesh-vertices");
+
+/// Diagnostic identity for exhausting the mesh-vertex allowance.
+pub const FACE_TESSELLATION_MESH_VERTEX_LIMIT: DiagnosticCode =
+    known_diagnostic("kgeom.tess.mesh-vertices-limit");
+
 /// Version-1 deterministic budget profile for one face tessellation.
 ///
 /// Requested mesh quality remains in [`super::TessOptions`]; this profile
-/// contains only resource ceilings already enforced by the legacy path.
+/// uses compatibility-safe representability ceilings and the legacy path's
+/// intended 200,000-triangle backstop. Contextual accounting now applies that
+/// triangle ceiling to the initial earclip generation as well as refinement.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FaceTessellationBudgetProfile;
 
@@ -62,10 +86,28 @@ impl FaceTessellationBudgetProfile {
                 MAX_BOUNDARY_DEPTH as u64,
             ),
             LimitSpec::new(
+                FACE_TESSELLATION_BOUNDARY_SPLITS,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                FACE_TESSELLATION_U32_ITEM_LIMIT,
+            ),
+            LimitSpec::new(
                 FACE_TESSELLATION_REFINEMENT_PASSES,
                 ResourceKind::Work,
                 AccountingMode::Cumulative,
                 MAX_REFINE_PASSES as u64,
+            ),
+            LimitSpec::new(
+                FACE_TESSELLATION_MESH_TRIANGLES,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                MAX_TRIANGLES as u64,
+            ),
+            LimitSpec::new(
+                FACE_TESSELLATION_MESH_VERTICES,
+                ResourceKind::Items,
+                AccountingMode::Cumulative,
+                FACE_TESSELLATION_U32_ITEM_LIMIT,
             ),
         ])
         .expect("built-in face-tessellation budget is valid")
@@ -97,10 +139,28 @@ mod tests {
                     16,
                 ),
                 LimitSpec::new(
+                    FACE_TESSELLATION_BOUNDARY_SPLITS,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    1_u64 << 32,
+                ),
+                LimitSpec::new(
                     FACE_TESSELLATION_REFINEMENT_PASSES,
                     ResourceKind::Work,
                     AccountingMode::Cumulative,
                     24,
+                ),
+                LimitSpec::new(
+                    FACE_TESSELLATION_MESH_TRIANGLES,
+                    ResourceKind::Items,
+                    AccountingMode::HighWater,
+                    200_000,
+                ),
+                LimitSpec::new(
+                    FACE_TESSELLATION_MESH_VERTICES,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    1_u64 << 32,
                 ),
             ]
         );
@@ -111,25 +171,37 @@ mod tests {
     fn identifiers_are_namespaced_unique_and_stable() {
         let stages = [
             FACE_TESSELLATION_BOUNDARY_DEPTH.as_str(),
+            FACE_TESSELLATION_BOUNDARY_SPLITS.as_str(),
             FACE_TESSELLATION_REFINEMENT_PASSES.as_str(),
+            FACE_TESSELLATION_MESH_TRIANGLES.as_str(),
+            FACE_TESSELLATION_MESH_VERTICES.as_str(),
         ];
         let diagnostics = [
             FACE_TESSELLATION_BOUNDARY_DEPTH_LIMIT.as_str(),
+            FACE_TESSELLATION_BOUNDARY_SPLIT_LIMIT.as_str(),
             FACE_TESSELLATION_REFINEMENT_PASS_LIMIT.as_str(),
+            FACE_TESSELLATION_MESH_TRIANGLE_LIMIT.as_str(),
+            FACE_TESSELLATION_MESH_VERTEX_LIMIT.as_str(),
         ];
 
         assert_eq!(
             stages,
             [
                 "kgeom.tess.boundary-depth",
+                "kgeom.tess.boundary-splits",
                 "kgeom.tess.interior-refinement-passes",
+                "kgeom.tess.mesh-triangles",
+                "kgeom.tess.mesh-vertices",
             ]
         );
         assert_eq!(
             diagnostics,
             [
                 "kgeom.tess.boundary-depth-limit",
+                "kgeom.tess.boundary-splits-limit",
                 "kgeom.tess.interior-refinement-pass-limit",
+                "kgeom.tess.mesh-triangles-limit",
+                "kgeom.tess.mesh-vertices-limit",
             ]
         );
 
@@ -149,7 +221,24 @@ mod tests {
             .observe(FACE_TESSELLATION_BOUNDARY_DEPTH, ResourceKind::Depth, 16)
             .unwrap();
         ledger
+            .charge(FACE_TESSELLATION_BOUNDARY_SPLITS, 1_u64 << 32)
+            .unwrap();
+        ledger
             .charge(FACE_TESSELLATION_REFINEMENT_PASSES, 24)
+            .unwrap();
+        ledger
+            .observe(
+                FACE_TESSELLATION_MESH_TRIANGLES,
+                ResourceKind::Items,
+                200_000,
+            )
+            .unwrap();
+        ledger
+            .charge_resource(
+                FACE_TESSELLATION_MESH_VERTICES,
+                ResourceKind::Items,
+                1_u64 << 32,
+            )
             .unwrap();
         assert!(matches!(
             ledger.observe(
@@ -161,9 +250,34 @@ mod tests {
                 if snapshot.consumed == 17 && snapshot.allowed == 16
         ));
         assert!(matches!(
+            ledger.charge(FACE_TESSELLATION_BOUNDARY_SPLITS, 1),
+            Err(OperationPolicyError::LimitReached(snapshot))
+                if snapshot.consumed == (1_u64 << 32) + 1
+                    && snapshot.allowed == 1_u64 << 32
+        ));
+        assert!(matches!(
             ledger.charge(FACE_TESSELLATION_REFINEMENT_PASSES, 1),
             Err(OperationPolicyError::LimitReached(snapshot))
                 if snapshot.consumed == 25 && snapshot.allowed == 24
+        ));
+        assert!(matches!(
+            ledger.observe(
+                FACE_TESSELLATION_MESH_TRIANGLES,
+                ResourceKind::Items,
+                200_001,
+            ),
+            Err(OperationPolicyError::LimitReached(snapshot))
+                if snapshot.consumed == 200_001 && snapshot.allowed == 200_000
+        ));
+        assert!(matches!(
+            ledger.charge_resource(
+                FACE_TESSELLATION_MESH_VERTICES,
+                ResourceKind::Items,
+                1,
+            ),
+            Err(OperationPolicyError::LimitReached(snapshot))
+                if snapshot.consumed == (1_u64 << 32) + 1
+                    && snapshot.allowed == 1_u64 << 32
         ));
     }
 
@@ -183,6 +297,6 @@ mod tests {
         )]));
 
         assert!(composed.is_ok());
-        assert_eq!(composed.unwrap().limits().len(), 3);
+        assert_eq!(composed.unwrap().limits().len(), 6);
     }
 }

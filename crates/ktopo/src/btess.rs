@@ -50,9 +50,9 @@ use crate::geom::{Curve2dGeom, SurfaceGeom};
 use crate::store::Store;
 use kcore::error::Error;
 use kcore::operation::{
-    AccountingMode, BudgetPlan, DiagnosticKind, ExecutionPolicy, LimitSnapshot, LimitSpec,
-    NumericalPolicy, OperationContext, OperationOutcome, OperationPolicyError, OperationScope,
-    PolicyVersion, ResourceKind, SessionPolicy, SessionPrecision, StageId,
+    AccountingMode, BudgetPlan, DiagnosticCode, DiagnosticKind, ExecutionPolicy, LimitSnapshot,
+    LimitSpec, NumericalPolicy, OperationContext, OperationOutcome, OperationPolicyError,
+    OperationScope, PolicyVersion, ResourceKind, SessionPolicy, SessionPrecision, StageId,
 };
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
@@ -61,6 +61,9 @@ use kgeom::surface_point::{invert_surface_point_in_scope, normalize_surface_uv};
 pub use kgeom::tess::TessOptions;
 use kgeom::tess::{
     FACE_TESSELLATION_BOUNDARY_DEPTH, FACE_TESSELLATION_BOUNDARY_DEPTH_LIMIT,
+    FACE_TESSELLATION_BOUNDARY_SPLIT_LIMIT, FACE_TESSELLATION_BOUNDARY_SPLITS,
+    FACE_TESSELLATION_MESH_TRIANGLE_LIMIT, FACE_TESSELLATION_MESH_TRIANGLES,
+    FACE_TESSELLATION_MESH_VERTEX_LIMIT, FACE_TESSELLATION_MESH_VERTICES,
     FACE_TESSELLATION_REFINEMENT_PASS_LIMIT, FACE_TESSELLATION_REFINEMENT_PASSES,
     FaceTessellationBudgetProfile, TrimLoop, TrimmedSurface, tessellate_in_sequential_ledger,
 };
@@ -82,7 +85,8 @@ pub use policy::{
     BODY_TESSELLATION_EDGE_DEPTH_LIMIT_REACHED, BODY_TESSELLATION_ISO_ARC_DEPTH,
     BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT, BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT_REACHED,
     BODY_TESSELLATION_MESH_VERTEX_LIMIT, BODY_TESSELLATION_MESH_VERTEX_LIMIT_REACHED,
-    BODY_TESSELLATION_MESH_VERTICES, BodyTessellationBudgetProfile,
+    BODY_TESSELLATION_MESH_VERTICES, BODY_TESSELLATION_TOTAL_WORK_LIMIT_REACHED,
+    BodyTessellationBudgetProfile,
 };
 
 type Result<T> = TessellationResult<T>;
@@ -1016,6 +1020,36 @@ fn anchor_chain_to_domain(chain: &mut UvChain, domain: FaceDomain, periods: [Opt
 /// global ids, interior vertices become fresh ones, and triangles are
 /// flipped when the face sense is reversed. Triangles that degenerate
 /// under welding (sphere pole collapse) are dropped.
+fn face_tessellation_limit_diagnostic(stage: StageId) -> Option<(DiagnosticCode, &'static str)> {
+    match stage {
+        FACE_TESSELLATION_BOUNDARY_DEPTH => Some((
+            FACE_TESSELLATION_BOUNDARY_DEPTH_LIMIT,
+            "face boundary refinement depth limit reached",
+        )),
+        FACE_TESSELLATION_REFINEMENT_PASSES => Some((
+            FACE_TESSELLATION_REFINEMENT_PASS_LIMIT,
+            "face interior refinement pass limit reached",
+        )),
+        FACE_TESSELLATION_BOUNDARY_SPLITS => Some((
+            FACE_TESSELLATION_BOUNDARY_SPLIT_LIMIT,
+            "face boundary split limit reached",
+        )),
+        FACE_TESSELLATION_MESH_VERTICES => Some((
+            FACE_TESSELLATION_MESH_VERTEX_LIMIT,
+            "face mesh vertex limit reached",
+        )),
+        FACE_TESSELLATION_MESH_TRIANGLES => Some((
+            FACE_TESSELLATION_MESH_TRIANGLE_LIMIT,
+            "face mesh triangle limit reached",
+        )),
+        kcore::operation::TOTAL_WORK_STAGE => Some((
+            BODY_TESSELLATION_TOTAL_WORK_LIMIT_REACHED,
+            "face tessellation total work limit reached",
+        )),
+        _ => None,
+    }
+}
+
 fn run_kgeom(
     s: &dyn Surface,
     loops_pts: Vec<Vec<Vec2>>,
@@ -1048,22 +1082,8 @@ fn run_kgeom(
                 _ => None,
             };
             if let Some(snapshot) = snapshot {
-                let (code, message) = if snapshot.stage == FACE_TESSELLATION_BOUNDARY_DEPTH {
-                    (
-                        FACE_TESSELLATION_BOUNDARY_DEPTH_LIMIT,
-                        "face boundary refinement depth limit reached",
-                    )
-                } else if snapshot.stage == FACE_TESSELLATION_REFINEMENT_PASSES {
-                    (
-                        FACE_TESSELLATION_REFINEMENT_PASS_LIMIT,
-                        "face interior refinement pass limit reached",
-                    )
-                } else if snapshot.stage == kcore::operation::TOTAL_WORK_STAGE {
-                    (
-                        FACE_TESSELLATION_REFINEMENT_PASS_LIMIT,
-                        "face tessellation total work limit reached",
-                    )
-                } else {
+                let Some((code, message)) = face_tessellation_limit_diagnostic(snapshot.stage)
+                else {
                     return Err(error.into());
                 };
                 work.scope.diagnose(
@@ -2046,6 +2066,15 @@ fn legacy_body_tessellation_error(error: TessellationError) -> TessellationError
             }
             .into()
         }
+        TessellationError::Kernel(Error::ResourceLimit { snapshot })
+            if snapshot.stage == FACE_TESSELLATION_MESH_TRIANGLES =>
+        {
+            Error::AlgorithmLimit {
+                operation: "tessellation triangle count",
+                limit: 200_000,
+            }
+            .into()
+        }
         other => other,
     }
 }
@@ -2176,7 +2205,10 @@ mod tests {
                     0
                 ),
                 (FACE_TESSELLATION_BOUNDARY_DEPTH, ResourceKind::Depth, 0),
+                (FACE_TESSELLATION_BOUNDARY_SPLITS, ResourceKind::Work, 0),
                 (FACE_TESSELLATION_REFINEMENT_PASSES, ResourceKind::Work, 0),
+                (FACE_TESSELLATION_MESH_TRIANGLES, ResourceKind::Items, 2),
+                (FACE_TESSELLATION_MESH_VERTICES, ResourceKind::Items, 24),
                 (kgraph::eval_stage::DEPENDENCY_DEPTH, ResourceKind::Depth, 1),
                 (kgraph::eval_stage::NODE_VISITS, ResourceKind::Work, 150),
                 (BODY_TESSELLATION_EDGE_DEPTH, ResourceKind::Depth, 0),
@@ -2404,27 +2436,31 @@ mod tests {
                 limit: 4096,
             })
         );
-        for (stage, operation, limit) in [
+        for (stage, resource, operation, limit) in [
             (
                 FACE_TESSELLATION_BOUNDARY_DEPTH,
+                ResourceKind::Depth,
                 "tessellation boundary refinement depth",
                 16,
             ),
             (
                 FACE_TESSELLATION_REFINEMENT_PASSES,
+                ResourceKind::Work,
                 "tessellation interior refinement passes",
                 24,
+            ),
+            (
+                FACE_TESSELLATION_MESH_TRIANGLES,
+                ResourceKind::Items,
+                "tessellation triangle count",
+                200_000,
             ),
         ] {
             let error = legacy_body_tessellation_error(
                 Error::ResourceLimit {
                     snapshot: LimitSnapshot {
                         stage,
-                        resource: if stage == FACE_TESSELLATION_BOUNDARY_DEPTH {
-                            ResourceKind::Depth
-                        } else {
-                            ResourceKind::Work
-                        },
+                        resource,
                         consumed: limit as u64 + 1,
                         allowed: limit as u64,
                     },
@@ -2436,6 +2472,45 @@ mod tests {
                 TessellationError::Kernel(Error::AlgorithmLimit { operation, limit })
             );
         }
+    }
+
+    #[test]
+    fn face_limit_diagnostic_mapping_covers_all_composed_stages_and_generic_root() {
+        for (stage, code) in [
+            (
+                FACE_TESSELLATION_BOUNDARY_DEPTH,
+                FACE_TESSELLATION_BOUNDARY_DEPTH_LIMIT,
+            ),
+            (
+                FACE_TESSELLATION_BOUNDARY_SPLITS,
+                FACE_TESSELLATION_BOUNDARY_SPLIT_LIMIT,
+            ),
+            (
+                FACE_TESSELLATION_REFINEMENT_PASSES,
+                FACE_TESSELLATION_REFINEMENT_PASS_LIMIT,
+            ),
+            (
+                FACE_TESSELLATION_MESH_TRIANGLES,
+                FACE_TESSELLATION_MESH_TRIANGLE_LIMIT,
+            ),
+            (
+                FACE_TESSELLATION_MESH_VERTICES,
+                FACE_TESSELLATION_MESH_VERTEX_LIMIT,
+            ),
+            (
+                kcore::operation::TOTAL_WORK_STAGE,
+                BODY_TESSELLATION_TOTAL_WORK_LIMIT_REACHED,
+            ),
+        ] {
+            assert_eq!(
+                face_tessellation_limit_diagnostic(stage).map(|mapped| mapped.0),
+                Some(code)
+            );
+        }
+        assert_eq!(
+            face_tessellation_limit_diagnostic(kgraph::eval_stage::NODE_VISITS),
+            None
+        );
     }
 
     #[test]
@@ -2597,7 +2672,11 @@ mod tests {
             assert_eq!(outcome.report().diagnostics().len(), 1);
             assert_eq!(
                 outcome.report().diagnostics()[0].code,
-                FACE_TESSELLATION_REFINEMENT_PASS_LIMIT
+                if stage == kcore::operation::TOTAL_WORK_STAGE {
+                    BODY_TESSELLATION_TOTAL_WORK_LIMIT_REACHED
+                } else {
+                    FACE_TESSELLATION_REFINEMENT_PASS_LIMIT
+                }
             );
         }
     }

@@ -686,9 +686,11 @@ Status: projection and face/body tessellation now have contextual and
 shared-scope entry points. Whole-body tessellation owns one scope across graph
 queries, projection fallback, edge/iso depth, per-patch face work, and retained
 vertices; local caps, aggregate/root failures, diagnostics, legacy bits/errors,
-and Serial/fixed/available execution-policy equivalence are covered. Dedicated
-pre-allocation limits for prepared UV/patch scratch and triangle retention
-remain before the path is fully hostile-input bounded.
+and Serial/fixed/available execution-policy equivalence are covered. Per-face
+boundary splits, mesh vertices, and retained triangles now have exact
+pre-allocation admission and composition evidence. Dedicated body-wide limits
+for prepared UV/patch scratch and triangle retention remain before the path is
+fully hostile-input bounded.
 
 - Add fallible contextual projection APIs and remove public panic behavior through the
   new path.
@@ -705,15 +707,19 @@ The contextual path is not yet a complete hostile-input allocation boundary.
 The next slices are ordered so accounting vocabulary and compatibility evidence
 land before any product cap is selected:
 
-1. `kgeom` adds per-patch boundary-split `Work/Cumulative`, prepared-trim
-   `Items/Cumulative`, and triangle `Items/HighWater` stages. Compatibility v1
-   uses the u32 representability ceiling for split/trim items and the existing
-   200,000-triangle backstop; admission happens before midpoint, trim, earclip,
-   or refinement-generation allocation.
-2. The body profile composes those names, then adds body-wide edge/iso split
-   `Work/Cumulative` stages with the u32 vertex ceiling. Split work contributes
-   to root total work and is charged after depth acceptance but before midpoint
-   evaluation or retention.
+1. **Landed:** `kgeom` has per-patch boundary-split `Work/Cumulative`, mesh-
+   vertex `Items/Cumulative`, and triangle `Items/HighWater` stages.
+   Compatibility v1 uses the u32 representability ceiling for split/vertex
+   items and the existing 200,000-triangle backstop; admission happens before
+   midpoint, refined-trim copies, earclip retention, or refinement-generation
+   allocation. Exact N/N+1, physical-cap, atomic-precedence, child/sequential
+   composition, root-work, execution-policy, and multi-hole output evidence is
+   in the owning tests.
+2. **Partially landed:** the body profile composes the per-face names and maps
+   every leaf plus generic root failure to stable diagnostics. Body-wide
+   edge/iso split `Work/Cumulative` stages with the u32 vertex ceiling remain.
+   Split work must contribute to root total work and be charged after depth
+   acceptance but before midpoint evaluation or retention.
 3. `ktopo` adds prepared-patch and retained-body-triangle `Items/Cumulative`
    stages. Their compatibility v1 allowances are `u64::MAX`: the counters and
    pre-allocation seams are exact, but finite aggregate caps require corpus

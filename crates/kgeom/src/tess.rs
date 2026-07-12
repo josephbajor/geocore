@@ -41,8 +41,11 @@ mod policy;
 
 pub use policy::{
     FACE_TESSELLATION_BOUNDARY_DEPTH, FACE_TESSELLATION_BOUNDARY_DEPTH_LIMIT,
+    FACE_TESSELLATION_BOUNDARY_SPLIT_LIMIT, FACE_TESSELLATION_BOUNDARY_SPLITS,
+    FACE_TESSELLATION_MESH_TRIANGLE_LIMIT, FACE_TESSELLATION_MESH_TRIANGLES,
+    FACE_TESSELLATION_MESH_VERTEX_LIMIT, FACE_TESSELLATION_MESH_VERTICES,
     FACE_TESSELLATION_REFINEMENT_PASS_LIMIT, FACE_TESSELLATION_REFINEMENT_PASSES,
-    FaceTessellationBudgetProfile,
+    FACE_TESSELLATION_U32_ITEM_LIMIT, FaceTessellationBudgetProfile,
 };
 
 /// A closed polygonal trim loop in a surface's parameter space.
@@ -335,6 +338,22 @@ fn tessellate_accounted(
         max_len: opts.max_edge_len.unwrap_or(f64::INFINITY),
     };
 
+    let initial_trim_items = face.loops.iter().try_fold(0_u64, |total, loop_| {
+        let count = u64::try_from(loop_.points.len()).map_err(|_| {
+            Error::from(OperationPolicyError::AccountingOverflow {
+                stage: FACE_TESSELLATION_MESH_VERTICES,
+                resource: ResourceKind::Items,
+            })
+        })?;
+        total.checked_add(count).ok_or_else(|| {
+            Error::from(OperationPolicyError::AccountingOverflow {
+                stage: FACE_TESSELLATION_MESH_VERTICES,
+                resource: ResourceKind::Items,
+            })
+        })
+    })?;
+    admit_mesh_vertices(accounting, initial_trim_items)?;
+
     // Stage 1: boundary refinement. Vertices 0..N are the refined loop
     // vertices, loop by loop, in traversal order.
     let mut uvs: Vec<Vec2> = Vec::new();
@@ -345,7 +364,14 @@ fn tessellate_accounted(
         let start = uvs.len();
         let mut indices = Vec::with_capacity(refined.len());
         for (uv, p) in refined {
-            indices.push((start + indices.len()) as u32);
+            let logical_index = start.checked_add(indices.len()).ok_or_else(|| {
+                Error::from(OperationPolicyError::AccountingOverflow {
+                    stage: FACE_TESSELLATION_MESH_VERTICES,
+                    resource: ResourceKind::Items,
+                })
+            })?;
+            indices
+                .push(u32::try_from(logical_index).map_err(|_| mesh_vertex_address_limit_error())?);
             uvs.push(uv);
             positions.push(p);
         }
@@ -358,7 +384,7 @@ fn tessellate_accounted(
 
     // Stage 2: bridge holes and ear-clip.
     let merged = bridge_holes(&uvs, &boundary)?;
-    let mut triangles = earclip(&uvs, &merged)?;
+    let mut triangles = earclip(&uvs, &merged, accounting)?;
 
     // Stage 3: conforming interior refinement.
     loop {
@@ -405,33 +431,52 @@ fn tessellate_accounted(
         if marked.is_empty() && centroid_tris.is_empty() {
             break;
         }
-        preflight_refinement_pass(accounting, triangles.len())?;
+        let new_vertex_count = u64::try_from(marked.len())
+            .ok()
+            .and_then(|count| {
+                u64::try_from(centroid_tris.len())
+                    .ok()
+                    .and_then(|centroids| count.checked_add(centroids))
+            })
+            .ok_or_else(|| {
+                Error::from(OperationPolicyError::AccountingOverflow {
+                    stage: FACE_TESSELLATION_MESH_VERTICES,
+                    resource: ResourceKind::Items,
+                })
+            })?;
+        let next_triangle_count =
+            prospective_refinement_triangle_count(&triangles, &marked, &centroid_tris)?;
+        preflight_refinement_generation(accounting, new_vertex_count, next_triangle_count)?;
 
         // Allocate midpoint vertices (sorted edge order → deterministic ids).
         let mut midpoint: BTreeMap<(u32, u32), u32> = BTreeMap::new();
         for &key in &marked {
             let uv = (uvs[key.0 as usize] + uvs[key.1 as usize]) / 2.0;
-            midpoint.insert(key, push_vertex(&mut uvs, &mut positions, &ctx, uv));
+            midpoint.insert(
+                key,
+                push_vertex(&mut uvs, &mut positions, &ctx, uv, accounting)?,
+            );
         }
         let centroid_set: BTreeSet<usize> = centroid_tris.into_iter().collect();
 
-        let mut next: Vec<[u32; 3]> = Vec::with_capacity(triangles.len() * 2);
+        let next_capacity = usize::try_from(next_triangle_count).map_err(|_| {
+            Error::from(OperationPolicyError::AccountingOverflow {
+                stage: FACE_TESSELLATION_MESH_TRIANGLES,
+                resource: ResourceKind::Items,
+            })
+        })?;
+        let mut next: Vec<[u32; 3]> = Vec::with_capacity(next_capacity);
         for (ti, tri) in triangles.iter().enumerate() {
             if centroid_set.contains(&ti) {
                 let [a, b, c] = *tri;
                 let g = (uvs[a as usize] + uvs[b as usize] + uvs[c as usize]) / 3.0;
-                let gi = push_vertex(&mut uvs, &mut positions, &ctx, g);
+                let gi = push_vertex(&mut uvs, &mut positions, &ctx, g, accounting)?;
                 next.extend([[a, b, gi], [b, c, gi], [c, a, gi]]);
             } else {
                 subdivide_triangle(*tri, &midpoint, &uvs, &mut next);
             }
         }
-        if next.len() > MAX_TRIANGLES {
-            return Err(Error::AlgorithmLimit {
-                operation: "tessellation triangle count",
-                limit: MAX_TRIANGLES,
-            });
-        }
+        debug_assert_eq!(next.len(), next_capacity);
         charge_refinement_pass(accounting)?;
         triangles = next;
     }
@@ -451,14 +496,31 @@ trait TessellationAccounting {
         resource: ResourceKind,
         mode: AccountingMode,
     ) -> core::result::Result<(), OperationPolicyError>;
+    fn snapshot(
+        &self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+    ) -> core::result::Result<LimitSnapshot, OperationPolicyError>;
     fn check_charge(
         &self,
         stage: kcore::operation::StageId,
         amount: u64,
     ) -> core::result::Result<(), OperationPolicyError>;
+    fn check_charge_resource(
+        &self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError>;
     fn charge(
         &mut self,
         stage: kcore::operation::StageId,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError>;
+    fn charge_resource(
+        &mut self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
         amount: u64,
     ) -> core::result::Result<(), OperationPolicyError>;
     fn observe(
@@ -485,6 +547,14 @@ impl TessellationAccounting for OperationScope<'_, '_> {
         OperationScope::ledger(self).require_limit(stage, resource, mode)
     }
 
+    fn snapshot(
+        &self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+    ) -> core::result::Result<LimitSnapshot, OperationPolicyError> {
+        snapshot_from_ledger(OperationScope::ledger(self), stage, resource)
+    }
+
     fn check_charge(
         &self,
         stage: kcore::operation::StageId,
@@ -493,12 +563,30 @@ impl TessellationAccounting for OperationScope<'_, '_> {
         OperationScope::ledger(self).check_charge(stage, amount)
     }
 
+    fn check_charge_resource(
+        &self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        OperationScope::ledger(self).check_charge_resource(stage, resource, amount)
+    }
+
     fn charge(
         &mut self,
         stage: kcore::operation::StageId,
         amount: u64,
     ) -> core::result::Result<(), OperationPolicyError> {
         OperationScope::ledger_mut(self).charge(stage, amount)
+    }
+
+    fn charge_resource(
+        &mut self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        OperationScope::ledger_mut(self).charge_resource(stage, resource, amount)
     }
 
     fn observe(
@@ -535,6 +623,14 @@ impl TessellationAccounting for ChildWorkLedger {
         ChildWorkLedger::ledger(self).require_limit(stage, resource, mode)
     }
 
+    fn snapshot(
+        &self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+    ) -> core::result::Result<LimitSnapshot, OperationPolicyError> {
+        snapshot_from_ledger(ChildWorkLedger::ledger(self), stage, resource)
+    }
+
     fn check_charge(
         &self,
         stage: kcore::operation::StageId,
@@ -543,12 +639,30 @@ impl TessellationAccounting for ChildWorkLedger {
         ChildWorkLedger::ledger(self).check_charge(stage, amount)
     }
 
+    fn check_charge_resource(
+        &self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        ChildWorkLedger::ledger(self).check_charge_resource(stage, resource, amount)
+    }
+
     fn charge(
         &mut self,
         stage: kcore::operation::StageId,
         amount: u64,
     ) -> core::result::Result<(), OperationPolicyError> {
         ChildWorkLedger::ledger_mut(self).charge(stage, amount)
+    }
+
+    fn charge_resource(
+        &mut self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        ChildWorkLedger::ledger_mut(self).charge_resource(stage, resource, amount)
     }
 
     fn observe(
@@ -579,6 +693,17 @@ impl TessellationAccounting for SequentialWorkLedger<'_> {
         SequentialWorkLedger::require_limit(self, stage, resource, mode)
     }
 
+    fn snapshot(
+        &self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+    ) -> core::result::Result<LimitSnapshot, OperationPolicyError> {
+        SequentialWorkLedger::snapshots(self)
+            .into_iter()
+            .find(|entry| entry.stage == stage && entry.resource == resource)
+            .ok_or(OperationPolicyError::UnknownLimit { stage, resource })
+    }
+
     fn check_charge(
         &self,
         stage: kcore::operation::StageId,
@@ -587,12 +712,30 @@ impl TessellationAccounting for SequentialWorkLedger<'_> {
         SequentialWorkLedger::check_charge(self, stage, amount)
     }
 
+    fn check_charge_resource(
+        &self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        SequentialWorkLedger::check_charge_resource(self, stage, resource, amount)
+    }
+
     fn charge(
         &mut self,
         stage: kcore::operation::StageId,
         amount: u64,
     ) -> core::result::Result<(), OperationPolicyError> {
         SequentialWorkLedger::charge(self, stage, amount)
+    }
+
+    fn charge_resource(
+        &mut self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+        amount: u64,
+    ) -> core::result::Result<(), OperationPolicyError> {
+        SequentialWorkLedger::charge_resource(self, stage, resource, amount)
     }
 
     fn observe(
@@ -611,6 +754,18 @@ impl TessellationAccounting for SequentialWorkLedger<'_> {
         _message: &'static str,
     ) {
     }
+}
+
+fn snapshot_from_ledger(
+    ledger: &kcore::operation::WorkLedger,
+    stage: kcore::operation::StageId,
+    resource: ResourceKind,
+) -> core::result::Result<LimitSnapshot, OperationPolicyError> {
+    ledger
+        .snapshots()
+        .into_iter()
+        .find(|entry| entry.stage == stage && entry.resource == resource)
+        .ok_or(OperationPolicyError::UnknownLimit { stage, resource })
 }
 
 fn validate_tessellation_budget(
@@ -642,7 +797,125 @@ fn legacy_tessellation_error(error: Error) -> Error {
                 limit: MAX_REFINE_PASSES,
             }
         }
+        Error::ResourceLimit { snapshot } if snapshot.stage == FACE_TESSELLATION_MESH_TRIANGLES => {
+            Error::AlgorithmLimit {
+                operation: "tessellation triangle count",
+                limit: MAX_TRIANGLES,
+            }
+        }
         other => other,
+    }
+}
+
+fn charge_mesh_vertices(accounting: &mut impl TessellationAccounting, amount: u64) -> Result<()> {
+    match accounting.charge_resource(FACE_TESSELLATION_MESH_VERTICES, ResourceKind::Items, amount) {
+        Ok(()) => Ok(()),
+        Err(OperationPolicyError::LimitReached(snapshot)) => {
+            accounting.diagnose_limit(
+                snapshot,
+                FACE_TESSELLATION_MESH_VERTEX_LIMIT,
+                "face tessellation mesh-vertex limit reached",
+            );
+            Err(Error::ResourceLimit { snapshot })
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn admit_mesh_vertices(accounting: &mut impl TessellationAccounting, amount: u64) -> Result<()> {
+    preflight_mesh_vertices(accounting, amount)?;
+    charge_mesh_vertices(accounting, amount)
+}
+
+fn preflight_mesh_vertices(
+    accounting: &mut impl TessellationAccounting,
+    amount: u64,
+) -> Result<()> {
+    let configured = accounting
+        .snapshot(FACE_TESSELLATION_MESH_VERTICES, ResourceKind::Items)
+        .map_err(Error::from)?;
+    let prospective = configured.consumed.checked_add(amount).ok_or_else(|| {
+        Error::from(OperationPolicyError::AccountingOverflow {
+            stage: FACE_TESSELLATION_MESH_VERTICES,
+            resource: ResourceKind::Items,
+        })
+    })?;
+    if prospective > FACE_TESSELLATION_U32_ITEM_LIMIT {
+        let physical = LimitSnapshot {
+            stage: FACE_TESSELLATION_MESH_VERTICES,
+            resource: ResourceKind::Items,
+            consumed: prospective,
+            allowed: FACE_TESSELLATION_U32_ITEM_LIMIT,
+        };
+        if configured.allowed <= FACE_TESSELLATION_U32_ITEM_LIMIT {
+            return charge_mesh_vertices(accounting, amount);
+        }
+        accounting.diagnose_limit(
+            physical,
+            FACE_TESSELLATION_MESH_VERTEX_LIMIT,
+            "face tessellation mesh-vertex format limit reached",
+        );
+        return Err(Error::ResourceLimit { snapshot: physical });
+    }
+    match accounting.check_charge_resource(
+        FACE_TESSELLATION_MESH_VERTICES,
+        ResourceKind::Items,
+        amount,
+    ) {
+        Ok(()) => Ok(()),
+        Err(OperationPolicyError::LimitReached(_)) => charge_mesh_vertices(accounting, amount),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn charge_boundary_split(accounting: &mut impl TessellationAccounting) -> Result<()> {
+    match accounting.charge(FACE_TESSELLATION_BOUNDARY_SPLITS, 1) {
+        Ok(()) => Ok(()),
+        Err(OperationPolicyError::LimitReached(snapshot)) => {
+            accounting.diagnose_limit(
+                snapshot,
+                FACE_TESSELLATION_BOUNDARY_SPLIT_LIMIT,
+                "face tessellation boundary-split limit reached",
+            );
+            Err(Error::ResourceLimit { snapshot })
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Admit a boundary split and its new mesh vertex as one logical unit.
+/// Both ledgers are preflighted before either accepted counter changes.
+fn charge_boundary_split_and_vertex(accounting: &mut impl TessellationAccounting) -> Result<()> {
+    match accounting.check_charge(FACE_TESSELLATION_BOUNDARY_SPLITS, 1) {
+        Ok(()) => {}
+        Err(OperationPolicyError::LimitReached(_)) => return charge_boundary_split(accounting),
+        Err(error) => return Err(error.into()),
+    }
+    preflight_mesh_vertices(accounting, 1)?;
+
+    charge_boundary_split(accounting)?;
+    charge_mesh_vertices(accounting, 1)
+}
+
+fn observe_mesh_triangles(
+    accounting: &mut impl TessellationAccounting,
+    triangle_count: u64,
+) -> Result<()> {
+    match accounting.observe(
+        FACE_TESSELLATION_MESH_TRIANGLES,
+        ResourceKind::Items,
+        triangle_count,
+    ) {
+        Ok(()) => Ok(()),
+        Err(OperationPolicyError::LimitReached(snapshot)) => {
+            accounting.diagnose_limit(
+                snapshot,
+                FACE_TESSELLATION_MESH_TRIANGLE_LIMIT,
+                "face tessellation mesh-triangle limit reached",
+            );
+            Err(Error::ResourceLimit { snapshot })
+        }
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -661,10 +934,7 @@ fn charge_refinement_pass(accounting: &mut impl TessellationAccounting) -> Resul
     }
 }
 
-fn preflight_refinement_pass(
-    accounting: &mut impl TessellationAccounting,
-    triangle_count: usize,
-) -> Result<()> {
+fn preflight_refinement_pass(accounting: &mut impl TessellationAccounting) -> Result<()> {
     match accounting.check_charge(FACE_TESSELLATION_REFINEMENT_PASSES, 1) {
         Ok(()) => {}
         Err(OperationPolicyError::LimitReached(_)) => {
@@ -672,13 +942,51 @@ fn preflight_refinement_pass(
         }
         Err(error) => return Err(error.into()),
     }
-    if triangle_count >= MAX_TRIANGLES {
-        return Err(Error::AlgorithmLimit {
-            operation: "tessellation triangle count",
-            limit: MAX_TRIANGLES,
-        });
-    }
     Ok(())
+}
+
+fn preflight_refinement_generation(
+    accounting: &mut impl TessellationAccounting,
+    new_vertex_count: u64,
+    next_triangle_count: u64,
+) -> Result<()> {
+    preflight_refinement_pass(accounting)?;
+    preflight_mesh_vertices(accounting, new_vertex_count)?;
+    observe_mesh_triangles(accounting, next_triangle_count)
+}
+
+fn prospective_refinement_triangle_count(
+    triangles: &[[u32; 3]],
+    marked: &BTreeSet<(u32, u32)>,
+    centroid_tris: &[usize],
+) -> Result<u64> {
+    triangles
+        .iter()
+        .enumerate()
+        .try_fold(0_u64, |total, (index, triangle)| {
+            let generated = if centroid_tris.binary_search(&index).is_ok() {
+                3
+            } else {
+                let marked_edges = tri_edges(triangle)
+                    .filter(|edge| marked.contains(&sorted_pair(*edge)))
+                    .count();
+                u64::try_from(marked_edges)
+                    .ok()
+                    .and_then(|count| count.checked_add(1))
+                    .ok_or_else(|| {
+                        Error::from(OperationPolicyError::AccountingOverflow {
+                            stage: FACE_TESSELLATION_MESH_TRIANGLES,
+                            resource: ResourceKind::Items,
+                        })
+                    })?
+            };
+            total.checked_add(generated).ok_or_else(|| {
+                Error::from(OperationPolicyError::AccountingOverflow {
+                    stage: FACE_TESSELLATION_MESH_TRIANGLES,
+                    resource: ResourceKind::Items,
+                })
+            })
+        })
 }
 
 /// Shared refinement inputs.
@@ -693,11 +1001,24 @@ fn push_vertex(
     positions: &mut Vec<Point3>,
     ctx: &RefineCtx<'_>,
     uv: Vec2,
-) -> u32 {
-    let idx = u32::try_from(uvs.len()).expect("mesh exceeded u32 vertex capacity");
+    accounting: &mut impl TessellationAccounting,
+) -> Result<u32> {
+    charge_mesh_vertices(accounting, 1)?;
+    let idx = u32::try_from(uvs.len()).map_err(|_| mesh_vertex_address_limit_error())?;
     uvs.push(uv);
     positions.push(ctx.surface.eval([uv.x, uv.y]));
-    idx
+    Ok(idx)
+}
+
+fn mesh_vertex_address_limit_error() -> Error {
+    Error::ResourceLimit {
+        snapshot: LimitSnapshot {
+            stage: FACE_TESSELLATION_MESH_VERTICES,
+            resource: ResourceKind::Items,
+            consumed: FACE_TESSELLATION_U32_ITEM_LIMIT + 1,
+            allowed: FACE_TESSELLATION_U32_ITEM_LIMIT,
+        },
+    }
 }
 
 /// Distance from `p` to the segment `[a, b]` in 3D.
@@ -770,6 +1091,7 @@ fn refine_edge(
                     })
                 })?;
                 observe_boundary_depth(accounting, next_depth)?;
+                charge_boundary_split_and_vertex(accounting)?;
                 let midpoint = (mid_uv, mid_p);
                 tasks.push(Task::Segment {
                     a: midpoint,
@@ -989,69 +1311,78 @@ fn bridge_holes(uvs: &[Vec2], boundary: &[Vec<u32>]) -> Result<Vec<u32>> {
 
     for (k, &hi) in order.iter().enumerate() {
         let hole = &boundary[hi];
-        let pending: Vec<&Vec<u32>> = order[k..].iter().map(|&x| &boundary[x]).collect();
-        // Candidate bridges sorted by parameter-space length.
-        let mut candidates: Vec<(f64, usize, usize)> = Vec::new();
+        // Select the first visible bridge under the historical total order
+        // (parameter-space length, hole index, polygon index) without
+        // materializing the O(hole * polygon) candidate scratch vector.
+        let mut chosen: Option<(f64, usize, usize)> = None;
         for (a, &hv) in hole.iter().enumerate() {
             for (b, &pv) in polygon.iter().enumerate() {
-                candidates.push((uvs[hv as usize].dist(uvs[pv as usize]), a, b));
-            }
-        }
-        candidates.sort_by(|x, y| {
-            x.0.partial_cmp(&y.0)
-                .expect("finite uvs")
-                .then((x.1, x.2).cmp(&(y.1, y.2)))
-        });
-
-        let mut chosen: Option<(usize, usize)> = None;
-        'candidate: for &(_, a, b) in &candidates {
-            let (hv, pv) = (hole[a], polygon[b]);
-            if uvs[hv as usize] == uvs[pv as usize] {
-                continue;
-            }
-            // The bridge may not cross any current-polygon or pending-hole
-            // edge (edges sharing an endpoint with the bridge are exempt).
-            let blocked = |i: u32, j: u32| {
-                let share = |v: u32| {
-                    uvs[v as usize] == uvs[hv as usize] || uvs[v as usize] == uvs[pv as usize]
+                let distance = uvs[hv as usize].dist(uvs[pv as usize]);
+                if chosen.is_some_and(|best| {
+                    distance
+                        .partial_cmp(&best.0)
+                        .expect("finite uvs")
+                        .then((a, b).cmp(&(best.1, best.2)))
+                        .is_ge()
+                }) {
+                    continue;
+                }
+                if uvs[hv as usize] == uvs[pv as usize] {
+                    continue;
+                }
+                // The bridge may not cross any current-polygon or
+                // pending-hole edge (shared endpoints are exempt).
+                let blocked = |i: u32, j: u32| {
+                    let share = |v: u32| {
+                        uvs[v as usize] == uvs[hv as usize] || uvs[v as usize] == uvs[pv as usize]
+                    };
+                    if share(i) || share(j) {
+                        return false;
+                    }
+                    segments_cross(uvs, hv, pv, i, j)
                 };
-                if share(i) || share(j) {
-                    return false;
+                if loop_edges(&polygon).any(|(i, j)| blocked(i, j)) {
+                    continue;
                 }
-                segments_cross(uvs, hv, pv, i, j)
-            };
-            for (i, j) in loop_edges(&polygon) {
-                if blocked(i, j) {
-                    continue 'candidate;
-                }
-            }
-            for h in &pending {
-                for (i, j) in loop_edges(h) {
-                    if blocked(i, j) {
-                        continue 'candidate;
+                let mut pending_blocked = false;
+                for &pending_index in &order[k..] {
+                    if loop_edges(&boundary[pending_index]).any(|(i, j)| blocked(i, j)) {
+                        pending_blocked = true;
+                        break;
                     }
                 }
+                if pending_blocked {
+                    continue;
+                }
+                // The bridge midpoint must lie inside the face region.
+                let mid = (uvs[hv as usize] + uvs[pv as usize]) / 2.0;
+                if !point_in_region(uvs, boundary, mid) {
+                    continue;
+                }
+                chosen = Some((distance, a, b));
             }
-            // The bridge midpoint must lie inside the face region.
-            let mid = (uvs[hv as usize] + uvs[pv as usize]) / 2.0;
-            if !point_in_region(uvs, boundary, mid) {
-                continue;
-            }
-            chosen = Some((a, b));
-            break;
         }
-        let Some((a, b)) = chosen else {
+        let Some((_, a, b)) = chosen else {
             return Err(Error::InvalidGeometry {
                 reason: "no visible bridge from hole to outer boundary",
             });
         };
         // Splice: ..., polygon[b], hole[a], hole[a+1], ..., hole[a],
         // polygon[b], ...
-        let mut spliced: Vec<u32> = Vec::with_capacity(polygon.len() + hole.len() + 2);
+        let splice_capacity = polygon
+            .len()
+            .checked_add(hole.len())
+            .and_then(|count| count.checked_add(2))
+            .ok_or_else(|| {
+                Error::from(OperationPolicyError::AccountingOverflow {
+                    stage: FACE_TESSELLATION_MESH_VERTICES,
+                    resource: ResourceKind::Items,
+                })
+            })?;
+        let mut spliced: Vec<u32> = Vec::with_capacity(splice_capacity);
         spliced.extend_from_slice(&polygon[..=b]);
-        for t in 0..=hole.len() {
-            spliced.push(hole[(a + t) % hole.len()]);
-        }
+        spliced.extend_from_slice(&hole[a..]);
+        spliced.extend_from_slice(&hole[..=a]);
         spliced.push(polygon[b]);
         spliced.extend_from_slice(&polygon[b + 1..]);
         polygon = spliced;
@@ -1060,17 +1391,23 @@ fn bridge_holes(uvs: &[Vec2], boundary: &[Vec<u32>]) -> Result<Vec<u32>> {
 }
 
 /// Ear-clip a simple (bridged) polygon given as vertex indices, CCW.
-fn earclip(uvs: &[Vec2], polygon: &[u32]) -> Result<Vec<[u32; 3]>> {
+fn earclip(
+    uvs: &[Vec2],
+    polygon: &[u32],
+    accounting: &mut impl TessellationAccounting,
+) -> Result<Vec<[u32; 3]>> {
     let n = polygon.len();
     if n < 3 {
         return Err(Error::InvalidGeometry {
             reason: "polygon has fewer than 3 vertices",
         });
     }
-    let mut next: Vec<usize> = (0..n).map(|i| (i + 1) % n).collect();
-    let mut prev: Vec<usize> = (0..n).map(|i| (i + n - 1) % n).collect();
+    let mut next: Vec<usize> = (0..n).map(|i| if i + 1 == n { 0 } else { i + 1 }).collect();
+    let mut prev: Vec<usize> = (0..n).map(|i| if i == 0 { n - 1 } else { i - 1 }).collect();
     let mut alive = n;
-    let mut triangles: Vec<[u32; 3]> = Vec::with_capacity(n.saturating_sub(2));
+    // Keep this unallocated until the first exact retained-triangle
+    // observation has been admitted.
+    let mut triangles: Vec<[u32; 3]> = Vec::new();
 
     let mut cursor = 0usize;
     let mut since_last_clip = 0usize;
@@ -1095,6 +1432,16 @@ fn earclip(uvs: &[Vec2], polygon: &[u32]) -> Result<Vec<[u32; 3]>> {
                     w = next[w];
                 }
                 if ear {
+                    let prospective = u64::try_from(triangles.len())
+                        .ok()
+                        .and_then(|count| count.checked_add(1))
+                        .ok_or_else(|| {
+                            Error::from(OperationPolicyError::AccountingOverflow {
+                                stage: FACE_TESSELLATION_MESH_TRIANGLES,
+                                resource: ResourceKind::Items,
+                            })
+                        })?;
+                    observe_mesh_triangles(accounting, prospective)?;
                     triangles.push([vp, vc, vn]);
                 }
                 ear
@@ -1124,6 +1471,16 @@ fn earclip(uvs: &[Vec2], polygon: &[u32]) -> Result<Vec<[u32; 3]>> {
     }
     let (p, c, n2) = (cursor, next[cursor], next[next[cursor]]);
     if orient(uvs, polygon[p], polygon[c], polygon[n2]) == Orientation::Positive {
+        let prospective = u64::try_from(triangles.len())
+            .ok()
+            .and_then(|count| count.checked_add(1))
+            .ok_or_else(|| {
+                Error::from(OperationPolicyError::AccountingOverflow {
+                    stage: FACE_TESSELLATION_MESH_TRIANGLES,
+                    resource: ResourceKind::Items,
+                })
+            })?;
+        observe_mesh_triangles(accounting, prospective)?;
         triangles.push([polygon[p], polygon[c], polygon[n2]]);
     }
     Ok(triangles)
@@ -1134,6 +1491,7 @@ mod tests {
     use super::*;
     use crate::frame::Frame;
     use crate::surface::{Cylinder, Plane};
+    use kcore::operation::{BudgetPlan, LimitSpec};
     use std::cell::Cell;
     use std::collections::BTreeMap;
     use std::num::NonZeroUsize;
@@ -1357,6 +1715,83 @@ mod tests {
     }
 
     #[test]
+    fn streaming_bridge_selection_preserves_the_hard_multi_hole_output_golden() {
+        let plane = Plane::new(Frame::world());
+        let outer = TrimLoop::new(vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(12.0, 0.0),
+            Vec2::new(12.0, 10.0),
+            Vec2::new(0.0, 10.0),
+        ])
+        .unwrap();
+        let holes = [
+            vec![
+                Vec2::new(1.0, 2.0),
+                Vec2::new(1.0, 4.0),
+                Vec2::new(3.0, 4.0),
+                Vec2::new(3.0, 2.0),
+            ],
+            vec![
+                Vec2::new(4.0, 6.0),
+                Vec2::new(4.0, 9.0),
+                Vec2::new(7.0, 9.0),
+                Vec2::new(7.0, 6.0),
+            ],
+            vec![
+                Vec2::new(8.0, 1.0),
+                Vec2::new(8.0, 5.0),
+                Vec2::new(11.0, 5.0),
+                Vec2::new(11.0, 1.0),
+            ],
+        ];
+        let mut loops = vec![outer];
+        loops.extend(
+            holes
+                .into_iter()
+                .map(|points| TrimLoop::new(points).unwrap()),
+        );
+        let face = TrimmedSurface::new(&plane, loops).unwrap();
+        let mesh = tessellate(&face, &TessOptions::default()).unwrap();
+
+        assert_eq!(
+            mesh.boundary,
+            [
+                vec![0, 1, 2, 3],
+                vec![4, 5, 6, 7],
+                vec![8, 9, 10, 11],
+                vec![12, 13, 14, 15],
+            ]
+        );
+        assert_eq!(
+            mesh.triangles,
+            [
+                [3, 0, 4],
+                [3, 4, 5],
+                [3, 5, 6],
+                [3, 6, 8],
+                [3, 8, 9],
+                [2, 3, 9],
+                [2, 9, 10],
+                [2, 10, 11],
+                [2, 11, 13],
+                [2, 13, 14],
+                [1, 2, 14],
+                [1, 14, 15],
+                [0, 1, 15],
+                [0, 15, 12],
+                [4, 0, 12],
+                [7, 4, 12],
+                [6, 7, 12],
+                [8, 6, 12],
+                [11, 8, 12],
+                [11, 12, 13],
+            ]
+        );
+        assert_watertight(&mesh);
+        assert!((mesh_area(&mesh) - 95.0).abs() < 1e-12);
+    }
+
+    #[test]
     fn cylinder_patch_meets_chord_tolerance() {
         let cyl = Cylinder::new(Frame::world(), 2.0).unwrap();
         let face = TrimmedSurface::rectangle(
@@ -1489,7 +1924,7 @@ mod tests {
     }
 
     #[test]
-    fn contextual_tessellation_preserves_bits_and_accounts_both_refinement_stages() {
+    fn contextual_tessellation_preserves_bits_and_enforces_all_five_stage_boundaries() {
         let cylinder = Cylinder::new(Frame::world(), 2.0).unwrap();
         let face = TrimmedSurface::rectangle(
             &cylinder,
@@ -1510,9 +1945,16 @@ mod tests {
         assert_eq!(baseline.result(), Ok(&legacy));
 
         let boundary = usage_for(baseline.report(), FACE_TESSELLATION_BOUNDARY_DEPTH).consumed;
+        let boundary_splits =
+            usage_for(baseline.report(), FACE_TESSELLATION_BOUNDARY_SPLITS).consumed;
         let passes = usage_for(baseline.report(), FACE_TESSELLATION_REFINEMENT_PASSES).consumed;
+        let triangles = usage_for(baseline.report(), FACE_TESSELLATION_MESH_TRIANGLES).consumed;
+        let vertices = usage_for(baseline.report(), FACE_TESSELLATION_MESH_VERTICES).consumed;
         assert!(boundary > 0 && boundary < MAX_BOUNDARY_DEPTH as u64);
+        assert!(boundary_splits > 0 && boundary_splits < FACE_TESSELLATION_U32_ITEM_LIMIT);
         assert!(passes > 0 && passes < MAX_REFINE_PASSES as u64);
+        assert!(triangles > 0 && triangles < MAX_TRIANGLES as u64);
+        assert!(vertices > 0 && vertices < FACE_TESSELLATION_U32_ITEM_LIMIT);
 
         let run = |stage, resource, mode, allowed, diagnostics| {
             let context = OperationContext::new(&session, Tolerances::default())
@@ -1536,6 +1978,27 @@ mod tests {
                 AccountingMode::Cumulative,
                 passes,
                 FACE_TESSELLATION_REFINEMENT_PASS_LIMIT,
+            ),
+            (
+                FACE_TESSELLATION_BOUNDARY_SPLITS,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                boundary_splits,
+                FACE_TESSELLATION_BOUNDARY_SPLIT_LIMIT,
+            ),
+            (
+                FACE_TESSELLATION_MESH_TRIANGLES,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                triangles,
+                FACE_TESSELLATION_MESH_TRIANGLE_LIMIT,
+            ),
+            (
+                FACE_TESSELLATION_MESH_VERTICES,
+                ResourceKind::Items,
+                AccountingMode::Cumulative,
+                vertices,
+                FACE_TESSELLATION_MESH_VERTEX_LIMIT,
             ),
         ] {
             let below = run(
@@ -1592,12 +2055,17 @@ mod tests {
             assert!(above.report().limit_events().is_empty());
         }
 
-        let parallel_session =
-            tessellation_session(ExecutionPolicy::AtMost(NonZeroUsize::new(2).unwrap()));
-        let parallel_context =
-            OperationContext::new(&parallel_session, Tolerances::default()).unwrap();
-        let parallel = tessellate_with_context(&face, &opts, &parallel_context).unwrap();
-        assert_eq!(parallel, baseline);
+        for execution in [
+            ExecutionPolicy::AtMost(NonZeroUsize::new(1).unwrap()),
+            ExecutionPolicy::AtMost(NonZeroUsize::new(2).unwrap()),
+            ExecutionPolicy::Available,
+        ] {
+            let parallel_session = tessellation_session(execution);
+            let parallel_context =
+                OperationContext::new(&parallel_session, Tolerances::default()).unwrap();
+            let parallel = tessellate_with_context(&face, &opts, &parallel_context).unwrap();
+            assert_eq!(parallel, baseline);
+        }
 
         let shared_budget = FaceTessellationBudgetProfile::v1_defaults().overlaid(&override_limit(
             FACE_TESSELLATION_REFINEMENT_PASSES,
@@ -1642,6 +2110,267 @@ mod tests {
     }
 
     #[test]
+    fn initial_mesh_vertex_denial_precedes_every_surface_evaluation() {
+        let plane = CountingSurface::new(Plane::new(Frame::world()));
+        let face = TrimmedSurface::rectangle(
+            &plane,
+            [ParamRange::new(0.0, 1.0), ParamRange::new(0.0, 1.0)],
+        )
+        .unwrap();
+        let budget = FaceTessellationBudgetProfile::v1_defaults().overlaid(&override_limit(
+            FACE_TESSELLATION_MESH_VERTICES,
+            ResourceKind::Items,
+            AccountingMode::Cumulative,
+            3,
+        ));
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            budget,
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let outcome = tessellate_with_context(&face, &TessOptions::default(), &context).unwrap();
+        let snapshot = LimitSnapshot {
+            stage: FACE_TESSELLATION_MESH_VERTICES,
+            resource: ResourceKind::Items,
+            consumed: 4,
+            allowed: 3,
+        };
+
+        assert_eq!(outcome.result(), Err(&Error::ResourceLimit { snapshot }));
+        assert_eq!(plane.evaluations(), 0);
+        assert_eq!(
+            usage_for(outcome.report(), FACE_TESSELLATION_MESH_VERTICES).consumed,
+            0
+        );
+        assert_eq!(outcome.report().limit_events(), &[snapshot]);
+    }
+
+    #[test]
+    fn raised_policy_cannot_cross_the_u32_mesh_vertex_cap_without_allocating() {
+        let budget = FaceTessellationBudgetProfile::v1_defaults().overlaid(&override_limit(
+            FACE_TESSELLATION_MESH_VERTICES,
+            ResourceKind::Items,
+            AccountingMode::Cumulative,
+            FACE_TESSELLATION_U32_ITEM_LIMIT + 10,
+        ));
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            budget,
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let mut scope = OperationScope::new(&context);
+        scope
+            .ledger_mut()
+            .charge_resource(
+                FACE_TESSELLATION_MESH_VERTICES,
+                ResourceKind::Items,
+                FACE_TESSELLATION_U32_ITEM_LIMIT,
+            )
+            .unwrap();
+        let snapshot = LimitSnapshot {
+            stage: FACE_TESSELLATION_MESH_VERTICES,
+            resource: ResourceKind::Items,
+            consumed: FACE_TESSELLATION_U32_ITEM_LIMIT + 1,
+            allowed: FACE_TESSELLATION_U32_ITEM_LIMIT,
+        };
+
+        assert_eq!(
+            preflight_mesh_vertices(&mut scope, 1),
+            Err(Error::ResourceLimit { snapshot })
+        );
+        assert_eq!(
+            snapshot_for(
+                scope.ledger().snapshots().as_slice(),
+                FACE_TESSELLATION_MESH_VERTICES
+            )
+            .consumed,
+            FACE_TESSELLATION_U32_ITEM_LIMIT
+        );
+        assert!(scope.ledger().limit_events().is_empty());
+    }
+
+    #[test]
+    fn initial_earclip_triangle_limit_is_exact_and_preallocation() {
+        let plane = Plane::new(Frame::world());
+        let face = TrimmedSurface::rectangle(
+            &plane,
+            [ParamRange::new(0.0, 1.0), ParamRange::new(0.0, 1.0)],
+        )
+        .unwrap();
+        let budget = FaceTessellationBudgetProfile::v1_defaults().overlaid(&override_limit(
+            FACE_TESSELLATION_MESH_TRIANGLES,
+            ResourceKind::Items,
+            AccountingMode::HighWater,
+            1,
+        ));
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            budget,
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let outcome = tessellate_with_context(&face, &TessOptions::default(), &context).unwrap();
+        let snapshot = LimitSnapshot {
+            stage: FACE_TESSELLATION_MESH_TRIANGLES,
+            resource: ResourceKind::Items,
+            consumed: 2,
+            allowed: 1,
+        };
+
+        assert_eq!(outcome.result(), Err(&Error::ResourceLimit { snapshot }));
+        assert_eq!(
+            usage_for(outcome.report(), FACE_TESSELLATION_MESH_TRIANGLES).consumed,
+            1
+        );
+        assert_eq!(outcome.report().limit_events(), &[snapshot]);
+    }
+
+    #[test]
+    fn coupled_allocation_preflights_have_stable_precedence_and_no_partial_usage() {
+        let run_boundary = |split_limit, vertex_limit| {
+            let budget = FaceTessellationBudgetProfile::v1_defaults().overlaid(
+                &BudgetPlan::new([
+                    LimitSpec::new(
+                        FACE_TESSELLATION_BOUNDARY_SPLITS,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        split_limit,
+                    ),
+                    LimitSpec::new(
+                        FACE_TESSELLATION_MESH_VERTICES,
+                        ResourceKind::Items,
+                        AccountingMode::Cumulative,
+                        vertex_limit,
+                    ),
+                ])
+                .unwrap(),
+            );
+            let session = SessionPolicy::new(
+                SessionPrecision::parasolid(),
+                NumericalPolicy::v1(),
+                ExecutionPolicy::Serial,
+                budget,
+                PolicyVersion::V1,
+            );
+            let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+            let mut scope = OperationScope::new(&context);
+            let error = charge_boundary_split_and_vertex(&mut scope).unwrap_err();
+            let snapshots = scope.ledger().snapshots();
+            let usage = (
+                snapshot_for(&snapshots, FACE_TESSELLATION_BOUNDARY_SPLITS).consumed,
+                snapshot_for(&snapshots, FACE_TESSELLATION_MESH_VERTICES).consumed,
+            );
+            (error, usage, scope.ledger().limit_events().to_vec())
+        };
+
+        let split_snapshot = LimitSnapshot {
+            stage: FACE_TESSELLATION_BOUNDARY_SPLITS,
+            resource: ResourceKind::Work,
+            consumed: 1,
+            allowed: 0,
+        };
+        assert_eq!(
+            run_boundary(0, 0),
+            (
+                Error::ResourceLimit {
+                    snapshot: split_snapshot
+                },
+                (0, 0),
+                vec![split_snapshot],
+            )
+        );
+
+        let vertex_snapshot = LimitSnapshot {
+            stage: FACE_TESSELLATION_MESH_VERTICES,
+            resource: ResourceKind::Items,
+            consumed: 1,
+            allowed: 0,
+        };
+        assert_eq!(
+            run_boundary(1, 0),
+            (
+                Error::ResourceLimit {
+                    snapshot: vertex_snapshot
+                },
+                (0, 0),
+                vec![vertex_snapshot],
+            )
+        );
+
+        let run_refinement = |vertex_limit, triangle_limit| {
+            let budget = FaceTessellationBudgetProfile::v1_defaults().overlaid(
+                &BudgetPlan::new([
+                    LimitSpec::new(
+                        FACE_TESSELLATION_MESH_TRIANGLES,
+                        ResourceKind::Items,
+                        AccountingMode::HighWater,
+                        triangle_limit,
+                    ),
+                    LimitSpec::new(
+                        FACE_TESSELLATION_MESH_VERTICES,
+                        ResourceKind::Items,
+                        AccountingMode::Cumulative,
+                        vertex_limit,
+                    ),
+                ])
+                .unwrap(),
+            );
+            let session = SessionPolicy::new(
+                SessionPrecision::parasolid(),
+                NumericalPolicy::v1(),
+                ExecutionPolicy::Serial,
+                budget,
+                PolicyVersion::V1,
+            );
+            let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+            let mut scope = OperationScope::new(&context);
+            let error = preflight_refinement_generation(&mut scope, 1, 1).unwrap_err();
+            let snapshots = scope.ledger().snapshots();
+            let usage = (
+                snapshot_for(&snapshots, FACE_TESSELLATION_REFINEMENT_PASSES).consumed,
+                snapshot_for(&snapshots, FACE_TESSELLATION_MESH_VERTICES).consumed,
+                snapshot_for(&snapshots, FACE_TESSELLATION_MESH_TRIANGLES).consumed,
+            );
+            (error, usage, scope.ledger().limit_events().to_vec())
+        };
+
+        assert_eq!(
+            run_refinement(0, 0),
+            (
+                Error::ResourceLimit {
+                    snapshot: vertex_snapshot
+                },
+                (0, 0, 0),
+                vec![vertex_snapshot],
+            )
+        );
+        let triangle_snapshot = LimitSnapshot {
+            stage: FACE_TESSELLATION_MESH_TRIANGLES,
+            resource: ResourceKind::Items,
+            consumed: 1,
+            allowed: 0,
+        };
+        assert_eq!(
+            run_refinement(1, 0),
+            (
+                Error::ResourceLimit {
+                    snapshot: triangle_snapshot
+                },
+                (0, 0, 0),
+                vec![triangle_snapshot],
+            )
+        );
+    }
+
+    #[test]
     fn child_ledgers_preserve_per_face_v1_caps_and_mesh_bits() {
         let cylinder = Cylinder::new(Frame::world(), 2.0).unwrap();
         let face = TrimmedSurface::rectangle(
@@ -1663,15 +2392,47 @@ mod tests {
         let expected_mesh = baseline.result().unwrap();
         let expected_boundary =
             usage_for(baseline.report(), FACE_TESSELLATION_BOUNDARY_DEPTH).consumed;
+        let expected_splits =
+            usage_for(baseline.report(), FACE_TESSELLATION_BOUNDARY_SPLITS).consumed;
         let expected_passes =
             usage_for(baseline.report(), FACE_TESSELLATION_REFINEMENT_PASSES).consumed;
+        let expected_triangles =
+            usage_for(baseline.report(), FACE_TESSELLATION_MESH_TRIANGLES).consumed;
+        let expected_vertices =
+            usage_for(baseline.report(), FACE_TESSELLATION_MESH_VERTICES).consumed;
 
-        let parent_budget = FaceTessellationBudgetProfile::v1_defaults().overlaid(&override_limit(
-            FACE_TESSELLATION_REFINEMENT_PASSES,
-            ResourceKind::Work,
-            AccountingMode::Cumulative,
-            (MAX_REFINE_PASSES * 2) as u64,
-        ));
+        let parent_budget = FaceTessellationBudgetProfile::v1_defaults().overlaid(
+            &kcore::operation::BudgetPlan::new([
+                kcore::operation::LimitSpec::new(
+                    FACE_TESSELLATION_BOUNDARY_SPLITS,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    FACE_TESSELLATION_U32_ITEM_LIMIT * 2,
+                ),
+                kcore::operation::LimitSpec::new(
+                    FACE_TESSELLATION_REFINEMENT_PASSES,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    (MAX_REFINE_PASSES * 2) as u64,
+                ),
+                // Concurrent child triangle buffers coexist, so reservable
+                // Items/HighWater capacity is additive even though merged
+                // usage retains the maximum observation.
+                kcore::operation::LimitSpec::new(
+                    FACE_TESSELLATION_MESH_TRIANGLES,
+                    ResourceKind::Items,
+                    AccountingMode::HighWater,
+                    (MAX_TRIANGLES * 2) as u64,
+                ),
+                kcore::operation::LimitSpec::new(
+                    FACE_TESSELLATION_MESH_VERTICES,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    FACE_TESSELLATION_U32_ITEM_LIMIT * 2,
+                ),
+            ])
+            .unwrap(),
+        );
         let parent_session = SessionPolicy::new(
             SessionPrecision::parasolid(),
             NumericalPolicy::v1(),
@@ -1705,6 +2466,18 @@ mod tests {
                 expected_passes
             );
             assert_eq!(
+                snapshot_for(&snapshots, FACE_TESSELLATION_BOUNDARY_SPLITS).consumed,
+                expected_splits
+            );
+            assert_eq!(
+                snapshot_for(&snapshots, FACE_TESSELLATION_MESH_TRIANGLES).consumed,
+                expected_triangles
+            );
+            assert_eq!(
+                snapshot_for(&snapshots, FACE_TESSELLATION_MESH_VERTICES).consumed,
+                expected_vertices
+            );
+            assert_eq!(
                 snapshot_for(&snapshots, FACE_TESSELLATION_BOUNDARY_DEPTH).allowed,
                 MAX_BOUNDARY_DEPTH as u64
             );
@@ -1726,6 +2499,18 @@ mod tests {
         assert_eq!(
             usage_for(&report, FACE_TESSELLATION_REFINEMENT_PASSES).consumed,
             expected_passes * 2
+        );
+        assert_eq!(
+            usage_for(&report, FACE_TESSELLATION_BOUNDARY_SPLITS).consumed,
+            expected_splits * 2
+        );
+        assert_eq!(
+            usage_for(&report, FACE_TESSELLATION_MESH_TRIANGLES).consumed,
+            expected_triangles
+        );
+        assert_eq!(
+            usage_for(&report, FACE_TESSELLATION_MESH_VERTICES).consumed,
+            expected_vertices * 2
         );
         assert!(report.limit_events().is_empty());
     }
@@ -1752,9 +2537,14 @@ mod tests {
         let expected_mesh = baseline.result().unwrap();
         let expected_boundary =
             usage_for(baseline.report(), FACE_TESSELLATION_BOUNDARY_DEPTH).consumed;
+        let expected_splits =
+            usage_for(baseline.report(), FACE_TESSELLATION_BOUNDARY_SPLITS).consumed;
         let expected_passes =
             usage_for(baseline.report(), FACE_TESSELLATION_REFINEMENT_PASSES).consumed;
-
+        let expected_triangles =
+            usage_for(baseline.report(), FACE_TESSELLATION_MESH_TRIANGLES).consumed;
+        let expected_vertices =
+            usage_for(baseline.report(), FACE_TESSELLATION_MESH_VERTICES).consumed;
         let parent_budget = FaceTessellationBudgetProfile::v1_defaults().overlaid(&override_limit(
             FACE_TESSELLATION_REFINEMENT_PASSES,
             ResourceKind::Work,
@@ -1799,6 +2589,18 @@ mod tests {
                     allowed: MAX_REFINE_PASSES as u64,
                 }
             );
+            assert_eq!(
+                snapshot_for(&snapshots, FACE_TESSELLATION_BOUNDARY_SPLITS).consumed,
+                expected_splits
+            );
+            assert_eq!(
+                snapshot_for(&snapshots, FACE_TESSELLATION_MESH_TRIANGLES).consumed,
+                expected_triangles
+            );
+            assert_eq!(
+                snapshot_for(&snapshots, FACE_TESSELLATION_MESH_VERTICES).consumed,
+                expected_vertices
+            );
         }
 
         let report = parent.finish(Ok(())).report().clone();
@@ -1809,6 +2611,18 @@ mod tests {
         assert_eq!(
             usage_for(&report, FACE_TESSELLATION_REFINEMENT_PASSES).consumed,
             expected_passes * 2
+        );
+        assert_eq!(
+            usage_for(&report, FACE_TESSELLATION_BOUNDARY_SPLITS).consumed,
+            expected_splits * 2
+        );
+        assert_eq!(
+            usage_for(&report, FACE_TESSELLATION_MESH_TRIANGLES).consumed,
+            expected_triangles
+        );
+        assert_eq!(
+            usage_for(&report, FACE_TESSELLATION_MESH_VERTICES).consumed,
+            expected_vertices * 2
         );
         assert!(report.limit_events().is_empty());
     }
@@ -1835,6 +2649,9 @@ mod tests {
         let expected_mesh = baseline.result().unwrap();
         let expected_passes =
             usage_for(baseline.report(), FACE_TESSELLATION_REFINEMENT_PASSES).consumed;
+        let expected_splits =
+            usage_for(baseline.report(), FACE_TESSELLATION_BOUNDARY_SPLITS).consumed;
+        let expected_total_work = expected_splits + expected_passes;
         assert!(expected_passes > 0);
 
         for (parent_budget, expected_stage) in [
@@ -1855,7 +2672,7 @@ mod tests {
                         AccountingMode::Cumulative,
                         (MAX_REFINE_PASSES * 2) as u64,
                     ))
-                    .with_total_work_limit(expected_passes),
+                    .with_total_work_limit(expected_total_work),
                 kcore::operation::TOTAL_WORK_STAGE,
             ),
         ] {
@@ -1901,8 +2718,16 @@ mod tests {
                 LimitSnapshot {
                     stage: expected_stage,
                     resource: ResourceKind::Work,
-                    consumed: expected_passes + 1,
-                    allowed: expected_passes,
+                    consumed: if expected_stage == kcore::operation::TOTAL_WORK_STAGE {
+                        expected_total_work + 1
+                    } else {
+                        expected_passes + 1
+                    },
+                    allowed: if expected_stage == kcore::operation::TOTAL_WORK_STAGE {
+                        expected_total_work
+                    } else {
+                        expected_passes
+                    },
                 }
             );
             let report = parent.finish(Ok(())).report().clone();
@@ -1910,6 +2735,13 @@ mod tests {
                 usage_for(&report, FACE_TESSELLATION_REFINEMENT_PASSES).consumed,
                 expected_passes
             );
+            if expected_stage == kcore::operation::TOTAL_WORK_STAGE {
+                assert_eq!(
+                    usage_for(&report, kcore::operation::TOTAL_WORK_STAGE).consumed,
+                    expected_splits + expected_passes,
+                    "root work must include accepted boundary splits and refinement passes"
+                );
+            }
             assert_eq!(report.limit_events(), &[snapshot]);
         }
     }
@@ -1997,6 +2829,20 @@ mod tests {
                 limit: MAX_REFINE_PASSES,
             }
         );
+        assert_eq!(
+            legacy_tessellation_error(Error::ResourceLimit {
+                snapshot: LimitSnapshot {
+                    stage: FACE_TESSELLATION_MESH_TRIANGLES,
+                    resource: ResourceKind::Items,
+                    consumed: MAX_TRIANGLES as u64 + 1,
+                    allowed: MAX_TRIANGLES as u64,
+                },
+            }),
+            Error::AlgorithmLimit {
+                operation: "tessellation triangle count",
+                limit: MAX_TRIANGLES,
+            }
+        );
     }
 
     #[test]
@@ -2023,7 +2869,7 @@ mod tests {
             allowed: 0,
         };
         assert_eq!(
-            preflight_refinement_pass(&mut denied_scope, MAX_TRIANGLES),
+            preflight_refinement_pass(&mut denied_scope),
             Err(Error::ResourceLimit { snapshot }),
             "pass exhaustion retains precedence over the triangle backstop"
         );
@@ -2033,11 +2879,16 @@ mod tests {
         let triangle_context =
             OperationContext::new(&triangle_session, Tolerances::default()).unwrap();
         let mut triangle_scope = OperationScope::new(&triangle_context);
+        let triangle_snapshot = LimitSnapshot {
+            stage: FACE_TESSELLATION_MESH_TRIANGLES,
+            resource: ResourceKind::Items,
+            consumed: MAX_TRIANGLES as u64 + 1,
+            allowed: MAX_TRIANGLES as u64,
+        };
         assert_eq!(
-            preflight_refinement_pass(&mut triangle_scope, MAX_TRIANGLES),
-            Err(Error::AlgorithmLimit {
-                operation: "tessellation triangle count",
-                limit: MAX_TRIANGLES,
+            observe_mesh_triangles(&mut triangle_scope, MAX_TRIANGLES as u64 + 1),
+            Err(Error::ResourceLimit {
+                snapshot: triangle_snapshot,
             })
         );
         assert_eq!(
@@ -2063,7 +2914,7 @@ mod tests {
         let context = OperationContext::new(&session, Tolerances::default()).unwrap();
         let outcome = tessellate_with_context(&face, &TessOptions::default(), &context).unwrap();
         assert!(outcome.result().is_ok());
-        assert_eq!(outcome.report().usage().len(), 2);
+        assert_eq!(outcome.report().usage().len(), 5);
 
         let invalid = tessellate_with_context(
             &face,

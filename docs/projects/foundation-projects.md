@@ -58,15 +58,15 @@ current record. Host findings remain ratcheted in `docs/oracle-results.tsv`.
    Projection production adoption and its internal-use ratchet remain. Public
    body-tessellation deprecation still waits for an adopted facade replacement.
 2. **Finish hostile-input tessellation accounting.** The contextual migration
-   accounts quality work and retained mesh vertices, but pole-row UV scratch,
-   prepared patch arrays, and triangle/output retention do not yet have
-   pre-allocation ceilings. Land exact split-work, prepared-item, and retained-
-   triangle stages first with compatibility-safe v1 defaults; body-wide patch
-   and triangle totals remain accounting-only where no truthful finite legacy
-   cap exists. Expand Q3 measurements, then add reviewed opt-in `bounded_v1`
-   face/body presets before describing product-facing tessellation as hostile-
-   input bounded. Do not use allocator-dependent byte counts or silently tune
-   the legacy v1 wrapper.
+   now has exact per-face boundary-split work, mesh-vertex admission, and
+   triangle high-water ceilings, including physical u32 enforcement and
+   child/sequential/root composition. Whole-body edge/iso split work, pole-row
+   UV scratch, prepared patch arrays, and retained output triangles still need
+   pre-allocation stages. Body-wide patch and triangle totals remain
+   accounting-only where no truthful finite legacy cap exists. Expand Q3
+   measurements, then add reviewed opt-in `bounded_v1` face/body presets before
+   describing product-facing tessellation as hostile-input bounded. Do not use
+   allocator-dependent byte counts or silently tune the legacy v1 wrapper.
 3. **Resume algorithm/API expansion behind the completed gates.** F3's generic fallback
    and facade graph-aware intersection follow the F2 scale/context work;
    semantic K4 edit transactions follow the K5 adoption pass. F6 splits and F4
