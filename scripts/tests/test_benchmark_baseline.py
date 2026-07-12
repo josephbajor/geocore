@@ -29,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 81)
+        self.assertEqual(len(cases), 83)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -106,7 +106,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
         tessellation = [
             case for case in cases if case["benchmark_target"] == "body_tessellation"
         ]
-        self.assertEqual(len(tessellation), 18)
+        self.assertEqual(len(tessellation), 20)
         self.assertTrue(
             all(
                 case["deterministic_seed"] == 0x5154455353000003
@@ -115,7 +115,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
         )
         self.assertEqual(
             {case["tolerances"]["chord_tol"] for case in tessellation},
-            {1e-2, 1e-3},
+            {1e-2, 3e-3, 1e-3, 3e-4},
         )
         self.assertTrue(
             all(
@@ -197,7 +197,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
             if case["policy_values"].get("source_fixture")
             == "solid_cylinder.x_t@onshape-cloud-2026-07-11"
         ]
-        self.assertEqual(len(imported_cylinder), 2)
+        self.assertEqual(len(imported_cylinder), 4)
         cylinder_sha256 = certified["fixtures_sha256"]["solid_cylinder.x_t"]
         cylinder_bytes = (
             ROOT / "oracle" / "outbox" / "solid_cylinder.x_t"
@@ -211,7 +211,12 @@ class BenchmarkBaselineTests(unittest.TestCase):
                 and case["expected_result_counters"]["source_faces"] == 3
                 and case["expected_result_counters"]["source_edges"] == 2
                 and case["policy_values"]["volume_ratio_floor"]
-                == (0.99 if case["tolerances"]["chord_tol"] < 5e-3 else 0.94)
+                == {
+                    1e-2: 0.94,
+                    3e-3: 0.98,
+                    1e-3: 0.99,
+                    3e-4: 0.998,
+                }[case["tolerances"]["chord_tol"]]
                 for case in imported_cylinder
             )
         )

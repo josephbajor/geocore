@@ -264,11 +264,12 @@ after it is captured in a named stable-host baseline.
 
 Owner: `ktopo`, consuming `kgeom` tessellation.
 
-Status: the closed-solid ladder uses the contextual v2 contract across eighteen
-registered cases: ten analytic block, cylinder, cone, sphere, and torus rows,
-two mixed-store target-cylinder rows, plus six certified imported NURBS-face,
-tolerant-edge, and cylinder rows at chord tolerances `1e-2` and `1e-3`. Each
-case uses a Serial, compatibility-v1 session and measures only
+Status: the closed-solid ladder uses the contextual v2 contract across twenty
+registered cases: ten analytic block, cylinder, cone, sphere, and torus rows;
+two mixed-store target-cylinder rows; four certified imported NURBS-face and
+tolerant-edge rows at chord tolerances `1e-2` and `1e-3`; and a four-point
+certified imported-cylinder ladder at `1e-2`, `3e-3`, `1e-3`, and `3e-4`.
+Each case uses a Serial, compatibility-v1 session and measures only
 `tessellate_body_with_context`; primitive construction or X_T import,
 session/context construction, outcome unpacking, and verification remain
 outside timing. Repetition proves both the mesh and complete operation report
@@ -303,13 +304,16 @@ target identity has exactly the standalone cylinder's normalized mesh and
 21-stage report at both tolerances. The 2,309-byte certified cylinder adds the
 first broader imported curved solid: setup pins its SHA-256, one analytic
 cylinder face, three total faces, and two vertex-less ring edges. Its coarse
-`1e-2` chord request is large relative to radius `0.13`, so the reviewed volume
-ratios are approximately `0.94968` and `0.99436`; explicit `0.94` and `0.99`
-lower floors admit each row without pretending the coarse row has fine-row
-accuracy.
-Genuinely curved NURBS, more imported representations, and tighter-tolerance
-cases remain required before corpus-backed finite body `bounded_v1` allowances
-are proposed.
+`1e-2` chord request is large relative to radius `0.13`. Across the four-point
+ladder, reviewed volume ratios are approximately `0.94968`, `0.98487`,
+`0.99436`, and `0.99857`; explicit `0.94`, `0.98`, `0.99`, and `0.998` lower
+floors admit each row without pretending coarse output has fine-row accuracy.
+Face-refinement passes progress `3 → 4 → 5 → 6`, edge depth `2 → 2 → 3 → 4`,
+and target vertices `202 → 540 → 2,320 → 12,248`, so finite presets must not
+assume smooth scaling between tolerance tiers. Genuinely curved NURBS, more
+imported representations, and four-point ladders across additional
+representations remain required before corpus-backed finite body `bounded_v1`
+allowances are proposed.
 
 Face-profile evidence is owned by a separate standalone ladder. Whole-body
 tessellation pre-refines each shared edge against every adjacent surface with a
@@ -333,7 +337,8 @@ trimmed NURBS fixtures promoted from the test corpus:
 - a bounded trimmed NURBS patch with one and multiple loops.
 
 For each fixture, run chord tolerances `1e-2`, `3e-3`, `1e-3`, and `3e-4`
-where deterministic work bounds allow. Record source entity counts, boundary
+where deterministic work bounds allow; the certified cylinder now covers all
+four. Record source entity counts, boundary
 samples, vertices, triangles, refinement steps, and output digest. Before a
 sample is accepted, verify:
 

@@ -126,8 +126,8 @@ pub struct BodyTessellationCase {
     pub expected_usage_stage_digest: u64,
 }
 
-/// Twelve analytic/store-shape cases plus six certified imported corpus rows.
-pub const CASES: [BodyTessellationCase; 18] = [
+/// Twelve analytic/store-shape cases plus eight certified imported corpus rows.
+pub const CASES: [BodyTessellationCase; 20] = [
     case(
         "topology/body-tessellation/block-v2/1/chord-1e-2-v2",
         FixtureKind::Block,
@@ -282,6 +282,15 @@ pub const CASES: [BodyTessellationCase; 18] = [
         0x2eef_9932_85f8_11dc,
     ),
     case(
+        "topology/body-tessellation/imported-cylinder-v2/1/chord-3e-3-v2",
+        FixtureKind::ImportedCylinder,
+        3.0e-3,
+        540,
+        1_076,
+        0x57c3_295c_221c_4f73,
+        0xd56f_60cd_d3a7_6735,
+    ),
+    case(
         "topology/body-tessellation/imported-cylinder-v2/1/chord-1e-3-v2",
         FixtureKind::ImportedCylinder,
         1.0e-3,
@@ -289,6 +298,15 @@ pub const CASES: [BodyTessellationCase; 18] = [
         4_636,
         0xc4ba_635c_11a1_e117,
         0xcf79_fce5_b7bf_d10d,
+    ),
+    case(
+        "topology/body-tessellation/imported-cylinder-v2/1/chord-3e-4-v2",
+        FixtureKind::ImportedCylinder,
+        3.0e-4,
+        12_248,
+        24_492,
+        0x135a_e581_4e82_5469,
+        0x92ae_1819_ef1c_3cf6,
     ),
 ];
 
@@ -340,8 +358,46 @@ const fn reviewed_accounting(
     chord_tol: f64,
 ) -> ([u64; USAGE_STAGE_COUNT], u64) {
     assert!(
-        chord_tol.to_bits() == 1.0e-2_f64.to_bits() || chord_tol.to_bits() == 1.0e-3_f64.to_bits()
+        chord_tol.to_bits() == 1.0e-2_f64.to_bits()
+            || chord_tol.to_bits() == 3.0e-3_f64.to_bits()
+            || chord_tol.to_bits() == 1.0e-3_f64.to_bits()
+            || chord_tol.to_bits() == 3.0e-4_f64.to_bits()
     );
+    if matches!(fixture_kind, FixtureKind::ImportedCylinder) {
+        if chord_tol.to_bits() == 1.0e-2_f64.to_bits() {
+            return (
+                [
+                    0, 0, 0, 0, 0, 0, 0, 3, 372, 236, 1, 131, 2, 24, 110, 0, 0, 202, 498, 400, 23,
+                ],
+                0x6ee8_a7e7_c94f_6b33,
+            );
+        }
+        if chord_tol.to_bits() == 1.0e-3_f64.to_bits() {
+            return (
+                [
+                    0, 0, 0, 0, 0, 0, 0, 5, 4_576, 2_386, 1, 259, 3, 56, 206, 0, 0, 2_320, 2_904,
+                    4_636, 23,
+                ],
+                0xd07b_2989_d806_bb46,
+            );
+        }
+        if chord_tol.to_bits() == 3.0e-3_f64.to_bits() {
+            return (
+                [
+                    0, 0, 0, 0, 0, 0, 0, 4, 1_048, 574, 1, 131, 2, 24, 110, 0, 0, 540, 836, 1_076,
+                    23,
+                ],
+                0x4331_bcf7_e749_7126,
+            );
+        }
+        return (
+            [
+                0, 0, 0, 0, 0, 0, 0, 6, 24_368, 12_378, 1, 515, 4, 120, 398, 0, 0, 12_248, 13_408,
+                24_492, 23,
+            ],
+            0x5503_6a96_7093_eaef,
+        );
+    }
     let fine = chord_tol < 5.0e-3;
     match (fixture_kind, fine) {
         (FixtureKind::Block, _) => (
@@ -417,19 +473,7 @@ const fn reviewed_accounting(
             ],
             0x0604_73f6_2ba7_442f,
         ),
-        (FixtureKind::ImportedCylinder, false) => (
-            [
-                0, 0, 0, 0, 0, 0, 0, 3, 372, 236, 1, 131, 2, 24, 110, 0, 0, 202, 498, 400, 23,
-            ],
-            0x6ee8_a7e7_c94f_6b33,
-        ),
-        (FixtureKind::ImportedCylinder, true) => (
-            [
-                0, 0, 0, 0, 0, 0, 0, 5, 4_576, 2_386, 1, 259, 3, 56, 206, 0, 0, 2_320, 2_904,
-                4_636, 23,
-            ],
-            0xd07b_2989_d806_bb46,
-        ),
+        (FixtureKind::ImportedCylinder, _) => unreachable!(),
     }
 }
 
@@ -1026,7 +1070,13 @@ pub fn fixture(case: BodyTessellationCase) -> BodyTessellationFixture {
                 })
                 .count();
             assert_eq!(cylinder_faces, 1);
-            let minimum_volume_ratio = if case.chord_tol < 5.0e-3 { 0.99 } else { 0.94 };
+            let minimum_volume_ratio = match case.chord_tol.to_bits() {
+                bits if bits == 1.0e-2_f64.to_bits() => 0.94,
+                bits if bits == 3.0e-3_f64.to_bits() => 0.98,
+                bits if bits == 1.0e-3_f64.to_bits() => 0.99,
+                bits if bits == 3.0e-4_f64.to_bits() => 0.998,
+                _ => unreachable!("reviewed imported-cylinder tolerance"),
+            };
             (
                 body,
                 core::f64::consts::PI * 0.13 * 0.13 * 0.2,
@@ -1162,8 +1212,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn registry_contains_exactly_eighteen_unique_canonical_cases() {
-        assert_eq!(CASES.len(), 18);
+    fn registry_contains_exactly_twenty_unique_canonical_cases() {
+        assert_eq!(CASES.len(), 20);
         let unique: BTreeSet<_> = CASES.iter().map(|case| case.path).collect();
         assert_eq!(unique.len(), CASES.len());
         for case in CASES {
@@ -1263,7 +1313,13 @@ mod tests {
                     );
                     assert_eq!(
                         entry["policy_values"]["volume_ratio_floor"].as_f64(),
-                        Some(if case.chord_tol < 5.0e-3 { 0.99 } else { 0.94 })
+                        Some(match case.chord_tol.to_bits() {
+                            bits if bits == 1.0e-2_f64.to_bits() => 0.94,
+                            bits if bits == 3.0e-3_f64.to_bits() => 0.98,
+                            bits if bits == 1.0e-3_f64.to_bits() => 0.99,
+                            bits if bits == 3.0e-4_f64.to_bits() => 0.998,
+                            _ => unreachable!("reviewed imported-cylinder tolerance"),
+                        })
                     );
                 }
                 FixtureKind::MixedStoreCylinder => {
