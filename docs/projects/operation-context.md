@@ -613,6 +613,12 @@ operand ordering without a second algorithm path. The future certified fallback
 enters at this same normalized boundary and must return indeterminate evidence
 until complete-domain exclusion is proven.
 
+Surface/surface dispatch uses the same single-arm rule. Its internal canonical
+rank is Plane, Cone, Cylinder, Sphere, Torus, then NURBS; this intentionally
+differs from the public class enum order so the cone/cylinder specialization
+retains its established cone-first contract. Result swapping restores caller
+order for points, branches, pcurves, and completion evidence.
+
 ## Rollout stages
 
 ### Stage 0 — Audit and vocabulary lock
