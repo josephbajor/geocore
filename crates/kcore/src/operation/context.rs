@@ -22,6 +22,7 @@ pub enum DiagnosticLevel {
 pub struct OperationContext<'session> {
     session: &'session SessionPolicy,
     tolerances: Tolerances,
+    family_budget_defaults: BudgetPlan,
     budget_overrides: BudgetPlan,
     diagnostic_level: DiagnosticLevel,
     diagnostic_capacity: usize,
@@ -41,10 +42,23 @@ impl<'session> OperationContext<'session> {
         Ok(Self {
             session,
             tolerances,
+            family_budget_defaults: BudgetPlan::empty(),
             budget_overrides: BudgetPlan::empty(),
             diagnostic_level: DiagnosticLevel::Off,
             diagnostic_capacity: 0,
         })
+    }
+
+    /// Installs the owning operation family's default budget profile.
+    ///
+    /// Family defaults have the lowest precedence: session entries replace
+    /// matching defaults, and explicit per-operation overrides replace both.
+    /// Omitted entries and root total-work ceilings flow through unchanged.
+    /// The three layers remain separate, so builder call order does not affect
+    /// the composed plan.
+    pub fn with_family_budget_defaults(mut self, defaults: BudgetPlan) -> Self {
+        self.family_budget_defaults = defaults;
+        self
     }
 
     /// Replaces per-operation budget overrides.
@@ -75,10 +89,10 @@ impl<'session> OperationContext<'session> {
         &self.budget_overrides
     }
 
-    /// Returns the effective budget after applying operation overrides.
+    /// Returns the effective family, session, and request budget.
     pub fn effective_budget(&self) -> BudgetPlan {
-        self.session
-            .default_budget()
+        self.family_budget_defaults
+            .overlaid(self.session.default_budget())
             .overlaid(&self.budget_overrides)
     }
 }

@@ -26,7 +26,7 @@ section and link the reason from the affected project file in the same change.
 | --- | --- |
 | F0 | Implemented: curve/curve operand swapping preserves completion evidence and canonical order. |
 | F1 | G1-G4a plus the F2 graph-budget adapter are implemented: `kgraph` and `ktopo::Store` own one transactional geometry graph; exact offsets evaluate through accepted/attempted node/depth accounting, check, tessellate, and round-trip through the declared X_T subset without basis duplication. The 14-file writer bundle is host-recertified and machine-fingerprinted; broader G4 corpus coverage and G5 remain. |
-| F2 | Stage 1, two Stage 2 pilots, three bounded Stage 3 pilots, and the first Stage 4 migration are implemented: scoped NURBS proof/march, Full face-domain checking, face tessellation, and NURBS/NURBS Newton conditioning/progress/gradient stationarity use shared policy/report vocabulary with compatibility, scale, and swap tests. Minimizer/contact-classification/legacy-slack guards, contextual projection, body tessellation, and broader migrations remain. |
+| F2 | Stage 1, Stage 1b composition, two Stage 2 pilots, three bounded Stage 3 pilots, and the first Stage 4 migration are implemented. `OperationContext` now owns family-default < session < request budget precedence for graph evaluation, Full checking, and face tessellation, including canonical root stops and accounting-mode validation. Scoped NURBS proof/march and NURBS/NURBS Newton conditioning/progress/gradient stationarity retain compatibility, scale, and swap evidence. Minimizer/contact-classification/legacy-slack guards, contextual projection, body tessellation, and broader migrations remain. |
 | F3 | Two slices implemented: centralized class dispatch plus shared periodic/range and first-wins candidate emission migrated through line/circle and plane/sphere. Broader driver migration and generic fallback remain. |
 | F4 | Phase 1, representative Phase 2 slices, and two Phase 3 pilots are implemented: graph evaluation owns stable classification, and one surface-intersection family retains ordered structured incomplete evidence through limits, numeric stops, canonicalization, and swapping. Broader result-family and legacy migrations remain. |
 | F5 | K1-K3, typed K4 interchange, and K5 adoption are implemented: the `kernel` facade owns lifecycle, opaque IDs, classified sources, one-scope outcomes, safe checker subjects, opaque journals, child-accounted procedural evaluation, and atomic typed X_T import/export. The standalone `kernel-lifecycle` client depends directly only on `kernel` and proves construction, semantic inspection, Full checking, surface evaluation, and byte-stable X_T export/import/re-export. Graph-aware intersection and semantic edit/journal iteration remain. |
@@ -48,13 +48,11 @@ current record. Host findings remain ratcheted in `docs/oracle-results.tsv`.
 
 ### Ordered code queue
 
-1. **Finish F2 contract consolidation.** Land one `kcore` operation-family
-   profile
-   composition rule: family defaults fill missing stages, session entries
-   override those defaults, and explicit request overrides are the only allowed
-   later override.
-   Finish the NURBS contact-classification/minimizer scale guards that bound the
-   future generic intersection fallback.
+1. **Finish F2 numerical convergence.** Land the bounded NURBS/NURBS
+   contact-classification and minimizer/local-search scale guards that gate the
+   future generic intersection fallback. Stage 1b profile composition is now
+   implemented and remains the mandatory rule for each later contextual
+   family; no owner-local merge recipe may reappear.
 2. **Contextualize and ratchet the remaining foundation paths.** Migrate body
    tessellation,
    projection, and X_T reconstruction's nested graph evaluation onto shared

@@ -241,20 +241,24 @@ pub fn tessellate(face: &TrimmedSurface<'_>, opts: &TessOptions) -> Result<FaceM
 
 /// Tessellate a trimmed face with deterministic resource accounting.
 ///
-/// The context's effective budget must contain the stages from
-/// [`FaceTessellationBudgetProfile::v1_defaults`]. Configuration errors are
-/// returned separately from geometry and limit failures. Budget validation
-/// precedes option validation and geometry evaluation.
+/// Family defaults fill tessellation stages omitted by the caller. Matching
+/// session entries override those defaults, and explicit request overrides
+/// have final precedence. Configuration errors are returned separately from
+/// geometry and limit failures. Budget validation precedes option validation
+/// and geometry evaluation.
 pub fn tessellate_with_context(
     face: &TrimmedSurface<'_>,
     opts: &TessOptions,
     context: &OperationContext<'_>,
 ) -> core::result::Result<OperationOutcome<FaceMesh>, OperationPolicyError> {
+    let context = context
+        .clone()
+        .with_family_budget_defaults(FaceTessellationBudgetProfile::v1_defaults());
     let effective_budget = context.effective_budget();
     validate_tessellation_budget(|stage, resource, mode| {
         effective_budget.require_limit(stage, resource, mode)
     })?;
-    let mut scope = OperationScope::new(context);
+    let mut scope = OperationScope::new(&context);
     let result = tessellate_in_scope(face, opts, &mut scope);
     Ok(scope.finish(result))
 }
@@ -408,19 +412,8 @@ fn validate_tessellation_budget(
         AccountingMode,
     ) -> core::result::Result<(), OperationPolicyError>,
 ) -> core::result::Result<(), OperationPolicyError> {
-    for (stage, resource, mode) in [
-        (
-            FACE_TESSELLATION_BOUNDARY_DEPTH,
-            ResourceKind::Depth,
-            AccountingMode::HighWater,
-        ),
-        (
-            FACE_TESSELLATION_REFINEMENT_PASSES,
-            ResourceKind::Work,
-            AccountingMode::Cumulative,
-        ),
-    ] {
-        require_limit(stage, resource, mode)?;
+    for required in FaceTessellationBudgetProfile::v1_defaults().limits() {
+        require_limit(required.stage, required.resource, required.mode)?;
     }
     Ok(())
 }
@@ -1537,7 +1530,7 @@ mod tests {
     }
 
     #[test]
-    fn contextual_entry_rejects_a_missing_budget_before_tessellation() {
+    fn contextual_entry_fills_missing_family_budget_before_tessellation() {
         let plane = Plane::new(Frame::world());
         let face = TrimmedSurface::rectangle(
             &plane,
@@ -1546,27 +1539,22 @@ mod tests {
         .unwrap();
         let session = SessionPolicy::v1();
         let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let outcome = tessellate_with_context(&face, &TessOptions::default(), &context).unwrap();
+        assert!(outcome.result().is_ok());
+        assert_eq!(outcome.report().usage().len(), 2);
+
+        let invalid = tessellate_with_context(
+            &face,
+            &TessOptions {
+                chord_tol: 0.0,
+                max_edge_len: None,
+            },
+            &context,
+        )
+        .unwrap();
         assert_eq!(
-            tessellate_with_context(&face, &TessOptions::default(), &context),
-            Err(OperationPolicyError::UnknownLimit {
-                stage: FACE_TESSELLATION_BOUNDARY_DEPTH,
-                resource: ResourceKind::Depth,
-            })
-        );
-        assert_eq!(
-            tessellate_with_context(
-                &face,
-                &TessOptions {
-                    chord_tol: 0.0,
-                    max_edge_len: None,
-                },
-                &context,
-            ),
-            Err(OperationPolicyError::UnknownLimit {
-                stage: FACE_TESSELLATION_BOUNDARY_DEPTH,
-                resource: ResourceKind::Depth,
-            }),
-            "configuration validation precedes option validation"
+            invalid.result(),
+            Err(&Error::InvalidTolerance { value: 0.0 })
         );
     }
 

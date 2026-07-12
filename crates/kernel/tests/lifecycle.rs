@@ -2,8 +2,7 @@
 
 use kernel::{
     BlockRequest, CheckBodyRequest, CheckLevel, CheckOutcome, Error, ExportXtRequest, Frame,
-    FullCheckBudgetProfile, ImportXtRequest, Kernel, OperationSettings, SessionPolicy,
-    SurfaceDerivativeOrder, SurfaceEvaluationRequest,
+    ImportXtRequest, Kernel, SessionPolicy, SurfaceDerivativeOrder, SurfaceEvaluationRequest,
 };
 
 #[test]
@@ -92,7 +91,7 @@ fn facade_only_client_can_construct_and_check_a_block_with_reports() {
 }
 
 #[test]
-fn facade_only_client_can_configure_a_full_check() {
+fn facade_only_client_can_run_a_full_check_with_family_defaults() {
     let mut session = Kernel::new().create_session();
     let part_id = session.create_part();
     let body = session
@@ -103,13 +102,10 @@ fn facade_only_client_can_configure_a_full_check() {
         .into_result()
         .unwrap()
         .body();
-    let settings =
-        OperationSettings::new().with_budget_overrides(FullCheckBudgetProfile::v1_defaults());
-
     let check = session
         .part(part_id)
         .unwrap()
-        .check_body(CheckBodyRequest::new(body, CheckLevel::Full).with_settings(settings))
+        .check_body(CheckBodyRequest::new(body, CheckLevel::Full))
         .unwrap();
 
     assert_eq!(check.result().unwrap().outcome(), CheckOutcome::Valid);

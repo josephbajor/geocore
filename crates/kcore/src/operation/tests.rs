@@ -13,6 +13,10 @@ const STAGE_B: StageId = match StageId::new("kcore.test.b") {
     Ok(value) => value,
     Err(_) => panic!("valid test stage"),
 };
+const STAGE_C: StageId = match StageId::new("kcore.test.c") {
+    Ok(value) => value,
+    Err(_) => panic!("valid test stage"),
+};
 const CODE_A: DiagnosticCode = match DiagnosticCode::new("kcore.test.notice-a") {
     Ok(value) => value,
     Err(_) => panic!("valid test code"),
@@ -24,6 +28,16 @@ fn plan() -> BudgetPlan {
         LimitSpec::new(STAGE_A, ResourceKind::Work, AccountingMode::Cumulative, 10),
     ])
     .expect("valid plan")
+}
+
+fn session_with_budget(default_budget: BudgetPlan) -> SessionPolicy {
+    SessionPolicy::new(
+        SessionPrecision::parasolid(),
+        NumericalPolicy::v1(),
+        ExecutionPolicy::Serial,
+        default_budget,
+        PolicyVersion::V1,
+    )
 }
 
 #[test]
@@ -222,6 +236,272 @@ fn required_limit_validation_is_consistent_and_read_only_for_plans_and_ledgers()
         );
     }
     assert_eq!(ledger, before);
+}
+
+#[test]
+fn family_session_and_request_budgets_compose_canonically_without_mutating_sources() {
+    let family = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        10,
+    )])
+    .unwrap();
+    let session_budget = BudgetPlan::new([LimitSpec::new(
+        STAGE_B,
+        ResourceKind::Depth,
+        AccountingMode::HighWater,
+        20,
+    )])
+    .unwrap();
+    let request = BudgetPlan::new([LimitSpec::new(
+        STAGE_C,
+        ResourceKind::Items,
+        AccountingMode::HighWater,
+        30,
+    )])
+    .unwrap();
+    let family_before = family.clone();
+    let session_before = session_budget.clone();
+    let request_before = request.clone();
+    let session = session_with_budget(session_budget.clone());
+
+    let family_then_request = OperationContext::new(&session, Tolerances::default())
+        .unwrap()
+        .with_family_budget_defaults(family.clone())
+        .with_budget_overrides(request.clone())
+        .effective_budget();
+    let request_then_family = OperationContext::new(&session, Tolerances::default())
+        .unwrap()
+        .with_budget_overrides(request.clone())
+        .with_family_budget_defaults(family.clone())
+        .effective_budget();
+    let expected = BudgetPlan::new([
+        LimitSpec::new(STAGE_C, ResourceKind::Items, AccountingMode::HighWater, 30),
+        LimitSpec::new(STAGE_B, ResourceKind::Depth, AccountingMode::HighWater, 20),
+        LimitSpec::new(STAGE_A, ResourceKind::Work, AccountingMode::Cumulative, 10),
+    ])
+    .unwrap();
+
+    assert_eq!(family_then_request, expected);
+    assert_eq!(request_then_family, expected);
+    assert_eq!(family, family_before);
+    assert_eq!(session_budget, session_before);
+    assert_eq!(request, request_before);
+}
+
+#[test]
+fn matching_limit_precedence_is_family_then_session_then_request() {
+    let family = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        100,
+    )])
+    .unwrap();
+    let session_budget = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        80,
+    )])
+    .unwrap();
+    let request = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        60,
+    )])
+    .unwrap();
+
+    let family_only_session = SessionPolicy::v1();
+    let family_only = OperationContext::new(&family_only_session, Tolerances::default())
+        .unwrap()
+        .with_family_budget_defaults(family.clone())
+        .effective_budget();
+    assert_eq!(family_only.limits()[0].allowed, 100);
+
+    let session = session_with_budget(session_budget);
+    let session_wins = OperationContext::new(&session, Tolerances::default())
+        .unwrap()
+        .with_family_budget_defaults(family.clone())
+        .effective_budget();
+    assert_eq!(session_wins.limits()[0].allowed, 80);
+
+    let request_wins = OperationContext::new(&session, Tolerances::default())
+        .unwrap()
+        .with_family_budget_defaults(family)
+        .with_budget_overrides(request)
+        .effective_budget();
+    assert_eq!(request_wins.limits()[0].allowed, 60);
+}
+
+#[test]
+fn winning_accounting_mode_remains_visible_to_family_validation() {
+    let family = BudgetPlan::new([LimitSpec::new(
+        STAGE_C,
+        ResourceKind::Items,
+        AccountingMode::HighWater,
+        10,
+    )])
+    .unwrap();
+    let session = session_with_budget(
+        BudgetPlan::new([LimitSpec::new(
+            STAGE_C,
+            ResourceKind::Items,
+            AccountingMode::Cumulative,
+            8,
+        )])
+        .unwrap(),
+    );
+    let session_wins = OperationContext::new(&session, Tolerances::default())
+        .unwrap()
+        .with_family_budget_defaults(family.clone())
+        .effective_budget();
+    assert_eq!(
+        session_wins.require_limit(STAGE_C, ResourceKind::Items, AccountingMode::HighWater,),
+        Err(OperationPolicyError::AccountingModeMismatch {
+            stage: STAGE_C,
+            resource: ResourceKind::Items,
+        })
+    );
+
+    let request = BudgetPlan::new([LimitSpec::new(
+        STAGE_C,
+        ResourceKind::Items,
+        AccountingMode::HighWater,
+        6,
+    )])
+    .unwrap();
+    let request_wins = OperationContext::new(&session, Tolerances::default())
+        .unwrap()
+        .with_family_budget_defaults(family)
+        .with_budget_overrides(request)
+        .effective_budget();
+    assert_eq!(
+        request_wins.require_limit(STAGE_C, ResourceKind::Items, AccountingMode::HighWater,),
+        Ok(())
+    );
+    assert_eq!(request_wins.limits()[0].allowed, 6);
+}
+
+#[test]
+fn root_total_work_obeys_layer_precedence_without_erasing_leaf_limits() {
+    let family = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        100,
+    )])
+    .unwrap()
+    .with_total_work_limit(90);
+
+    let family_only_session = SessionPolicy::v1();
+    let family_only = OperationContext::new(&family_only_session, Tolerances::default())
+        .unwrap()
+        .with_family_budget_defaults(family.clone())
+        .effective_budget();
+    assert_eq!(family_only.total_work_limit(), Some(90));
+    assert_eq!(family_only.limits()[0].allowed, 100);
+
+    let session = session_with_budget(
+        BudgetPlan::new([LimitSpec::new(
+            STAGE_A,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            80,
+        )])
+        .unwrap()
+        .with_total_work_limit(70),
+    );
+    let leaf_request = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        60,
+    )])
+    .unwrap();
+    let leaf_override = OperationContext::new(&session, Tolerances::default())
+        .unwrap()
+        .with_family_budget_defaults(family.clone())
+        .with_budget_overrides(leaf_request)
+        .effective_budget();
+    assert_eq!(leaf_override.limits()[0].allowed, 60);
+    assert_eq!(leaf_override.total_work_limit(), Some(70));
+
+    let root_override = OperationContext::new(&session, Tolerances::default())
+        .unwrap()
+        .with_family_budget_defaults(family)
+        .with_budget_overrides(BudgetPlan::empty().with_total_work_limit(50))
+        .effective_budget();
+    assert_eq!(root_override.limits()[0].allowed, 80);
+    assert_eq!(root_override.total_work_limit(), Some(50));
+}
+
+#[test]
+fn composed_root_crossing_keeps_the_canonical_total_work_stage() {
+    let family = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        100,
+    )])
+    .unwrap()
+    .with_total_work_limit(5);
+    let session = SessionPolicy::v1();
+    let context = OperationContext::new(&session, Tolerances::default())
+        .unwrap()
+        .with_family_budget_defaults(family);
+    let mut scope = OperationScope::new(&context);
+
+    let snapshot = match scope.ledger_mut().charge(STAGE_A, 6) {
+        Err(OperationPolicyError::LimitReached(snapshot)) => snapshot,
+        other => panic!("unexpected root charge result: {other:?}"),
+    };
+    assert_eq!(
+        snapshot,
+        LimitSnapshot {
+            stage: TOTAL_WORK_STAGE,
+            resource: ResourceKind::Work,
+            consumed: 6,
+            allowed: 5,
+        }
+    );
+    let report = scope.finish(Ok(())).into_parts().1;
+    assert_eq!(report.limit_events(), &[snapshot]);
+}
+
+#[test]
+fn plain_context_keeps_legacy_session_then_request_composition() {
+    let session_budget = BudgetPlan::new([LimitSpec::new(
+        STAGE_A,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        10,
+    )])
+    .unwrap()
+    .with_total_work_limit(20);
+    let request = BudgetPlan::new([LimitSpec::new(
+        STAGE_B,
+        ResourceKind::Depth,
+        AccountingMode::HighWater,
+        8,
+    )])
+    .unwrap();
+    let session = session_with_budget(session_budget.clone());
+    let effective = OperationContext::new(&session, Tolerances::default())
+        .unwrap()
+        .with_budget_overrides(request.clone())
+        .effective_budget();
+
+    assert_eq!(effective, session_budget.overlaid(&request));
+    assert_eq!(
+        effective.require_limit(STAGE_C, ResourceKind::Items, AccountingMode::HighWater,),
+        Err(OperationPolicyError::UnknownLimit {
+            stage: STAGE_C,
+            resource: ResourceKind::Items,
+        })
+    );
 }
 
 #[test]

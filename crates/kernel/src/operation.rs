@@ -82,22 +82,6 @@ impl OperationSettings {
             .with_budget_overrides(self.budget_overrides.clone())
             .with_diagnostics(self.diagnostic_level, self.diagnostic_capacity))
     }
-
-    fn context_with_missing_budget_defaults<'session>(
-        &self,
-        policy: &'session SessionPolicy,
-        defaults: &BudgetPlan,
-    ) -> Result<OperationContext<'session>> {
-        // The operation-specific profile supplies only stages omitted by the
-        // session. Existing session limits remain authoritative, while an
-        // explicit operation override retains normal F2 precedence.
-        let effective = defaults
-            .overlaid(policy.default_budget())
-            .overlaid(&self.budget_overrides);
-        Ok(OperationContext::new(policy, self.tolerances)?
-            .with_budget_overrides(effective)
-            .with_diagnostics(self.diagnostic_level, self.diagnostic_capacity))
-    }
 }
 
 impl Default for OperationSettings {
@@ -502,8 +486,9 @@ impl Part<'_> {
             settings,
         } = request;
         self.body(body.clone())?;
-        let context = settings.context(self.policy)?;
+        let mut context = settings.context(self.policy)?;
         if level == CheckLevel::Full {
+            context = context.with_family_budget_defaults(FullCheckBudgetProfile::v1_defaults());
             let effective = context.effective_budget();
             for required in FullCheckBudgetProfile::v1_defaults().limits() {
                 effective.require_limit(required.stage, required.resource, required.mode)?;
@@ -545,8 +530,9 @@ impl Part<'_> {
         } = request;
         self.surface(surface.clone())?;
 
-        let defaults = EvalBudgetProfile::v1_defaults();
-        let context = settings.context_with_missing_budget_defaults(self.policy, &defaults)?;
+        let context = settings
+            .context(self.policy)?
+            .with_family_budget_defaults(EvalBudgetProfile::v1_defaults());
         let effective = context.effective_budget();
         let limits = EvalLimits::from_budget_plan(&effective)?;
 
@@ -862,7 +848,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut session = Kernel::with_default_policy(policy).create_session();
+        let mut session = Kernel::new().create_session();
         let part_id = session.create_part();
         let created = session
             .edit_part(part_id.clone())
@@ -883,7 +869,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_full_check_policy_is_a_delegated_pre_scope_failure() {
+    fn full_check_family_defaults_fill_an_empty_session_budget() {
         let mut session = Kernel::new().create_session();
         let part_id = session.create_part();
         let body = session
@@ -894,21 +880,114 @@ mod tests {
             .into_result()
             .unwrap()
             .body();
-        let error = session
+        let outcome = session
             .part(part_id)
             .unwrap()
             .check_body(CheckBodyRequest::new(body, CheckLevel::Full))
-            .unwrap_err();
-        let expected = kcore::operation::OperationPolicyError::UnknownLimit {
+            .unwrap();
+        assert_eq!(outcome.result().unwrap().outcome(), CheckOutcome::Valid);
+        assert_eq!(
+            report_usage(
+                outcome.report(),
+                ktopo::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
+                ResourceKind::Items,
+            )
+            .allowed,
+            ktopo::domain::FaceDomainContainmentBudgetProfile::v1_defaults().limits()[0].allowed,
+        );
+        assert!(outcome.report().limit_events().is_empty());
+    }
+
+    #[test]
+    fn stricter_session_full_check_stage_overrides_the_family_default() {
+        let session_budget = BudgetPlan::new([LimitSpec::new(
+            ktopo::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
+            ResourceKind::Items,
+            AccountingMode::HighWater,
+            0,
+        )])
+        .unwrap();
+        let policy = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            session_budget,
+            PolicyVersion::V1,
+        );
+        let mut session = Kernel::with_default_policy(policy).create_session();
+        let part_id = session.create_part();
+        let body = session
+            .edit_part(part_id.clone())
+            .unwrap()
+            .create_block(BlockRequest::new(Frame::world(), [1.0, 1.0, 1.0]))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let outcome = session
+            .part(part_id)
+            .unwrap()
+            .check_body(CheckBodyRequest::new(body, CheckLevel::Full))
+            .unwrap();
+        let snapshot = kcore::operation::LimitSnapshot {
             stage: ktopo::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
             resource: ResourceKind::Items,
+            consumed: 1,
+            allowed: 0,
         };
-        assert_eq!(error.class(), ErrorClass::InvalidInput);
-        assert_eq!(error.code(), expected.code());
-        assert!(matches!(
-            error.source().and_then(|source| source.downcast_ref()),
-            Some(kcore::error::Error::OperationPolicy { source }) if source == &expected
-        ));
+        assert_eq!(outcome.report().limit_events(), &[snapshot]);
+        assert_eq!(
+            report_usage(
+                outcome.report(),
+                ktopo::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
+                ResourceKind::Items,
+            )
+            .allowed,
+            0,
+        );
+    }
+
+    #[test]
+    fn explicit_full_check_override_wins_over_a_stricter_session_stage() {
+        let session_budget = BudgetPlan::new([LimitSpec::new(
+            ktopo::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
+            ResourceKind::Items,
+            AccountingMode::HighWater,
+            0,
+        )])
+        .unwrap();
+        let policy = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            session_budget,
+            PolicyVersion::V1,
+        );
+        let mut session = Kernel::with_default_policy(policy).create_session();
+        let part_id = session.create_part();
+        let body = session
+            .edit_part(part_id.clone())
+            .unwrap()
+            .create_block(BlockRequest::new(Frame::world(), [1.0, 1.0, 1.0]))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let request = CheckBodyRequest::new(body, CheckLevel::Full).with_settings(
+            OperationSettings::new().with_budget_overrides(FullCheckBudgetProfile::v1_defaults()),
+        );
+        let outcome = session.part(part_id).unwrap().check_body(request).unwrap();
+        assert_eq!(outcome.result().unwrap().outcome(), CheckOutcome::Valid);
+        assert!(outcome.report().limit_events().is_empty());
+        assert_eq!(
+            report_usage(
+                outcome.report(),
+                ktopo::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
+                ResourceKind::Items,
+            )
+            .allowed,
+            FullCheckBudgetProfile::v1_defaults().limits()[0].allowed,
+        );
     }
 
     #[test]

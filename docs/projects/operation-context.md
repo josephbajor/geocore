@@ -1,6 +1,6 @@
 # Operation context and numerical policy
 
-Status: infrastructure and representative Stage 2-4 pilots implemented; operation-family profile consolidation is the next gate
+Status: Stage 1b composition and representative Stage 2-4 pilots implemented; NURBS contact/minimizer scale guards are the next gate
 
 ## Purpose
 
@@ -598,7 +598,8 @@ tests and determinism hashes are unchanged.
 
 ### Stage 1b — Consolidate operation-family profile composition
 
-Status: next F2 priority before additional contextual operation families.
+Status: implemented for graph evaluation, Full checking, and face
+tessellation; later contextual families must use the same contract.
 
 - Add one owner-level composition API in `kcore`: operation-family defaults
   fill missing stage/resource entries, session entries override those defaults,
@@ -612,6 +613,16 @@ Status: next F2 priority before additional contextual operation families.
 
 Exit: every contextual family composes policy the same way, and no facade or
 operation crate implements its own default/session/request merge semantics.
+
+Implementation evidence: `OperationContext` retains family defaults, session
+entries, and explicit request overrides as distinct layers and composes them in
+that order. Builder call order is irrelevant; matching entries replace rather
+than silently taking a minimum, accounting-mode changes remain visible to the
+family's validation, and root total-work overrides retain the canonical
+`kcore.operation.total-work` stop. The facade's former local overlay helper was
+removed. Outer graph evaluation, Full checking, and face tessellation install
+their owner profiles, while nested `*_in_scope` paths continue to validate and
+borrow the parent ledger without re-profiling or resetting work.
 
 ### Stage 2 — Behavior-preserving proof/refinement pilots
 

@@ -68,9 +68,9 @@ use crate::store::{Entity, Store};
 use kcore::arena::Handle;
 use kcore::error::{CapabilityId, Result};
 use kcore::operation::{
-    AccountingMode, BudgetPlan, ExecutionPolicy, LimitSnapshot, NumericalPolicy, OperationContext,
-    OperationOutcome, OperationPolicyError, OperationScope, PolicyVersion, ResourceKind,
-    SessionPolicy, SessionPrecision,
+    BudgetPlan, ExecutionPolicy, LimitSnapshot, NumericalPolicy, OperationContext,
+    OperationOutcome, OperationPolicyError, OperationScope, PolicyVersion, SessionPolicy,
+    SessionPrecision,
 };
 use kcore::tolerance::{LINEAR_RESOLUTION, SIZE_BOX_HALF, Tolerances};
 use kgeom::param::ParamRange;
@@ -345,15 +345,22 @@ pub fn check_body_report(store: &Store, body: BodyId, level: CheckLevel) -> Resu
 
 /// Check a body while retaining deterministic operation accounting.
 ///
-/// Full checking requires the stages from
-/// [`FullCheckBudgetProfile::v1_defaults`]. Fast checking does not consume
-/// that proof budget.
+/// Full-check family defaults fill stages omitted by the caller. Matching
+/// session entries override those defaults, and explicit request overrides
+/// have final precedence. Fast checking does not install or consume the Full
+/// proof budget.
 pub fn check_body_report_with_context(
     store: &Store,
     body: BodyId,
     level: CheckLevel,
     context: &OperationContext<'_>,
 ) -> core::result::Result<OperationOutcome<CheckReport>, OperationPolicyError> {
+    let family_context = (level == CheckLevel::Full).then(|| {
+        context
+            .clone()
+            .with_family_budget_defaults(FullCheckBudgetProfile::v1_defaults())
+    });
+    let context = family_context.as_ref().unwrap_or(context);
     if level == CheckLevel::Full {
         validate_full_check_budget(context)?;
     }
@@ -415,20 +422,8 @@ fn validate_full_check_budget(
     context: &OperationContext<'_>,
 ) -> core::result::Result<(), OperationPolicyError> {
     let plan = context.effective_budget();
-    let Some(limit) = plan.limits().iter().find(|limit| {
-        limit.stage == crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS
-            && limit.resource == ResourceKind::Items
-    }) else {
-        return Err(OperationPolicyError::UnknownLimit {
-            stage: crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
-            resource: ResourceKind::Items,
-        });
-    };
-    if limit.mode != AccountingMode::HighWater {
-        return Err(OperationPolicyError::AccountingModeMismatch {
-            stage: limit.stage,
-            resource: limit.resource,
-        });
+    for required in FullCheckBudgetProfile::v1_defaults().limits() {
+        plan.require_limit(required.stage, required.resource, required.mode)?;
     }
     Ok(())
 }
@@ -1719,6 +1714,7 @@ mod tests {
     use crate::make::{
         block, cone, cylinder, cylindrical_sheet, planar_sheet, solid_body_scaffold,
     };
+    use kcore::operation::{AccountingMode, ResourceKind};
     use kgeom::curve::{Circle, Line};
     use kgeom::curve2d::NurbsCurve2d;
     use kgeom::frame::Frame;
@@ -2069,7 +2065,7 @@ mod tests {
         let body = clean_block(&mut store);
         let legacy = check_body_report(&store, body, CheckLevel::Full).unwrap();
 
-        let session = checker_session(FullCheckBudgetProfile::v1_defaults());
+        let session = checker_session(BudgetPlan::empty());
         let context = OperationContext::new(&session, Tolerances::default()).unwrap();
         let contextual =
             check_body_report_with_context(&store, body, CheckLevel::Full, &context).unwrap();
