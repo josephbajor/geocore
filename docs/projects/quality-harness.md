@@ -1,6 +1,6 @@
 # F7 quality, fuzzing, and performance harnesses
 
-Status: Q0 through Q2 plus the first Q3 through Q5 slices implemented; remaining benchmark and fuzz stages implementation-ready
+Status: Q0-Q2 and the first Q3-Q6 foundation slices implemented; Q8 bounded CI activation is next
 
 ## Outcome
 
@@ -412,6 +412,10 @@ regression remains portable.
 
 ## Stage Q8 — bounded CI jobs
 
+Status: next F7 milestone. Existing benchmark targets and the two current fuzz
+targets are sufficient to activate the bounded jobs; more matrices and targets
+do not block this stage.
+
 Add two jobs after Q1 and Q6 land.
 
 `benchmark-smoke`:
@@ -438,22 +442,21 @@ A scheduled job may use longer budgets, rotating deterministic seeds, and a
 corpus cache. It must remain bounded and must not silently update checked-in
 corpora or baselines.
 
-## Atomic landing sequence
+## Revised landing sequence from the current state
 
-1. **Q0:** toolchain file, workspace MSRV inheritance, pinned CI, this plan.
-2. **Q1:** benchmark runner, metadata schema, tiny fixture, smoke command.
-3. **Q2:** topology commit/index ladder and failure-atomic checks.
-4. **Q3:** tessellation ladder.
-5. **Q4:** NURBS isolation ladder.
-6. **Q5:** X_T I/O ladder.
-7. **Q6:** isolated fuzz workspace and four initial target contracts.
-8. **Q7:** minimization/promotion tooling and regression manifest.
-9. **Q8:** bounded CI smoke jobs; stable-host baseline workflow separately.
+1. **Q8:** activate bounded benchmark and fuzz smoke jobs for the existing
+   targets, locked corpora, fixed seeds, and documented commands.
+2. **Q7:** land minimization/promotion tooling and the regression manifest so
+   CI findings have one durable path into portable tests.
+3. **Q6 expansion:** add result-canonicalization and transaction/Euler targets
+   only after the two existing targets run in CI.
+4. **Q3-Q5 expansion:** grow tessellation, NURBS isolation, and X_T size/class
+   matrices only in response to an algorithm/adoption question or measured
+   coverage gap.
 
-Q2 through Q5 are independent after Q1 and should land in separate commits.
-The four fuzz targets are independent after Q6 establishes shared decoding and
-limit helpers. CI jobs land only after their local commands are documented and
-repeatable.
+Q0-Q2 and the current Q3-Q6 foundation slices are completed milestones. No
+additional fuzz target, benchmark family, or broad corpus expansion should land
+before Q8 unless it is the regression for a concrete production defect.
 
 ## Exit criteria
 

@@ -448,14 +448,20 @@ partial evidence with an indeterminate status in its result record.
 - Make context-aware operation reports the source of complete limit usage and
   deterministic diagnostics.
 
-### Phase 4 — Broad cleanup and facade/ABI
+### Phase 4 — Owner-driven cleanup and facade enforcement
 
-- Migrate remaining prose-only invalid/limit call sites in bounded owner-sized
-  changes.
+- Require all new production paths to use the stable taxonomy and migrate
+  remaining prose-only invalid/limit call sites only with bounded owner-sized
+  behavior changes.
 - Deprecate legacy `AlgorithmLimit { operation, limit }` and prose-only
   completion reasons after all public consumers have structured accessors.
-- Define the F5 facade error and C record as adapters over classified source
+- Keep the implemented F5 facade error as an adapter over classified source
   errors; do not duplicate layer payloads.
+- Defer the C record and ABI project until K5 adoption validates the native
+  facade and a separately approved ABI contract exists.
+
+Phase 4 is not a repository-wide cleanup campaign. Stable identifiers are
+enforced for new work; legacy migrations are opportunistic and owner-driven.
 
 ## Required tests
 

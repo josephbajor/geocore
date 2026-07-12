@@ -1,6 +1,6 @@
 # Operation context and numerical policy
 
-Status: Stage 1, intersection and checker Stage 2 pilots, the first conditioning-only Stage 3 pilot, and the first contextual Stage 4 face-tessellation migration implemented
+Status: infrastructure and representative Stage 2-4 pilots implemented; operation-family profile consolidation is the next gate
 
 ## Purpose
 
@@ -574,6 +574,23 @@ Exit: every pilot constant has one documented category; no behavior changes.
 Exit: types are usable without any production operation depending on them; existing
 tests and determinism hashes are unchanged.
 
+### Stage 1b — Consolidate operation-family profile composition
+
+Status: next F2 priority before additional contextual operation families.
+
+- Add one owner-level composition API in `kcore`: operation-family defaults
+  fill missing stage/resource entries, session entries override those defaults,
+  and explicit request overrides are the only allowed later override.
+- Preserve the root total-work ceiling and canonical stop identity through all
+  three layers.
+- Migrate graph evaluation, Full checking, and face tessellation profile setup
+  to this API; prohibit new owner-local overlay helpers.
+- Add cross-family tests for omitted stages, stricter session stages, explicit
+  overrides, accounting-mode mismatches, and root-versus-leaf precedence.
+
+Exit: every contextual family composes policy the same way, and no facade or
+operation crate implements its own default/session/request merge semantics.
+
 ### Stage 2 — Behavior-preserving proof/refinement pilots
 
 - Migrate `NurbsSurfaceBvh::isolate_implicit_candidates` as the geometry pilot.
@@ -605,6 +622,11 @@ numeric-resolution reporting remain separate migrations.
 Exit: candidate acceptance still depends on model residuals; parameter/conditioning
 guards have no direct proof authority; scale tests pass.
 
+Before F3's generic fallback grows, migrate the remaining NURBS/NURBS
+contact-classification and minimizer/progress scale guards that currently bound
+the verified reparameterization range. Broader pair-file migration waits for
+that gate; it does not proceed merely because the contextual entry point exists.
+
 ### Stage 4 — Projection and tessellation
 
 Status: face tessellation now has contextual and shared-scope entry points,
@@ -625,6 +647,9 @@ thread-count variants produce identical mesh bits and semantic reports.
 
 - Route checked construction through one scope, including affected-body checking.
 - Add contextual checker APIs and structured Full verification gaps.
+- Route X_T reconstruction's nested graph evaluation through the caller's
+  scope and deterministic child reservations; do not report uncharged default
+  graph limits as contextual work.
 - Define the policy-ceiling relationship to transaction tolerance-growth budgets without
   moving consumption out of the transaction.
 
@@ -633,6 +658,8 @@ unchanged under the compatibility policy.
 
 ### Stage 6 — Broad intersection migration and enforcement
 
+- Start only after Stage 1b composition and the Stage 3
+  contact-classification/minimizer scale gate are complete.
 - Migrate remaining iterative intersection paths and shared drivers as F3 consolidates
   them.
 - Add a review lint or targeted source audit that rejects new unclassified production

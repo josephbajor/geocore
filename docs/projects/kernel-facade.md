@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1, the K2 contextual block/check/query pilot, K3 geometry-identity/read-view/surface-evaluation slices, and the first K4 typed interchange slice implemented; graph-aware intersection, semantic K4 edits/journal iteration, and K5 implementation-ready
+Status: K1-K3 pilots and typed K4 interchange implemented; K5 adoption is the next gate before further public facade expansion
 
 ## Outcome
 
@@ -636,6 +636,25 @@ points, and keeps the workspace green.
 Exit: ownership, ordering, and error ownership are unambiguous; no source API
 changes.
 
+### Current convergence gate — adoption before expansion
+
+The implemented facade is now large enough to validate against a real consumer.
+Before adding graph-aware intersection, semantic edit transactions, more
+operation families, or any ABI layer:
+
+- migrate one in-repository tool/example to depend only on `kernel`;
+- audit every lower-crate import or raw-field access that migration still
+  requires;
+- add semantic accessors in the owner crate rather than exposing raw facade
+  escape hatches;
+- verify the `kernel` package file list and facade-only examples are
+  self-contained; and
+- record API friction before stabilizing additional request/result types.
+
+Compile-fail leakage guards and existing facade behavior remain frozen during
+this adoption pass. Necessary additive accessors are allowed; speculative
+operation families are not.
+
 ### K1 — Lifecycle, opaque IDs, and read views
 
 - Add the `kernel` crate, `Kernel`, `Session`, `PartId`, `Part`, and `PartEdit`.
@@ -676,6 +695,10 @@ F2 child ledger, retains accepted/attempted graph work and classified sources,
 and keeps graph limits, handles, evaluators, and descriptors private.
 Graph-aware intersection requests remain.
 
+The graph-aware request resumes after F2 profile composition and the NURBS
+scale gates required by F3's generic fallback are complete, and after the K5
+consumer audit confirms the request shape.
+
 This phase lands after F1 G2 or in the same integration window:
 
 - add facade curve/surface/pcurve IDs backed by graph handles;
@@ -695,6 +718,10 @@ summaries, deterministic text, classified source chains, and the exact opaque
 commit journal. Import into populated parts is rollback- and allocator-clean;
 semantic edit transactions and facade-ID journal iterators remain.
 
+Those remaining semantic edit surfaces resume after the K5 adoption pass. The
+interchange facade stays thin while `kxt` first gains truthful contextual child
+accounting for its nested graph evaluation.
+
 - Add the semantic `EditTransaction` wrapper over currently public checked
   transaction methods.
 - Add `ChangeJournal` and its facade-ID iterators.
@@ -708,13 +735,20 @@ export a body without importing raw topology structs.
 
 ### K5 — Adoption and lower-layer encapsulation preparation
 
-- Migrate product/examples/bindings-facing code to `kernel`.
+Priority: next facade milestone; it now precedes the remaining K3/K4 API
+expansion.
+
+- Migrate at least one real product/tool/example path to a `kernel`-only direct
+  dependency before attempting broad adoption.
 - Add semantic accessors to `ktopo` wherever facade or interchange still reads
   public fields directly.
 - Mark raw topology layout and assembly modules explicitly unstable in package
   documentation and stop adding external-style examples that construct entity
   structs.
 - Audit public fields, generic `Entity` access, and raw assembly consumers.
+- Make `cargo package --list` self-contained for facade tests/examples and
+  inventory the pre-existing path-dependency version work required for full
+  package verification.
 
 F5 does not remove or privatize existing public fields in this additive phase.
 Once all in-repository consumers use accessors, a separately announced

@@ -1,6 +1,6 @@
 # Kernel foundation project portfolio
 
-Status: proposed execution plan
+Status: active implementation portfolio; convergence phase
 
 This portfolio turns the current foundation review into bounded projects with
 explicit dependencies and exit criteria. Projects should preserve the kernel's
@@ -20,6 +20,35 @@ topology boundaries.
 | F6 | First slice implemented: shared surface inversion, chart normalization, and distance services consumed by checker and tessellation. Module splits remain. |
 | F7 | Q0-Q2 plus first Q3-Q6 slices are implemented: reproducible benchmarks cover topology, analytic body tessellation, NURBS isolation, and truthful X_T I/O; the isolated fuzz workspace now has bounded `xt_read` and `nurbs_constructors` contracts, stable error/invariant checks, atomicity, and licensed/generated seeds. Q3/Q4/Q5 expansion, pinned-nightly smokes, more Q6 targets/corpora, and Q7-Q8 remain. |
 
+## Current direction and milestone order
+
+The foundation has enough vertical proof. The current phase prioritizes
+convergence, adoption, and continuous enforcement over adding more parallel
+surface area:
+
+1. **F2 contract consolidation.** Land one `kcore` operation-family profile
+   composition rule: family defaults fill missing stages, session entries
+   override those defaults, and explicit request overrides are the only allowed
+   later override.
+   Finish the NURBS contact-classification/minimizer scale guards that bound the
+   future generic intersection fallback.
+2. **Contextualize the remaining foundation paths.** Migrate body tessellation,
+   projection, and X_T reconstruction's nested graph evaluation onto shared
+   scopes and child reservations before expanding their facade APIs.
+3. **Pull F5/K5 adoption forward.** Migrate one real tool/example to depend only
+   on `kernel`, audit the resulting accessor and packaging gaps, and keep the
+   public facade otherwise stable during that pass.
+4. **Make F7/Q8 the next harness milestone.** Run the existing benchmarks and
+   fuzz contracts in bounded CI before adding more benchmark matrices, fuzz
+   targets, or corpora.
+5. **Resume algorithm/API expansion behind those gates.** F3's generic fallback
+   and facade graph-aware intersection follow the F2 scale/context work;
+   semantic K4 edit transactions follow the K5 adoption pass. F6 splits and F4
+   legacy cleanup land only with an owner-level behavioral migration.
+
+No C ABI, plugin ABI, broad topology privacy break, speculative facade family,
+or file-size-only module split is part of this convergence phase.
+
 ## Dependency outline
 
 ```text
@@ -33,10 +62,11 @@ F6 Shared surface services/module decomposition (independent first slice)
 F7 Quality and performance harnesses             (independent and continuous)
 ```
 
-F0, F1, F2, the first slice of F6, and F7 can proceed concurrently. F3 should
-not perform a broad pair-file rewrite until F2 defines solver policy. F5 should
-not freeze a facade until graph handles, operation context, and error outcomes
-have stable shapes.
+The original independent foundations have landed. Work is no longer scheduled
+as broad parallel expansion: F2 profile/scale convergence gates F3; contextual
+X_T/body-tessellation work gates the corresponding facade operations; K5
+adoption gates further public facade growth; and Q8 gates additional harness
+breadth.
 
 ## Reconciled F1/F2/F4 boundary
 
@@ -113,6 +143,12 @@ algorithm consume explicit policy; defaults reproduce existing golden results;
 limits are test-overridable and failures report stage plus consumed/allowed
 work.
 
+**Current convergence gate:** move operation-family default/session/request
+composition into one `kcore` contract, remove owner-local overlay recipes, and
+finish the scale-sensitive contact/minimizer guards required by the generic
+intersection fallback. Contextual X_T graph evaluation, projection, and body
+tessellation must use the same scope/child-reservation model.
+
 ## F3 — Intersection engine consolidation
 
 **Purpose:** keep analytic special cases while preventing quadratic dispatch and
@@ -171,7 +207,10 @@ chart normalization, and point-to-surface distance in `kgeom`; migrate checker
 and body tessellation to it.
 
 **Later slices:** separate structural/incidence/domain/shell checking;
-boundary/chart/triangulation tessellation; and X_T planning/emission/serialization.
+boundary/chart/triangulation tessellation; and X_T
+planning/emission/serialization only when the corresponding contextual or
+adoption work establishes a tested seam. File size alone is not a split
+criterion.
 
 **Exit criteria:** checker and tessellator share one inversion implementation and
 the same class coverage; focused tests cover seams, singularities, and NURBS
@@ -198,3 +237,7 @@ or indeterminate, which tolerances and work budgets apply, how failure atomicity
 is verified, what journal/checker evidence is produced, and which deterministic
 or performance regression protects it. Cross-project shared types should land
 in small contract commits before broad migrations.
+
+During convergence, new production code must use the F2/F4 contracts, but F4
+does not run a repository-wide cleanup campaign. Remaining legacy call sites
+migrate opportunistically with their owning behavior change.
