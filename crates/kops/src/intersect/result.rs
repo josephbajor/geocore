@@ -62,7 +62,9 @@ pub struct CurveCurveOverlap {
 pub struct CurveCurveIntersections {
     /// Isolated contacts in deterministic parameter order.
     pub points: Vec<CurveCurvePoint>,
-    /// Coincident intervals in deterministic parameter order.
+    /// Coincident intervals in deterministic parameter order. On a complete
+    /// result these extents are certified; on an indeterminate result they are
+    /// verified provisional discoveries only.
     pub overlaps: Vec<CurveCurveOverlap>,
     completion: Completion,
     root_certificates: Vec<CurvePairRootCertificate>,

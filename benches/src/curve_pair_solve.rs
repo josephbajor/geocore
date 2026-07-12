@@ -35,6 +35,10 @@ pub enum SolveFixture {
     MultipleRoots,
     /// Overlapping root hulls whose exact subdivision proves separation.
     HiddenMiss,
+    /// Byte-identical NURBS representations over the same full range.
+    ExactOverlap,
+    /// Tolerance-contained parallel curves without exact representation proof.
+    SampledOverlap,
 }
 
 /// Reviewed structured stop.
@@ -79,8 +83,8 @@ pub struct CurvePairSolveCase {
     pub expected_output_digest: u64,
 }
 
-/// Six cases covering representation, contact character, multiplicity, proof, and limits.
-pub const CASES: [CurvePairSolveCase; 6] = [
+/// Eight cases covering representation, contact character, multiplicity, overlap proof, and limits.
+pub const CASES: [CurvePairSolveCase; 8] = [
     case(
         "geometry/curve-pair-solve/poly-transverse-v1/1/default-v1",
         SolveFixture::PolynomialTransverse,
@@ -144,6 +148,32 @@ pub const CASES: [CurvePairSolveCase; 6] = [
             LimitKind::None,
             0x6489_db2b_285b_d20f,
             0x302a_fe5b_7cd2_afbf,
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/exact-overlap-v1/1/default-v1",
+        SolveFixture::ExactOverlap,
+        4_096,
+        expected(
+            0,
+            true,
+            false,
+            LimitKind::None,
+            0x6489_db2b_285b_d20f,
+            0xd761_a52e_b63b_8741,
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/sampled-overlap-v1/1/default-v1",
+        SolveFixture::SampledOverlap,
+        4_096,
+        expected(
+            0,
+            false,
+            false,
+            LimitKind::None,
+            0x6489_db2b_285b_d20f,
+            0xd353_e12d_7ffc_6c0b,
         ),
     ),
     case(
@@ -401,7 +431,11 @@ pub fn fixture(case: CurvePairSolveCase) -> CurvePairSolveFixture {
 /// Verify reviewed solve evidence without using elapsed time as correctness evidence.
 pub fn verify(case: CurvePairSolveCase, evidence: CurvePairSolveEvidence) {
     assert_eq!(evidence.points, case.expected_points);
-    assert_eq!(evidence.overlaps, 0);
+    let expected_overlaps = usize::from(matches!(
+        case.fixture,
+        SolveFixture::ExactOverlap | SolveFixture::SampledOverlap
+    ));
+    assert_eq!(evidence.overlaps, expected_overlaps);
     assert_eq!(evidence.complete, case.expected_complete);
     assert_eq!(evidence.proven_empty, case.expected_proven_empty);
     assert_eq!(evidence.limit, case.expected_limit);
@@ -433,6 +467,8 @@ fn curves(fixture: SolveFixture) -> (NurbsCurve, NurbsCurve) {
         SolveFixture::Tangent => (tangent_parabola(), horizontal(0.0)),
         SolveFixture::MultipleRoots => (arch(), horizontal(0.5)),
         SolveFixture::HiddenMiss => (arch(), horizontal(1.5)),
+        SolveFixture::ExactOverlap => (horizontal(0.0), horizontal(0.0)),
+        SolveFixture::SampledOverlap => (horizontal(0.0), horizontal(0.5e-8)),
     }
 }
 

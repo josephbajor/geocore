@@ -396,6 +396,9 @@ fn intersect_bounded_nurbs_nurbs_contextual_impl(
     let collapsed_a = range_has_no_parameter_progress(range_a, tolerances, numerical);
     let collapsed_b = range_has_no_parameter_progress(range_b, tolerances, numerical);
     if !collapsed_a && !collapsed_b {
+        if let Some(overlap) = exact_full_overlap(a, range_a, b, range_b) {
+            return CurveCurveIntersections::canonicalized_complete(Vec::new(), vec![overlap]);
+        }
         let isolation = isolate_curve_pair_candidates_in_scope(
             a,
             range_a,
@@ -430,6 +433,63 @@ fn intersect_bounded_nurbs_nurbs_contextual_impl(
         );
     }
     degenerate_range_intersections(a, range_a, collapsed_a, b, range_b, tolerances, numerical)
+}
+
+fn exact_full_overlap(
+    a: &NurbsCurve,
+    range_a: ParamRange,
+    b: &NurbsCurve,
+    range_b: ParamRange,
+) -> Option<CurveCurveOverlap> {
+    if a == b && range_a == range_b {
+        return Some(CurveCurveOverlap {
+            a: range_a,
+            b: range_b,
+            orientation: ParamOrientation::Same,
+        });
+    }
+    if !exact_reversed_representation(a, b) {
+        return None;
+    }
+    let domain = a.param_range();
+    let reversed_range = ParamRange::new(
+        reverse_parameter(domain, range_a.hi)?,
+        reverse_parameter(domain, range_a.lo)?,
+    );
+    (range_b == reversed_range).then_some(CurveCurveOverlap {
+        a: range_a,
+        b: range_b,
+        orientation: ParamOrientation::Reversed,
+    })
+}
+
+fn exact_reversed_representation(a: &NurbsCurve, b: &NurbsCurve) -> bool {
+    if a.degree() != b.degree()
+        || a.param_range() != b.param_range()
+        || !a.points().iter().eq(b.points().iter().rev())
+    {
+        return false;
+    }
+    let weights_match = match (a.weights(), b.weights()) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.iter().eq(b.iter().rev()),
+        _ => false,
+    };
+    if !weights_match {
+        return false;
+    }
+    let domain = a.param_range();
+    a.knots()
+        .as_slice()
+        .iter()
+        .rev()
+        .zip(b.knots().as_slice())
+        .all(|(a, b)| reverse_parameter(domain, *a) == Some(*b))
+}
+
+fn reverse_parameter(domain: ParamRange, parameter: f64) -> Option<f64> {
+    let reversed = domain.lo + (domain.hi - parameter);
+    reversed.is_finite().then_some(reversed)
 }
 
 fn curve_pair_coverage_incomplete_evidence() -> IncompleteEvidence {

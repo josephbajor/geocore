@@ -108,8 +108,11 @@ Host findings remain ratcheted in `docs/oracle-results.tsv`.
    define joined components, and their validated bounding-range proofs now
    complete rational boundary roots and separated multi-root cases. Interval
    Euclidean hull-distance bounds now remove diagonal tolerance-empty cells
-   without weakening the inclusive boundary. The next algorithm slice targets
-   genuinely spatial proof and overlap extent/completeness.
+   without weakening the inclusive boundary. Identical and exact reversed
+   NURBS representations now produce complete full-range overlap extents while
+   sampled near-coincidence stays indeterminate. The next algorithm slice
+   broadens overlap equivalence/partial extent and targets genuinely spatial
+   proof.
    Semantic K4 edit transactions follow the K5 adoption pass. F6 splits and F4
    legacy cleanup land only with an owner-level behavioral migration. The Q2a/
    Q2b ladders are executable in CI; any graph-index/traversal representation change

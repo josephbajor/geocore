@@ -755,8 +755,11 @@ true only for an empty complete result.
   evidence cannot upgrade completion. An outward-safe Euclidean control-hull
   distance lower bound now excludes diagonal tolerance-empty cells beyond the
   axis-wise broad phase while retaining the inclusive boundary. Next, extend
-  proof to genuinely spatial cases, overlap extent, generic
-  curve/surface pairing, and procedural/NURBS fields.
+  Byte-identical and exact reversed NURBS representations now supply the first
+  complete overlap extents; sampled near-coincidence remains indeterminate.
+  Next, broaden certified overlap equivalence/partial extent and extend root
+  proof to genuinely spatial cases, generic curve/surface pairing, and
+  procedural/NURBS fields.
 - Analytic special cases and the generic solver feed the same canonical result type.
 - Consolidate the per-pair analytic curve/surface and SSI boilerplate (range
   validation, parameter fitting, dedup, branch emission — currently repeated across

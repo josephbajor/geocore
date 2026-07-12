@@ -302,6 +302,19 @@ mod tests {
         assert!(result.incomplete_evidence().is_empty());
 
         let outcome = session
+            .part(part_id.clone())
+            .unwrap()
+            .intersect_curves(IntersectCurvesRequest::new(
+                BoundedCurve::new(first_id.clone(), range),
+                BoundedCurve::new(first_id.clone(), range),
+            ))
+            .unwrap();
+        let result = outcome.into_result().unwrap();
+        assert!(result.is_complete());
+        assert_eq!(result.overlaps().len(), 1);
+        assert!(result.incomplete_evidence().is_empty());
+
+        let outcome = session
             .part(part_id)
             .unwrap()
             .intersect_curves(IntersectCurvesRequest::new(

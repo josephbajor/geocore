@@ -208,6 +208,8 @@ fn nurbs_nurbs_reports_simple_contained_overlaps() {
     )
     .unwrap();
     assert!(hit.points.is_empty());
+    assert!(hit.is_complete());
+    assert!(hit.incomplete_evidence().is_empty());
     assert_eq!(hit.overlaps.len(), 1);
     assert_eq!(hit.overlaps[0].a, ParamRange::new(0.0, 1.0));
     assert_eq!(hit.overlaps[0].b, ParamRange::new(0.0, 1.0));
@@ -223,6 +225,8 @@ fn nurbs_nurbs_reports_simple_contained_overlaps() {
     )
     .unwrap();
     assert!(hit.points.is_empty());
+    assert!(hit.is_complete());
+    assert!(hit.incomplete_evidence().is_empty());
     assert_eq!(hit.overlaps.len(), 1);
     assert_eq!(hit.overlaps[0].a, ParamRange::new(0.0, 1.0));
     assert_eq!(hit.overlaps[0].b, ParamRange::new(0.0, 1.0));
@@ -248,10 +252,102 @@ fn nurbs_nurbs_reports_simple_contained_overlaps() {
     )
     .unwrap();
     assert!(scaled.points.is_empty());
+    assert!(scaled.is_complete());
+    assert!(scaled.incomplete_evidence().is_empty());
     assert_eq!(scaled.overlaps.len(), 1);
     assert_eq!(scaled.overlaps[0].a, ParamRange::new(0.0, parameter_scale));
     assert_eq!(scaled.overlaps[0].b, ParamRange::new(0.0, parameter_scale));
     assert_eq!(scaled.overlaps[0].orientation, ParamOrientation::Same);
+
+    let subrange = ParamRange::new(0.25 * parameter_scale, 0.75 * parameter_scale);
+    let subrange_overlap = intersect_bounded_nurbs_nurbs(
+        &scaled_a,
+        subrange,
+        &scaled_b,
+        subrange,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(subrange_overlap.is_complete());
+    assert_eq!(subrange_overlap.overlaps[0].a, subrange);
+    assert_eq!(subrange_overlap.overlaps[0].b, subrange);
+
+    let near = line_nurbs(Point3::new(0.0, 0.5e-8, 0.0), Point3::new(3.0, 0.5e-8, 0.0));
+    let sampled = intersect_bounded_nurbs_nurbs(
+        &a,
+        a.param_range(),
+        &near,
+        near.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(sampled.overlaps.len(), 1);
+    assert!(!sampled.is_complete());
+    assert_eq!(sampled.incomplete_evidence().len(), 1);
+}
+
+#[test]
+fn exact_reversed_overlap_handles_asymmetric_knots() {
+    let points = vec![
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 2.0, 0.0),
+        Point3::new(2.0, -1.0, 0.0),
+        Point3::new(3.0, 0.5, 0.0),
+    ];
+    let forward = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 0.25, 1.0, 1.0, 1.0],
+        points.clone(),
+        Some(vec![1.0, 0.75, 1.25, 2.0]),
+    )
+    .unwrap();
+    let reversed = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 0.75, 1.0, 1.0, 1.0],
+        points.into_iter().rev().collect(),
+        Some(vec![2.0, 1.25, 0.75, 1.0]),
+    )
+    .unwrap();
+    let result = intersect_bounded_nurbs_nurbs(
+        &forward,
+        forward.param_range(),
+        &reversed,
+        reversed.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(result.is_complete());
+    assert!(result.points.is_empty());
+    assert_eq!(result.overlaps.len(), 1);
+    assert_eq!(result.overlaps[0].orientation, ParamOrientation::Reversed);
+    assert_eq!(result.clone().swapped(), result);
+
+    let lo = 1.0e308;
+    let hi = 1.1e308;
+    let forward = NurbsCurve::new(
+        1,
+        vec![lo, lo, hi, hi],
+        vec![Point3::new(-1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
+        None,
+    )
+    .unwrap();
+    let reversed = NurbsCurve::new(
+        1,
+        vec![lo, lo, hi, hi],
+        vec![Point3::new(1.0, 0.0, 0.0), Point3::new(-1.0, 0.0, 0.0)],
+        None,
+    )
+    .unwrap();
+    let extreme = intersect_bounded_nurbs_nurbs(
+        &forward,
+        forward.param_range(),
+        &reversed,
+        reversed.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(extreme.is_complete());
+    assert_eq!(extreme.overlaps[0].orientation, ParamOrientation::Reversed);
 }
 
 #[test]

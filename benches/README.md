@@ -68,7 +68,9 @@ geometry, then folds all of them into its semantic output contract. Joined
 candidate components collapse duplicate boundary leaves to one proof region;
 polynomial and rational transverse cases plus separated two-root cases are
 complete only when every component has a certificate and verified
-representative, while tangency remains indeterminate.
+representative, while tangency remains indeterminate. Exact and sampled
+overlap controls separately pin complete representation proof versus
+provisional tolerance containment.
 The curve-pair isolation ladder separately pins unique-root certificate counts
 and ordered certificate digests. Its positive-weight rational case now proves
 both retained cells through interval quotient-rule derivative bounds, while

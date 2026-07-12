@@ -685,8 +685,8 @@ certificate. The NURBS/NURBS solver retires the coverage gap only when
 isolation completed and every deterministic candidate component has both a
 unique-root certificate and a verified emitted representative. Polynomial and
 positive-weight rational transverse crossings therefore complete, as do
-separated two-root components. Tangent, interval-inconclusive, and overlap
-cases continue to fail closed.
+separated two-root components. Tangent and interval-inconclusive cases
+continue to fail closed.
 
 The same proof is now available over validated caller-supplied source ranges,
 not only individual retained leaves. This lets a later ownership pass join
@@ -697,6 +697,14 @@ and associates one representative with each certificate. The rational
 transverse control therefore completes even though not every closed leaf can
 independently discharge boundary existence. Seed-limit stops still prevent
 completion regardless of available component proof.
+
+The first exact overlap extent proof now recognizes byte-identical NURBS
+representations over identical requested ranges and exact reversed
+representations whose knots, control points, weights, and range correspondence
+reverse together. Those results return one `Complete` overlap with exact
+orientation and no isolation work. The existing tolerance-sampled containment
+path remains `Indeterminate`; near-coincident curves cannot inherit exact
+completion from approximate samples.
 
 That normalized boundary now has contextual and shared-scope public entries.
 The contextual entry composes the curve/curve family profile once and creates

@@ -2894,6 +2894,26 @@
       "expected_result_counters": { "points": 0, "overlaps": 0, "complete": true, "proven_empty": true, "indeterminate": false, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 2, "candidate_high_water": 1, "depth_high_water": 1, "seed_attempts": 0, "incomplete_evidence": 0, "incomplete_evidence_digest": "8b5e85e65191be35", "root_certificates": 0, "root_certificate_digest": "f7f43088bcf6c822", "point_digest": "6489db2b285bd20f", "output_digest": "302afe5b7cd2afbf" }
     },
     {
+      "path": "geometry/curve-pair-solve/exact-overlap-v1/1/default-v1",
+      "benchmark_target": "curve_pair_solve",
+      "fixture_version": "curve-pair-solve.v1",
+      "deterministic_seed": 5860383027389988874,
+      "size_parameters": { "elements": 1, "control_points": 4 },
+      "tolerances": { "linear": 1e-8 },
+      "policy_values": { "seed_attempts_allowed": 4096, "execution": "serial", "policy_version": "v1", "api": "intersect_bounded_nurbs_nurbs_with_context" },
+      "expected_result_counters": { "points": 0, "overlaps": 1, "complete": true, "proven_empty": false, "indeterminate": false, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 0, "candidate_high_water": 0, "depth_high_water": 0, "seed_attempts": 0, "incomplete_evidence": 0, "incomplete_evidence_digest": "8b5e85e65191be35", "root_certificates": 0, "root_certificate_digest": "f7f43088bcf6c822", "point_digest": "6489db2b285bd20f", "output_digest": "d761a52eb63b8741" }
+    },
+    {
+      "path": "geometry/curve-pair-solve/sampled-overlap-v1/1/default-v1",
+      "benchmark_target": "curve_pair_solve",
+      "fixture_version": "curve-pair-solve.v1",
+      "deterministic_seed": 5860383027389988874,
+      "size_parameters": { "elements": 1, "control_points": 4 },
+      "tolerances": { "linear": 1e-8 },
+      "policy_values": { "seed_attempts_allowed": 4096, "execution": "serial", "policy_version": "v1", "api": "intersect_bounded_nurbs_nurbs_with_context" },
+      "expected_result_counters": { "points": 0, "overlaps": 1, "complete": false, "proven_empty": false, "indeterminate": true, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 178, "candidate_high_water": 190, "depth_high_water": 6, "seed_attempts": 0, "incomplete_evidence": 1, "incomplete_evidence_digest": "f2e277f833dc186d", "root_certificates": 0, "root_certificate_digest": "f7f43088bcf6c822", "point_digest": "6489db2b285bd20f", "output_digest": "d353e12d7ffc6c0b" }
+    },
+    {
       "path": "geometry/curve-pair-solve/poly-tangent-v1/1/seed-denied-v1",
       "benchmark_target": "curve_pair_solve",
       "fixture_version": "curve-pair-solve.v1",
