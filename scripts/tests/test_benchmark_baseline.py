@@ -29,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 96)
+        self.assertEqual(len(cases), 97)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -295,7 +295,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
             for case in cases
             if case["benchmark_target"] == "curve_pair_isolation"
         ]
-        self.assertEqual(len(curve_pair_isolation), 7)
+        self.assertEqual(len(curve_pair_isolation), 8)
         self.assertTrue(
             all(
                 case["deterministic_seed"] == 0x5154435041490009
@@ -329,8 +329,10 @@ class BenchmarkBaselineTests(unittest.TestCase):
             for case in curve_pair_isolation
             if case["expected_result_counters"]["proven_empty"]
         ]
-        self.assertEqual(len(curve_pair_misses), 1)
-        self.assertTrue(curve_pair_misses[0]["expected_result_counters"]["complete"])
+        self.assertEqual(len(curve_pair_misses), 2)
+        self.assertTrue(
+            all(case["expected_result_counters"]["complete"] for case in curve_pair_misses)
+        )
         curve_pair_solve = [
             case for case in cases if case["benchmark_target"] == "curve_pair_solve"
         ]

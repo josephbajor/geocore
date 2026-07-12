@@ -37,6 +37,8 @@ pub enum GeometryRelation {
     Retained,
     /// Root control hulls overlap, but subdivision proves the curves separate.
     Separated,
+    /// Axis-wise inflated boxes overlap, but Euclidean hull distance proves separation.
+    DiagonalSeparated,
 }
 
 /// Reviewed structured stop.
@@ -95,9 +97,9 @@ pub struct CurvePairIsolationCase {
     pub expected_output_digest: u64,
 }
 
-/// Seven cases covering representation, plane orientation, hidden separation,
+/// Eight cases covering representation, plane orientation, hidden separation,
 /// and all resource stops.
-pub const CASES: [CurvePairIsolationCase; 7] = [
+pub const CASES: [CurvePairIsolationCase; 8] = [
     case(
         "geometry/curve-pair-isolation/poly-retained-v1/1/depth-3-v1",
         CurveFixture::Polynomial,
@@ -152,6 +154,20 @@ pub const CASES: [CurvePairIsolationCase; 7] = [
             LimitKind::None,
             0x2de4_8551_deac_70df,
             0x218c_ff54_d8fe_44f3,
+        ),
+    ),
+    case(
+        "geometry/curve-pair-isolation/poly-diagonal-separated-v1/1/depth-3-v1",
+        CurveFixture::Polynomial,
+        GeometryRelation::DiagonalSeparated,
+        policy(3, 1_366, 4_096, 3),
+        expected(
+            0,
+            true,
+            true,
+            LimitKind::None,
+            0x2de4_8551_deac_70df,
+            0x0bd6_8b28_1bb5_6fba,
         ),
     ),
     case(
@@ -450,6 +466,7 @@ impl CurvePairIsolationEvidence {
         digest.tag(match case.relation {
             GeometryRelation::Retained => 0,
             GeometryRelation::Separated => 1,
+            GeometryRelation::DiagonalSeparated => 2,
         });
         digest.finish()
     }
@@ -457,13 +474,24 @@ impl CurvePairIsolationEvidence {
 
 /// Construct one prepared curve pair and contextual policy.
 pub fn fixture(case: CurvePairIsolationCase) -> CurvePairIsolationFixture {
+    let diagonal_pair = case.relation == GeometryRelation::DiagonalSeparated;
     let second_y = match case.relation {
         GeometryRelation::Retained => 0.0,
         GeometryRelation::Separated => 1.5,
+        GeometryRelation::DiagonalSeparated => 0.0,
     };
     let tilted = case.fixture == CurveFixture::TiltedPolynomial;
-    let first = arch(case.fixture == CurveFixture::Rational, tilted);
-    let second = line(second_y, tilted);
+    let (first, second) = if diagonal_pair {
+        (
+            constant(Point3::new(0.0, 0.0, 0.0)),
+            constant(Point3::new(0.75e-8, 0.75e-8, 0.0)),
+        )
+    } else {
+        (
+            arch(case.fixture == CurveFixture::Rational, tilted),
+            line(second_y, tilted),
+        )
+    };
     let budget = BudgetPlan::new([
         LimitSpec::new(
             NURBS_CURVE_PAIR_SUBDIVISIONS,
@@ -545,6 +573,16 @@ fn line(y: f64, tilted: bool) -> NurbsCurve {
         None,
     )
     .expect("valid Q4 line")
+}
+
+fn constant(point: Point3) -> NurbsCurve {
+    NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![point, point],
+        None,
+    )
+    .expect("valid Q4 constant curve")
 }
 
 fn endpoint_contacts_are_covered(isolation: &CurvePairIsolation) -> bool {
@@ -783,4 +821,5 @@ mod tests {
             );
         }
     }
+
 }

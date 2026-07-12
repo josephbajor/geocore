@@ -752,8 +752,10 @@ true only for an empty complete result.
   Deterministic joined-region ownership groups exact shared grid vertices and
   requires one certificate/witness per component, completing polynomial and
   rational boundary roots plus separated multi-root components. Partial
-  evidence cannot upgrade completion. Next, add interval empty-cell exclusion,
-  then extend proof to genuinely spatial cases, overlap extent, generic
+  evidence cannot upgrade completion. An outward-safe Euclidean control-hull
+  distance lower bound now excludes diagonal tolerance-empty cells beyond the
+  axis-wise broad phase while retaining the inclusive boundary. Next, extend
+  proof to genuinely spatial cases, overlap extent, generic
   curve/surface pairing, and procedural/NURBS fields.
 - Analytic special cases and the generic solver feed the same canonical result type.
 - Consolidate the per-pair analytic curve/surface and SSI boilerplate (range

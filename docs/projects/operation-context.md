@@ -625,7 +625,12 @@ Its first exclusion rung is now live for NURBS/NURBS: exact restricted
 positive-weight control hulls can prove a complete miss before fixed-grid
 candidate discovery. Exactly one hull is outward-inflated by the model
 tolerance, so strict separation is sufficient while contact at the inclusive
-tolerance boundary remains an indeterminate candidate. Exact binary subdivision
+tolerance boundary remains an indeterminate candidate. A second interval rung
+computes an outward-safe Euclidean squared-distance lower bound between the
+two control hulls. It removes diagonal false positives when no individual axis
+gap exceeds tolerance but their combined distance does; comparison uses an
+upward-rounded squared tolerance, so the inclusive boundary remains retained.
+Exact binary subdivision
 of both curves now refines every retained subcurve pair deterministically. Its
 composed family profile accounts setup/subdivision work cumulatively and
 candidate/depth high-water; a denied split retains its parent cell, and an

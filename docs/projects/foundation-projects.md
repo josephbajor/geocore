@@ -106,9 +106,10 @@ Host findings remain ratcheted in `docs/oracle-results.tsv`.
    unique-root certificate and verified representative; partial certificates
    remain proof evidence on indeterminate results. Exact shared grid vertices
    define joined components, and their validated bounding-range proofs now
-   complete rational boundary roots and separated multi-root cases. The next
-   algorithm slice adds interval empty-cell exclusion, followed by genuinely
-   spatial proof and overlap extent/completeness.
+   complete rational boundary roots and separated multi-root cases. Interval
+   Euclidean hull-distance bounds now remove diagonal tolerance-empty cells
+   without weakening the inclusive boundary. The next algorithm slice targets
+   genuinely spatial proof and overlap extent/completeness.
    Semantic K4 edit transactions follow the K5 adoption pass. F6 splits and F4
    legacy cleanup land only with an owner-level behavioral migration. The Q2a/
    Q2b ladders are executable in CI; any graph-index/traversal representation change

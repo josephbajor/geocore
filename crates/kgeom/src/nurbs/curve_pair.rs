@@ -88,7 +88,8 @@ impl NurbsCurvePairBudgetProfile {
     }
 }
 
-/// One exact subcurve pair whose tolerance-inflated control hulls overlap.
+/// One exact subcurve pair whose control hulls are not certified farther apart
+/// than the requested Euclidean tolerance.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CurvePairCandidateCell {
     first: NurbsCurve,
@@ -782,9 +783,9 @@ fn candidate_cell(
 ) -> Option<CurvePairCandidateCell> {
     let first_bounds = first.bounding_box(first.param_range());
     let second_bounds = second.bounding_box(second.param_range());
-    first_bounds
-        .inflated(margin)
-        .intersects(second_bounds)
+    let axis_candidate = first_bounds.inflated(margin).intersects(second_bounds);
+    let margin_squared = (Interval::point(margin) * Interval::point(margin)).hi();
+    (axis_candidate && first_bounds.squared_distance_lower_bound(second_bounds) <= margin_squared)
         .then_some(CurvePairCandidateCell {
             first,
             second,
@@ -979,6 +980,25 @@ mod tests {
             .collect::<Vec<_>>();
         swapped_ranges.sort_by(|a, b| a.0.lo.total_cmp(&b.0.lo).then(a.1.lo.total_cmp(&b.1.lo)));
         assert_eq!(swapped_ranges, forward_ranges);
+    }
+
+    #[test]
+    fn euclidean_control_hull_distance_excludes_diagonal_gaps_but_keeps_boundary() {
+        let constant = |point| segment(point, point, None);
+        let origin = constant(Point3::new(0.0, 0.0, 0.0));
+        let diagonal = constant(Point3::new(0.75, 0.75, 0.0));
+        assert!(
+            origin
+                .bounding_box(origin.param_range())
+                .inflated(1.0)
+                .intersects(diagonal.bounding_box(diagonal.param_range()))
+        );
+        assert!(candidate_cell(origin.clone(), diagonal.clone(), 0, 1.0).is_none());
+        assert!(candidate_cell(diagonal, origin.clone(), 0, 1.0).is_none());
+
+        let boundary = constant(Point3::new(3.0, 4.0, 0.0));
+        assert!(candidate_cell(origin.clone(), boundary.clone(), 0, 5.0).is_some());
+        assert!(candidate_cell(boundary, origin, 0, 5.0).is_some());
     }
 
     #[test]

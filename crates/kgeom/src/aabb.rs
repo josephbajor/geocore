@@ -1,6 +1,7 @@
 //! Axis-aligned bounding boxes (2D parameter space and 3D model space).
 
 use crate::vec::{Vec2, Vec3};
+use kcore::interval::Interval;
 
 /// A 3D axis-aligned bounding box. The empty box has `min > max`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -79,6 +80,33 @@ impl Aabb3 {
             && other.min.y <= self.max.y
             && self.min.z <= other.max.z
             && other.min.z <= self.max.z
+    }
+
+    /// Conservative lower bound for squared Euclidean distance between boxes.
+    ///
+    /// Interval arithmetic rounds every coordinate gap and square outward, so
+    /// the returned value never exceeds the true squared distance. Empty boxes
+    /// have infinite separation from every represented point set.
+    pub fn squared_distance_lower_bound(self, other: Aabb3) -> f64 {
+        if self.is_empty() || other.is_empty() {
+            return f64::INFINITY;
+        }
+        let mut squared = Interval::point(0.0);
+        for (first_lo, first_hi, second_lo, second_hi) in [
+            (self.min.x, self.max.x, other.min.x, other.max.x),
+            (self.min.y, self.max.y, other.min.y, other.max.y),
+            (self.min.z, self.max.z, other.min.z, other.max.z),
+        ] {
+            let gap = if first_hi < second_lo {
+                Interval::point(second_lo) - Interval::point(first_hi)
+            } else if second_hi < first_lo {
+                Interval::point(first_lo) - Interval::point(second_hi)
+            } else {
+                Interval::point(0.0)
+            };
+            squared = squared + gap * gap;
+        }
+        squared.lo().max(0.0)
     }
 
     /// Box grown by `margin` on every side with outward-rounded bounds.
@@ -203,5 +231,20 @@ mod tests {
         let b = Aabb2::from_points(&[Vec2::new(1.0, 1.0)]).inflated(0.5);
         assert!(b.contains(Vec2::new(0.6, 1.4)));
         assert!(!b.contains(Vec2::new(0.4, 1.0)));
+    }
+
+    #[test]
+    fn squared_distance_lower_bound_is_euclidean_outward_and_symmetric() {
+        let origin = Aabb3::from_point(Vec3::new(0.0, 0.0, 0.0));
+        let diagonal = Aabb3::from_point(Vec3::new(0.75, 0.75, 0.0));
+        let lower = origin.squared_distance_lower_bound(diagonal);
+        assert!(lower <= 0.75 * 0.75 + 0.75 * 0.75);
+        assert!(lower > 1.0);
+        assert_eq!(lower, diagonal.squared_distance_lower_bound(origin));
+        assert_eq!(origin.squared_distance_lower_bound(origin), 0.0);
+        assert_eq!(
+            Aabb3::empty().squared_distance_lower_bound(origin),
+            f64::INFINITY
+        );
     }
 }

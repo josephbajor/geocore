@@ -2804,6 +2804,16 @@
       "expected_result_counters": { "candidates": 0, "max_candidate_depth": 0, "complete": true, "proven_empty": true, "indeterminate": false, "conservative_cover": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "work_consumed": 2, "candidate_high_water": 1, "depth_high_water": 1, "unique_root_cells": 0, "root_certificate_digest": "54b9300d07e25d05", "candidate_digest": "2de48551deac70df", "output_digest": "218cff54d8fe44f3" }
     },
     {
+      "path": "geometry/curve-pair-isolation/poly-diagonal-separated-v1/1/depth-3-v1",
+      "benchmark_target": "curve_pair_isolation",
+      "fixture_version": "curve-pair-isolation.v1",
+      "deterministic_seed": 5860383027087605769,
+      "size_parameters": { "elements": 1, "control_points": 4 },
+      "tolerances": { "linear": 1e-8 },
+      "policy_values": { "requested_depth": 3, "work_allowed": 1366, "candidates_allowed": 4096, "depth_allowed": 3, "execution": "serial" },
+      "expected_result_counters": { "candidates": 0, "max_candidate_depth": 0, "complete": true, "proven_empty": true, "indeterminate": false, "conservative_cover": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "work_consumed": 1, "candidate_high_water": 0, "depth_high_water": 0, "unique_root_cells": 0, "root_certificate_digest": "54b9300d07e25d05", "candidate_digest": "2de48551deac70df", "output_digest": "0bd68b281bb56fba" }
+    },
+    {
       "path": "geometry/curve-pair-isolation/poly-retained-v1/1/work-low-v1",
       "benchmark_target": "curve_pair_isolation",
       "fixture_version": "curve-pair-isolation.v1",
