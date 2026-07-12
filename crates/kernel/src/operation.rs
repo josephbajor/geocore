@@ -426,7 +426,7 @@ impl CurveCurveIntersections {
     pub fn incomplete_evidence(&self) -> &[crate::IncompleteEvidence] {
         &self.incomplete_evidence
     }
-    /// Exact unique-root certificates in deterministic parameter-cell order.
+    /// Exact unique-root certificates in deterministic parameter-region order.
     pub fn root_certificates(&self) -> &[crate::CurvePairRootCertificate] {
         &self.root_certificates
     }

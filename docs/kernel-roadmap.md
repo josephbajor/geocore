@@ -745,15 +745,14 @@ true only for an empty complete result.
   parameter-resolution, invalid-objective, and iteration-bound termination.
   Ordered incomplete proof obligations survive canonicalization, swapping,
   generic dispatch, and facade adaptation, and Q4 pins their semantic digest.
-  Exact retained cells can now certify unique transverse roots for polynomial
-  and positive-weight rational subcurves in arbitrary exact affine planes
-  using robust coplanarity, Poincaré–Miranda face signs, and interval P-matrix
-  univalence; Q4 pins polynomial, rational, and tilted proof digests. Complete
-  isolation plus a certificate and verified representative for every retained
-  cell proves complete polynomial transverse results, while partial evidence
-  cannot upgrade completion. A range-level entry can also certify a joined
-  parameter rectangle around closed-leaf boundaries. Next, integrate
-  deterministic joined-region ownership and interval empty-cell exclusion,
+  Exact retained regions can now certify unique transverse roots for
+  polynomial and positive-weight rational subcurves in arbitrary exact affine
+  planes using robust coplanarity, Poincaré–Miranda face signs, and interval
+  P-matrix univalence; Q4 pins polynomial, rational, and tilted proof digests.
+  Deterministic joined-region ownership groups exact shared grid vertices and
+  requires one certificate/witness per component, completing polynomial and
+  rational boundary roots plus separated multi-root components. Partial
+  evidence cannot upgrade completion. Next, add interval empty-cell exclusion,
   then extend proof to genuinely spatial cases, overlap extent, generic
   curve/surface pairing, and procedural/NURBS fields.
 - Analytic special cases and the generic solver feed the same canonical result type.

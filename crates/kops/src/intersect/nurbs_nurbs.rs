@@ -18,12 +18,13 @@ use kcore::proof::{Completion, IncompleteCause, IncompleteEvidence};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::nurbs::{
-    ContextCurvePairIsolationError, CurvePairCandidateCell, CurvePairIsolationLimits,
-    CurvePairRootCertificate, NurbsCurve, NurbsCurvePairBudgetProfile,
+    ContextCurvePairIsolationError, CurvePairCandidateCell, CurvePairIsolationLimits, NurbsCurve,
+    NurbsCurvePairBudgetProfile, certify_curve_pair_unique_root,
     isolate_curve_pair_candidates_in_scope,
 };
 use kgeom::param::ParamRange;
 use kgeom::vec::Point3;
+use std::collections::BTreeMap;
 
 const MIN_STEPS: usize = 96;
 const MAX_STEPS: usize = 384;
@@ -555,11 +556,30 @@ fn intersect_bounded_nurbs_nurbs_candidates_impl(
         );
     }
 
+    let components = if isolation_complete {
+        candidate_components(candidates)
+    } else {
+        candidates
+            .iter()
+            .map(|candidate| CurvePairCandidateComponent {
+                first_range: candidate.first_range(),
+                second_range: candidate.second_range(),
+            })
+            .collect()
+    };
+    let mut root_certificates = Vec::new();
+    for component in &components {
+        if let Some(certificate) =
+            certify_curve_pair_unique_root(a, component.first_range, b, component.second_range)?
+        {
+            root_certificates.push(certificate);
+        }
+    }
+    let every_component_certified =
+        isolation_complete && !components.is_empty() && root_certificates.len() == components.len();
     let mut points = Vec::new();
-    let mut root_certificates: Vec<CurvePairRootCertificate> = Vec::new();
-    let mut every_cell_certified = isolation_complete && !candidates.is_empty();
+    let mut seed_limit_reached = false;
     for cell in candidates {
-        let root_certificate = cell.certify_unique_root();
         match scope.ledger_mut().charge(NURBS_CURVE_PAIR_SEED_ATTEMPTS, 1) {
             Ok(()) => {}
             Err(OperationPolicyError::LimitReached(snapshot)) => {
@@ -569,7 +589,7 @@ fn intersect_bounded_nurbs_nurbs_candidates_impl(
                     NURBS_CURVE_PAIR_SEED_LIMIT,
                     "NURBS curve-pair seed-attempt limit reached",
                 ));
-                every_cell_certified = false;
+                seed_limit_reached = true;
                 break;
             }
             Err(error) => return Err(error.into()),
@@ -600,20 +620,20 @@ fn intersect_bounded_nurbs_nurbs_candidates_impl(
             polished.t_b,
             policy.tolerances.linear(),
         ) else {
-            every_cell_certified = false;
             diagnose_minimizer_stops(scope, polished.minimizer_stops);
             diagnose_polish_stop(scope, polished.stop);
             continue;
         };
         let kind = contact_kind(a, seed.t_a, b, seed.t_b, policy.tolerances);
         push_distinct_point(&mut points, seed.into_point(kind), policy.tolerances);
-        if let Some(certificate) = root_certificate {
-            root_certificates.push(certificate);
-        } else {
-            every_cell_certified = false;
-        }
     }
-    if every_cell_certified {
+    let every_component_witnessed = root_certificates.iter().all(|certificate| {
+        points.iter().any(|point| {
+            certificate.first_range().contains(point.t_a)
+                && certificate.second_range().contains(point.t_b)
+        })
+    });
+    if every_component_certified && every_component_witnessed && !seed_limit_reached {
         return CurveCurveIntersections::canonicalized_with_proof_evidence(
             points,
             Vec::new(),
@@ -634,6 +654,91 @@ fn intersect_bounded_nurbs_nurbs_candidates_impl(
         root_certificates,
         incomplete_evidence,
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CurvePairCandidateComponent {
+    first_range: ParamRange,
+    second_range: ParamRange,
+}
+
+fn candidate_components(candidates: &[CurvePairCandidateCell]) -> Vec<CurvePairCandidateComponent> {
+    let mut parent = (0..candidates.len()).collect::<Vec<_>>();
+    let mut incident = BTreeMap::<(u64, u64), Vec<usize>>::new();
+    for (index, candidate) in candidates.iter().enumerate() {
+        let first = candidate.first_range();
+        let second = candidate.second_range();
+        for vertex in [
+            (parameter_key(first.lo), parameter_key(second.lo)),
+            (parameter_key(first.lo), parameter_key(second.hi)),
+            (parameter_key(first.hi), parameter_key(second.lo)),
+            (parameter_key(first.hi), parameter_key(second.hi)),
+        ] {
+            incident.entry(vertex).or_default().push(index);
+        }
+    }
+    for cells in incident.values() {
+        if let Some((&first, rest)) = cells.split_first() {
+            for &other in rest {
+                union_components(&mut parent, first, other);
+            }
+        }
+    }
+
+    let mut grouped = BTreeMap::<usize, CurvePairCandidateComponent>::new();
+    for (index, candidate) in candidates.iter().enumerate() {
+        let root = find_component(&mut parent, index);
+        let first = candidate.first_range();
+        let second = candidate.second_range();
+        grouped
+            .entry(root)
+            .and_modify(|component| {
+                component.first_range = bounding_range(component.first_range, first);
+                component.second_range = bounding_range(component.second_range, second);
+            })
+            .or_insert(CurvePairCandidateComponent {
+                first_range: first,
+                second_range: second,
+            });
+    }
+    let mut components = grouped.into_values().collect::<Vec<_>>();
+    components.sort_by(|a, b| {
+        a.first_range
+            .lo
+            .total_cmp(&b.first_range.lo)
+            .then(a.second_range.lo.total_cmp(&b.second_range.lo))
+            .then(a.first_range.hi.total_cmp(&b.first_range.hi))
+            .then(a.second_range.hi.total_cmp(&b.second_range.hi))
+    });
+    components
+}
+
+fn find_component(parent: &mut [usize], index: usize) -> usize {
+    if parent[index] != index {
+        parent[index] = find_component(parent, parent[index]);
+    }
+    parent[index]
+}
+
+fn union_components(parent: &mut [usize], first: usize, second: usize) {
+    let first = find_component(parent, first);
+    let second = find_component(parent, second);
+    if first != second {
+        let (root, child) = if first < second {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        parent[child] = root;
+    }
+}
+
+fn parameter_key(value: f64) -> u64 {
+    if value == 0.0 { 0 } else { value.to_bits() }
+}
+
+fn bounding_range(first: ParamRange, second: ParamRange) -> ParamRange {
+    ParamRange::new(first.lo.min(second.lo), first.hi.max(second.hi))
 }
 
 fn seed_for_candidate_cell(

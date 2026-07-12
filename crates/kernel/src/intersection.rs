@@ -313,6 +313,6 @@ mod tests {
         assert_eq!(result.points().len(), 1);
         assert!(result.is_complete());
         assert!(result.incomplete_evidence().is_empty());
-        assert_eq!(result.root_certificates().len(), 4);
+        assert_eq!(result.root_certificates().len(), 1);
     }
 }

@@ -2841,7 +2841,7 @@
       "size_parameters": { "elements": 1, "control_points": 4 },
       "tolerances": { "linear": 1e-8 },
       "policy_values": { "seed_attempts_allowed": 4096, "execution": "serial", "policy_version": "v1", "api": "intersect_bounded_nurbs_nurbs_with_context" },
-      "expected_result_counters": { "points": 1, "overlaps": 0, "complete": true, "proven_empty": false, "indeterminate": false, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 22, "candidate_high_water": 4, "depth_high_water": 6, "seed_attempts": 4, "incomplete_evidence": 0, "incomplete_evidence_digest": "8b5e85e65191be35", "root_certificates": 4, "root_certificate_digest": "bc9ea3761300317c", "point_digest": "617e1b7b48fdb84a", "output_digest": "8dfbac0d9e9d1d0b" }
+      "expected_result_counters": { "points": 1, "overlaps": 0, "complete": true, "proven_empty": false, "indeterminate": false, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 22, "candidate_high_water": 4, "depth_high_water": 6, "seed_attempts": 4, "incomplete_evidence": 0, "incomplete_evidence_digest": "8b5e85e65191be35", "root_certificates": 1, "root_certificate_digest": "80c0e63f639f651f", "point_digest": "617e1b7b48fdb84a", "output_digest": "4f44d94262f3f968" }
     },
     {
       "path": "geometry/curve-pair-solve/rational-transverse-v1/1/default-v1",
@@ -2851,7 +2851,7 @@
       "size_parameters": { "elements": 1, "control_points": 4 },
       "tolerances": { "linear": 1e-8 },
       "policy_values": { "seed_attempts_allowed": 4096, "execution": "serial", "policy_version": "v1", "api": "intersect_bounded_nurbs_nurbs_with_context" },
-      "expected_result_counters": { "points": 1, "overlaps": 0, "complete": false, "proven_empty": false, "indeterminate": true, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 12, "candidate_high_water": 2, "depth_high_water": 6, "seed_attempts": 2, "incomplete_evidence": 1, "incomplete_evidence_digest": "f2e277f833dc186d", "root_certificates": 0, "root_certificate_digest": "f7f43088bcf6c822", "point_digest": "d116a5f64d2e545a", "output_digest": "7fca16ca153ed3c8" }
+      "expected_result_counters": { "points": 1, "overlaps": 0, "complete": true, "proven_empty": false, "indeterminate": false, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 12, "candidate_high_water": 2, "depth_high_water": 6, "seed_attempts": 2, "incomplete_evidence": 0, "incomplete_evidence_digest": "8b5e85e65191be35", "root_certificates": 1, "root_certificate_digest": "badc5daa41104cea", "point_digest": "d116a5f64d2e545a", "output_digest": "129d9dfd17173a8b" }
     },
     {
       "path": "geometry/curve-pair-solve/poly-tangent-v1/1/default-v1",
@@ -2871,7 +2871,7 @@
       "size_parameters": { "elements": 2, "control_points": 5 },
       "tolerances": { "linear": 1e-8 },
       "policy_values": { "seed_attempts_allowed": 4096, "execution": "serial", "policy_version": "v1", "api": "intersect_bounded_nurbs_nurbs_with_context" },
-      "expected_result_counters": { "points": 2, "overlaps": 0, "complete": false, "proven_empty": false, "indeterminate": true, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 22, "candidate_high_water": 5, "depth_high_water": 6, "seed_attempts": 4, "incomplete_evidence": 1, "incomplete_evidence_digest": "f2e277f833dc186d", "root_certificates": 2, "root_certificate_digest": "707aaa3df5647b00", "point_digest": "360610ba1318ae30", "output_digest": "289f9511588a2317" }
+      "expected_result_counters": { "points": 2, "overlaps": 0, "complete": true, "proven_empty": false, "indeterminate": false, "verified_witnesses": true, "limit_kind": "none", "limit_events": 0, "limit_attempted_consumed": 0, "limit_attempted_allowed": 0, "isolation_work": 22, "candidate_high_water": 5, "depth_high_water": 6, "seed_attempts": 4, "incomplete_evidence": 0, "incomplete_evidence_digest": "8b5e85e65191be35", "root_certificates": 2, "root_certificate_digest": "487fad1a513619cb", "point_digest": "360610ba1318ae30", "output_digest": "a30bf60825a10056" }
     },
     {
       "path": "geometry/curve-pair-solve/poly-hidden-miss-v1/0/default-v1",

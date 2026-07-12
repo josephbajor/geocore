@@ -102,13 +102,13 @@ Host findings remain ratcheted in `docs/oracle-results.tsv`.
    classified limit evidence. Exact adaptive NURBS pair exclusion now feeds
    one bounded cell-local seed/polish attempt per retained cell; accepted
    discoveries carry re-evaluated tolerance witnesses. Complete isolation now
-   grants completion only when every retained cell also has a unique-root
-   certificate and verified representative; partial certificates remain
-   proof evidence on indeterminate results. A validated range-level proof can
-   now certify joined rectangles around shared subdivision boundaries; the
-   next algorithm slice integrates deterministic component ownership and
-   interval empty-cell exclusion, followed by genuinely spatial proof and
-   overlap extent/completeness.
+   grants completion only when every deterministic candidate component has a
+   unique-root certificate and verified representative; partial certificates
+   remain proof evidence on indeterminate results. Exact shared grid vertices
+   define joined components, and their validated bounding-range proofs now
+   complete rational boundary roots and separated multi-root cases. The next
+   algorithm slice adds interval empty-cell exclusion, followed by genuinely
+   spatial proof and overlap extent/completeness.
    Semantic K4 edit transactions follow the K5 adoption pass. F6 splits and F4
    legacy cleanup land only with an owner-level behavioral migration. The Q2a/
    Q2b ladders are executable in CI; any graph-index/traversal representation change

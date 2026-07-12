@@ -676,20 +676,22 @@ projection without normalizing a floating plane normal. Rational derivatives
 use homogeneous numerator/weight hulls and the interval quotient rule. Exact
 expansion signs protect boundary equalities. Genuinely non-coplanar,
 tangent/singular, multi-root, and interval-inconclusive cells return no
-certificate. The NURBS/NURBS solver now retires
-the coverage gap only when isolation completed and every retained cell has
-both a unique-root certificate and a verified emitted representative. A
-polynomial transverse crossing therefore completes, while partial certificates
-remain visible on indeterminate multi-root results and rational, tangent, and
-overlap cases continue to fail closed.
+certificate. The NURBS/NURBS solver retires the coverage gap only when
+isolation completed and every deterministic candidate component has both a
+unique-root certificate and a verified emitted representative. Polynomial and
+positive-weight rational transverse crossings therefore complete, as do
+separated two-root components. Tangent, interval-inconclusive, and overlap
+cases continue to fail closed.
 
 The same proof is now available over validated caller-supplied source ranges,
 not only individual retained leaves. This lets a later ownership pass join
 adjacent cells around an exact subdivision boundary and certify their bounding
-parameter rectangle once. The rational transverse control proves over that
-joined region even though not every closed leaf can independently discharge
-boundary existence. Solver component ownership is intentionally not inferred
-from this substrate yet.
+parameter rectangle once. The solver now forms those components through exact
+shared parameter-grid vertices, orders their bounding ranges deterministically,
+and associates one representative with each certificate. The rational
+transverse control therefore completes even though not every closed leaf can
+independently discharge boundary existence. Seed-limit stops still prevent
+completion regardless of available component proof.
 
 That normalized boundary now has contextual and shared-scope public entries.
 The contextual entry composes the curve/curve family profile once and creates

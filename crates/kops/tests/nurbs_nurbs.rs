@@ -73,7 +73,7 @@ fn nurbs_nurbs_crossing_tangent_and_range_filtering() {
     assert_eq!(hit.points[0].kind, ContactKind::Transverse);
     assert!(hit.is_complete());
     assert!(hit.incomplete_evidence().is_empty());
-    assert_eq!(hit.root_certificates().len(), 4);
+    assert_eq!(hit.root_certificates().len(), 1);
     assert!(
         hit.root_certificates()
             .iter()
@@ -147,8 +147,9 @@ fn cell_local_discovery_retains_multiple_roots_and_verified_witnesses() {
 
     assert_eq!(forward.points.len(), 2, "{:?}", forward.points);
     assert_eq!(swapped.points.len(), 2);
-    assert!(!forward.is_complete());
-    assert!(!forward.root_certificates().is_empty());
+    assert!(forward.is_complete());
+    assert!(forward.incomplete_evidence().is_empty());
+    assert_eq!(forward.root_certificates().len(), 2);
     assert_eq!(forward.clone().swapped(), swapped);
     for (point, reversed) in forward.points.iter().zip(&swapped.points) {
         assert!(arch.param_range().contains(point.t_a));
@@ -159,6 +160,39 @@ fn cell_local_discovery_retains_multiple_roots_and_verified_witnesses() {
         assert_eq!(point.point, reversed.point);
         assert_eq!(point.residual, reversed.residual);
     }
+}
+
+#[test]
+fn joined_components_complete_rational_boundary_roots_under_swap() {
+    let rational = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![Point3::new(-1.0, -1.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+        Some(vec![1.0, 1.5]),
+    )
+    .unwrap();
+    let horizontal = line_nurbs(Point3::new(-2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0));
+    let forward = intersect_bounded_nurbs_nurbs(
+        &rational,
+        rational.param_range(),
+        &horizontal,
+        horizontal.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    let reversed = intersect_bounded_nurbs_nurbs(
+        &horizontal,
+        horizontal.param_range(),
+        &rational,
+        rational.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(forward.is_complete());
+    assert_eq!(forward.points.len(), 1);
+    assert_eq!(forward.root_certificates().len(), 1);
+    assert!(forward.incomplete_evidence().is_empty());
+    assert_eq!(forward.clone().swapped(), reversed);
 }
 
 #[test]
@@ -393,7 +427,7 @@ fn nurbs_nurbs_is_stable_under_small_and_large_parameter_reparameterization() {
         );
         assert_eq!(legacy.points[0].kind, ContactKind::Transverse);
         assert!(legacy.is_complete());
-        assert_eq!(legacy.root_certificates().len(), 4);
+        assert_eq!(legacy.root_certificates().len(), 1);
         assert!(legacy.points[0].point.dist(Point3::new(0.0, 0.0, 0.0)) <= 1.0e-8);
         assert!((legacy.points[0].t_a / parameter_scale - 0.5).abs() <= 1.0e-8);
         assert!((legacy.points[0].t_b / parameter_scale - 0.5).abs() <= 1.0e-8);

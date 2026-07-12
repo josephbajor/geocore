@@ -91,7 +91,7 @@ pub const CASES: [CurvePairSolveCase; 6] = [
             false,
             LimitKind::None,
             0x617e_1b7b_48fd_b84a,
-            0x8dfb_ac0d_9e9d_1d0b,
+            0x4f44_d942_62f3_f968,
         ),
     ),
     case(
@@ -100,11 +100,11 @@ pub const CASES: [CurvePairSolveCase; 6] = [
         4_096,
         expected(
             1,
-            false,
+            true,
             false,
             LimitKind::None,
             0xd116_a5f6_4d2e_545a,
-            0x7fca_16ca_153e_d3c8,
+            0x129d_9dfd_1717_3a8b,
         ),
     ),
     case(
@@ -126,11 +126,11 @@ pub const CASES: [CurvePairSolveCase; 6] = [
         4_096,
         expected(
             2,
-            false,
+            true,
             false,
             LimitKind::None,
             0x3606_10ba_1318_ae30,
-            0x289f_9511_588a_2317,
+            0xa30b_f608_25a1_0056,
         ),
     ),
     case(
@@ -734,4 +734,5 @@ mod tests {
             );
         }
     }
+
 }
