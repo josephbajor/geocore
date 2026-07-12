@@ -1,6 +1,30 @@
 //! Shared numerical-policy adapters for intersection solvers.
 
-use kcore::operation::NumericalPolicy;
+use kcore::operation::{NumericalPolicy, ParameterScale};
+
+/// Derives a scale-aware parameter-progress step with no acceptance authority.
+///
+/// Callers must still check their model-space residual before accepting a
+/// candidate. An invalid scale returns `None` so iterative callers can stop
+/// conservatively without panicking.
+pub(super) fn parameter_progress_step(
+    policy: NumericalPolicy,
+    coordinate_magnitude: f64,
+    span: f64,
+    output_tolerance: f64,
+) -> Option<f64> {
+    policy
+        .parameter_tolerance(
+            ParameterScale {
+                coordinate_magnitude,
+                span,
+                output_rate_upper: None,
+            },
+            output_tolerance,
+        )
+        .ok()
+        .map(|tolerance| tolerance.termination_step)
+}
 
 /// Solves a symmetric 2×2 system after a scale-invariant conditioning check.
 ///
@@ -65,6 +89,32 @@ pub(super) fn solve_symmetric_2x2(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parameter_progress_step_tracks_small_and_large_parameter_scales() {
+        let policy = NumericalPolicy::v1();
+        let base = f64::EPSILON * 64.0;
+        for (coordinate, span, expected) in [
+            (5.0e-14, 1.0e-13, base),
+            (0.5, 1.0, base),
+            (5.0e12, 1.0e13, base * 1.0e13),
+        ] {
+            let step = parameter_progress_step(policy, coordinate, span, 1.0e-8).unwrap();
+            assert!((step / expected - 1.0).abs() <= f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn parameter_progress_step_honors_custom_policy_and_rejects_invalid_scales() {
+        let v1 = parameter_progress_step(NumericalPolicy::v1(), 0.5, 1.0, 1.0e-8).unwrap();
+        let custom = NumericalPolicy::try_new(32.0, 640.0, 128.0 * f64::EPSILON).unwrap();
+        let custom = parameter_progress_step(custom, 0.5, 1.0, 1.0e-8).unwrap();
+        assert!((custom / v1 - 10.0).abs() <= 4.0 * f64::EPSILON);
+        assert_eq!(
+            parameter_progress_step(NumericalPolicy::v1(), 0.0, 0.0, 1.0e-8),
+            None
+        );
+    }
 
     #[test]
     fn solve_decision_and_result_are_invariant_across_coefficient_scale() {

@@ -1,6 +1,9 @@
 //! Bounded NURBS/NURBS curve intersections.
 
-use kcore::operation::{OperationContext, PolicyVersion, SessionPolicy};
+use kcore::operation::{
+    BudgetPlan, ExecutionPolicy, NumericalPolicy, OperationContext, PolicyVersion, SessionPolicy,
+    SessionPrecision,
+};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::nurbs::NurbsCurve;
@@ -12,7 +15,11 @@ use kops::intersect::{
 };
 
 fn line_nurbs(start: Point3, end: Point3) -> NurbsCurve {
-    NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![start, end], None).unwrap()
+    line_nurbs_with_domain(start, end, 1.0)
+}
+
+fn line_nurbs_with_domain(start: Point3, end: Point3, hi: f64) -> NurbsCurve {
+    NurbsCurve::new(1, vec![0.0, 0.0, hi, hi], vec![start, end], None).unwrap()
 }
 
 fn tangent_parabola() -> NurbsCurve {
@@ -150,4 +157,86 @@ fn contextual_v1_entry_is_exactly_legacy_compatible() {
         &context,
     );
     assert_eq!(contextual.result(), legacy.as_ref());
+}
+
+#[test]
+fn nurbs_nurbs_is_stable_under_small_and_large_parameter_reparameterization() {
+    let session = SessionPolicy::v1();
+    for parameter_scale in [1.0e-13, 1.0, 1.0e13] {
+        let diagonal = line_nurbs_with_domain(
+            Point3::new(-1.0, -1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            parameter_scale,
+        );
+        let horizontal = line_nurbs_with_domain(
+            Point3::new(-2.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+            parameter_scale,
+        );
+        let tolerances = Tolerances::default();
+        let legacy = intersect_bounded_nurbs_nurbs(
+            &diagonal,
+            diagonal.param_range(),
+            &horizontal,
+            horizontal.param_range(),
+            tolerances,
+        )
+        .unwrap();
+        assert_eq!(
+            legacy.points.len(),
+            1,
+            "parameter scale {parameter_scale:e}"
+        );
+        assert!(legacy.points[0].point.dist(Point3::new(0.0, 0.0, 0.0)) <= 1.0e-8);
+        assert!((legacy.points[0].t_a / parameter_scale - 0.5).abs() <= 1.0e-8);
+        assert!((legacy.points[0].t_b / parameter_scale - 0.5).abs() <= 1.0e-8);
+
+        let context = OperationContext::new(&session, tolerances).unwrap();
+        let contextual = intersect_bounded_nurbs_nurbs_with_context(
+            &diagonal,
+            diagonal.param_range(),
+            &horizontal,
+            horizontal.param_range(),
+            &context,
+        );
+        assert_eq!(contextual.result(), Ok(&legacy));
+    }
+}
+
+#[test]
+fn coarse_custom_progress_policy_can_stop_but_cannot_accept_a_contact() {
+    let diagonal = line_nurbs(Point3::new(-1.0, -1.0, 0.0), Point3::new(1.0, 1.0, 0.0));
+    let horizontal = line_nurbs(Point3::new(-2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0));
+    let tolerances = Tolerances::default();
+
+    let default = intersect_bounded_nurbs_nurbs(
+        &diagonal,
+        diagonal.param_range(),
+        &horizontal,
+        horizontal.param_range(),
+        tolerances,
+    )
+    .unwrap();
+    assert_eq!(default.points.len(), 1);
+
+    let numerical = NumericalPolicy::try_new(32.0, 1.0e16, 128.0 * f64::EPSILON).unwrap();
+    let session = SessionPolicy::new(
+        SessionPrecision::parasolid(),
+        numerical,
+        ExecutionPolicy::Available,
+        BudgetPlan::empty(),
+        PolicyVersion::V1,
+    );
+    let context = OperationContext::new(&session, tolerances).unwrap();
+    let stopped = intersect_bounded_nurbs_nurbs_with_context(
+        &diagonal,
+        diagonal.param_range(),
+        &horizontal,
+        horizontal.param_range(),
+        &context,
+    );
+    let stopped = stopped.result().unwrap();
+    assert!(stopped.points.is_empty());
+    assert!(stopped.overlaps.is_empty());
+    assert!(!stopped.is_complete());
 }
