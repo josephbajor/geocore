@@ -26,7 +26,7 @@ section and link the reason from the affected project file in the same change.
 | --- | --- |
 | F0 | Implemented: curve/curve operand swapping preserves completion evidence and canonical order. |
 | F1 | G1-G4a plus the F2 graph-budget adapter are implemented: `kgraph` and `ktopo::Store` own one transactional geometry graph; exact offsets evaluate through accepted/attempted node/depth accounting, check, tessellate, and round-trip through the declared X_T subset without basis duplication. Reverse dependencies use deterministic insertion-ordered adjacency with direct key/membership lookup and no full-order rebuilds; traversal keeps vector-defined output/path order with indexed active/completed membership. Q2a/Q2b preserve exact graph, index, traversal, rollback, and accounting evidence. The 14-file writer bundle is host-recertified and machine-fingerprinted; broader G4 corpus coverage and G5 remain. |
-| F2 | Stage 1, Stage 1b composition, the bounded NURBS/NURBS Stage 3 scale gate, two Stage 2 pilots, and contextual face/body-tessellation, projection, and checker entries are implemented. `OperationContext` owns family-default < session < request budget precedence for graph evaluation, Full checking, tessellation, and projection, including canonical root stops and accounting-mode validation. Whole-body tessellation now owns one scope across graph evaluation, projection fallback, shared-edge/iso refinement and storage, prepared UV/patch materialization, topology/holder structural storage, per-patch face tessellation, retained mesh vertices, and retained output triangles while preserving legacy bits and errors. Body and standalone-face legacy tessellation wrappers are closed to new production callers by the CI retirement ratchet. NURBS/NURBS conditioning, gradients, accepted progress, contact classification, collapsed ranges, and minimizer/local-search guards are normalized across parameter/model scales while residuals retain sole acceptance authority. Segment conditioning, overlap/input/dedup slack, structured numeric stops, other contextual caller adoption/ratcheting, corpus-backed bounded tessellation presets, and broader migrations remain. |
+| F2 | Stage 1, Stage 1b composition, the bounded NURBS/NURBS Stage 3 scale gate, two Stage 2 pilots, and contextual face/body-tessellation, projection, and checker entries are implemented. `OperationContext` owns family-default < session < request budget precedence for graph evaluation, Full checking, tessellation, and projection, including canonical root stops and accounting-mode validation. Whole-body tessellation now owns one scope across graph evaluation, projection fallback, shared-edge/iso refinement and storage, prepared UV/patch materialization, topology/holder structural storage, per-patch face tessellation, retained mesh vertices, and retained output triangles while preserving legacy bits and errors. Body/standalone-face tessellation and standalone surface projection are closed to new production callers by the CI retirement ratchet. NURBS/NURBS conditioning, gradients, accepted progress, contact classification, collapsed ranges, and minimizer/local-search guards are normalized across parameter/model scales while residuals retain sole acceptance authority. Curve-projection owner adoption, segment conditioning, overlap/input/dedup slack, structured numeric stops, other contextual caller adoption/ratcheting, corpus-backed bounded tessellation presets, and broader migrations remain. |
 | F3 | Two slices implemented: centralized class dispatch plus shared periodic/range and first-wins candidate emission migrated through line/circle and plane/sphere. Broader driver migration and generic fallback remain. |
 | F4 | Phase 1, representative Phase 2 slices, and two Phase 3 pilots are implemented: graph evaluation owns stable classification, and one surface-intersection family retains ordered structured incomplete evidence through limits, numeric stops, canonicalization, and swapping. Broader result-family and legacy migrations remain. |
 | F5 | K1-K3, typed K4 interchange, and K5 adoption are implemented: the `kernel` facade owns lifecycle, opaque IDs, classified sources, one-scope outcomes, safe checker subjects, opaque journals, child-accounted procedural evaluation, and atomic typed X_T import/export. The standalone `kernel-lifecycle` client depends directly only on `kernel` and proves construction, semantic inspection, Full checking, surface evaluation, and byte-stable X_T export/import/re-export. Graph-aware intersection and semantic edit/journal iteration remain. |
@@ -55,7 +55,9 @@ current record. Host findings remain ratcheted in `docs/oracle-results.tsv`.
    its remaining `ktopo`/`kxt` production clients now use one contextual
    operation per body. The enforced legacy-API source audit closes new
    production calls to the body wrapper while preserving compatibility tests.
-   Projection production adoption and its internal-use ratchet remain. Public
+   Standalone surface projection is now closed to new production callers;
+   curve-projection adoption remains for the multi-query X_T and intersection
+   owners and needs an owner-level aggregate profile before its ratchet. Public
    body-tessellation deprecation still waits for an adopted facade replacement.
 2. **Finish hostile-input tessellation policy.** Exact per-face split/vertex/
    triangle admission and body-wide edge/iso split, prepared-patch, and retained-
@@ -117,8 +119,8 @@ share one graph child in one scope. Contextual body tessellation now composes
 projection and sequential graph/face work in one scope; its `ktopo`/`kxt`
 production callers are contextual and its internal legacy-use ratchet is
 enforced. Exact body edge-line and remaining structural-holder admission have
-landed. Projection adoption/ratcheting and corpus-backed bounded tessellation
-presets remain.
+landed. Curve-projection owner adoption/ratcheting and corpus-backed bounded
+tessellation presets remain.
 The Q2a/Q2b ladders now protect graph construction, reverse indexing, and
 dependency traversal through the current 1,000-edge procedural scale.
 

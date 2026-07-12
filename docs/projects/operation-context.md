@@ -590,6 +590,14 @@ contextual half-cylinder ladder proved all five stages and exact mesh/report
 repeatability. The same audit rejects new production references to it across
 `kgeom`, `ktopo`, and `kxt`. Neither wrapper is publicly deprecated because
 `kernel` does not yet expose an adopted facade replacement for these families.
+Standalone `kgeom::project::project_to_surface` is also at state 3: contextual
+and shared-scope paths are proven in projection, surface-point services, and
+body tessellation, and the source audit permits the legacy symbol only in its
+public definition, focused tests, and the two compatibility surface-point
+wrappers that preserve the old invalid-query behavior. Curve projection remains
+at state 2 because X_T reconstruction and ellipse intersection can issue more
+than one query; their owner-level aggregate profile must land before closing
+the single-query wrapper.
 
 ## Rollout stages
 
@@ -813,9 +821,10 @@ the exact transaction, allocator, index, and journal state; ordinary evaluator
 failures retain the checker's established fault ordering. Legacy wrappers use a
 non-binding aggregate allowance so compatibility does not acquire an accidental
 model-size ceiling. Contextual facade construction composition remains;
-projection and body tessellation have contextual entries but still need
-remaining projection production-caller adoption and its internal legacy
-ratchet. Body tessellation's `ktopo`/`kxt` callers are contextual and its
+surface projection and body tessellation have contextual entries with their
+internal legacy ratchets closed. Curve projection still needs multi-query owner
+adoption and its internal legacy ratchet. Body tessellation's `ktopo`/`kxt`
+callers are contextual and its
 production-use ratchet is enforced; public deprecation remains blocked on a
 facade replacement.
 

@@ -6,9 +6,12 @@ from pathlib import Path
 from scripts.legacy_api_contract import (
     BODY_TESSELLATION_DEFINITION,
     FACE_TESSELLATION_DEFINITION,
+    SURFACE_POINT_COMPATIBILITY,
+    SURFACE_PROJECTION_DEFINITION,
     audit_repository,
     find_legacy_body_tessellation_uses,
     find_legacy_face_tessellation_uses,
+    find_legacy_surface_projection_uses,
 )
 
 
@@ -97,6 +100,19 @@ fn production_after_tests() {
             find_legacy_body_tessellation_uses({path: source}), [f"{path}:13"]
         )
 
+    def test_cfg_test_module_with_intervening_attributes_is_masked(self) -> None:
+        path = Path("crates/kgeom/src/attributed_tests.rs")
+        source = """\
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+mod tests {
+    fn compatibility() {
+        tessellate_body();
+    }
+}
+"""
+        self.assertEqual(find_legacy_body_tessellation_uses({path: source}), [])
+
 
 class FaceTessellationRatchetTests(unittest.TestCase):
     def test_production_import_and_call_are_rejected(self) -> None:
@@ -140,6 +156,70 @@ mod tests {
 use kgeom::tess::{tessellate_in_scope, tessellate_with_context};
 """
         self.assertEqual(find_legacy_face_tessellation_uses({path: source}), [])
+
+    def test_current_production_sources_are_closed(self) -> None:
+        self.assertEqual(audit_repository(ROOT), [])
+
+
+class SurfaceProjectionRatchetTests(unittest.TestCase):
+    def test_production_import_and_call_are_rejected(self) -> None:
+        path = Path("crates/kops/src/new_surface_client.rs")
+        source = """\
+use kgeom::project::project_to_surface;
+
+fn run() {
+    let _ = project_to_surface(&surface, point, window);
+}
+"""
+        self.assertEqual(
+            find_legacy_surface_projection_uses({path: source}),
+            [f"{path}:1", f"{path}:4"],
+        )
+
+    def test_public_definition_and_exact_compatibility_wrappers_are_allowed(self) -> None:
+        definition = "pub fn project_to_surface() {}\n"
+        compatibility = """\
+pub fn invert_surface_point() {
+    project_to_surface();
+}
+
+pub fn distance_to_surface() {
+    project_to_surface();
+}
+"""
+        self.assertEqual(
+            find_legacy_surface_projection_uses(
+                {
+                    SURFACE_PROJECTION_DEFINITION: definition,
+                    SURFACE_POINT_COMPATIBILITY: compatibility,
+                }
+            ),
+            [],
+        )
+
+    def test_new_call_in_compatibility_module_is_still_rejected(self) -> None:
+        source = """\
+pub fn invert_surface_point() {
+    project_to_surface();
+}
+
+fn new_production_helper() {
+    project_to_surface();
+}
+"""
+        self.assertEqual(
+            find_legacy_surface_projection_uses(
+                {SURFACE_POINT_COMPATIBILITY: source}
+            ),
+            [f"{SURFACE_POINT_COMPATIBILITY}:6"],
+        )
+
+    def test_contextual_names_do_not_match(self) -> None:
+        path = Path("crates/kops/src/contextual_surface.rs")
+        source = """\
+use kgeom::project::{project_to_surface_in_scope, project_to_surface_with_context};
+"""
+        self.assertEqual(find_legacy_surface_projection_uses({path: source}), [])
 
     def test_current_production_sources_are_closed(self) -> None:
         self.assertEqual(audit_repository(ROOT), [])

@@ -11,17 +11,23 @@ from typing import Mapping
 
 SOURCE_ROOTS = (
     Path("crates/kgeom/src"),
+    Path("crates/kops/src"),
     Path("crates/ktopo/src"),
     Path("crates/kxt/src"),
 )
 LEGACY_BODY_TESSELLATION = re.compile(r"\btessellate_body\b")
 LEGACY_FACE_TESSELLATION = re.compile(r"\btessellate\b")
+LEGACY_SURFACE_PROJECTION = re.compile(r"\bproject_to_surface\b")
 TEST_MODULE = re.compile(
-    r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*mod\s+[A-Za-z_][A-Za-z0-9_]*\s*\{",
+    r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*"
+    r"(?:#\s*\[[^\]]*\]\s*)*"
+    r"mod\s+[A-Za-z_][A-Za-z0-9_]*\s*\{",
     re.MULTILINE,
 )
 BODY_TESSELLATION_DEFINITION = Path("crates/ktopo/src/btess.rs")
 FACE_TESSELLATION_DEFINITION = Path("crates/kgeom/src/tess.rs")
+SURFACE_PROJECTION_DEFINITION = Path("crates/kgeom/src/project.rs")
+SURFACE_POINT_COMPATIBILITY = Path("crates/kgeom/src/surface_point.rs")
 
 
 class ContractError(RuntimeError):
@@ -150,16 +156,50 @@ def _without_test_modules(source: str) -> str:
     return "".join(masked)
 
 
+def _function_ranges(source: str, names: frozenset[str]) -> list[tuple[int, int]]:
+    """Return complete lexical ranges for explicitly named Rust functions."""
+    ranges = []
+    function = re.compile(
+        r"\b(?:pub(?:\s*\([^)]*\))?\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\b[^{]*\{",
+        re.MULTILINE,
+    )
+    for match in function.finditer(source):
+        if match.group(1) not in names:
+            continue
+        opening = source.find("{", match.start(), match.end())
+        depth = 0
+        for index in range(opening, len(source)):
+            if source[index] == "{":
+                depth += 1
+            elif source[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    ranges.append((match.start(), index + 1))
+                    break
+        else:
+            raise ContractError(
+                f"unterminated allowed compatibility function {match.group(1)}"
+            )
+    return ranges
+
+
 def _find_legacy_uses(
     sources: Mapping[Path, str],
     symbol: re.Pattern[str],
     definition_path: Path,
+    allowed_functions: Mapping[Path, frozenset[str]] | None = None,
 ) -> list[str]:
     """Return forbidden production references for one legacy symbol."""
     violations = []
     for path in sorted(sources, key=lambda item: item.as_posix()):
         source = _without_test_modules(sources[path])
+        allowed_ranges = _function_ranges(
+            source,
+            (allowed_functions or {}).get(path, frozenset()),
+        )
         for match in symbol.finditer(source):
+            if any(start <= match.start() < end for start, end in allowed_ranges):
+                continue
             line_start = source.rfind("\n", 0, match.start()) + 1
             line_end = source.find("\n", match.end())
             if line_end == -1:
@@ -192,6 +232,20 @@ def find_legacy_face_tessellation_uses(sources: Mapping[Path, str]) -> list[str]
     )
 
 
+def find_legacy_surface_projection_uses(sources: Mapping[Path, str]) -> list[str]:
+    """Return forbidden production references to the legacy surface projector."""
+    return _find_legacy_uses(
+        sources,
+        LEGACY_SURFACE_PROJECTION,
+        SURFACE_PROJECTION_DEFINITION,
+        {
+            SURFACE_POINT_COMPATIBILITY: frozenset(
+                {"invert_surface_point", "distance_to_surface"}
+            )
+        },
+    )
+
+
 def audit_repository(repository: Path) -> list[str]:
     """Audit the crate production trees governed by this ratchet."""
     sources = {}
@@ -201,6 +255,7 @@ def audit_repository(repository: Path) -> list[str]:
     return sorted(
         find_legacy_body_tessellation_uses(sources)
         + find_legacy_face_tessellation_uses(sources)
+        + find_legacy_surface_projection_uses(sources)
     )
 
 
@@ -210,11 +265,11 @@ def main() -> int:
     if violations:
         joined = "\n  ".join(violations)
         raise ContractError(
-            "legacy body/face tessellation wrappers are closed to production callers; "
+            "equivalence-proven legacy APIs are closed to new production callers; "
             "use the contextual or in-scope entry points:\n  "
             f"{joined}"
         )
-    print("legacy body/face tessellation production-use ratchet is closed")
+    print("legacy API production-use ratchets are closed")
     return 0
 
 

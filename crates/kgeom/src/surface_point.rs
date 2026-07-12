@@ -10,8 +10,7 @@
 
 use crate::param::wrap_periodic;
 use crate::project::{
-    ProjectionError, compose_surface_projection_context, project_to_surface,
-    project_to_surface_in_scope,
+    ProjectionError, compose_surface_projection_context, project_to_surface_in_scope,
 };
 use crate::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 use crate::vec::Point3;
@@ -269,8 +268,8 @@ pub fn invert_surface_point(
     if !window[0].is_finite() || !window[1].is_finite() {
         return Err(SurfacePointError::UnboundedProjectionWindow);
     }
-    let projection =
-        project_to_surface(surface, point, window).ok_or(SurfacePointError::ProjectionFailed)?;
+    let projection = crate::project::project_to_surface(surface, point, window)
+        .ok_or(SurfacePointError::ProjectionFailed)?;
     Ok(SurfacePointUv {
         uv: projection.uv,
         method: SurfacePointMethod::Projected,
@@ -365,8 +364,8 @@ pub fn distance_to_surface(
     if !window[0].is_finite() || !window[1].is_finite() {
         return Err(SurfacePointError::UnboundedProjectionWindow);
     }
-    let projection =
-        project_to_surface(surface, point, window).ok_or(SurfacePointError::ProjectionFailed)?;
+    let projection = crate::project::project_to_surface(surface, point, window)
+        .ok_or(SurfacePointError::ProjectionFailed)?;
     Ok(SurfacePointDistance {
         distance: projection.dist,
         method: SurfacePointMethod::Projected,
