@@ -1,0 +1,67 @@
+{
+  "schema_version": "kernel-fuzz-contract.v1",
+  "toolchain": "nightly-2026-01-22",
+  "cargo_fuzz_version": "0.13.2",
+  "libfuzzer_sys_version": "0.4.13",
+  "target": {
+    "name": "xt_read",
+    "selector_bytes": 1,
+    "max_payload_bytes": 262144,
+    "max_import_records": 4096,
+    "smoke_seed": 5860406134146269190,
+    "smoke_seconds": 20,
+    "timeout_seconds": 5,
+    "rss_limit_mb": 2048
+  },
+  "corpus": [
+    {
+      "file": "parse-minimal-valid.xtseed",
+      "selector": 0,
+      "source": "fuzz/fixtures/minimal_valid.x_t",
+      "transform": "full",
+      "license": "Apache-2.0"
+    },
+    {
+      "file": "parse-block.xtseed",
+      "selector": 0,
+      "source": "crates/kxt/tests/fixtures/block.x_t",
+      "transform": "full",
+      "license": "Apache-2.0"
+    },
+    {
+      "file": "import-block.xtseed",
+      "selector": 1,
+      "source": "crates/kxt/tests/fixtures/block.x_t",
+      "transform": "full",
+      "license": "Apache-2.0"
+    },
+    {
+      "file": "import-offset-plane.xtseed",
+      "selector": 1,
+      "source": "crates/kxt/tests/fixtures/offset_plane.x_t",
+      "transform": "full",
+      "license": "Apache-2.0"
+    },
+    {
+      "file": "parse-header-boundary.xtseed",
+      "selector": 0,
+      "source": "crates/kxt/tests/fixtures/block.x_t",
+      "transform": "header-boundary",
+      "license": "Apache-2.0"
+    },
+    {
+      "file": "parse-token-boundary.xtseed",
+      "selector": 0,
+      "source": "crates/kxt/tests/fixtures/block.x_t",
+      "transform": "terminator-token-boundary",
+      "license": "Apache-2.0"
+    },
+    {
+      "file": "import-record-boundary.xtseed",
+      "selector": 1,
+      "source": "crates/kxt/tests/fixtures/block.x_t",
+      "transform": "terminator-record-boundary",
+      "license": "Apache-2.0"
+    }
+  ]
+}

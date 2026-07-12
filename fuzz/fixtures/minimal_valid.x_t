@@ -1,0 +1,5 @@
+**PART1;FORMAT=text;GUISE=transmit;
+**PART2;SCH=SCH_1300000_13006;USFLD_SIZE=0;
+**PART3;
+**END_OF_HEADER*****************************************************************
+T1 v17 SCH_1300000_13006 0 1 0 
