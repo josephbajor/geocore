@@ -1,6 +1,7 @@
 //! Typed X_T interchange at the supported facade boundary.
 
 use kcore::operation::OperationScope;
+use kgraph::{EvalBudgetProfile, EvalLimits};
 
 use crate::error::{Error, Result};
 use crate::session::{Part, PartEdit};
@@ -159,10 +160,13 @@ impl PartEdit<'_> {
         request: ImportXtRequest<'_>,
     ) -> Result<OperationOutcome<ImportXtResult>> {
         let ImportXtRequest { bytes, settings } = request;
-        let context = settings.context(self.policy)?;
-        let scope = OperationScope::new(&context);
+        let context = settings
+            .context(self.policy)?
+            .with_family_budget_defaults(EvalBudgetProfile::v1_defaults());
+        EvalLimits::from_budget_plan(&context.effective_budget())?;
+        let mut scope = OperationScope::new(&context);
         let part = self.id.clone();
-        let result = kxt::import(bytes, &mut self.state.store)
+        let result = kxt::import_in_scope(bytes, &mut self.state.store, &mut scope, 0)
             .map(|reconstruction| adapt_import(part, reconstruction))
             .map_err(Error::from_xt);
         Ok(scope.finish_typed(result))
@@ -213,7 +217,10 @@ mod tests {
     use std::error::Error as _;
 
     use kcore::error::ErrorClass;
-    use kcore::operation::{ExecutionPolicy, NumericalPolicy, PolicyVersion, SessionPrecision};
+    use kcore::operation::{
+        ExecutionPolicy, LimitSnapshot, NumericalPolicy, PolicyVersion, ResourceKind,
+        SessionPrecision, TOTAL_WORK_STAGE,
+    };
     use kgeom::frame::Frame;
     use kgeom::surface::Plane;
     use kgeom::vec::Point3;
@@ -260,6 +267,20 @@ T51 : TRANSMIT FILE created by modeller version 100023017 SCH_1000230_100040";
         assert_eq!(part.pcurves().len(), direct.geometry().curve2d_count());
     }
 
+    fn report_snapshot(
+        outcome: &OperationOutcome<ImportXtResult>,
+        stage: crate::StageId,
+        resource: ResourceKind,
+    ) -> LimitSnapshot {
+        outcome
+            .report()
+            .usage()
+            .iter()
+            .copied()
+            .find(|snapshot| snapshot.stage == stage && snapshot.resource == resource)
+            .expect("configured usage snapshot")
+    }
+
     #[test]
     fn import_into_existing_part_matches_direct_bodies_journal_and_semantics() {
         let block_xt = block_xt();
@@ -284,7 +305,24 @@ T51 : TRANSMIT FILE created by modeller version 100023017 SCH_1000230_100040";
             .unwrap()
             .import_xt(ImportXtRequest::new(block_xt.as_bytes()))
             .unwrap();
-        assert!(facade.report().usage().is_empty());
+        assert_eq!(
+            report_snapshot(&facade, kgraph::eval_stage::NODE_VISITS, ResourceKind::Work,),
+            LimitSnapshot {
+                stage: kgraph::eval_stage::NODE_VISITS,
+                resource: ResourceKind::Work,
+                consumed: 12,
+                allowed: 4_096,
+            }
+        );
+        assert_eq!(
+            report_snapshot(
+                &facade,
+                kgraph::eval_stage::DEPENDENCY_DEPTH,
+                ResourceKind::Depth,
+            )
+            .consumed,
+            1
+        );
         let imported = facade.result().unwrap();
         assert_eq!(imported.bodies().len(), direct_import.bodies.len());
         for (facade, direct) in imported.bodies().iter().zip(&direct_import.bodies) {
@@ -454,7 +492,7 @@ T51 : TRANSMIT FILE created by modeller version 100023017 SCH_1000230_100040";
             failed.result().unwrap_err().code(),
             kxt::error::code::OUTSIDE_SIZE_BOX
         );
-        assert!(failed.report().usage().is_empty());
+        assert_eq!(failed.report().usage().len(), 2);
         let part = session.part(part_id.clone()).unwrap();
         assert_eq!(
             before,
@@ -484,6 +522,69 @@ T51 : TRANSMIT FILE created by modeller version 100023017 SCH_1000230_100040";
                 .unwrap();
         assert_eq!(future.body(), expected.body());
         assert_eq!(future.journal(), expected.journal());
+    }
+
+    #[test]
+    fn import_aggregate_graph_limit_counts_prior_queries_and_rolls_back() {
+        let bytes = block_xt();
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let budget = EvalBudgetProfile::for_limits(64, 1);
+        let outcome = session
+            .edit_part(part_id.clone())
+            .unwrap()
+            .import_xt(
+                ImportXtRequest::new(bytes.as_bytes())
+                    .with_settings(OperationSettings::new().with_budget_overrides(budget)),
+            )
+            .unwrap();
+        let expected = LimitSnapshot {
+            stage: kgraph::eval_stage::NODE_VISITS,
+            resource: ResourceKind::Work,
+            consumed: 2,
+            allowed: 1,
+        };
+        assert_eq!(outcome.result().unwrap_err().limit(), Some(expected));
+        assert_eq!(outcome.report().limit_events(), &[expected]);
+        assert_eq!(
+            report_snapshot(
+                &outcome,
+                kgraph::eval_stage::NODE_VISITS,
+                ResourceKind::Work,
+            )
+            .consumed,
+            1
+        );
+        assert_eq!(session.part(part_id).unwrap().bodies().len(), 0);
+    }
+
+    #[test]
+    fn import_total_work_precedes_graph_stage_and_matches_error_report() {
+        let bytes = block_xt();
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let budget = EvalBudgetProfile::for_limits(64, 64).with_total_work_limit(1);
+        let outcome = session
+            .edit_part(part_id.clone())
+            .unwrap()
+            .import_xt(
+                ImportXtRequest::new(bytes.as_bytes())
+                    .with_settings(OperationSettings::new().with_budget_overrides(budget)),
+            )
+            .unwrap();
+        let expected = LimitSnapshot {
+            stage: TOTAL_WORK_STAGE,
+            resource: ResourceKind::Work,
+            consumed: 2,
+            allowed: 1,
+        };
+        assert_eq!(outcome.result().unwrap_err().limit(), Some(expected));
+        assert_eq!(outcome.report().limit_events(), &[expected]);
+        assert_eq!(
+            report_snapshot(&outcome, TOTAL_WORK_STAGE, ResourceKind::Work).consumed,
+            1
+        );
+        assert_eq!(session.part(part_id).unwrap().bodies().len(), 0);
     }
 
     fn add_raw_block(session: &mut crate::Session, part: &PartId) -> BodyId {

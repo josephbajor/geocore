@@ -106,10 +106,29 @@ impl FaceDomainContainmentBudgetProfile {
 /// finite chart, not that the face is unbounded.
 pub fn derive_face_domain(store: &Store, face_id: FaceId) -> Result<Option<FaceDomain>> {
     let face = store.get(face_id)?;
-    let surface = store.get(face.surface)?;
     let Some((natural, periods)) = surface_metadata(store, face.surface) else {
         return Ok(None);
     };
+    derive_face_domain_from_metadata(store, face_id, natural, periods)
+}
+
+/// Derive a face domain from graph metadata already obtained by a trusted
+/// higher-layer adapter.
+///
+/// This is the composition seam used by contextual interchange: the caller
+/// can charge the range and periodicity graph queries to its own operation
+/// scope instead of letting [`derive_face_domain`] create an independent
+/// default evaluator. The supplied values must come from the face's live
+/// supporting-surface handle.
+#[doc(hidden)]
+pub fn derive_face_domain_from_metadata(
+    store: &Store,
+    face_id: FaceId,
+    natural: [ParamRange; 2],
+    periods: [Option<f64>; 2],
+) -> Result<Option<FaceDomain>> {
+    let face = store.get(face_id)?;
+    let surface = store.get(face.surface)?;
     if let Ok(domain) = FaceDomain::new(natural[0], natural[1]) {
         return Ok(Some(domain));
     }

@@ -5,6 +5,8 @@
 //! and V28 (embedded schemas over base 13006); `longbar` is a V10 file
 //! that must be rejected.
 
+use kcore::operation::{OperationContext, ResourceKind, SessionPolicy};
+use kcore::tolerance::Tolerances;
 use kgeom::frame::Frame;
 use kgeom::vec::Point3;
 use ktopo::check::check_body;
@@ -15,7 +17,7 @@ use ktopo::store::Store;
 use ktopo::transaction::MutationKind;
 use kxt::parse::Value;
 use kxt::schema::code;
-use kxt::{XtError, import, read_xt, reconstruct};
+use kxt::{XtError, import, import_with_context, read_xt, reconstruct};
 
 fn fixture(name: &str) -> Vec<u8> {
     let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -79,6 +81,66 @@ fn successful_reconstruction_exposes_its_atomic_mutation_journal() {
             .all(|mutation| mutation.kind == MutationKind::Created)
     );
     assert!(reconstruction.journal.lineage().is_empty());
+}
+
+#[test]
+fn legacy_import_matches_contextual_v1_result_and_reports_graph_work() {
+    let bytes = fixture("block.x_t");
+    let mut legacy_store = Store::new();
+    let legacy = import(&bytes, &mut legacy_store).unwrap();
+
+    let session = SessionPolicy::v1();
+    let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+    let mut contextual_store = Store::new();
+    let outcome = import_with_context(&bytes, &mut contextual_store, &context).unwrap();
+    let (contextual, report) = outcome.into_parts();
+    let contextual = contextual.unwrap();
+
+    assert_eq!(contextual.bodies, legacy.bodies);
+    assert_eq!(contextual.skipped, legacy.skipped);
+    assert_eq!(contextual.journal, legacy.journal);
+    assert_eq!(
+        contextual_store.count::<Body>(),
+        legacy_store.count::<Body>()
+    );
+    let visits = report
+        .usage()
+        .iter()
+        .find(|snapshot| {
+            snapshot.stage == kgraph::eval_stage::NODE_VISITS
+                && snapshot.resource == ResourceKind::Work
+        })
+        .unwrap();
+    assert_eq!((visits.consumed, visits.allowed), (12, 4_096));
+    let depth = report
+        .usage()
+        .iter()
+        .find(|snapshot| {
+            snapshot.stage == kgraph::eval_stage::DEPENDENCY_DEPTH
+                && snapshot.resource == ResourceKind::Depth
+        })
+        .unwrap();
+    assert_eq!((depth.consumed, depth.allowed), (1, 64));
+    assert!(report.limit_events().is_empty());
+}
+
+#[test]
+fn contextual_parse_failure_keeps_the_precomposed_zero_usage_report() {
+    let session = SessionPolicy::v1();
+    let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+    let mut store = Store::new();
+    let outcome = import_with_context(b"not an X_T file", &mut store, &context).unwrap();
+    assert!(matches!(outcome.result(), Err(XtError::BadHeader { .. })));
+    assert_eq!(outcome.report().usage().len(), 2);
+    assert!(
+        outcome
+            .report()
+            .usage()
+            .iter()
+            .all(|snapshot| snapshot.consumed == 0)
+    );
+    assert!(outcome.report().limit_events().is_empty());
+    assert_eq!(store.count::<Body>(), 0);
 }
 
 #[test]

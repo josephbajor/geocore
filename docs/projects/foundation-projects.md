@@ -48,14 +48,14 @@ current record. Host findings remain ratcheted in `docs/oracle-results.tsv`.
 
 ### Ordered code queue
 
-1. **Contextualize and ratchet the remaining foundation paths.** Migrate body
-   tessellation,
-   projection, and X_T reconstruction's nested graph evaluation onto shared
-   scopes and child reservations before expanding their facade APIs. As each
-   contextual path proves legacy equivalence, forbid new crate-internal calls
-   to its legacy wrapper. K5 has now exercised the public compatibility
-   surface, so proven legacy wrappers may be deprecated when their owning
-   migration lands.
+1. **Contextualize and ratchet the remaining foundation paths.** X_T's
+   reconstruction phase now uses one facade-owned scope and child reservation;
+   contextual checked commit is the mandatory next half of that import path.
+   Then migrate projection and body tessellation before expanding their facade
+   APIs. As each complete contextual path proves legacy equivalence, forbid new
+   crate-internal calls to its legacy wrapper. K5 has now exercised the public
+   compatibility surface, so proven legacy wrappers may be deprecated when
+   their owning migration lands.
 2. **Measure graph construction before large imports.** Land the Q2a
    graph-build/reverse-dependency ladder before production-scale imports or a
    reverse-index representation change. Optimize the current deterministic
@@ -84,9 +84,9 @@ F7 Quality and performance harnesses             (independent and continuous)
 The original independent foundations have landed. Work is no longer scheduled
 as broad parallel expansion: Q8 made the harness protective; K5 tested the
 facade against a consumer; the completed F2 profile/scale gates make bounded F3
-fallback work eligible; contextual X_T/body-tessellation work still gates the
-corresponding facade operations; and the Q2a graph-build baseline gates large
-imports and reverse-index optimization.
+fallback work eligible; the X_T reconstruction path now owns its graph child,
+while checked-commit checking and body tessellation remain. The Q2a graph-build
+baseline gates large imports and reverse-index optimization.
 
 ### Standing handoff ratchets
 
@@ -177,11 +177,11 @@ algorithm consume explicit policy; defaults reproduce existing golden results;
 limits are test-overridable and failures report stage plus consumed/allowed
 work.
 
-**Current convergence gate:** move operation-family default/session/request
-composition into one `kcore` contract, remove owner-local overlay recipes, and
-finish the scale-sensitive contact/minimizer guards required by the generic
-intersection fallback. Contextual X_T graph evaluation, projection, and body
-tessellation must use the same scope/child-reservation model.
+**Current convergence gate:** operation-family composition and the
+scale-sensitive contact/minimizer gate are complete. Contextual graph
+evaluation, projection, and body tessellation use the same
+scope/child-reservation model: X_T reconstruction is now migrated, while
+projection, body tessellation, and checked construction remain.
 
 ## F3 — Intersection engine consolidation
 

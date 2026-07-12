@@ -623,11 +623,13 @@ test covers malformed cyclic and singular cases.
 
 ### G5 — Operations adapter and follow-on descriptors
 
-Priority gate: F2 now owns operation-family profile composition and the NURBS
-scale guards required by the generic fallback are complete. X_T nested graph
-evaluation must still consume caller-owned child reservations before G5
-starts. The existing facade evaluation adapter is the reference accounting
-contract.
+Priority gate: F2 owns operation-family profile composition and the NURBS
+scale guards required by the generic fallback are complete. X_T
+reconstruction-owned graph evaluation now consumes one caller-owned child
+reservation across face-domain metadata and SP-curve validation, including
+aggregate and root-total limit reconciliation. Checked commit's broader Fast
+checker evaluation remains part of F2 Stage 5 rather than this G5 gate. The
+existing facade evaluation adapter remains the reference accounting contract.
 
 - Add graph-aware `kops` inspection/evaluation adapters without rewriting
   analytic solvers.

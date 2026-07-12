@@ -48,9 +48,10 @@ pub mod write;
 
 pub use error::{Result, XtCapability, XtError};
 pub use parse::{Header, Node, Value, XtFile, read_xt};
-pub use recon::{Reconstruction, reconstruct};
+pub use recon::{Reconstruction, reconstruct, reconstruct_in_scope, reconstruct_with_context};
 pub use write::export_text;
 
+use kcore::operation::{OperationContext, OperationOutcome, OperationPolicyError, OperationScope};
 use ktopo::store::Store;
 
 /// Parse and reconstruct a transmit file atomically. On error, `store` is
@@ -58,4 +59,34 @@ use ktopo::store::Store;
 pub fn import(bytes: &[u8], store: &mut Store) -> Result<Reconstruction> {
     let file = read_xt(bytes)?;
     reconstruct(&file, store)
+}
+
+/// Parse and reconstruct with graph work charged to a fresh operation scope.
+pub fn import_with_context(
+    bytes: &[u8],
+    store: &mut Store,
+    context: &OperationContext<'_>,
+) -> core::result::Result<OperationOutcome<Reconstruction, XtError>, OperationPolicyError> {
+    let context = context
+        .clone()
+        .with_family_budget_defaults(kgraph::EvalBudgetProfile::v1_defaults());
+    kgraph::EvalLimits::from_budget_plan(&context.effective_budget())?;
+    let mut scope = OperationScope::new(&context);
+    let result = read_xt(bytes).and_then(|file| reconstruct_in_scope(&file, store, &mut scope, 0));
+    Ok(scope.finish_typed(result))
+}
+
+/// Parse and reconstruct inside an existing caller-owned operation scope.
+///
+/// The caller supplies the stable ordinal for the reconstruction's one graph
+/// child reservation and must have installed the graph evaluation family
+/// budget before creating `scope`.
+pub fn import_in_scope(
+    bytes: &[u8],
+    store: &mut Store,
+    scope: &mut OperationScope<'_, '_>,
+    child_ordinal: u64,
+) -> Result<Reconstruction> {
+    let file = read_xt(bytes)?;
+    reconstruct_in_scope(&file, store, scope, child_ordinal)
 }

@@ -683,6 +683,18 @@ thread-count variants produce identical mesh bits and semantic reports.
 
 ### Stage 5 — Checker/make integration
 
+Status: X_T reconstruction-owned graph queries are contextual. Facade import
+installs the graph family profile before parsing, owns one scope, and reserves
+one deterministic child for the complete reconstruction. SP-curve endpoint
+validation and face-domain range/periodicity metadata charge accepted visits,
+depth high-water, synthetic aggregate crossings, and root-total precedence to
+that child; any resulting failure is rollback-clean and retains matching typed
+error/report limit evidence. The legacy face-domain API still maps unavailable
+metadata to `None`, while the trusted reconstruction seam supplies already
+charged metadata and propagates graph failures. Checked commit's Fast-check
+evaluation, contextual construction/check integration, body tessellation, and
+projection remain.
+
 - Route checked construction through one scope, including affected-body checking.
 - Add contextual checker APIs and structured Full verification gaps.
 - Route X_T reconstruction's nested graph evaluation through the caller's
