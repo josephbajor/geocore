@@ -58,6 +58,7 @@ use kgeom::tess::{TrimLoop, TrimmedSurface, tessellate};
 use kgeom::vec::{Point3, Vec2};
 mod error;
 mod offset;
+mod policy;
 
 pub use error::{
     EVALUATION_FAILED, OFFSET_PERIODIC_WINDING, PROCEDURAL_LEAF_ALGORITHM,
@@ -65,6 +66,13 @@ pub use error::{
     UNSUPPORTED_TESSELLATION,
 };
 use offset::{eval_surface_point, face_case_planar_offset, surface_periodicity};
+pub use policy::{
+    BODY_TESSELLATION_EDGE_DEPTH, BODY_TESSELLATION_EDGE_DEPTH_LIMIT,
+    BODY_TESSELLATION_EDGE_DEPTH_LIMIT_REACHED, BODY_TESSELLATION_ISO_ARC_DEPTH,
+    BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT, BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT_REACHED,
+    BODY_TESSELLATION_MESH_VERTEX_LIMIT, BODY_TESSELLATION_MESH_VERTEX_LIMIT_REACHED,
+    BODY_TESSELLATION_MESH_VERTICES, BodyTessellationBudgetProfile,
+};
 
 type Result<T> = TessellationResult<T>;
 
@@ -163,34 +171,6 @@ pub fn check_watertight(mesh: &BodyMesh) -> Vec<String> {
 const MARGIN: f64 = 0.9;
 /// Recursion cap for edge / iso-arc refinement (2^16 segments).
 const MAX_DEPTH: usize = 16;
-
-/// Stable stage for exact-edge curve-refinement depth.
-pub const BODY_TESSELLATION_EDGE_DEPTH: StageId =
-    match StageId::new("ktopo.body-tessellation.edge-depth") {
-        Ok(stage) => stage,
-        Err(_) => panic!("valid body-tessellation edge-depth stage"),
-    };
-
-/// Stable stage for surface iso/seam arc-refinement depth.
-pub const BODY_TESSELLATION_ISO_ARC_DEPTH: StageId =
-    match StageId::new("ktopo.body-tessellation.iso-arc-depth") {
-        Ok(stage) => stage,
-        Err(_) => panic!("valid body-tessellation iso-arc-depth stage"),
-    };
-
-/// Stable stage for retained vertices in a whole-body mesh.
-pub const BODY_TESSELLATION_MESH_VERTICES: StageId =
-    match StageId::new("ktopo.body-tessellation.mesh-vertices") {
-        Ok(stage) => stage,
-        Err(_) => panic!("valid body-tessellation mesh-vertices stage"),
-    };
-
-/// Inclusive legacy exact-edge refinement depth allowance.
-pub const BODY_TESSELLATION_EDGE_DEPTH_LIMIT: u64 = MAX_DEPTH as u64;
-/// Inclusive legacy iso/seam arc refinement depth allowance.
-pub const BODY_TESSELLATION_ISO_ARC_DEPTH_LIMIT: u64 = MAX_DEPTH as u64;
-/// Inclusive number of vertices addressable by `u32` mesh indices.
-pub const BODY_TESSELLATION_MESH_VERTEX_LIMIT: u64 = u32::MAX as u64 + 1;
 
 /// Refinement tolerances, margin-scaled from the caller's [`TessOptions`].
 #[derive(Clone, Copy)]
