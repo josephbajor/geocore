@@ -28,6 +28,7 @@ mod ellipse_sphere;
 mod ellipse_torus;
 mod error;
 mod geometry_class;
+mod graph_surface;
 mod line_circle;
 mod line_cone;
 mod line_cylinder;
@@ -58,6 +59,7 @@ mod result;
 mod sphere_nurbs_surface;
 mod sphere_sphere;
 mod sphere_torus;
+mod support_curve_pair;
 mod surface_surface;
 mod torus_nurbs_surface;
 mod torus_torus;
@@ -93,6 +95,13 @@ pub use error::{
     CURVE_CURVE_CLASS_PAIR, CURVE_SURFACE_CLASS_PAIR, IntersectionError, IntersectionResult,
     SURFACE_SURFACE_CLASS_PAIR, UNSUPPORTED_CLASS_PAIR,
 };
+pub use graph_surface::{
+    BRANCH_CERTIFICATE_FAILURE, GraphSurfaceIntersectionError, GraphSurfaceIntersectionResult,
+    GraphSurfaceSurfaceIntersections, IntersectionBranchEdge, IntersectionBranchEndpointEvent,
+    IntersectionBranchGraph, IntersectionBranchVertex, IntersectionBranchVertexEvent,
+    intersect_bounded_graph_surfaces, intersect_bounded_graph_surfaces_in_scope,
+    intersect_bounded_graph_surfaces_with_context,
+};
 pub use kgraph::{CurveClass, GeometryClassKey, SurfaceClass};
 pub use line_circle::intersect_bounded_line_circle;
 pub use line_cone::intersect_bounded_line_cone;
@@ -111,7 +120,8 @@ pub use nurbs_nurbs::{
     NURBS_CURVE_PAIR_ISOLATION_METHOD_UNAVAILABLE, NURBS_CURVE_PAIR_ISOLATION_PARAMETER_RESOLUTION,
     NURBS_CURVE_PAIR_ISOLATION_SUBDIVISION_LIMIT, NURBS_CURVE_PAIR_MINIMIZER_DIAGNOSTICS,
     NURBS_CURVE_PAIR_MINIMIZER_INVALID_OBJECTIVE, NURBS_CURVE_PAIR_MINIMIZER_ITERATION_LIMIT,
-    NURBS_CURVE_PAIR_MINIMIZER_PARAMETER_RESOLUTION, NURBS_CURVE_PAIR_POLISH_DIAGNOSTICS,
+    NURBS_CURVE_PAIR_MINIMIZER_PARAMETER_RESOLUTION, NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+    NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE_LIMIT, NURBS_CURVE_PAIR_POLISH_DIAGNOSTICS,
     NURBS_CURVE_PAIR_POLISH_FALLBACK, NURBS_CURVE_PAIR_POLISH_ILL_CONDITIONED,
     NURBS_CURVE_PAIR_POLISH_ITERATION_LIMIT, NURBS_CURVE_PAIR_POLISH_NO_DESCENT,
     NURBS_CURVE_PAIR_POLISH_PARAMETER_RESOLUTION, NURBS_CURVE_PAIR_POLISH_STATIONARY,

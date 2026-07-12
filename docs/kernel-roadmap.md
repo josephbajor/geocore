@@ -71,7 +71,7 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, topology-internal Euler operators, transaction-owned public Euler edits, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, checked transaction-scoped assembly, and deterministic journals exist; general bodies and several degenerate topology classes remain. |
 | M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance and transaction-owned aggregate budgets; shared incidence validation; a complete transaction-owned public Euler surface with mandatory pcurve creation and derived/split/merge/delete lineage; private generic Store mutation; transaction-scoped low-level assembly whose only public persistence path uses deterministic mutation preview, incrementally replaced per-body ownership/shared-geometry dependency footprints, affected-root Fast checks, and complete ownership closure; pcurve-driven tessellation; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; a reusable validated simple-polygon planar profile; checked X_T reconstruction; explicit face metadata; certified imported domains; adaptive full-active-interval analytic/clamped-NURBS face-domain containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring loop proofs; and convex-planar, whole sphere/torus, sphere-cap, and single-planar-face shell embedding proofs have landed. General NURBS/mixed-parameter incidence, periodic/unclamped and unsupported exact/mixed-boundary containment, profiles with holes/curves, operation-specific tolerance propagation rules, curved-loop/general curved-shell proofs, production seam/singularity interchange fixtures, geometry graph, higher-operation migration, and multi-body performance baselines remain. |
 | M3 X_T | IN PROGRESS | The modern-schema subset reads both wire encodings and writes text, including bounded tolerant edges as trimmed SP-curves over finite 2D B-curves; production coverage and external certification remain. |
-| M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases, explicit `Complete`/`Indeterminate` result evidence, exact NURBS patch subdivision/BVH, analytic implicit-surface exclusion, deterministic recursive candidate covers with structured limits and proof-bearing miss exits, plus bounded cell-local curve-pair polishing with verified tolerance witnesses exist; interval-certified root discovery and boolean-ready paired-pcurve branches do not. |
+| M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases, explicit `Complete`/`Indeterminate` result evidence, exact NURBS patch subdivision/BVH, analytic implicit-surface exclusion, deterministic recursive candidate covers with structured limits and proof-bearing miss exits, bounded cell-local curve-pair polishing, and several exact-cell interval-certified root/overlap slices exist; general root discovery and boolean-ready paired-pcurve branches do not. |
 | M5–M8 | NOT STARTED | No end-to-end booleans, general modeling, blends, stable API, or production hardening. |
 
 The machine-readable companion [kernel-support.tsv](kernel-support.tsv) is the capability
@@ -88,7 +88,7 @@ proof-bearing contracts. Work therefore advances through these gates in order:
 | Order | Delivery tranche | Required result | What it unlocks |
 |---|---|---|---|
 | 1 | Close M2.5 topology contracts | Production seam/pole/apex interchange fixtures; operation-specific rules over the landed tolerance provenance/budgets; multi-body performance baselines for the landed incremental affected-root index; and discharge the remaining checker-v2 `Full` proof gaps with adaptive incidence, curved-loop/multi-loop containment, and shell proofs. Full-active-interval face-domain containment, private/checked mutation, transaction lineage, affected-root selection, and per-body incremental indexing are landed. | A B-rep that intersections and features can modify without inventing representation rules mid-boolean. |
-| 2 | Build the M4 proof substrate | Geometry-graph descriptors for procedural/intersection curves; verified root seeds and polishing over the landed exact adaptive NURBS/implicit candidate isolation; extend the landed common `Complete`/`Indeterminate` evidence with paired pcurves and verified residual bounds. | Certified general CC/CS/SSI and trustworthy empty results. |
+| 2 | Build the M4 proof substrate | Geometry-graph descriptors for procedural/intersection curves; generalize the landed verified seed/polish path and exact-cell root/overlap certificates over adaptive NURBS/implicit candidate isolation; extend the landed common `Complete`/`Indeterminate` evidence with paired pcurves and verified residual bounds. | Certified general CC/CS/SSI and trustworthy empty results. |
 | 3 | Ship one end-to-end feature ladder | Profile-region builder with holes, deterministic body copy/transform, extrude/revolve, point-on-face and point-in-body classification, then block/block and block/cylinder booleans. Every result is atomic, journaled, checker-v2 clean, and externally X_T checked. | The first honest CAD modeling vertical slice. |
 | 4 | Broaden general modeling | Expand analytic booleans, then periodic NURBS booleans, sweep/loft, sewing/healing, and STEP. | General mechanical part construction and imported-body repair. |
 | 5 | Add local/advanced features | Fillet/blend, chamfer, offset, shell, draft/taper, replace/delete-and-heal, then production API and performance hardening. | The operation breadth expected by a fully featured CAD application. |
@@ -754,18 +754,51 @@ true only for an empty complete result.
   rational boundary roots plus separated multi-root components. Partial
   evidence cannot upgrade completion. An outward-safe Euclidean control-hull
   distance lower bound now excludes diagonal tolerance-empty cells beyond the
-  axis-wise broad phase while retaining the inclusive boundary. Next, extend
-  Byte-identical and exact reversed NURBS representations now supply the first
-  complete overlap extents; sampled near-coincidence remains indeterminate.
-  Next, broaden certified overlap equivalence/partial extent and extend root
-  proof to genuinely spatial cases, generic curve/surface pairing, and
-  procedural/NURBS fields.
+  axis-wise broad phase while retaining the inclusive boundary. Exact affine
+  parameterizations with matching normalized knots, Euclidean control points,
+  and globally proportional rational weights now supply complete clipped
+  same/reversed overlap extents. Exact shared 3D corners extend unique-root
+  proof to noncoplanar pairs whenever an interval P-matrix certifies a globally
+  injective coordinate projection. Sampled near-coincidence remains
+  indeterminate. Deterministic exact knot-insertion descendants now inherit
+  complete clipped overlap evidence when reconstruction to a common knot
+  multiset yields an exact normalized representation match. Different rounded
+  insertion histories are now compared through bounded inverse candidates;
+  every accepted predecessor must reproduce its descendant exactly through
+  production reinsertion, so a common checked ancestor makes equivalence
+  history-independent while altered data stays indeterminate. Full-
+  multiplicity interior knots whose stored Euclidean points agree exactly add
+  a noncoplanar interior existence witness before the same global injectivity
+  proof. Candidate cells retain shared original-source provenance so rounded
+  split controls cannot establish source roots. On partial ranges, direct
+  outward interval de Boor bounds over each original knot span enclose
+  homogeneous positions and derivative B-splines; source-range Poincare signs
+  and P-matrix bounds certify coplanar roots, while bounded exact
+  `{mid,lo,hi}` source samples and in-range full-multiplicity knots provide
+  noncoplanar existence. The `2^-53` rounded-restriction adversary now stays
+  inconclusive, while rational boundary and separated multi-root completion
+  remain source-valid. Exact overlap scans, reconstruction, and inverse-state bounds now
+  pre-admit conservative Work and Items; exhaustion returns structured
+  indeterminate evidence before proof allocation. Internal graph-owned facade
+  evidence pins exact Work/Items N and isolated N-1 propagation for distinct
+  checked-ancestor curves. Q4 solve fixture v3 pins both resource
+  usage/allowances, common-refinement success, ordered overlap extents and
+  orientation, and Work N-1 denial. G5a now adds invertible affine
+  carrier/pcurve maps, whole-interval paired plane residual certificates, and
+  a Plane/Plane-only graph-aware adapter that builds deterministic verified
+  branch vertices/edges while preserving source identity and typed unsupported
+  procedural pairs. Next, broaden algebraic spatial existence, audit
+  subdivision-hull roundoff provenance, extend the adapter to contextual
+  procedural/NURBS fields, and persist verified intersection descriptors.
 - Analytic special cases and the generic solver feed the same canonical result type.
-- Consolidate the per-pair analytic curve/surface and SSI boilerplate (range
-  validation, parameter fitting, dedup, branch emission — currently repeated across
-  the conic/quadric pair files) into shared drivers behind the same result contract,
-  following the `MarchConfig` pattern already proven by the NURBS-surface marchers,
-  before adding further special-case pairs.
+- Consolidate the per-pair analytic curve/surface and SSI boilerplate behind
+  shared drivers with the same result contract. The first complete-support-
+  curve emitter now owns clipping, periodic/nonperiodic membership, candidate
+  reacceptance, and first-wins point/endpoint-aware branch dedup for the
+  cylinder/cylinder and cone/cylinder pilots. Migrate the four remaining
+  duplicated SSI pairs, then address the broader curve/surface boilerplate,
+  following the `MarchConfig` pattern already proven by the NURBS-surface
+  marchers, before adding further special-case pairs.
 
 ### M4b — Curve/curve and curve/surface completion
 
@@ -930,10 +963,9 @@ that queue must eventually discharge.
 - M2.5: finish parameter-space incidence and ratcheted Full-checker proofs for
   periodic/mixed boundaries, multi-loop containment, and curved shells.
 - M4: extend completion evidence with paired pcurves, coincident regions,
-  singular events, and verified residual bounds; upgrade the landed bounded
-  in-cell tolerance witnesses and typed local-solver stops to
-  solver-integrated/general interval-certified root existence and complete
-  overlap extent.
+  singular events, and verified residual bounds; generalize the landed
+  exact-cell root/overlap certificates, bounded in-cell tolerance witnesses,
+  and typed local-solver stops to complete solver-integrated coverage.
 - M5: grow planar profiles and booleans only after facade adoption and the
   checker, rollback, lineage, tolerance, determinism, corpus, performance, and
   independent-oracle gates.

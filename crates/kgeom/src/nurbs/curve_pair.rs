@@ -12,6 +12,7 @@ use kcore::operation::{
     ResourceKind, StageId,
 };
 use kcore::predicates::{Orientation, orient2d, orient3d};
+use std::sync::Arc;
 
 const DEFAULT_DEPTH: u32 = 6;
 const DEFAULT_CANDIDATES: u64 = 4_096;
@@ -88,12 +89,15 @@ impl NurbsCurvePairBudgetProfile {
     }
 }
 
-/// One exact subcurve pair whose control hulls are not certified farther apart
-/// than the requested Euclidean tolerance.
+/// One derived subcurve pair whose control hulls are not certified farther
+/// apart than the requested Euclidean tolerance, with shared provenance back
+/// to the original source curves.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CurvePairCandidateCell {
     first: NurbsCurve,
     second: NurbsCurve,
+    first_source: Arc<NurbsCurve>,
+    second_source: Arc<NurbsCurve>,
     first_bounds: Aabb3,
     second_bounds: Aabb3,
     depth: u32,
@@ -113,10 +117,12 @@ pub enum CurvePairProjectionPlane {
 
 /// Proof that one retained NURBS pair cell contains exactly one transverse root.
 ///
-/// The certificate combines Poincaré–Miranda face signs for existence with a
-/// strictly positive interval P-matrix Jacobian for global injectivity on the
-/// parameter rectangle. Exact coplanarity and an injective coordinate
-/// projection make the projected root a full 3D root.
+/// The certificate combines an exact existence witness with a strictly
+/// positive interval P-matrix Jacobian for global injectivity on the parameter
+/// rectangle. Existence comes either from Poincaré–Miranda face signs plus
+/// exact coplanarity, directly from an exact shared 3D parameter corner, or
+/// from bounded exact rational source samples or source full-multiplicity
+/// knots.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CurvePairRootCertificate {
     first_range: ParamRange,
@@ -136,7 +142,7 @@ impl CurvePairRootCertificate {
         self.second_range
     }
 
-    /// Exact common coordinate plane used by the proof.
+    /// Coordinate plane whose difference map is certified injective.
     pub const fn projection_plane(self) -> CurvePairProjectionPlane {
         self.projection_plane
     }
@@ -195,39 +201,183 @@ impl CurvePairCandidateCell {
 
     /// Certify one exact unique transverse root in this retained cell.
     ///
-    /// This interval-proof slice accepts positive-weight polynomial or rational
-    /// subcurves lying in one exact affine plane. Non-coplanar, tangent,
-    /// singular, and interval-inconclusive cells return `None` without weakening
-    /// the conservative candidate cover.
+    /// Full-source cells may use representation proofs directly. Partial cells
+    /// use exact source-curve samples/full-multiplicity knots or source-range
+    /// interval face signs, together with a source-range P-matrix bound.
+    /// Rounded generated controls never establish a source root. Other
+    /// non-coplanar, tangent, singular, and interval-inconclusive cells return
+    /// `None` without weakening the cover.
     pub fn certify_unique_root(&self) -> Option<CurvePairRootCertificate> {
-        if self.first.degree() == 0 || self.second.degree() == 0 {
+        if self.first_source.degree() == 0 || self.second_source.degree() == 0 {
             return None;
         }
-        let (plane, axes) = exact_common_plane_projection(&self.first, &self.second)?;
-        for axes in [axes, [axes[1], axes[0]]] {
-            if let Some(determinant_lower_bound) =
-                certify_projected_unique_root(&self.first, &self.second, axes)
-            {
-                return Some(CurvePairRootCertificate {
-                    first_range: self.first_range(),
-                    second_range: self.second_range(),
-                    projection_plane: plane,
-                    determinant_lower_bound,
-                });
+        let first_range = self.first_range();
+        let second_range = self.second_range();
+        if first_range == self.first_source.param_range()
+            && second_range == self.second_source.param_range()
+        {
+            return certify_full_source_pair(
+                &self.first_source,
+                &self.second_source,
+                first_range,
+                second_range,
+            );
+        }
+        certify_partial_source_pair(
+            &self.first_source,
+            first_range,
+            &self.second_source,
+            second_range,
+        )
+    }
+}
+
+fn certify_full_source_pair(
+    first: &NurbsCurve,
+    second: &NurbsCurve,
+    first_range: ParamRange,
+    second_range: ParamRange,
+) -> Option<CurvePairRootCertificate> {
+    let certificate = |projection_plane, determinant_lower_bound| CurvePairRootCertificate {
+        first_range,
+        second_range,
+        projection_plane,
+        determinant_lower_bound,
+    };
+    if let Some((projection_plane, determinant_lower_bound)) =
+        super::spatial_interior_root::certify_spatial_interior_root(first, second)
+    {
+        return Some(certificate(projection_plane, determinant_lower_bound));
+    }
+    if let Some((projection_plane, determinant_lower_bound)) =
+        super::spatial_curve_pair::certify_spatial_common_corner(first, second)
+    {
+        return Some(certificate(projection_plane, determinant_lower_bound));
+    }
+    if let Some(first_midpoint) = strict_midpoint(first_range)
+        && let Some(second_midpoint) = strict_midpoint(second_range)
+        && source_samples_equal(first, first_midpoint, second, second_midpoint)
+        && let Some((projection_plane, determinant_lower_bound)) =
+            super::spatial_curve_pair::certify_injective_projection(first, second)
+    {
+        return Some(certificate(projection_plane, determinant_lower_bound));
+    }
+    let (plane, axes) = exact_common_plane_projection(first, second)?;
+    for axes in [axes, [axes[1], axes[0]]] {
+        if let Some(determinant_lower_bound) = certify_projected_unique_root(first, second, axes) {
+            return Some(certificate(plane, determinant_lower_bound));
+        }
+    }
+    None
+}
+
+fn certify_partial_source_pair(
+    first: &NurbsCurve,
+    first_range: ParamRange,
+    second: &NurbsCurve,
+    second_range: ParamRange,
+) -> Option<CurvePairRootCertificate> {
+    if let Some((projection_plane, determinant_lower_bound)) =
+        super::spatial_curve_pair::certify_injective_projection_in_ranges(
+            first,
+            first_range,
+            second,
+            second_range,
+        )
+    {
+        let certificate = || CurvePairRootCertificate {
+            first_range,
+            second_range,
+            projection_plane,
+            determinant_lower_bound,
+        };
+        let first_parameters = range_witness_parameters(first_range);
+        let second_parameters = range_witness_parameters(second_range);
+        for &first_parameter in &first_parameters {
+            for &second_parameter in &second_parameters {
+                if source_samples_equal(first, first_parameter, second, second_parameter) {
+                    return Some(certificate());
+                }
             }
         }
-        None
+        if super::spatial_interior_root::exact_interior_witness_in_ranges(
+            first,
+            first_range,
+            second,
+            second_range,
+        )
+        .is_some()
+        {
+            return Some(certificate());
+        }
     }
+
+    let (plane, axes) = exact_common_plane_projection(first, second)?;
+    for axes in [axes, [axes[1], axes[0]]] {
+        if let Some(determinant_lower_bound) =
+            certify_projected_unique_root_in_ranges(first, first_range, second, second_range, axes)
+        {
+            return Some(CurvePairRootCertificate {
+                first_range,
+                second_range,
+                projection_plane: plane,
+                determinant_lower_bound,
+            });
+        }
+    }
+    None
+}
+
+fn range_witness_parameters(range: ParamRange) -> Vec<f64> {
+    let mut parameters = Vec::with_capacity(3);
+    if let Some(midpoint) = strict_midpoint(range) {
+        parameters.push(midpoint);
+    }
+    for endpoint in [range.lo, range.hi] {
+        if !parameters.contains(&endpoint) {
+            parameters.push(endpoint);
+        }
+    }
+    parameters
+}
+
+fn source_samples_equal(
+    first: &NurbsCurve,
+    first_parameter: f64,
+    second: &NurbsCurve,
+    second_parameter: f64,
+) -> bool {
+    let Some(witness) = super::spatial_exact_sample::certify_exact_spatial_sample(
+        first,
+        first_parameter,
+        second,
+        second_parameter,
+    ) else {
+        return false;
+    };
+    debug_assert_eq!(witness.first_parameter(), first_parameter);
+    debug_assert_eq!(witness.second_parameter(), second_parameter);
+    true
+}
+
+fn strict_midpoint(range: ParamRange) -> Option<f64> {
+    let width = range.hi - range.lo;
+    let midpoint = if width.is_finite() {
+        range.lo + width / 2.0
+    } else {
+        range.lo / 2.0 + range.hi / 2.0
+    };
+    (midpoint.is_finite() && range.lo < midpoint && midpoint < range.hi).then_some(midpoint)
 }
 
 /// Certify one exact unique transverse root over caller-supplied parameter
 /// ranges.
 ///
 /// This range-level entry supports proof regions formed by joining adjacent
-/// isolation cells around a shared parameter boundary. It validates and
-/// restricts both source curves exactly, returns `None` when the control hulls
-/// are disjoint or the proof is inconclusive, and never treats a failed proof
-/// as an empty-domain certificate.
+/// isolation cells around a shared parameter boundary. Partial ranges use only
+/// exact evaluations or outward interval bounds of the original source
+/// representations. It returns `None` when the proof is inconclusive and never
+/// treats a failed proof as an empty-domain certificate.
 pub fn certify_curve_pair_unique_root(
     first: &NurbsCurve,
     first_range: ParamRange,
@@ -235,9 +385,26 @@ pub fn certify_curve_pair_unique_root(
     second_range: ParamRange,
 ) -> Result<Option<CurvePairRootCertificate>> {
     validate_inputs(first, first_range, second, second_range, 0.0)?;
-    let first = first.restricted_to(first_range)?;
-    let second = second.restricted_to(second_range)?;
-    Ok(candidate_cell(first, second, 0, 0.0).and_then(|cell| cell.certify_unique_root()))
+    if !first.knots().is_clamped() || !second.knots().is_clamped() {
+        return Err(Error::InvalidGeometry {
+            reason: "curve-pair root certification requires clamped NURBS curves",
+        });
+    }
+    if first_range == first.param_range() && second_range == second.param_range() {
+        Ok(certify_full_source_pair(
+            first,
+            second,
+            first_range,
+            second_range,
+        ))
+    } else {
+        Ok(certify_partial_source_pair(
+            first,
+            first_range,
+            second,
+            second_range,
+        ))
+    }
 }
 
 fn certify_projected_unique_root(
@@ -293,7 +460,63 @@ fn certify_projected_unique_root(
     None
 }
 
-fn certify_p_matrix(
+fn certify_projected_unique_root_in_ranges(
+    first: &NurbsCurve,
+    first_range: ParamRange,
+    second: &NurbsCurve,
+    second_range: ParamRange,
+    axes: [usize; 2],
+) -> Option<f64> {
+    let first_low = super::source_range_interval::position_component_interval(
+        first,
+        ParamRange::new(first_range.lo, first_range.lo),
+        axes[0],
+    )? - super::source_range_interval::position_component_interval(
+        second,
+        second_range,
+        axes[0],
+    )?;
+    let first_high = super::source_range_interval::position_component_interval(
+        first,
+        ParamRange::new(first_range.hi, first_range.hi),
+        axes[0],
+    )? - super::source_range_interval::position_component_interval(
+        second,
+        second_range,
+        axes[0],
+    )?;
+    let second_low =
+        super::source_range_interval::position_component_interval(first, first_range, axes[1])?
+            - super::source_range_interval::position_component_interval(
+                second,
+                ParamRange::new(second_range.lo, second_range.lo),
+                axes[1],
+            )?;
+    let second_high =
+        super::source_range_interval::position_component_interval(first, first_range, axes[1])?
+            - super::source_range_interval::position_component_interval(
+                second,
+                ParamRange::new(second_range.hi, second_range.hi),
+                axes[1],
+            )?;
+    let signs = [
+        interval_face_orientation(first_low, first_high)?,
+        interval_face_orientation(second_low, second_high)?,
+    ];
+    certify_p_matrix_in_ranges(first, first_range, second, second_range, axes, signs)
+}
+
+fn interval_face_orientation(low: Interval, high: Interval) -> Option<f64> {
+    if low.hi() <= 0.0 && high.lo() >= 0.0 {
+        Some(1.0)
+    } else if low.lo() >= 0.0 && high.hi() <= 0.0 {
+        Some(-1.0)
+    } else {
+        None
+    }
+}
+
+pub(super) fn certify_p_matrix(
     first: &NurbsCurve,
     second: &NurbsCurve,
     axes: [usize; 2],
@@ -312,7 +535,40 @@ fn certify_p_matrix(
     (determinant.lo() > 0.0).then_some(determinant.lo())
 }
 
-fn has_exact_common_corner(first: &NurbsCurve, second: &NurbsCurve) -> bool {
+pub(super) fn certify_p_matrix_in_ranges(
+    first: &NurbsCurve,
+    first_range: ParamRange,
+    second: &NurbsCurve,
+    second_range: ParamRange,
+    axes: [usize; 2],
+    signs: [f64; 2],
+) -> Option<f64> {
+    let sign_first = Interval::point(signs[0]);
+    let sign_second = Interval::point(signs[1]);
+    let j00 = sign_first
+        * super::source_range_interval::derivative_component_interval(first, first_range, axes[0])?;
+    let j01 = sign_first
+        * -super::source_range_interval::derivative_component_interval(
+            second,
+            second_range,
+            axes[0],
+        )?;
+    let j10 = sign_second
+        * super::source_range_interval::derivative_component_interval(first, first_range, axes[1])?;
+    let j11 = sign_second
+        * -super::source_range_interval::derivative_component_interval(
+            second,
+            second_range,
+            axes[1],
+        )?;
+    if j00.lo() <= 0.0 || j11.lo() <= 0.0 {
+        return None;
+    }
+    let determinant = j00 * j11 - j01 * j10;
+    (determinant.lo() > 0.0).then_some(determinant.lo())
+}
+
+pub(super) fn has_exact_common_corner(first: &NurbsCurve, second: &NurbsCurve) -> bool {
     let first = [first.points().first(), first.points().last()];
     let second = [second.points().first(), second.points().last()];
     first
@@ -617,9 +873,11 @@ pub fn isolate_curve_pair_candidates_in_scope(
         .ledger_mut()
         .charge(NURBS_CURVE_PAIR_SUBDIVISIONS, 1)?;
 
-    let first = first.restricted_to(first_range)?;
-    let second = second.restricted_to(second_range)?;
-    let mut cells = initial_cells(first, second, margin);
+    let first_source = Arc::new(first.clone());
+    let second_source = Arc::new(second.clone());
+    let first = first_source.restricted_to(first_range)?;
+    let second = second_source.restricted_to(second_range)?;
+    let mut cells = initial_cells(first, second, first_source, second_source, margin);
     let subdivision_unavailable = requested_depth > 0
         && !cells.is_empty()
         && (cells[0].cell.first.degree() == 0 || cells[0].cell.second.degree() == 0);
@@ -764,8 +1022,14 @@ fn require_profile(
     NurbsCurvePairBudgetProfile::validate(&scope.context().effective_budget())
 }
 
-fn initial_cells(first: NurbsCurve, second: NurbsCurve, margin: f64) -> Vec<WorkCell> {
-    candidate_cell(first, second, 0, margin)
+fn initial_cells(
+    first: NurbsCurve,
+    second: NurbsCurve,
+    first_source: Arc<NurbsCurve>,
+    second_source: Arc<NurbsCurve>,
+    margin: f64,
+) -> Vec<WorkCell> {
+    candidate_cell_with_sources(first, second, first_source, second_source, 0, margin)
         .map(|cell| {
             vec![WorkCell {
                 cell,
@@ -775,9 +1039,23 @@ fn initial_cells(first: NurbsCurve, second: NurbsCurve, margin: f64) -> Vec<Work
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 fn candidate_cell(
     first: NurbsCurve,
     second: NurbsCurve,
+    depth: u32,
+    margin: f64,
+) -> Option<CurvePairCandidateCell> {
+    let first_source = Arc::new(first.clone());
+    let second_source = Arc::new(second.clone());
+    candidate_cell_with_sources(first, second, first_source, second_source, depth, margin)
+}
+
+fn candidate_cell_with_sources(
+    first: NurbsCurve,
+    second: NurbsCurve,
+    first_source: Arc<NurbsCurve>,
+    second_source: Arc<NurbsCurve>,
     depth: u32,
     margin: f64,
 ) -> Option<CurvePairCandidateCell> {
@@ -789,6 +1067,8 @@ fn candidate_cell(
         .then_some(CurvePairCandidateCell {
             first,
             second,
+            first_source,
+            second_source,
             first_bounds,
             second_bounds,
             depth,
@@ -817,9 +1097,14 @@ fn split_children(
     let mut children = Vec::with_capacity(4);
     for first in first {
         for second in &second {
-            if let Some(cell) =
-                candidate_cell(first.clone(), second.clone(), parent.depth + 1, margin)
-            {
+            if let Some(cell) = candidate_cell_with_sources(
+                first.clone(),
+                second.clone(),
+                Arc::clone(&parent.first_source),
+                Arc::clone(&parent.second_source),
+                parent.depth + 1,
+                margin,
+            ) {
                 children.push(cell);
             }
         }
@@ -1161,7 +1446,7 @@ mod tests {
     }
 
     #[test]
-    fn range_certificate_joins_boundary_cells_without_claiming_each_leaf() {
+    fn range_certificate_joins_boundary_cells_with_source_interval_proof() {
         let rational = segment(
             Point3::new(-1.0, -1.0, 0.0),
             Point3::new(1.0, 1.0, 0.0),

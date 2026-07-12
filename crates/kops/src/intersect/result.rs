@@ -796,6 +796,11 @@ impl SurfaceSurfaceIntersections {
                 reason: "surface/surface curve data must be finite and have positive width",
             });
         }
+        Self::sort_evidence(points, curves);
+        Ok(())
+    }
+
+    fn sort_evidence(points: &mut [SurfaceSurfacePoint], curves: &mut [SurfaceSurfaceCurve]) {
         points.sort_by(|a, b| {
             a.uv_a[0]
                 .total_cmp(&b.uv_a[0])
@@ -812,7 +817,6 @@ impl SurfaceSurfaceIntersections {
                 .then(a.uv_a_start[0].total_cmp(&b.uv_a_start[0]))
                 .then(a.uv_a_start[1].total_cmp(&b.uv_a_start[1]))
         });
-        Ok(())
     }
 
     /// True when no contacts or branches were discovered. This alone is not
@@ -848,7 +852,8 @@ impl SurfaceSurfaceIntersections {
         self.is_complete() && self.is_empty()
     }
 
-    /// Swap the first and second surface parameter data.
+    /// Swap the first and second surface parameter data while restoring
+    /// canonical first-surface ordering.
     pub fn swapped(mut self) -> Self {
         for point in &mut self.points {
             core::mem::swap(&mut point.uv_a, &mut point.uv_b);
@@ -857,6 +862,7 @@ impl SurfaceSurfaceIntersections {
             core::mem::swap(&mut curve.uv_a_start, &mut curve.uv_b_start);
             core::mem::swap(&mut curve.uv_a_end, &mut curve.uv_b_end);
         }
+        Self::sort_evidence(&mut self.points, &mut self.curves);
         self
     }
 }

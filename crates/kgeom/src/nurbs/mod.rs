@@ -16,8 +16,9 @@
 //! - global curve interpolation ([`interpolate`]).
 //!
 //! Deliberately deferred (with rationale):
-//! - **knot removal and degree elevation** — first needed by loft/surface
-//!   compatibility in M6;
+//! - **general knot removal and degree elevation** — first needed by
+//!   loft/surface compatibility in M6. A narrower checked inverse-refinement
+//!   proof helper exists for exact curve-pair representation equivalence;
 //! - **periodic NURBS** — XT B-geometry can be periodic; support lands with
 //!   the XT reader (M3) when real periodic inputs exist to test against.
 //!   Until then [`NurbsCurve`] reports `periodicity() == None`.
@@ -27,11 +28,16 @@
 pub mod basis;
 mod curve_pair;
 mod fit;
+mod inverse_refinement;
 mod knots;
 mod ncurve;
 mod nsurface;
 pub(crate) mod ops;
 mod patch_bvh;
+mod source_range_interval;
+mod spatial_curve_pair;
+mod spatial_exact_sample;
+mod spatial_interior_root;
 
 pub use curve_pair::{
     ContextCurvePairIsolationError, CurvePairCandidateCell, CurvePairIsolation,
@@ -41,6 +47,7 @@ pub use curve_pair::{
     isolate_curve_pair_candidates_in_scope,
 };
 pub use fit::interpolate;
+pub use inverse_refinement::{CHECKED_REFINEMENT_ANCESTOR_LIMIT, checked_refinement_ancestors};
 pub use knots::KnotVector;
 pub use ncurve::NurbsCurve;
 pub use nsurface::NurbsSurface;

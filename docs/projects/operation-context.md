@@ -649,6 +649,16 @@ far with indeterminate completion and an exact report crossing. A verified
 tolerance witness proves only that emitted contact, not root uniqueness,
 complete-domain discovery, or coincident-interval extent.
 
+Exact overlap equivalence owns a separate pre-discovery admission stage,
+`kops.intersect.nurbs-curve-pair-overlap-equivalence`, with cumulative Work
+and Items resources. A conservative deterministic formula covers normalized
+knot/control/weight scans, common-knot reconstruction, and bounded checked
+inverse-refinement state plus temporary logical slots before their first
+allocation. Distinct representations therefore cannot return `Complete` with
+zero unbounded work. Exact N/N-1 Work and Items crossings return one ordered
+structured incomplete obligation and stop before isolation; pointer-identical
+operands retain a constant zero-work fast path.
+
 Newton termination is now typed internally as gradient stationarity,
 ill-conditioning, failure to find descent, parameter resolution, or the fixed
 iteration bound. A failed witness emits the corresponding stable `kops`
@@ -668,18 +678,26 @@ Curve/curve results now retain the unresolved proof obligations themselves,
 not only the prose completion reason. Exact isolation limits, arithmetic and
 method stops, the cell-local seed crossing, and the remaining complete root /
 overlap coverage capability stay ordered through canonicalization, swapping,
-generic dispatch, and the facade. Q4 hashes this evidence separately from
-contact geometry and folds both into its semantic output digest.
+generic dispatch, and the facade. Q4 hashes this evidence and ordered overlap
+ranges/orientation separately from contact geometry, records overlap Work and
+Items usage plus allowances, and folds them into its semantic output digest.
 
 The first root-existence substrate is also landed on exact curve-pair cells.
 For polynomial or positive-weight rational subcurves in an exactly shared
-affine plane, control-hull face signs discharge Poincaré–Miranda existence and
-interval derivative hulls prove a strictly positive P-matrix Jacobian, giving
+affine plane, source-range interval face signs discharge Poincaré–Miranda existence and
+source derivative hulls prove a strictly positive P-matrix Jacobian, giving
 one unique exact transverse root in the parameter rectangle. Exact robust
 orientation predicates prove coplanarity and choose an injective XY, XZ, or YZ
-projection without normalizing a floating plane normal. Rational derivatives
-use homogeneous numerator/weight hulls and the interval quotient rule. Exact
-expansion signs protect boundary equalities. Genuinely non-coplanar,
+projection without normalizing a floating plane normal. Noncoplanar pairs can
+instead use exact rational de Boor equality on a bounded source-parameter set
+`{mid,lo,hi} × {mid,lo,hi}` or equal source points at in-range knots whose
+multiplicity equals degree. Candidate cells retain the original source curves;
+generated rounded controls are used only for the conservative cover. Direct
+outward interval de Boor over each original knot span encloses homogeneous
+positions and the exact homogeneous derivative-control B-spline, then applies
+the rational quotient rule. The same source-range P-matrix proves the projected
+difference globally injective. Degree, expansion, exponent, sample, interval,
+or Jacobian failure remains inconclusive. Projected-only equality, simple-knot control-point equality,
 tangent/singular, multi-root, and interval-inconclusive cells return no
 certificate. The NURBS/NURBS solver retires the coverage gap only when
 isolation completed and every deterministic candidate component has both a
@@ -698,13 +716,14 @@ transverse control therefore completes even though not every closed leaf can
 independently discharge boundary existence. Seed-limit stops still prevent
 completion regardless of available component proof.
 
-The first exact overlap extent proof now recognizes byte-identical NURBS
-representations over identical requested ranges and exact reversed
-representations whose knots, control points, weights, and range correspondence
-reverse together. Those results return one `Complete` overlap with exact
-orientation and no isolation work. The existing tolerance-sampled containment
-path remains `Indeterminate`; near-coincident curves cannot inherit exact
-completion from approximate samples.
+Exact overlap extent proof now recognizes affine parameter-domain mappings,
+globally proportional positive rational weights, clipped same/reversed ranges,
+and deterministic knot-insertion descendants. Independently rounded insertion
+histories enumerate bounded inverse candidates; no candidate is trusted until
+production reinsertion reproduces the descendant exactly, and only a common
+checked ancestor grants history-independent equivalence. Those results return
+one `Complete` overlap with exact orientation and no isolation work. Altered
+refinements and tolerance-sampled near-coincidence remain `Indeterminate`.
 
 That normalized boundary now has contextual and shared-scope public entries.
 The contextual entry composes the curve/curve family profile once and creates

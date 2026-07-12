@@ -1,14 +1,15 @@
 use super::conic::{fit_periodic_parameter, parameter_tolerance};
 use super::line_cylinder::intersect_bounded_line_cylinder;
+use super::parameter::fit_scalar_parameter;
 use super::result::{
-    ContactKind, CurveSurfaceIntersections, CurveSurfaceOverlap, CurveSurfacePoint,
-    SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
-    SurfaceSurfacePoint, accept_surface_surface_candidate,
+    ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
+    SurfaceSurfacePoint,
 };
+use super::support_curve_pair::{SupportCurvePairConfig, emit_support_curve_pair};
 use kcore::error::{Error, Result};
 use kcore::math;
 use kcore::tolerance::Tolerances;
-use kgeom::curve::{Curve, Line};
+use kgeom::curve::Line;
 use kgeom::param::ParamRange;
 use kgeom::surface::Cylinder;
 use kgeom::vec::Point3;
@@ -114,191 +115,29 @@ fn add_line_branch(
     let line_range = a_range[1];
     let a_hit = intersect_bounded_line_cylinder(&line, line_range, a, a_range, tolerances)?;
     let b_hit = intersect_bounded_line_cylinder(&line, line_range, b, b_range, tolerances)?;
-    add_clipped_branch(
+    let curve = SurfaceIntersectionCurve::Line(line);
+    let first_uv = |point| cylinder_uv_at(point, a, a_range, tolerances);
+    let second_uv = |point| cylinder_uv_at(point, b, b_range, tolerances);
+    emit_support_curve_pair(
+        SupportCurvePairConfig {
+            curve: &curve,
+            curve_range: line_range,
+            first_hit: &a_hit,
+            second_hit: &b_hit,
+            kind: branch_kind,
+            parameter_tolerance: tolerances.linear(),
+            parameter_period: None,
+            branch_tolerance: tolerances.linear(),
+            first_surface: a,
+            second_surface: b,
+            first_uv: &first_uv,
+            second_uv: &second_uv,
+            tolerances,
+        },
         points,
         curves,
-        &line,
-        &a_hit,
-        &b_hit,
-        branch_kind,
-        a,
-        a_range,
-        b,
-        b_range,
-        tolerances,
     );
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn add_clipped_branch(
-    points: &mut Vec<SurfaceSurfacePoint>,
-    curves: &mut Vec<SurfaceSurfaceCurve>,
-    line: &Line,
-    a_hit: &CurveSurfaceIntersections,
-    b_hit: &CurveSurfaceIntersections,
-    branch_kind: ContactKind,
-    a: &Cylinder,
-    a_range: [ParamRange; 2],
-    b: &Cylinder,
-    b_range: [ParamRange; 2],
-    tolerances: Tolerances,
-) {
-    let t_tol = tolerances.linear();
-    for a_overlap in &a_hit.overlaps {
-        for b_overlap in &b_hit.overlaps {
-            let lo = a_overlap.curve.lo.max(b_overlap.curve.lo);
-            let hi = a_overlap.curve.hi.min(b_overlap.curve.hi);
-            if hi - lo > t_tol {
-                let Some(uv_a_start) = cylinder_uv_at(line.eval(lo), a, a_range, tolerances) else {
-                    continue;
-                };
-                let Some(uv_a_end) = cylinder_uv_at(line.eval(hi), a, a_range, tolerances) else {
-                    continue;
-                };
-                let Some(uv_b_start) = cylinder_uv_at(line.eval(lo), b, b_range, tolerances) else {
-                    continue;
-                };
-                let Some(uv_b_end) = cylinder_uv_at(line.eval(hi), b, b_range, tolerances) else {
-                    continue;
-                };
-                push_curve(
-                    curves,
-                    SurfaceSurfaceCurve {
-                        curve: SurfaceIntersectionCurve::Line(*line),
-                        curve_range: ParamRange::new(lo, hi),
-                        uv_a_start,
-                        uv_a_end,
-                        uv_b_start,
-                        uv_b_end,
-                        kind: branch_kind,
-                    },
-                    t_tol,
-                );
-            } else if (hi - lo).abs() <= t_tol {
-                add_point_from_curve_parameter(
-                    points,
-                    line,
-                    ((lo + hi) / 2.0).clamp(line.param_range().lo, line.param_range().hi),
-                    branch_kind,
-                    a,
-                    a_range,
-                    b,
-                    b_range,
-                    t_tol,
-                    tolerances,
-                );
-            }
-        }
-    }
-
-    add_isolated_points(
-        points,
-        line,
-        a_hit,
-        b_hit,
-        branch_kind,
-        a,
-        a_range,
-        b,
-        b_range,
-        t_tol,
-        tolerances,
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
-fn add_isolated_points(
-    points: &mut Vec<SurfaceSurfacePoint>,
-    line: &Line,
-    a_hit: &CurveSurfaceIntersections,
-    b_hit: &CurveSurfaceIntersections,
-    branch_kind: ContactKind,
-    a: &Cylinder,
-    a_range: [ParamRange; 2],
-    b: &Cylinder,
-    b_range: [ParamRange; 2],
-    t_tol: f64,
-    tolerances: Tolerances,
-) {
-    for point in &a_hit.points {
-        if hit_contains_t(b_hit, point.t_curve, t_tol, tolerances) {
-            add_point_from_curve_parameter(
-                points,
-                line,
-                point.t_curve,
-                branch_kind,
-                a,
-                a_range,
-                b,
-                b_range,
-                t_tol,
-                tolerances,
-            );
-        }
-    }
-    for point in &b_hit.points {
-        if hit_contains_t(a_hit, point.t_curve, t_tol, tolerances) {
-            add_point_from_curve_parameter(
-                points,
-                line,
-                point.t_curve,
-                branch_kind,
-                a,
-                a_range,
-                b,
-                b_range,
-                t_tol,
-                tolerances,
-            );
-        }
-    }
-    for a_point in &a_hit.points {
-        for b_point in &b_hit.points {
-            if curve_parameters_match(a_point, b_point, t_tol, tolerances) {
-                add_point_from_curve_parameter(
-                    points,
-                    line,
-                    a_point.t_curve,
-                    branch_kind,
-                    a,
-                    a_range,
-                    b,
-                    b_range,
-                    t_tol,
-                    tolerances,
-                );
-            }
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn add_point_from_curve_parameter(
-    points: &mut Vec<SurfaceSurfacePoint>,
-    line: &Line,
-    t: f64,
-    kind: ContactKind,
-    a: &Cylinder,
-    a_range: [ParamRange; 2],
-    b: &Cylinder,
-    b_range: [ParamRange; 2],
-    t_tol: f64,
-    tolerances: Tolerances,
-) {
-    let Some(t) = fit_scalar_parameter(t, a_range[1], t_tol) else {
-        return;
-    };
-    let point = line.eval(t);
-    let Some(uv_a) = cylinder_uv_at(point, a, a_range, tolerances) else {
-        return;
-    };
-    let Some(uv_b) = cylinder_uv_at(point, b, b_range, tolerances) else {
-        return;
-    };
-    if let Some(point) = accept_surface_surface_candidate(a, uv_a, b, uv_b, kind, tolerances) {
-        push_point(points, point, tolerances);
-    }
 }
 
 fn cylinder_uv_at(
@@ -316,82 +155,6 @@ fn cylinder_uv_at(
     )?;
     let v = fit_scalar_parameter(local.z, cylinder_range[1], tolerances.linear())?;
     Some([u, v])
-}
-
-fn hit_contains_t(
-    hit: &CurveSurfaceIntersections,
-    t: f64,
-    t_tol: f64,
-    tolerances: Tolerances,
-) -> bool {
-    hit.overlaps
-        .iter()
-        .any(|overlap| overlap_contains_t(overlap, t, t_tol))
-        || hit.points.iter().any(|point| {
-            curve_parameter_distance(point.t_curve, t) <= t_tol.max(tolerances.angular())
-        })
-}
-
-fn overlap_contains_t(overlap: &CurveSurfaceOverlap, t: f64, t_tol: f64) -> bool {
-    t >= overlap.curve.lo - t_tol && t <= overlap.curve.hi + t_tol
-}
-
-fn curve_parameters_match(
-    a: &CurveSurfacePoint,
-    b: &CurveSurfacePoint,
-    t_tol: f64,
-    tolerances: Tolerances,
-) -> bool {
-    curve_parameter_distance(a.t_curve, b.t_curve) <= t_tol.max(tolerances.angular())
-        || a.point.dist(b.point) <= tolerances.linear()
-}
-
-fn curve_parameter_distance(a: f64, b: f64) -> f64 {
-    (a - b).abs()
-}
-
-fn fit_scalar_parameter(candidate: f64, range: ParamRange, tolerance: f64) -> Option<f64> {
-    if candidate < range.lo - tolerance || candidate > range.hi + tolerance {
-        None
-    } else {
-        Some(candidate.clamp(range.lo, range.hi))
-    }
-}
-
-fn push_point(
-    points: &mut Vec<SurfaceSurfacePoint>,
-    candidate: SurfaceSurfacePoint,
-    tolerances: Tolerances,
-) {
-    if !points
-        .iter()
-        .any(|point| point.point.dist(candidate.point) <= tolerances.linear())
-    {
-        points.push(candidate);
-    }
-}
-
-fn push_curve(
-    curves: &mut Vec<SurfaceSurfaceCurve>,
-    candidate: SurfaceSurfaceCurve,
-    tolerance: f64,
-) {
-    if !curves.iter().any(|curve| {
-        (curve.curve_range.lo - candidate.curve_range.lo).abs() <= tolerance
-            && (curve.curve_range.hi - candidate.curve_range.hi).abs() <= tolerance
-            && curve
-                .curve
-                .eval(curve.curve_range.lo)
-                .dist(candidate.curve.eval(candidate.curve_range.lo))
-                <= tolerance
-            && curve
-                .curve
-                .eval(curve.curve_range.hi)
-                .dist(candidate.curve.eval(candidate.curve_range.hi))
-                <= tolerance
-    }) {
-        curves.push(candidate);
-    }
 }
 
 fn squared_tolerance(radius_a: f64, radius_b: f64, distance: f64, tolerances: Tolerances) -> f64 {

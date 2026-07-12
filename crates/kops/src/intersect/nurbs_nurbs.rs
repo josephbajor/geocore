@@ -9,6 +9,7 @@ use super::result::{
     accept_curve_curve_candidate,
 };
 use kcore::error::{CapabilityId, Error, Result};
+use kcore::expansion;
 use kcore::operation::{
     AccountingMode, BudgetPlan, DiagnosticCode, DiagnosticKind, LimitSnapshot, LimitSpec,
     NumericalPolicy, OperationContext, OperationOutcome, OperationPolicyError, OperationScope,
@@ -18,8 +19,9 @@ use kcore::proof::{Completion, IncompleteCause, IncompleteEvidence};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::nurbs::{
-    ContextCurvePairIsolationError, CurvePairCandidateCell, CurvePairIsolationLimits, NurbsCurve,
-    NurbsCurvePairBudgetProfile, certify_curve_pair_unique_root,
+    CHECKED_REFINEMENT_ANCESTOR_LIMIT, ContextCurvePairIsolationError, CurvePairCandidateCell,
+    CurvePairIsolationLimits, NurbsCurve, NurbsCurvePairBudgetProfile,
+    certify_curve_pair_unique_root, checked_refinement_ancestors,
     isolate_curve_pair_candidates_in_scope,
 };
 use kgeom::param::ParamRange;
@@ -32,6 +34,8 @@ const MAX_POLISH_STEPS: usize = 32;
 const MAX_MINIMIZE_STEPS: usize = 80;
 const OVERLAP_SAMPLES: usize = 32;
 const DEFAULT_SEED_ATTEMPTS: u64 = 4_096;
+const DEFAULT_OVERLAP_EQUIVALENCE_WORK: u64 = 1_000_000;
+const DEFAULT_OVERLAP_EQUIVALENCE_ITEMS: u64 = 1_000_000;
 const CURVE_PAIR_COMPLETION_REASON: &str =
     "NURBS curve-pair candidate cells do not yet have complete root and overlap coverage";
 
@@ -45,6 +49,9 @@ const fn stage(value: &'static str) -> StageId {
 /// Cumulative bounded cell-local seed and polish attempts.
 pub const NURBS_CURVE_PAIR_SEED_ATTEMPTS: StageId =
     stage("kops.intersect.nurbs-curve-pair-seed-attempts");
+/// Cumulative exact overlap-representation scan and reconstruction work.
+pub const NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE: StageId =
+    stage("kops.intersect.nurbs-curve-pair-overlap-equivalence");
 
 const fn diagnostic(value: &'static str) -> DiagnosticCode {
     match DiagnosticCode::new(value) {
@@ -81,6 +88,9 @@ pub const NURBS_CURVE_PAIR_ISOLATION_METHOD_UNAVAILABLE: DiagnosticCode =
 /// Cell-local seed work stopped before every retained cell was attempted.
 pub const NURBS_CURVE_PAIR_SEED_LIMIT: DiagnosticCode =
     diagnostic("kops.intersect.nurbs-curve-pair-seed-limit");
+/// Exact overlap-equivalence work stopped before representation proof.
+pub const NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE_LIMIT: DiagnosticCode =
+    diagnostic("kops.intersect.nurbs-curve-pair-overlap-equivalence-limit");
 /// Retained cells still lack a complete root/overlap proof method.
 pub const NURBS_CURVE_PAIR_COVERAGE_INCOMPLETE: DiagnosticCode =
     diagnostic("kops.intersect.nurbs-curve-pair-coverage-incomplete");
@@ -132,6 +142,7 @@ pub const NURBS_CURVE_PAIR_MINIMIZER_DIAGNOSTICS: &[DiagnosticCode] = &[
 
 /// Every stable incomplete-proof identity owned by NURBS curve-pair solving.
 pub const NURBS_CURVE_PAIR_PROOF_DIAGNOSTICS: &[DiagnosticCode] = &[
+    NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE_LIMIT,
     NURBS_CURVE_PAIR_ISOLATION_SUBDIVISION_LIMIT,
     NURBS_CURVE_PAIR_ISOLATION_CANDIDATE_LIMIT,
     NURBS_CURVE_PAIR_ISOLATION_DEPTH_LIMIT,
@@ -150,18 +161,42 @@ impl NurbsCurvePairSolveBudgetProfile {
     /// cell. The isolation profile itself caps that cover at 4,096 cells.
     pub fn v1_defaults() -> BudgetPlan {
         let isolation = NurbsCurvePairBudgetProfile::v1_defaults();
-        BudgetPlan::new(isolation.limits().iter().copied().chain([LimitSpec::new(
-            NURBS_CURVE_PAIR_SEED_ATTEMPTS,
-            ResourceKind::Work,
-            AccountingMode::Cumulative,
-            DEFAULT_SEED_ATTEMPTS,
-        )]))
+        BudgetPlan::new(isolation.limits().iter().copied().chain([
+            LimitSpec::new(
+                NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                DEFAULT_OVERLAP_EQUIVALENCE_WORK,
+            ),
+            LimitSpec::new(
+                NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+                ResourceKind::Items,
+                AccountingMode::Cumulative,
+                DEFAULT_OVERLAP_EQUIVALENCE_ITEMS,
+            ),
+            LimitSpec::new(
+                NURBS_CURVE_PAIR_SEED_ATTEMPTS,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                DEFAULT_SEED_ATTEMPTS,
+            ),
+        ]))
         .expect("built-in NURBS curve-pair solve profile is valid")
     }
 
     /// Require isolation and discovery stages with canonical accounting.
     pub fn validate(plan: &BudgetPlan) -> core::result::Result<(), OperationPolicyError> {
         NurbsCurvePairBudgetProfile::validate(plan)?;
+        plan.require_limit(
+            NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+        )?;
+        plan.require_limit(
+            NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            ResourceKind::Items,
+            AccountingMode::Cumulative,
+        )?;
         plan.require_limit(
             NURBS_CURVE_PAIR_SEED_ATTEMPTS,
             ResourceKind::Work,
@@ -183,6 +218,12 @@ struct PolishPolicy {
     range_b: ParamRange,
     tolerances: Tolerances,
     numerical: NumericalPolicy,
+}
+
+enum ExactOverlapProof {
+    Proven(CurveCurveOverlap),
+    NotProven,
+    Incomplete(IncompleteEvidence),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -330,8 +371,8 @@ impl VerifiedCurvePairSeed {
 /// This is the first general NURBS/NURBS curve bridge: it isolates exact
 /// conservative subcurve-pair cells, chooses one deterministic local seed per
 /// cell, polishes it by safeguarded Newton iteration, and emits only
-/// re-evaluated tolerance witnesses. It also reports simple contained spans
-/// when the first curve range is provisionally found to lie on the second.
+/// re-evaluated tolerance witnesses. Exact affine-equivalent representations
+/// produce complete clipped overlaps; sampled containment stays provisional.
 pub fn intersect_bounded_nurbs_nurbs(
     a: &NurbsCurve,
     range_a: ParamRange,
@@ -396,8 +437,19 @@ fn intersect_bounded_nurbs_nurbs_contextual_impl(
     let collapsed_a = range_has_no_parameter_progress(range_a, tolerances, numerical);
     let collapsed_b = range_has_no_parameter_progress(range_b, tolerances, numerical);
     if !collapsed_a && !collapsed_b {
-        if let Some(overlap) = exact_full_overlap(a, range_a, b, range_b) {
-            return CurveCurveIntersections::canonicalized_complete(Vec::new(), vec![overlap]);
+        match exact_overlap(a, range_a, b, range_b, scope)? {
+            ExactOverlapProof::Proven(overlap) => {
+                return CurveCurveIntersections::canonicalized_complete(Vec::new(), vec![overlap]);
+            }
+            ExactOverlapProof::Incomplete(evidence) => {
+                return CurveCurveIntersections::canonicalized_with_incomplete_evidence(
+                    Vec::new(),
+                    Vec::new(),
+                    CURVE_PAIR_COMPLETION_REASON,
+                    vec![evidence],
+                );
+            }
+            ExactOverlapProof::NotProven => {}
         }
         let isolation = isolate_curve_pair_candidates_in_scope(
             a,
@@ -435,35 +487,412 @@ fn intersect_bounded_nurbs_nurbs_contextual_impl(
     degenerate_range_intersections(a, range_a, collapsed_a, b, range_b, tolerances, numerical)
 }
 
-fn exact_full_overlap(
+fn exact_overlap(
     a: &NurbsCurve,
     range_a: ParamRange,
     b: &NurbsCurve,
     range_b: ParamRange,
-) -> Option<CurveCurveOverlap> {
-    if a == b && range_a == range_b {
-        return Some(CurveCurveOverlap {
-            a: range_a,
-            b: range_b,
-            orientation: ParamOrientation::Same,
-        });
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<ExactOverlapProof> {
+    if core::ptr::eq(a, b) {
+        return Ok(intersect_positive_ranges(range_a, range_b).map_or(
+            ExactOverlapProof::NotProven,
+            |overlap| {
+                ExactOverlapProof::Proven(CurveCurveOverlap {
+                    a: overlap,
+                    b: overlap,
+                    orientation: ParamOrientation::Same,
+                })
+            },
+        ));
     }
-    if !exact_reversed_representation(a, b) {
-        return None;
+    let same_endpoints =
+        a.points().first() == b.points().first() && a.points().last() == b.points().last();
+    let reversed_endpoints =
+        a.points().first() == b.points().last() && a.points().last() == b.points().first();
+    if a.degree() != b.degree() || (!same_endpoints && !reversed_endpoints) {
+        return Ok(ExactOverlapProof::NotProven);
     }
-    let domain = a.param_range();
-    let reversed_range = ParamRange::new(
-        reverse_parameter(domain, range_a.hi)?,
-        reverse_parameter(domain, range_a.lo)?,
-    );
-    (range_b == reversed_range).then_some(CurveCurveOverlap {
-        a: range_a,
-        b: range_b,
-        orientation: ParamOrientation::Reversed,
-    })
+    let (work, items) = overlap_equivalence_cost(a, b)?;
+    if let Some(evidence) = admit_overlap_equivalence(scope, work, items)? {
+        return Ok(ExactOverlapProof::Incomplete(evidence));
+    }
+    let Some(orientation) = exact_affine_representation(a, b) else {
+        return Ok(ExactOverlapProof::NotProven);
+    };
+    let Some(mapped_a) = map_range(range_a, a.param_range(), b.param_range(), orientation) else {
+        return Ok(ExactOverlapProof::NotProven);
+    };
+    let Some(overlap_b) = intersect_positive_ranges(mapped_a, range_b) else {
+        return Ok(ExactOverlapProof::NotProven);
+    };
+    let Some(overlap_a) = map_range(overlap_b, b.param_range(), a.param_range(), orientation)
+    else {
+        return Ok(ExactOverlapProof::NotProven);
+    };
+    Ok(ExactOverlapProof::Proven(CurveCurveOverlap {
+        a: overlap_a,
+        b: overlap_b,
+        orientation,
+    }))
 }
 
-fn exact_reversed_representation(a: &NurbsCurve, b: &NurbsCurve) -> bool {
+fn overlap_equivalence_cost(a: &NurbsCurve, b: &NurbsCurve) -> Result<(u64, u64)> {
+    let ka = u64::try_from(a.knots().as_slice().len()).map_err(|_| {
+        OperationPolicyError::AccountingOverflow {
+            stage: NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            resource: ResourceKind::Items,
+        }
+    })?;
+    let kb = u64::try_from(b.knots().as_slice().len()).map_err(|_| {
+        OperationPolicyError::AccountingOverflow {
+            stage: NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            resource: ResourceKind::Items,
+        }
+    })?;
+    let ca =
+        u64::try_from(a.points().len()).map_err(|_| OperationPolicyError::AccountingOverflow {
+            stage: NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            resource: ResourceKind::Items,
+        })?;
+    let cb =
+        u64::try_from(b.points().len()).map_err(|_| OperationPolicyError::AccountingOverflow {
+            stage: NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            resource: ResourceKind::Items,
+        })?;
+    let slots = ka
+        .checked_add(kb)
+        .and_then(|value| value.checked_add(ca))
+        .and_then(|value| value.checked_add(cb))
+        .ok_or(OperationPolicyError::AccountingOverflow {
+            stage: NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            resource: ResourceKind::Items,
+        })?;
+    let comparisons = ka
+        .checked_mul(kb)
+        .and_then(|value| value.checked_mul(4))
+        .ok_or(OperationPolicyError::AccountingOverflow {
+            stage: NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            resource: ResourceKind::Work,
+        })?;
+    let insertions = ka
+        .checked_add(kb)
+        .ok_or(OperationPolicyError::AccountingOverflow {
+            stage: NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            resource: ResourceKind::Work,
+        })?;
+    let reconstruction = slots
+        .checked_add(insertions)
+        .and_then(|value| value.checked_mul(insertions))
+        .and_then(|value| value.checked_mul(2))
+        .ok_or(OperationPolicyError::AccountingOverflow {
+            stage: NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            resource: ResourceKind::Work,
+        })?;
+    let states_a = refinement_ancestor_state_bound(a)
+        .and_then(|value| u64::try_from(value).ok())
+        .unwrap_or(1);
+    let states_b = refinement_ancestor_state_bound(b)
+        .and_then(|value| u64::try_from(value).ok())
+        .unwrap_or(1);
+    let storage_a = ka
+        .checked_add(
+            ca.checked_mul(3)
+                .ok_or(OperationPolicyError::AccountingOverflow {
+                    stage: NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+                    resource: ResourceKind::Items,
+                })?,
+        )
+        .ok_or(OperationPolicyError::AccountingOverflow {
+            stage: NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            resource: ResourceKind::Items,
+        })?;
+    let storage_b = kb
+        .checked_add(
+            cb.checked_mul(3)
+                .ok_or(OperationPolicyError::AccountingOverflow {
+                    stage: NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+                    resource: ResourceKind::Items,
+                })?,
+        )
+        .ok_or(OperationPolicyError::AccountingOverflow {
+            stage: NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            resource: ResourceKind::Items,
+        })?;
+    let ancestor_items = states_a
+        .checked_mul(ka)
+        .and_then(|value| value.checked_mul(storage_a))
+        .and_then(|value| {
+            states_b
+                .checked_mul(kb)
+                .and_then(|other| other.checked_mul(storage_b))
+                .and_then(|other| value.checked_add(other))
+        })
+        .and_then(|value| value.checked_mul(8))
+        .ok_or(OperationPolicyError::AccountingOverflow {
+            stage: NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            resource: ResourceKind::Items,
+        })?;
+    let ancestor_comparisons = states_a
+        .checked_mul(states_b)
+        .and_then(|value| value.checked_mul(slots))
+        .ok_or(OperationPolicyError::AccountingOverflow {
+            stage: NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            resource: ResourceKind::Work,
+        })?;
+    let work = slots
+        .checked_mul(8)
+        .and_then(|value| value.checked_add(comparisons))
+        .and_then(|value| value.checked_add(reconstruction))
+        .and_then(|value| value.checked_add(ancestor_items))
+        .and_then(|value| value.checked_add(ancestor_comparisons))
+        .ok_or(OperationPolicyError::AccountingOverflow {
+            stage: NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            resource: ResourceKind::Work,
+        })?;
+    let items = slots
+        .checked_mul(4)
+        .and_then(|value| value.checked_add(reconstruction))
+        .and_then(|value| value.checked_add(ancestor_items))
+        .ok_or(OperationPolicyError::AccountingOverflow {
+            stage: NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            resource: ResourceKind::Items,
+        })?;
+    Ok((work, items))
+}
+
+fn admit_overlap_equivalence(
+    scope: &mut OperationScope<'_, '_>,
+    work: u64,
+    items: u64,
+) -> Result<Option<IncompleteEvidence>> {
+    for (resource, amount) in [(ResourceKind::Work, work), (ResourceKind::Items, items)] {
+        if let Err(error) = scope.ledger_mut().check_charge_resource(
+            NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            resource,
+            amount,
+        ) {
+            return match error {
+                OperationPolicyError::LimitReached(_) => {
+                    let OperationPolicyError::LimitReached(snapshot) = scope
+                        .ledger_mut()
+                        .charge_resource(NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE, resource, amount)
+                        .expect_err("preflighted overlap-equivalence crossing must repeat")
+                    else {
+                        unreachable!("preflighted overlap-equivalence crossing changed kind")
+                    };
+                    Ok(Some(diagnose_curve_pair_limit(
+                        scope,
+                        snapshot,
+                        NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE_LIMIT,
+                        "NURBS curve-pair exact overlap-equivalence limit reached",
+                    )))
+                }
+                error => Err(error.into()),
+            };
+        }
+    }
+    scope.ledger_mut().charge_resource(
+        NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+        ResourceKind::Work,
+        work,
+    )?;
+    scope.ledger_mut().charge_resource(
+        NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+        ResourceKind::Items,
+        items,
+    )?;
+    Ok(None)
+}
+
+fn exact_affine_representation(a: &NurbsCurve, b: &NurbsCurve) -> Option<ParamOrientation> {
+    if a == b {
+        return Some(ParamOrientation::Same);
+    }
+    if exact_reversed_same_domain_representation(a, b) {
+        return Some(ParamOrientation::Reversed);
+    }
+    if let Some(orientation) = exact_affine_representation_without_refinement(a, b) {
+        return Some(orientation);
+    }
+    for orientation in [ParamOrientation::Same, ParamOrientation::Reversed] {
+        if let Some((refined_a, refined_b)) = refine_to_common_knot_multiset(a, b, orientation)
+            && exact_affine_representation_for_orientation(&refined_a, &refined_b, orientation)
+        {
+            return Some(orientation);
+        }
+    }
+    exact_affine_refinement_ancestor_orientation(a, b)
+}
+
+fn exact_affine_refinement_ancestor_orientation(
+    a: &NurbsCurve,
+    b: &NurbsCurve,
+) -> Option<ParamOrientation> {
+    let limit_a = refinement_ancestor_state_bound(a)?;
+    let limit_b = refinement_ancestor_state_bound(b)?;
+    if limit_a == 1 && limit_b == 1 {
+        return None;
+    }
+    let ancestors_a = checked_refinement_ancestors(a, limit_a)?;
+    let ancestors_b = checked_refinement_ancestors(b, limit_b)?;
+    for ancestor_a in &ancestors_a {
+        for ancestor_b in &ancestors_b {
+            if let Some(orientation) =
+                exact_affine_representation_without_refinement(ancestor_a, ancestor_b)
+            {
+                return Some(orientation);
+            }
+        }
+    }
+    None
+}
+
+fn refinement_ancestor_state_bound(curve: &NurbsCurve) -> Option<usize> {
+    if !curve.knots().is_clamped() {
+        return None;
+    }
+    let endpoint_knots = curve.degree().checked_add(1)?.checked_mul(2)?;
+    let interior_occurrences = curve.knots().as_slice().len().checked_sub(endpoint_knots)?;
+    let exponent = u32::try_from(interior_occurrences).ok()?;
+    let bound = 3usize.checked_pow(exponent)?;
+    (bound <= CHECKED_REFINEMENT_ANCESTOR_LIMIT).then_some(bound)
+}
+
+fn exact_affine_representation_without_refinement(
+    a: &NurbsCurve,
+    b: &NurbsCurve,
+) -> Option<ParamOrientation> {
+    if a.degree() != b.degree() || a.knots().as_slice().len() != b.knots().as_slice().len() {
+        return None;
+    }
+    [ParamOrientation::Same, ParamOrientation::Reversed]
+        .into_iter()
+        .find(|&orientation| exact_affine_representation_for_orientation(a, b, orientation))
+}
+
+fn exact_affine_representation_for_orientation(
+    a: &NurbsCurve,
+    b: &NurbsCurve,
+    orientation: ParamOrientation,
+) -> bool {
+    if a.degree() != b.degree() || a.knots().as_slice().len() != b.knots().as_slice().len() {
+        return false;
+    }
+    let points_match = match orientation {
+        ParamOrientation::Same => a.points().iter().eq(b.points()),
+        ParamOrientation::Reversed => a.points().iter().eq(b.points().iter().rev()),
+    };
+    if !points_match || !weights_are_proportional(a, b, orientation) {
+        return false;
+    }
+    match orientation {
+        ParamOrientation::Same => {
+            a.knots()
+                .as_slice()
+                .iter()
+                .zip(b.knots().as_slice())
+                .all(|(&ka, &kb)| {
+                    exact_normalized_parameters_equal(
+                        ka,
+                        a.param_range(),
+                        kb,
+                        b.param_range(),
+                        orientation,
+                    )
+                })
+        }
+        ParamOrientation::Reversed => a
+            .knots()
+            .as_slice()
+            .iter()
+            .zip(b.knots().as_slice().iter().rev())
+            .all(|(&ka, &kb)| {
+                exact_normalized_parameters_equal(
+                    ka,
+                    a.param_range(),
+                    kb,
+                    b.param_range(),
+                    orientation,
+                )
+            }),
+    }
+}
+
+fn refine_to_common_knot_multiset(
+    a: &NurbsCurve,
+    b: &NurbsCurve,
+    orientation: ParamOrientation,
+) -> Option<(NurbsCurve, NurbsCurve)> {
+    if a.degree() != b.degree() || !a.knots().is_clamped() || !b.knots().is_clamped() {
+        return None;
+    }
+    let insert_into_a = missing_mapped_interior_knots(b, a, orientation)?;
+    let insert_into_b = missing_mapped_interior_knots(a, b, orientation)?;
+    if insert_into_a.is_empty() && insert_into_b.is_empty() {
+        return None;
+    }
+    // Reconstruct through the kernel's exact knot-insertion operation, then
+    // require the resulting normalized representations to compare exactly.
+    // A merely close reconstructed control polygon never grants completion.
+    let refined_a = if insert_into_a.is_empty() {
+        a.clone()
+    } else {
+        a.with_knots_refined(&insert_into_a).ok()?
+    };
+    let refined_b = if insert_into_b.is_empty() {
+        b.clone()
+    } else {
+        b.with_knots_refined(&insert_into_b).ok()?
+    };
+    Some((refined_a, refined_b))
+}
+
+fn missing_mapped_interior_knots(
+    source: &NurbsCurve,
+    target: &NurbsCurve,
+    orientation: ParamOrientation,
+) -> Option<Vec<f64>> {
+    let source_domain = source.param_range();
+    let target_domain = target.param_range();
+    let knots = source.knots().as_slice();
+    let mut missing = Vec::new();
+    let mut index = 0;
+    while index < knots.len() {
+        let parameter = knots[index];
+        let mut end = index + 1;
+        while end < knots.len() && knots[end] == parameter {
+            end += 1;
+        }
+        if parameter > source_domain.lo && parameter < source_domain.hi {
+            let target_count = target
+                .knots()
+                .as_slice()
+                .iter()
+                .filter(|&&target_parameter| {
+                    exact_normalized_parameters_equal(
+                        parameter,
+                        source_domain,
+                        target_parameter,
+                        target_domain,
+                        orientation,
+                    )
+                })
+                .count();
+            let source_count = end - index;
+            let missing_count = source_count.saturating_sub(target_count);
+            if missing_count > 0 {
+                let mapped = map_parameter(parameter, source_domain, target_domain, orientation)?;
+                missing.extend(core::iter::repeat_n(mapped, missing_count));
+            }
+        }
+        index = end;
+    }
+    missing.sort_by(f64::total_cmp);
+    Some(missing)
+}
+
+fn exact_reversed_same_domain_representation(a: &NurbsCurve, b: &NurbsCurve) -> bool {
     if a.degree() != b.degree()
         || a.param_range() != b.param_range()
         || !a.points().iter().eq(b.points().iter().rev())
@@ -484,12 +913,128 @@ fn exact_reversed_representation(a: &NurbsCurve, b: &NurbsCurve) -> bool {
         .iter()
         .rev()
         .zip(b.knots().as_slice())
-        .all(|(a, b)| reverse_parameter(domain, *a) == Some(*b))
+        .all(|(&ka, &kb)| domain.lo + (domain.hi - ka) == kb)
 }
 
-fn reverse_parameter(domain: ParamRange, parameter: f64) -> Option<f64> {
-    let reversed = domain.lo + (domain.hi - parameter);
-    reversed.is_finite().then_some(reversed)
+fn weights_are_proportional(a: &NurbsCurve, b: &NurbsCurve, orientation: ParamOrientation) -> bool {
+    let a_weights = a.weights();
+    let b_weights = b.weights();
+    let a_weight = |index: usize| a_weights.map_or(1.0, |weights| weights[index]);
+    let b_weight = |index: usize| b_weights.map_or(1.0, |weights| weights[index]);
+    let count = a.points().len();
+    let b_index = |index: usize| match orientation {
+        ParamOrientation::Same => index,
+        ParamOrientation::Reversed => count - 1 - index,
+    };
+    let a_base = a_weight(0);
+    let b_base = b_weight(b_index(0));
+    (0..count).all(|index| {
+        exact_products_equal(a_weight(index), b_base, b_weight(b_index(index)), a_base)
+    })
+}
+
+fn exact_products_equal(a: f64, b: f64, c: f64, d: f64) -> bool {
+    let (ab, ab_tail) = expansion::two_product(a, b);
+    let (cd, cd_tail) = expansion::two_product(c, d);
+    if [ab, ab_tail, cd, cd_tail]
+        .into_iter()
+        .any(|value| !value.is_finite())
+    {
+        return false;
+    }
+    let difference = expansion::sum(
+        &expansion::from_two(ab, ab_tail),
+        &expansion::negate(&expansion::from_two(cd, cd_tail)),
+    );
+    expansion::sign(&difference) == 0
+}
+
+fn exact_normalized_parameters_equal(
+    parameter_a: f64,
+    domain_a: ParamRange,
+    parameter_b: f64,
+    domain_b: ParamRange,
+    orientation: ParamOrientation,
+) -> bool {
+    let a_offset = exact_difference(parameter_a, domain_a.lo);
+    let b_offset = match orientation {
+        ParamOrientation::Same => exact_difference(parameter_b, domain_b.lo),
+        ParamOrientation::Reversed => exact_difference(domain_b.hi, parameter_b),
+    };
+    let a_width = exact_difference(domain_a.hi, domain_a.lo);
+    let b_width = exact_difference(domain_b.hi, domain_b.lo);
+    exact_expansion_products_equal(&a_offset, &b_width, &b_offset, &a_width)
+}
+
+fn exact_difference(a: f64, b: f64) -> Vec<f64> {
+    let (difference, tail) = expansion::two_diff(a, b);
+    expansion::from_two(difference, tail)
+}
+
+fn exact_expansion_products_equal(a: &[f64], b: &[f64], c: &[f64], d: &[f64]) -> bool {
+    let ab = expansion::mul(a, b);
+    let cd = expansion::mul(c, d);
+    if ab.iter().chain(&cd).any(|value| !value.is_finite()) {
+        return false;
+    }
+    expansion::sign(&expansion::sum(&ab, &expansion::negate(&cd))) == 0
+}
+
+fn map_range(
+    range: ParamRange,
+    source_domain: ParamRange,
+    target_domain: ParamRange,
+    orientation: ParamOrientation,
+) -> Option<ParamRange> {
+    let first = map_parameter(range.lo, source_domain, target_domain, orientation)?;
+    let last = map_parameter(range.hi, source_domain, target_domain, orientation)?;
+    let mapped = ParamRange::new(first.min(last), first.max(last));
+    let round_trip_first = map_parameter(mapped.lo, target_domain, source_domain, orientation)?;
+    let round_trip_last = map_parameter(mapped.hi, target_domain, source_domain, orientation)?;
+    let expected = match orientation {
+        ParamOrientation::Same => range,
+        ParamOrientation::Reversed => ParamRange::new(range.lo, range.hi),
+    };
+    let round_trip = ParamRange::new(
+        round_trip_first.min(round_trip_last),
+        round_trip_first.max(round_trip_last),
+    );
+    (round_trip == expected).then_some(mapped)
+}
+
+fn map_parameter(
+    parameter: f64,
+    source_domain: ParamRange,
+    target_domain: ParamRange,
+    orientation: ParamOrientation,
+) -> Option<f64> {
+    if source_domain == target_domain {
+        let mapped = match orientation {
+            ParamOrientation::Same => parameter,
+            ParamOrientation::Reversed => source_domain.lo + (source_domain.hi - parameter),
+        };
+        return mapped.is_finite().then_some(mapped);
+    }
+    let normalized = (parameter - source_domain.lo) / source_domain.width();
+    let normalized = match orientation {
+        ParamOrientation::Same => normalized,
+        ParamOrientation::Reversed => 1.0 - normalized,
+    };
+    let mapped = target_domain.lo + normalized * target_domain.width();
+    (mapped.is_finite()
+        && exact_normalized_parameters_equal(
+            parameter,
+            source_domain,
+            mapped,
+            target_domain,
+            orientation,
+        ))
+    .then_some(mapped)
+}
+
+fn intersect_positive_ranges(first: ParamRange, second: ParamRange) -> Option<ParamRange> {
+    let overlap = ParamRange::new(first.lo.max(second.lo), first.hi.min(second.hi));
+    (overlap.width() > 0.0).then_some(overlap)
 }
 
 fn curve_pair_coverage_incomplete_evidence() -> IncompleteEvidence {
@@ -1579,7 +2124,23 @@ mod tests {
         assert_eq!(seeds.resource, ResourceKind::Work);
         assert_eq!(seeds.mode, AccountingMode::Cumulative);
         assert_eq!(seeds.allowed, cells.allowed);
-        assert_eq!(profile.limits().len(), 4);
+        let overlap = profile
+            .limits()
+            .iter()
+            .filter(|limit| limit.stage == NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE)
+            .collect::<Vec<_>>();
+        assert_eq!(overlap.len(), 2);
+        assert!(overlap.iter().any(|limit| {
+            limit.resource == ResourceKind::Work
+                && limit.mode == AccountingMode::Cumulative
+                && limit.allowed == DEFAULT_OVERLAP_EQUIVALENCE_WORK
+        }));
+        assert!(overlap.iter().any(|limit| {
+            limit.resource == ResourceKind::Items
+                && limit.mode == AccountingMode::Cumulative
+                && limit.allowed == DEFAULT_OVERLAP_EQUIVALENCE_ITEMS
+        }));
+        assert_eq!(profile.limits().len(), 6);
     }
 
     #[test]
@@ -1765,7 +2326,24 @@ mod tests {
         let session = SessionPolicy::v1();
         let context = OperationContext::new(&session, Tolerances::default())
             .unwrap()
-            .with_family_budget_defaults(NurbsCurvePairBudgetProfile::v1_defaults());
+            .with_family_budget_defaults(NurbsCurvePairBudgetProfile::v1_defaults())
+            .with_budget_overrides(
+                BudgetPlan::new([
+                    LimitSpec::new(
+                        NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        DEFAULT_OVERLAP_EQUIVALENCE_WORK,
+                    ),
+                    LimitSpec::new(
+                        NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+                        ResourceKind::Items,
+                        AccountingMode::Cumulative,
+                        DEFAULT_OVERLAP_EQUIVALENCE_ITEMS,
+                    ),
+                ])
+                .unwrap(),
+            );
         let mut scope = OperationScope::new(&context);
         let error = intersect_bounded_nurbs_nurbs_contextual_impl(
             &first,

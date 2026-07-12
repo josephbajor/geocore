@@ -1,6 +1,6 @@
 # F1 procedural geometry graph
 
-Status: G1-G4a and the F2 evaluation-budget adapter implemented; broader corpus coverage and G5 remain
+Status: G1-G4a, the F2 evaluation-budget adapter, and the Plane/Plane G5a verified branch-graph adapter are implemented; broader corpus coverage, persistent intersection descriptors, and procedural operations remain
 
 ## Outcome
 
@@ -632,8 +632,21 @@ Fast-reachable checked-commit graph query, so import reports cover both phases
 without resetting the aggregate allowance. The shared topology graph-work
 adapter is now the accounting contract used by both phases.
 
-- Add graph-aware `kops` inspection/evaluation adapters without rewriting
-  analytic solvers.
+Landed G5a slice: `kgraph` owns an invertible affine carrier-to-pcurve
+parameter map and a private-field certificate minted only after
+outward-rounded interval arithmetic bounds a finite line carrier against two
+plane/line-pcurve lifts over the complete carrier range. Exact, reversed, and
+nonidentity maps are covered; invalid maps/ranges/tolerances, non-finite
+arithmetic, and residual violations fail explicitly. A graph-aware `kops`
+Plane/Plane compat/context/in-scope adapter preserves the analytic result,
+source handles, typed stale/unsupported failures, and canonical operand-swap
+behavior while building deterministic endpoint vertices and certified edges
+with graph-ready carrier/pcurve descriptors. Offset and all other unregistered
+pairs remain explicitly unsupported. Persistent intersection descriptors and
+broader procedural evaluation remain behind the consumer migration below.
+
+- Extend the graph-aware `kops` adapter beyond the landed Plane/Plane arm only
+  after each family has contextual accounting and paired trace evidence.
 - Reserve the verified intersection descriptor construction path for the M3c
   intersection-import project.
 - Add swept, spun, and blend descriptors only with their own evaluator,

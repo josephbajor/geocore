@@ -70,7 +70,12 @@ polynomial and rational transverse cases plus separated two-root cases are
 complete only when every component has a certificate and verified
 representative, while tangency remains indeterminate. Exact and sampled
 overlap controls separately pin complete representation proof versus
-provisional tolerance containment.
+provisional tolerance containment. The version-3 solve fixture also pins a
+clipped common-refinement overlap, exact overlap-equivalence Work/Items
+accounting, its `N-1` work crossing, and an ordered range/orientation digest
+whose endpoints are re-evaluated against both source curves. Version 3 also
+pins source-range root-certificate digests so rounded restricted controls
+cannot substitute for original-curve proof evidence.
 The curve-pair isolation ladder separately pins unique-root certificate counts
 and ordered certificate digests. Its positive-weight rational case now proves
 both retained cells through interval quotient-rule derivative bounds, while
@@ -177,20 +182,26 @@ BVH construction, operation-context setup, reports, digests, and conservative
 cover verification are excluded from the measured duration. Degree and larger
 control-net/patch-count ladders remain deferred.
 
-The curve-pair Q4 slice adds six deterministic exact-subdivision cases. It
-varies polynomial/rational curves, retained endpoint contacts versus a hidden
-separated miss, and independent work, candidate-high-water, and depth stops.
+The curve-pair Q4 slice has eight deterministic exact-subdivision cases. It
+varies polynomial/rational/tilted curves, retained contacts versus axis and
+Euclidean-distance separated misses, and independent work,
+candidate-high-water, and depth stops. Fixture version 2 pins source-range
+root certificates rather than proofs transferred from rounded restricted
+controls.
 Every limited result must retain its conservative parent cover and remain
 indeterminate. Curve and policy construction, operation-context setup, report
 extraction, and evidence verification remain outside the measured duration.
 
-The solve-level Q4 slice adds six contextual cases over the exact-cell-driven
+The solve-level Q4 slice adds ten contextual cases over the exact-cell-driven
 NURBS/NURBS path: polynomial and rational transverse contacts, tangency, two
-roots, a subdivision-proven hidden miss, and zero seed admission. It pins all
-four report stages, ordered contact/output digests, exact in-cell witness
-re-evaluation, and the seed-limit crossing. Geometry, session, request
-overrides, and evidence verification are outside timing; the public contextual
-solve, including profile composition and report finalization, is timed.
+roots, a subdivision-proven hidden miss, exact and sampled overlaps, clipped
+common-refinement overlap, zero seed admission, and exact overlap-work denial.
+It pins all five report stages and both overlap-stage resources, ordered
+point/overlap/proof/output digests, endpoint and in-cell witness
+re-evaluation, and exact seed/overlap limit crossings. Geometry, session,
+request overrides, and evidence verification are outside timing; the public
+contextual solve, including profile composition and report finalization, is
+timed.
 
 The first Q5 slice uses only the repository's Apache-2.0 hand-authored
 `block.x_t` and `offset_plane.x_t` fixtures. Eight cases time the public

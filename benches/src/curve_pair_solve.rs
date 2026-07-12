@@ -13,14 +13,15 @@ use kgeom::nurbs::{
 };
 use kgeom::vec::Point3;
 use kops::intersect::{
-    ContactKind, CurveCurveIntersections, NURBS_CURVE_PAIR_SEED_ATTEMPTS,
-    intersect_bounded_nurbs_nurbs_with_context,
+    ContactKind, CurveCurveIntersections, NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+    NURBS_CURVE_PAIR_SEED_ATTEMPTS, ParamOrientation, intersect_bounded_nurbs_nurbs_with_context,
 };
 
 /// Fixture identity for the first Q4 curve-pair solve ladder.
-pub const FIXTURE_VERSION: &str = "curve-pair-solve.v1";
+pub const FIXTURE_VERSION: &str = "curve-pair-solve.v3";
 /// Deterministic construction seed recorded by the registry.
 pub const FIXTURE_SEED: u64 = 0x5154_4350_534f_000a;
+const DEFAULT_OVERLAP_EQUIVALENCE_ALLOWANCE: u64 = 1_000_000;
 
 /// Geometry varied by the solve ladder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +38,8 @@ pub enum SolveFixture {
     HiddenMiss,
     /// Byte-identical NURBS representations over the same full range.
     ExactOverlap,
+    /// Equal curves whose stored knot multisets differ by exact refinement.
+    CommonRefinementOverlap,
     /// Tolerance-contained parallel curves without exact representation proof.
     SampledOverlap,
 }
@@ -48,6 +51,10 @@ pub enum LimitKind {
     None,
     /// Cell-local seed admission stopped.
     SeedAttempts,
+    /// Exact overlap-equivalence work admission stopped.
+    OverlapWork,
+    /// Exact overlap-equivalence temporary-item admission stopped.
+    OverlapItems,
 }
 
 impl LimitKind {
@@ -56,6 +63,8 @@ impl LimitKind {
         match self {
             Self::None => "none",
             Self::SeedAttempts => "seed-attempts",
+            Self::OverlapWork => "overlap-work",
+            Self::OverlapItems => "overlap-items",
         }
     }
 }
@@ -69,8 +78,14 @@ pub struct CurvePairSolveCase {
     pub fixture: SolveFixture,
     /// Inclusive seed-attempt allowance.
     pub seed_attempts_allowed: u64,
+    /// Inclusive exact overlap-equivalence work allowance.
+    pub overlap_work_allowed: u64,
+    /// Inclusive exact overlap-equivalence temporary-item allowance.
+    pub overlap_items_allowed: u64,
     /// Reviewed emitted contact count.
     pub expected_points: usize,
+    /// Reviewed emitted overlap count.
+    pub expected_overlaps: usize,
     /// Reviewed complete-domain state.
     pub expected_complete: bool,
     /// Reviewed proven-empty state.
@@ -79,114 +94,186 @@ pub struct CurvePairSolveCase {
     pub expected_limit: LimitKind,
     /// Reviewed contact digest.
     pub expected_point_digest: u64,
+    /// Reviewed ordered overlap-extent/orientation digest.
+    pub expected_overlap_digest: u64,
     /// Reviewed complete evidence digest.
     pub expected_output_digest: u64,
 }
 
-/// Eight cases covering representation, contact character, multiplicity, overlap proof, and limits.
-pub const CASES: [CurvePairSolveCase; 8] = [
+/// Ten cases covering representation, contact character, overlap proof, and limits.
+pub const CASES: [CurvePairSolveCase; 10] = [
     case(
         "geometry/curve-pair-solve/poly-transverse-v1/1/default-v1",
         SolveFixture::PolynomialTransverse,
-        4_096,
+        policy(4_096),
         expected(
             1,
+            0,
             true,
             false,
             LimitKind::None,
-            0x617e_1b7b_48fd_b84a,
-            0x4f44_d942_62f3_f968,
+            digests(
+                0x617e_1b7b_48fd_b84a,
+                0x16e0_85b4_d5ef_f9c3,
+            0xcd7e_2331_14d3_e54a,
+            ),
         ),
     ),
     case(
         "geometry/curve-pair-solve/rational-transverse-v1/1/default-v1",
         SolveFixture::RationalTransverse,
-        4_096,
+        policy(4_096),
         expected(
             1,
+            0,
             true,
             false,
             LimitKind::None,
-            0xd116_a5f6_4d2e_545a,
-            0x129d_9dfd_1717_3a8b,
+            digests(
+                0xd116_a5f6_4d2e_545a,
+                0x16e0_85b4_d5ef_f9c3,
+            0x5def_f37c_1f72_248c,
+            ),
         ),
     ),
     case(
         "geometry/curve-pair-solve/poly-tangent-v1/1/default-v1",
         SolveFixture::Tangent,
-        4_096,
+        policy(4_096),
         expected(
             1,
+            0,
             false,
             false,
             LimitKind::None,
-            0x617e_1c7b_48fd_b9fd,
-            0x9db6_67bc_8bf2_e7cc,
+            digests(
+                0x617e_1c7b_48fd_b9fd,
+                0x16e0_85b4_d5ef_f9c3,
+                0x216f_67f3_d315_05b3,
+            ),
         ),
     ),
     case(
         "geometry/curve-pair-solve/poly-two-root-v1/2/default-v1",
         SolveFixture::MultipleRoots,
-        4_096,
+        policy(4_096),
         expected(
             2,
+            0,
             true,
             false,
             LimitKind::None,
-            0x3606_10ba_1318_ae30,
-            0xa30b_f608_25a1_0056,
+            digests(
+                0x3606_10ba_1318_ae30,
+                0x16e0_85b4_d5ef_f9c3,
+            0x0dac_5484_f631_d325,
+            ),
         ),
     ),
     case(
         "geometry/curve-pair-solve/poly-hidden-miss-v1/0/default-v1",
         SolveFixture::HiddenMiss,
-        4_096,
+        policy(4_096),
         expected(
+            0,
             0,
             true,
             true,
             LimitKind::None,
-            0x6489_db2b_285b_d20f,
-            0x302a_fe5b_7cd2_afbf,
+            digests(
+                0x6489_db2b_285b_d20f,
+                0x16e0_85b4_d5ef_f9c3,
+                0x32cf_5369_b496_626c,
+            ),
         ),
     ),
     case(
         "geometry/curve-pair-solve/exact-overlap-v1/1/default-v1",
         SolveFixture::ExactOverlap,
-        4_096,
+        policy(4_096),
         expected(
             0,
+            1,
             true,
             false,
             LimitKind::None,
-            0x6489_db2b_285b_d20f,
-            0xd761_a52e_b63b_8741,
+            digests(
+                0x6489_db2b_285b_d20f,
+                0xeebe_95f0_8459_1be6,
+                0xfede_9ccb_0a6b_3a25,
+            ),
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/common-refinement-overlap-v1/1/default-v1",
+        SolveFixture::CommonRefinementOverlap,
+        policy(4_096),
+        expected(
+            0,
+            1,
+            true,
+            false,
+            LimitKind::None,
+            digests(
+                0x6489_db2b_285b_d20f,
+                0xa70a_9e47_b017_2306,
+                0xee72_6cb3_a9bf_973b,
+            ),
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/common-refinement-overlap-v1/0/work-denied-v1",
+        SolveFixture::CommonRefinementOverlap,
+        SolvePolicy {
+            seed_attempts: 4_096,
+            overlap_work: 5_157,
+            overlap_items: DEFAULT_OVERLAP_EQUIVALENCE_ALLOWANCE,
+        },
+        expected(
+            0,
+            0,
+            false,
+            false,
+            LimitKind::OverlapWork,
+            digests(
+                0x6489_db2b_285b_d20f,
+                0x16e0_85b4_d5ef_f9c3,
+                0x86af_8ec2_aa1e_3d32,
+            ),
         ),
     ),
     case(
         "geometry/curve-pair-solve/sampled-overlap-v1/1/default-v1",
         SolveFixture::SampledOverlap,
-        4_096,
+        policy(4_096),
         expected(
             0,
+            1,
             false,
             false,
             LimitKind::None,
-            0x6489_db2b_285b_d20f,
-            0xd353_e12d_7ffc_6c0b,
+            digests(
+                0x6489_db2b_285b_d20f,
+                0xeebe_95f0_8459_1be6,
+                0xe6ea_fca4_fcc1_a8bb,
+            ),
         ),
     ),
     case(
         "geometry/curve-pair-solve/poly-tangent-v1/1/seed-denied-v1",
         SolveFixture::Tangent,
-        0,
+        policy(0),
         expected(
+            0,
             0,
             false,
             false,
             LimitKind::SeedAttempts,
-            0x6489_db2b_285b_d20f,
-            0x4b70_6ef0_2117_44ef,
+            digests(
+                0x6489_db2b_285b_d20f,
+                0x16e0_85b4_d5ef_f9c3,
+                0xda13_6fbc_79c3_4280,
+            ),
         ),
     ),
 ];
@@ -194,46 +281,84 @@ pub const CASES: [CurvePairSolveCase; 8] = [
 #[derive(Clone, Copy)]
 struct Expected {
     points: usize,
+    overlaps: usize,
     complete: bool,
     proven_empty: bool,
     limit: LimitKind,
     point_digest: u64,
+    overlap_digest: u64,
     output_digest: u64,
+}
+
+#[derive(Clone, Copy)]
+struct ExpectedDigests {
+    point: u64,
+    overlap: u64,
+    output: u64,
+}
+
+const fn digests(point: u64, overlap: u64, output: u64) -> ExpectedDigests {
+    ExpectedDigests {
+        point,
+        overlap,
+        output,
+    }
 }
 
 const fn expected(
     points: usize,
+    overlaps: usize,
     complete: bool,
     proven_empty: bool,
     limit: LimitKind,
-    point_digest: u64,
-    output_digest: u64,
+    digests: ExpectedDigests,
 ) -> Expected {
     Expected {
         points,
+        overlaps,
         complete,
         proven_empty,
         limit,
-        point_digest,
-        output_digest,
+        point_digest: digests.point,
+        overlap_digest: digests.overlap,
+        output_digest: digests.output,
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SolvePolicy {
+    seed_attempts: u64,
+    overlap_work: u64,
+    overlap_items: u64,
+}
+
+const fn policy(seed_attempts: u64) -> SolvePolicy {
+    SolvePolicy {
+        seed_attempts,
+        overlap_work: DEFAULT_OVERLAP_EQUIVALENCE_ALLOWANCE,
+        overlap_items: DEFAULT_OVERLAP_EQUIVALENCE_ALLOWANCE,
     }
 }
 
 const fn case(
     path: &'static str,
     fixture: SolveFixture,
-    seed_attempts_allowed: u64,
+    policy: SolvePolicy,
     expected: Expected,
 ) -> CurvePairSolveCase {
     CurvePairSolveCase {
         path,
         fixture,
-        seed_attempts_allowed,
+        seed_attempts_allowed: policy.seed_attempts,
+        overlap_work_allowed: policy.overlap_work,
+        overlap_items_allowed: policy.overlap_items,
         expected_points: expected.points,
+        expected_overlaps: expected.overlaps,
         expected_complete: expected.complete,
         expected_proven_empty: expected.proven_empty,
         expected_limit: expected.limit,
         expected_point_digest: expected.point_digest,
+        expected_overlap_digest: expected.overlap_digest,
         expected_output_digest: expected.output_digest,
     }
 }
@@ -241,7 +366,9 @@ const fn case(
 /// Immutable prepared geometry and session policy; neither is timed.
 pub struct CurvePairSolveFixture {
     first: NurbsCurve,
+    first_range: kgeom::param::ParamRange,
     second: NurbsCurve,
+    second_range: kgeom::param::ParamRange,
     session: SessionPolicy,
 }
 
@@ -251,12 +378,26 @@ impl CurvePairSolveFixture {
         &self,
         case: CurvePairSolveCase,
     ) -> (core::time::Duration, CurvePairSolveEvidence) {
-        let overrides = BudgetPlan::new([LimitSpec::new(
-            NURBS_CURVE_PAIR_SEED_ATTEMPTS,
-            ResourceKind::Work,
-            AccountingMode::Cumulative,
-            case.seed_attempts_allowed,
-        )])
+        let overrides = BudgetPlan::new([
+            LimitSpec::new(
+                NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                case.overlap_work_allowed,
+            ),
+            LimitSpec::new(
+                NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+                ResourceKind::Items,
+                AccountingMode::Cumulative,
+                case.overlap_items_allowed,
+            ),
+            LimitSpec::new(
+                NURBS_CURVE_PAIR_SEED_ATTEMPTS,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                case.seed_attempts_allowed,
+            ),
+        ])
         .expect("valid Q4 seed override");
         let context = OperationContext::new(&self.session, Tolerances::default())
             .expect("Q4 curve-pair solve policy is valid")
@@ -264,9 +405,9 @@ impl CurvePairSolveFixture {
         let started = std::time::Instant::now();
         let outcome = intersect_bounded_nurbs_nurbs_with_context(
             &self.first,
-            self.first.param_range(),
+            self.first_range,
             &self.second,
-            self.second.param_range(),
+            self.second_range,
             &context,
         );
         let elapsed = started.elapsed();
@@ -281,24 +422,41 @@ impl CurvePairSolveFixture {
         result: &CurveCurveIntersections,
         report: &OperationReport,
     ) -> CurvePairSolveEvidence {
-        let isolation_work = usage(report, NURBS_CURVE_PAIR_SUBDIVISIONS);
-        let candidates = usage(report, NURBS_CURVE_PAIR_CANDIDATES);
-        let depth = usage(report, NURBS_CURVE_PAIR_DEPTH);
-        let seeds = usage(report, NURBS_CURVE_PAIR_SEED_ATTEMPTS);
-        let limit = if report
+        let isolation_work = usage(report, NURBS_CURVE_PAIR_SUBDIVISIONS, ResourceKind::Work);
+        let candidates = usage(report, NURBS_CURVE_PAIR_CANDIDATES, ResourceKind::Items);
+        let depth = usage(report, NURBS_CURVE_PAIR_DEPTH, ResourceKind::Depth);
+        let overlap_work = usage(
+            report,
+            NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            ResourceKind::Work,
+        );
+        let overlap_items = usage(
+            report,
+            NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            ResourceKind::Items,
+        );
+        let seeds = usage(report, NURBS_CURVE_PAIR_SEED_ATTEMPTS, ResourceKind::Work);
+        let limit = report
             .limit_events()
-            .iter()
-            .any(|event| event.stage == NURBS_CURVE_PAIR_SEED_ATTEMPTS)
-        {
-            LimitKind::SeedAttempts
-        } else {
-            LimitKind::None
-        };
+            .first()
+            .map_or(LimitKind::None, |event| {
+                match (event.stage, event.resource) {
+                    (NURBS_CURVE_PAIR_SEED_ATTEMPTS, ResourceKind::Work) => LimitKind::SeedAttempts,
+                    (NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE, ResourceKind::Work) => {
+                        LimitKind::OverlapWork
+                    }
+                    (NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE, ResourceKind::Items) => {
+                        LimitKind::OverlapItems
+                    }
+                    _ => LimitKind::None,
+                }
+            });
         let (limit_attempted_consumed, limit_attempted_allowed) = report
             .limit_events()
             .first()
             .map_or((0, 0), |event| (event.consumed, event.allowed));
         let point_digest = point_digest(result);
+        let overlap_digest = overlap_digest(result);
         let incomplete_evidence_digest = incomplete_evidence_digest(result);
         let root_certificate_digest = root_certificate_digest(result);
         let mut evidence = CurvePairSolveEvidence {
@@ -308,7 +466,7 @@ impl CurvePairSolveFixture {
             complete: result.is_complete(),
             proven_empty: result.is_proven_empty(),
             indeterminate: !result.is_complete(),
-            verified_witnesses: witnesses_are_verified(&self.first, &self.second, result),
+            verified_witnesses: witnesses_are_verified(self, result),
             limit,
             limit_events: report.limit_events().len(),
             limit_attempted_consumed,
@@ -316,6 +474,10 @@ impl CurvePairSolveFixture {
             isolation_work: isolation_work.consumed,
             candidate_high_water: candidates.consumed,
             depth_high_water: depth.consumed,
+            overlap_equivalence_work: overlap_work.consumed,
+            overlap_equivalence_work_allowed: overlap_work.allowed,
+            overlap_equivalence_items: overlap_items.consumed,
+            overlap_equivalence_items_allowed: overlap_items.allowed,
             seed_attempts: seeds.consumed,
             seed_attempts_allowed: seeds.allowed,
             incomplete_evidence: result.incomplete_evidence().len(),
@@ -323,6 +485,7 @@ impl CurvePairSolveFixture {
             root_certificates: result.root_certificates().len(),
             root_certificate_digest,
             point_digest,
+            overlap_digest,
             output_digest: 0,
         };
         evidence.output_digest = evidence.digest(case);
@@ -361,6 +524,14 @@ pub struct CurvePairSolveEvidence {
     pub candidate_high_water: u64,
     /// Exact isolation depth high water.
     pub depth_high_water: u64,
+    /// Exact overlap-equivalence scan/reconstruction work.
+    pub overlap_equivalence_work: u64,
+    /// Inclusive exact overlap-equivalence work allowance.
+    pub overlap_equivalence_work_allowed: u64,
+    /// Temporary logical items admitted for overlap equivalence.
+    pub overlap_equivalence_items: u64,
+    /// Inclusive overlap-equivalence temporary-item allowance.
+    pub overlap_equivalence_items_allowed: u64,
     /// Committed cell-local attempts.
     pub seed_attempts: u64,
     /// Inclusive cell-local attempt allowance.
@@ -375,6 +546,8 @@ pub struct CurvePairSolveEvidence {
     pub root_certificate_digest: u64,
     /// Exact ordered contact digest.
     pub point_digest: u64,
+    /// Ordered overlap ranges and orientation digest.
+    pub overlap_digest: u64,
     /// Complete semantic evidence digest.
     pub output_digest: u64,
 }
@@ -393,6 +566,8 @@ impl CurvePairSolveEvidence {
         digest.tag(match self.limit {
             LimitKind::None => 0,
             LimitKind::SeedAttempts => 1,
+            LimitKind::OverlapWork => 2,
+            LimitKind::OverlapItems => 3,
         });
         digest.count(self.limit_events);
         digest.u64(self.limit_attempted_consumed);
@@ -400,6 +575,10 @@ impl CurvePairSolveEvidence {
         digest.u64(self.isolation_work);
         digest.u64(self.candidate_high_water);
         digest.u64(self.depth_high_water);
+        digest.u64(self.overlap_equivalence_work);
+        digest.u64(self.overlap_equivalence_work_allowed);
+        digest.u64(self.overlap_equivalence_items);
+        digest.u64(self.overlap_equivalence_items_allowed);
         digest.u64(self.seed_attempts);
         digest.u64(self.seed_attempts_allowed);
         digest.count(self.incomplete_evidence);
@@ -407,6 +586,7 @@ impl CurvePairSolveEvidence {
         digest.count(self.root_certificates);
         digest.u64(self.root_certificate_digest);
         digest.u64(self.point_digest);
+        digest.u64(self.overlap_digest);
         digest.tag(case.fixture as u8);
         digest.finish()
     }
@@ -415,9 +595,18 @@ impl CurvePairSolveEvidence {
 /// Construct one prepared solve fixture.
 pub fn fixture(case: CurvePairSolveCase) -> CurvePairSolveFixture {
     let (first, second) = curves(case.fixture);
+    let (first_range, second_range) = match case.fixture {
+        SolveFixture::CommonRefinementOverlap => (
+            kgeom::param::ParamRange::new(0.25, 0.75),
+            kgeom::param::ParamRange::new(0.5, 1.0),
+        ),
+        _ => (first.param_range(), second.param_range()),
+    };
     CurvePairSolveFixture {
         first,
+        first_range,
         second,
+        second_range,
         session: SessionPolicy::new(
             SessionPrecision::parasolid(),
             NumericalPolicy::v1(),
@@ -431,11 +620,7 @@ pub fn fixture(case: CurvePairSolveCase) -> CurvePairSolveFixture {
 /// Verify reviewed solve evidence without using elapsed time as correctness evidence.
 pub fn verify(case: CurvePairSolveCase, evidence: CurvePairSolveEvidence) {
     assert_eq!(evidence.points, case.expected_points);
-    let expected_overlaps = usize::from(matches!(
-        case.fixture,
-        SolveFixture::ExactOverlap | SolveFixture::SampledOverlap
-    ));
-    assert_eq!(evidence.overlaps, expected_overlaps);
+    assert_eq!(evidence.overlaps, case.expected_overlaps);
     assert_eq!(evidence.complete, case.expected_complete);
     assert_eq!(evidence.proven_empty, case.expected_proven_empty);
     assert_eq!(evidence.limit, case.expected_limit);
@@ -447,6 +632,14 @@ pub fn verify(case: CurvePairSolveCase, evidence: CurvePairSolveEvidence) {
     };
     assert_eq!(evidence.incomplete_evidence, expected_incomplete_evidence);
     assert_eq!(evidence.seed_attempts_allowed, case.seed_attempts_allowed);
+    assert_eq!(
+        evidence.overlap_equivalence_work_allowed,
+        case.overlap_work_allowed
+    );
+    assert_eq!(
+        evidence.overlap_equivalence_items_allowed,
+        case.overlap_items_allowed
+    );
     if evidence.limit == LimitKind::None {
         assert_eq!(evidence.limit_events, 0);
     } else {
@@ -455,8 +648,10 @@ pub fn verify(case: CurvePairSolveCase, evidence: CurvePairSolveEvidence) {
         assert!(evidence.limit_attempted_consumed > evidence.limit_attempted_allowed);
     }
     assert_ne!(case.expected_point_digest, 0);
+    assert_ne!(case.expected_overlap_digest, 0);
     assert_ne!(case.expected_output_digest, 0);
     assert_eq!(evidence.point_digest, case.expected_point_digest);
+    assert_eq!(evidence.overlap_digest, case.expected_overlap_digest);
     assert_eq!(evidence.output_digest, case.expected_output_digest);
 }
 
@@ -468,6 +663,13 @@ fn curves(fixture: SolveFixture) -> (NurbsCurve, NurbsCurve) {
         SolveFixture::MultipleRoots => (arch(), horizontal(0.5)),
         SolveFixture::HiddenMiss => (arch(), horizontal(1.5)),
         SolveFixture::ExactOverlap => (horizontal(0.0), horizontal(0.0)),
+        SolveFixture::CommonRefinementOverlap => {
+            let coarse = arch();
+            let refined = coarse
+                .with_knot_inserted(0.5, 1)
+                .expect("valid Q4 exact common refinement");
+            (coarse, refined)
+        }
         SolveFixture::SampledOverlap => (horizontal(0.0), horizontal(0.5e-8)),
     }
 }
@@ -520,28 +722,50 @@ fn arch() -> NurbsCurve {
     .expect("valid Q4 arch")
 }
 
-fn usage(report: &OperationReport, stage: StageId) -> LimitSnapshot {
+fn usage(report: &OperationReport, stage: StageId, resource: ResourceKind) -> LimitSnapshot {
     *report
         .usage()
         .iter()
-        .find(|usage| usage.stage == stage)
+        .find(|usage| usage.stage == stage && usage.resource == resource)
         .expect("Q4 curve-pair solve stage is configured")
 }
 
 fn witnesses_are_verified(
-    first: &NurbsCurve,
-    second: &NurbsCurve,
+    fixture: &CurvePairSolveFixture,
     result: &CurveCurveIntersections,
 ) -> bool {
-    result.points.iter().all(|point| {
-        let first_point = first.eval(point.t_a);
-        let second_point = second.eval(point.t_b);
-        first.param_range().contains(point.t_a)
-            && second.param_range().contains(point.t_b)
+    let points_verified = result.points.iter().all(|point| {
+        let first_point = fixture.first.eval(point.t_a);
+        let second_point = fixture.second.eval(point.t_b);
+        fixture.first_range.contains(point.t_a)
+            && fixture.second_range.contains(point.t_b)
             && point.residual == first_point.dist(second_point)
             && point.residual <= Tolerances::default().linear()
             && point.point == (first_point + second_point) / 2.0
-    })
+    });
+    let overlaps_verified = result.overlaps.iter().all(|overlap| {
+        let (second_start, second_end) = match overlap.orientation {
+            ParamOrientation::Same => (overlap.b.lo, overlap.b.hi),
+            ParamOrientation::Reversed => (overlap.b.hi, overlap.b.lo),
+        };
+        overlap.a.width() > 0.0
+            && overlap.b.width() > 0.0
+            && fixture.first_range.contains(overlap.a.lo)
+            && fixture.first_range.contains(overlap.a.hi)
+            && fixture.second_range.contains(overlap.b.lo)
+            && fixture.second_range.contains(overlap.b.hi)
+            && fixture
+                .first
+                .eval(overlap.a.lo)
+                .dist(fixture.second.eval(second_start))
+                <= Tolerances::default().linear()
+            && fixture
+                .first
+                .eval(overlap.a.hi)
+                .dist(fixture.second.eval(second_end))
+                <= Tolerances::default().linear()
+    });
+    points_verified && overlaps_verified
 }
 
 fn point_digest(result: &CurveCurveIntersections) -> u64 {
@@ -560,6 +784,23 @@ fn point_digest(result: &CurveCurveIntersections) -> u64 {
             ContactKind::Tangent => 1,
             ContactKind::Singular => 2,
             _ => 3,
+        });
+    }
+    digest.finish()
+}
+
+fn overlap_digest(result: &CurveCurveIntersections) -> u64 {
+    let mut digest = StableHasher::new();
+    digest.tag(0xb4);
+    digest.count(result.overlaps.len());
+    for overlap in &result.overlaps {
+        digest.f64(overlap.a.lo);
+        digest.f64(overlap.a.hi);
+        digest.f64(overlap.b.lo);
+        digest.f64(overlap.b.hi);
+        digest.tag(match overlap.orientation {
+            ParamOrientation::Same => 0,
+            ParamOrientation::Reversed => 1,
         });
     }
     digest.finish()
@@ -698,6 +939,14 @@ mod tests {
                 entry["policy_values"]["seed_attempts_allowed"].as_u64(),
                 Some(case.seed_attempts_allowed)
             );
+            assert_eq!(
+                entry["policy_values"]["overlap_work_allowed"].as_u64(),
+                Some(case.overlap_work_allowed)
+            );
+            assert_eq!(
+                entry["policy_values"]["overlap_items_allowed"].as_u64(),
+                Some(case.overlap_items_allowed)
+            );
             assert_eq!(entry["policy_values"]["execution"], "serial");
             assert_eq!(entry["policy_values"]["policy_version"], "v1");
             assert_eq!(
@@ -718,7 +967,7 @@ mod tests {
             };
             assert_eq!(
                 entry["size_parameters"]["elements"].as_u64(),
-                Some(expected_elements)
+                Some(expected_elements as u64)
             );
             assert_eq!(
                 entry["tolerances"]["linear"].as_f64(),
@@ -737,6 +986,22 @@ mod tests {
                 ("isolation_work", evidence.isolation_work),
                 ("candidate_high_water", evidence.candidate_high_water),
                 ("depth_high_water", evidence.depth_high_water),
+                (
+                    "overlap_equivalence_work",
+                    evidence.overlap_equivalence_work,
+                ),
+                (
+                    "overlap_equivalence_work_allowed",
+                    evidence.overlap_equivalence_work_allowed,
+                ),
+                (
+                    "overlap_equivalence_items",
+                    evidence.overlap_equivalence_items,
+                ),
+                (
+                    "overlap_equivalence_items_allowed",
+                    evidence.overlap_equivalence_items_allowed,
+                ),
                 ("seed_attempts", evidence.seed_attempts),
                 ("incomplete_evidence", evidence.incomplete_evidence as u64),
                 ("root_certificates", evidence.root_certificates as u64),
@@ -765,10 +1030,13 @@ mod tests {
                 Some(format!("{:016x}", evidence.point_digest).as_str())
             );
             assert_eq!(
+                counters["overlap_digest"].as_str(),
+                Some(format!("{:016x}", evidence.overlap_digest).as_str())
+            );
+            assert_eq!(
                 counters["output_digest"].as_str(),
                 Some(format!("{:016x}", evidence.output_digest).as_str())
             );
         }
     }
-
 }

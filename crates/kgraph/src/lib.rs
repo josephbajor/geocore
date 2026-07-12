@@ -9,6 +9,7 @@ mod descriptor;
 mod error;
 mod eval;
 mod graph;
+mod intersection;
 
 pub use class::{Curve2dClass, CurveClass, GeometryClassKey, SurfaceClass};
 pub use descriptor::{
@@ -29,4 +30,8 @@ pub use graph::GraphBuildObservation;
 pub use graph::{
     Curve2dHandle, Curve2dNode, CurveHandle, CurveNode, GeometryChanges, GeometryGraph,
     GeometryRef, SurfaceHandle, SurfaceNode,
+};
+pub use intersection::{
+    AffineParamMap1d, IntersectionCertificateError, PairedPlaneLineResidualCertificate,
+    PairedTrace, certify_paired_plane_line_residuals,
 };

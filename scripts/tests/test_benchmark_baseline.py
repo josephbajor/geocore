@@ -29,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 99)
+        self.assertEqual(len(cases), 101)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -299,7 +299,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
         self.assertTrue(
             all(
                 case["deterministic_seed"] == 0x5154435041490009
-                and case["fixture_version"] == "curve-pair-isolation.v1"
+                and case["fixture_version"] == "curve-pair-isolation.v2"
                 for case in curve_pair_isolation
             )
         )
@@ -336,15 +336,22 @@ class BenchmarkBaselineTests(unittest.TestCase):
         curve_pair_solve = [
             case for case in cases if case["benchmark_target"] == "curve_pair_solve"
         ]
-        self.assertEqual(len(curve_pair_solve), 8)
+        self.assertEqual(len(curve_pair_solve), 10)
         self.assertTrue(
             all(
                 case["deterministic_seed"] == 0x51544350534F000A
-                and case["fixture_version"] == "curve-pair-solve.v1"
+                and case["fixture_version"] == "curve-pair-solve.v3"
                 and case["policy_values"]["policy_version"] == "v1"
                 and case["policy_values"]["execution"] == "serial"
                 and case["policy_values"]["api"]
                 == "intersect_bounded_nurbs_nurbs_with_context"
+                and case["policy_values"]["overlap_work_allowed"] >= 0
+                and case["policy_values"]["overlap_items_allowed"] >= 0
+                and case["expected_result_counters"]["overlap_equivalence_work"]
+                >= 0
+                and case["expected_result_counters"]["overlap_equivalence_items"]
+                >= 0
+                and len(case["expected_result_counters"]["overlap_digest"]) == 16
                 and case["expected_result_counters"]["verified_witnesses"]
                 for case in curve_pair_solve
             )
@@ -354,11 +361,52 @@ class BenchmarkBaselineTests(unittest.TestCase):
             for case in curve_pair_solve
             if case["expected_result_counters"]["limit_kind"] != "none"
         ]
-        self.assertEqual(len(solve_limited), 1)
-        self.assertTrue(
-            solve_limited[0]["expected_result_counters"]["indeterminate"]
+        self.assertEqual(len(solve_limited), 2)
+        self.assertEqual(
+            {
+                case["expected_result_counters"]["limit_kind"]
+                for case in solve_limited
+            },
+            {"seed-attempts", "overlap-work"},
         )
-        self.assertFalse(solve_limited[0]["expected_result_counters"]["complete"])
+        self.assertTrue(
+            all(
+                case["expected_result_counters"]["indeterminate"]
+                and not case["expected_result_counters"]["complete"]
+                for case in solve_limited
+            )
+        )
+        common_refinement = [
+            case
+            for case in curve_pair_solve
+            if "common-refinement-overlap-v1" in case["path"]
+        ]
+        self.assertEqual(len(common_refinement), 2)
+        common_complete = next(
+            case
+            for case in common_refinement
+            if case["expected_result_counters"]["limit_kind"] == "none"
+        )
+        self.assertTrue(common_complete["expected_result_counters"]["complete"])
+        self.assertEqual(common_complete["expected_result_counters"]["overlaps"], 1)
+        self.assertGreater(
+            common_complete["expected_result_counters"]["overlap_equivalence_work"],
+            0,
+        )
+        self.assertGreater(
+            common_complete["expected_result_counters"]["overlap_equivalence_items"],
+            0,
+        )
+        common_denied = next(
+            case
+            for case in common_refinement
+            if case["expected_result_counters"]["limit_kind"] == "overlap-work"
+        )
+        self.assertEqual(
+            common_denied["expected_result_counters"]["limit_attempted_consumed"],
+            common_denied["expected_result_counters"]["limit_attempted_allowed"] + 1,
+        )
+        self.assertEqual(common_denied["expected_result_counters"]["overlaps"], 0)
         solve_miss = [
             case
             for case in curve_pair_solve

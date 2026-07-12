@@ -15,7 +15,7 @@ use kgeom::nurbs::{
 use kgeom::vec::Point3;
 
 /// Fixture identity for the first Q4 curve-pair ladder.
-pub const FIXTURE_VERSION: &str = "curve-pair-isolation.v1";
+pub const FIXTURE_VERSION: &str = "curve-pair-isolation.v2";
 /// Deterministic construction seed recorded by the benchmark registry.
 pub const FIXTURE_SEED: u64 = 0x5154_4350_4149_0009;
 
@@ -111,7 +111,7 @@ pub const CASES: [CurvePairIsolationCase; 8] = [
             false,
             LimitKind::None,
             0xc6d0_acd6_f471_2a52,
-            0x4d6f_b6f5_809c_4b32,
+            0xcdfa_59f3_b55a_8715,
         ),
     ),
     case(
@@ -125,7 +125,7 @@ pub const CASES: [CurvePairIsolationCase; 8] = [
             false,
             LimitKind::None,
             0x4f99_4d43_1116_fb10,
-            0x6141_c7e5_8af0_3d3b,
+            0x088a_09e4_a265_3a20,
         ),
     ),
     case(
@@ -139,7 +139,7 @@ pub const CASES: [CurvePairIsolationCase; 8] = [
             false,
             LimitKind::None,
             0xf318_c6de_18a5_8992,
-            0x243c_13b7_d862_2e50,
+            0x1eed_4095_c616_4117,
         ),
     ),
     case(

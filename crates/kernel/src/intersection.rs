@@ -127,7 +127,10 @@ mod tests {
     use ktopo::geom::CurveGeom;
 
     use super::*;
-    use crate::{BoundedCurve, EntityKind, Kernel, KernelError, OperationSettings, Tolerances};
+    use crate::{
+        BoundedCurve, EntityKind, IncompleteCause, Kernel, KernelError, OperationSettings,
+        Tolerances,
+    };
 
     #[test]
     fn facade_matches_direct_context_and_preserves_limit_report() {
@@ -327,5 +330,193 @@ mod tests {
         assert!(result.is_complete());
         assert!(result.incomplete_evidence().is_empty());
         assert_eq!(result.root_certificates().len(), 1);
+    }
+
+    #[test]
+    fn graph_owned_inverse_refinement_overlap_preserves_proof_and_accounting() {
+        let points = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 2.0, 0.0),
+            Point3::new(3.0, 0.0, 0.0),
+        ];
+        let weights = vec![1.0, 1.5, 2.0];
+        let forward = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            points.clone(),
+            Some(weights.clone()),
+        )
+        .unwrap()
+        .with_knot_inserted(0.25, 1)
+        .unwrap();
+        let reversed = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            points.into_iter().rev().collect(),
+            Some(weights.into_iter().rev().collect()),
+        )
+        .unwrap()
+        .with_knot_inserted(0.25, 1)
+        .unwrap();
+        let first_range = ParamRange::new(0.125, 0.75);
+        let second_range = ParamRange::new(0.375, 0.875);
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let (first_id, second_id) = {
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let store = edit.store_mut_for_test();
+            let first = store.insert_curve(CurveGeom::Nurbs(forward)).unwrap();
+            let second = store.insert_curve(CurveGeom::Nurbs(reversed)).unwrap();
+            (
+                CurveId::new(part_id.clone(), first),
+                CurveId::new(part_id.clone(), second),
+            )
+        };
+        assert_ne!(first_id, second_id);
+        let request = |settings| {
+            IntersectCurvesRequest::new(
+                BoundedCurve::new(first_id.clone(), first_range),
+                BoundedCurve::new(second_id.clone(), second_range),
+            )
+            .with_settings(settings)
+        };
+        let part = session.part(part_id).unwrap();
+        let baseline = part
+            .intersect_curves(request(OperationSettings::new()))
+            .unwrap();
+        let baseline_binding = baseline.result();
+        let baseline_result = baseline_binding.as_ref().unwrap();
+        assert_eq!(baseline_result.first(), first_id);
+        assert_eq!(baseline_result.second(), second_id);
+        assert!(baseline_result.is_complete());
+        assert!(baseline_result.points().is_empty());
+        assert!(baseline_result.incomplete_evidence().is_empty());
+        assert_eq!(baseline_result.overlaps().len(), 1);
+        let overlap = baseline_result.overlaps()[0];
+        assert_eq!(overlap.first_range(), ParamRange::new(0.125, 0.625));
+        assert_eq!(overlap.second_range(), ParamRange::new(0.375, 0.875));
+        assert_eq!(overlap.orientation(), CurveOverlapOrientation::Reversed);
+
+        let usage = |resource| {
+            baseline
+                .report()
+                .usage()
+                .iter()
+                .find(|usage| {
+                    usage.stage == kops::intersect::NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE
+                        && usage.resource == resource
+                })
+                .copied()
+                .unwrap()
+        };
+        let work = usage(ResourceKind::Work);
+        let items = usage(ResourceKind::Items);
+        assert!(work.consumed > 0);
+        assert!(items.consumed > 0);
+
+        let exact_budget = BudgetPlan::new([
+            LimitSpec::new(
+                kops::intersect::NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                work.consumed,
+            ),
+            LimitSpec::new(
+                kops::intersect::NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+                ResourceKind::Items,
+                AccountingMode::Cumulative,
+                items.consumed,
+            ),
+        ])
+        .unwrap();
+        let admitted = part
+            .intersect_curves(request(
+                OperationSettings::new().with_budget_overrides(exact_budget),
+            ))
+            .unwrap();
+        assert_eq!(admitted.result(), baseline.result());
+        assert!(admitted.report().limit_events().is_empty());
+        for (resource, expected) in [
+            (ResourceKind::Work, work.consumed),
+            (ResourceKind::Items, items.consumed),
+        ] {
+            let exact_usage = admitted
+                .report()
+                .usage()
+                .iter()
+                .find(|usage| {
+                    usage.stage == kops::intersect::NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE
+                        && usage.resource == resource
+                })
+                .unwrap();
+            assert_eq!(
+                (exact_usage.consumed, exact_usage.allowed),
+                (expected, expected)
+            );
+        }
+
+        for (resource, consumed) in [
+            (ResourceKind::Work, work.consumed),
+            (ResourceKind::Items, items.consumed),
+        ] {
+            let other_resource = match resource {
+                ResourceKind::Work => ResourceKind::Items,
+                ResourceKind::Items => ResourceKind::Work,
+                _ => unreachable!("the overlap stage owns only Work and Items"),
+            };
+            let other_consumed = match other_resource {
+                ResourceKind::Work => work.consumed,
+                ResourceKind::Items => items.consumed,
+                _ => unreachable!("the overlap stage owns only Work and Items"),
+            };
+            let denied_budget = BudgetPlan::new([
+                LimitSpec::new(
+                    kops::intersect::NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+                    resource,
+                    AccountingMode::Cumulative,
+                    consumed - 1,
+                ),
+                LimitSpec::new(
+                    kops::intersect::NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+                    other_resource,
+                    AccountingMode::Cumulative,
+                    other_consumed,
+                ),
+            ])
+            .unwrap();
+            let denied = part
+                .intersect_curves(request(
+                    OperationSettings::new().with_budget_overrides(denied_budget),
+                ))
+                .unwrap();
+            let denied_binding = denied.result();
+            let denied_result = denied_binding.as_ref().unwrap();
+            assert_eq!(denied_result.first(), first_id);
+            assert_eq!(denied_result.second(), second_id);
+            assert!(!denied_result.is_complete());
+            assert!(denied_result.is_empty());
+            assert_eq!(denied_result.incomplete_evidence().len(), 1);
+            assert_eq!(denied.report().limit_events().len(), 1);
+            let crossing = denied.report().limit_events()[0];
+            assert_eq!(
+                crossing.stage,
+                kops::intersect::NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE
+            );
+            assert_eq!(crossing.resource, resource);
+            assert_eq!(
+                (crossing.consumed, crossing.allowed),
+                (consumed, consumed - 1)
+            );
+            let evidence = denied_result.incomplete_evidence()[0];
+            assert_eq!(
+                evidence.code,
+                kops::intersect::NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE_LIMIT
+            );
+            assert_eq!(evidence.stage, crossing.stage);
+            assert_eq!(
+                evidence.cause,
+                IncompleteCause::Limit { snapshot: crossing }
+            );
+        }
     }
 }

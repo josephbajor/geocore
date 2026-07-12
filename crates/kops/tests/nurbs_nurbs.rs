@@ -14,6 +14,7 @@ use kgeom::vec::Point3;
 use kops::intersect::{
     ContactKind, NURBS_CURVE_PAIR_COVERAGE_INCOMPLETE,
     NURBS_CURVE_PAIR_ISOLATION_SUBDIVISION_LIMIT, NURBS_CURVE_PAIR_MINIMIZER_PARAMETER_RESOLUTION,
+    NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE, NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE_LIMIT,
     NURBS_CURVE_PAIR_POLISH_FALLBACK, NURBS_CURVE_PAIR_POLISH_STATIONARY,
     NURBS_CURVE_PAIR_SEED_ATTEMPTS, NURBS_CURVE_PAIR_SEED_LIMIT, ParamOrientation,
     intersect_bounded_curves_with_context, intersect_bounded_nurbs_nurbs,
@@ -196,6 +197,110 @@ fn joined_components_complete_rational_boundary_roots_under_swap() {
 }
 
 #[test]
+fn exact_spatial_corner_certificate_completes_the_non_coplanar_solve() {
+    let first = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 1.0),
+            Point3::new(2.0, 2.0, 0.25),
+        ],
+        None,
+    )
+    .unwrap();
+    let second = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(-1.0, 1.0, -1.0),
+            Point3::new(-2.0, 2.0, 0.75),
+        ],
+        None,
+    )
+    .unwrap();
+
+    let forward = intersect_bounded_nurbs_nurbs(
+        &first,
+        first.param_range(),
+        &second,
+        second.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    let reversed = intersect_bounded_nurbs_nurbs(
+        &second,
+        second.param_range(),
+        &first,
+        first.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(forward.is_complete());
+    assert_eq!(forward.points.len(), 1);
+    assert_eq!(forward.root_certificates().len(), 1);
+    assert!(forward.incomplete_evidence().is_empty());
+    assert_eq!(forward.clone().swapped(), reversed);
+}
+
+#[test]
+fn exact_spatial_interior_knot_certificate_completes_the_non_coplanar_solve() {
+    let first = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(-2.0, -2.0, -1.0),
+            Point3::new(-1.0, -1.0, 2.0),
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, -2.0),
+            Point3::new(2.0, 2.0, 1.0),
+        ],
+        Some(vec![1.0, 1.001, 1.002, 1.001, 1.0]),
+    )
+    .unwrap();
+    let second = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(-2.0, 2.0, 3.0),
+            Point3::new(-1.0, 1.0, -1.0),
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, -1.0, 4.0),
+            Point3::new(2.0, -2.0, -3.0),
+        ],
+        Some(vec![1.002, 1.001, 1.0, 1.001, 1.002]),
+    )
+    .unwrap();
+
+    assert_eq!(first.eval(0.5), Point3::new(0.0, 0.0, 0.0));
+    assert_eq!(second.eval(0.5), Point3::new(0.0, 0.0, 0.0));
+    let forward = intersect_bounded_nurbs_nurbs(
+        &first,
+        first.param_range(),
+        &second,
+        second.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    let reversed = intersect_bounded_nurbs_nurbs(
+        &second,
+        second.param_range(),
+        &first,
+        first.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(forward.is_complete(), "{forward:?}");
+    assert_eq!(forward.points.len(), 1);
+    assert_eq!(forward.root_certificates().len(), 1);
+    assert_eq!(forward.points[0].point, Point3::new(0.0, 0.0, 0.0));
+    assert_eq!(forward.clone().swapped(), reversed);
+}
+
+#[test]
 fn nurbs_nurbs_reports_simple_contained_overlaps() {
     let a = line_nurbs(Point3::new(0.0, 0.0, 0.0), Point3::new(3.0, 0.0, 0.0));
     let b = line_nurbs(Point3::new(0.0, 0.0, 0.0), Point3::new(3.0, 0.0, 0.0));
@@ -351,6 +456,361 @@ fn exact_reversed_overlap_handles_asymmetric_knots() {
 }
 
 #[test]
+fn exact_affine_overlap_clips_ranges_and_accepts_global_weight_scaling() {
+    let points = vec![
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 2.0, 0.0),
+        Point3::new(3.0, 0.0, 0.0),
+    ];
+    let unit = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        points.clone(),
+        Some(vec![1.0, 1.5, 2.0]),
+    )
+    .unwrap();
+    let shifted = NurbsCurve::new(
+        2,
+        vec![2.0, 2.0, 2.0, 6.0, 6.0, 6.0],
+        points,
+        Some(vec![2.0, 3.0, 4.0]),
+    )
+    .unwrap();
+    let shifted_reversed = NurbsCurve::new(
+        2,
+        vec![2.0, 2.0, 2.0, 6.0, 6.0, 6.0],
+        shifted.points().iter().copied().rev().collect(),
+        Some(vec![4.0, 3.0, 2.0]),
+    )
+    .unwrap();
+
+    let result = intersect_bounded_nurbs_nurbs(
+        &unit,
+        ParamRange::new(0.25, 0.75),
+        &shifted,
+        ParamRange::new(2.0, 4.0),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(result.is_complete());
+    assert!(result.points.is_empty());
+    assert!(result.incomplete_evidence().is_empty());
+    assert_eq!(result.overlaps.len(), 1);
+    assert_eq!(result.overlaps[0].a, ParamRange::new(0.25, 0.5));
+    assert_eq!(result.overlaps[0].b, ParamRange::new(3.0, 4.0));
+    assert_eq!(result.overlaps[0].orientation, ParamOrientation::Same);
+
+    let swapped = intersect_bounded_nurbs_nurbs(
+        &shifted,
+        ParamRange::new(2.0, 4.0),
+        &unit,
+        ParamRange::new(0.25, 0.75),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(result.swapped(), swapped);
+
+    let reversed = intersect_bounded_nurbs_nurbs(
+        &unit,
+        ParamRange::new(0.25, 0.75),
+        &shifted_reversed,
+        ParamRange::new(2.0, 4.0),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(reversed.is_complete());
+    assert_eq!(reversed.overlaps[0].a, ParamRange::new(0.5, 0.75));
+    assert_eq!(reversed.overlaps[0].b, ParamRange::new(3.0, 4.0));
+    assert_eq!(reversed.overlaps[0].orientation, ParamOrientation::Reversed);
+}
+
+#[test]
+fn exact_knot_refinement_equivalence_preserves_complete_clipped_overlaps() {
+    let points = vec![
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 2.0, 0.0),
+        Point3::new(3.0, 0.0, 0.0),
+    ];
+    let coarse = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        points.clone(),
+        Some(vec![1.0, 1.5, 2.0]),
+    )
+    .unwrap();
+    let refined = coarse.with_knot_inserted(0.5, 1).unwrap();
+    let same = intersect_bounded_nurbs_nurbs(
+        &coarse,
+        ParamRange::new(0.25, 0.75),
+        &refined,
+        ParamRange::new(0.5, 1.0),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(same.is_complete());
+    assert_eq!(same.overlaps[0].a, ParamRange::new(0.5, 0.75));
+    assert_eq!(same.overlaps[0].b, ParamRange::new(0.5, 0.75));
+    assert_eq!(same.overlaps[0].orientation, ParamOrientation::Same);
+
+    let refined_twice = coarse.with_knots_refined(&[0.25, 0.75]).unwrap();
+    let repeated = intersect_bounded_nurbs_nurbs(
+        &coarse,
+        coarse.param_range(),
+        &refined_twice,
+        refined_twice.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(repeated.is_complete());
+    assert_eq!(repeated.overlaps[0].a, coarse.param_range());
+    assert_eq!(repeated.overlaps[0].b, coarse.param_range());
+
+    let shifted = NurbsCurve::new(
+        2,
+        vec![2.0, 2.0, 2.0, 6.0, 6.0, 6.0],
+        points.clone(),
+        Some(vec![2.0, 3.0, 4.0]),
+    )
+    .unwrap()
+    .with_knot_inserted(4.0, 1)
+    .unwrap();
+    let affine = intersect_bounded_nurbs_nurbs(
+        &coarse,
+        ParamRange::new(0.25, 0.75),
+        &shifted,
+        ParamRange::new(2.0, 4.0),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(affine.is_complete());
+    assert_eq!(affine.overlaps[0].a, ParamRange::new(0.25, 0.5));
+    assert_eq!(affine.overlaps[0].b, ParamRange::new(3.0, 4.0));
+    let affine_swapped = intersect_bounded_nurbs_nurbs(
+        &shifted,
+        ParamRange::new(2.0, 4.0),
+        &coarse,
+        ParamRange::new(0.25, 0.75),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(affine.clone().swapped(), affine_swapped);
+
+    let reversed = NurbsCurve::new(
+        2,
+        vec![2.0, 2.0, 2.0, 6.0, 6.0, 6.0],
+        points.into_iter().rev().collect(),
+        Some(vec![4.0, 3.0, 2.0]),
+    )
+    .unwrap()
+    .with_knot_inserted(5.0, 1)
+    .unwrap();
+    let reversed = intersect_bounded_nurbs_nurbs(
+        &coarse,
+        ParamRange::new(0.125, 0.75),
+        &reversed,
+        ParamRange::new(2.0, 5.0),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(reversed.is_complete());
+    assert_eq!(reversed.overlaps[0].a, ParamRange::new(0.25, 0.75));
+    assert_eq!(reversed.overlaps[0].b, ParamRange::new(3.0, 5.0));
+    assert_eq!(reversed.overlaps[0].orientation, ParamOrientation::Reversed);
+}
+
+#[test]
+fn checked_inverse_refinement_recovers_histories_but_rejects_altered_data() {
+    let coarse = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 2.0, 0.0),
+            Point3::new(3.0, 0.0, 0.0),
+        ],
+        Some(vec![1.0, 1.5, 2.0]),
+    )
+    .unwrap();
+    let refined = coarse.with_knot_inserted(0.5, 1).unwrap();
+    let mut changed_points = refined.points().to_vec();
+    changed_points[1].y += 1.0e-4;
+    let changed = NurbsCurve::new(
+        refined.degree(),
+        refined.knots().as_slice().to_vec(),
+        changed_points,
+        refined.weights().map(<[f64]>::to_vec),
+    )
+    .unwrap();
+
+    let result = intersect_bounded_nurbs_nurbs(
+        &coarse,
+        coarse.param_range(),
+        &changed,
+        changed.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(!result.is_complete());
+    assert!(result.overlaps.is_empty());
+
+    let left_history = coarse.with_knot_inserted(0.25, 1).unwrap();
+    let right_history = coarse.with_knot_inserted(0.75, 1).unwrap();
+    let recovered = intersect_bounded_nurbs_nurbs(
+        &left_history,
+        left_history.param_range(),
+        &right_history,
+        right_history.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(recovered.is_complete());
+    assert_eq!(recovered.overlaps.len(), 1);
+    assert_eq!(recovered.overlaps[0].a, coarse.param_range());
+    assert_eq!(recovered.overlaps[0].b, coarse.param_range());
+}
+
+#[test]
+fn overlap_equivalence_work_has_exact_admission_boundaries() {
+    let coarse = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 2.0, 0.0),
+            Point3::new(3.0, 0.0, 0.0),
+        ],
+        Some(vec![1.0, 1.5, 2.0]),
+    )
+    .unwrap();
+    let refined = coarse.with_knots_refined(&[0.25, 0.75]).unwrap();
+    let session = SessionPolicy::v1();
+    let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+    let baseline = intersect_bounded_nurbs_nurbs_with_context(
+        &coarse,
+        coarse.param_range(),
+        &refined,
+        refined.param_range(),
+        &context,
+    );
+    assert!(baseline.result().unwrap().is_complete());
+    let work = baseline
+        .report()
+        .usage()
+        .iter()
+        .find(|usage| {
+            usage.stage == NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE
+                && usage.resource == ResourceKind::Work
+        })
+        .unwrap()
+        .consumed;
+    let items = baseline
+        .report()
+        .usage()
+        .iter()
+        .find(|usage| {
+            usage.stage == NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE
+                && usage.resource == ResourceKind::Items
+        })
+        .unwrap()
+        .consumed;
+    assert!(work > 0 && items > 0);
+
+    let exact = BudgetPlan::new([
+        LimitSpec::new(
+            NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            work,
+        ),
+        LimitSpec::new(
+            NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+            ResourceKind::Items,
+            AccountingMode::Cumulative,
+            items,
+        ),
+    ])
+    .unwrap();
+    let admitted = intersect_bounded_nurbs_nurbs_with_context(
+        &coarse,
+        coarse.param_range(),
+        &refined,
+        refined.param_range(),
+        &context.clone().with_budget_overrides(exact),
+    );
+    assert_eq!(admitted.result(), baseline.result());
+    assert!(admitted.report().limit_events().is_empty());
+
+    let denied = BudgetPlan::new([LimitSpec::new(
+        NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        work - 1,
+    )])
+    .unwrap();
+    let denied = intersect_bounded_nurbs_nurbs_with_context(
+        &coarse,
+        coarse.param_range(),
+        &refined,
+        refined.param_range(),
+        &context.clone().with_budget_overrides(denied),
+    );
+    let denied_result = denied.result().unwrap();
+    assert!(denied_result.is_empty());
+    assert!(!denied_result.is_complete());
+    assert_eq!(denied_result.incomplete_evidence().len(), 1);
+    assert_eq!(
+        denied_result.incomplete_evidence()[0].code,
+        NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE_LIMIT
+    );
+    assert_eq!(denied.report().limit_events().len(), 1);
+    let crossing = denied.report().limit_events()[0];
+    assert_eq!(crossing.stage, NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE);
+    assert_eq!(crossing.resource, ResourceKind::Work);
+    assert_eq!((crossing.consumed, crossing.allowed), (work, work - 1));
+
+    let item_denied = BudgetPlan::new([LimitSpec::new(
+        NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE,
+        ResourceKind::Items,
+        AccountingMode::Cumulative,
+        items - 1,
+    )])
+    .unwrap();
+    let item_denied = intersect_bounded_nurbs_nurbs_with_context(
+        &coarse,
+        coarse.param_range(),
+        &refined,
+        refined.param_range(),
+        &context.with_budget_overrides(item_denied),
+    );
+    assert!(!item_denied.result().unwrap().is_complete());
+    assert_eq!(item_denied.report().limit_events().len(), 1);
+    let crossing = item_denied.report().limit_events()[0];
+    assert_eq!(crossing.stage, NURBS_CURVE_PAIR_OVERLAP_EQUIVALENCE);
+    assert_eq!(crossing.resource, ResourceKind::Items);
+    assert_eq!((crossing.consumed, crossing.allowed), (items, items - 1));
+}
+
+#[test]
+fn exact_reversed_overlap_clips_to_the_shared_parameter_extent() {
+    let forward = line_nurbs(Point3::new(0.0, 0.0, 0.0), Point3::new(4.0, 0.0, 0.0));
+    let reversed = line_nurbs(Point3::new(4.0, 0.0, 0.0), Point3::new(0.0, 0.0, 0.0));
+    let result = intersect_bounded_nurbs_nurbs(
+        &forward,
+        ParamRange::new(0.125, 0.75),
+        &reversed,
+        ParamRange::new(0.375, 0.875),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(result.is_complete());
+    assert_eq!(result.overlaps.len(), 1);
+    assert_eq!(result.overlaps[0].a, ParamRange::new(0.125, 0.625));
+    assert_eq!(result.overlaps[0].b, ParamRange::new(0.375, 0.875));
+    assert_eq!(result.overlaps[0].orientation, ParamOrientation::Reversed);
+}
+
+#[test]
 fn contextual_v1_entry_is_exactly_legacy_compatible() {
     let a = tangent_parabola();
     let b = line_nurbs(Point3::new(-2.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0));
@@ -371,7 +831,7 @@ fn contextual_v1_entry_is_exactly_legacy_compatible() {
         );
         assert_eq!(contextual.result(), legacy.as_ref());
         assert_eq!(contextual.report().policy_version(), PolicyVersion::V1);
-        assert_eq!(contextual.report().usage().len(), 4);
+        assert_eq!(contextual.report().usage().len(), 6);
         assert!(
             contextual
                 .report()

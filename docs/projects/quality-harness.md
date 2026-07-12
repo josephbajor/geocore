@@ -355,20 +355,25 @@ tolerances as though they perform the same amount of work.
 
 Owners: `kgeom`, `kops`.
 
-Status: two contextual isolation slices and one solve slice are implemented as
-six registered cases each. The implicit-surface ladder varies polynomial/rational
+Status: the contextual implicit ladder has six registered cases, curve-pair
+isolation fixture v2 has eight, and solve fixture v3 has ten. The implicit-surface ladder varies polynomial/rational
 representation, one/four Bezier patches, retained/separated implicit geometry,
 and exact work/candidate-cover budget boundaries. The curve-pair ladder varies
-polynomial/rational curves, retained endpoint contacts, a subdivision-proven
-hidden miss, and independent exact work, candidate-high-water, and depth
-stops. Limited results must remain indeterminate, retain a deterministic
+polynomial/rational/tilted curves, retained endpoint contacts, axis/Euclidean
+separated misses, source-range certificate digests, and independent exact
+work, candidate-high-water, and depth stops. Limited results must remain indeterminate, retain a deterministic
 conservative cover of the corresponding complete result, and never become a
 complete miss. Only contextual isolation is timed; geometry/BVH/policy setup
 and verification are excluded. The solve ladder pins polynomial/rational
 transverse contacts, tangency, two roots, a hidden proven miss, zero seed
-admission, all four report stages, and re-evaluated in-cell tolerance
-witnesses. The broader degree, control-net, knot-span/patch-count, and deeper
-subdivision matrix remains deferred.
+admission, exact/common-refinement/sampled overlaps, and overlap Work denial.
+It records five stage identities and six stage-resource snapshots because the
+overlap stage owns both Work and Items, including both usages and allowances.
+Re-evaluated in-cell contacts, overlap endpoints, ordered extent/orientation
+digests, source-range root-certificate digests, and the seed/overlap limit
+crossings are semantic evidence. The
+broader degree, control-net, knot-span/patch-count, Q4 Items-denial and
+inverse-history fixtures, and deeper subdivision matrix remain deferred.
 
 Exercise curve and surface subdivision/isolation independently from full
 intersection dispatch. Use generated deterministic fixtures whose control

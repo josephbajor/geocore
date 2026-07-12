@@ -1556,8 +1556,7 @@ fn surface_surface_dispatches_plane_torus_both_orders() {
     )
     .unwrap();
     assert_eq!(swapped.curves.len(), hit.curves.len());
-    assert_eq!(swapped.curves[0].uv_a_start, hit.curves[0].uv_b_start);
-    assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
+    assert_eq!(swapped, hit.swapped());
 }
 
 #[test]
@@ -1741,6 +1740,8 @@ fn cylinder_cylinder_parallel_secant_returns_ruling_lines() {
     )
     .unwrap();
 
+    assert!(hit.is_complete());
+    assert!(hit.incomplete_evidence().is_empty());
     assert!(hit.points.is_empty());
     assert_eq!(hit.curves.len(), 2);
     assert!((total_curve_width(&hit) - 4.0).abs() < 1e-12);
@@ -1824,6 +1825,8 @@ fn cylinder_cylinder_window_boundary_contact_returns_points() {
     )
     .unwrap();
 
+    assert!(hit.is_complete());
+    assert!(hit.incomplete_evidence().is_empty());
     assert!(hit.curves.is_empty());
     assert_eq!(hit.points.len(), 2);
     for point in &hit.points {
@@ -2159,6 +2162,8 @@ fn cone_cylinder_coaxial_secant_returns_circle_branches() {
     )
     .unwrap();
 
+    assert!(hit.is_complete());
+    assert!(hit.incomplete_evidence().is_empty());
     assert!(hit.points.is_empty());
     assert_eq!(hit.curves.len(), 3);
     assert!((total_curve_width(&hit) - 2.0 * core::f64::consts::TAU).abs() < 1e-12);

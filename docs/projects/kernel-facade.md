@@ -699,8 +699,12 @@ and `Complete`/`Indeterminate` evidence prevent raw result leakage. Direct
 ellipse/ellipse parity pins the exact report and smallest projection-limit
 crossing. The composed curve/curve profile also carries certified NURBS pair
 isolation work without exposing its stages as facade configuration types; the
-facade preserves an adaptively proven empty result. The facade-only lifecycle
-client exercises an analytic graph-owned edge pair.
+facade preserves an adaptively proven empty result. An internal graph-owned
+facade-boundary test also pins checked-ancestor clipped reversed overlap,
+operand identity, exact Work/Items N admission, and isolated per-resource N-1
+evidence. It uses internal construction and lower-layer stage identities; the
+facade-only lifecycle client still exercises only an analytic graph-owned edge
+pair.
 Future procedural curve descriptors must add truthful graph child accounting
 instead of retroactively charging today's leaf borrow.
 

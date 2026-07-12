@@ -217,7 +217,7 @@ fn facade_only_client_can_intersect_graph_owned_curves_with_identity_and_one_rep
     assert!(!intersections.is_empty());
     assert_eq!(intersections.points().len(), 1);
     assert!(intersections.overlaps().is_empty());
-    assert_eq!(outcome.report().usage().len(), 9);
+    assert_eq!(outcome.report().usage().len(), 11);
     assert!(
         outcome
             .report()
