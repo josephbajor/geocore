@@ -1,8 +1,9 @@
 //! Facade-only lifecycle tests: no lower-layer crate is imported.
 
 use kernel::{
-    BlockRequest, CheckBodyRequest, CheckLevel, CheckOutcome, Error, Frame, FullCheckBudgetProfile,
-    Kernel, OperationSettings, SessionPolicy, SurfaceDerivativeOrder, SurfaceEvaluationRequest,
+    BlockRequest, CheckBodyRequest, CheckLevel, CheckOutcome, Error, ExportXtRequest, Frame,
+    FullCheckBudgetProfile, ImportXtRequest, Kernel, OperationSettings, SessionPolicy,
+    SurfaceDerivativeOrder, SurfaceEvaluationRequest,
 };
 
 #[test]
@@ -158,4 +159,62 @@ fn facade_only_client_can_evaluate_an_opaque_surface_with_one_report() {
             .iter()
             .all(|usage| usage.consumed == 1)
     );
+}
+
+#[test]
+fn facade_only_client_can_import_inspect_and_deterministically_export_xt() {
+    let mut session = Kernel::new().create_session();
+    let source_part = session.create_part();
+    let source_body = session
+        .edit_part(source_part.clone())
+        .unwrap()
+        .create_block(BlockRequest::new(Frame::world(), [0.1, 0.15, 0.2]))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .body();
+    let authored = session
+        .part(source_part)
+        .unwrap()
+        .export_xt(ExportXtRequest::new(source_body))
+        .unwrap()
+        .into_result()
+        .unwrap();
+
+    let part_id = session.create_part();
+    let imported = session
+        .edit_part(part_id.clone())
+        .unwrap()
+        .import_xt(ImportXtRequest::new(authored.bytes()))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(imported.bodies().len(), 1);
+    assert!(imported.journal().mutation_count() > 0);
+    let body = imported.bodies()[0].clone();
+    assert!(
+        session
+            .part(part_id.clone())
+            .unwrap()
+            .body(body.clone())
+            .is_ok()
+    );
+
+    let first = session
+        .part(part_id.clone())
+        .unwrap()
+        .export_xt(ExportXtRequest::new(body.clone()))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    let second = session
+        .part(part_id)
+        .unwrap()
+        .export_xt(ExportXtRequest::new(body))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(first.bytes(), second.bytes());
+    assert_eq!(authored.bytes(), first.bytes());
+    assert!(first.text().starts_with("**ABCDEFGHIJKLMNOPQRSTUVWXYZ"));
 }

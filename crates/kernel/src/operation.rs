@@ -74,7 +74,7 @@ impl OperationSettings {
         self.diagnostic_capacity
     }
 
-    fn context<'session>(
+    pub(crate) fn context<'session>(
         &self,
         policy: &'session SessionPolicy,
     ) -> Result<OperationContext<'session>> {
@@ -158,6 +158,10 @@ pub struct ChangeJournal {
 }
 
 impl ChangeJournal {
+    pub(crate) const fn from_raw(part: PartId, inner: ktopo::transaction::Journal) -> Self {
+        Self { part, inner }
+    }
+
     /// Part whose state was changed.
     pub fn part(&self) -> PartId {
         self.part.clone()
@@ -181,6 +185,11 @@ impl ChangeJournal {
     /// Number of committed entity-tolerance changes.
     pub fn tolerance_event_count(&self) -> usize {
         self.inner.tolerance_events().len()
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn raw_for_test(&self) -> &ktopo::transaction::Journal {
+        &self.inner
     }
 }
 
@@ -437,10 +446,7 @@ impl PartEdit<'_> {
                 let (raw_body, inner) = creation.into_parts();
                 BodyCreated {
                     body: BodyId::new(part.clone(), raw_body),
-                    journal: ChangeJournal {
-                        part: part.clone(),
-                        inner,
-                    },
+                    journal: ChangeJournal::from_raw(part.clone(), inner),
                 }
             })
             .map_err(Error::from);
@@ -557,7 +563,7 @@ impl Part<'_> {
                     surface,
                     derivatives,
                 })
-                .map_err(Error::from),
+                .map_err(Error::from_graph),
             Err(source) => Err(Error::from(source)),
         };
         Ok(scope.finish_typed(result))

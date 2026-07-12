@@ -130,6 +130,73 @@ impl ClassifiedError for GeometryEvaluationError {
     }
 }
 
+/// Classified X_T interchange failure with transport details kept out of its
+/// public representation.
+///
+/// Stable capability/classification data is available directly, while the
+/// exact parse, reconstruction, or writer failure remains in the standard
+/// error source chain.
+#[derive(Debug, Clone, PartialEq)]
+pub struct XtInterchangeError {
+    source: kxt::XtError,
+}
+
+impl XtInterchangeError {
+    pub(crate) const fn new(source: kxt::XtError) -> Self {
+        Self { source }
+    }
+
+    /// Returns the lower failure's broad semantic class.
+    pub const fn class(&self) -> ErrorClass {
+        self.source.class()
+    }
+
+    /// Returns the lower failure's stable machine-readable identity.
+    pub const fn code(&self) -> ErrorCode {
+        self.source.code()
+    }
+
+    /// Returns the unavailable interchange capability when applicable.
+    pub const fn capability(&self) -> Option<CapabilityId> {
+        self.source.capability_id()
+    }
+
+    /// Returns a delegated deterministic limit crossing when applicable.
+    pub const fn limit(&self) -> Option<LimitSnapshot> {
+        self.source.limit()
+    }
+}
+
+impl fmt::Display for XtInterchangeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("X_T interchange failed")
+    }
+}
+
+impl std::error::Error for XtInterchangeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+impl ClassifiedError for XtInterchangeError {
+    fn class(&self) -> ErrorClass {
+        self.class()
+    }
+
+    fn code(&self) -> ErrorCode {
+        self.code()
+    }
+
+    fn capability(&self) -> Option<CapabilityId> {
+        self.capability()
+    }
+
+    fn limit(&self) -> Option<LimitSnapshot> {
+        self.limit()
+    }
+}
+
 /// Classified façade failure that retains any lower-layer source.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -166,6 +233,11 @@ pub enum KernelError {
         /// Facade-safe classified adapter retaining the exact source chain.
         source: GeometryEvaluationError,
     },
+    /// X_T parsing, reconstruction, or deterministic writing failed.
+    Interchange {
+        /// Facade-safe classified adapter retaining the exact source chain.
+        source: XtInterchangeError,
+    },
 }
 
 impl fmt::Display for KernelError {
@@ -179,6 +251,7 @@ impl fmt::Display for KernelError {
             }
             Self::Core { source } => write!(f, "kernel operation failed: {source}"),
             Self::GeometryEvaluation { source } => source.fmt(f),
+            Self::Interchange { source } => source.fmt(f),
         }
     }
 }
@@ -188,12 +261,25 @@ impl std::error::Error for KernelError {
         match self {
             Self::InconsistentTopology { source } | Self::Core { source } => Some(source),
             Self::GeometryEvaluation { source } => Some(source),
+            Self::Interchange { source } => Some(source),
             Self::UnknownPart | Self::WrongPart { .. } | Self::StaleEntity { .. } => None,
         }
     }
 }
 
 impl KernelError {
+    pub(crate) const fn from_graph(source: kgraph::EvalError) -> Self {
+        Self::GeometryEvaluation {
+            source: GeometryEvaluationError::new(source),
+        }
+    }
+
+    pub(crate) const fn from_xt(source: kxt::XtError) -> Self {
+        Self::Interchange {
+            source: XtInterchangeError::new(source),
+        }
+    }
+
     /// Returns this façade error's broad semantic class.
     pub const fn class(&self) -> ErrorClass {
         match self {
@@ -203,6 +289,7 @@ impl KernelError {
             Self::InconsistentTopology { .. } => ErrorClass::InternalInvariant,
             Self::Core { source } => source.class(),
             Self::GeometryEvaluation { source } => source.class(),
+            Self::Interchange { source } => source.class(),
         }
     }
 
@@ -215,6 +302,7 @@ impl KernelError {
             Self::InconsistentTopology { .. } => code::INCONSISTENT_TOPOLOGY,
             Self::Core { source } => source.code(),
             Self::GeometryEvaluation { source } => source.code(),
+            Self::Interchange { source } => source.code(),
         }
     }
 
@@ -223,6 +311,7 @@ impl KernelError {
         match self {
             Self::Core { source } => source.capability(),
             Self::GeometryEvaluation { source } => source.capability(),
+            Self::Interchange { source } => source.capability(),
             Self::UnknownPart
             | Self::WrongPart { .. }
             | Self::StaleEntity { .. }
@@ -235,6 +324,7 @@ impl KernelError {
         match self {
             Self::Core { source } => source.limit(),
             Self::GeometryEvaluation { source } => source.limit(),
+            Self::Interchange { source } => source.limit(),
             Self::UnknownPart
             | Self::WrongPart { .. }
             | Self::StaleEntity { .. }
@@ -270,14 +360,6 @@ impl From<kcore::error::Error> for KernelError {
 impl From<kcore::operation::OperationPolicyError> for KernelError {
     fn from(source: kcore::operation::OperationPolicyError) -> Self {
         kcore::error::Error::from(source).into()
-    }
-}
-
-impl From<kgraph::EvalError> for KernelError {
-    fn from(source: kgraph::EvalError) -> Self {
-        Self::GeometryEvaluation {
-            source: GeometryEvaluationError::new(source),
-        }
     }
 }
 
@@ -346,6 +428,37 @@ mod tests {
                 .source()
                 .and_then(|source| source.downcast_ref::<kcore::error::Error>()),
             Some(found) if found == &source
+        ));
+    }
+
+    #[test]
+    fn interchange_sources_delegate_nested_kernel_classification_and_limit() {
+        let snapshot = LimitSnapshot {
+            stage: kcore::operation::TOTAL_WORK_STAGE,
+            resource: kcore::operation::ResourceKind::Work,
+            consumed: 3,
+            allowed: 2,
+        };
+        let nested = kcore::error::Error::ResourceLimit { snapshot };
+        let source = kxt::XtError::Kernel(nested.clone());
+        let error = KernelError::from_xt(source.clone());
+        assert_eq!(error.class(), source.class());
+        assert_eq!(error.code(), source.code());
+        assert_eq!(error.capability(), source.capability_id());
+        assert_eq!(error.limit(), Some(snapshot));
+        let interchange = error
+            .source()
+            .and_then(|source| source.downcast_ref::<XtInterchangeError>())
+            .unwrap();
+        let xt = interchange
+            .source()
+            .and_then(|source| source.downcast_ref::<kxt::XtError>())
+            .unwrap();
+        assert_eq!(xt, &source);
+        assert!(matches!(
+            xt.source()
+                .and_then(|source| source.downcast_ref::<kcore::error::Error>()),
+            Some(found) if found == &nested
         ));
     }
 }

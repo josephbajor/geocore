@@ -161,6 +161,29 @@
 //! }
 //! ```
 //!
+//! X_T results expose opaque bodies and semantic summaries, not the lower
+//! reconstruction object or transport node indexes:
+//!
+//! ```compile_fail
+//! fn raw_import(result: &kernel::ImportXtResult) {
+//!     let _ = result.reconstruction();
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! fn transport_index(skipped: kernel::XtSkippedNode) {
+//!     let _ = skipped.node_index();
+//! }
+//! ```
+//!
+//! Interchange errors retain their exact source without a public raw field:
+//!
+//! ```compile_fail
+//! fn raw_xt_error(error: kernel::XtInterchangeError) {
+//!     let _ = error.source;
+//! }
+//! ```
+//!
 //! Sessions uniquely own their parts and therefore are not cloneable:
 //!
 //! ```compile_fail
@@ -171,17 +194,22 @@
 
 mod error;
 mod id;
+mod interchange;
 mod iter;
 mod operation;
 mod session;
 mod view;
 
 pub use error::{
-    EntityKind, Error, GeometryEvaluationError, KernelError, Result, code as error_code,
+    EntityKind, Error, GeometryEvaluationError, KernelError, Result, XtInterchangeError,
+    code as error_code,
 };
 pub use id::{
     BodyId, CurveId, EdgeId, FaceId, FinId, LoopId, PartId, PcurveId, RegionId, ShellId, SurfaceId,
     VertexId,
+};
+pub use interchange::{
+    ExportXtRequest, ExportXtResult, ImportXtRequest, ImportXtResult, XtSkippedNode,
 };
 pub use iter::{
     BodyIds, CurveIds, EdgeIds, FaceIds, FinIds, LoopIds, PartIds, PcurveIds, RegionIds, ShellIds,

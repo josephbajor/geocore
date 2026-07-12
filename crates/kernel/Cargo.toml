@@ -12,6 +12,7 @@ kcore = { path = "../kcore" }
 kgeom = { path = "../kgeom" }
 kgraph = { path = "../kgraph" }
 ktopo = { path = "../ktopo" }
+kxt = { path = "../kxt" }
 
 [lints]
 workspace = true
