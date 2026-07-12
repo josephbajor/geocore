@@ -219,6 +219,26 @@ impl CurvePairCandidateCell {
     }
 }
 
+/// Certify one exact unique transverse root over caller-supplied parameter
+/// ranges.
+///
+/// This range-level entry supports proof regions formed by joining adjacent
+/// isolation cells around a shared parameter boundary. It validates and
+/// restricts both source curves exactly, returns `None` when the control hulls
+/// are disjoint or the proof is inconclusive, and never treats a failed proof
+/// as an empty-domain certificate.
+pub fn certify_curve_pair_unique_root(
+    first: &NurbsCurve,
+    first_range: ParamRange,
+    second: &NurbsCurve,
+    second_range: ParamRange,
+) -> Result<Option<CurvePairRootCertificate>> {
+    validate_inputs(first, first_range, second, second_range, 0.0)?;
+    let first = first.restricted_to(first_range)?;
+    let second = second.restricted_to(second_range)?;
+    Ok(candidate_cell(first, second, 0, 0.0).and_then(|cell| cell.certify_unique_root()))
+}
+
 fn certify_projected_unique_root(
     first: &NurbsCurve,
     second: &NurbsCurve,
@@ -1118,6 +1138,64 @@ mod tests {
                 assert!(interval.lo() <= component && component <= interval.hi());
             }
         }
+    }
+
+    #[test]
+    fn range_certificate_joins_boundary_cells_without_claiming_each_leaf() {
+        let rational = segment(
+            Point3::new(-1.0, -1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Some(vec![1.0, 1.5]),
+        );
+        let horizontal = line(0.0);
+        let cover = run(&rational, &horizontal, 6, BudgetPlan::empty());
+        let cover = cover.result().unwrap();
+        assert!(cover.is_complete());
+        assert!(
+            cover
+                .candidates()
+                .iter()
+                .any(|cell| cell.certify_unique_root().is_none())
+        );
+        let first_range = cover
+            .candidates()
+            .iter()
+            .map(CurvePairCandidateCell::first_range)
+            .reduce(|a, b| ParamRange::new(a.lo.min(b.lo), a.hi.max(b.hi)))
+            .unwrap();
+        let second_range = cover
+            .candidates()
+            .iter()
+            .map(CurvePairCandidateCell::second_range)
+            .reduce(|a, b| ParamRange::new(a.lo.min(b.lo), a.hi.max(b.hi)))
+            .unwrap();
+        let certificate =
+            certify_curve_pair_unique_root(&rational, first_range, &horizontal, second_range)
+                .unwrap()
+                .unwrap();
+        assert_eq!(certificate.first_range(), first_range);
+        assert_eq!(certificate.second_range(), second_range);
+        assert!(certificate.determinant_lower_bound() > 0.0);
+        let swapped =
+            certify_curve_pair_unique_root(&horizontal, second_range, &rational, first_range)
+                .unwrap()
+                .unwrap();
+        assert_eq!(swapped.first_range(), second_range);
+        assert_eq!(swapped.second_range(), first_range);
+        assert_eq!(swapped.projection_plane(), certificate.projection_plane());
+        assert!(swapped.determinant_lower_bound() > 0.0);
+
+        let separated = line(10.0);
+        assert!(
+            certify_curve_pair_unique_root(
+                &rational,
+                rational.param_range(),
+                &separated,
+                separated.param_range(),
+            )
+            .unwrap()
+            .is_none()
+        );
     }
 
     #[test]

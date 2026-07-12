@@ -104,9 +104,11 @@ Host findings remain ratcheted in `docs/oracle-results.tsv`.
    discoveries carry re-evaluated tolerance witnesses. Complete isolation now
    grants completion only when every retained cell also has a unique-root
    certificate and verified representative; partial certificates remain
-   proof evidence on indeterminate results. The next algorithm slice extends
-   certificate coverage and interval empty-cell exclusion, followed by overlap
-   extent/completeness.
+   proof evidence on indeterminate results. A validated range-level proof can
+   now certify joined rectangles around shared subdivision boundaries; the
+   next algorithm slice integrates deterministic component ownership and
+   interval empty-cell exclusion, followed by genuinely spatial proof and
+   overlap extent/completeness.
    Semantic K4 edit transactions follow the K5 adoption pass. F6 splits and F4
    legacy cleanup land only with an owner-level behavioral migration. The Q2a/
    Q2b ladders are executable in CI; any graph-index/traversal representation change

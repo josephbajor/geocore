@@ -683,6 +683,14 @@ polynomial transverse crossing therefore completes, while partial certificates
 remain visible on indeterminate multi-root results and rational, tangent, and
 overlap cases continue to fail closed.
 
+The same proof is now available over validated caller-supplied source ranges,
+not only individual retained leaves. This lets a later ownership pass join
+adjacent cells around an exact subdivision boundary and certify their bounding
+parameter rectangle once. The rational transverse control proves over that
+joined region even though not every closed leaf can independently discharge
+boundary existence. Solver component ownership is intentionally not inferred
+from this substrate yet.
+
 That normalized boundary now has contextual and shared-scope public entries.
 The contextual entry composes the curve/curve family profile once and creates
 one scope; ellipse/ellipse borrows it for every projection, while NURBS/NURBS
