@@ -15,9 +15,11 @@ use kgeom::surface::{Plane, Surface};
 use kgeom::vec::{Point3, Vec3};
 
 /// Fixture identity shared by the first Q4 isolation slice.
-pub const FIXTURE_VERSION: &str = "nurbs-isolation.v1";
+pub const FIXTURE_VERSION: &str = "nurbs-isolation.v3";
 /// Deterministic fixture seed (construction itself is not randomized).
-pub const FIXTURE_SEED: u64 = 0x5154_4e55_5242_0004;
+pub const FIXTURE_SEED: u64 = 0x5154_4e55_5242_0006;
+
+const ROUNDOFF_CONTACT_Z: f64 = 9_007_199_254_740_991.0;
 
 /// NURBS representation and source-patch scale varied by Q4.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +30,8 @@ pub enum SurfaceFixture {
     RationalSingle,
     /// Four rational bilinear Bezier patches extracted from a 3×3 net.
     RationalFourPatch,
+    /// Cubic extrusion whose rounded child hulls lose an exact plane contact.
+    SubdivisionRoundoff,
 }
 
 /// Implicit geometry relation varied independently from source representation.
@@ -94,58 +98,74 @@ pub struct NurbsIsolationCase {
     pub expected_output_digest: u64,
 }
 
-/// Six cases varying representation, patch scale, geometry relation, and exact budgets.
-pub const CASES: [NurbsIsolationCase; 6] = [
+/// Eight cases varying representation, source provenance, geometry relation,
+/// and exact budgets.
+pub const CASES: [NurbsIsolationCase; 8] = [
     case(
         "geometry/nurbs-isolation/poly-single-v1/1/work-exact-v1",
         SurfaceFixture::PolynomialSingle,
         GeometryRelation::Retained,
-        policy(1, 1, 2, 1),
+        policy(1, 29, 2, 1),
         expected(
             1,
             2,
             true,
             false,
             LimitKind::None,
-            0x6dee_eb2a_4795_5f67,
-            0x3d29_c8a2_2479_d220,
+            0x5b02_05cb_3766_1ca0,
+            0xaf4f_1f71_b59b_1dd4,
         ),
     ),
     case(
         "geometry/nurbs-isolation/rational-single-v1/1/work-exact-v1",
         SurfaceFixture::RationalSingle,
         GeometryRelation::Retained,
-        policy(1, 1, 2, 1),
+        policy(1, 29, 2, 1),
         expected(
             1,
             2,
             true,
             false,
             LimitKind::None,
-            0x9de1_7ff6_683a_1c15,
-            0x1124_ed09_9f1e_a266,
+            0xe7d7_4902_4af7_bf16,
+            0x0a3b_2e64_dca3_daf2,
         ),
     ),
     case(
         "geometry/nurbs-isolation/rational-four-patch-v1/4/retained-v1",
         SurfaceFixture::RationalFourPatch,
         GeometryRelation::Retained,
-        policy(1, 4, 8, 1),
+        policy(1, 404, 8, 1),
         expected(
             4,
             8,
             true,
             false,
             LimitKind::None,
-            0x605d_9d2d_837c_94fa,
-            0xf18b_8f25_52a1_0df8,
+            0x372d_272e_8dfc_face,
+            0x799b_8af6_6f20_652a,
+        ),
+    ),
+    case(
+        "geometry/nurbs-isolation/rational-four-patch-v1/4/work-low-v2",
+        SurfaceFixture::RationalFourPatch,
+        GeometryRelation::Retained,
+        policy(1, 403, 8, 1),
+        expected(
+            4,
+            7,
+            false,
+            false,
+            LimitKind::Work,
+            0x15d7_570c_bf57_a446,
+            0x1e80_ec1c_2a9a_7490,
         ),
     ),
     case(
         "geometry/nurbs-isolation/rational-four-patch-v1/4/separated-v1",
         SurfaceFixture::RationalFourPatch,
         GeometryRelation::Separated,
-        policy(1, 4, 8, 1),
+        policy(1, 404, 8, 1),
         expected(
             4,
             0,
@@ -153,14 +173,14 @@ pub const CASES: [NurbsIsolationCase; 6] = [
             true,
             LimitKind::None,
             0xd1d4_86dd_bbba_946f,
-            0xef1c_f8eb_bf88_0336,
+            0x56ff_6611_015e_7f87,
         ),
     ),
     case(
         "geometry/nurbs-isolation/poly-single-v1/1/work-low-v1",
         SurfaceFixture::PolynomialSingle,
         GeometryRelation::Retained,
-        policy(1, 0, 2, 1),
+        policy(1, 28, 2, 1),
         expected(
             1,
             1,
@@ -168,14 +188,14 @@ pub const CASES: [NurbsIsolationCase; 6] = [
             false,
             LimitKind::Work,
             0x4871_aa3f_190d_2d1e,
-            0xafd0_f4e9_64d8_03d7,
+            0x2d72_5375_64b3_c2c9,
         ),
     ),
     case(
         "geometry/nurbs-isolation/poly-single-v1/1/candidate-low-v1",
         SurfaceFixture::PolynomialSingle,
         GeometryRelation::Retained,
-        policy(1, 1, 1, 1),
+        policy(1, 29, 1, 1),
         expected(
             1,
             1,
@@ -183,7 +203,22 @@ pub const CASES: [NurbsIsolationCase; 6] = [
             false,
             LimitKind::Candidates,
             0x4871_aa3f_190d_2d1e,
-            0x91f2_82ce_578b_027f,
+            0x3bb4_be2b_bfd2_a94d,
+        ),
+    ),
+    case(
+        "geometry/nurbs-isolation/poly-subdivision-roundoff-v1/1/depth-1-v1",
+        SurfaceFixture::SubdivisionRoundoff,
+        GeometryRelation::Retained,
+        policy(1, 29, 8, 1),
+        expected(
+            1,
+            2,
+            true,
+            false,
+            LimitKind::None,
+            0xc0bc_f78d_8f6f_66bf,
+            0x6aa8_538f_10e3_9e78,
         ),
     ),
 ];
@@ -331,6 +366,8 @@ impl NurbsIsolationFixture {
         let candidate_digest = candidate_digest(isolation);
         let conservative_cover = if isolation.is_proven_empty() {
             true
+        } else if case.fixture == SurfaceFixture::SubdivisionRoundoff {
+            exact_roundoff_contact_is_covered(isolation)
         } else {
             sampled_cover(&self.surface, isolation)
         };
@@ -455,6 +492,12 @@ impl NurbsIsolationEvidence {
             GeometryRelation::Retained => 0,
             GeometryRelation::Separated => 1,
         });
+        digest.tag(match case.fixture {
+            SurfaceFixture::PolynomialSingle => 0,
+            SurfaceFixture::RationalSingle => 1,
+            SurfaceFixture::RationalFourPatch => 2,
+            SurfaceFixture::SubdivisionRoundoff => 3,
+        });
         digest.finish()
     }
 }
@@ -465,11 +508,19 @@ pub fn fixture(case: NurbsIsolationCase) -> NurbsIsolationFixture {
         SurfaceFixture::PolynomialSingle => single_patch(false),
         SurfaceFixture::RationalSingle => single_patch(true),
         SurfaceFixture::RationalFourPatch => four_patch(),
+        SurfaceFixture::SubdivisionRoundoff => subdivision_roundoff_patch(),
     };
     let hierarchy = NurbsSurfaceBvh::build(&surface).expect("valid Q4 hierarchy");
-    let plane = match case.relation {
-        GeometryRelation::Retained => Plane::new(Frame::world()),
-        GeometryRelation::Separated => Plane::new(
+    let plane = match (case.fixture, case.relation) {
+        (SurfaceFixture::SubdivisionRoundoff, GeometryRelation::Retained) => Plane::new(
+            Frame::from_z(
+                Point3::new(0.0, 0.0, ROUNDOFF_CONTACT_Z),
+                Vec3::new(0.0, 0.0, 1.0),
+            )
+            .expect("valid roundoff-contact plane"),
+        ),
+        (_, GeometryRelation::Retained) => Plane::new(Frame::world()),
+        (_, GeometryRelation::Separated) => Plane::new(
             Frame::from_z(Point3::new(0.0, 0.0, 10.0), Vec3::new(0.0, 0.0, 1.0))
                 .expect("valid separated plane"),
         ),
@@ -579,6 +630,38 @@ fn four_patch() -> NurbsSurface {
     }
     NurbsSurface::new(1, 1, knots.clone(), knots, points, Some(weights))
         .expect("valid four-patch fixture")
+}
+
+fn subdivision_roundoff_patch() -> NurbsSurface {
+    let xs = [-1.0, -1.0 / 3.0, 1.0 / 3.0, 1.0];
+    let zs = [
+        9_007_199_254_740_360.0,
+        9_007_199_254_740_978.0,
+        9_007_199_254_741_648.0,
+        9_007_199_254_739_690.0,
+    ];
+    let mut points = Vec::with_capacity(8);
+    for (x, z) in xs.into_iter().zip(zs) {
+        points.push(Point3::new(x, -1.0, z));
+        points.push(Point3::new(x, 1.0, z));
+    }
+    NurbsSurface::new(
+        3,
+        1,
+        vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        points,
+        None,
+    )
+    .expect("valid subdivision-roundoff surface")
+}
+
+fn exact_roundoff_contact_is_covered(isolation: &ImplicitPatchIsolation) -> bool {
+    let contact = Point3::new(0.0, 0.0, ROUNDOFF_CONTACT_Z);
+    isolation.candidates().iter().any(|candidate| {
+        let range = candidate.parameter_range();
+        range[0].contains(0.5) && range[1].contains(0.5) && candidate.bounds().contains(contact)
+    })
 }
 
 fn sampled_cover(surface: &NurbsSurface, isolation: &ImplicitPatchIsolation) -> bool {
@@ -705,7 +788,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn registry_contains_exactly_six_unique_canonical_cases() {
+    fn registry_contains_exactly_eight_unique_canonical_cases() {
         let unique: BTreeSet<_> = CASES.iter().map(|case| case.path).collect();
         assert_eq!(unique.len(), CASES.len());
         for case in CASES {
@@ -817,11 +900,15 @@ mod tests {
 
     #[test]
     fn budget_exhaustion_is_the_smallest_crossing_and_retains_the_exact_cover() {
-        let exact_fixture = fixture(CASES[0]);
-        let (_, exact, exact_report) = exact_fixture.isolate_once(CASES[0]);
-        assert!(exact.is_complete());
-        assert!(exact_report.limit_events().is_empty());
-        for case in [CASES[4], CASES[5]] {
+        for (exact_case, case) in [
+            (CASES[2], CASES[3]),
+            (CASES[0], CASES[5]),
+            (CASES[0], CASES[6]),
+        ] {
+            let exact_fixture = fixture(exact_case);
+            let (_, exact, exact_report) = exact_fixture.isolate_once(exact_case);
+            assert!(exact.is_complete());
+            assert!(exact_report.limit_events().is_empty());
             let limited_fixture = fixture(case);
             assert_eq!(limited_fixture.surface, exact_fixture.surface);
             assert_eq!(limited_fixture.hierarchy, exact_fixture.hierarchy);

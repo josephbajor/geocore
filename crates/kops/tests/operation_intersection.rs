@@ -540,7 +540,7 @@ fn complete_empty_and_kernel_errors_match_the_legacy_adapter() {
             NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
         )
         .consumed,
-        1
+        8
     );
     assert_eq!(
         usage_for(contextual_empty.report(), NURBS_SURFACE_MARCH_SAMPLES).consumed,
@@ -824,6 +824,91 @@ fn proof_work_and_root_zero_limits_stop_before_complete_proof() {
     assert_eq!(
         usage_for(root_limited.report(), NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,).consumed,
         0
+    );
+}
+
+#[test]
+fn source_rectangle_bvh_work_has_exact_composed_n_and_n_minus_one_boundaries() {
+    let plane = plane();
+    let surface = separated_surface();
+    let tolerances = Tolerances::default();
+    let session = session(ExecutionPolicy::Serial);
+    let exact_work = 8; // setup + one single-span source-range BVH enclosure
+
+    let exact_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(override_limit(
+            NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            exact_work,
+        ));
+    let exact = intersect_bounded_plane_nurbs_surface_with_context(
+        &plane,
+        plane_range(),
+        &surface,
+        surface.param_range(),
+        &exact_context,
+    )
+    .unwrap();
+    assert!(exact.result().is_ok_and(|result| result.is_proven_empty()));
+    assert_eq!(
+        usage_for(exact.report(), NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS).consumed,
+        exact_work
+    );
+
+    let low_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(override_limit(
+            NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            exact_work - 1,
+        ));
+    let low = intersect_bounded_plane_nurbs_surface_with_context(
+        &plane,
+        plane_range(),
+        &surface,
+        surface.param_range(),
+        &low_context,
+    )
+    .unwrap();
+    let snapshot = LimitSnapshot {
+        stage: NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
+        resource: ResourceKind::Work,
+        consumed: exact_work,
+        allowed: exact_work - 1,
+    };
+    assert!(low.result().is_ok_and(|result| !result.is_complete()));
+    assert_eq!(low.report().limit_events(), &[snapshot]);
+    assert_eq!(
+        usage_for(low.report(), NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS).consumed,
+        1,
+        "denied BVH source-range preflight leaves only the accepted setup unit"
+    );
+    assert_eq!(
+        low.result().unwrap().incomplete_evidence()[0],
+        IncompleteEvidence {
+            code: NURBS_IMPLICIT_ISOLATION_SUBDIVISION_LIMIT,
+            stage: NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
+            cause: IncompleteCause::Limit { snapshot },
+            message: "NURBS source-rectangle BVH work limit reached",
+        }
+    );
+
+    let default_work = NurbsSurfaceMarchBudgetProfile::v1_defaults()
+        .limits()
+        .iter()
+        .find(|limit| {
+            limit.stage == NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS
+                && limit.resource == ResourceKind::Work
+        })
+        .unwrap()
+        .allowed;
+    assert_eq!(
+        default_work,
+        1 + 4_096 * (6 * 4_096 + 1) + 12 * 4_096 * (1 + 4 * (6 * 4_096 + 1)),
+        "the profile composes setup, maximum source-BVH scans, and every candidate child scan"
     );
 }
 

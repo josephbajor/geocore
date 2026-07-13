@@ -6,7 +6,7 @@
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
-use kgraph::{CurveClass, SurfaceClass};
+use kgraph::{CurveClass, SurfaceClass, VerifiedIntersectionCurveDescriptor};
 
 #[derive(Clone, Copy)]
 pub(super) enum CurveDispatch<'a> {
@@ -14,6 +14,7 @@ pub(super) enum CurveDispatch<'a> {
     Circle(&'a Circle),
     Ellipse(&'a Ellipse),
     Nurbs(&'a NurbsCurve),
+    Intersection,
 }
 
 impl<'a> CurveDispatch<'a> {
@@ -28,7 +29,12 @@ impl<'a> CurveDispatch<'a> {
         if let Some(curve) = curve.downcast_ref() {
             return Some(Self::Ellipse(curve));
         }
-        curve.downcast_ref().map(Self::Nurbs)
+        if let Some(curve) = curve.downcast_ref() {
+            return Some(Self::Nurbs(curve));
+        }
+        curve
+            .downcast_ref::<VerifiedIntersectionCurveDescriptor>()
+            .map(|_| Self::Intersection)
     }
 
     pub(super) const fn class(self) -> CurveClass {
@@ -37,6 +43,7 @@ impl<'a> CurveDispatch<'a> {
             Self::Circle(_) => CurveClass::Circle,
             Self::Ellipse(_) => CurveClass::Ellipse,
             Self::Nurbs(_) => CurveClass::Nurbs,
+            Self::Intersection => CurveClass::Intersection,
         }
     }
 }

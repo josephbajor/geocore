@@ -6,7 +6,7 @@ use kgeom::aabb::{Aabb2, Aabb3};
 use kgeom::curve::{Curve, CurveDerivs};
 use kgeom::curve2d::{Curve2d, Curve2dDerivs};
 use kgeom::param::ParamRange;
-use kgeom::surface::{Degeneracy, Surface, SurfaceDerivs};
+use kgeom::surface::{Degeneracy, Plane, Sphere, Surface, SurfaceDerivs};
 use std::collections::HashMap;
 
 use crate::SurfaceClass;
@@ -37,6 +37,16 @@ pub enum SurfaceValidity {
         /// Named reason for the proof gap.
         reason: ValidityGap,
     },
+}
+
+/// Exact analytic fields structurally recoverable through supported graph
+/// descriptor chains without sampling or fitting.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ExactSurfaceField {
+    /// Direct or constant-normal-offset plane.
+    Plane(Plane),
+    /// Direct or positive-radius constant-normal-offset sphere.
+    Sphere(Sphere),
 }
 
 /// Work reserved for one public graph query.
@@ -437,6 +447,34 @@ impl<'g> EvalContext<'g> {
         self.surface_leaf_class_inner(surface)
     }
 
+    /// Resolve an exact plane field through a direct plane or a chain of
+    /// constant normal offsets, with normal graph visit/depth accounting.
+    ///
+    /// Other leaf and procedural families return `Ok(None)`; callers must keep
+    /// those cases unsupported or indeterminate until a certified solver arm
+    /// exists.
+    pub fn surface_exact_plane(&mut self, surface: SurfaceHandle) -> EvalResult<Option<Plane>> {
+        self.begin_query();
+        Ok(match self.surface_exact_field_inner(surface)? {
+            Some(ExactSurfaceField::Plane(plane)) => Some(plane),
+            Some(ExactSurfaceField::Sphere(_)) | None => None,
+        })
+    }
+
+    /// Resolve the exact analytic field represented by a direct descriptor or
+    /// supported constant-normal-offset chain.
+    ///
+    /// Sphere offsets are retained only while every inner-to-outer effective
+    /// radius remains positive and finite. A focal or orientation-reversing
+    /// offset returns `Ok(None)` so callers fail closed.
+    pub fn surface_exact_field(
+        &mut self,
+        surface: SurfaceHandle,
+    ) -> EvalResult<Option<ExactSurfaceField>> {
+        self.begin_query();
+        self.surface_exact_field_inner(surface)
+    }
+
     fn with_curve<T>(
         &mut self,
         handle: CurveHandle,
@@ -554,6 +592,83 @@ impl<'g> EvalContext<'g> {
             }
         })();
         self.leave(geometry);
+        result
+    }
+
+    fn surface_exact_field_inner(
+        &mut self,
+        surface: SurfaceHandle,
+    ) -> EvalResult<Option<ExactSurfaceField>> {
+        let mut current = surface;
+        let mut distances = Vec::new();
+        let mut entered = Vec::new();
+        let result = (|| {
+            let field = loop {
+                let geometry = GeometryRef::Surface(current);
+                self.enter(geometry)?;
+                entered.push(geometry);
+                match self
+                    .graph
+                    .surface(current)
+                    .ok_or(EvalError::StaleGeometryHandle { geometry })?
+                {
+                    SurfaceDescriptor::Plane(plane) => break ExactSurfaceField::Plane(*plane),
+                    SurfaceDescriptor::Sphere(sphere) => break ExactSurfaceField::Sphere(*sphere),
+                    SurfaceDescriptor::Offset(offset) => {
+                        distances.push(offset.signed_distance());
+                        current = offset.basis();
+                    }
+                    SurfaceDescriptor::Cylinder(_)
+                    | SurfaceDescriptor::Cone(_)
+                    | SurfaceDescriptor::Torus(_)
+                    | SurfaceDescriptor::Nurbs(_) => return Ok(None),
+                }
+            };
+            if distances.is_empty() {
+                return Ok(Some(field));
+            }
+            match field {
+                ExactSurfaceField::Plane(plane) => {
+                    let distance = distances.into_iter().rev().try_fold(0.0, |sum, value| {
+                        let next = sum + value;
+                        next.is_finite().then_some(next)
+                    });
+                    let Some(distance) = distance else {
+                        return Err(EvalError::NonFiniteResult {
+                            class: SurfaceClass::Offset.key(),
+                        });
+                    };
+                    let frame = plane.frame();
+                    let origin = frame.origin() + frame.z() * distance;
+                    if !origin.to_array().into_iter().all(f64::is_finite) {
+                        return Err(EvalError::NonFiniteResult {
+                            class: SurfaceClass::Offset.key(),
+                        });
+                    }
+                    Ok(Some(ExactSurfaceField::Plane(Plane::new(
+                        frame.with_origin(origin),
+                    ))))
+                }
+                ExactSurfaceField::Sphere(sphere) => {
+                    let mut radius = sphere.radius();
+                    for distance in distances.into_iter().rev() {
+                        radius += distance;
+                        if !radius.is_finite() || radius <= 0.0 {
+                            return Ok(None);
+                        }
+                    }
+                    let sphere = Sphere::new(*sphere.frame(), radius).map_err(|_| {
+                        EvalError::NonFiniteResult {
+                            class: SurfaceClass::Offset.key(),
+                        }
+                    })?;
+                    Ok(Some(ExactSurfaceField::Sphere(sphere)))
+                }
+            }
+        })();
+        for geometry in entered.into_iter().rev() {
+            self.leave(geometry);
+        }
         result
     }
 
@@ -754,6 +869,9 @@ fn curve_leaf(descriptor: &CurveDescriptor) -> &dyn Curve {
         CurveDescriptor::Circle(v) => v,
         CurveDescriptor::Ellipse(v) => v,
         CurveDescriptor::Nurbs(v) => v,
+        CurveDescriptor::Intersection(v) => v.as_ref(),
+        CurveDescriptor::TransmittedIntersection(v) => v.as_ref(),
+        CurveDescriptor::TransmittedNurbsIntersection(v) => v.as_ref(),
     }
 }
 
@@ -762,6 +880,7 @@ fn curve2d_leaf(descriptor: &Curve2dDescriptor) -> &dyn Curve2d {
         Curve2dDescriptor::Line(v) => v,
         Curve2dDescriptor::Circle(v) => v,
         Curve2dDescriptor::Nurbs(v) => v,
+        Curve2dDescriptor::SphericalCircle(v) => v,
     }
 }
 

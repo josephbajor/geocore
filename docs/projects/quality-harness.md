@@ -1,6 +1,6 @@
 # F7 quality, fuzzing, and performance harnesses
 
-Status: Q0-Q2b, Q8, and the first Q3-Q6 foundation slices implemented; the Q2a diamond row awaits a real multi-dependency descriptor
+Status: Q0-Q2b, Q8, and the first Q3-Q6 foundation slices implemented, including the production-descriptor Q2a diamond ladder
 
 ## Outcome
 
@@ -25,8 +25,10 @@ proposed version. Raising either value requires release notes and a CI-green
 toolchain commit. Do not claim compatibility with an untested compiler.
 
 Benchmark dependencies are isolated in the excluded `benches/` package and do
-not enter the kernel workspace dependency graph or root lockfile. No fuzz
-dependency has been introduced.
+not enter the kernel workspace dependency graph or root lockfile. Fuzz-only
+dependencies and the pinned nightly toolchain are likewise isolated in the
+excluded `fuzz/` package and its own lockfile, so they do not raise the kernel
+workspace's MSRV or enter its root lockfile.
 
 ## Governing rules
 
@@ -50,7 +52,9 @@ dependency has been introduced.
 
 ## Repository layout
 
-Land the following structure incrementally:
+The current harnesses use this centralized structure (support modules below
+`benches/src/` are omitted here for brevity, and the host/revision baseline
+path remains the reserved destination for recorded runs):
 
 ```text
 benches/
@@ -60,27 +64,32 @@ benches/
   cases.json
   benches/
     benchmark_contract.rs
+    topology_commit.rs
+    graph_build.rs
+    graph_traversal.rs
+    body_tessellation.rs
+    face_tessellation.rs
+    nurbs_isolation.rs
+    curve_pair_isolation.rs
+    curve_pair_solve.rs
+    xt_io.rs
   baselines/
     schema.json
     <host>/<git-revision>.json
-crates/ktopo/benches/
-  transaction_commit.rs
-  body_tessellation.rs
-crates/kgeom/benches/
-  nurbs_isolation.rs
-crates/kxt/benches/
-  xt_io.rs
 fuzz/
   Cargo.toml
+  Cargo.lock
   rust-toolchain.toml
   fuzz_targets/
     xt_read.rs
     nurbs_constructors.rs
-    intersection_result.rs
-    topology_transactions.rs
   corpus/<target>/
-  regressions/<target>/
 ```
+
+`intersection_result` and `topology_transactions` are the next planned fuzz
+targets; they are not part of the two-target landed workspace yet. The Q7
+`fuzz/regressions/<target>/` promotion layout is likewise planned rather than a
+current checked-in directory.
 
 Use one workspace benchmark dependency and one workspace fuzzing stack rather
 than per-crate frameworks. Benchmark and fuzz packages stay outside normal
@@ -203,10 +212,10 @@ rejected-edit case protects failure atomicity, not merely throughput.
 
 Owner: `kgraph`, with `ktopo` integration cases.
 
-Status: implemented as 17 registered, CI-compiled cases with one bounded smoke
-case, and used to land the reverse-index replacement. The diamond row is deliberately deferred because every current
-procedural descriptor reports at most one dependency; a benchmark-only fake
-descriptor would not measure the production graph.
+Status: implemented as 21 registered, CI-compiled v2 cases with one bounded
+smoke case, and used to land the reverse-index replacement. Four verified
+intersection rows now exercise a production multi-dependency descriptor and a
+real shared-basis diamond.
 
 Capture the current deterministic implementation as the baseline before
 optimizing it. Measure graph construction and dependency maintenance separately
@@ -217,7 +226,7 @@ from geometry evaluation with these one-dimension-at-a-time ladders:
 | independent nodes | 1, 10, 100, 1,000, 10,000 nodes | insert leaf nodes | node count, stable order, graph digest |
 | dependency chain | depth 1, 10, 100, 1,000 | insert dependency-first chain | accepted nodes, dependency visits, reverse-index digest |
 | shared fanout | 1, 10, 100, 1,000 dependents | insert offsets sharing one basis | exact dependent set and deterministic order |
-| diamond graph | deferred until a real descriptor has two or more dependencies | construct shared dependency diamonds | deduplicated traversal and graph digest |
+| diamond graph | 1, 10, 100, 1,000 verified merge descriptors | construct two certified offset-plane branches sharing one basis, then merge them through persistent intersection curves | deduplicated closure, graph digest, and reverse-index digest |
 | transactional rollback | same representative scales | insert then reject/rollback a dependent subgraph | identical pre/post graph and reverse-index digests |
 
 Record nodes, dependency edges, reverse-index updates, and full-order rebuilds
@@ -233,9 +242,11 @@ observation snapshot; it exposes no mutable index representation. Stable graph
 and reverse-index digests, exact dependent order, graph validation, and
 rollback pre/post equality are checked outside every accumulated duration.
 Geometry evaluation is not called by this target. The registered scale ladders
-are complete for independent nodes, chains, fanout, and rollback. The
+are complete for independent nodes, chains, fanout, verified diamonds, and
+rollback. Diamond closure retains the merge curve, two pcurves, two offset
+branches, and their shared basis exactly once. The
 replacement uses insertion-ordered adjacency vectors with hash-backed key and
-membership lookup that is never iterated for observable output. All 17 rows
+membership lookup that is never iterated for observable output. All 21 rows
 preserve graph/reverse-index digests and now pin zero full-order rebuilds.
 Removed entry slots are reused deterministically instead of accumulating
 tombstones.
@@ -244,13 +255,17 @@ tombstones.
 
 Owner: `kgraph`.
 
-Status: implemented as eight registered and CI-smoked cases.
+Status: implemented as ten registered v2 and CI-smoked cases.
 
 The prepared offset-chain fixture measures dependency-first closure and a
 deterministic missing dependency-path search at 1, 10, 100, and 1,000 edges.
-Construction, graph validation, ordinal indexing, and repeated-result checking
-are excluded from timing. Every iteration verifies exact result presence,
-returned node count, stable node-order digest, and repeatability.
+A production verified-intersection diamond adds both operations over two equal
+offset branches sharing one basis; its six-node dependency-first closure proves
+the completed-membership index visits that shared basis exactly once.
+Construction, proof minting, graph validation, ordinal indexing, and
+repeated-result checking are excluded from timing. Every iteration verifies
+exact result presence, returned node count, stable node-order digest, and
+repeatability.
 
 The ladder protects the traversal scratch replacement: ordered vectors remain
 the sole source of closure results and cycle paths, while hash maps/sets provide
@@ -355,25 +370,37 @@ tolerances as though they perform the same amount of work.
 
 Owners: `kgeom`, `kops`.
 
-Status: the contextual implicit ladder has six registered cases, curve-pair
-isolation fixture v2 has eight, and solve fixture v3 has ten. The implicit-surface ladder varies polynomial/rational
+Status: the contextual implicit ladder v3 has eight registered cases,
+curve-pair isolation fixture v4 has nine, and solve fixture v18 has twenty-eight. The implicit-surface ladder varies polynomial/rational
 representation, one/four Bezier patches, retained/separated implicit geometry,
-and exact work/candidate-cover budget boundaries. The curve-pair ladder varies
-polynomial/rational/tilted curves, retained endpoint contacts, axis/Euclidean
-separated misses, source-range certificate digests, and independent exact
+an exact subdivision-roundoff contact, source-span-accounted surface Work, and
+exact single/multi-span work and candidate-cover budget boundaries. The curve-pair ladder varies
+polynomial/rational/tilted curves, retained endpoint contacts, a true midpoint
+contact hidden by rounded subdivision controls, axis/Euclidean separated misses,
+source-range enclosure/certificate digests, span-admitted Work, and independent exact
 work, candidate-high-water, and depth stops. Limited results must remain indeterminate, retain a deterministic
 conservative cover of the corresponding complete result, and never become a
 complete miss. Only contextual isolation is timed; geometry/BVH/policy setup
 and verification are excluded. The solve ladder pins polynomial/rational
-transverse contacts, tangency, two roots, a hidden proven miss, zero seed
-admission, exact/common-refinement/sampled overlaps, and overlap Work denial.
+transverse contacts, a genuinely noncoplanar algebraic `1/3` root, a signed
+linear-form root with no corresponding coordinate scalar, primitive
+magnitude-two, magnitude-three, magnitude-four, magnitude-five, magnitude-six, magnitude-seven, magnitude-eight, magnitude-nine, magnitude-ten, magnitude-eleven, and magnitude-twelve forms that each escape the preceding
+coefficient family, tangency,
+two roots, a hidden proven miss, zero seed
+admission, exact/common-refinement/sampled overlaps, checked inverse-history
+recovery, altered-history rejection, and independent common-refinement and
+inverse-history Work/Items denial.
+The magnitude-twelve rung pins 182 canonical primitive two-axis carriers per
+projection plane and 6,153 canonical residuals per omitted axis; its derivative
+certificate continues to bound the directly formed homogeneous scalar rather
+than independently bounding and recombining coordinate derivatives.
 It records five stage identities and six stage-resource snapshots because the
 overlap stage owns both Work and Items, including both usages and allowances.
 Re-evaluated in-cell contacts, overlap endpoints, ordered extent/orientation
 digests, source-range root-certificate digests, and the seed/overlap limit
 crossings are semantic evidence. The
-broader degree, control-net, knot-span/patch-count, Q4 Items-denial and
-inverse-history fixtures, and deeper subdivision matrix remain deferred.
+broader degree, control-net, knot-span/patch-count, coefficient families beyond magnitude twelve,
+and deeper subdivision matrix remain deferred.
 
 Exercise curve and surface subdivision/isolation independently from full
 intersection dispatch. Use generated deterministic fixtures whose control
@@ -435,8 +462,9 @@ isolated pinned workspace. Direct capped targets check stable errors, import
 atomicity, constructor invariants, and deterministic bounded queries across
 seven X_T and nine curve/surface polynomial/rational seed cases. The constructor
 contract also closed a production curve non-finite-control-point gap. Stable
-host gates pass; exact pinned-nightly 20-second smokes, semantic X_T write/read
-digest property, broader corpora, and remaining targets are deferred.
+host gates pass, and exact pinned-nightly 20-second smokes for both targets run
+in bounded CI jobs. The semantic X_T write/read digest property, broader
+corpora, and remaining targets are deferred.
 
 Pin the fuzz runner, its package versions, and any required nightly by exact
 version/date in `fuzz/`. That toolchain is isolated from the workspace MSRV.
@@ -591,9 +619,9 @@ licensed-host validation described in `docs/oracle-loop.md`.
    matrices only in response to an algorithm/adoption question or measured
    coverage gap.
 
-Q0-Q2b, Q8, and the current Q3-Q6 foundation slices are completed milestones,
-apart from Q2a's explicitly descriptor-blocked diamond row. Additional fuzz
-targets, benchmark families, and broad corpus expansion remain evidence-driven.
+Q0-Q2b, Q8, and the current Q3-Q6 foundation slices are completed milestones.
+Additional fuzz targets, benchmark families, and broad corpus expansion remain
+evidence-driven.
 
 ## Exit criteria
 

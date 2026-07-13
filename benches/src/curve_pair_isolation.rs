@@ -15,9 +15,9 @@ use kgeom::nurbs::{
 use kgeom::vec::Point3;
 
 /// Fixture identity for the first Q4 curve-pair ladder.
-pub const FIXTURE_VERSION: &str = "curve-pair-isolation.v2";
+pub const FIXTURE_VERSION: &str = "curve-pair-isolation.v4";
 /// Deterministic construction seed recorded by the benchmark registry.
-pub const FIXTURE_SEED: u64 = 0x5154_4350_4149_0009;
+pub const FIXTURE_SEED: u64 = 0x5154_4350_4149_000a;
 
 /// NURBS representation varied independently from proof outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +28,8 @@ pub enum CurveFixture {
     Rational,
     /// Polynomial arch and line in an exact tilted affine plane.
     TiltedPolynomial,
+    /// Exact midpoint contact hidden by rounded cubic subdivision controls.
+    SubdivisionRoundoff,
 }
 
 /// Exact geometric relation.
@@ -75,7 +77,7 @@ pub struct CurvePairIsolationCase {
     pub fixture: CurveFixture,
     /// Geometric relation.
     pub relation: GeometryRelation,
-    /// Requested exact subdivision rounds.
+    /// Requested deterministic subdivision rounds.
     pub requested_depth: u32,
     /// Inclusive work allowance.
     pub work_allowed: u64,
@@ -97,119 +99,133 @@ pub struct CurvePairIsolationCase {
     pub expected_output_digest: u64,
 }
 
-/// Eight cases covering representation, plane orientation, hidden separation,
-/// and all resource stops.
-pub const CASES: [CurvePairIsolationCase; 8] = [
+/// Nine cases covering representation, plane orientation, source-bound
+/// provenance, hidden separation, and all resource stops.
+pub const CASES: [CurvePairIsolationCase; 9] = [
     case(
         "geometry/curve-pair-isolation/poly-retained-v1/1/depth-3-v1",
         CurveFixture::Polynomial,
         GeometryRelation::Retained,
-        policy(3, 1_366, 4_096, 3),
+        policy(3, 6_828, 4_096, 3),
         expected(
             4,
             true,
             false,
             LimitKind::None,
-            0xc6d0_acd6_f471_2a52,
-            0xcdfa_59f3_b55a_8715,
+            0xe64e_9230_591c_dcc9,
+            0x38dd_e2ab_e8f2_fa6d,
         ),
     ),
     case(
         "geometry/curve-pair-isolation/rational-retained-v1/1/depth-3-v1",
         CurveFixture::Rational,
         GeometryRelation::Retained,
-        policy(3, 1_366, 4_096, 3),
+        policy(3, 6_828, 4_096, 3),
         expected(
-            2,
+            3,
             true,
             false,
             LimitKind::None,
-            0x4f99_4d43_1116_fb10,
-            0x088a_09e4_a265_3a20,
+            0x5e2b_4172_eda6_4be1,
+            0xdc8d_cf3c_17aa_673f,
         ),
     ),
     case(
         "geometry/curve-pair-isolation/poly-tilted-retained-v1/1/depth-3-v1",
         CurveFixture::TiltedPolynomial,
         GeometryRelation::Retained,
-        policy(3, 1_366, 4_096, 3),
+        policy(3, 6_828, 4_096, 3),
         expected(
             4,
             true,
             false,
             LimitKind::None,
-            0xf318_c6de_18a5_8992,
-            0x1eed_4095_c616_4117,
+            0xb448_5251_a452_5389,
+            0xc5bd_9e39_34ce_d1c2,
+        ),
+    ),
+    case(
+        "geometry/curve-pair-isolation/poly-subdivision-roundoff-v1/1/depth-1-v1",
+        CurveFixture::SubdivisionRoundoff,
+        GeometryRelation::Retained,
+        policy(1, 6_828, 4_096, 1),
+        expected(
+            4,
+            true,
+            false,
+            LimitKind::None,
+            0x3db2_c7fc_3bbd_4c37,
+            0x9f1b_2365_82a2_ff45,
         ),
     ),
     case(
         "geometry/curve-pair-isolation/poly-separated-v1/1/depth-3-v1",
         CurveFixture::Polynomial,
         GeometryRelation::Separated,
-        policy(3, 1_366, 4_096, 3),
+        policy(3, 6_828, 4_096, 3),
         expected(
             0,
             true,
             true,
             LimitKind::None,
             0x2de4_8551_deac_70df,
-            0x218c_ff54_d8fe_44f3,
+            0x19cc_d129_069b_77f0,
         ),
     ),
     case(
         "geometry/curve-pair-isolation/poly-diagonal-separated-v1/1/depth-3-v1",
         CurveFixture::Polynomial,
         GeometryRelation::DiagonalSeparated,
-        policy(3, 1_366, 4_096, 3),
+        policy(3, 6_828, 4_096, 3),
         expected(
             0,
             true,
             true,
             LimitKind::None,
             0x2de4_8551_deac_70df,
-            0x0bd6_8b28_1bb5_6fba,
+            0xebbc_2c5a_bc34_c18f,
         ),
     ),
     case(
         "geometry/curve-pair-isolation/poly-retained-v1/1/work-low-v1",
         CurveFixture::Polynomial,
         GeometryRelation::Retained,
-        policy(3, 1, 4_096, 3),
+        policy(3, 3, 4_096, 3),
         expected(
             1,
             false,
             false,
             LimitKind::Work,
             0xbf04_9d39_485c_be6a,
-            0x2d90_9abe_bc52_fd4b,
+            0xed55_6fc4_03c3_3443,
         ),
     ),
     case(
         "geometry/curve-pair-isolation/poly-retained-v1/1/candidate-low-v1",
         CurveFixture::Polynomial,
         GeometryRelation::Retained,
-        policy(3, 1_366, 1, 3),
+        policy(3, 6_828, 1, 3),
         expected(
             1,
             false,
             false,
             LimitKind::Candidates,
             0xbf04_9d39_485c_be6a,
-            0xa98c_3dae_4ad9_e8e6,
+            0x16bc_ca87_368d_9913,
         ),
     ),
     case(
         "geometry/curve-pair-isolation/poly-retained-v1/1/depth-low-v1",
         CurveFixture::Polynomial,
         GeometryRelation::Retained,
-        policy(3, 1_366, 4_096, 0),
+        policy(3, 6_828, 4_096, 0),
         expected(
             1,
             false,
             false,
             LimitKind::Depth,
             0xbf04_9d39_485c_be6a,
-            0xa461_a399_e70b_0a99,
+            0x7d35_88a7_f049_95ac,
         ),
     ),
 ];
@@ -354,7 +370,7 @@ impl CurvePairIsolationFixture {
             proven_empty: isolation.is_proven_empty(),
             indeterminate: !isolation.is_complete(),
             conservative_cover: isolation.is_proven_empty()
-                || endpoint_contacts_are_covered(isolation),
+                || known_contacts_are_covered(case, isolation),
             limit,
             limit_events: report.limit_events().len(),
             limit_attempted_consumed,
@@ -462,6 +478,7 @@ impl CurvePairIsolationEvidence {
             CurveFixture::Polynomial => 0,
             CurveFixture::Rational => 1,
             CurveFixture::TiltedPolynomial => 2,
+            CurveFixture::SubdivisionRoundoff => 3,
         });
         digest.tag(match case.relation {
             GeometryRelation::Retained => 0,
@@ -481,7 +498,9 @@ pub fn fixture(case: CurvePairIsolationCase) -> CurvePairIsolationFixture {
         GeometryRelation::DiagonalSeparated => 0.0,
     };
     let tilted = case.fixture == CurveFixture::TiltedPolynomial;
-    let (first, second) = if diagonal_pair {
+    let (first, second) = if case.fixture == CurveFixture::SubdivisionRoundoff {
+        subdivision_roundoff_pair()
+    } else if diagonal_pair {
         (
             constant(Point3::new(0.0, 0.0, 0.0)),
             constant(Point3::new(0.75e-8, 0.75e-8, 0.0)),
@@ -576,17 +595,47 @@ fn line(y: f64, tilted: bool) -> NurbsCurve {
 }
 
 fn constant(point: Point3) -> NurbsCurve {
-    NurbsCurve::new(
-        1,
-        vec![0.0, 0.0, 1.0, 1.0],
-        vec![point, point],
-        None,
-    )
-    .expect("valid Q4 constant curve")
+    NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![point, point], None)
+        .expect("valid Q4 constant curve")
 }
 
-fn endpoint_contacts_are_covered(isolation: &CurvePairIsolation) -> bool {
-    [0.0, 1.0].into_iter().all(|parameter| {
+fn subdivision_roundoff_pair() -> (NurbsCurve, NurbsCurve) {
+    let contact_z = 9_007_199_254_740_991.0;
+    let cubic = NurbsCurve::new(
+        3,
+        vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(-1.0, 0.0, 9_007_199_254_740_360.0),
+            Point3::new(-1.0 / 3.0, 0.0, 9_007_199_254_740_978.0),
+            Point3::new(1.0 / 3.0, 0.0, 9_007_199_254_741_648.0),
+            Point3::new(1.0, 0.0, 9_007_199_254_739_690.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 subdivision-roundoff cubic");
+    let line = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, -1.0, contact_z),
+            Point3::new(0.0, 1.0, contact_z),
+        ],
+        None,
+    )
+    .expect("valid Q4 subdivision-roundoff line");
+    (cubic, line)
+}
+
+fn known_contacts_are_covered(
+    case: CurvePairIsolationCase,
+    isolation: &CurvePairIsolation,
+) -> bool {
+    let parameters: &[f64] = if case.fixture == CurveFixture::SubdivisionRoundoff {
+        &[0.5]
+    } else {
+        &[0.0, 1.0]
+    };
+    parameters.iter().copied().all(|parameter| {
         isolation.candidates().iter().any(|candidate| {
             candidate.first_range().contains(parameter)
                 && candidate.second_range().contains(parameter)
@@ -821,5 +870,4 @@ mod tests {
             );
         }
     }
-
 }

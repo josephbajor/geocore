@@ -133,7 +133,7 @@ fn contextual_parse_failure_keeps_the_precomposed_zero_usage_report() {
     let mut store = Store::new();
     let outcome = import_with_context(b"not an X_T file", &mut store, &context).unwrap();
     assert!(matches!(outcome.result(), Err(XtError::BadHeader { .. })));
-    assert_eq!(outcome.report().usage().len(), 7);
+    assert_eq!(outcome.report().usage().len(), 10);
     assert!(
         outcome
             .report()

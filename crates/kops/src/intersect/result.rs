@@ -1,4 +1,5 @@
 use kcore::error::{Error, Result};
+use kcore::math;
 use kcore::proof::{Completion, IncompleteEvidence};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
@@ -643,6 +644,264 @@ pub struct SurfaceSurfaceCurve {
     pub kind: ContactKind,
 }
 
+/// Orientation of the second surface chart relative to the first across a
+/// coincident surface region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SurfaceRegionOrientation {
+    /// The two chart boundaries have the same winding.
+    Same,
+    /// The two chart boundaries have opposite winding.
+    Reversed,
+}
+
+/// Exact nonlinear chart correspondence for one signed-axis coincident-sphere
+/// octant.
+///
+/// Fields are private so only the sphere/sphere solver can mint evidence after
+/// proving exact center/radius equality, signed coordinate-permutation frames,
+/// and matching physical octants. The source windows define the complete
+/// positive-area region; polygon vertices are only exact physical boundary
+/// anchors and are never interpolated to approximate this map.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OrthogonalSphereOctantMap {
+    first_range: [ParamRange; 2],
+    second_range: [ParamRange; 2],
+    /// For each second-chart local coordinate, the corresponding first-chart
+    /// local coordinate and its exact sign.
+    second_from_first_axis: [u8; 3],
+    second_from_first_sign: [f64; 3],
+}
+
+impl OrthogonalSphereOctantMap {
+    pub(crate) const fn new(
+        first_range: [ParamRange; 2],
+        second_range: [ParamRange; 2],
+        second_from_first_axis: [u8; 3],
+        second_from_first_sign: [f64; 3],
+    ) -> Self {
+        Self {
+            first_range,
+            second_range,
+            second_from_first_axis,
+            second_from_first_sign,
+        }
+    }
+
+    /// Complete first-chart octant window.
+    pub const fn first_range(self) -> [ParamRange; 2] {
+        self.first_range
+    }
+
+    /// Complete second-chart octant window.
+    pub const fn second_range(self) -> [ParamRange; 2] {
+        self.second_range
+    }
+
+    /// Evaluate the exact analytic first-to-second sphere-chart map.
+    pub fn map_first_to_second(self, uv: [f64; 2]) -> Option<[f64; 2]> {
+        map_sphere_octant_parameter(
+            self.first_range,
+            self.second_range,
+            self.second_from_first_axis,
+            self.second_from_first_sign,
+            uv,
+        )
+    }
+
+    /// Evaluate the exact analytic second-to-first sphere-chart map.
+    pub fn map_second_to_first(self, uv: [f64; 2]) -> Option<[f64; 2]> {
+        let (axis, sign) = inverse_signed_axis_permutation(
+            self.second_from_first_axis,
+            self.second_from_first_sign,
+        );
+        map_sphere_octant_parameter(self.second_range, self.first_range, axis, sign, uv)
+    }
+
+    pub(crate) const fn swapped(self) -> Self {
+        let (axis, sign) = inverse_signed_axis_permutation(
+            self.second_from_first_axis,
+            self.second_from_first_sign,
+        );
+        Self::new(self.second_range, self.first_range, axis, sign)
+    }
+}
+
+/// Exact nonlinear chart correspondence for the intersection of two
+/// arbitrary-frame coincident-sphere octants.
+///
+/// The two source windows and both frame-to-frame local-coordinate maps are
+/// retained explicitly. Mapping is defined only on the mutual window
+/// intersection, so callers never interpolate the curved spherical-polygon
+/// boundary anchors.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArbitrarySphereOctantMap {
+    first_range: [ParamRange; 2],
+    second_range: [ParamRange; 2],
+    second_from_first: [[f64; 3]; 3],
+    first_from_second: [[f64; 3]; 3],
+    parameter_allowance: f64,
+}
+
+impl ArbitrarySphereOctantMap {
+    pub(crate) const fn new(
+        first_range: [ParamRange; 2],
+        second_range: [ParamRange; 2],
+        second_from_first: [[f64; 3]; 3],
+        first_from_second: [[f64; 3]; 3],
+        parameter_allowance: f64,
+    ) -> Self {
+        Self {
+            first_range,
+            second_range,
+            second_from_first,
+            first_from_second,
+            parameter_allowance,
+        }
+    }
+
+    /// Complete first-chart octant window before mutual-domain clipping.
+    pub const fn first_range(self) -> [ParamRange; 2] {
+        self.first_range
+    }
+
+    /// Complete second-chart octant window before mutual-domain clipping.
+    pub const fn second_range(self) -> [ParamRange; 2] {
+        self.second_range
+    }
+
+    /// Map a first-chart parameter when its physical point lies in both
+    /// retained octant windows.
+    pub fn map_first_to_second(self, uv: [f64; 2]) -> Option<[f64; 2]> {
+        map_arbitrary_sphere_octant_parameter(
+            self.first_range,
+            self.second_range,
+            self.second_from_first,
+            self.parameter_allowance,
+            uv,
+        )
+    }
+
+    /// Map a second-chart parameter when its physical point lies in both
+    /// retained octant windows.
+    pub fn map_second_to_first(self, uv: [f64; 2]) -> Option<[f64; 2]> {
+        map_arbitrary_sphere_octant_parameter(
+            self.second_range,
+            self.first_range,
+            self.first_from_second,
+            self.parameter_allowance,
+            uv,
+        )
+    }
+
+    const fn swapped(self) -> Self {
+        Self::new(
+            self.second_range,
+            self.first_range,
+            self.first_from_second,
+            self.second_from_first,
+            self.parameter_allowance,
+        )
+    }
+
+    fn is_finite(self) -> bool {
+        self.first_range
+            .into_iter()
+            .chain(self.second_range)
+            .all(ParamRange::is_finite)
+            && self
+                .second_from_first
+                .into_iter()
+                .chain(self.first_from_second)
+                .flatten()
+                .all(f64::is_finite)
+            && self.parameter_allowance.is_finite()
+            && self.parameter_allowance >= 0.0
+    }
+
+    fn anchors_match(self, first: [f64; 2], second: [f64; 2]) -> bool {
+        let Some(mapped_second) = self.map_first_to_second(first) else {
+            return false;
+        };
+        let Some(mapped_first) = self.map_second_to_first(second) else {
+            return false;
+        };
+        mapped_second
+            .into_iter()
+            .zip(second)
+            .chain(mapped_first.into_iter().zip(first))
+            .all(|(mapped, stored)| (mapped - stored).abs() <= self.parameter_allowance)
+    }
+}
+
+const fn inverse_signed_axis_permutation(axis: [u8; 3], sign: [f64; 3]) -> ([u8; 3], [f64; 3]) {
+    let mut inverse_axis = [0_u8; 3];
+    let mut inverse_sign = [0.0; 3];
+    let mut target = 0;
+    while target < 3 {
+        let source = axis[target] as usize;
+        inverse_axis[source] = target as u8;
+        inverse_sign[source] = sign[target];
+        target += 1;
+    }
+    (inverse_axis, inverse_sign)
+}
+
+/// How the complete paired region interior is represented.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SurfaceRegionCorrespondence {
+    /// Both chart boundaries and their interior correspondence are polygonal.
+    Polygonal,
+    /// Exact analytic nonlinear correspondence over a signed-axis sphere
+    /// octant.
+    OrthogonalSphereOctant(OrthogonalSphereOctantMap),
+    /// Exact analytic correspondence over the convex spherical-polygon
+    /// intersection of two arbitrary-frame sphere octants.
+    ArbitrarySphereOctant(ArbitrarySphereOctantMap),
+}
+
+impl SurfaceRegionCorrespondence {
+    fn swapped(self) -> Self {
+        match self {
+            Self::Polygonal => Self::Polygonal,
+            Self::OrthogonalSphereOctant(map) => Self::OrthogonalSphereOctant(map.swapped()),
+            Self::ArbitrarySphereOctant(map) => Self::ArbitrarySphereOctant(map.swapped()),
+        }
+    }
+}
+
+/// One paired boundary vertex of a coincident surface region.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurfaceSurfaceRegionVertex {
+    /// Symmetric representative point between the two surface evaluations.
+    pub point: Point3,
+    /// Parameters on the first surface.
+    pub uv_a: [f64; 2],
+    /// Parameters on the second surface.
+    pub uv_b: [f64; 2],
+    /// Distance between the two surface evaluations at this vertex.
+    pub residual: f64,
+}
+
+/// A positive-area coincident region with paired boundary data in both
+/// surface charts.
+///
+/// Polygonal boundaries are canonicalized counter-clockwise in the first
+/// chart. Nonlinear correspondences define their own exact domain and anchor
+/// contract. The owning solver must supply a `max_residual` proof over the
+/// complete region.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SurfaceSurfaceRegion {
+    /// Deterministic boundary vertices or exact nonlinear-domain anchors, as
+    /// specified by `correspondence`.
+    pub boundary: Vec<SurfaceSurfaceRegionVertex>,
+    /// Winding correspondence between the paired chart boundaries.
+    pub orientation: SurfaceRegionOrientation,
+    /// Whole-interior paired-chart representation.
+    pub correspondence: SurfaceRegionCorrespondence,
+    /// Conservative residual bound over the complete region.
+    pub max_residual: f64,
+}
+
 /// Surface/surface intersection evidence with explicit domain-completion
 /// status.
 #[derive(Debug, Clone, PartialEq)]
@@ -651,6 +910,8 @@ pub struct SurfaceSurfaceIntersections {
     pub points: Vec<SurfaceSurfacePoint>,
     /// Positive-length intersection branches.
     pub curves: Vec<SurfaceSurfaceCurve>,
+    /// Positive-area coincident regions.
+    pub regions: Vec<SurfaceSurfaceRegion>,
     completion: Completion,
     incomplete_evidence: Vec<IncompleteEvidence>,
 }
@@ -660,6 +921,7 @@ impl Default for SurfaceSurfaceIntersections {
         Self {
             points: Vec::new(),
             curves: Vec::new(),
+            regions: Vec::new(),
             completion: Completion::Indeterminate {
                 reason: MISSING_COMPLETION_REASON,
             },
@@ -702,10 +964,12 @@ impl SurfaceSurfaceIntersections {
         reason: &'static str,
         incomplete_evidence: Vec<IncompleteEvidence>,
     ) -> Result<Self> {
-        Self::validate_and_sort(&mut points, &mut curves)?;
+        let mut regions = Vec::new();
+        Self::validate_and_sort(&mut points, &mut curves, &mut regions)?;
         Ok(Self {
             points,
             curves,
+            regions,
             completion: Completion::Indeterminate { reason },
             incomplete_evidence,
         })
@@ -720,11 +984,29 @@ impl SurfaceSurfaceIntersections {
         Self::canonicalized_with_completion(points, curves, Completion::Complete)
     }
 
+    /// Validate and sort contacts, branches, and positive-area regions whose
+    /// solver covered the complete requested domain.
+    pub fn canonicalized_complete_with_regions(
+        mut points: Vec<SurfaceSurfacePoint>,
+        mut curves: Vec<SurfaceSurfaceCurve>,
+        mut regions: Vec<SurfaceSurfaceRegion>,
+    ) -> Result<Self> {
+        Self::validate_and_sort(&mut points, &mut curves, &mut regions)?;
+        Ok(Self {
+            points,
+            curves,
+            regions,
+            completion: Completion::Complete,
+            incomplete_evidence: Vec::new(),
+        })
+    }
+
     /// Proven empty result over the complete requested domain.
     pub fn complete_empty() -> Self {
         Self {
             points: Vec::new(),
             curves: Vec::new(),
+            regions: Vec::new(),
             completion: Completion::Complete,
             incomplete_evidence: Vec::new(),
         }
@@ -735,6 +1017,7 @@ impl SurfaceSurfaceIntersections {
         Self {
             points: Vec::new(),
             curves: Vec::new(),
+            regions: Vec::new(),
             completion: Completion::Indeterminate { reason },
             incomplete_evidence: Vec::new(),
         }
@@ -748,6 +1031,7 @@ impl SurfaceSurfaceIntersections {
         Self {
             points: Vec::new(),
             curves: Vec::new(),
+            regions: Vec::new(),
             completion: Completion::Indeterminate { reason },
             incomplete_evidence,
         }
@@ -758,10 +1042,12 @@ impl SurfaceSurfaceIntersections {
         mut curves: Vec<SurfaceSurfaceCurve>,
         completion: Completion,
     ) -> Result<Self> {
-        Self::validate_and_sort(&mut points, &mut curves)?;
+        let mut regions = Vec::new();
+        Self::validate_and_sort(&mut points, &mut curves, &mut regions)?;
         Ok(Self {
             points,
             curves,
+            regions,
             completion,
             incomplete_evidence: Vec::new(),
         })
@@ -770,6 +1056,7 @@ impl SurfaceSurfaceIntersections {
     fn validate_and_sort(
         points: &mut [SurfaceSurfacePoint],
         curves: &mut [SurfaceSurfaceCurve],
+        regions: &mut [SurfaceSurfaceRegion],
     ) -> Result<()> {
         if points.iter().any(|p| {
             !p.point.x.is_finite()
@@ -796,11 +1083,18 @@ impl SurfaceSurfaceIntersections {
                 reason: "surface/surface curve data must be finite and have positive width",
             });
         }
-        Self::sort_evidence(points, curves);
+        for region in regions.iter_mut() {
+            canonicalize_region(region)?;
+        }
+        Self::sort_evidence(points, curves, regions);
         Ok(())
     }
 
-    fn sort_evidence(points: &mut [SurfaceSurfacePoint], curves: &mut [SurfaceSurfaceCurve]) {
+    fn sort_evidence(
+        points: &mut [SurfaceSurfacePoint],
+        curves: &mut [SurfaceSurfaceCurve],
+        regions: &mut [SurfaceSurfaceRegion],
+    ) {
         points.sort_by(|a, b| {
             a.uv_a[0]
                 .total_cmp(&b.uv_a[0])
@@ -817,12 +1111,13 @@ impl SurfaceSurfaceIntersections {
                 .then(a.uv_a_start[0].total_cmp(&b.uv_a_start[0]))
                 .then(a.uv_a_start[1].total_cmp(&b.uv_a_start[1]))
         });
+        regions.sort_by(compare_regions);
     }
 
     /// True when no contacts or branches were discovered. This alone is not
     /// proof of a miss.
     pub fn is_empty(&self) -> bool {
-        self.points.is_empty() && self.curves.is_empty()
+        self.points.is_empty() && self.curves.is_empty() && self.regions.is_empty()
     }
 
     /// Completion evidence for the complete requested surface domains.
@@ -862,9 +1157,267 @@ impl SurfaceSurfaceIntersections {
             core::mem::swap(&mut curve.uv_a_start, &mut curve.uv_b_start);
             core::mem::swap(&mut curve.uv_a_end, &mut curve.uv_b_end);
         }
-        Self::sort_evidence(&mut self.points, &mut self.curves);
+        for region in &mut self.regions {
+            for vertex in &mut region.boundary {
+                core::mem::swap(&mut vertex.uv_a, &mut vertex.uv_b);
+            }
+            region.correspondence = region.correspondence.swapped();
+            canonicalize_region(region)
+                .expect("validated surface region remains valid after operand swap");
+        }
+        Self::sort_evidence(&mut self.points, &mut self.curves, &mut self.regions);
         self
     }
+}
+
+fn canonicalize_region(region: &mut SurfaceSurfaceRegion) -> Result<()> {
+    if region.boundary.len() < 3
+        || !region.max_residual.is_finite()
+        || region.max_residual < 0.0
+        || region.boundary.iter().any(|vertex| {
+            !vertex.point.x.is_finite()
+                || !vertex.point.y.is_finite()
+                || !vertex.point.z.is_finite()
+                || vertex.uv_a.iter().any(|value| !value.is_finite())
+                || vertex.uv_b.iter().any(|value| !value.is_finite())
+                || !vertex.residual.is_finite()
+                || vertex.residual < 0.0
+                || vertex.residual > region.max_residual
+        })
+    {
+        return Err(Error::InvalidGeometry {
+            reason: "surface/surface region data must be finite, nonnegative, and have at least three bounded vertices",
+        });
+    }
+
+    if matches!(
+        region.correspondence,
+        SurfaceRegionCorrespondence::OrthogonalSphereOctant(_)
+    ) {
+        if region.boundary.len() != 3 || region.orientation != SurfaceRegionOrientation::Same {
+            return Err(Error::InvalidGeometry {
+                reason: "orthogonal sphere octant regions require three exact boundary anchors and same orientation",
+            });
+        }
+        region.boundary.sort_by(compare_region_physical_vertices);
+        return Ok(());
+    }
+
+    if let SurfaceRegionCorrespondence::ArbitrarySphereOctant(map) = region.correspondence {
+        if !map.is_finite()
+            || region.orientation != SurfaceRegionOrientation::Same
+            || region
+                .boundary
+                .iter()
+                .any(|vertex| !map.anchors_match(vertex.uv_a, vertex.uv_b))
+        {
+            return Err(Error::InvalidGeometry {
+                reason: "arbitrary sphere octant regions require mutually mapped boundary anchors and same orientation",
+            });
+        }
+        let first = region
+            .boundary
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| compare_region_physical_vertices(a, b))
+            .map(|(index, _)| index)
+            .expect("region has at least three vertices");
+        region.boundary.rotate_left(first);
+        return Ok(());
+    }
+
+    let mut area_a = signed_region_area(&region.boundary, |vertex| vertex.uv_a);
+    let area_b = signed_region_area(&region.boundary, |vertex| vertex.uv_b);
+    if !area_a.is_finite() || !area_b.is_finite() || area_a == 0.0 || area_b == 0.0 {
+        return Err(Error::InvalidGeometry {
+            reason: "surface/surface region boundaries must have positive area in both charts",
+        });
+    }
+    let expected_orientation = if area_a.is_sign_positive() == area_b.is_sign_positive() {
+        SurfaceRegionOrientation::Same
+    } else {
+        SurfaceRegionOrientation::Reversed
+    };
+    if region.orientation != expected_orientation {
+        return Err(Error::InvalidGeometry {
+            reason: "surface/surface region orientation disagrees with paired chart winding",
+        });
+    }
+    if area_a.is_sign_negative() {
+        region.boundary.reverse();
+        area_a = -area_a;
+    }
+    debug_assert!(area_a > 0.0);
+
+    if !is_strictly_convex_in_first_chart(&region.boundary) {
+        return Err(Error::InvalidGeometry {
+            reason: "surface/surface region boundary must be a nondegenerate convex polygon",
+        });
+    }
+    let first = region
+        .boundary
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| compare_region_vertices(a, b))
+        .map(|(index, _)| index)
+        .expect("region has at least three vertices");
+    region.boundary.rotate_left(first);
+    Ok(())
+}
+
+fn signed_region_area(
+    boundary: &[SurfaceSurfaceRegionVertex],
+    uv: impl Fn(&SurfaceSurfaceRegionVertex) -> [f64; 2],
+) -> f64 {
+    let origin = uv(&boundary[0]);
+    boundary
+        .iter()
+        .zip(boundary.iter().cycle().skip(1))
+        .map(|(a, b)| {
+            let a = uv(a);
+            let b = uv(b);
+            let a = [a[0] - origin[0], a[1] - origin[1]];
+            let b = [b[0] - origin[0], b[1] - origin[1]];
+            a[0] * b[1] - a[1] * b[0]
+        })
+        .sum::<f64>()
+        / 2.0
+}
+
+fn is_strictly_convex_in_first_chart(boundary: &[SurfaceSurfaceRegionVertex]) -> bool {
+    (0..boundary.len()).all(|index| {
+        let a = boundary[index].uv_a;
+        let b = boundary[(index + 1) % boundary.len()].uv_a;
+        let c = boundary[(index + 2) % boundary.len()].uv_a;
+        let cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+        cross.is_finite() && cross > 0.0
+    })
+}
+
+fn compare_region_vertices(
+    a: &SurfaceSurfaceRegionVertex,
+    b: &SurfaceSurfaceRegionVertex,
+) -> core::cmp::Ordering {
+    a.uv_a[0]
+        .total_cmp(&b.uv_a[0])
+        .then(a.uv_a[1].total_cmp(&b.uv_a[1]))
+        .then(a.uv_b[0].total_cmp(&b.uv_b[0]))
+        .then(a.uv_b[1].total_cmp(&b.uv_b[1]))
+}
+
+fn compare_region_physical_vertices(
+    a: &SurfaceSurfaceRegionVertex,
+    b: &SurfaceSurfaceRegionVertex,
+) -> core::cmp::Ordering {
+    a.point
+        .x
+        .total_cmp(&b.point.x)
+        .then(a.point.y.total_cmp(&b.point.y))
+        .then(a.point.z.total_cmp(&b.point.z))
+        .then_with(|| compare_region_vertices(a, b))
+}
+
+fn map_sphere_octant_parameter(
+    source_range: [ParamRange; 2],
+    target_range: [ParamRange; 2],
+    target_from_source_axis: [u8; 3],
+    target_from_source_sign: [f64; 3],
+    uv: [f64; 2],
+) -> Option<[f64; 2]> {
+    if !source_range[0].contains(uv[0]) || !source_range[1].contains(uv[1]) {
+        return None;
+    }
+    let (sin_u, cos_u) = math::sincos(uv[0]);
+    let (sin_v, cos_v) = math::sincos(uv[1]);
+    let source_local = [cos_v * cos_u, cos_v * sin_u, sin_v];
+    let target_local: [f64; 3] = core::array::from_fn(|target| {
+        source_local[target_from_source_axis[target] as usize] * target_from_source_sign[target]
+    });
+    let radial = (target_local[0] * target_local[0] + target_local[1] * target_local[1]).sqrt();
+    let raw_v = math::atan2(target_local[2], radial);
+    let scale = uv[0]
+        .abs()
+        .max(uv[1].abs())
+        .max(target_range[0].lo.abs())
+        .max(target_range[0].hi.abs())
+        .max(1.0);
+    let tolerance = 256.0 * f64::EPSILON * scale;
+    let v = fit_closed_scalar(raw_v, target_range[1], tolerance)?;
+    let u = if radial <= tolerance {
+        target_range[0].lo
+    } else {
+        fit_closed_periodic(
+            math::atan2(target_local[1], target_local[0]),
+            target_range[0],
+            tolerance,
+        )?
+    };
+    Some([u, v])
+}
+
+fn map_arbitrary_sphere_octant_parameter(
+    source_range: [ParamRange; 2],
+    target_range: [ParamRange; 2],
+    target_from_source: [[f64; 3]; 3],
+    parameter_allowance: f64,
+    uv: [f64; 2],
+) -> Option<[f64; 2]> {
+    if !source_range[0].contains(uv[0]) || !source_range[1].contains(uv[1]) {
+        return None;
+    }
+    let (sin_u, cos_u) = math::sincos(uv[0]);
+    let (sin_v, cos_v) = math::sincos(uv[1]);
+    let source_local = [cos_v * cos_u, cos_v * sin_u, sin_v];
+    let target_local = target_from_source
+        .map(|row| row[0] * source_local[0] + row[1] * source_local[1] + row[2] * source_local[2]);
+    let radial = (target_local[0] * target_local[0] + target_local[1] * target_local[1]).sqrt();
+    let v = fit_closed_scalar(
+        math::atan2(target_local[2], radial),
+        target_range[1],
+        parameter_allowance,
+    )?;
+    let u = if radial <= parameter_allowance {
+        target_range[0].lo
+    } else {
+        fit_closed_periodic(
+            math::atan2(target_local[1], target_local[0]),
+            target_range[0],
+            parameter_allowance,
+        )?
+    };
+    Some([u, v])
+}
+
+fn fit_closed_scalar(value: f64, range: ParamRange, tolerance: f64) -> Option<f64> {
+    if value < range.lo - tolerance || value > range.hi + tolerance {
+        return None;
+    }
+    Some(value.clamp(range.lo, range.hi))
+}
+
+fn fit_closed_periodic(value: f64, range: ParamRange, tolerance: f64) -> Option<f64> {
+    let tau = core::f64::consts::TAU;
+    let midpoint = range.lo + 0.5 * range.width();
+    let shift = ((midpoint - value) / tau).round();
+    [shift - 1.0, shift, shift + 1.0]
+        .into_iter()
+        .filter_map(|shift| fit_closed_scalar(value + shift * tau, range, tolerance))
+        .min_by(|first, second| {
+            (first - midpoint)
+                .abs()
+                .total_cmp(&(second - midpoint).abs())
+        })
+}
+
+fn compare_regions(a: &SurfaceSurfaceRegion, b: &SurfaceSurfaceRegion) -> core::cmp::Ordering {
+    a.boundary
+        .iter()
+        .zip(&b.boundary)
+        .map(|(a, b)| compare_region_vertices(a, b))
+        .find(|ordering| !ordering.is_eq())
+        .unwrap_or_else(|| a.boundary.len().cmp(&b.boundary.len()))
+        .then(a.orientation.cmp(&b.orientation))
+        .then(a.max_residual.total_cmp(&b.max_residual))
 }
 
 /// Evaluate and tolerance-filter one surface/surface point candidate.

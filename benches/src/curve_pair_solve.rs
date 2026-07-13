@@ -18,9 +18,9 @@ use kops::intersect::{
 };
 
 /// Fixture identity for the first Q4 curve-pair solve ladder.
-pub const FIXTURE_VERSION: &str = "curve-pair-solve.v3";
+pub const FIXTURE_VERSION: &str = "curve-pair-solve.v18";
 /// Deterministic construction seed recorded by the registry.
-pub const FIXTURE_SEED: u64 = 0x5154_4350_534f_000a;
+pub const FIXTURE_SEED: u64 = 0x5154_4350_534f_0018;
 const DEFAULT_OVERLAP_EQUIVALENCE_ALLOWANCE: u64 = 1_000_000;
 
 /// Geometry varied by the solve ladder.
@@ -30,6 +30,43 @@ pub enum SolveFixture {
     PolynomialTransverse,
     /// Rationally parameterized transverse line pair.
     RationalTransverse,
+    /// Noncoplanar quadratic pair with an algebraic root at normalized 1/3.
+    AlgebraicSpatial,
+    /// Noncoplanar quadratic pair whose root is lifted by signed linear forms.
+    AlgebraicLinearForm,
+    /// Noncoplanar quadratic pair whose root requires primitive magnitude-two
+    /// carrier and residual coefficients.
+    AlgebraicPrimitiveForm,
+    /// Noncoplanar quadratic pair whose proof requires a primitive carrier
+    /// coefficient of magnitude three.
+    AlgebraicPrimitiveMagnitudeThree,
+    /// Noncoplanar quadratic pair whose proof requires a primitive carrier
+    /// coefficient of magnitude four.
+    AlgebraicPrimitiveMagnitudeFour,
+    /// Noncoplanar quadratic pair whose proof requires a primitive carrier
+    /// coefficient of magnitude five.
+    AlgebraicPrimitiveMagnitudeFive,
+    /// Noncoplanar quadratic pair whose proof requires a primitive carrier
+    /// coefficient of magnitude six.
+    AlgebraicPrimitiveMagnitudeSix,
+    /// Noncoplanar quadratic pair whose proof requires a primitive carrier
+    /// coefficient of magnitude seven.
+    AlgebraicPrimitiveMagnitudeSeven,
+    /// Noncoplanar quadratic pair whose proof requires a primitive carrier
+    /// coefficient of magnitude eight.
+    AlgebraicPrimitiveMagnitudeEight,
+    /// Noncoplanar quadratic pair whose proof requires a primitive carrier
+    /// coefficient of magnitude nine.
+    AlgebraicPrimitiveMagnitudeNine,
+    /// Noncoplanar quadratic pair whose proof requires a primitive carrier
+    /// coefficient of magnitude ten.
+    AlgebraicPrimitiveMagnitudeTen,
+    /// Noncoplanar quadratic pair whose proof requires a primitive carrier
+    /// coefficient of magnitude eleven.
+    AlgebraicPrimitiveMagnitudeEleven,
+    /// Noncoplanar quadratic pair whose proof requires a primitive carrier
+    /// coefficient of magnitude twelve.
+    AlgebraicPrimitiveMagnitudeTwelve,
     /// Quadratic tangency.
     Tangent,
     /// Quadratic arch with two transverse contacts.
@@ -40,6 +77,12 @@ pub enum SolveFixture {
     ExactOverlap,
     /// Equal curves whose stored knot multisets differ by exact refinement.
     CommonRefinementOverlap,
+    /// Equal descendants with disjoint knot-insertion histories recovered
+    /// through checked inverse refinement.
+    InverseHistoryOverlap,
+    /// A refinement descendant altered after insertion, which must not inherit
+    /// exact overlap completion.
+    AlteredInverseHistory,
     /// Tolerance-contained parallel curves without exact representation proof.
     SampledOverlap,
 }
@@ -100,8 +143,9 @@ pub struct CurvePairSolveCase {
     pub expected_output_digest: u64,
 }
 
-/// Ten cases covering representation, contact character, overlap proof, and limits.
-pub const CASES: [CurvePairSolveCase; 10] = [
+/// Twenty-eight cases covering representation, spatial existence, contact character,
+/// overlap proof, and limits.
+pub const CASES: [CurvePairSolveCase; 28] = [
     case(
         "geometry/curve-pair-solve/poly-transverse-v1/1/default-v1",
         SolveFixture::PolynomialTransverse,
@@ -115,7 +159,7 @@ pub const CASES: [CurvePairSolveCase; 10] = [
             digests(
                 0x617e_1b7b_48fd_b84a,
                 0x16e0_85b4_d5ef_f9c3,
-            0xcd7e_2331_14d3_e54a,
+                0x0e8a_0c8f_c288_7e68,
             ),
         ),
     ),
@@ -132,7 +176,228 @@ pub const CASES: [CurvePairSolveCase; 10] = [
             digests(
                 0xd116_a5f6_4d2e_545a,
                 0x16e0_85b4_d5ef_f9c3,
-            0x5def_f37c_1f72_248c,
+                0x2619_4d14_a6ca_e95e,
+            ),
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/algebraic-spatial-v1/1/default-v1",
+        SolveFixture::AlgebraicSpatial,
+        policy(4_096),
+        expected(
+            1,
+            0,
+            true,
+            false,
+            LimitKind::None,
+            digests(
+                0xcba7_208e_589b_20a1,
+                0x16e0_85b4_d5ef_f9c3,
+                0xd4d1_e57b_2449_a796,
+            ),
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/algebraic-linear-form-v1/1/default-v1",
+        SolveFixture::AlgebraicLinearForm,
+        policy(4_096),
+        expected(
+            1,
+            0,
+            true,
+            false,
+            LimitKind::None,
+            digests(
+                0xcaee_0659_d4d0_264f,
+                0x16e0_85b4_d5ef_f9c3,
+                0x4e05_63b1_6632_dfdf,
+            ),
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/algebraic-primitive-form-v1/1/default-v1",
+        SolveFixture::AlgebraicPrimitiveForm,
+        policy(4_096),
+        expected(
+            1,
+            0,
+            true,
+            false,
+            LimitKind::None,
+            digests(
+                0x11a8_5af9_7585_8be6,
+                0x16e0_85b4_d5ef_f9c3,
+                0xf39a_c7cd_8567_2726,
+            ),
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/algebraic-primitive-magnitude-three-v1/1/default-v1",
+        SolveFixture::AlgebraicPrimitiveMagnitudeThree,
+        policy(4_096),
+        expected(
+            1,
+            0,
+            true,
+            false,
+            LimitKind::None,
+            digests(
+                0x0d56_1692_2c10_261b,
+                0x16e0_85b4_d5ef_f9c3,
+                0x831a_92d7_8131_ea32,
+            ),
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/algebraic-primitive-magnitude-four-v1/1/default-v1",
+        SolveFixture::AlgebraicPrimitiveMagnitudeFour,
+        policy(4_096),
+        expected(
+            1,
+            0,
+            true,
+            false,
+            LimitKind::None,
+            digests(
+                0xa6c4_0bd1_f119_46a6,
+                0x16e0_85b4_d5ef_f9c3,
+                0x80fe_0444_7e33_cc5b,
+            ),
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/algebraic-primitive-magnitude-five-v1/1/default-v1",
+        SolveFixture::AlgebraicPrimitiveMagnitudeFive,
+        policy(4_096),
+        expected(
+            1,
+            0,
+            true,
+            false,
+            LimitKind::None,
+            digests(
+                0x67ad_1e9d_8a57_f336,
+                0x16e0_85b4_d5ef_f9c3,
+                0x0b8b_2dfc_eb14_9fa7,
+            ),
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/algebraic-primitive-magnitude-six-v1/1/default-v1",
+        SolveFixture::AlgebraicPrimitiveMagnitudeSix,
+        policy(4_096),
+        expected(
+            1,
+            0,
+            true,
+            false,
+            LimitKind::None,
+            digests(
+                0x1ad0_3d1b_3310_10b8,
+                0x16e0_85b4_d5ef_f9c3,
+                0x8dcb_c69a_dbd3_7afe,
+            ),
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/algebraic-primitive-magnitude-seven-v1/1/default-v1",
+        SolveFixture::AlgebraicPrimitiveMagnitudeSeven,
+        policy(4_096),
+        expected(
+            1,
+            0,
+            true,
+            false,
+            LimitKind::None,
+            digests(
+                0xb8e6_2351_1e4e_5be5,
+                0x16e0_85b4_d5ef_f9c3,
+                0x7094_9ce9_570b_442f,
+            ),
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/algebraic-primitive-magnitude-eight-v1/1/default-v1",
+        SolveFixture::AlgebraicPrimitiveMagnitudeEight,
+        policy(4_096),
+        expected(
+            1,
+            0,
+            true,
+            false,
+            LimitKind::None,
+            digests(
+                0xb8e6_2351_1e4e_5be5,
+                0x16e0_85b4_d5ef_f9c3,
+                0x9b8a_b02c_c82e_4827,
+            ),
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/algebraic-primitive-magnitude-nine-v1/1/default-v1",
+        SolveFixture::AlgebraicPrimitiveMagnitudeNine,
+        policy(4_096),
+        expected(
+            1,
+            0,
+            true,
+            false,
+            LimitKind::None,
+            digests(
+                0xea35_3685_4d6b_432c,
+                0x16e0_85b4_d5ef_f9c3,
+                0x6f2a_90dc_efff_c937,
+            ),
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/algebraic-primitive-magnitude-ten-v1/1/default-v1",
+        SolveFixture::AlgebraicPrimitiveMagnitudeTen,
+        policy(4_096),
+        expected(
+            1,
+            0,
+            true,
+            false,
+            LimitKind::None,
+            digests(
+                0x5ea9_8a33_9380_41c5,
+                0x16e0_85b4_d5ef_f9c3,
+                0x70b8_c902_2d6e_cfbb,
+            ),
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/algebraic-primitive-magnitude-eleven-v1/1/default-v1",
+        SolveFixture::AlgebraicPrimitiveMagnitudeEleven,
+        policy(4_096),
+        expected(
+            1,
+            0,
+            true,
+            false,
+            LimitKind::None,
+            digests(
+                0x9497_c3af_110f_59a1,
+                0x16e0_85b4_d5ef_f9c3,
+                0x36e8_1ec0_e9ec_8719,
+            ),
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/algebraic-primitive-magnitude-twelve-v1/1/default-v1",
+        SolveFixture::AlgebraicPrimitiveMagnitudeTwelve,
+        policy(4_096),
+        expected(
+            1,
+            0,
+            true,
+            false,
+            LimitKind::None,
+            digests(
+                0x6fbe_da9c_216e_24c3,
+                0x16e0_85b4_d5ef_f9c3,
+                0x2610_cd86_2dcb_733e,
             ),
         ),
     ),
@@ -149,7 +414,7 @@ pub const CASES: [CurvePairSolveCase; 10] = [
             digests(
                 0x617e_1c7b_48fd_b9fd,
                 0x16e0_85b4_d5ef_f9c3,
-                0x216f_67f3_d315_05b3,
+                0xee5e_159c_7ab1_60c3,
             ),
         ),
     ),
@@ -166,7 +431,7 @@ pub const CASES: [CurvePairSolveCase; 10] = [
             digests(
                 0x3606_10ba_1318_ae30,
                 0x16e0_85b4_d5ef_f9c3,
-            0x0dac_5484_f631_d325,
+                0xd436_d965_d4b6_4777,
             ),
         ),
     ),
@@ -183,7 +448,7 @@ pub const CASES: [CurvePairSolveCase; 10] = [
             digests(
                 0x6489_db2b_285b_d20f,
                 0x16e0_85b4_d5ef_f9c3,
-                0x32cf_5369_b496_626c,
+                0x14fb_df45_5f91_91b4,
             ),
         ),
     ),
@@ -222,6 +487,82 @@ pub const CASES: [CurvePairSolveCase; 10] = [
         ),
     ),
     case(
+        "geometry/curve-pair-solve/inverse-history-overlap-v1/1/default-v1",
+        SolveFixture::InverseHistoryOverlap,
+        policy(4_096),
+        expected(
+            0,
+            1,
+            true,
+            false,
+            LimitKind::None,
+            digests(
+                0x6489_db2b_285b_d20f,
+                0xeebe_95f0_8459_1be6,
+                0x0ad7_fc6d_2592_2d73,
+            ),
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/inverse-history-overlap-v1/0/work-denied-v1",
+        SolveFixture::InverseHistoryOverlap,
+        SolvePolicy {
+            seed_attempts: 4_096,
+            overlap_work: 7_961,
+            overlap_items: DEFAULT_OVERLAP_EQUIVALENCE_ALLOWANCE,
+        },
+        expected(
+            0,
+            0,
+            false,
+            false,
+            LimitKind::OverlapWork,
+            digests(
+                0x6489_db2b_285b_d20f,
+                0x16e0_85b4_d5ef_f9c3,
+                0x16c6_f1c4_f139_c1ed,
+            ),
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/inverse-history-overlap-v1/0/items-denied-v1",
+        SolveFixture::InverseHistoryOverlap,
+        SolvePolicy {
+            seed_attempts: 4_096,
+            overlap_work: DEFAULT_OVERLAP_EQUIVALENCE_ALLOWANCE,
+            overlap_items: 7_479,
+        },
+        expected(
+            0,
+            0,
+            false,
+            false,
+            LimitKind::OverlapItems,
+            digests(
+                0x6489_db2b_285b_d20f,
+                0x16e0_85b4_d5ef_f9c3,
+                0x5282_9ff5_7ad5_595a,
+            ),
+        ),
+    ),
+    case(
+        "geometry/curve-pair-solve/altered-inverse-history-v1/2/default-v1",
+        SolveFixture::AlteredInverseHistory,
+        policy(4_096),
+        expected(
+            2,
+            0,
+            false,
+            false,
+            LimitKind::None,
+            digests(
+                0x8465_b61a_a5fb_dbf7,
+                0x16e0_85b4_d5ef_f9c3,
+                0x5974_1fe9_070b_9bba,
+            ),
+        ),
+    ),
+    case(
         "geometry/curve-pair-solve/common-refinement-overlap-v1/0/work-denied-v1",
         SolveFixture::CommonRefinementOverlap,
         SolvePolicy {
@@ -243,6 +584,27 @@ pub const CASES: [CurvePairSolveCase; 10] = [
         ),
     ),
     case(
+        "geometry/curve-pair-solve/common-refinement-overlap-v1/0/items-denied-v1",
+        SolveFixture::CommonRefinementOverlap,
+        SolvePolicy {
+            seed_attempts: 4_096,
+            overlap_work: DEFAULT_OVERLAP_EQUIVALENCE_ALLOWANCE,
+            overlap_items: 4_849,
+        },
+        expected(
+            0,
+            0,
+            false,
+            false,
+            LimitKind::OverlapItems,
+            digests(
+                0x6489_db2b_285b_d20f,
+                0x16e0_85b4_d5ef_f9c3,
+                0x84aa_8afb_689a_3758,
+            ),
+        ),
+    ),
+    case(
         "geometry/curve-pair-solve/sampled-overlap-v1/1/default-v1",
         SolveFixture::SampledOverlap,
         policy(4_096),
@@ -255,7 +617,7 @@ pub const CASES: [CurvePairSolveCase; 10] = [
             digests(
                 0x6489_db2b_285b_d20f,
                 0xeebe_95f0_8459_1be6,
-                0xe6ea_fca4_fcc1_a8bb,
+                0xd795_7920_26df_5106,
             ),
         ),
     ),
@@ -272,7 +634,7 @@ pub const CASES: [CurvePairSolveCase; 10] = [
             digests(
                 0x6489_db2b_285b_d20f,
                 0x16e0_85b4_d5ef_f9c3,
-                0xda13_6fbc_79c3_4280,
+                0xf1c5_b32b_c96c_335c,
             ),
         ),
     ),
@@ -587,7 +949,31 @@ impl CurvePairSolveEvidence {
         digest.u64(self.root_certificate_digest);
         digest.u64(self.point_digest);
         digest.u64(self.overlap_digest);
-        digest.tag(case.fixture as u8);
+        digest.tag(match case.fixture {
+            SolveFixture::PolynomialTransverse => 0,
+            SolveFixture::RationalTransverse => 1,
+            SolveFixture::Tangent => 2,
+            SolveFixture::MultipleRoots => 3,
+            SolveFixture::HiddenMiss => 4,
+            SolveFixture::ExactOverlap => 5,
+            SolveFixture::CommonRefinementOverlap => 6,
+            SolveFixture::SampledOverlap => 7,
+            SolveFixture::AlgebraicSpatial => 8,
+            SolveFixture::AlgebraicLinearForm => 9,
+            SolveFixture::InverseHistoryOverlap => 10,
+            SolveFixture::AlteredInverseHistory => 11,
+            SolveFixture::AlgebraicPrimitiveForm => 12,
+            SolveFixture::AlgebraicPrimitiveMagnitudeThree => 13,
+            SolveFixture::AlgebraicPrimitiveMagnitudeFour => 14,
+            SolveFixture::AlgebraicPrimitiveMagnitudeFive => 15,
+            SolveFixture::AlgebraicPrimitiveMagnitudeSix => 16,
+            SolveFixture::AlgebraicPrimitiveMagnitudeSeven => 17,
+            SolveFixture::AlgebraicPrimitiveMagnitudeEight => 18,
+            SolveFixture::AlgebraicPrimitiveMagnitudeNine => 19,
+            SolveFixture::AlgebraicPrimitiveMagnitudeTen => 20,
+            SolveFixture::AlgebraicPrimitiveMagnitudeEleven => 21,
+            SolveFixture::AlgebraicPrimitiveMagnitudeTwelve => 22,
+        });
         digest.finish()
     }
 }
@@ -599,6 +985,25 @@ pub fn fixture(case: CurvePairSolveCase) -> CurvePairSolveFixture {
         SolveFixture::CommonRefinementOverlap => (
             kgeom::param::ParamRange::new(0.25, 0.75),
             kgeom::param::ParamRange::new(0.5, 1.0),
+        ),
+        SolveFixture::AlgebraicSpatial => (
+            kgeom::param::ParamRange::new(0.25, 0.5),
+            kgeom::param::ParamRange::new(0.25, 0.5),
+        ),
+        SolveFixture::AlgebraicLinearForm
+        | SolveFixture::AlgebraicPrimitiveForm
+        | SolveFixture::AlgebraicPrimitiveMagnitudeThree
+        | SolveFixture::AlgebraicPrimitiveMagnitudeFour
+        | SolveFixture::AlgebraicPrimitiveMagnitudeFive
+        | SolveFixture::AlgebraicPrimitiveMagnitudeSix
+        | SolveFixture::AlgebraicPrimitiveMagnitudeSeven
+        | SolveFixture::AlgebraicPrimitiveMagnitudeEight
+        | SolveFixture::AlgebraicPrimitiveMagnitudeNine
+        | SolveFixture::AlgebraicPrimitiveMagnitudeTen
+        | SolveFixture::AlgebraicPrimitiveMagnitudeEleven
+        | SolveFixture::AlgebraicPrimitiveMagnitudeTwelve => (
+            kgeom::param::ParamRange::new(0.0, 1.0),
+            kgeom::param::ParamRange::new(0.25, 0.5),
         ),
         _ => (first.param_range(), second.param_range()),
     };
@@ -659,6 +1064,29 @@ fn curves(fixture: SolveFixture) -> (NurbsCurve, NurbsCurve) {
     match fixture {
         SolveFixture::PolynomialTransverse => (diagonal(None), horizontal(0.0)),
         SolveFixture::RationalTransverse => (diagonal(Some(vec![1.0, 1.5])), horizontal(0.0)),
+        SolveFixture::AlgebraicSpatial => algebraic_spatial_pair(),
+        SolveFixture::AlgebraicLinearForm => algebraic_linear_form_pair(),
+        SolveFixture::AlgebraicPrimitiveForm => algebraic_primitive_form_pair(),
+        SolveFixture::AlgebraicPrimitiveMagnitudeThree => {
+            algebraic_primitive_magnitude_three_pair()
+        }
+        SolveFixture::AlgebraicPrimitiveMagnitudeFour => algebraic_primitive_magnitude_four_pair(),
+        SolveFixture::AlgebraicPrimitiveMagnitudeFive => algebraic_primitive_magnitude_five_pair(),
+        SolveFixture::AlgebraicPrimitiveMagnitudeSix => algebraic_primitive_magnitude_six_pair(),
+        SolveFixture::AlgebraicPrimitiveMagnitudeSeven => {
+            algebraic_primitive_magnitude_seven_pair()
+        }
+        SolveFixture::AlgebraicPrimitiveMagnitudeEight => {
+            algebraic_primitive_magnitude_eight_pair()
+        }
+        SolveFixture::AlgebraicPrimitiveMagnitudeNine => algebraic_primitive_magnitude_nine_pair(),
+        SolveFixture::AlgebraicPrimitiveMagnitudeTen => algebraic_primitive_magnitude_ten_pair(),
+        SolveFixture::AlgebraicPrimitiveMagnitudeEleven => {
+            algebraic_primitive_magnitude_eleven_pair()
+        }
+        SolveFixture::AlgebraicPrimitiveMagnitudeTwelve => {
+            algebraic_primitive_magnitude_twelve_pair()
+        }
         SolveFixture::Tangent => (tangent_parabola(), horizontal(0.0)),
         SolveFixture::MultipleRoots => (arch(), horizontal(0.5)),
         SolveFixture::HiddenMiss => (arch(), horizontal(1.5)),
@@ -670,8 +1098,393 @@ fn curves(fixture: SolveFixture) -> (NurbsCurve, NurbsCurve) {
                 .expect("valid Q4 exact common refinement");
             (coarse, refined)
         }
+        SolveFixture::InverseHistoryOverlap => inverse_history_pair(false),
+        SolveFixture::AlteredInverseHistory => inverse_history_pair(true),
         SolveFixture::SampledOverlap => (horizontal(0.0), horizontal(0.5e-8)),
     }
+}
+
+fn inverse_history_pair(altered: bool) -> (NurbsCurve, NurbsCurve) {
+    let coarse = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 2.0, 0.0),
+            Point3::new(3.0, 0.0, 0.0),
+        ],
+        Some(vec![1.0, 1.5, 2.0]),
+    )
+    .expect("valid Q4 inverse-history ancestor");
+    let left = coarse
+        .with_knot_inserted(0.25, 1)
+        .expect("valid Q4 left insertion history");
+    let mut right = coarse
+        .with_knot_inserted(0.75, 1)
+        .expect("valid Q4 right insertion history");
+    if altered {
+        let mut points = right.points().to_vec();
+        points[1].y += 1.0e-4;
+        right = NurbsCurve::new(
+            right.degree(),
+            right.knots().as_slice().to_vec(),
+            points,
+            right.weights().map(<[f64]>::to_vec),
+        )
+        .expect("valid Q4 altered insertion history");
+    }
+    (left, right)
+}
+
+fn algebraic_spatial_pair() -> (NurbsCurve, NurbsCurve) {
+    let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let first = NurbsCurve::new(
+        2,
+        knots.clone(),
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.5, 0.0, 1.0),
+            Point3::new(1.0, 0.0, 0.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 algebraic-spatial first curve");
+    let second = NurbsCurve::new(
+        2,
+        knots,
+        vec![
+            Point3::new(0.0, -1.0, 0.0),
+            Point3::new(0.5, 0.5, 1.0),
+            Point3::new(1.0, 2.0, 0.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 algebraic-spatial second curve");
+    (first, second)
+}
+
+fn algebraic_linear_form_pair() -> (NurbsCurve, NurbsCurve) {
+    let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let first = NurbsCurve::new(
+        2,
+        knots.clone(),
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 1.0),
+            Point3::new(4.0, 0.0, 0.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 algebraic-linear-form first curve");
+    let second = NurbsCurve::new(
+        2,
+        knots,
+        vec![
+            Point3::new(1.0, -1.0, 1.0),
+            Point3::new(1.5, 0.5, 0.5),
+            Point3::new(2.0, 2.0, -2.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 algebraic-linear-form second curve");
+    (first, second)
+}
+
+fn algebraic_primitive_form_pair() -> (NurbsCurve, NurbsCurve) {
+    let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let first = NurbsCurve::new(
+        2,
+        knots.clone(),
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 1.0),
+            Point3::new(8.0, 0.0, 0.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 algebraic-primitive-form first curve");
+    let second = NurbsCurve::new(
+        2,
+        knots,
+        vec![
+            Point3::new(2.0, -4.0, 1.0),
+            Point3::new(3.0, 2.0, 0.5),
+            Point3::new(4.0, 8.0, -2.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 algebraic-primitive-form second curve");
+    (first, second)
+}
+
+fn algebraic_primitive_magnitude_three_pair() -> (NurbsCurve, NurbsCurve) {
+    let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let first = NurbsCurve::new(
+        2,
+        knots.clone(),
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 1.0),
+            Point3::new(8.0, 0.0, 0.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-three first curve");
+    let second = NurbsCurve::new(
+        2,
+        knots,
+        vec![
+            Point3::new(1.0, 3.0, 7.0),
+            Point3::new(3.5, -1.5, -2.5),
+            Point3::new(6.0, -6.0, -14.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-three second curve");
+    (first, second)
+}
+
+fn algebraic_primitive_magnitude_four_pair() -> (NurbsCurve, NurbsCurve) {
+    let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let first = NurbsCurve::new(
+        2,
+        knots.clone(),
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 1.0),
+            Point3::new(8.0, 0.0, 0.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-four first curve");
+    let second = NurbsCurve::new(
+        2,
+        knots,
+        vec![
+            Point3::new(1.0, 4.0, 9.0),
+            Point3::new(3.5, -2.0, -3.5),
+            Point3::new(6.0, -8.0, -18.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-four second curve");
+    (first, second)
+}
+
+fn algebraic_primitive_magnitude_five_pair() -> (NurbsCurve, NurbsCurve) {
+    let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let first = NurbsCurve::new(
+        2,
+        knots.clone(),
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 1.0),
+            Point3::new(8.0, 0.0, 0.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-five first curve");
+    let second = NurbsCurve::new(
+        2,
+        knots,
+        vec![
+            Point3::new(1.0, 5.0, 11.0),
+            Point3::new(3.5, -2.5, -4.5),
+            Point3::new(6.0, -10.0, -22.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-five second curve");
+    (first, second)
+}
+
+fn algebraic_primitive_magnitude_six_pair() -> (NurbsCurve, NurbsCurve) {
+    let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let first = NurbsCurve::new(
+        2,
+        knots.clone(),
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 1.0),
+            Point3::new(8.0, 0.0, 0.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-six first curve");
+    let second = NurbsCurve::new(
+        2,
+        knots,
+        vec![
+            Point3::new(1.0, 6.0, 13.0),
+            Point3::new(3.5, -3.0, -5.5),
+            Point3::new(6.0, -12.0, -26.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-six second curve");
+    (first, second)
+}
+
+fn algebraic_primitive_magnitude_seven_pair() -> (NurbsCurve, NurbsCurve) {
+    let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let first = NurbsCurve::new(
+        2,
+        knots.clone(),
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 1.0),
+            Point3::new(8.0, 0.0, 0.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-seven first curve");
+    let second = NurbsCurve::new(
+        2,
+        knots,
+        vec![
+            Point3::new(1.0, 7.0, 15.0),
+            Point3::new(3.5, -3.5, -6.5),
+            Point3::new(6.0, -14.0, -30.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-seven second curve");
+    (first, second)
+}
+
+fn algebraic_primitive_magnitude_eight_pair() -> (NurbsCurve, NurbsCurve) {
+    let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let first = NurbsCurve::new(
+        2,
+        knots.clone(),
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 1.0),
+            Point3::new(8.0, 0.0, 0.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-eight first curve");
+    let second = NurbsCurve::new(
+        2,
+        knots,
+        vec![
+            Point3::new(1.0, 8.0, 17.0),
+            Point3::new(3.5, -4.0, -7.5),
+            Point3::new(6.0, -16.0, -34.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-eight second curve");
+    (first, second)
+}
+
+fn algebraic_primitive_magnitude_nine_pair() -> (NurbsCurve, NurbsCurve) {
+    let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let first = NurbsCurve::new(
+        2,
+        knots.clone(),
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 1.0),
+            Point3::new(8.0, 0.0, 0.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-nine first curve");
+    let second = NurbsCurve::new(
+        2,
+        knots,
+        vec![
+            Point3::new(1.0, 9.0, 19.0),
+            Point3::new(3.5, -4.5, -8.5),
+            Point3::new(6.0, -18.0, -38.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-nine second curve");
+    (first, second)
+}
+
+fn algebraic_primitive_magnitude_ten_pair() -> (NurbsCurve, NurbsCurve) {
+    let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let first = NurbsCurve::new(
+        2,
+        knots.clone(),
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 1.0),
+            Point3::new(8.0, 0.0, 0.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-ten first curve");
+    let second = NurbsCurve::new(
+        2,
+        knots,
+        vec![
+            Point3::new(1.0, 10.0, 21.0),
+            Point3::new(3.5, -5.0, -9.5),
+            Point3::new(6.0, -20.0, -42.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-ten second curve");
+    (first, second)
+}
+
+fn algebraic_primitive_magnitude_eleven_pair() -> (NurbsCurve, NurbsCurve) {
+    let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let first = NurbsCurve::new(
+        2,
+        knots.clone(),
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 1.0),
+            Point3::new(8.0, 0.0, 0.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-eleven first curve");
+    let second = NurbsCurve::new(
+        2,
+        knots,
+        vec![
+            Point3::new(1.0, 11.0, 23.0),
+            Point3::new(3.5, -5.5, -10.5),
+            Point3::new(6.0, -22.0, -46.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-eleven second curve");
+    (first, second)
+}
+
+fn algebraic_primitive_magnitude_twelve_pair() -> (NurbsCurve, NurbsCurve) {
+    let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+    let first = NurbsCurve::new(
+        2,
+        knots.clone(),
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 1.0),
+            Point3::new(8.0, 0.0, 0.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-twelve first curve");
+    let second = NurbsCurve::new(
+        2,
+        knots,
+        vec![
+            Point3::new(1.0, 12.0, 25.0),
+            Point3::new(3.5, -6.0, -11.5),
+            Point3::new(6.0, -24.0, -50.0),
+        ],
+        None,
+    )
+    .expect("valid Q4 magnitude-twelve second curve");
+    (first, second)
 }
 
 fn diagonal(weights: Option<Vec<f64>>) -> NurbsCurve {
@@ -962,7 +1775,7 @@ mod tests {
             );
             let expected_elements = match case.fixture {
                 SolveFixture::HiddenMiss => 0,
-                SolveFixture::MultipleRoots => 2,
+                SolveFixture::MultipleRoots | SolveFixture::AlteredInverseHistory => 2,
                 _ => 1,
             };
             assert_eq!(

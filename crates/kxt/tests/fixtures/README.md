@@ -38,6 +38,17 @@ the committed corpus.
   fixture validates the published base-13006 layout locally; it does not
   claim acceptance by a modern external Parasolid oracle.
 
+The G5 transmitted-intersection positive is generated structurally in
+`tests/intersection_chart.rs` from the canonical writer's unit block rather
+than committed as another byte fixture. It replaces one exact line with a
+trimmed, finite open plane/plane `INTERSECTION`, two affine CHART positions,
+`L/?` endpoint LIMITs, and an `INTERSECTION_DATA(204)` record containing two
+ordered `[u0,v0,u1,v1]` tuples. A separate embedded-schema wire test pins the
+modern appended pointer and inserted-field layouts. The later certified
+constant-normal `Offset(B-surface)/B-surface` rung covers the exemplar's first
+such chart; equal start/end limits, null UV tuples, `H` closed limits, and
+`T/F` terminators remain unsupported.
+
 ## Downloaded (public GitHub repositories)
 
 Real-world files written by Parasolid-based applications; committed as
@@ -68,10 +79,16 @@ statement accompanied the individual files.
   edges with per-fin trimmed SP-curves) exported by the repository owner
   from their own Onshape project as Parasolid text (Parasolid 37.1.212,
   schema `SCH_3701212_37102_13006`, 2026-07-11). Parses fully through
-  the embedded-schema mechanism. OFFSET_SURF reconstruction now advances
-  until a periodic B-surface basis, which remains outside the kernel's NURBS
-  contract. Primary reference for
-  modern writer conventions: TRIMMED_CURVE/GEOMETRIC_OWNER linkage,
+  the embedded-schema mechanism. Its three clamped periodic/closed B-surface
+  leaves reconstruct through the certified position/C1 seam contract, and its
+  first constant-normal `Offset(B-surface)/B-surface` chart now retains the
+  live offset root, signed distance, periodic NURBS basis, paired pcurves, and
+  whole-range unit-normal proof. Reconstruction next stops at a genuinely
+  later transmitted intersection without distinct finite-open limits: records
+  1828 and 2008 each reuse one limit pointer as both start and end. Equal-limit
+  semantics are therefore the next corpus-backed reader slice, before broader
+  null/closed, periodic-trace-range, and noncanonical chart forms. Primary
+  reference for modern writer conventions: TRIMMED_CURVE/GEOMETRIC_OWNER linkage,
   tolerant-edge fin curves, POINT ownership by vertex, and the resolved
   37102 node layouts (133/141 match base 13006 exactly).
 - `cyl.x_t` — a plain solid cylinder exported by the repository owner

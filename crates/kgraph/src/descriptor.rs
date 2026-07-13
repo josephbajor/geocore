@@ -7,6 +7,10 @@ use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Surface, Torus};
 
 use crate::class::{Curve2dClass, CurveClass, GeometryClassKey, SurfaceClass};
 use crate::graph::{GeometryRef, SurfaceHandle};
+use crate::intersection::{
+    SphericalCirclePcurve, TransmittedIntersectionCurveDescriptor,
+    TransmittedNurbsIntersectionCurveDescriptor, VerifiedIntersectionCurveDescriptor,
+};
 
 /// Constant signed displacement along a basis surface's natural unit normal.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -47,6 +51,12 @@ pub enum CurveDescriptor {
     Ellipse(Ellipse),
     /// B-spline or NURBS curve.
     Nurbs(NurbsCurve),
+    /// Finite graph-owned intersection branch with paired trace proof.
+    Intersection(Box<VerifiedIntersectionCurveDescriptor>),
+    /// Verified chordal intersection geometry retained from interchange.
+    TransmittedIntersection(Box<TransmittedIntersectionCurveDescriptor>),
+    /// Verified chordal chart with original NURBS traces retained from interchange.
+    TransmittedNurbsIntersection(Box<TransmittedNurbsIntersectionCurveDescriptor>),
 }
 
 impl CurveDescriptor {
@@ -62,6 +72,9 @@ impl CurveDescriptor {
             Self::Circle(value) => value,
             Self::Ellipse(value) => value,
             Self::Nurbs(value) => value,
+            Self::Intersection(value) => value.as_ref(),
+            Self::TransmittedIntersection(value) => value.as_ref(),
+            Self::TransmittedNurbsIntersection(value) => value.as_ref(),
         }
     }
 
@@ -72,6 +85,9 @@ impl CurveDescriptor {
             Self::Circle(_) => CurveClass::Circle,
             Self::Ellipse(_) => CurveClass::Ellipse,
             Self::Nurbs(_) => CurveClass::Nurbs,
+            Self::Intersection(_) => CurveClass::Intersection,
+            Self::TransmittedIntersection(_) => CurveClass::Intersection,
+            Self::TransmittedNurbsIntersection(_) => CurveClass::Intersection,
         }
     }
 
@@ -114,6 +130,47 @@ impl CurveDescriptor {
         } else {
             None
         }
+    }
+
+    /// Borrow this descriptor as a verified intersection branch when its
+    /// class matches.
+    pub fn as_intersection(&self) -> Option<&VerifiedIntersectionCurveDescriptor> {
+        if let Self::Intersection(value) = self {
+            Some(value.as_ref())
+        } else {
+            None
+        }
+    }
+
+    /// Borrow this descriptor as a verified transmitted chordal intersection.
+    pub fn as_transmitted_intersection(&self) -> Option<&TransmittedIntersectionCurveDescriptor> {
+        if let Self::TransmittedIntersection(value) = self {
+            Some(value.as_ref())
+        } else {
+            None
+        }
+    }
+
+    /// Borrow this descriptor as a verified transmitted original-NURBS chart.
+    pub fn as_transmitted_nurbs_intersection(
+        &self,
+    ) -> Option<&TransmittedNurbsIntersectionCurveDescriptor> {
+        if let Self::TransmittedNurbsIntersection(value) = self {
+            Some(value.as_ref())
+        } else {
+            None
+        }
+    }
+
+    /// Whether this descriptor is any graph-owned verified intersection
+    /// family.
+    pub const fn is_verified_intersection(&self) -> bool {
+        matches!(
+            self,
+            Self::Intersection(_)
+                | Self::TransmittedIntersection(_)
+                | Self::TransmittedNurbsIntersection(_)
+        )
     }
 }
 
@@ -290,6 +347,10 @@ impl From<OffsetSurfaceDescriptor> for SurfaceDescriptor {
 }
 
 /// A two-dimensional parameter-space curve descriptor.
+// The certified nonlinear variant intentionally stays inline: graph
+// descriptors are immutable values, and retaining value semantics keeps
+// certificate/pcurve equality and transactional validation exact.
+#[allow(clippy::large_enum_variant)]
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Curve2dDescriptor {
@@ -299,6 +360,8 @@ pub enum Curve2dDescriptor {
     Circle(Circle2d),
     /// B-spline or NURBS curve.
     Nurbs(NurbsCurve2d),
+    /// Finite certifier-minted inverse sphere chart of a spatial circle.
+    SphericalCircle(SphericalCirclePcurve),
 }
 
 impl Curve2dDescriptor {
@@ -313,6 +376,7 @@ impl Curve2dDescriptor {
             Self::Line(value) => value,
             Self::Circle(value) => value,
             Self::Nurbs(value) => value,
+            Self::SphericalCircle(value) => value,
         }
     }
 
@@ -322,6 +386,7 @@ impl Curve2dDescriptor {
             Self::Line(_) => Curve2dClass::Line,
             Self::Circle(_) => Curve2dClass::Circle,
             Self::Nurbs(_) => Curve2dClass::Nurbs,
+            Self::SphericalCircle(_) => Curve2dClass::SphericalCircle,
         }
     }
     /// Stable external class key.
@@ -352,6 +417,15 @@ impl Curve2dDescriptor {
             None
         }
     }
+    /// Borrow as a certified inverse sphere-chart circle when its class
+    /// matches.
+    pub const fn as_spherical_circle(&self) -> Option<&SphericalCirclePcurve> {
+        if let Self::SphericalCircle(value) = self {
+            Some(value)
+        } else {
+            None
+        }
+    }
 }
 
 impl From<Line2d> for Curve2dDescriptor {
@@ -377,7 +451,18 @@ pub trait GeometryDependencies {
 }
 
 impl GeometryDependencies for CurveDescriptor {
-    fn visit_dependencies(&self, _: &mut dyn FnMut(GeometryRef)) {}
+    fn visit_dependencies(&self, visit: &mut dyn FnMut(GeometryRef)) {
+        match self {
+            Self::Intersection(intersection) => intersection.visit_dependencies(visit),
+            Self::TransmittedIntersection(intersection) => {
+                intersection.visit_dependencies(visit);
+            }
+            Self::TransmittedNurbsIntersection(intersection) => {
+                intersection.visit_dependencies(visit);
+            }
+            _ => {}
+        }
+    }
 }
 impl GeometryDependencies for SurfaceDescriptor {
     fn visit_dependencies(&self, visit: &mut dyn FnMut(GeometryRef)) {

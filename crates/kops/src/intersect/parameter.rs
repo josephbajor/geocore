@@ -94,6 +94,144 @@ pub(super) fn angular_parameter_tolerance(radius: f64, tolerances: Tolerances) -
     (tolerances.linear() / radius).max(tolerances.angular())
 }
 
+/// One first-chart interval whose affine periodic image lies in the requested
+/// second-chart interval. `shift` is the exact integer-period representative
+/// added after the affine map.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct PeriodicOverlapPiece {
+    pub(super) a: ParamRange,
+    pub(super) shift: f64,
+}
+
+/// Intersect `a` with all preimages of `b` under
+/// `b_parameter = sign * a_parameter + phase + k * period`.
+///
+/// Both input windows are expected to span no more than one period. The
+/// integer corridor keeps the shift multiplication exact and prevents a
+/// malformed far-away chart from silently aliasing through lossy casts.
+pub(super) fn periodic_preimage_overlaps(
+    a: ParamRange,
+    b: ParamRange,
+    sign: f64,
+    phase: f64,
+    period: f64,
+    tolerance: f64,
+    corridor_reason: &'static str,
+) -> Result<Vec<PeriodicOverlapPiece>> {
+    debug_assert!(sign == -1.0 || sign == 1.0);
+    debug_assert!(period.is_finite() && period > 0.0);
+    let mapped = [sign * a.lo + phase, sign * a.hi + phase];
+    let mapped_lo = mapped[0].min(mapped[1]);
+    let mapped_hi = mapped[0].max(mapped[1]);
+    let first_shift = ((b.lo - tolerance - mapped_hi) / period).ceil();
+    let last_shift = ((b.hi + tolerance - mapped_lo) / period).floor();
+    const EXACT_INTEGER_LIMIT: f64 = (1_u64 << 52) as f64;
+    if !first_shift.is_finite()
+        || !last_shift.is_finite()
+        || first_shift.abs() > EXACT_INTEGER_LIMIT
+        || last_shift.abs() > EXACT_INTEGER_LIMIT
+        || last_shift - first_shift > 4.0
+    {
+        return Err(Error::InvalidGeometry {
+            reason: corridor_reason,
+        });
+    }
+
+    let mut pieces = Vec::new();
+    let first_shift = first_shift as i64;
+    let last_shift = last_shift as i64;
+    if first_shift > last_shift {
+        return Ok(pieces);
+    }
+    for integer_shift in first_shift..=last_shift {
+        let shift = integer_shift as f64 * period;
+        let mapped_b = affine_preimage_range(b, sign, phase + shift);
+        if let Some(overlap) = intersect_ranges(a, mapped_b, tolerance) {
+            pieces.push(PeriodicOverlapPiece { a: overlap, shift });
+        }
+    }
+    pieces.sort_by(|first, second| {
+        first
+            .a
+            .lo
+            .total_cmp(&second.a.lo)
+            .then(first.a.hi.total_cmp(&second.a.hi))
+            .then(first.shift.total_cmp(&second.shift))
+    });
+    pieces.dedup_by(|second, first| second.a == first.a);
+
+    let positive = pieces
+        .iter()
+        .copied()
+        .filter(|piece| piece.a.width() > tolerance)
+        .collect::<Vec<_>>();
+    let mut point_representatives = Vec::new();
+    pieces.retain(|piece| {
+        if piece.a.width() > tolerance {
+            return true;
+        }
+        let parameter = range_midpoint(piece.a);
+        if positive.iter().any(|positive| {
+            fit_periodic_parameter(parameter, positive.a, period, tolerance).is_some()
+        }) {
+            return false;
+        }
+        if point_representatives.iter().any(|representative| {
+            periodic_distance(parameter, *representative, period) <= tolerance
+        }) {
+            return false;
+        }
+        point_representatives.push(parameter);
+        true
+    });
+    Ok(pieces)
+}
+
+/// Intersect `a` with the preimage of `b` under an affine sign/phase map.
+pub(super) fn affine_preimage_overlap(
+    a: ParamRange,
+    b: ParamRange,
+    sign: f64,
+    phase: f64,
+    tolerance: f64,
+) -> Option<ParamRange> {
+    intersect_ranges(a, affine_preimage_range(b, sign, phase), tolerance)
+}
+
+pub(super) fn range_midpoint(range: ParamRange) -> f64 {
+    range.lo + 0.5 * range.width()
+}
+
+fn affine_preimage_range(range: ParamRange, sign: f64, phase: f64) -> ParamRange {
+    let endpoints = [(range.lo - phase) / sign, (range.hi - phase) / sign];
+    ParamRange::new(
+        endpoints[0].min(endpoints[1]),
+        endpoints[0].max(endpoints[1]),
+    )
+}
+
+fn intersect_ranges(first: ParamRange, second: ParamRange, tolerance: f64) -> Option<ParamRange> {
+    let lo = first.lo.max(second.lo);
+    let hi = first.hi.min(second.hi);
+    if lo <= hi {
+        return Some(ParamRange::new(lo, hi));
+    }
+    if lo - hi > tolerance {
+        return None;
+    }
+    let parameter = if first.hi < second.lo {
+        first.hi
+    } else {
+        first.lo
+    };
+    Some(ParamRange::new(parameter, parameter))
+}
+
+fn periodic_distance(first: f64, second: f64, period: f64) -> f64 {
+    let turns = ((first - second) / period).round();
+    (first - second - turns * period).abs()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +326,36 @@ mod tests {
                 reason: surface_reason,
             })
         );
+    }
+
+    #[test]
+    fn affine_periodic_overlap_splits_seams_and_retains_collapsed_contacts() {
+        let tau = core::f64::consts::TAU;
+        let pieces = periodic_preimage_overlaps(
+            ParamRange::new(0.0, tau),
+            ParamRange::new(1.0, 1.0 + tau),
+            1.0,
+            0.0,
+            tau,
+            0.0,
+            "periodic corridor",
+        )
+        .unwrap();
+        assert_eq!(pieces.len(), 2);
+        assert_eq!(pieces[0].a, ParamRange::new(0.0, 1.0));
+        assert_eq!(pieces[1].a, ParamRange::new(1.0, tau));
+
+        let collapsed = periodic_preimage_overlaps(
+            ParamRange::new(0.5, 0.5),
+            ParamRange::new(-0.5, -0.5),
+            -1.0,
+            0.0,
+            tau,
+            0.0,
+            "periodic corridor",
+        )
+        .unwrap();
+        assert_eq!(collapsed.len(), 1);
+        assert_eq!(collapsed[0].a, ParamRange::new(0.5, 0.5));
     }
 }

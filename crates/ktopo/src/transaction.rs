@@ -22,7 +22,10 @@ use kcore::arena::Handle;
 use kcore::error::{Error, Result};
 use kcore::operation::{OperationContext, OperationOutcome, OperationPolicyError, OperationScope};
 use kcore::tolerance::{LINEAR_RESOLUTION, Tolerances};
-use kgraph::{EvalBudgetProfile, EvalLimits};
+use kgraph::{
+    Curve2dHandle, EvalBudgetProfile, EvalLimits, SurfaceHandle,
+    TransmittedNurbsIntersectionCertificate, TransmittedPlaneIntersectionCertificate,
+};
 
 /// Net kind of one committed entity mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,6 +205,52 @@ impl AssemblyStore<'_> {
     /// Insert a validated 3D curve descriptor into the graph.
     pub fn insert_curve(&mut self, curve: CurveGeom) -> Result<CurveId> {
         self.store.insert_curve(curve)
+    }
+
+    /// Insert a certified transmitted exact-plane-field intersection and
+    /// retain its ordered source and pcurve dependencies in the geometry graph.
+    pub fn insert_verified_transmitted_plane_intersection_curve(
+        &mut self,
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: TransmittedPlaneIntersectionCertificate,
+    ) -> Result<CurveId> {
+        self.store
+            .insert_verified_transmitted_plane_intersection_curve(
+                source_surfaces,
+                pcurves,
+                certificate,
+            )
+    }
+
+    /// Insert a certified transmitted chart containing one or two original
+    /// NURBS traces and retain its ordered source/pcurve dependencies.
+    pub fn insert_verified_transmitted_nurbs_intersection_curve(
+        &mut self,
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: TransmittedNurbsIntersectionCertificate,
+    ) -> Result<CurveId> {
+        self.store
+            .insert_verified_transmitted_nurbs_intersection_curve(
+                source_surfaces,
+                pcurves,
+                certificate,
+            )
+    }
+
+    /// Compatibility insertion name for the original mixed Plane/NURBS arm.
+    pub fn insert_verified_transmitted_plane_nurbs_intersection_curve(
+        &mut self,
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: TransmittedNurbsIntersectionCertificate,
+    ) -> Result<CurveId> {
+        self.insert_verified_transmitted_nurbs_intersection_curve(
+            source_surfaces,
+            pcurves,
+            certificate,
+        )
     }
 
     /// Insert a validated surface descriptor into the graph.

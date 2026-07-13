@@ -1,8 +1,51 @@
 //! Source-representation interval bounds over finite NURBS parameter ranges.
 
 use super::NurbsCurve;
+use crate::aabb::Aabb3;
 use crate::param::ParamRange;
+use crate::vec::Vec3;
 use kcore::interval::Interval;
+
+const MAX_LINEAR_FORM_COEFFICIENT: i8 = 12;
+
+/// Exact number of source knot-span slots inspected by one position-range
+/// enclosure.
+///
+/// This count intentionally includes repeated/empty span slots: the interval
+/// loop inspects each slot before deciding whether it contributes. Callers can
+/// therefore admit the complete scan without first performing an unaccounted
+/// knot-vector traversal.
+pub(super) fn position_range_work_units(curve: &NurbsCurve) -> usize {
+    curve.points().len() - curve.degree()
+}
+
+/// Conservatively enclose source-curve positions over a closed parameter range.
+///
+/// The range box is derived directly from the original representation; rounded
+/// knot-insertion or restriction controls do not participate. Intersecting it
+/// with the whole-source positive-weight control hull can only tighten two
+/// independently conservative bounds. If interval evaluation is inconclusive,
+/// the whole-source hull is retained so callers fail open rather than exclude
+/// source geometry.
+pub(super) fn position_range_aabb(curve: &NurbsCurve, range: ParamRange) -> Aabb3 {
+    let source_hull = Aabb3::from_points(curve.points());
+    let Some([x, y, z]) = position_component_intervals(curve, range, [0, 1, 2]) else {
+        return source_hull;
+    };
+    let range_box = Aabb3 {
+        min: Vec3::new(x.lo(), y.lo(), z.lo()),
+        max: Vec3::new(x.hi(), y.hi(), z.hi()),
+    };
+    let bounded = Aabb3 {
+        min: source_hull.min.max(range_box.min),
+        max: source_hull.max.min(range_box.max),
+    };
+    if bounded.is_empty() {
+        source_hull
+    } else {
+        bounded
+    }
+}
 
 /// Enclose one Euclidean position component over a closed source range.
 pub(super) fn position_component_interval(
@@ -10,7 +53,15 @@ pub(super) fn position_component_interval(
     range: ParamRange,
     axis: usize,
 ) -> Option<Interval> {
-    if axis >= 3 || !range.is_finite() || range.width() < 0.0 {
+    position_component_intervals(curve, range, [axis]).map(|bounds| bounds[0])
+}
+
+fn position_component_intervals<const N: usize>(
+    curve: &NurbsCurve,
+    range: ParamRange,
+    axes: [usize; N],
+) -> Option<[Interval; N]> {
+    if axes.iter().any(|&axis| axis >= 3) || !range.is_finite() || range.width() < 0.0 {
         return None;
     }
     let domain = curve.knots().domain();
@@ -21,7 +72,7 @@ pub(super) fn position_component_interval(
     let knots = curve.knots().as_slice();
     let degree = curve.degree();
     let last_span = curve.points().len() - 1;
-    let mut result = None;
+    let mut result: Option<[Interval; N]> = None;
     for span in degree..=last_span {
         if knots[span] >= knots[span + 1] {
             continue;
@@ -38,18 +89,27 @@ pub(super) fn position_component_interval(
             Interval::new(local_lo, local_hi),
             &homogeneous,
         )?;
-        let component = if curve.weights().is_none() {
-            position[axis]
+        let components = if curve.weights().is_none() {
+            core::array::from_fn(|index| position[axes[index]])
         } else {
             if position[3].lo() <= 0.0 {
                 return None;
             }
-            position[axis].checked_div(position[3])?
+            let mut components = core::array::from_fn(|index| position[axes[index]]);
+            for component in &mut components {
+                *component = component.checked_div(position[3])?;
+            }
+            components
         };
-        if !finite(component) {
+        if !components.iter().copied().all(finite) {
             return None;
         }
-        result = Some(hull(result, component));
+        result = Some(match result {
+            Some(current) => {
+                core::array::from_fn(|index| hull(Some(current[index]), components[index]))
+            }
+            None => components,
+        });
     }
     result
 }
@@ -63,6 +123,58 @@ pub(super) fn derivative_component_interval(
     range: ParamRange,
     axis: usize,
 ) -> Option<Interval> {
+    if axis >= 3 {
+        return None;
+    }
+    let homogeneous = homogeneous_controls(curve)?;
+    derivative_homogeneous_coordinate_interval(curve, range, axis, &homogeneous)
+}
+
+/// Enclose the derivative of a bounded integer Euclidean coordinate form.
+///
+/// The scalar numerator is formed in homogeneous source-control space before
+/// interval de Boor evaluation. This preserves correlations such as `x+y`
+/// that independent component bounds lose. Coefficients outside `[-12,12]`
+/// and inconclusive arithmetic fail closed.
+pub(super) fn derivative_signed_linear_form_interval(
+    curve: &NurbsCurve,
+    range: ParamRange,
+    coefficients: [i8; 3],
+) -> Option<Interval> {
+    if coefficients.iter().any(|&coefficient| {
+        !(-MAX_LINEAR_FORM_COEFFICIENT..=MAX_LINEAR_FORM_COEFFICIENT).contains(&coefficient)
+    }) || coefficients.iter().all(|&coefficient| coefficient == 0)
+    {
+        return None;
+    }
+    let homogeneous = homogeneous_controls(curve)?;
+    let scalar_homogeneous = homogeneous
+        .iter()
+        .map(|control| {
+            let scalar = coefficients.iter().enumerate().fold(
+                Interval::point(0.0),
+                |value, (axis, &coefficient)| {
+                    value + Interval::point(f64::from(coefficient)) * control[axis]
+                },
+            );
+            let packed = [
+                scalar,
+                Interval::point(0.0),
+                Interval::point(0.0),
+                control[3],
+            ];
+            packed.iter().copied().all(finite).then_some(packed)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    derivative_homogeneous_coordinate_interval(curve, range, 0, &scalar_homogeneous)
+}
+
+fn derivative_homogeneous_coordinate_interval(
+    curve: &NurbsCurve,
+    range: ParamRange,
+    axis: usize,
+    homogeneous: &[[Interval; 4]],
+) -> Option<Interval> {
     if axis >= 3 || !range.is_finite() || range.width() <= 0.0 {
         return None;
     }
@@ -75,8 +187,7 @@ pub(super) fn derivative_component_interval(
     if degree == 0 {
         return None;
     }
-    let homogeneous = homogeneous_controls(curve)?;
-    let derivative = homogeneous_derivative_controls(curve, &homogeneous)?;
+    let derivative = homogeneous_derivative_controls(curve, homogeneous)?;
     let knots = curve.knots().as_slice();
     let derivative_knots = &knots[1..knots.len() - 1];
     let last_span = curve.points().len() - 1;
@@ -92,7 +203,7 @@ pub(super) fn derivative_component_interval(
             continue;
         }
         let parameter = Interval::new(local_lo, local_hi);
-        let position = interval_de_boor(knots, degree, span, parameter, &homogeneous)?;
+        let position = interval_de_boor(knots, degree, span, parameter, homogeneous)?;
         let homogeneous_derivative = interval_de_boor(
             derivative_knots,
             degree - 1,
@@ -226,6 +337,7 @@ mod tests {
     use crate::vec::Point3;
 
     fn assert_derivatives_enclosed(curve: &NurbsCurve, range: ParamRange) {
+        let position_bounds = position_range_aabb(curve, range);
         let bounds = [
             derivative_component_interval(curve, range, 0).unwrap(),
             derivative_component_interval(curve, range, 1).unwrap(),
@@ -235,6 +347,10 @@ mod tests {
             let parameter = range.lerp(f64::from(sample) / 512.0);
             let point = curve.eval(parameter);
             let derivative = curve.eval_derivs(parameter, 1).d[1];
+            assert!(
+                position_bounds.contains(point),
+                "parameter={parameter}, point={point:?}, bounds={position_bounds:?}"
+            );
             for (axis, value) in [point.x, point.y, point.z].into_iter().enumerate() {
                 let bound = position_component_interval(curve, range, axis).unwrap();
                 assert!(bound.contains(value));
@@ -281,7 +397,20 @@ mod tests {
             Some(vec![0.75, 2.0, 1.25]),
         )
         .unwrap();
-        assert_derivatives_enclosed(&curve, ParamRange::new(0.125, 0.875));
+        let range = ParamRange::new(0.125, 0.875);
+        assert_derivatives_enclosed(&curve, range);
+        let signed = derivative_signed_linear_form_interval(&curve, range, [1, -1, 1]).unwrap();
+        let magnitude_twelve =
+            derivative_signed_linear_form_interval(&curve, range, [12, -11, 0]).unwrap();
+        assert!(derivative_signed_linear_form_interval(&curve, range, [13, 0, 0]).is_none());
+        assert!(derivative_signed_linear_form_interval(&curve, range, [-13, 0, 0]).is_none());
+        for sample in 0..=512 {
+            let derivative = curve
+                .eval_derivs(range.lerp(f64::from(sample) / 512.0), 1)
+                .d[1];
+            assert!(signed.contains(derivative.x - derivative.y + derivative.z));
+            assert!(magnitude_twelve.contains(12.0 * derivative.x - 11.0 * derivative.y));
+        }
     }
 
     #[test]
@@ -317,6 +446,62 @@ mod tests {
         assert!(
             derivative_component_interval(&tiny_domain, tiny_domain.param_range(), 0).is_none()
         );
+        assert!(
+            derivative_signed_linear_form_interval(
+                &tiny_domain,
+                tiny_domain.param_range(),
+                [1, 1, 0],
+            )
+            .is_none()
+        );
+        assert!(
+            derivative_signed_linear_form_interval(
+                &tiny_domain,
+                tiny_domain.param_range(),
+                [11, 0, 0],
+            )
+            .is_none()
+        );
+        assert!(
+            derivative_signed_linear_form_interval(
+                &tiny_domain,
+                tiny_domain.param_range(),
+                [-11, 0, 0],
+            )
+            .is_none()
+        );
+        assert!(
+            derivative_signed_linear_form_interval(
+                &tiny_domain,
+                tiny_domain.param_range(),
+                [12, 0, 0],
+            )
+            .is_none()
+        );
+        assert!(
+            derivative_signed_linear_form_interval(
+                &tiny_domain,
+                tiny_domain.param_range(),
+                [-12, 0, 0],
+            )
+            .is_none()
+        );
+        assert!(
+            derivative_signed_linear_form_interval(
+                &tiny_domain,
+                tiny_domain.param_range(),
+                [13, 0, 0],
+            )
+            .is_none()
+        );
+        assert!(
+            derivative_signed_linear_form_interval(
+                &tiny_domain,
+                tiny_domain.param_range(),
+                [-13, 0, 0],
+            )
+            .is_none()
+        );
 
         let overflow = NurbsCurve::new(
             1,
@@ -330,5 +515,14 @@ mod tests {
         .unwrap();
         assert!(position_component_interval(&overflow, overflow.param_range(), 0).is_none());
         assert!(derivative_component_interval(&overflow, overflow.param_range(), 0).is_none());
+        assert!(
+            derivative_signed_linear_form_interval(&overflow, overflow.param_range(), [12, 1, 0],)
+                .is_none()
+        );
+        assert_eq!(
+            position_range_aabb(&overflow, overflow.param_range()),
+            Aabb3::from_points(overflow.points()),
+            "an inconclusive source-range interval must retain the whole source hull"
+        );
     }
 }

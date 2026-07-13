@@ -6,8 +6,8 @@ use kgeom::curve2d::{Line2d, NurbsCurve2d};
 use kgeom::frame::Frame;
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::param::ParamRange;
-use kgeom::surface::Plane;
-use kgeom::vec::{Point2, Point3, Vec3};
+use kgeom::surface::{Plane, Surface};
+use kgeom::vec::{Point2, Point3, Vec2, Vec3};
 use ktopo::btess::{TessOptions, check_watertight, tessellate_body};
 use ktopo::check::check_body;
 use ktopo::entity::{
@@ -319,6 +319,155 @@ fn replace_face_with_bilinear_nurbs(store: &mut Store, body: BodyId) {
             store.get_mut(fin_id).unwrap().pcurve =
                 Some(FinPcurve::new(pcurve_id, ParamRange::new(0.0, uv_len), map).unwrap());
         }
+    });
+}
+
+fn replace_sheet_patch_with_periodic_rational_nurbs(store: &mut Store, body: BodyId) {
+    let face_id = store.faces_of_body(body).unwrap()[0];
+    let surface_id = store.get(face_id).unwrap().surface;
+    let loop_id = store.get(face_id).unwrap().loops[0];
+    let fins = store.get(loop_id).unwrap().fins.clone();
+    let edges: Vec<_> = fins
+        .iter()
+        .map(|&fin| store.get(fin).unwrap().edge)
+        .collect();
+    let curves: Vec<_> = edges
+        .iter()
+        .map(|&edge| store.get(edge).unwrap().curve.unwrap())
+        .collect();
+    let vertices = [
+        store.get(edges[0]).unwrap().vertices[0].unwrap(),
+        store.get(edges[0]).unwrap().vertices[1].unwrap(),
+        store.get(edges[1]).unwrap().vertices[1].unwrap(),
+        store.get(edges[2]).unwrap().vertices[1].unwrap(),
+    ];
+
+    edit_body(store, body, |store| {
+        let xy = [
+            (Point3::new(1.0, 0.0, 0.0), 1.0),
+            (Point3::new(2.0, 1.0, 0.0), 0.75),
+            (Point3::new(0.4, -0.6, 0.0), 1.25),
+            (Point3::new(1.0, 0.0, 0.0), 1.0),
+        ];
+        let knots_u = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        let mut points = Vec::new();
+        let mut weights = Vec::new();
+        for (point, weight) in xy {
+            for z in [0.0, 2.0] {
+                points.push(Point3::new(point.x, point.y, z));
+                weights.push(weight);
+            }
+        }
+        let surface = NurbsSurface::new(
+            3,
+            1,
+            knots_u.clone(),
+            vec![0.0, 0.0, 2.0, 2.0],
+            points,
+            Some(weights),
+        )
+        .unwrap()
+        .with_certified_periodicity([true, false], 0.0)
+        .unwrap();
+        let (u0, u1) = (0.15, 0.65);
+        let positions = [
+            surface.eval([u0, 0.0]),
+            surface.eval([u1, 0.0]),
+            surface.eval([u1, 2.0]),
+            surface.eval([u0, 2.0]),
+        ];
+        for (vertex, position) in vertices.into_iter().zip(positions) {
+            let point = store.get(vertex).unwrap().point;
+            *store.get_mut(point).unwrap() = position;
+        }
+        store
+            .replace_surface(surface_id, SurfaceGeom::Nurbs(surface.clone()))
+            .unwrap();
+        store.get_mut(face_id).unwrap().domain =
+            Some(ktopo::entity::FaceDomain::from_bounds(u0, u1, 0.0, 2.0).unwrap());
+
+        let iso_curve = |z: f64| {
+            NurbsCurve::new(
+                3,
+                knots_u.clone(),
+                xy.into_iter()
+                    .map(|(point, _)| Point3::new(point.x, point.y, z))
+                    .collect(),
+                Some(xy.into_iter().map(|(_, weight)| weight).collect()),
+            )
+            .unwrap()
+            .restricted_to(ParamRange::new(u0, u1))
+            .unwrap()
+        };
+        store
+            .replace_curve(curves[0], CurveGeom::Nurbs(iso_curve(0.0)))
+            .unwrap();
+        store
+            .replace_curve(
+                curves[1],
+                CurveGeom::Line(Line::new(positions[1], positions[2] - positions[1]).unwrap()),
+            )
+            .unwrap();
+        store
+            .replace_curve(curves[2], CurveGeom::Nurbs(iso_curve(2.0)))
+            .unwrap();
+        store
+            .replace_curve(
+                curves[3],
+                CurveGeom::Line(Line::new(positions[0], positions[3] - positions[0]).unwrap()),
+            )
+            .unwrap();
+        for (edge, bounds) in
+            edges
+                .iter()
+                .copied()
+                .zip([(u0, u1), (0.0, 2.0), (u0, u1), (0.0, 2.0)])
+        {
+            store.get_mut(edge).unwrap().bounds = Some(bounds);
+        }
+        store.get_mut(edges[2]).unwrap().vertices = [Some(vertices[3]), Some(vertices[2])];
+        store.get_mut(edges[3]).unwrap().vertices = [Some(vertices[0]), Some(vertices[3])];
+        store.get_mut(fins[2]).unwrap().sense = Sense::Reversed;
+        store.get_mut(fins[3]).unwrap().sense = Sense::Reversed;
+
+        for (fin, origin, direction, range) in [
+            (
+                fins[0],
+                Point2::new(0.0, 0.0),
+                Vec2::new(1.0, 0.0),
+                ParamRange::new(u0, u1),
+            ),
+            (
+                fins[1],
+                Point2::new(u1, 0.0),
+                Vec2::new(0.0, 1.0),
+                ParamRange::new(0.0, 2.0),
+            ),
+            (
+                fins[2],
+                Point2::new(0.0, 2.0),
+                Vec2::new(1.0, 0.0),
+                ParamRange::new(u0, u1),
+            ),
+            (
+                fins[3],
+                Point2::new(u0, 0.0),
+                Vec2::new(0.0, 1.0),
+                ParamRange::new(0.0, 2.0),
+            ),
+        ] {
+            let curve = store.get(fin).unwrap().pcurve.unwrap().curve();
+            store
+                .replace_pcurve(
+                    curve,
+                    Curve2dGeom::Line(Line2d::new(origin, direction).unwrap()),
+                )
+                .unwrap();
+            store.get_mut(fin).unwrap().pcurve =
+                Some(FinPcurve::new(curve, range, ParamMap1d::identity()).unwrap());
+        }
+        let faults = check_body(store, body).unwrap();
+        assert!(faults.is_empty(), "periodic patch edit faults: {faults:?}");
     });
 }
 
@@ -1266,6 +1415,60 @@ fn nurbs_surface_face_round_trips_as_b_surface() {
     assert_eq!(nurbs[0].degree_v(), 1);
     assert_eq!(nurbs[0].net_size(), (2, 2));
     assert_eq!(imported.faces_of_body(imported_body).unwrap().len(), 6);
+}
+
+#[test]
+fn periodic_rational_nurbs_sheet_round_trips_with_closed_flags() {
+    let mut store = Store::new();
+    let body = make::planar_sheet(
+        &mut store,
+        &Frame::world(),
+        &[
+            Point2::new(0.15, 0.0),
+            Point2::new(0.65, 0.0),
+            Point2::new(0.65, 2.0),
+            Point2::new(0.15, 2.0),
+        ],
+    )
+    .unwrap();
+    replace_sheet_patch_with_periodic_rational_nurbs(&mut store, body);
+
+    let (text, imported, _) = assert_checker_roundtrip(&store, body);
+    let parsed = kxt::read_xt(text.as_bytes()).unwrap();
+    let nurbs_node = parsed
+        .nodes
+        .values()
+        .find(|node| node.code == code::NURBS_SURF)
+        .unwrap();
+    for name in ["u_periodic", "u_closed"] {
+        assert_eq!(
+            parsed.field(nurbs_node, name),
+            Some(&kxt::Value::Logical(true))
+        );
+    }
+    for name in ["v_periodic", "v_closed"] {
+        assert_eq!(
+            parsed.field(nurbs_node, name),
+            Some(&kxt::Value::Logical(false))
+        );
+    }
+    assert_eq!(
+        parsed.field(nurbs_node, "rational"),
+        Some(&kxt::Value::Logical(true))
+    );
+
+    let surface = imported
+        .iter::<SurfaceGeom>()
+        .find_map(|(_, surface)| match surface {
+            SurfaceGeom::Nurbs(surface) => Some(surface),
+            _ => None,
+        })
+        .unwrap();
+    assert!(surface.is_rational());
+    assert_eq!(surface.periodicity(), [Some(1.0), None]);
+    for uv in [[0.0, 0.4], [0.23, 1.3], [1.0, 1.7]] {
+        assert!(surface.eval(uv).dist(surface.eval([uv[0] + 1.0, uv[1]])) < 1.0e-13);
+    }
 }
 
 #[test]

@@ -1,14 +1,16 @@
 use super::line_plane::intersect_bounded_line_plane;
 use super::result::{
     ContactKind, CurveSurfaceIntersections, CurveSurfaceOverlap, CurveSurfacePoint,
-    SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
-    SurfaceSurfacePoint, accept_surface_surface_candidate,
+    SurfaceIntersectionCurve, SurfaceRegionOrientation, SurfaceSurfaceCurve,
+    SurfaceSurfaceIntersections, SurfaceSurfacePoint, SurfaceSurfaceRegion,
+    SurfaceSurfaceRegionVertex, accept_surface_surface_candidate,
 };
 use kcore::error::{Error, Result};
+use kcore::interval::Interval;
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Curve, Line};
 use kgeom::param::ParamRange;
-use kgeom::surface::Plane;
+use kgeom::surface::{Plane, Surface};
 use kgeom::vec::Point3;
 
 /// Intersect two finite plane windows.
@@ -28,9 +30,7 @@ pub fn intersect_bounded_planes(
     if direction_norm <= tolerances.angular() {
         let separation = (b.frame().origin() - a.frame().origin()).dot(n_a).abs();
         if separation <= tolerances.linear() {
-            return Err(Error::InvalidGeometry {
-                reason: "coincident plane/plane intersection is a surface overlap",
-            });
+            return intersect_coincident_plane_windows(a, a_range, b, b_range, tolerances);
         }
         return Ok(SurfaceSurfaceIntersections::complete_empty());
     }
@@ -306,6 +306,411 @@ fn push_point(
     {
         points.push(candidate);
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PairedPlaneSample {
+    point: Point3,
+    uv_a: [f64; 2],
+    uv_b: [f64; 2],
+    residual: f64,
+    residual_bound: f64,
+}
+
+fn intersect_coincident_plane_windows(
+    a: &Plane,
+    a_range: [ParamRange; 2],
+    b: &Plane,
+    b_range: [ParamRange; 2],
+    tolerances: Tolerances,
+) -> Result<SurfaceSurfaceIntersections> {
+    let a_corners = rectangle_corners(a_range);
+    let b_corners = rectangle_corners(b_range).map(|uv| {
+        let local = a.frame().to_local(b.eval(uv));
+        [local.x, local.y]
+    });
+    let mut candidates = Vec::new();
+
+    for point in a_corners {
+        if point_in_first_window(point, a_range, tolerances.linear())
+            && point_in_second_window(point, a, b, b_range, tolerances.linear())
+        {
+            push_uv_candidate(&mut candidates, point, tolerances.linear());
+        }
+    }
+    for point in b_corners {
+        if point_in_first_window(point, a_range, tolerances.linear())
+            && point_in_second_window(point, a, b, b_range, tolerances.linear())
+        {
+            push_uv_candidate(&mut candidates, point, tolerances.linear());
+        }
+    }
+    for (a_start, a_end) in rectangle_edges(a_corners) {
+        for (b_start, b_end) in rectangle_edges(b_corners) {
+            for point in segment_intersections(a_start, a_end, b_start, b_end, tolerances) {
+                if point_in_first_window(point, a_range, tolerances.linear())
+                    && point_in_second_window(point, a, b, b_range, tolerances.linear())
+                {
+                    push_uv_candidate(&mut candidates, point, tolerances.linear());
+                }
+            }
+        }
+    }
+
+    let hull = convex_hull(candidates, tolerances.linear());
+    match intersection_dimension(&hull, tolerances.linear()) {
+        WindowIntersectionDimension::Empty => Ok(SurfaceSurfaceIntersections::complete_empty()),
+        WindowIntersectionDimension::Point => {
+            let uv = centroid(&hull);
+            let sample = paired_plane_sample(uv, a, a_range, b, b_range, tolerances).ok_or(
+                Error::InvalidGeometry {
+                    reason: "coincident plane/plane window produced non-finite paired boundary data",
+                },
+            )?;
+            SurfaceSurfaceIntersections::canonicalized_complete(
+                vec![SurfaceSurfacePoint {
+                    point: sample.point,
+                    uv_a: sample.uv_a,
+                    uv_b: sample.uv_b,
+                    residual: sample.residual,
+                    kind: ContactKind::Tangent,
+                }],
+                Vec::new(),
+            )
+        }
+        WindowIntersectionDimension::Curve(start, end) => {
+            let start = paired_plane_sample(start, a, a_range, b, b_range, tolerances).ok_or(
+                Error::InvalidGeometry {
+                    reason: "coincident plane/plane window produced non-finite paired boundary data",
+                },
+            )?;
+            let end = paired_plane_sample(end, a, a_range, b, b_range, tolerances).ok_or(
+                Error::InvalidGeometry {
+                    reason: "coincident plane/plane window produced non-finite paired boundary data",
+                },
+            )?;
+            let direction = end.point - start.point;
+            let length = direction.norm();
+            if length <= tolerances.linear() {
+                return SurfaceSurfaceIntersections::canonicalized_complete(
+                    vec![SurfaceSurfacePoint {
+                        point: (start.point + end.point) / 2.0,
+                        uv_a: midpoint2(start.uv_a, end.uv_a),
+                        uv_b: midpoint2(start.uv_b, end.uv_b),
+                        residual: start.residual.max(end.residual),
+                        kind: ContactKind::Tangent,
+                    }],
+                    Vec::new(),
+                );
+            }
+            let line = Line::new(start.point, direction)?;
+            SurfaceSurfaceIntersections::canonicalized_complete(
+                Vec::new(),
+                vec![SurfaceSurfaceCurve {
+                    curve: SurfaceIntersectionCurve::Line(line),
+                    curve_range: ParamRange::new(0.0, length),
+                    uv_a_start: start.uv_a,
+                    uv_a_end: end.uv_a,
+                    uv_b_start: start.uv_b,
+                    uv_b_end: end.uv_b,
+                    kind: ContactKind::Tangent,
+                }],
+            )
+        }
+        WindowIntersectionDimension::Region => {
+            let mut boundary = Vec::with_capacity(hull.len());
+            let mut max_residual = 0.0_f64;
+            for uv in hull {
+                let sample = paired_plane_sample(uv, a, a_range, b, b_range, tolerances).ok_or(
+                    Error::InvalidGeometry {
+                        reason: "coincident plane/plane window produced non-finite paired boundary data",
+                    },
+                )?;
+                max_residual = max_residual.max(sample.residual_bound);
+                boundary.push(SurfaceSurfaceRegionVertex {
+                    point: sample.point,
+                    uv_a: sample.uv_a,
+                    uv_b: sample.uv_b,
+                    residual: sample.residual,
+                });
+            }
+            let orientation = if a.frame().z().dot(b.frame().z()).is_sign_positive() {
+                SurfaceRegionOrientation::Same
+            } else {
+                SurfaceRegionOrientation::Reversed
+            };
+            SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
+                Vec::new(),
+                Vec::new(),
+                vec![SurfaceSurfaceRegion {
+                    boundary,
+                    orientation,
+                    correspondence: super::result::SurfaceRegionCorrespondence::Polygonal,
+                    max_residual,
+                }],
+            )
+        }
+    }
+}
+
+fn rectangle_corners(range: [ParamRange; 2]) -> [[f64; 2]; 4] {
+    [
+        [range[0].lo, range[1].lo],
+        [range[0].hi, range[1].lo],
+        [range[0].hi, range[1].hi],
+        [range[0].lo, range[1].hi],
+    ]
+}
+
+fn rectangle_edges(corners: [[f64; 2]; 4]) -> [([f64; 2], [f64; 2]); 4] {
+    [
+        (corners[0], corners[1]),
+        (corners[1], corners[2]),
+        (corners[2], corners[3]),
+        (corners[3], corners[0]),
+    ]
+}
+
+fn point_in_first_window(point: [f64; 2], range: [ParamRange; 2], tolerance: f64) -> bool {
+    point[0] >= range[0].lo - tolerance
+        && point[0] <= range[0].hi + tolerance
+        && point[1] >= range[1].lo - tolerance
+        && point[1] <= range[1].hi + tolerance
+}
+
+fn point_in_second_window(
+    point_a: [f64; 2],
+    a: &Plane,
+    b: &Plane,
+    range_b: [ParamRange; 2],
+    tolerance: f64,
+) -> bool {
+    let local = b.frame().to_local(a.eval(point_a));
+    point_in_first_window([local.x, local.y], range_b, tolerance)
+}
+
+fn segment_intersections(
+    p: [f64; 2],
+    p_end: [f64; 2],
+    q: [f64; 2],
+    q_end: [f64; 2],
+    tolerances: Tolerances,
+) -> Vec<[f64; 2]> {
+    let r = sub2(p_end, p);
+    let s = sub2(q_end, q);
+    let r_length = norm2(r);
+    let s_length = norm2(s);
+    if r_length <= tolerances.linear() {
+        return point_segment_contact(p, q, q_end, tolerances.linear())
+            .into_iter()
+            .collect();
+    }
+    if s_length <= tolerances.linear() {
+        return point_segment_contact(q, p, p_end, tolerances.linear())
+            .into_iter()
+            .collect();
+    }
+
+    let denominator = cross2(r, s);
+    if denominator.abs() <= tolerances.angular() * r_length * s_length {
+        return Vec::new();
+    }
+    let q_minus_p = sub2(q, p);
+    let t = cross2(q_minus_p, s) / denominator;
+    let u = cross2(q_minus_p, r) / denominator;
+    let t_tolerance = tolerances.linear() / r_length;
+    let u_tolerance = tolerances.linear() / s_length;
+    if t < -t_tolerance || t > 1.0 + t_tolerance || u < -u_tolerance || u > 1.0 + u_tolerance {
+        Vec::new()
+    } else {
+        let from_p = add2(p, scale2(r, t.clamp(0.0, 1.0)));
+        let from_q = add2(q, scale2(s, u.clamp(0.0, 1.0)));
+        vec![midpoint2(from_p, from_q)]
+    }
+}
+
+fn point_segment_contact(
+    point: [f64; 2],
+    start: [f64; 2],
+    end: [f64; 2],
+    tolerance: f64,
+) -> Option<[f64; 2]> {
+    let direction = sub2(end, start);
+    let length_sq = dot2(direction, direction);
+    if length_sq == 0.0 {
+        return (norm2(sub2(point, start)) <= tolerance).then(|| midpoint2(point, start));
+    }
+    let parameter = (dot2(sub2(point, start), direction) / length_sq).clamp(0.0, 1.0);
+    let closest = add2(start, scale2(direction, parameter));
+    (norm2(sub2(point, closest)) <= tolerance).then(|| midpoint2(point, closest))
+}
+
+fn push_uv_candidate(candidates: &mut Vec<[f64; 2]>, candidate: [f64; 2], tolerance: f64) {
+    if !candidates
+        .iter()
+        .any(|existing| norm2(sub2(*existing, candidate)) <= tolerance)
+    {
+        candidates.push(candidate);
+    }
+}
+
+fn convex_hull(mut points: Vec<[f64; 2]>, tolerance: f64) -> Vec<[f64; 2]> {
+    points.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+    let mut unique = Vec::new();
+    for point in points {
+        push_uv_candidate(&mut unique, point, tolerance);
+    }
+    if unique.len() <= 2 {
+        return unique;
+    }
+
+    let mut lower = Vec::new();
+    for &point in &unique {
+        while lower.len() >= 2
+            && cross2(
+                sub2(lower[lower.len() - 1], lower[lower.len() - 2]),
+                sub2(point, lower[lower.len() - 1]),
+            ) <= 0.0
+        {
+            lower.pop();
+        }
+        lower.push(point);
+    }
+    let mut upper = Vec::new();
+    for &point in unique.iter().rev() {
+        while upper.len() >= 2
+            && cross2(
+                sub2(upper[upper.len() - 1], upper[upper.len() - 2]),
+                sub2(point, upper[upper.len() - 1]),
+            ) <= 0.0
+        {
+            upper.pop();
+        }
+        upper.push(point);
+    }
+    lower.pop();
+    upper.pop();
+    lower.extend(upper);
+    lower
+}
+
+enum WindowIntersectionDimension {
+    Empty,
+    Point,
+    Curve([f64; 2], [f64; 2]),
+    Region,
+}
+
+fn intersection_dimension(points: &[[f64; 2]], tolerance: f64) -> WindowIntersectionDimension {
+    if points.is_empty() {
+        return WindowIntersectionDimension::Empty;
+    }
+    let mut farthest = (points[0], points[0]);
+    let mut diameter = 0.0_f64;
+    for (index, &a) in points.iter().enumerate() {
+        for &b in &points[index + 1..] {
+            let distance = norm2(sub2(b, a));
+            if distance > diameter {
+                diameter = distance;
+                farthest = (a, b);
+            }
+        }
+    }
+    if diameter <= tolerance {
+        return WindowIntersectionDimension::Point;
+    }
+    if compare_uv(farthest.1, farthest.0).is_lt() {
+        farthest = (farthest.1, farthest.0);
+    }
+    let baseline = sub2(farthest.1, farthest.0);
+    let thickness = points
+        .iter()
+        .map(|point| cross2(baseline, sub2(*point, farthest.0)).abs() / diameter)
+        .fold(0.0_f64, f64::max);
+    if thickness <= tolerance {
+        WindowIntersectionDimension::Curve(farthest.0, farthest.1)
+    } else {
+        WindowIntersectionDimension::Region
+    }
+}
+
+fn centroid(points: &[[f64; 2]]) -> [f64; 2] {
+    let sum = points
+        .iter()
+        .fold([0.0, 0.0], |sum, point| add2(sum, *point));
+    scale2(sum, 1.0 / points.len() as f64)
+}
+
+fn paired_plane_sample(
+    point_a: [f64; 2],
+    a: &Plane,
+    a_range: [ParamRange; 2],
+    b: &Plane,
+    b_range: [ParamRange; 2],
+    tolerances: Tolerances,
+) -> Option<PairedPlaneSample> {
+    let uv_a = [
+        fit_scalar_parameter(point_a[0], a_range[0], tolerances.linear())?,
+        fit_scalar_parameter(point_a[1], a_range[1], tolerances.linear())?,
+    ];
+    let pa = a.eval(uv_a);
+    let local_b = b.frame().to_local(pa);
+    let uv_b = [
+        fit_scalar_parameter(local_b.x, b_range[0], tolerances.linear())?,
+        fit_scalar_parameter(local_b.y, b_range[1], tolerances.linear())?,
+    ];
+    let pb = b.eval(uv_b);
+    let residual = pa.dist(pb);
+    let residual_bound = conservative_point_distance(pa, pb)?;
+    Some(PairedPlaneSample {
+        point: (pa + pb) / 2.0,
+        uv_a,
+        uv_b,
+        residual,
+        residual_bound,
+    })
+}
+
+fn conservative_point_distance(a: Point3, b: Point3) -> Option<f64> {
+    let x = Interval::point(a.x) - Interval::point(b.x);
+    let y = Interval::point(a.y) - Interval::point(b.y);
+    let z = Interval::point(a.z) - Interval::point(b.z);
+    (x.square() + y.square() + z.square())
+        .sqrt()
+        .map(Interval::hi)
+        .filter(|bound| bound.is_finite())
+}
+
+fn add2(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+    [a[0] + b[0], a[1] + b[1]]
+}
+
+fn sub2(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+    [a[0] - b[0], a[1] - b[1]]
+}
+
+fn scale2(value: [f64; 2], scale: f64) -> [f64; 2] {
+    [value[0] * scale, value[1] * scale]
+}
+
+fn midpoint2(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+    [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]
+}
+
+fn dot2(a: [f64; 2], b: [f64; 2]) -> f64 {
+    a[0] * b[0] + a[1] * b[1]
+}
+
+fn cross2(a: [f64; 2], b: [f64; 2]) -> f64 {
+    a[0] * b[1] - a[1] * b[0]
+}
+
+fn norm2(value: [f64; 2]) -> f64 {
+    dot2(value, value).sqrt()
+}
+
+fn compare_uv(a: [f64; 2], b: [f64; 2]) -> core::cmp::Ordering {
+    a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1]))
 }
 
 fn validate_ranges(a_range: [ParamRange; 2], b_range: [ParamRange; 2]) -> Result<()> {

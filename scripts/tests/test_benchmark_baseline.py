@@ -29,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 101)
+        self.assertEqual(len(cases), 128)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -64,21 +64,42 @@ class BenchmarkBaselineTests(unittest.TestCase):
         graph_build = [
             case for case in cases if case["benchmark_target"] == "graph_build"
         ]
-        self.assertEqual(len(graph_build), 17)
+        self.assertEqual(len(graph_build), 21)
         self.assertTrue(
             all(
-                case["deterministic_seed"] == 0x5154324147520006
+                case["deterministic_seed"] == 0x5154324147520007
+                and case["fixture_version"] == "graph-build.v2"
                 for case in graph_build
+            )
+        )
+        diamond = [
+            case
+            for case in graph_build
+            if case["policy_values"]["shape"] == "diamond"
+        ]
+        self.assertEqual(len(diamond), 4)
+        self.assertEqual(
+            {case["size_parameters"]["dependents"] for case in diamond},
+            {1, 10, 100, 1000},
+        )
+        self.assertTrue(
+            all(
+                case["size_parameters"]["shared_sources"] == 4
+                and case["expected_result_counters"]["diamond_closure_nodes"] == 6
+                and case["expected_result_counters"][
+                    "diamond_closure_deduplicated"
+                ]
+                for case in diamond
             )
         )
         graph_traversal = [
             case for case in cases if case["benchmark_target"] == "graph_traversal"
         ]
-        self.assertEqual(len(graph_traversal), 8)
+        self.assertEqual(len(graph_traversal), 10)
         self.assertTrue(
             all(
-                case["deterministic_seed"] == 0x5154325452410008
-                and case["fixture_version"] == "graph-traversal.v1"
+                case["deterministic_seed"] == 0x5154325452410009
+                and case["fixture_version"] == "graph-traversal.v2"
                 and case["policy_values"]["membership"] == "indexed"
                 and case["expected_result_counters"]["stable"]
                 and len(case["expected_result_counters"]["result_digest"]) == 16
@@ -90,9 +111,32 @@ class BenchmarkBaselineTests(unittest.TestCase):
             {case["policy_values"]["operation"] for case in graph_traversal},
             {"dependency-closure", "dependency-path-miss"},
         )
+        diamond_traversal = [
+            case
+            for case in graph_traversal
+            if case["policy_values"]["shape"] == "verified-intersection-diamond"
+        ]
+        self.assertEqual(len(diamond_traversal), 2)
+        self.assertTrue(
+            all(
+                case["size_parameters"]["shared_bases"] == 1
+                and case["expected_result_counters"]["nodes"] == 7
+                and case["expected_result_counters"]["dependency_edges"] == 6
+                for case in diamond_traversal
+            )
+        )
+        diamond_closure = next(
+            case
+            for case in diamond_traversal
+            if case["policy_values"]["operation"] == "dependency-closure"
+        )
+        self.assertEqual(
+            diamond_closure["expected_result_counters"]["result_nodes"], 6
+        )
+        self.assertTrue(diamond_closure["expected_result_counters"]["reached"])
         self.assertEqual(
             {case["policy_values"]["shape"] for case in graph_build},
-            {"independent", "chain", "fanout", "rollback-chain"},
+            {"independent", "chain", "fanout", "diamond", "rollback-chain"},
         )
         self.assertTrue(
             all(
@@ -271,16 +315,28 @@ class BenchmarkBaselineTests(unittest.TestCase):
         isolation = [
             case for case in cases if case["benchmark_target"] == "nurbs_isolation"
         ]
-        self.assertEqual(len(isolation), 6)
+        self.assertEqual(len(isolation), 8)
         self.assertTrue(
-            all(case["deterministic_seed"] == 0x51544E5552420004 for case in isolation)
+            all(
+                case["deterministic_seed"] == 0x51544E5552420006
+                and case["fixture_version"] == "nurbs-isolation.v3"
+                for case in isolation
+            )
         )
+        surface_roundoff = [
+            case
+            for case in isolation
+            if "subdivision-roundoff" in case["path"]
+        ]
+        self.assertEqual(len(surface_roundoff), 1)
+        self.assertTrue(surface_roundoff[0]["expected_result_counters"]["complete"])
+        self.assertFalse(surface_roundoff[0]["expected_result_counters"]["proven_empty"])
         limited = [
             case
             for case in isolation
             if case["expected_result_counters"]["limit_kind"] != "none"
         ]
-        self.assertEqual(len(limited), 2)
+        self.assertEqual(len(limited), 3)
         self.assertTrue(
             all(
                 case["expected_result_counters"]["indeterminate"]
@@ -290,16 +346,28 @@ class BenchmarkBaselineTests(unittest.TestCase):
                 for case in limited
             )
         )
+        surface_work_low = [
+            case
+            for case in isolation
+            if "rational-four-patch" in case["path"]
+            and case["expected_result_counters"]["limit_kind"] == "work"
+        ]
+        self.assertEqual(len(surface_work_low), 1)
+        self.assertEqual(
+            surface_work_low[0]["expected_result_counters"]["limit_attempted_consumed"],
+            surface_work_low[0]["expected_result_counters"]["limit_attempted_allowed"]
+            + 1,
+        )
         curve_pair_isolation = [
             case
             for case in cases
             if case["benchmark_target"] == "curve_pair_isolation"
         ]
-        self.assertEqual(len(curve_pair_isolation), 8)
+        self.assertEqual(len(curve_pair_isolation), 9)
         self.assertTrue(
             all(
-                case["deterministic_seed"] == 0x5154435041490009
-                and case["fixture_version"] == "curve-pair-isolation.v2"
+                case["deterministic_seed"] == 0x515443504149000A
+                and case["fixture_version"] == "curve-pair-isolation.v4"
                 for case in curve_pair_isolation
             )
         )
@@ -336,11 +404,11 @@ class BenchmarkBaselineTests(unittest.TestCase):
         curve_pair_solve = [
             case for case in cases if case["benchmark_target"] == "curve_pair_solve"
         ]
-        self.assertEqual(len(curve_pair_solve), 10)
+        self.assertEqual(len(curve_pair_solve), 28)
         self.assertTrue(
             all(
-                case["deterministic_seed"] == 0x51544350534F000A
-                and case["fixture_version"] == "curve-pair-solve.v3"
+                case["deterministic_seed"] == 0x51544350534F0018
+                and case["fixture_version"] == "curve-pair-solve.v18"
                 and case["policy_values"]["policy_version"] == "v1"
                 and case["policy_values"]["execution"] == "serial"
                 and case["policy_values"]["api"]
@@ -356,18 +424,206 @@ class BenchmarkBaselineTests(unittest.TestCase):
                 for case in curve_pair_solve
             )
         )
+        algebraic_spatial = [
+            case
+            for case in curve_pair_solve
+            if "algebraic-spatial" in case["path"]
+        ]
+        self.assertEqual(len(algebraic_spatial), 1)
+        self.assertTrue(algebraic_spatial[0]["expected_result_counters"]["complete"])
+        self.assertEqual(
+            algebraic_spatial[0]["expected_result_counters"]["root_certificates"], 1
+        )
+        algebraic_linear_form = [
+            case
+            for case in curve_pair_solve
+            if "algebraic-linear-form" in case["path"]
+        ]
+        self.assertEqual(len(algebraic_linear_form), 1)
+        self.assertTrue(
+            algebraic_linear_form[0]["expected_result_counters"]["complete"]
+        )
+        self.assertEqual(
+            algebraic_linear_form[0]["expected_result_counters"]["root_certificates"],
+            1,
+        )
+        algebraic_primitive_form = [
+            case
+            for case in curve_pair_solve
+            if "algebraic-primitive-form" in case["path"]
+        ]
+        self.assertEqual(len(algebraic_primitive_form), 1)
+        self.assertTrue(
+            algebraic_primitive_form[0]["expected_result_counters"]["complete"]
+        )
+        self.assertEqual(
+            algebraic_primitive_form[0]["expected_result_counters"][
+                "root_certificates"
+            ],
+            1,
+        )
+        algebraic_magnitude_three = [
+            case
+            for case in curve_pair_solve
+            if "algebraic-primitive-magnitude-three" in case["path"]
+        ]
+        self.assertEqual(len(algebraic_magnitude_three), 1)
+        self.assertTrue(
+            algebraic_magnitude_three[0]["expected_result_counters"]["complete"]
+        )
+        self.assertEqual(
+            algebraic_magnitude_three[0]["expected_result_counters"][
+                "root_certificates"
+            ],
+            1,
+        )
+        algebraic_magnitude_four = [
+            case
+            for case in curve_pair_solve
+            if "algebraic-primitive-magnitude-four" in case["path"]
+        ]
+        self.assertEqual(len(algebraic_magnitude_four), 1)
+        self.assertTrue(
+            algebraic_magnitude_four[0]["expected_result_counters"]["complete"]
+        )
+        self.assertEqual(
+            algebraic_magnitude_four[0]["expected_result_counters"][
+                "root_certificates"
+            ],
+            1,
+        )
+        algebraic_magnitude_five = [
+            case
+            for case in curve_pair_solve
+            if "algebraic-primitive-magnitude-five" in case["path"]
+        ]
+        self.assertEqual(len(algebraic_magnitude_five), 1)
+        self.assertTrue(
+            algebraic_magnitude_five[0]["expected_result_counters"]["complete"]
+        )
+        self.assertEqual(
+            algebraic_magnitude_five[0]["expected_result_counters"][
+                "root_certificates"
+            ],
+            1,
+        )
+        algebraic_magnitude_six = [
+            case
+            for case in curve_pair_solve
+            if "algebraic-primitive-magnitude-six" in case["path"]
+        ]
+        self.assertEqual(len(algebraic_magnitude_six), 1)
+        self.assertTrue(
+            algebraic_magnitude_six[0]["expected_result_counters"]["complete"]
+        )
+        self.assertEqual(
+            algebraic_magnitude_six[0]["expected_result_counters"][
+                "root_certificates"
+            ],
+            1,
+        )
+        algebraic_magnitude_seven = [
+            case
+            for case in curve_pair_solve
+            if "algebraic-primitive-magnitude-seven" in case["path"]
+        ]
+        self.assertEqual(len(algebraic_magnitude_seven), 1)
+        self.assertTrue(
+            algebraic_magnitude_seven[0]["expected_result_counters"]["complete"]
+        )
+        self.assertEqual(
+            algebraic_magnitude_seven[0]["expected_result_counters"][
+                "root_certificates"
+            ],
+            1,
+        )
+        algebraic_magnitude_eight = [
+            case
+            for case in curve_pair_solve
+            if "algebraic-primitive-magnitude-eight" in case["path"]
+        ]
+        self.assertEqual(len(algebraic_magnitude_eight), 1)
+        self.assertTrue(
+            algebraic_magnitude_eight[0]["expected_result_counters"]["complete"]
+        )
+        self.assertEqual(
+            algebraic_magnitude_eight[0]["expected_result_counters"][
+                "root_certificates"
+            ],
+            1,
+        )
+        algebraic_magnitude_nine = [
+            case
+            for case in curve_pair_solve
+            if "algebraic-primitive-magnitude-nine" in case["path"]
+        ]
+        self.assertEqual(len(algebraic_magnitude_nine), 1)
+        self.assertTrue(
+            algebraic_magnitude_nine[0]["expected_result_counters"]["complete"]
+        )
+        self.assertEqual(
+            algebraic_magnitude_nine[0]["expected_result_counters"][
+                "root_certificates"
+            ],
+            1,
+        )
+        algebraic_magnitude_ten = [
+            case
+            for case in curve_pair_solve
+            if "algebraic-primitive-magnitude-ten" in case["path"]
+        ]
+        self.assertEqual(len(algebraic_magnitude_ten), 1)
+        self.assertTrue(
+            algebraic_magnitude_ten[0]["expected_result_counters"]["complete"]
+        )
+        self.assertEqual(
+            algebraic_magnitude_ten[0]["expected_result_counters"][
+                "root_certificates"
+            ],
+            1,
+        )
+        algebraic_magnitude_eleven = [
+            case
+            for case in curve_pair_solve
+            if "algebraic-primitive-magnitude-eleven" in case["path"]
+        ]
+        self.assertEqual(len(algebraic_magnitude_eleven), 1)
+        self.assertTrue(
+            algebraic_magnitude_eleven[0]["expected_result_counters"]["complete"]
+        )
+        self.assertEqual(
+            algebraic_magnitude_eleven[0]["expected_result_counters"][
+                "root_certificates"
+            ],
+            1,
+        )
+        algebraic_magnitude_twelve = [
+            case
+            for case in curve_pair_solve
+            if "algebraic-primitive-magnitude-twelve" in case["path"]
+        ]
+        self.assertEqual(len(algebraic_magnitude_twelve), 1)
+        self.assertTrue(
+            algebraic_magnitude_twelve[0]["expected_result_counters"]["complete"]
+        )
+        self.assertEqual(
+            algebraic_magnitude_twelve[0]["expected_result_counters"][
+                "root_certificates"
+            ],
+            1,
+        )
         solve_limited = [
             case
             for case in curve_pair_solve
             if case["expected_result_counters"]["limit_kind"] != "none"
         ]
-        self.assertEqual(len(solve_limited), 2)
+        self.assertEqual(len(solve_limited), 5)
         self.assertEqual(
             {
                 case["expected_result_counters"]["limit_kind"]
                 for case in solve_limited
             },
-            {"seed-attempts", "overlap-work"},
+            {"seed-attempts", "overlap-work", "overlap-items"},
         )
         self.assertTrue(
             all(
@@ -381,7 +637,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
             for case in curve_pair_solve
             if "common-refinement-overlap-v1" in case["path"]
         ]
-        self.assertEqual(len(common_refinement), 2)
+        self.assertEqual(len(common_refinement), 3)
         common_complete = next(
             case
             for case in common_refinement
@@ -407,6 +663,70 @@ class BenchmarkBaselineTests(unittest.TestCase):
             common_denied["expected_result_counters"]["limit_attempted_allowed"] + 1,
         )
         self.assertEqual(common_denied["expected_result_counters"]["overlaps"], 0)
+        common_items_denied = next(
+            case
+            for case in common_refinement
+            if case["expected_result_counters"]["limit_kind"] == "overlap-items"
+        )
+        self.assertEqual(
+            common_items_denied["expected_result_counters"][
+                "limit_attempted_consumed"
+            ],
+            common_items_denied["expected_result_counters"][
+                "limit_attempted_allowed"
+            ]
+            + 1,
+        )
+        self.assertEqual(
+            common_items_denied["expected_result_counters"]["overlaps"], 0
+        )
+        inverse_history = [
+            case
+            for case in curve_pair_solve
+            if "inverse-history" in case["path"]
+        ]
+        self.assertEqual(len(inverse_history), 4)
+        inverse_complete = next(
+            case
+            for case in inverse_history
+            if "inverse-history-overlap" in case["path"]
+            and case["expected_result_counters"]["limit_kind"] == "none"
+        )
+        inverse_altered = next(
+            case
+            for case in inverse_history
+            if "altered-inverse-history" in case["path"]
+        )
+        self.assertTrue(inverse_complete["expected_result_counters"]["complete"])
+        self.assertEqual(inverse_complete["expected_result_counters"]["overlaps"], 1)
+        self.assertFalse(inverse_altered["expected_result_counters"]["complete"])
+        self.assertEqual(inverse_altered["expected_result_counters"]["overlaps"], 0)
+        self.assertEqual(inverse_altered["expected_result_counters"]["points"], 2)
+        self.assertEqual(
+            inverse_complete["expected_result_counters"]["overlap_equivalence_work"],
+            inverse_altered["expected_result_counters"]["overlap_equivalence_work"],
+        )
+        self.assertEqual(
+            inverse_complete["expected_result_counters"]["overlap_equivalence_items"],
+            inverse_altered["expected_result_counters"]["overlap_equivalence_items"],
+        )
+        inverse_limits = [
+            case
+            for case in inverse_history
+            if case["expected_result_counters"]["limit_kind"] != "none"
+        ]
+        self.assertEqual(len(inverse_limits), 2)
+        self.assertEqual(
+            {case["expected_result_counters"]["limit_kind"] for case in inverse_limits},
+            {"overlap-work", "overlap-items"},
+        )
+        self.assertTrue(
+            all(
+                case["expected_result_counters"]["limit_attempted_consumed"]
+                == case["expected_result_counters"]["limit_attempted_allowed"] + 1
+                for case in inverse_limits
+            )
+        )
         solve_miss = [
             case
             for case in curve_pair_solve

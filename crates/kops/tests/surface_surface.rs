@@ -1155,20 +1155,19 @@ fn plane_plane_parallel_miss_and_coincident_cases() {
     .unwrap();
     assert!(miss.is_empty());
 
-    let err = intersect_bounded_planes(
+    let coincident = intersect_bounded_planes(
         &a,
         plane_window(),
         &a,
         plane_window(),
         Tolerances::default(),
     )
-    .unwrap_err();
-    assert_eq!(
-        err,
-        Error::InvalidGeometry {
-            reason: "coincident plane/plane intersection is a surface overlap"
-        }
-    );
+    .unwrap();
+    assert!(coincident.is_complete());
+    assert!(coincident.points.is_empty());
+    assert!(coincident.curves.is_empty());
+    assert_eq!(coincident.regions.len(), 1);
+    assert_eq!(coincident.regions[0].boundary.len(), 4);
 }
 
 #[test]
@@ -1894,20 +1893,18 @@ fn cylinder_cylinder_tangent_miss_coincident_and_unsupported_cases() {
     .unwrap();
     assert!(concentric.is_empty());
 
-    let err = intersect_bounded_cylinders(
+    let coincident = intersect_bounded_cylinders(
         &a,
         cylinder_window(),
         &a,
         cylinder_window(),
         Tolerances::default(),
     )
-    .unwrap_err();
-    assert_eq!(
-        err,
-        Error::InvalidGeometry {
-            reason: "coincident cylinder/cylinder intersection is a surface overlap"
-        }
-    );
+    .unwrap();
+    assert!(coincident.is_complete());
+    assert_eq!(coincident.regions.len(), 1);
+    assert!(coincident.points.is_empty());
+    assert!(coincident.curves.is_empty());
 
     let skew_b = Cylinder::new(
         Frame::new(
@@ -2435,20 +2432,18 @@ fn cone_cone_shared_apex_window_miss_overlap_and_unsupported_cases() {
     .unwrap();
     assert!(miss.is_empty());
 
-    let err = intersect_bounded_cones(
+    let overlap = intersect_bounded_cones(
         &a,
         wide_cone_window(),
         &a,
         wide_cone_window(),
         Tolerances::default(),
     )
-    .unwrap_err();
-    assert_eq!(
-        err,
-        Error::InvalidGeometry {
-            reason: "coincident cone/cone intersection is a surface overlap"
-        }
-    );
+    .unwrap();
+    assert!(overlap.is_complete());
+    assert!(overlap.points.is_empty());
+    assert!(overlap.curves.is_empty());
+    assert_eq!(overlap.regions.len(), 2);
 
     let shifted = Cone::new(
         Frame::new(
@@ -2530,25 +2525,25 @@ fn cone_cone_accepts_antiparallel_coaxial_axes() {
 fn surface_surface_dispatches_cone_cone_both_orders() {
     let a = Cone::new(Frame::world(), 2.0, core::f64::consts::FRAC_PI_4).unwrap();
     let b = Cone::new(Frame::world(), 2.0, math::atan2(1.0, 2.0)).unwrap();
-    let hit = intersect_bounded_surfaces(
-        &a,
-        wide_cone_window(),
-        &b,
-        wide_cone_window(),
-        Tolerances::default(),
-    )
-    .unwrap();
+    let a_range = wide_cone_window();
+    let b_range = wide_cone_window();
+    let tolerances = Tolerances::default();
+    let specialized = intersect_bounded_cones(&a, a_range, &b, b_range, tolerances).unwrap();
+    let hit = intersect_bounded_surfaces(&a, a_range, &b, b_range, tolerances).unwrap();
+    let repeated = intersect_bounded_surfaces(&a, a_range, &b, b_range, tolerances).unwrap();
+    assert_eq!(hit, specialized);
+    assert_eq!(repeated, hit);
+    assert!(hit.is_complete());
+    assert!(hit.incomplete_evidence().is_empty());
     assert_eq!(hit.curves.len(), 3);
     assert_cone_cone_branch_endpoints(&hit, &a, &b);
 
-    let swapped = intersect_bounded_surfaces(
-        &b,
-        wide_cone_window(),
-        &a,
-        wide_cone_window(),
-        Tolerances::default(),
-    )
-    .unwrap();
+    let reverse_specialized =
+        intersect_bounded_cones(&b, b_range, &a, a_range, tolerances).unwrap();
+    let swapped = intersect_bounded_surfaces(&b, b_range, &a, a_range, tolerances).unwrap();
+    assert_eq!(swapped, reverse_specialized);
+    assert!(swapped.is_complete());
+    assert!(swapped.incomplete_evidence().is_empty());
     assert_eq!(swapped.curves.len(), hit.curves.len());
     assert_cone_cone_branch_endpoints(&swapped, &b, &a);
 }
@@ -3141,24 +3136,27 @@ fn cone_sphere_tangent_apex_miss_and_unsupported_cases() {
 fn surface_surface_dispatches_cone_sphere_both_orders() {
     let cone = Cone::new(Frame::world(), 1.0, core::f64::consts::PI / 6.0).unwrap();
     let sphere = Sphere::new(Frame::world(), cos_pi_over_six()).unwrap();
-    let hit = intersect_bounded_surfaces(
-        &cone,
-        cone_window(),
-        &sphere,
-        sphere_window(),
-        Tolerances::default(),
-    )
-    .unwrap();
+    let cone_range = cone_window();
+    let sphere_range = sphere_window();
+    let tolerances = Tolerances::default();
+    let specialized =
+        intersect_bounded_cone_sphere(&cone, cone_range, &sphere, sphere_range, tolerances)
+            .unwrap();
+    let hit =
+        intersect_bounded_surfaces(&cone, cone_range, &sphere, sphere_range, tolerances).unwrap();
+    let repeated =
+        intersect_bounded_surfaces(&cone, cone_range, &sphere, sphere_range, tolerances).unwrap();
+    assert_eq!(hit, specialized);
+    assert_eq!(repeated, hit);
+    assert!(hit.is_complete());
+    assert!(hit.incomplete_evidence().is_empty());
     assert_eq!(hit.curves.len(), 1);
 
-    let swapped = intersect_bounded_surfaces(
-        &sphere,
-        sphere_window(),
-        &cone,
-        cone_window(),
-        Tolerances::default(),
-    )
-    .unwrap();
+    let swapped =
+        intersect_bounded_surfaces(&sphere, sphere_range, &cone, cone_range, tolerances).unwrap();
+    assert_eq!(swapped, specialized.swapped());
+    assert!(swapped.is_complete());
+    assert!(swapped.incomplete_evidence().is_empty());
     assert_eq!(swapped.curves.len(), hit.curves.len());
     assert_eq!(swapped.curves[0].uv_a_start, hit.curves[0].uv_b_start);
     assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
@@ -3291,30 +3289,38 @@ fn cylinder_sphere_tangent_miss_and_unsupported_cases() {
 fn surface_surface_dispatches_cylinder_sphere_both_orders() {
     let cylinder = Cylinder::new(Frame::world(), 0.5).unwrap();
     let sphere = Sphere::new(Frame::world(), 1.0).unwrap();
-    let hit = intersect_bounded_surfaces(
+    let cylinder_range = [
+        ParamRange::new(0.0, core::f64::consts::TAU),
+        ParamRange::new(-1.0, 1.0),
+    ];
+    let sphere_range = sphere_window();
+    let tolerances = Tolerances::default();
+    let specialized = intersect_bounded_cylinder_sphere(
         &cylinder,
-        [
-            ParamRange::new(0.0, core::f64::consts::TAU),
-            ParamRange::new(-1.0, 1.0),
-        ],
+        cylinder_range,
         &sphere,
-        sphere_window(),
-        Tolerances::default(),
+        sphere_range,
+        tolerances,
     )
     .unwrap();
+    let hit =
+        intersect_bounded_surfaces(&cylinder, cylinder_range, &sphere, sphere_range, tolerances)
+            .unwrap();
+    let repeated =
+        intersect_bounded_surfaces(&cylinder, cylinder_range, &sphere, sphere_range, tolerances)
+            .unwrap();
+    assert_eq!(hit, specialized);
+    assert_eq!(repeated, hit);
+    assert!(hit.is_complete());
+    assert!(hit.incomplete_evidence().is_empty());
     assert_eq!(hit.curves.len(), 2);
 
-    let swapped = intersect_bounded_surfaces(
-        &sphere,
-        sphere_window(),
-        &cylinder,
-        [
-            ParamRange::new(0.0, core::f64::consts::TAU),
-            ParamRange::new(-1.0, 1.0),
-        ],
-        Tolerances::default(),
-    )
-    .unwrap();
+    let swapped =
+        intersect_bounded_surfaces(&sphere, sphere_range, &cylinder, cylinder_range, tolerances)
+            .unwrap();
+    assert_eq!(swapped, specialized.swapped());
+    assert!(swapped.is_complete());
+    assert!(swapped.incomplete_evidence().is_empty());
     assert_eq!(swapped.curves.len(), hit.curves.len());
     assert_eq!(swapped.curves[0].uv_a_start, hit.curves[0].uv_b_start);
     assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
@@ -3621,20 +3627,18 @@ fn torus_torus_tangent_miss_overlap_and_unsupported_cases() {
     .unwrap();
     assert!(miss.is_empty());
 
-    let err = intersect_bounded_tori(
+    let overlap = intersect_bounded_tori(
         &a,
         torus_window(),
         &a,
         torus_window(),
         Tolerances::default(),
     )
-    .unwrap_err();
-    assert_eq!(
-        err,
-        Error::InvalidGeometry {
-            reason: "coincident torus/torus intersection is a surface overlap"
-        }
-    );
+    .unwrap();
+    assert!(overlap.is_complete());
+    assert!(overlap.points.is_empty());
+    assert!(overlap.curves.is_empty());
+    assert_eq!(overlap.regions.len(), 1);
 
     let shifted = Torus::new(
         Frame::new(
@@ -3832,20 +3836,18 @@ fn sphere_sphere_tangent_miss_and_coincident_cases() {
     .unwrap();
     assert!(miss.is_empty());
 
-    let err = intersect_bounded_spheres(
+    let coincident = intersect_bounded_spheres(
         &a,
         sphere_window(),
         &a,
         sphere_window(),
         Tolerances::default(),
     )
-    .unwrap_err();
-    assert_eq!(
-        err,
-        Error::InvalidGeometry {
-            reason: "coincident sphere/sphere intersection is a surface overlap"
-        }
-    );
+    .unwrap();
+    assert!(coincident.is_complete());
+    assert_eq!(coincident.regions.len(), 1);
+    assert!(coincident.points.is_empty());
+    assert!(coincident.curves.is_empty());
 }
 
 #[test]
@@ -3861,14 +3863,23 @@ fn surface_surface_dispatches_sphere_sphere() {
         1.0,
     )
     .unwrap();
-    let hit = intersect_bounded_surfaces(
-        &a,
-        sphere_window(),
-        &b,
-        sphere_window(),
-        Tolerances::default(),
-    )
-    .unwrap();
+    let a_range = sphere_window();
+    let b_range = sphere_window();
+    let tolerances = Tolerances::default();
+    let specialized = intersect_bounded_spheres(&a, a_range, &b, b_range, tolerances).unwrap();
+    let hit = intersect_bounded_surfaces(&a, a_range, &b, b_range, tolerances).unwrap();
+    let repeated = intersect_bounded_surfaces(&a, a_range, &b, b_range, tolerances).unwrap();
+    assert_eq!(hit, specialized);
+    assert_eq!(repeated, hit);
+    assert!(hit.is_complete());
+    assert!(hit.incomplete_evidence().is_empty());
     assert_eq!(hit.curves.len(), 3);
     assert!(hit.points.is_empty());
+
+    let reverse_specialized =
+        intersect_bounded_spheres(&b, b_range, &a, a_range, tolerances).unwrap();
+    let swapped = intersect_bounded_surfaces(&b, b_range, &a, a_range, tolerances).unwrap();
+    assert_eq!(swapped, reverse_specialized);
+    assert!(swapped.is_complete());
+    assert!(swapped.incomplete_evidence().is_empty());
 }

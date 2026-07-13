@@ -100,6 +100,7 @@ pub fn intersect_bounded_curves_in_scope(
         });
     };
     let (mut range_a, mut range_b) = (range_a, range_b);
+    let original_classes = [class_a.class().key(), class_b.class().key()];
     let swapped = class_a.class() > class_b.class();
     if swapped {
         core::mem::swap(&mut class_a, &mut class_b);
@@ -140,7 +141,12 @@ pub fn intersect_bounded_curves_in_scope(
             return intersect_bounded_nurbs_nurbs_in_scope(a, range_a, b, range_b, scope)
                 .map(|result| if swapped { result.swapped() } else { result });
         }
-        _ => unreachable!("curve classes are normalized into canonical order"),
+        _ => {
+            return Err(IntersectionError::UnsupportedCurvePair {
+                class_a: Some(original_classes[0]),
+                class_b: Some(original_classes[1]),
+            });
+        }
     };
     result
         .map(|result| if swapped { result.swapped() } else { result })

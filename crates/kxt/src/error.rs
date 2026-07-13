@@ -35,6 +35,16 @@ pub enum XtCapability {
     TolerantRingEdges,
     /// Procedural/intersection/foreign curve realization.
     ProceduralCurves,
+    /// Transmitted intersection chart parameter convention outside the
+    /// canonical affine sequence supported by this import rung.
+    IntersectionChartConvention,
+    /// Missing, nullable, or unsupported transmitted intersection UV data.
+    IntersectionChartData,
+    /// Closed, terminated, missing, or otherwise unsupported intersection limits.
+    IntersectionLimits,
+    /// Intersection source family outside the verified exact-plane and
+    /// finite-open original-source NURBS chart subsets.
+    IntersectionSurfaceFamily,
     /// Procedural swept/spun/blend/foreign surface realization.
     ProceduralSurfaces,
     /// Periodic NURBS curve realization or writing.
@@ -78,6 +88,10 @@ impl XtCapability {
         Self::IsolatedLoops,
         Self::TolerantRingEdges,
         Self::ProceduralCurves,
+        Self::IntersectionChartConvention,
+        Self::IntersectionChartData,
+        Self::IntersectionLimits,
+        Self::IntersectionSurfaceFamily,
         Self::ProceduralSurfaces,
         Self::PeriodicNurbsCurves,
         Self::PeriodicNurbsSurfaces,
@@ -106,6 +120,10 @@ impl XtCapability {
             Self::IsolatedLoops => "xt.read.isolated-loops",
             Self::TolerantRingEdges => "xt.read.tolerant-ring-edges",
             Self::ProceduralCurves => "xt.geometry.procedural-curves",
+            Self::IntersectionChartConvention => "xt.read.intersection-chart-convention",
+            Self::IntersectionChartData => "xt.read.intersection-chart-data",
+            Self::IntersectionLimits => "xt.read.intersection-limits",
+            Self::IntersectionSurfaceFamily => "xt.read.intersection-surface-family",
             Self::ProceduralSurfaces => "xt.geometry.procedural-surfaces",
             Self::PeriodicNurbsCurves => "xt.geometry.periodic-nurbs-curves",
             Self::PeriodicNurbsSurfaces => "xt.geometry.periodic-nurbs-surfaces",
@@ -169,6 +187,9 @@ pub mod code {
     /// Surface references contain a dependency cycle.
     pub const SURFACE_DEPENDENCY_CYCLE: ErrorCode =
         known_error_code("xt.read.surface-dependency-cycle");
+    /// A transmitted intersection failed its whole-range source/pcurve proof.
+    pub const INTERSECTION_CERTIFICATE: ErrorCode =
+        known_error_code("xt.read.intersection-certificate");
 
     /// Every X_T-owned error code in deterministic order.
     pub const ALL: &[ErrorCode] = &[
@@ -182,6 +203,7 @@ pub mod code {
         BAD_FIELD,
         OUTSIDE_SIZE_BOX,
         SURFACE_DEPENDENCY_CYCLE,
+        INTERSECTION_CERTIFICATE,
     ];
 }
 
@@ -250,6 +272,14 @@ pub enum XtError {
         /// Deterministic transport-node path including the repeated endpoint.
         path: Vec<u32>,
     },
+    /// A transmitted intersection carrier or ordered pcurve failed its
+    /// whole-range certificate against the declared source planes.
+    IntersectionCertificate {
+        /// Transport index of the INTERSECTION node.
+        index: u32,
+        /// Typed proof failure with residual/tolerance evidence where relevant.
+        source: kgraph::IntersectionCertificateError,
+    },
     /// Geometry-graph evaluation failed while validating or emitting data.
     Evaluation(kgraph::EvalError),
     /// A kernel error during geometry or topology reconstruction.
@@ -287,6 +317,12 @@ impl fmt::Display for XtError {
             XtError::SurfaceDependencyCycle { path } => {
                 write!(f, "XT surface dependency cycle: {path:?}")
             }
+            XtError::IntersectionCertificate { index, source } => {
+                write!(
+                    f,
+                    "node {index}: transmitted intersection proof failed: {source}"
+                )
+            }
             XtError::Evaluation(error) => write!(f, "XT geometry evaluation failed: {error}"),
             XtError::Kernel(e) => write!(f, "kernel error during reconstruction: {e}"),
         }
@@ -297,6 +333,7 @@ impl std::error::Error for XtError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Evaluation(error) => Some(error),
+            Self::IntersectionCertificate { source, .. } => Some(source),
             Self::Kernel(error) => Some(error),
             _ => None,
         }
@@ -323,6 +360,7 @@ impl XtError {
             | Self::BadField { .. }
             | Self::OutsideSizeBox { .. }
             | Self::SurfaceDependencyCycle { .. } => ErrorClass::InvalidInput,
+            Self::IntersectionCertificate { .. } => ErrorClass::ModelRejected,
             Self::UnsupportedSchema { .. }
             | Self::UnknownNodeType { .. }
             | Self::Unsupported { .. } => ErrorClass::Unsupported,
@@ -345,6 +383,7 @@ impl XtError {
             Self::BadField { .. } => code::BAD_FIELD,
             Self::OutsideSizeBox { .. } => code::OUTSIDE_SIZE_BOX,
             Self::SurfaceDependencyCycle { .. } => code::SURFACE_DEPENDENCY_CYCLE,
+            Self::IntersectionCertificate { .. } => code::INTERSECTION_CERTIFICATE,
             Self::Evaluation(error) => error.code(),
             Self::Kernel(error) => error.code(),
         }
@@ -420,6 +459,10 @@ mod tests {
             "xt.read.isolated-loops",
             "xt.read.tolerant-ring-edges",
             "xt.geometry.procedural-curves",
+            "xt.read.intersection-chart-convention",
+            "xt.read.intersection-chart-data",
+            "xt.read.intersection-limits",
+            "xt.read.intersection-surface-family",
             "xt.geometry.procedural-surfaces",
             "xt.geometry.periodic-nurbs-curves",
             "xt.geometry.periodic-nurbs-surfaces",

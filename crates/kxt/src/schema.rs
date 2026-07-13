@@ -139,6 +139,9 @@ pub mod code {
     pub const CHART: u16 = 40;
     /// LIMIT node type.
     pub const LIMIT: u16 = 41;
+    /// Modern embedded-schema INTERSECTION_DATA node type used by the
+    /// supported transmitted chart subset. It is not part of base 13006.
+    pub const INTERSECTION_DATA: u16 = 204;
     /// BSPLINE_VERTICES node type.
     pub const BSPLINE_VERTICES: u16 = 45;
     /// PLANE node type.

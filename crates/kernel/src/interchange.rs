@@ -502,7 +502,14 @@ T51 : TRANSMIT FILE created by modeller version 100023017 SCH_1000230_100040";
             failed.result().unwrap_err().code(),
             kxt::error::code::OUTSIDE_SIZE_BOX
         );
-        assert_eq!(failed.report().usage().len(), 7);
+        assert_eq!(failed.report().usage().len(), 10);
+        for (stage, resource) in [
+            (kxt::INTERSECTION_CHART_CERTIFICATE_WORK, ResourceKind::Work),
+            (kxt::INTERSECTION_CHART_ITEMS, ResourceKind::Items),
+            (kxt::INTERSECTION_CHART_DEPTH, ResourceKind::Depth),
+        ] {
+            assert_eq!(report_snapshot(&failed, stage, resource).consumed, 0);
+        }
         let part = session.part(part_id.clone()).unwrap();
         assert_eq!(
             before,

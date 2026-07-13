@@ -69,6 +69,13 @@ impl Frame {
         Frame::new(origin, zn, hint)
     }
 
+    /// Return this exact orientation at a different origin.
+    ///
+    /// Unlike [`Frame::new`], this does not renormalize already validated axes.
+    pub const fn with_origin(self, origin: Point3) -> Frame {
+        Frame { origin, ..self }
+    }
+
     /// Frame origin.
     pub fn origin(&self) -> Point3 {
         self.origin

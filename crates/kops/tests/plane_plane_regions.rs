@@ -1,0 +1,398 @@
+//! Coincident bounded plane/plane region and collapsed-contact conformance.
+
+use kcore::error::Error;
+use kcore::math;
+use kcore::tolerance::Tolerances;
+use kgeom::frame::Frame;
+use kgeom::param::ParamRange;
+use kgeom::surface::{Plane, Surface};
+use kgeom::vec::{Point3, Vec3};
+use kops::intersect::{
+    ContactKind, SurfaceIntersectionCurve, SurfaceRegionOrientation, SurfaceSurfaceIntersections,
+    SurfaceSurfaceRegion, SurfaceSurfaceRegionVertex, intersect_bounded_planes,
+};
+
+fn range(lo: f64, hi: f64) -> ParamRange {
+    ParamRange::new(lo, hi)
+}
+
+fn window(u_lo: f64, u_hi: f64, v_lo: f64, v_hi: f64) -> [ParamRange; 2] {
+    [range(u_lo, u_hi), range(v_lo, v_hi)]
+}
+
+fn world_plane() -> Plane {
+    Plane::new(Frame::world())
+}
+
+fn assert_region_lifts(hit: &SurfaceSurfaceIntersections, a: &Plane, b: &Plane) {
+    assert!(hit.is_complete());
+    assert!(!hit.is_empty());
+    assert!(hit.points.is_empty());
+    assert!(hit.curves.is_empty());
+    assert_eq!(hit.regions.len(), 1);
+    let region = &hit.regions[0];
+    assert!(region.boundary.len() >= 3);
+    for vertex in &region.boundary {
+        let pa = a.eval(vertex.uv_a);
+        let pb = b.eval(vertex.uv_b);
+        assert_eq!(vertex.point, (pa + pb) / 2.0);
+        assert_eq!(vertex.residual, pa.dist(pb));
+        assert!(vertex.residual <= region.max_residual);
+    }
+}
+
+#[test]
+fn aligned_partial_overlap_and_full_containment_are_complete_regions() {
+    let plane = world_plane();
+    let partial = intersect_bounded_planes(
+        &plane,
+        window(0.0, 2.0, 0.0, 2.0),
+        &plane,
+        window(1.0, 3.0, -1.0, 1.0),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_region_lifts(&partial, &plane, &plane);
+    assert_eq!(
+        partial.regions[0]
+            .boundary
+            .iter()
+            .map(|vertex| vertex.uv_a)
+            .collect::<Vec<_>>(),
+        vec![[1.0, 0.0], [2.0, 0.0], [2.0, 1.0], [1.0, 1.0]]
+    );
+    assert_eq!(
+        partial.regions[0].orientation,
+        SurfaceRegionOrientation::Same
+    );
+
+    let contained = intersect_bounded_planes(
+        &plane,
+        window(-2.0, 2.0, -2.0, 2.0),
+        &plane,
+        window(-0.5, 0.5, -1.0, 1.0),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_region_lifts(&contained, &plane, &plane);
+    assert_eq!(contained.regions[0].boundary.len(), 4);
+    assert_eq!(contained.regions[0].boundary[0].uv_a, [-0.5, -1.0]);
+}
+
+#[test]
+fn translated_rotated_and_antiparallel_charts_retain_paired_boundaries() {
+    let a = world_plane();
+    let translated = Plane::new(
+        Frame::new(
+            Point3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+    );
+    let translated_hit = intersect_bounded_planes(
+        &a,
+        window(0.0, 2.0, -1.0, 1.0),
+        &translated,
+        window(-1.0, 1.0, -1.0, 1.0),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_region_lifts(&translated_hit, &a, &translated);
+    for vertex in &translated_hit.regions[0].boundary {
+        assert_eq!(vertex.uv_b[0], vertex.uv_a[0] - 1.0);
+        assert_eq!(vertex.uv_b[1], vertex.uv_a[1]);
+    }
+
+    let angle = core::f64::consts::FRAC_PI_4;
+    let rotated = Plane::new(
+        Frame::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(math::cos(angle), math::sin(angle), 0.0),
+        )
+        .unwrap(),
+    );
+    let rotated_hit = intersect_bounded_planes(
+        &a,
+        window(-1.0, 1.0, -1.0, 1.0),
+        &rotated,
+        window(-1.0, 1.0, -1.0, 1.0),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_region_lifts(&rotated_hit, &a, &rotated);
+    assert_eq!(rotated_hit.regions[0].boundary.len(), 8);
+    assert_eq!(
+        rotated_hit.regions[0].orientation,
+        SurfaceRegionOrientation::Same
+    );
+
+    let antiparallel = Plane::new(
+        Frame::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+    );
+    let antiparallel_hit = intersect_bounded_planes(
+        &a,
+        window(-1.0, 1.0, -1.0, 1.0),
+        &antiparallel,
+        window(-1.0, 1.0, -1.0, 1.0),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_region_lifts(&antiparallel_hit, &a, &antiparallel);
+    assert_eq!(
+        antiparallel_hit.regions[0].orientation,
+        SurfaceRegionOrientation::Reversed
+    );
+}
+
+#[test]
+fn area_edge_point_and_disjoint_boundaries_are_dimensionally_truthful() {
+    let plane = world_plane();
+    let base = window(0.0, 1.0, 0.0, 1.0);
+
+    let edge = intersect_bounded_planes(
+        &plane,
+        base,
+        &plane,
+        window(1.0, 2.0, 0.0, 1.0),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(edge.is_complete());
+    assert!(edge.points.is_empty());
+    assert!(edge.regions.is_empty());
+    assert_eq!(edge.curves.len(), 1);
+    assert_eq!(edge.curves[0].kind, ContactKind::Tangent);
+    assert_eq!(edge.curves[0].uv_a_start, [1.0, 0.0]);
+    assert_eq!(edge.curves[0].uv_a_end, [1.0, 1.0]);
+    assert!(matches!(
+        edge.curves[0].curve,
+        SurfaceIntersectionCurve::Line(_)
+    ));
+
+    let point = intersect_bounded_planes(
+        &plane,
+        base,
+        &plane,
+        window(1.0, 2.0, 1.0, 2.0),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(point.is_complete());
+    assert!(point.curves.is_empty());
+    assert!(point.regions.is_empty());
+    assert_eq!(point.points.len(), 1);
+    assert_eq!(point.points[0].kind, ContactKind::Tangent);
+    assert_eq!(point.points[0].uv_a, [1.0, 1.0]);
+    assert_eq!(point.points[0].uv_b, [1.0, 1.0]);
+
+    let miss = intersect_bounded_planes(
+        &plane,
+        base,
+        &plane,
+        window(2.0, 3.0, 2.0, 3.0),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(miss.is_proven_empty());
+}
+
+#[test]
+fn degenerate_input_rectangles_collapse_to_curve_and_point() {
+    let plane = world_plane();
+    let curve = intersect_bounded_planes(
+        &plane,
+        window(0.5, 0.5, 0.0, 1.0),
+        &plane,
+        window(0.0, 1.0, 0.0, 1.0),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(curve.curves.len(), 1);
+    assert_eq!(curve.curves[0].kind, ContactKind::Tangent);
+
+    let point = intersect_bounded_planes(
+        &plane,
+        window(0.5, 0.5, 0.25, 0.25),
+        &plane,
+        window(0.0, 1.0, 0.0, 1.0),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(point.points.len(), 1);
+    assert_eq!(point.points[0].uv_a, [0.5, 0.25]);
+}
+
+#[test]
+fn swapped_regions_restore_first_chart_canonical_winding() {
+    let a = world_plane();
+    let b = Plane::new(
+        Frame::new(
+            Point3::new(0.5, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+    );
+    let a_range = window(-1.0, 1.0, -1.0, 1.0);
+    let b_range = window(-0.5, 1.0, -0.75, 0.75);
+    let hit = intersect_bounded_planes(&a, a_range, &b, b_range, Tolerances::default()).unwrap();
+    let swapped = hit.clone().swapped();
+    let direct_swapped =
+        intersect_bounded_planes(&b, b_range, &a, a_range, Tolerances::default()).unwrap();
+    assert_region_lifts(&swapped, &b, &a);
+    assert_region_lifts(&direct_swapped, &b, &a);
+    assert_eq!(swapped, direct_swapped);
+    assert_eq!(
+        swapped.regions[0].orientation,
+        SurfaceRegionOrientation::Reversed
+    );
+}
+
+#[test]
+fn region_validation_rejects_bad_residual_orientation_and_degeneracy() {
+    let vertices = vec![
+        vertex([0.0, 0.0], [0.0, 0.0], 0.0),
+        vertex([1.0, 0.0], [1.0, 0.0], 0.0),
+        vertex([1.0, 1.0], [1.0, 1.0], 0.0),
+        vertex([0.0, 1.0], [0.0, 1.0], 0.0),
+    ];
+    let bad_residual = SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
+        Vec::new(),
+        Vec::new(),
+        vec![SurfaceSurfaceRegion {
+            boundary: {
+                let mut boundary = vertices.clone();
+                boundary[0].residual = 1.0;
+                boundary
+            },
+            orientation: SurfaceRegionOrientation::Same,
+            correspondence: kops::intersect::SurfaceRegionCorrespondence::Polygonal,
+            max_residual: 0.5,
+        }],
+    )
+    .unwrap_err();
+    assert!(matches!(bad_residual, Error::InvalidGeometry { .. }));
+
+    let bad_orientation = SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
+        Vec::new(),
+        Vec::new(),
+        vec![SurfaceSurfaceRegion {
+            boundary: vertices,
+            orientation: SurfaceRegionOrientation::Reversed,
+            correspondence: kops::intersect::SurfaceRegionCorrespondence::Polygonal,
+            max_residual: 0.0,
+        }],
+    )
+    .unwrap_err();
+    assert_eq!(
+        bad_orientation,
+        Error::InvalidGeometry {
+            reason: "surface/surface region orientation disagrees with paired chart winding"
+        }
+    );
+
+    let degenerate = SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
+        Vec::new(),
+        Vec::new(),
+        vec![SurfaceSurfaceRegion {
+            boundary: vec![
+                vertex([0.0, 0.0], [0.0, 0.0], 0.0),
+                vertex([1.0, 0.0], [1.0, 0.0], 0.0),
+                vertex([2.0, 0.0], [2.0, 0.0], 0.0),
+            ],
+            orientation: SurfaceRegionOrientation::Same,
+            correspondence: kops::intersect::SurfaceRegionCorrespondence::Polygonal,
+            max_residual: 0.0,
+        }],
+    )
+    .unwrap_err();
+    assert!(matches!(degenerate, Error::InvalidGeometry { .. }));
+}
+
+#[test]
+fn region_residual_bound_covers_whole_affine_patch_and_bits_repeat() {
+    let a = world_plane();
+    let b = Plane::new(
+        Frame::new(
+            Point3::new(0.0, 0.0, 5.0e-9),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+    );
+    let a_range = window(-1.0, 2.0, -2.0, 1.0);
+    let b_range = window(-0.5, 1.5, -1.5, 0.5);
+    let first = intersect_bounded_planes(&a, a_range, &b, b_range, Tolerances::default()).unwrap();
+    let second = intersect_bounded_planes(&a, a_range, &b, b_range, Tolerances::default()).unwrap();
+    assert_eq!(region_bits(&first), region_bits(&second));
+
+    let region = &first.regions[0];
+    for index in 0..region.boundary.len() {
+        let current = region.boundary[index];
+        let next = region.boundary[(index + 1) % region.boundary.len()];
+        for weight in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let uv_a = lerp2(current.uv_a, next.uv_a, weight);
+            let uv_b = lerp2(current.uv_b, next.uv_b, weight);
+            assert!(a.eval(uv_a).dist(b.eval(uv_b)) <= region.max_residual);
+        }
+    }
+    let uv_a = average_uv(region.boundary.iter().map(|vertex| vertex.uv_a));
+    let uv_b = average_uv(region.boundary.iter().map(|vertex| vertex.uv_b));
+    assert!(a.eval(uv_a).dist(b.eval(uv_b)) <= region.max_residual);
+}
+
+fn vertex(uv_a: [f64; 2], uv_b: [f64; 2], residual: f64) -> SurfaceSurfaceRegionVertex {
+    SurfaceSurfaceRegionVertex {
+        point: Point3::new(uv_a[0], uv_a[1], 0.0),
+        uv_a,
+        uv_b,
+        residual,
+    }
+}
+
+fn lerp2(a: [f64; 2], b: [f64; 2], weight: f64) -> [f64; 2] {
+    [
+        a[0] * (1.0 - weight) + b[0] * weight,
+        a[1] * (1.0 - weight) + b[1] * weight,
+    ]
+}
+
+fn average_uv(parameters: impl Iterator<Item = [f64; 2]>) -> [f64; 2] {
+    let parameters = parameters.collect::<Vec<_>>();
+    let sum = parameters
+        .iter()
+        .fold([0.0, 0.0], |sum, uv| [sum[0] + uv[0], sum[1] + uv[1]]);
+    [
+        sum[0] / parameters.len() as f64,
+        sum[1] / parameters.len() as f64,
+    ]
+}
+
+fn region_bits(hit: &SurfaceSurfaceIntersections) -> Vec<u64> {
+    hit.regions
+        .iter()
+        .flat_map(|region| {
+            core::iter::once(region.max_residual.to_bits()).chain(region.boundary.iter().flat_map(
+                |vertex| {
+                    [
+                        vertex.point.x.to_bits(),
+                        vertex.point.y.to_bits(),
+                        vertex.point.z.to_bits(),
+                        vertex.uv_a[0].to_bits(),
+                        vertex.uv_a[1].to_bits(),
+                        vertex.uv_b[0].to_bits(),
+                        vertex.uv_b[1].to_bits(),
+                        vertex.residual.to_bits(),
+                    ]
+                },
+            ))
+        })
+        .collect()
+}

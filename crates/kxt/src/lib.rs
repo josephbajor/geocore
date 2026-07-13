@@ -22,7 +22,10 @@
 //! writing emits their current metric value. Valid
 //! content outside the declared subset reports a stable [`XtCapability`]
 //! code as well as human-readable context.
-//! Intersection and other procedural geometry, nested/shared-basis offset
+//! A narrow verified transmitted exact-plane-field intersection-chart subset
+//! (Plane/Plane or one direct plane paired with a finite plane-offset chain)
+//! is reconstructed as graph-owned degree-1 carriers with paired pcurves.
+//! Other intersection and procedural geometry, nested/shared-basis offset
 //! export, broader tolerant topology, periodic or
 //! circular pcurve encoding, periodic NURBS, pre-13006 schemas, assemblies,
 //! non-null face-tolerance writing, and neutral-binary writing remain deferred. Face UV
@@ -49,8 +52,9 @@ pub mod write;
 pub use error::{Result, XtCapability, XtError};
 pub use parse::{Header, Node, Value, XtFile, read_xt};
 pub use recon::{
-    Reconstruction, reconstruct, reconstruct_in_scope, reconstruct_with_context,
-    reconstruction_budget_profile,
+    INTERSECTION_CHART_CERTIFICATE_WORK, INTERSECTION_CHART_DEPTH, INTERSECTION_CHART_ITEMS,
+    IntersectionImportBudgetProfile, Reconstruction, reconstruct, reconstruct_in_scope,
+    reconstruct_with_context, reconstruction_budget_profile,
 };
 pub use write::export_text;
 

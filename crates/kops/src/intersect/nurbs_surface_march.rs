@@ -27,8 +27,13 @@ const MAX_GRID_STEPS: usize = 96;
 const MAX_BISECTION_STEPS: usize = 80;
 const PROOF_SUBDIVISION_DEPTH: u32 = 12;
 const PROOF_CANDIDATE_BUDGET: usize = 4_096;
-const PROOF_SUBDIVISION_WORK: u64 =
-    1 + PROOF_SUBDIVISION_DEPTH as u64 * PROOF_CANDIDATE_BUDGET as u64;
+const MAX_SOURCE_TENSOR_SPAN_SLOTS: u64 = PROOF_CANDIDATE_BUDGET as u64;
+const MAX_SOURCE_RANGE_WORK: u64 = 6 * MAX_SOURCE_TENSOR_SPAN_SLOTS + 1;
+const MAX_SOURCE_BVH_WORK: u64 = MAX_SOURCE_TENSOR_SPAN_SLOTS * MAX_SOURCE_RANGE_WORK;
+const MAX_SOURCE_CHILD_WORK: u64 = 1 + 4 * MAX_SOURCE_RANGE_WORK;
+const PROOF_SUBDIVISION_WORK: u64 = 1
+    + MAX_SOURCE_BVH_WORK
+    + PROOF_SUBDIVISION_DEPTH as u64 * PROOF_CANDIDATE_BUDGET as u64 * MAX_SOURCE_CHILD_WORK;
 const COMPLETION_REASON: &str =
     "fixed-grid NURBS surface marching does not prove complete coverage";
 
@@ -79,8 +84,9 @@ pub const NURBS_SURFACE_MARCH_CAPABILITIES: &[CapabilityId] =
 pub struct NurbsSurfaceMarchBudgetProfile;
 
 impl NurbsSurfaceMarchBudgetProfile {
-    /// Preserves the prior proof depth, candidate cover, and maximum `97 × 97`
-    /// grid without earlier exhaustion.
+    /// Preserves the proof depth, candidate cover, every source-rectangle scan
+    /// for surfaces with at most the candidate ceiling of tensor span slots,
+    /// and the maximum `97 × 97` grid without earlier exhaustion.
     pub fn v1_defaults() -> BudgetPlan {
         BudgetPlan::new([
             LimitSpec::new(
@@ -291,12 +297,27 @@ fn contextual_proof_coverage(
         Err(error) => return Err(ContextMarchError::Policy(error)),
     }
 
-    let Ok(active_surface) = config.surface.restricted_to(proof_range(config)) else {
-        return Ok(ProofCoverage::Incomplete(Vec::new()));
-    };
-    let Ok(hierarchy) = NurbsSurfaceBvh::build(&active_surface) else {
-        return Ok(ProofCoverage::Incomplete(Vec::new()));
-    };
+    let hierarchy =
+        match NurbsSurfaceBvh::build_range_in_scope(config.surface, proof_range(config), scope) {
+            Ok(hierarchy) => hierarchy,
+            Err(ContextImplicitIsolationError::Kernel(_)) => {
+                return Ok(ProofCoverage::Incomplete(Vec::new()));
+            }
+            Err(ContextImplicitIsolationError::Policy(OperationPolicyError::LimitReached(
+                snapshot,
+            ))) => {
+                let evidence = diagnose_limit(
+                    scope,
+                    snapshot,
+                    NURBS_IMPLICIT_ISOLATION_SUBDIVISION_LIMIT,
+                    "NURBS source-rectangle BVH work limit reached",
+                );
+                return Ok(ProofCoverage::Incomplete(vec![evidence]));
+            }
+            Err(ContextImplicitIsolationError::Policy(error)) => {
+                return Err(ContextMarchError::Policy(error));
+            }
+        };
     let isolation = hierarchy
         .isolate_implicit_candidates_in_scope(
             config.implicit_surface,

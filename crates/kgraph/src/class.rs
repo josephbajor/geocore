@@ -38,6 +38,8 @@ pub enum CurveClass {
     Ellipse,
     /// B-spline or NURBS curve.
     Nurbs,
+    /// Graph-owned verified intersection curve.
+    Intersection,
 }
 
 impl CurveClass {
@@ -48,6 +50,7 @@ impl CurveClass {
             Self::Circle => "kernel.curve.circle.v1",
             Self::Ellipse => "kernel.curve.ellipse.v1",
             Self::Nurbs => "kernel.curve.nurbs.v1",
+            Self::Intersection => "kernel.curve.intersection.v1",
         })
     }
 }
@@ -97,6 +100,8 @@ pub enum Curve2dClass {
     Circle,
     /// B-spline or NURBS curve.
     Nurbs,
+    /// Finite certifier-minted inverse sphere chart of a spatial circle.
+    SphericalCircle,
 }
 
 impl Curve2dClass {
@@ -106,6 +111,7 @@ impl Curve2dClass {
             Self::Line => "kernel.curve2d.line.v1",
             Self::Circle => "kernel.curve2d.circle.v1",
             Self::Nurbs => "kernel.curve2d.nurbs.v1",
+            Self::SphericalCircle => "kernel.curve2d.spherical-circle.v1",
         })
     }
 }

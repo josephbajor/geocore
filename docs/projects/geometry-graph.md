@@ -1,6 +1,6 @@
 # F1 procedural geometry graph
 
-Status: G1-G4a, the F2 evaluation-budget adapter, and the Plane/Plane G5a verified branch-graph adapter are implemented; broader corpus coverage, persistent intersection descriptors, and procedural operations remain
+Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line plus common-axis and oblique plane/sphere-circle descriptors, and M3c transmitted-chart consumers through direct constant-normal Offset(B-surface)/B-surface are implemented; broader corpus coverage, contextual NURBS/procedural intersection families, and further descriptor families remain
 
 ## Outcome
 
@@ -633,22 +633,113 @@ without resetting the aggregate allowance. The shared topology graph-work
 adapter is now the accounting contract used by both phases.
 
 Landed G5a slice: `kgraph` owns an invertible affine carrier-to-pcurve
-parameter map and a private-field certificate minted only after
-outward-rounded interval arithmetic bounds a finite line carrier against two
-plane/line-pcurve lifts over the complete carrier range. Exact, reversed, and
-nonidentity maps are covered; invalid maps/ranges/tolerances, non-finite
-arithmetic, and residual violations fail explicitly. A graph-aware `kops`
-Plane/Plane compat/context/in-scope adapter preserves the analytic result,
-source handles, typed stale/unsupported failures, and canonical operand-swap
-behavior while building deterministic endpoint vertices and certified edges
-with graph-ready carrier/pcurve descriptors. Offset and all other unregistered
-pairs remain explicitly unsupported. Persistent intersection descriptors and
-broader procedural evaluation remain behind the consumer migration below.
+parameter map and private-field certificates minted only after
+outward-rounded interval arithmetic bounds a finite carrier against both
+pcurve lifts over the complete carrier range. Plane/plane uses a line carrier
+with two plane-line traces; exact, reversed, and nonidentity maps are covered.
+The plane/sphere family uses a circle carrier and plane-circle pcurve. Its
+common-axis fast path retains a sphere longitude line at constant latitude: the
+sphere trace owns the canonical longitude parameter exactly and the plane map
+is `t` or `-t`, with any phase encoded in the plane-circle axis. Plane normals
+may equal either orientation of the sphere axis and the plane frame may rotate
+arbitrarily about that axis. Shifted, seam-crossing, full-turn, and
+wider-than-one-turn finite longitude windows unwrap into a continuous carrier
+range.
 
-- Extend the graph-aware `kops` adapter beyond the landed Plane/Plane arm only
-  after each family has contextual accounting and paired trace evidence.
-- Reserve the verified intersection descriptor construction path for the M3c
-  intersection-import project.
+Genuinely oblique finite secants use the stable
+`kernel.curve2d.spherical-circle.v1` descriptor. Its private certifier-minted
+payload evaluates the inverse sphere chart with continuous seam unwrapping,
+analytic derivatives through order three, a finite nonperiodic carrier range,
+and conservative chart bounds. Whole-branch interval evidence proves the
+carrier's radial residual, positive pole clearance, and enclosure by the
+requested longitude/latitude windows. The `kops` owner pre-admits exactly 128
+`kops.intersect.spherical-circle-proof-subdivisions` Work units per retained
+oblique branch through `GraphSurfaceBudgetProfile`; exact N/N-1 tests pin the
+crossing. Pole-touching, pole-crossing, or insufficient-clearance branches fail
+with `SingularSphereChart`; unenclosable finite charts fail with
+`SphereTraceOutsideWindow`. Invalid maps/ranges/tolerances, non-finite
+arithmetic, wrong trace families, and residual violations also fail
+explicitly. A graph-aware `kops`
+exact-field compat/context/in-scope adapter preserves the analytic result,
+source handles, typed stale/unsupported failures, and canonical operand-swap
+behavior while building deterministic endpoint vertices and certified edges.
+Direct planes and bounded, context-accounted constant-offset chains terminating
+at a plane resolve to exact plane fields. Direct spheres and offset chains whose
+effective radius stays positive and finite resolve to exact sphere fields.
+Common-axis and oblique plane/sphere secants and clipped arcs produce certified
+circle edges; tangencies remain vertex-only and misses preserve complete empty
+evidence. Other procedural families and NURBS fields remain unsupported.
+Certified branches can be committed
+atomically as `CurveDescriptor::Intersection` nodes with a stable class key,
+ordered source-surface and pcurve dependencies, a finite carrier interval, and
+the paired whole-interval certificate. Stale or altered proof sources fail
+before allocation or roll the complete persistence batch back.
+
+The first M3c consumers now commit
+`CurveDescriptor::TransmittedIntersection` through the same protected seam.
+For the canonical finite-open X_T subset whose ordered sources are direct
+planes or finite constant-offset chains terminating at planes, transmitted
+`CHART` positions and modern paired UV tuples become polynomial degree-1
+carrier/pcurves on one exact knot basis. A private whole-span certificate binds
+both effective plane fields, both pcurves, outward-rounded control residuals,
+the declared proof tolerance, and the affine/error metadata. The descriptor
+still retains the actual source handles, including each offset root, in
+transmitted operand order. Graph validation resolves those handles through
+safe finite offset chains and rejects any mismatch before allocation; reverse
+dependencies protect every transitive offset basis while the proof is live.
+X_T reconstruction accepts Plane/Offset, Offset/Plane, and Offset/Offset
+orderings, applies the published sense rule to the oriented effective normals,
+preserves the trim bounds, and never recomputes the spatial intersection. Two
+offset roots must have independent basis chains; cross-linked or shared chains
+fail closed. Both actual roots remain ordered descriptor dependencies, and each
+complete transitive basis chain is protected while the chart is live. Import
+Work/Items/Depth are pre-admitted and any parse, convention, certificate,
+graph, or topology failure rolls back atomically. The direct Plane/Plane path
+keeps its existing allocation order and avoids the additional exact-field
+graph queries used only by offset operands. Direct two-offset fixtures account
+exactly 34 graph node visits at depth 2; two nested two-link roots account 36
+visits at depth 3, including checked topology commit work.
+
+Canonical finite-open Plane/B-surface, Offset/B-surface, B-surface/B-surface,
+and reversed-operand charts use a separate `TransmittedNurbsIntersection`
+payload, leaving the established exact-plane certificate API unchanged. A
+plane trace may bind a direct plane or a safe finite constant-offset chain
+terminating at a plane. The descriptor retains the actual ordered offset root
+handle, while graph validation resolves its exact effective plane and reverse
+dependencies protect every transitive basis. Every NURBS trace owns and
+validates its original ordered polynomial or rational source exactly. All
+traces retain the degree-1 pcurves, carrier, metadata, and residual bounds.
+Every carrier span is split to binary depth 10. Original-source homogeneous
+interval de Boor evaluation encloses a center point and both first partials
+over each affine pcurve box; a centered mean-value residual preserves the
+shared carrier/pcurve parameter correlation. This is a whole-range subdivision
+proof, not point sampling, and it never recomputes the spatial intersection.
+For `C` chart positions, `P` plane traces, and NURBS source tensor-span slot
+counts `R_i`, import pre-admits
+`P*C + (C-1)*2^10*sum_i(6R_i+1)` Work, retains `C` Items, and reports Depth 10.
+The canonical two-source B/B fixture therefore consumes exactly 14,336 Work,
+2 Items, and Depth 10; its checked import uses 30 graph visits at depth 1.
+Direct planes avoid an exact-field graph query; one- and two-offset fixtures
+account exactly 32/2 and 33/3 aggregate graph node-visits/depth respectively,
+including checked topology commit work.
+
+A direct constant-normal `Offset(B-surface)` trace stays on the same persistent
+NURBS-intersection descriptor but uses a `TransmittedOffsetNurbsTrace` payload.
+It retains the live offset root, signed distance, and original NURBS basis.
+Each proof box encloses `du x dv`, establishes a positive normal-length lower
+bound, divides to the complete unit-normal field, and applies the signed
+displacement before checking the transmitted carrier residual. The six shared
+position/partial scans also pay for that normal proof, so the canonical
+one-span Offset(B)/B fixture remains exactly 14,336 Work, 2 Items, and Depth 10
+in both operand orders. The production exemplar now reaches the later
+`xt.read.intersection-limits` boundary rather than an unsupported surface
+family.
+
+- Add contextual NURBS/non-plane fields and other exact/procedural families
+  only with contextual accounting and paired trace evidence.
+- Broaden the M3c consumer to further production-exemplar source bases and
+  explicitly supported terminated chart variants without recomputing their
+  transmitted scars.
 - Add swept, spun, and blend descriptors only with their own evaluator,
   validity, bounds, interchange, and test contracts.
 
@@ -668,6 +759,35 @@ the graph ownership model.
 - depth and node-visit limits report consumed and allowed values;
 - graph clone preserves values but has independent undo state;
 - graph validation catches reverse-index disagreement in a test-only corruptor.
+- transmitted chart descriptors retain ordered plane/pcurve dependencies,
+  reject mismatched or mutated proof inputs, and evaluate the certified carrier;
+- transmitted charts whose actual source is a safe nested plane-offset chain
+  bind its effective plane while protecting the complete basis chain;
+- the X_T wire-layout test pins the modern appended intersection-data pointer,
+  `L/?` limits, `CHART` positions, and `INTERSECTION_DATA(204)` UV payload;
+- the structural import fixture pins exact Work/Items/Depth N/N-1 crossings,
+  typed null/malformed/convention/residual failures, and reusable rollback state.
+- Plane/Offset, Offset/Plane, and Offset/Offset structural variants pin actual
+  ordered source identity, positive and negative signed-offset accumulation,
+  direct and nested roots, both source senses, preserved trim bounds, both-chain
+  dependency protection, exact chart/graph accounting, and typed altered,
+  unsafe, cross-linked, cyclic, non-plane, parallel, and noncanonical exits.
+- Plane/B-surface, Offset/B-surface, and reversed-operand variants cover
+  polynomial and rational non-planar sources, direct and nested offset roots,
+  exact chart and graph-query Work/Items/Depth boundaries, metadata and trim
+  retention, ordered identity, perturbed carrier/UV/source/offset rejection,
+  periodic-source rejection, transitive dependency protection, rollback reuse,
+  and deterministic validation.
+- B-surface/B-surface variants cover two distinct original non-planar sources,
+  polynomial/rational combinations in both orders, exact summed proof and
+  graph-accounting boundaries, source/pcurve/carrier identity, dependency
+  protection, and typed periodic, closed, altered, stale, mismatched,
+  noncanonical, and null-limit rollback paths.
+- Direct constant-normal Offset(B-surface)/B-surface variants cover both operand
+  orders and polynomial/rational bases, retain the live root, signed distance,
+  basis, and paired pcurves, pin exact 14,336/2/10 proof accounting, reject
+  singular or underflowed normal fields and altered dependencies, and advance
+  the production corpus to its equal-limit boundary.
 
 ### Offset evaluator tests
 
@@ -719,7 +839,8 @@ the graph ownership model.
 - A plugin/custom-geometry ABI or dynamic class registry.
 - A durable native file format implementation; only its identity rules are
   fixed here.
-- Offset/offset or offset/NURBS intersection completion.
+- Recomputing general operational Offset/Offset or Offset/NURBS intersections;
+  verified import of supported transmitted scars is in scope above.
 - Recomputing imported intersection curves.
 - Sweeps, spun surfaces, rolling-ball blends, blend bounds, or foreign geometry.
 - Moving topological points into the graph.

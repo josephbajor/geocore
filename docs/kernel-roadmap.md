@@ -71,7 +71,7 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, topology-internal Euler operators, transaction-owned public Euler edits, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, checked transaction-scoped assembly, and deterministic journals exist; general bodies and several degenerate topology classes remain. |
 | M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance and transaction-owned aggregate budgets; shared incidence validation; a complete transaction-owned public Euler surface with mandatory pcurve creation and derived/split/merge/delete lineage; private generic Store mutation; transaction-scoped low-level assembly whose only public persistence path uses deterministic mutation preview, incrementally replaced per-body ownership/shared-geometry dependency footprints, affected-root Fast checks, and complete ownership closure; pcurve-driven tessellation; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; a reusable validated simple-polygon planar profile; checked X_T reconstruction; explicit face metadata; certified imported domains; adaptive full-active-interval analytic/clamped-NURBS face-domain containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring loop proofs; and convex-planar, whole sphere/torus, sphere-cap, and single-planar-face shell embedding proofs have landed. General NURBS/mixed-parameter incidence, periodic/unclamped and unsupported exact/mixed-boundary containment, profiles with holes/curves, operation-specific tolerance propagation rules, curved-loop/general curved-shell proofs, production seam/singularity interchange fixtures, geometry graph, higher-operation migration, and multi-body performance baselines remain. |
 | M3 X_T | IN PROGRESS | The modern-schema subset reads both wire encodings and writes text, including bounded tolerant edges as trimmed SP-curves over finite 2D B-curves; production coverage and external certification remain. |
-| M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases, explicit `Complete`/`Indeterminate` result evidence, exact NURBS patch subdivision/BVH, analytic implicit-surface exclusion, deterministic recursive candidate covers with structured limits and proof-bearing miss exits, bounded cell-local curve-pair polishing, and several exact-cell interval-certified root/overlap slices exist; general root discovery and boolean-ready paired-pcurve branches do not. |
+| M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases, explicit `Complete`/`Indeterminate` result evidence, exact NURBS patch subdivision/BVH, analytic implicit-surface exclusion, deterministic recursive candidate covers with structured limits and proof-bearing miss exits, source-range-certified curve-pair exclusion bounds, bounded cell-local curve-pair polishing, and several exact-cell interval-certified root/overlap slices exist; general root discovery and boolean-ready paired-pcurve branches do not. |
 | M5–M8 | NOT STARTED | No end-to-end booleans, general modeling, blends, stable API, or production hardening. |
 
 The machine-readable companion [kernel-support.tsv](kernel-support.tsv) is the capability
@@ -653,8 +653,9 @@ does not satisfy this gate.
 
 ### M3c — Tier 2/3 fidelity — THROUGH M6/M8
 
-Periodic B-geometry, circular/periodic pcurve encodings, intersection curves, procedural
-surfaces, curve-less tolerant ring/degenerate cases, general bodies, attributes,
+Arbitrary cyclic B-geometry beyond the certified clamped-seam slice,
+circular/periodic pcurve encodings, intersection curves, procedural surfaces,
+curve-less tolerant ring/degenerate cases, general bodies, attributes,
 transforms, instances, assemblies, and older schemas land with their kernel
 dependencies. Full “any well-formed X_T” Tier 0 is not claimed until this matrix is
 closed.
@@ -663,10 +664,13 @@ The gate fixture for the import half of this matrix is `exemplar.x_t`
 (owner-contributed Onshape/Parasolid 37.1 production part, 2026-07-11: 96 faces
 of which 44 sit on offset surfaces and 68 reference B-surfaces, 110 intersection
 curves, 131 curve-less tolerant edges, 7,423 nodes). It parses fully today, and
-the geometry-graph/offset reconstruction slice is complete. Reconstruction now
-stops at periodic/closed B-geometry with the named capability
-`xt.geometry.periodic-nurbs-surfaces`; this is step 3 below, not an offset
-surface blocker. Its manifest row remains the committed progress meter:
+the geometry-graph/offset reconstruction slice is complete. The three production
+periodic/closed B-surface leaves now reconstruct through a certified clamped
+position/C1 seam contract. Reconstruction next stops at
+`xt.read.intersection-limits` because the next transmitted INTERSECTION has
+equal, therefore non-distinct, start and end limits instead of the landed
+distinct finite-open pair; this is step 2 below, not a periodic-geometry or
+surface-family blocker. Its manifest row remains the committed progress meter:
 `reconstruct: unsupported → pass`, then `tessellate: pass`, then full-checker
 gaps shrinking toward `valid`. Dependency plan:
 
@@ -678,19 +682,70 @@ gaps shrinking toward `valid`. Dependency plan:
    conservative work boxes, and pcurve-driven tessellation are landed. This is
    the graph substrate shared by exemplar reconstruction and future M4 proofs;
    its descriptors serve both clients without duplicated owned geometry.
-2. **Verified import of intersection curves.** Consume stored XT `INTERSECTION`
-   geometry by verification, not recomputation: certify the transmitted
-   B-spline representation against both owning surfaces with residual bounds
-   inside the declared tolerances, following the landed
-   certified-imported-domain pattern for pcurves. Re-deriving boolean scars
-   through our own surface/surface intersector remains an M4 concern; import
-   must not wait on it.
-3. **LIVE RECONSTRUCTION BLOCKER — periodic/closed B-geometry.** Extend
-   `kgeom` NURBS evaluation,
-   reconstruction, and the writer beyond clamped non-periodic forms (the M1
-   debt line). The pcurve chart machinery already carries integer period
-   shifts, so the work concentrates in evaluation/knot handling, edge-bound
-   recovery, and checker acceptance.
+2. **VERIFIED TRANSMITTED SLICES IN PROGRESS — import intersection curves without
+   recomputation.** X_T transmits `CHART` model-space positions rather than an
+   owned spatial B-spline. The landed exact-plane-field slices retain those
+   positions and the modern `INTERSECTION_DATA(204)` paired UV tuples as one
+   shared, polynomial degree-1 basis, then proves both lifted pcurves over every
+   complete knot span with outward-rounded control residuals inside the owning
+   body/chart tolerance. Ordered source and pcurve dependencies, affine chart
+   metadata, and the proof persist in the geometry graph; natural edge bounds
+   come from the retained carrier. Each source may be a direct plane or a safe
+   finite constant-offset chain terminating at a plane, so Plane/Plane,
+   Plane/Offset, and Offset/Offset orderings share one proof contract.
+   Certificates bind the effective plane fields while retaining the actual
+   ordered source handles and protecting every complete basis chain. Two
+   Offset/Offset roots must have independent chains; shared or cross-linked
+   chains fail closed. The accepted boundary remains intentionally narrow:
+   two distinct nonparallel effective planes, at most two offset operands,
+   finite open `L/?` limits, non-null `uv_type=4` UVs, and the canonical affine
+   chart recurrence. Canonical Plane/B-surface, safe-Offset(Plane)/B-surface,
+   B-surface/B-surface, direct constant-normal Offset(B-surface)/B-surface,
+   and every applicable reversed operand order now retain
+   the same degree-1 carrier/pcurves while a separate certificate proves each
+   polynomial or rational source NURBS trace.
+   A plane trace may bind either a direct plane or a safe finite offset chain
+   resolving to an exact plane. A direct Offset(B-surface) trace instead binds
+   the live offset root, signed distance, and original NURBS basis; each proof
+   box outwardly encloses `du x dv`, proves a positive normal-length lower
+   bound, and divides to the complete unit-normal field before applying the
+   signed displacement. The persistent descriptor retains the actual ordered
+   roots and protects every transitive basis. Every carrier span is
+   subdivided to binary depth 10; original-source homogeneous point/partial
+   intervals and a centered mean-value residual provide whole-range evidence
+   without samples or spatial-intersection recomputation. For `N` chart
+   positions, `P` exact-plane traces, and each NURBS trace span count
+   `R_i=(nu_i-pu_i)(nv_i-pv_i)`, the NURBS descriptor pre-admits
+   `P*N+(N-1)*2^10*sum_i(6R_i+1)` Work, `N` Items, and Depth 10, with exact
+   N/N-1 rollback coverage. The canonical two-position, one-span B/B fixture
+   consumes `14336/2/10`; the historical Plane/B fixture remains
+   `7170/2/10`; the synthetic Offset(B)/B fixture consumes `14336/2/10` in
+   both operand orders and rational variants. Historical import profile v1
+   remains capped at 131,072 Work, while the corpus-backed v2 profile admits
+   the exemplar's exact `81267732/20/10` Work/Items/Depth boundary. Both
+   original B-surface identities and their paired pcurves are graph-protected
+   in source order. Other parameter conventions, limits,
+   nullable data, periodic/closed transmitted trace ranges, arbitrary unclamped
+   cyclic bases, and unsupported closed forms
+   fail with typed capabilities rather than being silently reparameterized. The
+   production exemplar's three clamped periodic/closed B-surface leaves now
+   reconstruct, wrap evaluation, bound seam-crossing ranges, and write matching
+   periodic/closed flags. Its first Offset(B-surface)/B-surface chart now
+   certifies, advancing the corpus ratchet to a later intersection whose start
+   and end limits are equal rather than distinct. Equal/non-distinct, null, or
+   closed limit families, periodic trace ranges, and noncanonical chart
+   conventions remain. Re-deriving
+   boolean scars through our own surface/surface intersector remains an M4
+   concern; import must not wait on it.
+3. **COMPLETE VERTICAL SLICE — certified clamped periodic/closed B-surfaces.**
+   `kgeom` certifies polynomial seams against the owning BODY linear tolerance
+   and rational seams by exact homogeneous position/first-partial equality;
+   evaluation wraps certified directions, bounding boxes split seam-crossing
+   ranges, and partitioning retains only untouched periodic directions.
+   Reconstruction validates matching periodic/closed flags and knot-implied
+   control counts, while the writer preserves the certified flags. Arbitrary
+   unclamped cyclic bases, periodic B-curves, and broader closed-form encodings
+   remain explicit typed boundaries.
 4. **Checker-gap ratchet on real parts.** Import does not gate on full-checker
    `valid`: exemplar-class bodies land as `Indeterminate` with named gaps
    (curved-face loop containment, general curved-shell orientation/embedding,
@@ -724,9 +779,12 @@ true only for an empty complete result.
   `is_proven_empty()`. Recursive isolation separately exposes structured cell-budget and
   parameter-resolution limits; intersection results still need structured provenance
   beyond stable reasons.
-- An SSI branch carries a 3D curve, pcurve on surface A, pcurve on surface B, parameter
-  correspondence, closure/end events, contact character, and a verified residual/error
-  bound over the entire active interval—not only endpoint UVs.
+- Target common SSI branch contract: a 3D curve, pcurve on surface A, pcurve on
+  surface B, parameter correspondence, closure/end events, contact character,
+  and a verified residual/error bound over the entire active interval—not only
+  endpoint UVs. Narrow graph-aware Plane/Plane and Plane/Sphere branches have
+  landed paired pcurves and whole-interval proofs; the common analytic result
+  families have not yet adopted that complete branch contract.
 - Represent coincident curve intervals and coincident surface regions separately from
   isolated contacts and ordinary branches.
 - Landed substrate: NURBS-to-Bezier surface subdivision, positive-weight control-hull
@@ -734,8 +792,9 @@ true only for an empty complete result.
   interval-certified affine-plane patch exclusion, analytic plane/sphere/cylinder/cone/
   torus implicit fields over outward-inflated boxes, exact adaptive U/V subpatch isolation
   with conservative covers and structured limits, proof-bearing analytic/NURBS SSI
-  empty exits, and deterministic exact NURBS curve-pair subdivision with
-  conservative covers and structured limits for complete curve/curve misses.
+  empty exits, and deterministic NURBS curve-pair subdivision whose exclusions
+  use original-source outward interval range boxes, with conservative covers
+  and structured limits for complete curve/curve misses.
   Retained curve-pair cells now feed deterministic chord/midpoint seeds into
   safeguarded local Newton polishing; a finite seed-attempt stage bounds the
   work, and only re-evaluated in-cell residual witnesses are emitted. These
@@ -752,9 +811,10 @@ true only for an empty complete result.
   Deterministic joined-region ownership groups exact shared grid vertices and
   requires one certificate/witness per component, completing polynomial and
   rational boundary roots plus separated multi-root components. Partial
-  evidence cannot upgrade completion. An outward-safe Euclidean control-hull
-  distance lower bound now excludes diagonal tolerance-empty cells beyond the
-  axis-wise broad phase while retaining the inclusive boundary. Exact affine
+  evidence cannot upgrade completion. An outward-safe Euclidean distance lower
+  bound between source-range position enclosures now excludes diagonal
+  tolerance-empty cells beyond the axis-wise broad phase while retaining the
+  inclusive boundary. Exact affine
   parameterizations with matching normalized knots, Euclidean control points,
   and globally proportional rational weights now supply complete clipped
   same/reversed overlap extents. Exact shared 3D corners extend unique-root
@@ -770,35 +830,131 @@ true only for an empty complete result.
   multiplicity interior knots whose stored Euclidean points agree exactly add
   a noncoplanar interior existence witness before the same global injectivity
   proof. Candidate cells retain shared original-source provenance so rounded
-  split controls cannot establish source roots. On partial ranges, direct
+  split controls cannot establish source roots or exclude source geometry.
+  Exclusion boxes come from outward interval evaluation over original-source
+  child ranges and fail open to the whole-source hull. A cubic/line adversary
+  whose exact midpoint rounds outside every generated child hull remains
+  nonempty, while the separate `2^-53` adversary guards against false
+  certificates. On partial ranges, direct
   outward interval de Boor bounds over each original knot span enclose
   homogeneous positions and derivative B-splines; source-range Poincare signs
   and P-matrix bounds certify coplanar roots, while bounded exact
   `{mid,lo,hi}` source samples and in-range full-multiplicity knots provide
-  noncoplanar existence. The `2^-53` rounded-restriction adversary now stays
+  noncoplanar existence. Exact normalized same/reversed parameter
+  correspondence now adds a non-sampled algebraic route: proportional
+  positive rational weights, a strictly monotone shared carrier, and exact
+  omitted-coordinate controls lift a projected Poincare/P-matrix root to 3D.
+  Canonical primitive integer carriers and residuals with coefficient magnitude
+  at most two extend the exact lift to sources with no corresponding coordinate
+  scalar or unit-coefficient form. Global-sign and scalar-multiple duplicates
+  are removed by positive leading coefficients and gcd normalization. Direct
+  homogeneous integer-form derivatives preserve correlation; swap, reversed
+  affine domains, positive rational weights, and broken gates are covered.
+  Both Q4 roots lie at normalized `1/3` inside partial ranges. The `2^-53` rounded-restriction adversary now stays
   inconclusive, while rational boundary and separated multi-root completion
   remain source-valid. Exact overlap scans, reconstruction, and inverse-state bounds now
   pre-admit conservative Work and Items; exhaustion returns structured
-  indeterminate evidence before proof allocation. Internal graph-owned facade
+  indeterminate evidence before proof allocation. Curve-pair range enclosures
+  also pre-admit every inspected original-source knot-span slot before
+  evaluation; a denied child scan retains its parent. Surface-patch BVH,
+  bounding-box, plane/implicit, and adaptive-child exclusion now use outward
+  tensor interval bounds over original source rectangles, tightened by active
+  source-support hulls and centered derivative bounds. An exact cubic extrusion
+  whose rounded children lose a real contact remains nonempty. For
+  `R=(nu-pu)(nv-pv)` source tensor slots, including repeated/empty slots, one
+  range bound admits `6R+1` Work; contextual BVH build admits `R*(6R+1)` and
+  each parent admits `1+4*(6R+1)` before any child scan. Exact repeated-knot,
+  roundoff, and composed-marcher N/N-1 tests retain the source cover. Internal graph-owned facade
   evidence pins exact Work/Items N and isolated N-1 propagation for distinct
-  checked-ancestor curves. Q4 solve fixture v3 pins both resource
-  usage/allowances, common-refinement success, ordered overlap extents and
-  orientation, and Work N-1 denial. G5a now adds invertible affine
-  carrier/pcurve maps, whole-interval paired plane residual certificates, and
-  a Plane/Plane-only graph-aware adapter that builds deterministic verified
-  branch vertices/edges while preserving source identity and typed unsupported
-  procedural pairs. Next, broaden algebraic spatial existence, audit
-  subdivision-hull roundoff provenance, extend the adapter to contextual
-  procedural/NURBS fields, and persist verified intersection descriptors.
+  checked-ancestor curves. Q4 isolation fixture v4, implicit-isolation v3, and
+  solve fixture v18 pin resource
+  usage/allowances, common-refinement and checked inverse-history success,
+  altered-history rejection, ordered overlap extents and orientation,
+  primitive magnitude-two through magnitude-twelve algebraic completion, and
+  independent overlap Work/Items N-1 denial. G5a now adds invertible affine
+  carrier/pcurve maps and whole-interval paired residual certificates. The
+  graph-aware adapter builds deterministic verified branches for exact
+  plane/plane lines and both common-axis and genuinely oblique plane/sphere
+  circles while preserving source identity and raw-result parity. The
+  common-axis fast path accepts either sphere-axis orientation, arbitrary plane
+  rotation about that axis, and shifted, seam-crossing, full-turn, or overwide
+  longitude windows through exact `t`/`-t` plane maps. Other finite regular
+  secants use a private-field nonperiodic inverse sphere-chart pcurve with
+  continuous seam unwrapping, analytic derivatives through order three,
+  conservative bounds, and whole-branch pole/window proof. Each retained
+  oblique branch pre-admits exactly 128 proof-subdivision Work units with pinned
+  N/N-1 evidence. Direct fields and context-accounted plane/sphere offset chains
+  share both arms; sphere chains fail closed if any effective radius is
+  nonpositive or non-finite. Certified finite line/circle branches persist
+  atomically with ordered source/pcurve dependencies and their proof. Tangencies
+  stay vertex-only, misses preserve completion, and pole-crossing or out-of-window
+  charts fail with precise typed errors. Contextual NURBS and other procedural
+  pairs remain typed unsupported.
+  The magnitude-twelve rung runs the complete historical magnitude-eleven family
+  first so all prior evidence remains stable, then admits only new carrier/
+  residual pairs that reach twelve. Direct correlated homogeneous derivative
+  bounds accept coefficients through twelve, explicitly reject magnitude thirteen,
+  and preserve fail-closed overflow/non-finite behavior. Next, broaden the
+  bounded exact family beyond magnitude twelve and extend the adapter to
+  contextual NURBS/non-plane fields and
+  further verified carrier families.
 - Analytic special cases and the generic solver feed the same canonical result type.
 - Consolidate the per-pair analytic curve/surface and SSI boilerplate behind
-  shared drivers with the same result contract. The first complete-support-
-  curve emitter now owns clipping, periodic/nonperiodic membership, candidate
-  reacceptance, and first-wins point/endpoint-aware branch dedup for the
-  cylinder/cylinder and cone/cylinder pilots. Migrate the four remaining
-  duplicated SSI pairs, then address the broader curve/surface boilerplate,
-  following the `MarchConfig` pattern already proven by the NURBS-surface
-  marchers, before adding further special-case pairs.
+  shared drivers with the same result contract. The complete-support-curve
+  emitter now owns clipping, periodic/nonperiodic membership, candidate
+  reacceptance, and first-wins point/endpoint-aware branch dedup for
+  cylinder/cylinder, cone/cylinder, cone/cone, cone/sphere, cylinder/sphere,
+  and sphere/sphere. Pair-owned apex/tangent paths and sphere tolerance remain
+  unchanged. The broader curve/surface rungs now route circle/ellipse ×
+  cylinder, circle/ellipse × cone, circle/ellipse × torus, and circle/ellipse ×
+  sphere through one config driver per surface family for validation, roots,
+  tangency, contained overlap, window clipping, candidate admission, ordering,
+  and completion; pre-refactor debug/release bit signatures and exact
+  diagnostics are pinned. The analytic primitive-surface family is now
+  consolidated. Circle/ellipse × NURBS now shares one marcher with explicit
+  radial-circle and closest-projection ellipse strategies while preserving
+  bit-exact diagnostics, completion, clipping, ordering, and classification.
+  Circle/circle, circle/ellipse, and ellipse/ellipse now share one bounded
+  conic-pair driver for validation, plane routing, inverse periodic fitting,
+  contact classification, first-wins deduplication, and coincident periodic
+  overlap construction. Their distinct quadratic/quartic root and projection
+  arithmetic remains strategy-local, with pre-refactor debug/release result and
+  operation-report bit signatures pinned. Bounded coincident plane/plane,
+  exact coincident cylinder/cylinder, exact common-axis sphere/sphere windows,
+  exact signed-coordinate-permutation sphere octants, and arbitrary-frame
+  sphere octants now return dimensionally truthful complete evidence. Plane
+  regions retain paired convex chart boundaries; cylinder and common-axis sphere
+  regions retain paired seam-aware chart rectangles. Signed-coordinate-
+  permutation octants retain a certifier-minted nonlinear bidirectional chart
+  correspondence, three exact physical boundary anchors, and an outward
+  operation-count/periodic-phase residual bound. Arbitrary-frame octants use
+  robust six-halfspace topology, deterministic spherical-polygon anchors, a
+  certifier-minted nonlinear bidirectional chart correspondence, and an outward
+  whole-region residual bound; angularly ill-conditioned boundary planes fail
+  closed rather than changing intersection dimension. Finite periodic
+  representatives are admitted only while an outward endpoint phase bound
+  remains inside the active angular-identity tolerance; more remote
+  representatives fail closed before phase drift can change intersection
+  dimension. Shared sphere-octant edges and vertices collapse to tangent branches
+  or isolated contacts, poles are singular point evidence, and disjoint octants
+  are proven empty. Exact coincident coaxial cone charts now retain paired affine
+  longitude/slant correspondence across shifted reference origins and radii,
+  rotated transverse frames, and reversed axes. Finite overlap regions split at
+  the apex; collapsed latitudes and longitudes become tangent circles or
+  rulings, the isolated apex is singular, and disjoint windows are proven
+  empty. Whole-region residual bounds are outward, and overwide, noncanonical,
+  near-coincident, or roundoff-unsafe chart families fail closed. Exact
+  coincident torus charts independently split longitude and latitude seams;
+  positive-area overlaps retain paired polygonal regions, while collapsed axes
+  become exact latitude or meridian circle branches and collapsed rectangles
+  become tangent points. Antiparallel frames preserve the signed two-axis chart
+  map, and overwide, near-coincident, or roundoff-unsafe windows fail closed.
+  These residual and singular-contact claims apply to the named landed slices,
+  not to SSI families that still lack whole-branch certificates. Near-coincident
+  non-identical surfaces, generic nonparallel frame rotations outside the landed
+  sphere-octant slice, and non-octant arbitrary-axis sphere windows still fail
+  closed for the certified general fallback. The next analytic boundaries are
+  general non-octant arbitrary-axis coincident sphere regions and that fallback.
 
 ### M4b — Curve/curve and curve/surface completion
 
@@ -958,14 +1114,24 @@ that queue must eventually discharge.
   evidence is the named wire/acorn rejection, host-canonicalized analytic NURBS
   fixtures, offset-sheet re-export gap, and two preserved host re-export reader
   gaps.
-- M3c: implement periodic/closed B-geometry, the live exemplar reconstruction
-  blocker, and independently verify imported intersection curves.
+- M3c: broaden the verified transmitted-chart import beyond the landed
+  certified clamped periodic/closed B-surface reconstruction and the
+  landed canonical Plane/Plane, Plane/Offset, Offset/Offset, Plane/B-surface,
+  safe-Offset(Plane)/B-surface, B-surface/B-surface, and direct
+  Offset(B-surface)/B-surface slices past the exemplar's current
+  `xt.read.intersection-limits` boundary: equal/non-distinct, null, and closed
+  limits, periodic trace ranges, and noncanonical chart variants.
 - M2.5: finish parameter-space incidence and ratcheted Full-checker proofs for
   periodic/mixed boundaries, multi-loop containment, and curved shells.
-- M4: extend completion evidence with paired pcurves, coincident regions,
-  singular events, and verified residual bounds; generalize the landed
-  exact-cell root/overlap certificates, bounded in-cell tolerance witnesses,
-  and typed local-solver stops to complete solver-integrated coverage.
+- M4: extend the narrow landed graph-aware Plane/Plane and Plane/Sphere paired-
+  pcurve and whole-interval residual proofs across the common SSI branch
+  contract; extend bounded Plane/Plane, cylinder/cylinder, common-axis
+  sphere/sphere, exact signed-axis and arbitrary-frame sphere-octant, coaxial
+  cone, and torus region/contact evidence to general non-octant arbitrary-axis
+  sphere and remaining coincident or singular families; and generalize the
+  landed exact-cell root/overlap certificates, bounded in-cell tolerance
+  witnesses, and typed local-solver stops to complete solver-integrated
+  coverage.
 - M5: grow planar profiles and booleans only after facade adoption and the
   checker, rollback, lineage, tolerance, determinism, corpus, performance, and
   independent-oracle gates.

@@ -11,8 +11,8 @@
 //!   implementing [`crate::surface::Surface`];
 //! - homogeneous knot insertion/refinement, exact curve and surface
 //!   splitting/restriction, and curve-segment/surface-patch Bezier extraction;
-//! - bounded exact NURBS curve-pair subdivision with conservative contact
-//!   covers and structured operation accounting;
+//! - bounded source-provenanced NURBS curve-pair subdivision with conservative
+//!   contact covers and structured operation accounting;
 //! - global curve interpolation ([`interpolate`]).
 //!
 //! Deliberately deferred (with rationale):
@@ -35,9 +35,11 @@ mod nsurface;
 pub(crate) mod ops;
 mod patch_bvh;
 mod source_range_interval;
+mod spatial_algebraic_correspondence;
 mod spatial_curve_pair;
 mod spatial_exact_sample;
 mod spatial_interior_root;
+mod surface_range_interval;
 
 pub use curve_pair::{
     ContextCurvePairIsolationError, CurvePairCandidateCell, CurvePairIsolation,
@@ -59,3 +61,4 @@ pub use patch_bvh::{
     NURBS_IMPLICIT_ISOLATION_SUBDIVISION_LIMIT, NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
     NurbsSurfaceBvh, PlanePatchRelation,
 };
+pub use surface_range_interval::NurbsSurfaceSourceDifferentialEnclosure;

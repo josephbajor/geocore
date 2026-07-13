@@ -70,10 +70,10 @@ polynomial and rational transverse cases plus separated two-root cases are
 complete only when every component has a certificate and verified
 representative, while tangency remains indeterminate. Exact and sampled
 overlap controls separately pin complete representation proof versus
-provisional tolerance containment. The version-3 solve fixture also pins a
+provisional tolerance containment. The v18 solve fixture also pins a
 clipped common-refinement overlap, exact overlap-equivalence Work/Items
 accounting, its `N-1` work crossing, and an ordered range/orientation digest
-whose endpoints are re-evaluated against both source curves. Version 3 also
+whose endpoints are re-evaluated against both source curves. Version 18 also
 pins source-range root-certificate digests so rounded restricted controls
 cannot substitute for original-curve proof evidence.
 The curve-pair isolation ladder separately pins unique-root certificate counts
@@ -95,27 +95,32 @@ verified prepared fixture so Criterion calibration does not repeat excluded
 cloning and snapshot work. Set `KERNEL_BENCH_SMOKE=1` and pass one full case
 path after `--` for a bounded local smoke run.
 
-The Q2a target registers 17 graph-construction cases: independent plane nodes
+The Q2a v2 target registers 21 graph-construction cases: independent plane nodes
 at 1 through 10,000 nodes, offset dependency chains and shared-basis fanout at
-1 through 1,000 edges, and rejected transient chains with exact undo rollback
-at 1 through 1,000 nodes. Descriptor policy and rollback control state are
+1 through 1,000 edges, verified intersection diamonds at 1 through 1,000 merge
+descriptors, and rejected transient chains with exact undo rollback at 1
+through 1,000 nodes. Diamond branches are two equal offset planes sharing one
+basis; the certified merge curve retains both source and pcurve dependencies,
+and dependency-first closure pins that the shared basis is visited once.
+Descriptor policy, certificates, and rollback control state are
 prepared outside timing. Only graph insertion, dependency maintenance, and
 rollback are timed; evaluation is deliberately absent. Every sample verifies
 node/edge counts, actual reverse-index registrations, zero complete-order
 rebuilds, stable iteration order, graph and reverse-index digests, validation,
-and rollback equality. The indexed replacement retains insertion-ordered
-adjacency and uses hash storage only for non-observable lookup/membership. The
-planned diamond row is deferred because current
-descriptors expose at most one dependency; the harness does not invent a
-benchmark-only graph shape.
+deduplicated diamond traversal, and rollback equality. The indexed replacement
+retains insertion-ordered adjacency and uses hash storage only for
+non-observable lookup/membership.
 
-The Q2b target registers eight prepared-chain traversal cases. Dependency-
+The Q2b v2 target registers ten prepared traversal cases. Dependency-
 first closure and a deterministic missing-path search each run at 1, 10, 100,
-and 1,000 dependency edges. Graph construction, validation, and stable ordinal
-indexing stay outside timing; every sample pins result presence, exact returned
-node count and order digest, and repeatability. Traversal output and cycle paths
-remain vector-ordered, while active/completed membership uses hash lookup that
-is never iterated. The smallest closure row runs in CI.
+and 1,000 chain edges; a production verified-intersection diamond adds both
+closure and missing-path rows. Its two equal offset branches share one basis,
+so the six-node closure proves timed traversal deduplicates that basis. Graph
+construction, validation, certificate minting, and stable ordinal indexing stay
+outside timing; every sample pins result presence, exact returned node count and
+order digest, and repeatability. Traversal output and cycle paths remain
+vector-ordered, while active/completed membership uses hash lookup that is never
+iterated. The smallest chain closure row runs in CI.
 
 The Q3 v2 contract registers twenty closed-solid cases: ten analytic block,
 cylinder, cone, sphere, and torus rows; two mixed-store target-cylinder rows;
@@ -174,34 +179,51 @@ rows activate all five face stages and pin boundary depth/splits, interior
 passes, mesh triangles/vertices, complete reports, and mesh bits. Fixture,
 trim, session, context, and verification remain outside timing.
 
-The first Q4 slice registers six contextual implicit-isolation cases. It varies
+The Q4 implicit-isolation slice registers eight contextual cases. It varies
 polynomial versus rational single patches, one versus four extracted Bezier
 patches, retained candidates versus a certified separated miss, and exact
-`N-1` work/candidate budget crossings. Surface construction, Bezier extraction,
+`N-1` work/candidate budget crossings. Fixture v3 adds a repeated/multi-span
+source-rectangle Work crossing and retains the exact cubic-extrusion
+adversary whose rounded children lose a real plane contact while the
+source-provenanced cover remains nonempty. Surface construction, Bezier extraction,
 BVH construction, operation-context setup, reports, digests, and conservative
 cover verification are excluded from the measured duration. Degree and larger
 control-net/patch-count ladders remain deferred.
 
-The curve-pair Q4 slice has eight deterministic exact-subdivision cases. It
-varies polynomial/rational/tilted curves, retained contacts versus axis and
+The curve-pair Q4 slice has nine deterministic subdivision cases. It varies
+polynomial/rational/tilted curves, retained contacts versus axis and
 Euclidean-distance separated misses, and independent work,
-candidate-high-water, and depth stops. Fixture version 2 pins source-range
-root certificates rather than proofs transferred from rounded restricted
-controls.
+candidate-high-water, and depth stops. Fixture version 4 pins source-range
+position enclosures and root certificates rather than exclusion/proof evidence
+transferred from rounded restricted controls. Its cubic/line case retains an
+exact midpoint contact that rounded child hulls would incorrectly erase.
+Work evidence now includes every inspected original-source knot-span slot for
+the initial and child range boxes before evaluation.
 Every limited result must retain its conservative parent cover and remain
 indeterminate. Curve and policy construction, operation-context setup, report
 extraction, and evidence verification remain outside the measured duration.
 
-The solve-level Q4 slice adds ten contextual cases over the exact-cell-driven
-NURBS/NURBS path: polynomial and rational transverse contacts, tangency, two
+The solve-level Q4 v18 slice adds twenty-eight contextual cases over the exact-cell-driven
+NURBS/NURBS path: polynomial and rational transverse contacts, an algebraic
+noncoplanar root at normalized `1/3`, a broader signed-linear-form root with no
+shared coordinate scalar, a primitive magnitude-two form outside the unit
+coefficient family, and magnitude-three, magnitude-four, magnitude-five, magnitude-six, magnitude-seven, magnitude-eight, magnitude-nine, magnitude-ten, magnitude-eleven, and magnitude-twelve
+forms that each escape the entire previous family,
+tangency, two
 roots, a subdivision-proven hidden miss, exact and sampled overlaps, clipped
-common-refinement overlap, zero seed admission, and exact overlap-work denial.
+common-refinement overlap, checked recovery from different knot-insertion
+histories, rejection of an altered history, zero seed admission, and exact
+overlap Work and Items denial for both common-refinement and inverse-history
+search.
 It pins all five report stages and both overlap-stage resources, ordered
 point/overlap/proof/output digests, endpoint and in-cell witness
 re-evaluation, and exact seed/overlap limit crossings. Geometry, session,
 request overrides, and evidence verification are outside timing; the public
 contextual solve, including profile composition and report finalization, is
 timed.
+The magnitude-twelve proof enumerates 182 canonical primitive two-axis carriers
+per projection plane and 6,153 canonical residuals per omitted axis while
+retaining the correlated homogeneous derivative numerator.
 
 The first Q5 slice uses only the repository's Apache-2.0 hand-authored
 `block.x_t` and `offset_plane.x_t` fixtures. Eight cases time the public

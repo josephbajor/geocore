@@ -459,6 +459,36 @@ Direct low-level `kgraph` clients may construct an `EvalContext` with standalone
 clients must derive it from their active operation scope so nested evaluation is charged
 to the caller's operation rather than an independent default budget.
 
+The graph-owned plane/sphere adapter also performs a bounded `kops` proof after
+field resolution when a retained circle needs a nonlinear inverse sphere chart.
+That proof remains outside `EvalContext`: the owner composes
+`GraphSurfaceBudgetProfile`, then pre-admits exactly 128 cumulative Work units
+per retained oblique branch at
+`kops.intersect.spherical-circle-proof-subdivisions`. Exact N/N-1 tests pin the
+crossing independently of the graph node-visit and dependency-depth stages.
+
+Verified X_T intersection-chart import likewise owns its proof budget outside
+`EvalContext`. The historical `IntersectionImportBudgetProfile::v1_defaults()`
+retains its 131,072 cumulative-Work, 65,536 Items, and Depth-10 contract.
+Current reconstruction owners explicitly compose
+`IntersectionImportBudgetProfile::v2_defaults()`: it retains the v1 Items and
+Depth ceilings and raises cumulative Work to the corpus-backed 81,267,732
+preflight needed by the exemplar's original-source NURBS traces. A plane trace
+costs one Work unit per retained chart position. Each NURBS or direct
+`Offset(B-surface)` trace instead costs, per chart span and each of 1,024
+fixed-depth proof boxes, `6 * u_span_slots * v_span_slots + 1`: the six shared
+point/partial-derivative enclosure scans also supply the outward unit-normal
+field for offset lifting. Only seam-safe clamped periodic proof rectangles are
+admitted; no proof box wraps the seam.
+
+The importer observes Items and Depth and preflights Work before retaining
+position/UV arrays or graph geometry, charges Work only after both whole-range
+lifts certify, and relies on the enclosing reconstruction transaction for
+complete topology/geometry rollback. Exact tests pin the canonical plane
+fixture at `4/2/1`, the synthetic two-NURBS-trace proof at `14,336/2/10`, and
+the exemplar's v2 Work/Items/Depth boundaries at `81,267,732/20/10`, including
+v1 rejection, v2 N/N-1 admission, deterministic reports, and rollback.
+
 ## Layer consumption
 
 ### `kcore`
@@ -621,21 +651,46 @@ operand ordering without a second algorithm path. The certified fallback enters
 at this same normalized boundary and returns indeterminate evidence until
 complete-domain exclusion is proven.
 
-Its first exclusion rung is now live for NURBS/NURBS: exact restricted
-positive-weight control hulls can prove a complete miss before fixed-grid
-candidate discovery. Exactly one hull is outward-inflated by the model
+Its first exclusion rung is now live for NURBS/NURBS: outward interval position
+enclosures evaluated directly over each original-source range can prove a
+complete miss before fixed-grid candidate discovery. Each enclosure is tightened
+by the conservative whole-source positive-weight control hull and fails open to
+that hull if range evaluation is inconclusive. Exactly one box is outward-inflated by the model
 tolerance, so strict separation is sufficient while contact at the inclusive
 tolerance boundary remains an indeterminate candidate. A second interval rung
 computes an outward-safe Euclidean squared-distance lower bound between the
-two control hulls. It removes diagonal false positives when no individual axis
+two source-range boxes. It removes diagonal false positives when no individual axis
 gap exceeds tolerance but their combined distance does; comparison uses an
 upward-rounded squared tolerance, so the inclusive boundary remains retained.
-Exact binary subdivision
-of both curves now refines every retained subcurve pair deterministically. Its
-composed family profile accounts setup/subdivision work cumulatively and
+Deterministic binary subdivision of both curves refines every retained subcurve
+pair; generated controls partition the search and seed polishing but never prove
+exclusion. Each distinct child range box is evaluated once before the pair
+Cartesian product. The composed family profile accounts setup/subdivision work cumulatively and
 candidate/depth high-water; a denied split retains its parent cell, and an
 unrepresentable midpoint records numeric resolution without dropping cover.
 Only an empty complete cover upgrades the intersection to a proven miss.
+Each initial enclosure scan and each pair of child-range scans now pre-admits
+one Work unit per inspected original-source knot-span slot plus its logical
+setup/split unit. The one-span depth-six default is therefore 6,828 units.
+Exact N/N-1 coverage proves that a denied child scan retains its parent before
+interval evaluation; arbitrary curve control counts can no longer hide inside
+one logical split.
+
+Surface-patch exclusion follows the same provenance rule without reusing
+rounded extracted or child hulls as proof. Tensor-product outward interval de
+Boor bounds over the original source rectangle are intersected with its active
+source-support hull and a centered derivative mean-value enclosure. Any
+inconclusive arithmetic fails open. BVH, plane/implicit filtering,
+`NurbsSurface::bounding_box`, and adaptive children use those source bounds;
+rounded patches only partition and seed. Contextual evaluation now admits that
+heavier work before it executes. For `R = (nu - pu)(nv - pv)` original tensor
+span slots, including repeated/empty slots, one source-range enclosure costs
+`W = 6R + 1`: support and direct scans, the centered point, and the paired
+position/derivative scans in both parameter directions. Contextual BVH build
+preflights `R*W`; each adaptive parent preflights `1 + 4W` before either
+possible axis split or any child bound. Exact N/N-1 tests cover repeated-knot
+multi-span build, the cubic roundoff contact, and the composed public marcher;
+denial consumes no partial unit and retains the admitted parent/source cover.
 
 Retained curve-pair cells now drive discovery directly instead of being
 discarded before a second global fixed-grid search. Each cell contributes at
@@ -691,8 +746,19 @@ orientation predicates prove coplanarity and choose an injective XY, XZ, or YZ
 projection without normalizing a floating plane normal. Noncoplanar pairs can
 instead use exact rational de Boor equality on a bounded source-parameter set
 `{mid,lo,hi} × {mid,lo,hi}` or equal source points at in-range knots whose
-multiplicity equals degree. Candidate cells retain the original source curves;
-generated rounded controls are used only for the conservative cover. Direct
+multiplicity equals degree. A third noncoplanar existence route uses no guessed
+parameter: exact same/reversed normalized knots, globally proportional positive
+rational weights, and identical carrier/omitted scalar controls establish an
+exact affine parameter correspondence. A strict source-range derivative sign
+makes the carrier injective; exact carrier face ordering, interval crossing
+faces, and the existing range P-matrix then lift the projected root to 3D. The
+Q4 normalized `1/3` case is interior to a partial range and is neither an
+endpoint, midpoint, nor full-multiplicity knot. Unsupported representation,
+unsafe expansion product, nonrepresentable mapping, nonproportional weights,
+or nonmonotonicity fails closed. Candidate cells retain the original source curves;
+generated rounded controls are used only for partitioning and seed machinery.
+Exclusion and stored bounds use the original-source interval enclosures described
+above. Direct
 outward interval de Boor over each original knot span encloses homogeneous
 positions and the exact homogeneous derivative-control B-spline, then applies
 the rational quotient rule. The same source-range P-matrix proves the projected
@@ -776,8 +842,9 @@ tests and determinism hashes are unchanged.
 
 ### Stage 1b — Consolidate operation-family profile composition
 
-Status: implemented for graph evaluation, Full checking, and face
-tessellation; later contextual families must use the same contract.
+Status: implemented for graph evaluation, graph-owned surface intersection,
+Full checking, and face tessellation; later contextual families must use the
+same contract.
 
 - Add one owner-level composition API in `kcore`: operation-family defaults
   fill missing stage/resource entries, session entries override those defaults,
@@ -798,9 +865,10 @@ that order. Builder call order is irrelevant; matching entries replace rather
 than silently taking a minimum, accounting-mode changes remain visible to the
 family's validation, and root total-work overrides retain the canonical
 `kcore.operation.total-work` stop. The facade's former local overlay helper was
-removed. Outer graph evaluation, Full checking, and face tessellation install
-their owner profiles, while nested `*_in_scope` paths continue to validate and
-borrow the parent ledger without re-profiling or resetting work.
+removed. Outer graph evaluation, graph-owned surface intersection, Full
+checking, and face tessellation install their owner profiles, while nested
+`*_in_scope` paths continue to validate and borrow the parent ledger without
+re-profiling or resetting work.
 
 ### Stage 2 — Behavior-preserving proof/refinement pilots
 

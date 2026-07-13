@@ -23,7 +23,10 @@ use kcore::arena::{Arena, ArenaChangeKind, Handle};
 use kcore::error::{Error, Result};
 use kcore::tolerance::{Tolerances, check_in_size_box};
 use kgeom::vec::Point3;
-use kgraph::{GeometryGraph, GeometryGraphError, GeometryRef};
+use kgraph::{
+    Curve2dHandle, GeometryGraph, GeometryGraphError, GeometryRef, SurfaceHandle,
+    TransmittedNurbsIntersectionCertificate, TransmittedPlaneIntersectionCertificate,
+};
 
 pub(crate) mod sealed {
     use super::{EntityRef, Handle, Result, Store};
@@ -378,6 +381,54 @@ impl Store {
     /// Insert immutable 3D curve geometry.
     pub fn insert_curve(&mut self, curve: CurveGeom) -> Result<CurveId> {
         self.geometry.insert_curve(curve).map_err(map_graph_error)
+    }
+
+    /// Insert a certified transmitted exact-plane-field intersection with
+    /// graph-owned source and pcurve proof bindings.
+    pub fn insert_verified_transmitted_plane_intersection_curve(
+        &mut self,
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: TransmittedPlaneIntersectionCertificate,
+    ) -> Result<CurveId> {
+        self.geometry
+            .insert_verified_transmitted_plane_intersection_curve(
+                source_surfaces,
+                pcurves,
+                certificate,
+            )
+            .map_err(map_graph_error)
+    }
+
+    /// Insert a certified transmitted chart containing one or two original
+    /// NURBS traces with graph-owned ordered source and pcurve proof bindings.
+    pub fn insert_verified_transmitted_nurbs_intersection_curve(
+        &mut self,
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: TransmittedNurbsIntersectionCertificate,
+    ) -> Result<CurveId> {
+        self.geometry
+            .insert_verified_transmitted_nurbs_intersection_curve(
+                source_surfaces,
+                pcurves,
+                certificate,
+            )
+            .map_err(map_graph_error)
+    }
+
+    /// Compatibility insertion name for the original mixed Plane/NURBS arm.
+    pub fn insert_verified_transmitted_plane_nurbs_intersection_curve(
+        &mut self,
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: TransmittedNurbsIntersectionCertificate,
+    ) -> Result<CurveId> {
+        self.insert_verified_transmitted_nurbs_intersection_curve(
+            source_surfaces,
+            pcurves,
+            certificate,
+        )
     }
 
     /// Insert immutable supporting-surface geometry.

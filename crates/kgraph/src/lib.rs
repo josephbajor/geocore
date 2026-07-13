@@ -21,8 +21,8 @@ pub use error::{
     code as eval_error_code, stage as eval_stage,
 };
 pub use eval::{
-    EvalBudgetProfile, EvalContext, EvalLimits, EvalUsage, SurfaceDerivativeOrder, SurfaceValidity,
-    ValidityGap,
+    EvalBudgetProfile, EvalContext, EvalLimits, EvalUsage, ExactSurfaceField,
+    SurfaceDerivativeOrder, SurfaceValidity, ValidityGap,
 };
 #[cfg(feature = "benchmark-internals")]
 #[doc(hidden)]
@@ -32,6 +32,20 @@ pub use graph::{
     GeometryRef, SurfaceHandle, SurfaceNode,
 };
 pub use intersection::{
-    AffineParamMap1d, IntersectionCertificateError, PairedPlaneLineResidualCertificate,
-    PairedTrace, certify_paired_plane_line_residuals,
+    AffineParamMap1d, IntersectionCertificateError, ObliqueSphereCircleTrace,
+    PairedPlaneLineResidualCertificate, PairedPlaneSphereCircleResidualCertificate, PairedTrace,
+    PlaneCircleTrace, PlaneSphereCircleTrace, SPHERICAL_CIRCLE_PROOF_SEGMENTS, SphereLatitudeTrace,
+    SphericalCirclePcurve, TRANSMITTED_NURBS_TRACE_PROOF_DEPTH,
+    TransmittedIntersectionChartMetadata, TransmittedIntersectionCurveDescriptor,
+    TransmittedNurbsIntersectionCertificate, TransmittedNurbsIntersectionCurveDescriptor,
+    TransmittedNurbsIntersectionTrace, TransmittedOffsetNurbsTrace,
+    TransmittedPlaneIntersectionCertificate, TransmittedPlaneNurbsIntersectionCertificate,
+    TransmittedPlaneNurbsTrace, VerifiedIntersectionCarrier, VerifiedIntersectionCertificate,
+    VerifiedIntersectionCurveDescriptor, certify_paired_plane_line_residuals,
+    certify_paired_plane_sphere_circle_residuals,
+    certify_paired_plane_sphere_oblique_circle_residuals,
+    certify_transmitted_nurbs_nurbs_intersection_residuals,
+    certify_transmitted_offset_nurbs_intersection_residuals,
+    certify_transmitted_plane_intersection_residuals,
+    certify_transmitted_plane_nurbs_intersection_residuals,
 };

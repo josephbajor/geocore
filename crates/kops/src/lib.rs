@@ -17,8 +17,10 @@
 //! plane/cone circular and elliptic slices, coaxial cylinder/sphere,
 //! cylinder/torus, cone/cone, cone/cylinder, cone/sphere, cone/torus,
 //! sphere/torus, and torus/torus circles, parallel cylinder/cylinder rulings,
-//! plane/torus latitude and meridian circles, sphere/sphere closed forms, and
-//! initial marched plane/sphere/cylinder/cone/torus/NURBS-surface branches.
+//! plane/torus latitude and meridian circles, sphere/sphere closed forms,
+//! exact coincident torus finite-window regions with two-axis periodic seam
+//! splitting and circle/point collapses, and initial marched
+//! plane/sphere/cylinder/cone/torus/NURBS-surface branches.
 //! Broader NURBS/procedural curve/curve, broader curve/surface, broader SSI,
 //! imprinting, and body operations remain future M4 work; SSI branch results
 //! can carry exact NURBS curves for broader intersection edge geometry.

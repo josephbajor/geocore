@@ -1,19 +1,30 @@
-//! Verified affine intersection-curve building blocks.
+//! Verified persistent intersection-curve building blocks.
 //!
-//! This module intentionally does not add a persistent intersection-curve
-//! descriptor. It provides the small, independently verifiable substrate
-//! needed by operation-local branch graphs: an invertible affine parameter
-//! correspondence and a certificate that a finite line carrier agrees with
-//! two plane pcurves over a complete parameter interval.
+//! The first descriptor families retain finite line and circle carriers with
+//! ordered source/pcurve identity and whole-interval paired trace proofs.
+//! Plane/plane lines use affine interval residuals. Axis-aligned or
+//! axis-antialigned plane/sphere circles retain a constant-latitude sphere
+//! trace. Other finite plane/sphere secants use a certifier-minted nonlinear
+//! inverse spherical chart with continuous seam unwrapping and whole-branch
+//! pole/window proof.
 
 use core::fmt;
 
 use kcore::interval::Interval;
-use kgeom::curve::Line;
-use kgeom::curve2d::Line2d;
+use kcore::math;
+use kgeom::aabb::{Aabb2, Aabb3};
+use kgeom::curve::{Circle, Curve, CurveDerivs, Line};
+use kgeom::curve2d::{Circle2d, Curve2d, Curve2dDerivs, Line2d, NurbsCurve2d};
+use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::param::ParamRange;
-use kgeom::surface::Plane;
+use kgeom::surface::{Dir, Plane, Sphere};
 use kgeom::vec::{Vec2, Vec3};
+
+use crate::{Curve2dHandle, GeometryRef, SurfaceHandle};
+
+/// Fixed interval subdivisions consumed by one nonlinear spherical-circle
+/// whole-branch chart proof.
+pub const SPHERICAL_CIRCLE_PROOF_SEGMENTS: usize = 128;
 
 /// An invertible affine correspondence from a carrier parameter `t` to a
 /// dependent curve parameter `s`: `s = scale * t + offset`.
@@ -89,6 +100,35 @@ pub enum IntersectionCertificateError {
         /// Stable validation reason.
         reason: &'static str,
     },
+    /// A nonlinear paired certificate did not contain exactly one trace of
+    /// each required surface family.
+    InvalidTraceFamily,
+    /// A nonlinear trace uses a parameterization outside the exact certified
+    /// subfamily.
+    UnsupportedTraceParameterization {
+        /// Trace whose parameterization is unsupported.
+        trace: PairedTrace,
+        /// Stable proof-boundary explanation.
+        reason: &'static str,
+    },
+    /// A retained carrier uses a representation outside the certifier's exact
+    /// whole-range proof family.
+    UnsupportedCarrierParameterization {
+        /// Stable proof-boundary explanation.
+        reason: &'static str,
+    },
+    /// The inverse spherical chart cannot be regular over the complete
+    /// carrier interval because pole clearance was not proved positive.
+    SingularSphereChart {
+        /// Conservative lower bound for squared distance from the sphere axis.
+        squared_pole_clearance: f64,
+    },
+    /// A certified inverse spherical trace could not be enclosed by the
+    /// requested finite chart window.
+    SphereTraceOutsideWindow {
+        /// Parameter coordinate whose enclosure crossed its window.
+        coordinate: &'static str,
+    },
     /// The carrier interval is non-finite or reversed.
     InvalidCarrierRange,
     /// The requested model-space tolerance is non-finite or negative.
@@ -99,6 +139,13 @@ pub enum IntersectionCertificateError {
     NonFiniteResidualBound {
         /// Trace whose interval evaluation overflowed.
         trace: PairedTrace,
+    },
+    /// An offset-NURBS trace did not prove a regular whole-rectangle normal.
+    SingularOffsetNormal {
+        /// Trace whose basis normal could not be normalized.
+        trace: PairedTrace,
+        /// Outward lower bound for the squared basis-normal magnitude.
+        squared_norm_lower_bound: f64,
     },
     /// A whole-interval trace residual is above the supplied tolerance.
     ResidualExceedsTolerance {
@@ -115,6 +162,25 @@ impl fmt::Display for IntersectionCertificateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidParameterMap { reason } => write!(f, "invalid parameter map: {reason}"),
+            Self::InvalidTraceFamily => {
+                f.write_str("paired nonlinear certificate requires one plane and one sphere trace")
+            }
+            Self::UnsupportedTraceParameterization { trace, reason } => {
+                write!(f, "unsupported {trace:?} trace parameterization: {reason}")
+            }
+            Self::UnsupportedCarrierParameterization { reason } => {
+                write!(f, "unsupported carrier parameterization: {reason}")
+            }
+            Self::SingularSphereChart {
+                squared_pole_clearance,
+            } => write!(
+                f,
+                "inverse sphere chart lacks positive whole-branch pole clearance (squared lower bound {squared_pole_clearance})"
+            ),
+            Self::SphereTraceOutsideWindow { coordinate } => write!(
+                f,
+                "inverse sphere trace escapes its requested {coordinate} window"
+            ),
             Self::InvalidCarrierRange => f.write_str("carrier range must be finite and ordered"),
             Self::InvalidTolerance => {
                 f.write_str("residual tolerance must be finite and nonnegative")
@@ -123,6 +189,13 @@ impl fmt::Display for IntersectionCertificateError {
             Self::NonFiniteResidualBound { trace } => {
                 write!(f, "{trace:?} trace produced a non-finite residual bound")
             }
+            Self::SingularOffsetNormal {
+                trace,
+                squared_norm_lower_bound,
+            } => write!(
+                f,
+                "{trace:?} offset-NURBS trace lacks a positive whole-range normal bound (squared lower bound {squared_norm_lower_bound})"
+            ),
             Self::ResidualExceedsTolerance {
                 trace,
                 residual_bound,
@@ -153,6 +226,883 @@ pub struct PairedPlaneLineResidualCertificate {
     parameter_maps: [AffineParamMap1d; 2],
     residual_bounds: [f64; 2],
     tolerance: f64,
+}
+
+/// Exact plane trace used by an axis-aligned plane/sphere circle proof.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlaneCircleTrace {
+    surface: Plane,
+    pcurve: Circle2d,
+    parameter_map: AffineParamMap1d,
+}
+
+impl PlaneCircleTrace {
+    /// Construct an ordered plane-circle trace candidate.
+    pub const fn new(surface: Plane, pcurve: Circle2d, parameter_map: AffineParamMap1d) -> Self {
+        Self {
+            surface,
+            pcurve,
+            parameter_map,
+        }
+    }
+
+    /// Exact plane field.
+    pub const fn surface(self) -> Plane {
+        self.surface
+    }
+
+    /// Circular plane pcurve.
+    pub const fn pcurve(self) -> Circle2d {
+        self.pcurve
+    }
+
+    /// Carrier-to-pcurve parameter map.
+    pub const fn parameter_map(self) -> AffineParamMap1d {
+        self.parameter_map
+    }
+}
+
+/// Exact constant-latitude sphere trace used by an axis-aligned circle proof.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SphereLatitudeTrace {
+    surface: Sphere,
+    pcurve: Line2d,
+    parameter_map: AffineParamMap1d,
+}
+
+impl SphereLatitudeTrace {
+    /// Construct an ordered sphere-latitude trace candidate.
+    pub const fn new(surface: Sphere, pcurve: Line2d, parameter_map: AffineParamMap1d) -> Self {
+        Self {
+            surface,
+            pcurve,
+            parameter_map,
+        }
+    }
+
+    /// Exact sphere field.
+    pub const fn surface(self) -> Sphere {
+        self.surface
+    }
+
+    /// Constant-latitude pcurve.
+    pub const fn pcurve(self) -> Line2d {
+        self.pcurve
+    }
+
+    /// Carrier-to-pcurve parameter map.
+    pub const fn parameter_map(self) -> AffineParamMap1d {
+        self.parameter_map
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+struct SphericalLongitudeSeam {
+    parameter: f64,
+    turn_delta: f64,
+    longitude: f64,
+}
+
+/// Finite inverse sphere-chart pcurve for a certified spatial circle branch.
+///
+/// Fields are private and instances are minted only by
+/// [`certify_paired_plane_sphere_oblique_circle_residuals`]. Longitude is
+/// continuously unwrapped through at most two retained canonical seam
+/// crossings. The represented branch is deliberately nonperiodic and cannot
+/// cross a sphere pole.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SphericalCirclePcurve {
+    carrier: Circle,
+    sphere: Sphere,
+    carrier_range: ParamRange,
+    chart_window: [ParamRange; 2],
+    initial_turn: f64,
+    seams: [SphericalLongitudeSeam; 2],
+    seam_count: u8,
+    endpoint_longitudes: [f64; 2],
+    solver_endpoint_longitudes: [f64; 2],
+}
+
+impl SphericalCirclePcurve {
+    /// Spatial circle whose inverse sphere chart this pcurve represents.
+    pub const fn carrier(self) -> Circle {
+        self.carrier
+    }
+
+    /// Exact sphere field used by the inverse chart.
+    pub const fn sphere(self) -> Sphere {
+        self.sphere
+    }
+
+    /// Complete finite parameter range of the represented branch.
+    pub const fn carrier_range(self) -> ParamRange {
+        self.carrier_range
+    }
+
+    /// Conservative finite longitude/latitude enclosure retained at minting.
+    pub const fn chart_window(self) -> [ParamRange; 2] {
+        self.chart_window
+    }
+
+    fn local_derivative_jets(self, parameter: f64) -> [DerivativeJet; 3] {
+        let derivatives = self.carrier.eval_derivs(parameter, 3);
+        let frame = self.sphere.frame();
+        let mut out = [DerivativeJet::default(); 3];
+        for order in 0..=3 {
+            let value = if order == 0 {
+                derivatives.d[0] - frame.origin()
+            } else {
+                derivatives.d[order]
+            };
+            out[0].d[order] = value.dot(frame.x());
+            out[1].d[order] = value.dot(frame.y());
+            out[2].d[order] = value.dot(frame.z());
+        }
+        out
+    }
+
+    fn unwrapped_longitude(self, parameter: f64, raw: f64) -> f64 {
+        if parameter == self.carrier_range.lo {
+            return self.endpoint_longitudes[0];
+        }
+        if parameter == self.carrier_range.hi {
+            return self.endpoint_longitudes[1];
+        }
+        let mut turn = self.initial_turn;
+        for seam in self.seams.iter().take(usize::from(self.seam_count)) {
+            if parameter == seam.parameter {
+                return seam.longitude;
+            }
+            if parameter > seam.parameter {
+                turn += seam.turn_delta;
+            }
+        }
+        raw + turn * core::f64::consts::TAU
+    }
+}
+
+impl Curve2d for SphericalCirclePcurve {
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
+    fn eval_derivs(&self, parameter: f64, order: usize) -> Curve2dDerivs {
+        let parameter = parameter.clamp(self.carrier_range.lo, self.carrier_range.hi);
+        let [x, y, z] = self.local_derivative_jets(parameter);
+        let rho = (x * x + y * y).sqrt();
+        let mut longitude = DerivativeJet::atan2(y, x);
+        longitude.d[0] = self.unwrapped_longitude(parameter, longitude.d[0]);
+        let latitude = DerivativeJet::atan2(z, rho);
+        let mut out = Curve2dDerivs::default();
+        for derivative in 0..=order.min(3) {
+            out.d[derivative] = Vec2::new(longitude.d[derivative], latitude.d[derivative]);
+        }
+        out
+    }
+
+    fn param_range(&self) -> ParamRange {
+        self.carrier_range
+    }
+
+    fn periodicity(&self) -> Option<f64> {
+        None
+    }
+
+    fn bounding_box(&self, _: ParamRange) -> Aabb2 {
+        Aabb2 {
+            min: Vec2::new(self.chart_window[0].lo, self.chart_window[1].lo),
+            max: Vec2::new(self.chart_window[0].hi, self.chart_window[1].hi),
+        }
+    }
+}
+
+/// Exact inverse-chart sphere trace used by a general plane/sphere circle
+/// proof.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ObliqueSphereCircleTrace {
+    surface: Sphere,
+    pcurve: SphericalCirclePcurve,
+    parameter_map: AffineParamMap1d,
+}
+
+impl ObliqueSphereCircleTrace {
+    /// Exact sphere field.
+    pub const fn surface(self) -> Sphere {
+        self.surface
+    }
+
+    /// Certifier-minted nonlinear inverse sphere-chart pcurve.
+    pub const fn pcurve(self) -> SphericalCirclePcurve {
+        self.pcurve
+    }
+
+    /// Carrier-to-pcurve parameter map.
+    pub const fn parameter_map(self) -> AffineParamMap1d {
+        self.parameter_map
+    }
+}
+
+/// One operand-ordered trace of a plane/sphere circle proof.
+// Keeping complete exact trace payloads inline preserves the established Copy
+// certificate contract and avoids identity-bearing shared proof allocations.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PlaneSphereCircleTrace {
+    /// Plane trace carried by a parameter-space circle.
+    Plane(PlaneCircleTrace),
+    /// Sphere trace carried by a longitude line at constant latitude.
+    Sphere(SphereLatitudeTrace),
+    /// General inverse sphere-chart trace for an oblique spatial circle.
+    SphereOblique(ObliqueSphereCircleTrace),
+}
+
+impl PlaneSphereCircleTrace {
+    /// Carrier-to-pcurve parameter map.
+    pub const fn parameter_map(self) -> AffineParamMap1d {
+        match self {
+            Self::Plane(trace) => trace.parameter_map(),
+            Self::Sphere(trace) => trace.parameter_map(),
+            Self::SphereOblique(trace) => trace.parameter_map(),
+        }
+    }
+}
+
+/// Whole-interval paired residual proof for one axis-aligned plane/sphere
+/// circle branch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PairedPlaneSphereCircleResidualCertificate {
+    carrier: Circle,
+    carrier_range: ParamRange,
+    traces: [PlaneSphereCircleTrace; 2],
+    residual_bounds: [f64; 2],
+    tolerance: f64,
+}
+
+/// Exact carrier families currently supported by persistent intersection
+/// descriptors.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum VerifiedIntersectionCarrier {
+    /// Finite line branch.
+    Line(Line),
+    /// Finite circular branch.
+    Circle(Circle),
+}
+
+impl VerifiedIntersectionCarrier {
+    /// Borrow this carrier as a line when its family matches.
+    pub const fn as_line(self) -> Option<Line> {
+        if let Self::Line(carrier) = self {
+            Some(carrier)
+        } else {
+            None
+        }
+    }
+
+    /// Borrow this carrier as a circle when its family matches.
+    pub const fn as_circle(self) -> Option<Circle> {
+        if let Self::Circle(carrier) = self {
+            Some(carrier)
+        } else {
+            None
+        }
+    }
+}
+
+/// Whole-interval proof families retained by persistent intersection curves.
+// The proof families intentionally remain inline so the public certificate is
+// an immutable Copy value with structural equality across persistence checks.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum VerifiedIntersectionCertificate {
+    /// Plane/plane line proof.
+    PlaneLine(PairedPlaneLineResidualCertificate),
+    /// Axis-aligned or axis-antialigned plane/sphere circle proof.
+    PlaneSphereCircle(PairedPlaneSphereCircleResidualCertificate),
+}
+
+impl VerifiedIntersectionCertificate {
+    /// Exact carrier geometry.
+    pub const fn carrier(self) -> VerifiedIntersectionCarrier {
+        match self {
+            Self::PlaneLine(certificate) => {
+                VerifiedIntersectionCarrier::Line(certificate.carrier())
+            }
+            Self::PlaneSphereCircle(certificate) => {
+                VerifiedIntersectionCarrier::Circle(certificate.carrier())
+            }
+        }
+    }
+
+    /// Complete finite parameter range covered by the proof.
+    pub const fn carrier_range(self) -> ParamRange {
+        match self {
+            Self::PlaneLine(certificate) => certificate.carrier_range(),
+            Self::PlaneSphereCircle(certificate) => certificate.carrier_range(),
+        }
+    }
+
+    /// Conservative paired residual bounds in operand order.
+    pub const fn residual_bounds(self) -> [f64; 2] {
+        match self {
+            Self::PlaneLine(certificate) => certificate.residual_bounds(),
+            Self::PlaneSphereCircle(certificate) => certificate.residual_bounds(),
+        }
+    }
+
+    /// Carrier-to-pcurve parameter maps in operand order.
+    pub const fn parameter_maps(self) -> [AffineParamMap1d; 2] {
+        match self {
+            Self::PlaneLine(certificate) => certificate.parameter_maps(),
+            Self::PlaneSphereCircle(certificate) => certificate.parameter_maps(),
+        }
+    }
+
+    /// Model-space tolerance used by the proof.
+    pub const fn tolerance(self) -> f64 {
+        match self {
+            Self::PlaneLine(certificate) => certificate.tolerance(),
+            Self::PlaneSphereCircle(certificate) => certificate.tolerance(),
+        }
+    }
+
+    /// Borrow the line proof when its family matches.
+    pub const fn as_plane_line(self) -> Option<PairedPlaneLineResidualCertificate> {
+        if let Self::PlaneLine(certificate) = self {
+            Some(certificate)
+        } else {
+            None
+        }
+    }
+
+    /// Borrow the plane/sphere circle proof when its family matches.
+    pub const fn as_plane_sphere_circle(
+        self,
+    ) -> Option<PairedPlaneSphereCircleResidualCertificate> {
+        if let Self::PlaneSphereCircle(certificate) = self {
+            Some(certificate)
+        } else {
+            None
+        }
+    }
+}
+
+/// Persistent graph descriptor for one verified finite intersection branch.
+///
+/// Source and pcurve handles are retained in operand order and become graph
+/// dependencies. Fields are private: descriptors can only be minted by the
+/// graph after it verifies that the referenced source fields and pcurves are
+/// exactly the geometry bound into `certificate`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VerifiedIntersectionCurveDescriptor {
+    source_surfaces: [SurfaceHandle; 2],
+    pcurves: [Curve2dHandle; 2],
+    certificate: VerifiedIntersectionCertificate,
+}
+
+/// Whole-range proof retained for an imported chordal exact-plane-field
+/// intersection chart.
+///
+/// The transmitted 3D and paired parameter-space curves remain degree-1,
+/// polynomial, open, and clamped. Their identical knot vectors make every
+/// lifted residual affine on each complete knot span, so the maximum norm is
+/// bounded by the certified control-point residuals.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransmittedPlaneIntersectionCertificate {
+    carrier: NurbsCurve,
+    carrier_range: ParamRange,
+    surfaces: [Plane; 2],
+    pcurves: [NurbsCurve2d; 2],
+    residual_bounds: [f64; 2],
+    tolerance: f64,
+    metadata: TransmittedIntersectionChartMetadata,
+}
+
+/// Fixed binary depth of the source-NURBS trace proof on every transmitted
+/// degree-1 carrier span.
+pub const TRANSMITTED_NURBS_TRACE_PROOF_DEPTH: usize = 10;
+
+/// One constant signed normal offset of an original NURBS basis retained by
+/// a transmitted whole-range trace proof.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransmittedOffsetNurbsTrace {
+    basis: NurbsSurface,
+    signed_distance: f64,
+}
+
+impl TransmittedOffsetNurbsTrace {
+    /// Construct a trace candidate. Finiteness and whole-range regularity are
+    /// checked by the certifier.
+    pub const fn new(basis: NurbsSurface, signed_distance: f64) -> Self {
+        Self {
+            basis,
+            signed_distance,
+        }
+    }
+
+    /// Original NURBS basis descriptor.
+    pub const fn basis(&self) -> &NurbsSurface {
+        &self.basis
+    }
+
+    /// Signed displacement along the basis natural unit normal.
+    pub const fn signed_distance(&self) -> f64 {
+        self.signed_distance
+    }
+}
+
+/// Ordered source trace retained by a transmitted chart with at least one
+/// original NURBS source.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransmittedNurbsIntersectionTrace {
+    /// Exact direct or effective plane field.
+    Plane(Plane),
+    /// Original source NURBS surface descriptor.
+    Nurbs(NurbsSurface),
+    /// Constant normal offset of an original NURBS basis.
+    OffsetNurbs(TransmittedOffsetNurbsTrace),
+}
+
+/// Compatibility name for the original mixed Plane/NURBS trace API.
+pub type TransmittedPlaneNurbsTrace = TransmittedNurbsIntersectionTrace;
+
+impl TransmittedNurbsIntersectionTrace {
+    /// Borrow the trace as a plane when its family matches.
+    pub const fn as_plane(&self) -> Option<Plane> {
+        if let Self::Plane(plane) = self {
+            Some(*plane)
+        } else {
+            None
+        }
+    }
+
+    /// Borrow the trace as its original NURBS source when its family matches.
+    pub const fn as_nurbs(&self) -> Option<&NurbsSurface> {
+        if let Self::Nurbs(surface) = self {
+            Some(surface)
+        } else {
+            None
+        }
+    }
+
+    /// Borrow the trace as a constant offset of a NURBS basis.
+    pub const fn as_offset_nurbs(&self) -> Option<&TransmittedOffsetNurbsTrace> {
+        if let Self::OffsetNurbs(trace) = self {
+            Some(trace)
+        } else {
+            None
+        }
+    }
+}
+
+/// Whole-range proof retained for a transmitted exact-plane-field/NURBS,
+/// NURBS/NURBS, or direct Offset(NURBS)/NURBS chart.
+///
+/// The NURBS trace is bounded on every binary carrier subdivision with an
+/// original-source point/partial interval enclosure and a centered
+/// mean-value residual. This preserves the shared affine carrier/pcurve
+/// parameter correlation and supports polynomial and rational non-planar
+/// surfaces without point sampling or spatial-intersection recomputation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransmittedNurbsIntersectionCertificate {
+    carrier: NurbsCurve,
+    carrier_range: ParamRange,
+    traces: [TransmittedNurbsIntersectionTrace; 2],
+    pcurves: [NurbsCurve2d; 2],
+    residual_bounds: [f64; 2],
+    tolerance: f64,
+    metadata: TransmittedIntersectionChartMetadata,
+    proof_depth: usize,
+}
+
+/// Compatibility name for the original mixed Plane/NURBS certificate API.
+pub type TransmittedPlaneNurbsIntersectionCertificate = TransmittedNurbsIntersectionCertificate;
+
+impl TransmittedNurbsIntersectionCertificate {
+    /// Retained degree-1 model-space chart carrier.
+    pub fn carrier(&self) -> &NurbsCurve {
+        &self.carrier
+    }
+
+    /// Complete canonical chart interval covered by the proof.
+    pub const fn carrier_range(&self) -> ParamRange {
+        self.carrier_range
+    }
+
+    /// Exact ordered proof sources.
+    pub const fn traces(&self) -> &[TransmittedNurbsIntersectionTrace; 2] {
+        &self.traces
+    }
+
+    /// Retained paired degree-1 pcurves in operand order.
+    pub const fn pcurves(&self) -> &[NurbsCurve2d; 2] {
+        &self.pcurves
+    }
+
+    /// Conservative whole-range lifted residual bounds.
+    pub const fn residual_bounds(&self) -> [f64; 2] {
+        self.residual_bounds
+    }
+
+    /// Explicit source/declaration tolerance used by import certification.
+    pub const fn tolerance(&self) -> f64 {
+        self.tolerance
+    }
+
+    /// Exact transmitted affine/error metadata.
+    pub const fn metadata(&self) -> TransmittedIntersectionChartMetadata {
+        self.metadata
+    }
+
+    /// Binary proof depth used on each carrier knot span.
+    pub const fn proof_depth(&self) -> usize {
+        self.proof_depth
+    }
+}
+
+/// Source chart declaration retained alongside a transmitted intersection
+/// proof. These values describe the published affine parameter convention and
+/// its declared approximation/error metadata; they are not recomputed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransmittedIntersectionChartMetadata {
+    base_parameter: f64,
+    base_scale: f64,
+    chordal_error: f64,
+    angular_error: f64,
+    parameter_error: [Option<f64>; 2],
+}
+
+impl TransmittedIntersectionChartMetadata {
+    /// Construct finite, nonnegative transmitted chart metadata.
+    pub fn new(
+        base_parameter: f64,
+        base_scale: f64,
+        chordal_error: f64,
+        angular_error: f64,
+        parameter_error: [Option<f64>; 2],
+    ) -> Result<Self, IntersectionCertificateError> {
+        if !base_parameter.is_finite()
+            || !base_scale.is_finite()
+            || base_scale <= 0.0
+            || !chordal_error.is_finite()
+            || chordal_error < 0.0
+            || !angular_error.is_finite()
+            || angular_error < 0.0
+            || parameter_error
+                .iter()
+                .flatten()
+                .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err(IntersectionCertificateError::NonFiniteGeometry);
+        }
+        Ok(Self {
+            base_parameter,
+            base_scale,
+            chordal_error,
+            angular_error,
+            parameter_error,
+        })
+    }
+
+    /// Transmitted affine parameter origin.
+    pub const fn base_parameter(self) -> f64 {
+        self.base_parameter
+    }
+
+    /// Transmitted affine parameter scale.
+    pub const fn base_scale(self) -> f64 {
+        self.base_scale
+    }
+
+    /// Published chordal error.
+    pub const fn chordal_error(self) -> f64 {
+        self.chordal_error
+    }
+
+    /// Published angular error.
+    pub const fn angular_error(self) -> f64 {
+        self.angular_error
+    }
+
+    /// Published per-operand parameter errors.
+    pub const fn parameter_error(self) -> [Option<f64>; 2] {
+        self.parameter_error
+    }
+}
+
+impl TransmittedPlaneIntersectionCertificate {
+    /// Retained degree-1 model-space chart carrier.
+    pub fn carrier(&self) -> &NurbsCurve {
+        &self.carrier
+    }
+
+    /// Complete canonical chart interval covered by the proof.
+    pub const fn carrier_range(&self) -> ParamRange {
+        self.carrier_range
+    }
+
+    /// Exact source planes in operand order.
+    pub const fn surfaces(&self) -> [Plane; 2] {
+        self.surfaces
+    }
+
+    /// Retained paired degree-1 pcurves in operand order.
+    pub fn pcurves(&self) -> &[NurbsCurve2d; 2] {
+        &self.pcurves
+    }
+
+    /// Conservative whole-range lifted residual bounds.
+    pub const fn residual_bounds(&self) -> [f64; 2] {
+        self.residual_bounds
+    }
+
+    /// Explicit source/declaration tolerance used by import certification.
+    pub const fn tolerance(&self) -> f64 {
+        self.tolerance
+    }
+
+    /// Exact transmitted affine/error metadata.
+    pub const fn metadata(&self) -> TransmittedIntersectionChartMetadata {
+        self.metadata
+    }
+}
+
+/// Persistent graph descriptor for a verified transmitted chordal
+/// intersection of two effective plane fields.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransmittedIntersectionCurveDescriptor {
+    source_surfaces: [SurfaceHandle; 2],
+    pcurves: [Curve2dHandle; 2],
+    certificate: TransmittedPlaneIntersectionCertificate,
+}
+
+/// Persistent graph descriptor for a verified transmitted chordal chart with
+/// one or two original NURBS traces.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransmittedNurbsIntersectionCurveDescriptor {
+    source_surfaces: [SurfaceHandle; 2],
+    pcurves: [Curve2dHandle; 2],
+    certificate: TransmittedNurbsIntersectionCertificate,
+}
+
+impl TransmittedNurbsIntersectionCurveDescriptor {
+    pub(crate) const fn new(
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: TransmittedNurbsIntersectionCertificate,
+    ) -> Self {
+        Self {
+            source_surfaces,
+            pcurves,
+            certificate,
+        }
+    }
+
+    /// Source surface identities in transmitted operand order.
+    pub const fn source_surfaces(&self) -> [SurfaceHandle; 2] {
+        self.source_surfaces
+    }
+
+    /// Paired pcurve identities in transmitted operand order.
+    pub const fn pcurves(&self) -> [Curve2dHandle; 2] {
+        self.pcurves
+    }
+
+    /// Exact carrier/source/pcurve proof payload.
+    pub const fn certificate(&self) -> &TransmittedNurbsIntersectionCertificate {
+        &self.certificate
+    }
+
+    pub(crate) fn visit_dependencies(&self, visit: &mut dyn FnMut(GeometryRef)) {
+        for surface in self.source_surfaces {
+            visit(GeometryRef::Surface(surface));
+        }
+        for pcurve in self.pcurves {
+            visit(GeometryRef::Curve2d(pcurve));
+        }
+    }
+}
+
+impl Curve for TransmittedNurbsIntersectionCurveDescriptor {
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
+    fn eval_derivs(&self, parameter: f64, order: usize) -> CurveDerivs {
+        self.certificate.carrier.eval_derivs(parameter, order)
+    }
+
+    fn param_range(&self) -> ParamRange {
+        self.certificate.carrier_range
+    }
+
+    fn periodicity(&self) -> Option<f64> {
+        None
+    }
+
+    fn bounding_box(&self, range: ParamRange) -> Aabb3 {
+        self.certificate.carrier.bounding_box(range)
+    }
+}
+
+impl TransmittedIntersectionCurveDescriptor {
+    pub(crate) const fn new(
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: TransmittedPlaneIntersectionCertificate,
+    ) -> Self {
+        Self {
+            source_surfaces,
+            pcurves,
+            certificate,
+        }
+    }
+
+    /// Source surface identities in transmitted operand order.
+    pub const fn source_surfaces(&self) -> [SurfaceHandle; 2] {
+        self.source_surfaces
+    }
+
+    /// Paired pcurve identities in transmitted operand order.
+    pub const fn pcurves(&self) -> [Curve2dHandle; 2] {
+        self.pcurves
+    }
+
+    /// Exact carrier/source/pcurve proof payload.
+    pub const fn certificate(&self) -> &TransmittedPlaneIntersectionCertificate {
+        &self.certificate
+    }
+
+    pub(crate) fn visit_dependencies(&self, visit: &mut dyn FnMut(GeometryRef)) {
+        for surface in self.source_surfaces {
+            visit(GeometryRef::Surface(surface));
+        }
+        for pcurve in self.pcurves {
+            visit(GeometryRef::Curve2d(pcurve));
+        }
+    }
+}
+
+impl Curve for TransmittedIntersectionCurveDescriptor {
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
+    fn eval_derivs(&self, parameter: f64, order: usize) -> CurveDerivs {
+        self.certificate.carrier.eval_derivs(parameter, order)
+    }
+
+    fn param_range(&self) -> ParamRange {
+        self.certificate.carrier_range
+    }
+
+    fn periodicity(&self) -> Option<f64> {
+        None
+    }
+
+    fn bounding_box(&self, range: ParamRange) -> Aabb3 {
+        self.certificate.carrier.bounding_box(range)
+    }
+}
+
+impl VerifiedIntersectionCurveDescriptor {
+    pub(crate) const fn new(
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: VerifiedIntersectionCertificate,
+    ) -> Self {
+        Self {
+            source_surfaces,
+            pcurves,
+            certificate,
+        }
+    }
+
+    /// Source surface identities in operand order.
+    pub const fn source_surfaces(self) -> [SurfaceHandle; 2] {
+        self.source_surfaces
+    }
+
+    /// Persistent paired pcurve identities in operand order.
+    pub const fn pcurves(self) -> [Curve2dHandle; 2] {
+        self.pcurves
+    }
+
+    /// Whole-interval paired trace proof retained by this descriptor.
+    pub const fn certificate(self) -> VerifiedIntersectionCertificate {
+        self.certificate
+    }
+
+    /// Exact model-space carrier.
+    pub const fn carrier(self) -> VerifiedIntersectionCarrier {
+        self.certificate.carrier()
+    }
+
+    /// Complete finite parameter interval covered by the descriptor proof.
+    pub const fn carrier_range(self) -> ParamRange {
+        self.certificate.carrier_range()
+    }
+
+    pub(crate) fn visit_dependencies(self, visit: &mut dyn FnMut(GeometryRef)) {
+        for surface in self.source_surfaces {
+            visit(GeometryRef::Surface(surface));
+        }
+        for pcurve in self.pcurves {
+            visit(GeometryRef::Curve2d(pcurve));
+        }
+    }
+}
+
+impl Curve for VerifiedIntersectionCurveDescriptor {
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
+    fn eval_derivs(&self, parameter: f64, order: usize) -> CurveDerivs {
+        debug_assert!(self.carrier_range().contains(parameter));
+        let parameter = parameter.clamp(self.carrier_range().lo, self.carrier_range().hi);
+        match self.carrier() {
+            VerifiedIntersectionCarrier::Line(carrier) => carrier.eval_derivs(parameter, order),
+            VerifiedIntersectionCarrier::Circle(carrier) => carrier.eval_derivs(parameter, order),
+        }
+    }
+
+    fn param_range(&self) -> ParamRange {
+        self.carrier_range()
+    }
+
+    fn periodicity(&self) -> Option<f64> {
+        None
+    }
+
+    fn bounding_box(&self, range: ParamRange) -> Aabb3 {
+        debug_assert!(range.is_finite());
+        debug_assert!(range.lo >= self.carrier_range().lo && range.hi <= self.carrier_range().hi);
+        let range = ParamRange::new(
+            range
+                .lo
+                .clamp(self.carrier_range().lo, self.carrier_range().hi),
+            range
+                .hi
+                .clamp(self.carrier_range().lo, self.carrier_range().hi),
+        );
+        match self.carrier() {
+            VerifiedIntersectionCarrier::Line(carrier) => carrier.bounding_box(range),
+            VerifiedIntersectionCarrier::Circle(carrier) => {
+                if carrier.param_range().contains(range.lo)
+                    && carrier.param_range().contains(range.hi)
+                {
+                    carrier.bounding_box(range)
+                } else {
+                    // Shifted longitude charts may place a finite branch
+                    // outside the circle's canonical [0, 2pi] interval. The
+                    // current analytic circle bound enumerates a fixed set of
+                    // canonical extrema, so use its complete-turn box for
+                    // those equivalent shifted parameters.
+                    carrier.bounding_box(carrier.param_range())
+                }
+            }
+        }
+    }
 }
 
 impl PairedPlaneLineResidualCertificate {
@@ -190,6 +1140,874 @@ impl PairedPlaneLineResidualCertificate {
     pub const fn tolerance(self) -> f64 {
         self.tolerance
     }
+}
+
+impl PairedPlaneSphereCircleResidualCertificate {
+    /// Verified model-space circle carrier.
+    pub const fn carrier(self) -> Circle {
+        self.carrier
+    }
+
+    /// Complete carrier interval covered by the proof.
+    pub const fn carrier_range(self) -> ParamRange {
+        self.carrier_range
+    }
+
+    /// Verified traces in source operand order.
+    pub const fn traces(self) -> [PlaneSphereCircleTrace; 2] {
+        self.traces
+    }
+
+    /// Carrier-to-pcurve parameter maps in operand order.
+    pub const fn parameter_maps(self) -> [AffineParamMap1d; 2] {
+        [
+            self.traces[0].parameter_map(),
+            self.traces[1].parameter_map(),
+        ]
+    }
+
+    /// Conservative whole-interval residual bounds in operand order.
+    pub const fn residual_bounds(self) -> [f64; 2] {
+        self.residual_bounds
+    }
+
+    /// Model-space tolerance against which both traces were certified.
+    pub const fn tolerance(self) -> f64 {
+        self.tolerance
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct DerivativeJet {
+    d: [f64; 4],
+}
+
+impl DerivativeJet {
+    fn derivative(self) -> Self {
+        Self {
+            d: [self.d[1], self.d[2], self.d[3], 0.0],
+        }
+    }
+
+    fn reciprocal(self) -> Self {
+        let mut out = Self::default();
+        out.d[0] = 1.0 / self.d[0];
+        out.d[1] = -(self.d[1] * out.d[0]) / self.d[0];
+        out.d[2] = -(self.d[2] * out.d[0] + 2.0 * self.d[1] * out.d[1]) / self.d[0];
+        out.d[3] =
+            -(self.d[3] * out.d[0] + 3.0 * self.d[2] * out.d[1] + 3.0 * self.d[1] * out.d[2])
+                / self.d[0];
+        out
+    }
+
+    fn sqrt(self) -> Self {
+        let mut out = Self::default();
+        out.d[0] = self.d[0].max(0.0).sqrt();
+        let denominator = 2.0 * out.d[0];
+        out.d[1] = self.d[1] / denominator;
+        out.d[2] = (self.d[2] - 2.0 * out.d[1] * out.d[1]) / denominator;
+        out.d[3] = (self.d[3] - 6.0 * out.d[1] * out.d[2]) / denominator;
+        out
+    }
+
+    fn atan2(y: Self, x: Self) -> Self {
+        let angular_rate = (x * y.derivative() - y * x.derivative()) * (x * x + y * y).reciprocal();
+        Self {
+            d: [
+                math::atan2(y.d[0], x.d[0]),
+                angular_rate.d[0],
+                angular_rate.d[1],
+                angular_rate.d[2],
+            ],
+        }
+    }
+}
+
+impl core::ops::Add for DerivativeJet {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self {
+        Self {
+            d: core::array::from_fn(|index| self.d[index] + rhs.d[index]),
+        }
+    }
+}
+
+impl core::ops::Sub for DerivativeJet {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self {
+        Self {
+            d: core::array::from_fn(|index| self.d[index] - rhs.d[index]),
+        }
+    }
+}
+
+impl core::ops::Mul for DerivativeJet {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self {
+        Self {
+            d: [
+                self.d[0] * rhs.d[0],
+                self.d[1] * rhs.d[0] + self.d[0] * rhs.d[1],
+                self.d[2] * rhs.d[0] + 2.0 * self.d[1] * rhs.d[1] + self.d[0] * rhs.d[2],
+                self.d[3] * rhs.d[0]
+                    + 3.0 * self.d[2] * rhs.d[1]
+                    + 3.0 * self.d[1] * rhs.d[2]
+                    + self.d[0] * rhs.d[3],
+            ],
+        }
+    }
+}
+
+/// Construct and certify the nonlinear inverse sphere-chart trace for a
+/// general finite plane/sphere circle branch.
+///
+/// `sphere_longitudes` are the authoritative analytic solver's fitted
+/// longitudes at `carrier_range.lo/hi`. The returned pcurve has private fields
+/// and is bound into the returned whole-branch certificate. `plane_position`
+/// retains source operand order without changing the canonical carrier.
+#[allow(clippy::too_many_arguments)]
+pub fn certify_paired_plane_sphere_oblique_circle_residuals(
+    carrier: Circle,
+    carrier_range: ParamRange,
+    plane: Plane,
+    plane_pcurve: Circle2d,
+    sphere: Sphere,
+    sphere_window: [ParamRange; 2],
+    sphere_longitudes: [f64; 2],
+    plane_position: PairedTrace,
+    tolerance: f64,
+) -> Result<
+    (
+        SphericalCirclePcurve,
+        PairedPlaneSphereCircleResidualCertificate,
+    ),
+    IntersectionCertificateError,
+> {
+    if !carrier_range.is_finite() || carrier_range.width() <= 0.0 {
+        return Err(IntersectionCertificateError::InvalidCarrierRange);
+    }
+    if sphere_window
+        .iter()
+        .any(|range| !range.is_finite() || range.width() < 0.0)
+        || !sphere_longitudes.into_iter().all(f64::is_finite)
+    {
+        return Err(IntersectionCertificateError::NonFiniteGeometry);
+    }
+    let identity = AffineParamMap1d::new(1.0, 0.0)?;
+    let pcurve = build_spherical_circle_pcurve(
+        carrier,
+        carrier_range,
+        sphere,
+        sphere_window,
+        sphere_longitudes,
+        tolerance,
+    )?;
+    let plane_trace =
+        PlaneSphereCircleTrace::Plane(PlaneCircleTrace::new(plane, plane_pcurve, identity));
+    let sphere_trace = PlaneSphereCircleTrace::SphereOblique(ObliqueSphereCircleTrace {
+        surface: sphere,
+        pcurve,
+        parameter_map: identity,
+    });
+    let traces = match plane_position {
+        PairedTrace::First => [plane_trace, sphere_trace],
+        PairedTrace::Second => [sphere_trace, plane_trace],
+    };
+    let certificate =
+        certify_paired_plane_sphere_circle_residuals(carrier, carrier_range, traces, tolerance)?;
+    Ok((pcurve, certificate))
+}
+
+fn build_spherical_circle_pcurve(
+    carrier: Circle,
+    carrier_range: ParamRange,
+    sphere: Sphere,
+    chart_window: [ParamRange; 2],
+    endpoint_longitudes: [f64; 2],
+    tolerance: f64,
+) -> Result<SphericalCirclePcurve, IntersectionCertificateError> {
+    let frame = sphere.frame();
+    let center = frame.to_local(carrier.frame().origin());
+    let x = carrier.frame().x() * carrier.radius();
+    let y = carrier.frame().y() * carrier.radius();
+    let cosine = Vec3::new(x.dot(frame.x()), x.dot(frame.y()), x.dot(frame.z()));
+    let sine = Vec3::new(y.dot(frame.x()), y.dot(frame.y()), y.dot(frame.z()));
+    let angular_tolerance = (tolerance / sphere.radius()).max(64.0 * f64::EPSILON);
+    let probe = carrier_range.lerp(1.0e-6);
+    let probe_local = harmonic_local_point(center, cosine, sine, probe);
+    let raw_probe = math::atan2(probe_local.y, probe_local.x);
+    let initial_turn = ((endpoint_longitudes[0] - raw_probe) / core::f64::consts::TAU).round();
+    if !initial_turn.is_finite() {
+        return Err(IntersectionCertificateError::NonFiniteGeometry);
+    }
+
+    let mut seams = [SphericalLongitudeSeam::default(); 2];
+    let mut seam_count = 0_usize;
+    let mut current_turn = initial_turn;
+    for root in trig_linear_roots(sine.y, cosine.y, center.y, carrier_range, angular_tolerance) {
+        if root <= carrier_range.lo + angular_tolerance
+            || root >= carrier_range.hi - angular_tolerance
+        {
+            continue;
+        }
+        let local = harmonic_local_point(center, cosine, sine, root);
+        if local.x >= 0.0 {
+            continue;
+        }
+        let (sin, cos) = math::sincos(root);
+        let y_derivative = -cosine.y * sin + sine.y * cos;
+        if y_derivative.abs() <= angular_tolerance {
+            continue;
+        }
+        if seam_count == seams.len() {
+            return Err(
+                IntersectionCertificateError::UnsupportedTraceParameterization {
+                    trace: PairedTrace::Second,
+                    reason: "inverse sphere chart exceeded its finite seam-crossing capacity",
+                },
+            );
+        }
+        let turn_delta = if y_derivative < 0.0 { 1.0 } else { -1.0 };
+        let longitude = if turn_delta > 0.0 {
+            core::f64::consts::PI + current_turn * core::f64::consts::TAU
+        } else {
+            -core::f64::consts::PI + current_turn * core::f64::consts::TAU
+        };
+        seams[seam_count] = SphericalLongitudeSeam {
+            parameter: root,
+            turn_delta,
+            longitude,
+        };
+        seam_count += 1;
+        current_turn += turn_delta;
+    }
+    seams[..seam_count].sort_by(|first, second| first.parameter.total_cmp(&second.parameter));
+
+    current_turn = initial_turn;
+    for seam in seams.iter().take(seam_count) {
+        current_turn += seam.turn_delta;
+    }
+    let end_local = harmonic_local_point(center, cosine, sine, carrier_range.hi);
+    let continuous_end =
+        math::atan2(end_local.y, end_local.x) + current_turn * core::f64::consts::TAU;
+    let start_local = harmonic_local_point(center, cosine, sine, carrier_range.lo);
+    let continuous_start =
+        math::atan2(start_local.y, start_local.x) + initial_turn * core::f64::consts::TAU;
+    let fitted_start = periodic_representative_near(
+        endpoint_longitudes[0],
+        continuous_start,
+        chart_window[0],
+        angular_tolerance,
+    )
+    .unwrap_or_else(|| continuous_start.clamp(chart_window[0].lo, chart_window[0].hi));
+    let fitted_end = periodic_representative_near(
+        endpoint_longitudes[1],
+        continuous_end,
+        chart_window[0],
+        angular_tolerance,
+    )
+    .unwrap_or_else(|| continuous_end.clamp(chart_window[0].lo, chart_window[0].hi));
+
+    Ok(SphericalCirclePcurve {
+        carrier,
+        sphere,
+        carrier_range,
+        chart_window,
+        initial_turn,
+        seams,
+        seam_count: seam_count as u8,
+        endpoint_longitudes: [fitted_start, fitted_end],
+        solver_endpoint_longitudes: endpoint_longitudes,
+    })
+}
+
+fn harmonic_local_point(center: Vec3, cosine: Vec3, sine: Vec3, parameter: f64) -> Vec3 {
+    let (sin, cos) = math::sincos(parameter);
+    center + cosine * cos + sine * sin
+}
+
+fn trig_linear_roots(
+    sine: f64,
+    cosine: f64,
+    constant: f64,
+    range: ParamRange,
+    tolerance: f64,
+) -> Vec<f64> {
+    let q2 = constant - cosine;
+    let q1 = 2.0 * sine;
+    let q0 = cosine + constant;
+    let mut roots = Vec::new();
+    for half_tangent in quadratic_roots(q2, q1, q0, tolerance) {
+        push_periodic_root(
+            &mut roots,
+            2.0 * math::atan2(half_tangent, 1.0),
+            range,
+            tolerance,
+        );
+    }
+    if q2.abs() <= tolerance {
+        push_periodic_root(&mut roots, core::f64::consts::PI, range, tolerance);
+    }
+    roots.sort_by(f64::total_cmp);
+    roots.dedup_by(|first, second| (*first - *second).abs() <= tolerance);
+    roots
+}
+
+fn quadratic_roots(a: f64, b: f64, c: f64, tolerance: f64) -> Vec<f64> {
+    if a.abs() <= tolerance {
+        if b.abs() <= tolerance {
+            Vec::new()
+        } else {
+            vec![-c / b]
+        }
+    } else {
+        let discriminant = b * b - 4.0 * a * c;
+        if discriminant < -tolerance {
+            Vec::new()
+        } else if discriminant.abs() <= tolerance {
+            vec![-b / (2.0 * a)]
+        } else {
+            let root = discriminant.max(0.0).sqrt();
+            vec![(-b - root) / (2.0 * a), (-b + root) / (2.0 * a)]
+        }
+    }
+}
+
+fn push_periodic_root(roots: &mut Vec<f64>, candidate: f64, range: ParamRange, tolerance: f64) {
+    let tau = core::f64::consts::TAU;
+    let first = ((range.lo - tolerance - candidate) / tau).ceil();
+    let last = ((range.hi + tolerance - candidate) / tau).floor();
+    for turn in [first, last] {
+        if turn.is_finite() {
+            let root = (candidate + turn * tau).clamp(range.lo, range.hi);
+            if !roots
+                .iter()
+                .any(|existing| (existing - root).abs() <= tolerance)
+            {
+                roots.push(root);
+            }
+        }
+    }
+}
+
+fn periodic_representative_near(
+    value: f64,
+    target: f64,
+    window: ParamRange,
+    tolerance: f64,
+) -> Option<f64> {
+    let tau = core::f64::consts::TAU;
+    let first_turn = ((window.lo - tolerance - value) / tau).ceil();
+    let last_turn = ((window.hi + tolerance - value) / tau).floor();
+    if first_turn > last_turn {
+        return None;
+    }
+    let turn = ((target - value) / tau)
+        .round()
+        .clamp(first_turn, last_turn);
+    let result = (value + turn * tau).clamp(window.lo, window.hi);
+    result.is_finite().then_some(result)
+}
+
+/// Certify an axis-aligned or axis-antialigned plane/sphere circle over a
+/// complete finite range.
+///
+/// The sphere trace must be `(u, v) = (t, constant)` with an identity map, so
+/// its lift and the carrier share the exact same deterministic sine/cosine
+/// evaluation even for shifted longitude intervals. The plane trace may map
+/// the carrier parameter as `s=t` or `s=-t`; deterministic sine/cosine is
+/// bitwise even/odd under that reversal. A nonzero phase belongs in the
+/// plane-circle axis, not in either affine map. General oblique sphere traces
+/// are admitted only through the private-field nonlinear spherical pcurve
+/// produced by [`certify_paired_plane_sphere_oblique_circle_residuals`].
+pub fn certify_paired_plane_sphere_circle_residuals(
+    carrier: Circle,
+    carrier_range: ParamRange,
+    traces: [PlaneSphereCircleTrace; 2],
+    tolerance: f64,
+) -> Result<PairedPlaneSphereCircleResidualCertificate, IntersectionCertificateError> {
+    if !carrier_range.is_finite() || carrier_range.lo > carrier_range.hi {
+        return Err(IntersectionCertificateError::InvalidCarrierRange);
+    }
+    if !tolerance.is_finite() || tolerance < 0.0 {
+        return Err(IntersectionCertificateError::InvalidTolerance);
+    }
+    if !finite_circle(carrier) {
+        return Err(IntersectionCertificateError::NonFiniteGeometry);
+    }
+    if !matches!(
+        traces,
+        [
+            PlaneSphereCircleTrace::Plane(_),
+            PlaneSphereCircleTrace::Sphere(_)
+        ] | [
+            PlaneSphereCircleTrace::Sphere(_),
+            PlaneSphereCircleTrace::Plane(_)
+        ] | [
+            PlaneSphereCircleTrace::Plane(_),
+            PlaneSphereCircleTrace::SphereOblique(_)
+        ] | [
+            PlaneSphereCircleTrace::SphereOblique(_),
+            PlaneSphereCircleTrace::Plane(_)
+        ]
+    ) {
+        return Err(IntersectionCertificateError::InvalidTraceFamily);
+    }
+
+    let mut residual_bounds = [0.0; 2];
+    for (index, trace) in traces.into_iter().enumerate() {
+        let trace_id = if index == 0 {
+            PairedTrace::First
+        } else {
+            PairedTrace::Second
+        };
+        let bound = match trace {
+            PlaneSphereCircleTrace::Plane(trace) => {
+                let parameter_map = trace.parameter_map();
+                if !matches!(parameter_map.scale(), -1.0 | 1.0)
+                    || parameter_map.offset() != 0.0
+                {
+                    return Err(
+                        IntersectionCertificateError::UnsupportedTraceParameterization {
+                            trace: trace_id,
+                            reason: "plane-circle trace must map the longitude as t or -t with no phase offset",
+                        },
+                    );
+                }
+                if !finite_plane(trace.surface()) || !finite_circle2d(trace.pcurve()) {
+                    return Err(IntersectionCertificateError::NonFiniteGeometry);
+                }
+                plane_circle_residual_bound(
+                    carrier,
+                    trace.surface(),
+                    trace.pcurve(),
+                    parameter_map.scale(),
+                )
+            }
+            PlaneSphereCircleTrace::Sphere(trace) => {
+                if trace.parameter_map().scale() != 1.0
+                    || trace.parameter_map().offset() != 0.0
+                {
+                    return Err(
+                        IntersectionCertificateError::UnsupportedTraceParameterization {
+                            trace: trace_id,
+                            reason: "sphere trace must use the carrier longitude without an affine transform",
+                        },
+                    );
+                }
+                if !finite_sphere(trace.surface())
+                    || !finite_vec2(trace.pcurve().origin())
+                    || !finite_vec2(trace.pcurve().dir())
+                {
+                    return Err(IntersectionCertificateError::NonFiniteGeometry);
+                }
+                let pcurve = trace.pcurve();
+                if pcurve.origin().x != 0.0 || pcurve.dir().x != 1.0 || pcurve.dir().y != 0.0 {
+                    return Err(
+                        IntersectionCertificateError::UnsupportedTraceParameterization {
+                            trace: trace_id,
+                            reason: "sphere trace must be u=t at one constant latitude",
+                        },
+                    );
+                }
+                sphere_latitude_residual_bound(carrier, trace.surface(), pcurve.origin().y)
+            }
+            PlaneSphereCircleTrace::SphereOblique(trace) => {
+                if trace.parameter_map().scale() != 1.0
+                    || trace.parameter_map().offset() != 0.0
+                {
+                    return Err(
+                        IntersectionCertificateError::UnsupportedTraceParameterization {
+                            trace: trace_id,
+                            reason: "inverse sphere-chart trace must use the carrier parameter exactly",
+                        },
+                    );
+                }
+                let pcurve = trace.pcurve();
+                if trace.surface() != pcurve.sphere()
+                    || pcurve.carrier() != carrier
+                    || pcurve.carrier_range() != carrier_range
+                {
+                    return Err(
+                        IntersectionCertificateError::UnsupportedTraceParameterization {
+                            trace: trace_id,
+                            reason: "inverse sphere-chart trace is not bound to this carrier, range, and sphere",
+                        },
+                    );
+                }
+                Some(oblique_sphere_trace_residual_bound(
+                    pcurve, tolerance, trace_id,
+                )?)
+            }
+        }
+        .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace: trace_id })?;
+        if bound > tolerance {
+            return Err(IntersectionCertificateError::ResidualExceedsTolerance {
+                trace: trace_id,
+                residual_bound: bound,
+                tolerance,
+            });
+        }
+        residual_bounds[index] = bound;
+    }
+
+    Ok(PairedPlaneSphereCircleResidualCertificate {
+        carrier,
+        carrier_range,
+        traces,
+        residual_bounds,
+        tolerance,
+    })
+}
+
+fn plane_circle_residual_bound(
+    carrier: Circle,
+    surface: Plane,
+    pcurve: Circle2d,
+    orientation: f64,
+) -> Option<f64> {
+    let carrier_coefficients = circle_coefficients(carrier)?;
+    let frame = surface.frame();
+    let center = pcurve.center();
+    let x = pcurve.x_dir();
+    let y = x.perp();
+    let radius = Interval::point(pcurve.radius());
+    let surface_origin = frame.origin().to_array();
+    let surface_x = frame.x().to_array();
+    let surface_y = frame.y().to_array();
+    let mut lifted = [[Interval::point(0.0); 3]; 3];
+    for axis in 0..3 {
+        lifted[0][axis] = finite_interval(
+            finite_interval(
+                Interval::point(surface_origin[axis])
+                    + finite_interval(
+                        Interval::point(surface_x[axis]) * Interval::point(center.x),
+                    )?,
+            )? + finite_interval(Interval::point(surface_y[axis]) * Interval::point(center.y))?,
+        )?;
+        lifted[1][axis] = finite_interval(
+            finite_interval(
+                Interval::point(surface_x[axis]) * finite_interval(radius * Interval::point(x.x))?,
+            )? + finite_interval(
+                Interval::point(surface_y[axis]) * finite_interval(radius * Interval::point(x.y))?,
+            )?,
+        )?;
+        lifted[2][axis] = finite_interval(
+            Interval::point(orientation)
+                * finite_interval(
+                    finite_interval(
+                        Interval::point(surface_x[axis])
+                            * finite_interval(radius * Interval::point(y.x))?,
+                    )? + finite_interval(
+                        Interval::point(surface_y[axis])
+                            * finite_interval(radius * Interval::point(y.y))?,
+                    )?,
+                )?,
+        )?;
+    }
+    harmonic_residual_bound(carrier_coefficients, lifted)
+}
+
+fn sphere_latitude_residual_bound(carrier: Circle, surface: Sphere, latitude: f64) -> Option<f64> {
+    let carrier_coefficients = circle_coefficients(carrier)?;
+    let (sin_latitude, cos_latitude) = math::sincos(latitude);
+    let frame = surface.frame();
+    let radius = Interval::point(surface.radius());
+    let surface_origin = frame.origin().to_array();
+    let surface_x = frame.x().to_array();
+    let surface_y = frame.y().to_array();
+    let surface_z = frame.z().to_array();
+    let radial_radius = finite_interval(radius * Interval::point(cos_latitude))?;
+    let height = finite_interval(radius * Interval::point(sin_latitude))?;
+    let mut lifted = [[Interval::point(0.0); 3]; 3];
+    for axis in 0..3 {
+        lifted[0][axis] = finite_interval(
+            Interval::point(surface_origin[axis])
+                + finite_interval(Interval::point(surface_z[axis]) * height)?,
+        )?;
+        lifted[1][axis] = finite_interval(Interval::point(surface_x[axis]) * radial_radius)?;
+        lifted[2][axis] = finite_interval(Interval::point(surface_y[axis]) * radial_radius)?;
+    }
+    harmonic_residual_bound(carrier_coefficients, lifted)
+}
+
+fn oblique_sphere_trace_residual_bound(
+    pcurve: SphericalCirclePcurve,
+    tolerance: f64,
+    trace: PairedTrace,
+) -> Result<f64, IntersectionCertificateError> {
+    let sphere = pcurve.sphere();
+    let frame = sphere.frame();
+    let carrier = pcurve.carrier();
+    let center_local = frame.to_local(carrier.frame().origin());
+    let carrier_x = carrier.frame().x() * carrier.radius();
+    let carrier_y = carrier.frame().y() * carrier.radius();
+    let cosine = Vec3::new(
+        carrier_x.dot(frame.x()),
+        carrier_x.dot(frame.y()),
+        carrier_x.dot(frame.z()),
+    );
+    let sine = Vec3::new(
+        carrier_y.dot(frame.x()),
+        carrier_y.dot(frame.y()),
+        carrier_y.dot(frame.z()),
+    );
+    let range = pcurve.carrier_range();
+    let chart = pcurve.chart_window();
+    let angular_tolerance = (tolerance / sphere.radius()).max(64.0 * f64::EPSILON);
+    let scale = (center_local.norm() + carrier.radius() + sphere.radius()).max(1.0);
+    let clearance_floor = tolerance.max(128.0 * f64::EPSILON * scale);
+    let mut squared_pole_clearance = f64::INFINITY;
+    let mut outside_coordinate = None;
+    let residual_bound =
+        sphere_radial_residual_bound(center_local, cosine, sine, sphere.radius(), trace)?;
+
+    for segment in 0..SPHERICAL_CIRCLE_PROOF_SEGMENTS {
+        let lo = range.lerp(segment as f64 / SPHERICAL_CIRCLE_PROOF_SEGMENTS as f64);
+        let hi = range.lerp((segment + 1) as f64 / SPHERICAL_CIRCLE_PROOF_SEGMENTS as f64);
+        let cosine_range = trig_interval(lo, hi, false);
+        let sine_range = trig_interval(lo, hi, true);
+        let coordinates = [
+            harmonic_coordinate_interval(
+                center_local.x,
+                cosine.x,
+                sine.x,
+                cosine_range,
+                sine_range,
+            ),
+            harmonic_coordinate_interval(
+                center_local.y,
+                cosine.y,
+                sine.y,
+                cosine_range,
+                sine_range,
+            ),
+            harmonic_coordinate_interval(
+                center_local.z,
+                cosine.z,
+                sine.z,
+                cosine_range,
+                sine_range,
+            ),
+        ];
+        if coordinates
+            .iter()
+            .any(|interval| !interval.lo().is_finite() || !interval.hi().is_finite())
+        {
+            return Err(IntersectionCertificateError::NonFiniteResidualBound { trace });
+        }
+        let squared_xy = finite_interval(coordinates[0].square() + coordinates[1].square())
+            .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+        squared_pole_clearance = squared_pole_clearance.min(squared_xy.lo().max(0.0));
+        if squared_xy.lo() <= clearance_floor * clearance_floor {
+            continue;
+        }
+        let midpoint = (lo + hi) / 2.0;
+        let midpoint_uv = pcurve.eval(midpoint);
+        let longitude = longitude_interval(coordinates[0], coordinates[1], midpoint_uv.x);
+        if longitude.lo() < chart[0].lo - angular_tolerance
+            || longitude.hi() > chart[0].hi + angular_tolerance
+        {
+            outside_coordinate.get_or_insert("longitude");
+        }
+        let rho = squared_xy
+            .sqrt()
+            .and_then(finite_interval)
+            .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+        let latitude = latitude_interval(coordinates[2], rho);
+        if latitude.lo() < chart[1].lo - angular_tolerance
+            || latitude.hi() > chart[1].hi + angular_tolerance
+        {
+            outside_coordinate.get_or_insert("latitude");
+        }
+    }
+
+    if squared_pole_clearance <= clearance_floor * clearance_floor {
+        return Err(IntersectionCertificateError::SingularSphereChart {
+            squared_pole_clearance,
+        });
+    }
+    if let Some(coordinate) = outside_coordinate {
+        return Err(IntersectionCertificateError::SphereTraceOutsideWindow { coordinate });
+    }
+    for (solver, certified) in pcurve
+        .solver_endpoint_longitudes
+        .into_iter()
+        .zip(pcurve.endpoint_longitudes)
+    {
+        let fitted = periodic_representative_near(solver, certified, chart[0], angular_tolerance)
+            .ok_or(
+            IntersectionCertificateError::UnsupportedTraceParameterization {
+                trace,
+                reason: "solver endpoint longitude is inconsistent with continuous seam unwrapping",
+            },
+        )?;
+        if (fitted - certified).abs() > angular_tolerance {
+            return Err(
+                IntersectionCertificateError::UnsupportedTraceParameterization {
+                    trace,
+                    reason: "solver endpoint longitude is inconsistent with continuous seam unwrapping",
+                },
+            );
+        }
+    }
+    Ok(residual_bound)
+}
+
+fn sphere_radial_residual_bound(
+    center: Vec3,
+    cosine: Vec3,
+    sine: Vec3,
+    radius: f64,
+    trace: PairedTrace,
+) -> Result<f64, IntersectionCertificateError> {
+    let dot = |first: Vec3, second: Vec3| {
+        finite_interval(
+            finite_interval(
+                Interval::point(first.x) * Interval::point(second.x)
+                    + Interval::point(first.y) * Interval::point(second.y),
+            )? + Interval::point(first.z) * Interval::point(second.z),
+        )
+    };
+    let half = Interval::point(0.5);
+    let two = Interval::point(2.0);
+    let center_sq = dot(center, center)
+        .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+    let cosine_sq = dot(cosine, cosine)
+        .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+    let sine_sq =
+        dot(sine, sine).ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+    let constant = finite_interval(
+        center_sq
+            + finite_interval((cosine_sq + sine_sq) * half)
+                .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?
+            - Interval::point(radius) * Interval::point(radius),
+    )
+    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+    let first_cosine = finite_interval(
+        dot(center, cosine)
+            .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?
+            * two,
+    )
+    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+    let first_sine = finite_interval(
+        dot(center, sine).ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?
+            * two,
+    )
+    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+    let second_cosine = finite_interval((cosine_sq - sine_sq) * half)
+        .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+    let second_sine =
+        dot(cosine, sine).ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+    let maximum_absolute = |interval: Interval| interval.lo().abs().max(interval.hi().abs());
+    let squared_residual = maximum_absolute(constant)
+        + maximum_absolute(first_cosine)
+        + maximum_absolute(first_sine)
+        + maximum_absolute(second_cosine)
+        + maximum_absolute(second_sine);
+    let bound = squared_residual / radius;
+    if bound.is_finite() {
+        Ok(bound.next_up())
+    } else {
+        Err(IntersectionCertificateError::NonFiniteResidualBound { trace })
+    }
+}
+
+fn harmonic_coordinate_interval(
+    center: f64,
+    cosine: f64,
+    sine: f64,
+    cosine_range: Interval,
+    sine_range: Interval,
+) -> Interval {
+    Interval::point(center)
+        + Interval::point(cosine) * cosine_range
+        + Interval::point(sine) * sine_range
+}
+
+fn trig_interval(lo: f64, hi: f64, sine: bool) -> Interval {
+    let evaluate = if sine { math::sin } else { math::cos };
+    let mut minimum = evaluate(lo).min(evaluate(hi));
+    let mut maximum = evaluate(lo).max(evaluate(hi));
+    let base = if sine {
+        core::f64::consts::FRAC_PI_2
+    } else {
+        0.0
+    };
+    let mut multiple = ((lo - base) / core::f64::consts::PI).ceil();
+    for _ in 0..=2 {
+        let parameter = base + multiple * core::f64::consts::PI;
+        if parameter > hi {
+            break;
+        }
+        if parameter >= lo {
+            let value = evaluate(parameter);
+            minimum = minimum.min(value);
+            maximum = maximum.max(value);
+        }
+        multiple += 1.0;
+    }
+    Interval::new(minimum.next_down(), maximum.next_up())
+}
+
+fn longitude_interval(x: Interval, y: Interval, reference: f64) -> Interval {
+    let mut minimum = f64::INFINITY;
+    let mut maximum = f64::NEG_INFINITY;
+    for x_value in [x.lo(), x.hi()] {
+        for y_value in [y.lo(), y.hi()] {
+            let raw = math::atan2(y_value, x_value);
+            let lifted =
+                raw + ((reference - raw) / core::f64::consts::TAU).round() * core::f64::consts::TAU;
+            minimum = minimum.min(lifted);
+            maximum = maximum.max(lifted);
+        }
+    }
+    Interval::new(minimum.next_down(), maximum.next_up())
+}
+
+fn latitude_interval(z: Interval, rho: Interval) -> Interval {
+    let mut minimum = f64::INFINITY;
+    let mut maximum = f64::NEG_INFINITY;
+    for z_value in [z.lo(), z.hi()] {
+        for rho_value in [rho.lo(), rho.hi()] {
+            let value = math::atan2(z_value, rho_value);
+            minimum = minimum.min(value);
+            maximum = maximum.max(value);
+        }
+    }
+    Interval::new(minimum.next_down(), maximum.next_up())
+}
+
+fn circle_coefficients(carrier: Circle) -> Option<[[Interval; 3]; 3]> {
+    let frame = carrier.frame();
+    let origin = frame.origin().to_array();
+    let x = frame.x().to_array();
+    let y = frame.y().to_array();
+    let radius = Interval::point(carrier.radius());
+    let mut coefficients = [[Interval::point(0.0); 3]; 3];
+    for axis in 0..3 {
+        coefficients[0][axis] = Interval::point(origin[axis]);
+        coefficients[1][axis] = finite_interval(Interval::point(x[axis]) * radius)?;
+        coefficients[2][axis] = finite_interval(Interval::point(y[axis]) * radius)?;
+    }
+    Some(coefficients)
+}
+
+fn harmonic_residual_bound(carrier: [[Interval; 3]; 3], lifted: [[Interval; 3]; 3]) -> Option<f64> {
+    let harmonic = Interval::new(-1.0, 1.0);
+    let mut squared_norm = Interval::point(0.0);
+    for axis in 0..3 {
+        let residual = finite_interval(
+            finite_interval(carrier[0][axis] - lifted[0][axis])?
+                + finite_interval(finite_interval(carrier[1][axis] - lifted[1][axis])? * harmonic)?
+                + finite_interval(finite_interval(carrier[2][axis] - lifted[2][axis])? * harmonic)?,
+        )?;
+        squared_norm = finite_interval(squared_norm + finite_interval(residual.square())?)?;
+    }
+    Some(finite_interval(squared_norm.sqrt()?)?.hi())
 }
 
 /// Certifies two plane/pcurve traces against one finite line carrier.
@@ -260,6 +2078,543 @@ pub fn certify_paired_plane_line_residuals(
     })
 }
 
+/// Certifies a transmitted open degree-1 chart against two exact planes.
+///
+/// The carrier and both pcurves must be polynomial, clamped degree-1 NURBS
+/// with identical knot vectors and control counts over their complete natural
+/// range. Because the carrier and lifted plane traces share every linear basis
+/// function, their residual is affine on each knot span. Convexity of the
+/// Euclidean norm therefore makes the outward-rounded control residuals a
+/// complete whole-range bound; no spatial intersection is recomputed.
+pub fn certify_transmitted_plane_intersection_residuals(
+    carrier: NurbsCurve,
+    surfaces: [Plane; 2],
+    pcurves: [NurbsCurve2d; 2],
+    metadata: TransmittedIntersectionChartMetadata,
+    tolerance: f64,
+) -> Result<TransmittedPlaneIntersectionCertificate, IntersectionCertificateError> {
+    let carrier_range = carrier.param_range();
+    if !carrier_range.is_finite() || carrier_range.width() <= 0.0 {
+        return Err(IntersectionCertificateError::InvalidCarrierRange);
+    }
+    if !tolerance.is_finite() || tolerance < 0.0 {
+        return Err(IntersectionCertificateError::InvalidTolerance);
+    }
+    if carrier.degree() != 1
+        || carrier.weights().is_some()
+        || !carrier.knots().is_clamped()
+        || carrier.points().len() < 2
+    {
+        return Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "transmitted chart carrier must be open clamped polynomial degree 1",
+            },
+        );
+    }
+    if surfaces.iter().any(|surface| !finite_plane(*surface))
+        || carrier
+            .points()
+            .iter()
+            .copied()
+            .any(|point| !finite_vec3(point))
+    {
+        return Err(IntersectionCertificateError::NonFiniteGeometry);
+    }
+
+    let carrier_knots = carrier.knots().as_slice();
+    let mut residual_bounds = [0.0; 2];
+    for index in 0..2 {
+        let trace = if index == 0 {
+            PairedTrace::First
+        } else {
+            PairedTrace::Second
+        };
+        let pcurve = &pcurves[index];
+        if pcurve.degree() != 1
+            || pcurve.weights().is_some()
+            || !pcurve.knots().is_clamped()
+            || pcurve.knots().as_slice() != carrier_knots
+            || pcurve.points().len() != carrier.points().len()
+            || pcurve.param_range() != carrier_range
+        {
+            return Err(
+                IntersectionCertificateError::UnsupportedTraceParameterization {
+                    trace,
+                    reason: "transmitted pcurve must share the carrier's open clamped polynomial degree-1 basis",
+                },
+            );
+        }
+        if pcurve
+            .points()
+            .iter()
+            .any(|point| !point.x.is_finite() || !point.y.is_finite())
+        {
+            return Err(IntersectionCertificateError::NonFiniteGeometry);
+        }
+        let mut bound = 0.0_f64;
+        for (&point, &uv) in carrier.points().iter().zip(pcurve.points()) {
+            let control_bound = transmitted_plane_control_residual_bound(
+                point,
+                surfaces[index],
+                Vec2::new(uv.x, uv.y),
+            )
+            .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+            bound = bound.max(control_bound);
+        }
+        if bound > tolerance {
+            return Err(IntersectionCertificateError::ResidualExceedsTolerance {
+                trace,
+                residual_bound: bound,
+                tolerance,
+            });
+        }
+        residual_bounds[index] = bound;
+    }
+
+    Ok(TransmittedPlaneIntersectionCertificate {
+        carrier,
+        carrier_range,
+        surfaces,
+        pcurves,
+        residual_bounds,
+        tolerance,
+        metadata,
+    })
+}
+
+/// Certify a transmitted open degree-1 chart against one exact plane field
+/// and one source NURBS surface in either operand order.
+///
+/// The plane trace uses the exact shared-control proof. The NURBS trace uses a
+/// fixed, finite binary subdivision of each complete carrier span. On every
+/// subinterval, original-source homogeneous interval evaluation encloses the
+/// surface point and first partials, while a centered mean-value residual
+/// keeps the carrier and affine pcurve parameter correlated. No sample is used
+/// as proof evidence and the spatial intersection is never recomputed.
+pub fn certify_transmitted_plane_nurbs_intersection_residuals(
+    carrier: NurbsCurve,
+    traces: [TransmittedNurbsIntersectionTrace; 2],
+    pcurves: [NurbsCurve2d; 2],
+    metadata: TransmittedIntersectionChartMetadata,
+    tolerance: f64,
+) -> Result<TransmittedNurbsIntersectionCertificate, IntersectionCertificateError> {
+    if !matches!(
+        &traces,
+        [
+            TransmittedNurbsIntersectionTrace::Plane(_),
+            TransmittedNurbsIntersectionTrace::Nurbs(_)
+        ] | [
+            TransmittedNurbsIntersectionTrace::Nurbs(_),
+            TransmittedNurbsIntersectionTrace::Plane(_)
+        ]
+    ) {
+        return Err(IntersectionCertificateError::InvalidTraceFamily);
+    }
+    certify_transmitted_nurbs_intersection_residuals_impl(
+        carrier, traces, pcurves, metadata, tolerance,
+    )
+}
+
+/// Certify a transmitted open degree-1 chart against two ordered original
+/// source NURBS surfaces.
+///
+/// Each trace independently uses the same fixed finite whole-range binary
+/// subdivision and centered mean-value enclosure as the Plane/NURBS arm. The
+/// proof therefore binds both original polynomial or rational sources without
+/// sampling or spatial-intersection recomputation.
+pub fn certify_transmitted_nurbs_nurbs_intersection_residuals(
+    carrier: NurbsCurve,
+    traces: [TransmittedNurbsIntersectionTrace; 2],
+    pcurves: [NurbsCurve2d; 2],
+    metadata: TransmittedIntersectionChartMetadata,
+    tolerance: f64,
+) -> Result<TransmittedNurbsIntersectionCertificate, IntersectionCertificateError> {
+    if !matches!(
+        &traces,
+        [
+            TransmittedNurbsIntersectionTrace::Nurbs(_),
+            TransmittedNurbsIntersectionTrace::Nurbs(_)
+        ]
+    ) {
+        return Err(IntersectionCertificateError::InvalidTraceFamily);
+    }
+    certify_transmitted_nurbs_intersection_residuals_impl(
+        carrier, traces, pcurves, metadata, tolerance,
+    )
+}
+
+/// Certify a transmitted chart between one constant normal offset of an
+/// original NURBS basis and one direct original NURBS source, in either
+/// operand order.
+///
+/// The offset trace uses the same fixed source point/first-partial enclosure
+/// as the direct NURBS proof. Each proof rectangle additionally encloses
+/// `du x dv`, proves its norm strictly positive, and outwardly divides to a
+/// unit-normal interval before applying the signed displacement. No sampled
+/// normal or second-partial estimate is proof evidence.
+pub fn certify_transmitted_offset_nurbs_intersection_residuals(
+    carrier: NurbsCurve,
+    traces: [TransmittedNurbsIntersectionTrace; 2],
+    pcurves: [NurbsCurve2d; 2],
+    metadata: TransmittedIntersectionChartMetadata,
+    tolerance: f64,
+) -> Result<TransmittedNurbsIntersectionCertificate, IntersectionCertificateError> {
+    if !matches!(
+        &traces,
+        [
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(_),
+            TransmittedNurbsIntersectionTrace::Nurbs(_)
+        ] | [
+            TransmittedNurbsIntersectionTrace::Nurbs(_),
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(_)
+        ]
+    ) {
+        return Err(IntersectionCertificateError::InvalidTraceFamily);
+    }
+    certify_transmitted_nurbs_intersection_residuals_impl(
+        carrier, traces, pcurves, metadata, tolerance,
+    )
+}
+
+fn certify_transmitted_nurbs_intersection_residuals_impl(
+    carrier: NurbsCurve,
+    traces: [TransmittedNurbsIntersectionTrace; 2],
+    pcurves: [NurbsCurve2d; 2],
+    metadata: TransmittedIntersectionChartMetadata,
+    tolerance: f64,
+) -> Result<TransmittedNurbsIntersectionCertificate, IntersectionCertificateError> {
+    let carrier_range = carrier.param_range();
+    if !carrier_range.is_finite() || carrier_range.width() <= 0.0 {
+        return Err(IntersectionCertificateError::InvalidCarrierRange);
+    }
+    if !tolerance.is_finite() || tolerance < 0.0 {
+        return Err(IntersectionCertificateError::InvalidTolerance);
+    }
+    if carrier.degree() != 1
+        || carrier.weights().is_some()
+        || !carrier.knots().is_clamped()
+        || carrier.points().len() < 2
+    {
+        return Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "transmitted chart carrier must be open clamped polynomial degree 1",
+            },
+        );
+    }
+    if carrier
+        .points()
+        .iter()
+        .copied()
+        .any(|point| !finite_vec3(point))
+        || traces.iter().any(|trace| match trace {
+            TransmittedNurbsIntersectionTrace::Plane(plane) => !finite_plane(*plane),
+            TransmittedNurbsIntersectionTrace::Nurbs(surface) => {
+                surface
+                    .points()
+                    .iter()
+                    .copied()
+                    .any(|point| !finite_vec3(point))
+                    || surface
+                        .weights()
+                        .is_some_and(|weights| weights.iter().any(|weight| !weight.is_finite()))
+            }
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(trace) => {
+                !trace.signed_distance.is_finite()
+                    || trace
+                        .basis
+                        .points()
+                        .iter()
+                        .copied()
+                        .any(|point| !finite_vec3(point))
+                    || trace
+                        .basis
+                        .weights()
+                        .is_some_and(|weights| weights.iter().any(|weight| !weight.is_finite()))
+            }
+        })
+    {
+        return Err(IntersectionCertificateError::NonFiniteGeometry);
+    }
+
+    let carrier_knots = carrier.knots().as_slice();
+    let mut residual_bounds = [0.0; 2];
+    for index in 0..2 {
+        let trace = paired_trace(index);
+        let pcurve = &pcurves[index];
+        if pcurve.degree() != 1
+            || pcurve.weights().is_some()
+            || !pcurve.knots().is_clamped()
+            || pcurve.knots().as_slice() != carrier_knots
+            || pcurve.points().len() != carrier.points().len()
+            || pcurve.param_range() != carrier_range
+        {
+            return Err(
+                IntersectionCertificateError::UnsupportedTraceParameterization {
+                    trace,
+                    reason: "transmitted pcurve must share the carrier's open clamped polynomial degree-1 basis",
+                },
+            );
+        }
+        if pcurve
+            .points()
+            .iter()
+            .any(|point| !point.x.is_finite() || !point.y.is_finite())
+        {
+            return Err(IntersectionCertificateError::NonFiniteGeometry);
+        }
+
+        let bound = match &traces[index] {
+            TransmittedNurbsIntersectionTrace::Plane(surface) => {
+                let mut bound = 0.0_f64;
+                for (&point, &uv) in carrier.points().iter().zip(pcurve.points()) {
+                    let control_bound = transmitted_plane_control_residual_bound(
+                        point,
+                        *surface,
+                        Vec2::new(uv.x, uv.y),
+                    )
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+                    bound = bound.max(control_bound);
+                }
+                bound
+            }
+            TransmittedNurbsIntersectionTrace::Nurbs(surface) => {
+                transmitted_nurbs_trace_residual_bound(&carrier, surface, None, pcurve, trace)?
+            }
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(offset) => {
+                transmitted_nurbs_trace_residual_bound(
+                    &carrier,
+                    &offset.basis,
+                    Some(offset.signed_distance),
+                    pcurve,
+                    trace,
+                )?
+            }
+        };
+        if bound > tolerance {
+            return Err(IntersectionCertificateError::ResidualExceedsTolerance {
+                trace,
+                residual_bound: bound,
+                tolerance,
+            });
+        }
+        residual_bounds[index] = bound;
+    }
+
+    Ok(TransmittedNurbsIntersectionCertificate {
+        carrier,
+        carrier_range,
+        traces,
+        pcurves,
+        residual_bounds,
+        tolerance,
+        metadata,
+        proof_depth: TRANSMITTED_NURBS_TRACE_PROOF_DEPTH,
+    })
+}
+
+fn transmitted_nurbs_trace_residual_bound(
+    carrier: &NurbsCurve,
+    surface: &NurbsSurface,
+    signed_offset: Option<f64>,
+    pcurve: &NurbsCurve2d,
+    trace: PairedTrace,
+) -> Result<f64, IntersectionCertificateError> {
+    let domains = [
+        surface.knots(Dir::U).domain(),
+        surface.knots(Dir::V).domain(),
+    ];
+    if pcurve
+        .points()
+        .iter()
+        .any(|point| !domains[0].contains(point.x) || !domains[1].contains(point.y))
+    {
+        return Err(
+            IntersectionCertificateError::UnsupportedTraceParameterization {
+                trace,
+                reason: "transmitted NURBS pcurve leaves the source surface domain",
+            },
+        );
+    }
+    let subdivisions = 1_usize << TRANSMITTED_NURBS_TRACE_PROOF_DEPTH;
+    let mut bound = 0.0_f64;
+    for span in 0..carrier.points().len() - 1 {
+        let carrier_start = carrier.points()[span];
+        let carrier_end = carrier.points()[span + 1];
+        let uv_start = pcurve.points()[span];
+        let uv_end = pcurve.points()[span + 1];
+        let carrier_direction = interval_vec3_difference(carrier_end, carrier_start);
+        let uv_direction = [
+            Interval::point(uv_end.x) - Interval::point(uv_start.x),
+            Interval::point(uv_end.y) - Interval::point(uv_start.y),
+        ];
+        for subdivision in 0..subdivisions {
+            let fraction_lo = subdivision as f64 / subdivisions as f64;
+            let fraction_hi = (subdivision + 1) as f64 / subdivisions as f64;
+            let fraction_mid = fraction_lo + 0.5 * (fraction_hi - fraction_lo);
+            let delta = Interval::new(fraction_lo - fraction_mid, fraction_hi - fraction_mid);
+            let carrier_mid = interval_affine_vec3(carrier_start, carrier_direction, fraction_mid);
+            let uv_mid = [
+                Interval::point(uv_start.x) + uv_direction[0] * Interval::point(fraction_mid),
+                Interval::point(uv_start.y) + uv_direction[1] * Interval::point(fraction_mid),
+            ];
+            let uv_box = core::array::from_fn(|axis| {
+                let enclosure = uv_mid[axis] + uv_direction[axis] * delta;
+                ParamRange::new(
+                    enclosure.lo().max(domains[axis].lo),
+                    enclosure.hi().min(domains[axis].hi),
+                )
+            });
+            if uv_box.iter().any(|range| range.lo > range.hi) {
+                return Err(
+                    IntersectionCertificateError::UnsupportedTraceParameterization {
+                        trace,
+                        reason: "transmitted NURBS pcurve interval leaves the source surface domain",
+                    },
+                );
+            }
+            let center = uv_box.map(|range| range.lo + 0.5 * range.width());
+            let enclosure = surface
+                .source_differential_enclosure(uv_box, center)
+                .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+            let position = enclosure.position();
+            let derivative_u = enclosure.derivative_u();
+            let derivative_v = enclosure.derivative_v();
+            let offset_normal = signed_offset
+                .map(|distance| {
+                    interval_unit_normal(derivative_u, derivative_v, trace)
+                        .map(|normal| (Interval::point(distance), normal))
+                })
+                .transpose()?;
+            let uv_center_delta = [
+                uv_mid[0] - Interval::point(center[0]),
+                uv_mid[1] - Interval::point(center[1]),
+            ];
+            let finite = |interval| {
+                finite_interval(interval)
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })
+            };
+            let mut squared_norm = Interval::point(0.0);
+            for axis in 0..3 {
+                let carrier_minus_position = finite(carrier_mid[axis] - position[axis])?;
+                let center_u = finite(derivative_u[axis] * uv_center_delta[0])?;
+                let center_v = finite(derivative_v[axis] * uv_center_delta[1])?;
+                let residual_center =
+                    finite(finite(carrier_minus_position - center_u)? - center_v)?;
+                let direction_u = finite(derivative_u[axis] * uv_direction[0])?;
+                let direction_v = finite(derivative_v[axis] * uv_direction[1])?;
+                let residual_direction =
+                    finite(finite(carrier_direction[axis] - direction_u)? - direction_v)?;
+                let mut residual = finite(residual_center + finite(residual_direction * delta)?)?;
+                if let Some((distance, normal)) = offset_normal {
+                    residual = finite(residual - finite(distance * normal[axis])?)?;
+                }
+                squared_norm = finite(squared_norm + finite(residual.square())?)?;
+            }
+            let square_root = squared_norm
+                .sqrt()
+                .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+            let local = finite(square_root)?.hi();
+            bound = bound.max(local);
+        }
+    }
+    Ok(bound)
+}
+
+fn interval_unit_normal(
+    derivative_u: [Interval; 3],
+    derivative_v: [Interval; 3],
+    trace: PairedTrace,
+) -> Result<[Interval; 3], IntersectionCertificateError> {
+    let finite = |interval: Interval| {
+        finite_interval(interval)
+            .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })
+    };
+    let cross = [
+        finite(
+            finite(derivative_u[1] * derivative_v[2])? - finite(derivative_u[2] * derivative_v[1])?,
+        )?,
+        finite(
+            finite(derivative_u[2] * derivative_v[0])? - finite(derivative_u[0] * derivative_v[2])?,
+        )?,
+        finite(
+            finite(derivative_u[0] * derivative_v[1])? - finite(derivative_u[1] * derivative_v[0])?,
+        )?,
+    ];
+    let squared_norm = finite(
+        finite(finite(cross[0].square())? + finite(cross[1].square())?)?
+            + finite(cross[2].square())?,
+    )?;
+    if squared_norm.lo() <= 0.0 {
+        return Err(IntersectionCertificateError::SingularOffsetNormal {
+            trace,
+            squared_norm_lower_bound: squared_norm.lo(),
+        });
+    }
+    let norm = squared_norm
+        .sqrt()
+        .and_then(finite_interval)
+        .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+    if norm.lo() <= 0.0 {
+        return Err(IntersectionCertificateError::SingularOffsetNormal {
+            trace,
+            squared_norm_lower_bound: squared_norm.lo(),
+        });
+    }
+    let mut normal = [Interval::point(0.0); 3];
+    for axis in 0..3 {
+        normal[axis] = cross[axis]
+            .checked_div(norm)
+            .and_then(finite_interval)
+            .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+    }
+    Ok(normal)
+}
+
+fn paired_trace(index: usize) -> PairedTrace {
+    if index == 0 {
+        PairedTrace::First
+    } else {
+        PairedTrace::Second
+    }
+}
+
+fn interval_vec3_difference(end: Vec3, start: Vec3) -> [Interval; 3] {
+    let end = end.to_array();
+    let start = start.to_array();
+    core::array::from_fn(|axis| Interval::point(end[axis]) - Interval::point(start[axis]))
+}
+
+fn interval_affine_vec3(start: Vec3, direction: [Interval; 3], fraction: f64) -> [Interval; 3] {
+    let start = start.to_array();
+    core::array::from_fn(|axis| {
+        Interval::point(start[axis]) + direction[axis] * Interval::point(fraction)
+    })
+}
+
+fn transmitted_plane_control_residual_bound(
+    carrier: Vec3,
+    surface: Plane,
+    uv: Vec2,
+) -> Option<f64> {
+    let frame = surface.frame();
+    let carrier = carrier.to_array();
+    let origin = frame.origin().to_array();
+    let axis_u = frame.x().to_array();
+    let axis_v = frame.y().to_array();
+    let mut squared_norm = Interval::point(0.0);
+    for axis in 0..3 {
+        let lifted = finite_interval(
+            finite_interval(
+                Interval::point(origin[axis])
+                    + finite_interval(Interval::point(axis_u[axis]) * Interval::point(uv.x))?,
+            )? + finite_interval(Interval::point(axis_v[axis]) * Interval::point(uv.y))?,
+        )?;
+        let residual = finite_interval(Interval::point(carrier[axis]) - lifted)?;
+        squared_norm = finite_interval(squared_norm + finite_interval(residual.square())?)?;
+    }
+    finite_interval(squared_norm.sqrt()?).map(Interval::hi)
+}
+
 fn trace_residual_bound(
     carrier: Line,
     carrier_range: ParamRange,
@@ -328,6 +2683,25 @@ fn finite_vec3(value: Vec3) -> bool {
 
 fn finite_plane(surface: Plane) -> bool {
     let frame = surface.frame();
+    finite_vec3(frame.origin())
+        && finite_vec3(frame.x())
+        && finite_vec3(frame.y())
+        && finite_vec3(frame.z())
+}
+
+fn finite_sphere(surface: Sphere) -> bool {
+    finite_frame(surface.frame()) && surface.radius().is_finite()
+}
+
+fn finite_circle(carrier: Circle) -> bool {
+    finite_frame(carrier.frame()) && carrier.radius().is_finite()
+}
+
+fn finite_circle2d(pcurve: Circle2d) -> bool {
+    finite_vec2(pcurve.center()) && finite_vec2(pcurve.x_dir()) && pcurve.radius().is_finite()
+}
+
+fn finite_frame(frame: &kgeom::frame::Frame) -> bool {
     finite_vec3(frame.origin())
         && finite_vec3(frame.x())
         && finite_vec3(frame.y())

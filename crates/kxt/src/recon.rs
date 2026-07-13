@@ -35,7 +35,8 @@ use crate::parse::{Node, Value, XtFile};
 use crate::schema::code;
 use kcore::math;
 use kcore::operation::{
-    BudgetPlan, OperationContext, OperationOutcome, OperationPolicyError, OperationScope,
+    AccountingMode, BudgetPlan, LimitSpec, OperationContext, OperationOutcome,
+    OperationPolicyError, OperationScope, ResourceKind, StageId, WorkLedger,
 };
 use kcore::tolerance::{LINEAR_RESOLUTION, Tolerances};
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
@@ -43,10 +44,18 @@ use kgeom::curve2d::{Curve2d, NurbsCurve2d};
 use kgeom::frame::Frame;
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::param::{ParamRange, wrap_periodic};
-use kgeom::project::{CurveProjection, ProjectionBudgetProfile, ProjectionError};
-use kgeom::surface::{Cone, Cylinder, Plane, Sphere, Torus};
+use kgeom::project::{ProjectionBudgetProfile, ProjectionError};
+use kgeom::surface::{Cone, Cylinder, Dir, Plane, Sphere, Torus};
 use kgeom::vec::{Point2, Point3, Vec3};
-use kgraph::{EvalBudgetProfile, EvalLimits, OffsetSurfaceDescriptor, SurfaceDerivativeOrder};
+use kgraph::{
+    EvalBudgetProfile, EvalLimits, OffsetSurfaceDescriptor, SurfaceDerivativeOrder,
+    TRANSMITTED_NURBS_TRACE_PROOF_DEPTH, TransmittedIntersectionChartMetadata,
+    TransmittedNurbsIntersectionTrace, TransmittedOffsetNurbsTrace,
+    certify_transmitted_nurbs_nurbs_intersection_residuals,
+    certify_transmitted_offset_nurbs_intersection_residuals,
+    certify_transmitted_plane_intersection_residuals,
+    certify_transmitted_plane_nurbs_intersection_residuals,
+};
 use ktopo::entity::{
     Body, BodyId, BodyKind, Curve2dId, CurveId, Edge, EdgeId, Face, FaceDomain, FaceId, Fin,
     FinPcurve, Loop, ParamMap1d, PcurveEndpointKind, Region, RegionId, RegionKind, Sense, Shell,
@@ -59,8 +68,101 @@ use ktopo::tolerance::EntityTolerance;
 use ktopo::transaction::{AssemblyStore, Journal, MutationKind};
 use std::collections::BTreeMap;
 
-type CurveProjector<'scope> = dyn FnMut(&dyn Curve, Point3, ParamRange) -> core::result::Result<CurveProjection, ProjectionError>
-    + 'scope;
+const fn stage(value: &'static str) -> StageId {
+    match StageId::new(value) {
+        Ok(stage) => stage,
+        Err(_) => panic!("invalid X_T reconstruction stage"),
+    }
+}
+
+/// Cumulative whole-range certificate work for transmitted intersection charts.
+pub const INTERSECTION_CHART_CERTIFICATE_WORK: StageId =
+    stage("kxt.intersection-chart-certificate-work");
+/// High-water transmitted positions retained by one intersection chart.
+pub const INTERSECTION_CHART_ITEMS: StageId = stage("kxt.intersection-chart-items");
+/// High-water dependency/proof nesting used by transmitted intersection import.
+pub const INTERSECTION_CHART_DEPTH: StageId = stage("kxt.intersection-chart-depth");
+
+/// Versioned resource profile for transmitted intersection chart import.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IntersectionImportBudgetProfile;
+
+impl IntersectionImportBudgetProfile {
+    /// Bounded defaults for canonical plane charts and fixed-depth
+    /// original-source NURBS trace subdivision.
+    pub fn v1_defaults() -> BudgetPlan {
+        BudgetPlan::new([
+            LimitSpec::new(
+                INTERSECTION_CHART_CERTIFICATE_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                131_072,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_ITEMS,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                65_536,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64,
+            ),
+        ])
+        .expect("built-in X_T intersection import profile is valid")
+    }
+
+    /// Corpus-backed defaults for production B-surface transmitted charts.
+    ///
+    /// The Work cap admits the exemplar's exact fixed-depth original-source
+    /// scan preflight while retaining the v1 Items/Depth ceilings. Callers may
+    /// still install a stricter operation override; v1 remains available as
+    /// the historical policy contract.
+    pub fn v2_defaults() -> BudgetPlan {
+        BudgetPlan::new([
+            LimitSpec::new(
+                INTERSECTION_CHART_CERTIFICATE_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                81_267_732,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_ITEMS,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                65_536,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64,
+            ),
+        ])
+        .expect("built-in X_T production intersection import profile is valid")
+    }
+
+    fn validate(ledger: &WorkLedger) -> core::result::Result<(), OperationPolicyError> {
+        ledger.require_limit(
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+        )?;
+        ledger.require_limit(
+            INTERSECTION_CHART_ITEMS,
+            ResourceKind::Items,
+            AccountingMode::HighWater,
+        )?;
+        ledger.require_limit(
+            INTERSECTION_CHART_DEPTH,
+            ResourceKind::Depth,
+            AccountingMode::HighWater,
+        )?;
+        Ok(())
+    }
+}
 
 /// Everything produced by reconstructing one transmit file.
 #[derive(Debug)]
@@ -86,16 +188,32 @@ pub struct Reconstruction {
 pub fn reconstruction_budget_profile() -> BudgetPlan {
     let graph = EvalBudgetProfile::v1_defaults();
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    BudgetPlan::new(graph.limits().iter().chain(projection.limits()).copied())
-        .expect("built-in X_T reconstruction budget is valid")
+    let intersection = IntersectionImportBudgetProfile::v2_defaults();
+    BudgetPlan::new(
+        graph
+            .limits()
+            .iter()
+            .chain(projection.limits())
+            .chain(intersection.limits())
+            .copied(),
+    )
+    .expect("built-in X_T reconstruction budget is valid")
 }
 
 fn reconstruction_compatibility_budget() -> BudgetPlan {
     let graph =
         EvalBudgetProfile::for_limits(EvalLimits::default().max_dependency_depth, usize::MAX);
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    BudgetPlan::new(graph.limits().iter().chain(projection.limits()).copied())
-        .expect("built-in X_T compatibility budget is valid")
+    let intersection = IntersectionImportBudgetProfile::v2_defaults();
+    BudgetPlan::new(
+        graph
+            .limits()
+            .iter()
+            .chain(projection.limits())
+            .chain(intersection.limits())
+            .copied(),
+    )
+    .expect("built-in X_T compatibility budget is valid")
 }
 
 /// Reconstruct every body in the file into `store`.
@@ -148,6 +266,7 @@ pub fn reconstruct_in_scope(
     scope: &mut OperationScope<'_, '_>,
     child_ordinal: u64,
 ) -> Result<Reconstruction> {
+    IntersectionImportBudgetProfile::validate(scope.ledger()).map_err(policy_error)?;
     let graph = GraphQueryWork::reserve(scope, child_ordinal).map_err(policy_error)?;
     let mut transaction = match store.transaction() {
         Ok(transaction) => transaction,
@@ -235,14 +354,11 @@ fn reconstruct_into(
         }
     }
 
-    let mut project_curve = |curve: &dyn Curve, point, range| {
-        kgeom::project::project_to_curve_in_scope(curve, point, range, scope)
-    };
     let mut recon = Recon {
         file,
         store,
         graph,
-        project_curve: &mut project_curve,
+        scope,
         curves: BTreeMap::new(),
         pcurves: BTreeMap::new(),
         surfaces: BTreeMap::new(),
@@ -250,6 +366,7 @@ fn reconstruct_into(
         points: BTreeMap::new(),
         vertices: BTreeMap::new(),
         edges: BTreeMap::new(),
+        body_linear_tolerance: None,
     };
     let bodies = body_indices
         .iter()
@@ -281,7 +398,8 @@ fn reconstruct_into(
                 | code::TRANSFORM
                 | code::GEOMETRIC_OWNER
                 | code::KEY
-        ) || file.foreign_codes.contains(&node.code);
+        ) || (node.code != code::INTERSECTION_DATA
+            && file.foreign_codes.contains(&node.code));
         if deliberately_skipped {
             *skipped.entry(node.code).or_insert(0) += 1;
         }
@@ -387,13 +505,182 @@ fn in_size_box(p: Vec3) -> Result<Vec3> {
     Ok(p)
 }
 
+fn intersection_limit(file: &XtFile, index: u32) -> Result<Point3> {
+    let node = xnode(file, index)?;
+    if node.code != code::LIMIT {
+        return Err(XtError::BadField {
+            index,
+            what: "INTERSECTION limit pointer is not a LIMIT",
+        });
+    }
+    if ch(file, node, "type")? != 'L'
+        || !matches!(file.field(node, "term_use"), Some(Value::Char('?')))
+    {
+        return Err(XtError::Unsupported {
+            capability: XtCapability::IntersectionLimits,
+            what: "only finite open LIMIT type L with term_use ? is supported",
+        });
+    }
+    match field(file, node, "hvec")? {
+        Value::Arr(values) if values.len() == 1 => {
+            let value = values[0].as_vector().ok_or(XtError::BadField {
+                index,
+                what: "LIMIT contains a null or malformed position",
+            })?;
+            in_size_box(Point3::new(value[0], value[1], value[2]))
+        }
+        _ => Err(XtError::Unsupported {
+            capability: XtCapability::IntersectionLimits,
+            what: "finite open LIMIT must contain exactly one position",
+        }),
+    }
+}
+
+fn transmitted_nurbs_trace_proof_work(
+    file: &XtFile,
+    surface_index: u32,
+    chart_count: u64,
+) -> Result<u64> {
+    let surface = xnode(file, surface_index)?;
+    let nurbs_index = ptr(file, surface, "nurbs")?;
+    let nurbs = xnode(file, nurbs_index)?;
+    let degree_u = f64_of(file, nurbs, "u_degree")? as u64;
+    let degree_v = f64_of(file, nurbs, "v_degree")? as u64;
+    let declared_control_u = f64_of(file, nurbs, "n_u_vertices")? as u64;
+    let declared_control_v = f64_of(file, nurbs, "n_v_vertices")? as u64;
+    let control_u =
+        transmitted_knot_control_count(file, nurbs, degree_u, "u_knots", "u_knot_mult")?;
+    let control_v =
+        transmitted_knot_control_count(file, nurbs, degree_v, "v_knots", "v_knot_mult")?;
+    if [declared_control_u, declared_control_v] != [control_u, control_v] {
+        return Err(XtError::BadField {
+            index: surface_index,
+            what: "B-surface declared control dimensions do not match its knot-implied control net",
+        });
+    }
+    let span_slots = control_u
+        .checked_sub(degree_u)
+        .and_then(|u| {
+            control_v
+                .checked_sub(degree_v)
+                .and_then(|v| u.checked_mul(v))
+        })
+        .ok_or(XtError::BadField {
+            index: surface_index,
+            what: "B-surface source span count underflows or overflows",
+        })?;
+    let enclosure_work = span_slots
+        .checked_mul(6)
+        .and_then(|work| work.checked_add(1))
+        .ok_or(XtError::BadField {
+            index: surface_index,
+            what: "B-surface source enclosure work overflows",
+        })?;
+    let subdivisions = 1_u64
+        .checked_shl(TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u32)
+        .ok_or(XtError::BadField {
+            index: surface_index,
+            what: "B-surface proof subdivision count overflows",
+        })?;
+    let span_count = chart_count.checked_sub(1).ok_or(XtError::BadField {
+        index: surface_index,
+        what: "B-surface proof chart has no spans",
+    })?;
+    span_count
+        .checked_mul(subdivisions)
+        .and_then(|segments| segments.checked_mul(enclosure_work))
+        .ok_or(XtError::BadField {
+            index: surface_index,
+            what: "INTERSECTION CHART B-surface proof work overflows",
+        })
+}
+
+fn transmitted_offset_chains_are_independent(file: &XtFile, roots: [u32; 2]) -> Result<bool> {
+    fn chain(file: &XtFile, root: u32) -> Result<Vec<u32>> {
+        let mut path = Vec::new();
+        let mut current = root;
+        loop {
+            if let Some(start) = path.iter().position(|&index| index == current) {
+                let mut cycle = path[start..].to_vec();
+                cycle.push(current);
+                return Err(XtError::SurfaceDependencyCycle { path: cycle });
+            }
+            path.push(current);
+            let node = xnode(file, current)?;
+            if node.code != code::OFFSET_SURF {
+                return Ok(path);
+            }
+            current = ptr(file, node, "surface")?;
+        }
+    }
+
+    let first = chain(file, roots[0])?;
+    let second = chain(file, roots[1])?;
+    Ok(!first.iter().any(|node| second.contains(node)))
+}
+
+fn transmitted_knot_control_count(
+    file: &XtFile,
+    nurbs: &Node,
+    degree: u64,
+    knots_field: &'static str,
+    multiplicities_field: &'static str,
+) -> Result<u64> {
+    let knots_index = ptr(file, nurbs, knots_field)?;
+    let multiplicities_index = ptr(file, nurbs, multiplicities_field)?;
+    let knot_count = match field(file, xnode(file, knots_index)?, "knots")? {
+        Value::Arr(values) => values.len(),
+        _ => {
+            return Err(XtError::BadField {
+                index: knots_index,
+                what: "B-surface knot set is not an array",
+            });
+        }
+    };
+    let multiplicities = match field(file, xnode(file, multiplicities_index)?, "mult")? {
+        Value::Arr(values) if values.len() == knot_count => values,
+        Value::Arr(_) => {
+            return Err(XtError::BadField {
+                index: multiplicities_index,
+                what: "knot and multiplicity arrays differ in length",
+            });
+        }
+        _ => {
+            return Err(XtError::BadField {
+                index: multiplicities_index,
+                what: "B-surface knot multiplicities are not an array",
+            });
+        }
+    };
+    let expanded_count = multiplicities.iter().try_fold(0_u64, |count, value| {
+        let multiplicity = value.as_int().and_then(|value| u64::try_from(value).ok());
+        let Some(multiplicity) = multiplicity.filter(|value| *value > 0) else {
+            return Err(XtError::BadField {
+                index: multiplicities_index,
+                what: "B-surface knot multiplicity is not a positive integer",
+            });
+        };
+        count.checked_add(multiplicity).ok_or(XtError::BadField {
+            index: multiplicities_index,
+            what: "B-surface expanded knot count overflows",
+        })
+    })?;
+    expanded_count
+        .checked_sub(degree)
+        .and_then(|count| count.checked_sub(1))
+        .ok_or(XtError::BadField {
+            index: multiplicities_index,
+            what: "B-surface knot-implied control count underflows",
+        })
+}
+
 // ---------------------------------------------------------------- body --
 
-struct Recon<'file, 'assembly, 'store, 'graph, 'projector> {
+struct Recon<'file, 'assembly, 'store, 'graph, 'scope, 'context, 'session> {
     file: &'file XtFile,
     store: &'assembly mut AssemblyStore<'store>,
     graph: &'graph mut GraphQueryWork,
-    project_curve: &'projector mut CurveProjector<'projector>,
+    scope: &'scope mut OperationScope<'context, 'session>,
     /// XT curve index → (kernel curve, XT sense was `-`).
     curves: BTreeMap<u32, (CurveId, bool)>,
     /// XT 2D B-curve index → kernel pcurve geometry.
@@ -408,9 +695,11 @@ struct Recon<'file, 'assembly, 'store, 'graph, 'projector> {
     vertices: BTreeMap<u32, VertexId>,
     /// XT edge index → (kernel edge, fins must flip: curve sense was `-`).
     edges: BTreeMap<u32, (EdgeId, bool)>,
+    /// Active BODY declaration used only by transmitted intersection proofs.
+    body_linear_tolerance: Option<f64>,
 }
 
-impl Recon<'_, '_, '_, '_, '_> {
+impl Recon<'_, '_, '_, '_, '_, '_, '_> {
     fn body(&mut self, body_idx: u32) -> Result<BodyId> {
         let file = self.file;
         let body_node = xnode(file, body_idx)?;
@@ -420,6 +709,7 @@ impl Recon<'_, '_, '_, '_, '_> {
                 what: "referenced part is not a BODY node",
             });
         }
+        self.body_linear_tolerance = field(file, body_node, "res_linear")?.as_f64();
         let kind = match field(file, body_node, "body_type")?.as_int() {
             Some(1) => BodyKind::Solid,
             Some(2) => BodyKind::Wire, // acorn detection below
@@ -774,7 +1064,7 @@ impl Recon<'_, '_, '_, '_, '_> {
                             ep,
                             trim,
                             curve_reversed,
-                            self.project_curve,
+                            self.scope,
                         )
                         .map_err(|error| match error {
                             ProjectionError::Policy(error) => policy_error(error),
@@ -1002,7 +1292,21 @@ impl Recon<'_, '_, '_, '_, '_> {
         }
         let file = self.file;
         let node = xnode(file, curve_idx)?;
-        let reversed = ch(file, node, "sense")? == '-';
+        let reversed = match ch(file, node, "sense")? {
+            '+' => false,
+            '-' => true,
+            _ => {
+                return Err(XtError::BadField {
+                    index: curve_idx,
+                    what: "curve sense is not +/-",
+                });
+            }
+        };
+        if node.code == code::INTERSECTION {
+            let c = self.intersection_curve(curve_idx, node)?;
+            self.curves.insert(curve_idx, (c, reversed));
+            return Ok((c, reversed));
+        }
         let geom: CurveGeom = match node.code {
             code::LINE => {
                 let origin = in_size_box(vector(file, node, "pvec")?)?;
@@ -1023,7 +1327,7 @@ impl Recon<'_, '_, '_, '_, '_> {
                     .into()
             }
             code::B_CURVE => self.b_curve(curve_idx, node)?.into(),
-            code::INTERSECTION | code::SP_CURVE | code::PE_CURVE => {
+            code::SP_CURVE | code::PE_CURVE => {
                 return Err(XtError::Unsupported {
                     capability: XtCapability::ProceduralCurves,
                     what: "procedural curves (intersection/SP/foreign) — Tier 2",
@@ -1039,6 +1343,559 @@ impl Recon<'_, '_, '_, '_, '_> {
         let c = self.store.insert_curve(geom).map_err(XtError::Kernel)?;
         self.curves.insert(curve_idx, (c, reversed));
         Ok((c, reversed))
+    }
+
+    /// Import the finite open modern-chart subset without recomputing the
+    /// spatial intersection. The transmitted positions and interleaved UVs
+    /// become one shared degree-1 basis and are certified over every span.
+    fn intersection_curve(&mut self, curve_idx: u32, node: &Node) -> Result<CurveId> {
+        let file = self.file;
+        let source_indices = match field(file, node, "surface")? {
+            Value::Arr(values) if values.len() == 2 => {
+                let first = values[0].as_ptr().unwrap_or(0);
+                let second = values[1].as_ptr().unwrap_or(0);
+                if first == 0 || second == 0 || first == second {
+                    return Err(XtError::BadField {
+                        index: curve_idx,
+                        what: "INTERSECTION must reference two distinct source surfaces",
+                    });
+                }
+                [first, second]
+            }
+            _ => {
+                return Err(XtError::BadField {
+                    index: curve_idx,
+                    what: "INTERSECTION surface field is not two pointers",
+                });
+            }
+        };
+        let mut direct_planes = Vec::with_capacity(2);
+        let mut source_senses = Vec::with_capacity(2);
+        let mut has_offset_source = false;
+        let mut offset_source_count = 0_u8;
+        let mut nurbs_source_indices = [None, None];
+        let mut nurbs_source_count = 0_u8;
+        let mut offset_nurbs_sources = [false, false];
+        for (operand, &index) in source_indices.iter().enumerate() {
+            let source = xnode(file, index)?;
+            let sense = match ch(file, source, "sense")? {
+                '+' => '+',
+                '-' => '-',
+                _ => {
+                    return Err(XtError::BadField {
+                        index,
+                        what: "INTERSECTION source surface sense is not +/-",
+                    });
+                }
+            };
+            source_senses.push(sense);
+            match source.code {
+                code::PLANE => direct_planes.push(Some(Plane::new(frame_from(
+                    file, source, "pvec", "normal", "x_axis",
+                )?))),
+                code::OFFSET_SURF => {
+                    direct_planes.push(None);
+                    has_offset_source = true;
+                    offset_source_count += 1;
+                    let basis = ptr(file, source, "surface")?;
+                    if xnode(file, basis)?.code == code::B_SURFACE {
+                        nurbs_source_indices[operand] = Some(basis);
+                        offset_nurbs_sources[operand] = true;
+                    }
+                }
+                code::B_SURFACE => {
+                    direct_planes.push(None);
+                    nurbs_source_indices[operand] = Some(index);
+                    nurbs_source_count += 1;
+                }
+                _ => {
+                    return Err(XtError::Unsupported {
+                        capability: XtCapability::IntersectionSurfaceFamily,
+                        what: "transmitted intersection source is not a supported Plane/Plane, Plane/Offset, Offset/Offset, Plane/B-surface, Offset/B-surface, or B-surface/B-surface family",
+                    });
+                }
+            }
+        }
+        let nurbs_trace_count = nurbs_source_indices.iter().flatten().count() as u64;
+        let has_nurbs_source = nurbs_trace_count != 0;
+
+        let chart_idx = ptr(file, node, "chart")?;
+        let chart = xnode(file, chart_idx)?;
+        if chart.code != code::CHART {
+            return Err(XtError::BadField {
+                index: chart_idx,
+                what: "INTERSECTION chart pointer is not a CHART",
+            });
+        }
+        let base_parameter = f64_of(file, chart, "base_parameter")?;
+        let base_scale = f64_of(file, chart, "base_scale")?;
+        if base_parameter != 0.0 || base_scale != 1.0 {
+            return Err(XtError::Unsupported {
+                capability: XtCapability::IntersectionChartConvention,
+                what: "only canonical base_parameter=0/base_scale=1 charts are supported",
+            });
+        }
+        let count_i64 = field(file, chart, "chart_count")?
+            .as_int()
+            .ok_or(XtError::BadField {
+                index: chart_idx,
+                what: "CHART chart_count is not integral",
+            })?;
+        let count = usize::try_from(count_i64).map_err(|_| XtError::BadField {
+            index: chart_idx,
+            what: "CHART chart_count is negative or too large",
+        })?;
+        if count < 2 {
+            return Err(XtError::BadField {
+                index: chart_idx,
+                what: "INTERSECTION CHART must contain at least two positions",
+            });
+        }
+        let count_u64 = u64::try_from(count).map_err(|_| XtError::BadField {
+            index: chart_idx,
+            what: "INTERSECTION CHART sample count is too large",
+        })?;
+        let (proof_work, proof_depth) = if has_nurbs_source {
+            let plane_trace_count = 2_u64 - nurbs_trace_count;
+            let mut proof_work =
+                count_u64
+                    .checked_mul(plane_trace_count)
+                    .ok_or(XtError::BadField {
+                        index: chart_idx,
+                        what: "INTERSECTION CHART plane-trace proof work overflows",
+                    })?;
+            for surface_index in nurbs_source_indices.into_iter().flatten() {
+                proof_work = proof_work
+                    .checked_add(transmitted_nurbs_trace_proof_work(
+                        file,
+                        surface_index,
+                        count_u64,
+                    )?)
+                    .ok_or(XtError::BadField {
+                        index: chart_idx,
+                        what: "INTERSECTION CHART B-surface proof work overflows",
+                    })?;
+            }
+            (proof_work, TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64)
+        } else {
+            (
+                count_u64.checked_mul(2).ok_or(XtError::BadField {
+                    index: chart_idx,
+                    what: "INTERSECTION CHART proof work overflows",
+                })?,
+                1,
+            )
+        };
+        self.scope
+            .ledger_mut()
+            .observe(INTERSECTION_CHART_ITEMS, ResourceKind::Items, count_u64)
+            .map_err(policy_error)?;
+        self.scope
+            .ledger_mut()
+            .observe(INTERSECTION_CHART_DEPTH, ResourceKind::Depth, proof_depth)
+            .map_err(policy_error)?;
+        self.scope
+            .ledger()
+            .check_charge(INTERSECTION_CHART_CERTIFICATE_WORK, proof_work)
+            .map_err(policy_error)?;
+
+        let early_source_surfaces = if has_offset_source || has_nurbs_source {
+            Some([
+                self.surface(source_indices[0])?.0,
+                self.surface(source_indices[1])?.0,
+            ])
+        } else {
+            None
+        };
+        if offset_source_count == 2
+            && !transmitted_offset_chains_are_independent(file, source_indices)?
+        {
+            return Err(XtError::Unsupported {
+                capability: XtCapability::IntersectionSurfaceFamily,
+                what: "Offset/Offset transmitted sources must have independent basis chains",
+            });
+        }
+        let mut nurbs_effective_offset_planes = [None, None];
+        let planes = if has_nurbs_source {
+            for (index, direct_plane) in direct_planes.iter().enumerate() {
+                if direct_plane.is_some() {
+                    continue;
+                }
+                let source_node = xnode(file, source_indices[index])?;
+                if source_node.code != code::OFFSET_SURF {
+                    continue;
+                }
+                if offset_nurbs_sources[index] {
+                    continue;
+                }
+                let source =
+                    early_source_surfaces.expect("offset sources resolve before proof")[index];
+                let plane = self
+                    .graph
+                    .query(self.store, |evaluator| {
+                        evaluator.surface_exact_plane(source)
+                    })
+                    .map_err(policy_error)?
+                    .map_err(XtError::Evaluation)?
+                    .ok_or(XtError::Unsupported {
+                        capability: XtCapability::IntersectionSurfaceFamily,
+                        what: "INTERSECTION offset source does not resolve to an exact plane field",
+                    })?;
+                nurbs_effective_offset_planes[index] = Some(plane);
+            }
+            None
+        } else {
+            let mut effective_planes = Vec::with_capacity(2);
+            for (index, direct_plane) in direct_planes.iter().copied().enumerate() {
+                if let Some(plane) = direct_plane {
+                    effective_planes.push(plane);
+                    continue;
+                }
+                let source =
+                    early_source_surfaces.expect("offset sources resolve before proof")[index];
+                let plane = self
+                    .graph
+                    .query(self.store, |evaluator| {
+                        evaluator.surface_exact_plane(source)
+                    })
+                    .map_err(policy_error)?
+                    .map_err(XtError::Evaluation)?
+                    .ok_or(XtError::Unsupported {
+                        capability: XtCapability::IntersectionSurfaceFamily,
+                        what: "INTERSECTION offset source does not resolve to an exact plane field",
+                    })?;
+                effective_planes.push(plane);
+            }
+            Some([effective_planes[0], effective_planes[1]])
+        };
+
+        let positions = match field(file, chart, "hvec")? {
+            Value::Arr(values) if values.len() == count => values
+                .iter()
+                .map(|value| {
+                    value.as_vector().ok_or(XtError::BadField {
+                        index: chart_idx,
+                        what: "INTERSECTION CHART contains a null or malformed position",
+                    })
+                })
+                .map(|value| value.and_then(|v| in_size_box(Point3::new(v[0], v[1], v[2]))))
+                .collect::<Result<Vec<_>>>()?,
+            Value::Arr(_) => {
+                return Err(XtError::BadField {
+                    index: chart_idx,
+                    what: "INTERSECTION CHART position count does not match chart_count",
+                });
+            }
+            _ => {
+                return Err(XtError::BadField {
+                    index: chart_idx,
+                    what: "INTERSECTION CHART hvec is not an array",
+                });
+            }
+        };
+        if let Some(planes) = planes {
+            let oriented_normal = |index: usize| {
+                let normal = planes[index].frame().z();
+                if source_senses[index] == '+' {
+                    normal
+                } else {
+                    -normal
+                }
+            };
+            let expected_step = oriented_normal(0)
+                .cross(oriented_normal(1))
+                .normalized()
+                .ok_or(XtError::Unsupported {
+                    capability: XtCapability::IntersectionSurfaceFamily,
+                    what: "parallel or coincident exact plane fields are not supported",
+                })?
+                * base_scale;
+            if positions
+                .windows(2)
+                .any(|pair| pair[1] - pair[0] != expected_step)
+            {
+                return Err(XtError::Unsupported {
+                    capability: XtCapability::IntersectionChartConvention,
+                    what: "CHART positions do not prove the canonical affine recurrence",
+                });
+            }
+        }
+
+        let chordal_error = f64_of(file, chart, "chordal_error")?;
+        let angular_error = f64_of(file, chart, "angular_error")?;
+        let parameter_error = match field(file, chart, "parameter_error")? {
+            Value::Arr(values) if values.len() == 2 => values
+                .iter()
+                .map(|value| match value {
+                    Value::Null => Ok(None),
+                    value => value
+                        .as_f64()
+                        .filter(|value| value.is_finite() && *value >= 0.0)
+                        .map(Some)
+                        .ok_or(XtError::BadField {
+                            index: chart_idx,
+                            what: "CHART parameter_error is neither null nor finite nonnegative",
+                        }),
+                })
+                .collect::<Result<Vec<_>>>()?
+                .try_into()
+                .expect("a two-element parameter-error array remains two elements"),
+            _ => {
+                return Err(XtError::BadField {
+                    index: chart_idx,
+                    what: "CHART parameter_error is not a pair",
+                });
+            }
+        };
+        let metadata = TransmittedIntersectionChartMetadata::new(
+            base_parameter,
+            base_scale,
+            chordal_error,
+            angular_error,
+            parameter_error,
+        )
+        .map_err(|source| XtError::IntersectionCertificate {
+            index: curve_idx,
+            source,
+        })?;
+        let declaration = self.body_linear_tolerance.ok_or(XtError::BadField {
+            index: curve_idx,
+            what: "owning BODY has no numeric res_linear declaration",
+        })?;
+        if !declaration.is_finite() || declaration < 0.0 {
+            return Err(XtError::BadField {
+                index: curve_idx,
+                what: "owning BODY res_linear is not finite and nonnegative",
+            });
+        }
+        let proof_tolerance = declaration.max(chordal_error);
+
+        let start_idx = ptr(file, node, "start")?;
+        let end_idx = ptr(file, node, "end")?;
+        if start_idx == 0 || end_idx == 0 || start_idx == end_idx {
+            return Err(XtError::Unsupported {
+                capability: XtCapability::IntersectionLimits,
+                what: "transmitted intersection is not finite and open with distinct limits",
+            });
+        }
+        let start = intersection_limit(file, start_idx)?;
+        let end = intersection_limit(file, end_idx)?;
+        if start.dist(positions[0]) > proof_tolerance
+            || end.dist(positions[count - 1]) > proof_tolerance
+        {
+            return Err(XtError::BadField {
+                index: curve_idx,
+                what: "INTERSECTION LIMIT endpoints do not match the CHART endpoints",
+            });
+        }
+
+        let data_idx = file
+            .field(node, "intersection_data")
+            .and_then(Value::as_ptr)
+            .filter(|&index| index != 0)
+            .ok_or(XtError::Unsupported {
+                capability: XtCapability::IntersectionChartData,
+                what: "INTERSECTION has no modern INTERSECTION_DATA pointer",
+            })?;
+        let data = xnode(file, data_idx)?;
+        if data.code != code::INTERSECTION_DATA {
+            return Err(XtError::BadField {
+                index: data_idx,
+                what: "intersection_data pointer is not INTERSECTION_DATA(204)",
+            });
+        }
+        if field(file, data, "uv_type")?.as_int() != Some(4) {
+            return Err(XtError::Unsupported {
+                capability: XtCapability::IntersectionChartData,
+                what: "only INTERSECTION_DATA uv_type=4 is supported",
+            });
+        }
+        let expected_values = count.checked_mul(4).ok_or(XtError::BadField {
+            index: data_idx,
+            what: "INTERSECTION_DATA expected value count overflows",
+        })?;
+        let values = match field(file, data, "values")? {
+            Value::Arr(values) if values.len() == expected_values => values,
+            Value::Arr(_) => {
+                return Err(XtError::BadField {
+                    index: data_idx,
+                    what: "INTERSECTION_DATA values length is not four times chart_count",
+                });
+            }
+            _ => {
+                return Err(XtError::BadField {
+                    index: data_idx,
+                    what: "INTERSECTION_DATA values is not an array",
+                });
+            }
+        };
+        let mut uv = [Vec::with_capacity(count), Vec::with_capacity(count)];
+        for tuple in values.chunks_exact(4) {
+            let scalar = |index: usize| -> Result<f64> {
+                tuple[index]
+                    .as_f64()
+                    .filter(|value| value.is_finite())
+                    .ok_or(XtError::Unsupported {
+                        capability: XtCapability::IntersectionChartData,
+                        what: "INTERSECTION_DATA contains null or non-finite UV values",
+                    })
+            };
+            uv[0].push(Point2::new(scalar(0)?, scalar(1)?));
+            uv[1].push(Point2::new(scalar(2)?, scalar(3)?));
+        }
+
+        let mut knots = vec![0.0, 0.0];
+        knots.extend((1..count - 1).map(|index| index as f64));
+        knots.extend([count_u64.saturating_sub(1) as f64; 2]);
+        let carrier =
+            NurbsCurve::new(1, knots.clone(), positions, None).map_err(XtError::Kernel)?;
+        let pcurves = [
+            NurbsCurve2d::new(1, knots.clone(), uv[0].clone(), None).map_err(XtError::Kernel)?,
+            NurbsCurve2d::new(1, knots, uv[1].clone(), None).map_err(XtError::Kernel)?,
+        ];
+
+        let source_surfaces = if let Some(sources) = early_source_surfaces {
+            sources
+        } else {
+            [
+                self.surface(source_indices[0])?.0,
+                self.surface(source_indices[1])?.0,
+            ]
+        };
+        if let Some(planes) = planes {
+            if !has_offset_source {
+                for (index, plane) in planes.iter().copied().enumerate() {
+                    if self.store.get(source_surfaces[index])?.as_plane().copied() != Some(plane) {
+                        return Err(XtError::BadField {
+                            index: curve_idx,
+                            what: "live source plane does not match its transmitted declaration",
+                        });
+                    }
+                }
+            }
+            let certificate = certify_transmitted_plane_intersection_residuals(
+                carrier,
+                planes,
+                pcurves.clone(),
+                metadata,
+                proof_tolerance,
+            )
+            .map_err(|source| XtError::IntersectionCertificate {
+                index: curve_idx,
+                source,
+            })?;
+            self.scope
+                .ledger_mut()
+                .charge(INTERSECTION_CHART_CERTIFICATE_WORK, proof_work)
+                .map_err(policy_error)?;
+            let pcurve_handles = [
+                self.store
+                    .insert_pcurve(Curve2dGeom::Nurbs(pcurves[0].clone()))
+                    .map_err(XtError::Kernel)?,
+                self.store
+                    .insert_pcurve(Curve2dGeom::Nurbs(pcurves[1].clone()))
+                    .map_err(XtError::Kernel)?,
+            ];
+            return self
+                .store
+                .insert_verified_transmitted_plane_intersection_curve(
+                    source_surfaces,
+                    pcurve_handles,
+                    certificate,
+                )
+                .map_err(XtError::Kernel);
+        }
+
+        let mut traces = Vec::with_capacity(2);
+        for (index, direct_plane) in direct_planes.iter().copied().enumerate() {
+            if let Some(plane) = direct_plane {
+                if self.store.get(source_surfaces[index])?.as_plane().copied() != Some(plane) {
+                    return Err(XtError::BadField {
+                        index: curve_idx,
+                        what: "live source plane does not match its transmitted declaration",
+                    });
+                }
+                traces.push(TransmittedNurbsIntersectionTrace::Plane(plane));
+            } else if let Some(plane) = nurbs_effective_offset_planes[index] {
+                traces.push(TransmittedNurbsIntersectionTrace::Plane(plane));
+            } else if offset_nurbs_sources[index] {
+                let source = self.store.get(source_surfaces[index])?;
+                let offset = source.as_offset().copied().ok_or(XtError::BadField {
+                    index: curve_idx,
+                    what: "live offset B-surface source is not an offset descriptor",
+                })?;
+                let basis = self
+                    .store
+                    .get(offset.basis())?
+                    .as_nurbs()
+                    .cloned()
+                    .ok_or(XtError::BadField {
+                        index: curve_idx,
+                        what: "live offset B-surface basis is not its transmitted NURBS declaration",
+                    })?;
+                traces.push(TransmittedNurbsIntersectionTrace::OffsetNurbs(
+                    TransmittedOffsetNurbsTrace::new(basis, offset.signed_distance()),
+                ));
+            } else {
+                let source = self.store.get(source_surfaces[index])?;
+                let surface = source.as_nurbs().ok_or(XtError::BadField {
+                    index: curve_idx,
+                    what: "live B-surface does not match its transmitted declaration",
+                })?;
+                traces.push(TransmittedNurbsIntersectionTrace::Nurbs(surface.clone()));
+            }
+        }
+        let traces: [TransmittedNurbsIntersectionTrace; 2] = traces
+            .try_into()
+            .expect("two transmitted sources remain two ordered traces");
+        let certificate = if offset_nurbs_sources.into_iter().any(|offset| offset) {
+            certify_transmitted_offset_nurbs_intersection_residuals(
+                carrier,
+                traces,
+                pcurves.clone(),
+                metadata,
+                proof_tolerance,
+            )
+        } else if nurbs_source_count == 2 {
+            certify_transmitted_nurbs_nurbs_intersection_residuals(
+                carrier,
+                traces,
+                pcurves.clone(),
+                metadata,
+                proof_tolerance,
+            )
+        } else {
+            certify_transmitted_plane_nurbs_intersection_residuals(
+                carrier,
+                traces,
+                pcurves.clone(),
+                metadata,
+                proof_tolerance,
+            )
+        }
+        .map_err(|source| XtError::IntersectionCertificate {
+            index: curve_idx,
+            source,
+        })?;
+        self.scope
+            .ledger_mut()
+            .charge(INTERSECTION_CHART_CERTIFICATE_WORK, proof_work)
+            .map_err(policy_error)?;
+        let pcurve_handles = [
+            self.store
+                .insert_pcurve(Curve2dGeom::Nurbs(pcurves[0].clone()))
+                .map_err(XtError::Kernel)?,
+            self.store
+                .insert_pcurve(Curve2dGeom::Nurbs(pcurves[1].clone()))
+                .map_err(XtError::Kernel)?,
+        ];
+        self.store
+            .insert_verified_transmitted_nurbs_intersection_curve(
+                source_surfaces,
+                pcurve_handles,
+                certificate,
+            )
+            .map_err(XtError::Kernel)
     }
 
     fn b_curve(&mut self, curve_idx: u32, node: &Node) -> Result<NurbsCurve> {
@@ -1214,10 +2071,18 @@ impl Recon<'_, '_, '_, '_, '_> {
         let file = self.file;
         let nurbs_idx = ptr(file, node, "nurbs")?;
         let n = xnode(file, nurbs_idx)?;
-        if logical_of(file, n, "u_periodic")? || logical_of(file, n, "v_periodic")? {
+        let periodic = [
+            logical_of(file, n, "u_periodic")?,
+            logical_of(file, n, "v_periodic")?,
+        ];
+        let closed = [
+            logical_of(file, n, "u_closed")?,
+            logical_of(file, n, "v_closed")?,
+        ];
+        if periodic != closed {
             return Err(XtError::Unsupported {
                 capability: XtCapability::PeriodicNurbsSurfaces,
-                what: "periodic B-surfaces (kernel periodic NURBS lands at M3)",
+                what: "B-surface periodic/closed flags do not match the certified clamped-seam representation",
             });
         }
         let rational = logical_of(file, n, "rational")?;
@@ -1228,8 +2093,43 @@ impl Recon<'_, '_, '_, '_, '_> {
         let vertex_dim = f64_of(file, n, "vertex_dim")? as usize;
         let u_knots = self.knot_vector(ptr(file, n, "u_knots")?, ptr(file, n, "u_knot_mult")?)?;
         let v_knots = self.knot_vector(ptr(file, n, "v_knots")?, ptr(file, n, "v_knot_mult")?)?;
+        let u_order = u_degree.checked_add(1).ok_or(XtError::BadField {
+            index: surface_idx,
+            what: "B-surface u degree overflows its order",
+        })?;
+        let v_order = v_degree.checked_add(1).ok_or(XtError::BadField {
+            index: surface_idx,
+            what: "B-surface v degree overflows its order",
+        })?;
+        let implied_n_u = u_knots
+            .len()
+            .checked_sub(u_order)
+            .ok_or(XtError::BadField {
+                index: surface_idx,
+                what: "B-surface u knot-implied control count underflows",
+            })?;
+        let implied_n_v = v_knots
+            .len()
+            .checked_sub(v_order)
+            .ok_or(XtError::BadField {
+                index: surface_idx,
+                what: "B-surface v knot-implied control count underflows",
+            })?;
+        if [n_u, n_v] != [implied_n_u, implied_n_v] {
+            return Err(XtError::BadField {
+                index: surface_idx,
+                what: "B-surface declared control dimensions do not match its knot-implied control net",
+            });
+        }
         let raw = self.doubles(ptr(file, n, "bspline_vertices")?, "vertices")?;
-        if raw.len() != n_u * n_v * vertex_dim {
+        let expected_vertex_values = n_u
+            .checked_mul(n_v)
+            .and_then(|control_count| control_count.checked_mul(vertex_dim))
+            .ok_or(XtError::BadField {
+                index: surface_idx,
+                what: "B-surface control dimensions overflow the vertex array length",
+            })?;
+        if raw.len() != expected_vertex_values {
             return Err(XtError::BadField {
                 index: surface_idx,
                 what: "bspline vertex array length mismatch",
@@ -1242,8 +2142,37 @@ impl Recon<'_, '_, '_, '_, '_> {
         for p in &points {
             in_size_box(*p)?;
         }
-        NurbsSurface::new(u_degree, v_degree, u_knots, v_knots, points, weights)
-            .map_err(XtError::Kernel)
+        let surface = NurbsSurface::new(u_degree, v_degree, u_knots, v_knots, points, weights)
+            .map_err(XtError::Kernel)?;
+        if periodic
+            .into_iter()
+            .zip([Dir::U, Dir::V])
+            .any(|(is_periodic, dir)| is_periodic && !surface.knots(dir).is_clamped())
+        {
+            return Err(XtError::Unsupported {
+                capability: XtCapability::PeriodicNurbsSurfaces,
+                what: "unclamped cyclic periodic B-surface basis",
+            });
+        }
+        if periodic == [false, false] {
+            return Ok(surface);
+        }
+        let seam_tolerance = self.body_linear_tolerance.ok_or(XtError::BadField {
+            index: surface_idx,
+            what: "periodic B-surface has no owning BODY res_linear seam tolerance",
+        })?;
+        if !seam_tolerance.is_finite() || seam_tolerance < 0.0 {
+            return Err(XtError::BadField {
+                index: surface_idx,
+                what: "periodic B-surface owning BODY res_linear is not finite and nonnegative",
+            });
+        }
+        surface
+            .with_certified_periodicity(periodic, seam_tolerance)
+            .map_err(|_| XtError::BadField {
+                index: surface_idx,
+                what: "periodic B-surface fails its clamped position/C1 seam contract",
+            })
     }
 
     /// Expand an XT (distinct knots, multiplicities) pair into the full
@@ -1399,7 +2328,7 @@ fn edge_bounds(
     end: Point3,
     trim: Option<(f64, f64)>,
     curve_reversed: bool,
-    project_curve: &mut CurveProjector<'_>,
+    scope: &mut OperationScope<'_, '_>,
 ) -> core::result::Result<Option<(f64, f64)>, ProjectionError> {
     if let Some((p1, p2)) = trim {
         // With a '+' basis sense parm_2 > parm_1; with '-' they come
@@ -1438,9 +2367,17 @@ fn edge_bounds(
         }
         CurveGeom::Nurbs(n) => {
             let range = n.param_range();
-            let t0 = project_curve(n, start, range)?.t;
-            let t1 = project_curve(n, end, range)?.t;
+            let t0 = kgeom::project::project_to_curve_in_scope(n, start, range, scope)?.t;
+            let t1 = kgeom::project::project_to_curve_in_scope(n, end, range, scope)?.t;
             Ok((t1 > t0).then_some((t0, t1)))
+        }
+        CurveGeom::TransmittedIntersection(intersection) => {
+            let range = intersection.certificate().carrier_range();
+            Ok(Some((range.lo, range.hi)))
+        }
+        CurveGeom::TransmittedNurbsIntersection(intersection) => {
+            let range = intersection.certificate().carrier_range();
+            Ok(Some((range.lo, range.hi)))
         }
         _ => Ok(None),
     }

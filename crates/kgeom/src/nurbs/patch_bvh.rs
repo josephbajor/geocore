@@ -1,5 +1,5 @@
-//! Conservative BVH, implicit certificates, and exact adaptive isolation for
-//! NURBS patches.
+//! Conservative BVH, implicit certificates, and source-provenanced adaptive
+//! isolation for NURBS patches.
 
 use super::NurbsSurface;
 use crate::aabb::Aabb3;
@@ -76,8 +76,8 @@ pub enum PlanePatchRelation {
     Positive,
 }
 
-/// One exact NURBS subpatch whose control-hull box could not be excluded
-/// from an implicit zero set.
+/// One rounded working NURBS subpatch whose source-range enclosure could not
+/// be excluded from an implicit zero set.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplicitCandidateCell {
     source_patch: usize,
@@ -92,7 +92,7 @@ impl ImplicitCandidateCell {
         self.source_patch
     }
 
-    /// Exact clamped subpatch represented by this cell.
+    /// Clamped working subpatch used for deterministic partitioning and seeds.
     pub fn patch(&self) -> &NurbsSurface {
         &self.patch
     }
@@ -102,12 +102,12 @@ impl ImplicitCandidateCell {
         self.patch.param_range()
     }
 
-    /// Conservative positive-weight control-hull box.
+    /// Conservative outward interval box evaluated from the original source.
     pub fn bounds(&self) -> Aabb3 {
         self.bounds
     }
 
-    /// Number of exact binary subdivisions from the source Bezier patch.
+    /// Number of deterministic binary subdivisions from the source Bezier patch.
     pub fn depth(&self) -> u32 {
         self.depth
     }
@@ -182,7 +182,7 @@ impl From<OperationPolicyError> for ContextImplicitIsolationError {
 }
 
 /// Certified cover of every possible implicit-surface contact on a NURBS
-/// surface after deterministic exact subdivision and interval pruning.
+/// surface after deterministic subdivision and source-range interval pruning.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplicitPatchIsolation {
     candidates: Vec<ImplicitCandidateCell>,
@@ -196,7 +196,7 @@ impl ImplicitPatchIsolation {
         &self.candidates
     }
 
-    /// Requested exact binary subdivision depth.
+    /// Requested binary subdivision depth.
     pub fn requested_depth(&self) -> u32 {
         self.requested_depth
     }
@@ -218,10 +218,11 @@ impl ImplicitPatchIsolation {
     }
 }
 
-/// Deterministic hierarchy over the exact Bezier decomposition of one
+/// Deterministic hierarchy over the Bezier decomposition of one
 /// clamped NURBS surface.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NurbsSurfaceBvh {
+    source: NurbsSurface,
     patches: Vec<NurbsSurface>,
     hierarchy: AabbBvh,
 }
@@ -234,15 +235,62 @@ struct PlaneFilter {
 
 impl NurbsSurfaceBvh {
     /// Extract the surface's tensor-product Bezier patches and build a
-    /// deterministic hierarchy over their positive-weight control hulls.
+    /// deterministic hierarchy over source-provenanced range enclosures.
     pub fn build(surface: &NurbsSurface) -> Result<Self> {
-        let patches = surface.to_bezier_patches()?;
+        Self::build_partition(surface, surface)
+    }
+
+    fn build_partition(source: &NurbsSurface, partition: &NurbsSurface) -> Result<Self> {
+        let patches = partition.to_bezier_patches()?;
         let bounds: Vec<_> = patches
             .iter()
-            .map(|patch| Aabb3::from_points(patch.points()))
+            .map(|patch| {
+                super::surface_range_interval::position_range_aabb(source, patch.param_range())
+            })
             .collect();
         let hierarchy = AabbBvh::build(&bounds)?;
-        Ok(Self { patches, hierarchy })
+        Ok(Self {
+            source: source.clone(),
+            patches,
+            hierarchy,
+        })
+    }
+
+    /// Contextual hierarchy construction with source-rectangle Work admitted
+    /// before Bezier extraction, interval evaluation, or hierarchy allocation.
+    ///
+    /// The preflight conservatively charges every source tensor-span slot as a
+    /// potential Bezier patch, including repeated/empty slots. Each potential
+    /// patch is charged at the complete source-range evaluation cost returned
+    /// by the interval implementation.
+    pub fn build_in_scope(
+        surface: &NurbsSurface,
+        scope: &mut OperationScope<'_, '_>,
+    ) -> core::result::Result<Self, ContextImplicitIsolationError> {
+        let work = source_bvh_build_work_units(surface)?;
+        scope
+            .ledger_mut()
+            .charge(NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS, work)?;
+        Self::build_partition(surface, surface).map_err(ContextImplicitIsolationError::Kernel)
+    }
+
+    /// Contextual hierarchy construction over a positive source subrectangle.
+    ///
+    /// Work is conservatively admitted from the original source before the
+    /// working restriction, Bezier extraction, interval evaluation, or any of
+    /// their allocations. The rounded restricted surface supplies only patch
+    /// partitions; all hierarchy bounds retain `source` provenance.
+    pub fn build_range_in_scope(
+        source: &NurbsSurface,
+        range: [ParamRange; 2],
+        scope: &mut OperationScope<'_, '_>,
+    ) -> core::result::Result<Self, ContextImplicitIsolationError> {
+        let work = source_bvh_build_work_units(source)?;
+        scope
+            .ledger_mut()
+            .charge(NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS, work)?;
+        let partition = source.restricted_to(range)?;
+        Self::build_partition(source, &partition).map_err(ContextImplicitIsolationError::Kernel)
     }
 
     /// Number of Bezier patches, in deterministic source `u`/`v` order.
@@ -260,7 +308,7 @@ impl NurbsSurfaceBvh {
         self.patches.get(index)
     }
 
-    /// Conservative control-hull bound for one patch.
+    /// Conservative source-provenanced range bound for one patch.
     pub fn patch_bounds(&self, index: usize) -> Option<Aabb3> {
         self.hierarchy.primitive_bounds(index)
     }
@@ -270,13 +318,13 @@ impl NurbsSurfaceBvh {
         self.hierarchy.root_bounds().unwrap_or_else(Aabb3::empty)
     }
 
-    /// Patch indices whose control-hull boxes meet `query` after outward
+    /// Patch indices whose source-range boxes meet `query` after outward
     /// growth by `margin`.
     pub fn query_aabb(&self, query: Aabb3, margin: f64) -> Result<Vec<usize>> {
         self.hierarchy.query_aabb(query, margin)
     }
 
-    /// Candidate patch pairs whose control-hull boxes are separated by no
+    /// Candidate patch pairs whose source-range boxes are separated by no
     /// more than `max_separation`. Empty is a certified broad-phase miss.
     pub fn overlapping_patch_pairs(
         &self,
@@ -287,7 +335,7 @@ impl NurbsSurfaceBvh {
             .overlapping_pairs(&other.hierarchy, max_separation)
     }
 
-    /// Classify one patch's complete control-hull box against an implicit
+    /// Classify one patch's complete source-range box against an implicit
     /// surface after outward growth by a model-space `margin`.
     ///
     /// A non-candidate result certifies that the entire rational patch is
@@ -309,13 +357,15 @@ impl NurbsSurfaceBvh {
         classify_implicit_box(surface, bounds, margin)
     }
 
-    /// Patches whose complete control-hull boxes cannot be excluded from an
+    /// Patches whose complete source-range boxes cannot be excluded from an
     /// implicit zero set within model-space `margin`.
     ///
     /// Hierarchy nodes are pruned by interval field signs before leaf boxes
-    /// are classified. An empty result is a certificate that the complete
-    /// represented NURBS surface misses the implicit surface by more than the
-    /// requested margin.
+    /// are classified. The hierarchy and leaves use outward interval
+    /// evaluation of the original surface, not rounded extracted patch hulls.
+    /// An empty result is therefore a certificate that the complete represented
+    /// NURBS surface misses the implicit surface by more than the requested
+    /// margin.
     pub fn implicit_candidates(
         &self,
         surface: &dyn ImplicitSurface,
@@ -330,8 +380,8 @@ impl NurbsSurfaceBvh {
         }))
     }
 
-    /// Recursively isolate an implicit zero set with exact binary NURBS
-    /// subdivision and interval control-hull pruning.
+    /// Recursively isolate an implicit zero set with deterministic binary NURBS
+    /// subdivision and source-range interval pruning.
     ///
     /// The returned cells conservatively cover every possible contact within
     /// `margin`. `requested_depth` controls spatial refinement without
@@ -367,15 +417,17 @@ impl NurbsSurfaceBvh {
         }
     }
 
-    /// Contextual exact implicit isolation with deterministic work, candidate,
+    /// Contextual source-provenanced implicit isolation with deterministic work, candidate,
     /// and depth accounting.
     ///
-    /// The caller charges one subdivision-stage unit before constructing this
-    /// hierarchy. This method then charges one unit before each exact candidate
-    /// subdivision. Candidate cells and subdivision depth are observed as
-    /// high-water resources. Reaching any configured allowance retains a
-    /// conservative cover and records the exact attempted snapshot in
-    /// [`ImplicitIsolationLimits`].
+    /// The caller charges its setup unit before contextual hierarchy
+    /// construction; [`NurbsSurfaceBvh::build_in_scope`] or
+    /// [`NurbsSurfaceBvh::build_range_in_scope`] then admits source-BVH range
+    /// evaluation. This method pre-admits each candidate subdivision together
+    /// with all four possible child source-range enclosures. Candidate cells
+    /// and subdivision depth are observed as high-water resources. Reaching
+    /// any configured allowance retains a conservative parent cover and records
+    /// the exact attempted snapshot in [`ImplicitIsolationLimits`].
     pub fn isolate_implicit_candidates_in_scope(
         &self,
         surface: &dyn ImplicitSurface,
@@ -413,21 +465,22 @@ impl NurbsSurfaceBvh {
         half_width: f64,
     ) -> Result<PlanePatchRelation> {
         let plane = validate_plane(origin, normal, half_width)?;
-        let patch = self.patches.get(patch).ok_or(Error::InvalidGeometry {
-            reason: "NURBS BVH patch index is out of range",
-        })?;
-        Ok(classify_points(
-            patch.points(),
+        let bounds = self
+            .hierarchy
+            .primitive_bounds(patch)
+            .ok_or(Error::InvalidGeometry {
+                reason: "NURBS BVH patch index is out of range",
+            })?;
+        Ok(classify_box(
+            bounds,
             origin,
             plane.normal,
             plane.scaled_half_width,
         ))
     }
 
-    /// Patches whose control hulls meet a plane tolerance slab. Hierarchy
-    /// nodes wholly on either side are pruned first, then leaf control nets
-    /// provide the tighter affine certificate. Empty proves the complete
-    /// surface misses the slab.
+    /// Patches whose source-range boxes meet a plane tolerance slab. Empty
+    /// proves the complete surface misses the slab.
     pub fn plane_candidates(
         &self,
         origin: Point3,
@@ -435,21 +488,10 @@ impl NurbsSurfaceBvh {
         half_width: f64,
     ) -> Result<Vec<usize>> {
         let plane = validate_plane(origin, normal, half_width)?;
-        let broad = self.hierarchy.query_pruned(|bounds| {
+        Ok(self.hierarchy.query_pruned(|bounds| {
             classify_box(bounds, origin, plane.normal, plane.scaled_half_width)
                 == PlanePatchRelation::Candidate
-        });
-        Ok(broad
-            .into_iter()
-            .filter(|&index| {
-                classify_points(
-                    self.patches[index].points(),
-                    origin,
-                    plane.normal,
-                    plane.scaled_half_width,
-                ) == PlanePatchRelation::Candidate
-            })
-            .collect())
+        }))
     }
 }
 
@@ -517,6 +559,7 @@ trait IsolationLimiter {
 
     fn charge_subdivision(
         &mut self,
+        amount: u64,
         limits: &mut ImplicitIsolationLimits,
     ) -> core::result::Result<bool, Self::Error>;
 
@@ -560,6 +603,7 @@ impl IsolationLimiter for LegacyIsolationLimiter {
 
     fn charge_subdivision(
         &mut self,
+        _amount: u64,
         _limits: &mut ImplicitIsolationLimits,
     ) -> core::result::Result<bool, Self::Error> {
         Ok(true)
@@ -637,12 +681,13 @@ impl IsolationLimiter for ContextIsolationLimiter<'_, '_, '_> {
 
     fn charge_subdivision(
         &mut self,
+        amount: u64,
         limits: &mut ImplicitIsolationLimits,
     ) -> core::result::Result<bool, Self::Error> {
         match self
             .scope
             .ledger_mut()
-            .charge(NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS, 1)
+            .charge(NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS, amount)
         {
             Ok(()) => Ok(true),
             Err(OperationPolicyError::LimitReached(snapshot)) => {
@@ -690,7 +735,15 @@ fn isolate_implicit_candidates_engine<L: IsolationLimiter>(
         .map_err(IsolationEngineError::Kernel)?
         .into_iter()
         .map(|source_patch| WorkCell {
-            cell: candidate_cell(source_patch, hierarchy.patches[source_patch].clone(), 0),
+            cell: candidate_cell_with_bounds(
+                source_patch,
+                hierarchy.patches[source_patch].clone(),
+                hierarchy
+                    .hierarchy
+                    .primitive_bounds(source_patch)
+                    .expect("candidate index came from this hierarchy"),
+                0,
+            ),
             blocked: false,
         })
         .collect();
@@ -728,8 +781,9 @@ fn isolate_implicit_candidates_engine<L: IsolationLimiter>(
                 next.push(work);
                 continue;
             }
+            let subdivision_work = source_child_work_units(&hierarchy.source);
             if !limiter
-                .charge_subdivision(&mut limits)
+                .charge_subdivision(subdivision_work, &mut limits)
                 .map_err(IsolationEngineError::Limiter)?
             {
                 work.blocked = true;
@@ -737,7 +791,7 @@ fn isolate_implicit_candidates_engine<L: IsolationLimiter>(
                 continue;
             }
 
-            let Some(children) = candidate_children(&work.cell, surface, margin)
+            let Some(children) = candidate_children(&hierarchy.source, &work.cell, surface, margin)
                 .map_err(IsolationEngineError::Kernel)?
             else {
                 work.blocked = true;
@@ -793,14 +847,61 @@ fn usize_to_u64(
     u64::try_from(value).map_err(|_| OperationPolicyError::AccountingOverflow { stage, resource })
 }
 
+fn source_bvh_build_work_units(
+    surface: &NurbsSurface,
+) -> core::result::Result<u64, OperationPolicyError> {
+    let rectangle_slots = source_work_value(
+        super::surface_range_interval::source_tensor_span_slots(surface),
+    )?;
+    let range_work = source_work_value(super::surface_range_interval::position_range_work_units(
+        surface,
+    ))?;
+    rectangle_slots
+        .checked_mul(range_work)
+        .ok_or(OperationPolicyError::AccountingOverflow {
+            stage: NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
+            resource: ResourceKind::Work,
+        })
+}
+
+fn source_child_work_units(surface: &NurbsSurface) -> u64 {
+    let range_work = super::surface_range_interval::position_range_work_units(surface)
+        .and_then(|work| u64::try_from(work).ok())
+        .unwrap_or(u64::MAX);
+    range_work.saturating_mul(4).saturating_add(1)
+}
+
+fn source_work_value(value: Option<usize>) -> core::result::Result<u64, OperationPolicyError> {
+    value.and_then(|value| u64::try_from(value).ok()).ok_or(
+        OperationPolicyError::AccountingOverflow {
+            stage: NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
+            resource: ResourceKind::Work,
+        },
+    )
+}
+
 #[derive(Debug)]
 struct WorkCell {
     cell: ImplicitCandidateCell,
     blocked: bool,
 }
 
-fn candidate_cell(source_patch: usize, patch: NurbsSurface, depth: u32) -> ImplicitCandidateCell {
-    let bounds = Aabb3::from_points(patch.points());
+fn candidate_cell(
+    source: &NurbsSurface,
+    source_patch: usize,
+    patch: NurbsSurface,
+    depth: u32,
+) -> ImplicitCandidateCell {
+    let bounds = super::surface_range_interval::position_range_aabb(source, patch.param_range());
+    candidate_cell_with_bounds(source_patch, patch, bounds, depth)
+}
+
+fn candidate_cell_with_bounds(
+    source_patch: usize,
+    patch: NurbsSurface,
+    bounds: Aabb3,
+    depth: u32,
+) -> ImplicitCandidateCell {
     ImplicitCandidateCell {
         source_patch,
         patch,
@@ -810,6 +911,7 @@ fn candidate_cell(source_patch: usize, patch: NurbsSurface, depth: u32) -> Impli
 }
 
 fn candidate_children(
+    source: &NurbsSurface,
     parent: &ImplicitCandidateCell,
     surface: &dyn ImplicitSurface,
     margin: f64,
@@ -825,7 +927,7 @@ fn candidate_children(
         let mut children = Vec::with_capacity(2);
         let mut uncertainty = 0.0;
         for patch in [left, right] {
-            let child = candidate_cell(parent.source_patch, patch, parent.depth + 1);
+            let child = candidate_cell(source, parent.source_patch, patch, parent.depth + 1);
             if classify_implicit_box(surface, child.bounds, margin)?
                 == ImplicitBoxRelation::Candidate
             {
@@ -930,25 +1032,6 @@ fn classify_box(
     classify_interval(lo.lo(), hi.hi(), half_width)
 }
 
-fn classify_points(
-    points: &[Point3],
-    origin: Point3,
-    normal: Vec3,
-    half_width: f64,
-) -> PlanePatchRelation {
-    let mut minimum = f64::INFINITY;
-    let mut maximum = f64::NEG_INFINITY;
-    for &point in points {
-        let distance = signed_distance_interval(point, origin, normal);
-        if !distance.lo().is_finite() || !distance.hi().is_finite() {
-            return PlanePatchRelation::Candidate;
-        }
-        minimum = minimum.min(distance.lo());
-        maximum = maximum.max(distance.hi());
-    }
-    classify_interval(minimum, maximum, half_width)
-}
-
 fn signed_distance_interval(point: Point3, origin: Point3, normal: Vec3) -> Interval {
     let dx = Interval::point(point.x) - Interval::point(origin.x);
     let dy = Interval::point(point.y) - Interval::point(origin.y);
@@ -1030,6 +1113,23 @@ mod tests {
         .unwrap()
     }
 
+    fn repeated_knot_multi_patch() -> NurbsSurface {
+        let mut points = Vec::new();
+        for u in 0..6 {
+            points.push(Point3::new(f64::from(u), 0.0, 0.0));
+            points.push(Point3::new(f64::from(u), 1.0, 0.0));
+        }
+        NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 0.4, 0.4, 0.7, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            points,
+            None,
+        )
+        .unwrap()
+    }
+
     fn contextual_isolation(
         hierarchy: &NurbsSurfaceBvh,
         surface: &dyn ImplicitSurface,
@@ -1081,6 +1181,85 @@ mod tests {
             .iter()
             .find(|snapshot| snapshot.stage == stage)
             .unwrap()
+    }
+
+    fn contextual_build(
+        surface: &NurbsSurface,
+        work_allowed: u64,
+    ) -> (
+        core::result::Result<NurbsSurfaceBvh, ContextImplicitIsolationError>,
+        OperationReport,
+    ) {
+        let budget = BudgetPlan::new([LimitSpec::new(
+            NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            work_allowed,
+        )])
+        .unwrap();
+        let session = SessionPolicy::new(
+            SessionPrecision::parasolid(),
+            NumericalPolicy::v1(),
+            ExecutionPolicy::Serial,
+            budget,
+            PolicyVersion::V1,
+        );
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let mut scope = OperationScope::new(&context);
+        let result = NurbsSurfaceBvh::build_in_scope(surface, &mut scope);
+        let (_, report) = scope.finish(Ok(())).into_parts();
+        (result, report)
+    }
+
+    #[test]
+    fn source_rectangle_build_is_pre_admitted_at_exact_multi_span_boundary() {
+        let surface = repeated_knot_multi_patch();
+        assert_eq!(
+            super::super::surface_range_interval::source_tensor_span_slots(&surface),
+            Some(4),
+            "the repeated u knot contributes one inspected empty tensor slot"
+        );
+        assert_eq!(
+            super::super::surface_range_interval::position_range_work_units(&surface),
+            Some(25),
+        );
+        let exact_work = source_bvh_build_work_units(&surface).unwrap();
+        assert_eq!(exact_work, 100);
+
+        let (exact, exact_report) = contextual_build(&surface, exact_work);
+        assert_eq!(exact.unwrap().patch_count(), 3);
+        assert_eq!(
+            usage(&exact_report, NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS).consumed,
+            exact_work
+        );
+        assert!(exact_report.limit_events().is_empty());
+
+        let (low, low_report) = contextual_build(&surface, exact_work - 1);
+        assert_eq!(
+            low.unwrap_err(),
+            ContextImplicitIsolationError::Policy(OperationPolicyError::LimitReached(
+                LimitSnapshot {
+                    stage: NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
+                    resource: ResourceKind::Work,
+                    consumed: exact_work,
+                    allowed: exact_work - 1,
+                }
+            ))
+        );
+        assert_eq!(
+            low_report.limit_events(),
+            &[LimitSnapshot {
+                stage: NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
+                resource: ResourceKind::Work,
+                consumed: exact_work,
+                allowed: exact_work - 1,
+            }]
+        );
+        assert_eq!(
+            usage(&low_report, NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS).consumed,
+            0,
+            "denied build preflight cannot partially consume Work"
+        );
     }
 
     #[test]
@@ -1275,12 +1454,13 @@ mod tests {
         let coincident = coincident_patch();
         let hierarchy = NurbsSurfaceBvh::build(&coincident).unwrap();
         let plane = Plane::new(crate::frame::Frame::world());
+        let child_work = source_child_work_units(&coincident);
 
         let (work_low, work_low_report) = contextual_isolation(&hierarchy, &plane, 1, 0, 4, 1);
         let work_limit = LimitSnapshot {
             stage: NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
             resource: ResourceKind::Work,
-            consumed: 1,
+            consumed: child_work,
             allowed: 0,
         };
         assert_eq!(work_low.limits().subdivision_work(), Some(work_limit));
@@ -1292,22 +1472,24 @@ mod tests {
         assert_eq!(work_low.candidates().len(), 1);
         assert_eq!(work_low.candidates()[0].depth(), 0);
 
-        let (work_exact, work_exact_report) = contextual_isolation(&hierarchy, &plane, 1, 1, 4, 1);
-        let (work_plus, work_plus_report) = contextual_isolation(&hierarchy, &plane, 1, 2, 4, 1);
+        let (work_exact, work_exact_report) =
+            contextual_isolation(&hierarchy, &plane, 1, child_work, 4, 1);
+        let (work_plus, work_plus_report) =
+            contextual_isolation(&hierarchy, &plane, 1, child_work + 1, 4, 1);
         assert!(work_exact.limits().subdivision_work().is_none());
         assert_eq!(work_exact.candidates().len(), 2);
         assert_eq!(work_exact, work_plus);
         assert_eq!(
             usage(&work_exact_report, NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS).consumed,
-            1
+            child_work
         );
         assert_eq!(
             usage(&work_plus_report, NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS).consumed,
-            1
+            child_work
         );
 
         let (candidate_low, candidate_low_report) =
-            contextual_isolation(&hierarchy, &plane, 1, 2, 1, 1);
+            contextual_isolation(&hierarchy, &plane, 1, child_work, 1, 1);
         let candidate_limit = LimitSnapshot {
             stage: NURBS_IMPLICIT_ISOLATION_CANDIDATES,
             resource: ResourceKind::Items,
@@ -1324,9 +1506,9 @@ mod tests {
             1
         );
         let (candidate_exact, candidate_exact_report) =
-            contextual_isolation(&hierarchy, &plane, 1, 2, 2, 1);
+            contextual_isolation(&hierarchy, &plane, 1, child_work, 2, 1);
         let (candidate_plus, candidate_plus_report) =
-            contextual_isolation(&hierarchy, &plane, 1, 2, 3, 1);
+            contextual_isolation(&hierarchy, &plane, 1, child_work, 3, 1);
         let legacy_exact = hierarchy
             .isolate_implicit_candidates(&plane, 0.0, 1, 2)
             .unwrap();
@@ -1353,7 +1535,8 @@ mod tests {
             2
         );
 
-        let (depth_low, depth_low_report) = contextual_isolation(&hierarchy, &plane, 1, 2, 4, 0);
+        let (depth_low, depth_low_report) =
+            contextual_isolation(&hierarchy, &plane, 1, child_work, 4, 0);
         let depth_limit = LimitSnapshot {
             stage: NURBS_IMPLICIT_ISOLATION_DEPTH,
             resource: ResourceKind::Depth,
@@ -1367,8 +1550,9 @@ mod tests {
             0
         );
         let (depth_exact, depth_exact_report) =
-            contextual_isolation(&hierarchy, &plane, 1, 2, 4, 1);
-        let (depth_plus, depth_plus_report) = contextual_isolation(&hierarchy, &plane, 1, 2, 4, 2);
+            contextual_isolation(&hierarchy, &plane, 1, child_work, 4, 1);
+        let (depth_plus, depth_plus_report) =
+            contextual_isolation(&hierarchy, &plane, 1, child_work + 1, 4, 2);
         assert_eq!(depth_exact, depth_plus);
         assert_eq!(
             usage(&depth_exact_report, NURBS_IMPLICIT_ISOLATION_DEPTH).consumed,
@@ -1385,8 +1569,9 @@ mod tests {
         let coincident = coincident_patch();
         let hierarchy = NurbsSurfaceBvh::build(&coincident).unwrap();
         let plane = Plane::new(crate::frame::Frame::world());
-        let (first, first_report) = contextual_isolation(&hierarchy, &plane, 1, 2, 1, 1);
-        let (second, second_report) = contextual_isolation(&hierarchy, &plane, 1, 2, 1, 1);
+        let child_work = source_child_work_units(&coincident);
+        let (first, first_report) = contextual_isolation(&hierarchy, &plane, 1, child_work, 1, 1);
+        let (second, second_report) = contextual_isolation(&hierarchy, &plane, 1, child_work, 1, 1);
         assert_eq!(first, second);
         assert_eq!(first_report.limit_events(), second_report.limit_events());
         assert_eq!(first.candidates().len(), 1);
@@ -1420,7 +1605,14 @@ mod tests {
         .unwrap();
         let hierarchy = NurbsSurfaceBvh::build(&surface).unwrap();
         let plane = Plane::new(crate::frame::Frame::world());
-        let (isolation, report) = contextual_isolation(&hierarchy, &plane, 1, 1, 4, 1);
+        let (isolation, report) = contextual_isolation(
+            &hierarchy,
+            &plane,
+            1,
+            source_child_work_units(&surface),
+            4,
+            1,
+        );
         assert!(isolation.limits().parameter_resolution());
         assert!(isolation.limits().subdivision_work().is_none());
         assert!(isolation.limits().candidate_cells().is_none());
@@ -1555,16 +1747,9 @@ mod tests {
                 .plane_candidates(Point3::default(), Vec3::new(1.0, 0.0, 0.0), f64::NAN)
                 .is_err()
         );
-        assert!(
-            hierarchy
-                .classify_patch_against_plane(
-                    100,
-                    Point3::default(),
-                    Vec3::new(1.0, 0.0, 0.0),
-                    0.0,
-                )
-                .is_err()
-        );
+        assert!(hierarchy
+            .classify_patch_against_plane(100, Point3::default(), Vec3::new(1.0, 0.0, 0.0), 0.0,)
+            .is_err());
 
         let unclamped = NurbsSurface::new(
             1,

@@ -4,7 +4,7 @@ use super::basis::ders_basis_funs;
 use super::knots::KnotVector;
 use super::ops::{Hpt, insert_knot, refine_knots};
 use crate::aabb::Aabb3;
-use crate::param::ParamRange;
+use crate::param::{ParamRange, wrap_periodic};
 use crate::surface::{Dir, Surface, SurfaceDerivs};
 use crate::vec::{Point3, Vec3};
 use kcore::error::{Error, Result};
@@ -25,6 +25,9 @@ pub struct NurbsSurface {
     knots_v: KnotVector,
     points: Vec<Point3>,
     weights: Option<Vec<f64>>,
+    /// A period is present only after the corresponding clamped seam has
+    /// passed the explicit position/C1 closure contract.
+    periodicity: [Option<f64>; 2],
 }
 
 impl NurbsSurface {
@@ -72,7 +75,132 @@ impl NurbsSurface {
             knots_v,
             points,
             weights,
+            periodicity: [None, None],
         })
+    }
+
+    /// Certify selected clamped directions as periodic and closed.
+    ///
+    /// This is deliberately narrower than accepting an arbitrary cyclic
+    /// B-spline basis: each selected knot vector must be clamped, and the two
+    /// endpoint rows and their clamped first-derivative rows must agree. The
+    /// polynomial contract uses `linear_tolerance`; rational seams require
+    /// exact homogeneous equality so tiny positive weights cannot amplify an
+    /// admitted residual. Once certified, evaluation wraps that parameter and
+    /// [`Surface::periodicity`] advertises the knot-domain width.
+    pub fn with_certified_periodicity(
+        mut self,
+        periodic: [bool; 2],
+        linear_tolerance: f64,
+    ) -> Result<NurbsSurface> {
+        if !linear_tolerance.is_finite() || linear_tolerance < 0.0 {
+            return Err(Error::InvalidGeometry {
+                reason: "periodic NURBS seam tolerance must be finite and nonnegative",
+            });
+        }
+        for (axis, dir) in [Dir::U, Dir::V].into_iter().enumerate() {
+            if periodic[axis] {
+                self.certify_clamped_c1_seam(dir, linear_tolerance)?;
+                self.periodicity[axis] = Some(self.knots(dir).domain().width());
+            }
+        }
+        Ok(self)
+    }
+
+    fn certify_clamped_c1_seam(&self, dir: Dir, linear_tolerance: f64) -> Result<()> {
+        let knots = self.knots(dir);
+        if !knots.is_clamped() {
+            return Err(Error::InvalidGeometry {
+                reason: "periodic NURBS certification requires a clamped knot vector",
+            });
+        }
+        let degree = knots.degree();
+        let raw_knots = knots.as_slice();
+        let controls = knots.control_count();
+        if degree == 0 || controls < 2 {
+            return Err(Error::InvalidGeometry {
+                reason: "periodic NURBS C1 certification requires positive degree and two controls",
+            });
+        }
+        let start_denominator = raw_knots[degree + 1] - raw_knots[degree];
+        let end_denominator = raw_knots[controls] - raw_knots[controls - 1];
+        if !(start_denominator > 0.0 && end_denominator > 0.0) {
+            return Err(Error::InvalidGeometry {
+                reason: "periodic NURBS seam has no positive endpoint derivative span",
+            });
+        }
+
+        let (nu, nv) = self.net_size();
+        let seam_count = match dir {
+            Dir::U => nv,
+            Dir::V => nu,
+        };
+        let indices = |seam: usize| match dir {
+            Dir::U => (seam, nv + seam, (nu - 2) * nv + seam, (nu - 1) * nv + seam),
+            Dir::V => {
+                let row = seam * nv;
+                (row, row + 1, row + nv - 2, row + nv - 1)
+            }
+        };
+        let weight = |index: usize| self.weights.as_ref().map_or(1.0, |weights| weights[index]);
+        let derivative_scale_start = degree as f64 / start_denominator;
+        let derivative_scale_end = degree as f64 / end_denominator;
+        let rational = self.weights.is_some();
+
+        for seam in 0..seam_count {
+            let (start, next, previous, end) = indices(seam);
+            let (w0, w1, wp, we) = (weight(start), weight(next), weight(previous), weight(end));
+            let weight_scale = w0.abs().max(we.abs()).max(1.0);
+            let weight_roundoff = 128.0 * f64::EPSILON * weight_scale;
+            let position_closed = if rational {
+                w0 == we && self.points[start] == self.points[end]
+            } else {
+                (w0 - we).abs() <= weight_roundoff
+                    && self.points[start].dist(self.points[end]) <= linear_tolerance
+            };
+            if !position_closed {
+                return Err(Error::InvalidGeometry {
+                    reason: "periodic NURBS seam does not close in position",
+                });
+            }
+
+            // Equality of these homogeneous endpoint-derivative controls,
+            // together with the boundary controls above, proves equality of
+            // the rational first partial over the entire transverse seam.
+            let start_dw = (w1 - w0) * derivative_scale_start;
+            let end_dw = (we - wp) * derivative_scale_end;
+            let start_dh =
+                (self.points[next] * w1 - self.points[start] * w0) * derivative_scale_start;
+            let end_dh =
+                (self.points[end] * we - self.points[previous] * wp) * derivative_scale_end;
+            if rational {
+                // Exact homogeneous equality makes the rational quotient and
+                // its first partial identical without assuming a lower bound
+                // on the positive weight function. An approximate residual
+                // here could be amplified without bound by tiny weights.
+                if start_dw != end_dw || start_dh != end_dh {
+                    return Err(Error::InvalidGeometry {
+                        reason: "periodic rational NURBS seam is not exactly C1 in homogeneous space",
+                    });
+                }
+                continue;
+            }
+            let derivative_weight_scale = start_dw.abs().max(end_dw.abs()).max(weight_scale);
+            if (start_dw - end_dw).abs() > 256.0 * f64::EPSILON * derivative_weight_scale {
+                return Err(Error::InvalidGeometry {
+                    reason: "periodic NURBS seam is not C1 in homogeneous weight",
+                });
+            }
+            let magnitude = start_dh.norm().max(end_dh.norm()).max(weight_scale);
+            let derivative_tolerance = linear_tolerance * weight_scale / knots.domain().width()
+                + 256.0 * f64::EPSILON * magnitude;
+            if (start_dh - end_dh).norm() > derivative_tolerance {
+                return Err(Error::InvalidGeometry {
+                    reason: "periodic NURBS seam is not C1 in position",
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Degree in `u`.
@@ -111,6 +239,25 @@ impl NurbsSurface {
     /// Control-net counts `(nu, nv)`.
     pub fn net_size(&self) -> (usize, usize) {
         (self.knots_u.control_count(), self.knots_v.control_count())
+    }
+
+    /// Original-source point/first-partial enclosure for a proof rectangle.
+    ///
+    /// This proof-support API evaluates the retained knot vectors and
+    /// homogeneous controls directly. It does not sample or construct a
+    /// rounded restricted control net, and either parameter interval may
+    /// collapse for constant-coordinate traces.
+    pub fn source_differential_enclosure(
+        &self,
+        range: [ParamRange; 2],
+        center: [f64; 2],
+    ) -> Option<super::NurbsSurfaceSourceDifferentialEnclosure> {
+        super::surface_range_interval::source_differential_enclosure(self, range, center)
+    }
+
+    /// Conservative source-span work for one differential enclosure.
+    pub fn source_differential_enclosure_work_units(&self) -> Option<usize> {
+        super::surface_range_interval::source_differential_enclosure_work_units(self)
     }
 
     /// Surface with the knot `x` inserted `times` times in direction `dir`
@@ -193,7 +340,12 @@ impl NurbsSurface {
             Dir::U => (new_knots, self.knots_v.as_slice().to_vec()),
             Dir::V => (self.knots_u.as_slice().to_vec(), new_knots),
         };
-        NurbsSurface::new(self.degree_u(), self.degree_v(), ku, kv, points, weights)
+        let mut result =
+            NurbsSurface::new(self.degree_u(), self.degree_v(), ku, kv, points, weights)?;
+        // Knot insertion/refinement preserves the represented surface and its
+        // already-certified seam contract.
+        result.periodicity = self.periodicity;
+        Ok(result)
     }
 
     /// Split at `parameter` in direction `dir` into two surfaces clamped in
@@ -245,24 +397,25 @@ impl NurbsSurface {
                     None => (None, None),
                 };
                 let knots_v = full.knots_v.as_slice().to_vec();
-                Ok((
-                    NurbsSurface::new(
-                        full.degree_u(),
-                        full.degree_v(),
-                        left_knots,
-                        knots_v.clone(),
-                        left_points,
-                        left_weights,
-                    )?,
-                    NurbsSurface::new(
-                        full.degree_u(),
-                        full.degree_v(),
-                        right_knots,
-                        knots_v,
-                        right_points,
-                        right_weights,
-                    )?,
-                ))
+                let mut left = NurbsSurface::new(
+                    full.degree_u(),
+                    full.degree_v(),
+                    left_knots,
+                    knots_v.clone(),
+                    left_points,
+                    left_weights,
+                )?;
+                let mut right = NurbsSurface::new(
+                    full.degree_u(),
+                    full.degree_v(),
+                    right_knots,
+                    knots_v,
+                    right_points,
+                    right_weights,
+                )?;
+                left.periodicity[1] = full.periodicity[1];
+                right.periodicity[1] = full.periodicity[1];
+                Ok((left, right))
             }
             Dir::V => {
                 let left_points = slice_columns(&full.points, nu, nv, 0, split);
@@ -275,24 +428,25 @@ impl NurbsSurface {
                     None => (None, None),
                 };
                 let knots_u = full.knots_u.as_slice().to_vec();
-                Ok((
-                    NurbsSurface::new(
-                        full.degree_u(),
-                        full.degree_v(),
-                        knots_u.clone(),
-                        left_knots,
-                        left_points,
-                        left_weights,
-                    )?,
-                    NurbsSurface::new(
-                        full.degree_u(),
-                        full.degree_v(),
-                        knots_u,
-                        right_knots,
-                        right_points,
-                        right_weights,
-                    )?,
-                ))
+                let mut left = NurbsSurface::new(
+                    full.degree_u(),
+                    full.degree_v(),
+                    knots_u.clone(),
+                    left_knots,
+                    left_points,
+                    left_weights,
+                )?;
+                let mut right = NurbsSurface::new(
+                    full.degree_u(),
+                    full.degree_v(),
+                    knots_u,
+                    right_knots,
+                    right_points,
+                    right_weights,
+                )?;
+                left.periodicity[0] = full.periodicity[0];
+                right.periodicity[0] = full.periodicity[0];
+                Ok((left, right))
             }
         }
     }
@@ -391,13 +545,6 @@ impl NurbsSurface {
         Ok(patches)
     }
 
-    fn subrange_control_box(&self, range: [ParamRange; 2]) -> Aabb3 {
-        self.restricted_to(range).map_or_else(
-            |_| Aabb3::from_points(&self.points),
-            |surface| Aabb3::from_points(&surface.points),
-        )
-    }
-
     /// Homogeneous derivative table `(A_kl, w_kl)` for `k + l <= order`,
     /// shared by the polynomial and rational paths (weights default to 1).
     fn homogeneous_derivs(&self, u: f64, v: f64, order: usize) -> ([[Vec3; 3]; 3], [[f64; 3]; 3]) {
@@ -442,8 +589,14 @@ impl Surface for NurbsSurface {
         let order = order.min(2);
         let du = self.knots_u.domain();
         let dv = self.knots_v.domain();
-        let u = uv[0].clamp(du.lo, du.hi);
-        let v = uv[1].clamp(dv.lo, dv.hi);
+        let u = self.periodicity[0].map_or_else(
+            || uv[0].clamp(du.lo, du.hi),
+            |period| wrap_periodic(uv[0], du.lo, period),
+        );
+        let v = self.periodicity[1].map_or_else(
+            || uv[1].clamp(dv.lo, dv.hi),
+            |period| wrap_periodic(uv[1], dv.lo, period),
+        );
         let (a, w) = self.homogeneous_derivs(u, v, order);
 
         let mut out = SurfaceDerivs::default();
@@ -483,15 +636,50 @@ impl Surface for NurbsSurface {
     }
 
     fn periodicity(&self) -> [Option<f64>; 2] {
-        [None, None]
+        self.periodicity
     }
 
-    /// Convex-hull box of the exact clamped sub-surface control net. Positive
-    /// rational weights make the projected surface a convex combination, so
-    /// the box is conservative and tightens under parameter subdivision.
+    /// Outward interval enclosure evaluated directly from this source surface.
+    /// Rounded knot insertion and restricted control nets never participate in
+    /// exclusion bounds.
     fn bounding_box(&self, range: [ParamRange; 2]) -> Aabb3 {
         debug_assert!(range[0].is_finite() && range[1].is_finite());
-        self.subrange_control_box(range)
+        let domain = self.param_range();
+        let u_ranges = periodic_range_parts(range[0], domain[0], self.periodicity[0]);
+        let v_ranges = periodic_range_parts(range[1], domain[1], self.periodicity[1]);
+        let mut bounds = Aabb3::empty();
+        for u in &u_ranges {
+            for v in &v_ranges {
+                bounds = bounds.union(super::surface_range_interval::position_range_aabb(
+                    self,
+                    [*u, *v],
+                ));
+            }
+        }
+        bounds
+    }
+}
+
+fn periodic_range_parts(
+    requested: ParamRange,
+    domain: ParamRange,
+    period: Option<f64>,
+) -> Vec<ParamRange> {
+    let Some(period) = period else {
+        return vec![requested];
+    };
+    if requested.width() >= period {
+        return vec![domain];
+    }
+    let start = wrap_periodic(requested.lo, domain.lo, period);
+    let end = start + requested.width();
+    if end <= domain.hi {
+        vec![ParamRange::new(start, end)]
+    } else {
+        vec![
+            ParamRange::new(start, domain.hi),
+            ParamRange::new(domain.lo, domain.lo + (end - domain.hi)),
+        ]
     }
 }
 
@@ -598,6 +786,44 @@ mod tests {
             vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
             pts,
             Some(ws),
+        )
+        .unwrap()
+    }
+
+    /// Clamped cubic loop extruded along `v`. The rational form uses unequal
+    /// interior weights while matching both homogeneous seam derivative rows.
+    fn periodic_loop(rational: bool) -> NurbsSurface {
+        let weights_u = [1.0, 0.75, 1.25, 1.0];
+        let controls_u = if rational {
+            [
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(2.0, 1.0, 0.0),
+                Point3::new(0.4, -0.6, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+            ]
+        } else {
+            [
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(2.0, 1.0, 0.0),
+                Point3::new(0.0, -1.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+            ]
+        };
+        let mut points = Vec::new();
+        let mut weights = Vec::new();
+        for (control, weight) in controls_u.into_iter().zip(weights_u) {
+            for z in [0.0, 2.0] {
+                points.push(Point3::new(control.x, control.y, z));
+                weights.push(weight);
+            }
+        }
+        NurbsSurface::new(
+            3,
+            1,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            points,
+            rational.then_some(weights),
         )
         .unwrap()
     }
@@ -798,6 +1024,142 @@ mod tests {
         for uv in grid_samples() {
             assert!(bb.contains(s.eval(uv)));
         }
+    }
+
+    #[test]
+    fn certified_periodic_surface_wraps_polynomial_and_rational_evaluation() {
+        for rational in [false, true] {
+            let source = periodic_loop(rational);
+            let start = source.eval_derivs([0.0, 0.37], 1);
+            let end = source.eval_derivs([1.0, 0.37], 1);
+            assert!(start.p.dist(end.p) < 1.0e-14);
+            assert!((start.du - end.du).norm() < 1.0e-13);
+
+            let periodic = source
+                .with_certified_periodicity([true, false], 1.0e-12)
+                .unwrap();
+            assert_eq!(periodic.periodicity(), [Some(1.0), None]);
+            let reference = periodic.eval_derivs([0.23, 0.37], 2);
+            for u in [-1.77, 1.23, 8.23] {
+                let wrapped = periodic.eval_derivs([u, 0.37], 2);
+                assert!(wrapped.p.dist(reference.p) < 2.0e-14);
+                assert!((wrapped.du - reference.du).norm() < 2.0e-13);
+                assert!((wrapped.dv - reference.dv).norm() < 2.0e-13);
+            }
+        }
+    }
+
+    #[test]
+    fn periodic_certification_rejects_false_seams_and_unclamped_basis() {
+        assert!(
+            NurbsSurface::new(
+                0,
+                1,
+                vec![0.0, 1.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![Point3::default(); 2],
+                None,
+            )
+            .is_err()
+        );
+        let mut open = periodic_loop(false);
+        open.points[6].x += 1.0e-4;
+        assert!(
+            open.with_certified_periodicity([true, false], 1.0e-8)
+                .is_err()
+        );
+
+        let mut tangent_break = periodic_loop(false);
+        tangent_break.points[4].y += 1.0e-4;
+        assert!(
+            tangent_break
+                .with_certified_periodicity([true, false], 1.0e-8)
+                .is_err()
+        );
+
+        let mut rational_weight_break = periodic_loop(true);
+        rational_weight_break.weights.as_mut().unwrap()[4] += 1.0e-4;
+        assert!(
+            rational_weight_break
+                .with_certified_periodicity([true, false], 1.0e-8)
+                .is_err()
+        );
+
+        // A loose homogeneous tolerance is unsound when a positive rational
+        // denominator can be arbitrarily small: quotient differentiation can
+        // amplify this modest Euclidean tangent break without bound.
+        let mut tiny_weights = periodic_loop(true);
+        for weight in tiny_weights.weights.as_mut().unwrap() {
+            *weight *= 1.0e-200;
+        }
+        tiny_weights.points[4].y += 1.0e-4;
+        assert!(
+            tiny_weights
+                .with_certified_periodicity([true, false], 1.0e-8)
+                .is_err()
+        );
+
+        let source = periodic_loop(false);
+        let unclamped = NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            source.points,
+            None,
+        )
+        .unwrap();
+        assert!(
+            unclamped
+                .with_certified_periodicity([true, false], 1.0e-8)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn periodic_bounds_cover_shifted_and_seam_crossing_ranges() {
+        let surface = periodic_loop(true)
+            .with_certified_periodicity([true, false], 1.0e-12)
+            .unwrap();
+        for range in [
+            [ParamRange::new(0.8, 1.2), ParamRange::new(0.2, 0.8)],
+            [ParamRange::new(-3.0, 4.0), ParamRange::new(0.2, 0.8)],
+        ] {
+            let bounds = surface
+                .bounding_box(range)
+                .inflated(kcore::tolerance::LINEAR_RESOLUTION);
+            for i in 0..=80 {
+                for j in 0..=20 {
+                    let uv = [
+                        range[0].lerp(f64::from(i) / 80.0),
+                        range[1].lerp(f64::from(j) / 20.0),
+                    ];
+                    assert!(bounds.contains(surface.eval(uv)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn partition_preserves_only_uncut_periodicity() {
+        let surface = periodic_loop(false)
+            .with_certified_periodicity([true, false], 1.0e-12)
+            .unwrap();
+        let (low_v, high_v) = surface.split_at(Dir::V, 0.4).unwrap();
+        assert_eq!(low_v.periodicity(), [Some(1.0), None]);
+        assert_eq!(high_v.periodicity(), [Some(1.0), None]);
+        let (low_u, high_u) = surface.split_at(Dir::U, 0.4).unwrap();
+        assert_eq!(low_u.periodicity(), [None, None]);
+        assert_eq!(high_u.periodicity(), [None, None]);
+
+        let transverse = surface
+            .restricted_to([ParamRange::new(0.0, 1.0), ParamRange::new(0.2, 0.8)])
+            .unwrap();
+        assert_eq!(transverse.periodicity(), [Some(1.0), None]);
+        let longitudinal = surface
+            .restricted_to([ParamRange::new(0.2, 0.8), ParamRange::new(0.0, 1.0)])
+            .unwrap();
+        assert_eq!(longitudinal.periodicity(), [None, None]);
     }
 
     #[test]

@@ -2,17 +2,21 @@
 
 use core::time::Duration;
 
+use kgeom::curve::Line;
+use kgeom::curve2d::Line2d;
 use kgeom::frame::Frame;
+use kgeom::param::ParamRange;
 use kgeom::surface::Plane;
-use kgeom::vec::{Point3, Vec3};
+use kgeom::vec::{Point3, Vec2, Vec3};
 use kgraph::{
-    GeometryGraph, GeometryRef, GraphBuildObservation, OffsetSurfaceDescriptor, SurfaceDescriptor,
+    AffineParamMap1d, GeometryGraph, GeometryRef, GraphBuildObservation, OffsetSurfaceDescriptor,
+    PairedPlaneLineResidualCertificate, SurfaceDescriptor, certify_paired_plane_line_residuals,
 };
 
 /// Fixture identity shared by every implemented Q2a case.
-pub const FIXTURE_VERSION: &str = "graph-build.v1";
+pub const FIXTURE_VERSION: &str = "graph-build.v2";
 /// Deterministic fixture seed (construction itself is not randomized).
-pub const FIXTURE_SEED: u64 = 0x5154_3241_4752_0006;
+pub const FIXTURE_SEED: u64 = 0x5154_3241_4752_0007;
 
 /// One implemented Q2a graph shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +27,8 @@ pub enum Ladder {
     Chain,
     /// Offset surfaces sharing one plane basis.
     Fanout,
+    /// Verified intersection curves sharing two source planes and two pcurves.
+    Diamond,
     /// A transient dependent chain followed by rejection and rollback.
     Rollback,
 }
@@ -44,12 +50,8 @@ pub struct GraphBuildCase {
     pub expected_output_digest: u64,
 }
 
-/// The 17 currently representable Q2a graph-build cases.
-///
-/// The planned diamond row is intentionally absent: every current procedural
-/// descriptor reports at most one dependency, so constructing a real diamond
-/// would require a fake benchmark-only descriptor.
-pub const CASES: [GraphBuildCase; 17] = [
+/// The 21 currently representable Q2a graph-build cases.
+pub const CASES: [GraphBuildCase; 21] = [
     case(
         "graph/build/independent-planes-v1/1/default-v1",
         Ladder::Independent,
@@ -109,6 +111,26 @@ pub const CASES: [GraphBuildCase; 17] = [
     case(
         "graph/build/shared-offset-basis-v1/1000/default-v1",
         Ladder::Fanout,
+        1_000,
+    ),
+    case(
+        "graph/build/verified-intersection-diamond-v1/1/default-v1",
+        Ladder::Diamond,
+        1,
+    ),
+    case(
+        "graph/build/verified-intersection-diamond-v1/10/default-v1",
+        Ladder::Diamond,
+        10,
+    ),
+    case(
+        "graph/build/verified-intersection-diamond-v1/100/default-v1",
+        Ladder::Diamond,
+        100,
+    ),
+    case(
+        "graph/build/verified-intersection-diamond-v1/1000/default-v1",
+        Ladder::Diamond,
         1_000,
     ),
     case(
@@ -196,6 +218,26 @@ const fn case(path: &'static str, ladder: Ladder, scale: usize) -> GraphBuildCas
                 0x3eba_19f1_6511_4864,
                 0x7d75_7fc1_02e4_fad4,
             ),
+            (Ladder::Diamond, 1) => (
+                0x0bbd_553c_41bd_6627,
+                0x0fc8_0691_8bcd_c5f1,
+                0x54b0_04f8_b733_ee65,
+            ),
+            (Ladder::Diamond, 10) => (
+                0xecb6_ece7_25da_f3cc,
+                0x049c_7d92_3c24_9930,
+                0xc096_3a42_f09c_2c21,
+            ),
+            (Ladder::Diamond, 100) => (
+                0x7093_993e_d376_fbf5,
+                0xe991_95f6_9f53_0d35,
+                0x3747_8d55_afb1_88bf,
+            ),
+            (Ladder::Diamond, 1_000) => (
+                0x4a8a_54a0_4ba9_df7b,
+                0x7e10_3b1c_9b79_da59,
+                0x1a07_bb83_e289_3b19,
+            ),
             (Ladder::Rollback, 1) => (
                 0x5c41_4503_e372_ce9b,
                 0xa007_3203_cc9c_feb4,
@@ -233,19 +275,28 @@ const fn case(path: &'static str, ladder: Ladder, scale: usize) -> GraphBuildCas
 pub struct GraphBuildFixture {
     case: GraphBuildCase,
     planes: Box<[Plane]>,
+    diamond: Option<DiamondFixture>,
     rollback_basis: Option<GeometryGraph>,
+}
+
+#[derive(Clone, Copy)]
+struct DiamondFixture {
+    basis: Plane,
+    pcurves: [Line2d; 2],
+    certificate: PairedPlaneLineResidualCertificate,
 }
 
 impl GraphBuildFixture {
     /// Prepare one registered case.
     pub fn new(case: GraphBuildCase) -> Self {
         assert!(case.scale > 0);
-        let plane_count = if case.ladder == Ladder::Independent {
-            case.scale
-        } else {
-            1
+        let plane_count = match case.ladder {
+            Ladder::Independent => case.scale,
+            Ladder::Diamond => 0,
+            Ladder::Chain | Ladder::Fanout | Ladder::Rollback => 1,
         };
         let planes: Box<[_]> = (0..plane_count).map(plane).collect();
+        let diamond = (case.ladder == Ladder::Diamond).then(diamond_fixture);
         let rollback_basis = (case.ladder == Ladder::Rollback).then(|| {
             let mut graph = GeometryGraph::new();
             graph
@@ -256,6 +307,7 @@ impl GraphBuildFixture {
         Self {
             case,
             planes,
+            diamond,
             rollback_basis,
         }
     }
@@ -307,11 +359,52 @@ impl GraphBuildFixture {
                         .expect("fanout descriptor must be valid");
                 }
             }
+            Ladder::Diamond => {
+                let fixture = self.diamond.expect("diamond fixture must be prepared");
+                let basis = graph
+                    .insert_surface(fixture.basis)
+                    .expect("diamond basis plane must be valid");
+                let surfaces = [
+                    graph
+                        .insert_surface(OffsetSurfaceDescriptor::new(basis, 0.25))
+                        .expect("first certified offset plane must be valid"),
+                    graph
+                        .insert_surface(OffsetSurfaceDescriptor::new(basis, 0.25))
+                        .expect("second certified offset plane must be valid"),
+                ];
+                let pcurves = [
+                    graph
+                        .insert_curve2d(fixture.pcurves[0])
+                        .expect("first certified pcurve must be valid"),
+                    graph
+                        .insert_curve2d(fixture.pcurves[1])
+                        .expect("second certified pcurve must be valid"),
+                ];
+                for _ in 0..self.case.scale {
+                    graph
+                        .insert_verified_plane_intersection_curve(
+                            surfaces,
+                            pcurves,
+                            fixture.certificate,
+                        )
+                        .expect("verified intersection descriptor must be valid");
+                }
+            }
             Ladder::Rollback => unreachable!("rollback has a prepared control graph"),
         }
         let elapsed = started.elapsed();
         let observation = graph.benchmark_observation().since(before_observation);
-        (elapsed, inspect(graph, observation, false, false, None))
+        (
+            elapsed,
+            inspect(
+                graph,
+                observation,
+                false,
+                false,
+                None,
+                ladder == Ladder::Diamond,
+            ),
+        )
     }
 
     fn measure_rollback(&self) -> (Duration, GraphBuildResult) {
@@ -356,6 +449,7 @@ impl GraphBuildFixture {
                 rejected,
                 true,
                 Some((before_graph_digest, before_reverse_index_digest)),
+                false,
             ),
         )
     }
@@ -382,6 +476,10 @@ pub struct GraphBuildResult {
     pub rejected: bool,
     /// Whether an undo frame was rolled back.
     pub rolled_back: bool,
+    /// Dependency-first nodes visited from one diamond merge descriptor.
+    pub diamond_closure_nodes: Option<usize>,
+    /// Whether that closure contains every shared dependency exactly once.
+    pub diamond_closure_deduplicated: bool,
     /// Stable semantic graph digest.
     pub graph_digest: u64,
     /// Stable reverse-dependency index digest.
@@ -406,6 +504,11 @@ impl GraphBuildResult {
         digest.boolean(self.stable_order);
         digest.boolean(self.rejected);
         digest.boolean(self.rolled_back);
+        if let Some(nodes) = self.diamond_closure_nodes {
+            digest.tag(0x64);
+            digest.count(nodes);
+            digest.boolean(self.diamond_closure_deduplicated);
+        }
         digest.u64(self.graph_digest);
         digest.u64(self.reverse_index_digest);
         digest.optional_u64(self.before_graph_digest);
@@ -419,6 +522,12 @@ pub fn verify(case: GraphBuildCase, result: GraphBuildResult) {
     let (nodes, edges, registered_nodes, registered_edges) = match case.ladder {
         Ladder::Independent => (case.scale, 0, case.scale, 0),
         Ladder::Chain | Ladder::Fanout => (case.scale + 1, case.scale, case.scale + 1, case.scale),
+        Ladder::Diamond => (
+            case.scale + 5,
+            case.scale * 4 + 2,
+            case.scale + 5,
+            case.scale * 4 + 2,
+        ),
         Ladder::Rollback => (1, 0, case.scale, case.scale),
     };
     assert_eq!(result.nodes, nodes);
@@ -433,6 +542,13 @@ pub fn verify(case: GraphBuildCase, result: GraphBuildResult) {
     assert!(result.stable_order);
     assert_eq!(result.rejected, case.ladder == Ladder::Rollback);
     assert_eq!(result.rolled_back, case.ladder == Ladder::Rollback);
+    if case.ladder == Ladder::Diamond {
+        assert_eq!(result.diamond_closure_nodes, Some(6));
+        assert!(result.diamond_closure_deduplicated);
+    } else {
+        assert_eq!(result.diamond_closure_nodes, None);
+        assert!(!result.diamond_closure_deduplicated);
+    }
     if case.ladder == Ladder::Rollback {
         assert_eq!(result.before_graph_digest, Some(result.graph_digest));
         assert_eq!(
@@ -460,6 +576,7 @@ fn inspect(
     rejected: bool,
     rolled_back: bool,
     before: Option<(u64, u64)>,
+    inspect_diamond: bool,
 ) -> GraphBuildResult {
     graph.validate().expect("constructed graph must validate");
     let order: Vec<_> = graph.geometry().collect();
@@ -480,6 +597,24 @@ fn inspect(
         .map_or((None, None), |(graph, reverse)| {
             (Some(graph), Some(reverse))
         });
+    let diamond_closure = inspect_diamond.then(|| {
+        let root = order
+            .iter()
+            .rev()
+            .copied()
+            .find(|geometry| matches!(geometry, GeometryRef::Curve(_)))
+            .expect("diamond graph must contain a merge curve");
+        graph
+            .dependency_closure(root)
+            .expect("diamond dependency closure must be valid")
+    });
+    let diamond_closure_nodes = diamond_closure.as_ref().map(Vec::len);
+    let diamond_closure_deduplicated = diamond_closure.is_some_and(|closure| {
+        closure
+            .iter()
+            .enumerate()
+            .all(|(index, geometry)| !closure[..index].contains(geometry))
+    });
     GraphBuildResult {
         nodes: graph.len(),
         dependency_edges,
@@ -490,6 +625,8 @@ fn inspect(
         stable_order,
         rejected,
         rolled_back,
+        diamond_closure_nodes,
+        diamond_closure_deduplicated,
         graph_digest: graph_digest(&graph),
         reverse_index_digest: reverse_index_digest(&graph),
         before_graph_digest,
@@ -508,6 +645,34 @@ fn plane(ordinal: usize) -> Plane {
 
 fn offset_distance(ordinal: usize) -> f64 {
     (ordinal + 1) as f64 * 0.125
+}
+
+fn diamond_fixture() -> DiamondFixture {
+    let basis = Plane::new(Frame::world());
+    let certified_plane = Plane::new(Frame::world().with_origin(Point3::new(0.0, 0.0, 0.25)));
+    let planes = [certified_plane; 2];
+    let pcurves = [
+        Line2d::new(Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0))
+            .expect("diamond first pcurve must be valid"),
+        Line2d::new(Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0))
+            .expect("diamond second pcurve must be valid"),
+    ];
+    let identity = AffineParamMap1d::new(1.0, 0.0).expect("identity map must be valid");
+    let certificate = certify_paired_plane_line_residuals(
+        Line::new(Point3::new(0.0, 0.0, 0.25), Vec3::new(1.0, 0.0, 0.0))
+            .expect("diamond carrier must be valid"),
+        ParamRange::new(-8.0, 8.0),
+        planes,
+        pcurves,
+        [identity; 2],
+        1.0e-12,
+    )
+    .expect("diamond proof fixture must certify");
+    DiamondFixture {
+        basis,
+        pcurves,
+        certificate,
+    }
 }
 
 fn graph_digest(graph: &GeometryGraph) -> u64 {
@@ -646,8 +811,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn registry_contains_exactly_17_unique_canonical_cases() {
-        assert_eq!(CASES.len(), 17);
+    fn registry_contains_exactly_21_unique_canonical_cases() {
+        assert_eq!(CASES.len(), 21);
         let unique: BTreeSet<_> = CASES.iter().map(|case| case.path).collect();
         assert_eq!(unique.len(), CASES.len());
         for case in CASES {
@@ -688,6 +853,12 @@ mod tests {
                 Ladder::Chain | Ladder::Fanout => {
                     (case.scale + 1, case.scale, case.scale + 1, case.scale)
                 }
+                Ladder::Diamond => (
+                    case.scale + 5,
+                    case.scale * 4 + 2,
+                    case.scale + 5,
+                    case.scale * 4 + 2,
+                ),
                 Ladder::Rollback => (1, 0, case.scale, case.scale),
             };
             let counters = &entry["expected_result_counters"];
@@ -703,6 +874,10 @@ mod tests {
             );
             assert_eq!(counters["full_order_rebuilds"], 0);
             assert_eq!(counters["stable_order"], true);
+            if case.ladder == Ladder::Diamond {
+                assert_eq!(counters["diamond_closure_nodes"], 6);
+                assert_eq!(counters["diamond_closure_deduplicated"], true);
+            }
             assert_eq!(
                 counters["graph_digest"],
                 format!("{:016x}", case.expected_graph_digest)

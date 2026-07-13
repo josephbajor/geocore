@@ -96,11 +96,13 @@ pub use error::{
     SURFACE_SURFACE_CLASS_PAIR, UNSUPPORTED_CLASS_PAIR,
 };
 pub use graph_surface::{
-    BRANCH_CERTIFICATE_FAILURE, GraphSurfaceIntersectionError, GraphSurfaceIntersectionResult,
-    GraphSurfaceSurfaceIntersections, IntersectionBranchEdge, IntersectionBranchEndpointEvent,
-    IntersectionBranchGraph, IntersectionBranchVertex, IntersectionBranchVertexEvent,
+    BRANCH_CERTIFICATE_FAILURE, GraphSurfaceBudgetProfile, GraphSurfaceIntersectionError,
+    GraphSurfaceIntersectionResult, GraphSurfaceSurfaceIntersections, IntersectionBranchEdge,
+    IntersectionBranchEndpointEvent, IntersectionBranchGraph, IntersectionBranchVertex,
+    IntersectionBranchVertexEvent, PERSISTENT_DESCRIPTOR_FAILURE, PersistentIntersectionBranchEdge,
+    PersistentIntersectionBranchGraph, SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS,
     intersect_bounded_graph_surfaces, intersect_bounded_graph_surfaces_in_scope,
-    intersect_bounded_graph_surfaces_with_context,
+    intersect_bounded_graph_surfaces_with_context, persist_verified_graph_surface_intersections,
 };
 pub use kgraph::{CurveClass, GeometryClassKey, SurfaceClass};
 pub use line_circle::intersect_bounded_line_circle;
@@ -147,10 +149,11 @@ pub use plane_sphere::intersect_bounded_plane_sphere;
 pub use plane_torus::intersect_bounded_plane_torus;
 pub use result::{
     ContactKind, CurveCurveIntersections, CurveCurveOverlap, CurveCurvePoint,
-    CurveSurfaceIntersections, CurveSurfaceOverlap, CurveSurfacePoint, ParamOrientation,
-    SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
-    SurfaceSurfacePoint, accept_curve_curve_candidate, accept_curve_surface_candidate,
-    accept_surface_surface_candidate,
+    CurveSurfaceIntersections, CurveSurfaceOverlap, CurveSurfacePoint, OrthogonalSphereOctantMap,
+    ParamOrientation, SurfaceIntersectionCurve, SurfaceRegionCorrespondence,
+    SurfaceRegionOrientation, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
+    SurfaceSurfacePoint, SurfaceSurfaceRegion, SurfaceSurfaceRegionVertex,
+    accept_curve_curve_candidate, accept_curve_surface_candidate, accept_surface_surface_candidate,
 };
 pub use sphere_nurbs_surface::intersect_bounded_sphere_nurbs_surface;
 pub use sphere_sphere::intersect_bounded_spheres;

@@ -1659,14 +1659,15 @@ fn push_surface_aux_nodes(
     let (u_knots, u_multiplicities) = compressed_knots(surface.knots(Dir::U));
     let (v_knots, v_multiplicities) = compressed_knots(surface.knots(Dir::V));
     let rational = surface.is_rational();
+    let periodic = surface.periodicity().map(|period| period.is_some());
     let vertex_dim = if rational { 4 } else { 3 };
     let (nu, nv) = surface.net_size();
     out.push(OutNode {
         code: code::NURBS_SURF,
         index: ids.nurbs,
         values: vec![
-            Value::Logical(false),
-            Value::Logical(false),
+            Value::Logical(periodic[0]),
+            Value::Logical(periodic[1]),
             Value::Int(surface.degree_u() as i64),
             Value::Int(surface.degree_v() as i64),
             Value::Int(nu as i64),
@@ -1676,8 +1677,8 @@ fn push_surface_aux_nodes(
             Value::Int(u_knots.len() as i64),
             Value::Int(v_knots.len() as i64),
             Value::Logical(rational),
-            Value::Logical(false),
-            Value::Logical(false),
+            Value::Logical(periodic[0]),
+            Value::Logical(periodic[1]),
             Value::Int(0),
             Value::Int(vertex_dim),
             ptr(ids.poles),
@@ -1730,12 +1731,6 @@ fn validate_nurbs_curve(curve: &NurbsCurve) -> Result<()> {
 }
 
 fn validate_nurbs_surface(surface: &NurbsSurface) -> Result<()> {
-    if surface.periodicity() != [None, None] {
-        return Err(XtError::Unsupported {
-            capability: XtCapability::PeriodicNurbsSurfaces,
-            what: "periodic NURBS surfaces",
-        });
-    }
     for &point in surface.points() {
         check_in_size_box(point.to_array())?;
     }

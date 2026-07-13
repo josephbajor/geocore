@@ -1,27 +1,15 @@
 use super::circle_circle::intersect_bounded_circles;
 use super::conic::{
-    canonical_angle, ellipse_parameter, fit_periodic_parameter, parameter_tolerance,
-    push_angle_root, real_polynomial_roots,
+    ConicPairConfig, ConicPlaneRelation, canonical_angle, push_angle_root, real_polynomial_roots,
 };
 use super::line_circle::intersect_bounded_line_circle;
-use super::result::{
-    ContactKind, CurveCurveIntersections, CurveCurvePoint, accept_curve_curve_candidate,
-};
-use kcore::error::{Error, Result};
+use super::result::CurveCurveIntersections;
+use kcore::error::Result;
 use kcore::math;
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::param::ParamRange;
-use kgeom::vec::{Point3, Vec3};
-
-struct CircleEllipsePair<'a> {
-    circle: &'a Circle,
-    circle_range: ParamRange,
-    ellipse: &'a Ellipse,
-    ellipse_range: ParamRange,
-    parameter_tol: f64,
-    tolerances: Tolerances,
-}
+use kgeom::vec::Vec3;
 
 /// Intersect a circle and ellipse restricted to finite parameter ranges.
 ///
@@ -35,20 +23,21 @@ pub fn intersect_bounded_circle_ellipse(
     ellipse_range: ParamRange,
     tolerances: Tolerances,
 ) -> Result<CurveCurveIntersections> {
-    validate_ranges(
-        circle_range,
-        ellipse_range,
-        circle.radius(),
-        ellipse.minor_radius(),
-        tolerances,
-    )?;
-
-    let normal_cross = circle.frame().z().cross(ellipse.frame().z());
-    if normal_cross.norm() <= tolerances.angular() {
-        return intersect_parallel_plane(circle, circle_range, ellipse, ellipse_range, tolerances);
+    let pair =
+        ConicPairConfig::circle_ellipse(circle, circle_range, ellipse, ellipse_range, tolerances)?;
+    match pair.plane_relation()? {
+        ConicPlaneRelation::Parallel => intersect_parallel_plane(
+            circle,
+            circle_range,
+            ellipse,
+            ellipse_range,
+            tolerances,
+            pair,
+        ),
+        ConicPlaneRelation::Crossing(line) => {
+            intersect_plane_crossing(circle, circle_range, tolerances, line, pair)
+        }
     }
-
-    intersect_plane_crossing(circle, circle_range, ellipse, ellipse_range, tolerances)
 }
 
 fn intersect_parallel_plane(
@@ -57,6 +46,7 @@ fn intersect_parallel_plane(
     ellipse: &Ellipse,
     ellipse_range: ParamRange,
     tolerances: Tolerances,
+    pair: ConicPairConfig<'_>,
 ) -> Result<CurveCurveIntersections> {
     let center_delta = circle.frame().origin() - ellipse.frame().origin();
     if center_delta.dot(ellipse.frame().z()).abs() > tolerances.linear() {
@@ -77,24 +67,16 @@ fn intersect_parallel_plane(
         );
     }
 
-    intersect_coplanar_distinct(circle, circle_range, ellipse, ellipse_range, tolerances)
+    intersect_coplanar_distinct(circle, ellipse, tolerances, pair)
 }
 
 fn intersect_plane_crossing(
     circle: &Circle,
     circle_range: ParamRange,
-    ellipse: &Ellipse,
-    ellipse_range: ParamRange,
     tolerances: Tolerances,
+    line: Line,
+    pair: ConicPairConfig<'_>,
 ) -> Result<CurveCurveIntersections> {
-    let n1 = circle.frame().z();
-    let n2 = ellipse.frame().z();
-    let direction = n1.cross(n2);
-    let denom = direction.norm_sq();
-    let c1 = n1.dot(circle.frame().origin());
-    let c2 = n2.dot(ellipse.frame().origin());
-    let origin = ((n2 * c1 - n1 * c2).cross(direction)) / denom;
-    let line = Line::new(origin, direction)?;
     let center_parameter = line.dir().dot(circle.frame().origin() - line.origin());
     let line_range = ParamRange::new(
         center_parameter - circle.radius() - tolerances.linear(),
@@ -103,43 +85,26 @@ fn intersect_plane_crossing(
     let line_circle_hits =
         intersect_bounded_line_circle(&line, line_range, circle, circle_range, tolerances)?;
 
-    let pair = CircleEllipsePair {
-        circle,
-        circle_range,
-        ellipse,
-        ellipse_range,
-        parameter_tol: circle_ellipse_parameter_tolerance(circle, ellipse, tolerances),
-        tolerances,
-    };
     let mut points = Vec::with_capacity(line_circle_hits.points.len());
     for line_hit in line_circle_hits.points {
         let point = circle.eval(line_hit.t_b);
-        push_candidate_from_point(&pair, point, None, &mut points);
+        pair.push_point(point, None, &mut points);
     }
     CurveCurveIntersections::canonicalized_complete(points, Vec::new())
 }
 
 fn intersect_coplanar_distinct(
     circle: &Circle,
-    circle_range: ParamRange,
     ellipse: &Ellipse,
-    ellipse_range: ParamRange,
     tolerances: Tolerances,
+    pair: ConicPairConfig<'_>,
 ) -> Result<CurveCurveIntersections> {
-    let pair = CircleEllipsePair {
-        circle,
-        circle_range,
-        ellipse,
-        ellipse_range,
-        parameter_tol: circle_ellipse_parameter_tolerance(circle, ellipse, tolerances),
-        tolerances,
-    };
     let center = ellipse.frame().to_local(circle.frame().origin());
     let roots = coplanar_roots(ellipse, center, circle.radius(), tolerances);
     let mut points = Vec::with_capacity(roots.len());
     for t_ellipse in roots {
         let point = ellipse.eval(t_ellipse);
-        push_candidate_from_point(&pair, point, None, &mut points);
+        pair.push_point(point, None, &mut points);
     }
     CurveCurveIntersections::canonicalized_complete(points, Vec::new())
 }
@@ -225,118 +190,6 @@ fn circle_ellipse_radial_residual(
     ((dx * dx + dy * dy).sqrt() - circle_radius).abs()
 }
 
-fn push_candidate_from_point(
-    pair: &CircleEllipsePair<'_>,
-    point: Point3,
-    fallback_kind: Option<ContactKind>,
-    points: &mut Vec<CurveCurvePoint>,
-) {
-    let local_circle = pair.circle.frame().to_local(point);
-    let raw_circle = math::atan2(local_circle.y, local_circle.x);
-    let Some(t_circle) = fit_periodic_parameter(raw_circle, pair.circle_range, pair.parameter_tol)
-    else {
-        return;
-    };
-    let local_ellipse = pair.ellipse.frame().to_local(point);
-    let raw_ellipse = ellipse_parameter(local_ellipse, pair.ellipse);
-    let Some(t_ellipse) =
-        fit_periodic_parameter(raw_ellipse, pair.ellipse_range, pair.parameter_tol)
-    else {
-        return;
-    };
-    let kind = fallback_kind.unwrap_or_else(|| {
-        contact_kind(
-            pair.circle,
-            t_circle,
-            pair.ellipse,
-            t_ellipse,
-            pair.tolerances,
-        )
-    });
-    if let Some(point) = accept_curve_curve_candidate(
-        pair.circle,
-        t_circle,
-        pair.ellipse,
-        t_ellipse,
-        kind,
-        pair.tolerances,
-    ) {
-        push_distinct(points, point, pair.tolerances);
-    }
-}
-
-fn contact_kind(
-    circle: &Circle,
-    t_circle: f64,
-    ellipse: &Ellipse,
-    t_ellipse: f64,
-    tolerances: Tolerances,
-) -> ContactKind {
-    let dc = circle.eval_derivs(t_circle, 1).d[1];
-    let de = ellipse.eval_derivs(t_ellipse, 1).d[1];
-    let Some(uc) = dc.normalized() else {
-        return ContactKind::Singular;
-    };
-    let Some(ue) = de.normalized() else {
-        return ContactKind::Singular;
-    };
-    if uc.cross(ue).norm() <= tolerances.angular() {
-        ContactKind::Tangent
-    } else {
-        ContactKind::Transverse
-    }
-}
-
-fn circle_ellipse_parameter_tolerance(
-    circle: &Circle,
-    ellipse: &Ellipse,
-    tolerances: Tolerances,
-) -> f64 {
-    parameter_tolerance(circle.radius(), tolerances)
-        .max(parameter_tolerance(ellipse.minor_radius(), tolerances))
-}
-
 fn ellipse_is_circle(ellipse: &Ellipse, tolerances: Tolerances) -> bool {
     (ellipse.major_radius() - ellipse.minor_radius()).abs() <= tolerances.linear()
-}
-
-fn push_distinct(
-    points: &mut Vec<CurveCurvePoint>,
-    candidate: CurveCurvePoint,
-    tolerances: Tolerances,
-) {
-    if !points
-        .iter()
-        .any(|point| point.point.dist(candidate.point) <= tolerances.linear())
-    {
-        points.push(candidate);
-    }
-}
-
-fn validate_ranges(
-    circle_range: ParamRange,
-    ellipse_range: ParamRange,
-    circle_radius: f64,
-    ellipse_minor_radius: f64,
-    tolerances: Tolerances,
-) -> Result<()> {
-    if !circle_range.is_finite()
-        || !ellipse_range.is_finite()
-        || circle_range.width() < 0.0
-        || ellipse_range.width() < 0.0
-    {
-        return Err(Error::InvalidGeometry {
-            reason: "circle/ellipse intersection requires finite non-reversed ranges",
-        });
-    }
-    if circle_range.width()
-        > core::f64::consts::TAU + parameter_tolerance(circle_radius, tolerances)
-        || ellipse_range.width()
-            > core::f64::consts::TAU + parameter_tolerance(ellipse_minor_radius, tolerances)
-    {
-        return Err(Error::InvalidGeometry {
-            reason: "bounded circle and ellipse ranges cannot span more than one period",
-        });
-    }
-    Ok(())
 }

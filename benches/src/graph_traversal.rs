@@ -3,15 +3,21 @@
 use core::time::Duration;
 use std::collections::HashMap;
 
+use kgeom::curve::Line;
+use kgeom::curve2d::Line2d;
 use kgeom::frame::Frame;
+use kgeom::param::ParamRange;
 use kgeom::surface::Plane;
-use kgeom::vec::{Point3, Vec3};
-use kgraph::{GeometryGraph, GeometryRef, OffsetSurfaceDescriptor};
+use kgeom::vec::{Point3, Vec2, Vec3};
+use kgraph::{
+    AffineParamMap1d, GeometryGraph, GeometryRef, OffsetSurfaceDescriptor,
+    certify_paired_plane_line_residuals,
+};
 
 /// Fixture identity shared by every Q2b traversal case.
-pub const FIXTURE_VERSION: &str = "graph-traversal.v1";
+pub const FIXTURE_VERSION: &str = "graph-traversal.v2";
 /// Deterministic fixture seed (construction itself is not randomized).
-pub const FIXTURE_SEED: u64 = 0x5154_3254_5241_0008;
+pub const FIXTURE_SEED: u64 = 0x5154_3254_5241_0009;
 
 /// One graph traversal operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +26,10 @@ pub enum Traversal {
     DependencyClosure,
     /// Exhaust the chain while searching for an unrelated live target.
     MissingDependencyPath,
+    /// Produce a dependency-first closure whose two offset branches share one basis.
+    DiamondDependencyClosure,
+    /// Exhaust the shared-basis diamond while searching for an unrelated target.
+    DiamondMissingDependencyPath,
 }
 
 /// Stable Q2b case definition.
@@ -35,8 +45,8 @@ pub struct GraphTraversalCase {
     pub expected_output_digest: u64,
 }
 
-/// The eight Q2b chain-traversal cases.
-pub const CASES: [GraphTraversalCase; 8] = [
+/// The ten Q2b chain and production-diamond traversal cases.
+pub const CASES: [GraphTraversalCase; 10] = [
     case(Traversal::DependencyClosure, 1, 0xd32a_43f8_8885_5691),
     case(Traversal::DependencyClosure, 10, 0x9cf1_e363_1a47_4c8c),
     case(Traversal::DependencyClosure, 100, 0x569e_4ec5_e87b_41e6),
@@ -48,6 +58,16 @@ pub const CASES: [GraphTraversalCase; 8] = [
         Traversal::MissingDependencyPath,
         1_000,
         0x4f96_2c80_64e3_d636,
+    ),
+    case(
+        Traversal::DiamondDependencyClosure,
+        1,
+        0x477d_9f7a_09bd_7d51,
+    ),
+    case(
+        Traversal::DiamondMissingDependencyPath,
+        1,
+        0x55e4_e90b_1607_4b8d,
     ),
 ];
 
@@ -81,6 +101,12 @@ const fn case(
         (Traversal::MissingDependencyPath, 1_000) => {
             "graph/traverse/offset-chain-miss-v1/1000/deterministic-v1"
         }
+        (Traversal::DiamondDependencyClosure, 1) => {
+            "graph/traverse/verified-intersection-diamond-v1/1/dependency-first-v1"
+        }
+        (Traversal::DiamondMissingDependencyPath, 1) => {
+            "graph/traverse/verified-intersection-diamond-miss-v1/1/deterministic-v1"
+        }
         _ => "",
     };
     GraphTraversalCase {
@@ -101,25 +127,18 @@ pub struct GraphTraversalFixture {
 }
 
 impl GraphTraversalFixture {
-    /// Prepare one registered chain and unrelated live target.
+    /// Prepare one registered chain or shared-basis diamond and unrelated target.
     pub fn new(case: GraphTraversalCase) -> Self {
         assert!(case.scale > 0);
-        let mut graph = GeometryGraph::new();
-        let basis = graph
-            .insert_surface(plane(0))
-            .expect("chain basis must be valid");
-        let mut root = basis;
-        for ordinal in 0..case.scale {
-            root = graph
-                .insert_surface(OffsetSurfaceDescriptor::new(
-                    root,
-                    (ordinal + 1) as f64 * 0.125,
-                ))
-                .expect("offset-chain descriptor must be valid");
-        }
-        let unrelated = graph
-            .insert_surface(plane(case.scale + 1))
-            .expect("unrelated target must be valid");
+        let (graph, root, unrelated) = match case.traversal {
+            Traversal::DependencyClosure | Traversal::MissingDependencyPath => {
+                prepare_chain(case.scale)
+            }
+            Traversal::DiamondDependencyClosure | Traversal::DiamondMissingDependencyPath => {
+                assert_eq!(case.scale, 1);
+                prepare_diamond()
+            }
+        };
         graph.validate().expect("prepared graph must validate");
         let ordinals = graph
             .geometry()
@@ -129,8 +148,8 @@ impl GraphTraversalFixture {
         Self {
             case,
             graph,
-            root: GeometryRef::Surface(root),
-            unrelated: GeometryRef::Surface(unrelated),
+            root,
+            unrelated,
             ordinals,
         }
     }
@@ -149,7 +168,7 @@ impl GraphTraversalFixture {
             elapsed,
             GraphTraversalResult {
                 nodes: self.graph.len(),
-                dependency_edges: self.case.scale,
+                dependency_edges: expected_dependency_edges(self.case),
                 result_nodes,
                 reached,
                 stable,
@@ -160,12 +179,12 @@ impl GraphTraversalFixture {
 
     fn traverse(&self) -> Option<Vec<GeometryRef>> {
         match self.case.traversal {
-            Traversal::DependencyClosure => Some(
+            Traversal::DependencyClosure | Traversal::DiamondDependencyClosure => Some(
                 self.graph
                     .dependency_closure(self.root)
                     .expect("prepared closure must succeed"),
             ),
-            Traversal::MissingDependencyPath => self
+            Traversal::MissingDependencyPath | Traversal::DiamondMissingDependencyPath => self
                 .graph
                 .dependency_path(self.root, self.unrelated)
                 .expect("prepared path query must succeed"),
@@ -223,21 +242,117 @@ impl GraphTraversalResult {
 
 /// Verify exact counters and reviewed digests before accepting a sample.
 pub fn verify(case: GraphTraversalCase, result: GraphTraversalResult) {
-    assert_eq!(result.nodes, case.scale + 2);
-    assert_eq!(result.dependency_edges, case.scale);
+    assert_eq!(result.nodes, expected_nodes(case));
+    assert_eq!(result.dependency_edges, expected_dependency_edges(case));
     assert!(result.stable);
     match case.traversal {
         Traversal::DependencyClosure => {
             assert_eq!(result.result_nodes, case.scale + 1);
             assert!(result.reached);
         }
-        Traversal::MissingDependencyPath => {
+        Traversal::DiamondDependencyClosure => {
+            assert_eq!(result.result_nodes, 6);
+            assert!(result.reached);
+        }
+        Traversal::MissingDependencyPath | Traversal::DiamondMissingDependencyPath => {
             assert_eq!(result.result_nodes, 0);
             assert!(!result.reached);
         }
     }
     assert_ne!(case.expected_output_digest, 0);
     assert_eq!(result.output_digest(), case.expected_output_digest);
+}
+
+const fn expected_nodes(case: GraphTraversalCase) -> usize {
+    match case.traversal {
+        Traversal::DependencyClosure | Traversal::MissingDependencyPath => case.scale + 2,
+        Traversal::DiamondDependencyClosure | Traversal::DiamondMissingDependencyPath => 7,
+    }
+}
+
+const fn expected_dependency_edges(case: GraphTraversalCase) -> usize {
+    match case.traversal {
+        Traversal::DependencyClosure | Traversal::MissingDependencyPath => case.scale,
+        Traversal::DiamondDependencyClosure | Traversal::DiamondMissingDependencyPath => 6,
+    }
+}
+
+fn prepare_chain(scale: usize) -> (GeometryGraph, GeometryRef, GeometryRef) {
+    let mut graph = GeometryGraph::new();
+    let basis = graph
+        .insert_surface(plane(0))
+        .expect("chain basis must be valid");
+    let mut root = basis;
+    for ordinal in 0..scale {
+        root = graph
+            .insert_surface(OffsetSurfaceDescriptor::new(
+                root,
+                (ordinal + 1) as f64 * 0.125,
+            ))
+            .expect("offset-chain descriptor must be valid");
+    }
+    let unrelated = graph
+        .insert_surface(plane(scale + 1))
+        .expect("unrelated target must be valid");
+    (
+        graph,
+        GeometryRef::Surface(root),
+        GeometryRef::Surface(unrelated),
+    )
+}
+
+fn prepare_diamond() -> (GeometryGraph, GeometryRef, GeometryRef) {
+    let mut graph = GeometryGraph::new();
+    let basis_plane = Plane::new(Frame::world());
+    let basis = graph
+        .insert_surface(basis_plane)
+        .expect("diamond basis must be valid");
+    let sources = [
+        graph
+            .insert_surface(OffsetSurfaceDescriptor::new(basis, 0.25))
+            .expect("first diamond branch must be valid"),
+        graph
+            .insert_surface(OffsetSurfaceDescriptor::new(basis, 0.25))
+            .expect("second diamond branch must be valid"),
+    ];
+    let pcurves = [
+        Line2d::new(Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0))
+            .expect("first diamond pcurve must be valid"),
+        Line2d::new(Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0))
+            .expect("second diamond pcurve must be valid"),
+    ];
+    let pcurve_handles = [
+        graph
+            .insert_curve2d(pcurves[0])
+            .expect("first diamond pcurve must insert"),
+        graph
+            .insert_curve2d(pcurves[1])
+            .expect("second diamond pcurve must insert"),
+    ];
+    let carrier = Line::new(Point3::new(0.0, 0.0, 0.25), Vec3::new(1.0, 0.0, 0.0))
+        .expect("diamond carrier must be valid");
+    let certified_plane = Plane::new(Frame::world().with_origin(Point3::new(0.0, 0.0, 0.25)));
+    let identity = AffineParamMap1d::new(1.0, 0.0).expect("identity map must be valid");
+    let certificate = certify_paired_plane_line_residuals(
+        carrier,
+        ParamRange::new(-8.0, 8.0),
+        [certified_plane; 2],
+        pcurves,
+        [identity; 2],
+        1.0e-12,
+    )
+    .expect("diamond trace must certify");
+    let root = graph
+        .insert_verified_plane_intersection_curve(sources, pcurve_handles, certificate)
+        .expect("diamond merge must be valid");
+    let unrelated = graph
+        .insert_surface(plane(2))
+        .expect("unrelated target must be valid");
+    (
+        graph,
+        GeometryRef::Curve(root),
+        GeometryRef::Surface(unrelated),
+    )
 }
 
 fn plane(ordinal: usize) -> Plane {
@@ -289,8 +404,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn registry_contains_exactly_eight_unique_canonical_cases() {
-        assert_eq!(CASES.len(), 8);
+    fn registry_contains_exactly_ten_unique_canonical_cases() {
+        assert_eq!(CASES.len(), 10);
         let unique: BTreeSet<_> = CASES.iter().map(|case| case.path).collect();
         assert_eq!(unique.len(), CASES.len());
         for case in CASES {
@@ -330,15 +445,22 @@ mod tests {
             let counters = &entry["expected_result_counters"];
             assert_eq!(entry["fixture_version"], FIXTURE_VERSION);
             assert_eq!(entry["deterministic_seed"], FIXTURE_SEED);
-            assert_eq!(counters["nodes"], case.scale + 2);
-            assert_eq!(counters["dependency_edges"], case.scale);
+            assert_eq!(counters["nodes"], expected_nodes(case));
+            assert_eq!(
+                counters["dependency_edges"],
+                expected_dependency_edges(case)
+            );
             assert_eq!(counters["stable"], true);
             match case.traversal {
                 Traversal::DependencyClosure => {
                     assert_eq!(counters["result_nodes"], case.scale + 1);
                     assert_eq!(counters["reached"], true);
                 }
-                Traversal::MissingDependencyPath => {
+                Traversal::DiamondDependencyClosure => {
+                    assert_eq!(counters["result_nodes"], 6);
+                    assert_eq!(counters["reached"], true);
+                }
+                Traversal::MissingDependencyPath | Traversal::DiamondMissingDependencyPath => {
                     assert_eq!(counters["result_nodes"], 0);
                     assert_eq!(counters["reached"], false);
                 }

@@ -4,6 +4,15 @@ use crate::descriptor::{
     Curve2dDescriptor, CurveDescriptor, GeometryDependencies, SurfaceDescriptor,
 };
 use crate::error::{GeometryGraphError, GeometryGraphResult};
+use crate::eval::ExactSurfaceField;
+use crate::intersection::{
+    PairedPlaneLineResidualCertificate, PairedPlaneSphereCircleResidualCertificate,
+    PlaneSphereCircleTrace, TransmittedIntersectionCurveDescriptor,
+    TransmittedNurbsIntersectionCertificate, TransmittedNurbsIntersectionCurveDescriptor,
+    TransmittedNurbsIntersectionTrace, TransmittedPlaneIntersectionCertificate,
+    VerifiedIntersectionCarrier, VerifiedIntersectionCertificate,
+    VerifiedIntersectionCurveDescriptor,
+};
 use kcore::arena::{Arena, ArenaChange, Handle};
 use kcore::error::Result as CoreResult;
 use std::collections::{HashMap, HashSet};
@@ -344,11 +353,95 @@ impl GeometryGraph {
     ) -> GeometryGraphResult<CurveHandle> {
         let descriptor = descriptor.into();
         validate_curve(&descriptor)?;
+        validate_curve_references(self, &descriptor)?;
         let dependencies = dependencies_of(&descriptor);
         self.validate_dependencies(&dependencies)?;
         let handle = self.curves.insert(descriptor);
         self.register(GeometryRef::Curve(handle), &dependencies);
         Ok(handle)
+    }
+
+    /// Insert a persistent finite intersection branch after binding its paired
+    /// whole-range certificate to live source surfaces and pcurve nodes.
+    ///
+    /// Source and pcurve dependencies retain operand order. The graph rejects
+    /// stale handles, non-plane exact fields, or any certificate/handle
+    /// mismatch before allocating the curve node.
+    pub fn insert_verified_plane_intersection_curve(
+        &mut self,
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: PairedPlaneLineResidualCertificate,
+    ) -> GeometryGraphResult<CurveHandle> {
+        self.insert_curve(CurveDescriptor::Intersection(Box::new(
+            VerifiedIntersectionCurveDescriptor::new(
+                source_surfaces,
+                pcurves,
+                VerifiedIntersectionCertificate::PlaneLine(certificate),
+            ),
+        )))
+    }
+
+    /// Insert a persistent finite common-axis plane/sphere circle after
+    /// binding its whole-range paired proof to live sources and pcurves. The
+    /// certificate retains aligned or anti-aligned plane-chart orientation.
+    pub fn insert_verified_plane_sphere_intersection_curve(
+        &mut self,
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: PairedPlaneSphereCircleResidualCertificate,
+    ) -> GeometryGraphResult<CurveHandle> {
+        self.insert_curve(CurveDescriptor::Intersection(Box::new(
+            VerifiedIntersectionCurveDescriptor::new(
+                source_surfaces,
+                pcurves,
+                VerifiedIntersectionCertificate::PlaneSphereCircle(certificate),
+            ),
+        )))
+    }
+
+    /// Insert a certified transmitted piecewise-linear exact-plane-field
+    /// intersection after binding its owned carrier and pcurves to the actual
+    /// live graph sources in operand order. A source may be a direct plane or
+    /// a finite offset chain whose effective field is the certified plane.
+    pub fn insert_verified_transmitted_plane_intersection_curve(
+        &mut self,
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: TransmittedPlaneIntersectionCertificate,
+    ) -> GeometryGraphResult<CurveHandle> {
+        self.insert_curve(CurveDescriptor::TransmittedIntersection(Box::new(
+            TransmittedIntersectionCurveDescriptor::new(source_surfaces, pcurves, certificate),
+        )))
+    }
+
+    /// Insert a certified transmitted chart containing one or two original
+    /// NURBS traces after binding its owned carrier and pcurves to the actual
+    /// ordered live graph sources. An optional plane trace may be direct or a
+    /// finite offset chain.
+    pub fn insert_verified_transmitted_nurbs_intersection_curve(
+        &mut self,
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: TransmittedNurbsIntersectionCertificate,
+    ) -> GeometryGraphResult<CurveHandle> {
+        self.insert_curve(CurveDescriptor::TransmittedNurbsIntersection(Box::new(
+            TransmittedNurbsIntersectionCurveDescriptor::new(source_surfaces, pcurves, certificate),
+        )))
+    }
+
+    /// Compatibility insertion name for the original mixed Plane/NURBS arm.
+    pub fn insert_verified_transmitted_plane_nurbs_intersection_curve(
+        &mut self,
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: TransmittedNurbsIntersectionCertificate,
+    ) -> GeometryGraphResult<CurveHandle> {
+        self.insert_verified_transmitted_nurbs_intersection_curve(
+            source_surfaces,
+            pcurves,
+            certificate,
+        )
     }
 
     /// Insert a validated immutable surface descriptor.
@@ -391,6 +484,7 @@ impl GeometryGraph {
     ) -> GeometryGraphResult<CurveNode> {
         let descriptor = descriptor.into();
         validate_curve(&descriptor)?;
+        validate_curve_references(self, &descriptor)?;
         self.replace_curve_node(handle, descriptor)
     }
     /// Borrow a live surface node.
@@ -405,6 +499,7 @@ impl GeometryGraph {
     ) -> GeometryGraphResult<SurfaceNode> {
         let descriptor = descriptor.into();
         validate_surface(&descriptor)?;
+        self.reject_verified_intersection_source_replacement(GeometryRef::Surface(handle))?;
         self.replace_surface_node(handle, descriptor)
     }
     /// Borrow a live parameter-space curve node.
@@ -419,6 +514,7 @@ impl GeometryGraph {
     ) -> GeometryGraphResult<Curve2dNode> {
         let descriptor = descriptor.into();
         validate_curve2d(&descriptor)?;
+        self.reject_verified_intersection_source_replacement(GeometryRef::Curve2d(handle))?;
         self.replace_curve2d_node(handle, descriptor)
     }
 
@@ -604,6 +700,9 @@ impl GeometryGraph {
                 }
             }
         }
+        for (_, descriptor) in self.curves() {
+            validate_curve_references(self, descriptor)?;
+        }
         Ok(())
     }
 
@@ -620,6 +719,54 @@ impl GeometryGraph {
                 self.benchmark_observation.registered_dependency_edges += 1;
             }
         }
+    }
+
+    fn reject_verified_intersection_source_replacement(
+        &self,
+        geometry: GeometryRef,
+    ) -> GeometryGraphResult<()> {
+        if !self.contains(geometry) {
+            return Err(stale(geometry));
+        }
+        let dependents = self
+            .reverse_dependencies
+            .dependents(geometry)
+            .iter()
+            .copied()
+            .filter(|dependent| {
+                self.reaches_verified_intersection_dependent(*dependent, &mut HashSet::new())
+            })
+            .collect::<Vec<_>>();
+        if dependents.is_empty() {
+            Ok(())
+        } else {
+            Err(GeometryGraphError::HasDependents {
+                geometry,
+                dependents,
+            })
+        }
+    }
+
+    fn reaches_verified_intersection_dependent(
+        &self,
+        geometry: GeometryRef,
+        visited: &mut HashSet<GeometryRef>,
+    ) -> bool {
+        if !visited.insert(geometry) {
+            return false;
+        }
+        if let GeometryRef::Curve(handle) = geometry
+            && self
+                .curve(handle)
+                .is_some_and(CurveDescriptor::is_verified_intersection)
+        {
+            return true;
+        }
+        self.reverse_dependencies
+            .dependents(geometry)
+            .iter()
+            .copied()
+            .any(|dependent| self.reaches_verified_intersection_dependent(dependent, visited))
     }
 
     fn prepare_replacement(
@@ -821,6 +968,251 @@ fn finite_frame(frame: &kgeom::frame::Frame) -> bool {
     finite3(frame.origin()) && finite3(frame.x()) && finite3(frame.y()) && finite3(frame.z())
 }
 
+fn validate_curve_references(
+    graph: &GeometryGraph,
+    descriptor: &CurveDescriptor,
+) -> GeometryGraphResult<()> {
+    if let Some(intersection) = descriptor.as_intersection().copied() {
+        match intersection.certificate() {
+            VerifiedIntersectionCertificate::PlaneLine(certificate) => {
+                for (source, certified) in intersection
+                    .source_surfaces()
+                    .into_iter()
+                    .zip(certificate.surfaces())
+                {
+                    let Some(ExactSurfaceField::Plane(actual)) =
+                        exact_surface_field(graph, source)?
+                    else {
+                        return Err(invalid_intersection_descriptor(
+                            "verified line source is not an exact plane field",
+                        ));
+                    };
+                    if actual != certified {
+                        return Err(invalid_intersection_descriptor(
+                            "verified line source does not match its certificate",
+                        ));
+                    }
+                }
+                for (pcurve, certified) in intersection
+                    .pcurves()
+                    .into_iter()
+                    .zip(certificate.pcurves())
+                {
+                    let geometry = GeometryRef::Curve2d(pcurve);
+                    let actual = graph.curve2d(pcurve).ok_or_else(|| stale(geometry))?;
+                    if actual.as_line().copied() != Some(certified) {
+                        return Err(invalid_intersection_descriptor(
+                            "verified line pcurve does not match its certificate",
+                        ));
+                    }
+                }
+            }
+            VerifiedIntersectionCertificate::PlaneSphereCircle(certificate) => {
+                for ((source, pcurve), trace) in intersection
+                    .source_surfaces()
+                    .into_iter()
+                    .zip(intersection.pcurves())
+                    .zip(certificate.traces())
+                {
+                    let field = exact_surface_field(graph, source)?;
+                    let geometry = GeometryRef::Curve2d(pcurve);
+                    let actual_pcurve = graph.curve2d(pcurve).ok_or_else(|| stale(geometry))?;
+                    let matches = match trace {
+                        PlaneSphereCircleTrace::Plane(trace) => {
+                            field == Some(ExactSurfaceField::Plane(trace.surface()))
+                                && actual_pcurve.as_circle().copied() == Some(trace.pcurve())
+                        }
+                        PlaneSphereCircleTrace::Sphere(trace) => {
+                            field == Some(ExactSurfaceField::Sphere(trace.surface()))
+                                && actual_pcurve.as_line().copied() == Some(trace.pcurve())
+                        }
+                        PlaneSphereCircleTrace::SphereOblique(trace) => {
+                            field == Some(ExactSurfaceField::Sphere(trace.surface()))
+                                && actual_pcurve.as_spherical_circle().copied()
+                                    == Some(trace.pcurve())
+                        }
+                    };
+                    if !matches {
+                        return Err(invalid_intersection_descriptor(
+                            "verified circle source or pcurve does not match its ordered trace",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    if let Some(intersection) = descriptor.as_transmitted_intersection() {
+        let certificate = intersection.certificate();
+        for (source, certified) in intersection
+            .source_surfaces()
+            .into_iter()
+            .zip(certificate.surfaces())
+        {
+            let Some(ExactSurfaceField::Plane(actual)) = exact_surface_field(graph, source)? else {
+                return Err(invalid_intersection_descriptor(
+                    "transmitted intersection source is not its certified exact plane field",
+                ));
+            };
+            if actual != certified {
+                return Err(invalid_intersection_descriptor(
+                    "transmitted intersection exact plane field does not match its certificate",
+                ));
+            }
+        }
+        for (pcurve, certified) in intersection
+            .pcurves()
+            .into_iter()
+            .zip(certificate.pcurves())
+        {
+            let geometry = GeometryRef::Curve2d(pcurve);
+            let actual = graph.curve2d(pcurve).ok_or_else(|| stale(geometry))?;
+            if actual.as_nurbs() != Some(certified) {
+                return Err(invalid_intersection_descriptor(
+                    "transmitted intersection pcurve does not match its certificate",
+                ));
+            }
+        }
+    }
+    if let Some(intersection) = descriptor.as_transmitted_nurbs_intersection() {
+        let certificate = intersection.certificate();
+        for (source, certified) in intersection
+            .source_surfaces()
+            .into_iter()
+            .zip(certificate.traces())
+        {
+            let geometry = GeometryRef::Surface(source);
+            let matches = match certified {
+                TransmittedNurbsIntersectionTrace::Plane(certified) => {
+                    exact_surface_field(graph, source)?
+                        == Some(ExactSurfaceField::Plane(*certified))
+                }
+                TransmittedNurbsIntersectionTrace::Nurbs(certified) => {
+                    graph
+                        .surface(source)
+                        .ok_or_else(|| stale(geometry))?
+                        .as_nurbs()
+                        == Some(certified)
+                }
+                TransmittedNurbsIntersectionTrace::OffsetNurbs(certified) => {
+                    let Some(offset) = graph
+                        .surface(source)
+                        .ok_or_else(|| stale(geometry))?
+                        .as_offset()
+                        .copied()
+                    else {
+                        return Err(invalid_intersection_descriptor(
+                            "transmitted offset-NURBS source is not an offset descriptor",
+                        ));
+                    };
+                    offset.signed_distance() == certified.signed_distance()
+                        && graph
+                            .surface(offset.basis())
+                            .ok_or_else(|| stale(GeometryRef::Surface(offset.basis())))?
+                            .as_nurbs()
+                            == Some(certified.basis())
+                }
+            };
+            if !matches {
+                return Err(invalid_intersection_descriptor(
+                    "transmitted NURBS-chart source does not match its ordered certificate trace",
+                ));
+            }
+        }
+        for (pcurve, certified) in intersection
+            .pcurves()
+            .into_iter()
+            .zip(certificate.pcurves())
+        {
+            let geometry = GeometryRef::Curve2d(pcurve);
+            let actual = graph.curve2d(pcurve).ok_or_else(|| stale(geometry))?;
+            if actual.as_nurbs() != Some(certified) {
+                return Err(invalid_intersection_descriptor(
+                    "transmitted NURBS-chart pcurve does not match its certificate",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn exact_surface_field(
+    graph: &GeometryGraph,
+    root: SurfaceHandle,
+) -> GeometryGraphResult<Option<ExactSurfaceField>> {
+    let mut active = Vec::new();
+    let mut active_positions = HashMap::new();
+    let mut distances = Vec::new();
+    let mut current = root;
+    let field = loop {
+        let geometry = GeometryRef::Surface(current);
+        if let Some(&start) = active_positions.get(&geometry) {
+            let mut path = active[start..].to_vec();
+            path.push(geometry);
+            return Err(GeometryGraphError::DependencyCycle { path });
+        }
+        active_positions.insert(geometry, active.len());
+        active.push(geometry);
+        match graph.surface(current).ok_or_else(|| stale(geometry))? {
+            SurfaceDescriptor::Plane(plane) => break ExactSurfaceField::Plane(*plane),
+            SurfaceDescriptor::Sphere(sphere) => break ExactSurfaceField::Sphere(*sphere),
+            SurfaceDescriptor::Offset(offset) => {
+                distances.push(offset.signed_distance());
+                current = offset.basis();
+            }
+            SurfaceDescriptor::Cylinder(_)
+            | SurfaceDescriptor::Cone(_)
+            | SurfaceDescriptor::Torus(_)
+            | SurfaceDescriptor::Nurbs(_) => return Ok(None),
+        }
+    };
+    if distances.is_empty() {
+        return Ok(Some(field));
+    }
+    match field {
+        ExactSurfaceField::Plane(plane) => {
+            let distance = distances.into_iter().rev().try_fold(0.0, |sum, value| {
+                let next = sum + value;
+                next.is_finite().then_some(next)
+            });
+            let Some(distance) = distance else {
+                return Err(invalid_intersection_descriptor(
+                    "exact plane-field offset accumulation is non-finite",
+                ));
+            };
+            let frame = plane.frame();
+            let origin = frame.origin() + frame.z() * distance;
+            if !finite3(origin) {
+                return Err(invalid_intersection_descriptor(
+                    "exact plane-field origin is non-finite",
+                ));
+            }
+            Ok(Some(ExactSurfaceField::Plane(kgeom::surface::Plane::new(
+                frame.with_origin(origin),
+            ))))
+        }
+        ExactSurfaceField::Sphere(sphere) => {
+            let mut radius = sphere.radius();
+            for distance in distances.into_iter().rev() {
+                radius += distance;
+                if !radius.is_finite() || radius <= 0.0 {
+                    return Ok(None);
+                }
+            }
+            let sphere = kgeom::surface::Sphere::new(*sphere.frame(), radius).map_err(|_| {
+                invalid_intersection_descriptor("exact sphere-field radius is invalid")
+            })?;
+            Ok(Some(ExactSurfaceField::Sphere(sphere)))
+        }
+    }
+}
+
+fn invalid_intersection_descriptor(reason: &'static str) -> GeometryGraphError {
+    GeometryGraphError::InvalidDescriptor {
+        class: crate::CurveClass::Intersection.key(),
+        reason,
+    }
+}
+
 fn validate_curve(descriptor: &CurveDescriptor) -> GeometryGraphResult<()> {
     let valid = match descriptor {
         CurveDescriptor::Line(v) => finite3(v.origin()) && finite3(v.dir()),
@@ -832,6 +1224,37 @@ fn validate_curve(descriptor: &CurveDescriptor) -> GeometryGraphResult<()> {
             v.points().iter().copied().all(finite3)
                 && v.knots().as_slice().iter().all(|x| x.is_finite())
                 && v.weights().is_none_or(|w| w.iter().all(|x| x.is_finite()))
+        }
+        CurveDescriptor::Intersection(v) => {
+            let carrier_valid = match v.carrier() {
+                VerifiedIntersectionCarrier::Line(carrier) => {
+                    finite3(carrier.origin()) && finite3(carrier.dir())
+                }
+                VerifiedIntersectionCarrier::Circle(carrier) => {
+                    finite_frame(carrier.frame()) && carrier.radius().is_finite()
+                }
+            };
+            carrier_valid && v.carrier_range().is_finite() && v.carrier_range().width() >= 0.0
+        }
+        CurveDescriptor::TransmittedIntersection(v) => {
+            let carrier = v.certificate().carrier();
+            carrier.points().iter().copied().all(finite3)
+                && carrier.knots().as_slice().iter().all(|x| x.is_finite())
+                && carrier
+                    .weights()
+                    .is_none_or(|w| w.iter().all(|x| x.is_finite()))
+                && v.certificate().carrier_range().is_finite()
+                && v.certificate().carrier_range().width() > 0.0
+        }
+        CurveDescriptor::TransmittedNurbsIntersection(v) => {
+            let carrier = v.certificate().carrier();
+            carrier.points().iter().copied().all(finite3)
+                && carrier.knots().as_slice().iter().all(|x| x.is_finite())
+                && carrier
+                    .weights()
+                    .is_none_or(|w| w.iter().all(|x| x.is_finite()))
+                && v.certificate().carrier_range().is_finite()
+                && v.certificate().carrier_range().width() > 0.0
         }
     };
     if valid {
@@ -880,6 +1303,17 @@ fn validate_curve2d(descriptor: &Curve2dDescriptor) -> GeometryGraphResult<()> {
         Curve2dDescriptor::Nurbs(v) => {
             v.points().iter().copied().all(finite2)
                 && v.weights().is_none_or(|w| w.iter().all(|x| x.is_finite()))
+        }
+        Curve2dDescriptor::SphericalCircle(v) => {
+            finite_frame(v.carrier().frame())
+                && v.carrier().radius().is_finite()
+                && finite_frame(v.sphere().frame())
+                && v.sphere().radius().is_finite()
+                && v.carrier_range().is_finite()
+                && v.carrier_range().width() > 0.0
+                && v.chart_window()
+                    .into_iter()
+                    .all(|range| range.is_finite() && range.width() >= 0.0)
         }
     };
     if valid {

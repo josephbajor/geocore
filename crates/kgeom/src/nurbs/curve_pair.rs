@@ -1,4 +1,4 @@
-//! Exact adaptive control-hull isolation for NURBS curve pairs.
+//! Source-provenanced adaptive isolation for NURBS curve pairs.
 
 use super::NurbsCurve;
 use crate::aabb::Aabb3;
@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 const DEFAULT_DEPTH: u32 = 6;
 const DEFAULT_CANDIDATES: u64 = 4_096;
-const DEFAULT_SUBDIVISIONS: u64 = 1_366;
+const DEFAULT_SUBDIVISIONS: u64 = 6_828;
 
 const fn stage(value: &'static str) -> StageId {
     match StageId::new(value) {
@@ -25,20 +25,21 @@ const fn stage(value: &'static str) -> StageId {
     }
 }
 
-/// Cumulative exact curve-pair setup and subdivision attempts.
+/// Cumulative curve-pair setup and deterministic subdivision attempts.
 pub const NURBS_CURVE_PAIR_SUBDIVISIONS: StageId = stage("kgeom.nurbs.curve-pair-subdivisions");
 /// High-water retained conservative curve-pair candidate cells.
 pub const NURBS_CURVE_PAIR_CANDIDATES: StageId = stage("kgeom.nurbs.curve-pair-candidates");
-/// High-water exact binary subdivision depth per curve in a pair cell.
+/// High-water binary subdivision depth per curve in a pair cell.
 pub const NURBS_CURVE_PAIR_DEPTH: StageId = stage("kgeom.nurbs.curve-pair-depth");
 
-/// Version-1 bounded profile for exact NURBS curve-pair isolation.
+/// Version-1 bounded profile for source-provenanced NURBS curve-pair isolation.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NurbsCurvePairBudgetProfile;
 
 impl NurbsCurvePairBudgetProfile {
-    /// Exact ceilings for one root pair through six four-way rounds: at most
-    /// 4,096 retained cells and 1,366 setup/subdivision charges.
+    /// Exact ceilings for one single-span root pair through six four-way
+    /// rounds: at most 4,096 retained cells and 6,828 setup, subdivision, and
+    /// source-range span-scan charges.
     pub fn v1_defaults() -> BudgetPlan {
         BudgetPlan::new([
             LimitSpec::new(
@@ -89,9 +90,9 @@ impl NurbsCurvePairBudgetProfile {
     }
 }
 
-/// One derived subcurve pair whose control hulls are not certified farther
-/// apart than the requested Euclidean tolerance, with shared provenance back
-/// to the original source curves.
+/// One derived subcurve pair whose conservative source-range position
+/// enclosures are not certified farther apart than the requested Euclidean
+/// tolerance, with shared provenance back to the original source curves.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CurvePairCandidateCell {
     first: NurbsCurve,
@@ -184,17 +185,17 @@ impl CurvePairCandidateCell {
         self.second.param_range()
     }
 
-    /// Conservative first control-hull box.
+    /// Conservative first source-range position enclosure.
     pub const fn first_bounds(&self) -> Aabb3 {
         self.first_bounds
     }
 
-    /// Conservative second control-hull box.
+    /// Conservative second source-range position enclosure.
     pub const fn second_bounds(&self) -> Aabb3 {
         self.second_bounds
     }
 
-    /// Number of exact pair-subdivision rounds from the requested root pair.
+    /// Number of pair-subdivision rounds from the requested root pair.
     pub const fn depth(&self) -> u32 {
         self.depth
     }
@@ -262,6 +263,16 @@ fn certify_full_source_pair(
     {
         return Some(certificate(projection_plane, determinant_lower_bound));
     }
+    if let Some((projection_plane, determinant_lower_bound)) =
+        super::spatial_algebraic_correspondence::certify_algebraic_spatial_root(
+            first,
+            first_range,
+            second,
+            second_range,
+        )
+    {
+        return Some(certificate(projection_plane, determinant_lower_bound));
+    }
     let (plane, axes) = exact_common_plane_projection(first, second)?;
     for axes in [axes, [axes[1], axes[0]]] {
         if let Some(determinant_lower_bound) = certify_projected_unique_root(first, second, axes) {
@@ -310,6 +321,22 @@ fn certify_partial_source_pair(
         {
             return Some(certificate());
         }
+    }
+
+    if let Some((projection_plane, determinant_lower_bound)) =
+        super::spatial_algebraic_correspondence::certify_algebraic_spatial_root(
+            first,
+            first_range,
+            second,
+            second_range,
+        )
+    {
+        return Some(CurvePairRootCertificate {
+            first_range,
+            second_range,
+            projection_plane,
+            determinant_lower_bound,
+        });
     }
 
     let (plane, axes) = exact_common_plane_projection(first, second)?;
@@ -460,7 +487,7 @@ fn certify_projected_unique_root(
     None
 }
 
-fn certify_projected_unique_root_in_ranges(
+pub(super) fn certify_projected_unique_root_in_ranges(
     first: &NurbsCurve,
     first_range: ParamRange,
     second: &NurbsCurve,
@@ -805,7 +832,7 @@ impl CurvePairIsolation {
         &self.candidates
     }
 
-    /// Requested exact pair-subdivision depth.
+    /// Requested pair-subdivision depth.
     pub const fn requested_depth(&self) -> u32 {
         self.requested_depth
     }
@@ -824,7 +851,7 @@ impl CurvePairIsolation {
                 .all(|candidate| candidate.depth == self.requested_depth)
     }
 
-    /// True only when complete control-hull pruning excluded every pair.
+    /// True only when complete source-range enclosure pruning excluded every pair.
     pub fn is_proven_empty(&self) -> bool {
         self.is_complete() && self.candidates.is_empty()
     }
@@ -857,7 +884,7 @@ struct WorkCell {
     blocked: bool,
 }
 
-/// Isolate a conservative exact-subcurve cover of every possible contact.
+/// Isolate a conservative source-range cover of every possible contact.
 pub fn isolate_curve_pair_candidates_in_scope(
     first: &NurbsCurve,
     first_range: ParamRange,
@@ -869,9 +896,10 @@ pub fn isolate_curve_pair_candidates_in_scope(
 ) -> core::result::Result<CurvePairIsolation, ContextCurvePairIsolationError> {
     validate_inputs(first, first_range, second, second_range, margin)?;
     require_profile(scope)?;
+    let initial_work = source_range_work_units(first, second, 1)?;
     scope
         .ledger_mut()
-        .charge(NURBS_CURVE_PAIR_SUBDIVISIONS, 1)?;
+        .charge(NURBS_CURVE_PAIR_SUBDIVISIONS, initial_work)?;
 
     let first_source = Arc::new(first.clone());
     let second_source = Arc::new(second.clone());
@@ -942,7 +970,12 @@ pub fn isolate_curve_pair_candidates_in_scope(
                 next.push(work);
                 continue;
             }
-            match scope.ledger_mut().charge(NURBS_CURVE_PAIR_SUBDIVISIONS, 1) {
+            let subdivision_work =
+                source_range_work_units(&work.cell.first_source, &work.cell.second_source, 2)?;
+            match scope
+                .ledger_mut()
+                .charge(NURBS_CURVE_PAIR_SUBDIVISIONS, subdivision_work)
+            {
                 Ok(()) => {}
                 Err(OperationPolicyError::LimitReached(snapshot)) => {
                     limits.subdivision_work = Some(snapshot);
@@ -1059,8 +1092,33 @@ fn candidate_cell_with_sources(
     depth: u32,
     margin: f64,
 ) -> Option<CurvePairCandidateCell> {
-    let first_bounds = first.bounding_box(first.param_range());
-    let second_bounds = second.bounding_box(second.param_range());
+    let first_bounds =
+        super::source_range_interval::position_range_aabb(&first_source, first.param_range());
+    let second_bounds =
+        super::source_range_interval::position_range_aabb(&second_source, second.param_range());
+    candidate_cell_with_source_bounds(
+        first,
+        second,
+        first_source,
+        second_source,
+        first_bounds,
+        second_bounds,
+        depth,
+        margin,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn candidate_cell_with_source_bounds(
+    first: NurbsCurve,
+    second: NurbsCurve,
+    first_source: Arc<NurbsCurve>,
+    second_source: Arc<NurbsCurve>,
+    first_bounds: Aabb3,
+    second_bounds: Aabb3,
+    depth: u32,
+    margin: f64,
+) -> Option<CurvePairCandidateCell> {
     let axis_candidate = first_bounds.inflated(margin).intersects(second_bounds);
     let margin_squared = (Interval::point(margin) * Interval::point(margin)).hi();
     (axis_candidate && first_bounds.squared_distance_lower_bound(second_bounds) <= margin_squared)
@@ -1092,16 +1150,30 @@ fn split_children(
     }
     let (first_low, first_high) = parent.first.split_at(first_mid)?;
     let (second_low, second_high) = parent.second.split_at(second_mid)?;
-    let first = [first_low, first_high];
-    let second = [second_low, second_high];
+    let first = [first_low, first_high].map(|curve| {
+        let bounds = super::source_range_interval::position_range_aabb(
+            &parent.first_source,
+            curve.param_range(),
+        );
+        (curve, bounds)
+    });
+    let second = [second_low, second_high].map(|curve| {
+        let bounds = super::source_range_interval::position_range_aabb(
+            &parent.second_source,
+            curve.param_range(),
+        );
+        (curve, bounds)
+    });
     let mut children = Vec::with_capacity(4);
-    for first in first {
-        for second in &second {
-            if let Some(cell) = candidate_cell_with_sources(
+    for (first, first_bounds) in first {
+        for (second, second_bounds) in &second {
+            if let Some(cell) = candidate_cell_with_source_bounds(
                 first.clone(),
                 second.clone(),
                 Arc::clone(&parent.first_source),
                 Arc::clone(&parent.second_source),
+                first_bounds,
+                *second_bounds,
                 parent.depth + 1,
                 margin,
             ) {
@@ -1150,6 +1222,31 @@ fn usize_to_u64(
     resource: ResourceKind,
 ) -> core::result::Result<u64, OperationPolicyError> {
     u64::try_from(value).map_err(|_| OperationPolicyError::AccountingOverflow { stage, resource })
+}
+
+fn source_range_work_units(
+    first: &NurbsCurve,
+    second: &NurbsCurve,
+    evaluations_per_source: u64,
+) -> core::result::Result<u64, OperationPolicyError> {
+    let first = usize_to_u64(
+        super::source_range_interval::position_range_work_units(first),
+        NURBS_CURVE_PAIR_SUBDIVISIONS,
+        ResourceKind::Work,
+    )?;
+    let second = usize_to_u64(
+        super::source_range_interval::position_range_work_units(second),
+        NURBS_CURVE_PAIR_SUBDIVISIONS,
+        ResourceKind::Work,
+    )?;
+    first
+        .checked_add(second)
+        .and_then(|spans| spans.checked_mul(evaluations_per_source))
+        .and_then(|range_work| range_work.checked_add(1))
+        .ok_or(OperationPolicyError::AccountingOverflow {
+            stage: NURBS_CURVE_PAIR_SUBDIVISIONS,
+            resource: ResourceKind::Work,
+        })
 }
 
 #[cfg(test)]
@@ -1284,6 +1381,77 @@ mod tests {
         let boundary = constant(Point3::new(3.0, 4.0, 0.0));
         assert!(candidate_cell(origin.clone(), boundary.clone(), 0, 5.0).is_some());
         assert!(candidate_cell(boundary, origin, 0, 5.0).is_some());
+    }
+
+    #[test]
+    fn rounded_subdivision_hulls_cannot_exclude_an_exact_source_contact() {
+        let contact_z = 9_007_199_254_740_991.0;
+        let first = NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(-1.0, 0.0, 9_007_199_254_740_360.0),
+                Point3::new(-1.0 / 3.0, 0.0, 9_007_199_254_740_978.0),
+                Point3::new(1.0 / 3.0, 0.0, 9_007_199_254_741_648.0),
+                Point3::new(1.0, 0.0, 9_007_199_254_739_690.0),
+            ],
+            None,
+        )
+        .unwrap();
+        let second = segment(
+            Point3::new(0.0, -1.0, contact_z),
+            Point3::new(0.0, 1.0, contact_z),
+            None,
+        );
+
+        assert!(
+            certify_curve_pair_unique_root(
+                &first,
+                first.param_range(),
+                &second,
+                second.param_range(),
+            )
+            .unwrap()
+            .is_some(),
+            "the original dyadic source representations meet exactly at both midpoints"
+        );
+        let (first_low, first_high) = first.split_at(0.5).unwrap();
+        assert_eq!(first_low.points().last().unwrap().z, contact_z - 1.0);
+        assert_eq!(first_high.points().first().unwrap().z, contact_z - 1.0);
+        assert!(
+            first_low
+                .points()
+                .iter()
+                .chain(first_high.points())
+                .all(|point| point.z < contact_z),
+            "the rounded child hulls deliberately lose the exact source midpoint"
+        );
+
+        let session = SessionPolicy::v1();
+        let context = OperationContext::new(&session, Tolerances::default())
+            .unwrap()
+            .with_family_budget_defaults(NurbsCurvePairBudgetProfile::v1_defaults());
+        let mut scope = OperationScope::new(&context);
+        let isolation = isolate_curve_pair_candidates_in_scope(
+            &first,
+            first.param_range(),
+            &second,
+            second.param_range(),
+            0.0,
+            1,
+            &mut scope,
+        )
+        .unwrap();
+        let exact_contact = Point3::new(0.0, 0.0, contact_z);
+
+        assert!(isolation.is_complete());
+        assert!(!isolation.is_proven_empty());
+        assert!(isolation.candidates().iter().any(|candidate| {
+            candidate.first_range().contains(0.5)
+                && candidate.second_range().contains(0.5)
+                && candidate.first_bounds().contains(exact_contact)
+                && candidate.second_bounds().contains(exact_contact)
+        }));
     }
 
     #[test]
@@ -1565,9 +1733,81 @@ mod tests {
                     NURBS_CURVE_PAIR_SUBDIVISIONS,
                     ResourceKind::Work,
                     AccountingMode::Cumulative,
-                    1_366,
+                    6_828,
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn source_span_scans_are_pre_admitted_at_exact_work_boundaries() {
+        let first = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 0.25, 0.75, 1.0, 1.0],
+            vec![
+                Point3::new(-1.0, 0.0, 0.0),
+                Point3::new(-0.25, 0.0, 0.0),
+                Point3::new(0.25, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+            ],
+            None,
+        )
+        .unwrap();
+        let second = segment(
+            Point3::new(0.0, -1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            None,
+        );
+
+        // Setup evaluates one three-slot and one one-slot source enclosure.
+        // The first split evaluates two ranges for each source: 1 + 2*(3+1).
+        let exact_work = 5 + 9;
+        let exact = run(
+            &first,
+            &second,
+            1,
+            BudgetPlan::new([LimitSpec::new(
+                NURBS_CURVE_PAIR_SUBDIVISIONS,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                exact_work,
+            )])
+            .unwrap(),
+        );
+        assert!(exact.result().unwrap().is_complete());
+        assert_eq!(
+            usage(
+                exact.report(),
+                NURBS_CURVE_PAIR_SUBDIVISIONS,
+                ResourceKind::Work,
+            )
+            .consumed,
+            exact_work,
+        );
+
+        let low = run(
+            &first,
+            &second,
+            1,
+            BudgetPlan::new([LimitSpec::new(
+                NURBS_CURVE_PAIR_SUBDIVISIONS,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                exact_work - 1,
+            )])
+            .unwrap(),
+        );
+        let isolation = low.result().unwrap();
+        assert!(!isolation.is_complete());
+        assert_eq!(isolation.candidates().len(), 1);
+        assert_eq!(
+            low.report().limit_events(),
+            &[LimitSnapshot {
+                stage: NURBS_CURVE_PAIR_SUBDIVISIONS,
+                resource: ResourceKind::Work,
+                consumed: exact_work,
+                allowed: exact_work - 1,
+            }],
         );
     }
 
