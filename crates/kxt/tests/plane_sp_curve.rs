@@ -17,6 +17,7 @@ use kxt::{
 const EXEMPLAR: &[u8] = include_bytes!("fixtures/exemplar.x_t");
 const V5_WORK: u64 = 117_478_445;
 const V6_WORK: u64 = 208_228_426;
+const V6_NEXT_CHART_ATTEMPT: u64 = 221_060_174;
 
 fn field<'a>(file: &'a kxt::XtFile, index: u32, name: &str) -> &'a Value {
     file.field(&file.nodes[&index], name).unwrap()
@@ -75,16 +76,22 @@ fn assert_rollback(store: &Store) {
     assert_eq!(store.count::<SurfaceGeom>(), 0);
 }
 
-fn assert_post_ring_chart_data_boundary(error: &XtError) {
-    assert!(
-        matches!(
-            error,
-            XtError::Unsupported {
-                capability: XtCapability::IntersectionChartData,
-                what: "INTERSECTION_DATA contains null or non-finite UV values",
-            }
+fn assert_v6_next_chart_work_boundary(error: &XtError) {
+    let crossing = error.limit().expect("v6 must stop at the next chart proof");
+    assert_eq!(
+        (
+            crossing.stage,
+            crossing.resource,
+            crossing.consumed,
+            crossing.allowed,
         ),
-        "unexpected post-SP-curve boundary: {error:?}"
+        (
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+            V6_NEXT_CHART_ATTEMPT,
+            V6_WORK,
+        ),
+        "unexpected post-SP-curve boundary: {error:?}",
     );
 }
 
@@ -162,7 +169,7 @@ fn node_30_and_face_1195_pin_the_exact_plane_lift_and_ring_topology() {
 }
 
 #[test]
-fn v6_lifts_node_30_and_advances_atomically_past_the_ring_domain_boundary() {
+fn v6_lifts_node_30_and_stops_atomically_at_the_next_chart_proof() {
     let file = read_xt(EXEMPLAR).unwrap();
     let session = SessionPolicy::v1();
     let mut store = Store::new();
@@ -172,7 +179,7 @@ fn v6_lifts_node_30_and_advances_atomically_past_the_ring_domain_boundary() {
         &context_with_plan(&session, IntersectionImportBudgetProfile::v6_defaults()),
     )
     .unwrap();
-    assert_post_ring_chart_data_boundary(outcome.result().as_ref().unwrap_err());
+    assert_v6_next_chart_work_boundary(outcome.result().as_ref().unwrap_err());
     assert!(outcome.report().limit_events().is_empty());
     assert_eq!(
         usage(

@@ -1,6 +1,6 @@
 # F1 procedural geometry graph
 
-Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, or compatible direct-NURBS/NURBS descriptors, plus M3c transmitted-chart consumers through endpoint-only equal-limit closure, finite-open/end-terminated `T/F` singular closure, and the first finite-open B-surface/Plane chart with omitted interior Plane UVs are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
+Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, or compatible direct-NURBS/NURBS descriptors, plus M3c transmitted-chart consumers through endpoint-only equal-limit closure, finite-open/end-terminated `T/F` singular closure, and finite-open B-surface/Plane or Plane/Offset(B-surface) charts with omitted interior Plane UVs are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
 
 ## Outcome
 
@@ -776,9 +776,15 @@ the open, nonperiodic, nonrational 2D B-curve controls. Exactly one certified
 periodic NURBS axis may close an equal-limit chart; only its endpoints are
 unwrapped by one exact period before the whole-range interval proof, and that
 proof alone promotes the closed transmitted carrier to periodic evaluation and
-bounds. FACE 1195 can therefore derive its vertex-less ring domain. The next
-boundary is later `INTERSECTION` 5089 / `INTERSECTION_DATA` 5092, where sample
-2 operand 0 has a null UV pair. An end terminator contributes a
+bounds. FACE 1195 can therefore derive its vertex-less ring domain. Production
+v7 certifies later `INTERSECTION` 5089 / `INTERSECTION_DATA` 5092, where
+sample 2 operand 0 has a paired-null interior Plane UV, through exact frame
+inversion plus the unchanged whole-carrier Plane/Offset-NURBS proof. V6 remains
+exact at `208228426/22/10` and pins its next attempted 221,060,174 Work; v7 is
+exact at `272430166/22/10` and rolls back before `INTERSECTION` 1984's attempted
+285,283,414-Work proof. A diagnostic-cap continuation reaches trace `First` and
+rejects because its transmitted NURBS pcurve leaves the original source domain.
+An end terminator contributes a
 tolerance-close, distinct singularity
 and one extra paired-UV tuple whose appended span is certified with the same
 whole-range proof. Records 1828 and 1671 are admitted in place, while the
@@ -863,9 +869,9 @@ the graph ownership model.
   basis, and paired pcurves, pin exact 14,336/2/10 proof accounting, reject
   singular or underflowed normal fields and altered dependencies, and advance
   the production corpus through record 1828, end-terminated record 1671, and
-  finite-open record 1252 and native direct-Plane `SP_CURVE` node 30 through
-  FACE 1195's vertex-less ring domain to the null chart-data boundary at
-  `INTERSECTION` 5089 / data 5092. The equal-limit
+  finite-open records 1252 and 5089 and native direct-Plane `SP_CURVE` node 30
+  through FACE 1195's vertex-less ring domain to `INTERSECTION` 1984's
+  proof-preflight boundary. The equal-limit
   suite separately pins both records, exact v3
   `115485725/20/10`, record-2008 transplant `124040223/22/10`, endpoint-only
   period unwrapping, and typed null/distinct-closed/off-seam rollback. The
@@ -877,7 +883,11 @@ the graph ownership model.
   exact N/N-1 rollback, and the preserved v5 chart crossing. The SP-curve
   suite pins exact v6 `208228426/22/10`, per-resource N/N-1 rollback, the
   affine control lift, typed approximation rejection, certificate-derived
-  periodic carrier semantics, and the next null chart-data boundary.
+  periodic carrier semantics, and the 221,060,174-Work next attempt. The next
+  omitted-data suite pins exact v7 `272430166/22/10`, per-resource N/N-1
+  rollback, paired-null interior Plane recovery for Plane/Offset(B-surface),
+  typed endpoint/half-null/NURBS omissions, whole-carrier residual rejection,
+  and the 285,283,414-Work next proof preflight.
 
 ### Offset evaluator tests
 

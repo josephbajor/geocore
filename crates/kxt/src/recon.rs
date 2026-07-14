@@ -258,6 +258,34 @@ impl IntersectionImportBudgetProfile {
         .expect("built-in X_T native Plane SP-curve profile is valid")
     }
 
+    /// Corpus-backed defaults through the first finite-open
+    /// Plane/Offset(B-surface) chart with an omitted interior Plane UV pair.
+    ///
+    /// Historical v1-v6 profiles retain their exact policy contracts.
+    pub fn v7_defaults() -> BudgetPlan {
+        BudgetPlan::new([
+            LimitSpec::new(
+                INTERSECTION_CHART_CERTIFICATE_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                272_430_166,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_ITEMS,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                65_536,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64,
+            ),
+        ])
+        .expect("built-in X_T finite-open Plane/Offset(B-surface) profile is valid")
+    }
+
     fn validate(ledger: &WorkLedger) -> core::result::Result<(), OperationPolicyError> {
         ledger.require_limit(
             INTERSECTION_CHART_CERTIFICATE_WORK,
@@ -302,7 +330,7 @@ pub struct Reconstruction {
 pub fn reconstruction_budget_profile() -> BudgetPlan {
     let graph = EvalBudgetProfile::v1_defaults();
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v6_defaults();
+    let intersection = IntersectionImportBudgetProfile::v7_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -318,7 +346,7 @@ fn reconstruction_compatibility_budget() -> BudgetPlan {
     let graph =
         EvalBudgetProfile::for_limits(EvalLimits::default().max_dependency_depth, usize::MAX);
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v6_defaults();
+    let intersection = IntersectionImportBudgetProfile::v7_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -2158,9 +2186,8 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
         ];
         let finite_open_plane_nurbs_interior_omissions = !equal_limits
             && !terminated
-            && !has_offset_source
-            && nurbs_source_count == 1
-            && direct_planes.iter().flatten().count() == 1;
+            && nurbs_trace_count == 1
+            && exact_trace_planes.iter().flatten().count() == 1;
         let mut uv = [
             Vec::with_capacity(retained_count),
             Vec::with_capacity(retained_count),

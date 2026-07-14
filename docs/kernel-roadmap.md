@@ -679,12 +679,18 @@ B-curve controls. The affine Plane map preserves degree, knots, and
 parameterization without approximation. The equal-limit proof now promotes
 its closed carrier to periodic semantics only after one complete certified
 NURBS seam crossing, so vertex-less EDGE 2210 remains a topology ring and FACE
-1195 derives its finite domain. Reconstruction now stops at `INTERSECTION`
-5089 / `INTERSECTION_DATA` 5092, whose sample 2 operand 0 UV pair is null. Its
-manifest row is `reconstruct: unsupported` with
-`xt.read.intersection-chart-data` and remains the committed progress meter:
-`reconstruct: unsupported → pass`, then `tessellate: pass`, then full-checker
-gaps shrinking toward `valid`. Dependency plan:
+1195 derives its finite domain. Production v7 then certifies finite-open
+Plane/Offset(B-surface) `INTERSECTION` 5089 by recovering sample 2 operand 0's
+paired-null interior Plane UV through exact frame inversion and rerunning the
+whole-carrier Plane/Offset-NURBS proof. V1-v6 remain unchanged; v6 pins its
+next denied attempt at 221,060,174 Work, while v7 admits exact
+`272430166/22/10` Work/Items/Depth. Reconstruction now stops atomically at the
+next `INTERSECTION` 1984 proof preflight, which attempts 285,283,414 Work. A
+diagnostic-cap continuation reaches trace `First` and rejects because the
+transmitted NURBS pcurve leaves its original source domain. Its manifest row is
+`reconstruct: fail` with no capability and remains the committed
+progress meter: `reconstruct: fail → pass`, then `tessellate: pass`, then
+full-checker gaps shrinking toward `valid`. Dependency plan:
 
 1. **COMPLETE — geometry graph with the offset-surface evaluator as its first
    import client.** The M2.5-B evaluation context and `OFFSET_SURF`
@@ -746,9 +752,12 @@ gaps shrinking toward `valid`. Dependency plan:
    crossing. Production v6 admits the native direct-Plane SP-curve lift and
    every later already-supported chart it exposes at exact
    `208228426/22/10` Work/Items/Depth, derives FACE 1195's vertex-less ring
-   domain from certificate-owned periodic carrier semantics, then fails
-   atomically at the later null sample-2 operand-0 UV pair in intersection data
-   5092. Both
+   domain from certificate-owned periodic carrier semantics, then pins its next
+   denied chart proof at 221,060,174 Work. Production v7 admits finite-open
+   Plane/Offset(B-surface) record 5089 at exact `272430166/22/10`: only
+   paired-null interior Plane samples may use exact frame inversion, and the
+   existing whole-carrier certificate remains authoritative. It then fails
+   atomically before `INTERSECTION` 1984's 285,283,414-Work proof. Both
    original B-surface identities and their paired pcurves are graph-protected
    in source order. Other parameter conventions, limits,
    nullable data, periodic/closed transmitted trace ranges, arbitrary unclamped
@@ -758,10 +767,10 @@ gaps shrinking toward `valid`. Dependency plan:
    reconstruct, wrap evaluation, bound seam-crossing ranges, and write matching
    periodic/closed flags. Its first Offset(B-surface)/B-surface chart now
    certifies. The endpoint-only equal-limit records 1828 and 2008 and the
-   end-terminated records 1671 and 1678, finite-open record 1252, and native
-   Plane SP-curve node 30 now certify; FACE 1195's vertex-less ring domain also
-   derives, advancing the corpus ratchet to `INTERSECTION` 5089's null chart
-   data boundary.
+   end-terminated records 1671 and 1678, finite-open records 1252 and 5089, and
+   native Plane SP-curve node 30 now certify; FACE 1195's vertex-less ring
+   domain also derives, advancing the corpus ratchet to `INTERSECTION` 1984's
+   proof-preflight boundary.
    Original-backed, tolerance-qualified, non-Plane, reversed-basis, periodic,
    closed, rational, or non-2D SP-curves, foreign curves, null/general
    closed-limit, endpoint or NURBS-trace omissions, other nullable
