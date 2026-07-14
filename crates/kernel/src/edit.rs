@@ -13,7 +13,7 @@ use crate::error::{Error, Result};
 use crate::session::PartEdit;
 use crate::{
     BodyId, BoundedCurve, ChangeJournal, CurveId, EdgeId, EntityKind, FaceId, FinId, LoopId,
-    OperationOutcome, OperationSettings, ParamRange, PartId, PcurveId,
+    OperationOutcome, OperationSettings, ParamRange, PartId, PcurveId, Sense, SurfaceId,
 };
 
 /// Validated affine correspondence from edge parameter `t` to pcurve
@@ -645,6 +645,120 @@ impl JoinRingResult {
     }
 }
 
+/// Absorb one single-loop face into another face of the same shell as a ring.
+///
+/// Topology proves ownership, incidence, and Euler structure, but it does not
+/// pre-certify that the moved loop is geometrically contained as a hole in the
+/// surviving face. Checked commit is the final persistence authority and
+/// applies the supported Fast checks failure-atomically; callers still need
+/// operation-specific containment evidence where Fast cannot prove it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeFaceAsHoleRequest {
+    keep: FaceId,
+    remove: FaceId,
+}
+
+impl MergeFaceAsHoleRequest {
+    /// Select the surviving face and the single-loop face to absorb.
+    pub const fn new(keep: FaceId, remove: FaceId) -> Self {
+        Self { keep, remove }
+    }
+
+    /// Face that survives and receives the ring.
+    pub fn keep(&self) -> FaceId {
+        self.keep.clone()
+    }
+
+    /// Single-loop face removed by the operation.
+    pub fn remove(&self) -> FaceId {
+        self.remove.clone()
+    }
+}
+
+/// Identities retained after absorbing one face as a ring hole.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeFaceAsHoleResult {
+    face: FaceId,
+    ring: LoopId,
+}
+
+impl MergeFaceAsHoleResult {
+    /// Surviving face identity.
+    pub fn face(&self) -> FaceId {
+        self.face.clone()
+    }
+
+    /// Moved loop, now owned by the surviving face.
+    pub fn ring(&self) -> LoopId {
+        self.ring.clone()
+    }
+}
+
+/// Detach one loop of a multi-loop face into a new face.
+///
+/// The caller supplies the new supporting surface and orientation. Topology
+/// does not pre-certify that the selected loop is geometrically an inner hole;
+/// checked commit applies the supported Fast checks before persistence, while
+/// callers retain any operation-specific containment proof obligation that
+/// Fast cannot discharge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SplitHoleAsFaceRequest {
+    ring: LoopId,
+    surface: SurfaceId,
+    sense: Sense,
+}
+
+impl SplitHoleAsFaceRequest {
+    /// Select a ring plus the new face's supporting carrier and orientation.
+    pub const fn new(ring: LoopId, surface: SurfaceId, sense: Sense) -> Self {
+        Self {
+            ring,
+            surface,
+            sense,
+        }
+    }
+
+    /// Loop moved to the new face.
+    pub fn ring(&self) -> LoopId {
+        self.ring.clone()
+    }
+
+    /// Supporting surface of the new face.
+    pub fn surface(&self) -> SurfaceId {
+        self.surface.clone()
+    }
+
+    /// New face orientation relative to its surface.
+    pub const fn sense(&self) -> Sense {
+        self.sense
+    }
+}
+
+/// Identities produced by detaching one ring into a new face.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SplitHoleAsFaceResult {
+    source_face: FaceId,
+    face: FaceId,
+    loop_id: LoopId,
+}
+
+impl SplitHoleAsFaceResult {
+    /// Surviving source face.
+    pub fn source_face(&self) -> FaceId {
+        self.source_face.clone()
+    }
+
+    /// Newly created face.
+    pub fn face(&self) -> FaceId {
+        self.face.clone()
+    }
+
+    /// Same loop identity moved from source to new face.
+    pub fn loop_id(&self) -> LoopId {
+        self.loop_id.clone()
+    }
+}
+
 /// Failure-atomic composition of checked semantic edits on one part.
 ///
 /// Dropping this value rolls every uncommitted mutation back. Only the
@@ -842,6 +956,134 @@ impl EditTransaction<'_> {
         })
     }
 
+    /// Absorb a single-loop face as a ring of another face in the same shell.
+    ///
+    /// This preflights structural ownership and moved pcurve incidence. It
+    /// does not claim geometric hole containment. Checked commit is the final
+    /// persistence authority for supported Fast checks and restores failures
+    /// atomically; unsupported containment still needs caller evidence.
+    pub fn merge_face_as_hole(
+        &mut self,
+        request: MergeFaceAsHoleRequest,
+    ) -> Result<MergeFaceAsHoleResult> {
+        self.validate_part(request.keep.part())?;
+        self.validate_part(request.remove.part())?;
+        let keep = self
+            .inner
+            .store()
+            .get(request.keep.raw())
+            .map_err(|_| Error::StaleEntity {
+                kind: EntityKind::Face,
+            })?;
+        let remove =
+            self.inner
+                .store()
+                .get(request.remove.raw())
+                .map_err(|_| Error::StaleEntity {
+                    kind: EntityKind::Face,
+                })?;
+        if request.keep == request.remove {
+            return Err(kcore::error::Error::InvalidGeometry {
+                reason: "face-as-hole merge requires two distinct faces",
+            }
+            .into());
+        }
+        if keep.shell() != remove.shell() {
+            return Err(kcore::error::Error::InvalidGeometry {
+                reason: "face-as-hole merge requires one owning shell",
+            }
+            .into());
+        }
+        self.inner
+            .store()
+            .get(keep.shell())
+            .map_err(|_| Error::StaleEntity {
+                kind: EntityKind::Shell,
+            })?;
+        for surface in [keep.surface(), remove.surface()] {
+            self.inner
+                .store()
+                .geometry()
+                .surface(surface)
+                .ok_or(Error::StaleEntity {
+                    kind: EntityKind::Surface,
+                })?;
+        }
+        let [ring] = remove.loops() else {
+            return Err(kcore::error::Error::InvalidGeometry {
+                reason: "face-as-hole merge requires the removed face to own exactly one loop",
+            }
+            .into());
+        };
+        self.inner
+            .store()
+            .get(*ring)
+            .map_err(|_| Error::StaleEntity {
+                kind: EntityKind::Loop,
+            })?;
+
+        let ring = self
+            .inner
+            .merge_face_as_hole(request.keep.raw(), request.remove.raw())?;
+        Ok(MergeFaceAsHoleResult {
+            face: request.keep,
+            ring: LoopId::new(self.part.clone(), ring),
+        })
+    }
+
+    /// Detach one loop of a multi-loop face into a new face.
+    ///
+    /// The selected loop's geometric hole role is not pre-certified. Carrier
+    /// incidence is preflighted; checked commit gates persistence with
+    /// supported Fast checks, while unproved containment remains a caller
+    /// obligation.
+    pub fn split_hole_as_face(
+        &mut self,
+        request: SplitHoleAsFaceRequest,
+    ) -> Result<SplitHoleAsFaceResult> {
+        self.validate_part(request.ring.part())?;
+        self.validate_part(request.surface.part())?;
+        let ring = self
+            .inner
+            .store()
+            .get(request.ring.raw())
+            .map_err(|_| Error::StaleEntity {
+                kind: EntityKind::Loop,
+            })?;
+        self.require_surface(&request.surface)?;
+        let source_face = ring.face();
+        let source = self
+            .inner
+            .store()
+            .get(source_face)
+            .map_err(|_| Error::StaleEntity {
+                kind: EntityKind::Face,
+            })?;
+        self.inner
+            .store()
+            .get(source.shell())
+            .map_err(|_| Error::StaleEntity {
+                kind: EntityKind::Shell,
+            })?;
+        if source.loops().len() < 2 {
+            return Err(kcore::error::Error::InvalidGeometry {
+                reason: "hole split requires another loop to remain on the source face",
+            }
+            .into());
+        }
+
+        let face = self.inner.split_hole_as_face(
+            request.ring.raw(),
+            request.surface.raw(),
+            request.sense,
+        )?;
+        Ok(SplitHoleAsFaceResult {
+            source_face: FaceId::new(self.part.clone(), source_face),
+            face: FaceId::new(self.part.clone(), face),
+            loop_id: request.ring,
+        })
+    }
+
     /// Fast-check every affected body and commit one journal atomically.
     ///
     /// `roots` supplies preferred result-body validation order. Wrong-part or
@@ -905,6 +1147,18 @@ impl EditTransaction<'_> {
             .map(|_| ())
             .ok_or(Error::StaleEntity {
                 kind: EntityKind::Pcurve,
+            })
+    }
+
+    fn require_surface(&self, surface: &SurfaceId) -> Result<()> {
+        self.validate_part(surface.part())?;
+        self.inner
+            .store()
+            .geometry()
+            .surface(surface.raw())
+            .map(|_| ())
+            .ok_or(Error::StaleEntity {
+                kind: EntityKind::Surface,
             })
     }
 }
@@ -1573,6 +1827,232 @@ mod tests {
             })
         ));
         assert_eq!(edit.as_part().loops().len(), loop_count);
+    }
+
+    #[test]
+    fn face_hole_merge_split_round_trip_preserves_pcurves_lineage_and_identity() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let mut edit = session.edit_part(part_id.clone()).unwrap();
+        let body = block(&mut edit);
+        let split_request = split_request(&mut edit, &body);
+        let keep = edit
+            .as_part()
+            .loop_(split_request.loop_id())
+            .unwrap()
+            .face();
+        let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+        let split = transaction.split_face(split_request).unwrap();
+        transaction
+            .commit(core::slice::from_ref(&body))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        let remove = split.face();
+        let ring = split.loop_id();
+
+        let (equivalent_surface, remove_sense) = {
+            let store = edit.store_mut_for_test();
+            let remove_face = store.get(remove.raw()).unwrap();
+            let remove_sense = remove_face.sense();
+            let original_surface = remove_face.surface();
+            let plane = match store.get(original_surface).unwrap() {
+                SurfaceGeom::Plane(plane) => *plane,
+                _ => panic!("split block face must remain planar"),
+            };
+            let equivalent = store.insert_surface(SurfaceGeom::Plane(plane)).unwrap();
+            let mut transaction = store.transaction().unwrap();
+            transaction
+                .assembly()
+                .get_mut(remove.raw())
+                .unwrap()
+                .surface = equivalent;
+            transaction.commit_checked_body(body.raw()).unwrap();
+            (SurfaceId::new(part_id.clone(), equivalent), remove_sense)
+        };
+        assert_ne!(
+            edit.as_part().face(keep.clone()).unwrap().surface(),
+            equivalent_surface
+        );
+
+        let expected_pcurves = edit
+            .as_part()
+            .loop_(ring.clone())
+            .unwrap()
+            .fins()
+            .map(|fin| {
+                let part = edit.as_part();
+                let fin = part.fin(fin).unwrap();
+                (
+                    fin.pcurve(),
+                    fin.pcurve_range(),
+                    fin.pcurve_parameter_map(),
+                    fin.pcurve_metadata(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let merge_request = MergeFaceAsHoleRequest::new(keep.clone(), remove.clone());
+        let split_request =
+            SplitHoleAsFaceRequest::new(ring.clone(), equivalent_surface.clone(), remove_sense);
+
+        let rolled_back = {
+            let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+            let merged = transaction
+                .merge_face_as_hole(merge_request.clone())
+                .unwrap();
+            assert_eq!(merged.face(), keep);
+            assert_eq!(merged.ring(), ring);
+            let detached = transaction
+                .split_hole_as_face(split_request.clone())
+                .unwrap();
+            assert_eq!(detached.source_face(), keep);
+            assert_eq!(detached.loop_id(), ring);
+            let actual_pcurves = transaction
+                .inner
+                .store()
+                .get(ring.raw())
+                .unwrap()
+                .fins()
+                .iter()
+                .map(|&fin| {
+                    let use_ = transaction
+                        .inner
+                        .store()
+                        .get(fin)
+                        .unwrap()
+                        .pcurve()
+                        .unwrap();
+                    (
+                        Some(PcurveId::new(part_id.clone(), use_.curve())),
+                        Some(use_.range()),
+                        Some(PcurveParameterMap::from_raw(use_.edge_to_pcurve())),
+                        Some(PcurveMetadata::from_raw(use_)),
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual_pcurves, expected_pcurves);
+            transaction.rollback().unwrap();
+            (merged, detached)
+        };
+        assert!(edit.as_part().face(remove.clone()).is_ok());
+        assert!(matches!(
+            edit.as_part().face(rolled_back.1.face()),
+            Err(Error::StaleEntity {
+                kind: EntityKind::Face
+            })
+        ));
+
+        let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+        let merged = transaction.merge_face_as_hole(merge_request).unwrap();
+        let detached = transaction.split_hole_as_face(split_request).unwrap();
+        assert_eq!((merged.clone(), detached.clone()), rolled_back);
+        let outcome = transaction.commit(core::slice::from_ref(&body)).unwrap();
+        let journal = outcome.result().unwrap();
+        let lineage = journal.lineage().collect::<Vec<_>>();
+        assert_eq!(lineage.len(), 2);
+        let LineageView::Merge { sources, result } = &lineage[0] else {
+            panic!("face-as-hole must journal a face merge");
+        };
+        assert_eq!(
+            sources.clone().collect::<Vec<_>>(),
+            vec![
+                JournalEntity::Face(keep.clone()),
+                JournalEntity::Face(remove.clone())
+            ]
+        );
+        assert_eq!(*result, JournalEntity::Face(keep.clone()));
+        let LineageView::Split { source, pieces } = &lineage[1] else {
+            panic!("hole detachment must journal a face split");
+        };
+        assert_eq!(*source, JournalEntity::Face(keep.clone()));
+        assert_eq!(
+            pieces.clone().collect::<Vec<_>>(),
+            vec![
+                JournalEntity::Face(keep.clone()),
+                JournalEntity::Face(detached.face())
+            ]
+        );
+        assert!(edit.as_part().face(keep).is_ok());
+        assert!(edit.as_part().face(detached.face()).is_ok());
+        assert_eq!(edit.as_part().loop_(ring).unwrap().face(), detached.face());
+        assert!(matches!(
+            edit.as_part().face(remove),
+            Err(Error::StaleEntity {
+                kind: EntityKind::Face
+            })
+        ));
+        edit.as_part().body(body).unwrap();
+    }
+
+    #[test]
+    fn face_hole_preflight_rejects_invalid_ownership_and_incidence_atomically() {
+        let mut session = Kernel::new().create_session();
+        let first_part = session.create_part();
+        let second_part = session.create_part();
+        let (body, faces, loop_id, surface, sense) = {
+            let mut edit = session.edit_part(first_part.clone()).unwrap();
+            let body = block(&mut edit);
+            let part = edit.as_part();
+            let faces = part
+                .body(body.clone())
+                .unwrap()
+                .faces()
+                .unwrap()
+                .take(2)
+                .collect::<Vec<_>>();
+            let face = part.face(faces[0].clone()).unwrap();
+            let loop_id = face.loops().next().unwrap();
+            (body, faces, loop_id, face.surface(), face.sense())
+        };
+        let foreign_face = {
+            let mut edit = session.edit_part(second_part.clone()).unwrap();
+            let body = block(&mut edit);
+            edit.as_part()
+                .body(body)
+                .unwrap()
+                .faces()
+                .unwrap()
+                .next()
+                .unwrap()
+        };
+
+        let mut edit = session.edit_part(first_part.clone()).unwrap();
+        let original_face_count = edit.as_part().faces().len();
+        let original_loop_count = edit.as_part().loops().len();
+        let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+        assert!(
+            transaction
+                .merge_face_as_hole(MergeFaceAsHoleRequest::new(
+                    faces[0].clone(),
+                    faces[0].clone(),
+                ))
+                .is_err()
+        );
+        assert!(
+            transaction
+                .merge_face_as_hole(MergeFaceAsHoleRequest::new(
+                    faces[0].clone(),
+                    faces[1].clone(),
+                ))
+                .is_err()
+        );
+        assert!(
+            transaction
+                .split_hole_as_face(SplitHoleAsFaceRequest::new(loop_id, surface, sense,))
+                .is_err()
+        );
+        assert!(matches!(
+            transaction.merge_face_as_hole(MergeFaceAsHoleRequest::new(
+                faces[0].clone(),
+                foreign_face,
+            )),
+            Err(Error::WrongPart { expected, actual })
+                if expected == first_part && actual == second_part
+        ));
+        transaction.rollback().unwrap();
+        assert_eq!(edit.as_part().faces().len(), original_face_count);
+        assert_eq!(edit.as_part().loops().len(), original_loop_count);
+        edit.as_part().body(body).unwrap();
     }
 
     #[test]

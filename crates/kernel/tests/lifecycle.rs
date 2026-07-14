@@ -3,10 +3,11 @@
 use kernel::{
     BlockRequest, BodyTessellationBudgetProfile, BoundedCurve, BoundedPcurve, CheckBodyRequest,
     CheckLevel, CheckOutcome, EntityKind, Error, ExportXtRequest, Frame, ImportXtRequest,
-    IntersectCurvesRequest, JoinRingRequest, Kernel, MutationKind, OperationSettings, ParamRange,
-    PcurveChart, PcurveEndpointKind, PcurveMetadata, PcurveSeam, PcurveSeamSide,
-    RemoveBridgeRequest, SessionPolicy, SurfaceDerivativeOrder, SurfaceEvaluationRequest,
-    SurfaceParameter, TessOptions, TessellateBodyRequest,
+    IntersectCurvesRequest, JoinRingRequest, Kernel, MergeFaceAsHoleRequest, MutationKind,
+    OperationSettings, ParamRange, PcurveChart, PcurveEndpointKind, PcurveMetadata, PcurveSeam,
+    PcurveSeamSide, RemoveBridgeRequest, SessionPolicy, SplitHoleAsFaceRequest,
+    SurfaceDerivativeOrder, SurfaceEvaluationRequest, SurfaceParameter, TessOptions,
+    TessellateBodyRequest,
 };
 
 #[test]
@@ -234,6 +235,62 @@ fn facade_only_ring_edit_requests_remain_checked_and_failure_atomic() {
     transaction.rollback().unwrap();
     assert_eq!(edit.as_part().loops().len(), original_loop_count);
     assert!(edit.as_part().fin(fin_id).is_ok());
+    drop(edit);
+
+    let check = session
+        .part(part_id)
+        .unwrap()
+        .check_body(CheckBodyRequest::new(body, CheckLevel::Fast))
+        .unwrap();
+    assert_eq!(check.result().unwrap().outcome(), CheckOutcome::Valid);
+}
+
+#[test]
+fn facade_only_face_hole_requests_are_failure_atomic_persistence_candidates() {
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let body = session
+        .edit_part(part_id.clone())
+        .unwrap()
+        .create_block(BlockRequest::new(Frame::world(), [2.0, 3.0, 4.0]))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .body();
+    let (face_id, loop_id, surface, sense) = {
+        let part = session.part(part_id.clone()).unwrap();
+        let face_id = part
+            .body(body.clone())
+            .unwrap()
+            .faces()
+            .unwrap()
+            .next()
+            .unwrap();
+        let face = part.face(face_id.clone()).unwrap();
+        (
+            face_id,
+            face.loops().next().unwrap(),
+            face.surface(),
+            face.sense(),
+        )
+    };
+    let merge = MergeFaceAsHoleRequest::new(face_id.clone(), face_id.clone());
+    assert_eq!(merge.keep(), face_id);
+    assert_eq!(merge.remove(), face_id);
+    let split = SplitHoleAsFaceRequest::new(loop_id.clone(), surface.clone(), sense);
+    assert_eq!(split.ring(), loop_id);
+    assert_eq!(split.surface(), surface);
+    assert_eq!(split.sense(), sense);
+
+    let mut edit = session.edit_part(part_id.clone()).unwrap();
+    let original_face_count = edit.as_part().faces().len();
+    let original_loop_count = edit.as_part().loops().len();
+    let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+    assert!(transaction.merge_face_as_hole(merge).is_err());
+    assert!(transaction.split_hole_as_face(split).is_err());
+    transaction.rollback().unwrap();
+    assert_eq!(edit.as_part().faces().len(), original_face_count);
+    assert_eq!(edit.as_part().loops().len(), original_loop_count);
     drop(edit);
 
     let check = session

@@ -248,8 +248,11 @@ Landed slice:
 - Pcurve-aware MEV/MEF/MEKR variants preflight both new fin uses before mutation and
   attach them after successful preflight. MEF/KEF/KFMRH/MFKRH preflight existing
   pcurve-bearing fins on a destination surface before moving them; checker and Euler
-  validation share one incidence implementation. Full multi-step atomicity remains part
-  of the transaction gate below.
+  validation share one incidence implementation. The facade now exposes checked
+  KFMRH/MFKRH requests with exact face merge/split lineage, rollback identity, and
+  pcurve metadata transport. These structural operators do not pre-certify geometric
+  hole containment; supported Fast checks gate persistence while operation-specific
+  unsupported containment remains an explicit caller proof obligation.
 - A bounded tolerant edge may omit its 3D curve and use a finite increasing logical edge
   domain (canonically `[0, 1]`). Every real fin must then carry a pcurve whose affine map
   covers that domain. The checker verifies pcurve definitions, endpoint-to-vertex
@@ -502,7 +505,8 @@ Remaining before the gate closes:
   handle validity, and next-allocation behavior. **Landed for scoped Store transactions.**
 - Successful split/merge scenarios emit deterministic lineage events. **Landed for the
   checked pcurve-aware face wrappers and the facade-owned bridge-edge removal/ring-join
-  wrappers, including exact rollback identity and affine pcurve metadata transport.**
+  plus face-as-hole merge/split wrappers, including exact rollback identity, face
+  merge/split lineage, and affine pcurve metadata transport.**
 - Budget exhaustion and a checker-failing tolerance edit restore the prior entity state;
   successful growth preserves imported origin and emits deterministic usage/events.
   **Landed for transaction-owned face/edge/vertex tolerance growth.**
