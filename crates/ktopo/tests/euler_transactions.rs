@@ -1,5 +1,6 @@
 //! Public Euler mutation is transaction-owned, pcurve-aware, and journaled.
 
+use kcore::tolerance::SIZE_BOX_HALF;
 use kgeom::curve::Line;
 use kgeom::curve2d::Line2d;
 use kgeom::frame::Frame;
@@ -75,6 +76,7 @@ fn minimal_inverse_journal() -> Journal {
     assert_eq!(store.count::<Fin>(), 0);
     assert_eq!(store.count::<Edge>(), 0);
     assert_eq!(store.count::<Vertex>(), 0);
+    assert_eq!(store.count::<Point3>(), 2);
     journal
 }
 
@@ -110,6 +112,122 @@ fn minimal_mev_kev_kvfs_sequence_is_atomic_and_deterministic() {
             },
         ]
     ));
+}
+
+#[test]
+fn position_mev_preflights_without_consuming_point_identity() {
+    let mut store = Store::new();
+    let surface = store
+        .insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())))
+        .unwrap();
+    let start_position = Point3::new(0.0, 0.0, 0.0);
+    let end_position = Point3::new(1.0, 0.0, 0.0);
+    let start = store.insert_point(start_position).unwrap();
+    let (curve, bounds, pcurves) = line_inputs(&mut store, surface, start_position, end_position);
+    let off_curve = store
+        .insert_pcurve(Curve2dGeom::Line(
+            Line2d::new(Point2::new(10.0, 10.0), Point2::new(1.0, 0.0)).unwrap(),
+        ))
+        .unwrap();
+    let off_use =
+        FinPcurve::new(off_curve, ParamRange::new(0.0, 1.0), ParamMap1d::identity()).unwrap();
+    let off_pcurves = FinPcurvePair::new(off_use, off_use);
+
+    let mut transaction = store.transaction().unwrap();
+    let minimal = transaction
+        .make_minimal_body(surface, Sense::Forward, start)
+        .unwrap();
+    let point_count = transaction.store().count::<Point3>();
+    for invalid in [
+        Point3::new(f64::NAN, 0.0, 0.0),
+        Point3::new(SIZE_BOX_HALF + 1.0, 0.0, 0.0),
+    ] {
+        assert!(
+            transaction
+                .make_edge_vertex_at_position(minimal.ring, 0, curve, bounds, invalid, pcurves,)
+                .is_err()
+        );
+        assert_eq!(transaction.store().count::<Point3>(), point_count);
+    }
+    assert!(
+        transaction
+            .make_edge_vertex_at_position(minimal.ring, 1, curve, bounds, end_position, pcurves,)
+            .is_err()
+    );
+    assert_eq!(transaction.store().count::<Point3>(), point_count);
+    assert!(
+        transaction
+            .make_edge_vertex_at_position(
+                minimal.ring,
+                0,
+                curve,
+                bounds,
+                end_position,
+                off_pcurves,
+            )
+            .is_err()
+    );
+    assert_eq!(transaction.store().count::<Point3>(), point_count);
+
+    let sprout = transaction
+        .make_edge_vertex_at_position(minimal.ring, 0, curve, bounds, end_position, pcurves)
+        .unwrap();
+    assert_eq!(transaction.store().count::<Point3>(), point_count + 1);
+    let inserted_point = transaction.store().get(sprout.vertex).unwrap().point();
+    transaction
+        .kill_position_owned_edge_vertex(sprout.edge)
+        .unwrap();
+    assert_eq!(transaction.store().count::<Point3>(), point_count);
+    transaction.kill_minimal_body(minimal.body).unwrap();
+    let journal = transaction.commit_checked(&[]).unwrap();
+    assert!(matches!(
+        journal.lineage()[2],
+        LineageEvent::DerivedFrom {
+            derived: EntityRef::Vertex(vertex),
+            source: EntityRef::Point(point),
+        } if vertex == sprout.vertex && point == inserted_point
+    ));
+    assert!(matches!(
+        journal.lineage()[5],
+        LineageEvent::Deleted {
+            entity: EntityRef::Point(point),
+        } if point == inserted_point
+    ));
+    assert_eq!(store.count::<Point3>(), point_count);
+}
+
+#[test]
+fn position_owned_kev_retains_a_point_still_shared_by_a_live_vertex() {
+    let mut store = Store::new();
+    let surface = store
+        .insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())))
+        .unwrap();
+    let start_position = Point3::new(0.0, 0.0, 0.0);
+    let end_position = Point3::new(1.0, 0.0, 0.0);
+    let start = store.insert_point(start_position).unwrap();
+    let (curve, bounds, pcurves) = line_inputs(&mut store, surface, start_position, end_position);
+
+    let mut transaction = store.transaction().unwrap();
+    let minimal = transaction
+        .make_minimal_body(surface, Sense::Forward, start)
+        .unwrap();
+    let sprout = transaction
+        .make_edge_vertex_at_position(minimal.ring, 0, curve, bounds, end_position, pcurves)
+        .unwrap();
+    let point = transaction.store().get(sprout.vertex).unwrap().point();
+    let sharing_vertex = transaction.assembly().add(Vertex {
+        point,
+        tolerance: None,
+    });
+    transaction
+        .kill_position_owned_edge_vertex(sprout.edge)
+        .unwrap();
+    assert_eq!(
+        transaction.store().get(sharing_vertex).unwrap().point(),
+        point
+    );
+    assert_eq!(*transaction.store().get(point).unwrap(), end_position);
+    transaction.rollback().unwrap();
 }
 
 #[test]

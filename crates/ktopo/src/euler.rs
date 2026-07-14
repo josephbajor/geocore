@@ -23,10 +23,12 @@
 //! checker instead.
 //!
 //! **Geometry policy.** Euler operators never compute or validate
-//! geometry: the caller passes the already-stored geometry handles
+//! geometry: raw operators take already-stored geometry handles
 //! ([`crate::entity::PointId`], [`crate::entity::CurveId`],
 //! [`crate::entity::SurfaceId`]) each new entity should reference, and the
-//! checker later verifies geometric consistency. The `*_with_pcurves`
+//! checker later verifies geometric consistency. The semantic position-owning
+//! MEV transaction entry point validates its [`Point3`] and all raw MEV
+//! preconditions before inserting the point. The `*_with_pcurves`
 //! variants additionally preflight the complete edge/pcurve/surface tuple
 //! and attach an explicit pcurve to every new fin. Operators that move
 //! pcurve-bearing fins between faces preflight them on the destination
@@ -54,6 +56,7 @@ use crate::store::Store;
 use crate::tolerance::EntityTolerance;
 use kcore::error::{Error, Result};
 use kcore::tolerance::LINEAR_RESOLUTION;
+use kgeom::vec::Point3;
 
 fn topo_err<T>(reason: &'static str) -> Result<T> {
     Err(Error::InvalidGeometry { reason })
@@ -339,6 +342,21 @@ pub struct Mev {
     pub fin_back: FinId,
 }
 
+/// Topology and geometry identities detached by KEV.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Kev {
+    /// Removed vertex.
+    pub vertex: VertexId,
+    /// Point formerly referenced by that vertex.
+    pub point: PointId,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MevPreflight {
+    sprout: VertexId,
+    empty_shell: Option<ShellId>,
+}
+
 /// Make edge and vertex: sprout a new edge into a loop.
 ///
 /// The new edge runs from the *sprout vertex* to a new vertex at `point`,
@@ -357,7 +375,11 @@ pub(crate) fn mev(
     bounds: (f64, f64),
     point: PointId,
 ) -> Result<Mev> {
-    mev_impl(store, lp, at, curve, bounds, point, None)
+    let preflight = preflight_mev(store, lp, at, curve, bounds, None)?;
+    store.get(point)?;
+    Ok(apply_mev(
+        store, lp, at, curve, bounds, point, None, preflight,
+    ))
 }
 
 /// Pcurve-bearing MEV. Both pcurves are validated against the owning
@@ -371,26 +393,61 @@ pub(crate) fn mev_with_pcurves(
     point: PointId,
     pcurves: FinPcurvePair,
 ) -> Result<Mev> {
-    valid_bounds(bounds)?;
-    let face = store.get(store.get(lp)?.face)?;
-    validate_pcurve_pair(store, curve, bounds, [face.surface, face.surface], pcurves)?;
-    mev_impl(store, lp, at, curve, bounds, point, Some(pcurves))
+    let preflight = preflight_mev(store, lp, at, curve, bounds, Some(pcurves))?;
+    store.get(point)?;
+    Ok(apply_mev(
+        store,
+        lp,
+        at,
+        curve,
+        bounds,
+        point,
+        Some(pcurves),
+        preflight,
+    ))
 }
 
-fn mev_impl(
+pub(crate) fn mev_at_position_with_pcurves(
     store: &mut Store,
     lp: LoopId,
     at: usize,
     curve: CurveId,
     bounds: (f64, f64),
-    point: PointId,
+    position: Point3,
+    pcurves: FinPcurvePair,
+) -> Result<(Mev, PointId)> {
+    Store::validate_point(position)?;
+    let preflight = preflight_mev(store, lp, at, curve, bounds, Some(pcurves))?;
+    let point = store.insert_point(position)?;
+    let made = apply_mev(
+        store,
+        lp,
+        at,
+        curve,
+        bounds,
+        point,
+        Some(pcurves),
+        preflight,
+    );
+    Ok((made, point))
+}
+
+fn preflight_mev(
+    store: &Store,
+    lp: LoopId,
+    at: usize,
+    curve: CurveId,
+    bounds: (f64, f64),
     pcurves: Option<FinPcurvePair>,
-) -> Result<Mev> {
+) -> Result<MevPreflight> {
     valid_bounds(bounds)?;
     store.get(curve)?;
-    store.get(point)?;
     let fins = store.get(lp)?.fins.clone();
-    let sprout = if fins.is_empty() {
+    if let Some(pcurves) = pcurves {
+        let face = store.get(store.get(lp)?.face)?;
+        validate_pcurve_pair(store, curve, bounds, [face.surface, face.surface], pcurves)?;
+    }
+    if fins.is_empty() {
         if at != 0 {
             return topo_err("mev: index must be 0 on a zero-fin loop");
         }
@@ -399,8 +456,10 @@ fn mev_impl(
         let Some(seed) = seed else {
             return topo_err("mev: zero-fin loop's shell holds no seed vertex");
         };
-        store.get_mut(shell)?.vertex = None;
-        seed
+        Ok(MevPreflight {
+            sprout: seed,
+            empty_shell: Some(shell),
+        })
     } else {
         if at >= fins.len() {
             return topo_err("mev: fin index out of range");
@@ -408,15 +467,38 @@ fn mev_impl(
         let Some(tail) = store.fin_tail(fins[at])? else {
             return topo_err("mev: cannot sprout at a ring edge fin");
         };
-        tail
-    };
+        store.vertex_position(tail)?;
+        Ok(MevPreflight {
+            sprout: tail,
+            empty_shell: None,
+        })
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_mev(
+    store: &mut Store,
+    lp: LoopId,
+    at: usize,
+    curve: CurveId,
+    bounds: (f64, f64),
+    point: PointId,
+    pcurves: Option<FinPcurvePair>,
+    preflight: MevPreflight,
+) -> Mev {
+    if let Some(shell) = preflight.empty_shell {
+        store
+            .get_mut(shell)
+            .expect("MEV preflight keeps the empty shell live")
+            .vertex = None;
+    }
     let vertex = store.add(Vertex {
         point,
         tolerance: None,
     });
     let edge = store.add(Edge {
         curve: Some(curve),
-        vertices: [Some(sprout), Some(vertex)],
+        vertices: [Some(preflight.sprout), Some(vertex)],
         bounds: Some(bounds),
         fins: Vec::new(),
         tolerance: None,
@@ -433,16 +515,19 @@ fn mev_impl(
         sense: Sense::Reversed,
         pcurve: pcurves.map(|pair| pair.reversed),
     });
-    store.get_mut(edge)?.fins = vec![fin_out, fin_back];
-    let ring = &mut store.get_mut(lp)?.fins;
+    store.get_mut(edge).expect("new MEV edge remains live").fins = vec![fin_out, fin_back];
+    let ring = &mut store
+        .get_mut(lp)
+        .expect("MEV preflight keeps the destination loop live")
+        .fins;
     ring.insert(at, fin_back);
     ring.insert(at, fin_out);
-    Ok(Mev {
+    Mev {
         edge,
         vertex,
         fin_out,
         fin_back,
-    })
+    }
 }
 
 /// Kill edge and vertex: exact inverse of MEV.
@@ -451,7 +536,7 @@ fn mev_impl(
 /// shape MEV makes), and the vertex between them must be used by no
 /// other edge. If the loop becomes empty, the surviving vertex returns to
 /// the shell's seed slot.
-pub(crate) fn kev(store: &mut Store, edge: EdgeId) -> Result<VertexId> {
+pub(crate) fn kev(store: &mut Store, edge: EdgeId) -> Result<Kev> {
     let e = store.get(edge)?;
     let [f0, f1] = e.fins[..] else {
         return topo_err("kev: edge must have exactly two fins");
@@ -491,6 +576,8 @@ pub(crate) fn kev(store: &mut Store, edge: EdgeId) -> Result<VertexId> {
     if vertex_in_use {
         return topo_err("kev: the edge's head vertex is still in use");
     }
+    let point = store.get(dying)?.point;
+    store.get(point)?;
     let now_empty = fins.iter().all(|&fin| fin == f0 || fin == f1);
     let empty_shell = if now_empty {
         let shell = shell_of_loop(store, lp)?;
@@ -511,7 +598,10 @@ pub(crate) fn kev(store: &mut Store, edge: EdgeId) -> Result<VertexId> {
         let slot = &mut store.get_mut(shell)?.vertex;
         *slot = Some(survivor);
     }
-    Ok(dying)
+    Ok(Kev {
+        vertex: dying,
+        point,
+    })
 }
 
 /// Entities created by MEF.

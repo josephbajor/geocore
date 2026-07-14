@@ -249,10 +249,14 @@ Landed slice:
   attach them after successful preflight. MEF/KEF/KFMRH/MFKRH preflight existing
   pcurve-bearing fins on a destination surface before moving them; checker and Euler
   validation share one incidence implementation. The facade now exposes checked
-  KFMRH/MFKRH requests with exact face merge/split lineage, rollback identity, and
-  pcurve metadata transport. These structural operators do not pre-certify geometric
-  hole containment; supported Fast checks gate persistence while operation-specific
-  unsupported containment remains an explicit caller proof obligation.
+  position-owning MEV/KEV and KFMRH/MFKRH requests with exact lineage, rollback
+  identity, and pcurve metadata transport. MEV preflights the position, topology,
+  curve, bounds, and both pcurves before allocating its hidden point; its facade
+  inverse removes and journals that point only when no live vertex shares it, while
+  ordinary lower KEV retains externally owned point geometry. The structural
+  face/hole operators do not pre-certify geometric hole containment; supported Fast
+  checks gate persistence while operation-specific unsupported containment remains an
+  explicit caller proof obligation.
 - A bounded tolerant edge may omit its 3D curve and use a finite increasing logical edge
   domain (canonically `[0, 1]`). Every real fin must then carry a pcurve whose affine map
   covers that domain. The checker verifies pcurve definitions, endpoint-to-vertex
@@ -507,6 +511,10 @@ Remaining before the gate closes:
   checked pcurve-aware face wrappers and the facade-owned bridge-edge removal/ring-join
   plus face-as-hole merge/split wrappers, including exact rollback identity, face
   merge/split lineage, and affine pcurve metadata transport.**
+- Position-owning MEV/KEV emits deterministic edge/vertex derivation and deletion
+  lineage, consumes no point identity on preflight failure, restores future identities
+  on rollback, and removes its hidden point only when it is unshared. **Landed for the
+  facade-owned strut wrappers without exposing `PointId` or raw assembly.**
 - Budget exhaustion and a checker-failing tolerance edit restore the prior entity state;
   successful growth preserves imported origin and emits deterministic usage/events.
   **Landed for transaction-owned face/edge/vertex tolerance growth.**

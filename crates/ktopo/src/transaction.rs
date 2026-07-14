@@ -22,6 +22,7 @@ use kcore::arena::Handle;
 use kcore::error::{Error, Result};
 use kcore::operation::{OperationContext, OperationOutcome, OperationPolicyError, OperationScope};
 use kcore::tolerance::{LINEAR_RESOLUTION, Tolerances};
+use kgeom::vec::Point3;
 use kgraph::{
     Curve2dHandle, EvalBudgetProfile, EvalLimits, SurfaceHandle,
     TransmittedNurbsIntersectionCertificate, TransmittedPlaneIntersectionCertificate,
@@ -581,15 +582,72 @@ impl<'a> Transaction<'a> {
         Ok(made)
     }
 
+    /// MEV: sprout an edge and new vertex at a validated position.
+    ///
+    /// The position and every topology/pcurve precondition are validated
+    /// before the point is inserted, so rejection does not consume a point
+    /// identity. The inserted point is retained as the new vertex's lineage
+    /// source just like the lower-level handle-taking form.
+    #[allow(clippy::too_many_arguments)]
+    pub fn make_edge_vertex_at_position(
+        &mut self,
+        lp: LoopId,
+        at: usize,
+        curve: CurveId,
+        bounds: (f64, f64),
+        position: Point3,
+        pcurves: FinPcurvePair,
+    ) -> Result<Mev> {
+        let (made, point) = crate::euler::mev_at_position_with_pcurves(
+            self.store, lp, at, curve, bounds, position, pcurves,
+        )?;
+        self.lineage.push(LineageEvent::DerivedFrom {
+            derived: EntityRef::Edge(made.edge),
+            source: EntityRef::Loop(lp),
+        });
+        self.lineage.push(LineageEvent::DerivedFrom {
+            derived: EntityRef::Vertex(made.vertex),
+            source: EntityRef::Point(point),
+        });
+        Ok(made)
+    }
+
     /// KEV: remove a strut edge and its otherwise-unused vertex.
     pub fn kill_edge_vertex(&mut self, edge: EdgeId) -> Result<()> {
-        let deleted_vertex = crate::euler::kev(self.store, edge)?;
+        let deleted = crate::euler::kev(self.store, edge)?;
         self.lineage.push(LineageEvent::Deleted {
             entity: EntityRef::Edge(edge),
         });
         self.lineage.push(LineageEvent::Deleted {
-            entity: EntityRef::Vertex(deleted_vertex),
+            entity: EntityRef::Vertex(deleted.vertex),
         });
+        Ok(())
+    }
+
+    /// KEV inverse for a position-owning MEV created through the facade.
+    ///
+    /// Besides removing the strut topology, this removes the detached
+    /// vertex's point when no live vertex still references it. Ordinary
+    /// [`Self::kill_edge_vertex`] intentionally retains point geometry for
+    /// handle-owning callers that may have authored or shared it separately.
+    pub fn kill_position_owned_edge_vertex(&mut self, edge: EdgeId) -> Result<()> {
+        let deleted = crate::euler::kev(self.store, edge)?;
+        self.lineage.push(LineageEvent::Deleted {
+            entity: EntityRef::Edge(edge),
+        });
+        self.lineage.push(LineageEvent::Deleted {
+            entity: EntityRef::Vertex(deleted.vertex),
+        });
+        let point_in_use = self
+            .store
+            .iter::<crate::entity::Vertex>()
+            .any(|(_, vertex)| vertex.point == deleted.point);
+        if !point_in_use {
+            self.store.remove(deleted.point)?;
+            self.lineage.push(LineageEvent::Deleted {
+                entity: EntityRef::Point(deleted.point),
+            });
+        }
         Ok(())
     }
 

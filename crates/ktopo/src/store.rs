@@ -374,8 +374,12 @@ impl Store {
 
     /// Insert immutable point geometry after size-box validation.
     pub fn insert_point(&mut self, point: Point3) -> Result<PointId> {
-        check_in_size_box(point.to_array())?;
+        Self::validate_point(point)?;
         Ok(self.add(point))
+    }
+
+    pub(crate) fn validate_point(point: Point3) -> Result<()> {
+        check_in_size_box(point.to_array())
     }
 
     /// Insert immutable 3D curve geometry.

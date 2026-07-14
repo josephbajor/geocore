@@ -1,6 +1,7 @@
 //! Checked semantic topology edits at the supported facade boundary.
 
 use kcore::operation::OperationContext;
+use kgeom::vec::Point3;
 use ktopo::entity::{
     FinPcurve, ParamMap1d, PcurveChart as RawPcurveChart,
     PcurveEndpointKind as RawPcurveEndpointKind, PcurveSeam as RawPcurveSeam,
@@ -13,7 +14,7 @@ use crate::error::{Error, Result};
 use crate::session::PartEdit;
 use crate::{
     BodyId, BoundedCurve, ChangeJournal, CurveId, EdgeId, EntityKind, FaceId, FinId, LoopId,
-    OperationOutcome, OperationSettings, ParamRange, PartId, PcurveId, Sense, SurfaceId,
+    OperationOutcome, OperationSettings, ParamRange, PartId, PcurveId, Sense, SurfaceId, VertexId,
 };
 
 /// Validated affine correspondence from edge parameter `t` to pcurve
@@ -415,6 +416,120 @@ impl BoundedPcurve {
     }
 }
 
+/// Sprout one pcurve-bearing strut edge and a new vertex into a loop.
+///
+/// The fin index selects the existing fin whose tail is the sprout vertex.
+/// The new edge runs from that vertex to `position`; its forward and reversed
+/// pcurve uses are inserted consecutively into the same loop.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateStrutRequest {
+    loop_id: LoopId,
+    fin_index: usize,
+    curve: BoundedCurve,
+    position: Point3,
+    pcurves: [BoundedPcurve; 2],
+}
+
+impl CreateStrutRequest {
+    /// Construct one position-owning, pcurve-aware strut request.
+    pub const fn new(
+        loop_id: LoopId,
+        fin_index: usize,
+        curve: BoundedCurve,
+        position: Point3,
+        pcurves: [BoundedPcurve; 2],
+    ) -> Self {
+        Self {
+            loop_id,
+            fin_index,
+            curve,
+            position,
+            pcurves,
+        }
+    }
+
+    /// Loop that receives the two new fins.
+    pub fn loop_id(&self) -> LoopId {
+        self.loop_id.clone()
+    }
+
+    /// Stored fin position whose tail starts the strut.
+    pub const fn fin_index(&self) -> usize {
+        self.fin_index
+    }
+
+    /// Existing 3D edge geometry and active interval.
+    pub const fn curve(&self) -> &BoundedCurve {
+        &self.curve
+    }
+
+    /// Model-space position of the new vertex.
+    pub const fn position(&self) -> Point3 {
+        self.position
+    }
+
+    /// Forward/reversed pcurve uses for the new fins.
+    pub const fn pcurves(&self) -> &[BoundedPcurve; 2] {
+        &self.pcurves
+    }
+}
+
+/// Opaque topology identities created by one strut operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateStrutResult {
+    edge: EdgeId,
+    vertex: VertexId,
+    fins: [FinId; 2],
+}
+
+impl CreateStrutResult {
+    /// New strut edge.
+    pub fn edge(&self) -> EdgeId {
+        self.edge.clone()
+    }
+
+    /// New vertex at the requested position.
+    pub fn vertex(&self) -> VertexId {
+        self.vertex.clone()
+    }
+
+    /// New fins in forward/reversed sense order.
+    pub fn fins(&self) -> [FinId; 2] {
+        self.fins.clone()
+    }
+}
+
+/// Remove one live MEV-shaped strut edge and its otherwise-unused vertex.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoveStrutRequest {
+    edge: EdgeId,
+}
+
+impl RemoveStrutRequest {
+    /// Select the strut edge to remove.
+    pub const fn new(edge: EdgeId) -> Self {
+        Self { edge }
+    }
+
+    /// Strut edge to remove.
+    pub fn edge(&self) -> EdgeId {
+        self.edge.clone()
+    }
+}
+
+/// Surviving loop after removing one strut.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoveStrutResult {
+    loop_id: LoopId,
+}
+
+impl RemoveStrutResult {
+    /// Loop from which the strut fins were removed.
+    pub fn loop_id(&self) -> LoopId {
+        self.loop_id.clone()
+    }
+}
+
 /// Split one loop between two stored fin positions using existing geometry.
 ///
 /// The new face inherits the source face's surface, orientation, domain, and
@@ -791,6 +906,95 @@ impl EditTransaction<'_> {
     /// Part whose candidate state is exclusively borrowed.
     pub fn part(&self) -> PartId {
         self.part.clone()
+    }
+
+    /// Create one position-owning strut with mandatory independent pcurves.
+    ///
+    /// All position, identity, incidence, and MEV topology preconditions are
+    /// checked before the new point enters the transaction candidate.
+    pub fn create_strut(&mut self, request: CreateStrutRequest) -> Result<CreateStrutResult> {
+        self.validate_part(request.loop_id.part())?;
+        let loop_ =
+            self.inner
+                .store()
+                .get(request.loop_id.raw())
+                .map_err(|_| Error::StaleEntity {
+                    kind: EntityKind::Loop,
+                })?;
+        if loop_.fins().is_empty() {
+            if request.fin_index != 0 {
+                return Err(kcore::error::Error::InvalidGeometry {
+                    reason: "strut fin index must be zero on an empty loop",
+                }
+                .into());
+            }
+        } else {
+            let Some(&fin) = loop_.fins().get(request.fin_index) else {
+                return Err(kcore::error::Error::InvalidGeometry {
+                    reason: "strut fin index is out of range",
+                }
+                .into());
+            };
+            let vertex = self.inner.store().fin_tail(fin)?.ok_or_else(|| {
+                Error::from(kcore::error::Error::InvalidGeometry {
+                    reason: "strut cannot sprout from a ring-edge fin",
+                })
+            })?;
+            self.inner.store().vertex_position(vertex)?;
+        }
+        self.require_curve(&request.curve.curve)?;
+        for pcurve in &request.pcurves {
+            self.require_pcurve(&pcurve.pcurve)?;
+        }
+
+        let CreateStrutRequest {
+            loop_id,
+            fin_index,
+            curve,
+            position,
+            pcurves: [forward, reversed],
+        } = request;
+        let pcurves = FinPcurvePair::new(forward.into_raw_use()?, reversed.into_raw_use()?);
+        let made = self.inner.make_edge_vertex_at_position(
+            loop_id.raw(),
+            fin_index,
+            curve.curve.raw(),
+            (curve.range.lo, curve.range.hi),
+            position,
+            pcurves,
+        )?;
+        Ok(CreateStrutResult {
+            edge: EdgeId::new(self.part.clone(), made.edge),
+            vertex: VertexId::new(self.part.clone(), made.vertex),
+            fins: [
+                FinId::new(self.part.clone(), made.fin_out),
+                FinId::new(self.part.clone(), made.fin_back),
+            ],
+        })
+    }
+
+    /// Remove one MEV-shaped strut and its otherwise-unused vertex.
+    pub fn remove_strut(&mut self, request: RemoveStrutRequest) -> Result<RemoveStrutResult> {
+        self.validate_part(request.edge.part())?;
+        let edge = self
+            .inner
+            .store()
+            .get(request.edge.raw())
+            .map_err(|_| Error::StaleEntity {
+                kind: EntityKind::Edge,
+            })?;
+        let [first, _] = edge.fins() else {
+            return Err(kcore::error::Error::InvalidGeometry {
+                reason: "strut removal requires an edge with exactly two fins",
+            }
+            .into());
+        };
+        let loop_id = self.inner.store().get(*first)?.parent();
+        self.inner
+            .kill_position_owned_edge_vertex(request.edge.raw())?;
+        Ok(RemoveStrutResult {
+            loop_id: LoopId::new(self.part.clone(), loop_id),
+        })
     }
 
     /// Split one face using the transaction's pcurve-aware checked operator.
@@ -1196,6 +1400,72 @@ mod tests {
 
     fn reversed_split_request(edit: &mut PartEdit<'_>, body: &BodyId) -> SplitFaceRequest {
         split_request_with_parameterization(edit, body, true)
+    }
+
+    fn planar_strut_request(
+        edit: &mut PartEdit<'_>,
+    ) -> (BodyId, LoopId, EdgeId, CreateStrutRequest, PcurveId) {
+        let part = edit.id();
+        let store = edit.store_mut_for_test();
+        let raw_body = ktopo::make::planar_sheet(
+            store,
+            &Frame::world(),
+            &[
+                Point2::new(-1.0, -1.0),
+                Point2::new(1.0, -1.0),
+                Point2::new(1.0, 1.0),
+                Point2::new(-1.0, 1.0),
+            ],
+        )
+        .unwrap();
+        let face = store.faces_of_body(raw_body).unwrap()[0];
+        let loop_id = store.get(face).unwrap().loops()[0];
+        let first_fin = store.get(loop_id).unwrap().fins()[0];
+        let ordinary_edge = store.get(first_fin).unwrap().edge();
+        let sprout = store.fin_tail(first_fin).unwrap().unwrap();
+        let start = store.vertex_position(sprout).unwrap();
+        let position = Point3::new(0.0, 0.0, 0.0);
+        let length = (position - start).norm();
+        let curve = store
+            .insert_curve(CurveGeom::Line(Line::new(start, position - start).unwrap()))
+            .unwrap();
+        let start_uv = Point2::new(start.x, start.y);
+        let position_uv = Point2::new(position.x, position.y);
+        let make_pcurve = |store: &mut ktopo::store::Store| {
+            store
+                .insert_pcurve(Curve2dGeom::Line(
+                    Line2d::new(position_uv, start_uv - position_uv).unwrap(),
+                ))
+                .unwrap()
+        };
+        let forward = make_pcurve(store);
+        let reversed = make_pcurve(store);
+        let off_curve = store
+            .insert_pcurve(Curve2dGeom::Line(
+                Line2d::new(Point2::new(10.0, 10.0), Vec2::new(1.0, 1.0)).unwrap(),
+            ))
+            .unwrap();
+        let range = ParamRange::new(0.0, length);
+        let map = PcurveParameterMap::affine(-1.0, length).unwrap();
+        let bounded_pcurve = |raw| {
+            BoundedPcurve::new(PcurveId::new(part.clone(), raw), range)
+                .with_parameter_map(map)
+                .with_metadata(PcurveMetadata::regular())
+        };
+        let request = CreateStrutRequest::new(
+            LoopId::new(part.clone(), loop_id),
+            0,
+            BoundedCurve::new(CurveId::new(part.clone(), curve), range),
+            position,
+            [bounded_pcurve(forward), bounded_pcurve(reversed)],
+        );
+        (
+            BodyId::new(part.clone(), raw_body),
+            LoopId::new(part.clone(), loop_id),
+            EdgeId::new(part.clone(), ordinary_edge),
+            request,
+            PcurveId::new(part, off_curve),
+        )
     }
 
     fn spherical_sector_split_request(edit: &mut PartEdit<'_>) -> (BodyId, SplitFaceRequest) {
@@ -1608,6 +1878,162 @@ mod tests {
             edit.as_part().edge(split.edge()),
             Err(Error::StaleEntity {
                 kind: EntityKind::Edge
+            })
+        ));
+    }
+
+    #[test]
+    fn checked_strut_round_trip_preserves_metadata_lineage_and_future_ids() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let foreign_part = session.create_part();
+        let foreign_body = session
+            .edit_part(foreign_part.clone())
+            .unwrap()
+            .create_block(BlockRequest::new(Frame::world(), [1.0, 1.0, 1.0]))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let foreign_loop = {
+            let part = session.part(foreign_part).unwrap();
+            let face = part
+                .body(foreign_body)
+                .unwrap()
+                .faces()
+                .unwrap()
+                .next()
+                .unwrap();
+            part.face(face).unwrap().loops().next().unwrap()
+        };
+        let mut edit = session.edit_part(part_id).unwrap();
+        let (body, loop_id, ordinary_edge, request, off_curve) = planar_strut_request(&mut edit);
+        let point_count = edit.store_mut_for_test().count::<Point3>();
+        let expected_map = PcurveParameterMap::affine(-1.0, core::f64::consts::SQRT_2).unwrap();
+
+        let (rolled_back, rolled_back_point) = {
+            let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+            let created = transaction.create_strut(request.clone()).unwrap();
+            let point = transaction
+                .inner
+                .store()
+                .get(created.vertex.raw())
+                .unwrap()
+                .point();
+            for fin in created.fins() {
+                let use_ = transaction
+                    .inner
+                    .store()
+                    .get(fin.raw())
+                    .unwrap()
+                    .pcurve()
+                    .unwrap();
+                assert_eq!(
+                    PcurveParameterMap::from_raw(use_.edge_to_pcurve()),
+                    expected_map
+                );
+                assert_eq!(PcurveMetadata::from_raw(use_), PcurveMetadata::regular());
+            }
+            transaction.rollback().unwrap();
+            (created, point)
+        };
+        assert!(matches!(
+            edit.as_part().edge(rolled_back.edge()),
+            Err(Error::StaleEntity {
+                kind: EntityKind::Edge
+            })
+        ));
+        assert!(matches!(
+            edit.as_part().vertex(rolled_back.vertex()),
+            Err(Error::StaleEntity {
+                kind: EntityKind::Vertex
+            })
+        ));
+
+        let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+        assert!(
+            transaction
+                .remove_strut(RemoveStrutRequest::new(rolled_back.edge()))
+                .is_err()
+        );
+        assert!(
+            transaction
+                .remove_strut(RemoveStrutRequest::new(ordinary_edge))
+                .is_err()
+        );
+        let mut wrong_part = request.clone();
+        wrong_part.loop_id = foreign_loop;
+        assert!(matches!(
+            transaction.create_strut(wrong_part),
+            Err(Error::WrongPart { .. })
+        ));
+        let mut bad_position = request.clone();
+        bad_position.position = Point3::new(f64::NAN, 0.0, 0.0);
+        assert!(transaction.create_strut(bad_position).is_err());
+        let mut bad_index = request.clone();
+        bad_index.fin_index = usize::MAX;
+        assert!(transaction.create_strut(bad_index).is_err());
+        let mut bad_pcurve = request.clone();
+        bad_pcurve.pcurves[0] = BoundedPcurve::new(off_curve, ParamRange::new(0.0, 1.0));
+        assert!(transaction.create_strut(bad_pcurve).is_err());
+
+        let created = transaction.create_strut(request).unwrap();
+        assert_eq!(created, rolled_back);
+        assert_eq!(
+            transaction
+                .inner
+                .store()
+                .get(created.vertex.raw())
+                .unwrap()
+                .point(),
+            rolled_back_point
+        );
+        assert_eq!(
+            transaction
+                .remove_strut(RemoveStrutRequest::new(created.edge()))
+                .unwrap()
+                .loop_id(),
+            loop_id
+        );
+        let outcome = transaction.commit(core::slice::from_ref(&body)).unwrap();
+        let journal = outcome.result().unwrap();
+        let lineage = journal.lineage().collect::<Vec<_>>();
+        assert_eq!(lineage.len(), 5);
+        let LineageView::DerivedFrom { derived, source } = &lineage[0] else {
+            panic!("MEV must derive its edge from the destination loop");
+        };
+        assert_eq!(*derived, JournalEntity::Edge(created.edge()));
+        assert_eq!(*source, JournalEntity::Loop(loop_id.clone()));
+        let LineageView::DerivedFrom { derived, source } = &lineage[1] else {
+            panic!("MEV must derive its vertex from the inserted point");
+        };
+        assert_eq!(*derived, JournalEntity::Vertex(created.vertex()));
+        assert!(matches!(source, JournalEntity::Point(_)));
+        let inserted_point = source.clone();
+        let LineageView::Deleted { entity } = &lineage[2] else {
+            panic!("KEV must record the deleted edge");
+        };
+        assert_eq!(*entity, JournalEntity::Edge(created.edge()));
+        let LineageView::Deleted { entity } = &lineage[3] else {
+            panic!("KEV must record the deleted vertex");
+        };
+        assert_eq!(*entity, JournalEntity::Vertex(created.vertex()));
+        let LineageView::Deleted { entity } = &lineage[4] else {
+            panic!("position-owning KEV must record the deleted point");
+        };
+        assert_eq!(*entity, inserted_point);
+        assert_eq!(edit.store_mut_for_test().count::<Point3>(), point_count);
+        assert!(edit.as_part().loop_(loop_id).is_ok());
+        assert!(matches!(
+            edit.as_part().edge(created.edge()),
+            Err(Error::StaleEntity {
+                kind: EntityKind::Edge
+            })
+        ));
+        assert!(matches!(
+            edit.as_part().vertex(created.vertex()),
+            Err(Error::StaleEntity {
+                kind: EntityKind::Vertex
             })
         ));
     }

@@ -262,9 +262,10 @@ mod tessellation;
 mod view;
 
 pub use edit::{
-    BoundedPcurve, EditTransaction, JoinRingRequest, JoinRingResult, MergeFaceAsHoleRequest,
-    MergeFaceAsHoleResult, MergeFacesRequest, PcurveChart, PcurveEndpointKind, PcurveMetadata,
-    PcurveParameterMap, PcurveSeam, PcurveSeamSide, RemoveBridgeRequest, RemoveBridgeResult,
+    BoundedPcurve, CreateStrutRequest, CreateStrutResult, EditTransaction, JoinRingRequest,
+    JoinRingResult, MergeFaceAsHoleRequest, MergeFaceAsHoleResult, MergeFacesRequest, PcurveChart,
+    PcurveEndpointKind, PcurveMetadata, PcurveParameterMap, PcurveSeam, PcurveSeamSide,
+    RemoveBridgeRequest, RemoveBridgeResult, RemoveStrutRequest, RemoveStrutResult,
     SplitFaceRequest, SplitFaceResult, SplitHoleAsFaceRequest, SplitHoleAsFaceResult,
     SurfaceParameter,
 };
