@@ -45,7 +45,7 @@ use kgeom::frame::Frame;
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::param::{ParamRange, wrap_periodic};
 use kgeom::project::{ProjectionBudgetProfile, ProjectionError};
-use kgeom::surface::{Cone, Cylinder, Dir, Plane, Sphere, Torus};
+use kgeom::surface::{Cone, Cylinder, Dir, Plane, Sphere, Surface, Torus};
 use kgeom::vec::{Point2, Point3, Vec3};
 use kgraph::{
     EvalBudgetProfile, EvalLimits, OffsetSurfaceDescriptor, SurfaceDerivativeOrder,
@@ -144,6 +144,35 @@ impl IntersectionImportBudgetProfile {
         .expect("built-in X_T production intersection import profile is valid")
     }
 
+    /// Corpus-backed defaults through the canonical equal-limit chart rung.
+    ///
+    /// The Work cap admits record 1828 and every later chart reached before
+    /// the exemplar's still-unsupported terminated `T/F` limit. The v2
+    /// profile remains the historical pre-equal-limit policy contract.
+    pub fn v3_defaults() -> BudgetPlan {
+        BudgetPlan::new([
+            LimitSpec::new(
+                INTERSECTION_CHART_CERTIFICATE_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                115_485_725,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_ITEMS,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                65_536,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64,
+            ),
+        ])
+        .expect("built-in X_T equal-limit intersection import profile is valid")
+    }
+
     fn validate(ledger: &WorkLedger) -> core::result::Result<(), OperationPolicyError> {
         ledger.require_limit(
             INTERSECTION_CHART_CERTIFICATE_WORK,
@@ -188,7 +217,7 @@ pub struct Reconstruction {
 pub fn reconstruction_budget_profile() -> BudgetPlan {
     let graph = EvalBudgetProfile::v1_defaults();
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v2_defaults();
+    let intersection = IntersectionImportBudgetProfile::v3_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -204,7 +233,7 @@ fn reconstruction_compatibility_budget() -> BudgetPlan {
     let graph =
         EvalBudgetProfile::for_limits(EvalLimits::default().max_dependency_depth, usize::MAX);
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v2_defaults();
+    let intersection = IntersectionImportBudgetProfile::v3_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -415,6 +444,26 @@ fn policy_error(error: OperationPolicyError) -> XtError {
     XtError::Kernel(error.into())
 }
 
+fn preflight_intersection_chart(
+    scope: &mut OperationScope<'_, '_>,
+    count: u64,
+    proof_depth: u64,
+    proof_work: u64,
+) -> Result<()> {
+    scope
+        .ledger_mut()
+        .observe(INTERSECTION_CHART_ITEMS, ResourceKind::Items, count)
+        .map_err(policy_error)?;
+    scope
+        .ledger_mut()
+        .observe(INTERSECTION_CHART_DEPTH, ResourceKind::Depth, proof_depth)
+        .map_err(policy_error)?;
+    scope
+        .ledger()
+        .check_charge(INTERSECTION_CHART_CERTIFICATE_WORK, proof_work)
+        .map_err(policy_error)
+}
+
 // ------------------------------------------------------- field helpers --
 
 fn xnode(file: &XtFile, index: u32) -> Result<&Node> {
@@ -534,6 +583,123 @@ fn intersection_limit(file: &XtFile, index: u32) -> Result<Point3> {
             what: "finite open LIMIT must contain exactly one position",
         }),
     }
+}
+
+fn equal_intersection_limit(file: &XtFile, index: u32) -> Result<Point3> {
+    let node = xnode(file, index)?;
+    if node.code != code::LIMIT {
+        return Err(XtError::BadField {
+            index,
+            what: "INTERSECTION equal-limit pointer is not a LIMIT",
+        });
+    }
+    if ch(file, node, "type")? != 'H'
+        || !matches!(file.field(node, "term_use"), Some(Value::Char('?')))
+    {
+        return Err(XtError::Unsupported {
+            capability: XtCapability::IntersectionLimits,
+            what: "only one shared closed LIMIT type H with term_use ? is supported for an equal-limit chart",
+        });
+    }
+    match field(file, node, "hvec")? {
+        Value::Arr(values) if values.len() == 1 => {
+            let value = values[0].as_vector().ok_or(XtError::BadField {
+                index,
+                what: "equal LIMIT contains a null or malformed position",
+            })?;
+            in_size_box(Point3::new(value[0], value[1], value[2]))
+        }
+        _ => Err(XtError::Unsupported {
+            capability: XtCapability::IntersectionLimits,
+            what: "shared closed LIMIT must contain exactly one position",
+        }),
+    }
+}
+
+fn canonicalize_equal_limit_periodic_trace_endpoints(
+    curve_idx: u32,
+    traces: &[TransmittedNurbsIntersectionTrace; 2],
+    uv: &mut [Vec<Point2>; 2],
+) -> Result<()> {
+    let mut periodic_axes = 0_usize;
+    for (trace_index, trace) in traces.iter().enumerate() {
+        let surface = match trace {
+            TransmittedNurbsIntersectionTrace::Plane(_) => continue,
+            TransmittedNurbsIntersectionTrace::Nurbs(surface) => surface,
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(offset) => offset.basis(),
+        };
+        for (axis, periodicity) in surface.periodicity().into_iter().enumerate() {
+            let Some(period) = periodicity else {
+                continue;
+            };
+            periodic_axes += 1;
+            let domain = surface
+                .knots(if axis == 0 { Dir::U } else { Dir::V })
+                .domain();
+            if period != domain.width() || uv[trace_index].len() < 2 {
+                return Err(XtError::Unsupported {
+                    capability: XtCapability::IntersectionLimits,
+                    what: "equal-limit chart does not use one canonical certified periodic seam",
+                });
+            }
+            let coordinate = |point: Point2| if axis == 0 { point.x } else { point.y };
+            let first_raw = coordinate(uv[trace_index][0]);
+            let last_index = uv[trace_index].len() - 1;
+            let last_raw = coordinate(uv[trace_index][last_index]);
+            let scale = domain
+                .lo
+                .abs()
+                .max(domain.hi.abs())
+                .max(period.abs())
+                .max(1.0);
+            let seam_slack = 16_384.0 * f64::EPSILON * scale;
+            let near_seam =
+                |value: f64| (value - domain.lo).abs().min((value - domain.hi).abs()) <= seam_slack;
+            if !near_seam(first_raw) || !near_seam(last_raw) {
+                return Err(XtError::Unsupported {
+                    capability: XtCapability::IntersectionLimits,
+                    what: "equal-limit chart endpoints are not on one certified periodic seam",
+                });
+            }
+            let second = coordinate(uv[trace_index][1]);
+            let penultimate = coordinate(uv[trace_index][last_index - 1]);
+            let nearest_boundary = |neighbor: f64| {
+                if (neighbor - domain.lo).abs() <= (neighbor - domain.hi).abs() {
+                    domain.lo
+                } else {
+                    domain.hi
+                }
+            };
+            let unwrap_endpoint = |raw: f64, neighbor: f64| {
+                let raw_boundary = nearest_boundary(raw);
+                let desired_boundary = nearest_boundary(neighbor);
+                // Preserve the transmitted value modulo one exact certified
+                // period. No intermediate UV or model-space chart position
+                // is rewritten.
+                raw + (desired_boundary - raw_boundary)
+            };
+            if axis == 0 {
+                uv[trace_index][0].x = unwrap_endpoint(first_raw, second);
+                uv[trace_index][last_index].x = unwrap_endpoint(last_raw, penultimate);
+            } else {
+                uv[trace_index][0].y = unwrap_endpoint(first_raw, second);
+                uv[trace_index][last_index].y = unwrap_endpoint(last_raw, penultimate);
+            }
+        }
+    }
+    if periodic_axes != 1 {
+        return Err(XtError::Unsupported {
+            capability: XtCapability::IntersectionLimits,
+            what: "equal-limit chart must close on exactly one certified periodic NURBS axis",
+        });
+    }
+    if uv.iter().any(|trace| trace.len() < 2) {
+        return Err(XtError::BadField {
+            index: curve_idx,
+            what: "equal-limit chart has no endpoint pair",
+        });
+    }
+    Ok(())
 }
 
 fn transmitted_nurbs_trace_proof_work(
@@ -1345,9 +1511,10 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
         Ok((c, reversed))
     }
 
-    /// Import the finite open modern-chart subset without recomputing the
-    /// spatial intersection. The transmitted positions and interleaved UVs
-    /// become one shared degree-1 basis and are certified over every span.
+    /// Import canonical finite-open charts and the one-shared-`H` periodic
+    /// equal-limit form without recomputing the spatial intersection. The
+    /// transmitted positions and interleaved UVs become one shared degree-1
+    /// basis and are certified over every span.
     fn intersection_curve(&mut self, curve_idx: u32, node: &Node) -> Result<CurveId> {
         let file = self.file;
         let source_indices = match field(file, node, "surface")? {
@@ -1486,19 +1653,6 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 1,
             )
         };
-        self.scope
-            .ledger_mut()
-            .observe(INTERSECTION_CHART_ITEMS, ResourceKind::Items, count_u64)
-            .map_err(policy_error)?;
-        self.scope
-            .ledger_mut()
-            .observe(INTERSECTION_CHART_DEPTH, ResourceKind::Depth, proof_depth)
-            .map_err(policy_error)?;
-        self.scope
-            .ledger()
-            .check_charge(INTERSECTION_CHART_CERTIFICATE_WORK, proof_work)
-            .map_err(policy_error)?;
-
         let early_source_surfaces = if has_offset_source || has_nurbs_source {
             Some([
                 self.surface(source_indices[0])?.0,
@@ -1672,20 +1826,34 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
 
         let start_idx = ptr(file, node, "start")?;
         let end_idx = ptr(file, node, "end")?;
-        if start_idx == 0 || end_idx == 0 || start_idx == end_idx {
+        if start_idx == 0 || end_idx == 0 {
             return Err(XtError::Unsupported {
                 capability: XtCapability::IntersectionLimits,
-                what: "transmitted intersection is not finite and open with distinct limits",
+                what: "transmitted intersection has a null limit",
             });
         }
-        let start = intersection_limit(file, start_idx)?;
-        let end = intersection_limit(file, end_idx)?;
+        let equal_limits = start_idx == end_idx;
+        let (start, end) = if equal_limits {
+            let limit = equal_intersection_limit(file, start_idx)?;
+            (limit, limit)
+        } else {
+            (
+                intersection_limit(file, start_idx)?,
+                intersection_limit(file, end_idx)?,
+            )
+        };
         if start.dist(positions[0]) > proof_tolerance
             || end.dist(positions[count - 1]) > proof_tolerance
         {
             return Err(XtError::BadField {
                 index: curve_idx,
                 what: "INTERSECTION LIMIT endpoints do not match the CHART endpoints",
+            });
+        }
+        if equal_limits && positions[0].dist(positions[count - 1]) > proof_tolerance {
+            return Err(XtError::BadField {
+                index: curve_idx,
+                what: "equal-limit INTERSECTION CHART is not spatially closed",
             });
         }
 
@@ -1749,10 +1917,6 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
         knots.extend([count_u64.saturating_sub(1) as f64; 2]);
         let carrier =
             NurbsCurve::new(1, knots.clone(), positions, None).map_err(XtError::Kernel)?;
-        let pcurves = [
-            NurbsCurve2d::new(1, knots.clone(), uv[0].clone(), None).map_err(XtError::Kernel)?,
-            NurbsCurve2d::new(1, knots, uv[1].clone(), None).map_err(XtError::Kernel)?,
-        ];
 
         let source_surfaces = if let Some(sources) = early_source_surfaces {
             sources
@@ -1763,6 +1927,12 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             ]
         };
         if let Some(planes) = planes {
+            if equal_limits {
+                return Err(XtError::Unsupported {
+                    capability: XtCapability::IntersectionLimits,
+                    what: "equal-limit chart must close on exactly one certified periodic NURBS axis",
+                });
+            }
             if !has_offset_source {
                 for (index, plane) in planes.iter().copied().enumerate() {
                     if self.store.get(source_surfaces[index])?.as_plane().copied() != Some(plane) {
@@ -1773,6 +1943,12 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                     }
                 }
             }
+            let pcurves = [
+                NurbsCurve2d::new(1, knots.clone(), uv[0].clone(), None)
+                    .map_err(XtError::Kernel)?,
+                NurbsCurve2d::new(1, knots, uv[1].clone(), None).map_err(XtError::Kernel)?,
+            ];
+            preflight_intersection_chart(self.scope, count_u64, proof_depth, proof_work)?;
             let certificate = certify_transmitted_plane_intersection_residuals(
                 carrier,
                 planes,
@@ -1848,6 +2024,14 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
         let traces: [TransmittedNurbsIntersectionTrace; 2] = traces
             .try_into()
             .expect("two transmitted sources remain two ordered traces");
+        if equal_limits {
+            canonicalize_equal_limit_periodic_trace_endpoints(curve_idx, &traces, &mut uv)?;
+        }
+        let pcurves = [
+            NurbsCurve2d::new(1, knots.clone(), uv[0].clone(), None).map_err(XtError::Kernel)?,
+            NurbsCurve2d::new(1, knots, uv[1].clone(), None).map_err(XtError::Kernel)?,
+        ];
+        preflight_intersection_chart(self.scope, count_u64, proof_depth, proof_work)?;
         let certificate = if offset_nurbs_sources.into_iter().any(|offset| offset) {
             certify_transmitted_offset_nurbs_intersection_residuals(
                 carrier,

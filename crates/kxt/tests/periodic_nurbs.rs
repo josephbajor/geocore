@@ -7,10 +7,18 @@ use ktopo::geom::SurfaceGeom;
 use ktopo::store::Store;
 use kxt::parse::{Value, read_xt};
 use kxt::schema::code;
-use kxt::{XtCapability, XtError, reconstruct, reconstruct_with_context};
+use kxt::{
+    IntersectionImportBudgetProfile, XtCapability, XtError, reconstruct, reconstruct_with_context,
+};
 
 const EXEMPLAR: &[u8] = include_bytes!("fixtures/exemplar.x_t");
 const BLOCK: &[u8] = include_bytes!("fixtures/block.x_t");
+
+fn equal_limit_context<'a>(session: &'a SessionPolicy) -> OperationContext<'a> {
+    OperationContext::new(session, Tolerances::default())
+        .unwrap()
+        .with_budget_overrides(IntersectionImportBudgetProfile::v3_defaults())
+}
 
 fn field<'a>(file: &'a kxt::XtFile, index: u32, name: &str) -> &'a Value {
     file.field(&file.nodes[&index], name).unwrap()
@@ -160,14 +168,18 @@ fn exemplar_periodic_surfaces_pin_the_certified_clamped_seam_contract() {
 #[test]
 fn exemplar_offset_nurbs_proof_advances_to_intersection_limits_and_rolls_back() {
     let file = read_xt(EXEMPLAR).unwrap();
+    let session = SessionPolicy::v1();
     let mut store = Store::new();
-    let error = reconstruct(&file, &mut store).unwrap_err();
+    let outcome =
+        reconstruct_with_context(&file, &mut store, &equal_limit_context(&session)).unwrap();
+    let result = outcome.result();
+    let error = result.as_ref().unwrap_err();
     assert!(
         matches!(
             error,
             XtError::Unsupported {
                 capability: XtCapability::IntersectionLimits,
-                what: "transmitted intersection is not finite and open with distinct limits",
+                what: "only finite open LIMIT type L with term_use ? is supported",
             }
         ),
         "advanced exemplar error: {error:?}"
@@ -249,7 +261,7 @@ fn malformed_periodic_seam_is_bad_data_and_accounting_is_deterministic() {
 
     let file = read_xt(EXEMPLAR).unwrap();
     let session = SessionPolicy::v1();
-    let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+    let context = equal_limit_context(&session);
     let mut reports = Vec::new();
     for _ in 0..2 {
         let mut store = Store::new();

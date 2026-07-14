@@ -16,8 +16,8 @@ use kgeom::aabb::{Aabb2, Aabb3};
 use kgeom::curve::{Circle, Curve, CurveDerivs, Line};
 use kgeom::curve2d::{Circle2d, Curve2d, Curve2dDerivs, Line2d, NurbsCurve2d};
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
-use kgeom::param::ParamRange;
-use kgeom::surface::{Dir, Plane, Sphere};
+use kgeom::param::{ParamRange, wrap_periodic};
+use kgeom::surface::{Dir, Plane, Sphere, Surface};
 use kgeom::vec::{Vec2, Vec3};
 
 use crate::{Curve2dHandle, GeometryRef, SurfaceHandle};
@@ -650,10 +650,9 @@ impl TransmittedOffsetNurbsTrace {
     }
 }
 
-/// Ordered source trace retained by a transmitted chart with at least one
-/// original NURBS source.
+/// Ordered exact source trace retained by a whole-range NURBS branch proof.
 #[derive(Debug, Clone, PartialEq)]
-pub enum TransmittedNurbsIntersectionTrace {
+pub enum NurbsIntersectionTrace {
     /// Exact direct or effective plane field.
     Plane(Plane),
     /// Original source NURBS surface descriptor.
@@ -662,10 +661,12 @@ pub enum TransmittedNurbsIntersectionTrace {
     OffsetNurbs(TransmittedOffsetNurbsTrace),
 }
 
+/// Compatibility name for transmitted-chart callers.
+pub type TransmittedNurbsIntersectionTrace = NurbsIntersectionTrace;
 /// Compatibility name for the original mixed Plane/NURBS trace API.
-pub type TransmittedPlaneNurbsTrace = TransmittedNurbsIntersectionTrace;
+pub type TransmittedPlaneNurbsTrace = NurbsIntersectionTrace;
 
-impl TransmittedNurbsIntersectionTrace {
+impl NurbsIntersectionTrace {
     /// Borrow the trace as a plane when its family matches.
     pub const fn as_plane(&self) -> Option<Plane> {
         if let Self::Plane(plane) = self {
@@ -695,7 +696,8 @@ impl TransmittedNurbsIntersectionTrace {
 }
 
 /// Whole-range proof retained for a transmitted exact-plane-field/NURBS,
-/// NURBS/NURBS, or direct Offset(NURBS)/NURBS chart.
+/// NURBS/NURBS, direct Offset(NURBS)/NURBS, or
+/// exact-plane-field/Offset(NURBS) chart.
 ///
 /// The NURBS trace is bounded on every binary carrier subdivision with an
 /// original-source point/partial interval enclosure and a centered
@@ -2244,8 +2246,8 @@ pub fn certify_transmitted_nurbs_nurbs_intersection_residuals(
 }
 
 /// Certify a transmitted chart between one constant normal offset of an
-/// original NURBS basis and one direct original NURBS source, in either
-/// operand order.
+/// original NURBS basis and either one exact plane field or one direct
+/// original NURBS source, in either operand order.
 ///
 /// The offset trace uses the same fixed source point/first-partial enclosure
 /// as the direct NURBS proof. Each proof rectangle additionally encloses
@@ -2266,6 +2268,12 @@ pub fn certify_transmitted_offset_nurbs_intersection_residuals(
             TransmittedNurbsIntersectionTrace::Nurbs(_)
         ] | [
             TransmittedNurbsIntersectionTrace::Nurbs(_),
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(_)
+        ] | [
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(_),
+            TransmittedNurbsIntersectionTrace::Plane(_)
+        ] | [
+            TransmittedNurbsIntersectionTrace::Plane(_),
             TransmittedNurbsIntersectionTrace::OffsetNurbs(_)
         ]
     ) {
@@ -2423,17 +2431,44 @@ fn transmitted_nurbs_trace_residual_bound(
         surface.knots(Dir::U).domain(),
         surface.knots(Dir::V).domain(),
     ];
-    if pcurve
-        .points()
-        .iter()
-        .any(|point| !domains[0].contains(point.x) || !domains[1].contains(point.y))
-    {
-        return Err(
-            IntersectionCertificateError::UnsupportedTraceParameterization {
-                trace,
-                reason: "transmitted NURBS pcurve leaves the source surface domain",
-            },
-        );
+    let periodicity = surface.periodicity();
+    let last_point = pcurve.points().len() - 1;
+    // Equal-limit import may unwrap only its first or last seam value by one
+    // exact period. Admit the resulting decimal-roundoff overhang, while an
+    // interior or material out-of-domain value remains a noncanonical range.
+    for (point_index, point) in pcurve.points().iter().enumerate() {
+        for axis in 0..2 {
+            let value = if axis == 0 { point.x } else { point.y };
+            if domains[axis].contains(value) {
+                continue;
+            }
+            let Some(period) = periodicity[axis] else {
+                return Err(
+                    IntersectionCertificateError::UnsupportedTraceParameterization {
+                        trace,
+                        reason: "transmitted NURBS pcurve leaves the source surface domain",
+                    },
+                );
+            };
+            let scale = domains[axis]
+                .lo
+                .abs()
+                .max(domains[axis].hi.abs())
+                .max(period.abs())
+                .max(1.0);
+            let seam_slack = 16_384.0 * f64::EPSILON * scale;
+            let outside = (domains[axis].lo - value)
+                .max(value - domains[axis].hi)
+                .max(0.0);
+            if (point_index != 0 && point_index != last_point) || outside > seam_slack {
+                return Err(
+                    IntersectionCertificateError::UnsupportedTraceParameterization {
+                        trace,
+                        reason: "transmitted periodic NURBS pcurve has a noncanonical trace range",
+                    },
+                );
+            }
+        }
     }
     let subdivisions = 1_usize << TRANSMITTED_NURBS_TRACE_PROOF_DEPTH;
     let mut bound = 0.0_f64;
@@ -2450,74 +2485,141 @@ fn transmitted_nurbs_trace_residual_bound(
         for subdivision in 0..subdivisions {
             let fraction_lo = subdivision as f64 / subdivisions as f64;
             let fraction_hi = (subdivision + 1) as f64 / subdivisions as f64;
-            let fraction_mid = fraction_lo + 0.5 * (fraction_hi - fraction_lo);
-            let delta = Interval::new(fraction_lo - fraction_mid, fraction_hi - fraction_mid);
-            let carrier_mid = interval_affine_vec3(carrier_start, carrier_direction, fraction_mid);
-            let uv_mid = [
-                Interval::point(uv_start.x) + uv_direction[0] * Interval::point(fraction_mid),
-                Interval::point(uv_start.y) + uv_direction[1] * Interval::point(fraction_mid),
-            ];
-            let uv_box = core::array::from_fn(|axis| {
-                let enclosure = uv_mid[axis] + uv_direction[axis] * delta;
-                ParamRange::new(
-                    enclosure.lo().max(domains[axis].lo),
-                    enclosure.hi().min(domains[axis].hi),
-                )
-            });
-            if uv_box.iter().any(|range| range.lo > range.hi) {
-                return Err(
-                    IntersectionCertificateError::UnsupportedTraceParameterization {
-                        trace,
-                        reason: "transmitted NURBS pcurve interval leaves the source surface domain",
-                    },
-                );
-            }
-            let center = uv_box.map(|range| range.lo + 0.5 * range.width());
-            let enclosure = surface
-                .source_differential_enclosure(uv_box, center)
-                .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
-            let position = enclosure.position();
-            let derivative_u = enclosure.derivative_u();
-            let derivative_v = enclosure.derivative_v();
-            let offset_normal = signed_offset
-                .map(|distance| {
-                    interval_unit_normal(derivative_u, derivative_v, trace)
-                        .map(|normal| (Interval::point(distance), normal))
-                })
-                .transpose()?;
-            let uv_center_delta = [
-                uv_mid[0] - Interval::point(center[0]),
-                uv_mid[1] - Interval::point(center[1]),
-            ];
-            let finite = |interval| {
-                finite_interval(interval)
-                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })
-            };
-            let mut squared_norm = Interval::point(0.0);
-            for axis in 0..3 {
-                let carrier_minus_position = finite(carrier_mid[axis] - position[axis])?;
-                let center_u = finite(derivative_u[axis] * uv_center_delta[0])?;
-                let center_v = finite(derivative_v[axis] * uv_center_delta[1])?;
-                let residual_center =
-                    finite(finite(carrier_minus_position - center_u)? - center_v)?;
-                let direction_u = finite(derivative_u[axis] * uv_direction[0])?;
-                let direction_v = finite(derivative_v[axis] * uv_direction[1])?;
-                let residual_direction =
-                    finite(finite(carrier_direction[axis] - direction_u)? - direction_v)?;
-                let mut residual = finite(residual_center + finite(residual_direction * delta)?)?;
-                if let Some((distance, normal)) = offset_normal {
-                    residual = finite(residual - finite(distance * normal[axis])?)?;
+            let mut cuts = vec![fraction_lo, fraction_hi];
+            for axis in 0..2 {
+                let Some(_) = periodicity[axis] else {
+                    continue;
+                };
+                let start = if axis == 0 { uv_start.x } else { uv_start.y };
+                let end = if axis == 0 { uv_end.x } else { uv_end.y };
+                let direction = end - start;
+                if direction == 0.0 {
+                    continue;
                 }
-                squared_norm = finite(squared_norm + finite(residual.square())?)?;
+                for seam in [domains[axis].lo, domains[axis].hi] {
+                    let crossing = (seam - start) / direction;
+                    if crossing > fraction_lo && crossing < fraction_hi {
+                        cuts.push(crossing);
+                    }
+                }
             }
-            let square_root = squared_norm
-                .sqrt()
-                .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
-            let local = finite(square_root)?.hi();
-            bound = bound.max(local);
+            cuts.sort_by(f64::total_cmp);
+            cuts.dedup();
+            for pair in cuts.windows(2) {
+                let piece_lo = pair[0];
+                let piece_hi = pair[1];
+                let piece_mid = piece_lo + 0.5 * (piece_hi - piece_lo);
+                let parameter_shift = core::array::from_fn(|axis| {
+                    // Split at every crossed certified seam and prove the
+                    // wrapped piece against its original-source interval.
+                    periodicity[axis].map_or(0.0, |period| {
+                        let start = if axis == 0 { uv_start.x } else { uv_start.y };
+                        let end = if axis == 0 { uv_end.x } else { uv_end.y };
+                        let raw = start + (end - start) * piece_mid;
+                        wrap_periodic(raw, domains[axis].lo, period) - raw
+                    })
+                });
+                let local = transmitted_nurbs_trace_piece_residual_bound(
+                    carrier_start,
+                    carrier_direction,
+                    uv_start,
+                    uv_direction,
+                    piece_lo,
+                    piece_hi,
+                    parameter_shift,
+                    surface,
+                    signed_offset,
+                    domains,
+                    trace,
+                )?;
+                bound = bound.max(local);
+            }
         }
     }
     Ok(bound)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn transmitted_nurbs_trace_piece_residual_bound(
+    carrier_start: Vec3,
+    carrier_direction: [Interval; 3],
+    uv_start: Vec2,
+    uv_direction: [Interval; 2],
+    fraction_lo: f64,
+    fraction_hi: f64,
+    parameter_shift: [f64; 2],
+    surface: &NurbsSurface,
+    signed_offset: Option<f64>,
+    domains: [ParamRange; 2],
+    trace: PairedTrace,
+) -> Result<f64, IntersectionCertificateError> {
+    let fraction_mid = fraction_lo + 0.5 * (fraction_hi - fraction_lo);
+    let delta = Interval::new(fraction_lo - fraction_mid, fraction_hi - fraction_mid);
+    let carrier_mid = interval_affine_vec3(carrier_start, carrier_direction, fraction_mid);
+    let uv_mid = [
+        Interval::point(uv_start.x)
+            + uv_direction[0] * Interval::point(fraction_mid)
+            + Interval::point(parameter_shift[0]),
+        Interval::point(uv_start.y)
+            + uv_direction[1] * Interval::point(fraction_mid)
+            + Interval::point(parameter_shift[1]),
+    ];
+    let uv_box = core::array::from_fn(|axis| {
+        let enclosure = uv_mid[axis] + uv_direction[axis] * delta;
+        ParamRange::new(
+            enclosure.lo().max(domains[axis].lo),
+            enclosure.hi().min(domains[axis].hi),
+        )
+    });
+    if uv_box.iter().any(|range| range.lo > range.hi) {
+        return Err(
+            IntersectionCertificateError::UnsupportedTraceParameterization {
+                trace,
+                reason: "transmitted NURBS pcurve interval leaves the source surface domain",
+            },
+        );
+    }
+    let center = uv_box.map(|range| range.lo + 0.5 * range.width());
+    let enclosure = surface
+        .source_differential_enclosure(uv_box, center)
+        .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+    let position = enclosure.position();
+    let derivative_u = enclosure.derivative_u();
+    let derivative_v = enclosure.derivative_v();
+    let offset_normal = signed_offset
+        .map(|distance| {
+            interval_unit_normal(derivative_u, derivative_v, trace)
+                .map(|normal| (Interval::point(distance), normal))
+        })
+        .transpose()?;
+    let uv_center_delta = [
+        uv_mid[0] - Interval::point(center[0]),
+        uv_mid[1] - Interval::point(center[1]),
+    ];
+    let finite = |interval| {
+        finite_interval(interval)
+            .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })
+    };
+    let mut squared_norm = Interval::point(0.0);
+    for axis in 0..3 {
+        let carrier_minus_position = finite(carrier_mid[axis] - position[axis])?;
+        let center_u = finite(derivative_u[axis] * uv_center_delta[0])?;
+        let center_v = finite(derivative_v[axis] * uv_center_delta[1])?;
+        let residual_center = finite(finite(carrier_minus_position - center_u)? - center_v)?;
+        let direction_u = finite(derivative_u[axis] * uv_direction[0])?;
+        let direction_v = finite(derivative_v[axis] * uv_direction[1])?;
+        let residual_direction =
+            finite(finite(carrier_direction[axis] - direction_u)? - direction_v)?;
+        let mut residual = finite(residual_center + finite(residual_direction * delta)?)?;
+        if let Some((distance, normal)) = offset_normal {
+            residual = finite(residual - finite(distance * normal[axis])?)?;
+        }
+        squared_norm = finite(squared_norm + finite(residual.square())?)?;
+    }
+    let square_root = squared_norm
+        .sqrt()
+        .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+    Ok(finite(square_root)?.hi())
 }
 
 fn interval_unit_normal(

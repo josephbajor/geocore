@@ -666,11 +666,11 @@ of which 44 sit on offset surfaces and 68 reference B-surfaces, 110 intersection
 curves, 131 curve-less tolerant edges, 7,423 nodes). It parses fully today, and
 the geometry-graph/offset reconstruction slice is complete. The three production
 periodic/closed B-surface leaves now reconstruct through a certified clamped
-position/C1 seam contract. Reconstruction next stops at
-`xt.read.intersection-limits` because the next transmitted INTERSECTION has
-equal, therefore non-distinct, start and end limits instead of the landed
-distinct finite-open pair; this is step 2 below, not a periodic-geometry or
-surface-family blocker. Its manifest row remains the committed progress meter:
+position/C1 seam contract. The endpoint-only equal-limit form at records 1828
+and 2008 is now certified when a shared `H/?` limit closes spatially on exactly
+one periodic NURBS axis; only the pcurve endpoints are unwrapped by the exact
+declared period. Production reconstruction now stops later at the preserved
+terminated `T/F` limit boundary. Its manifest row remains the committed progress meter:
 `reconstruct: unsupported → pass`, then `tessellate: pass`, then full-checker
 gaps shrinking toward `valid`. Dependency plan:
 
@@ -721,8 +721,11 @@ gaps shrinking toward `valid`. Dependency plan:
    consumes `14336/2/10`; the historical Plane/B fixture remains
    `7170/2/10`; the synthetic Offset(B)/B fixture consumes `14336/2/10` in
    both operand orders and rational variants. Historical import profile v1
-   remains capped at 131,072 Work, while the corpus-backed v2 profile admits
-   the exemplar's exact `81267732/20/10` Work/Items/Depth boundary. Both
+   remains capped at 131,072 Work and v2 retains its 81,267,732 Work
+   compatibility boundary. Production v3 admits the exemplar through record
+   1828 and all later accepted charts at exact `115485725/20/10`
+   Work/Items/Depth before the terminated `T/F` limit; the independently
+   transplanted record-2008 payload pins `124040223/22/10`. Both
    original B-surface identities and their paired pcurves are graph-protected
    in source order. Other parameter conventions, limits,
    nullable data, periodic/closed transmitted trace ranges, arbitrary unclamped
@@ -731,10 +734,10 @@ gaps shrinking toward `valid`. Dependency plan:
    production exemplar's three clamped periodic/closed B-surface leaves now
    reconstruct, wrap evaluation, bound seam-crossing ranges, and write matching
    periodic/closed flags. Its first Offset(B-surface)/B-surface chart now
-   certifies, advancing the corpus ratchet to a later intersection whose start
-   and end limits are equal rather than distinct. Equal/non-distinct, null, or
-   closed limit families, periodic trace ranges, and noncanonical chart
-   conventions remain. Re-deriving
+   certifies. The endpoint-only equal-limit records 1828 and 2008 now certify,
+   advancing the corpus ratchet to a later terminated `T/F` limit. Null,
+   general closed-limit, non-endpoint-only periodic trace ranges, and
+   noncanonical chart conventions remain. Re-deriving
    boolean scars through our own surface/surface intersector remains an M4
    concern; import must not wait on it.
 3. **COMPLETE VERTICAL SLICE — certified clamped periodic/closed B-surfaces.**

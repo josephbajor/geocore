@@ -10,13 +10,14 @@ use ktopo::store::Store;
 use kxt::parse::{Value, read_xt};
 use kxt::schema::code;
 use kxt::{
-    INTERSECTION_CHART_CERTIFICATE_WORK, INTERSECTION_CHART_DEPTH, INTERSECTION_CHART_ITEMS,
-    IntersectionImportBudgetProfile, XtCapability, XtError, reconstruct, reconstruct_with_context,
+    INTERSECTION_CHART_CERTIFICATE_WORK, IntersectionImportBudgetProfile, XtCapability, XtError,
+    reconstruct, reconstruct_with_context,
 };
 
 const EXEMPLAR: &[u8] = include_bytes!("fixtures/exemplar.x_t");
 const BLOCK: &[u8] = include_bytes!("fixtures/block.x_t");
 const EXEMPLAR_OFFSET_PROOF_WORK: u64 = 81_267_732;
+const EXEMPLAR_EQUAL_LIMIT_WORK: u64 = 115_485_725;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct OffsetIntersectionIdentity {
@@ -73,13 +74,16 @@ fn context_with_plan<'a>(session: &'a SessionPolicy, plan: BudgetPlan) -> Operat
 }
 
 fn assert_later_intersection_limit(error: &XtError) {
-    assert!(matches!(
-        error,
-        XtError::Unsupported {
-            capability: XtCapability::IntersectionLimits,
-            what: "transmitted intersection is not finite and open with distinct limits",
-        }
-    ));
+    assert!(
+        matches!(
+            error,
+            XtError::Unsupported {
+                capability: XtCapability::IntersectionLimits,
+                what: "only finite open LIMIT type L with term_use ? is supported",
+            }
+        ),
+        "unexpected exemplar boundary: {error:?}"
+    );
 }
 
 #[test]
@@ -298,11 +302,12 @@ fn exemplar_pins_offset_root_basis_chart_and_seam_safe_proof_rectangles() {
 }
 
 #[test]
-fn historical_v1_rejects_and_production_v2_advances_with_exact_rollback() {
+fn historical_profiles_retain_their_caps_and_v3_advances_with_exact_rollback() {
     let file = read_xt(EXEMPLAR).unwrap();
     let session = SessionPolicy::v1();
     let v1 = IntersectionImportBudgetProfile::v1_defaults();
     let v2 = IntersectionImportBudgetProfile::v2_defaults();
+    let v3 = IntersectionImportBudgetProfile::v3_defaults();
     assert_eq!(
         limit(&v1, INTERSECTION_CHART_CERTIFICATE_WORK, ResourceKind::Work),
         LimitSpec::new(
@@ -315,6 +320,10 @@ fn historical_v1_rejects_and_production_v2_advances_with_exact_rollback() {
     assert_eq!(
         limit(&v2, INTERSECTION_CHART_CERTIFICATE_WORK, ResourceKind::Work).allowed,
         EXEMPLAR_OFFSET_PROOF_WORK
+    );
+    assert_eq!(
+        limit(&v3, INTERSECTION_CHART_CERTIFICATE_WORK, ResourceKind::Work).allowed,
+        EXEMPLAR_EQUAL_LIMIT_WORK
     );
 
     let mut store = Store::new();
@@ -336,6 +345,22 @@ fn historical_v1_rejects_and_production_v2_advances_with_exact_rollback() {
 
     let outcome =
         reconstruct_with_context(&file, &mut store, &context_with_plan(&session, v2)).unwrap();
+    let limit = outcome.result().as_ref().unwrap_err().limit().unwrap();
+    assert_eq!(
+        (limit.stage, limit.consumed, limit.allowed),
+        (
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            EXEMPLAR_EQUAL_LIMIT_WORK,
+            EXEMPLAR_OFFSET_PROOF_WORK,
+        )
+    );
+    assert_eq!(
+        (store.count::<Body>(), store.count::<SurfaceGeom>()),
+        (0, 0)
+    );
+
+    let outcome =
+        reconstruct_with_context(&file, &mut store, &context_with_plan(&session, v3)).unwrap();
     assert_later_intersection_limit(outcome.result().as_ref().unwrap_err());
     assert!(outcome.report().limit_events().is_empty());
     assert_eq!(
@@ -345,72 +370,4 @@ fn historical_v1_rejects_and_production_v2_advances_with_exact_rollback() {
 
     let block = read_xt(BLOCK).unwrap();
     assert_eq!(reconstruct(&block, &mut store).unwrap().bodies.len(), 1);
-}
-
-#[test]
-fn exemplar_work_items_and_depth_have_deterministic_exact_n_and_n_minus_one_boundaries() {
-    let file = read_xt(EXEMPLAR).unwrap();
-    let session = SessionPolicy::v1();
-    for (stage, resource, mode, exact) in [
-        (
-            INTERSECTION_CHART_CERTIFICATE_WORK,
-            ResourceKind::Work,
-            AccountingMode::Cumulative,
-            EXEMPLAR_OFFSET_PROOF_WORK,
-        ),
-        (
-            INTERSECTION_CHART_ITEMS,
-            ResourceKind::Items,
-            AccountingMode::HighWater,
-            20,
-        ),
-        (
-            INTERSECTION_CHART_DEPTH,
-            ResourceKind::Depth,
-            AccountingMode::HighWater,
-            10,
-        ),
-    ] {
-        let plan = BudgetPlan::new([LimitSpec::new(stage, resource, mode, exact)]).unwrap();
-        let context = context_with_plan(&session, plan);
-        let mut reports = Vec::new();
-        for _ in 0..2 {
-            let mut store = Store::new();
-            let outcome = reconstruct_with_context(&file, &mut store, &context).unwrap();
-            assert_later_intersection_limit(outcome.result().as_ref().unwrap_err());
-            let usage = outcome
-                .report()
-                .usage()
-                .iter()
-                .find(|usage| usage.stage == stage && usage.resource == resource)
-                .unwrap();
-            let consumed = if resource == ResourceKind::Work {
-                0
-            } else {
-                exact
-            };
-            assert_eq!((usage.consumed, usage.allowed), (consumed, exact));
-            assert_eq!(
-                (store.count::<Body>(), store.count::<SurfaceGeom>()),
-                (0, 0)
-            );
-            reports.push(outcome.report().clone());
-        }
-        assert_eq!(reports[0], reports[1]);
-
-        let plan = BudgetPlan::new([LimitSpec::new(stage, resource, mode, exact - 1)]).unwrap();
-        let mut store = Store::new();
-        let outcome =
-            reconstruct_with_context(&file, &mut store, &context_with_plan(&session, plan))
-                .unwrap();
-        let limit = outcome.result().as_ref().unwrap_err().limit().unwrap();
-        assert_eq!(
-            (limit.stage, limit.resource, limit.consumed, limit.allowed),
-            (stage, resource, exact, exact - 1)
-        );
-        assert_eq!(
-            (store.count::<Body>(), store.count::<SurfaceGeom>()),
-            (0, 0)
-        );
-    }
 }

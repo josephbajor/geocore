@@ -40,7 +40,7 @@ pub enum XtCapability {
     IntersectionChartConvention,
     /// Missing, nullable, or unsupported transmitted intersection UV data.
     IntersectionChartData,
-    /// Closed, terminated, missing, or otherwise unsupported intersection limits.
+    /// Null, terminated, or otherwise unsupported intersection limits.
     IntersectionLimits,
     /// Intersection source family outside the verified exact-plane and
     /// finite-open original-source NURBS chart subsets.

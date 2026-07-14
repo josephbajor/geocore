@@ -731,15 +731,19 @@ bound, divides to the complete unit-normal field, and applies the signed
 displacement before checking the transmitted carrier residual. The six shared
 position/partial scans also pay for that normal proof, so the canonical
 one-span Offset(B)/B fixture remains exactly 14,336 Work, 2 Items, and Depth 10
-in both operand orders. The production exemplar now reaches the later
+in both operand orders. The production exemplar now passes its first shared-
+`H/?` equal-limit chart and reaches the later terminated `T/F`
 `xt.read.intersection-limits` boundary rather than an unsupported surface
-family.
+family. Exactly one certified periodic NURBS axis may close the chart; only its
+endpoints are unwrapped by one exact period before the whole-range interval
+proof. Record 1828 is admitted in place, while the traversal-masked record 2008
+is independently certified by a focused payload transplant.
 
 - Add contextual NURBS/non-plane fields and other exact/procedural families
   only with contextual accounting and paired trace evidence.
-- Broaden the M3c consumer to further production-exemplar source bases and
-  explicitly supported terminated chart variants without recomputing their
-  transmitted scars.
+- Broaden the M3c consumer to null/general closed limits, non-endpoint-only
+  periodic trace ranges, noncanonical charts, and further terminated variants
+  without recomputing their transmitted scars.
 - Add swept, spun, and blend descriptors only with their own evaluator,
   validity, bounds, interchange, and test contracts.
 
@@ -787,7 +791,10 @@ the graph ownership model.
   orders and polynomial/rational bases, retain the live root, signed distance,
   basis, and paired pcurves, pin exact 14,336/2/10 proof accounting, reject
   singular or underflowed normal fields and altered dependencies, and advance
-  the production corpus to its equal-limit boundary.
+  the production corpus through record 1828 to the later terminated `T/F`
+  boundary. The equal-limit suite separately pins both records, exact v3
+  `115485725/20/10`, record-2008 transplant `124040223/22/10`, endpoint-only
+  period unwrapping, and typed null/distinct-closed/off-seam rollback.
 
 ### Offset evaluator tests
 

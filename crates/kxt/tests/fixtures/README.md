@@ -83,11 +83,13 @@ statement accompanied the individual files.
   leaves reconstruct through the certified position/C1 seam contract, and its
   first constant-normal `Offset(B-surface)/B-surface` chart now retains the
   live offset root, signed distance, periodic NURBS basis, paired pcurves, and
-  whole-range unit-normal proof. Reconstruction next stops at a genuinely
-  later transmitted intersection without distinct finite-open limits: records
-  1828 and 2008 each reuse one limit pointer as both start and end. Equal-limit
-  semantics are therefore the next corpus-backed reader slice, before broader
-  null/closed, periodic-trace-range, and noncanonical chart forms. Primary
+  whole-range unit-normal proof. Records 1828 and 2008 each reuse one `H/?`
+  limit pointer as both start and end. Their endpoint-only,
+  single-periodic-axis payloads now certify: record 1828 advances untouched
+  production reconstruction to the later terminated `T/F` boundary at exact
+  `115485725/20/10` Work/Items/Depth, while record 2008 is independently pinned
+  by a focused payload transplant at `124040223/22/10`. Broader null/closed,
+  periodic-trace-range, and noncanonical chart forms remain unsupported. Primary
   reference for modern writer conventions: TRIMMED_CURVE/GEOMETRIC_OWNER linkage,
   tolerant-edge fin curves, POINT ownership by vertex, and the resolved
   37102 node layouts (133/141 match base 13006 exactly).
