@@ -1938,6 +1938,209 @@ fn face_case_a(
     run_kgeom(s, loops_pts, &loops_ids, flip, acc, opts, work)
 }
 
+/// Copy one side of an axis-aligned UV rectangle from a frozen trim chain.
+/// Corners intentionally occur in both adjacent arcs; [`patch_polygon`]
+/// retains each exactly once when it assembles a patch.
+fn rectangular_chain_side(
+    chain: &UvChain,
+    keep: impl Fn(Vec2) -> bool,
+    canonicalize: impl Fn(Vec2) -> Vec2,
+    ascending: impl Fn(Vec2) -> f64,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
+) -> Result<Arc> {
+    let count = chain.uvs.iter().copied().filter(|&uv| keep(uv)).count();
+    if count < 2 {
+        return Err(Error::InvalidGeometry {
+            reason: "internal: rectangular trim side has fewer than two samples",
+        }
+        .into());
+    }
+    checked_vec_capacity::<(Vec2, u32)>(BODY_TESSELLATION_PREPARED_PATCH_ITEMS, count)?;
+    work.admit_prepared_items(count)?;
+    let mut arc = Vec::with_capacity(count);
+    for (&uv, &id) in chain.uvs.iter().zip(&chain.ids) {
+        if keep(uv) {
+            arc.push((canonicalize(uv), id));
+        }
+    }
+    arc.sort_by(|a, b| ascending(a.0).total_cmp(&ascending(b.0)));
+    Ok(arc)
+}
+
+/// Split a stitched full-period cylindrical rectangle at already-frozen
+/// quarter-period samples. A single wide periodic chart can seed helical UV
+/// slivers whose 3D area is material despite negligible radial projection.
+/// Keeping the two welded seam copies in separate quarter-period end patches
+/// removes that connectivity ambiguity without changing any topological
+/// boundary samples. Each new iso-column is shared by global vertex id.
+fn split_full_period_cylinder_rectangle(
+    s: &dyn Surface,
+    chain: &UvChain,
+    flip: bool,
+    acc: &mut MeshAcc,
+    opts: &TessOptions,
+    ctx: Ctx,
+    work: &mut BodyTessellationWork<'_, '_, '_>,
+) -> Result<Option<Vec<[u32; 3]>>> {
+    let Some(period) = s.periodicity()[0] else {
+        return Ok(None);
+    };
+    if chain.uvs.len() < 4 || chain.ids.len() != chain.uvs.len() {
+        return Ok(None);
+    }
+    let (u_lo, u_hi, v_lo, v_hi) = chain.uvs.iter().fold(
+        (
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ),
+        |(u_lo, u_hi, v_lo, v_hi), uv| {
+            (
+                u_lo.min(uv.x),
+                u_hi.max(uv.x),
+                v_lo.min(uv.y),
+                v_hi.max(uv.y),
+            )
+        },
+    );
+    let scale = u_lo
+        .abs()
+        .max(u_hi.abs())
+        .max(v_lo.abs())
+        .max(v_hi.abs())
+        .max(period.abs())
+        .max(1.0);
+    let eps = 256.0 * f64::EPSILON * scale;
+    let near = |a: f64, b: f64| (a - b).abs() <= eps;
+    if !near(u_hi - u_lo, period)
+        || near(v_lo, v_hi)
+        || chain.uvs.iter().any(|uv| {
+            !near(uv.x, u_lo) && !near(uv.x, u_hi) && !near(uv.y, v_lo) && !near(uv.y, v_hi)
+        })
+    {
+        return Ok(None);
+    }
+
+    let mut bottom = rectangular_chain_side(
+        chain,
+        |uv| near(uv.y, v_lo),
+        |uv| Vec2::new(uv.x, v_lo),
+        |uv| uv.x,
+        work,
+    )?;
+    let mut top = rectangular_chain_side(
+        chain,
+        |uv| near(uv.y, v_hi),
+        |uv| Vec2::new(uv.x, v_hi),
+        |uv| uv.x,
+        work,
+    )?;
+    let left = rectangular_chain_side(
+        chain,
+        |uv| near(uv.x, u_lo),
+        |uv| {
+            let v = if near(uv.y, v_lo) {
+                v_lo
+            } else if near(uv.y, v_hi) {
+                v_hi
+            } else {
+                uv.y
+            };
+            Vec2::new(u_lo, v)
+        },
+        |uv| uv.y,
+        work,
+    )?;
+    let right = rectangular_chain_side(
+        chain,
+        |uv| near(uv.x, u_hi),
+        |uv| {
+            let v = if near(uv.y, v_lo) {
+                v_lo
+            } else if near(uv.y, v_hi) {
+                v_hi
+            } else {
+                uv.y
+            };
+            Vec2::new(u_hi, v)
+        },
+        |uv| uv.y,
+        work,
+    )?;
+    let nearest = |arc: &Arc, target_u: f64| {
+        arc.iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                (a.0.x - target_u)
+                    .abs()
+                    .total_cmp(&(b.0.x - target_u).abs())
+            })
+            .map(|(index, _)| index)
+            .expect("rectangular side has at least two points")
+    };
+    let mut bottom_cut = [0_usize; 5];
+    let mut top_cut = [0_usize; 5];
+    bottom_cut[4] = bottom.len() - 1;
+    top_cut[4] = top.len() - 1;
+    for split in 1..4 {
+        let target_u = u_lo + period * split as f64 / 4.0;
+        bottom_cut[split] = nearest(&bottom, target_u);
+        top_cut[split] = nearest(&top, target_u);
+        if !near(bottom[bottom_cut[split]].0.x, target_u)
+            || !near(top[top_cut[split]].0.x, target_u)
+            || bottom_cut[split] <= bottom_cut[split - 1]
+            || top_cut[split] <= top_cut[split - 1]
+        {
+            return Ok(None);
+        }
+        bottom[bottom_cut[split]].0.x = target_u;
+        top[top_cut[split]].0.x = target_u;
+    }
+    if bottom_cut[3] >= bottom_cut[4] || top_cut[3] >= top_cut[4] {
+        return Ok(None);
+    }
+    bottom[0].0.x = u_lo;
+    top[0].0.x = u_lo;
+    bottom[bottom_cut[4]].0.x = u_hi;
+    top[top_cut[4]].0.x = u_hi;
+    let columns = [
+        left,
+        iso_arc(s, bottom[bottom_cut[1]], top[top_cut[1]], acc, ctx, work)?,
+        iso_arc(s, bottom[bottom_cut[2]], top[top_cut[2]], acc, ctx, work)?,
+        iso_arc(s, bottom[bottom_cut[3]], top[top_cut[3]], acc, ctx, work)?,
+        right,
+    ];
+    let mut triangles = Vec::new();
+    for patch in 0..4 {
+        let bottom_count = inclusive_item_count(bottom_cut[patch], bottom_cut[patch + 1])?;
+        let top_count = inclusive_item_count(top_cut[patch], top_cut[patch + 1])?;
+        let bottom_arc = collect_prepared_arc(
+            bottom_count,
+            bottom[bottom_cut[patch]..=bottom_cut[patch + 1]]
+                .iter()
+                .copied(),
+            work,
+        )?;
+        let top_arc = collect_prepared_arc(
+            top_count,
+            top[top_cut[patch]..=top_cut[patch + 1]].iter().copied(),
+            work,
+        )?;
+        let (points, ids) = patch_polygon(
+            &bottom_arc,
+            &columns[patch + 1],
+            &top_arc,
+            &columns[patch],
+            work,
+        )?;
+        let loops_pts = structural_singleton(points, work)?;
+        let patch_triangles = run_kgeom(s, loops_pts, &[ids], flip, acc, opts, work)?;
+        extend_admitted_triangles(&mut triangles, patch_triangles)?;
+    }
+    Ok(Some(triangles))
+}
+
 /// Periodic side face (cylinder/cone-like): exactly one loop winds `+1`
 /// (bottom) and one winds `-1` (top) around the `u` period; the domain is
 /// seam-cut into one period-wide region whose left/right seam columns
@@ -2714,7 +2917,15 @@ fn tess_face(
         }
     }
     if chains.iter().all(|c| c.winding == [0, 0]) {
-        face_case_a(require_leaf_surface(sg)?, chains, flip, acc, opts, work)
+        let s = require_leaf_surface(sg)?;
+        if matches!(sg, SurfaceGeom::Cylinder(_))
+            && chains.len() == 1
+            && let Some(triangles) =
+                split_full_period_cylinder_rectangle(s, &chains[0], flip, acc, opts, ctx, work)?
+        {
+            return Ok(triangles);
+        }
+        face_case_a(s, chains, flip, acc, opts, work)
     } else {
         face_case_b(sg, chains, flip, acc, opts, ctx, work)
     }
@@ -2897,7 +3108,7 @@ mod tests {
     };
     use crate::entity::{Face, Fin, Loop, PcurveChart, ShellId};
     use crate::geom::CurveGeom;
-    use crate::make::{block, cylinder, planar_sheet, solid_body_scaffold};
+    use crate::make::{block, cylinder, cylindrical_sheet, planar_sheet, solid_body_scaffold};
     use core::num::NonZeroUsize;
     use kcore::math;
     use kcore::operation::DiagnosticLevel;
@@ -5946,5 +6157,106 @@ mod tests {
             }
         }
         assert_eq!(faces_using, 2, "ring edge must stitch exactly two faces");
+    }
+
+    #[test]
+    fn cylindrical_sheet_has_oriented_manifold_area_with_or_without_pcurves() {
+        let (radius, height) = (0.13, 0.2);
+        for curve_only in [false, true] {
+            let mut store = Store::new();
+            let body = cylindrical_sheet(&mut store, &Frame::world(), radius, height).unwrap();
+            if curve_only {
+                for edge in store.edges_of_body(body).unwrap() {
+                    let fins = store.get(edge).unwrap().fins.clone();
+                    for fin in fins {
+                        store.get_mut(fin).unwrap().pcurve = None;
+                    }
+                }
+            }
+            assert!(check_body(&store, body).unwrap().is_empty());
+            let exact_area = core::f64::consts::TAU * radius * height;
+            for tol in [1.0e-2, 3.0e-3, 1.0e-3, 3.0e-4] {
+                let mesh = tessellate_body(&store, body, &opts(tol)).unwrap();
+                assert!(
+                    tessellate_body(&store, body, &opts(tol)).unwrap() == mesh,
+                    "cylindrical sheet must repeat bitwise at {tol}; curve_only={curve_only}"
+                );
+                assert_eq!(mesh.face_ranges.len(), 1);
+                assert_eq!(mesh.face_ranges[0].1, 0..mesh.triangles.len());
+
+                let mut directed = std::collections::BTreeSet::new();
+                let mut incidence = std::collections::BTreeMap::<(u32, u32), usize>::new();
+                let mut area = 0.0;
+                for triangle in &mesh.triangles {
+                    assert!(
+                        triangle[0] != triangle[1]
+                            && triangle[1] != triangle[2]
+                            && triangle[2] != triangle[0],
+                        "sheet tessellation retained a degenerate triangle at {tol}; curve_only={curve_only}"
+                    );
+                    for edge in [
+                        (triangle[0], triangle[1]),
+                        (triangle[1], triangle[2]),
+                        (triangle[2], triangle[0]),
+                    ] {
+                        assert!(
+                            directed.insert(edge),
+                            "directed triangle edge {edge:?} repeats at {tol}; curve_only={curve_only}"
+                        );
+                        *incidence
+                            .entry((edge.0.min(edge.1), edge.0.max(edge.1)))
+                            .or_default() += 1;
+                    }
+                    let [a, b, c] = triangle.map(|index| mesh.positions[index as usize]);
+                    let area_vector = (b - a).cross(c - a);
+                    let triangle_area = 0.5 * area_vector.norm();
+                    assert!(triangle_area.is_finite() && triangle_area > 0.0);
+                    area += triangle_area;
+                    let centroid = Point3::new(
+                        (a.x + b.x + c.x) / 3.0,
+                        (a.y + b.y + c.y) / 3.0,
+                        (a.z + b.z + c.z) / 3.0,
+                    );
+                    let radial = Vec3::new(centroid.x, centroid.y, 0.0)
+                        .normalized()
+                        .expect("cylinder triangle centroid stays off its axis");
+                    let normal_alignment = area_vector.dot(radial) / area_vector.norm();
+                    assert!(
+                        normal_alignment >= 0.9,
+                        "materially misaligned sheet facet at {tol}: {triangle:?}, alignment={normal_alignment}, curve_only={curve_only}"
+                    );
+                }
+
+                assert!(incidence.values().all(|&count| matches!(count, 1 | 2)));
+                let actual_boundary: std::collections::BTreeSet<_> = incidence
+                    .iter()
+                    .filter_map(|(&edge, &count)| (count == 1).then_some(edge))
+                    .collect();
+                let mut expected_boundary = std::collections::BTreeSet::new();
+                for &(edge_id, ref polyline) in &mesh.edge_polylines {
+                    if store.get(edge_id).unwrap().fins.len() == 1 {
+                        for pair in polyline.windows(2) {
+                            assert!(
+                                expected_boundary
+                                    .insert((pair[0].min(pair[1]), pair[0].max(pair[1]),))
+                            );
+                        }
+                    } else {
+                        for pair in polyline.windows(2) {
+                            assert_eq!(
+                                incidence.get(&(pair[0].min(pair[1]), pair[0].max(pair[1]))),
+                                Some(&2),
+                                "welded seam must be internal at {tol}; curve_only={curve_only}"
+                            );
+                        }
+                    }
+                }
+                assert_eq!(actual_boundary, expected_boundary);
+                assert!(
+                    (area - exact_area).abs() / exact_area <= 0.006,
+                    "sheet area {area:.16e} vs exact {exact_area:.16e} at {tol}; curve_only={curve_only}"
+                );
+            }
+        }
     }
 }
