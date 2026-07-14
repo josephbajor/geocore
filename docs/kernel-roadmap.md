@@ -683,12 +683,15 @@ NURBS seam crossing, so vertex-less EDGE 2210 remains a topology ring and FACE
 1195 derives its finite domain. Production v7 then certifies finite-open
 Plane/Offset(B-surface) `INTERSECTION` 5089 by recovering sample 2 operand 0's
 paired-null interior Plane UV through exact frame inversion and rerunning the
-whole-carrier Plane/Offset-NURBS proof. V1-v6 remain unchanged; v6 pins its
-next denied attempt at 221,060,174 Work, while v7 admits exact
-`272430166/22/10` Work/Items/Depth. Reconstruction now stops atomically at the
-next `INTERSECTION` 1984 proof preflight, which attempts 285,283,414 Work. A
-diagnostic-cap continuation reaches trace `First` and rejects because the
-transmitted NURBS pcurve leaves its original source domain. Its manifest row is
+whole-carrier Plane/Offset-NURBS proof. V1-v7 remain unchanged; v7 pins its
+next denied attempt at 285,283,414 Work. Production v8 certifies nonperiodic
+NURBS/Offset(B-surface) `INTERSECTION` 1984 after snapping only the final first-
+trace `u` value from `-2.02217766823431e-15` to its exact source-domain lower
+bound, then rerunning the unchanged whole-carrier proof. V8 admits exact
+`315245660/22/10` Work/Items/Depth and stops atomically at `INTERSECTION` 5945's
+323,814,492-Work proof preflight. That next record retains ordered Offset roots
+`[3338, 773]`; a diagnostic larger cap reaches typed `InvalidTraceFamily`, so
+the broader transmitted Offset/Offset arm remains closed. Its manifest row is
 `reconstruct: fail` with no capability and remains the committed
 progress meter: `reconstruct: fail → pass`, then `tessellate: pass`, then
 full-checker gaps shrinking toward `valid`. Dependency plan:
@@ -757,8 +760,13 @@ full-checker gaps shrinking toward `valid`. Dependency plan:
    denied chart proof at 221,060,174 Work. Production v7 admits finite-open
    Plane/Offset(B-surface) record 5089 at exact `272430166/22/10`: only
    paired-null interior Plane samples may use exact frame inversion, and the
-   existing whole-carrier certificate remains authoritative. It then fails
-   atomically before `INTERSECTION` 1984's 285,283,414-Work proof. Both
+   existing whole-carrier certificate remains authoritative. Production v8
+   then admits `INTERSECTION` 1984 at exact `315245660/22/10`: only first/last
+   NURBS coordinates may snap across a source-domain boundary within
+   `16384 * EPSILON * domain-scale`, and the original-source whole-carrier
+   certificate remains authoritative. Material or interior overhangs and
+   displaced carriers remain typed and atomic. V8 stops before `INTERSECTION`
+   5945's attempted 323,814,492-Work proof. Both
    original B-surface identities and their paired pcurves are graph-protected
    in source order. Other parameter conventions, limits,
    nullable data, periodic/closed transmitted trace ranges, arbitrary unclamped
@@ -770,7 +778,8 @@ full-checker gaps shrinking toward `valid`. Dependency plan:
    certifies. The endpoint-only equal-limit records 1828 and 2008 and the
    end-terminated records 1671 and 1678, finite-open records 1252 and 5089, and
    native Plane SP-curve node 30 now certify; FACE 1195's vertex-less ring
-   domain also derives, advancing the corpus ratchet to `INTERSECTION` 1984's
+   domain also derives. Nonperiodic NURBS endpoint-roundoff record 1984 now
+   certifies, advancing the corpus ratchet to `INTERSECTION` 5945's
    proof-preflight boundary.
    Original-backed, tolerance-qualified, non-Plane, reversed-basis, periodic,
    closed, rational, or non-2D SP-curves, foreign curves, null/general

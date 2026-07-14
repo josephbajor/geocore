@@ -286,6 +286,34 @@ impl IntersectionImportBudgetProfile {
         .expect("built-in X_T finite-open Plane/Offset(B-surface) profile is valid")
     }
 
+    /// Corpus-backed defaults through the first finite-open nonperiodic NURBS
+    /// chart with a source-domain endpoint affected only by decimal roundoff.
+    ///
+    /// Historical v1-v7 profiles retain their exact policy contracts.
+    pub fn v8_defaults() -> BudgetPlan {
+        BudgetPlan::new([
+            LimitSpec::new(
+                INTERSECTION_CHART_CERTIFICATE_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                315_245_660,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_ITEMS,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                65_536,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64,
+            ),
+        ])
+        .expect("built-in X_T finite-open NURBS endpoint-roundoff profile is valid")
+    }
+
     fn validate(ledger: &WorkLedger) -> core::result::Result<(), OperationPolicyError> {
         ledger.require_limit(
             INTERSECTION_CHART_CERTIFICATE_WORK,
@@ -330,7 +358,7 @@ pub struct Reconstruction {
 pub fn reconstruction_budget_profile() -> BudgetPlan {
     let graph = EvalBudgetProfile::v1_defaults();
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v7_defaults();
+    let intersection = IntersectionImportBudgetProfile::v8_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -346,7 +374,7 @@ fn reconstruction_compatibility_budget() -> BudgetPlan {
     let graph =
         EvalBudgetProfile::for_limits(EvalLimits::default().max_dependency_depth, usize::MAX);
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v7_defaults();
+    let intersection = IntersectionImportBudgetProfile::v8_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -851,7 +879,10 @@ fn canonicalize_equal_limit_periodic_trace_endpoints(
     Ok(())
 }
 
-fn canonicalize_terminated_trace_endpoint_roundoff(
+/// Snap only endpoint coordinates whose decimal overhang is within a bounded
+/// source-domain floating slack. Interior values are never rewritten, and the
+/// complete resulting pcurve must still pass its original-source certificate.
+fn canonicalize_trace_endpoint_roundoff(
     traces: &[TransmittedNurbsIntersectionTrace; 2],
     uv: &mut [Vec<Point2>; 2],
 ) {
@@ -2341,8 +2372,8 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             .expect("two transmitted sources remain two ordered traces");
         if equal_limits {
             canonicalize_equal_limit_periodic_trace_endpoints(curve_idx, &traces, &mut uv)?;
-        } else if terminated {
-            canonicalize_terminated_trace_endpoint_roundoff(&traces, &mut uv);
+        } else {
+            canonicalize_trace_endpoint_roundoff(&traces, &mut uv);
         }
         let pcurves = [
             NurbsCurve2d::new(1, knots.clone(), uv[0].clone(), None).map_err(XtError::Kernel)?,

@@ -788,9 +788,14 @@ v7 certifies later `INTERSECTION` 5089 / `INTERSECTION_DATA` 5092, where
 sample 2 operand 0 has a paired-null interior Plane UV, through exact frame
 inversion plus the unchanged whole-carrier Plane/Offset-NURBS proof. V6 remains
 exact at `208228426/22/10` and pins its next attempted 221,060,174 Work; v7 is
-exact at `272430166/22/10` and rolls back before `INTERSECTION` 1984's attempted
-285,283,414-Work proof. A diagnostic-cap continuation reaches trace `First` and
-rejects because its transmitted NURBS pcurve leaves the original source domain.
+exact at `272430166/22/10` and pins record 1984's attempted 285,283,414 Work.
+Production v8 certifies record 1984 by snapping only its final first-trace `u`
+from `-2.02217766823431e-15` to the exact nonperiodic source-domain lower bound,
+then rerunning the unchanged original-source whole-carrier proof. V8 is exact at
+`315245660/22/10` and stops before record 5945's attempted 323,814,492 Work.
+That record's ordered Offset roots `[3338, 773]` reach typed
+`InvalidTraceFamily` under a diagnostic larger cap; transmitted Offset/Offset
+support is not inferred from the endpoint normalization.
 An end terminator contributes a
 tolerance-close, distinct singularity
 and one extra paired-UV tuple whose appended span is certified with the same
@@ -877,8 +882,8 @@ the graph ownership model.
   singular or underflowed normal fields and altered dependencies, and advance
   the production corpus through record 1828, end-terminated record 1671, and
   finite-open records 1252 and 5089 and native direct-Plane `SP_CURVE` node 30
-  through FACE 1195's vertex-less ring domain to `INTERSECTION` 1984's
-  proof-preflight boundary. The equal-limit
+  through FACE 1195's vertex-less ring domain and nonperiodic endpoint-roundoff
+  `INTERSECTION` 1984 to `INTERSECTION` 5945's proof-preflight boundary. The equal-limit
   suite separately pins both records, exact v3
   `115485725/20/10`, record-2008 transplant `124040223/22/10`, endpoint-only
   period unwrapping, and typed null/distinct-closed/off-seam rollback. The
@@ -895,6 +900,10 @@ the graph ownership model.
   rollback, paired-null interior Plane recovery for Plane/Offset(B-surface),
   typed endpoint/half-null/NURBS omissions, whole-carrier residual rejection,
   and the 285,283,414-Work next proof preflight.
+  The endpoint-roundoff suite pins exact v8 `315245660/22/10`, historical-v7
+  stability, per-resource N/N-1 rollback, endpoint-only source-boundary
+  normalization, material/interior overhang rejection, whole-carrier residual
+  rejection, and record 5945's 323,814,492-Work next proof preflight.
 
 ### Offset evaluator tests
 

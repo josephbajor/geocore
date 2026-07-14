@@ -523,6 +523,12 @@ traversal boundaries mask them in normal file order. Terminated charts append
 one singularity sample and certify its final span; exact Plane null UV pairs
 are inverted analytically, while NURBS endpoint roundoff may snap only within
 `16,384 * EPSILON * domain-scale` before the same whole-range proof.
+Corpus-backed v8 applies that existing endpoint-only rule to finite-open
+nonperiodic record 1984, pins exact `315,245,660/22/10` Work/Items/Depth and
+per-resource N/N-1 denial, and stops before record 5945's attempted 323,814,492
+Work. Historical v1-v7 budgets remain exact. Material and interior overhangs are
+never normalized, and every snapped endpoint is still subordinate to the
+original-source whole-carrier certificate.
 The v5 extension permits paired-null Plane UVs only at interior samples of an
 unterminated finite-open direct Plane/B-surface chart; both endpoints and every
 NURBS UV remain numeric. It then advances the corpus boundary to procedural
