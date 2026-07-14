@@ -3,12 +3,12 @@
 use kernel::{
     BlockRequest, BodyTessellationBudgetProfile, BoundedCurve, BoundedPcurve, CheckBodyRequest,
     CheckLevel, CheckOutcome, CreateSeedBodyRequest, CreateStrutRequest, EntityKind, Error,
-    ExportXtRequest, Frame, ImportXtRequest, IntersectCurvesRequest, JoinRingRequest, Kernel,
-    MergeFaceAsHoleRequest, MutationKind, OperationSettings, ParamRange, PcurveChart,
-    PcurveEndpointKind, PcurveMetadata, PcurveSeam, PcurveSeamSide, Point3, RemoveBridgeRequest,
-    RemoveSeedBodyRequest, RemoveStrutRequest, SessionPolicy, SplitHoleAsFaceRequest,
-    SurfaceDerivativeOrder, SurfaceEvaluationRequest, SurfaceParameter, TessOptions,
-    TessellateBodyRequest,
+    ExportXtRequest, Frame, GrowTolerancesRequest, ImportXtRequest, IntersectCurvesRequest,
+    JoinRingRequest, Kernel, MergeFaceAsHoleRequest, MutationKind, OperationSettings, ParamRange,
+    PcurveChart, PcurveEndpointKind, PcurveMetadata, PcurveSeam, PcurveSeamSide, Point3,
+    RemoveBridgeRequest, RemoveSeedBodyRequest, RemoveStrutRequest, SessionPolicy,
+    SplitHoleAsFaceRequest, SurfaceDerivativeOrder, SurfaceEvaluationRequest, SurfaceParameter,
+    TessOptions, TessellateBodyRequest, ToleranceGrowth, ToleranceGrowthTarget,
 };
 
 #[test]
@@ -396,6 +396,111 @@ fn facade_only_seed_body_round_trip_is_explicitly_transient_and_checked() {
         .check_body(CheckBodyRequest::new(body, CheckLevel::Fast))
         .unwrap();
     assert_eq!(check.result().unwrap().outcome(), CheckOutcome::Valid);
+}
+
+#[test]
+fn facade_only_tolerance_batch_is_journal_scoped_and_request_ordered() {
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let body = session
+        .edit_part(part_id.clone())
+        .unwrap()
+        .create_block(BlockRequest::new(Frame::world(), [2.0, 3.0, 4.0]))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .body();
+    let (face_id, edge_id, vertex_id) = {
+        let part = session.part(part_id.clone()).unwrap();
+        let face_id = part
+            .body(body.clone())
+            .unwrap()
+            .faces()
+            .unwrap()
+            .next()
+            .unwrap();
+        let loop_id = part.face(face_id.clone()).unwrap().loops().next().unwrap();
+        let fin_id = part.loop_(loop_id).unwrap().fins().next().unwrap();
+        let edge_id = part.fin(fin_id).unwrap().edge();
+        let vertex_id = part.edge(edge_id.clone()).unwrap().vertices()[0]
+            .clone()
+            .unwrap();
+        (face_id, edge_id, vertex_id)
+    };
+    let resolution = OperationSettings::default().tolerances().linear();
+    let growth = vec![
+        ToleranceGrowth::new(
+            ToleranceGrowthTarget::Vertex(vertex_id.clone()),
+            2.0 * resolution,
+        ),
+        ToleranceGrowth::new(
+            ToleranceGrowthTarget::Face(face_id.clone()),
+            3.0 * resolution,
+        ),
+        ToleranceGrowth::new(
+            ToleranceGrowthTarget::Edge(edge_id.clone()),
+            4.0 * resolution,
+        ),
+    ];
+    let request = GrowTolerancesRequest::new("facade-lifecycle-heal", 6.0 * resolution, growth);
+    assert_eq!(request.operation(), "facade-lifecycle-heal");
+    assert_eq!(request.max_total_growth(), 6.0 * resolution);
+    assert_eq!(request.growth().len(), 3);
+    assert!(matches!(
+        request.growth()[0].target(),
+        ToleranceGrowthTarget::Vertex(id) if id == &vertex_id
+    ));
+    assert_eq!(request.growth()[0].requested(), 2.0 * resolution);
+
+    let mut edit = session.edit_part(part_id).unwrap();
+    let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+    let applied = transaction.grow_tolerances(request).unwrap();
+    let journal = transaction
+        .commit(core::slice::from_ref(&body))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    let budget = journal.tolerance_budget(applied.budget()).unwrap();
+    assert_eq!(budget.id(), applied.budget());
+    assert_eq!(budget.operation(), "facade-lifecycle-heal");
+    assert_eq!(budget.consumed(), 6.0 * resolution);
+    let events = journal.tolerance_events().collect::<Vec<_>>();
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0].entity().kind(), EntityKind::Vertex);
+    assert_eq!(events[1].entity().kind(), EntityKind::Face);
+    assert_eq!(events[2].entity().kind(), EntityKind::Edge);
+    assert!(
+        events
+            .iter()
+            .all(|event| event.budget() == applied.budget())
+    );
+    assert_eq!(
+        edit.as_part()
+            .vertex(vertex_id)
+            .unwrap()
+            .tolerance()
+            .unwrap()
+            .value(),
+        2.0 * resolution
+    );
+    assert_eq!(
+        edit.as_part()
+            .face(face_id)
+            .unwrap()
+            .tolerance()
+            .unwrap()
+            .value(),
+        3.0 * resolution
+    );
+    assert_eq!(
+        edit.as_part()
+            .edge(edge_id)
+            .unwrap()
+            .tolerance()
+            .unwrap()
+            .value(),
+        4.0 * resolution
+    );
 }
 
 #[test]

@@ -263,12 +263,13 @@ mod view;
 
 pub use edit::{
     BoundedPcurve, CreateSeedBodyRequest, CreateSeedBodyResult, CreateStrutRequest,
-    CreateStrutResult, EditTransaction, JoinRingRequest, JoinRingResult, MergeFaceAsHoleRequest,
-    MergeFaceAsHoleResult, MergeFacesRequest, PcurveChart, PcurveEndpointKind, PcurveMetadata,
-    PcurveParameterMap, PcurveSeam, PcurveSeamSide, RemoveBridgeRequest, RemoveBridgeResult,
-    RemoveSeedBodyRequest, RemoveSeedBodyResult, RemoveStrutRequest, RemoveStrutResult,
-    SplitFaceRequest, SplitFaceResult, SplitHoleAsFaceRequest, SplitHoleAsFaceResult,
-    SurfaceParameter,
+    CreateStrutResult, EditTransaction, GrowTolerancesRequest, GrowTolerancesResult,
+    JoinRingRequest, JoinRingResult, MergeFaceAsHoleRequest, MergeFaceAsHoleResult,
+    MergeFacesRequest, PcurveChart, PcurveEndpointKind, PcurveMetadata, PcurveParameterMap,
+    PcurveSeam, PcurveSeamSide, RemoveBridgeRequest, RemoveBridgeResult, RemoveSeedBodyRequest,
+    RemoveSeedBodyResult, RemoveStrutRequest, RemoveStrutResult, SplitFaceRequest, SplitFaceResult,
+    SplitHoleAsFaceRequest, SplitHoleAsFaceResult, SurfaceParameter, ToleranceGrowth,
+    ToleranceGrowthTarget,
 };
 pub use error::{
     BodyTessellationError, EntityKind, Error, GeometryEvaluationError, GeometryIntersectionError,

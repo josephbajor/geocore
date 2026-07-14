@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, K5 adoption, and facade body tessellation implemented; broader K4 edits remain
+Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, failure-atomic operation-owned facade tolerance batching, K5 adoption, and facade body tessellation implemented; broader K4 edits and partition history remain
 
 ## Outcome
 
@@ -46,6 +46,13 @@ The remaining coupling is conceptual and representational:
   not an ordinary modeling API; and
 - F1 moves geometry ownership from topology arenas into `GeometryGraph`, which
   must not force application clients through a second identity migration.
+
+The operation-owned tolerance batch closes one prior transaction coupling: an
+ordinary client supplies only ordered part-qualified Face/Edge/Vertex targets,
+final tolerance values, an operation name, and an aggregate limit. The facade
+does not expose or accept the lower transaction-local budget capability.
+Operation-specific combination/propagation policy and partition-history
+composition remain higher-level pressure rather than storage escape hatches.
 
 The facade solves these problems by stabilizing concepts and behavior, not the
 current storage representation.
@@ -429,6 +436,10 @@ impl PartEdit<'_> {
 }
 
 impl EditTransaction<'_> {
+    pub fn grow_tolerances(
+        &mut self,
+        request: GrowTolerancesRequest,
+    ) -> Result<GrowTolerancesResult>;
     pub fn split_face(&mut self, request: SplitFaceRequest) -> Result<SplitFaceResult>;
     pub fn merge_faces(&mut self, request: MergeFacesRequest) -> Result<()>;
     pub fn commit(self, roots: &[BodyId]) -> Result<OperationOutcome<ChangeJournal>>;
@@ -467,6 +478,19 @@ The facade KVFS inverse deletes and journals the hidden point only when it is
 unshared; ordinary lower KVFS continues to retain externally owned or shared
 point geometry.
 
+Operation-owned tolerance growth uses one failure-atomic batch request. A first
+pass validates the part qualification and liveness of every Face/Edge/Vertex
+target before operation names, limits, final values, or duplicates are
+considered. Targets must be unique and every final value must meet the model
+resolution floor. The lower transaction then prepares imported-origin-
+preserving provenance and exact aggregate accounting for the whole ordered
+batch before an infallible apply. Committed tolerance events retain request
+order. `GrowTolerancesResult` carries only an opaque journal-local budget
+identity: no edit method accepts it, and callers resolve it against the
+resulting `ChangeJournal`. Aggregate N/N-1 rejection, explicit rollback, and a
+checker-denied commit restore both entity tolerances and transaction-local
+budget state.
+
 `ChangeJournal` is an owning adapter over `ktopo::transaction::Journal`, not a
 copied facade journal schema:
 
@@ -481,6 +505,8 @@ impl ChangeJournal {
     pub fn lineage(&self) -> impl ExactSizeIterator<Item = LineageView<'_>> + '_;
     pub fn tolerance_budgets(&self)
         -> impl ExactSizeIterator<Item = ToleranceBudgetView> + '_;
+    pub fn tolerance_budget(&self, id: ToleranceBudgetId)
+        -> Option<ToleranceBudgetView>;
     pub fn tolerance_events(&self)
         -> impl ExactSizeIterator<Item = ToleranceEventView> + '_;
 }
@@ -786,6 +812,12 @@ opaquely, and remains an explicitly transient candidate until composed with
 later Euler edits or removed by KVFS. Its facade KVFS inverse cleans up and
 journals the hidden point only when unshared; ordinary lower KVFS retains
 external/shared point geometry.
+The K4 facade also owns one ordered tolerance-growth batch. It validates every
+target's part and liveness before scalar or duplicate checks, requires unique
+Face/Edge/Vertex targets and model-resolution-valid final values, and completes
+imported-origin-preserving provenance plus exact aggregate accounting before an
+infallible apply. Events retain request order, and the returned budget identity
+is journal-local evidence rather than a reusable authoring capability.
 KFMRH/MFKRH
 preflight part ownership, liveness, shell/loop shape, and cross-carrier pcurve
 incidence while preserving exact pcurve metadata and lineage. Topology does
@@ -871,8 +903,10 @@ The remaining pressure is explicit:
   application client;
 - X_T reconstruction and oracle fixture authoring remain reviewed trusted raw
   assembly seams pending a separately announced sealed-reconstruction change;
-- broader semantic edit families and partition-history composition remain K4 work;
-  facade journal iteration is implemented; and
+- broader semantic edit families, operation-specific tolerance
+  combination/propagation policies, and partition-history composition remain
+  K4 work; facade journal iteration and generic operation-owned tolerance
+  batching are implemented; and
 - `cargo package -p kernel --list` is now an exact CI-reviewed inventory with
   the facade README and lifecycle tests, while full package creation remains
   blocked by the five versionless direct path dependencies (19 internal path

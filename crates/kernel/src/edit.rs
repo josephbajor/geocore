@@ -8,14 +8,17 @@ use ktopo::entity::{
     SeamSide as RawPcurveSeamSide, SurfaceParameter as RawSurfaceParameter,
 };
 use ktopo::euler::FinPcurvePair;
-use ktopo::transaction::Transaction;
+use ktopo::transaction::{
+    ToleranceGrowth as RawToleranceGrowth, ToleranceGrowthTarget as RawToleranceGrowthTarget,
+    Transaction,
+};
 
 use crate::error::{Error, Result};
 use crate::session::PartEdit;
 use crate::{
     BodyId, BoundedCurve, ChangeJournal, CurveId, EdgeId, EntityKind, FaceId, FinId, LoopId,
     OperationOutcome, OperationSettings, ParamRange, PartId, PcurveId, RegionId, Sense, ShellId,
-    SurfaceId, VertexId,
+    SurfaceId, ToleranceBudgetId, VertexId,
 };
 
 /// Validated affine correspondence from edge parameter `t` to pcurve
@@ -414,6 +417,99 @@ impl BoundedPcurve {
             self.range,
             self.parameter_map.into_raw(),
         )?))
+    }
+}
+
+/// One facade topology identity eligible for metric-tolerance growth.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ToleranceGrowthTarget {
+    /// Face tolerance.
+    Face(FaceId),
+    /// Edge tolerance.
+    Edge(EdgeId),
+    /// Vertex tolerance.
+    Vertex(VertexId),
+}
+
+/// One requested final tolerance in a batch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToleranceGrowth {
+    target: ToleranceGrowthTarget,
+    requested: f64,
+}
+
+impl ToleranceGrowth {
+    /// Construct one target-tolerance request.
+    pub const fn new(target: ToleranceGrowthTarget, requested: f64) -> Self {
+        Self { target, requested }
+    }
+
+    /// Entity whose tolerance may grow.
+    pub const fn target(&self) -> &ToleranceGrowthTarget {
+        &self.target
+    }
+
+    /// Requested final tolerance in model units.
+    pub const fn requested(&self) -> f64 {
+        self.requested
+    }
+}
+
+/// Failure-atomic operation-owned tolerance-growth batch.
+///
+/// The operation name is retained as tolerance provenance. `max_total_growth`
+/// limits aggregate enlargement above each target's existing tolerance or the
+/// model resolution floor. Targets must be unique within the batch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GrowTolerancesRequest {
+    operation: &'static str,
+    max_total_growth: f64,
+    growth: Vec<ToleranceGrowth>,
+}
+
+impl GrowTolerancesRequest {
+    /// Construct one ordered tolerance-growth batch.
+    pub fn new(
+        operation: &'static str,
+        max_total_growth: f64,
+        growth: Vec<ToleranceGrowth>,
+    ) -> Self {
+        Self {
+            operation,
+            max_total_growth,
+            growth,
+        }
+    }
+
+    /// Stable operation name retained in tolerance provenance.
+    pub const fn operation(&self) -> &'static str {
+        self.operation
+    }
+
+    /// Maximum aggregate enlargement in model units.
+    pub const fn max_total_growth(&self) -> f64 {
+        self.max_total_growth
+    }
+
+    /// Ordered target requests.
+    pub fn growth(&self) -> &[ToleranceGrowth] {
+        &self.growth
+    }
+}
+
+/// Journal-local identity of one successfully applied tolerance budget.
+///
+/// This identity is not an authoring capability and no edit method accepts it.
+/// After commit, resolve it only against the resulting [`ChangeJournal`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GrowTolerancesResult {
+    budget: ToleranceBudgetId,
+}
+
+impl GrowTolerancesResult {
+    /// Budget identity to resolve in the committed journal.
+    pub const fn budget(self) -> ToleranceBudgetId {
+        self.budget
     }
 }
 
@@ -1027,6 +1123,88 @@ impl EditTransaction<'_> {
         self.part.clone()
     }
 
+    /// Apply one failure-atomic operation-owned tolerance-growth batch.
+    ///
+    /// Part qualification, liveness, model-valid final tolerances, uniqueness,
+    /// provenance construction, and aggregate growth are fully preflighted
+    /// before the lower transaction declares its internal budget or mutates
+    /// any entity. Wrong-part and stale-identity rejection precede numeric or
+    /// duplicate validation, and event order matches request order.
+    pub fn grow_tolerances(
+        &mut self,
+        request: GrowTolerancesRequest,
+    ) -> Result<GrowTolerancesResult> {
+        let mut qualified = Vec::with_capacity(request.growth.len());
+        for growth in &request.growth {
+            let target = match &growth.target {
+                ToleranceGrowthTarget::Face(face) => {
+                    self.validate_part(face.part())?;
+                    self.inner
+                        .store()
+                        .get(face.raw())
+                        .map_err(|_| Error::StaleEntity {
+                            kind: EntityKind::Face,
+                        })?;
+                    RawToleranceGrowthTarget::Face(face.raw())
+                }
+                ToleranceGrowthTarget::Edge(edge) => {
+                    self.validate_part(edge.part())?;
+                    self.inner
+                        .store()
+                        .get(edge.raw())
+                        .map_err(|_| Error::StaleEntity {
+                            kind: EntityKind::Edge,
+                        })?;
+                    RawToleranceGrowthTarget::Edge(edge.raw())
+                }
+                ToleranceGrowthTarget::Vertex(vertex) => {
+                    self.validate_part(vertex.part())?;
+                    self.inner
+                        .store()
+                        .get(vertex.raw())
+                        .map_err(|_| Error::StaleEntity {
+                            kind: EntityKind::Vertex,
+                        })?;
+                    RawToleranceGrowthTarget::Vertex(vertex.raw())
+                }
+            };
+            qualified.push(target);
+        }
+        if request.operation.is_empty() {
+            return Err(kcore::error::Error::InvalidGeometry {
+                reason: "tolerance operation name must not be empty",
+            }
+            .into());
+        }
+        if !request.max_total_growth.is_finite() || request.max_total_growth < 0.0 {
+            return Err(kcore::error::Error::InvalidToleranceBudget {
+                limit: request.max_total_growth,
+            }
+            .into());
+        }
+
+        let mut seen = Vec::with_capacity(request.growth.len());
+        let mut raw = Vec::with_capacity(request.growth.len());
+        for (growth, target) in request.growth.iter().zip(qualified) {
+            if seen.contains(&growth.target) {
+                return Err(kcore::error::Error::InvalidGeometry {
+                    reason: "tolerance growth batch contains a duplicate target",
+                }
+                .into());
+            }
+            seen.push(growth.target.clone());
+            kcore::tolerance::Tolerances::default().entity_tolerance(growth.requested)?;
+            raw.push(RawToleranceGrowth::new(target, growth.requested));
+        }
+
+        let budget =
+            self.inner
+                .grow_tolerances(request.operation, request.max_total_growth, &raw)?;
+        Ok(GrowTolerancesResult {
+            budget: ToleranceBudgetId::from_index(budget.index()),
+        })
+    }
+
     /// Create one transient position-owning MVFS seed body.
     ///
     /// The returned topology is intentionally incomplete and cannot pass
@@ -1535,6 +1713,7 @@ impl EditTransaction<'_> {
 #[cfg(test)]
 mod tests {
     use kcore::operation::{AccountingMode, BudgetPlan, LimitSpec, ResourceKind};
+    use kcore::tolerance::LINEAR_RESOLUTION;
     use kgeom::curve::{Circle, Line};
     use kgeom::curve2d::Line2d;
     use kgeom::frame::Frame;
@@ -1549,7 +1728,7 @@ mod tests {
     use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 
     use super::*;
-    use crate::{BlockRequest, JournalEntity, Kernel, LineageView, MutationKind};
+    use crate::{BlockRequest, JournalEntity, Kernel, LineageView, MutationKind, ToleranceOrigin};
 
     fn block(edit: &mut PartEdit<'_>) -> BodyId {
         edit.create_block(BlockRequest::new(Frame::world(), [2.0, 2.0, 2.0]))
@@ -1579,6 +1758,19 @@ mod tests {
             SurfaceId::new(part, face.surface()),
             face.sense(),
             store.vertex_position(vertex).unwrap(),
+        )
+    }
+
+    fn tolerance_targets(edit: &mut PartEdit<'_>, body: &BodyId) -> (FaceId, EdgeId, VertexId) {
+        let part = edit.id();
+        let store = edit.store_mut_for_test();
+        let face = store.faces_of_body(body.raw()).unwrap()[0];
+        let edge = store.edges_of_body(body.raw()).unwrap()[0];
+        let vertex = store.get(edge).unwrap().vertices()[0].unwrap();
+        (
+            FaceId::new(part.clone(), face),
+            EdgeId::new(part.clone(), edge),
+            VertexId::new(part, vertex),
         )
     }
 
@@ -2060,6 +2252,248 @@ mod tests {
                 kind: EntityKind::Edge
             })
         ));
+    }
+
+    #[test]
+    fn tolerance_batch_is_atomic_ordered_provenanced_and_journal_scoped() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let foreign_part = session.create_part();
+        let foreign_body = session
+            .edit_part(foreign_part.clone())
+            .unwrap()
+            .create_block(BlockRequest::new(Frame::world(), [1.0, 1.0, 1.0]))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let foreign_face = {
+            let part = session.part(foreign_part).unwrap();
+            part.body(foreign_body)
+                .unwrap()
+                .faces()
+                .unwrap()
+                .next()
+                .unwrap()
+        };
+
+        let mut edit = session.edit_part(part_id).unwrap();
+        let body = block(&mut edit);
+        let (face, edge, vertex) = tolerance_targets(&mut edit, &body);
+        let seed_request = seed_body_request(&mut edit, &body);
+        let imported = crate::EntityTolerance::imported_xt(2.0 * LINEAR_RESOLUTION).unwrap();
+        {
+            let store = edit.store_mut_for_test();
+            let mut setup = store.transaction().unwrap();
+            setup.assembly().get_mut(edge.raw()).unwrap().tolerance = Some(imported);
+            setup.commit_checked_body(body.raw()).unwrap();
+        }
+        let stale_vertex = {
+            let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+            let seed = transaction.create_seed_body(seed_request.clone()).unwrap();
+            transaction.rollback().unwrap();
+            seed.vertex()
+        };
+        let batch = |limit| {
+            GrowTolerancesRequest::new(
+                "facade-heal",
+                limit,
+                vec![
+                    ToleranceGrowth::new(
+                        ToleranceGrowthTarget::Vertex(vertex.clone()),
+                        4.0 * LINEAR_RESOLUTION,
+                    ),
+                    ToleranceGrowth::new(
+                        ToleranceGrowthTarget::Face(face.clone()),
+                        3.0 * LINEAR_RESOLUTION,
+                    ),
+                    ToleranceGrowth::new(
+                        ToleranceGrowthTarget::Edge(edge.clone()),
+                        5.0 * LINEAR_RESOLUTION,
+                    ),
+                ],
+            )
+        };
+
+        let rolled_back = {
+            let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+            let result = transaction
+                .grow_tolerances(batch(8.0 * LINEAR_RESOLUTION))
+                .unwrap();
+            assert_eq!(result.budget().index(), 0);
+            transaction.rollback().unwrap();
+            result
+        };
+        assert_eq!(edit.as_part().face(face.clone()).unwrap().tolerance(), None);
+        assert_eq!(
+            edit.as_part().edge(edge.clone()).unwrap().tolerance(),
+            Some(imported)
+        );
+        assert_eq!(
+            edit.as_part().vertex(vertex.clone()).unwrap().tolerance(),
+            None
+        );
+
+        let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+        let wrong_part_and_invalid = GrowTolerancesRequest::new(
+            "facade-heal",
+            f64::NAN,
+            vec![ToleranceGrowth::new(
+                ToleranceGrowthTarget::Face(foreign_face),
+                f64::NAN,
+            )],
+        );
+        assert!(matches!(
+            transaction.grow_tolerances(wrong_part_and_invalid),
+            Err(Error::WrongPart { .. })
+        ));
+        let stale_and_invalid = GrowTolerancesRequest::new(
+            "facade-heal",
+            f64::NAN,
+            vec![ToleranceGrowth::new(
+                ToleranceGrowthTarget::Vertex(stale_vertex),
+                f64::NAN,
+            )],
+        );
+        assert!(matches!(
+            transaction.grow_tolerances(stale_and_invalid),
+            Err(Error::StaleEntity {
+                kind: EntityKind::Vertex
+            })
+        ));
+        assert!(
+            transaction
+                .grow_tolerances(GrowTolerancesRequest::new(
+                    "facade-heal",
+                    -1.0,
+                    vec![ToleranceGrowth::new(
+                        ToleranceGrowthTarget::Face(face.clone()),
+                        3.0 * LINEAR_RESOLUTION,
+                    )],
+                ))
+                .is_err()
+        );
+        assert!(
+            transaction
+                .grow_tolerances(GrowTolerancesRequest::new(
+                    "facade-heal",
+                    LINEAR_RESOLUTION,
+                    vec![ToleranceGrowth::new(
+                        ToleranceGrowthTarget::Face(face.clone()),
+                        -1.0,
+                    )],
+                ))
+                .is_err()
+        );
+        assert!(
+            transaction
+                .grow_tolerances(GrowTolerancesRequest::new(
+                    "facade-heal",
+                    LINEAR_RESOLUTION,
+                    vec![ToleranceGrowth::new(
+                        ToleranceGrowthTarget::Face(face.clone()),
+                        0.5 * LINEAR_RESOLUTION,
+                    )],
+                ))
+                .is_err()
+        );
+        assert!(
+            transaction
+                .grow_tolerances(GrowTolerancesRequest::new(
+                    "facade-heal",
+                    8.0 * LINEAR_RESOLUTION,
+                    vec![
+                        ToleranceGrowth::new(
+                            ToleranceGrowthTarget::Face(face.clone()),
+                            3.0 * LINEAR_RESOLUTION,
+                        ),
+                        ToleranceGrowth::new(
+                            ToleranceGrowthTarget::Face(face.clone()),
+                            4.0 * LINEAR_RESOLUTION,
+                        ),
+                    ],
+                ))
+                .is_err()
+        );
+        assert!(
+            transaction
+                .grow_tolerances(batch(7.0 * LINEAR_RESOLUTION))
+                .is_err()
+        );
+        assert_eq!(
+            transaction
+                .inner
+                .store()
+                .get(face.raw())
+                .unwrap()
+                .tolerance(),
+            None
+        );
+        assert_eq!(
+            transaction
+                .inner
+                .store()
+                .get(edge.raw())
+                .unwrap()
+                .tolerance(),
+            Some(imported)
+        );
+        assert_eq!(
+            transaction
+                .inner
+                .store()
+                .get(vertex.raw())
+                .unwrap()
+                .tolerance(),
+            None
+        );
+
+        let result = transaction
+            .grow_tolerances(batch(8.0 * LINEAR_RESOLUTION))
+            .unwrap();
+        assert_eq!(result, rolled_back);
+        let outcome = transaction.commit(core::slice::from_ref(&body)).unwrap();
+        let journal = outcome.result().unwrap();
+        let budget = journal.tolerance_budget(result.budget()).unwrap();
+        assert_eq!(budget.operation(), "facade-heal");
+        assert_eq!(budget.limit(), 8.0 * LINEAR_RESOLUTION);
+        assert_eq!(budget.consumed(), 8.0 * LINEAR_RESOLUTION);
+        assert_eq!(budget.remaining(), 0.0);
+        let events = journal.tolerance_events().collect::<Vec<_>>();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].entity(), &JournalEntity::Vertex(vertex.clone()));
+        assert_eq!(events[1].entity(), &JournalEntity::Face(face.clone()));
+        assert_eq!(events[2].entity(), &JournalEntity::Edge(edge.clone()));
+        assert!(events.iter().all(|event| event.budget() == result.budget()));
+        assert_eq!(events[2].previous(), Some(imported));
+        assert_eq!(events[2].current().origin(), ToleranceOrigin::ImportedXt);
+        assert_eq!(events[2].current().origin_value(), imported.value());
+        assert_eq!(events[2].current().last_operation(), Some("facade-heal"));
+
+        let committed_face = edit
+            .as_part()
+            .face(face.clone())
+            .unwrap()
+            .tolerance()
+            .unwrap();
+        let mut denied = edit.begin_edit(OperationSettings::default()).unwrap();
+        denied
+            .grow_tolerances(GrowTolerancesRequest::new(
+                "denied-heal",
+                LINEAR_RESOLUTION,
+                vec![ToleranceGrowth::new(
+                    ToleranceGrowthTarget::Face(face.clone()),
+                    4.0 * LINEAR_RESOLUTION,
+                )],
+            ))
+            .unwrap();
+        denied.create_seed_body(seed_request).unwrap();
+        let outcome = denied.commit(core::slice::from_ref(&body)).unwrap();
+        assert!(outcome.result().is_err());
+        assert_eq!(
+            edit.as_part().face(face).unwrap().tolerance(),
+            Some(committed_face)
+        );
     }
 
     #[test]

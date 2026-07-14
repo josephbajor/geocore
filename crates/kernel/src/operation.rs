@@ -329,6 +329,10 @@ pub enum LineageView<'journal> {
 pub struct ToleranceBudgetId(usize);
 
 impl ToleranceBudgetId {
+    pub(crate) const fn from_index(index: usize) -> Self {
+        Self(index)
+    }
+
     /// Stable declaration-order index within this journal.
     pub const fn index(self) -> usize {
         self.0
@@ -446,6 +450,12 @@ impl ChangeJournal {
                 limit: budget.limit(),
                 consumed: budget.consumed(),
             })
+    }
+
+    /// Resolve a journal-local budget identity returned by the edit that
+    /// produced this committed journal.
+    pub fn tolerance_budget(&self, id: ToleranceBudgetId) -> Option<ToleranceBudgetView> {
+        self.tolerance_budgets().nth(id.index())
     }
 
     /// Entity-tolerance changes in semantic operation order.

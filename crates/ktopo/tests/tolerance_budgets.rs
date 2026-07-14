@@ -8,7 +8,7 @@ use ktopo::entity::EntityRef;
 use ktopo::make;
 use ktopo::store::Store;
 use ktopo::tolerance::{EntityTolerance, ToleranceOrigin};
-use ktopo::transaction::{Journal, MutationKind};
+use ktopo::transaction::{Journal, MutationKind, ToleranceGrowth, ToleranceGrowthTarget};
 
 fn model() -> (Store, ktopo::entity::BodyId, ktopo::entity::EdgeId) {
     let mut store = Store::new();
@@ -151,4 +151,61 @@ fn budget_journals_are_deterministic_and_invalid_limits_are_typed() {
         transaction.declare_tolerance_budget("bad", -1.0),
         Err(Error::InvalidToleranceBudget { .. })
     ));
+}
+
+#[test]
+fn batch_growth_preflights_exact_aggregate_boundary_and_preserves_order() {
+    let (mut store, body, edge) = model();
+    let face = store.faces_of_body(body).unwrap()[0];
+    let vertex = store.get(edge).unwrap().vertices[0].unwrap();
+    let imported = EntityTolerance::imported_xt(LINEAR_RESOLUTION * 2.0).unwrap();
+    let mut setup = store.transaction().unwrap();
+    setup.assembly().get_mut(edge).unwrap().tolerance = Some(imported);
+    setup.commit_checked_body(body).unwrap();
+
+    let requests = [
+        ToleranceGrowth::new(
+            ToleranceGrowthTarget::Vertex(vertex),
+            LINEAR_RESOLUTION * 4.0,
+        ),
+        ToleranceGrowth::new(ToleranceGrowthTarget::Face(face), LINEAR_RESOLUTION * 3.0),
+        ToleranceGrowth::new(ToleranceGrowthTarget::Edge(edge), LINEAR_RESOLUTION * 5.0),
+    ];
+    let mut transaction = store.transaction().unwrap();
+    assert!(matches!(
+        transaction.grow_tolerances("heal-batch", LINEAR_RESOLUTION * 7.0, &requests),
+        Err(Error::ToleranceBudgetExceeded { .. })
+    ));
+    assert_eq!(transaction.store().get(face).unwrap().tolerance, None);
+    assert_eq!(
+        transaction.store().get(edge).unwrap().tolerance,
+        Some(imported)
+    );
+    assert_eq!(transaction.store().get(vertex).unwrap().tolerance, None);
+
+    let budget = transaction
+        .grow_tolerances("heal-batch", LINEAR_RESOLUTION * 8.0, &requests)
+        .unwrap();
+    assert_eq!(budget.index(), 0);
+    let journal = transaction.commit_checked_body(body).unwrap();
+    assert_eq!(
+        journal.tolerance_budgets()[0].consumed(),
+        LINEAR_RESOLUTION * 8.0
+    );
+    assert_eq!(
+        journal
+            .tolerance_events()
+            .iter()
+            .map(|event| event.entity())
+            .collect::<Vec<_>>(),
+        vec![
+            EntityRef::Vertex(vertex),
+            EntityRef::Face(face),
+            EntityRef::Edge(edge),
+        ]
+    );
+    let current = store.get(edge).unwrap().tolerance.unwrap();
+    assert_eq!(current.origin(), ToleranceOrigin::ImportedXt);
+    assert_eq!(current.origin_value(), imported.value());
+    assert_eq!(current.last_operation(), Some("heal-batch"));
 }

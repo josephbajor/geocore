@@ -100,6 +100,33 @@ pub struct ToleranceEvent {
     budget: ToleranceBudgetId,
 }
 
+/// One topology target eligible for operation-owned tolerance growth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToleranceGrowthTarget {
+    /// Face metric tolerance.
+    Face(FaceId),
+    /// Edge metric tolerance.
+    Edge(EdgeId),
+    /// Vertex metric tolerance.
+    Vertex(VertexId),
+}
+
+/// One requested final tolerance in a failure-atomic growth batch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ToleranceGrowth {
+    /// Entity whose tolerance may grow.
+    pub target: ToleranceGrowthTarget,
+    /// Requested final tolerance value.
+    pub requested: f64,
+}
+
+impl ToleranceGrowth {
+    /// Construct one target-tolerance request.
+    pub const fn new(target: ToleranceGrowthTarget, requested: f64) -> Self {
+        Self { target, requested }
+    }
+}
+
 impl ToleranceEvent {
     /// Entity whose metric tolerance changed.
     pub fn entity(&self) -> EntityRef {
@@ -530,6 +557,117 @@ impl<'a> Transaction<'a> {
             self.store.get_mut(vertex)?.tolerance = Some(current);
         }
         Ok(())
+    }
+
+    /// Apply one fully preflighted operation-owned tolerance-growth batch.
+    ///
+    /// Targets must be distinct and every requested final tolerance must meet
+    /// the model resolution floor. Requests at or below an existing tolerance
+    /// are deterministic no-ops. Every liveness, value, provenance, and
+    /// aggregate-budget check completes before the budget is declared or any
+    /// entity is mutated, so rejection leaves the transaction state unchanged.
+    pub fn grow_tolerances(
+        &mut self,
+        operation: &'static str,
+        max_total_growth: f64,
+        requests: &[ToleranceGrowth],
+    ) -> Result<ToleranceBudgetId> {
+        if operation.is_empty() {
+            return Err(Error::InvalidGeometry {
+                reason: "tolerance operation name must not be empty",
+            });
+        }
+        if !max_total_growth.is_finite() || max_total_growth < 0.0 {
+            return Err(Error::InvalidToleranceBudget {
+                limit: max_total_growth,
+            });
+        }
+
+        let mut targets = Vec::with_capacity(requests.len());
+        let mut prepared = Vec::with_capacity(requests.len());
+        let mut consumed: f64 = 0.0;
+        for request in requests {
+            if targets.contains(&request.target) {
+                return Err(Error::InvalidGeometry {
+                    reason: "tolerance growth batch contains a duplicate target",
+                });
+            }
+            targets.push(request.target);
+            Tolerances::default().entity_tolerance(request.requested)?;
+            let previous = match request.target {
+                ToleranceGrowthTarget::Face(face) => self.store.get(face)?.tolerance,
+                ToleranceGrowthTarget::Edge(edge) => self.store.get(edge)?.tolerance,
+                ToleranceGrowthTarget::Vertex(vertex) => self.store.get(vertex)?.tolerance,
+            };
+            let old_value = previous
+                .map(EntityTolerance::value)
+                .unwrap_or(LINEAR_RESOLUTION);
+            if request.requested <= old_value {
+                continue;
+            }
+            let growth = request.requested - old_value;
+            let new_consumed = consumed + growth;
+            let accounting_guard = 32.0
+                * f64::EPSILON
+                * max_total_growth
+                    .abs()
+                    .max(new_consumed.abs())
+                    .max(f64::MIN_POSITIVE);
+            if new_consumed > max_total_growth + accounting_guard {
+                return Err(Error::ToleranceBudgetExceeded {
+                    requested_growth: growth,
+                    remaining_growth: (max_total_growth - consumed).max(0.0),
+                });
+            }
+            consumed = new_consumed.min(max_total_growth);
+            let current = match previous {
+                Some(tolerance) => tolerance.grown_to(request.requested, operation)?,
+                None => EntityTolerance::operation(request.requested, operation)?,
+            };
+            prepared.push((request.target, previous, current));
+        }
+
+        // Everything that can fail has completed. Install the validated
+        // budget and prepared values directly so the apply phase cannot leave
+        // a partially mutated candidate.
+        let budget = ToleranceBudgetId(self.tolerance_budgets.len());
+        self.tolerance_budgets.push(ToleranceBudgetReport {
+            operation,
+            limit: max_total_growth,
+            consumed,
+        });
+        for (target, previous, current) in prepared {
+            let entity = match target {
+                ToleranceGrowthTarget::Face(face) => {
+                    self.store
+                        .get_mut(face)
+                        .expect("tolerance batch preflight keeps the face live")
+                        .tolerance = Some(current);
+                    EntityRef::Face(face)
+                }
+                ToleranceGrowthTarget::Edge(edge) => {
+                    self.store
+                        .get_mut(edge)
+                        .expect("tolerance batch preflight keeps the edge live")
+                        .tolerance = Some(current);
+                    EntityRef::Edge(edge)
+                }
+                ToleranceGrowthTarget::Vertex(vertex) => {
+                    self.store
+                        .get_mut(vertex)
+                        .expect("tolerance batch preflight keeps the vertex live")
+                        .tolerance = Some(current);
+                    EntityRef::Vertex(vertex)
+                }
+            };
+            self.tolerance_events.push(ToleranceEvent {
+                entity,
+                previous,
+                current,
+                budget,
+            });
+        }
+        Ok(budget)
     }
 
     /// MVFS: create the transient minimal solid-body topology.
