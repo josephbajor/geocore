@@ -25,7 +25,7 @@ boundary.
 | [`crates/ktopo`](crates/ktopo) | L2 topology | Parasolid entity hierarchy (body→region→shell→face→loop→fin→edge→vertex), finite conservative face UV domains, typed entity-tolerance provenance and transaction-owned growth budgets, independent per-fin pcurves, bounded curve-less tolerant edges, reusable validated simple-polygon profiles, transaction-owned pcurve-aware Euler edits, private generic Store mutation with transaction-scoped checked assembly, deterministic mutation/lineage/tolerance journals, journal-returning checked solid/sheet/wire/acorn constructors, shared incidence validation, and pcurve-driven watertight tessellation |
 | [`crates/kops`](crates/kops) | L3 operations | Provisional M4 intersection foundation: exact analytic special cases plus early sampled NURBS curve/curve, curve/surface, and surface/surface experiments; generic completeness and boolean-ready pcurve results remain gated |
 | [`crates/kxt`](crates/kxt) | L5 interchange | Atomic modern-schema Parasolid XT (`.x_t`/`.x_b`) import for the supported geometry subset, plus a deterministic schema-13006 text writer for self-authored analytic solids, sheets, wires, acorns, and bounded tolerant edges encoded as trimmed SP-curves over 2D B-curves (clean-room from the published XT Format Reference) |
-| [`crates/kernel`](crates/kernel) | Supported native facade | Session/part lifecycle, opaque semantic IDs and views, contextual construction/check/evaluation, and typed X_T import/export without raw topology or graph leakage |
+| [`crates/kernel`](crates/kernel) | Supported native facade | Session/part lifecycle, opaque semantic IDs and views, contextual construction/check/evaluation/tessellation, and typed X_T import/export without raw topology or graph leakage |
 | [`examples/kernel-lifecycle`](examples/kernel-lifecycle) | Facade-only client | Executable application lifecycle with `kernel` as its only direct kernel dependency |
 
 ### Facade quickstart
@@ -37,9 +37,10 @@ cargo run -p kernel-lifecycle -- target/kernel-lifecycle.x_t
 ```
 
 The client constructs a block, traverses semantic faces/edges/vertices, checks
-the body, evaluates one supporting surface, and exports through the `kernel`
-API. Lower-layer X_T reconstruction and oracle tools remain trusted adapter and
-conformance seams; they are not examples of the ordinary application boundary.
+and tessellates the body, evaluates one supporting surface, and exports through
+the `kernel` API. Lower-layer X_T reconstruction and oracle tools remain
+trusted adapter and conformance seams; they are not examples of the ordinary
+application boundary.
 
 ## Current Status
 

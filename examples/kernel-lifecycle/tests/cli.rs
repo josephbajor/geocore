@@ -40,6 +40,8 @@ fn facade_only_client_completes_the_supported_lifecycle() {
     assert!(summary.contains("faces=6"));
     assert!(summary.contains("edges=12"));
     assert!(summary.contains("vertices=8"));
+    assert!(summary.contains("mesh_vertices=8"));
+    assert!(summary.contains("mesh_triangles=12"));
     assert!(summary.contains("check=Valid"));
     assert!(summary.contains("surface=kernel.surface.plane.v1"));
     assert!(summary.contains("imported_bodies=1"));

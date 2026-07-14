@@ -140,6 +140,83 @@ pub struct GeometryIntersectionError {
     source: kops::intersect::IntersectionError,
 }
 
+/// Classified body-tessellation failure with lower topology and graph details
+/// kept out of the facade representation.
+///
+/// Stable classification accessors delegate unchanged, and the exact
+/// tessellator failure remains available through the standard error source
+/// chain.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BodyTessellationError {
+    source: Box<ktopo::btess::TessellationError>,
+    class: ErrorClass,
+    code: ErrorCode,
+    capability: Option<CapabilityId>,
+    limit: Option<LimitSnapshot>,
+}
+
+impl BodyTessellationError {
+    pub(crate) fn new(source: ktopo::btess::TessellationError) -> Self {
+        Self {
+            class: source.class(),
+            code: source.code(),
+            capability: source.capability(),
+            limit: source.limit(),
+            source: Box::new(source),
+        }
+    }
+
+    /// Returns the lower failure's broad semantic class.
+    pub const fn class(&self) -> ErrorClass {
+        self.class
+    }
+
+    /// Returns the lower failure's stable machine-readable identity.
+    pub const fn code(&self) -> ErrorCode {
+        self.code
+    }
+
+    /// Returns the unavailable tessellation capability when applicable.
+    pub const fn capability(&self) -> Option<CapabilityId> {
+        self.capability
+    }
+
+    /// Returns the exact deterministic limit crossing when applicable.
+    pub const fn limit(&self) -> Option<LimitSnapshot> {
+        self.limit
+    }
+}
+
+impl fmt::Display for BodyTessellationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("body tessellation failed")
+    }
+}
+
+impl std::error::Error for BodyTessellationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&*self.source)
+    }
+}
+
+impl ClassifiedError for BodyTessellationError {
+    fn class(&self) -> ErrorClass {
+        self.class()
+    }
+
+    fn code(&self) -> ErrorCode {
+        self.code()
+    }
+
+    fn capability(&self) -> Option<CapabilityId> {
+        self.capability()
+    }
+
+    fn limit(&self) -> Option<LimitSnapshot> {
+        self.limit()
+    }
+}
+
 impl GeometryIntersectionError {
     pub(crate) const fn new(source: kops::intersect::IntersectionError) -> Self {
         Self { source }
@@ -304,6 +381,11 @@ pub enum KernelError {
         /// Facade-safe classified adapter retaining the exact source chain.
         source: GeometryIntersectionError,
     },
+    /// Whole-body tessellation failed.
+    BodyTessellation {
+        /// Facade-safe classified adapter retaining the exact source chain.
+        source: BodyTessellationError,
+    },
     /// X_T parsing, reconstruction, or deterministic writing failed.
     Interchange {
         /// Facade-safe classified adapter retaining the exact source chain.
@@ -323,6 +405,7 @@ impl fmt::Display for KernelError {
             Self::Core { source } => write!(f, "kernel operation failed: {source}"),
             Self::GeometryEvaluation { source } => source.fmt(f),
             Self::GeometryIntersection { source } => source.fmt(f),
+            Self::BodyTessellation { source } => source.fmt(f),
             Self::Interchange { source } => source.fmt(f),
         }
     }
@@ -334,6 +417,7 @@ impl std::error::Error for KernelError {
             Self::InconsistentTopology { source } | Self::Core { source } => Some(source),
             Self::GeometryEvaluation { source } => Some(source),
             Self::GeometryIntersection { source } => Some(source),
+            Self::BodyTessellation { source } => Some(source),
             Self::Interchange { source } => Some(source),
             Self::UnknownPart | Self::WrongPart { .. } | Self::StaleEntity { .. } => None,
         }
@@ -353,6 +437,12 @@ impl KernelError {
         }
     }
 
+    pub(crate) fn from_tessellation(source: ktopo::btess::TessellationError) -> Self {
+        Self::BodyTessellation {
+            source: BodyTessellationError::new(source),
+        }
+    }
+
     pub(crate) const fn from_xt(source: kxt::XtError) -> Self {
         Self::Interchange {
             source: XtInterchangeError::new(source),
@@ -369,6 +459,7 @@ impl KernelError {
             Self::Core { source } => source.class(),
             Self::GeometryEvaluation { source } => source.class(),
             Self::GeometryIntersection { source } => source.class(),
+            Self::BodyTessellation { source } => source.class(),
             Self::Interchange { source } => source.class(),
         }
     }
@@ -383,6 +474,7 @@ impl KernelError {
             Self::Core { source } => source.code(),
             Self::GeometryEvaluation { source } => source.code(),
             Self::GeometryIntersection { source } => source.code(),
+            Self::BodyTessellation { source } => source.code(),
             Self::Interchange { source } => source.code(),
         }
     }
@@ -393,6 +485,7 @@ impl KernelError {
             Self::Core { source } => source.capability(),
             Self::GeometryEvaluation { source } => source.capability(),
             Self::GeometryIntersection { source } => source.capability(),
+            Self::BodyTessellation { source } => source.capability(),
             Self::Interchange { source } => source.capability(),
             Self::UnknownPart
             | Self::WrongPart { .. }
@@ -407,6 +500,7 @@ impl KernelError {
             Self::Core { source } => source.limit(),
             Self::GeometryEvaluation { source } => source.limit(),
             Self::GeometryIntersection { source } => source.limit(),
+            Self::BodyTessellation { source } => source.limit(),
             Self::Interchange { source } => source.limit(),
             Self::UnknownPart
             | Self::WrongPart { .. }
@@ -534,6 +628,38 @@ mod tests {
                 .source()
                 .and_then(|source| source.downcast_ref::<kops::intersect::IntersectionError>()),
             Some(found) if found == &source
+        ));
+    }
+
+    #[test]
+    fn tessellation_sources_delegate_every_shared_classification_accessor() {
+        let snapshot = LimitSnapshot {
+            stage: ktopo::btess::BODY_TESSELLATION_STRUCTURAL_ITEMS,
+            resource: kcore::operation::ResourceKind::Items,
+            consumed: 84,
+            allowed: 83,
+        };
+        let nested = kcore::error::Error::ResourceLimit { snapshot };
+        let source = ktopo::btess::TessellationError::Kernel(nested.clone());
+        let error = KernelError::from_tessellation(source.clone());
+        assert_eq!(error.class(), source.class());
+        assert_eq!(error.code(), source.code());
+        assert_eq!(error.capability(), source.capability());
+        assert_eq!(error.limit(), source.limit());
+        let tessellation = error
+            .source()
+            .and_then(|source| source.downcast_ref::<BodyTessellationError>())
+            .unwrap();
+        let lower = tessellation
+            .source()
+            .and_then(|source| source.downcast_ref::<ktopo::btess::TessellationError>())
+            .unwrap();
+        assert_eq!(lower, &source);
+        assert!(matches!(
+            lower
+                .source()
+                .and_then(|source| source.downcast_ref::<kcore::error::Error>()),
+            Some(found) if found == &nested
         ));
     }
 

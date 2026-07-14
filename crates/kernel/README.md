@@ -10,6 +10,7 @@ The current facade supports:
 - kernel/session/part lifecycle with opaque, part-qualified identities;
 - deterministic semantic topology and geometry views;
 - contextual block construction and Fast/Full body checking;
+- operation-accounted watertight whole-body tessellation;
 - bounded, operation-accounted surface evaluation; and
 - atomic typed X_T import and deterministic X_T export.
 
@@ -25,7 +26,7 @@ A facade client imports only `kernel` concepts:
 ```rust
 use kernel::{
     BlockRequest, CheckBodyRequest, CheckLevel, CheckOutcome, ExportXtRequest,
-    Frame, Kernel,
+    Frame, Kernel, TessOptions, TessellateBodyRequest,
 };
 
 let mut session = Kernel::new().create_session();
@@ -41,6 +42,14 @@ let checked = part
     .check_body(CheckBodyRequest::new(body.clone(), CheckLevel::Fast))?
     .into_result()?;
 assert_eq!(checked.outcome(), CheckOutcome::Valid);
+
+let mesh = part
+    .tessellate_body(TessellateBodyRequest::new(
+        body.clone(),
+        TessOptions { chord_tol: 1.0e-3, max_edge_len: None },
+    ))?
+    .into_result()?;
+assert!(!mesh.triangles().is_empty());
 
 let exported = part
     .export_xt(ExportXtRequest::new(body))?
@@ -58,7 +67,7 @@ The repository's
 [`kernel-lifecycle`](https://github.com/josephbajor/cad_prototype/tree/main/examples/kernel-lifecycle)
 executable is a real facade-only client. Its manifest has `kernel` as its only
 direct dependency and exercises construction, semantic inspection, checking,
-surface evaluation, and X_T export:
+body tessellation, surface evaluation, and X_T export:
 
 ```sh
 cargo run -p kernel-lifecycle -- target/kernel-lifecycle.x_t

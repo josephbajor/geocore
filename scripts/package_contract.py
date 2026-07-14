@@ -24,6 +24,7 @@ KERNEL_PACKAGE_FILES = {
     "src/lib.rs",
     "src/operation.rs",
     "src/session.rs",
+    "src/tessellation.rs",
     "src/view/body.rs",
     "src/view/boundary.rs",
     "src/view/edge.rs",

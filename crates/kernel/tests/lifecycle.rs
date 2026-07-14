@@ -3,7 +3,7 @@
 use kernel::{
     BlockRequest, BoundedCurve, CheckBodyRequest, CheckLevel, CheckOutcome, Error, ExportXtRequest,
     Frame, ImportXtRequest, IntersectCurvesRequest, Kernel, ParamRange, SessionPolicy,
-    SurfaceDerivativeOrder, SurfaceEvaluationRequest,
+    SurfaceDerivativeOrder, SurfaceEvaluationRequest, TessOptions, TessellateBodyRequest,
 };
 
 #[test]
@@ -90,6 +90,56 @@ fn facade_only_client_can_construct_and_check_a_block_with_reports() {
     assert!(check.result().unwrap().faults().is_empty());
     assert!(!check.report().usage().is_empty());
     assert!(check.report().limit_events().is_empty());
+}
+
+#[test]
+fn facade_only_client_can_tessellate_with_opaque_topology_identity() {
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let body = session
+        .edit_part(part_id.clone())
+        .unwrap()
+        .create_block(BlockRequest::new(Frame::world(), [2.0, 3.0, 4.0]))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .body();
+    let options = TessOptions {
+        chord_tol: 1.0e-3,
+        max_edge_len: None,
+    };
+    let part = session.part(part_id).unwrap();
+    let first = part
+        .tessellate_body(TessellateBodyRequest::new(body.clone(), options))
+        .unwrap();
+    assert!(first.report().limit_events().is_empty());
+    let mesh = first.result().unwrap();
+    assert_eq!(mesh.body(), body.clone());
+    assert_eq!(mesh.positions().len(), 8);
+    assert_eq!(mesh.triangles().len(), 12);
+    assert_eq!(mesh.face_triangle_ranges().len(), 6);
+    assert_eq!(mesh.edge_polylines().len(), 12);
+    assert!(
+        mesh.face_triangle_ranges()
+            .iter()
+            .all(|range| { !range.range().is_empty() && part.face(range.face()).is_ok() })
+    );
+    assert!(
+        mesh.edge_polylines()
+            .iter()
+            .all(|line| { line.vertex_indices().len() == 2 && part.edge(line.edge()).is_ok() })
+    );
+    assert!(mesh.positions().iter().all(|point| {
+        point
+            .to_array()
+            .iter()
+            .all(|coordinate| coordinate.is_finite())
+    }));
+
+    let second = part
+        .tessellate_body(TessellateBodyRequest::new(body, options))
+        .unwrap();
+    assert_eq!(first, second);
 }
 
 #[test]

@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1-K3, typed K4 interchange, and K5 adoption implemented; semantic K4 edits and facade body tessellation remain
+Status: K1-K3, typed K4 interchange, K5 adoption, and facade body tessellation implemented; semantic K4 edits remain
 
 ## Outcome
 
@@ -668,10 +668,16 @@ part, but cannot obtain or mutate a stored raw entity.
 
 ### K2 — F2/F4 contextual operation pilot
 
-Status: typed block construction and Fast/Full body checking now create one
-facade-owned context and scope, retain exact reports and classified sources,
-adapt checker subjects to opaque IDs, and expose committed journals without raw
-topology. A contextual tessellation/query path remains.
+Status: implemented. Typed block construction, Fast/Full body checking, and
+whole-body tessellation create one facade-owned context and scope, retain exact
+reports and classified sources, adapt topology identities to opaque IDs, and
+expose committed journals or immutable mesh values without raw topology.
+Tessellation reuses the lower `TessOptions` quality contract, installs the
+complete body family profile, calls the shared-scope entry directly, and maps
+ordered face ranges and edge polylines to part-qualified facade identities.
+Direct/facade mesh bits and reports, repeated output, exact structural-item
+N/N-1 limits, invalid options, wrong-part precedence, private lower sources,
+and the facade-only lifecycle consumer are pinned.
 
 - Re-export the landed F2 configuration types and construct one scope per
   facade call.
@@ -782,7 +788,8 @@ layout is stable forever.
 package whose only direct dependency is `kernel`. Its executed path constructs
 a block, retains its committed-journal summary, traverses semantic topology,
 performs a budgeted Full check, evaluates a supporting surface at the center of
-its finite face domain, intersects two adjacent graph-owned edge curves,
+its finite face domain, tessellates the body through the facade, intersects two
+adjacent graph-owned edge curves,
 exports X_T, imports into another part, checks and re-exports that body, proves
 byte stability, and resolves the original opaque body ID after the unrelated
 import. The example's structural test and
@@ -798,8 +805,6 @@ compatible during this additive phase.
 
 The remaining pressure is explicit:
 
-- facade body tessellation is still absent and belongs to the later
-  contextual body-tessellation migration, not K5;
 - `xt_inspect` intentionally mines transport nodes/schema and `xt_oracle`
   intentionally authors conformance fixtures, so neither is an ordinary
   application client;

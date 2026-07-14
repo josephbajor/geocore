@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use kernel::{
     BlockRequest, BoundedCurve, CheckBodyRequest, CheckLevel, CheckOutcome, ExportXtRequest, Frame,
     FullCheckBudgetProfile, ImportXtRequest, IntersectCurvesRequest, Kernel, OperationSettings,
-    ParamRange, SurfaceDerivativeOrder, SurfaceEvaluationRequest,
+    ParamRange, SurfaceDerivativeOrder, SurfaceEvaluationRequest, TessOptions,
+    TessellateBodyRequest,
 };
 
 fn output_path() -> Result<PathBuf, io::Error> {
@@ -45,7 +46,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     let full_check_settings =
         || OperationSettings::new().with_budget_overrides(FullCheckBudgetProfile::v1_defaults());
 
-    let (body_kind, face_count, edge_count, vertex_count, surface_class, point, authored_xt) = {
+    let (
+        body_kind,
+        face_count,
+        edge_count,
+        vertex_count,
+        mesh_vertex_count,
+        mesh_triangle_count,
+        surface_class,
+        point,
+        authored_xt,
+    ) = {
         let part = session.part(part_id.clone())?;
         let body = part.body(body_id.clone())?;
         let face_ids = body.faces()?.collect::<Vec<_>>();
@@ -77,6 +88,33 @@ fn main() -> Result<(), Box<dyn Error>> {
             ))
             .into());
         }
+
+        let mesh = part
+            .tessellate_body(TessellateBodyRequest::new(
+                body_id.clone(),
+                TessOptions {
+                    chord_tol: 1.0e-3,
+                    max_edge_len: None,
+                },
+            ))?
+            .into_result()?;
+        if mesh.positions().len() != 8
+            || mesh.triangles().len() != 12
+            || mesh.face_triangle_ranges().len() != face_ids.len()
+            || mesh.edge_polylines().len() != edge_count
+            || mesh
+                .face_triangle_ranges()
+                .iter()
+                .any(|range| range.range().is_empty() || part.face(range.face()).is_err())
+            || mesh
+                .edge_polylines()
+                .iter()
+                .any(|line| line.vertex_indices().is_empty() || part.edge(line.edge()).is_err())
+        {
+            return Err(io::Error::other("facade tessellation summary changed").into());
+        }
+        let mesh_vertex_count = mesh.positions().len();
+        let mesh_triangle_count = mesh.triangles().len();
 
         let evaluated = part
             .evaluate_surface(SurfaceEvaluationRequest::new(
@@ -148,6 +186,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             face_ids.len(),
             edge_count,
             vertex_count,
+            mesh_vertex_count,
+            mesh_triangle_count,
             surface_class,
             point,
             authored_xt,
@@ -203,10 +243,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     std::fs::write(&output_path, imported_xt.as_bytes())?;
 
     println!(
-        "kind={body_kind:?} faces={} edges={} vertices={} check={:?} surface={} point={:?} bytes={} construction_mutations={} import_mutations={} imported_bodies=1 byte_stable=true original_live=true",
+        "kind={body_kind:?} faces={} edges={} vertices={} mesh_vertices={} mesh_triangles={} check={:?} surface={} point={:?} bytes={} construction_mutations={} import_mutations={} imported_bodies=1 byte_stable=true original_live=true",
         face_count,
         edge_count,
         vertex_count,
+        mesh_vertex_count,
+        mesh_triangle_count,
         CheckOutcome::Valid,
         surface_class,
         point.to_array(),

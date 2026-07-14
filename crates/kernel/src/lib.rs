@@ -3,10 +3,10 @@
 //! The implemented foundation owns sessions and independent parts, exposes
 //! opaque part-qualified topology and geometry identities, and returns
 //! immutable semantic views. Contextual operations cover checked block
-//! construction, body checking, operation-scoped surface evaluation, and typed
-//! X_T import/export plus graph-owned bounded curve intersection with F2 reports
-//! and delegated classified errors. Broader modeling and semantic journal views
-//! remain later façade stages.
+//! construction, body checking and tessellation, operation-scoped surface
+//! evaluation, and typed X_T import/export plus graph-owned bounded curve
+//! intersection with F2 reports and delegated classified errors. Broader
+//! modeling and semantic journal views remain later façade stages.
 //!
 //! Raw lower-layer storage is not reachable through this crate:
 //!
@@ -145,6 +145,24 @@
 //! }
 //! ```
 //!
+//! Tessellation errors likewise preserve lower sources without exposing their
+//! implementation payload as a public field:
+//!
+//! ```compile_fail
+//! fn raw_tessellation_error(error: kernel::BodyTessellationError) {
+//!     let _ = error.source;
+//! }
+//! ```
+//!
+//! Tessellation results expose immutable facade values rather than mutable
+//! lower mesh fields:
+//!
+//! ```compile_fail
+//! fn raw_mesh(mut mesh: kernel::BodyMesh) {
+//!     mesh.triangles.clear();
+//! }
+//! ```
+//!
 //! Intersection results expose facade accessors rather than mutable lower
 //! result collections:
 //!
@@ -218,11 +236,12 @@ mod intersection;
 mod iter;
 mod operation;
 mod session;
+mod tessellation;
 mod view;
 
 pub use error::{
-    EntityKind, Error, GeometryEvaluationError, GeometryIntersectionError, KernelError, Result,
-    XtInterchangeError, code as error_code,
+    BodyTessellationError, EntityKind, Error, GeometryEvaluationError, GeometryIntersectionError,
+    KernelError, Result, XtInterchangeError, code as error_code,
 };
 pub use id::{
     BodyId, CurveId, EdgeId, FaceId, FinId, LoopId, PartId, PcurveId, RegionId, ShellId, SurfaceId,
@@ -243,6 +262,7 @@ pub use operation::{
     SurfaceEvaluationRequest,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
+pub use tessellation::{BodyMesh, EdgePolyline, FaceTriangleRange, TessellateBodyRequest};
 pub use view::{
     BodyView, CurveView, EdgeView, FaceDomain, FaceView, FinView, LoopView, PcurveView, RegionView,
     ShellView, SurfaceView, VertexView,
@@ -260,8 +280,10 @@ pub use kgeom::frame::Frame;
 pub use kgeom::nurbs::{CurvePairProjectionPlane, CurvePairRootCertificate};
 pub use kgeom::param::ParamRange;
 pub use kgeom::surface::SurfaceDerivs;
+pub use kgeom::tess::TessOptions;
 pub use kgeom::vec::{Point3, Vec3};
 pub use kgraph::{EvalBudgetProfile, GeometryClassKey, SurfaceDerivativeOrder};
+pub use ktopo::btess::BodyTessellationBudgetProfile;
 pub use ktopo::check::{
     CheckLevel, CheckOutcome, FaultKind, FullCheckBudgetProfile, VerificationGapCause,
     VerificationGapKind,
