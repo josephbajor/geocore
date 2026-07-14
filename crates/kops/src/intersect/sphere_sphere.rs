@@ -280,7 +280,7 @@ const GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT: usize =
     GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_PAIR_LIMIT;
 const GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT: usize =
     GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_ARC_LIMIT;
-const GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON: &str = "general coincident sphere both-wide union supports at most five positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four require an exact connected shared-seam union; five require an exact shared-seam path";
+const GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON: &str = "general coincident sphere both-wide union supports at most five positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four to five require an exact connected shared-seam union";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SphereWindowConstraint {
@@ -709,6 +709,13 @@ fn certify_double_wide_sphere_window_union(
             } else {
                 resolved_regions =
                     merge_exact_sphere_region_path(&occupied_regions, &a_pieces, &b_pieces)
+                        .or_else(|| {
+                            merge_exact_sphere_region_non_path_union(
+                                &occupied_regions,
+                                &a_pieces,
+                                &b_pieces,
+                            )
+                        })
                         .map(|region| vec![region]);
                 resolved_regions.is_some()
             }
@@ -725,9 +732,9 @@ fn certify_double_wide_sphere_window_union(
     // an independent set or between a merged pair and its singleton; the
     // remaining empty siblings exclude every other artificial seam. Three-
     // through five-cell paths are merged in deterministic adjacency order.
-    // Four-cell non-path unions cancel every shared edge only after all owners
-    // prove reverse-oriented bit-exact seam records, then require the remaining
-    // edges to trace one unambiguous outer cycle.
+    // Four- and five-cell non-path unions cancel every shared edge only after
+    // all owners prove reverse-oriented bit-exact seam records, then require
+    // the remaining edges to trace one unambiguous outer cycle.
     // Pole-clear sub-full-turn parent charts are injective, so the resulting
     // cycles have only true parent boundaries and may use the parent map.
     let parent_residual = arbitrary_sphere_octant_residual_bound(a, b, parent_parameter_allowance)?;
@@ -924,7 +931,7 @@ fn merge_exact_sphere_region_non_path_union(
     a_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
     b_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
 ) -> Option<SurfaceSurfaceRegion> {
-    if regions.len() != 4 {
+    if !(4..=5).contains(&regions.len()) {
         return None;
     }
     let mut adjacent = [[false; 5]; 5];
@@ -3611,24 +3618,27 @@ mod tests {
             }
         );
 
-        let adjacent_angle = 0.05;
-        let adjacent_b = Sphere::new(
+        let non_path_angle = 0.6262133187963131;
+        let non_path_b = Sphere::new(
             Frame::new(
                 Point3::new(0.0, 0.0, 0.0),
-                Vec3::new(math::sin(adjacent_angle), 0.0, math::cos(adjacent_angle)),
-                Vec3::new(math::cos(adjacent_angle), 0.0, -math::sin(adjacent_angle)),
+                Vec3::new(math::sin(non_path_angle), 0.0, math::cos(non_path_angle)),
+                Vec3::new(math::cos(non_path_angle), 0.0, -math::sin(non_path_angle)),
             )
             .unwrap(),
             1.0,
         )
         .unwrap();
         let double_wide_a_range = [
-            ParamRange::new(-0.6, -0.6 + 1.01 * core::f64::consts::PI),
-            ParamRange::new(-0.2, 0.2),
+            ParamRange::new(-1.9846283117352035, -1.9846283117352035 + 4.243344332010903),
+            ParamRange::new(-0.6755006209846244, 0.7250364320693048),
         ];
         let double_wide_b_range = [
-            ParamRange::new(0.3, 0.3 + 1.02 * core::f64::consts::PI),
-            ParamRange::new(-0.2, 0.2),
+            ParamRange::new(
+                -0.11076369393899554,
+                -0.11076369393899554 + 3.738241202226847,
+            ),
+            ParamRange::new(-0.16878390777804864, 1.0641254995346001),
         ];
         let double_wide_allowance =
             arbitrary_sphere_octant_parameter_allowance(double_wide_a_range, double_wide_b_range)
@@ -3639,7 +3649,7 @@ mod tests {
         let double_wide = certify_double_wide_sphere_window_union(
             &a,
             double_wide_a_range,
-            &adjacent_b,
+            &non_path_b,
             double_wide_b_range,
             Tolerances::default(),
             double_wide_allowance,
@@ -3650,14 +3660,14 @@ mod tests {
         .unwrap();
         assert!(double_wide.is_complete());
         assert_eq!(double_wide.regions.len(), 1);
-        assert_eq!(double_wide.regions[0].boundary.len(), 14);
+        assert_eq!(double_wide.regions[0].boundary.len(), 12);
         let transposed_allowance =
             arbitrary_sphere_octant_parameter_allowance(double_wide_b_range, double_wide_a_range)
                 .unwrap();
         let transposed_double_wide = certify_double_wide_sphere_window_union(
-            &a,
+            &non_path_b,
             double_wide_b_range,
-            &adjacent_b,
+            &a,
             double_wide_a_range,
             Tolerances::default(),
             transposed_allowance,
@@ -3668,12 +3678,12 @@ mod tests {
         .unwrap();
         assert!(transposed_double_wide.is_complete());
         assert_eq!(transposed_double_wide.regions.len(), 1);
-        assert_eq!(transposed_double_wide.regions[0].boundary.len(), 14);
+        assert_eq!(transposed_double_wide.regions[0].boundary.len(), 12);
         assert_eq!(
             certify_double_wide_sphere_window_union(
                 &a,
                 double_wide_a_range,
-                &adjacent_b,
+                &non_path_b,
                 double_wide_b_range,
                 Tolerances::default(),
                 double_wide_allowance,
@@ -3690,7 +3700,7 @@ mod tests {
             certify_double_wide_sphere_window_union(
                 &a,
                 double_wide_a_range,
-                &adjacent_b,
+                &non_path_b,
                 double_wide_b_range,
                 Tolerances::default(),
                 double_wide_allowance,
@@ -3707,7 +3717,7 @@ mod tests {
             certify_double_wide_sphere_window_union(
                 &a,
                 double_wide_a_range,
-                &adjacent_b,
+                &non_path_b,
                 double_wide_b_range,
                 Tolerances::default(),
                 double_wide_allowance,
