@@ -250,6 +250,127 @@ impl BodyTessellationBudgetProfile {
         )
         .expect("built-in body-tessellation budget is valid and collision-free")
     }
+
+    /// Returns the finite corpus-backed whole-body tessellation preset.
+    ///
+    /// Each measured high-water or cumulative stage is rounded up to the next
+    /// power of two at or above twice the `body-tessellation.v3` maximum. A
+    /// measured zero remains zero. Existing finite algorithm ceilings remain
+    /// authoritative, so local depth/sample caps and the 200,000-triangle face
+    /// ceiling are retained instead of expanded. The root work ceiling applies
+    /// inclusively to the sum of all cumulative `Work` stages.
+    ///
+    /// This preset is explicitly opt-in. [`Self::v1_defaults`] remains the
+    /// compatibility contract for callers that have not selected finite
+    /// corpus-backed operation limits.
+    pub fn bounded_v1() -> BudgetPlan {
+        let face = FaceTessellationBudgetProfile::v1_defaults().overlaid(
+            &BudgetPlan::new([
+                LimitSpec::new(
+                    FACE_TESSELLATION_BOUNDARY_SPLITS,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    0,
+                ),
+                LimitSpec::new(
+                    FACE_TESSELLATION_REFINEMENT_PASSES,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    64,
+                ),
+                LimitSpec::new(
+                    FACE_TESSELLATION_MESH_VERTICES,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    524_288,
+                ),
+            ])
+            .expect("bounded body face-tessellation aggregate override is valid"),
+        );
+        let graph = EvalBudgetProfile::v1_defaults().overlaid(
+            &BudgetPlan::new([LimitSpec::new(
+                kgraph::eval_stage::NODE_VISITS,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                8_192,
+            )])
+            .expect("bounded body graph-evaluation aggregate override is valid"),
+        );
+        let surface_projection = ProjectionBudgetProfile::surface_defaults().overlaid(
+            &BudgetPlan::new([LimitSpec::new(
+                SURFACE_PROJECTION_QUERIES,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                32,
+            )])
+            .expect("bounded body surface-projection aggregate override is valid"),
+        );
+
+        BudgetPlan::new(
+            [
+                LimitSpec::new(
+                    BODY_TESSELLATION_EDGE_DEPTH,
+                    ResourceKind::Depth,
+                    AccountingMode::HighWater,
+                    16,
+                ),
+                LimitSpec::new(
+                    BODY_TESSELLATION_EDGE_SPLITS,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    512,
+                ),
+                LimitSpec::new(
+                    BODY_TESSELLATION_EDGE_STORAGE_ITEMS,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    2_048,
+                ),
+                LimitSpec::new(
+                    BODY_TESSELLATION_ISO_ARC_DEPTH,
+                    ResourceKind::Depth,
+                    AccountingMode::HighWater,
+                    16,
+                ),
+                LimitSpec::new(
+                    BODY_TESSELLATION_ISO_ARC_SPLITS,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    1_024,
+                ),
+                LimitSpec::new(
+                    BODY_TESSELLATION_MESH_VERTICES,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    524_288,
+                ),
+                LimitSpec::new(
+                    BODY_TESSELLATION_PREPARED_PATCH_ITEMS,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    524_288,
+                ),
+                LimitSpec::new(
+                    BODY_TESSELLATION_RETAINED_TRIANGLES,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    1_048_576,
+                ),
+                LimitSpec::new(
+                    BODY_TESSELLATION_STRUCTURAL_ITEMS,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    256,
+                ),
+            ]
+            .into_iter()
+            .chain(face.limits().iter().copied())
+            .chain(graph.limits().iter().copied())
+            .chain(surface_projection.limits().iter().copied()),
+        )
+        .expect("bounded body-tessellation budget is valid and collision-free")
+        .with_total_work_limit(8_192)
+    }
 }
 
 /// Validate the complete aggregate profile through a caller-selected budget view.
@@ -275,8 +396,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     use kcore::operation::{
-        ExecutionPolicy, NumericalPolicy, OperationContext, PolicyVersion, SessionPolicy,
-        SessionPrecision,
+        ExecutionPolicy, LimitSnapshot, NumericalPolicy, OperationContext, PolicyVersion,
+        SessionPolicy, SessionPrecision, TOTAL_WORK_STAGE, WorkLedger,
     };
     use kcore::tolerance::Tolerances;
     use kgeom::project::{
@@ -434,6 +555,230 @@ mod tests {
             ]
         );
         assert_eq!(profile.total_work_limit(), None);
+    }
+
+    #[test]
+    fn bounded_v1_profile_is_an_exact_ordered_golden_contract() {
+        let profile = BodyTessellationBudgetProfile::bounded_v1();
+
+        assert_eq!(
+            profile.limits(),
+            [
+                limit(
+                    SURFACE_PROJECTION_HALVINGS,
+                    ResourceKind::Depth,
+                    AccountingMode::HighWater,
+                    30
+                ),
+                limit(
+                    SURFACE_PROJECTION_CANDIDATES,
+                    ResourceKind::Items,
+                    AccountingMode::HighWater,
+                    6
+                ),
+                limit(
+                    SURFACE_PROJECTION_NEWTON_ITERATIONS,
+                    ResourceKind::Depth,
+                    AccountingMode::HighWater,
+                    60
+                ),
+                limit(
+                    SURFACE_PROJECTION_QUERIES,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    32
+                ),
+                limit(
+                    SURFACE_PROJECTION_SAMPLES,
+                    ResourceKind::Items,
+                    AccountingMode::HighWater,
+                    625
+                ),
+                limit(
+                    FACE_TESSELLATION_BOUNDARY_DEPTH,
+                    ResourceKind::Depth,
+                    AccountingMode::HighWater,
+                    16
+                ),
+                limit(
+                    FACE_TESSELLATION_BOUNDARY_SPLITS,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    0
+                ),
+                limit(
+                    FACE_TESSELLATION_REFINEMENT_PASSES,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    64
+                ),
+                limit(
+                    FACE_TESSELLATION_MESH_TRIANGLES,
+                    ResourceKind::Items,
+                    AccountingMode::HighWater,
+                    200_000
+                ),
+                limit(
+                    FACE_TESSELLATION_MESH_VERTICES,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    524_288
+                ),
+                limit(
+                    kgraph::eval_stage::DEPENDENCY_DEPTH,
+                    ResourceKind::Depth,
+                    AccountingMode::HighWater,
+                    64
+                ),
+                limit(
+                    kgraph::eval_stage::NODE_VISITS,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    8_192
+                ),
+                limit(
+                    BODY_TESSELLATION_EDGE_DEPTH,
+                    ResourceKind::Depth,
+                    AccountingMode::HighWater,
+                    16
+                ),
+                limit(
+                    BODY_TESSELLATION_EDGE_SPLITS,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    512
+                ),
+                limit(
+                    BODY_TESSELLATION_EDGE_STORAGE_ITEMS,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    2_048
+                ),
+                limit(
+                    BODY_TESSELLATION_ISO_ARC_DEPTH,
+                    ResourceKind::Depth,
+                    AccountingMode::HighWater,
+                    16
+                ),
+                limit(
+                    BODY_TESSELLATION_ISO_ARC_SPLITS,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    1_024
+                ),
+                limit(
+                    BODY_TESSELLATION_MESH_VERTICES,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    524_288
+                ),
+                limit(
+                    BODY_TESSELLATION_PREPARED_PATCH_ITEMS,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    524_288
+                ),
+                limit(
+                    BODY_TESSELLATION_RETAINED_TRIANGLES,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    1_048_576
+                ),
+                limit(
+                    BODY_TESSELLATION_STRUCTURAL_ITEMS,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    256
+                ),
+            ]
+        );
+        assert_eq!(profile.total_work_limit(), Some(8_192));
+    }
+
+    #[test]
+    fn bounded_v1_is_finite_without_changing_the_compatibility_contract() {
+        let compatibility = BodyTessellationBudgetProfile::v1_defaults();
+        let bounded = BodyTessellationBudgetProfile::bounded_v1();
+
+        assert_eq!(compatibility.total_work_limit(), None);
+        assert_eq!(bounded.total_work_limit(), Some(8_192));
+        assert_eq!(compatibility.limits().len(), bounded.limits().len());
+        for (compatibility, bounded) in compatibility.limits().iter().zip(bounded.limits()) {
+            assert_eq!(compatibility.stage, bounded.stage);
+            assert_eq!(compatibility.resource, bounded.resource);
+            assert_eq!(compatibility.mode, bounded.mode);
+            assert!(bounded.allowed <= compatibility.allowed);
+            assert_ne!(bounded.allowed, u64::MAX);
+        }
+    }
+
+    #[test]
+    fn bounded_v1_stage_allowances_are_inclusive() {
+        let profile = BodyTessellationBudgetProfile::bounded_v1();
+
+        for expected in profile.limits() {
+            let apply = |ledger: &mut WorkLedger, value| match expected.mode {
+                AccountingMode::Cumulative => {
+                    ledger.charge_resource(expected.stage, expected.resource, value)
+                }
+                AccountingMode::HighWater => {
+                    ledger.observe(expected.stage, expected.resource, value)
+                }
+            };
+
+            let mut at_limit = WorkLedger::new(profile.clone());
+            assert_eq!(apply(&mut at_limit, expected.allowed), Ok(()));
+
+            let mut above_limit = WorkLedger::new(profile.clone());
+            assert_eq!(
+                apply(&mut above_limit, expected.allowed + 1),
+                Err(OperationPolicyError::LimitReached(LimitSnapshot {
+                    stage: expected.stage,
+                    resource: expected.resource,
+                    consumed: expected.allowed + 1,
+                    allowed: expected.allowed,
+                })),
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_v1_preserves_zero_nested_boundary_splits_and_caps_root_work() {
+        let profile = BodyTessellationBudgetProfile::bounded_v1();
+        let boundary_splits = profile
+            .limits()
+            .iter()
+            .find(|entry| entry.stage == FACE_TESSELLATION_BOUNDARY_SPLITS)
+            .copied()
+            .expect("nested face boundary-split stage exists");
+        assert_eq!(boundary_splits.allowed, 0);
+
+        let mut boundary = WorkLedger::new(profile.clone());
+        assert_eq!(
+            boundary.charge(FACE_TESSELLATION_BOUNDARY_SPLITS, 0),
+            Ok(())
+        );
+        assert_eq!(
+            boundary.charge(FACE_TESSELLATION_BOUNDARY_SPLITS, 1),
+            Err(OperationPolicyError::LimitReached(LimitSnapshot {
+                stage: FACE_TESSELLATION_BOUNDARY_SPLITS,
+                resource: ResourceKind::Work,
+                consumed: 1,
+                allowed: 0,
+            })),
+        );
+
+        let mut root = WorkLedger::new(profile);
+        assert_eq!(root.charge(kgraph::eval_stage::NODE_VISITS, 8_192), Ok(()));
+        assert_eq!(
+            root.charge(SURFACE_PROJECTION_QUERIES, 1),
+            Err(OperationPolicyError::LimitReached(LimitSnapshot {
+                stage: TOTAL_WORK_STAGE,
+                resource: ResourceKind::Work,
+                consumed: 8_193,
+                allowed: 8_192,
+            })),
+        );
     }
 
     #[test]
