@@ -673,10 +673,14 @@ declared period. The finite-open/end-terminated `T/F` singular form at records
 1671 and 1678 is also certified with one appended final span. Production
 v5 additionally certifies finite-open direct B-surface/Plane record 1252,
 recovering its paired-null interior Plane UVs by exact frame inversion while
-requiring numeric endpoints and NURBS UVs. Reconstruction now stops at
-procedural `SP_CURVE` node 30 (`xt.geometry.procedural-curves`). Its manifest
-row remains the committed progress meter:
-`reconstruct: unsupported → pass`, then `tessellate: pass`, then full-checker
+requiring numeric endpoints and NURBS UVs. Production v6 then lifts native
+Plane `SP_CURVE` node 30 exactly from its open, nonperiodic, nonrational 2D
+B-curve controls. The affine Plane map preserves degree, knots, and
+parameterization without approximation. Reconstruction now stops while
+deriving FACE 1195's domain from vertex-less EDGE 2210 and nonperiodic
+equal-limit `INTERSECTION` 2008. Its manifest row remains the committed
+progress meter:
+`reconstruct: fail → pass`, then `tessellate: pass`, then full-checker
 gaps shrinking toward `valid`. Dependency plan:
 
 1. **COMPLETE — geometry graph with the offset-surface evaluator as its first
@@ -734,7 +738,12 @@ gaps shrinking toward `valid`. Dependency plan:
    the independently transplanted record-2008 and record-1678 payloads pin
    `124040223/22/10` and `116413476` Work. Production v5 then admits record
    1252 at exact `117478445/20/10`; its six interior Plane pairs are the only
-   omitted UVs and are recovered through the exact direct-plane frame. Both
+   omitted UVs and are recovered through the exact direct-plane frame. V5
+   remains capped there and pins the later attempted 118,406,196-Work chart
+   crossing. Production v6 admits the native direct-Plane SP-curve lift and
+   every later already-supported chart it exposes at exact
+   `208228426/22/10` Work/Items/Depth, then fails atomically at the nonperiodic
+   ring-edge face-domain boundary. Both
    original B-surface identities and their paired pcurves are graph-protected
    in source order. Other parameter conventions, limits,
    nullable data, periodic/closed transmitted trace ranges, arbitrary unclamped
@@ -744,9 +753,12 @@ gaps shrinking toward `valid`. Dependency plan:
    reconstruct, wrap evaluation, bound seam-crossing ranges, and write matching
    periodic/closed flags. Its first Offset(B-surface)/B-surface chart now
    certifies. The endpoint-only equal-limit records 1828 and 2008 and the
-   end-terminated records 1671 and 1678 and finite-open record 1252 now certify,
-   advancing the corpus ratchet to procedural `SP_CURVE` node 30.
-   Null/general closed-limit, endpoint or NURBS-trace omissions, other nullable
+   end-terminated records 1671 and 1678, finite-open record 1252, and native
+   Plane SP-curve node 30 now certify, advancing the corpus ratchet to FACE
+   1195's vertex-less ring-domain boundary.
+   Original-backed, tolerance-qualified, non-Plane, reversed-basis, periodic,
+   closed, rational, or non-2D SP-curves, foreign curves, null/general
+   closed-limit, endpoint or NURBS-trace omissions, other nullable
    chart-data, non-endpoint-only periodic trace ranges, and noncanonical chart
    conventions remain. Re-deriving
    boolean scars through our own surface/surface intersector remains an M4
@@ -1185,8 +1197,8 @@ that queue must eventually discharge.
   certified clamped periodic/closed B-surface reconstruction and the
   landed canonical Plane/Plane, Plane/Offset, Offset/Offset, Plane/B-surface,
   safe-Offset(Plane)/B-surface, B-surface/B-surface, and direct
-  Offset(B-surface)/B-surface slices past the exemplar's current
-  `xt.geometry.procedural-curves` boundary: procedural SP/foreign curves,
+  Offset(B-surface)/B-surface and native direct-Plane SP-curve slices past the
+  exemplar's current nonperiodic ring-domain boundary: broader SP/foreign curves,
   null/general closed limits, remaining nullable chart data, periodic trace
   ranges, and noncanonical chart variants.
 - M2.5: finish parameter-space incidence and ratcheted Full-checker proofs for

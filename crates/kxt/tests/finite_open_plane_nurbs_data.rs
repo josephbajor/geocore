@@ -74,14 +74,15 @@ fn assert_rollback(store: &Store) {
     assert_eq!(store.count::<SurfaceGeom>(), 0);
 }
 
-fn assert_procedural_boundary(error: &XtError) {
-    assert!(
-        matches!(
-            error,
-            XtError::Unsupported {
-                capability: XtCapability::ProceduralCurves,
-                what: "procedural curves (intersection/SP/foreign) — Tier 2",
-            }
+fn assert_v5_work_boundary(error: &XtError) {
+    let limit = error.limit().expect("v5 must stop at the next chart proof");
+    assert_eq!(
+        (limit.stage, limit.resource, limit.consumed, limit.allowed),
+        (
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+            118_406_196,
+            V5_WORK,
         ),
         "unexpected post-v5 boundary: {error:?}"
     );
@@ -132,7 +133,7 @@ fn record_1252_pins_interior_plane_uv_omissions_and_exact_inversion() {
 }
 
 #[test]
-fn v5_certifies_record_1252_and_advances_atomically_to_procedural_curve_30() {
+fn v5_certifies_record_1252_and_stops_at_the_newly_exposed_chart_proof() {
     let file = read_xt(EXEMPLAR).unwrap();
     assert_eq!(file.nodes[&30].code, code::SP_CURVE);
     let session = SessionPolicy::v1();
@@ -143,7 +144,7 @@ fn v5_certifies_record_1252_and_advances_atomically_to_procedural_curve_30() {
         &context_with_plan(&session, IntersectionImportBudgetProfile::v5_defaults()),
     )
     .unwrap();
-    assert_procedural_boundary(outcome.result().as_ref().unwrap_err());
+    assert_v5_work_boundary(outcome.result().as_ref().unwrap_err());
     assert!(outcome.report().limit_events().is_empty());
     assert_eq!(
         usage(

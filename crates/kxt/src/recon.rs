@@ -230,6 +230,34 @@ impl IntersectionImportBudgetProfile {
         .expect("built-in X_T finite-open Plane/B-surface intersection profile is valid")
     }
 
+    /// Corpus-backed defaults through the first exact native Plane SP-curve
+    /// lift and the next transmitted intersection chart it exposes.
+    ///
+    /// Historical v1-v5 profiles retain their exact policy contracts.
+    pub fn v6_defaults() -> BudgetPlan {
+        BudgetPlan::new([
+            LimitSpec::new(
+                INTERSECTION_CHART_CERTIFICATE_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                208_228_426,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_ITEMS,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                65_536,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64,
+            ),
+        ])
+        .expect("built-in X_T native Plane SP-curve profile is valid")
+    }
+
     fn validate(ledger: &WorkLedger) -> core::result::Result<(), OperationPolicyError> {
         ledger.require_limit(
             INTERSECTION_CHART_CERTIFICATE_WORK,
@@ -274,7 +302,7 @@ pub struct Reconstruction {
 pub fn reconstruction_budget_profile() -> BudgetPlan {
     let graph = EvalBudgetProfile::v1_defaults();
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v5_defaults();
+    let intersection = IntersectionImportBudgetProfile::v6_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -290,7 +318,7 @@ fn reconstruction_compatibility_budget() -> BudgetPlan {
     let graph =
         EvalBudgetProfile::for_limits(EvalLimits::default().max_dependency_depth, usize::MAX);
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v5_defaults();
+    let intersection = IntersectionImportBudgetProfile::v6_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -1620,7 +1648,8 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                     .into()
             }
             code::B_CURVE => self.b_curve(curve_idx, node)?.into(),
-            code::SP_CURVE | code::PE_CURVE => {
+            code::SP_CURVE => self.plane_sp_curve(curve_idx, node)?.into(),
+            code::PE_CURVE => {
                 return Err(XtError::Unsupported {
                     capability: XtCapability::ProceduralCurves,
                     what: "procedural curves (intersection/SP/foreign) — Tier 2",
@@ -1636,6 +1665,77 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
         let c = self.store.insert_curve(geom).map_err(XtError::Kernel)?;
         self.curves.insert(curve_idx, (c, reversed));
         Ok((c, reversed))
+    }
+
+    /// Lift a native 2D B-curve through a direct Plane parameterization.
+    /// An affine map commutes exactly with the NURBS basis, so lifting the
+    /// control points preserves the complete curve and its parameterization.
+    fn plane_sp_curve(&mut self, curve_idx: u32, node: &Node) -> Result<NurbsCurve> {
+        let file = self.file;
+        if ptr(file, node, "original")? != 0
+            || !matches!(field(file, node, "tolerance_to_original")?, Value::Null)
+        {
+            return Err(XtError::Unsupported {
+                capability: XtCapability::ProceduralCurves,
+                what: "only native Plane SP_CURVEs without an original or approximation tolerance are supported",
+            });
+        }
+
+        let surface_idx = ptr(file, node, "surface")?;
+        let surface = xnode(file, surface_idx)?;
+        if surface.code != code::PLANE {
+            return Err(XtError::Unsupported {
+                capability: XtCapability::ProceduralCurves,
+                what: "only native SP_CURVEs on direct Plane surfaces are supported",
+            });
+        }
+        let plane = Plane::new(frame_from(file, surface, "pvec", "normal", "x_axis")?);
+
+        let bcurve_idx = ptr(file, node, "b_curve")?;
+        let bcurve = xnode(file, bcurve_idx)?;
+        if bcurve.code != code::B_CURVE {
+            return Err(XtError::BadField {
+                index: curve_idx,
+                what: "SP_CURVE parameter geometry is not a B_CURVE",
+            });
+        }
+        if ch(file, bcurve, "sense")? != '+' {
+            return Err(XtError::Unsupported {
+                capability: XtCapability::ProceduralCurves,
+                what: "native Plane SP_CURVE parameter B-curve sense must be positive",
+            });
+        }
+        let nurbs_idx = ptr(file, bcurve, "nurbs")?;
+        let nurbs = xnode(file, nurbs_idx)?;
+        if logical_of(file, nurbs, "periodic")?
+            || logical_of(file, nurbs, "closed")?
+            || logical_of(file, nurbs, "rational")?
+            || f64_of(file, nurbs, "vertex_dim")? != 2.0
+        {
+            return Err(XtError::Unsupported {
+                capability: XtCapability::ProceduralCurves,
+                what: "only open nonperiodic nonrational two-dimensional Plane SP_CURVE B-geometry is supported",
+            });
+        }
+
+        let pcurve = self.pcurve_b_curve(bcurve_idx)?;
+        let pcurve = match self.store.get(pcurve)? {
+            Curve2dGeom::Nurbs(curve) => curve.clone(),
+            _ => unreachable!("B_CURVE parameter geometry reconstructs as NURBS"),
+        };
+        let frame = plane.frame();
+        let points = pcurve
+            .points()
+            .iter()
+            .map(|point| in_size_box(frame.origin() + frame.x() * point.x + frame.y() * point.y))
+            .collect::<Result<Vec<_>>>()?;
+        NurbsCurve::new(
+            pcurve.degree(),
+            pcurve.knots().as_slice().to_vec(),
+            points,
+            None,
+        )
+        .map_err(XtError::Kernel)
     }
 
     /// Import canonical finite-open charts and the one-shared-`H` periodic
