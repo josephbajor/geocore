@@ -1,6 +1,6 @@
 # Operation context and numerical policy
 
-Status: Stage 1b composition, the NURBS contact/minimizer scale gate, and representative Stage 2-5 pilots implemented; whole-body and standalone-face tessellation internal-use ratchets plus the body allocation-accounting boundary are complete, while projection adoption, corpus-backed bounded presets, and broader ratchets remain
+Status: Stage 1b composition, the NURBS contact/minimizer scale gate, and representative Stage 2-5 pilots implemented; whole-body tessellation has an adopted facade and state-4 wrapper ratchet, standalone-face internal-use ratcheting and the body allocation-accounting boundary are complete, while projection adoption, corpus-backed bounded presets, and broader ratchets remain
 
 ## Purpose
 
@@ -611,15 +611,18 @@ ratchet applies to tessellation, checking, NURBS marching, intersection slack,
 and future contextual families; “opportunistic migration” is not permission to
 add new legacy callers.
 
-Whole-body tessellation is at state 3 for `ktopo`/`kxt`: production callers use
-`tessellate_body_with_context` with one operation per body, and
-`scripts/legacy_api_contract.py` rejects new production references while
-allowing the public definition and `#[cfg(test)]` compatibility clients. The
+Whole-body tessellation is at state 4. Production `ktopo`/`kxt` callers use
+the contextual or shared-scope entries with one operation per body, while the
+adopted `kernel::Part::tessellate_body` application path owns one scope and
+returns facade-safe mesh identities plus the exact report. The legacy wrapper
+is publicly deprecated but retains exact v1 compatibility behavior;
+`scripts/legacy_api_contract.py` audits `kernel` as well as lower production
+trees, rejects new references, and requires the deprecation to remain. The
 standalone `kgeom::tess::tessellate` wrapper is also at state 3 after the
 contextual half-cylinder ladder proved all five stages and exact mesh/report
 repeatability. The same audit rejects new production references to it across
-`kgeom`, `ktopo`, and `kxt`. Neither wrapper is publicly deprecated because
-`kernel` does not yet expose an adopted facade replacement for these families.
+`kgeom`, `ktopo`, and `kxt`. The standalone face wrapper is not publicly
+deprecated because `kernel` does not expose an adopted standalone-face path.
 Standalone `kgeom::project::project_to_surface` is also at state 3: contextual
 and shared-scope paths are proven in projection, surface-point services, and
 body tessellation, and the source audit permits the legacy symbol only in its
@@ -1047,10 +1050,10 @@ model-size ceiling. Contextual facade construction composition remains;
 surface projection and body tessellation have contextual entries with their
 internal legacy ratchets closed. X_T NURBS-edge reconstruction and ellipse
 intersection account curve projection in their owner scopes, and the curve-
-projector ratchet is closed. Body tessellation's `ktopo`/`kxt`
-callers are contextual and its
-production-use ratchet is enforced; public deprecation remains blocked on a
-facade replacement.
+projector ratchet is closed. Body tessellation's `ktopo`/`kxt` callers are
+contextual, its production-use ratchet is enforced, the facade owns the
+supported application path, and the compatibility wrapper is state 4
+deprecated without changing its v1 defaults.
 
 - Route facade construction through one scope, including affected-body checking.
 - Add contextual checker APIs and structured Full verification gaps.

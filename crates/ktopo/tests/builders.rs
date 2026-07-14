@@ -1,3 +1,8 @@
+#![allow(
+    deprecated,
+    reason = "compatibility coverage retains the deprecated v1 tessellation wrapper"
+)]
+
 //! Checked builders for non-solid topology used by profiles and interchange.
 
 use kgeom::frame::Frame;

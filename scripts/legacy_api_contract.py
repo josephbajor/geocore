@@ -10,6 +10,7 @@ from typing import Mapping
 
 
 SOURCE_ROOTS = (
+    Path("crates/kernel/src"),
     Path("crates/kgeom/src"),
     Path("crates/kops/src"),
     Path("crates/ktopo/src"),
@@ -26,6 +27,7 @@ TEST_MODULE = re.compile(
     re.MULTILINE,
 )
 BODY_TESSELLATION_DEFINITION = Path("crates/ktopo/src/btess.rs")
+FACADE_BODY_TESSELLATION_DEFINITION = Path("crates/kernel/src/tessellation.rs")
 FACE_TESSELLATION_DEFINITION = Path("crates/kgeom/src/tess.rs")
 SURFACE_PROJECTION_DEFINITION = Path("crates/kgeom/src/project.rs")
 CURVE_PROJECTION_DEFINITION = Path("crates/kgeom/src/project.rs")
@@ -190,6 +192,7 @@ def _find_legacy_uses(
     symbol: re.Pattern[str],
     definition_path: Path,
     allowed_functions: Mapping[Path, frozenset[str]] | None = None,
+    additional_definition_paths: frozenset[Path] = frozenset(),
 ) -> list[str]:
     """Return forbidden production references for one legacy symbol."""
     violations = []
@@ -207,7 +210,7 @@ def _find_legacy_uses(
             if line_end == -1:
                 line_end = len(source)
             line = source[line_start:line_end]
-            if path == definition_path and re.search(
+            if path in {definition_path, *additional_definition_paths} and re.search(
                 rf"\bpub\s+fn\s+{re.escape(match.group())}\b", line
             ):
                 continue
@@ -222,7 +225,25 @@ def find_legacy_body_tessellation_uses(sources: Mapping[Path, str]) -> list[str]
         sources,
         LEGACY_BODY_TESSELLATION,
         BODY_TESSELLATION_DEFINITION,
+        additional_definition_paths=frozenset({FACADE_BODY_TESSELLATION_DEFINITION}),
     )
+
+
+def find_body_tessellation_deprecation_violations(
+    sources: Mapping[Path, str],
+) -> list[str]:
+    """Require the state-4 public compatibility wrapper to remain deprecated."""
+    source = sources.get(BODY_TESSELLATION_DEFINITION)
+    if source is None:
+        return []
+    deprecated_definition = re.compile(
+        r"#\s*\[\s*deprecated\s*\([^)]*\)\s*\]\s*"
+        r"pub\s+fn\s+tessellate_body\b",
+        re.MULTILINE | re.DOTALL,
+    )
+    if deprecated_definition.search(source):
+        return []
+    return [f"{BODY_TESSELLATION_DEFINITION.as_posix()}:missing-deprecated"]
 
 
 def find_legacy_face_tessellation_uses(sources: Mapping[Path, str]) -> list[str]:
@@ -265,6 +286,7 @@ def audit_repository(repository: Path) -> list[str]:
             sources[path.relative_to(repository)] = path.read_text(encoding="utf-8")
     return sorted(
         find_legacy_body_tessellation_uses(sources)
+        + find_body_tessellation_deprecation_violations(sources)
         + find_legacy_face_tessellation_uses(sources)
         + find_legacy_surface_projection_uses(sources)
         + find_legacy_curve_projection_uses(sources)

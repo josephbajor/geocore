@@ -1053,6 +1053,10 @@ fn torus_in(
 }
 
 #[cfg(test)]
+#[allow(
+    deprecated,
+    reason = "constructor compatibility tests retain the deprecated v1 tessellation wrapper"
+)]
 mod tests {
     use super::*;
     use crate::btess::{TessOptions, tessellate_body};

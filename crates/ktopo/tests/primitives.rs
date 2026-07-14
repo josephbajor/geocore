@@ -1,3 +1,8 @@
+#![allow(
+    deprecated,
+    reason = "compatibility coverage retains the deprecated v1 tessellation wrapper"
+)]
+
 //! Cross-module integration: every primitive constructor must be
 //! checker-clean and tessellate watertight with the right volume — the M2
 //! exit criteria, exercised end-to-end (make → check → btess).

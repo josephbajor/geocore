@@ -678,6 +678,9 @@ ordered face ranges and edge polylines to part-qualified facade identities.
 Direct/facade mesh bits and reports, repeated output, exact structural-item
 N/N-1 limits, invalid options, wrong-part precedence, private lower sources,
 and the facade-only lifecycle consumer are pinned.
+That adoption advances only the legacy whole-body compatibility wrapper to
+public retirement state 4; lower contextual and shared-scope integration APIs
+remain supported implementation seams.
 
 - Re-export the landed F2 configuration types and construct one scope per
   facade call.

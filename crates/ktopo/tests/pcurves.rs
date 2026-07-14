@@ -1,3 +1,8 @@
+#![allow(
+    deprecated,
+    reason = "compatibility coverage retains the deprecated v1 tessellation wrapper"
+)]
+
 //! Integration coverage for per-fin parameter-space curves.
 
 use kcore::tolerance::LINEAR_RESOLUTION;

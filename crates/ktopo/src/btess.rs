@@ -2721,6 +2721,10 @@ fn tess_face(
 }
 
 /// Tessellate a body into one watertight mesh (see module docs).
+#[deprecated(
+    since = "0.1.0",
+    note = "use kernel::Part::tessellate_body for application code; lower-layer integrations should use tessellate_body_with_context or tessellate_body_in_scope"
+)]
 pub fn tessellate_body(store: &Store, body: BodyId, opts: &TessOptions) -> Result<BodyMesh> {
     let session = SessionPolicy::new(
         SessionPrecision::parasolid(),
@@ -2882,6 +2886,10 @@ fn legacy_body_tessellation_error(error: TessellationError) -> TessellationError
 }
 
 #[cfg(test)]
+#[allow(
+    deprecated,
+    reason = "compatibility tests keep the state-4 wrapper behavior pinned"
+)]
 mod tests {
     use super::*;
     use crate::check::{

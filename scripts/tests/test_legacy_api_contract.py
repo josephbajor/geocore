@@ -7,9 +7,11 @@ from scripts.legacy_api_contract import (
     BODY_TESSELLATION_DEFINITION,
     CURVE_PROJECTION_DEFINITION,
     FACE_TESSELLATION_DEFINITION,
+    FACADE_BODY_TESSELLATION_DEFINITION,
     SURFACE_POINT_COMPATIBILITY,
     SURFACE_PROJECTION_DEFINITION,
     audit_repository,
+    find_body_tessellation_deprecation_violations,
     find_legacy_body_tessellation_uses,
     find_legacy_curve_projection_uses,
     find_legacy_face_tessellation_uses,
@@ -63,6 +65,45 @@ mod tests {
         path = Path("crates/kxt/src/bin/contextual.rs")
         source = "use ktopo::btess::tessellate_body_with_context;\n"
         self.assertEqual(find_legacy_body_tessellation_uses({path: source}), [])
+
+    def test_facade_definition_is_allowed_but_legacy_delegation_is_rejected(self) -> None:
+        supported = "pub fn tessellate_body(&self) { tessellate_body_in_scope(); }\n"
+        self.assertEqual(
+            find_legacy_body_tessellation_uses(
+                {FACADE_BODY_TESSELLATION_DEFINITION: supported}
+            ),
+            [],
+        )
+
+        reset = """\
+pub fn tessellate_body(&self) {
+    ktopo::btess::tessellate_body(&store, body, &options);
+}
+"""
+        self.assertEqual(
+            find_legacy_body_tessellation_uses(
+                {FACADE_BODY_TESSELLATION_DEFINITION: reset}
+            ),
+            [f"{FACADE_BODY_TESSELLATION_DEFINITION}:2"],
+        )
+
+    def test_public_wrapper_deprecation_is_monotonic(self) -> None:
+        deprecated = """\
+#[deprecated(since = "0.1.0", note = "use the facade")]
+pub fn tessellate_body() {}
+"""
+        self.assertEqual(
+            find_body_tessellation_deprecation_violations(
+                {BODY_TESSELLATION_DEFINITION: deprecated}
+            ),
+            [],
+        )
+        self.assertEqual(
+            find_body_tessellation_deprecation_violations(
+                {BODY_TESSELLATION_DEFINITION: "pub fn tessellate_body() {}\n"}
+            ),
+            [f"{BODY_TESSELLATION_DEFINITION}:missing-deprecated"],
+        )
 
     def test_fake_test_modules_and_legacy_names_in_literals_are_ignored(self) -> None:
         path = Path("crates/kxt/src/bin/literal.rs")

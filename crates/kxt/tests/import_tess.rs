@@ -1,3 +1,8 @@
+#![allow(
+    deprecated,
+    reason = "interchange compatibility coverage retains the deprecated v1 tessellation wrapper"
+)]
+
 //! M3a exit criterion, end to end: real-world transmit files parse,
 //! reconstruct checker-clean, and tessellate into watertight meshes.
 

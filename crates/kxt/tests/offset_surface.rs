@@ -1,3 +1,8 @@
+#![allow(
+    deprecated,
+    reason = "interchange compatibility coverage retains the deprecated v1 tessellation wrapper"
+)]
+
 //! G4a single-offset X_T transport contract.
 
 use kcore::error::ErrorClass;

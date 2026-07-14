@@ -1,3 +1,8 @@
+#![allow(
+    deprecated,
+    reason = "compatibility coverage retains the deprecated v1 tessellation wrapper"
+)]
+
 //! Determinism harness for the topology layer.
 //!
 //! Same contract as kcore's and kgeom's: a fixed batch of results — here,

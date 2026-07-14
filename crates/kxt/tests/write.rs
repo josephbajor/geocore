@@ -1,3 +1,8 @@
+#![allow(
+    deprecated,
+    reason = "interchange compatibility coverage retains the deprecated v1 tessellation wrapper"
+)]
+
 //! M3b writer round trips for self-authored primitives and supported imports.
 
 use kcore::tolerance::LINEAR_RESOLUTION;
