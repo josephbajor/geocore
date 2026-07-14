@@ -112,6 +112,49 @@ impl FaceTessellationBudgetProfile {
         ])
         .expect("built-in face-tessellation budget is valid")
     }
+
+    /// Returns the finite version-1 profile derived from the certified face matrix.
+    ///
+    /// Each allowance is the next power of two at or above twice the
+    /// corresponding measured maximum, clamped by the tessellator's existing
+    /// local ceilings where necessary. The root allowance applies the same rule
+    /// to the largest per-row sum of cumulative work stages.
+    pub fn bounded_v1() -> BudgetPlan {
+        BudgetPlan::new([
+            LimitSpec::new(
+                FACE_TESSELLATION_BOUNDARY_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                16,
+            ),
+            LimitSpec::new(
+                FACE_TESSELLATION_BOUNDARY_SPLITS,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                512,
+            ),
+            LimitSpec::new(
+                FACE_TESSELLATION_REFINEMENT_PASSES,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                16,
+            ),
+            LimitSpec::new(
+                FACE_TESSELLATION_MESH_TRIANGLES,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                131_072,
+            ),
+            LimitSpec::new(
+                FACE_TESSELLATION_MESH_VERTICES,
+                ResourceKind::Items,
+                AccountingMode::Cumulative,
+                65_536,
+            ),
+        ])
+        .expect("built-in bounded face-tessellation budget is valid")
+        .with_total_work_limit(512)
+    }
 }
 
 #[cfg(test)]
@@ -165,6 +208,54 @@ mod tests {
             ]
         );
         assert_eq!(profile.total_work_limit(), None);
+    }
+
+    #[test]
+    fn bounded_v1_profile_is_an_exact_ordered_golden_contract() {
+        let profile = FaceTessellationBudgetProfile::bounded_v1();
+
+        assert_eq!(
+            profile.limits(),
+            [
+                LimitSpec::new(
+                    FACE_TESSELLATION_BOUNDARY_DEPTH,
+                    ResourceKind::Depth,
+                    AccountingMode::HighWater,
+                    16,
+                ),
+                LimitSpec::new(
+                    FACE_TESSELLATION_BOUNDARY_SPLITS,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    512,
+                ),
+                LimitSpec::new(
+                    FACE_TESSELLATION_REFINEMENT_PASSES,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    16,
+                ),
+                LimitSpec::new(
+                    FACE_TESSELLATION_MESH_TRIANGLES,
+                    ResourceKind::Items,
+                    AccountingMode::HighWater,
+                    131_072,
+                ),
+                LimitSpec::new(
+                    FACE_TESSELLATION_MESH_VERTICES,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    65_536,
+                ),
+            ]
+        );
+        assert_eq!(profile.total_work_limit(), Some(512));
+        assert!(
+            profile
+                .limits()
+                .iter()
+                .all(|limit| limit.allowed < u64::MAX)
+        );
     }
 
     #[test]
@@ -278,6 +369,100 @@ mod tests {
             Err(OperationPolicyError::LimitReached(snapshot))
                 if snapshot.consumed == (1_u64 << 32) + 1
                     && snapshot.allowed == 1_u64 << 32
+        ));
+    }
+
+    #[test]
+    fn bounded_v1_stage_allowances_are_inclusive() {
+        let mut depth = WorkLedger::new(FaceTessellationBudgetProfile::bounded_v1());
+        depth
+            .observe(FACE_TESSELLATION_BOUNDARY_DEPTH, ResourceKind::Depth, 16)
+            .unwrap();
+        assert!(matches!(
+            depth.observe(FACE_TESSELLATION_BOUNDARY_DEPTH, ResourceKind::Depth, 17),
+            Err(OperationPolicyError::LimitReached(snapshot))
+                if snapshot.stage == FACE_TESSELLATION_BOUNDARY_DEPTH
+                    && snapshot.consumed == 17
+                    && snapshot.allowed == 16
+        ));
+
+        let mut splits = WorkLedger::new(FaceTessellationBudgetProfile::bounded_v1());
+        splits
+            .charge(FACE_TESSELLATION_BOUNDARY_SPLITS, 512)
+            .unwrap();
+        assert!(matches!(
+            splits.charge(FACE_TESSELLATION_BOUNDARY_SPLITS, 1),
+            Err(OperationPolicyError::LimitReached(snapshot))
+                if snapshot.stage == FACE_TESSELLATION_BOUNDARY_SPLITS
+                    && snapshot.consumed == 513
+                    && snapshot.allowed == 512
+        ));
+
+        let mut passes = WorkLedger::new(FaceTessellationBudgetProfile::bounded_v1());
+        passes
+            .charge(FACE_TESSELLATION_REFINEMENT_PASSES, 16)
+            .unwrap();
+        assert!(matches!(
+            passes.charge(FACE_TESSELLATION_REFINEMENT_PASSES, 1),
+            Err(OperationPolicyError::LimitReached(snapshot))
+                if snapshot.stage == FACE_TESSELLATION_REFINEMENT_PASSES
+                    && snapshot.consumed == 17
+                    && snapshot.allowed == 16
+        ));
+
+        let mut triangles = WorkLedger::new(FaceTessellationBudgetProfile::bounded_v1());
+        triangles
+            .observe(
+                FACE_TESSELLATION_MESH_TRIANGLES,
+                ResourceKind::Items,
+                131_072,
+            )
+            .unwrap();
+        assert!(matches!(
+            triangles.observe(
+                FACE_TESSELLATION_MESH_TRIANGLES,
+                ResourceKind::Items,
+                131_073,
+            ),
+            Err(OperationPolicyError::LimitReached(snapshot))
+                if snapshot.stage == FACE_TESSELLATION_MESH_TRIANGLES
+                    && snapshot.consumed == 131_073
+                    && snapshot.allowed == 131_072
+        ));
+
+        let mut vertices = WorkLedger::new(FaceTessellationBudgetProfile::bounded_v1());
+        vertices
+            .charge_resource(FACE_TESSELLATION_MESH_VERTICES, ResourceKind::Items, 65_536)
+            .unwrap();
+        assert!(matches!(
+            vertices.charge_resource(
+                FACE_TESSELLATION_MESH_VERTICES,
+                ResourceKind::Items,
+                1,
+            ),
+            Err(OperationPolicyError::LimitReached(snapshot))
+                if snapshot.stage == FACE_TESSELLATION_MESH_VERTICES
+                    && snapshot.consumed == 65_537
+                    && snapshot.allowed == 65_536
+        ));
+    }
+
+    #[test]
+    fn bounded_v1_root_work_allowance_is_inclusive() {
+        let mut ledger = WorkLedger::new(FaceTessellationBudgetProfile::bounded_v1());
+        ledger
+            .charge(FACE_TESSELLATION_BOUNDARY_SPLITS, 496)
+            .unwrap();
+        ledger
+            .charge(FACE_TESSELLATION_REFINEMENT_PASSES, 16)
+            .unwrap();
+
+        assert!(matches!(
+            ledger.charge(FACE_TESSELLATION_BOUNDARY_SPLITS, 1),
+            Err(OperationPolicyError::LimitReached(snapshot))
+                if snapshot.stage == kcore::operation::TOTAL_WORK_STAGE
+                    && snapshot.consumed == 513
+                    && snapshot.allowed == 512
         ));
     }
 
