@@ -5,8 +5,10 @@
 //! immutable semantic views. Contextual operations cover checked block
 //! construction, body checking and tessellation, operation-scoped surface
 //! evaluation, and typed X_T import/export plus graph-owned bounded curve
-//! intersection with F2 reports and delegated classified errors. Broader
-//! modeling and semantic journal views remain later façade stages.
+//! intersection with F2 reports and delegated classified errors. Committed
+//! mutation, lineage, and tolerance evidence is exposed through part-qualified
+//! facade journal views. Broader modeling and semantic edit transactions
+//! remain later façade stages.
 //!
 //! Raw lower-layer storage is not reachable through this crate:
 //!
@@ -109,12 +111,20 @@
 //! }
 //! ```
 //!
-//! Committed journals expose semantic summaries, not a raw transaction
-//! journal or its entity handles:
+//! Committed journals expose part-qualified semantic views, not a raw
+//! transaction journal or its entity handles:
 //!
 //! ```compile_fail
 //! fn raw_journal(created: &kernel::BodyCreated) {
 //!     let _ = created.journal().raw();
+//! }
+//! ```
+//!
+//! Journal-only point identities expose no stored point handle:
+//!
+//! ```compile_fail
+//! fn raw_journal_point(id: kernel::JournalPointId) {
+//!     let _ = id.raw();
 //! }
 //! ```
 //!
@@ -244,8 +254,8 @@ pub use error::{
     KernelError, Result, XtInterchangeError, code as error_code,
 };
 pub use id::{
-    BodyId, CurveId, EdgeId, FaceId, FinId, LoopId, PartId, PcurveId, RegionId, ShellId, SurfaceId,
-    VertexId,
+    BodyId, CurveId, EdgeId, FaceId, FinId, JournalPointId, LoopId, PartId, PcurveId, RegionId,
+    ShellId, SurfaceId, VertexId,
 };
 pub use interchange::{
     ExportXtRequest, ExportXtResult, ImportXtRequest, ImportXtResult, XtSkippedNode,
@@ -258,8 +268,9 @@ pub use operation::{
     BlockRequest, BodyCreated, BoundedCurve, ChangeJournal, CheckBodyRequest, CheckEntity,
     CheckFault, CheckGap, CheckReport, CurveContactKind, CurveCurveIntersections,
     CurveCurveOverlap, CurveCurvePoint, CurveOverlapOrientation, IntersectCurvesRequest,
-    IntersectionCompletion, OperationOutcome, OperationSettings, SurfaceEvaluation,
-    SurfaceEvaluationRequest,
+    IntersectionCompletion, JournalEntities, JournalEntity, LineageView, MutationKind,
+    MutationView, OperationOutcome, OperationSettings, SurfaceEvaluation, SurfaceEvaluationRequest,
+    ToleranceBudgetId, ToleranceBudgetView, ToleranceEventView,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use tessellation::{BodyMesh, EdgePolyline, FaceTriangleRange, TessellateBodyRequest};

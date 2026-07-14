@@ -7,14 +7,16 @@ use kgeom::param::ParamRange;
 use kgraph::{EvalBudgetProfile, EvalContext, EvalLimits, EvalUsage};
 #[cfg(test)]
 use ktopo::check::FullCheckBudgetProfile;
-use ktopo::entity::EntityRef;
+use ktopo::entity::EntityRef as RawEntityRef;
+use ktopo::transaction::{LineageEvent as RawLineageEvent, MutationKind as RawMutationKind};
 
 use crate::error::{Error, Result};
 use crate::session::{Part, PartEdit};
 use crate::{
-    BodyId, BudgetPlan, CheckLevel, CheckOutcome, CurveId, DiagnosticLevel, EdgeId, FaceId,
-    FaultKind, FinId, Frame, LoopId, PartId, PcurveId, Point3, RegionId, SessionPolicy, ShellId,
-    SurfaceId, Tolerances, VerificationGapCause, VerificationGapKind, VertexId,
+    BodyId, BudgetPlan, CheckLevel, CheckOutcome, CurveId, DiagnosticLevel, EdgeId, EntityKind,
+    FaceId, FaultKind, FinId, Frame, JournalPointId, LoopId, PartId, PcurveId, Point3, RegionId,
+    SessionPolicy, ShellId, SurfaceId, Tolerances, VerificationGapCause, VerificationGapKind,
+    VertexId,
 };
 
 /// F2 settings used to construct one operation context at a façade call.
@@ -137,6 +139,269 @@ impl BlockRequest {
     }
 }
 
+/// Facade-safe identity retained by a committed journal.
+///
+/// Every variant is part-qualified. A deleted topology or geometry identity
+/// remains comparable in journal evidence even though resolving it as a live
+/// part view would fail. Point geometry has no ordinary facade view, so its
+/// opaque identity is intentionally useful only as journal evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum JournalEntity {
+    /// Body identity.
+    Body(BodyId),
+    /// Region identity.
+    Region(RegionId),
+    /// Shell identity.
+    Shell(ShellId),
+    /// Face identity.
+    Face(FaceId),
+    /// Loop identity.
+    Loop(LoopId),
+    /// Fin identity.
+    Fin(FinId),
+    /// Edge identity.
+    Edge(EdgeId),
+    /// Vertex identity.
+    Vertex(VertexId),
+    /// Three-dimensional curve geometry identity.
+    Curve(CurveId),
+    /// Supporting-surface geometry identity.
+    Surface(SurfaceId),
+    /// Point geometry identity retained only for journal tracking.
+    Point(JournalPointId),
+    /// Parameter-space curve geometry identity.
+    Pcurve(PcurveId),
+}
+
+impl JournalEntity {
+    /// Part whose committed journal owns this identity.
+    pub fn part(&self) -> PartId {
+        match self {
+            Self::Body(id) => id.part().clone(),
+            Self::Region(id) => id.part().clone(),
+            Self::Shell(id) => id.part().clone(),
+            Self::Face(id) => id.part().clone(),
+            Self::Loop(id) => id.part().clone(),
+            Self::Fin(id) => id.part().clone(),
+            Self::Edge(id) => id.part().clone(),
+            Self::Vertex(id) => id.part().clone(),
+            Self::Curve(id) => id.part().clone(),
+            Self::Surface(id) => id.part().clone(),
+            Self::Point(id) => id.part().clone(),
+            Self::Pcurve(id) => id.part().clone(),
+        }
+    }
+
+    /// Stable semantic kind without exposing a lower-layer handle type.
+    pub const fn kind(&self) -> EntityKind {
+        match self {
+            Self::Body(_) => EntityKind::Body,
+            Self::Region(_) => EntityKind::Region,
+            Self::Shell(_) => EntityKind::Shell,
+            Self::Face(_) => EntityKind::Face,
+            Self::Loop(_) => EntityKind::Loop,
+            Self::Fin(_) => EntityKind::Fin,
+            Self::Edge(_) => EntityKind::Edge,
+            Self::Vertex(_) => EntityKind::Vertex,
+            Self::Curve(_) => EntityKind::Curve,
+            Self::Surface(_) => EntityKind::Surface,
+            Self::Point(_) => EntityKind::Point,
+            Self::Pcurve(_) => EntityKind::Pcurve,
+        }
+    }
+}
+
+/// Net kind of one committed facade mutation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum MutationKind {
+    /// An identity became live.
+    Created,
+    /// A pre-existing identity changed and remains live.
+    Modified,
+    /// A pre-existing identity was removed.
+    Deleted,
+}
+
+/// One deterministic committed net mutation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MutationView {
+    entity: JournalEntity,
+    kind: MutationKind,
+}
+
+impl MutationView {
+    /// Affected part-qualified identity.
+    pub const fn entity(&self) -> &JournalEntity {
+        &self.entity
+    }
+
+    /// Net mutation kind.
+    pub const fn kind(&self) -> MutationKind {
+        self.kind
+    }
+}
+
+/// Deterministically ordered facade journal identities.
+#[derive(Clone)]
+pub struct JournalEntities<'journal> {
+    part: PartId,
+    inner: core::slice::Iter<'journal, RawEntityRef>,
+}
+
+impl<'journal> JournalEntities<'journal> {
+    fn new(part: PartId, entities: &'journal [RawEntityRef]) -> Self {
+        Self {
+            part,
+            inner: entities.iter(),
+        }
+    }
+}
+
+impl Iterator for JournalEntities<'_> {
+    type Item = JournalEntity;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|&entity| adapt_journal_entity(&self.part, entity))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl ExactSizeIterator for JournalEntities<'_> {}
+impl core::iter::FusedIterator for JournalEntities<'_> {}
+
+impl fmt::Debug for JournalEntities<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("JournalEntities")
+            .field("remaining", &self.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// One semantic identity relationship in committed operation order.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum LineageView<'journal> {
+    /// `derived` was constructed from `source` without replacing it.
+    DerivedFrom {
+        /// New or changed identity.
+        derived: JournalEntity,
+        /// Source identity.
+        source: JournalEntity,
+    },
+    /// One identity was divided into ordered result pieces.
+    Split {
+        /// Identity that was split.
+        source: JournalEntity,
+        /// Deterministically ordered result identities.
+        pieces: JournalEntities<'journal>,
+    },
+    /// Ordered source identities were combined into one result.
+    Merge {
+        /// Deterministically ordered source identities.
+        sources: JournalEntities<'journal>,
+        /// Combined result identity.
+        result: JournalEntity,
+    },
+    /// One identity was superseded by another.
+    Replaced {
+        /// Superseded identity.
+        old: JournalEntity,
+        /// Replacement identity.
+        new: JournalEntity,
+    },
+    /// One semantic identity was intentionally removed.
+    Deleted {
+        /// Removed identity, intentionally stale after commit.
+        entity: JournalEntity,
+    },
+}
+
+/// Opaque declaration-order identity of a transaction-owned tolerance budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ToleranceBudgetId(usize);
+
+impl ToleranceBudgetId {
+    /// Stable declaration-order index within this journal.
+    pub const fn index(self) -> usize {
+        self.0
+    }
+}
+
+/// Final committed usage of one transaction-owned tolerance budget.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ToleranceBudgetView {
+    id: ToleranceBudgetId,
+    operation: &'static str,
+    limit: f64,
+    consumed: f64,
+}
+
+impl ToleranceBudgetView {
+    /// Journal-local declaration identity.
+    pub const fn id(self) -> ToleranceBudgetId {
+        self.id
+    }
+
+    /// Stable semantic operation name supplied at declaration.
+    pub const fn operation(self) -> &'static str {
+        self.operation
+    }
+
+    /// Maximum aggregate model-unit growth permitted.
+    pub const fn limit(self) -> f64 {
+        self.limit
+    }
+
+    /// Aggregate model-unit growth committed.
+    pub const fn consumed(self) -> f64 {
+        self.consumed
+    }
+
+    /// Unspent growth at commit time.
+    pub fn remaining(self) -> f64 {
+        (self.limit - self.consumed).max(0.0)
+    }
+}
+
+/// One committed entity-tolerance change.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToleranceEventView {
+    entity: JournalEntity,
+    previous: Option<crate::EntityTolerance>,
+    current: crate::EntityTolerance,
+    budget: ToleranceBudgetId,
+}
+
+impl ToleranceEventView {
+    /// Identity whose metric tolerance changed.
+    pub const fn entity(&self) -> &JournalEntity {
+        &self.entity
+    }
+
+    /// Prior tolerance, or `None` when an exact entity became tolerant.
+    pub const fn previous(&self) -> Option<crate::EntityTolerance> {
+        self.previous
+    }
+
+    /// Committed tolerance and its retained provenance.
+    pub const fn current(&self) -> crate::EntityTolerance {
+        self.current
+    }
+
+    /// Journal-local budget that authorized this change.
+    pub const fn budget(&self) -> ToleranceBudgetId {
+        self.budget
+    }
+}
+
 /// Opaque owning adapter over one committed lower-layer journal.
 pub struct ChangeJournal {
     part: PartId,
@@ -151,6 +416,49 @@ impl ChangeJournal {
     /// Part whose state was changed.
     pub fn part(&self) -> PartId {
         self.part.clone()
+    }
+
+    /// Net mutations in deterministic arena-type and slot order.
+    pub fn mutations(&self) -> impl ExactSizeIterator<Item = MutationView> + '_ {
+        self.inner.mutations().iter().map(|mutation| MutationView {
+            entity: adapt_journal_entity(&self.part, mutation.entity),
+            kind: adapt_mutation_kind(mutation.kind),
+        })
+    }
+
+    /// Semantic lineage in caller-recorded operation order.
+    pub fn lineage(&self) -> impl ExactSizeIterator<Item = LineageView<'_>> + '_ {
+        self.inner
+            .lineage()
+            .iter()
+            .map(|event| adapt_lineage_event(&self.part, event))
+    }
+
+    /// Transaction-owned tolerance budgets in declaration order.
+    pub fn tolerance_budgets(&self) -> impl ExactSizeIterator<Item = ToleranceBudgetView> + '_ {
+        self.inner
+            .tolerance_budgets()
+            .iter()
+            .enumerate()
+            .map(|(index, budget)| ToleranceBudgetView {
+                id: ToleranceBudgetId(index),
+                operation: budget.operation(),
+                limit: budget.limit(),
+                consumed: budget.consumed(),
+            })
+    }
+
+    /// Entity-tolerance changes in semantic operation order.
+    pub fn tolerance_events(&self) -> impl ExactSizeIterator<Item = ToleranceEventView> + '_ {
+        self.inner
+            .tolerance_events()
+            .iter()
+            .map(|event| ToleranceEventView {
+                entity: adapt_journal_entity(&self.part, event.entity()),
+                previous: event.previous(),
+                current: event.current(),
+                budget: ToleranceBudgetId(event.budget().index()),
+            })
     }
 
     /// Number of committed net mutations.
@@ -176,6 +484,60 @@ impl ChangeJournal {
     #[cfg(test)]
     pub(crate) const fn raw_for_test(&self) -> &ktopo::transaction::Journal {
         &self.inner
+    }
+}
+
+fn adapt_journal_entity(part: &PartId, entity: RawEntityRef) -> JournalEntity {
+    let part = part.clone();
+    match entity {
+        RawEntityRef::Body(raw) => JournalEntity::Body(BodyId::new(part, raw)),
+        RawEntityRef::Region(raw) => JournalEntity::Region(RegionId::new(part, raw)),
+        RawEntityRef::Shell(raw) => JournalEntity::Shell(ShellId::new(part, raw)),
+        RawEntityRef::Face(raw) => JournalEntity::Face(FaceId::new(part, raw)),
+        RawEntityRef::Loop(raw) => JournalEntity::Loop(LoopId::new(part, raw)),
+        RawEntityRef::Fin(raw) => JournalEntity::Fin(FinId::new(part, raw)),
+        RawEntityRef::Edge(raw) => JournalEntity::Edge(EdgeId::new(part, raw)),
+        RawEntityRef::Vertex(raw) => JournalEntity::Vertex(VertexId::new(part, raw)),
+        RawEntityRef::Curve(raw) => JournalEntity::Curve(CurveId::new(part, raw)),
+        RawEntityRef::Surface(raw) => JournalEntity::Surface(SurfaceId::new(part, raw)),
+        RawEntityRef::Point(raw) => JournalEntity::Point(JournalPointId::new(part, raw)),
+        RawEntityRef::Curve2d(raw) => JournalEntity::Pcurve(PcurveId::new(part, raw)),
+    }
+}
+
+const fn adapt_mutation_kind(kind: RawMutationKind) -> MutationKind {
+    match kind {
+        RawMutationKind::Created => MutationKind::Created,
+        RawMutationKind::Modified => MutationKind::Modified,
+        RawMutationKind::Deleted => MutationKind::Deleted,
+    }
+}
+
+fn adapt_lineage_event<'journal>(
+    part: &PartId,
+    event: &'journal RawLineageEvent,
+) -> LineageView<'journal> {
+    match event {
+        RawLineageEvent::DerivedFrom { derived, source } => LineageView::DerivedFrom {
+            derived: adapt_journal_entity(part, *derived),
+            source: adapt_journal_entity(part, *source),
+        },
+        RawLineageEvent::Split { source, pieces } => LineageView::Split {
+            source: adapt_journal_entity(part, *source),
+            pieces: JournalEntities::new(part.clone(), pieces),
+        },
+        RawLineageEvent::Merge { sources, result } => LineageView::Merge {
+            sources: JournalEntities::new(part.clone(), sources),
+            result: adapt_journal_entity(part, *result),
+        },
+        RawLineageEvent::Replaced { old, new } => LineageView::Replaced {
+            old: adapt_journal_entity(part, *old),
+            new: adapt_journal_entity(part, *new),
+        },
+        RawLineageEvent::Deleted { entity } => LineageView::Deleted {
+            entity: adapt_journal_entity(part, *entity),
+        },
+        _ => unreachable!("unadapted lower-layer lineage variant reached the facade"),
     }
 }
 
@@ -898,22 +1260,22 @@ fn adapt_check_report(
 fn adapt_check_entity(
     part: &PartId,
     store: &ktopo::store::Store,
-    entity: EntityRef,
+    entity: RawEntityRef,
 ) -> Result<CheckEntity> {
     let part = part.clone();
     Ok(match entity {
-        EntityRef::Body(raw) => CheckEntity::Body(BodyId::new(part, raw)),
-        EntityRef::Region(raw) => CheckEntity::Region(RegionId::new(part, raw)),
-        EntityRef::Shell(raw) => CheckEntity::Shell(ShellId::new(part, raw)),
-        EntityRef::Face(raw) => CheckEntity::Face(FaceId::new(part, raw)),
-        EntityRef::Loop(raw) => CheckEntity::Loop(LoopId::new(part, raw)),
-        EntityRef::Fin(raw) => CheckEntity::Fin(FinId::new(part, raw)),
-        EntityRef::Edge(raw) => CheckEntity::Edge(EdgeId::new(part, raw)),
-        EntityRef::Vertex(raw) => CheckEntity::Vertex(VertexId::new(part, raw)),
-        EntityRef::Curve(raw) => CheckEntity::Curve(CurveId::new(part, raw)),
-        EntityRef::Surface(raw) => CheckEntity::Surface(SurfaceId::new(part, raw)),
-        EntityRef::Curve2d(raw) => CheckEntity::Pcurve(PcurveId::new(part, raw)),
-        EntityRef::Point(raw) => CheckEntity::Point(
+        RawEntityRef::Body(raw) => CheckEntity::Body(BodyId::new(part, raw)),
+        RawEntityRef::Region(raw) => CheckEntity::Region(RegionId::new(part, raw)),
+        RawEntityRef::Shell(raw) => CheckEntity::Shell(ShellId::new(part, raw)),
+        RawEntityRef::Face(raw) => CheckEntity::Face(FaceId::new(part, raw)),
+        RawEntityRef::Loop(raw) => CheckEntity::Loop(LoopId::new(part, raw)),
+        RawEntityRef::Fin(raw) => CheckEntity::Fin(FinId::new(part, raw)),
+        RawEntityRef::Edge(raw) => CheckEntity::Edge(EdgeId::new(part, raw)),
+        RawEntityRef::Vertex(raw) => CheckEntity::Vertex(VertexId::new(part, raw)),
+        RawEntityRef::Curve(raw) => CheckEntity::Curve(CurveId::new(part, raw)),
+        RawEntityRef::Surface(raw) => CheckEntity::Surface(SurfaceId::new(part, raw)),
+        RawEntityRef::Curve2d(raw) => CheckEntity::Pcurve(PcurveId::new(part, raw)),
+        RawEntityRef::Point(raw) => CheckEntity::Point(
             *store
                 .get(raw)
                 .map_err(|source| Error::InconsistentTopology { source })?,
@@ -1044,6 +1406,179 @@ mod tests {
         assert!(facade_check.report().limit_events().is_empty());
         let expected = adapt_check_report(&part_id, &direct_store, direct_check).unwrap();
         assert_eq!(facade_check.result(), Ok(&expected));
+    }
+
+    #[test]
+    fn journal_adapters_preserve_every_lineage_shape_and_ordered_identity() {
+        let mut store = Store::new();
+        let creation =
+            ktopo::make::block_with_journal(&mut store, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
+        let body = creation.body();
+        let face = store.faces_of_body(body).unwrap()[0];
+        let edge = store.edges_of_body(body).unwrap()[0];
+        let vertex = store.vertices_of_body(body).unwrap()[0];
+        let point = store.get(vertex).unwrap().point();
+
+        let mut session = Kernel::new().create_session();
+        let part = session.create_part();
+
+        let derived = RawLineageEvent::DerivedFrom {
+            derived: RawEntityRef::Edge(edge),
+            source: RawEntityRef::Point(point),
+        };
+        let LineageView::DerivedFrom { derived, source } = adapt_lineage_event(&part, &derived)
+        else {
+            panic!("expected derived-from lineage");
+        };
+        assert_eq!(derived.kind(), EntityKind::Edge);
+        assert_eq!(source.kind(), EntityKind::Point);
+
+        let split = RawLineageEvent::Split {
+            source: RawEntityRef::Face(face),
+            pieces: vec![RawEntityRef::Face(face), RawEntityRef::Face(face)],
+        };
+        let LineageView::Split { source, pieces } = adapt_lineage_event(&part, &split) else {
+            panic!("expected split lineage");
+        };
+        assert_eq!(source.kind(), EntityKind::Face);
+        assert_eq!(
+            pieces.map(|piece| piece.kind()).collect::<Vec<_>>(),
+            vec![EntityKind::Face, EntityKind::Face]
+        );
+
+        let merge = RawLineageEvent::Merge {
+            sources: vec![RawEntityRef::Face(face), RawEntityRef::Face(face)],
+            result: RawEntityRef::Face(face),
+        };
+        let LineageView::Merge { sources, result } = adapt_lineage_event(&part, &merge) else {
+            panic!("expected merge lineage");
+        };
+        assert_eq!(
+            sources.map(|source| source.kind()).collect::<Vec<_>>(),
+            vec![EntityKind::Face, EntityKind::Face]
+        );
+        assert_eq!(result.kind(), EntityKind::Face);
+
+        let replaced = RawLineageEvent::Replaced {
+            old: RawEntityRef::Edge(edge),
+            new: RawEntityRef::Edge(edge),
+        };
+        let LineageView::Replaced { old, new } = adapt_lineage_event(&part, &replaced) else {
+            panic!("expected replaced lineage");
+        };
+        assert_eq!(old.kind(), EntityKind::Edge);
+        assert_eq!(new.kind(), EntityKind::Edge);
+
+        let deleted = RawLineageEvent::Deleted {
+            entity: RawEntityRef::Body(body),
+        };
+        let LineageView::Deleted { entity } = adapt_lineage_event(&part, &deleted) else {
+            panic!("expected deleted lineage");
+        };
+        assert_eq!(entity.kind(), EntityKind::Body);
+        assert_eq!(entity.part(), part);
+    }
+
+    #[test]
+    fn deleted_lineage_identity_remains_reportable_but_stale_in_the_part() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let journal = {
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let mut transaction = edit.store_mut_for_test().transaction().unwrap();
+            let (surface, point) = {
+                let mut assembly = transaction.assembly();
+                (
+                    assembly
+                        .insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())))
+                        .unwrap(),
+                    assembly.add(Point3::new(0.0, 0.0, 0.0)),
+                )
+            };
+            let transient = transaction
+                .make_minimal_body(surface, crate::Sense::Forward, point)
+                .unwrap();
+            transaction.kill_minimal_body(transient.body).unwrap();
+            ChangeJournal::from_raw(part_id.clone(), transaction.commit_checked(&[]).unwrap())
+        };
+
+        let mut lineage = journal.lineage();
+        let LineageView::DerivedFrom { derived, source } = lineage.next().unwrap() else {
+            panic!("expected vertex derivation");
+        };
+        assert_eq!(derived.kind(), EntityKind::Vertex);
+        assert_eq!(source.kind(), EntityKind::Point);
+        let LineageView::Deleted { entity } = lineage.next().unwrap() else {
+            panic!("expected body deletion");
+        };
+        assert_eq!(lineage.len(), 0);
+        let JournalEntity::Body(deleted_body) = entity else {
+            panic!("expected deleted body identity");
+        };
+        assert!(matches!(
+            session.part(part_id).unwrap().body(deleted_body),
+            Err(crate::Error::StaleEntity {
+                kind: EntityKind::Body
+            })
+        ));
+    }
+
+    #[test]
+    fn journal_adapters_keep_tolerance_budgets_distinct_from_operation_work() {
+        let mut store = Store::new();
+        let body = ktopo::make::block(&mut store, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
+        let face = store.faces_of_body(body).unwrap()[0];
+        let edge = store.edges_of_body(body).unwrap()[0];
+        let vertex = store.vertices_of_body(body).unwrap()[0];
+        let requested = 3.0 * kcore::tolerance::LINEAR_RESOLUTION;
+        let growth = requested - kcore::tolerance::LINEAR_RESOLUTION;
+
+        let mut transaction = store.transaction().unwrap();
+        let budget = transaction
+            .declare_tolerance_budget("facade-journal-test", 3.0 * growth)
+            .unwrap();
+        transaction
+            .grow_face_tolerance(budget, face, requested)
+            .unwrap();
+        transaction
+            .grow_edge_tolerance(budget, edge, requested)
+            .unwrap();
+        transaction
+            .grow_vertex_tolerance(budget, vertex, requested)
+            .unwrap();
+        let raw = transaction.commit_checked_body(body).unwrap();
+
+        let mut session = Kernel::new().create_session();
+        let part = session.create_part();
+        let journal = ChangeJournal::from_raw(part.clone(), raw);
+        let budgets = journal.tolerance_budgets().collect::<Vec<_>>();
+        assert_eq!(budgets.len(), 1);
+        assert_eq!(budgets[0].id().index(), 0);
+        assert_eq!(budgets[0].operation(), "facade-journal-test");
+        assert_eq!(budgets[0].limit(), 3.0 * growth);
+        assert_eq!(budgets[0].consumed(), 3.0 * growth);
+        assert_eq!(budgets[0].remaining(), 0.0);
+
+        let events = journal.tolerance_events().collect::<Vec<_>>();
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.entity().kind())
+                .collect::<Vec<_>>(),
+            vec![EntityKind::Face, EntityKind::Edge, EntityKind::Vertex]
+        );
+        assert!(events.iter().all(|event| {
+            event.entity().part() == part
+                && event.previous().is_none()
+                && event.current().value() == requested
+                && event.budget() == budgets[0].id()
+        }));
+        assert!(
+            journal
+                .mutations()
+                .all(|mutation| mutation.kind() == MutationKind::Modified)
+        );
     }
 
     #[test]

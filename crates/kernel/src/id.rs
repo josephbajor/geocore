@@ -10,7 +10,8 @@ use kgraph::{
 };
 use ktopo::entity::{
     BodyId as RawBodyId, EdgeId as RawEdgeId, FaceId as RawFaceId, FinId as RawFinId,
-    LoopId as RawLoopId, RegionId as RawRegionId, ShellId as RawShellId, VertexId as RawVertexId,
+    LoopId as RawLoopId, PointId as RawPointId, RegionId as RawRegionId, ShellId as RawShellId,
+    VertexId as RawVertexId,
 };
 
 use crate::session::PartState;
@@ -130,3 +131,31 @@ facade_id!(VertexId, RawVertexId, "vertex");
 facade_id!(CurveId, RawCurveId, "3D curve geometry node");
 facade_id!(SurfaceId, RawSurfaceId, "surface geometry node");
 facade_id!(PcurveId, RawPcurveId, "parameter-space curve geometry node");
+
+/// Opaque, part-qualified point geometry identity retained by a committed
+/// journal.
+///
+/// Point handles are not ordinary facade geometry identities. This type exists
+/// only so lineage and mutation evidence can retain an exact identity after
+/// the point or its owning topology is deleted.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct JournalPointId {
+    part: PartId,
+    raw: RawPointId,
+}
+
+impl JournalPointId {
+    pub(crate) fn new(part: PartId, raw: RawPointId) -> Self {
+        Self { part, raw }
+    }
+
+    pub(crate) fn part(&self) -> &PartId {
+        &self.part
+    }
+}
+
+impl fmt::Debug for JournalPointId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("JournalPointId(<opaque>)")
+    }
+}

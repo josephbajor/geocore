@@ -12,7 +12,8 @@ The current facade supports:
 - contextual block construction and Fast/Full body checking;
 - operation-accounted conforming solid and sheet tessellation;
 - bounded, operation-accounted surface evaluation; and
-- atomic typed X_T import and deterministic X_T export.
+- atomic typed X_T import and deterministic X_T export; and
+- deterministic facade-ID mutation, lineage, and tolerance journal iteration.
 
 Broader modeling operations and semantic edit transactions remain under active
 development. The facade is additive: lower crates remain available to kernel

@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1-K3, typed K4 interchange, K5 adoption, and facade body tessellation implemented; semantic K4 edits remain
+Status: K1-K3, typed K4 interchange and journal views, K5 adoption, and facade body tessellation implemented; semantic K4 edits remain
 
 ## Outcome
 
@@ -468,6 +468,13 @@ as live entity views returns stale-handle. The adapter does not reinterpret
 tolerance growth as F2 work usage; transaction-owned tolerance budgets remain
 distinct and journaled as required by F2.
 
+This adapter is implemented. Mutations retain arena-type/slot order, lineage
+retains operation order and ordered split/merge members, and tolerance events
+refer to declaration-ordered facade budget IDs. Topology and graph geometry use
+their normal part-qualified IDs. Stored points remain outside the ordinary
+geometry view surface, so journals use an opaque `JournalPointId` solely to
+retain exact created/deleted identity without exposing its arena handle.
+
 F5 does not add undo/redo, rollback marks, journal persistence, attributes, or
 persistent naming. The journal adapter is deliberately sufficient for those
 future layers to consume without learning arena layout.
@@ -735,8 +742,11 @@ change, and an offset basis remains shared and hidden behind opaque IDs.
 
 Status: typed X_T import/export now returns opaque body IDs, skipped-schema
 summaries, deterministic text, classified source chains, and the exact opaque
-commit journal. Import into populated parts is rollback- and allocator-clean;
-semantic edit transactions and facade-ID journal iterators remain.
+commit journal. Import into populated parts is rollback- and allocator-clean.
+`ChangeJournal` now exposes exact-size facade-ID iterators for net mutations,
+all five semantic lineage forms, tolerance budgets, and tolerance events while
+retaining deleted and point identities without raw handles. Semantic edit
+transactions remain.
 
 Those remaining semantic edit surfaces resume after the K5 adoption pass. The
 interchange facade stays thin: `kxt` reconstruction and checked-commit Fast
@@ -745,7 +755,7 @@ facade report.
 
 - Add the semantic `EditTransaction` wrapper over currently public checked
   transaction methods.
-- Add `ChangeJournal` and its facade-ID iterators.
+- Add `ChangeJournal` and its facade-ID iterators. **Implemented.**
 - Add typed X_T import/export requests and preserve source error detail.
 - Ensure raw assembly is not reachable through the facade.
 - Add rollback tests at parse, graph construction, topology assembly, checking,

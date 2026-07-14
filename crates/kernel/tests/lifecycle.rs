@@ -2,9 +2,9 @@
 
 use kernel::{
     BlockRequest, BodyTessellationBudgetProfile, BoundedCurve, CheckBodyRequest, CheckLevel,
-    CheckOutcome, Error, ExportXtRequest, Frame, ImportXtRequest, IntersectCurvesRequest, Kernel,
-    OperationSettings, ParamRange, SessionPolicy, SurfaceDerivativeOrder, SurfaceEvaluationRequest,
-    TessOptions, TessellateBodyRequest,
+    CheckOutcome, EntityKind, Error, ExportXtRequest, Frame, ImportXtRequest,
+    IntersectCurvesRequest, Kernel, MutationKind, OperationSettings, ParamRange, SessionPolicy,
+    SurfaceDerivativeOrder, SurfaceEvaluationRequest, TessOptions, TessellateBodyRequest,
 };
 
 #[test]
@@ -81,6 +81,37 @@ fn facade_only_client_can_construct_and_check_a_block_with_reports() {
     assert_eq!(created.journal().part(), part_id);
     assert!(created.journal().mutation_count() > 0);
     assert_eq!(created.journal().lineage_count(), 0);
+    let mutations = created.journal().mutations().collect::<Vec<_>>();
+    assert_eq!(mutations.len(), created.journal().mutation_count());
+    assert!(
+        mutations
+            .iter()
+            .all(|mutation| mutation.entity().part() == part_id)
+    );
+    assert!(
+        mutations
+            .iter()
+            .all(|mutation| mutation.kind() == MutationKind::Created)
+    );
+    let kinds = mutations
+        .iter()
+        .map(|mutation| mutation.entity().kind())
+        .collect::<Vec<_>>();
+    for expected in [
+        EntityKind::Body,
+        EntityKind::Face,
+        EntityKind::Edge,
+        EntityKind::Vertex,
+        EntityKind::Curve,
+        EntityKind::Surface,
+        EntityKind::Point,
+        EntityKind::Pcurve,
+    ] {
+        assert!(kinds.contains(&expected), "missing {expected:?}");
+    }
+    assert_eq!(created.journal().lineage().len(), 0);
+    assert_eq!(created.journal().tolerance_budgets().len(), 0);
+    assert_eq!(created.journal().tolerance_events().len(), 0);
 
     let check = session
         .part(part_id)

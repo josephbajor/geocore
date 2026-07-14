@@ -36,7 +36,7 @@ pub mod code {
     ];
 }
 
-/// Facade identity kind used in stale-ID diagnostics.
+/// Facade identity kind used in stale-ID diagnostics and committed journals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum EntityKind {
@@ -60,6 +60,8 @@ pub enum EntityKind {
     Curve,
     /// Supporting-surface geometry.
     Surface,
+    /// Point geometry retained as an opaque committed-journal identity.
+    Point,
     /// Parameter-space curve geometry.
     Pcurve,
 }
