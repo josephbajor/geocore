@@ -14,7 +14,8 @@ use crate::error::{Error, Result};
 use crate::session::PartEdit;
 use crate::{
     BodyId, BoundedCurve, ChangeJournal, CurveId, EdgeId, EntityKind, FaceId, FinId, LoopId,
-    OperationOutcome, OperationSettings, ParamRange, PartId, PcurveId, Sense, SurfaceId, VertexId,
+    OperationOutcome, OperationSettings, ParamRange, PartId, PcurveId, RegionId, Sense, ShellId,
+    SurfaceId, VertexId,
 };
 
 /// Validated affine correspondence from edge parameter `t` to pcurve
@@ -413,6 +414,124 @@ impl BoundedPcurve {
             self.range,
             self.parameter_map.into_raw(),
         )?))
+    }
+}
+
+/// Create the transient seed topology produced by MVFS at one position.
+///
+/// The result is an intermediate modeling state: checked commit must reject it
+/// unless later Euler operations complete it into valid topology or KVFS
+/// removes it in the same transaction.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateSeedBodyRequest {
+    surface: SurfaceId,
+    sense: Sense,
+    position: Point3,
+}
+
+impl CreateSeedBodyRequest {
+    /// Construct a position-owning MVFS request.
+    pub const fn new(surface: SurfaceId, sense: Sense, position: Point3) -> Self {
+        Self {
+            surface,
+            sense,
+            position,
+        }
+    }
+
+    /// Supporting surface of the seed face.
+    pub fn surface(&self) -> SurfaceId {
+        self.surface.clone()
+    }
+
+    /// Seed face orientation relative to its surface.
+    pub const fn sense(&self) -> Sense {
+        self.sense
+    }
+
+    /// Model-space seed-vertex position.
+    pub const fn position(&self) -> Point3 {
+        self.position
+    }
+}
+
+/// Opaque identities created by one transient MVFS operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateSeedBodyResult {
+    body: BodyId,
+    void_region: RegionId,
+    solid_region: RegionId,
+    shell: ShellId,
+    face: FaceId,
+    loop_id: LoopId,
+    vertex: VertexId,
+}
+
+impl CreateSeedBodyResult {
+    /// New transient body.
+    pub fn body(&self) -> BodyId {
+        self.body.clone()
+    }
+
+    /// Infinite exterior void region.
+    pub fn void_region(&self) -> RegionId {
+        self.void_region.clone()
+    }
+
+    /// Solid region owning the seed shell.
+    pub fn solid_region(&self) -> RegionId {
+        self.solid_region.clone()
+    }
+
+    /// Shell holding the seed vertex in its acorn slot.
+    pub fn shell(&self) -> ShellId {
+        self.shell.clone()
+    }
+
+    /// Single seed face.
+    pub fn face(&self) -> FaceId {
+        self.face.clone()
+    }
+
+    /// Face's single empty loop.
+    pub fn loop_id(&self) -> LoopId {
+        self.loop_id.clone()
+    }
+
+    /// Seed vertex at the requested position.
+    pub fn vertex(&self) -> VertexId {
+        self.vertex.clone()
+    }
+}
+
+/// Remove a body that is still in the exact transient MVFS seed shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoveSeedBodyRequest {
+    body: BodyId,
+}
+
+impl RemoveSeedBodyRequest {
+    /// Select the transient seed body to remove.
+    pub const fn new(body: BodyId) -> Self {
+        Self { body }
+    }
+
+    /// Seed body selected for removal.
+    pub fn body(&self) -> BodyId {
+        self.body.clone()
+    }
+}
+
+/// Identity removed by one successful KVFS operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoveSeedBodyResult {
+    body: BodyId,
+}
+
+impl RemoveSeedBodyResult {
+    /// Removed body identity, stale in the transaction candidate afterward.
+    pub fn body(&self) -> BodyId {
+        self.body.clone()
     }
 }
 
@@ -906,6 +1025,52 @@ impl EditTransaction<'_> {
     /// Part whose candidate state is exclusively borrowed.
     pub fn part(&self) -> PartId {
         self.part.clone()
+    }
+
+    /// Create one transient position-owning MVFS seed body.
+    ///
+    /// The returned topology is intentionally incomplete and cannot pass
+    /// checked commit by itself. Compose further Euler edits or call
+    /// [`Self::remove_seed_body`] before committing.
+    pub fn create_seed_body(
+        &mut self,
+        request: CreateSeedBodyRequest,
+    ) -> Result<CreateSeedBodyResult> {
+        self.require_surface(&request.surface)?;
+        let CreateSeedBodyRequest {
+            surface,
+            sense,
+            position,
+        } = request;
+        let made = self
+            .inner
+            .make_minimal_body_at_position(surface.raw(), sense, position)?;
+        Ok(CreateSeedBodyResult {
+            body: BodyId::new(self.part.clone(), made.body),
+            void_region: RegionId::new(self.part.clone(), made.void_region),
+            solid_region: RegionId::new(self.part.clone(), made.solid_region),
+            shell: ShellId::new(self.part.clone(), made.shell),
+            face: FaceId::new(self.part.clone(), made.face),
+            loop_id: LoopId::new(self.part.clone(), made.ring),
+            vertex: VertexId::new(self.part.clone(), made.vertex),
+        })
+    }
+
+    /// Remove exact transient MVFS topology and its unshared hidden point.
+    pub fn remove_seed_body(
+        &mut self,
+        request: RemoveSeedBodyRequest,
+    ) -> Result<RemoveSeedBodyResult> {
+        self.validate_part(request.body.part())?;
+        self.inner
+            .store()
+            .get(request.body.raw())
+            .map_err(|_| Error::StaleEntity {
+                kind: EntityKind::Body,
+            })?;
+        self.inner
+            .kill_position_owned_minimal_body(request.body.raw())?;
+        Ok(RemoveSeedBodyResult { body: request.body })
     }
 
     /// Create one position-owning strut with mandatory independent pcurves.
@@ -1402,6 +1567,21 @@ mod tests {
         split_request_with_parameterization(edit, body, true)
     }
 
+    fn seed_body_request(edit: &mut PartEdit<'_>, body: &BodyId) -> CreateSeedBodyRequest {
+        let part = edit.id();
+        let store = edit.store_mut_for_test();
+        let raw_face = store.faces_of_body(body.raw()).unwrap()[0];
+        let face = store.get(raw_face).unwrap();
+        let loop_id = face.loops()[0];
+        let fin = store.get(loop_id).unwrap().fins()[0];
+        let vertex = store.fin_tail(fin).unwrap().unwrap();
+        CreateSeedBodyRequest::new(
+            SurfaceId::new(part, face.surface()),
+            face.sense(),
+            store.vertex_position(vertex).unwrap(),
+        )
+    }
+
     fn planar_strut_request(
         edit: &mut PartEdit<'_>,
     ) -> (BodyId, LoopId, EdgeId, CreateStrutRequest, PcurveId) {
@@ -1880,6 +2060,132 @@ mod tests {
                 kind: EntityKind::Edge
             })
         ));
+    }
+
+    #[test]
+    fn checked_seed_body_round_trip_is_transient_atomic_and_identity_exact() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let foreign_part = session.create_part();
+        let foreign_body = session
+            .edit_part(foreign_part.clone())
+            .unwrap()
+            .create_block(BlockRequest::new(Frame::world(), [1.0, 1.0, 1.0]))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let foreign_surface = {
+            let part = session.part(foreign_part).unwrap();
+            let face = part
+                .body(foreign_body)
+                .unwrap()
+                .faces()
+                .unwrap()
+                .next()
+                .unwrap();
+            part.face(face).unwrap().surface()
+        };
+
+        let mut edit = session.edit_part(part_id).unwrap();
+        let body = block(&mut edit);
+        let request = seed_body_request(&mut edit, &body);
+        let point_count = edit.store_mut_for_test().count::<Point3>();
+        let (rolled_back, rolled_back_point) = {
+            let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+            let made = transaction.create_seed_body(request.clone()).unwrap();
+            let point = transaction
+                .inner
+                .store()
+                .get(made.vertex.raw())
+                .unwrap()
+                .point();
+            transaction.rollback().unwrap();
+            (made, point)
+        };
+        for entity_is_stale in [
+            edit.as_part().body(rolled_back.body()).is_err(),
+            edit.as_part().region(rolled_back.void_region()).is_err(),
+            edit.as_part().region(rolled_back.solid_region()).is_err(),
+            edit.as_part().shell(rolled_back.shell()).is_err(),
+            edit.as_part().face(rolled_back.face()).is_err(),
+            edit.as_part().loop_(rolled_back.loop_id()).is_err(),
+            edit.as_part().vertex(rolled_back.vertex()).is_err(),
+        ] {
+            assert!(entity_is_stale);
+        }
+
+        let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+        assert!(
+            transaction
+                .remove_seed_body(RemoveSeedBodyRequest::new(rolled_back.body()))
+                .is_err()
+        );
+        assert!(
+            transaction
+                .remove_seed_body(RemoveSeedBodyRequest::new(body.clone()))
+                .is_err()
+        );
+        let wrong_part =
+            CreateSeedBodyRequest::new(foreign_surface, request.sense(), request.position());
+        assert!(matches!(
+            transaction.create_seed_body(wrong_part),
+            Err(Error::WrongPart { .. })
+        ));
+        let bad_position = CreateSeedBodyRequest::new(
+            request.surface(),
+            request.sense(),
+            Point3::new(f64::NAN, 0.0, 0.0),
+        );
+        assert!(transaction.create_seed_body(bad_position).is_err());
+
+        let made = transaction.create_seed_body(request.clone()).unwrap();
+        assert_eq!(made, rolled_back);
+        assert_eq!(
+            transaction
+                .inner
+                .store()
+                .get(made.vertex.raw())
+                .unwrap()
+                .point(),
+            rolled_back_point
+        );
+        let removed = transaction
+            .remove_seed_body(RemoveSeedBodyRequest::new(made.body()))
+            .unwrap();
+        assert_eq!(removed.body(), made.body());
+        let outcome = transaction.commit(core::slice::from_ref(&body)).unwrap();
+        let journal = outcome.result().unwrap();
+        let lineage = journal.lineage().collect::<Vec<_>>();
+        assert_eq!(lineage.len(), 3);
+        let LineageView::DerivedFrom { derived, source } = &lineage[0] else {
+            panic!("position-owning MVFS must derive the seed vertex from its point");
+        };
+        assert_eq!(*derived, JournalEntity::Vertex(made.vertex()));
+        assert!(matches!(source, JournalEntity::Point(_)));
+        let hidden_point = source.clone();
+        let LineageView::Deleted { entity } = &lineage[1] else {
+            panic!("KVFS must record the deleted seed body");
+        };
+        assert_eq!(*entity, JournalEntity::Body(made.body()));
+        let LineageView::Deleted { entity } = &lineage[2] else {
+            panic!("position-owning KVFS must record the deleted hidden point");
+        };
+        assert_eq!(*entity, hidden_point);
+        assert_eq!(edit.store_mut_for_test().count::<Point3>(), point_count);
+        assert!(edit.as_part().body(body.clone()).is_ok());
+
+        let mut transient = edit.begin_edit(OperationSettings::default()).unwrap();
+        let incomplete = transient.create_seed_body(request).unwrap();
+        let denied = transient.commit(core::slice::from_ref(&body)).unwrap();
+        assert!(denied.result().is_err());
+        assert!(matches!(
+            edit.as_part().body(incomplete.body()),
+            Err(Error::StaleEntity {
+                kind: EntityKind::Body
+            })
+        ));
+        assert_eq!(edit.store_mut_for_test().count::<Point3>(), point_count);
     }
 
     #[test]

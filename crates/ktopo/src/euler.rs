@@ -238,6 +238,29 @@ pub struct Mvfs {
     pub vertex: VertexId,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct MvfsPreflight {
+    domain: Option<FaceDomain>,
+}
+
+/// Topology and geometry identities detached by KVFS.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Kvfs {
+    /// Point formerly referenced by the removed seed vertex.
+    pub point: PointId,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct KvfsPreflight {
+    void: RegionId,
+    solid: RegionId,
+    shell: ShellId,
+    face: FaceId,
+    ring: LoopId,
+    vertex: VertexId,
+    point: PointId,
+}
+
 /// Make vertex, face, shell (and body): the minimal solid body.
 ///
 /// Creates a solid body scaffold (void + solid regions, one shell), one
@@ -249,31 +272,67 @@ pub(crate) fn mvfs(
     sense: Sense,
     point: PointId,
 ) -> Result<Mvfs> {
-    let domain = FaceDomain::natural(store.get(surface)?);
+    let preflight = preflight_mvfs(store, surface)?;
     store.get(point)?;
+    Ok(apply_mvfs(store, surface, sense, point, preflight))
+}
+
+pub(crate) fn mvfs_at_position(
+    store: &mut Store,
+    surface: SurfaceId,
+    sense: Sense,
+    position: Point3,
+) -> Result<(Mvfs, PointId)> {
+    Store::validate_point(position)?;
+    let preflight = preflight_mvfs(store, surface)?;
+    let point = store.insert_point(position)?;
+    Ok((apply_mvfs(store, surface, sense, point, preflight), point))
+}
+
+fn preflight_mvfs(store: &Store, surface: SurfaceId) -> Result<MvfsPreflight> {
+    Ok(MvfsPreflight {
+        domain: FaceDomain::natural(store.get(surface)?),
+    })
+}
+
+fn apply_mvfs(
+    store: &mut Store,
+    surface: SurfaceId,
+    sense: Sense,
+    point: PointId,
+    preflight: MvfsPreflight,
+) -> Mvfs {
     let (body, shell) = crate::make::solid_body_scaffold(store);
-    let regions = store.get(body)?.regions.clone();
+    let regions = store
+        .get(body)
+        .expect("fresh MVFS body remains live")
+        .regions
+        .clone();
     let face = store.add(Face {
         shell,
         loops: Vec::new(),
         surface,
         sense,
-        domain,
+        domain: preflight.domain,
         tolerance: None,
     });
     let ring = store.add(Loop {
         face,
         fins: Vec::new(),
     });
-    store.get_mut(face)?.loops.push(ring);
+    store
+        .get_mut(face)
+        .expect("fresh MVFS face remains live")
+        .loops
+        .push(ring);
     let vertex = store.add(Vertex {
         point,
         tolerance: None,
     });
-    let sh = store.get_mut(shell)?;
+    let sh = store.get_mut(shell).expect("fresh MVFS shell remains live");
     sh.faces.push(face);
     sh.vertex = Some(vertex);
-    Ok(Mvfs {
+    Mvfs {
         body,
         void_region: regions[0],
         solid_region: regions[1],
@@ -281,14 +340,22 @@ pub(crate) fn mvfs(
         face,
         ring,
         vertex,
-    })
+    }
 }
 
 /// Kill vertex, face, shell, body: exact inverse of MVFS.
 ///
 /// The body must still be in the minimal shape MVFS made (one face
 /// with one empty loop, seed vertex in the shell slot, no edges).
-pub(crate) fn kvfs(store: &mut Store, body: BodyId) -> Result<()> {
+pub(crate) fn kvfs(store: &mut Store, body: BodyId) -> Result<Kvfs> {
+    let preflight = preflight_kvfs(store, body)?;
+    apply_kvfs(store, body, preflight);
+    Ok(Kvfs {
+        point: preflight.point,
+    })
+}
+
+fn preflight_kvfs(store: &Store, body: BodyId) -> Result<KvfsPreflight> {
     let regions = store.get(body)?.regions.clone();
     if regions.len() != 2 {
         return topo_err("kvfs: body must have exactly void + solid regions");
@@ -319,14 +386,41 @@ pub(crate) fn kvfs(store: &mut Store, body: BodyId) -> Result<()> {
     if !store.get(ring)?.fins.is_empty() {
         return topo_err("kvfs: loop must have no fins");
     }
-    store.remove(ring)?;
-    store.remove(face)?;
-    store.remove(vertex)?;
-    store.remove(shell)?;
-    store.remove(void)?;
-    store.remove(solid)?;
-    store.remove(body)?;
-    Ok(())
+    let point = store.get(vertex)?.point;
+    store.get(point)?;
+    Ok(KvfsPreflight {
+        void,
+        solid,
+        shell,
+        face,
+        ring,
+        vertex,
+        point,
+    })
+}
+
+fn apply_kvfs(store: &mut Store, body: BodyId, preflight: KvfsPreflight) {
+    store
+        .remove(preflight.ring)
+        .expect("KVFS preflight keeps the seed loop live");
+    store
+        .remove(preflight.face)
+        .expect("KVFS preflight keeps the seed face live");
+    store
+        .remove(preflight.vertex)
+        .expect("KVFS preflight keeps the seed vertex live");
+    store
+        .remove(preflight.shell)
+        .expect("KVFS preflight keeps the seed shell live");
+    store
+        .remove(preflight.void)
+        .expect("KVFS preflight keeps the void region live");
+    store
+        .remove(preflight.solid)
+        .expect("KVFS preflight keeps the solid region live");
+    store
+        .remove(body)
+        .expect("KVFS preflight keeps the seed body live");
 }
 
 /// Entities created by MEV.

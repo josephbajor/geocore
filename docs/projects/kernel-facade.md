@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MEV/KEV and KFMRH/MFKRH, K5 adoption, and facade body tessellation implemented; broader K4 edits remain
+Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, K5 adoption, and facade body tessellation implemented; broader K4 edits remain
 
 ## Outcome
 
@@ -458,6 +458,15 @@ contextual affected-body validation. Drop, explicit rollback, and a denied
 checked commit restore both candidate topology and exact future opaque
 identities.
 
+Position-owning MVFS validates the supporting surface and finite size-box seed
+position before allocating its hidden point, then returns opaque body, region,
+shell, face, loop, and vertex identities. That exact seed shape is deliberately
+transient: checked commit rejects a standalone MVFS candidate until later
+Euler edits complete it, or facade KVFS removes it in the same transaction.
+The facade KVFS inverse deletes and journals the hidden point only when it is
+unshared; ordinary lower KVFS continues to retain externally owned or shared
+point geometry.
+
 `ChangeJournal` is an owning adapter over `ktopo::transaction::Journal`, not a
 copied facade journal schema:
 
@@ -762,14 +771,21 @@ commit journal. Import into populated parts is rollback- and allocator-clean.
 `ChangeJournal` now exposes exact-size facade-ID iterators for net mutations,
 all five semantic lineage forms, tolerance budgets, and tolerance events while
 retaining deleted and point identities without raw handles. Checked semantic
-transactions compose position-owning pcurve-aware strut creation/removal,
-face split/merge, bridge-edge removal/ring join, and face-as-hole merge/split
+transactions compose position-owning seed-body creation/removal and
+pcurve-aware strut creation/removal, face split/merge, bridge-edge
+removal/ring join, and face-as-hole merge/split
 with validated affine parameter maps and facade-owned periodic-chart, seam,
 closed-use, and singular-endpoint metadata through checked contextual commit
 without exposing raw assembly. Position-owning MEV preflights position,
 size-box, topology, curve, bounds, and pcurves before point allocation. Its
 facade KEV inverse deletes and journals the hidden point only when no live
 vertex shares it; ordinary lower KEV retains external/shared point geometry.
+Position-owning MVFS likewise preflights the surface and finite size-box
+position before point allocation, exposes every created topology identity
+opaquely, and remains an explicitly transient candidate until composed with
+later Euler edits or removed by KVFS. Its facade KVFS inverse cleans up and
+journals the hidden point only when unshared; ordinary lower KVFS retains
+external/shared point geometry.
 KFMRH/MFKRH
 preflight part ownership, liveness, shell/loop shape, and cross-carrier pcurve
 incidence while preserving exact pcurve metadata and lineage. Topology does
@@ -783,8 +799,8 @@ validation share one contextual graph child and return one truthful
 facade report.
 
 - Add the semantic `EditTransaction` wrapper over currently public checked
-  transaction methods. **MEV/KEV strut, face split/merge, bridge/ring, and
-  face/hole KFMRH/MFKRH slices implemented.**
+  transaction methods. **MVFS/KVFS seed-body, MEV/KEV strut, face split/merge,
+  bridge/ring, and face/hole KFMRH/MFKRH slices implemented.**
 - Add `ChangeJournal` and its facade-ID iterators. **Implemented.**
 - Add typed X_T import/export requests and preserve source error detail.
 - Ensure raw assembly is not reachable through the facade.
@@ -855,7 +871,7 @@ The remaining pressure is explicit:
   application client;
 - X_T reconstruction and oracle fixture authoring remain reviewed trusted raw
   assembly seams pending a separately announced sealed-reconstruction change;
-- MVFS/KVFS plus broader semantic edit families remain K4 work;
+- broader semantic edit families and partition-history composition remain K4 work;
   facade journal iteration is implemented; and
 - `cargo package -p kernel --list` is now an exact CI-reviewed inventory with
   the facade README and lifecycle tests, while full package creation remains

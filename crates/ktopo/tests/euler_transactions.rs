@@ -115,6 +115,103 @@ fn minimal_mev_kev_kvfs_sequence_is_atomic_and_deterministic() {
 }
 
 #[test]
+fn position_mvfs_preflights_reuses_ids_and_cleans_its_hidden_point() {
+    let mut store = Store::new();
+    let surface = store
+        .insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())))
+        .unwrap();
+    let position = Point3::new(1.0, 2.0, 0.0);
+    let point_count = store.count::<Point3>();
+
+    let (rolled_back, rolled_back_point) = {
+        let mut transaction = store.transaction().unwrap();
+        for invalid in [
+            Point3::new(f64::NAN, 0.0, 0.0),
+            Point3::new(SIZE_BOX_HALF + 1.0, 0.0, 0.0),
+        ] {
+            assert!(
+                transaction
+                    .make_minimal_body_at_position(surface, Sense::Forward, invalid)
+                    .is_err()
+            );
+            assert_eq!(transaction.store().count::<Point3>(), point_count);
+        }
+        let made = transaction
+            .make_minimal_body_at_position(surface, Sense::Forward, position)
+            .unwrap();
+        let point = transaction.store().get(made.vertex).unwrap().point();
+        transaction.rollback().unwrap();
+        (made, point)
+    };
+    assert_eq!(store.count::<Point3>(), point_count);
+
+    let mut transaction = store.transaction().unwrap();
+    let made = transaction
+        .make_minimal_body_at_position(surface, Sense::Forward, position)
+        .unwrap();
+    let point = transaction.store().get(made.vertex).unwrap().point();
+    assert_eq!(made.body, rolled_back.body);
+    assert_eq!(made.void_region, rolled_back.void_region);
+    assert_eq!(made.solid_region, rolled_back.solid_region);
+    assert_eq!(made.shell, rolled_back.shell);
+    assert_eq!(made.face, rolled_back.face);
+    assert_eq!(made.ring, rolled_back.ring);
+    assert_eq!(made.vertex, rolled_back.vertex);
+    assert_eq!(point, rolled_back_point);
+    transaction
+        .kill_position_owned_minimal_body(made.body)
+        .unwrap();
+    assert_eq!(transaction.store().count::<Point3>(), point_count);
+    let journal = transaction.commit_checked(&[]).unwrap();
+    assert!(matches!(
+        journal.lineage(),
+        [
+            LineageEvent::DerivedFrom {
+                derived: EntityRef::Vertex(vertex),
+                source: EntityRef::Point(source),
+            },
+            LineageEvent::Deleted {
+                entity: EntityRef::Body(body),
+            },
+            LineageEvent::Deleted {
+                entity: EntityRef::Point(deleted),
+            },
+        ] if *vertex == made.vertex
+            && *source == point
+            && *body == made.body
+            && *deleted == point
+    ));
+    assert_eq!(store.count::<Point3>(), point_count);
+}
+
+#[test]
+fn position_owned_kvfs_retains_a_point_still_shared_by_a_live_vertex() {
+    let mut store = Store::new();
+    let surface = store
+        .insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())))
+        .unwrap();
+    let position = Point3::new(1.0, 2.0, 0.0);
+    let mut transaction = store.transaction().unwrap();
+    let made = transaction
+        .make_minimal_body_at_position(surface, Sense::Forward, position)
+        .unwrap();
+    let point = transaction.store().get(made.vertex).unwrap().point();
+    let sharing_vertex = transaction.assembly().add(Vertex {
+        point,
+        tolerance: None,
+    });
+    transaction
+        .kill_position_owned_minimal_body(made.body)
+        .unwrap();
+    assert_eq!(
+        transaction.store().get(sharing_vertex).unwrap().point(),
+        point
+    );
+    assert_eq!(*transaction.store().get(point).unwrap(), position);
+    transaction.rollback().unwrap();
+}
+
+#[test]
 fn position_mev_preflights_without_consuming_point_identity() {
     let mut store = Store::new();
     let surface = store

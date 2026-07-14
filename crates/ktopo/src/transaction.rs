@@ -549,12 +549,54 @@ impl<'a> Transaction<'a> {
         Ok(made)
     }
 
+    /// MVFS: create transient minimal topology at a validated position.
+    ///
+    /// The position and supporting surface are validated before the point is
+    /// inserted. This candidate cannot pass checked commit until later Euler
+    /// operations complete it into checker-valid topology, or KVFS removes it.
+    pub fn make_minimal_body_at_position(
+        &mut self,
+        surface: SurfaceId,
+        sense: Sense,
+        position: Point3,
+    ) -> Result<Mvfs> {
+        let (made, point) = crate::euler::mvfs_at_position(self.store, surface, sense, position)?;
+        self.lineage.push(LineageEvent::DerivedFrom {
+            derived: EntityRef::Vertex(made.vertex),
+            source: EntityRef::Point(point),
+        });
+        Ok(made)
+    }
+
     /// KVFS: remove a body that is still in minimal MVFS form.
     pub fn kill_minimal_body(&mut self, body: BodyId) -> Result<()> {
-        crate::euler::kvfs(self.store, body)?;
+        let _deleted = crate::euler::kvfs(self.store, body)?;
         self.lineage.push(LineageEvent::Deleted {
             entity: EntityRef::Body(body),
         });
+        Ok(())
+    }
+
+    /// KVFS inverse for a position-owning MVFS created through the facade.
+    ///
+    /// The hidden seed point is removed when no live vertex still references
+    /// it. Ordinary [`Self::kill_minimal_body`] retains point geometry for
+    /// handle-owning callers that may have authored or shared it separately.
+    pub fn kill_position_owned_minimal_body(&mut self, body: BodyId) -> Result<()> {
+        let deleted = crate::euler::kvfs(self.store, body)?;
+        self.lineage.push(LineageEvent::Deleted {
+            entity: EntityRef::Body(body),
+        });
+        let point_in_use = self
+            .store
+            .iter::<crate::entity::Vertex>()
+            .any(|(_, vertex)| vertex.point == deleted.point);
+        if !point_in_use {
+            self.store.remove(deleted.point)?;
+            self.lineage.push(LineageEvent::Deleted {
+                entity: EntityRef::Point(deleted.point),
+            });
+        }
         Ok(())
     }
 

@@ -2,12 +2,13 @@
 
 use kernel::{
     BlockRequest, BodyTessellationBudgetProfile, BoundedCurve, BoundedPcurve, CheckBodyRequest,
-    CheckLevel, CheckOutcome, CreateStrutRequest, EntityKind, Error, ExportXtRequest, Frame,
-    ImportXtRequest, IntersectCurvesRequest, JoinRingRequest, Kernel, MergeFaceAsHoleRequest,
-    MutationKind, OperationSettings, ParamRange, PcurveChart, PcurveEndpointKind, PcurveMetadata,
-    PcurveSeam, PcurveSeamSide, Point3, RemoveBridgeRequest, RemoveStrutRequest, SessionPolicy,
-    SplitHoleAsFaceRequest, SurfaceDerivativeOrder, SurfaceEvaluationRequest, SurfaceParameter,
-    TessOptions, TessellateBodyRequest,
+    CheckLevel, CheckOutcome, CreateSeedBodyRequest, CreateStrutRequest, EntityKind, Error,
+    ExportXtRequest, Frame, ImportXtRequest, IntersectCurvesRequest, JoinRingRequest, Kernel,
+    MergeFaceAsHoleRequest, MutationKind, OperationSettings, ParamRange, PcurveChart,
+    PcurveEndpointKind, PcurveMetadata, PcurveSeam, PcurveSeamSide, Point3, RemoveBridgeRequest,
+    RemoveSeedBodyRequest, RemoveStrutRequest, SessionPolicy, SplitHoleAsFaceRequest,
+    SurfaceDerivativeOrder, SurfaceEvaluationRequest, SurfaceParameter, TessOptions,
+    TessellateBodyRequest,
 };
 
 #[test]
@@ -315,6 +316,78 @@ fn facade_only_strut_requests_hide_points_and_remain_failure_atomic() {
         original
     );
     assert!(edit.as_part().edge(edge_id).is_ok());
+    drop(edit);
+
+    let check = session
+        .part(part_id)
+        .unwrap()
+        .check_body(CheckBodyRequest::new(body, CheckLevel::Fast))
+        .unwrap();
+    assert_eq!(check.result().unwrap().outcome(), CheckOutcome::Valid);
+}
+
+#[test]
+fn facade_only_seed_body_round_trip_is_explicitly_transient_and_checked() {
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let body = session
+        .edit_part(part_id.clone())
+        .unwrap()
+        .create_block(BlockRequest::new(Frame::world(), [2.0, 3.0, 4.0]))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .body();
+    let (surface, sense, position) = {
+        let part = session.part(part_id.clone()).unwrap();
+        let face_id = part
+            .body(body.clone())
+            .unwrap()
+            .faces()
+            .unwrap()
+            .next()
+            .unwrap();
+        let face = part.face(face_id).unwrap();
+        let loop_id = face.loops().next().unwrap();
+        let fin_id = part.loop_(loop_id).unwrap().fins().next().unwrap();
+        let vertex = part.fin(fin_id).unwrap().tail().unwrap().unwrap();
+        (
+            face.surface(),
+            face.sense(),
+            part.vertex(vertex).unwrap().position().unwrap(),
+        )
+    };
+    let request = CreateSeedBodyRequest::new(surface.clone(), sense, position);
+    assert_eq!(request.surface(), surface);
+    assert_eq!(request.sense(), sense);
+    assert_eq!(request.position(), position);
+
+    let mut edit = session.edit_part(part_id.clone()).unwrap();
+    let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+    let seed = transaction.create_seed_body(request).unwrap();
+    assert_eq!(format!("{:?}", seed.body()), "BodyId(<opaque>)");
+    assert_eq!(format!("{:?}", seed.void_region()), "RegionId(<opaque>)");
+    assert_eq!(format!("{:?}", seed.solid_region()), "RegionId(<opaque>)");
+    assert_eq!(format!("{:?}", seed.shell()), "ShellId(<opaque>)");
+    assert_eq!(format!("{:?}", seed.face()), "FaceId(<opaque>)");
+    assert_eq!(format!("{:?}", seed.loop_id()), "LoopId(<opaque>)");
+    assert_eq!(format!("{:?}", seed.vertex()), "VertexId(<opaque>)");
+    let removed = transaction
+        .remove_seed_body(RemoveSeedBodyRequest::new(seed.body()))
+        .unwrap();
+    assert_eq!(removed.body(), seed.body());
+    let journal = transaction
+        .commit(core::slice::from_ref(&body))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(journal.lineage_count(), 3);
+    assert!(matches!(
+        edit.as_part().body(seed.body()),
+        Err(Error::StaleEntity {
+            kind: EntityKind::Body
+        })
+    ));
     drop(edit);
 
     let check = session
