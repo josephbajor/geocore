@@ -68,14 +68,17 @@ fn usage(
         .consumed
 }
 
-fn assert_next_chart_data_boundary(error: &XtError) {
-    assert!(
-        matches!(
-            error,
-            XtError::Unsupported {
-                capability: XtCapability::IntersectionChartData,
-                what: "INTERSECTION_DATA contains null or non-finite UV values",
-            }
+fn assert_next_work_boundary(error: &XtError, consumed: u64, allowed: u64) {
+    let limit = error
+        .limit()
+        .expect("next chart must reach the v4 Work cap");
+    assert_eq!(
+        (limit.stage, limit.resource, limit.consumed, limit.allowed),
+        (
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+            consumed,
+            allowed,
         ),
         "unexpected post-terminator boundary: {error:?}"
     );
@@ -142,7 +145,7 @@ fn exemplar_pins_both_end_terminated_records_and_extra_singularity_tuples() {
 }
 
 #[test]
-fn first_end_terminator_certifies_and_advances_atomically_to_chart_data() {
+fn first_end_terminator_certifies_and_v4_stops_at_the_next_proof() {
     let file = read_xt(EXEMPLAR).unwrap();
     let session = SessionPolicy::v1();
     let mut store = Store::new();
@@ -152,7 +155,11 @@ fn first_end_terminator_certifies_and_advances_atomically_to_chart_data() {
         &context_with_plan(&session, IntersectionImportBudgetProfile::v4_defaults()),
     )
     .unwrap();
-    assert_next_chart_data_boundary(outcome.result().as_ref().unwrap_err());
+    assert_next_work_boundary(
+        outcome.result().as_ref().unwrap_err(),
+        117_478_445,
+        TERMINATED_WORK,
+    );
     assert!(outcome.report().limit_events().is_empty());
     assert_eq!(
         usage(
@@ -266,7 +273,11 @@ fn second_terminated_payload_certifies_independently_in_the_first_slot() {
         ),
     )
     .unwrap();
-    assert_next_chart_data_boundary(outcome.result().as_ref().unwrap_err());
+    assert_next_work_boundary(
+        outcome.result().as_ref().unwrap_err(),
+        117_495_852,
+        RECORD_1678_TRANSPLANT_WORK,
+    );
     assert!(outcome.report().limit_events().is_empty());
     assert_eq!(
         usage(

@@ -1,6 +1,6 @@
 # F1 procedural geometry graph
 
-Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field or direct-Sphere/NURBS descriptors, plus M3c transmitted-chart consumers through endpoint-only equal-limit closure and finite-open/end-terminated `T/F` singular closure are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
+Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field or direct-Sphere/NURBS descriptors, plus M3c transmitted-chart consumers through endpoint-only equal-limit closure, finite-open/end-terminated `T/F` singular closure, and the first finite-open B-surface/Plane chart with omitted interior Plane UVs are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
 
 ## Outcome
 
@@ -747,8 +747,10 @@ position/partial scans also pay for that normal proof, so the canonical
 one-span Offset(B)/B fixture remains exactly 14,336 Work, 2 Items, and Depth 10
 in both operand orders. The production exemplar now passes its first shared-
 `H/?` equal-limit chart and its first finite-open/end-terminated `T/F` chart,
-then reaches the next unsupported `xt.read.intersection-chart-data` boundary
-rather than an unsupported surface family. Exactly one certified periodic NURBS axis may close the equal-limit chart; only its
+then certifies finite-open direct B-surface/Plane record 1252 by exactly
+inverting its paired-null interior Plane UVs. It reaches procedural `SP_CURVE`
+node 30 (`xt.geometry.procedural-curves`) rather than another transmitted-chart
+boundary. Exactly one certified periodic NURBS axis may close the equal-limit chart; only its
 endpoints are unwrapped by one exact period before the whole-range interval
 proof. An end terminator contributes a tolerance-close, distinct singularity
 and one extra paired-UV tuple whose appended span is certified with the same
@@ -818,13 +820,17 @@ the graph ownership model.
   orders and polynomial/rational bases, retain the live root, signed distance,
   basis, and paired pcurves, pin exact 14,336/2/10 proof accounting, reject
   singular or underflowed normal fields and altered dependencies, and advance
-  the production corpus through record 1828 and end-terminated record 1671 to
-  the next unsupported chart-data form. The equal-limit suite separately pins both records, exact v3
+  the production corpus through record 1828, end-terminated record 1671, and
+  finite-open record 1252 to procedural `SP_CURVE` node 30. The equal-limit
+  suite separately pins both records, exact v3
   `115485725/20/10`, record-2008 transplant `124040223/22/10`, endpoint-only
   period unwrapping, and typed null/distinct-closed/off-seam rollback. The
   terminator suite pins exact v4 `116396069/20/10`, record-1678 transplant
   `116413476` Work, the appended final span, analytic Plane UV recovery,
-  endpoint-only NURBS roundoff snapping, and typed malformed rollback.
+  endpoint-only NURBS roundoff snapping, and typed malformed rollback. The
+  finite-open omitted-data suite pins exact v5 `117478445/20/10`, 20/10
+  Items/Depth, interior-only paired Plane omissions, historical-v4 stability,
+  exact N/N-1 rollback, and the procedural-curve boundary.
 
 ### Offset evaluator tests
 

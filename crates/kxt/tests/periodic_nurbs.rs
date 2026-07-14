@@ -1,6 +1,6 @@
 //! Production periodic/closed B-geometry reconstruction contract.
 
-use kcore::operation::{OperationContext, SessionPolicy};
+use kcore::operation::{OperationContext, ResourceKind, SessionPolicy};
 use kcore::tolerance::Tolerances;
 use ktopo::entity::Body;
 use ktopo::geom::SurfaceGeom;
@@ -8,7 +8,8 @@ use ktopo::store::Store;
 use kxt::parse::{Value, read_xt};
 use kxt::schema::code;
 use kxt::{
-    IntersectionImportBudgetProfile, XtCapability, XtError, reconstruct, reconstruct_with_context,
+    INTERSECTION_CHART_CERTIFICATE_WORK, IntersectionImportBudgetProfile, XtCapability, XtError,
+    reconstruct, reconstruct_with_context,
 };
 
 const EXEMPLAR: &[u8] = include_bytes!("fixtures/exemplar.x_t");
@@ -174,13 +175,14 @@ fn exemplar_offset_nurbs_proof_advances_to_intersection_limits_and_rolls_back() 
         reconstruct_with_context(&file, &mut store, &equal_limit_context(&session)).unwrap();
     let result = outcome.result();
     let error = result.as_ref().unwrap_err();
-    assert!(
-        matches!(
-            error,
-            XtError::Unsupported {
-                capability: XtCapability::IntersectionChartData,
-                what: "INTERSECTION_DATA contains null or non-finite UV values",
-            }
+    let limit = error.limit().expect("v4 must stop at the next chart proof");
+    assert_eq!(
+        (limit.stage, limit.resource, limit.consumed, limit.allowed),
+        (
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+            117_478_445,
+            116_396_069,
         ),
         "advanced exemplar error: {error:?}"
     );
@@ -266,10 +268,10 @@ fn malformed_periodic_seam_is_bad_data_and_accounting_is_deterministic() {
     for _ in 0..2 {
         let mut store = Store::new();
         let outcome = reconstruct_with_context(&file, &mut store, &context).unwrap();
-        assert_eq!(
-            outcome.result().as_ref().unwrap_err().capability(),
-            Some(XtCapability::IntersectionChartData)
-        );
+        let result = outcome.result();
+        let error = result.as_ref().unwrap_err();
+        let limit = error.limit().expect("v4 must stop at the next chart proof");
+        assert_eq!((limit.consumed, limit.allowed), (117_478_445, 116_396_069));
         assert!(outcome.report().limit_events().is_empty());
         assert_eq!(store.count::<Body>(), 0);
         reports.push(outcome.report().clone());

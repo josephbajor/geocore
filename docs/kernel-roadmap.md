@@ -671,7 +671,11 @@ and 2008 is certified when a shared `H/?` limit closes spatially on exactly
 one periodic NURBS axis; only the pcurve endpoints are unwrapped by the exact
 declared period. The finite-open/end-terminated `T/F` singular form at records
 1671 and 1678 is also certified with one appended final span. Production
-reconstruction now stops at the next unsupported chart-data form. Its manifest row remains the committed progress meter:
+v5 additionally certifies finite-open direct B-surface/Plane record 1252,
+recovering its paired-null interior Plane UVs by exact frame inversion while
+requiring numeric endpoints and NURBS UVs. Reconstruction now stops at
+procedural `SP_CURVE` node 30 (`xt.geometry.procedural-curves`). Its manifest
+row remains the committed progress meter:
 `reconstruct: unsupported → pass`, then `tessellate: pass`, then full-checker
 gaps shrinking toward `valid`. Dependency plan:
 
@@ -728,7 +732,9 @@ gaps shrinking toward `valid`. Dependency plan:
    1828 and all later equal-limit charts at exact `115485725/20/10`.
    Production v4 admits the first end terminator at exact `116396069/20/10`;
    the independently transplanted record-2008 and record-1678 payloads pin
-   `124040223/22/10` and `116413476` Work. Both
+   `124040223/22/10` and `116413476` Work. Production v5 then admits record
+   1252 at exact `117478445/20/10`; its six interior Plane pairs are the only
+   omitted UVs and are recovered through the exact direct-plane frame. Both
    original B-surface identities and their paired pcurves are graph-protected
    in source order. Other parameter conventions, limits,
    nullable data, periodic/closed transmitted trace ranges, arbitrary unclamped
@@ -738,10 +744,11 @@ gaps shrinking toward `valid`. Dependency plan:
    reconstruct, wrap evaluation, bound seam-crossing ranges, and write matching
    periodic/closed flags. Its first Offset(B-surface)/B-surface chart now
    certifies. The endpoint-only equal-limit records 1828 and 2008 and the
-   end-terminated records 1671 and 1678 now certify, advancing the corpus
-   ratchet to the next unsupported chart-data form. Null/general closed-limit,
-   other nullable chart-data, non-endpoint-only periodic trace ranges, and
-   noncanonical chart conventions remain. Re-deriving
+   end-terminated records 1671 and 1678 and finite-open record 1252 now certify,
+   advancing the corpus ratchet to procedural `SP_CURVE` node 30.
+   Null/general closed-limit, endpoint or NURBS-trace omissions, other nullable
+   chart-data, non-endpoint-only periodic trace ranges, and noncanonical chart
+   conventions remain. Re-deriving
    boolean scars through our own surface/surface intersector remains an M4
    concern; import must not wait on it.
 3. **COMPLETE VERTICAL SLICE — certified clamped periodic/closed B-surfaces.**
@@ -1163,8 +1170,9 @@ that queue must eventually discharge.
   landed canonical Plane/Plane, Plane/Offset, Offset/Offset, Plane/B-surface,
   safe-Offset(Plane)/B-surface, B-surface/B-surface, and direct
   Offset(B-surface)/B-surface slices past the exemplar's current
-  `xt.read.intersection-limits` boundary: equal/non-distinct, null, and closed
-  limits, periodic trace ranges, and noncanonical chart variants.
+  `xt.geometry.procedural-curves` boundary: procedural SP/foreign curves,
+  null/general closed limits, remaining nullable chart data, periodic trace
+  ranges, and noncanonical chart variants.
 - M2.5: finish parameter-space incidence and ratcheted Full-checker proofs for
   periodic/mixed boundaries, multi-loop containment, and curved shells.
 - M4: extend the narrow landed graph-aware Plane/Plane and Plane/Sphere paired-

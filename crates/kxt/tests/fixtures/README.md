@@ -46,8 +46,11 @@ trimmed, finite open plane/plane `INTERSECTION`, two affine CHART positions,
 ordered `[u0,v0,u1,v1]` tuples. A separate embedded-schema wire test pins the
 modern appended pointer and inserted-field layouts. The later certified
 constant-normal `Offset(B-surface)/B-surface` rung covers the exemplar's first
-such chart; equal start/end limits, null UV tuples, `H` closed limits, and
-`T/F` terminators remain unsupported.
+such chart. Endpoint-only equal limits, finite-open/end-terminated `T/F`
+charts, and the first finite-open direct B-surface/Plane chart with paired-null
+interior Plane UVs are now certified. General closed limits, omissions on a
+NURBS trace or chart endpoint, and other nullable chart-data forms remain
+unsupported.
 
 ## Downloaded (public GitHub repositories)
 
@@ -86,9 +89,15 @@ statement accompanied the individual files.
   whole-range unit-normal proof. Records 1828 and 2008 each reuse one `H/?`
   limit pointer as both start and end. Their endpoint-only,
   single-periodic-axis payloads now certify: record 1828 advances untouched
-  production reconstruction to the later terminated `T/F` boundary at exact
-  `115485725/20/10` Work/Items/Depth, while record 2008 is independently pinned
-  by a focused payload transplant at `124040223/22/10`. Broader null/closed,
+  production reconstruction through exact v3 `115485725/20/10`
+  Work/Items/Depth, while record 2008 is independently pinned by a focused
+  payload transplant at `124040223/22/10`. Production v4 then certifies the
+  first finite-open/end-terminated `T/F` record at `116396069/20/10`.
+  Production v5 additionally certifies record 1252, a direct B-surface/Plane
+  chart whose six interior Plane UV pairs are null and recovered by exact frame
+  inversion; the corpus reaches `117478445/20/10` before stopping at procedural
+  `SP_CURVE` node 30 (`xt.geometry.procedural-curves`). General closed limits,
+  endpoint or NURBS-trace omissions, other nullable chart data,
   periodic-trace-range, and noncanonical chart forms remain unsupported. Primary
   reference for modern writer conventions: TRIMMED_CURVE/GEOMETRIC_OWNER linkage,
   tolerant-edge fin curves, POINT ownership by vertex, and the resolved
