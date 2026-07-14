@@ -51,6 +51,7 @@ use kgraph::{
     EvalBudgetProfile, EvalLimits, OffsetSurfaceDescriptor, SurfaceDerivativeOrder,
     TRANSMITTED_NURBS_TRACE_PROOF_DEPTH, TransmittedIntersectionChartMetadata,
     TransmittedNurbsIntersectionTrace, TransmittedOffsetNurbsTrace,
+    certify_transmitted_cubic_dual_offset_nurbs_intersection_residuals,
     certify_transmitted_nurbs_nurbs_intersection_residuals,
     certify_transmitted_offset_nurbs_intersection_residuals,
     certify_transmitted_plane_intersection_residuals,
@@ -343,6 +344,34 @@ impl IntersectionImportBudgetProfile {
         .expect("built-in X_T quadratic dual-offset intersection profile is valid")
     }
 
+    /// Corpus-backed defaults through the canonical finite-open four-sample
+    /// Offset(B-surface)/Offset(B-surface) cubic chart.
+    ///
+    /// Historical v1-v9 profiles retain their exact policy contracts.
+    pub fn v10_defaults() -> BudgetPlan {
+        BudgetPlan::new([
+            LimitSpec::new(
+                INTERSECTION_CHART_CERTIFICATE_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                336_759_900,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_ITEMS,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                65_536,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64,
+            ),
+        ])
+        .expect("built-in X_T cubic dual-offset intersection profile is valid")
+    }
+
     fn validate(ledger: &WorkLedger) -> core::result::Result<(), OperationPolicyError> {
         ledger.require_limit(
             INTERSECTION_CHART_CERTIFICATE_WORK,
@@ -387,7 +416,7 @@ pub struct Reconstruction {
 pub fn reconstruction_budget_profile() -> BudgetPlan {
     let graph = EvalBudgetProfile::v1_defaults();
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v9_defaults();
+    let intersection = IntersectionImportBudgetProfile::v10_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -403,7 +432,7 @@ fn reconstruction_compatibility_budget() -> BudgetPlan {
     let graph =
         EvalBudgetProfile::for_limits(EvalLimits::default().max_dependency_depth, usize::MAX);
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v9_defaults();
+    let intersection = IntersectionImportBudgetProfile::v10_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -2290,20 +2319,37 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
         let dual_offset_nurbs = offset_nurbs_sources == [true, true];
         let quadratic_dual_offset =
             dual_offset_nurbs && retained_count == 3 && !equal_limits && !terminated;
-        if dual_offset_nurbs && !quadratic_dual_offset {
+        let cubic_dual_offset =
+            dual_offset_nurbs && retained_count == 4 && !equal_limits && !terminated;
+        if dual_offset_nurbs && !quadratic_dual_offset && !cubic_dual_offset {
             return Err(XtError::Unsupported {
                 capability: XtCapability::IntersectionSurfaceFamily,
-                what: "dual Offset(B-surface) charts require the canonical finite-open three-sample quadratic family",
+                what: "dual Offset(B-surface) charts require a canonical finite-open three-sample quadratic or four-sample cubic family",
             });
         }
         let quadratic_position_samples =
             quadratic_dual_offset.then(|| [positions[0], positions[1], positions[2]]);
+        let cubic_position_samples =
+            cubic_dual_offset.then(|| [positions[0], positions[1], positions[2], positions[3]]);
         let (carrier_degree, knots, carrier_points) = if quadratic_dual_offset {
             let midpoint_control = positions[1] * 2.0 - (positions[0] + positions[2]) * 0.5;
             (
                 2,
                 vec![0.0, 0.0, 0.0, 2.0, 2.0, 2.0],
                 vec![positions[0], midpoint_control, positions[2]],
+            )
+        } else if cubic_dual_offset {
+            let first = positions[1] * 27.0 - positions[0] * 8.0 - positions[3];
+            let second = positions[2] * 27.0 - positions[0] - positions[3] * 8.0;
+            (
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 3.0, 3.0, 3.0, 3.0],
+                vec![
+                    positions[0],
+                    (first * 2.0 - second) / 18.0,
+                    (second * 2.0 - first) / 18.0,
+                    positions[3],
+                ],
             )
         } else {
             let mut knots = vec![0.0, 0.0];
@@ -2431,12 +2477,29 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 [uv[1][0], uv[1][1], uv[1][2]],
             ]
         });
+        let cubic_canonicalized_pcurve_samples = cubic_dual_offset.then(|| {
+            [
+                [uv[0][0], uv[0][1], uv[0][2], uv[0][3]],
+                [uv[1][0], uv[1][1], uv[1][2], uv[1][3]],
+            ]
+        });
         let pcurve_points = if quadratic_dual_offset {
             uv.each_ref().map(|points| {
                 vec![
                     points[0],
                     points[1] * 2.0 - (points[0] + points[2]) * 0.5,
                     points[2],
+                ]
+            })
+        } else if cubic_dual_offset {
+            uv.each_ref().map(|points| {
+                let first = points[1] * 27.0 - points[0] * 8.0 - points[3];
+                let second = points[2] * 27.0 - points[0] - points[3] * 8.0;
+                vec![
+                    points[0],
+                    (first * 2.0 - second) / 18.0,
+                    (second * 2.0 - first) / 18.0,
+                    points[3],
                 ]
             })
         } else {
@@ -2462,6 +2525,17 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 quadratic_position_samples.expect("quadratic carrier retains three positions"),
                 quadratic_canonicalized_pcurve_samples
                     .expect("quadratic pcurves retain three canonicalized paired UV tuples"),
+                metadata,
+                proof_tolerance,
+            )
+        } else if cubic_dual_offset {
+            certify_transmitted_cubic_dual_offset_nurbs_intersection_residuals(
+                carrier,
+                traces,
+                pcurves.clone(),
+                cubic_position_samples.expect("cubic carrier retains four positions"),
+                cubic_canonicalized_pcurve_samples
+                    .expect("cubic pcurves retain four canonicalized paired UV tuples"),
                 metadata,
                 proof_tolerance,
             )

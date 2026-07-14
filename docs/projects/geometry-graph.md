@@ -796,8 +796,12 @@ then rerunning the unchanged original-source whole-carrier proof. V8 is exact at
 Work. V9 admits that record at exact `323814492/22/10`. Its ordered Offset roots
 `[3338, 773]` bind a common degree-2 clamped carrier/pcurve basis through three
 transmitted samples; the samples define the candidate, while two independent
-depth-10 original-source offset-NURBS residual certificates prove it. Broader
-Offset/Offset forms remain typed unsupported.
+depth-10 original-source offset-NURBS residual certificates prove it. V10
+admits record 3819 at exact `336759900/22/10`; roots `[3370, 773]` bind the
+unique common degree-3 clamped carrier/pcurve interpolants through four samples,
+again proved against both original offset-NURBS sources. The isolated chart
+pins `12945408/4/10` and historical v1-v9 parity. Zero-multiplicity null-knot
+padding at knot set 6764 is the next deterministic raw-field boundary.
 An end terminator contributes a
 tolerance-close, distinct singularity
 and one extra paired-UV tuple whose appended span is certified with the same
@@ -885,8 +889,9 @@ the graph ownership model.
   the production corpus through record 1828, end-terminated record 1671, and
   finite-open records 1252 and 5089 and native direct-Plane `SP_CURVE` node 30
   through FACE 1195's vertex-less ring domain, nonperiodic endpoint-roundoff
-  `INTERSECTION` 1984, and the canonical finite-open three-sample dual-offset
-  `INTERSECTION` 5945. The equal-limit
+  `INTERSECTION` 1984, the canonical finite-open three-sample dual-offset
+  `INTERSECTION` 5945, and the canonical four-sample cubic dual-offset
+  `INTERSECTION` 3819. The equal-limit
   suite separately pins both records, exact v3
   `115485725/20/10`, record-2008 transplant `124040223/22/10`, endpoint-only
   period unwrapping, and typed null/distinct-closed/off-seam rollback. The
@@ -910,7 +915,10 @@ the graph ownership model.
   quadratic dual-offset suite pins exact v9 `323814492/22/10`, historical
   v1-v8 stability, per-resource N/N-1 rollback, canonical degree/range/knots,
   pairwise-distinct witnesses, root/pcurve dependency identity, and altered or
-  stale rejection.
+  stale rejection. The cubic suite pins exact v10 `336759900/22/10`, isolated
+  `12945408/4/10`, historical v1-v9 stability, unique degree-3 interpolation,
+  polynomial-control-hull/Taylor enclosure agreement, dependency identity,
+  and typed malformed or altered rejection.
 
 ### Offset evaluator tests
 

@@ -104,8 +104,12 @@ statement accompanied the individual files.
   `323814492/22/10` by certifying record 5945's finite-open three-sample
   Offset(B-surface)/Offset(B-surface) chart with canonical clamped quadratic
   carrier and pcurves plus two independent original-source interval proofs. The
-  next broader dual-offset chart is retained as the stable typed
-  `xt.read.intersection-surface-family` unsupported boundary. General closed
+  v10 reaches `336759900/22/10` by certifying record 3819's finite-open
+  four-sample dual-offset chart with unique degree-3 clamped carrier and
+  pcurves plus two independent original-source interval proofs. Historical
+  v1-v9 profiles remain exact, and the isolated chart pins
+  `12945408/4/10`. The next source retains zero-multiplicity null-knot padding
+  at knot set 6764 as the stable raw `BadField` boundary. General closed
   limits, other nullable chart data, periodic-trace-range, broader carrier
   families, and noncanonical chart forms remain unsupported. Primary
   reference for modern writer conventions: TRIMMED_CURVE/GEOMETRIC_OWNER linkage,

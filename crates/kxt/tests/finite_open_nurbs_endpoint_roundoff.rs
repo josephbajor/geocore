@@ -21,6 +21,7 @@ const V7_ATTEMPTED_WORK: u64 = 285_283_414;
 const V8_WORK: u64 = 315_245_660;
 const V8_ATTEMPTED_WORK: u64 = 323_814_492;
 const V9_WORK: u64 = 323_814_492;
+const V9_ATTEMPTED_WORK: u64 = 336_759_900;
 
 #[test]
 fn record_5945_pins_the_canonical_finite_open_three_sample_dual_offset_payload() {
@@ -373,7 +374,7 @@ fn record_5945_transplant_certifies_at_its_exact_isolated_work_boundary() {
 }
 
 #[test]
-fn v9_certifies_5945_and_stops_at_the_next_unsupported_dual_offset_family() {
+fn v9_certifies_5945_and_stops_at_the_next_cubic_chart_proof() {
     let file = read_xt(EXEMPLAR).unwrap();
     let session = SessionPolicy::v1();
     let mut store = Store::new();
@@ -383,13 +384,21 @@ fn v9_certifies_5945_and_stops_at_the_next_unsupported_dual_offset_family() {
         &context_with_plan(&session, IntersectionImportBudgetProfile::v9_defaults()),
     )
     .unwrap();
-    assert!(matches!(
-        outcome.result(),
-        Err(XtError::Unsupported {
-            capability: XtCapability::IntersectionSurfaceFamily,
-            what: "dual Offset(B-surface) charts require the canonical finite-open three-sample quadratic family",
-        })
-    ));
+    let crossing = outcome.result().as_ref().unwrap_err().limit().unwrap();
+    assert_eq!(
+        (
+            crossing.stage,
+            crossing.resource,
+            crossing.consumed,
+            crossing.allowed,
+        ),
+        (
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+            V9_ATTEMPTED_WORK,
+            V9_WORK,
+        )
+    );
     assert_eq!(
         usage(
             outcome.report(),

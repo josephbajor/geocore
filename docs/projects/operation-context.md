@@ -530,7 +530,11 @@ Work. Corpus-backed v9 admits that exact three-sample finite-open dual-offset
 chart at `323,814,492/22/10`; its common degree-2 interpolants determine the
 candidate, while two original-source offset-NURBS interval residuals determine
 acceptance. Historical v1-v8 budgets remain exact, and v9 has isolated Work,
-Items, and Depth N/N-1 denial. Material and interior overhangs are never
+Items, and Depth N/N-1 denial. Corpus-backed v10 admits four-sample cubic
+dual-offset record 3819 at exact `336,759,900/22/10`; the chart itself pins
+`12,945,408/4/10`, and its unique degree-3 clamped interpolants remain
+subordinate to two independent original-source proofs. Historical v1-v9
+budgets remain exact. Material and interior overhangs are never
 normalized, and every snapped endpoint remains subordinate to its original-
 source whole-carrier certificate.
 The v5 extension permits paired-null Plane UVs only at interior samples of an
