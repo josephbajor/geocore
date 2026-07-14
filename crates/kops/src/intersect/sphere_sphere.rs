@@ -280,7 +280,7 @@ const GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT: usize =
     GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_PAIR_LIMIT;
 const GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT: usize =
     GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_ARC_LIMIT;
-const GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON: &str = "general coincident sphere both-wide union supports at most five positive cells; exactly three may be pairwise non-edge-adjacent, otherwise three to five require an exact shared-seam path";
+const GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON: &str = "general coincident sphere both-wide union supports at most five positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four to five require an exact shared-seam path";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SphereWindowConstraint {
@@ -627,7 +627,7 @@ fn certify_double_wide_sphere_window_union(
     let bounded_multi_cell_parents = a_range[0].width()
         < core::f64::consts::TAU - parent_parameter_allowance
         && b_range[0].width() < core::f64::consts::TAU - parent_parameter_allowance;
-    let mut merged_connected_region = None;
+    let mut resolved_regions = None;
     let supported_positive_cells = match occupied_regions.as_slice() {
         [_] => certified_empty_pairs + 1 == GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
         [(first, first_region), (second, second_region)] => {
@@ -639,13 +639,14 @@ fn certify_double_wide_sphere_window_union(
             } else if let Some((seam_on_first_operand, seam)) =
                 sphere_grid_shared_seam(*first, *second, &a_pieces, &b_pieces)
             {
-                merged_connected_region = merge_exact_adjacent_sphere_regions(
+                resolved_regions = merge_exact_adjacent_sphere_regions(
                     first_region,
                     second_region,
                     seam_on_first_operand,
                     seam,
-                );
-                merged_connected_region.is_some()
+                )
+                .map(|region| vec![region]);
+                resolved_regions.is_some()
             } else {
                 sphere_grid_regions_are_pairwise_independent(
                     &occupied_regions,
@@ -665,9 +666,18 @@ fn certify_double_wide_sphere_window_union(
             ) {
                 true
             } else {
-                merged_connected_region =
-                    merge_exact_sphere_region_path(&occupied_regions, &a_pieces, &b_pieces);
-                merged_connected_region.is_some()
+                resolved_regions =
+                    merge_exact_sphere_region_path(&occupied_regions, &a_pieces, &b_pieces)
+                        .map(|region| vec![region])
+                        .or_else(|| {
+                            merge_exact_sphere_region_pair_and_isolate(
+                                &occupied_regions,
+                                &a_pieces,
+                                &b_pieces,
+                                &certified_empty_cells,
+                            )
+                        });
+                resolved_regions.is_some()
             }
         }
         [_, _, _, _] => {
@@ -677,9 +687,10 @@ fn certify_double_wide_sphere_window_union(
             if !bounded_four_cell_proof {
                 false
             } else {
-                merged_connected_region =
-                    merge_exact_sphere_region_path(&occupied_regions, &a_pieces, &b_pieces);
-                merged_connected_region.is_some()
+                resolved_regions =
+                    merge_exact_sphere_region_path(&occupied_regions, &a_pieces, &b_pieces)
+                        .map(|region| vec![region]);
+                resolved_regions.is_some()
             }
         }
         [_, _, _, _, _] => {
@@ -689,9 +700,10 @@ fn certify_double_wide_sphere_window_union(
             if !bounded_five_cell_proof {
                 false
             } else {
-                merged_connected_region =
-                    merge_exact_sphere_region_path(&occupied_regions, &a_pieces, &b_pieces);
-                merged_connected_region.is_some()
+                resolved_regions =
+                    merge_exact_sphere_region_path(&occupied_regions, &a_pieces, &b_pieces)
+                        .map(|region| vec![region]);
+                resolved_regions.is_some()
             }
         }
         _ => false,
@@ -703,9 +715,9 @@ fn certify_double_wide_sphere_window_union(
     }
 
     // Certified-empty orthogonal corner owners isolate each diagonal pair in
-    // a two- or three-cell independent set; the remaining empty siblings
-    // exclude every other artificial seam. Three- through five-cell paths are
-    // merged from one end. Before every
+    // an independent set or between a merged pair and its singleton; the
+    // remaining empty siblings exclude every other artificial seam. Three-
+    // through five-cell paths are merged from one end. Before every
     // splice, the current cycle and next child must expose the same bit-exact
     // seam edge with reverse orientation, so every remaining seam is re-proven
     // after all earlier splices. Splicing complementary paths removes the seam
@@ -714,8 +726,8 @@ fn certify_double_wide_sphere_window_union(
     // cycles have only true parent boundaries and may use the parent map.
     let parent_residual = arbitrary_sphere_octant_residual_bound(a, b, parent_parameter_allowance)?;
     let parent_map = general_sphere_window_map(a, a_range, b, b_range, parent_parameter_allowance);
-    let source_regions = if let Some(region) = merged_connected_region {
-        vec![region]
+    let source_regions = if let Some(regions) = resolved_regions {
+        regions
     } else {
         occupied_regions
             .into_iter()
@@ -744,23 +756,74 @@ fn sphere_grid_regions_are_pairwise_independent(
 ) -> bool {
     regions.iter().enumerate().all(|(first_index, first)| {
         regions.iter().skip(first_index + 1).all(|second| {
-            let a_delta = first.0[0].abs_diff(second.0[0]);
-            let b_delta = first.0[1].abs_diff(second.0[1]);
-            if a_delta + b_delta <= 1 {
-                return false;
-            }
-            if a_delta == 1 && b_delta == 1 {
-                // Diagonal closed cells share one grid corner. Both
-                // orthogonal cells own that same corner, so both must have
-                // certified empty before corner contact is excluded.
-                let orthogonal = [[first.0[0], second.0[1]], [second.0[0], first.0[1]]];
-                return orthogonal
-                    .into_iter()
-                    .all(|cell| certified_empty_cells[cell[0]][cell[1]]);
-            }
-            true
+            sphere_grid_cells_are_independent(first.0, second.0, certified_empty_cells)
         })
     })
+}
+
+fn sphere_grid_cells_are_independent(
+    first: [usize; 2],
+    second: [usize; 2],
+    certified_empty_cells: &[[bool; GENERAL_SPHERE_WIDE_PIECE_LIMIT];
+         GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+) -> bool {
+    let a_delta = first[0].abs_diff(second[0]);
+    let b_delta = first[1].abs_diff(second[1]);
+    if a_delta + b_delta <= 1 {
+        return false;
+    }
+    if a_delta == 1 && b_delta == 1 {
+        // Diagonal closed cells share one grid corner. Both orthogonal cells
+        // own that same corner, so both must have certified empty before
+        // corner contact is excluded.
+        let orthogonal = [[first[0], second[1]], [second[0], first[1]]];
+        return orthogonal
+            .into_iter()
+            .all(|cell| certified_empty_cells[cell[0]][cell[1]]);
+    }
+    true
+}
+
+fn merge_exact_sphere_region_pair_and_isolate(
+    regions: &[([usize; 2], SurfaceSurfaceRegion)],
+    a_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+    b_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+    certified_empty_cells: &[[bool; GENERAL_SPHERE_WIDE_PIECE_LIMIT];
+         GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+) -> Option<Vec<SurfaceSurfaceRegion>> {
+    if regions.len() != 3 {
+        return None;
+    }
+    let adjacent = (0..regions.len())
+        .flat_map(|first| (first + 1..regions.len()).map(move |second| (first, second)))
+        .filter_map(|(first, second)| {
+            sphere_grid_shared_seam(regions[first].0, regions[second].0, a_pieces, b_pieces)
+                .map(|seam| (first, second, seam))
+        })
+        .collect::<Vec<_>>();
+    let [(first, second, (seam_on_first_operand, seam))]: [(usize, usize, (bool, f64)); 1] =
+        adjacent.try_into().ok()?;
+    let isolated = (0..regions.len()).find(|index| *index != first && *index != second)?;
+    if ![first, second].into_iter().all(|paired| {
+        sphere_grid_cells_are_independent(
+            regions[paired].0,
+            regions[isolated].0,
+            certified_empty_cells,
+        )
+    }) {
+        return None;
+    }
+    let merged = merge_exact_adjacent_sphere_regions(
+        &regions[first].1,
+        &regions[second].1,
+        seam_on_first_operand,
+        seam,
+    )?;
+    if isolated < first.min(second) {
+        Some(vec![regions[isolated].1.clone(), merged])
+    } else {
+        Some(vec![merged, regions[isolated].1.clone()])
+    }
 }
 
 fn sphere_grid_shared_seam(
