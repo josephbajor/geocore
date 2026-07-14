@@ -393,7 +393,7 @@ fn certify_general_sphere_windows(
             );
         }
         (true, true) => {
-            return certify_double_wide_sphere_windows_empty(
+            return certify_double_wide_sphere_window_union(
                 a,
                 a_range,
                 b,
@@ -537,7 +537,7 @@ fn certify_general_sphere_windows(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn certify_double_wide_sphere_windows_empty(
+fn certify_double_wide_sphere_window_union(
     a: &Sphere,
     a_range: [ParamRange; 2],
     b: &Sphere,
@@ -550,28 +550,27 @@ fn certify_double_wide_sphere_windows_empty(
 ) -> Result<SurfaceSurfaceIntersections> {
     if piece_limit < GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT {
         return Err(Error::InvalidGeometry {
-            reason: "general coincident sphere both-wide empty proof piece limit exhausted",
+            reason: "general coincident sphere both-wide union piece limit exhausted",
         });
     }
     if pair_limit < GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT {
         return Err(Error::InvalidGeometry {
-            reason: "general coincident sphere both-wide empty proof pair limit exhausted",
+            reason: "general coincident sphere both-wide union pair limit exhausted",
         });
     }
     if arc_limit < GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT {
         return Err(Error::InvalidGeometry {
-            reason: "general coincident sphere both-wide empty proof arc limit exhausted",
+            reason: "general coincident sphere both-wide union arc limit exhausted",
         });
     }
 
     let a_pieces = decompose_general_sphere_wide_window(a_range, parent_parameter_allowance)?;
     let b_pieces = decompose_general_sphere_wide_window(b_range, parent_parameter_allowance)?;
     let mut certified_empty_pairs = 0;
+    let mut occupied_region = None;
     // Each parent window is exactly the union of its three closed longitude
     // cells, so distributivity gives
     // (union A_i) intersect (union B_j) = union (A_i intersect B_j).
-    // Duplicate ownership of artificial seams is harmless for emptiness:
-    // only nine certified-empty child intersections justify Complete here.
     for &a_piece in &a_pieces {
         for &b_piece in &b_pieces {
             let piece_allowance = arbitrary_sphere_octant_parameter_allowance(a_piece, b_piece)?;
@@ -585,20 +584,58 @@ fn certify_double_wide_sphere_windows_empty(
                 GENERAL_SPHERE_WINDOW_ARC_LIMIT,
                 piece_allowance,
             )?;
-            if !hit.is_proven_empty() {
+            if hit.is_proven_empty() {
+                certified_empty_pairs += 1;
+                continue;
+            }
+            if !hit.is_complete()
+                || !hit.points.is_empty()
+                || !hit.curves.is_empty()
+                || hit.regions.len() != 1
+                || occupied_region.is_some()
+            {
                 return Err(Error::InvalidGeometry {
-                    reason: "general coincident sphere both-wide proof requires every decomposition cell pair to be certified empty",
+                    reason: "general coincident sphere both-wide union requires one positive-area cell and eight certified-empty siblings",
                 });
             }
-            certified_empty_pairs += 1;
+            occupied_region = hit.regions.into_iter().next();
         }
     }
-    if certified_empty_pairs != GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT {
+
+    let Some(mut region) = occupied_region else {
+        if certified_empty_pairs == GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT {
+            return Ok(SurfaceSurfaceIntersections::complete_empty());
+        }
         return Err(Error::InvalidGeometry {
-            reason: "general coincident sphere both-wide empty proof did not cover every decomposition cell pair",
+            reason: "general coincident sphere both-wide union did not cover every decomposition cell pair",
+        });
+    };
+    if certified_empty_pairs + 1 != GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere both-wide union did not cancel every artificial seam",
         });
     }
-    Ok(SurfaceSurfaceIntersections::complete_empty())
+
+    // The cells are closed. If the retained region touched an artificial
+    // seam of either operand, the neighboring cell paired with the same cell
+    // of the other operand would contain that seam point. Its certified-empty
+    // result therefore proves every artificial seam is absent. Only true
+    // parent boundaries remain, so parent chart correspondence is sound.
+    region.correspondence = SurfaceRegionCorrespondence::GeneralSphereWindow(
+        general_sphere_window_map(a, a_range, b, b_range, parent_parameter_allowance),
+    );
+    region.max_residual = region
+        .max_residual
+        .max(arbitrary_sphere_octant_residual_bound(
+            a,
+            b,
+            parent_parameter_allowance,
+        )?);
+    SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
+        Vec::new(),
+        Vec::new(),
+        vec![region],
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3054,12 +3091,12 @@ mod tests {
         );
 
         let double_wide_a_range = [
-            ParamRange::new(-0.6, core::f64::consts::PI - 0.6),
-            ParamRange::new(-1.2, -0.8),
+            ParamRange::new(-0.6, -0.6 + 1.01 * core::f64::consts::PI),
+            ParamRange::new(-0.4, 0.4),
         ];
         let double_wide_b_range = [
-            ParamRange::new(-0.4, core::f64::consts::PI - 0.4),
-            ParamRange::new(0.8, 1.2),
+            ParamRange::new(2.2, 2.2 + 1.01 * core::f64::consts::PI),
+            ParamRange::new(-0.35, 0.35),
         ];
         let double_wide_allowance =
             arbitrary_sphere_octant_parameter_allowance(double_wide_a_range, double_wide_b_range)
@@ -3067,7 +3104,7 @@ mod tests {
         assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT, 9);
         assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT, 252);
         assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT, 1_008);
-        let double_wide = certify_double_wide_sphere_windows_empty(
+        let double_wide = certify_double_wide_sphere_window_union(
             &a,
             double_wide_a_range,
             &wide_b,
@@ -3079,9 +3116,10 @@ mod tests {
             GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
         )
         .unwrap();
-        assert!(double_wide.is_proven_empty());
+        assert!(double_wide.is_complete());
+        assert_eq!(double_wide.regions.len(), 1);
         assert_eq!(
-            certify_double_wide_sphere_windows_empty(
+            certify_double_wide_sphere_window_union(
                 &a,
                 double_wide_a_range,
                 &wide_b,
@@ -3094,11 +3132,11 @@ mod tests {
             )
             .unwrap_err(),
             Error::InvalidGeometry {
-                reason: "general coincident sphere both-wide empty proof piece limit exhausted"
+                reason: "general coincident sphere both-wide union piece limit exhausted"
             }
         );
         assert_eq!(
-            certify_double_wide_sphere_windows_empty(
+            certify_double_wide_sphere_window_union(
                 &a,
                 double_wide_a_range,
                 &wide_b,
@@ -3111,11 +3149,11 @@ mod tests {
             )
             .unwrap_err(),
             Error::InvalidGeometry {
-                reason: "general coincident sphere both-wide empty proof pair limit exhausted"
+                reason: "general coincident sphere both-wide union pair limit exhausted"
             }
         );
         assert_eq!(
-            certify_double_wide_sphere_windows_empty(
+            certify_double_wide_sphere_window_union(
                 &a,
                 double_wide_a_range,
                 &wide_b,
@@ -3128,7 +3166,7 @@ mod tests {
             )
             .unwrap_err(),
             Error::InvalidGeometry {
-                reason: "general coincident sphere both-wide empty proof arc limit exhausted"
+                reason: "general coincident sphere both-wide union arc limit exhausted"
             }
         );
 

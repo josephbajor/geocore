@@ -438,8 +438,8 @@ fn general_single_wide_window_certifies_empty_union_and_swap() {
 fn general_both_wide_windows_certify_empty_grid_repeatably_and_swap() {
     let a = world_sphere();
     let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.2);
-    let a_window = window(-0.6, core::f64::consts::PI - 0.6, -1.2, -0.8);
-    let b_window = window(-0.4, core::f64::consts::PI - 0.4, 0.8, 1.2);
+    let a_window = window(-0.6, -0.6 + 1.01 * core::f64::consts::PI, -1.2, -0.8);
+    let b_window = window(-0.4, -0.4 + 1.1 * core::f64::consts::PI, 0.8, 1.2);
     let empty =
         intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
     assert!(empty.is_proven_empty());
@@ -472,6 +472,45 @@ fn general_both_wide_windows_certify_empty_grid_repeatably_and_swap() {
                 | "general coincident sphere window proof encountered an unresolved multiple boundary vertex"
         }
     ));
+}
+
+#[test]
+fn general_both_wide_windows_certify_single_cell_region_repeatably_and_swap() {
+    let a = world_sphere();
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.2);
+    let a_window = window(-0.6, -0.6 + 1.01 * core::f64::consts::PI, -0.4, 0.4);
+    let b_window = window(2.2, 2.2 + 1.01 * core::f64::consts::PI, -0.35, 0.35);
+    let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_general_sphere_window_region(&hit, &a, &b);
+    let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = hit.regions[0].correspondence
+    else {
+        unreachable!()
+    };
+    assert_eq!(map.first_range(), a_window);
+    assert_eq!(map.second_range(), b_window);
+    for (range, first_operand) in [(a_window[0], true), (b_window[0], false)] {
+        for seam in [
+            range.lo + range.width() / 3.0,
+            range.lo + 2.0 * range.width() / 3.0,
+        ] {
+            assert!(hit.regions[0].boundary.iter().all(|vertex| {
+                let parameter = if first_operand {
+                    vertex.uv_a[0]
+                } else {
+                    vertex.uv_b[0]
+                };
+                (parameter - seam).abs() > Tolerances::default().angular()
+            }));
+        }
+    }
+
+    let repeated =
+        intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_eq!(hit, repeated);
+    let swapped =
+        intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
+    assert_eq!(hit.clone().swapped(), swapped);
+    assert_general_sphere_window_region(&swapped, &b, &a);
 }
 
 #[test]
@@ -519,21 +558,35 @@ fn general_wide_window_union_fails_closed_across_artificial_seams_and_two_wide_i
         "unexpected seam-crossing result: {crossing:?}"
     );
 
-    let both_wide = intersect_bounded_spheres(
-        &a,
-        window(-0.6, core::f64::consts::PI - 0.6, -0.8, 0.8),
-        &b,
-        window(-0.4, core::f64::consts::PI - 0.4, -0.7, 0.7),
-        Tolerances::default(),
-    )
-    .unwrap();
+    let both_a_window = window(-0.6, -0.6 + 1.1 * core::f64::consts::PI, -0.8, 0.8);
+    let both_b_window = window(-0.4, -0.4 + 1.1 * core::f64::consts::PI, -0.7, 0.7);
+    let both_wide =
+        intersect_bounded_spheres(&a, both_a_window, &b, both_b_window, Tolerances::default())
+            .unwrap();
     assert!(both_wide.is_empty());
     assert!(matches!(
         both_wide.completion(),
         Completion::Indeterminate {
-            reason: "general coincident sphere both-wide proof requires every decomposition cell pair to be certified empty"
+            reason: "general coincident sphere both-wide union requires one positive-area cell and eight certified-empty siblings"
         }
     ));
+    let repeated_both_wide =
+        intersect_bounded_spheres(&a, both_a_window, &b, both_b_window, Tolerances::default())
+            .unwrap();
+    assert_eq!(both_wide, repeated_both_wide);
+
+    let shared_seam = intersect_bounded_spheres(
+        &a,
+        window(-0.6, -0.6 + 1.1 * core::f64::consts::PI, -0.4, 0.4),
+        &b,
+        window(1.35, 1.35 + 1.1 * core::f64::consts::PI, -0.35, 0.35),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_indeterminate_sphere_window(
+        &shared_seam,
+        "general coincident sphere both-wide union requires one positive-area cell and eight certified-empty siblings",
+    );
 
     let polar = intersect_bounded_spheres(
         &a,

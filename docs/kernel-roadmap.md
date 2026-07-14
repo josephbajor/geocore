@@ -1004,10 +1004,13 @@ true only for an empty complete result.
   cells or one positive region with two certified-empty siblings; sibling
   emptiness cancels the artificial seams before parent correspondence is
   restored. Its piece/pair/arc ceilings pin 3/2, 84/83, and 336/335 evidence.
-  When both operands are wide, an empty-only arm checks the Cartesian 3×3 grid
-  and returns `Complete` only after all nine closed child intersections are
-  certified empty, with exact 9/8 piece-pair, 252/251 boundary-pair, and
-  1,008/1,007 arc-witness admission. Multi-cell-positive unions, polar,
+  When both operands are wide, a bounded arm checks the Cartesian 3×3 grid and
+  returns `Complete` after all nine closed child intersections certify empty,
+  or when exactly one child owns one positive region and its eight siblings
+  certify empty. Closed sibling ownership excludes every artificial seam
+  before parent correspondence is restored. Exact 9/8 piece-pair, 252/251
+  boundary-pair, and 1,008/1,007 arc-witness admission remain pinned.
+  Multi-cell-positive unions, polar,
   non-exact tangent, multiple-cycle, ambiguous, and near-coincident
   non-identical cases remain `Indeterminate` or on their existing typed
   failure boundary.
