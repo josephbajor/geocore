@@ -280,7 +280,7 @@ const GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT: usize =
     GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_PAIR_LIMIT;
 const GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT: usize =
     GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_ARC_LIMIT;
-const GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON: &str = "general coincident sphere both-wide union supports at most five positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four to five require an exact shared-seam path";
+const GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON: &str = "general coincident sphere both-wide union supports at most five positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four require an exact connected shared-seam union; five require an exact shared-seam path";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SphereWindowConstraint {
@@ -689,6 +689,13 @@ fn certify_double_wide_sphere_window_union(
             } else {
                 resolved_regions =
                     merge_exact_sphere_region_path(&occupied_regions, &a_pieces, &b_pieces)
+                        .or_else(|| {
+                            merge_exact_sphere_region_non_path_union(
+                                &occupied_regions,
+                                &a_pieces,
+                                &b_pieces,
+                            )
+                        })
                         .map(|region| vec![region]);
                 resolved_regions.is_some()
             }
@@ -717,11 +724,10 @@ fn certify_double_wide_sphere_window_union(
     // Certified-empty orthogonal corner owners isolate each diagonal pair in
     // an independent set or between a merged pair and its singleton; the
     // remaining empty siblings exclude every other artificial seam. Three-
-    // through five-cell paths are merged from one end. Before every
-    // splice, the current cycle and next child must expose the same bit-exact
-    // seam edge with reverse orientation, so every remaining seam is re-proven
-    // after all earlier splices. Splicing complementary paths removes the seam
-    // edges.
+    // through five-cell paths are merged in deterministic adjacency order.
+    // Four-cell non-path unions cancel every shared edge only after all owners
+    // prove reverse-oriented bit-exact seam records, then require the remaining
+    // edges to trace one unambiguous outer cycle.
     // Pole-clear sub-full-turn parent charts are injective, so the resulting
     // cycles have only true parent boundaries and may use the parent map.
     let parent_residual = arbitrary_sphere_octant_residual_bound(a, b, parent_parameter_allowance)?;
@@ -911,6 +917,151 @@ fn merge_exact_sphere_region_path(
         )?;
     }
     Some(merged)
+}
+
+fn merge_exact_sphere_region_non_path_union(
+    regions: &[([usize; 2], SurfaceSurfaceRegion)],
+    a_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+    b_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+) -> Option<SurfaceSurfaceRegion> {
+    if regions.len() != 4 {
+        return None;
+    }
+    let mut adjacent = [[false; 5]; 5];
+    let mut degrees = [0_u8; 5];
+    let mut edge_count = 0;
+    for first in 0..regions.len() {
+        for second in first + 1..regions.len() {
+            if sphere_grid_shared_seam(regions[first].0, regions[second].0, a_pieces, b_pieces)
+                .is_some()
+            {
+                adjacent[first][second] = true;
+                adjacent[second][first] = true;
+                degrees[first] += 1;
+                degrees[second] += 1;
+                edge_count += 1;
+            }
+        }
+    }
+    let is_path = edge_count == regions.len() - 1
+        && degrees[..regions.len()]
+            .iter()
+            .filter(|degree| **degree == 1)
+            .count()
+            == 2
+        && degrees[..regions.len()]
+            .iter()
+            .filter(|degree| **degree == 2)
+            .count()
+            == regions.len() - 2;
+    if is_path {
+        return None;
+    }
+
+    let mut included = [false; 5];
+    included[0] = true;
+    let mut included_count = 1;
+    while included_count < regions.len() {
+        let next = (0..regions.len()).find(|candidate| {
+            !included[*candidate]
+                && (0..regions.len()).any(|owner| included[owner] && adjacent[owner][*candidate])
+        })?;
+        included[next] = true;
+        included_count += 1;
+    }
+
+    if regions
+        .iter()
+        .any(|(_, region)| region.orientation != SurfaceRegionOrientation::Same)
+    {
+        return None;
+    }
+    let mut removed_edges = regions
+        .iter()
+        .map(|(_, region)| vec![false; region.boundary.len()])
+        .collect::<Vec<_>>();
+    for first in 0..regions.len() {
+        for second in first + 1..regions.len() {
+            if !adjacent[first][second] {
+                continue;
+            }
+            let (seam_on_first_operand, seam) =
+                sphere_grid_shared_seam(regions[first].0, regions[second].0, a_pieces, b_pieces)?;
+            let first_edge =
+                exact_sphere_region_seam_edge(&regions[first].1, seam_on_first_operand, seam)?;
+            let second_edge =
+                exact_sphere_region_seam_edge(&regions[second].1, seam_on_first_operand, seam)?;
+            if removed_edges[first][first_edge[0]]
+                || removed_edges[second][second_edge[0]]
+                || !sphere_region_vertices_are_bit_exact(
+                    regions[first].1.boundary[first_edge[0]],
+                    regions[second].1.boundary[second_edge[1]],
+                )
+                || !sphere_region_vertices_are_bit_exact(
+                    regions[first].1.boundary[first_edge[1]],
+                    regions[second].1.boundary[second_edge[0]],
+                )
+            {
+                return None;
+            }
+            removed_edges[first][first_edge[0]] = true;
+            removed_edges[second][second_edge[0]] = true;
+        }
+    }
+
+    let outer_edges = regions
+        .iter()
+        .enumerate()
+        .flat_map(|(region_index, (_, region))| {
+            let removed_region_edges = &removed_edges[region_index];
+            (0..region.boundary.len())
+                .filter(move |edge| !removed_region_edges[*edge])
+                .map(move |edge| {
+                    [
+                        region.boundary[edge],
+                        region.boundary[(edge + 1) % region.boundary.len()],
+                    ]
+                })
+        })
+        .collect::<Vec<_>>();
+    if outer_edges.len() < 3 {
+        return None;
+    }
+    let mut used_edges = vec![false; outer_edges.len()];
+    let mut boundary = Vec::with_capacity(outer_edges.len());
+    let mut current = 0;
+    loop {
+        if used_edges[current] {
+            return None;
+        }
+        used_edges[current] = true;
+        boundary.push(outer_edges[current][0]);
+        let endpoint = outer_edges[current][1];
+        if sphere_region_vertices_are_bit_exact(endpoint, outer_edges[0][0]) {
+            if used_edges.iter().all(|used| *used) {
+                break;
+            }
+            return None;
+        }
+        let mut next_edges = (0..outer_edges.len()).filter(|next| {
+            !used_edges[*next]
+                && sphere_region_vertices_are_bit_exact(endpoint, outer_edges[*next][0])
+        });
+        current = next_edges.next()?;
+        if next_edges.next().is_some() {
+            return None;
+        }
+    }
+
+    Some(SurfaceSurfaceRegion {
+        boundary,
+        orientation: SurfaceRegionOrientation::Same,
+        correspondence: regions[0].1.correspondence,
+        max_residual: regions
+            .iter()
+            .map(|(_, region)| region.max_residual)
+            .fold(0.0_f64, f64::max),
+    })
 }
 
 fn merge_exact_adjacent_sphere_regions(

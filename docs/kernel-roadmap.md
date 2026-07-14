@@ -1148,11 +1148,15 @@ true only for an empty complete result.
   two consecutive, bit-identical endpoint records; each edge is removed and
   the complementary paths are spliced before parent correspondence is restored.
   Three- through five-cell paths recheck every remaining seam against the current
-  merged boundary after each earlier splice.
+  merged boundary after each earlier splice. A connected four-cell 2×2 cycle
+  proves all internal seam owners together, cancels only reverse-oriented
+  bit-exact edge pairs, and admits the result only when the remaining eight
+  edges trace one unambiguous outer boundary cycle; a one-ULP central-seam
+  mismatch remains indeterminate.
   Exact 9/8 piece-pair, 252/251 boundary-pair, and 1,008/1,007 arc-witness
-  admission remain pinned. Six-or-more-positive unions, four- or five-cell
-  non-path layouts, non-exact or multi-edge shared
-  seams, full-turn aliases, polar, non-exact tangent, multiple-cycle, ambiguous,
+  admission remain pinned. Six-or-more-positive unions, five-cell non-path
+  layouts, non-exact or otherwise ambiguous multi-edge shared seams, full-turn
+  aliases, polar, non-exact tangent, ambiguous multiple-cycle,
   and near-coincident
   non-identical cases remain `Indeterminate` or on their existing typed
   failure boundary.
