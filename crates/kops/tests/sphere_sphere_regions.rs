@@ -276,19 +276,37 @@ fn general_non_octant_fallback_rejects_unsupported_and_uncertified_windows() {
         }
     ));
 
-    let disjoint = intersect_bounded_spheres(
+    let tangent = intersect_bounded_spheres(
         &a,
-        window(0.0, 0.6, -0.3, 0.3),
+        window(-0.5, 0.5, -0.5, 0.0),
         &b,
-        window(2.0, 2.6, -0.3, 0.3),
+        window(-0.5, 0.5, 0.4, 0.9),
         Tolerances::default(),
     )
     .unwrap();
-    assert!(disjoint.is_empty());
+    assert!(tangent.is_empty());
     assert!(matches!(
-        disjoint.completion(),
-        Completion::Indeterminate { .. }
+        tangent.completion(),
+        Completion::Indeterminate {
+            reason: "general coincident sphere window boundary tangency is not certified by this fallback arm"
+                | "general coincident sphere window membership is inside the unresolved proof corridor"
+        }
     ));
+}
+
+#[test]
+fn general_non_octant_disjoint_windows_have_certified_empty_evidence_and_swap() {
+    let a = world_sphere();
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.4);
+    let a_window = window(0.1, 0.7, -0.3, 0.3);
+    let b_window = window(2.0, 2.6, -0.3, 0.3);
+    let disjoint =
+        intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert!(disjoint.is_proven_empty());
+
+    let disjoint_swapped =
+        intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
+    assert_eq!(disjoint.clone().swapped(), disjoint_swapped);
 }
 
 #[test]

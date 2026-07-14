@@ -205,6 +205,7 @@ fn intersect_orthogonal_sphere_octants(
             b_range,
             tolerances,
             GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
+            GENERAL_SPHERE_WINDOW_ARC_LIMIT,
         );
     };
     let Some(axis_map) = exact_signed_coordinate_axis_map(a, b) else {
@@ -254,6 +255,9 @@ fn unsupported_nonparallel_sphere_charts() -> Result<SurfaceSurfaceIntersections
 }
 
 const GENERAL_SPHERE_WINDOW_PAIR_LIMIT: usize = 28;
+// Eight boundary circles meet at most fourteen roots each. Sampling every
+// open arrangement arc therefore consumes at most 8 * 14 fixed witnesses.
+const GENERAL_SPHERE_WINDOW_ARC_LIMIT: usize = 112;
 
 #[derive(Clone, Copy, Debug)]
 struct SphereWindowConstraint {
@@ -276,6 +280,12 @@ struct CertifiedSphereBoundaryArc {
     midpoint: Vec3,
 }
 
+#[derive(Debug)]
+struct CertifiedSphereBoundaryArrangement {
+    feasible_arcs: Vec<CertifiedSphereBoundaryArc>,
+    all_boundaries_excluded: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn intersect_certified_general_sphere_windows(
     a: &Sphere,
@@ -284,6 +294,7 @@ fn intersect_certified_general_sphere_windows(
     b_range: [ParamRange; 2],
     tolerances: Tolerances,
     pair_limit: usize,
+    arc_limit: usize,
 ) -> Result<SurfaceSurfaceIntersections> {
     let parameter_allowance = arbitrary_sphere_octant_parameter_allowance(a_range, b_range)?;
     if parameter_allowance > tolerances.angular() {
@@ -296,6 +307,7 @@ fn intersect_certified_general_sphere_windows(
         b_range,
         tolerances,
         pair_limit,
+        arc_limit,
         parameter_allowance,
     ) {
         Ok(hit) => Ok(hit),
@@ -314,6 +326,7 @@ fn certify_general_sphere_windows(
     b_range: [ParamRange; 2],
     tolerances: Tolerances,
     pair_limit: usize,
+    arc_limit: usize,
     parameter_allowance: f64,
 ) -> Result<SurfaceSurfaceIntersections> {
     validate_general_sphere_window_slice(a_range, parameter_allowance)?;
@@ -356,7 +369,21 @@ fn certify_general_sphere_windows(
         }
     }
 
-    let arcs = certify_sphere_boundary_arcs(&constraints, &roots, tolerances)?;
+    let arrangement = certify_sphere_boundary_arcs(&constraints, &roots, tolerances, arc_limit)?;
+    if arrangement.all_boundaries_excluded {
+        // Pairwise interval discriminants found every crossing of the eight
+        // boundary circles. Each circle was partitioned at those crossings,
+        // every endpoint has a certified violated halfspace, and one witness
+        // on every open arc has a certified violated halfspace. Constraint
+        // signs cannot change inside an open arc, so the feasible set has no
+        // boundary point. It also cannot be the whole sphere: every retained
+        // pole-clear window contributes a longitude halfspace with offset
+        // zero, which its negated unit normal strictly violates. A nonempty
+        // proper closed subset of the connected sphere has nonempty boundary;
+        // therefore the mutual window intersection is empty.
+        return Ok(SurfaceSurfaceIntersections::complete_empty());
+    }
+    let arcs = arrangement.feasible_arcs;
     let feasible = roots
         .iter()
         .enumerate()
@@ -584,8 +611,11 @@ fn certify_sphere_boundary_arcs(
     constraints: &[SphereWindowConstraint],
     roots: &[CertifiedSphereBoundaryRoot],
     tolerances: Tolerances,
-) -> Result<Vec<CertifiedSphereBoundaryArc>> {
+    arc_limit: usize,
+) -> Result<CertifiedSphereBoundaryArrangement> {
     let mut arcs = Vec::new();
+    let mut remaining_arcs = arc_limit;
+    let mut has_feasible_boundary = roots.iter().any(|root| root.feasible);
     for (constraint_index, constraint) in constraints.iter().copied().enumerate() {
         let frame = Frame::from_z(Point3::new(0.0, 0.0, 0.0), constraint.normal)?;
         let radius_squared = 1.0 - constraint.offset * constraint.offset;
@@ -610,9 +640,19 @@ fn certify_sphere_boundary_arcs(
             .collect::<Vec<_>>();
         ordered.sort_by(|first, second| first.0.total_cmp(&second.0).then(first.1.cmp(&second.1)));
         if ordered.len() < 2 {
+            spend_sphere_boundary_arc(&mut remaining_arcs)?;
+            let sample = center + frame.x() * radius;
+            has_feasible_boundary |= certify_sphere_direction_membership(
+                sample,
+                Some(constraint_index),
+                constraints,
+                tolerances,
+                false,
+            )?;
             continue;
         }
         for edge in 0..ordered.len() {
+            spend_sphere_boundary_arc(&mut remaining_arcs)?;
             let (first_angle, first) = ordered[edge];
             let (mut second_angle, second) = ordered[(edge + 1) % ordered.len()];
             if edge + 1 == ordered.len() {
@@ -629,6 +669,7 @@ fn certify_sphere_boundary_arcs(
                 false,
             )?;
             if feasible {
+                has_feasible_boundary = true;
                 if !roots[first].feasible || !roots[second].feasible {
                     return Err(Error::InvalidGeometry {
                         reason: "general coincident sphere window boundary cycle is not topologically certified",
@@ -642,7 +683,20 @@ fn certify_sphere_boundary_arcs(
             }
         }
     }
-    Ok(arcs)
+    Ok(CertifiedSphereBoundaryArrangement {
+        feasible_arcs: arcs,
+        all_boundaries_excluded: !has_feasible_boundary,
+    })
+}
+
+fn spend_sphere_boundary_arc(remaining: &mut usize) -> Result<()> {
+    if *remaining == 0 {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere window proof arc limit exhausted",
+        });
+    }
+    *remaining -= 1;
+    Ok(())
 }
 
 fn certify_sphere_direction_membership(
@@ -2075,7 +2129,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn general_window_pair_proof_limit_is_exact_at_n_and_n_minus_one() {
+    fn general_window_proof_limits_are_exact_at_n_and_n_minus_one() {
         let a = Sphere::new(Frame::world(), 1.0).unwrap();
         let angle = 0.4;
         let b = Sphere::new(
@@ -2099,6 +2153,7 @@ mod tests {
             b_range,
             Tolerances::default(),
             GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
+            GENERAL_SPHERE_WINDOW_ARC_LIMIT,
             allowance,
         )
         .unwrap();
@@ -2112,11 +2167,46 @@ mod tests {
                 b_range,
                 Tolerances::default(),
                 GENERAL_SPHERE_WINDOW_PAIR_LIMIT - 1,
+                GENERAL_SPHERE_WINDOW_ARC_LIMIT,
                 allowance,
             )
             .unwrap_err(),
             Error::InvalidGeometry {
                 reason: "general coincident sphere window proof pair limit exhausted"
+            }
+        );
+
+        let empty_a_range = [ParamRange::new(0.1, 0.7), ParamRange::new(-0.3, 0.3)];
+        let empty_b_range = [ParamRange::new(2.0, 2.6), ParamRange::new(-0.3, 0.3)];
+        let empty_allowance =
+            arbitrary_sphere_octant_parameter_allowance(empty_a_range, empty_b_range).unwrap();
+        const EMPTY_EXEMPLAR_ARC_LIMIT: usize = 96;
+        let empty = certify_general_sphere_windows(
+            &a,
+            empty_a_range,
+            &b,
+            empty_b_range,
+            Tolerances::default(),
+            GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
+            EMPTY_EXEMPLAR_ARC_LIMIT,
+            empty_allowance,
+        )
+        .unwrap();
+        assert!(empty.is_proven_empty());
+        assert_eq!(
+            certify_general_sphere_windows(
+                &a,
+                empty_a_range,
+                &b,
+                empty_b_range,
+                Tolerances::default(),
+                GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
+                EMPTY_EXEMPLAR_ARC_LIMIT - 1,
+                empty_allowance,
+            )
+            .unwrap_err(),
+            Error::InvalidGeometry {
+                reason: "general coincident sphere window proof arc limit exhausted"
             }
         );
     }

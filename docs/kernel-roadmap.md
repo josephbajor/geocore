@@ -962,11 +962,14 @@ true only for an empty complete result.
   cycle plus a strict interior witness before `Complete`, and retains source
   rectangles with nonlinear bidirectional correspondence rather than treating
   anchors as polygon interpolation. Containment, seam crossing, swap, the exact
-  28/27 proof bound, and corrupt-anchor rejection are pinned. Wider, polar,
-  tangent, multiple-cycle, ambiguous, uncertified-empty, and near-coincident
+  28/27 proof bound, and corrupt-anchor rejection are pinned. A second bounded
+  proof scans at most 112 open arrangement arcs after those pair checks and
+  returns `Complete` empty only when every boundary component is excluded; its
+  disjoint exemplar pins exact 96/95 Work-style witness evidence and swap
+  parity. Wider, polar, tangent, multiple-cycle, ambiguous, and near-coincident
   non-identical cases remain `Indeterminate` or on their existing typed failure
-  boundary. Decomposition/union, separation certificates, and collapsed general
-  contacts are the next analytic sphere boundaries.
+  boundary. Decomposition/union and collapsed general contacts are the next
+  analytic sphere boundaries.
 
 ### M4b — Curve/curve and curve/surface completion
 

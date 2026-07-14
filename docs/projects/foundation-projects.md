@@ -49,8 +49,8 @@ prefix, while opt-in thirteen is the only reviewed extension. The remaining
 parallel legs certify the exemplar's equal-limit transmitted intersections
 (records 1828 and 2008) before broader null/closed/periodic chart forms;
 continue the new certified non-octant sphere fallback beyond its pole-clear,
-sub-π single-cycle arm to wider/polar decomposition and certified empty or
-collapsed cases; and add contextual NURBS/non-plane graph fields. These legs do
+sub-π single-cycle arm and certified-disjoint arm to wider/polar decomposition,
+tangent, or collapsed cases; and add contextual NURBS/non-plane graph fields. These legs do
 not silently leapfrog items 1 or 2.
 
 ### External-evidence lane — current
@@ -249,9 +249,11 @@ remain ratcheted in `docs/oracle-results.tsv`.
    interval-certified mutual membership, one connected degree-2 boundary
    cycle, and a strict interior witness, and preserves nonlinear source-window
    correspondence across containment, seam crossing, and operand swap. Wider,
-   polar, tangent, multiple-cycle, ambiguous, and uncertified-empty cases stay
-   `Indeterminate`. Decomposition/union, certified separation, and collapsed
-   general-window contacts are the next sphere boundaries.
+   polar, tangent, multiple-cycle, and ambiguous cases stay `Indeterminate`.
+   A fixed 112-witness arrangement scan now certifies disjoint supported
+   windows: the pinned empty exemplar succeeds at 96 witnesses and fails at 95.
+   Decomposition/union and collapsed general-window contacts are the next sphere
+   boundaries.
    Semantic K4 edit transactions follow the K5 adoption pass. F6 splits and F4
    legacy cleanup land only with an owner-level behavioral migration. The Q2a/
    Q2b ladders are executable in CI; any graph-index/traversal representation change
