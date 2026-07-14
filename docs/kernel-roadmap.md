@@ -1028,11 +1028,15 @@ true only for an empty complete result.
   restored. Its piece/pair/arc ceilings pin 3/2, 84/83, and 336/335 evidence.
   When both operands are wide, a bounded arm checks the Cartesian 3×3 grid and
   returns `Complete` after all nine closed child intersections certify empty,
-  or when exactly one child owns one positive region and its eight siblings
-  certify empty. Closed sibling ownership excludes every artificial seam
-  before parent correspondence is restored. Exact 9/8 piece-pair, 252/251
-  boundary-pair, and 1,008/1,007 arc-witness admission remain pinned.
-  Multi-cell-positive unions, polar,
+  when exactly one child owns one positive region and its eight siblings
+  certify empty, or when exactly two non-edge-adjacent children own one positive
+  region each and the other seven certify empty. The two-component path also
+  requires both parent longitude spans to remain below a full turn. Closed
+  sibling ownership excludes every artificial seam, including diagonal corner
+  contact through the two empty orthogonal owners, before parent correspondence
+  is restored. Exact 9/8 piece-pair, 252/251 boundary-pair, and 1,008/1,007
+  arc-witness admission remain pinned. Edge-adjacent or more-than-two-positive
+  unions, full-turn two-component aliases, polar,
   non-exact tangent, multiple-cycle, ambiguous, and near-coincident
   non-identical cases remain `Indeterminate` or on their existing typed
   failure boundary.

@@ -145,26 +145,36 @@ fn assert_arbitrary_octant_region(hit: &SurfaceSurfaceIntersections, a: &Sphere,
 }
 
 fn assert_general_sphere_window_region(hit: &SurfaceSurfaceIntersections, a: &Sphere, b: &Sphere) {
+    assert_general_sphere_window_regions(hit, a, b, 1);
+}
+
+fn assert_general_sphere_window_regions(
+    hit: &SurfaceSurfaceIntersections,
+    a: &Sphere,
+    b: &Sphere,
+    expected_regions: usize,
+) {
     assert!(hit.is_complete(), "unexpected incomplete result: {hit:?}");
     assert!(hit.points.is_empty());
     assert!(hit.curves.is_empty());
-    assert_eq!(hit.regions.len(), 1);
-    let region = &hit.regions[0];
-    assert!(region.boundary.len() >= 3);
-    assert_eq!(region.orientation, SurfaceRegionOrientation::Same);
-    let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = region.correspondence else {
-        panic!("expected a certified general sphere-window correspondence");
-    };
-    for vertex in &region.boundary {
-        assert!(vertex.residual <= region.max_residual);
-        let mapped_b = map
-            .map_first_to_second(vertex.uv_a)
-            .expect("every certified first-chart anchor must map");
-        let mapped_a = map
-            .map_second_to_first(vertex.uv_b)
-            .expect("every certified second-chart anchor must map");
-        assert!(a.eval(vertex.uv_a).dist(b.eval(mapped_b)) <= region.max_residual);
-        assert!(a.eval(mapped_a).dist(b.eval(vertex.uv_b)) <= region.max_residual);
+    assert_eq!(hit.regions.len(), expected_regions);
+    for region in &hit.regions {
+        assert!(region.boundary.len() >= 3);
+        assert_eq!(region.orientation, SurfaceRegionOrientation::Same);
+        let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = region.correspondence else {
+            panic!("expected a certified general sphere-window correspondence");
+        };
+        for vertex in &region.boundary {
+            assert!(vertex.residual <= region.max_residual);
+            let mapped_b = map
+                .map_first_to_second(vertex.uv_a)
+                .expect("every certified first-chart anchor must map");
+            let mapped_a = map
+                .map_second_to_first(vertex.uv_b)
+                .expect("every certified second-chart anchor must map");
+            assert!(a.eval(vertex.uv_a).dist(b.eval(mapped_b)) <= region.max_residual);
+            assert!(a.eval(mapped_a).dist(b.eval(vertex.uv_b)) <= region.max_residual);
+        }
     }
 }
 
@@ -514,6 +524,52 @@ fn general_both_wide_windows_certify_single_cell_region_repeatably_and_swap() {
 }
 
 #[test]
+fn general_both_wide_windows_certify_two_isolated_regions_repeatably_and_swap() {
+    let a = world_sphere();
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.2);
+    let span = 1.2 * core::f64::consts::PI;
+    let a_window = window(-0.6, -0.6 + span, -0.25, 0.25);
+    let b_window = window(
+        -0.6 + core::f64::consts::PI,
+        -0.6 + core::f64::consts::PI + span,
+        -0.25,
+        0.25,
+    );
+    let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_general_sphere_window_regions(&hit, &a, &b, 2);
+    for region in &hit.regions {
+        let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = region.correspondence else {
+            unreachable!()
+        };
+        assert_eq!(map.first_range(), a_window);
+        assert_eq!(map.second_range(), b_window);
+        for (range, first_operand) in [(a_window[0], true), (b_window[0], false)] {
+            for seam in [
+                range.lo + range.width() / 3.0,
+                range.lo + 2.0 * range.width() / 3.0,
+            ] {
+                assert!(region.boundary.iter().all(|vertex| {
+                    let parameter = if first_operand {
+                        vertex.uv_a[0]
+                    } else {
+                        vertex.uv_b[0]
+                    };
+                    (parameter - seam).abs() > Tolerances::default().angular()
+                }));
+            }
+        }
+    }
+
+    let repeated =
+        intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_eq!(hit, repeated);
+    let swapped =
+        intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
+    assert_eq!(hit.clone().swapped(), swapped);
+    assert_general_sphere_window_regions(&swapped, &b, &a, 2);
+}
+
+#[test]
 fn general_single_wide_window_preserves_parent_periodic_seam_evidence() {
     let a = world_sphere();
     let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.2);
@@ -567,7 +623,7 @@ fn general_wide_window_union_fails_closed_across_artificial_seams_and_two_wide_i
     assert!(matches!(
         both_wide.completion(),
         Completion::Indeterminate {
-            reason: "general coincident sphere both-wide union requires one positive-area cell and eight certified-empty siblings"
+            reason: "general coincident sphere both-wide union supports at most two seam-isolated positive cells with certified-empty siblings"
         }
     ));
     let repeated_both_wide =
@@ -585,7 +641,21 @@ fn general_wide_window_union_fails_closed_across_artificial_seams_and_two_wide_i
     .unwrap();
     assert_indeterminate_sphere_window(
         &shared_seam,
-        "general coincident sphere both-wide union requires one positive-area cell and eight certified-empty siblings",
+        "general coincident sphere both-wide union supports at most two seam-isolated positive cells with certified-empty siblings",
+    );
+
+    let mild_tilt = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.05);
+    let adjacent_pair = intersect_bounded_spheres(
+        &a,
+        window(-0.6, -0.6 + 1.01 * core::f64::consts::PI, -0.2, 0.2),
+        &mild_tilt,
+        window(1.4, 1.4 + 1.3 * core::f64::consts::PI, -0.2, 0.2),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_indeterminate_sphere_window(
+        &adjacent_pair,
+        "general coincident sphere both-wide union supports at most two seam-isolated positive cells with certified-empty siblings",
     );
 
     let polar = intersect_bounded_spheres(

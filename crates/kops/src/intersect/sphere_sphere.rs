@@ -567,12 +567,12 @@ fn certify_double_wide_sphere_window_union(
     let a_pieces = decompose_general_sphere_wide_window(a_range, parent_parameter_allowance)?;
     let b_pieces = decompose_general_sphere_wide_window(b_range, parent_parameter_allowance)?;
     let mut certified_empty_pairs = 0;
-    let mut occupied_region = None;
+    let mut occupied_regions = Vec::with_capacity(2);
     // Each parent window is exactly the union of its three closed longitude
     // cells, so distributivity gives
     // (union A_i) intersect (union B_j) = union (A_i intersect B_j).
-    for &a_piece in &a_pieces {
-        for &b_piece in &b_pieces {
+    for (a_index, &a_piece) in a_pieces.iter().enumerate() {
+        for (b_index, &b_piece) in b_pieces.iter().enumerate() {
             let piece_allowance = arbitrary_sphere_octant_parameter_allowance(a_piece, b_piece)?;
             let hit = certify_general_sphere_windows(
                 a,
@@ -592,49 +592,75 @@ fn certify_double_wide_sphere_window_union(
                 || !hit.points.is_empty()
                 || !hit.curves.is_empty()
                 || hit.regions.len() != 1
-                || occupied_region.is_some()
             {
                 return Err(Error::InvalidGeometry {
-                    reason: "general coincident sphere both-wide union requires one positive-area cell and eight certified-empty siblings",
+                    reason: "general coincident sphere both-wide union supports at most two seam-isolated positive cells with certified-empty siblings",
                 });
             }
-            occupied_region = hit.regions.into_iter().next();
+            if occupied_regions.len() == 2 {
+                return Err(Error::InvalidGeometry {
+                    reason: "general coincident sphere both-wide union supports at most two seam-isolated positive cells with certified-empty siblings",
+                });
+            }
+            occupied_regions.push((
+                [a_index, b_index],
+                hit.regions
+                    .into_iter()
+                    .next()
+                    .expect("one certified child region was required"),
+            ));
         }
     }
 
-    let Some(mut region) = occupied_region else {
+    if occupied_regions.is_empty() {
         if certified_empty_pairs == GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT {
             return Ok(SurfaceSurfaceIntersections::complete_empty());
         }
         return Err(Error::InvalidGeometry {
             reason: "general coincident sphere both-wide union did not cover every decomposition cell pair",
         });
+    }
+    let isolated_positive_cells = match occupied_regions.as_slice() {
+        [_] => certified_empty_pairs + 1 == GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+        [(first, _), (second, _)] => {
+            let a_delta = first[0].abs_diff(second[0]);
+            let b_delta = first[1].abs_diff(second[1]);
+            let share_artificial_seam =
+                (a_delta == 1 && b_delta == 0) || (a_delta == 0 && b_delta == 1);
+            certified_empty_pairs + 2 == GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT
+                && !share_artificial_seam
+                && a_range[0].width() < core::f64::consts::TAU - parent_parameter_allowance
+                && b_range[0].width() < core::f64::consts::TAU - parent_parameter_allowance
+        }
+        _ => false,
     };
-    if certified_empty_pairs + 1 != GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT {
+    if !isolated_positive_cells {
         return Err(Error::InvalidGeometry {
-            reason: "general coincident sphere both-wide union did not cancel every artificial seam",
+            reason: "general coincident sphere both-wide union supports at most two seam-isolated positive cells with certified-empty siblings",
         });
     }
 
-    // The cells are closed. If the retained region touched an artificial
-    // seam of either operand, the neighboring cell paired with the same cell
-    // of the other operand would contain that seam point. Its certified-empty
-    // result therefore proves every artificial seam is absent. Only true
-    // parent boundaries remain, so parent chart correspondence is sound.
-    region.correspondence = SurfaceRegionCorrespondence::GeneralSphereWindow(
-        general_sphere_window_map(a, a_range, b, b_range, parent_parameter_allowance),
-    );
-    region.max_residual = region
-        .max_residual
-        .max(arbitrary_sphere_octant_residual_bound(
-            a,
-            b,
-            parent_parameter_allowance,
-        )?);
+    // Every artificial-seam neighbor of each retained cell is empty. Thus a
+    // retained region cannot touch an artificial seam; diagonal cells cannot
+    // meet even at a seam crossing because both orthogonal owners are empty.
+    // For two retained cells, pole-clear charts whose parent spans are below a
+    // full turn are injective and the intervening empty cells prove the two
+    // physical components are disconnected. Only true parent boundaries
+    // remain, so each parent chart correspondence is sound.
+    let parent_residual = arbitrary_sphere_octant_residual_bound(a, b, parent_parameter_allowance)?;
+    let parent_map = general_sphere_window_map(a, a_range, b, b_range, parent_parameter_allowance);
+    let regions = occupied_regions
+        .into_iter()
+        .map(|(_, mut region)| {
+            region.correspondence = SurfaceRegionCorrespondence::GeneralSphereWindow(parent_map);
+            region.max_residual = region.max_residual.max(parent_residual);
+            region
+        })
+        .collect();
     SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
         Vec::new(),
         Vec::new(),
-        vec![region],
+        regions,
     )
 }
 
@@ -3091,12 +3117,15 @@ mod tests {
         );
 
         let double_wide_a_range = [
-            ParamRange::new(-0.6, -0.6 + 1.01 * core::f64::consts::PI),
-            ParamRange::new(-0.4, 0.4),
+            ParamRange::new(-0.6, -0.6 + 1.2 * core::f64::consts::PI),
+            ParamRange::new(-0.25, 0.25),
         ];
         let double_wide_b_range = [
-            ParamRange::new(2.2, 2.2 + 1.01 * core::f64::consts::PI),
-            ParamRange::new(-0.35, 0.35),
+            ParamRange::new(
+                -0.6 + core::f64::consts::PI,
+                -0.6 + 2.2 * core::f64::consts::PI,
+            ),
+            ParamRange::new(-0.25, 0.25),
         ];
         let double_wide_allowance =
             arbitrary_sphere_octant_parameter_allowance(double_wide_a_range, double_wide_b_range)
@@ -3117,7 +3146,7 @@ mod tests {
         )
         .unwrap();
         assert!(double_wide.is_complete());
-        assert_eq!(double_wide.regions.len(), 1);
+        assert_eq!(double_wide.regions.len(), 2);
         assert_eq!(
             certify_double_wide_sphere_window_union(
                 &a,
