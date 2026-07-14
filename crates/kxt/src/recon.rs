@@ -173,6 +173,35 @@ impl IntersectionImportBudgetProfile {
         .expect("built-in X_T equal-limit intersection import profile is valid")
     }
 
+    /// Corpus-backed defaults through the canonical end-terminator chart rung.
+    ///
+    /// The Work cap admits the exemplar's first finite-open chart ending at a
+    /// documented `T/F` singular terminator. Historical v1-v3 profiles retain
+    /// their exact policy contracts.
+    pub fn v4_defaults() -> BudgetPlan {
+        BudgetPlan::new([
+            LimitSpec::new(
+                INTERSECTION_CHART_CERTIFICATE_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                116_396_069,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_ITEMS,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                65_536,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64,
+            ),
+        ])
+        .expect("built-in X_T terminated intersection import profile is valid")
+    }
+
     fn validate(ledger: &WorkLedger) -> core::result::Result<(), OperationPolicyError> {
         ledger.require_limit(
             INTERSECTION_CHART_CERTIFICATE_WORK,
@@ -217,7 +246,7 @@ pub struct Reconstruction {
 pub fn reconstruction_budget_profile() -> BudgetPlan {
     let graph = EvalBudgetProfile::v1_defaults();
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v3_defaults();
+    let intersection = IntersectionImportBudgetProfile::v4_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -233,7 +262,7 @@ fn reconstruction_compatibility_budget() -> BudgetPlan {
     let graph =
         EvalBudgetProfile::for_limits(EvalLimits::default().max_dependency_depth, usize::MAX);
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v3_defaults();
+    let intersection = IntersectionImportBudgetProfile::v4_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -616,6 +645,41 @@ fn equal_intersection_limit(file: &XtFile, index: u32) -> Result<Point3> {
     }
 }
 
+fn terminated_intersection_limit(file: &XtFile, index: u32) -> Result<[Point3; 2]> {
+    let node = xnode(file, index)?;
+    if node.code != code::LIMIT {
+        return Err(XtError::BadField {
+            index,
+            what: "INTERSECTION terminator pointer is not a LIMIT",
+        });
+    }
+    if ch(file, node, "type")? != 'T'
+        || !matches!(file.field(node, "term_use"), Some(Value::Char('F')))
+    {
+        return Err(XtError::Unsupported {
+            capability: XtCapability::IntersectionLimits,
+            what: "only end LIMIT type T with term_use F is supported as a singular terminator",
+        });
+    }
+    match field(file, node, "hvec")? {
+        Value::Arr(values) if values.len() == 2 => {
+            let mut positions = Vec::with_capacity(2);
+            for value in values {
+                let value = value.as_vector().ok_or(XtError::BadField {
+                    index,
+                    what: "terminator LIMIT contains a null or malformed position",
+                })?;
+                positions.push(in_size_box(Point3::new(value[0], value[1], value[2]))?);
+            }
+            Ok([positions[0], positions[1]])
+        }
+        _ => Err(XtError::Unsupported {
+            capability: XtCapability::IntersectionLimits,
+            what: "singular terminator LIMIT must contain exactly two positions",
+        }),
+    }
+}
+
 fn canonicalize_equal_limit_periodic_trace_endpoints(
     curve_idx: u32,
     traces: &[TransmittedNurbsIntersectionTrace; 2],
@@ -624,7 +688,8 @@ fn canonicalize_equal_limit_periodic_trace_endpoints(
     let mut periodic_axes = 0_usize;
     for (trace_index, trace) in traces.iter().enumerate() {
         let surface = match trace {
-            TransmittedNurbsIntersectionTrace::Plane(_) => continue,
+            TransmittedNurbsIntersectionTrace::Plane(_)
+            | TransmittedNurbsIntersectionTrace::Sphere(_) => continue,
             TransmittedNurbsIntersectionTrace::Nurbs(surface) => surface,
             TransmittedNurbsIntersectionTrace::OffsetNurbs(offset) => offset.basis(),
         };
@@ -700,6 +765,40 @@ fn canonicalize_equal_limit_periodic_trace_endpoints(
         });
     }
     Ok(())
+}
+
+fn canonicalize_terminated_trace_endpoint_roundoff(
+    traces: &[TransmittedNurbsIntersectionTrace; 2],
+    uv: &mut [Vec<Point2>; 2],
+) {
+    for (trace_index, trace) in traces.iter().enumerate() {
+        let surface = match trace {
+            TransmittedNurbsIntersectionTrace::Plane(_)
+            | TransmittedNurbsIntersectionTrace::Sphere(_) => continue,
+            TransmittedNurbsIntersectionTrace::Nurbs(surface) => surface,
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(offset) => offset.basis(),
+        };
+        let last = uv[trace_index].len() - 1;
+        for endpoint in [0, last] {
+            for axis in 0..2 {
+                let domain = surface
+                    .knots(if axis == 0 { Dir::U } else { Dir::V })
+                    .domain();
+                let coordinate = if axis == 0 {
+                    &mut uv[trace_index][endpoint].x
+                } else {
+                    &mut uv[trace_index][endpoint].y
+                };
+                let scale = domain.lo.abs().max(domain.hi.abs()).max(1.0);
+                let endpoint_slack = 16_384.0 * f64::EPSILON * scale;
+                if *coordinate < domain.lo && domain.lo - *coordinate <= endpoint_slack {
+                    *coordinate = domain.lo;
+                } else if *coordinate > domain.hi && *coordinate - domain.hi <= endpoint_slack {
+                    *coordinate = domain.hi;
+                }
+            }
+        }
+    }
 }
 
 fn transmitted_nurbs_trace_proof_work(
@@ -1618,41 +1717,6 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 what: "INTERSECTION CHART must contain at least two positions",
             });
         }
-        let count_u64 = u64::try_from(count).map_err(|_| XtError::BadField {
-            index: chart_idx,
-            what: "INTERSECTION CHART sample count is too large",
-        })?;
-        let (proof_work, proof_depth) = if has_nurbs_source {
-            let plane_trace_count = 2_u64 - nurbs_trace_count;
-            let mut proof_work =
-                count_u64
-                    .checked_mul(plane_trace_count)
-                    .ok_or(XtError::BadField {
-                        index: chart_idx,
-                        what: "INTERSECTION CHART plane-trace proof work overflows",
-                    })?;
-            for surface_index in nurbs_source_indices.into_iter().flatten() {
-                proof_work = proof_work
-                    .checked_add(transmitted_nurbs_trace_proof_work(
-                        file,
-                        surface_index,
-                        count_u64,
-                    )?)
-                    .ok_or(XtError::BadField {
-                        index: chart_idx,
-                        what: "INTERSECTION CHART B-surface proof work overflows",
-                    })?;
-            }
-            (proof_work, TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64)
-        } else {
-            (
-                count_u64.checked_mul(2).ok_or(XtError::BadField {
-                    index: chart_idx,
-                    what: "INTERSECTION CHART proof work overflows",
-                })?,
-                1,
-            )
-        };
         let early_source_surfaces = if has_offset_source || has_nurbs_source {
             Some([
                 self.surface(source_indices[0])?.0,
@@ -1723,7 +1787,7 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             Some([effective_planes[0], effective_planes[1]])
         };
 
-        let positions = match field(file, chart, "hvec")? {
+        let mut positions = match field(file, chart, "hvec")? {
             Value::Arr(values) if values.len() == count => values
                 .iter()
                 .map(|value| {
@@ -1833,9 +1897,31 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             });
         }
         let equal_limits = start_idx == end_idx;
+        let end_limit = xnode(file, end_idx)?;
+        let terminated = !equal_limits
+            && end_limit.code == code::LIMIT
+            && matches!(file.field(end_limit, "type"), Some(Value::Char('T')));
         let (start, end) = if equal_limits {
             let limit = equal_intersection_limit(file, start_idx)?;
             (limit, limit)
+        } else if terminated {
+            let start = intersection_limit(file, start_idx)?;
+            let [singularity, branch] = terminated_intersection_limit(file, end_idx)?;
+            if branch.dist(positions[count - 1]) > proof_tolerance {
+                return Err(XtError::BadField {
+                    index: curve_idx,
+                    what: "INTERSECTION terminator branch point does not match the CHART endpoint",
+                });
+            }
+            let separation = singularity.dist(branch);
+            if separation == 0.0 || separation > proof_tolerance {
+                return Err(XtError::BadField {
+                    index: curve_idx,
+                    what: "INTERSECTION terminator singularity is not distinct and within chart tolerance of its branch point",
+                });
+            }
+            positions.push(singularity);
+            (start, singularity)
         } else {
             (
                 intersection_limit(file, start_idx)?,
@@ -1843,7 +1929,7 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             )
         };
         if start.dist(positions[0]) > proof_tolerance
-            || end.dist(positions[count - 1]) > proof_tolerance
+            || end.dist(positions[positions.len() - 1]) > proof_tolerance
         {
             return Err(XtError::BadField {
                 index: curve_idx,
@@ -1856,6 +1942,43 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 what: "equal-limit INTERSECTION CHART is not spatially closed",
             });
         }
+
+        let retained_count = positions.len();
+        let retained_count_u64 = u64::try_from(retained_count).map_err(|_| XtError::BadField {
+            index: chart_idx,
+            what: "INTERSECTION retained sample count is too large",
+        })?;
+        let (proof_work, proof_depth) = if has_nurbs_source {
+            let plane_trace_count = 2_u64 - nurbs_trace_count;
+            let mut proof_work =
+                retained_count_u64
+                    .checked_mul(plane_trace_count)
+                    .ok_or(XtError::BadField {
+                        index: chart_idx,
+                        what: "INTERSECTION CHART plane-trace proof work overflows",
+                    })?;
+            for surface_index in nurbs_source_indices.into_iter().flatten() {
+                proof_work = proof_work
+                    .checked_add(transmitted_nurbs_trace_proof_work(
+                        file,
+                        surface_index,
+                        retained_count_u64,
+                    )?)
+                    .ok_or(XtError::BadField {
+                        index: chart_idx,
+                        what: "INTERSECTION CHART B-surface proof work overflows",
+                    })?;
+            }
+            (proof_work, TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64)
+        } else {
+            (
+                retained_count_u64.checked_mul(2).ok_or(XtError::BadField {
+                    index: chart_idx,
+                    what: "INTERSECTION CHART proof work overflows",
+                })?,
+                1,
+            )
+        };
 
         let data_idx = file
             .field(node, "intersection_data")
@@ -1878,7 +2001,7 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 what: "only INTERSECTION_DATA uv_type=4 is supported",
             });
         }
-        let expected_values = count.checked_mul(4).ok_or(XtError::BadField {
+        let expected_values = retained_count.checked_mul(4).ok_or(XtError::BadField {
             index: data_idx,
             what: "INTERSECTION_DATA expected value count overflows",
         })?;
@@ -1887,7 +2010,7 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             Value::Arr(_) => {
                 return Err(XtError::BadField {
                     index: data_idx,
-                    what: "INTERSECTION_DATA values length is not four times chart_count",
+                    what: "INTERSECTION_DATA values length is not four times the retained sample count",
                 });
             }
             _ => {
@@ -1897,24 +2020,53 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 });
             }
         };
-        let mut uv = [Vec::with_capacity(count), Vec::with_capacity(count)];
-        for tuple in values.chunks_exact(4) {
-            let scalar = |index: usize| -> Result<f64> {
-                tuple[index]
-                    .as_f64()
-                    .filter(|value| value.is_finite())
-                    .ok_or(XtError::Unsupported {
-                        capability: XtCapability::IntersectionChartData,
-                        what: "INTERSECTION_DATA contains null or non-finite UV values",
-                    })
-            };
-            uv[0].push(Point2::new(scalar(0)?, scalar(1)?));
-            uv[1].push(Point2::new(scalar(2)?, scalar(3)?));
+        let exact_trace_planes = [
+            direct_planes[0]
+                .or(nurbs_effective_offset_planes[0])
+                .or_else(|| planes.map(|planes| planes[0])),
+            direct_planes[1]
+                .or(nurbs_effective_offset_planes[1])
+                .or_else(|| planes.map(|planes| planes[1])),
+        ];
+        let mut uv = [
+            Vec::with_capacity(retained_count),
+            Vec::with_capacity(retained_count),
+        ];
+        for (sample, tuple) in values.chunks_exact(4).enumerate() {
+            for operand in 0..2 {
+                let offset = operand * 2;
+                match (
+                    tuple[offset].as_f64().filter(|value| value.is_finite()),
+                    tuple[offset + 1].as_f64().filter(|value| value.is_finite()),
+                ) {
+                    (Some(u), Some(v)) => uv[operand].push(Point2::new(u, v)),
+                    (None, None)
+                        if terminated
+                            && matches!(tuple[offset], Value::Null)
+                            && matches!(tuple[offset + 1], Value::Null)
+                            && exact_trace_planes[operand].is_some() =>
+                    {
+                        let plane = exact_trace_planes[operand].expect("guarded exact trace plane");
+                        let frame = plane.frame();
+                        let displacement = positions[sample] - frame.origin();
+                        uv[operand].push(Point2::new(
+                            displacement.dot(frame.x()),
+                            displacement.dot(frame.y()),
+                        ));
+                    }
+                    _ => {
+                        return Err(XtError::Unsupported {
+                            capability: XtCapability::IntersectionChartData,
+                            what: "INTERSECTION_DATA contains null or non-finite UV values",
+                        });
+                    }
+                }
+            }
         }
 
         let mut knots = vec![0.0, 0.0];
-        knots.extend((1..count - 1).map(|index| index as f64));
-        knots.extend([count_u64.saturating_sub(1) as f64; 2]);
+        knots.extend((1..retained_count - 1).map(|index| index as f64));
+        knots.extend([retained_count_u64.saturating_sub(1) as f64; 2]);
         let carrier =
             NurbsCurve::new(1, knots.clone(), positions, None).map_err(XtError::Kernel)?;
 
@@ -1948,7 +2100,7 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                     .map_err(XtError::Kernel)?,
                 NurbsCurve2d::new(1, knots, uv[1].clone(), None).map_err(XtError::Kernel)?,
             ];
-            preflight_intersection_chart(self.scope, count_u64, proof_depth, proof_work)?;
+            preflight_intersection_chart(self.scope, retained_count_u64, proof_depth, proof_work)?;
             let certificate = certify_transmitted_plane_intersection_residuals(
                 carrier,
                 planes,
@@ -2026,12 +2178,14 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             .expect("two transmitted sources remain two ordered traces");
         if equal_limits {
             canonicalize_equal_limit_periodic_trace_endpoints(curve_idx, &traces, &mut uv)?;
+        } else if terminated {
+            canonicalize_terminated_trace_endpoint_roundoff(&traces, &mut uv);
         }
         let pcurves = [
             NurbsCurve2d::new(1, knots.clone(), uv[0].clone(), None).map_err(XtError::Kernel)?,
             NurbsCurve2d::new(1, knots, uv[1].clone(), None).map_err(XtError::Kernel)?,
         ];
-        preflight_intersection_chart(self.scope, count_u64, proof_depth, proof_work)?;
+        preflight_intersection_chart(self.scope, retained_count_u64, proof_depth, proof_work)?;
         let certificate = if offset_nurbs_sources.into_iter().any(|offset| offset) {
             certify_transmitted_offset_nurbs_intersection_residuals(
                 carrier,

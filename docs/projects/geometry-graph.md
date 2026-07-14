@@ -1,6 +1,6 @@
 # F1 procedural geometry graph
 
-Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and direct Plane/NURBS descriptors, plus M3c transmitted-chart consumers through endpoint-only equal-limit closure are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
+Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field/NURBS descriptors, plus M3c transmitted-chart consumers through endpoint-only equal-limit closure and finite-open/end-terminated `T/F` singular closure are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
 
 ## Outcome
 
@@ -743,17 +743,20 @@ displacement before checking the transmitted carrier residual. The six shared
 position/partial scans also pay for that normal proof, so the canonical
 one-span Offset(B)/B fixture remains exactly 14,336 Work, 2 Items, and Depth 10
 in both operand orders. The production exemplar now passes its first shared-
-`H/?` equal-limit chart and reaches the later terminated `T/F`
-`xt.read.intersection-limits` boundary rather than an unsupported surface
-family. Exactly one certified periodic NURBS axis may close the chart; only its
+`H/?` equal-limit chart and its first finite-open/end-terminated `T/F` chart,
+then reaches the next unsupported `xt.read.intersection-chart-data` boundary
+rather than an unsupported surface family. Exactly one certified periodic NURBS axis may close the equal-limit chart; only its
 endpoints are unwrapped by one exact period before the whole-range interval
-proof. Record 1828 is admitted in place, while the traversal-masked record 2008
-is independently certified by a focused payload transplant.
+proof. An end terminator contributes a tolerance-close, distinct singularity
+and one extra paired-UV tuple whose appended span is certified with the same
+whole-range proof. Records 1828 and 1671 are admitted in place, while the
+traversal-masked records 2008 and 1678 are independently certified by focused
+payload transplants.
 
 - Add Offset/NURBS, Sphere/NURBS, NURBS/NURBS, and other exact/procedural
   families only with contextual accounting and paired trace evidence.
-- Broaden the M3c consumer to null/general closed limits, non-endpoint-only
-  periodic trace ranges, noncanonical charts, and further terminated variants
+- Broaden the M3c consumer to null/general closed limits, other nullable chart
+  data, non-endpoint-only periodic trace ranges, noncanonical charts, and further terminator variants
   without recomputing their transmitted scars.
 - Add swept, spun, and blend descriptors only with their own evaluator,
   validity, bounds, interchange, and test contracts.
@@ -774,10 +777,11 @@ the graph ownership model.
 - depth and node-visit limits report consumed and allowed values;
 - graph clone preserves values but has independent undo state;
 - graph validation catches reverse-index disagreement in a test-only corruptor.
-- direct Plane/genuinely curved NURBS queries preserve lower raw/report
-  evidence, pin exact 7,170/7,169 proof Work, retain ordered paired pcurves,
+- exact direct/safe-Offset(Plane)-field/genuinely curved direct-NURBS queries
+  preserve lower raw/report evidence, pin exact 7,170/7,169 proof Work and 2/1
+  offset graph visits, retain ordered paired pcurves and original root identity,
   persist atomically in both operand orders, and reject planar encodings,
-  offsets, other surface pairs, stale sources, and altered sources;
+  Offset(NURBS), other surface pairs, stale sources, and altered sources;
 - transmitted chart descriptors retain ordered plane/pcurve dependencies,
   reject mismatched or mutated proof inputs, and evaluate the certified carrier;
 - transmitted charts whose actual source is a safe nested plane-offset chain
@@ -806,10 +810,13 @@ the graph ownership model.
   orders and polynomial/rational bases, retain the live root, signed distance,
   basis, and paired pcurves, pin exact 14,336/2/10 proof accounting, reject
   singular or underflowed normal fields and altered dependencies, and advance
-  the production corpus through record 1828 to the later terminated `T/F`
-  boundary. The equal-limit suite separately pins both records, exact v3
+  the production corpus through record 1828 and end-terminated record 1671 to
+  the next unsupported chart-data form. The equal-limit suite separately pins both records, exact v3
   `115485725/20/10`, record-2008 transplant `124040223/22/10`, endpoint-only
-  period unwrapping, and typed null/distinct-closed/off-seam rollback.
+  period unwrapping, and typed null/distinct-closed/off-seam rollback. The
+  terminator suite pins exact v4 `116396069/20/10`, record-1678 transplant
+  `116413476` Work, the appended final span, analytic Plane UV recovery,
+  endpoint-only NURBS roundoff snapping, and typed malformed rollback.
 
 ### Offset evaluator tests
 

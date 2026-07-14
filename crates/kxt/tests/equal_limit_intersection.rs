@@ -65,14 +65,15 @@ fn usage(
         .consumed
 }
 
-fn assert_terminated_limit_boundary(error: &XtError) {
-    assert!(
-        matches!(
-            error,
-            XtError::Unsupported {
-                capability: XtCapability::IntersectionLimits,
-                what: "only finite open LIMIT type L with term_use ? is supported",
-            }
+fn assert_terminated_work_boundary(error: &XtError, consumed: u64, allowed: u64) {
+    let limit = error.limit().expect("terminated proof must reach Work cap");
+    assert_eq!(
+        (limit.stage, limit.resource, limit.consumed, limit.allowed),
+        (
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+            consumed,
+            allowed,
         ),
         "unexpected exemplar boundary: {error:?}"
     );
@@ -145,7 +146,11 @@ fn record_1828_certifies_and_advances_to_the_terminated_limit_boundary() {
         &context_with_work(&session, EQUAL_LIMIT_WORK),
     )
     .unwrap();
-    assert_terminated_limit_boundary(outcome.result().as_ref().unwrap_err());
+    assert_terminated_work_boundary(
+        outcome.result().as_ref().unwrap_err(),
+        116_396_069,
+        EQUAL_LIMIT_WORK,
+    );
     assert!(outcome.report().limit_events().is_empty());
     assert_eq!(
         usage(
@@ -230,7 +235,11 @@ fn record_2008_payload_certifies_independently_of_the_earlier_terminated_boundar
         &context_with_work(&session, RECORD_2008_TRANSPLANT_WORK),
     )
     .unwrap();
-    assert_terminated_limit_boundary(outcome.result().as_ref().unwrap_err());
+    assert_terminated_work_boundary(
+        outcome.result().as_ref().unwrap_err(),
+        124_950_567,
+        RECORD_2008_TRANSPLANT_WORK,
+    );
     assert!(outcome.report().limit_events().is_empty());
     assert_eq!(
         usage(

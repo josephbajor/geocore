@@ -667,10 +667,11 @@ curves, 131 curve-less tolerant edges, 7,423 nodes). It parses fully today, and
 the geometry-graph/offset reconstruction slice is complete. The three production
 periodic/closed B-surface leaves now reconstruct through a certified clamped
 position/C1 seam contract. The endpoint-only equal-limit form at records 1828
-and 2008 is now certified when a shared `H/?` limit closes spatially on exactly
+and 2008 is certified when a shared `H/?` limit closes spatially on exactly
 one periodic NURBS axis; only the pcurve endpoints are unwrapped by the exact
-declared period. Production reconstruction now stops later at the preserved
-terminated `T/F` limit boundary. Its manifest row remains the committed progress meter:
+declared period. The finite-open/end-terminated `T/F` singular form at records
+1671 and 1678 is also certified with one appended final span. Production
+reconstruction now stops at the next unsupported chart-data form. Its manifest row remains the committed progress meter:
 `reconstruct: unsupported → pass`, then `tessellate: pass`, then full-checker
 gaps shrinking toward `valid`. Dependency plan:
 
@@ -698,8 +699,9 @@ gaps shrinking toward `valid`. Dependency plan:
    Offset/Offset roots must have independent chains; shared or cross-linked
    chains fail closed. The accepted boundary remains intentionally narrow:
    two distinct nonparallel effective planes, at most two offset operands,
-   finite open `L/?` limits, non-null `uv_type=4` UVs, and the canonical affine
-   chart recurrence. Canonical Plane/B-surface, safe-Offset(Plane)/B-surface,
+   finite open `L/?` limits plus the bounded end `T/F` singular terminator,
+   `uv_type=4` UVs with paired-null recovery only for an exact Plane trace, and
+   the canonical affine chart recurrence. Canonical Plane/B-surface, safe-Offset(Plane)/B-surface,
    B-surface/B-surface, direct constant-normal Offset(B-surface)/B-surface,
    and every applicable reversed operand order now retain
    the same degree-1 carrier/pcurves while a separate certificate proves each
@@ -723,9 +725,10 @@ gaps shrinking toward `valid`. Dependency plan:
    both operand orders and rational variants. Historical import profile v1
    remains capped at 131,072 Work and v2 retains its 81,267,732 Work
    compatibility boundary. Production v3 admits the exemplar through record
-   1828 and all later accepted charts at exact `115485725/20/10`
-   Work/Items/Depth before the terminated `T/F` limit; the independently
-   transplanted record-2008 payload pins `124040223/22/10`. Both
+   1828 and all later equal-limit charts at exact `115485725/20/10`.
+   Production v4 admits the first end terminator at exact `116396069/20/10`;
+   the independently transplanted record-2008 and record-1678 payloads pin
+   `124040223/22/10` and `116413476` Work. Both
    original B-surface identities and their paired pcurves are graph-protected
    in source order. Other parameter conventions, limits,
    nullable data, periodic/closed transmitted trace ranges, arbitrary unclamped
@@ -734,9 +737,10 @@ gaps shrinking toward `valid`. Dependency plan:
    production exemplar's three clamped periodic/closed B-surface leaves now
    reconstruct, wrap evaluation, bound seam-crossing ranges, and write matching
    periodic/closed flags. Its first Offset(B-surface)/B-surface chart now
-   certifies. The endpoint-only equal-limit records 1828 and 2008 now certify,
-   advancing the corpus ratchet to a later terminated `T/F` limit. Null,
-   general closed-limit, non-endpoint-only periodic trace ranges, and
+   certifies. The endpoint-only equal-limit records 1828 and 2008 and the
+   end-terminated records 1671 and 1678 now certify, advancing the corpus
+   ratchet to the next unsupported chart-data form. Null/general closed-limit,
+   other nullable chart-data, non-endpoint-only periodic trace ranges, and
    noncanonical chart conventions remain. Re-deriving
    boolean scars through our own surface/surface intersector remains an M4
    concern; import must not wait on it.

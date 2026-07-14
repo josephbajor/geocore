@@ -10,8 +10,8 @@ use ktopo::store::Store;
 use kxt::parse::{Value, read_xt};
 use kxt::schema::code;
 use kxt::{
-    INTERSECTION_CHART_CERTIFICATE_WORK, IntersectionImportBudgetProfile, XtCapability, XtError,
-    reconstruct, reconstruct_with_context,
+    INTERSECTION_CHART_CERTIFICATE_WORK, IntersectionImportBudgetProfile, XtError, reconstruct,
+    reconstruct_with_context,
 };
 
 const EXEMPLAR: &[u8] = include_bytes!("fixtures/exemplar.x_t");
@@ -74,13 +74,14 @@ fn context_with_plan<'a>(session: &'a SessionPolicy, plan: BudgetPlan) -> Operat
 }
 
 fn assert_later_intersection_limit(error: &XtError) {
-    assert!(
-        matches!(
-            error,
-            XtError::Unsupported {
-                capability: XtCapability::IntersectionLimits,
-                what: "only finite open LIMIT type L with term_use ? is supported",
-            }
+    let limit = error.limit().expect("v3 must stop at terminated proof");
+    assert_eq!(
+        (limit.stage, limit.resource, limit.consumed, limit.allowed),
+        (
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+            116_396_069,
+            EXEMPLAR_EQUAL_LIMIT_WORK,
         ),
         "unexpected exemplar boundary: {error:?}"
     );

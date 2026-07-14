@@ -17,7 +17,7 @@ const BLOCK: &[u8] = include_bytes!("fixtures/block.x_t");
 fn equal_limit_context<'a>(session: &'a SessionPolicy) -> OperationContext<'a> {
     OperationContext::new(session, Tolerances::default())
         .unwrap()
-        .with_budget_overrides(IntersectionImportBudgetProfile::v3_defaults())
+        .with_budget_overrides(IntersectionImportBudgetProfile::v4_defaults())
 }
 
 fn field<'a>(file: &'a kxt::XtFile, index: u32, name: &str) -> &'a Value {
@@ -178,8 +178,8 @@ fn exemplar_offset_nurbs_proof_advances_to_intersection_limits_and_rolls_back() 
         matches!(
             error,
             XtError::Unsupported {
-                capability: XtCapability::IntersectionLimits,
-                what: "only finite open LIMIT type L with term_use ? is supported",
+                capability: XtCapability::IntersectionChartData,
+                what: "INTERSECTION_DATA contains null or non-finite UV values",
             }
         ),
         "advanced exemplar error: {error:?}"
@@ -268,7 +268,7 @@ fn malformed_periodic_seam_is_bad_data_and_accounting_is_deterministic() {
         let outcome = reconstruct_with_context(&file, &mut store, &context).unwrap();
         assert_eq!(
             outcome.result().as_ref().unwrap_err().capability(),
-            Some(XtCapability::IntersectionLimits)
+            Some(XtCapability::IntersectionChartData)
         );
         assert!(outcome.report().limit_events().is_empty());
         assert_eq!(store.count::<Body>(), 0);

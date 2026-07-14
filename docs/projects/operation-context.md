@@ -480,11 +480,12 @@ Verified X_T intersection-chart import likewise owns its proof budget outside
 `EvalContext`. The historical `IntersectionImportBudgetProfile::v1_defaults()`
 retains its 131,072 cumulative-Work, 65,536 Items, and Depth-10 contract.
 The v2 profile remains the pre-equal-limit compatibility contract at
-81,267,732 Work. Current reconstruction owners explicitly compose
-`IntersectionImportBudgetProfile::v3_defaults()`: it retains the v1 Items and
-Depth ceilings and raises cumulative Work to the corpus-backed 115,485,725
-needed to certify the exemplar's first equal-limit trace and every later
-admitted chart before the terminated `T/F` boundary. A plane trace
+81,267,732 Work, and v3 remains the equal-limit contract at 115,485,725 Work.
+Current reconstruction owners explicitly compose
+`IntersectionImportBudgetProfile::v4_defaults()`: it retains the v1 Items and
+Depth ceilings and raises cumulative Work to the corpus-backed 116,396,069
+needed to certify the exemplar's first finite-open/end-terminated `T/F` trace
+and every earlier admitted chart. A plane trace
 costs one Work unit per retained chart position. Each NURBS or direct
 `Offset(B-surface)` trace instead costs, per chart span and each of 1,024
 fixed-depth proof boxes, `6 * u_span_slots * v_span_slots + 1`: the six shared
@@ -497,13 +498,17 @@ position/UV arrays or graph geometry, charges Work only after both whole-range
 lifts certify, and relies on the enclosing reconstruction transaction for
 complete topology/geometry rollback. Exact tests pin the canonical plane
 fixture at `4/2/1`, the synthetic two-NURBS-trace proof at `14,336/2/10`, and
-the exemplar's v3 Work/Items/Depth boundaries at `115,485,725/20/10`, including
-v1/v2 rejection, v3 N/N-1 admission, deterministic reports, and rollback. The
+the exemplar's v3 equal-limit and v4 terminator Work/Items/Depth boundaries at
+`115,485,725/20/10` and `116,396,069/20/10`, including historical-profile
+rejection, exact N/N-1 admission, deterministic reports, and rollback. The
 v2 allowance is exactly the cumulative preflight through record 1828; once
 that record is admitted, 34,217,993 later Work units produce the v3 boundary.
-Record 2008 is independently pinned at `124,040,223/22/10` through a focused
-payload transplant because the earlier `T/F` record masks it in normal file
-order.
+Records 2008 and 1678 are independently pinned at `124,040,223/22/10` and
+`116,413,476` Work through focused payload transplants because earlier
+traversal boundaries mask them in normal file order. Terminated charts append
+one singularity sample and certify its final span; exact Plane null UV pairs
+are inverted analytically, while NURBS endpoint roundoff may snap only within
+`16,384 * EPSILON * domain-scale` before the same whole-range proof.
 
 ## Layer consumption
 
