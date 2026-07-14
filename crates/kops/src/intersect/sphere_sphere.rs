@@ -5,9 +5,9 @@ use super::parameter::{
     periodic_preimage_overlaps, range_midpoint, validate_period_span,
 };
 use super::result::{
-    ArbitrarySphereOctantMap, ContactKind, OrthogonalSphereOctantMap, SurfaceIntersectionCurve,
-    SurfaceRegionCorrespondence, SurfaceRegionOrientation, SurfaceSurfaceCurve,
-    SurfaceSurfaceIntersections, SurfaceSurfacePoint, SurfaceSurfaceRegion,
+    ArbitrarySphereOctantMap, ContactKind, GeneralSphereWindowMap, OrthogonalSphereOctantMap,
+    SurfaceIntersectionCurve, SurfaceRegionCorrespondence, SurfaceRegionOrientation,
+    SurfaceSurfaceCurve, SurfaceSurfaceIntersections, SurfaceSurfacePoint, SurfaceSurfaceRegion,
     SurfaceSurfaceRegionVertex, accept_surface_surface_candidate,
 };
 use super::support_curve_pair::{SupportCurvePairConfig, emit_support_curve_pair};
@@ -194,11 +194,18 @@ fn intersect_orthogonal_sphere_octants(
     tolerances: Tolerances,
 ) -> Result<SurfaceSurfaceIntersections> {
     validate_coincident_sphere_ranges(a_range, b_range)?;
-    let Some(a_signs) = exact_sphere_octant_signs(a_range, tolerances) else {
-        return unsupported_nonparallel_sphere_charts();
-    };
-    let Some(b_local_signs) = exact_sphere_octant_signs(b_range, tolerances) else {
-        return unsupported_nonparallel_sphere_charts();
+    let (Some(a_signs), Some(b_local_signs)) = (
+        exact_sphere_octant_signs(a_range, tolerances),
+        exact_sphere_octant_signs(b_range, tolerances),
+    ) else {
+        return intersect_certified_general_sphere_windows(
+            a,
+            a_range,
+            b,
+            b_range,
+            tolerances,
+            GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
+        );
     };
     let Some(axis_map) = exact_signed_coordinate_axis_map(a, b) else {
         return intersect_arbitrary_sphere_octants(
@@ -244,6 +251,549 @@ fn unsupported_nonparallel_sphere_charts() -> Result<SurfaceSurfaceIntersections
     Err(Error::InvalidGeometry {
         reason: "coincident sphere charts with nonparallel latitude axes require the general certified fallback",
     })
+}
+
+const GENERAL_SPHERE_WINDOW_PAIR_LIMIT: usize = 28;
+
+#[derive(Clone, Copy, Debug)]
+struct SphereWindowConstraint {
+    normal: Vec3,
+    offset: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CertifiedSphereBoundaryRoot {
+    direction: Vec3,
+    enclosure: [Interval; 3],
+    active: [usize; 2],
+    feasible: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CertifiedSphereBoundaryArc {
+    first: usize,
+    second: usize,
+    midpoint: Vec3,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn intersect_certified_general_sphere_windows(
+    a: &Sphere,
+    a_range: [ParamRange; 2],
+    b: &Sphere,
+    b_range: [ParamRange; 2],
+    tolerances: Tolerances,
+    pair_limit: usize,
+) -> Result<SurfaceSurfaceIntersections> {
+    let parameter_allowance = arbitrary_sphere_octant_parameter_allowance(a_range, b_range)?;
+    if parameter_allowance > tolerances.angular() {
+        return unsupported_nonparallel_sphere_charts();
+    }
+    match certify_general_sphere_windows(
+        a,
+        a_range,
+        b,
+        b_range,
+        tolerances,
+        pair_limit,
+        parameter_allowance,
+    ) {
+        Ok(hit) => Ok(hit),
+        Err(Error::InvalidGeometry { reason }) => {
+            Ok(SurfaceSurfaceIntersections::indeterminate_empty(reason))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn certify_general_sphere_windows(
+    a: &Sphere,
+    a_range: [ParamRange; 2],
+    b: &Sphere,
+    b_range: [ParamRange; 2],
+    tolerances: Tolerances,
+    pair_limit: usize,
+    parameter_allowance: f64,
+) -> Result<SurfaceSurfaceIntersections> {
+    validate_general_sphere_window_slice(a_range, parameter_allowance)?;
+    validate_general_sphere_window_slice(b_range, parameter_allowance)?;
+
+    let constraints = general_sphere_window_constraints(a, a_range)?
+        .into_iter()
+        .chain(general_sphere_window_constraints(b, b_range)?)
+        .collect::<Vec<_>>();
+    debug_assert_eq!(constraints.len(), 8);
+
+    let mut remaining_pairs = pair_limit;
+    let mut roots = Vec::new();
+    for first in 0..constraints.len() {
+        for second in first + 1..constraints.len() {
+            if remaining_pairs == 0 {
+                return Err(Error::InvalidGeometry {
+                    reason: "general coincident sphere window proof pair limit exhausted",
+                });
+            }
+            remaining_pairs -= 1;
+            roots.extend(certified_sphere_boundary_pair(
+                constraints[first],
+                constraints[second],
+                [first, second],
+                tolerances,
+            )?);
+        }
+    }
+
+    for index in 0..roots.len() {
+        roots[index].feasible =
+            certify_sphere_root_membership(roots[index], &constraints, tolerances)?;
+        for other in 0..index {
+            if (roots[index].direction - roots[other].direction).norm() <= tolerances.angular() {
+                return Err(Error::InvalidGeometry {
+                    reason: "general coincident sphere window proof encountered an unresolved multiple boundary vertex",
+                });
+            }
+        }
+    }
+
+    let arcs = certify_sphere_boundary_arcs(&constraints, &roots, tolerances)?;
+    let feasible = roots
+        .iter()
+        .enumerate()
+        .filter_map(|(index, root)| root.feasible.then_some(index))
+        .collect::<Vec<_>>();
+    certify_single_sphere_boundary_cycle(&feasible, &arcs)?;
+
+    let mut directions = feasible
+        .iter()
+        .map(|&index| roots[index].direction)
+        .collect::<Vec<_>>();
+    if directions.len() == 2 {
+        directions.extend(arcs.iter().map(|arc| arc.midpoint));
+    }
+    directions.sort_by(|first, second| compare_sphere_directions(*first, *second));
+    directions.dedup_by(|first, second| (*first - *second).norm() <= tolerances.angular());
+    if directions.len() < 3
+        || !certify_sphere_region_interior(&directions, &constraints, tolerances)?
+    {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere window fallback did not certify a positive-area single-cycle region",
+        });
+    }
+    sort_arbitrary_sphere_polygon(&mut directions)?;
+
+    let mut max_residual = arbitrary_sphere_octant_residual_bound(a, b, parameter_allowance)?;
+    let mut boundary = Vec::with_capacity(directions.len());
+    for direction in directions {
+        let sample = paired_general_sphere_direction(
+            a,
+            a_range,
+            b,
+            b_range,
+            direction,
+            parameter_allowance,
+            tolerances,
+        )?;
+        max_residual = max_residual.max(sample.residual_bound);
+        boundary.push(SurfaceSurfaceRegionVertex {
+            point: sample.point,
+            uv_a: sample.uv_a,
+            uv_b: sample.uv_b,
+            residual: sample.residual,
+        });
+    }
+    let region = SurfaceSurfaceRegion {
+        boundary,
+        orientation: SurfaceRegionOrientation::Same,
+        correspondence: SurfaceRegionCorrespondence::GeneralSphereWindow(
+            general_sphere_window_map(a, a_range, b, b_range, parameter_allowance),
+        ),
+        max_residual,
+    };
+    SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
+        Vec::new(),
+        Vec::new(),
+        vec![region],
+    )
+}
+
+fn validate_general_sphere_window_slice(
+    range: [ParamRange; 2],
+    parameter_allowance: f64,
+) -> Result<()> {
+    let half_pi = core::f64::consts::FRAC_PI_2;
+    if range[0].width() <= parameter_allowance
+        || range[0].width() >= core::f64::consts::PI - parameter_allowance
+        || range[1].width() <= parameter_allowance
+        || range[1].lo <= -half_pi + parameter_allowance
+        || range[1].hi >= half_pi - parameter_allowance
+    {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere window fallback supports only positive-area pole-clear windows with longitude span below pi",
+        });
+    }
+    Ok(())
+}
+
+fn general_sphere_window_constraints(
+    sphere: &Sphere,
+    range: [ParamRange; 2],
+) -> Result<[SphereWindowConstraint; 4]> {
+    let frame = sphere.frame();
+    let (sin_u_lo, cos_u_lo) = math::sincos(range[0].lo);
+    let (sin_u_hi, cos_u_hi) = math::sincos(range[0].hi);
+    let (sin_v_lo, _) = math::sincos(range[1].lo);
+    let (sin_v_hi, _) = math::sincos(range[1].hi);
+    [
+        (frame.y() * cos_u_lo - frame.x() * sin_u_lo, 0.0),
+        (frame.x() * sin_u_hi - frame.y() * cos_u_hi, 0.0),
+        (frame.z(), sin_v_lo),
+        (-frame.z(), -sin_v_hi),
+    ]
+    .map(|(normal, offset)| {
+        let norm = normal.norm();
+        if !norm.is_finite() || norm == 0.0 {
+            return Err(Error::InvalidGeometry {
+                reason: "general coincident sphere window boundary plane is singular",
+            });
+        }
+        Ok(SphereWindowConstraint {
+            normal: normal / norm,
+            offset: offset / norm,
+        })
+    })
+    .into_iter()
+    .collect::<Result<Vec<_>>>()?
+    .try_into()
+    .map_err(|_| Error::InvalidGeometry {
+        reason: "general coincident sphere window boundary plane count is invalid",
+    })
+}
+
+fn certified_sphere_boundary_pair(
+    first: SphereWindowConstraint,
+    second: SphereWindowConstraint,
+    active: [usize; 2],
+    tolerances: Tolerances,
+) -> Result<Vec<CertifiedSphereBoundaryRoot>> {
+    if sphere_planes_are_exactly_parallel(first.normal, second.normal) {
+        return Ok(Vec::new());
+    }
+
+    let first_interval = first.normal.to_array().map(Interval::point);
+    let second_interval = second.normal.to_array().map(Interval::point);
+    let cross_interval = interval_cross(first_interval, second_interval);
+    let determinant = interval_dot(cross_interval, cross_interval);
+    let angular_squared = Interval::point(tolerances.angular()).square();
+    if determinant.lo() <= angular_squared.hi() {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere window boundary planes exceed the certified angular corridor",
+        });
+    }
+
+    let first_numerator = interval_cross(second_interval, cross_interval)
+        .map(|value| value * Interval::point(first.offset));
+    let second_numerator = interval_cross(cross_interval, first_interval)
+        .map(|value| value * Interval::point(second.offset));
+    let point_interval = core::array::from_fn(|axis| {
+        (first_numerator[axis] + second_numerator[axis])
+            .checked_div(determinant)
+            .expect("certified determinant excludes zero")
+    });
+    let discriminant = Interval::point(1.0) - interval_dot(point_interval, point_interval);
+    if discriminant.hi() < 0.0 {
+        return Ok(Vec::new());
+    }
+    if discriminant.lo() <= 0.0 {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere window boundary tangency is not certified by this fallback arm",
+        });
+    }
+    let scale = discriminant
+        .checked_div(determinant)
+        .and_then(Interval::sqrt)
+        .ok_or(Error::InvalidGeometry {
+            reason: "general coincident sphere window boundary intersection arithmetic is non-finite",
+        })?;
+
+    let cross = first.normal.cross(second.normal);
+    let determinant_nominal = cross.dot(cross);
+    let point = (second.normal.cross(cross) * first.offset
+        + cross.cross(first.normal) * second.offset)
+        / determinant_nominal;
+    let scale_nominal = ((1.0 - point.dot(point)) / determinant_nominal).sqrt();
+    if !scale_nominal.is_finite() {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere window boundary intersection arithmetic is non-finite",
+        });
+    }
+
+    let roots = [-1.0, 1.0].map(|sign| {
+        let enclosure = core::array::from_fn(|axis| {
+            if sign < 0.0 {
+                point_interval[axis] - cross_interval[axis] * scale
+            } else {
+                point_interval[axis] + cross_interval[axis] * scale
+            }
+        });
+        let direction = (point + cross * (sign * scale_nominal))
+            .normalized()
+            .ok_or(Error::InvalidGeometry {
+                reason: "general coincident sphere window boundary intersection is singular",
+            })?;
+        Ok(CertifiedSphereBoundaryRoot {
+            direction,
+            enclosure,
+            active,
+            feasible: false,
+        })
+    });
+    roots.into_iter().collect()
+}
+
+fn certify_sphere_root_membership(
+    root: CertifiedSphereBoundaryRoot,
+    constraints: &[SphereWindowConstraint],
+    _tolerances: Tolerances,
+) -> Result<bool> {
+    let mut undecided = false;
+    for (index, constraint) in constraints.iter().enumerate() {
+        if root.active.contains(&index) {
+            continue;
+        }
+        let margin = interval_dot(
+            root.enclosure,
+            constraint.normal.to_array().map(Interval::point),
+        ) - Interval::point(constraint.offset);
+        if margin.hi() < 0.0 {
+            return Ok(false);
+        }
+        if margin.lo() <= 0.0 {
+            undecided = true;
+        }
+    }
+    if undecided {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere window proof encountered an unresolved multiple boundary vertex",
+        });
+    }
+    Ok(true)
+}
+
+fn certify_sphere_boundary_arcs(
+    constraints: &[SphereWindowConstraint],
+    roots: &[CertifiedSphereBoundaryRoot],
+    tolerances: Tolerances,
+) -> Result<Vec<CertifiedSphereBoundaryArc>> {
+    let mut arcs = Vec::new();
+    for (constraint_index, constraint) in constraints.iter().copied().enumerate() {
+        let frame = Frame::from_z(Point3::new(0.0, 0.0, 0.0), constraint.normal)?;
+        let radius_squared = 1.0 - constraint.offset * constraint.offset;
+        if radius_squared <= 0.0 {
+            return Err(Error::InvalidGeometry {
+                reason: "general coincident sphere window fallback excludes pole boundary circles",
+            });
+        }
+        let radius = radius_squared.sqrt();
+        let center = constraint.normal * constraint.offset;
+        let mut ordered = roots
+            .iter()
+            .enumerate()
+            .filter(|(_, root)| root.active.contains(&constraint_index))
+            .map(|(index, root)| {
+                let radial = root.direction - center;
+                (
+                    math::atan2(radial.dot(frame.y()), radial.dot(frame.x())),
+                    index,
+                )
+            })
+            .collect::<Vec<_>>();
+        ordered.sort_by(|first, second| first.0.total_cmp(&second.0).then(first.1.cmp(&second.1)));
+        if ordered.len() < 2 {
+            continue;
+        }
+        for edge in 0..ordered.len() {
+            let (first_angle, first) = ordered[edge];
+            let (mut second_angle, second) = ordered[(edge + 1) % ordered.len()];
+            if edge + 1 == ordered.len() {
+                second_angle += core::f64::consts::TAU;
+            }
+            let midpoint_angle = first_angle + 0.5 * (second_angle - first_angle);
+            let (sin_midpoint, cos_midpoint) = math::sincos(midpoint_angle);
+            let midpoint = center + (frame.x() * cos_midpoint + frame.y() * sin_midpoint) * radius;
+            let feasible = certify_sphere_direction_membership(
+                midpoint,
+                Some(constraint_index),
+                constraints,
+                tolerances,
+                false,
+            )?;
+            if feasible {
+                if !roots[first].feasible || !roots[second].feasible {
+                    return Err(Error::InvalidGeometry {
+                        reason: "general coincident sphere window boundary cycle is not topologically certified",
+                    });
+                }
+                arcs.push(CertifiedSphereBoundaryArc {
+                    first,
+                    second,
+                    midpoint,
+                });
+            }
+        }
+    }
+    Ok(arcs)
+}
+
+fn certify_sphere_direction_membership(
+    direction: Vec3,
+    active: Option<usize>,
+    constraints: &[SphereWindowConstraint],
+    tolerances: Tolerances,
+    strict: bool,
+) -> Result<bool> {
+    let arithmetic_allowance = 256.0 * f64::EPSILON;
+    let enclosure = direction
+        .to_array()
+        .map(|value| Interval::new(value - arithmetic_allowance, value + arithmetic_allowance));
+    let mut undecided = false;
+    for (index, constraint) in constraints.iter().enumerate() {
+        if active == Some(index) {
+            continue;
+        }
+        let margin = interval_dot(enclosure, constraint.normal.to_array().map(Interval::point))
+            - Interval::point(constraint.offset);
+        if margin.hi() < 0.0 {
+            return Ok(false);
+        }
+        if margin.lo() <= if strict { tolerances.angular() } else { 0.0 } {
+            undecided = true;
+        }
+    }
+    if undecided {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere window membership is inside the unresolved proof corridor",
+        });
+    }
+    Ok(true)
+}
+
+fn certify_single_sphere_boundary_cycle(
+    feasible: &[usize],
+    arcs: &[CertifiedSphereBoundaryArc],
+) -> Result<()> {
+    if feasible.len() < 2 || arcs.len() != feasible.len() {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere window fallback did not certify a positive-area single-cycle region",
+        });
+    }
+    for &node in feasible {
+        let degree = arcs
+            .iter()
+            .filter(|arc| arc.first == node || arc.second == node)
+            .count();
+        if degree != 2 {
+            return Err(Error::InvalidGeometry {
+                reason: "general coincident sphere window boundary cycle is not topologically certified",
+            });
+        }
+    }
+    let mut visited = vec![false; feasible.iter().copied().max().unwrap_or(0) + 1];
+    let mut stack = vec![feasible[0]];
+    while let Some(node) = stack.pop() {
+        if visited[node] {
+            continue;
+        }
+        visited[node] = true;
+        for arc in arcs {
+            if arc.first == node && !visited[arc.second] {
+                stack.push(arc.second);
+            } else if arc.second == node && !visited[arc.first] {
+                stack.push(arc.first);
+            }
+        }
+    }
+    if feasible.iter().any(|&node| !visited[node]) {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere window fallback found multiple boundary cycles",
+        });
+    }
+    Ok(())
+}
+
+fn certify_sphere_region_interior(
+    directions: &[Vec3],
+    constraints: &[SphereWindowConstraint],
+    tolerances: Tolerances,
+) -> Result<bool> {
+    let sum = directions
+        .iter()
+        .copied()
+        .fold(Vec3::new(0.0, 0.0, 0.0), |sum, direction| sum + direction);
+    let Some(interior) = sum.normalized() else {
+        return Ok(false);
+    };
+    certify_sphere_direction_membership(interior, None, constraints, tolerances, true)
+}
+
+fn paired_general_sphere_direction(
+    a: &Sphere,
+    a_range: [ParamRange; 2],
+    b: &Sphere,
+    b_range: [ParamRange; 2],
+    direction: Vec3,
+    parameter_allowance: f64,
+    tolerances: Tolerances,
+) -> Result<PairedSphereSample> {
+    let tolerance = parameter_allowance.max(tolerances.angular());
+    let uv_a = sphere_uv_for_model_direction(direction, a, a_range, tolerance).ok_or(
+        Error::InvalidGeometry {
+            reason: "general sphere window boundary did not lift into the first chart",
+        },
+    )?;
+    let uv_b = sphere_uv_for_model_direction(direction, b, b_range, tolerance).ok_or(
+        Error::InvalidGeometry {
+            reason: "general sphere window boundary did not lift into the second chart",
+        },
+    )?;
+    paired_sphere_sample_at(a, uv_a, b, uv_b)
+}
+
+fn general_sphere_window_map(
+    a: &Sphere,
+    a_range: [ParamRange; 2],
+    b: &Sphere,
+    b_range: [ParamRange; 2],
+    parameter_allowance: f64,
+) -> GeneralSphereWindowMap {
+    let a_axes = [a.frame().x(), a.frame().y(), a.frame().z()];
+    let b_axes = [b.frame().x(), b.frame().y(), b.frame().z()];
+    let second_from_first = b_axes.map(|target| a_axes.map(|source| target.dot(source)));
+    let first_from_second = a_axes.map(|target| b_axes.map(|source| target.dot(source)));
+    GeneralSphereWindowMap::new(
+        a_range,
+        b_range,
+        second_from_first,
+        first_from_second,
+        parameter_allowance,
+    )
+}
+
+fn interval_dot(first: [Interval; 3], second: [Interval; 3]) -> Interval {
+    first
+        .into_iter()
+        .zip(second)
+        .fold(Interval::point(0.0), |sum, (first, second)| {
+            sum + first * second
+        })
+}
+
+fn interval_cross(first: [Interval; 3], second: [Interval; 3]) -> [Interval; 3] {
+    [
+        first[1] * second[2] - first[2] * second[1],
+        first[2] * second[0] - first[0] * second[2],
+        first[0] * second[1] - first[1] * second[0],
+    ]
 }
 
 fn exact_signed_coordinate_axis_map(a: &Sphere, b: &Sphere) -> Option<[SignedCoordinateAxis; 3]> {
@@ -1518,4 +2068,56 @@ fn validate_ranges(a_range: [ParamRange; 2], b_range: [ParamRange; 2]) -> Result
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn general_window_pair_proof_limit_is_exact_at_n_and_n_minus_one() {
+        let a = Sphere::new(Frame::world(), 1.0).unwrap();
+        let angle = 0.4;
+        let b = Sphere::new(
+            Frame::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(math::sin(angle), 0.0, math::cos(angle)),
+                Vec3::new(math::cos(angle), 0.0, -math::sin(angle)),
+            )
+            .unwrap(),
+            1.0,
+        )
+        .unwrap();
+        let a_range = [ParamRange::new(0.15, 1.25), ParamRange::new(-0.55, 0.65)];
+        let b_range = [ParamRange::new(0.05, 1.15), ParamRange::new(-0.45, 0.55)];
+        let allowance = arbitrary_sphere_octant_parameter_allowance(a_range, b_range).unwrap();
+
+        let hit = certify_general_sphere_windows(
+            &a,
+            a_range,
+            &b,
+            b_range,
+            Tolerances::default(),
+            GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
+            allowance,
+        )
+        .unwrap();
+        assert!(hit.is_complete());
+
+        assert_eq!(
+            certify_general_sphere_windows(
+                &a,
+                a_range,
+                &b,
+                b_range,
+                Tolerances::default(),
+                GENERAL_SPHERE_WINDOW_PAIR_LIMIT - 1,
+                allowance,
+            )
+            .unwrap_err(),
+            Error::InvalidGeometry {
+                reason: "general coincident sphere window proof pair limit exhausted"
+            }
+        );
+    }
 }

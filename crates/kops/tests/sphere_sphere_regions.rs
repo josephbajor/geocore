@@ -1,7 +1,8 @@
-//! Coincident common-axis bounded sphere/sphere region conformance.
+//! Coincident bounded sphere/sphere region conformance.
 
 use kcore::error::Error;
 use kcore::math;
+use kcore::proof::Completion;
 use kcore::tolerance::Tolerances;
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
@@ -141,6 +142,153 @@ fn assert_arbitrary_octant_region(hit: &SurfaceSurfaceIntersections, a: &Sphere,
         assert!(map.map_second_to_first(vertex.uv_b).is_some());
         assert!(a.eval(vertex.uv_a).dist(b.eval(vertex.uv_b)) <= region.max_residual);
     }
+}
+
+fn assert_general_sphere_window_region(hit: &SurfaceSurfaceIntersections, a: &Sphere, b: &Sphere) {
+    assert!(hit.is_complete());
+    assert!(hit.points.is_empty());
+    assert!(hit.curves.is_empty());
+    assert_eq!(hit.regions.len(), 1);
+    let region = &hit.regions[0];
+    assert!(region.boundary.len() >= 3);
+    assert_eq!(region.orientation, SurfaceRegionOrientation::Same);
+    let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = region.correspondence else {
+        panic!("expected a certified general sphere-window correspondence");
+    };
+    for vertex in &region.boundary {
+        assert!(vertex.residual <= region.max_residual);
+        let mapped_b = map
+            .map_first_to_second(vertex.uv_a)
+            .expect("every certified first-chart anchor must map");
+        let mapped_a = map
+            .map_second_to_first(vertex.uv_b)
+            .expect("every certified second-chart anchor must map");
+        assert!(a.eval(vertex.uv_a).dist(b.eval(mapped_b)) <= region.max_residual);
+        assert!(a.eval(mapped_a).dist(b.eval(vertex.uv_b)) <= region.max_residual);
+    }
+}
+
+fn assert_indeterminate_sphere_window(hit: &SurfaceSurfaceIntersections, reason: &'static str) {
+    assert!(hit.is_empty());
+    assert_eq!(hit.completion(), Completion::Indeterminate { reason });
+}
+
+#[test]
+fn general_non_octant_arbitrary_axis_windows_emit_certified_region_and_swap() {
+    let a = world_sphere();
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.4);
+    let a_window = window(0.15, 1.25, -0.55, 0.65);
+    let b_window = window(0.05, 1.15, -0.45, 0.55);
+    let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_general_sphere_window_region(&hit, &a, &b);
+
+    let swapped =
+        intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
+    assert_eq!(hit.clone().swapped(), swapped);
+    assert_general_sphere_window_region(&swapped, &b, &a);
+
+    let mut invalid = hit.regions[0].clone();
+    invalid.boundary[0].uv_b = invalid.boundary[1].uv_b;
+    assert_eq!(
+        SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
+            Vec::new(),
+            Vec::new(),
+            vec![invalid],
+        )
+        .unwrap_err(),
+        Error::InvalidGeometry {
+            reason: "general sphere window regions require mutually mapped certified boundary anchors and same orientation"
+        }
+    );
+}
+
+#[test]
+fn general_non_octant_fallback_certifies_containment_and_seam_windows() {
+    let a = world_sphere();
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.2);
+    let containing = window(-0.9, 0.9, -0.85, 0.85);
+    let contained = window(-0.2, 0.2, -0.2, 0.2);
+    let containment =
+        intersect_bounded_spheres(&a, containing, &b, contained, Tolerances::default()).unwrap();
+    assert_general_sphere_window_region(&containment, &a, &b);
+    assert_eq!(containment.regions[0].boundary.len(), 4);
+
+    let tau = core::f64::consts::TAU;
+    let seam_a = window(tau - 0.8, tau + 0.6, -0.6, 0.6);
+    let seam_b = window(-0.7, 0.7, -0.5, 0.5);
+    let seam = intersect_bounded_spheres(&a, seam_a, &b, seam_b, Tolerances::default()).unwrap();
+    assert_general_sphere_window_region(&seam, &a, &b);
+    assert!(
+        seam.regions[0]
+            .boundary
+            .iter()
+            .any(|vertex| { vertex.uv_a[0] > tau && vertex.uv_b[0] < 0.7 })
+    );
+}
+
+#[test]
+fn general_non_octant_fallback_rejects_unsupported_and_uncertified_windows() {
+    let a = world_sphere();
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.4);
+    let supported = window(0.0, 1.0, -0.5, 0.5);
+    let slice_reason = "general coincident sphere window fallback supports only positive-area pole-clear windows with longitude span below pi";
+    assert_indeterminate_sphere_window(
+        &intersect_bounded_spheres(
+            &a,
+            window(0.0, core::f64::consts::PI + 0.1, -0.5, 0.5),
+            &b,
+            supported,
+            Tolerances::default(),
+        )
+        .unwrap(),
+        slice_reason,
+    );
+    assert_indeterminate_sphere_window(
+        &intersect_bounded_spheres(
+            &a,
+            window(0.0, 1.0, -core::f64::consts::FRAC_PI_2, 0.5),
+            &b,
+            supported,
+            Tolerances::default(),
+        )
+        .unwrap(),
+        slice_reason,
+    );
+
+    let near_parallel = y_tilted_sphere(
+        Point3::new(0.0, 0.0, 0.0),
+        1.0,
+        0.5 * Tolerances::default().angular(),
+    );
+    let hit = intersect_bounded_spheres(
+        &a,
+        supported,
+        &near_parallel,
+        supported,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(matches!(
+        hit.completion(),
+        Completion::Indeterminate {
+            reason: "general coincident sphere window boundary planes exceed the certified angular corridor"
+                | "general coincident sphere window proof encountered an unresolved multiple boundary vertex"
+        }
+    ));
+
+    let disjoint = intersect_bounded_spheres(
+        &a,
+        window(0.0, 0.6, -0.3, 0.3),
+        &b,
+        window(2.0, 2.6, -0.3, 0.3),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(disjoint.is_empty());
+    assert!(matches!(
+        disjoint.completion(),
+        Completion::Indeterminate { .. }
+    ));
 }
 
 #[test]
@@ -812,7 +960,7 @@ fn pole_bounded_regions_retain_whole_patch_evidence() {
 }
 
 #[test]
-fn unsupported_chart_domains_and_nonparallel_or_near_coincidence_fail_closed() {
+fn unsupported_chart_domains_and_near_coincidence_fail_closed() {
     let sphere = world_sphere();
     let tau = core::f64::consts::TAU;
     let half_pi = core::f64::consts::FRAC_PI_2;
@@ -843,31 +991,6 @@ fn unsupported_chart_domains_and_nonparallel_or_near_coincidence_fail_closed() {
         latitude,
         Error::InvalidGeometry {
             reason: "coincident sphere latitude windows must stay inside the natural pole range"
-        }
-    );
-
-    let rotated_axis = Sphere::new(
-        Frame::new(
-            Point3::new(0.0, 0.0, 0.0),
-            Vec3::new(0.0, 1.0, 0.0),
-            Vec3::new(1.0, 0.0, 0.0),
-        )
-        .unwrap(),
-        1.0,
-    )
-    .unwrap();
-    let nonparallel = intersect_bounded_spheres(
-        &sphere,
-        window(0.0, 1.0, -0.5, 0.5),
-        &rotated_axis,
-        window(0.0, 1.0, -0.5, 0.5),
-        Tolerances::default(),
-    )
-    .unwrap_err();
-    assert_eq!(
-        nonparallel,
-        Error::InvalidGeometry {
-            reason: "coincident sphere charts with nonparallel latitude axes require the general certified fallback"
         }
     );
 

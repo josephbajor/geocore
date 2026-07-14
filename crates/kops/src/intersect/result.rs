@@ -833,6 +833,114 @@ impl ArbitrarySphereOctantMap {
     }
 }
 
+/// Certified nonlinear chart correspondence for one exact coincident-sphere
+/// overlap between two general, non-octant parameter windows.
+///
+/// The source rectangles remain the domain authority: boundary anchors record
+/// the exact physical arrangement certified by the sphere/sphere solver, while
+/// mapping is admitted only where a source point also belongs to the other
+/// retained window. This avoids treating curved latitude arcs as polygonal
+/// interpolation data.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GeneralSphereWindowMap {
+    first_range: [ParamRange; 2],
+    second_range: [ParamRange; 2],
+    second_from_first: [[f64; 3]; 3],
+    first_from_second: [[f64; 3]; 3],
+    parameter_allowance: f64,
+}
+
+impl GeneralSphereWindowMap {
+    pub(crate) const fn new(
+        first_range: [ParamRange; 2],
+        second_range: [ParamRange; 2],
+        second_from_first: [[f64; 3]; 3],
+        first_from_second: [[f64; 3]; 3],
+        parameter_allowance: f64,
+    ) -> Self {
+        Self {
+            first_range,
+            second_range,
+            second_from_first,
+            first_from_second,
+            parameter_allowance,
+        }
+    }
+
+    /// Complete first-chart window before mutual-domain clipping.
+    pub const fn first_range(self) -> [ParamRange; 2] {
+        self.first_range
+    }
+
+    /// Complete second-chart window before mutual-domain clipping.
+    pub const fn second_range(self) -> [ParamRange; 2] {
+        self.second_range
+    }
+
+    /// Map a first-chart parameter when its physical point lies in both
+    /// retained windows.
+    pub fn map_first_to_second(self, uv: [f64; 2]) -> Option<[f64; 2]> {
+        map_arbitrary_sphere_octant_parameter(
+            self.first_range,
+            self.second_range,
+            self.second_from_first,
+            self.parameter_allowance,
+            uv,
+        )
+    }
+
+    /// Map a second-chart parameter when its physical point lies in both
+    /// retained windows.
+    pub fn map_second_to_first(self, uv: [f64; 2]) -> Option<[f64; 2]> {
+        map_arbitrary_sphere_octant_parameter(
+            self.second_range,
+            self.first_range,
+            self.first_from_second,
+            self.parameter_allowance,
+            uv,
+        )
+    }
+
+    const fn swapped(self) -> Self {
+        Self::new(
+            self.second_range,
+            self.first_range,
+            self.first_from_second,
+            self.second_from_first,
+            self.parameter_allowance,
+        )
+    }
+
+    fn is_finite(self) -> bool {
+        self.first_range
+            .into_iter()
+            .chain(self.second_range)
+            .all(ParamRange::is_finite)
+            && self
+                .second_from_first
+                .into_iter()
+                .chain(self.first_from_second)
+                .flatten()
+                .all(f64::is_finite)
+            && self.parameter_allowance.is_finite()
+            && self.parameter_allowance >= 0.0
+    }
+
+    fn anchors_match(self, first: [f64; 2], second: [f64; 2]) -> bool {
+        let Some(mapped_second) = self.map_first_to_second(first) else {
+            return false;
+        };
+        let Some(mapped_first) = self.map_second_to_first(second) else {
+            return false;
+        };
+        mapped_second
+            .into_iter()
+            .zip(second)
+            .chain(mapped_first.into_iter().zip(first))
+            .all(|(mapped, stored)| (mapped - stored).abs() <= self.parameter_allowance)
+    }
+}
+
 const fn inverse_signed_axis_permutation(axis: [u8; 3], sign: [f64; 3]) -> ([u8; 3], [f64; 3]) {
     let mut inverse_axis = [0_u8; 3];
     let mut inverse_sign = [0.0; 3];
@@ -857,6 +965,9 @@ pub enum SurfaceRegionCorrespondence {
     /// Exact analytic correspondence over the convex spherical-polygon
     /// intersection of two arbitrary-frame sphere octants.
     ArbitrarySphereOctant(ArbitrarySphereOctantMap),
+    /// Certified analytic correspondence over the single-cycle intersection
+    /// of two general arbitrary-frame sphere windows.
+    GeneralSphereWindow(GeneralSphereWindowMap),
 }
 
 impl SurfaceRegionCorrespondence {
@@ -865,6 +976,7 @@ impl SurfaceRegionCorrespondence {
             Self::Polygonal => Self::Polygonal,
             Self::OrthogonalSphereOctant(map) => Self::OrthogonalSphereOctant(map.swapped()),
             Self::ArbitrarySphereOctant(map) => Self::ArbitrarySphereOctant(map.swapped()),
+            Self::GeneralSphereWindow(map) => Self::GeneralSphereWindow(map.swapped()),
         }
     }
 }
@@ -1213,6 +1325,29 @@ fn canonicalize_region(region: &mut SurfaceSurfaceRegion) -> Result<()> {
         {
             return Err(Error::InvalidGeometry {
                 reason: "arbitrary sphere octant regions require mutually mapped boundary anchors and same orientation",
+            });
+        }
+        let first = region
+            .boundary
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| compare_region_physical_vertices(a, b))
+            .map(|(index, _)| index)
+            .expect("region has at least three vertices");
+        region.boundary.rotate_left(first);
+        return Ok(());
+    }
+
+    if let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = region.correspondence {
+        if !map.is_finite()
+            || region.orientation != SurfaceRegionOrientation::Same
+            || region
+                .boundary
+                .iter()
+                .any(|vertex| !map.anchors_match(vertex.uv_a, vertex.uv_b))
+        {
+            return Err(Error::InvalidGeometry {
+                reason: "general sphere window regions require mutually mapped certified boundary anchors and same orientation",
             });
         }
         let first = region

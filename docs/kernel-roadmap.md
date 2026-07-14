@@ -954,11 +954,19 @@ true only for an empty complete result.
   become tangent points. Antiparallel frames preserve the signed two-axis chart
   map, and overwide, near-coincident, or roundoff-unsafe windows fail closed.
   These residual and singular-contact claims apply to the named landed slices,
-  not to SSI families that still lack whole-branch certificates. Near-coincident
-  non-identical surfaces, generic nonparallel frame rotations outside the landed
-  sphere-octant slice, and non-octant arbitrary-axis sphere windows still fail
-  closed for the certified general fallback. The next analytic boundaries are
-  general non-octant arbitrary-axis coincident sphere regions and that fallback.
+  not to SSI families that still lack whole-branch certificates. A first
+  certified general-window sphere arm now accepts exact coincident,
+  arbitrary-axis, positive-area windows whose longitude spans are below π and
+  whose latitude bounds clear both poles. It interval-classifies all 28 pairs
+  of the eight window halfspaces, requires one connected degree-2 boundary
+  cycle plus a strict interior witness before `Complete`, and retains source
+  rectangles with nonlinear bidirectional correspondence rather than treating
+  anchors as polygon interpolation. Containment, seam crossing, swap, the exact
+  28/27 proof bound, and corrupt-anchor rejection are pinned. Wider, polar,
+  tangent, multiple-cycle, ambiguous, uncertified-empty, and near-coincident
+  non-identical cases remain `Indeterminate` or on their existing typed failure
+  boundary. Decomposition/union, separation certificates, and collapsed general
+  contacts are the next analytic sphere boundaries.
 
 ### M4b — Curve/curve and curve/surface completion
 
