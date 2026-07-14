@@ -28,7 +28,8 @@ use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::param::ParamRange;
 use kgeom::vec::{Point2, Point3, Vec3};
 use ktopo::btess::{
-    BodyMesh, TessOptions, check_watertight, signed_volume, tessellate_body_with_context,
+    BodyMesh, BodyTessellationBudgetProfile, TessOptions, check_watertight, signed_volume,
+    tessellate_body_with_context,
 };
 use ktopo::check::{CheckLevel, CheckOutcome, check_body, check_body_report};
 use ktopo::entity::{
@@ -756,7 +757,8 @@ fn measure(store: &Store, body: BodyId) -> Result<Measured, String> {
     let (volume, watertight) = if kind == BodyKind::Solid {
         let policy = SessionPolicy::v1();
         let context = OperationContext::new(&policy, Tolerances::default())
-            .expect("v1 oracle tessellation context is valid");
+            .expect("v1 oracle tessellation context is valid")
+            .with_budget_overrides(BodyTessellationBudgetProfile::bounded_v1());
         let mesh: BodyMesh = tessellate_body_with_context(
             store,
             body,

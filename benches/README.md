@@ -168,9 +168,12 @@ deliberately rejected because it consumes 25 face-refinement passes against
 compatibility v1's limit of 24. The two sheets run at `1e-2`, `3e-3`, `1e-3`,
 and `3e-4`. The curved payload is locally import-verified, while the expanded
 15-file licensed-host certification remains pending and the historical
-14-file record is correctly stale. These measurements support the next
-finite-preset review; they do not themselves implement or adopt `bounded_v1`.
-The
+14-file record is correctly stale. The reviewed finite presets now use the
+next power of two at or above twice each measured nonzero maximum, preserve a
+measured zero as zero, and retain existing smaller algorithm ceilings. The
+compatibility benchmarks still record `v1_defaults`; separate matrix tests run
+every row under `bounded_v1` and pin the actual root-work crossings at
+`222/221` for faces and `2,822/2,821` for bodies. The
 mixed-store rows prepare a block, the target cylinder, and a sphere; they pin
 three stored bodies, a shifted target identity, and exact equality with the
 standalone cylinder's normalized output and complete report.

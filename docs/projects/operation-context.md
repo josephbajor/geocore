@@ -1,6 +1,6 @@
 # Operation context and numerical policy
 
-Status: Stage 1b composition, the NURBS contact/minimizer scale gate, and representative Stage 2-5 pilots implemented; whole-body tessellation has an adopted facade and state-4 wrapper ratchet, standalone-face internal-use ratcheting, the body allocation-accounting boundary, and the face/body tessellation evidence matrices are complete, while projection adoption, corpus-backed bounded presets, and broader ratchets remain
+Status: Stage 1b composition, the NURBS contact/minimizer scale gate, and representative Stage 2-5 pilots implemented; whole-body tessellation has an adopted facade and state-4 wrapper ratchet, standalone-face internal-use ratcheting, the body allocation-accounting boundary, complete face/body evidence matrices, and adopted opt-in bounded presets, while projection adoption and broader ratchets remain
 
 ## Purpose
 
@@ -935,9 +935,14 @@ plan, identity-membership scratch, topology/mesh mappings, owner ranges, and
 all remaining non-edge holder slots before allocation. Compatibility-v1 body-
 wide preparation, edge-storage, structural, and triangle allowances remain
 accounting-only at `u64::MAX`. The 18-row face matrix and 32-row
-`body-tessellation.v3` matrix now close the corpus evidence gate. Selecting,
-testing, and adopting finite presets is the remaining gate before the product
-path is described as hostile-input bounded.
+`body-tessellation.v3` matrix close the corpus evidence gate. The opt-in
+`bounded_v1` profiles choose the next power of two at or above twice every
+measured nonzero maximum, preserve zero, and retain smaller existing algorithm
+ceilings. Face caps in profile order are `16/512/16/131072/65536` with root
+Work 512. Body caps are projection `30/6/60/32/625`, nested face
+`16/0/64/200000/524288`, graph `64/8192`, and body
+`16/512/2048/16/1024/524288/524288/1048576/256`, with root Work 8192. All
+matrix rows pass; exact observed root crossings are 222/221 and 2,822/2,821.
 
 - Add fallible contextual projection APIs and remove public panic behavior through the
   new path.
@@ -1033,12 +1038,14 @@ land before any product cap is selected:
    limit of 24; its finest admitted tier is `5e-4`. The full-period cylinder
    sheet uses a proven rectangular chart split into quarter-period patches and
    needs no area exception. Both representation/trim evidence gates are now
-   closed. Next, select and review explicit
+   closed. The reviewed explicit
    `FaceTessellationBudgetProfile::bounded_v1()` and
    `BodyTessellationBudgetProfile::bounded_v1()` presets with finite aggregate
-   and root caps. Legacy wrappers stay on compatibility `v1_defaults`; facade,
-   import, and fuzz clients opt into the bounded presets before any later policy
-   version considers promoting those values.
+   and root caps are implemented and exercised by every matrix row. Legacy
+   wrappers stay on compatibility `v1_defaults`; the facade lifecycle client
+   and X_T oracle/inspector explicitly opt in through request overrides. The
+   current fuzz targets do not invoke tessellation, so there is no fuzz call
+   site to migrate. No later policy version promotes these values implicitly.
 
 `TrimLoop::cleaned_point_count` now lets the body path validate and admit the
 exact cleaned copy before `TrimLoop::new` allocates it. The original input

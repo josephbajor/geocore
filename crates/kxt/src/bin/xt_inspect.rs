@@ -2,7 +2,7 @@
 
 use kcore::operation::{OperationContext, SessionPolicy};
 use kcore::tolerance::Tolerances;
-use ktopo::btess::{TessOptions, tessellate_body_with_context};
+use ktopo::btess::{BodyTessellationBudgetProfile, TessOptions, tessellate_body_with_context};
 use ktopo::check::{CheckLevel, CheckOutcome, check_body_report};
 use ktopo::store::Store;
 use kxt::parse::{Value, XtFile};
@@ -243,7 +243,8 @@ fn inspect(path: &Path) -> (String, bool) {
             }
             let policy = SessionPolicy::v1();
             let context = OperationContext::new(&policy, Tolerances::default())
-                .expect("v1 inspector tessellation context is valid");
+                .expect("v1 inspector tessellation context is valid")
+                .with_budget_overrides(BodyTessellationBudgetProfile::bounded_v1());
             match tessellate_body_with_context(
                 &store,
                 body,

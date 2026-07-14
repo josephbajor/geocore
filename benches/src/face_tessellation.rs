@@ -1,5 +1,7 @@
 //! Deterministic Q3 standalone face-tessellation matrix fixtures and evidence.
 
+#[cfg(test)]
+use kcore::operation::TOTAL_WORK_STAGE;
 use kcore::operation::{
     AccountingMode, ExecutionPolicy, NumericalPolicy, OperationContext, OperationOutcome,
     OperationPolicyError, OperationReport, PolicyVersion, ResourceKind, SessionPolicy,
@@ -1306,6 +1308,89 @@ mod tests {
             assert_eq!(first, repeated);
             verify(case, fixture.evidence(&face, &first));
         }
+    }
+
+    #[test]
+    fn bounded_v1_admits_the_complete_matrix_and_pins_the_measured_root_crossing() {
+        let session = compatibility_session();
+        let context = OperationContext::new(&session, Tolerances::default())
+            .unwrap()
+            .with_budget_overrides(FaceTessellationBudgetProfile::bounded_v1());
+        let mut maximum_root_work = 0;
+        let mut maximum_path = None;
+
+        for case in CASES {
+            let fixture = fixture(case.representation);
+            let face = fixture.trimmed(case.trim_shape);
+            let outcome = fixture
+                .tessellate_outcome(&face, &tessellation_options(case.chord_tol), &context)
+                .unwrap();
+            let (result, report) = outcome.into_parts();
+            let mesh = result
+                .unwrap_or_else(|error| panic!("bounded preset rejected {}: {error:?}", case.path));
+            assert_eq!(
+                mesh_digest(&mesh),
+                case.expected.mesh_digest,
+                "{}",
+                case.path
+            );
+            assert!(report.limit_events().is_empty(), "{}", case.path);
+            for (stage, expected) in CANONICAL_STAGES.into_iter().zip(case.expected.usage) {
+                let actual = report
+                    .usage()
+                    .iter()
+                    .find(|snapshot| snapshot.stage == stage)
+                    .unwrap_or_else(|| panic!("missing {} for {}", stage.as_str(), case.path));
+                assert_eq!(actual.consumed, expected, "{}", case.path);
+            }
+            let root = report
+                .usage()
+                .iter()
+                .find(|snapshot| snapshot.stage == TOTAL_WORK_STAGE)
+                .unwrap();
+            assert_eq!(
+                root.consumed,
+                case.expected.usage[1] + case.expected.usage[2],
+                "{}",
+                case.path
+            );
+            if root.consumed > maximum_root_work {
+                maximum_root_work = root.consumed;
+                maximum_path = Some(case.path);
+            }
+        }
+
+        assert_eq!(maximum_root_work, 222);
+        assert_eq!(
+            maximum_path,
+            Some("geometry/face-tessellation/half-cylinder-v2/three-holes/chord-1e-3-v2")
+        );
+
+        let case = CASES
+            .into_iter()
+            .find(|case| case.path == maximum_path.unwrap())
+            .unwrap();
+        let fixture = fixture(case.representation);
+        let face = fixture.trimmed(case.trim_shape);
+        let run = |allowed| {
+            let context = OperationContext::new(&session, Tolerances::default())
+                .unwrap()
+                .with_budget_overrides(
+                    FaceTessellationBudgetProfile::bounded_v1().with_total_work_limit(allowed),
+                );
+            fixture
+                .tessellate_outcome(&face, &tessellation_options(case.chord_tol), &context)
+                .unwrap()
+        };
+        assert!(run(222).result().is_ok());
+        let denied = run(221);
+        assert!(denied.result().is_err());
+        assert_eq!(denied.report().limit_events().len(), 1);
+        let snapshot = denied.report().limit_events()[0];
+        assert_eq!(snapshot.stage, TOTAL_WORK_STAGE);
+        assert_eq!(snapshot.resource, ResourceKind::Work);
+        assert_eq!(snapshot.consumed, 222);
+        assert_eq!(snapshot.allowed, 221);
     }
 
     #[test]

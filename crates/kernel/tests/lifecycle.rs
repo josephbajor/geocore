@@ -1,9 +1,10 @@
 //! Facade-only lifecycle tests: no lower-layer crate is imported.
 
 use kernel::{
-    BlockRequest, BoundedCurve, CheckBodyRequest, CheckLevel, CheckOutcome, Error, ExportXtRequest,
-    Frame, ImportXtRequest, IntersectCurvesRequest, Kernel, ParamRange, SessionPolicy,
-    SurfaceDerivativeOrder, SurfaceEvaluationRequest, TessOptions, TessellateBodyRequest,
+    BlockRequest, BodyTessellationBudgetProfile, BoundedCurve, CheckBodyRequest, CheckLevel,
+    CheckOutcome, Error, ExportXtRequest, Frame, ImportXtRequest, IntersectCurvesRequest, Kernel,
+    OperationSettings, ParamRange, SessionPolicy, SurfaceDerivativeOrder, SurfaceEvaluationRequest,
+    TessOptions, TessellateBodyRequest,
 };
 
 #[test]
@@ -109,8 +110,12 @@ fn facade_only_client_can_tessellate_with_opaque_topology_identity() {
         max_edge_len: None,
     };
     let part = session.part(part_id).unwrap();
+    let bounded = BodyTessellationBudgetProfile::bounded_v1();
     let first = part
-        .tessellate_body(TessellateBodyRequest::new(body.clone(), options))
+        .tessellate_body(
+            TessellateBodyRequest::new(body.clone(), options)
+                .with_settings(OperationSettings::new().with_budget_overrides(bounded.clone())),
+        )
         .unwrap();
     assert!(first.report().limit_events().is_empty());
     let mesh = first.result().unwrap();
@@ -137,7 +142,10 @@ fn facade_only_client_can_tessellate_with_opaque_topology_identity() {
     }));
 
     let second = part
-        .tessellate_body(TessellateBodyRequest::new(body, options))
+        .tessellate_body(
+            TessellateBodyRequest::new(body, options)
+                .with_settings(OperationSettings::new().with_budget_overrides(bounded)),
+        )
         .unwrap();
     assert_eq!(first, second);
 }

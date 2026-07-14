@@ -1,5 +1,7 @@
 //! Deterministic Q3 body-tessellation fixtures and evidence.
 
+#[cfg(test)]
+use kcore::operation::TOTAL_WORK_STAGE;
 use kcore::operation::{
     AccountingMode, ExecutionPolicy, NumericalPolicy, OperationContext, OperationOutcome,
     OperationPolicyError, OperationReport, PolicyVersion, ResourceKind, SessionPolicy,
@@ -40,8 +42,7 @@ pub const EXECUTION_IDENTITY: &str = "serial";
 /// Canonical number of body, face, graph, and projection usage stages.
 pub const USAGE_STAGE_COUNT: usize = 21;
 /// Source-evidence label shared by the 2026-07-11 licensed-host corpus.
-pub const HOST_ACCEPTED_SOURCE_EVIDENCE: &str =
-    "historical-host-accepted:onshape-cloud-2026-07-11";
+pub const HOST_ACCEPTED_SOURCE_EVIDENCE: &str = "historical-host-accepted:onshape-cloud-2026-07-11";
 /// Exact licensed-host-certified corpus identity used by the first Q3 NURBS slice.
 pub const IMPORTED_NURBS_FACE_IDENTITY: &str =
     "solid_block_nurbs_face.x_t@onshape-cloud-2026-07-11";
@@ -84,8 +85,7 @@ pub const CURVED_NURBS_BLOCK_BYTE_DIGEST: u64 = 0xb8e1_8725_bad5_df39;
 const CURVED_NURBS_BLOCK_BYTES: &[u8] =
     include_bytes!("../testdata/solid_block_curved_nurbs_face.local.x_t");
 /// Licensed-host-certified concave planar sheet identity.
-pub const IMPORTED_PLANE_SHEET_IDENTITY: &str =
-    "sheet_plane_polygon.x_t@onshape-cloud-2026-07-11";
+pub const IMPORTED_PLANE_SHEET_IDENTITY: &str = "sheet_plane_polygon.x_t@onshape-cloud-2026-07-11";
 /// SHA-256 pinned by the licensed-host-certified oracle corpus.
 pub const IMPORTED_PLANE_SHEET_SHA256: &str =
     "38cec426b656aba55e949d16e50bbf66c1a084941bf333f5f26a2d64f3d9391c";
@@ -146,9 +146,7 @@ impl FixtureKind {
     /// Correctness contract implied by the source body's point-set kind.
     pub const fn validation(self) -> ValidationKind {
         match self {
-            Self::ImportedPlaneSheet | Self::ImportedCylinderSheet => {
-                ValidationKind::OrientedSheet
-            }
+            Self::ImportedPlaneSheet | Self::ImportedCylinderSheet => ValidationKind::OrientedSheet,
             _ => ValidationKind::ClosedSolid,
         }
     }
@@ -496,9 +494,7 @@ const fn case(
         FixtureKind::Block
         | FixtureKind::ImportedNurbsFace
         | FixtureKind::ImportedTolerantEdge
-        | FixtureKind::CurvedNurbsBlock => {
-            (6, 12, 8)
-        }
+        | FixtureKind::CurvedNurbsBlock => (6, 12, 8),
         FixtureKind::Cylinder
         | FixtureKind::MixedStoreCylinder
         | FixtureKind::ImportedCylinder
@@ -534,11 +530,7 @@ const fn case(
             {
                 32
             }
-            FixtureKind::ImportedCylinderSheet
-                if chord_tol.to_bits() == 1.0e-3_f64.to_bits() =>
-            {
-                64
-            }
+            FixtureKind::ImportedCylinderSheet if chord_tol.to_bits() == 1.0e-3_f64.to_bits() => 64,
             FixtureKind::ImportedCylinderSheet => 128,
             _ => 0,
         },
@@ -597,8 +589,7 @@ const fn reviewed_accounting(
         if chord_tol.to_bits() == 1.0e-2_f64.to_bits() {
             return (
                 [
-                    0, 1, 1, 16, 625, 0, 0, 0, 2, 24, 1, 54, 0, 0, 120, 0, 0, 8, 120, 12,
-                    84,
+                    0, 1, 1, 16, 625, 0, 0, 0, 2, 24, 1, 54, 0, 0, 120, 0, 0, 8, 120, 12, 84,
                 ],
                 0x8e9a_f09b_d104_3a00,
             );
@@ -606,8 +597,7 @@ const fn reviewed_accounting(
         if chord_tol.to_bits() == 3.0e-3_f64.to_bits() {
             return (
                 [
-                    0, 1, 1, 16, 625, 0, 0, 1, 4, 25, 1, 54, 0, 0, 120, 0, 0, 9, 121, 14,
-                    84,
+                    0, 1, 1, 16, 625, 0, 0, 1, 4, 25, 1, 54, 0, 0, 120, 0, 0, 9, 121, 14, 84,
                 ],
                 0xdd87_5541_8cbd_2232,
             );
@@ -615,16 +605,14 @@ const fn reviewed_accounting(
         if chord_tol.to_bits() == 1.0e-3_f64.to_bits() {
             return (
                 [
-                    0, 1, 1, 16, 625, 0, 0, 5, 36, 41, 1, 54, 0, 0, 120, 0, 0, 25, 137, 46,
-                    84,
+                    0, 1, 1, 16, 625, 0, 0, 5, 36, 41, 1, 54, 0, 0, 120, 0, 0, 25, 137, 46, 84,
                 ],
                 0x5d0f_cffa_1463_cb7e,
             );
         }
         return (
             [
-                0, 1, 1, 16, 625, 0, 0, 6, 100, 73, 1, 54, 0, 0, 120, 0, 0, 57, 169, 110,
-                84,
+                0, 1, 1, 16, 625, 0, 0, 6, 100, 73, 1, 54, 0, 0, 120, 0, 0, 57, 169, 110, 84,
             ],
             0x0e72_cb68_b372_9557,
         );
@@ -641,8 +629,7 @@ const fn reviewed_accounting(
         if chord_tol.to_bits() == 1.0e-2_f64.to_bits() {
             return (
                 [
-                    0, 0, 0, 0, 0, 0, 0, 4, 10, 44, 1, 69, 2, 24, 118, 0, 0, 36, 276, 40,
-                    23,
+                    0, 0, 0, 0, 0, 0, 0, 4, 10, 44, 1, 69, 2, 24, 118, 0, 0, 36, 276, 40, 23,
                 ],
                 0xbef1_dd9c_663f_31ae,
             );
@@ -650,8 +637,7 @@ const fn reviewed_accounting(
         if chord_tol.to_bits() == 3.0e-3_f64.to_bits() {
             return (
                 [
-                    0, 0, 0, 0, 0, 0, 0, 8, 18, 60, 1, 69, 2, 24, 118, 0, 0, 52, 292, 72,
-                    23,
+                    0, 0, 0, 0, 0, 0, 0, 8, 18, 60, 1, 69, 2, 24, 118, 0, 0, 52, 292, 72, 23,
                 ],
                 0x598f_284e_b091_01da,
             );
@@ -659,16 +645,15 @@ const fn reviewed_accounting(
         if chord_tol.to_bits() == 1.0e-3_f64.to_bits() {
             return (
                 [
-                    0, 0, 0, 0, 0, 0, 0, 12, 110, 260, 1, 133, 3, 56, 214, 0, 0, 252, 684,
-                    440, 23,
+                    0, 0, 0, 0, 0, 0, 0, 12, 110, 260, 1, 133, 3, 56, 214, 0, 0, 252, 684, 440, 23,
                 ],
                 0x86e6_e8eb_1abb_2b0c,
             );
         }
         return (
             [
-                0, 0, 0, 0, 0, 0, 0, 16, 714, 1_500, 1, 261, 4, 120, 406, 0, 0, 1_492,
-                2_308, 2_856, 23,
+                0, 0, 0, 0, 0, 0, 0, 16, 714, 1_500, 1, 261, 4, 120, 406, 0, 0, 1_492, 2_308,
+                2_856, 23,
             ],
             0x49dc_a081_ce6d_2499,
         );
@@ -1092,8 +1077,7 @@ impl BodyTessellationFixture {
                     faceted_area += area;
                     area.is_finite()
                         && alignment.is_finite()
-                        && (alignment >= -(2.0 * area) * 1.0e-10
-                            || area <= dust_threshold)
+                        && (alignment >= -(2.0 * area) * 1.0e-10 || area <= dust_threshold)
                 });
             let aligned = finite
                 && absolute_alignment > 0.0
@@ -1566,12 +1550,14 @@ pub fn fixture(case: BodyTessellationCase) -> BodyTessellationFixture {
             assert_eq!((faces.len(), edges.len(), vertices.len()), (6, 12, 8));
             let nurbs: Vec<_> = faces
                 .into_iter()
-                .filter_map(|face| match store
-                    .get(store.get(face).expect("live face").surface)
-                    .expect("live surface")
-                {
-                    SurfaceGeom::Nurbs(surface) => Some(surface),
-                    _ => None,
+                .filter_map(|face| {
+                    match store
+                        .get(store.get(face).expect("live face").surface)
+                        .expect("live surface")
+                    {
+                        SurfaceGeom::Nurbs(surface) => Some(surface),
+                        _ => None,
+                    }
                 })
                 .collect();
             assert_eq!(nurbs.len(), 1);
@@ -1598,11 +1584,7 @@ pub fn fixture(case: BodyTessellationCase) -> BodyTessellationFixture {
                 bits if bits == 5.0e-4_f64.to_bits() => 0.999_4,
                 _ => unreachable!("reviewed curved-NURBS tolerance"),
             };
-            (
-                body,
-                0.024_266_666_666_666_67,
-                minimum_volume_ratio,
-            )
+            (body, 0.024_266_666_666_666_67, minimum_volume_ratio)
         }
         FixtureKind::ImportedPlaneSheet => {
             assert_eq!(IMPORTED_PLANE_SHEET_BYTES.len(), 3_113);
@@ -1625,19 +1607,21 @@ pub fn fixture(case: BodyTessellationCase) -> BodyTessellationFixture {
                     .expect("live surface"),
                 SurfaceGeom::Plane(_)
             ));
-            assert!(edges
-                .into_iter()
-                .all(|edge| store.get(edge).expect("live boundary edge").fins().len() == 1));
+            assert!(
+                edges.into_iter().all(|edge| store
+                    .get(edge)
+                    .expect("live boundary edge")
+                    .fins()
+                    .len()
+                    == 1)
+            );
             (body, 0.09, 1.0 - 1.0e-12)
         }
         FixtureKind::ImportedCylinderSheet => {
             assert_eq!(IMPORTED_CYLINDER_SHEET_BYTES.len(), 2_209);
             let mut source_digest = StableHasher::new();
             source_digest.bytes(IMPORTED_CYLINDER_SHEET_BYTES);
-            assert_eq!(
-                source_digest.finish(),
-                IMPORTED_CYLINDER_SHEET_BYTE_DIGEST
-            );
+            assert_eq!(source_digest.finish(), IMPORTED_CYLINDER_SHEET_BYTE_DIGEST);
             let reconstruction = kxt::import(IMPORTED_CYLINDER_SHEET_BYTES, &mut store)
                 .expect("certified cylindrical sheet must import");
             assert!(reconstruction.skipped.is_empty());
@@ -1646,7 +1630,9 @@ pub fn fixture(case: BodyTessellationCase) -> BodyTessellationFixture {
             assert_eq!(store.get(body).expect("live body").kind(), BodyKind::Sheet);
             let faces = store.faces_of_body(body).expect("live cylindrical sheet");
             let edges = store.edges_of_body(body).expect("live cylindrical sheet");
-            let vertices = store.vertices_of_body(body).expect("live cylindrical sheet");
+            let vertices = store
+                .vertices_of_body(body)
+                .expect("live cylindrical sheet");
             assert_eq!((faces.len(), edges.len(), vertices.len()), (1, 3, 2));
             assert!(matches!(
                 store
@@ -1685,19 +1671,13 @@ pub fn fixture(case: BodyTessellationCase) -> BodyTessellationFixture {
     let source_edges = expected_edges.len();
     let source_vertices = store.vertices_of_body(body).expect("valid body").len();
     let maximum_measure_ratio = match case.fixture_kind {
-        FixtureKind::ImportedCylinderSheet
-            if case.chord_tol.to_bits() == 1.0e-2_f64.to_bits() =>
-        {
+        FixtureKind::ImportedCylinderSheet if case.chord_tol.to_bits() == 1.0e-2_f64.to_bits() => {
             1.002
         }
-        FixtureKind::ImportedCylinderSheet
-            if case.chord_tol.to_bits() == 3.0e-3_f64.to_bits() =>
-        {
+        FixtureKind::ImportedCylinderSheet if case.chord_tol.to_bits() == 3.0e-3_f64.to_bits() => {
             0.996
         }
-        FixtureKind::ImportedCylinderSheet
-            if case.chord_tol.to_bits() == 1.0e-3_f64.to_bits() =>
-        {
+        FixtureKind::ImportedCylinderSheet if case.chord_tol.to_bits() == 1.0e-3_f64.to_bits() => {
             1.001
         }
         FixtureKind::ImportedCylinderSheet => 1.002,
@@ -1745,10 +1725,7 @@ pub fn verify(case: BodyTessellationCase, evidence: BodyTessellationEvidence) {
     assert_eq!(evidence.source_vertices, case.expected_source_vertices);
     assert_eq!(evidence.face_ranges, case.expected_face_ranges);
     assert_eq!(evidence.edge_polylines, case.expected_edge_polylines);
-    assert_eq!(
-        evidence.boundary_segments,
-        case.expected_boundary_segments
-    );
+    assert_eq!(evidence.boundary_segments, case.expected_boundary_segments);
     assert_eq!(evidence.mesh_digest, case.expected_mesh_digest);
     assert_eq!(evidence.usage_consumed, case.expected_usage);
     assert_eq!(
@@ -1880,9 +1857,7 @@ mod tests {
             assert_eq!(entry["policy_values"]["policy_version"], "v1");
             assert_eq!(entry["policy_values"]["usage_contract"], "q3-usage.v1");
             let (body_kind, measure, orientation_proof) = match case.fixture_kind.validation() {
-                ValidationKind::ClosedSolid => {
-                    ("solid", "signed-volume", "positive-signed-volume")
-                }
+                ValidationKind::ClosedSolid => ("solid", "signed-volume", "positive-signed-volume"),
                 ValidationKind::OrientedSheet => (
                     "sheet",
                     "faceted-surface-area",
@@ -2206,6 +2181,92 @@ mod tests {
     }
 
     #[test]
+    fn bounded_v1_admits_the_complete_matrix_and_pins_the_measured_root_crossing() {
+        let session = compatibility_session();
+        let context = OperationContext::new(&session, Tolerances::default())
+            .unwrap()
+            .with_budget_overrides(BodyTessellationBudgetProfile::bounded_v1());
+        let compatibility = BodyTessellationBudgetProfile::v1_defaults();
+        let mut maximum_root_work = 0;
+        let mut maximum_path = None;
+
+        for case in CASES {
+            let fixture = fixture(case);
+            let outcome = fixture
+                .tessellate_outcome(&tessellation_options(case.chord_tol), &context)
+                .unwrap();
+            let (result, report) = outcome.into_parts();
+            let mesh = result
+                .unwrap_or_else(|error| panic!("bounded preset rejected {}: {error:?}", case.path));
+            assert_eq!(
+                fixture.mesh_digest(&mesh),
+                case.expected_mesh_digest,
+                "{}",
+                case.path
+            );
+            assert!(report.limit_events().is_empty(), "{}", case.path);
+            for (limit, expected) in compatibility.limits().iter().zip(case.expected_usage) {
+                let actual = report
+                    .usage()
+                    .iter()
+                    .find(|snapshot| snapshot.stage == limit.stage)
+                    .unwrap_or_else(|| {
+                        panic!("missing {} for {}", limit.stage.as_str(), case.path)
+                    });
+                assert_eq!(actual.consumed, expected, "{}", case.path);
+            }
+            let expected_root_work = compatibility
+                .limits()
+                .iter()
+                .zip(case.expected_usage)
+                .filter(|(limit, _)| limit.resource == ResourceKind::Work)
+                .map(|(_, consumed)| consumed)
+                .sum::<u64>();
+            let root = report
+                .usage()
+                .iter()
+                .find(|snapshot| snapshot.stage == TOTAL_WORK_STAGE)
+                .unwrap();
+            assert_eq!(root.consumed, expected_root_work, "{}", case.path);
+            if root.consumed > maximum_root_work {
+                maximum_root_work = root.consumed;
+                maximum_path = Some(case.path);
+            }
+        }
+
+        assert_eq!(maximum_root_work, 2_822);
+        assert_eq!(
+            maximum_path,
+            Some("topology/body-tessellation/cylinder-v3/1/chord-1e-3-v3")
+        );
+
+        let case = CASES
+            .into_iter()
+            .find(|case| case.path == maximum_path.unwrap())
+            .unwrap();
+        let fixture = fixture(case);
+        let run = |allowed| {
+            let context = OperationContext::new(&session, Tolerances::default())
+                .unwrap()
+                .with_budget_overrides(
+                    BodyTessellationBudgetProfile::bounded_v1().with_total_work_limit(allowed),
+                );
+            fixture
+                .tessellate_outcome(&tessellation_options(case.chord_tol), &context)
+                .unwrap()
+        };
+        assert!(run(2_822).result().is_ok());
+        let denied = run(2_821);
+        assert!(denied.result().is_err());
+        assert_eq!(denied.report().limit_events().len(), 1);
+        let snapshot = denied.report().limit_events()[0];
+        assert_eq!(snapshot.stage, TOTAL_WORK_STAGE);
+        assert_eq!(snapshot.resource, ResourceKind::Work);
+        assert_eq!(snapshot.consumed, 2_822);
+        assert_eq!(snapshot.allowed, 2_821);
+    }
+
+    #[test]
     fn mixed_store_target_is_isolated_from_unrelated_bodies() {
         let standalone_case = CASES
             .into_iter()
@@ -2325,8 +2386,7 @@ mod tests {
             .enumerate()
             .max_by(|(_, a), (_, b)| {
                 let area = |triangle: &&[u32; 3]| {
-                    let [p0, p1, p2] =
-                        triangle.map(|index| mesh.positions[index as usize]);
+                    let [p0, p1, p2] = triangle.map(|index| mesh.positions[index as usize]);
                     (p1 - p0).cross(p2 - p0).norm()
                 };
                 area(a).total_cmp(&area(b))
@@ -2436,5 +2496,4 @@ mod tests {
         assert!(scaled.orientation_valid);
         assert!(!scaled.measure_within_tolerance);
     }
-
 }

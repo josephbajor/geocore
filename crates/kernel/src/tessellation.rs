@@ -9,7 +9,7 @@ use crate::operation::{OperationOutcome, OperationSettings};
 use crate::session::Part;
 use crate::{BodyId, EdgeId, FaceId, PartId, Point3, TessOptions};
 
-/// Typed request for one watertight whole-body tessellation.
+/// Typed request for one conforming whole-body tessellation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TessellateBodyRequest {
     body: BodyId,
@@ -87,7 +87,7 @@ impl EdgePolyline {
     }
 }
 
-/// Watertight whole-body mesh using only facade-safe identities and values.
+/// Conforming whole-body mesh using only facade-safe identities and values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BodyMesh {
     body: BodyId,
@@ -108,7 +108,8 @@ impl BodyMesh {
         &self.positions
     }
 
-    /// Outward-oriented triangle vertex indices.
+    /// Triangle vertex indices oriented by face sense: outward for solids and
+    /// consistently across each sheet.
     pub fn triangles(&self) -> &[[u32; 3]] {
         &self.triangles
     }
@@ -218,7 +219,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        BlockRequest, BodyTessellationError, BudgetPlan, Frame, Kernel, KernelError, Tolerances,
+        BlockRequest, BodyTessellationBudgetProfile, BodyTessellationError, BudgetPlan, Frame,
+        Kernel, KernelError, Tolerances,
     };
 
     fn options() -> TessOptions {
@@ -229,12 +231,15 @@ mod tests {
     }
 
     #[test]
-    fn facade_mesh_matches_direct_contextual_bits_identity_and_report() {
+    fn bounded_facade_mesh_matches_direct_contextual_bits_identity_and_report() {
         let policy = crate::SessionPolicy::v1();
         let mut direct_store = Store::new();
         let direct_body =
             ktopo::make::block(&mut direct_store, &Frame::world(), [2.0, 3.0, 4.0]).unwrap();
-        let direct_context = OperationContext::new(&policy, Tolerances::default()).unwrap();
+        let bounded = BodyTessellationBudgetProfile::bounded_v1();
+        let direct_context = OperationContext::new(&policy, Tolerances::default())
+            .unwrap()
+            .with_budget_overrides(bounded.clone());
         let direct = ktopo::btess::tessellate_body_with_context(
             &direct_store,
             direct_body,
@@ -255,7 +260,10 @@ mod tests {
             .body();
         let part = session.part(part_id.clone()).unwrap();
         let facade = part
-            .tessellate_body(TessellateBodyRequest::new(body.clone(), options()))
+            .tessellate_body(
+                TessellateBodyRequest::new(body.clone(), options())
+                    .with_settings(OperationSettings::new().with_budget_overrides(bounded.clone())),
+            )
             .unwrap();
 
         let (direct_result, direct_report) = direct.into_parts();
@@ -282,7 +290,10 @@ mod tests {
         assert_eq!(mesh.to_obj(), direct_mesh.to_obj());
 
         let repeated = part
-            .tessellate_body(TessellateBodyRequest::new(body, options()))
+            .tessellate_body(
+                TessellateBodyRequest::new(body, options())
+                    .with_settings(OperationSettings::new().with_budget_overrides(bounded)),
+            )
             .unwrap();
         assert_eq!(repeated, facade);
     }
@@ -301,13 +312,15 @@ mod tests {
             .body();
 
         let run = |allowed| {
-            let overrides = BudgetPlan::new([LimitSpec::new(
-                ktopo::btess::BODY_TESSELLATION_STRUCTURAL_ITEMS,
-                ResourceKind::Items,
-                AccountingMode::Cumulative,
-                allowed,
-            )])
-            .unwrap();
+            let overrides = BodyTessellationBudgetProfile::bounded_v1().overlaid(
+                &BudgetPlan::new([LimitSpec::new(
+                    ktopo::btess::BODY_TESSELLATION_STRUCTURAL_ITEMS,
+                    ResourceKind::Items,
+                    AccountingMode::Cumulative,
+                    allowed,
+                )])
+                .unwrap(),
+            );
             session
                 .part(part_id.clone())
                 .unwrap()

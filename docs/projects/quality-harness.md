@@ -345,8 +345,10 @@ correctly stale. Both sheet fixtures run at `1e-2`, `3e-3`, `1e-3`, and
 into four quarter-period patches with shared iso columns, preserving its two
 topological ring boundaries and excluding its two-fin seam. Its reviewed area
 bands require no exception. These rows close the named body representation
-evidence gate; selecting and adopting finite `bounded_v1` caps is the next
-policy task and remains unimplemented.
+evidence gate. `bounded_v1` now selects twice-measured, next-power-of-two
+allowances while preserving zero and clamping to existing smaller algorithm
+ceilings. Every body row passes the preset; the maximum observed root Work is
+2,822, with exact 2,822/2,821 admission evidence.
 
 Face-profile evidence is owned by a separate standalone matrix. Whole-body
 tessellation pre-refines each shared edge against every adjacent surface with a
@@ -361,8 +363,9 @@ orientation, UV/model area, mesh bits, and complete repeatable reports. The
 NURBS fixture is a genuinely curved exact quarter-cylinder chart with explicit
 rational, non-coplanar, and normal-curvature witnesses. Surface and trim
 construction plus session/context setup stay outside timing. The named face
-representation/trim evidence gate is closed; selecting finite face caps remains
-the next policy review alongside the now-reconciled body matrix.
+representation/trim evidence gate is closed. Every row passes the reviewed
+face `bounded_v1` preset, and the maximum observed root Work has exact 222/221
+admission evidence.
 
 Fixtures use existing deterministic primitive constructors first, followed by
 trimmed NURBS fixtures promoted from the test corpus:

@@ -6,10 +6,10 @@ use std::io;
 use std::path::PathBuf;
 
 use kernel::{
-    BlockRequest, BoundedCurve, CheckBodyRequest, CheckLevel, CheckOutcome, ExportXtRequest, Frame,
-    FullCheckBudgetProfile, ImportXtRequest, IntersectCurvesRequest, Kernel, OperationSettings,
-    ParamRange, SurfaceDerivativeOrder, SurfaceEvaluationRequest, TessOptions,
-    TessellateBodyRequest,
+    BlockRequest, BodyTessellationBudgetProfile, BoundedCurve, CheckBodyRequest, CheckLevel,
+    CheckOutcome, ExportXtRequest, Frame, FullCheckBudgetProfile, ImportXtRequest,
+    IntersectCurvesRequest, Kernel, OperationSettings, ParamRange, SurfaceDerivativeOrder,
+    SurfaceEvaluationRequest, TessOptions, TessellateBodyRequest,
 };
 
 fn output_path() -> Result<PathBuf, io::Error> {
@@ -90,13 +90,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
 
         let mesh = part
-            .tessellate_body(TessellateBodyRequest::new(
-                body_id.clone(),
-                TessOptions {
-                    chord_tol: 1.0e-3,
-                    max_edge_len: None,
-                },
-            ))?
+            .tessellate_body(
+                TessellateBodyRequest::new(
+                    body_id.clone(),
+                    TessOptions {
+                        chord_tol: 1.0e-3,
+                        max_edge_len: None,
+                    },
+                )
+                .with_settings(
+                    OperationSettings::new()
+                        .with_budget_overrides(BodyTessellationBudgetProfile::bounded_v1()),
+                ),
+            )?
             .into_result()?;
         if mesh.positions().len() != 8
             || mesh.triangles().len() != 12

@@ -10,7 +10,7 @@ The current facade supports:
 - kernel/session/part lifecycle with opaque, part-qualified identities;
 - deterministic semantic topology and geometry views;
 - contextual block construction and Fast/Full body checking;
-- operation-accounted watertight whole-body tessellation;
+- operation-accounted conforming solid and sheet tessellation;
 - bounded, operation-accounted surface evaluation; and
 - atomic typed X_T import and deterministic X_T export.
 
@@ -25,8 +25,9 @@ A facade client imports only `kernel` concepts:
 
 ```rust
 use kernel::{
-    BlockRequest, CheckBodyRequest, CheckLevel, CheckOutcome, ExportXtRequest,
-    Frame, Kernel, TessOptions, TessellateBodyRequest,
+    BlockRequest, BodyTessellationBudgetProfile, CheckBodyRequest, CheckLevel,
+    CheckOutcome, ExportXtRequest, Frame, Kernel, OperationSettings, TessOptions,
+    TessellateBodyRequest,
 };
 
 let mut session = Kernel::new().create_session();
@@ -44,10 +45,15 @@ let checked = part
 assert_eq!(checked.outcome(), CheckOutcome::Valid);
 
 let mesh = part
-    .tessellate_body(TessellateBodyRequest::new(
-        body.clone(),
-        TessOptions { chord_tol: 1.0e-3, max_edge_len: None },
-    ))?
+    .tessellate_body(
+        TessellateBodyRequest::new(
+            body.clone(),
+            TessOptions { chord_tol: 1.0e-3, max_edge_len: None },
+        )
+        .with_settings(OperationSettings::new().with_budget_overrides(
+            BodyTessellationBudgetProfile::bounded_v1(),
+        )),
+    )?
     .into_result()?;
 assert!(!mesh.triangles().is_empty());
 
