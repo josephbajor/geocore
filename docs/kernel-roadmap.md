@@ -1109,8 +1109,10 @@ This is not an execution-priority list. The authoritative handoff queue is the
 foundation portfolio; this section preserves the larger milestone obligations
 that queue must eventually discharge.
 
-- M3b: keep the exact 14-file oracle bundle and its writer-byte invalidation
-  rule current. The 2026-07-11 Onshape run is machine-fingerprinted; remaining
+- M3b: keep the historical 14-file host certification and current declared
+  15-file oracle bundle distinct while preserving writer-byte invalidation.
+  The curved B-surface fixture remains locally verified and explicitly pending
+  host certification. The 2026-07-11 Onshape run is machine-fingerprinted; remaining
   evidence is the named wire/acorn rejection, host-canonicalized analytic NURBS
   fixtures, offset-sheet re-export gap, and two preserved host re-export reader
   gaps.

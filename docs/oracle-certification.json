@@ -1,7 +1,7 @@
 {
   "schema_version": "kernel-oracle-certification.v1",
   "status": "stale",
-  "reason": "kxt/src/write.rs changed in 2d7b8dc for the facade accessor migration after the 2026-07-11 host run; the regenerated 14-fixture bundle is byte-identical, but the writer-byte invalidation rule requires a licensed-host rerun",
+  "reason": "kxt/src/write.rs changed in 2d7b8dc for the facade accessor migration after the 2026-07-11 host run, and the declared writer bundle now adds solid_block_curved_nurbs_face.x_t as locally import-verified evidence pending host certification; this record intentionally preserves the historical 14-fixture host identities until the complete 15-fixture licensed-host rerun",
   "certified_at": "2026-07-11",
   "host": "onshape",
   "host_version": "cloud-2026-07-11",

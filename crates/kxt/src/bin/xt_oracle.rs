@@ -111,6 +111,12 @@ struct Fixture {
 
 const PI: f64 = std::f64::consts::PI;
 const BLOCK_VOLUME: f64 = 0.2 * 0.3 * 0.4;
+/// Outward displacement of the sole interior control point in the curved
+/// block fixture's biquadratic Bezier control net.
+const CURVED_FACE_CONTROL_OFFSET: f64 = 0.04;
+/// A biquadratic Bezier basis integrates to `1 / 3` in each parameter, so
+/// moving only the center control adds `area * offset / 9` to the block.
+const CURVED_BLOCK_VOLUME: f64 = BLOCK_VOLUME + 0.2 * 0.3 * CURVED_FACE_CONTROL_OFFSET / 9.0;
 const OFFSET_PLANE_BYTES: &[u8] = include_bytes!("../../tests/fixtures/offset_plane.x_t");
 
 /// Bundle definition. Order is the manifest order; keep it stable.
@@ -164,6 +170,16 @@ const FIXTURES: &[Fixture] = &[
             body
         },
         exact_volume: Some(BLOCK_VOLUME),
+    },
+    Fixture {
+        name: "solid_block_curved_nurbs_face",
+        probe: "genuinely curved polynomial B_SURFACE face with exact linear boundaries",
+        build: |s| {
+            let body = make::block(s, &tilted(), [0.2, 0.3, 0.4]).expect("block");
+            replace_face_with_curved_quadratic_nurbs(s, body);
+            body
+        },
+        exact_volume: Some(CURVED_BLOCK_VOLUME),
     },
     Fixture {
         name: "solid_block_tolerant_edge",
@@ -357,6 +373,107 @@ fn replace_face_with_bilinear_nurbs(store: &mut Store, body: BodyId) {
         // The replacement surface uses normalized [0, 1]^2 parameters, so the
         // inherited plane-coordinate pcurves are rewritten as exact normalized
         // ones while keeping each fin's independent Curve2d identity.
+        let du = u_bounds[1] - u_bounds[0];
+        let dv = v_bounds[1] - v_bounds[0];
+        let fin_ids: Vec<_> = store
+            .get(face_id)
+            .expect("face")
+            .loops
+            .iter()
+            .flat_map(|&loop_id| store.get(loop_id).expect("loop").fins.iter().copied())
+            .collect();
+        for fin_id in fin_ids {
+            let fin = store.get(fin_id).expect("fin");
+            let edge = store.get(fin.edge).expect("edge");
+            let [Some(start_id), Some(end_id)] = edge.vertices else {
+                unreachable!("block face edges are vertex-bounded")
+            };
+            let Some((t0, t1)) = edge.bounds else {
+                unreachable!("block face edges are bounded")
+            };
+            let to_uv = |point: Point3| {
+                let local = plane.frame().to_local(point);
+                Point2::new((local.x - u_bounds[0]) / du, (local.y - v_bounds[0]) / dv)
+            };
+            let start = to_uv(store.vertex_position(start_id).expect("start position"));
+            let end = to_uv(store.vertex_position(end_id).expect("end position"));
+            let uv_len = (end - start).norm();
+            let pcurve_id = fin.pcurve.expect("block fins carry pcurves").curve();
+            store
+                .replace_pcurve(
+                    pcurve_id,
+                    Curve2dGeom::Line(Line2d::new(start, end - start).expect("uv line")),
+                )
+                .expect("pcurve replacement");
+            let scale = uv_len / (t1 - t0);
+            let map = ParamMap1d::affine(scale, -scale * t0).expect("affine map");
+            store.get_mut(fin_id).expect("fin slot").pcurve = Some(
+                FinPcurve::new(pcurve_id, ParamRange::new(0.0, uv_len), map).expect("fin pcurve"),
+            );
+        }
+    });
+}
+
+/// Replace one block face with a genuinely curved polynomial NURBS patch.
+///
+/// The degree-2, 3x3 Bezier control net retains the four straight boundary
+/// rows/columns in the original face plane. Only its center control moves
+/// [`CURVED_FACE_CONTROL_OFFSET`] along the plane frame's outward normal.
+/// Consequently the B-rep keeps the block's twelve exact linear edges and
+/// remains closed while the face interior is provably non-planar. As with the
+/// bilinear oracle fixture, the replacement chart is normalized to `[0, 1]^2`
+/// and every inherited fin pcurve and edge-to-pcurve map is rewritten to that
+/// chart.
+fn replace_face_with_curved_quadratic_nurbs(store: &mut Store, body: BodyId) {
+    edit_body(store, body, |store| {
+        let face_id = first_plane_face(store, body);
+        let surface_id = store.get(face_id).expect("face").surface;
+        let plane = match store.get(surface_id).expect("surface") {
+            SurfaceGeom::Plane(plane) => *plane,
+            _ => unreachable!("first_plane_face returned a non-plane"),
+        };
+
+        let mut u_bounds = [f64::INFINITY, f64::NEG_INFINITY];
+        let mut v_bounds = [f64::INFINITY, f64::NEG_INFINITY];
+        for &loop_id in &store.get(face_id).expect("face").loops {
+            for &fin_id in &store.get(loop_id).expect("loop").fins {
+                let edge = store
+                    .get(store.get(fin_id).expect("fin").edge)
+                    .expect("edge");
+                for vertex in edge.vertices.into_iter().flatten() {
+                    let local = plane
+                        .frame()
+                        .to_local(store.vertex_position(vertex).expect("vertex position"));
+                    u_bounds[0] = u_bounds[0].min(local.x);
+                    u_bounds[1] = u_bounds[1].max(local.x);
+                    v_bounds[0] = v_bounds[0].min(local.y);
+                    v_bounds[1] = v_bounds[1].max(local.y);
+                }
+            }
+        }
+
+        let u_controls = [u_bounds[0], 0.5 * (u_bounds[0] + u_bounds[1]), u_bounds[1]];
+        let v_controls = [v_bounds[0], 0.5 * (v_bounds[0] + v_bounds[1]), v_bounds[1]];
+        let mut points = Vec::with_capacity(9);
+        for (i, u) in u_controls.into_iter().enumerate() {
+            for (j, v) in v_controls.into_iter().enumerate() {
+                let outward = if i == 1 && j == 1 {
+                    CURVED_FACE_CONTROL_OFFSET
+                } else {
+                    0.0
+                };
+                points.push(plane.frame().point_at(u, v, outward));
+            }
+        }
+        let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let surface = NurbsSurface::new(2, 2, knots.clone(), knots, points, None)
+            .expect("curved biquadratic NURBS patch");
+        store
+            .replace_surface(surface_id, SurfaceGeom::Nurbs(surface))
+            .expect("surface replacement");
+        store.get_mut(face_id).expect("face slot").domain =
+            Some(FaceDomain::from_bounds(0.0, 1.0, 0.0, 1.0).expect("unit domain"));
+
         let du = u_bounds[1] - u_bounds[0];
         let dv = v_bounds[1] - v_bounds[0];
         let fin_ids: Vec<_> = store
@@ -1026,5 +1143,83 @@ fn compare_files(ours_path: &Path, theirs_path: &Path) -> Result<bool, String> {
     } else {
         println!("COMPARE FAILED: {failures} mismatched fields");
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kgeom::surface::Surface as _;
+
+    #[test]
+    fn curved_fixture_source_pcurves_are_normalized_and_incident() {
+        let mut store = Store::new();
+        let fixture = FIXTURES
+            .iter()
+            .find(|fixture| fixture.name == "solid_block_curved_nurbs_face")
+            .expect("curved fixture declaration");
+        let body = (fixture.build)(&mut store);
+        let faults = check_body(&store, body).expect("source body check");
+        assert!(faults.is_empty(), "source body faults: {faults:?}");
+
+        let face_id = store
+            .faces_of_body(body)
+            .expect("body faces")
+            .into_iter()
+            .find(|&face_id| {
+                matches!(
+                    store
+                        .get(store.get(face_id).expect("face").surface)
+                        .expect("surface"),
+                    SurfaceGeom::Nurbs(_)
+                )
+            })
+            .expect("curved NURBS face");
+        let face = store.get(face_id).expect("face");
+        let SurfaceGeom::Nurbs(surface) = store.get(face.surface).expect("surface") else {
+            unreachable!("selected face is not NURBS")
+        };
+        assert_eq!(face.loops.len(), 1);
+        for &fin_id in &store.get(face.loops[0]).expect("face loop").fins {
+            let fin = store.get(fin_id).expect("fin");
+            let edge = store.get(fin.edge).expect("edge");
+            let [Some(start), Some(end)] = edge.vertices else {
+                panic!("curved face boundary edge is not vertex-bounded")
+            };
+            let (t0, t1) = edge.bounds.expect("curved face edge bounds");
+            let use_ = fin.pcurve.expect("curved face source pcurve");
+            let pcurve = store.get(use_.curve()).expect("pcurve").as_curve();
+            let q0 = use_.parameter_at_edge(t0);
+            let q1 = use_.parameter_at_edge(t1);
+            let uv0 = pcurve.eval(q0);
+            let uv1 = pcurve.eval(q1);
+            let uvm = pcurve.eval(0.5 * (q0 + q1));
+            for uv in [uv0, uv1, uvm] {
+                assert!(
+                    uv.x >= -1.0e-14
+                        && uv.x <= 1.0 + 1.0e-14
+                        && uv.y >= -1.0e-14
+                        && uv.y <= 1.0 + 1.0e-14,
+                    "source pcurve is outside the unit chart: {uv:?}"
+                );
+            }
+            assert!(
+                uvm.x.abs() <= 1.0e-14
+                    || (uvm.x - 1.0).abs() <= 1.0e-14
+                    || uvm.y.abs() <= 1.0e-14
+                    || (uvm.y - 1.0).abs() <= 1.0e-14,
+                "source pcurve is not on a chart boundary: {uvm:?}"
+            );
+            let start_position = store.vertex_position(start).expect("start position");
+            let end_position = store.vertex_position(end).expect("end position");
+            assert!(surface.eval([uv0.x, uv0.y]).dist(start_position) <= 1.0e-12);
+            assert!(surface.eval([uv1.x, uv1.y]).dist(end_position) <= 1.0e-12);
+            assert!(
+                surface
+                    .eval([uvm.x, uvm.y])
+                    .dist((start_position + end_position) * 0.5)
+                    <= 1.0e-12
+            );
+        }
     }
 }
