@@ -435,6 +435,46 @@ fn general_single_wide_window_certifies_empty_union_and_swap() {
 }
 
 #[test]
+fn general_both_wide_windows_certify_empty_grid_repeatably_and_swap() {
+    let a = world_sphere();
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.2);
+    let a_window = window(-0.6, core::f64::consts::PI - 0.6, -1.2, -0.8);
+    let b_window = window(-0.4, core::f64::consts::PI - 0.4, 0.8, 1.2);
+    let empty =
+        intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert!(empty.is_proven_empty());
+
+    let repeated =
+        intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_eq!(empty, repeated);
+    let swapped =
+        intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
+    assert_eq!(empty.swapped(), swapped);
+
+    let near_parallel = y_tilted_sphere(
+        Point3::new(0.0, 0.0, 0.0),
+        1.0,
+        0.5 * Tolerances::default().angular(),
+    );
+    let uncertified = intersect_bounded_spheres(
+        &a,
+        a_window,
+        &near_parallel,
+        b_window,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(uncertified.is_empty());
+    assert!(matches!(
+        uncertified.completion(),
+        Completion::Indeterminate {
+            reason: "general coincident sphere window boundary planes exceed the certified angular corridor"
+                | "general coincident sphere window proof encountered an unresolved multiple boundary vertex"
+        }
+    ));
+}
+
+#[test]
 fn general_single_wide_window_preserves_parent_periodic_seam_evidence() {
     let a = world_sphere();
     let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.2);
@@ -491,7 +531,7 @@ fn general_wide_window_union_fails_closed_across_artificial_seams_and_two_wide_i
     assert!(matches!(
         both_wide.completion(),
         Completion::Indeterminate {
-            reason: "general coincident sphere wide-window union supports exactly one wide longitude operand"
+            reason: "general coincident sphere both-wide proof requires every decomposition cell pair to be certified empty"
         }
     ));
 
