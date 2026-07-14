@@ -16,10 +16,11 @@ The current facade supports:
 - deterministic facade-ID mutation, lineage, and tolerance journal iteration;
   and
 - checked, failure-atomic face split/merge transactions using existing curve
-  and pcurve identities with validated affine edge-to-pcurve maps.
+  and pcurve identities with validated affine edge-to-pcurve maps plus
+  facade-owned periodic-chart, seam, closed-use winding, and singular-endpoint
+  metadata.
 
-Broader modeling operations, additional semantic edits, and periodic-chart,
-singular-endpoint, or closed-use pcurve metadata remain under active
+Broader modeling operations and additional semantic edits remain under active
 development. The facade is additive: lower crates remain available to kernel
 implementation and trusted adapter work, but their raw layouts are not part of
 the facade compatibility promise.

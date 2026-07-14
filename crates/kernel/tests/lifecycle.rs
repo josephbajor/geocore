@@ -3,8 +3,10 @@
 use kernel::{
     BlockRequest, BodyTessellationBudgetProfile, BoundedCurve, CheckBodyRequest, CheckLevel,
     CheckOutcome, EntityKind, Error, ExportXtRequest, Frame, ImportXtRequest,
-    IntersectCurvesRequest, Kernel, MutationKind, OperationSettings, ParamRange, SessionPolicy,
-    SurfaceDerivativeOrder, SurfaceEvaluationRequest, TessOptions, TessellateBodyRequest,
+    IntersectCurvesRequest, Kernel, MutationKind, OperationSettings, ParamRange, PcurveChart,
+    PcurveEndpointKind, PcurveMetadata, PcurveSeam, PcurveSeamSide, SessionPolicy,
+    SurfaceDerivativeOrder, SurfaceEvaluationRequest, SurfaceParameter, TessOptions,
+    TessellateBodyRequest,
 };
 
 #[test]
@@ -122,6 +124,53 @@ fn facade_only_client_can_construct_and_check_a_block_with_reports() {
     assert!(check.result().unwrap().faults().is_empty());
     assert!(!check.report().usage().is_empty());
     assert!(check.report().limit_events().is_empty());
+}
+
+#[test]
+fn facade_only_client_can_inspect_and_author_pcurve_metadata_values() {
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let body = session
+        .edit_part(part_id.clone())
+        .unwrap()
+        .create_block(BlockRequest::new(Frame::world(), [2.0, 3.0, 4.0]))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .body();
+    let part = session.part(part_id).unwrap();
+    let fins = part
+        .body(body)
+        .unwrap()
+        .edges()
+        .unwrap()
+        .flat_map(|edge| part.edge(edge).unwrap().fins().collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    assert!(!fins.is_empty());
+    for fin in fins {
+        let view = part.fin(fin).unwrap();
+        assert_eq!(view.pcurve_metadata(), Some(PcurveMetadata::regular()));
+        assert_eq!(view.pcurve_chart(), Some(PcurveChart::identity()));
+        assert_eq!(
+            view.pcurve_endpoint_kinds(),
+            Some([PcurveEndpointKind::Regular; 2])
+        );
+        assert_eq!(view.pcurve_closure_winding(), None);
+        assert_eq!(view.pcurve_seam(), None);
+    }
+
+    let seam = PcurveSeam::new(SurfaceParameter::U, PcurveSeamSide::Upper);
+    let periodic = PcurveMetadata::regular()
+        .with_chart(PcurveChart::shifted([1.0, 0.0]).unwrap())
+        .with_endpoint_kinds([
+            PcurveEndpointKind::Regular,
+            PcurveEndpointKind::SurfaceSingularity,
+        ])
+        .with_closure_winding([1, 0])
+        .with_seam(seam);
+    assert_eq!(periodic.chart().period_shifts(), [1, 0]);
+    assert_eq!(periodic.seam(), Some(seam));
+    assert!(PcurveChart::shifted([f64::NAN, 0.0]).is_err());
 }
 
 #[test]

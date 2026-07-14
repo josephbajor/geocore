@@ -9,7 +9,8 @@
 //! mutation, lineage, and tolerance evidence is exposed through part-qualified
 //! facade journal views. A narrow checked semantic edit transaction composes
 //! pcurve-aware face split/merge operations with validated affine
-//! edge-to-pcurve maps and without exposing raw assembly.
+//! edge-to-pcurve maps plus facade-owned periodic-chart, seam, closed-use, and
+//! singular-endpoint metadata, without exposing raw assembly.
 //! Broader modeling operations remain later façade stages.
 //!
 //! Raw lower-layer storage is not reachable through this crate:
@@ -261,8 +262,9 @@ mod tessellation;
 mod view;
 
 pub use edit::{
-    BoundedPcurve, EditTransaction, MergeFacesRequest, PcurveParameterMap, SplitFaceRequest,
-    SplitFaceResult,
+    BoundedPcurve, EditTransaction, MergeFacesRequest, PcurveChart, PcurveEndpointKind,
+    PcurveMetadata, PcurveParameterMap, PcurveSeam, PcurveSeamSide, SplitFaceRequest,
+    SplitFaceResult, SurfaceParameter,
 };
 pub use error::{
     BodyTessellationError, EntityKind, Error, GeometryEvaluationError, GeometryIntersectionError,

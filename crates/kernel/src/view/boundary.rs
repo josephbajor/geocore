@@ -5,8 +5,9 @@ use ktopo::store::Store;
 
 use crate::error::{Error, Result};
 use crate::{
-    EdgeId, EntityTolerance, FaceId, FinId, FinIds, LoopId, LoopIds, ParamRange, PcurveId,
-    PcurveParameterMap, Sense, ShellId, SurfaceId, VertexId,
+    EdgeId, EntityTolerance, FaceId, FinId, FinIds, LoopId, LoopIds, ParamRange, PcurveChart,
+    PcurveEndpointKind, PcurveId, PcurveMetadata, PcurveParameterMap, PcurveSeam, Sense, ShellId,
+    SurfaceId, VertexId,
 };
 
 /// Conservative finite parameter-space work box exposed without a supporting
@@ -200,6 +201,34 @@ impl<'part> FinView<'part> {
         self.entity()
             .pcurve()
             .map(|use_| PcurveParameterMap::from_raw(use_.edge_to_pcurve()))
+    }
+
+    /// Complete periodic-chart, endpoint, closure, and seam metadata, when
+    /// a pcurve is authored.
+    pub fn pcurve_metadata(&self) -> Option<PcurveMetadata> {
+        self.entity().pcurve().map(PcurveMetadata::from_raw)
+    }
+
+    /// Explicit periodic chart selection, when a pcurve is authored.
+    pub fn pcurve_chart(&self) -> Option<PcurveChart> {
+        self.pcurve_metadata().map(PcurveMetadata::chart)
+    }
+
+    /// Endpoint semantics in increasing edge-parameter order, when a pcurve
+    /// is authored.
+    pub fn pcurve_endpoint_kinds(&self) -> Option<[PcurveEndpointKind; 2]> {
+        self.pcurve_metadata().map(PcurveMetadata::endpoint_kinds)
+    }
+
+    /// Whole-period displacement of an explicitly closed use.
+    pub fn pcurve_closure_winding(&self) -> Option<[i32; 2]> {
+        self.pcurve_metadata()
+            .and_then(PcurveMetadata::closure_winding)
+    }
+
+    /// Periodic face-chart seam role of this use, when declared.
+    pub fn pcurve_seam(&self) -> Option<PcurveSeam> {
+        self.pcurve_metadata().and_then(PcurveMetadata::seam)
     }
 
     /// Tail vertex in fin traversal direction, or `None` for a ring edge.
