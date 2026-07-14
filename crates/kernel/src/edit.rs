@@ -12,22 +12,93 @@ use crate::{
     OperationOutcome, OperationSettings, ParamRange, PartId, PcurveId,
 };
 
+/// Validated affine correspondence from edge parameter `t` to pcurve
+/// parameter `q = scale * t + offset`.
+///
+/// A nonzero finite scale keeps the map invertible. Negative scale explicitly
+/// represents a pcurve authored opposite to increasing edge parameter.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PcurveParameterMap {
+    scale: f64,
+    offset: f64,
+}
+
+impl PcurveParameterMap {
+    /// Identity edge-to-pcurve correspondence.
+    pub const fn identity() -> Self {
+        Self {
+            scale: 1.0,
+            offset: 0.0,
+        }
+    }
+
+    /// Construct a finite invertible affine correspondence.
+    pub fn affine(scale: f64, offset: f64) -> Result<Self> {
+        ParamMap1d::affine(scale, offset)?;
+        Ok(Self { scale, offset })
+    }
+
+    /// Map an edge parameter to the authored pcurve parameter.
+    pub fn map(self, edge_parameter: f64) -> f64 {
+        self.scale * edge_parameter + self.offset
+    }
+
+    /// Map an authored pcurve parameter back to the edge parameter.
+    pub fn inverse(self, pcurve_parameter: f64) -> f64 {
+        (pcurve_parameter - self.offset) / self.scale
+    }
+
+    /// Affine scale; its sign is the relative parameter orientation.
+    pub const fn scale(self) -> f64 {
+        self.scale
+    }
+
+    /// Affine offset.
+    pub const fn offset(self) -> f64 {
+        self.offset
+    }
+
+    pub(crate) fn from_raw(map: ParamMap1d) -> Self {
+        Self {
+            scale: map.scale(),
+            offset: map.offset(),
+        }
+    }
+
+    fn into_raw(self) -> ParamMap1d {
+        ParamMap1d::affine(self.scale, self.offset)
+            .expect("facade pcurve parameter maps are validated at construction")
+    }
+}
+
 /// One existing pcurve restricted to a finite parameter interval.
 ///
-/// The first semantic split slice requires the edge-to-pcurve map to be the
-/// identity. Period-shifted, reversed, singular-endpoint, and closed pcurve
-/// uses remain lower-layer operations until facade-owned value contracts are
-/// added for those meanings.
+/// [`Self::new`] uses the identity edge-to-pcurve map. Call
+/// [`Self::with_parameter_map`] for a reversed, shifted, or scaled authored
+/// parameterization. Periodic chart selection, singular endpoints, and closed
+/// pcurve metadata remain lower-layer operations until facade-owned value
+/// contracts are added for those meanings.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BoundedPcurve {
     pcurve: PcurveId,
     range: ParamRange,
+    parameter_map: PcurveParameterMap,
 }
 
 impl BoundedPcurve {
     /// Bind an opaque pcurve identity to its active finite interval.
     pub const fn new(pcurve: PcurveId, range: ParamRange) -> Self {
-        Self { pcurve, range }
+        Self {
+            pcurve,
+            range,
+            parameter_map: PcurveParameterMap::identity(),
+        }
+    }
+
+    /// Replace the identity edge-to-pcurve correspondence.
+    pub const fn with_parameter_map(mut self, parameter_map: PcurveParameterMap) -> Self {
+        self.parameter_map = parameter_map;
+        self
     }
 
     /// Exact graph-owned pcurve identity.
@@ -38,6 +109,11 @@ impl BoundedPcurve {
     /// Active pcurve interval.
     pub const fn range(&self) -> ParamRange {
         self.range
+    }
+
+    /// Edge-to-pcurve parameter correspondence.
+    pub const fn parameter_map(&self) -> PcurveParameterMap {
+        self.parameter_map
     }
 }
 
@@ -55,7 +131,7 @@ pub struct SplitFaceRequest {
 }
 
 impl SplitFaceRequest {
-    /// Construct one canonical pcurve-aware face split request.
+    /// Construct one affine-map-aware pcurve face split request.
     pub const fn new(
         loop_id: LoopId,
         fin_indices: [usize; 2],
@@ -194,11 +270,15 @@ impl EditTransaction<'_> {
         let sense = source.sense();
         let [forward, reversed] = request.pcurves;
         let pcurves = FinPcurvePair::new(
-            FinPcurve::new(forward.pcurve.raw(), forward.range, ParamMap1d::identity())?,
+            FinPcurve::new(
+                forward.pcurve.raw(),
+                forward.range,
+                forward.parameter_map.into_raw(),
+            )?,
             FinPcurve::new(
                 reversed.pcurve.raw(),
                 reversed.range,
-                ParamMap1d::identity(),
+                reversed.parameter_map.into_raw(),
             )?,
         );
         let made = self.inner.split_face(
@@ -325,6 +405,18 @@ mod tests {
     }
 
     fn split_request(edit: &mut PartEdit<'_>, body: &BodyId) -> SplitFaceRequest {
+        split_request_with_parameterization(edit, body, false)
+    }
+
+    fn reversed_split_request(edit: &mut PartEdit<'_>, body: &BodyId) -> SplitFaceRequest {
+        split_request_with_parameterization(edit, body, true)
+    }
+
+    fn split_request_with_parameterization(
+        edit: &mut PartEdit<'_>,
+        body: &BodyId,
+        reversed_parameterization: bool,
+    ) -> SplitFaceRequest {
         let part = edit.id();
         let store = edit.store_mut_for_test();
         let face = store.faces_of_body(body.raw()).unwrap()[0];
@@ -352,10 +444,19 @@ mod tests {
         let uv_start = Point2::new(local_start.x, local_start.y);
         let uv_end = Point2::new(local_end.x, local_end.y);
         let range = ParamRange::new(0.0, length);
+        let (pcurve_start, pcurve_delta, parameter_map) = if reversed_parameterization {
+            (
+                uv_end,
+                uv_start - uv_end,
+                PcurveParameterMap::affine(-1.0, length).unwrap(),
+            )
+        } else {
+            (uv_start, uv_end - uv_start, PcurveParameterMap::identity())
+        };
         let mut make_pcurve = || {
             store
                 .insert_pcurve(Curve2dGeom::Line(
-                    Line2d::new(uv_start, uv_end - uv_start).unwrap(),
+                    Line2d::new(pcurve_start, pcurve_delta).unwrap(),
                 ))
                 .unwrap()
         };
@@ -366,8 +467,10 @@ mod tests {
             [0, 2],
             BoundedCurve::new(CurveId::new(part.clone(), curve), range),
             [
-                BoundedPcurve::new(PcurveId::new(part.clone(), forward), range),
-                BoundedPcurve::new(PcurveId::new(part, reversed), range),
+                BoundedPcurve::new(PcurveId::new(part.clone(), forward), range)
+                    .with_parameter_map(parameter_map),
+                BoundedPcurve::new(PcurveId::new(part, reversed), range)
+                    .with_parameter_map(parameter_map),
             ],
         )
     }
@@ -437,6 +540,69 @@ mod tests {
                 kind: EntityKind::Edge
             })
         ));
+    }
+
+    #[test]
+    fn affine_pcurve_maps_validate_and_round_trip() {
+        let identity = PcurveParameterMap::identity();
+        assert_eq!((identity.scale(), identity.offset()), (1.0, 0.0));
+        assert_eq!(identity.map(2.5), 2.5);
+        assert_eq!(identity.inverse(2.5), 2.5);
+
+        let reversed = PcurveParameterMap::affine(-2.0, 7.0).unwrap();
+        assert_eq!((reversed.scale(), reversed.offset()), (-2.0, 7.0));
+        assert_eq!(reversed.map(1.5), 4.0);
+        assert_eq!(reversed.inverse(4.0), 1.5);
+
+        for (scale, offset) in [
+            (0.0, 0.0),
+            (f64::NAN, 0.0),
+            (f64::INFINITY, 0.0),
+            (1.0, f64::NEG_INFINITY),
+        ] {
+            assert!(PcurveParameterMap::affine(scale, offset).is_err());
+        }
+    }
+
+    #[test]
+    fn reversed_pcurve_maps_commit_through_facade_views_and_merge() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let mut edit = session.edit_part(part_id).unwrap();
+        let body = block(&mut edit);
+        let request = reversed_split_request(&mut edit, &body);
+        let range = request.pcurves()[0].range();
+        let map = request.pcurves()[0].parameter_map();
+        assert!(map.scale() < 0.0);
+        assert_eq!(map.map(range.lo), range.hi);
+        assert_eq!(map.map(range.hi), range.lo);
+
+        let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+        let split = transaction.split_face(request).unwrap();
+        transaction
+            .commit(core::slice::from_ref(&body))
+            .unwrap()
+            .into_result()
+            .unwrap();
+
+        let part = edit.as_part();
+        for fin in split.fins() {
+            let view = part.fin(fin).unwrap();
+            assert_eq!(view.pcurve_range(), Some(range));
+            assert_eq!(view.pcurve_parameter_map(), Some(map));
+            assert!(view.pcurve().is_some());
+        }
+
+        let mut merge = edit.begin_edit(OperationSettings::default()).unwrap();
+        merge
+            .merge_faces(MergeFacesRequest::new(split.edge()))
+            .unwrap();
+        merge
+            .commit(core::slice::from_ref(&body))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        edit.as_part().body(body).unwrap();
     }
 
     #[test]

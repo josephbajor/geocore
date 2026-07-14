@@ -442,13 +442,16 @@ functions, or unchecked commit. Dropping it rolls back. Nested edit
 transactions remain rejected until journal composition and partition history
 have their own contract.
 
-The implemented first slice accepts existing bounded curve and pcurve IDs and
-uses the identity edge-to-pcurve parameter map. It validates part ownership and
-liveness before mutation, inherits the source face carrier and sense, and
-commits only through contextual affected-body validation. Drop, explicit
-rollback, and a denied checked commit restore both candidate topology and exact
-future opaque identities. Period-shifted, reversed-map, singular-endpoint, and
-closed pcurve uses await facade-owned value contracts.
+The implemented slice accepts existing bounded curve and pcurve IDs. Identity
+mapping remains the constructor default, while a facade-owned validated affine
+map supports shifted, scaled, and reversed authored pcurve parameters. The
+committed map and active pcurve range are inspectable through `FinView`. The
+transaction validates part ownership and liveness before mutation, inherits
+the source face carrier and sense, and commits only through contextual
+affected-body validation. Drop, explicit rollback, and a denied checked commit
+restore both candidate topology and exact future opaque identities. Periodic
+chart selection, singular endpoints, and closed pcurve uses await facade-owned
+value contracts.
 
 `ChangeJournal` is an owning adapter over `ktopo::transaction::Journal`, not a
 copied facade journal schema:
@@ -754,8 +757,8 @@ commit journal. Import into populated parts is rollback- and allocator-clean.
 `ChangeJournal` now exposes exact-size facade-ID iterators for net mutations,
 all five semantic lineage forms, tolerance budgets, and tolerance events while
 retaining deleted and point identities without raw handles. The first semantic
-transaction composes canonical pcurve-aware face split/merge through checked
-contextual commit without exposing raw assembly.
+transaction composes pcurve-aware face split/merge with validated affine
+parameter maps through checked contextual commit without exposing raw assembly.
 
 Broader semantic edit surfaces resume after the K5 adoption pass. The
 interchange facade stays thin: `kxt` reconstruction and checked-commit Fast
@@ -834,7 +837,8 @@ The remaining pressure is explicit:
   application client;
 - X_T reconstruction and oracle fixture authoring remain reviewed trusted raw
   assembly seams pending a separately announced sealed-reconstruction change;
-- broader semantic edit families and noncanonical pcurve maps remain K4 work;
+- broader semantic edit families and periodic-chart, singular-endpoint, and
+  closed-use pcurve metadata remain K4 work;
   facade journal iteration is implemented; and
 - `cargo package -p kernel --list` is now an exact CI-reviewed inventory with
   the facade README and lifecycle tests, while full package creation remains

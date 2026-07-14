@@ -5,8 +5,8 @@ use ktopo::store::Store;
 
 use crate::error::{Error, Result};
 use crate::{
-    EdgeId, EntityTolerance, FaceId, FinId, FinIds, LoopId, LoopIds, ParamRange, PcurveId, Sense,
-    ShellId, SurfaceId, VertexId,
+    EdgeId, EntityTolerance, FaceId, FinId, FinIds, LoopId, LoopIds, ParamRange, PcurveId,
+    PcurveParameterMap, Sense, ShellId, SurfaceId, VertexId,
 };
 
 /// Conservative finite parameter-space work box exposed without a supporting
@@ -188,6 +188,18 @@ impl<'part> FinView<'part> {
         self.entity()
             .pcurve()
             .map(|use_| PcurveId::new(self.id.part().clone(), use_.curve()))
+    }
+
+    /// Active pcurve parameter interval, when authored.
+    pub fn pcurve_range(&self) -> Option<ParamRange> {
+        self.entity().pcurve().map(|use_| use_.range())
+    }
+
+    /// Edge-to-pcurve affine correspondence, when authored.
+    pub fn pcurve_parameter_map(&self) -> Option<PcurveParameterMap> {
+        self.entity()
+            .pcurve()
+            .map(|use_| PcurveParameterMap::from_raw(use_.edge_to_pcurve()))
     }
 
     /// Tail vertex in fin traversal direction, or `None` for a ring edge.
