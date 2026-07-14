@@ -1,4 +1,4 @@
-//! Q3 contextual standalone face-tessellation benchmark ladder.
+//! Q3 contextual standalone face-tessellation benchmark matrix.
 
 use core::time::Duration;
 use std::hint::black_box;
@@ -27,21 +27,21 @@ fn face_tessellation(criterion: &mut Criterion) {
         let prepared = OnceLock::new();
         let expected = OnceLock::new();
         group.bench_function(case.path.rsplit_once('/').unwrap().1, move |bencher| {
-            let fixture = prepared.get_or_init(fixture);
-            let face = fixture.trimmed();
+            let fixture = prepared.get_or_init(|| fixture(case.representation));
+            let face = fixture.trimmed(case.trim_shape);
             let session = compatibility_session();
             let context = OperationContext::new(&session, Tolerances::default())
                 .expect("reviewed Q3 face tolerances satisfy compatibility-v1 precision");
             let options = tessellation_options(case.chord_tol);
             let expected = expected.get_or_init(|| {
-                let first = fixture.tessellate(case.chord_tol, &context);
-                let repeated = fixture.tessellate(case.chord_tol, &context);
+                let first = fixture.tessellate(case.trim_shape, case.chord_tol, &context);
+                let repeated = fixture.tessellate(case.trim_shape, case.chord_tol, &context);
                 assert_eq!(first.mesh, repeated.mesh, "Q3 face preflight mesh drift");
                 assert_eq!(
                     first.report, repeated.report,
                     "Q3 face preflight report drift"
                 );
-                fixture.evidence(&first)
+                fixture.evidence(&face, &first)
             });
             verify(case, *expected);
             bencher.iter_custom(|iterations| {
@@ -54,7 +54,7 @@ fn face_tessellation(criterion: &mut Criterion) {
                     let run = FaceTessellationRun::from_outcome(
                         outcome.expect("reviewed Q3 face policy must be valid"),
                     );
-                    let evidence = fixture.evidence(&run);
+                    let evidence = fixture.evidence(&face, &run);
                     verify(case, evidence);
                     black_box(run);
                 }

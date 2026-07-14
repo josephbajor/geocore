@@ -1812,86 +1812,184 @@
       }
     },
     {
-      "path": "geometry/face-tessellation/cylinder-half-v1/1/chord-1e-2-v1",
+      "path": "geometry/face-tessellation/plane-v2/outer/chord-1e-2-v2",
       "benchmark_target": "face_tessellation",
-      "fixture_version": "face-tessellation.v1",
+      "fixture_version": "face-tessellation.v2",
       "deterministic_seed": 5860386261231271943,
-      "size_parameters": {
-        "elements": 1,
-        "faces": 1
-      },
-      "tolerances": {
-        "chord_tol": 0.01
-      },
-      "policy_values": {
-        "api": "tessellate_with_context",
-        "budget_profile": "face-tessellation.compatibility-v1",
-        "execution": "serial",
-        "max_edge_len": "unbounded",
-        "policy_version": "v1",
-        "usage_contract": "q3-face-usage.v1"
-      },
-      "expected_result_counters": {
-        "mesh_vertices": 543,
-        "mesh_triangles": 1050,
-        "boundary_loops": 1,
-        "boundary_vertices": 34,
-        "positions_finite": true,
-        "uvs_finite": true,
-        "indices_valid": true,
-        "coordinates_aligned": true,
-        "triangles_oriented": true,
-        "usage_stage_count": 5,
-        "usage_consumed": [4, 30, 4, 1050, 543],
-        "usage_digest": "03527d7b7a511949",
-        "limit_event_count": 0,
-        "numeric_resolution_stage_count": 0,
-        "diagnostic_count": 0,
-        "dropped_diagnostic_count": 0,
-        "mesh_digest": "d7aedd965c8561f7",
-        "output_digest": "1fccc2a909863748"
-      }
+      "size_parameters": {"elements": 1, "faces": 1, "trim_loops": 1},
+      "tolerances": {"chord_tol": 0.01},
+      "policy_values": {"api": "tessellate_with_context", "budget_profile": "face-tessellation.compatibility-v1", "execution": "serial", "max_edge_len": "unbounded", "policy_version": "v1", "representation": "plane-v2", "trim_shape": "outer", "usage_contract": "q3-face-usage.v1"},
+      "expected_result_counters": {"mesh_vertices": 4, "mesh_triangles": 2, "boundary_loops": 1, "boundary_loop_vertices": [4], "boundary_vertices": 4, "positions_finite": true, "uvs_finite": true, "indices_valid": true, "coordinates_aligned": true, "triangles_oriented": true, "positions_on_surface": true, "triangles_follow_surface_orientation": true, "boundary_retains_trim_vertices": true, "parameter_area_matches_trim": true, "model_area_finite_positive": true, "parameter_area_units": 6283185307, "model_area_units": 6283185307, "usage_stage_count": 5, "usage_consumed": [0, 0, 0, 2, 4], "trim_digest": "4b1717c9c0ac29ea", "boundary_digest": "2928d6486d444958", "usage_digest": "fabdc67a6ea30b26", "limit_event_count": 0, "numeric_resolution_stage_count": 0, "diagnostic_count": 0, "dropped_diagnostic_count": 0, "mesh_digest": "d8c67e8d93eed369", "output_digest": "36c784704e836733"}
     },
     {
-      "path": "geometry/face-tessellation/cylinder-half-v1/1/chord-1e-3-v1",
+      "path": "geometry/face-tessellation/plane-v2/outer/chord-1e-3-v2",
       "benchmark_target": "face_tessellation",
-      "fixture_version": "face-tessellation.v1",
+      "fixture_version": "face-tessellation.v2",
       "deterministic_seed": 5860386261231271943,
-      "size_parameters": {
-        "elements": 1,
-        "faces": 1
-      },
-      "tolerances": {
-        "chord_tol": 0.001
-      },
-      "policy_values": {
-        "api": "tessellate_with_context",
-        "budget_profile": "face-tessellation.compatibility-v1",
-        "execution": "serial",
-        "max_edge_len": "unbounded",
-        "policy_version": "v1",
-        "usage_contract": "q3-face-usage.v1"
-      },
-      "expected_result_counters": {
-        "mesh_vertices": 18841,
-        "mesh_triangles": 37550,
-        "boundary_loops": 1,
-        "boundary_vertices": 130,
-        "positions_finite": true,
-        "uvs_finite": true,
-        "indices_valid": true,
-        "coordinates_aligned": true,
-        "triangles_oriented": true,
-        "usage_stage_count": 5,
-        "usage_consumed": [6, 126, 6, 37550, 18841],
-        "usage_digest": "34465daae185880c",
-        "limit_event_count": 0,
-        "numeric_resolution_stage_count": 0,
-        "diagnostic_count": 0,
-        "dropped_diagnostic_count": 0,
-        "mesh_digest": "f57c3dd38a9f0da8",
-        "output_digest": "a96b3eb91af566d7"
-      }
+      "size_parameters": {"elements": 1, "faces": 1, "trim_loops": 1},
+      "tolerances": {"chord_tol": 0.001},
+      "policy_values": {"api": "tessellate_with_context", "budget_profile": "face-tessellation.compatibility-v1", "execution": "serial", "max_edge_len": "unbounded", "policy_version": "v1", "representation": "plane-v2", "trim_shape": "outer", "usage_contract": "q3-face-usage.v1"},
+      "expected_result_counters": {"mesh_vertices": 4, "mesh_triangles": 2, "boundary_loops": 1, "boundary_loop_vertices": [4], "boundary_vertices": 4, "positions_finite": true, "uvs_finite": true, "indices_valid": true, "coordinates_aligned": true, "triangles_oriented": true, "positions_on_surface": true, "triangles_follow_surface_orientation": true, "boundary_retains_trim_vertices": true, "parameter_area_matches_trim": true, "model_area_finite_positive": true, "parameter_area_units": 6283185307, "model_area_units": 6283185307, "usage_stage_count": 5, "usage_consumed": [0, 0, 0, 2, 4], "trim_digest": "4b1717c9c0ac29ea", "boundary_digest": "2928d6486d444958", "usage_digest": "fabdc67a6ea30b26", "limit_event_count": 0, "numeric_resolution_stage_count": 0, "diagnostic_count": 0, "dropped_diagnostic_count": 0, "mesh_digest": "d8c67e8d93eed369", "output_digest": "36c784704e836733"}
+    },
+    {
+      "path": "geometry/face-tessellation/plane-v2/one-hole/chord-1e-2-v2",
+      "benchmark_target": "face_tessellation",
+      "fixture_version": "face-tessellation.v2",
+      "deterministic_seed": 5860386261231271943,
+      "size_parameters": {"elements": 1, "faces": 1, "trim_loops": 2},
+      "tolerances": {"chord_tol": 0.01},
+      "policy_values": {"api": "tessellate_with_context", "budget_profile": "face-tessellation.compatibility-v1", "execution": "serial", "max_edge_len": "unbounded", "policy_version": "v1", "representation": "plane-v2", "trim_shape": "one-hole", "usage_contract": "q3-face-usage.v1"},
+      "expected_result_counters": {"mesh_vertices": 8, "mesh_triangles": 8, "boundary_loops": 2, "boundary_loop_vertices": [4, 4], "boundary_vertices": 8, "positions_finite": true, "uvs_finite": true, "indices_valid": true, "coordinates_aligned": true, "triangles_oriented": true, "positions_on_surface": true, "triangles_follow_surface_orientation": true, "boundary_retains_trim_vertices": true, "parameter_area_matches_trim": true, "model_area_finite_positive": true, "parameter_area_units": 5445427266, "model_area_units": 5445427266, "usage_stage_count": 5, "usage_consumed": [0, 0, 0, 8, 8], "trim_digest": "91245d5ed35dd8a5", "boundary_digest": "d3231d56c6170057", "usage_digest": "4f8214a7d7866f2c", "limit_event_count": 0, "numeric_resolution_stage_count": 0, "diagnostic_count": 0, "dropped_diagnostic_count": 0, "mesh_digest": "1d5a3f5d35c9b2f6", "output_digest": "54dc047d60d74377"}
+    },
+    {
+      "path": "geometry/face-tessellation/plane-v2/one-hole/chord-1e-3-v2",
+      "benchmark_target": "face_tessellation",
+      "fixture_version": "face-tessellation.v2",
+      "deterministic_seed": 5860386261231271943,
+      "size_parameters": {"elements": 1, "faces": 1, "trim_loops": 2},
+      "tolerances": {"chord_tol": 0.001},
+      "policy_values": {"api": "tessellate_with_context", "budget_profile": "face-tessellation.compatibility-v1", "execution": "serial", "max_edge_len": "unbounded", "policy_version": "v1", "representation": "plane-v2", "trim_shape": "one-hole", "usage_contract": "q3-face-usage.v1"},
+      "expected_result_counters": {"mesh_vertices": 8, "mesh_triangles": 8, "boundary_loops": 2, "boundary_loop_vertices": [4, 4], "boundary_vertices": 8, "positions_finite": true, "uvs_finite": true, "indices_valid": true, "coordinates_aligned": true, "triangles_oriented": true, "positions_on_surface": true, "triangles_follow_surface_orientation": true, "boundary_retains_trim_vertices": true, "parameter_area_matches_trim": true, "model_area_finite_positive": true, "parameter_area_units": 5445427266, "model_area_units": 5445427266, "usage_stage_count": 5, "usage_consumed": [0, 0, 0, 8, 8], "trim_digest": "91245d5ed35dd8a5", "boundary_digest": "d3231d56c6170057", "usage_digest": "4f8214a7d7866f2c", "limit_event_count": 0, "numeric_resolution_stage_count": 0, "diagnostic_count": 0, "dropped_diagnostic_count": 0, "mesh_digest": "1d5a3f5d35c9b2f6", "output_digest": "54dc047d60d74377"}
+    },
+    {
+      "path": "geometry/face-tessellation/plane-v2/three-holes/chord-1e-2-v2",
+      "benchmark_target": "face_tessellation",
+      "fixture_version": "face-tessellation.v2",
+      "deterministic_seed": 5860386261231271943,
+      "size_parameters": {"elements": 1, "faces": 1, "trim_loops": 4},
+      "tolerances": {"chord_tol": 0.01},
+      "policy_values": {"api": "tessellate_with_context", "budget_profile": "face-tessellation.compatibility-v1", "execution": "serial", "max_edge_len": "unbounded", "policy_version": "v1", "representation": "plane-v2", "trim_shape": "three-holes", "usage_contract": "q3-face-usage.v1"},
+      "expected_result_counters": {"mesh_vertices": 16, "mesh_triangles": 20, "boundary_loops": 4, "boundary_loop_vertices": [4, 4, 4, 4], "boundary_vertices": 16, "positions_finite": true, "uvs_finite": true, "indices_valid": true, "coordinates_aligned": true, "triangles_oriented": true, "positions_on_surface": true, "triangles_follow_surface_orientation": true, "boundary_retains_trim_vertices": true, "parameter_area_matches_trim": true, "model_area_finite_positive": true, "parameter_area_units": 4974188368, "model_area_units": 4974188368, "usage_stage_count": 5, "usage_consumed": [0, 0, 0, 20, 16], "trim_digest": "977f5677ed7f9127", "boundary_digest": "28a74f72e8613705", "usage_digest": "651f8ecd63ea7e30", "limit_event_count": 0, "numeric_resolution_stage_count": 0, "diagnostic_count": 0, "dropped_diagnostic_count": 0, "mesh_digest": "29a4aac42455846d", "output_digest": "a94792836d31dddd"}
+    },
+    {
+      "path": "geometry/face-tessellation/plane-v2/three-holes/chord-1e-3-v2",
+      "benchmark_target": "face_tessellation",
+      "fixture_version": "face-tessellation.v2",
+      "deterministic_seed": 5860386261231271943,
+      "size_parameters": {"elements": 1, "faces": 1, "trim_loops": 4},
+      "tolerances": {"chord_tol": 0.001},
+      "policy_values": {"api": "tessellate_with_context", "budget_profile": "face-tessellation.compatibility-v1", "execution": "serial", "max_edge_len": "unbounded", "policy_version": "v1", "representation": "plane-v2", "trim_shape": "three-holes", "usage_contract": "q3-face-usage.v1"},
+      "expected_result_counters": {"mesh_vertices": 16, "mesh_triangles": 20, "boundary_loops": 4, "boundary_loop_vertices": [4, 4, 4, 4], "boundary_vertices": 16, "positions_finite": true, "uvs_finite": true, "indices_valid": true, "coordinates_aligned": true, "triangles_oriented": true, "positions_on_surface": true, "triangles_follow_surface_orientation": true, "boundary_retains_trim_vertices": true, "parameter_area_matches_trim": true, "model_area_finite_positive": true, "parameter_area_units": 4974188368, "model_area_units": 4974188368, "usage_stage_count": 5, "usage_consumed": [0, 0, 0, 20, 16], "trim_digest": "977f5677ed7f9127", "boundary_digest": "28a74f72e8613705", "usage_digest": "651f8ecd63ea7e30", "limit_event_count": 0, "numeric_resolution_stage_count": 0, "diagnostic_count": 0, "dropped_diagnostic_count": 0, "mesh_digest": "29a4aac42455846d", "output_digest": "a94792836d31dddd"}
+    },
+    {
+      "path": "geometry/face-tessellation/half-cylinder-v2/outer/chord-1e-2-v2",
+      "benchmark_target": "face_tessellation",
+      "fixture_version": "face-tessellation.v2",
+      "deterministic_seed": 5860386261231271943,
+      "size_parameters": {"elements": 1, "faces": 1, "trim_loops": 1},
+      "tolerances": {"chord_tol": 0.01},
+      "policy_values": {"api": "tessellate_with_context", "budget_profile": "face-tessellation.compatibility-v1", "execution": "serial", "max_edge_len": "unbounded", "policy_version": "v1", "representation": "half-cylinder-v2", "trim_shape": "outer", "usage_contract": "q3-face-usage.v1"},
+      "expected_result_counters": {"mesh_vertices": 543, "mesh_triangles": 1050, "boundary_loops": 1, "boundary_loop_vertices": [34], "boundary_vertices": 34, "positions_finite": true, "uvs_finite": true, "indices_valid": true, "coordinates_aligned": true, "triangles_oriented": true, "positions_on_surface": true, "triangles_follow_surface_orientation": true, "boundary_retains_trim_vertices": true, "parameter_area_matches_trim": true, "model_area_finite_positive": true, "parameter_area_units": 6283185307, "model_area_units": 12614511395, "usage_stage_count": 5, "usage_consumed": [4, 30, 4, 1050, 543], "trim_digest": "4b1717c9c0ac29ea", "boundary_digest": "84f9f765048d01c2", "usage_digest": "03527d7b7a511949", "limit_event_count": 0, "numeric_resolution_stage_count": 0, "diagnostic_count": 0, "dropped_diagnostic_count": 0, "mesh_digest": "ea7233bd22205d26", "output_digest": "9763b1c9054421ed"}
+    },
+    {
+      "path": "geometry/face-tessellation/half-cylinder-v2/outer/chord-1e-3-v2",
+      "benchmark_target": "face_tessellation",
+      "fixture_version": "face-tessellation.v2",
+      "deterministic_seed": 5860386261231271943,
+      "size_parameters": {"elements": 1, "faces": 1, "trim_loops": 1},
+      "tolerances": {"chord_tol": 0.001},
+      "policy_values": {"api": "tessellate_with_context", "budget_profile": "face-tessellation.compatibility-v1", "execution": "serial", "max_edge_len": "unbounded", "policy_version": "v1", "representation": "half-cylinder-v2", "trim_shape": "outer", "usage_contract": "q3-face-usage.v1"},
+      "expected_result_counters": {"mesh_vertices": 18841, "mesh_triangles": 37550, "boundary_loops": 1, "boundary_loop_vertices": [130], "boundary_vertices": 130, "positions_finite": true, "uvs_finite": true, "indices_valid": true, "coordinates_aligned": true, "triangles_oriented": true, "positions_on_surface": true, "triangles_follow_surface_orientation": true, "boundary_retains_trim_vertices": true, "parameter_area_matches_trim": true, "model_area_finite_positive": true, "parameter_area_units": 6283185307, "model_area_units": 12591608093, "usage_stage_count": 5, "usage_consumed": [6, 126, 6, 37550, 18841], "trim_digest": "4b1717c9c0ac29ea", "boundary_digest": "43560349f2658192", "usage_digest": "34465daae185880c", "limit_event_count": 0, "numeric_resolution_stage_count": 0, "diagnostic_count": 0, "dropped_diagnostic_count": 0, "mesh_digest": "f31d11e63e2afed5", "output_digest": "9fecc5d7143bdbec"}
+    },
+    {
+      "path": "geometry/face-tessellation/half-cylinder-v2/one-hole/chord-1e-2-v2",
+      "benchmark_target": "face_tessellation",
+      "fixture_version": "face-tessellation.v2",
+      "deterministic_seed": 5860386261231271943,
+      "size_parameters": {"elements": 1, "faces": 1, "trim_loops": 2},
+      "tolerances": {"chord_tol": 0.01},
+      "policy_values": {"api": "tessellate_with_context", "budget_profile": "face-tessellation.compatibility-v1", "execution": "serial", "max_edge_len": "unbounded", "policy_version": "v1", "representation": "half-cylinder-v2", "trim_shape": "one-hole", "usage_contract": "q3-face-usage.v1"},
+      "expected_result_counters": {"mesh_vertices": 540, "mesh_triangles": 1028, "boundary_loops": 2, "boundary_loop_vertices": [34, 18], "boundary_vertices": 52, "positions_finite": true, "uvs_finite": true, "indices_valid": true, "coordinates_aligned": true, "triangles_oriented": true, "positions_on_surface": true, "triangles_follow_surface_orientation": true, "boundary_retains_trim_vertices": true, "parameter_area_matches_trim": true, "model_area_finite_positive": true, "parameter_area_units": 5445427266, "model_area_units": 11002960078, "usage_stage_count": 5, "usage_consumed": [4, 44, 4, 1028, 540], "trim_digest": "91245d5ed35dd8a5", "boundary_digest": "7e6fb9b9fb752f20", "usage_digest": "3211d9616cba9492", "limit_event_count": 0, "numeric_resolution_stage_count": 0, "diagnostic_count": 0, "dropped_diagnostic_count": 0, "mesh_digest": "fb838ad8558f55df", "output_digest": "b0977f26a716361f"}
+    },
+    {
+      "path": "geometry/face-tessellation/half-cylinder-v2/one-hole/chord-1e-3-v2",
+      "benchmark_target": "face_tessellation",
+      "fixture_version": "face-tessellation.v2",
+      "deterministic_seed": 5860386261231271943,
+      "size_parameters": {"elements": 1, "faces": 1, "trim_loops": 2},
+      "tolerances": {"chord_tol": 0.001},
+      "policy_values": {"api": "tessellate_with_context", "budget_profile": "face-tessellation.compatibility-v1", "execution": "serial", "max_edge_len": "unbounded", "policy_version": "v1", "representation": "half-cylinder-v2", "trim_shape": "one-hole", "usage_contract": "q3-face-usage.v1"},
+      "expected_result_counters": {"mesh_vertices": 14946, "mesh_triangles": 29696, "boundary_loops": 2, "boundary_loop_vertices": [130, 66], "boundary_vertices": 196, "positions_finite": true, "uvs_finite": true, "indices_valid": true, "coordinates_aligned": true, "triangles_oriented": true, "positions_on_surface": true, "triangles_follow_surface_orientation": true, "boundary_retains_trim_vertices": true, "parameter_area_matches_trim": true, "model_area_finite_positive": true, "parameter_area_units": 5445427266, "model_area_units": 10930870905, "usage_stage_count": 5, "usage_consumed": [6, 188, 6, 29696, 14946], "trim_digest": "91245d5ed35dd8a5", "boundary_digest": "460b99ee666ebfa8", "usage_digest": "9e0e71c4562d7d58", "limit_event_count": 0, "numeric_resolution_stage_count": 0, "diagnostic_count": 0, "dropped_diagnostic_count": 0, "mesh_digest": "e9815951aefd8117", "output_digest": "ebf1640f7a76a8c0"}
+    },
+    {
+      "path": "geometry/face-tessellation/half-cylinder-v2/three-holes/chord-1e-2-v2",
+      "benchmark_target": "face_tessellation",
+      "fixture_version": "face-tessellation.v2",
+      "deterministic_seed": 5860386261231271943,
+      "size_parameters": {"elements": 1, "faces": 1, "trim_loops": 4},
+      "tolerances": {"chord_tol": 0.01},
+      "policy_values": {"api": "tessellate_with_context", "budget_profile": "face-tessellation.compatibility-v1", "execution": "serial", "max_edge_len": "unbounded", "policy_version": "v1", "representation": "half-cylinder-v2", "trim_shape": "three-holes", "usage_contract": "q3-face-usage.v1"},
+      "expected_result_counters": {"mesh_vertices": 467, "mesh_triangles": 874, "boundary_loops": 4, "boundary_loop_vertices": [34, 10, 10, 10], "boundary_vertices": 64, "positions_finite": true, "uvs_finite": true, "indices_valid": true, "coordinates_aligned": true, "triangles_oriented": true, "positions_on_surface": true, "triangles_follow_surface_orientation": true, "boundary_retains_trim_vertices": true, "parameter_area_matches_trim": true, "model_area_finite_positive": true, "parameter_area_units": 4974188368, "model_area_units": 10074975956, "usage_stage_count": 5, "usage_consumed": [4, 48, 4, 874, 467], "trim_digest": "977f5677ed7f9127", "boundary_digest": "a1c26215fcac9465", "usage_digest": "1a5bf9b0758d6bf7", "limit_event_count": 0, "numeric_resolution_stage_count": 0, "diagnostic_count": 0, "dropped_diagnostic_count": 0, "mesh_digest": "e6d415661ea86ad5", "output_digest": "c72ee9c463af83dd"}
+    },
+    {
+      "path": "geometry/face-tessellation/half-cylinder-v2/three-holes/chord-1e-3-v2",
+      "benchmark_target": "face_tessellation",
+      "fixture_version": "face-tessellation.v2",
+      "deterministic_seed": 5860386261231271943,
+      "size_parameters": {"elements": 1, "faces": 1, "trim_loops": 4},
+      "tolerances": {"chord_tol": 0.001},
+      "policy_values": {"api": "tessellate_with_context", "budget_profile": "face-tessellation.compatibility-v1", "execution": "serial", "max_edge_len": "unbounded", "policy_version": "v1", "representation": "half-cylinder-v2", "trim_shape": "three-holes", "usage_contract": "q3-face-usage.v1"},
+      "expected_result_counters": {"mesh_vertices": 10774, "mesh_triangles": 21320, "boundary_loops": 4, "boundary_loop_vertices": [130, 34, 34, 34], "boundary_vertices": 232, "positions_finite": true, "uvs_finite": true, "indices_valid": true, "coordinates_aligned": true, "triangles_oriented": true, "positions_on_surface": true, "triangles_follow_surface_orientation": true, "boundary_retains_trim_vertices": true, "parameter_area_matches_trim": true, "model_area_finite_positive": true, "parameter_area_units": 4974188368, "model_area_units": 9984072042, "usage_stage_count": 5, "usage_consumed": [6, 216, 6, 21320, 10774], "trim_digest": "977f5677ed7f9127", "boundary_digest": "6f77bed300ea04fd", "usage_digest": "3f9d551dbf483bb9", "limit_event_count": 0, "numeric_resolution_stage_count": 0, "diagnostic_count": 0, "dropped_diagnostic_count": 0, "mesh_digest": "aad9edf8610cc7c5", "output_digest": "7a3fd99870f627e5"}
+    },
+    {
+      "path": "geometry/face-tessellation/rational-nurbs-v2/outer/chord-1e-2-v2",
+      "benchmark_target": "face_tessellation",
+      "fixture_version": "face-tessellation.v2",
+      "deterministic_seed": 5860386261231271943,
+      "size_parameters": {"elements": 1, "faces": 1, "trim_loops": 1},
+      "tolerances": {"chord_tol": 0.01},
+      "policy_values": {"api": "tessellate_with_context", "budget_profile": "face-tessellation.compatibility-v1", "execution": "serial", "max_edge_len": "unbounded", "policy_version": "v1", "representation": "rational-nurbs-v2", "trim_shape": "outer", "usage_contract": "q3-face-usage.v1"},
+      "expected_result_counters": {"mesh_vertices": 155, "mesh_triangles": 282, "boundary_loops": 1, "boundary_loop_vertices": [26], "boundary_vertices": 26, "positions_finite": true, "uvs_finite": true, "indices_valid": true, "coordinates_aligned": true, "triangles_oriented": true, "positions_on_surface": true, "triangles_follow_surface_orientation": true, "boundary_retains_trim_vertices": true, "parameter_area_matches_trim": true, "model_area_finite_positive": true, "parameter_area_units": 6283185307, "model_area_units": 6290010630, "usage_stage_count": 5, "usage_consumed": [4, 22, 3, 282, 155], "trim_digest": "4b1717c9c0ac29ea", "boundary_digest": "1bf4c49f084eca52", "usage_digest": "05a5aa7513ab0d59", "limit_event_count": 0, "numeric_resolution_stage_count": 0, "diagnostic_count": 0, "dropped_diagnostic_count": 0, "mesh_digest": "6651b261eb20f12f", "output_digest": "8596ed7a62bdb79b"}
+    },
+    {
+      "path": "geometry/face-tessellation/rational-nurbs-v2/outer/chord-1e-3-v2",
+      "benchmark_target": "face_tessellation",
+      "fixture_version": "face-tessellation.v2",
+      "deterministic_seed": 5860386261231271943,
+      "size_parameters": {"elements": 1, "faces": 1, "trim_loops": 1},
+      "tolerances": {"chord_tol": 0.001},
+      "policy_values": {"api": "tessellate_with_context", "budget_profile": "face-tessellation.compatibility-v1", "execution": "serial", "max_edge_len": "unbounded", "policy_version": "v1", "representation": "rational-nurbs-v2", "trim_shape": "outer", "usage_contract": "q3-face-usage.v1"},
+      "expected_result_counters": {"mesh_vertices": 3015, "mesh_triangles": 5962, "boundary_loops": 1, "boundary_loop_vertices": [66], "boundary_vertices": 66, "positions_finite": true, "uvs_finite": true, "indices_valid": true, "coordinates_aligned": true, "triangles_oriented": true, "positions_on_surface": true, "triangles_follow_surface_orientation": true, "boundary_retains_trim_vertices": true, "parameter_area_matches_trim": true, "model_area_finite_positive": true, "parameter_area_units": 6283185307, "model_area_units": 6285978266, "usage_stage_count": 5, "usage_consumed": [5, 62, 5, 5962, 3015], "trim_digest": "4b1717c9c0ac29ea", "boundary_digest": "cd75dda4470c35ca", "usage_digest": "b3f2b89c205e1f35", "limit_event_count": 0, "numeric_resolution_stage_count": 0, "diagnostic_count": 0, "dropped_diagnostic_count": 0, "mesh_digest": "31ce831d8d0c31e6", "output_digest": "0a5c562c9f36809a"}
+    },
+    {
+      "path": "geometry/face-tessellation/rational-nurbs-v2/one-hole/chord-1e-2-v2",
+      "benchmark_target": "face_tessellation",
+      "fixture_version": "face-tessellation.v2",
+      "deterministic_seed": 5860386261231271943,
+      "size_parameters": {"elements": 1, "faces": 1, "trim_loops": 2},
+      "tolerances": {"chord_tol": 0.01},
+      "policy_values": {"api": "tessellate_with_context", "budget_profile": "face-tessellation.compatibility-v1", "execution": "serial", "max_edge_len": "unbounded", "policy_version": "v1", "representation": "rational-nurbs-v2", "trim_shape": "one-hole", "usage_contract": "q3-face-usage.v1"},
+      "expected_result_counters": {"mesh_vertices": 110, "mesh_triangles": 184, "boundary_loops": 2, "boundary_loop_vertices": [26, 10], "boundary_vertices": 36, "positions_finite": true, "uvs_finite": true, "indices_valid": true, "coordinates_aligned": true, "triangles_oriented": true, "positions_on_surface": true, "triangles_follow_surface_orientation": true, "boundary_retains_trim_vertices": true, "parameter_area_matches_trim": true, "model_area_finite_positive": true, "parameter_area_units": 5445427266, "model_area_units": 5408604575, "usage_stage_count": 5, "usage_consumed": [4, 28, 3, 184, 110], "trim_digest": "91245d5ed35dd8a5", "boundary_digest": "b80c967eb62aad08", "usage_digest": "5b0384a2e2627643", "limit_event_count": 0, "numeric_resolution_stage_count": 0, "diagnostic_count": 0, "dropped_diagnostic_count": 0, "mesh_digest": "390f465106c607d4", "output_digest": "1f57db501d7a15a0"}
+    },
+    {
+      "path": "geometry/face-tessellation/rational-nurbs-v2/one-hole/chord-1e-3-v2",
+      "benchmark_target": "face_tessellation",
+      "fixture_version": "face-tessellation.v2",
+      "deterministic_seed": 5860386261231271943,
+      "size_parameters": {"elements": 1, "faces": 1, "trim_loops": 2},
+      "tolerances": {"chord_tol": 0.001},
+      "policy_values": {"api": "tessellate_with_context", "budget_profile": "face-tessellation.compatibility-v1", "execution": "serial", "max_edge_len": "unbounded", "policy_version": "v1", "representation": "rational-nurbs-v2", "trim_shape": "one-hole", "usage_contract": "q3-face-usage.v1"},
+      "expected_result_counters": {"mesh_vertices": 2314, "mesh_triangles": 4528, "boundary_loops": 2, "boundary_loop_vertices": [66, 34], "boundary_vertices": 100, "positions_finite": true, "uvs_finite": true, "indices_valid": true, "coordinates_aligned": true, "triangles_oriented": true, "positions_on_surface": true, "triangles_follow_surface_orientation": true, "boundary_retains_trim_vertices": true, "parameter_area_matches_trim": true, "model_area_finite_positive": true, "parameter_area_units": 5445427266, "model_area_units": 5408275586, "usage_stage_count": 5, "usage_consumed": [5, 92, 5, 4528, 2314], "trim_digest": "91245d5ed35dd8a5", "boundary_digest": "db5c2780f85767e4", "usage_digest": "fc3a50ede4b4627c", "limit_event_count": 0, "numeric_resolution_stage_count": 0, "diagnostic_count": 0, "dropped_diagnostic_count": 0, "mesh_digest": "7cbccfe82bad7745", "output_digest": "587e4d6f32292a72"}
+    },
+    {
+      "path": "geometry/face-tessellation/rational-nurbs-v2/three-holes/chord-1e-2-v2",
+      "benchmark_target": "face_tessellation",
+      "fixture_version": "face-tessellation.v2",
+      "deterministic_seed": 5860386261231271943,
+      "size_parameters": {"elements": 1, "faces": 1, "trim_loops": 4},
+      "tolerances": {"chord_tol": 0.01},
+      "policy_values": {"api": "tessellate_with_context", "budget_profile": "face-tessellation.compatibility-v1", "execution": "serial", "max_edge_len": "unbounded", "policy_version": "v1", "representation": "rational-nurbs-v2", "trim_shape": "three-holes", "usage_contract": "q3-face-usage.v1"},
+      "expected_result_counters": {"mesh_vertices": 155, "mesh_triangles": 266, "boundary_loops": 4, "boundary_loop_vertices": [26, 6, 10, 6], "boundary_vertices": 48, "positions_finite": true, "uvs_finite": true, "indices_valid": true, "coordinates_aligned": true, "triangles_oriented": true, "positions_on_surface": true, "triangles_follow_surface_orientation": true, "boundary_retains_trim_vertices": true, "parameter_area_matches_trim": true, "model_area_finite_positive": true, "parameter_area_units": 4974188368, "model_area_units": 4982128008, "usage_stage_count": 5, "usage_consumed": [4, 32, 3, 266, 155], "trim_digest": "977f5677ed7f9127", "boundary_digest": "f5c0b5e6dff47169", "usage_digest": "220f55cd09ff75cb", "limit_event_count": 0, "numeric_resolution_stage_count": 0, "diagnostic_count": 0, "dropped_diagnostic_count": 0, "mesh_digest": "0f6c15bbd3adf7e2", "output_digest": "48500e0302b0b5db"}
+    },
+    {
+      "path": "geometry/face-tessellation/rational-nurbs-v2/three-holes/chord-1e-3-v2",
+      "benchmark_target": "face_tessellation",
+      "fixture_version": "face-tessellation.v2",
+      "deterministic_seed": 5860386261231271943,
+      "size_parameters": {"elements": 1, "faces": 1, "trim_loops": 4},
+      "tolerances": {"chord_tol": 0.001},
+      "policy_values": {"api": "tessellate_with_context", "budget_profile": "face-tessellation.compatibility-v1", "execution": "serial", "max_edge_len": "unbounded", "policy_version": "v1", "representation": "rational-nurbs-v2", "trim_shape": "three-holes", "usage_contract": "q3-face-usage.v1"},
+      "expected_result_counters": {"mesh_vertices": 1898, "mesh_triangles": 3682, "boundary_loops": 4, "boundary_loop_vertices": [66, 16, 18, 18], "boundary_vertices": 118, "positions_finite": true, "uvs_finite": true, "indices_valid": true, "coordinates_aligned": true, "triangles_oriented": true, "positions_on_surface": true, "triangles_follow_surface_orientation": true, "boundary_retains_trim_vertices": true, "parameter_area_matches_trim": true, "model_area_finite_positive": true, "parameter_area_units": 4974188368, "model_area_units": 4962705823, "usage_stage_count": 5, "usage_consumed": [5, 102, 5, 3682, 1898], "trim_digest": "977f5677ed7f9127", "boundary_digest": "e398498c3a7cf667", "usage_digest": "81a64b31e3ce2ab7", "limit_event_count": 0, "numeric_resolution_stage_count": 0, "diagnostic_count": 0, "dropped_diagnostic_count": 0, "mesh_digest": "4408d214e835ffa4", "output_digest": "e7229ca03cfbf515"}
     },
     {
       "path": "geometry/nurbs-isolation/poly-single-v1/1/work-exact-v1",

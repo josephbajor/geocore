@@ -1017,10 +1017,13 @@ land before any product cap is selected:
    explicit NURBS pcurve uses remain projection-free while graph work composes.
    Body-level face-boundary use remains zero by design: shared edges are
    pre-refined and frozen, and any nested boundary insertion is a crack-
-   prevention error. A separate contextual half-cylinder ladder activates and
-   pins all five face-profile stages at two tolerances. Expand the face
-   representation/trim matrix and add mixed, genuinely curved NURBS, broader
-   imported-corpus, and tighter-tolerance body measurements before proposing explicit
+   prevention error. A separate contextual 18-row matrix now crosses plane,
+   analytic half-cylinder, and genuinely curved rational-quadratic NURBS
+   surfaces with outer, one-hole, and three-hole trims at two tolerances; it
+   pins all five face-profile stages plus trim/boundary, lift, orientation, and
+   area evidence. The face representation/trim evidence gate is therefore
+   closed. Add genuinely curved NURBS, sheet, broader imported-corpus, and
+   tighter-tolerance body measurements before proposing explicit
    `FaceTessellationBudgetProfile::bounded_v1()` and
    `BodyTessellationBudgetProfile::bounded_v1()` presets with finite aggregate
    and root caps. Legacy wrappers stay on compatibility `v1_defaults`; facade,

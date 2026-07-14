@@ -87,7 +87,7 @@ jobs:
           cargo bench --manifest-path benches/Cargo.toml --locked --bench body_tessellation -- topology/body-tessellation/block-v2/1/chord-1e-2-v2
           cargo bench --manifest-path benches/Cargo.toml --locked --bench body_tessellation -- topology/body-tessellation/mixed-store-cylinder-v2/1/chord-1e-2-v2
           cargo bench --manifest-path benches/Cargo.toml --locked --bench body_tessellation -- topology/body-tessellation/imported-cylinder-v2/1/chord-1e-2-v2
-          cargo bench --manifest-path benches/Cargo.toml --locked --bench face_tessellation -- geometry/face-tessellation/cylinder-half-v1/1/chord-1e-2-v1
+          cargo bench --manifest-path benches/Cargo.toml --locked --bench face_tessellation -- geometry/face-tessellation/plane-v2/outer/chord-1e-2-v2
           cargo bench --manifest-path benches/Cargo.toml --locked --bench curve_pair_isolation -- geometry/curve-pair-isolation/poly-separated-v1/1/depth-3-v1
           cargo bench --manifest-path benches/Cargo.toml --locked --bench curve_pair_solve -- geometry/curve-pair-solve/poly-transverse-v1/1/default-v1
       - name: Upload advisory smoke samples
@@ -100,7 +100,7 @@ jobs:
             benches/target/criterion/graph_build_independent-planes-v1_1/default-v1/new/
             benches/target/criterion/graph_traverse_offset-chain-closure-v1_1/dependency-first-v1/new/
             benches/target/criterion/topology_body-tessellation_block-v2_1/chord-1e-2-v2/new/
-            benches/target/criterion/geometry_face-tessellation_cylinder-half-v1_1/chord-1e-2-v1/new/
+            benches/target/criterion/geometry_face-tessellation_plane-v2_outer/chord-1e-2-v2/new/
             benches/target/criterion/geometry_curve-pair-isolation_poly-separated-v1_1/depth-3-v1/new/
             benches/target/criterion/geometry_curve-pair-solve_poly-transverse-v1_1/default-v1/new/
           if-no-files-found: ignore

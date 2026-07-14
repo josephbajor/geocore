@@ -170,13 +170,18 @@ request is about 7.7% of the fixture radius. Face passes progress `3 → 4 → 5
 6`, edge depth `2 → 2 → 3 → 4`, and target vertices `202 → 540 → 2,320 →
 12,248`, making the non-smooth tolerance-tier transitions part of the contract.
 
-The standalone Q3 face ladder separately measures a half-cylinder trimmed
-surface at chord tolerances `1e-2` and `1e-3` through
-`tessellate_with_context`. This split is intentional: whole-body tessellation
+The standalone Q3 face matrix measures plane, analytic half-cylinder, and exact
+rational-quadratic NURBS representations across outer-only, one-hole, and
+three-hole trims at chord tolerances `1e-2` and `1e-3` through
+`tessellate_with_context`. The 18 rows pin every matrix combination. The NURBS
+fixture is an exact quarter-cylinder chart whose non-uniform weights,
+non-coplanar control net, and nonzero normal curvature prevent planar
+canonicalization. This split is intentional: whole-body tessellation
 pre-refines every shared edge with a safety margin and then freezes it, so a
-nested face-boundary split would be a crack-prevention failure. The standalone
-rows activate all five face stages and pin boundary depth/splits, interior
-passes, mesh triangles/vertices, complete reports, and mesh bits. Fixture,
+nested face-boundary split would be a crack-prevention failure. Evidence pins
+all five face stages, per-loop refined counts, source-trim and output-boundary
+digests, retained trim vertices, exact surface re-evaluation, UV area,
+face-surface orientation, model area, complete reports, and mesh bits. Fixture,
 trim, session, context, and verification remain outside timing.
 
 The Q4 implicit-isolation slice registers eight contextual cases. It varies

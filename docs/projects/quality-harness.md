@@ -330,16 +330,21 @@ imported representations, and four-point ladders across additional
 representations remain required before corpus-backed finite body `bounded_v1`
 allowances are proposed.
 
-Face-profile evidence is owned by a separate standalone ladder. Whole-body
+Face-profile evidence is owned by a separate standalone matrix. Whole-body
 tessellation pre-refines each shared edge against every adjacent surface with a
 safety margin and passes the resulting frozen UV boundary into `kgeom`; a
 nested face-boundary insertion would be a crack-prevention error, not useful
-body-corpus coverage. The standalone ladder therefore measures a half-cylinder
-trim through `tessellate_with_context` at `1e-2` and `1e-3`. Both rows activate
-all five canonical face stages and pin boundary depth/splits, interior passes,
-mesh triangles/vertices, mesh bits, and complete repeatable reports. Cylinder
-and trim construction plus session/context setup stay outside timing. Broader
-plane/NURBS, hole, and multi-loop rows remain before selecting finite face caps.
+body-corpus coverage. The standalone v2 matrix therefore crosses plane,
+analytic half-cylinder, and exact rational-quadratic NURBS surfaces with
+outer-only, one-hole, and three-hole trims at `1e-2` and `1e-3`. All 18 rows
+activate the applicable canonical face stages and pin per-loop boundary
+counts, source/output boundary identity, exact surface re-evaluation,
+orientation, UV/model area, mesh bits, and complete repeatable reports. The
+NURBS fixture is a genuinely curved exact quarter-cylinder chart with explicit
+rational, non-coplanar, and normal-curvature witnesses. Surface and trim
+construction plus session/context setup stay outside timing. The named face
+representation/trim evidence gate is closed; selecting finite face caps remains
+a separate policy review after the body matrix is reconciled.
 
 Fixtures use existing deterministic primitive constructors first, followed by
 trimmed NURBS fixtures promoted from the test corpus:

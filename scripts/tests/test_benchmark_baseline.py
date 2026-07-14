@@ -29,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 128)
+        self.assertEqual(len(cases), 144)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -291,11 +291,11 @@ class BenchmarkBaselineTests(unittest.TestCase):
         face_tessellation = [
             case for case in cases if case["benchmark_target"] == "face_tessellation"
         ]
-        self.assertEqual(len(face_tessellation), 2)
+        self.assertEqual(len(face_tessellation), 18)
         self.assertTrue(
             all(
                 case["deterministic_seed"] == 0x5154464143450007
-                and case["fixture_version"] == "face-tessellation.v1"
+                and case["fixture_version"] == "face-tessellation.v2"
                 and case["policy_values"]["api"] == "tessellate_with_context"
                 and case["policy_values"]["budget_profile"]
                 == "face-tessellation.compatibility-v1"
@@ -305,13 +305,77 @@ class BenchmarkBaselineTests(unittest.TestCase):
                 == "q3-face-usage.v1"
                 and case["expected_result_counters"]["usage_stage_count"] == 5
                 and len(case["expected_result_counters"]["usage_consumed"]) == 5
-                and all(
-                    consumed > 0
-                    for consumed in case["expected_result_counters"]["usage_consumed"]
-                )
+                and case["expected_result_counters"]["mesh_vertices"] > 0
+                and case["expected_result_counters"]["mesh_triangles"] > 0
+                and case["expected_result_counters"]["boundary_vertices"] > 0
                 for case in face_tessellation
             )
         )
+        self.assertEqual(
+            {
+                case["policy_values"]["representation"]
+                for case in face_tessellation
+            },
+            {"plane-v2", "half-cylinder-v2", "rational-nurbs-v2"},
+        )
+        self.assertEqual(
+            {case["policy_values"]["trim_shape"] for case in face_tessellation},
+            {"outer", "one-hole", "three-holes"},
+        )
+        self.assertEqual(
+            {case["tolerances"]["chord_tol"] for case in face_tessellation},
+            {1e-2, 1e-3},
+        )
+        matrix = {
+            (
+                case["policy_values"]["representation"],
+                case["policy_values"]["trim_shape"],
+                case["tolerances"]["chord_tol"],
+            )
+            for case in face_tessellation
+        }
+        self.assertEqual(len(matrix), 18)
+        for case in face_tessellation:
+            counters = case["expected_result_counters"]
+            expected_loops = {
+                "outer": 1,
+                "one-hole": 2,
+                "three-holes": 4,
+            }[case["policy_values"]["trim_shape"]]
+            self.assertEqual(case["size_parameters"]["trim_loops"], expected_loops)
+            self.assertEqual(counters["boundary_loops"], expected_loops)
+            self.assertEqual(len(counters["boundary_loop_vertices"]), expected_loops)
+            self.assertEqual(
+                sum(counters["boundary_loop_vertices"]),
+                counters["boundary_vertices"],
+            )
+            self.assertTrue(
+                all(
+                    counters[field]
+                    for field in (
+                        "positions_finite",
+                        "uvs_finite",
+                        "indices_valid",
+                        "coordinates_aligned",
+                        "triangles_oriented",
+                        "positions_on_surface",
+                        "triangles_follow_surface_orientation",
+                        "boundary_retains_trim_vertices",
+                        "parameter_area_matches_trim",
+                        "model_area_finite_positive",
+                    )
+                )
+            )
+            self.assertGreater(counters["parameter_area_units"], 0)
+            self.assertGreater(counters["model_area_units"], 0)
+            for digest in (
+                "trim_digest",
+                "boundary_digest",
+                "usage_digest",
+                "mesh_digest",
+                "output_digest",
+            ):
+                self.assertEqual(len(counters[digest]), 16)
         isolation = [
             case for case in cases if case["benchmark_target"] == "nurbs_isolation"
         ]
