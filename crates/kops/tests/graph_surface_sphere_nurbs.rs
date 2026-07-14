@@ -477,7 +477,336 @@ fn sphere_nurbs_stale_and_altered_sources_roll_back_atomically() {
 }
 
 #[test]
-fn procedural_and_planar_sphere_nurbs_pairs_remain_explicitly_unsupported() {
+fn offset_sphere_nurbs_uses_the_effective_field_and_retains_the_live_root() {
+    let basis_sphere = Sphere::new(Frame::world(), 0.9).unwrap();
+    let effective_sphere = Sphere::new(Frame::world(), 1.1).unwrap();
+    let surface = curved_patch(0.5);
+    let tolerances = Tolerances::with_linear(2.0e-3).unwrap();
+    let session = SessionPolicy::v1();
+    let lower_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_family_budget_defaults(
+            kops::intersect::NurbsSurfaceMarchBudgetProfile::v1_defaults(),
+        );
+    let lower = intersect_bounded_sphere_nurbs_surface_with_context(
+        &effective_sphere,
+        sphere_window(),
+        &surface,
+        surface.param_range(),
+        &lower_context,
+    )
+    .unwrap();
+
+    let mut graph = GeometryGraph::new();
+    let basis = graph.insert_surface(basis_sphere).unwrap();
+    let direct_offset = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(basis, 0.2))
+        .unwrap();
+    let inner_offset = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(basis, 0.1))
+        .unwrap();
+    let nested_offset = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(inner_offset, 0.1))
+        .unwrap();
+    let nurbs = graph.insert_surface(surface.clone()).unwrap();
+
+    let direct_context = OperationContext::new(&session, tolerances).unwrap();
+    let direct = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        direct_offset,
+        sphere_window(),
+        nurbs,
+        surface.param_range(),
+        &direct_context,
+    );
+    assert_eq!(
+        &direct.result().unwrap().raw,
+        *lower.result().as_ref().unwrap()
+    );
+    assert_eq!(
+        observed(
+            direct.report(),
+            kgraph::eval_stage::NODE_VISITS,
+            ResourceKind::Work,
+        ),
+        2
+    );
+    assert_eq!(
+        observed(
+            direct.report(),
+            kgraph::eval_stage::DEPENDENCY_DEPTH,
+            ResourceKind::Depth,
+        ),
+        2
+    );
+
+    let nested_context = OperationContext::new(&session, tolerances).unwrap();
+    let nested = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        nested_offset,
+        sphere_window(),
+        nurbs,
+        surface.param_range(),
+        &nested_context,
+    );
+    let nested_result = nested.result().unwrap();
+    assert_eq!(&nested_result.raw, *lower.result().as_ref().unwrap());
+    assert_eq!(
+        nested_result.branch_graph.source_surfaces,
+        [nested_offset, nurbs]
+    );
+    assert!(matches!(
+        nested_result.branch_graph.edges[0]
+            .certificate
+            .as_nurbs()
+            .unwrap()
+            .traces(),
+        [
+            NurbsIntersectionTrace::Sphere(sphere),
+            NurbsIntersectionTrace::Nurbs(_),
+        ] if *sphere == effective_sphere
+    ));
+    assert_eq!(
+        observed(
+            nested.report(),
+            kgraph::eval_stage::NODE_VISITS,
+            ResourceKind::Work,
+        ),
+        3
+    );
+    assert_eq!(
+        observed(
+            nested.report(),
+            kgraph::eval_stage::DEPENDENCY_DEPTH,
+            ResourceKind::Depth,
+        ),
+        3
+    );
+    for (stage, resource) in [
+        (NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS, ResourceKind::Work),
+        (NURBS_IMPLICIT_ISOLATION_CANDIDATES, ResourceKind::Items),
+        (NURBS_IMPLICIT_ISOLATION_DEPTH, ResourceKind::Depth),
+        (NURBS_SURFACE_MARCH_SAMPLES, ResourceKind::Work),
+    ] {
+        assert_eq!(
+            observed(nested.report(), stage, resource),
+            observed(lower.report(), stage, resource),
+            "lower marcher report parity for {stage:?}"
+        );
+    }
+
+    let reverse = intersect_bounded_graph_surfaces(
+        &graph,
+        nurbs,
+        surface.param_range(),
+        nested_offset,
+        sphere_window(),
+        tolerances,
+    )
+    .unwrap();
+    assert_eq!(reverse.raw, nested_result.raw.clone().swapped());
+    assert_eq!(reverse.branch_graph.source_surfaces, [nurbs, nested_offset]);
+
+    let persistent =
+        persist_verified_graph_surface_intersections(&mut graph, nested_result).unwrap();
+    let descriptor = graph.curve(persistent.edges[0].curve).unwrap();
+    let verified = descriptor.as_verified_nurbs_intersection().unwrap();
+    assert_eq!(verified.source_surfaces(), [nested_offset, nurbs]);
+    graph.validate().unwrap();
+    for protected in [nested_offset, inner_offset, basis, nurbs] {
+        assert!(matches!(
+            graph.remove_surface(protected),
+            Err(GeometryGraphError::HasDependents { .. })
+        ));
+    }
+}
+
+#[test]
+fn offset_sphere_nurbs_pins_graph_and_certificate_n_minus_one_boundaries() {
+    let surface = curved_patch(0.5);
+    let ranges = single_march_segment_sphere_window();
+    let tolerances = Tolerances::with_linear(1.0e-3).unwrap();
+    let mut graph = GeometryGraph::new();
+    let basis = graph
+        .insert_surface(Sphere::new(Frame::world(), 0.9).unwrap())
+        .unwrap();
+    let offset = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(basis, 0.2))
+        .unwrap();
+    let nurbs = graph.insert_surface(surface.clone()).unwrap();
+    let session = SessionPolicy::v1();
+
+    let exact_plan = BudgetPlan::new([
+        LimitSpec::new(
+            kgraph::eval_stage::NODE_VISITS,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            2,
+        ),
+        LimitSpec::new(
+            kgraph::eval_stage::DEPENDENCY_DEPTH,
+            ResourceKind::Depth,
+            AccountingMode::HighWater,
+            2,
+        ),
+        LimitSpec::new(
+            NURBS_TRACE_CERTIFICATE_WORK,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            8_192,
+        ),
+        LimitSpec::new(
+            NURBS_TRACE_CERTIFICATE_WORK,
+            ResourceKind::Items,
+            AccountingMode::HighWater,
+            1_024,
+        ),
+        LimitSpec::new(
+            NURBS_TRACE_CERTIFICATE_WORK,
+            ResourceKind::Depth,
+            AccountingMode::HighWater,
+            10,
+        ),
+    ])
+    .unwrap();
+    let exact_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(exact_plan);
+    let exact = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        offset,
+        ranges,
+        nurbs,
+        surface.param_range(),
+        &exact_context,
+    );
+    assert!(exact.result().is_ok());
+    for (stage, resource, expected) in [
+        (kgraph::eval_stage::NODE_VISITS, ResourceKind::Work, 2),
+        (kgraph::eval_stage::DEPENDENCY_DEPTH, ResourceKind::Depth, 2),
+        (NURBS_TRACE_CERTIFICATE_WORK, ResourceKind::Work, 8_192),
+        (NURBS_TRACE_CERTIFICATE_WORK, ResourceKind::Items, 1_024),
+        (NURBS_TRACE_CERTIFICATE_WORK, ResourceKind::Depth, 10),
+    ] {
+        assert_eq!(observed(exact.report(), stage, resource), expected);
+    }
+
+    for (stage, resource, mode, allowed, consumed) in [
+        (
+            kgraph::eval_stage::NODE_VISITS,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            1,
+            2,
+        ),
+        (
+            kgraph::eval_stage::DEPENDENCY_DEPTH,
+            ResourceKind::Depth,
+            AccountingMode::HighWater,
+            1,
+            2,
+        ),
+        (
+            NURBS_TRACE_CERTIFICATE_WORK,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            8_191,
+            8_192,
+        ),
+        (
+            NURBS_TRACE_CERTIFICATE_WORK,
+            ResourceKind::Items,
+            AccountingMode::HighWater,
+            1_023,
+            1_024,
+        ),
+        (
+            NURBS_TRACE_CERTIFICATE_WORK,
+            ResourceKind::Depth,
+            AccountingMode::HighWater,
+            9,
+            10,
+        ),
+    ] {
+        let denied_plan =
+            BudgetPlan::new([LimitSpec::new(stage, resource, mode, allowed)]).unwrap();
+        let denied_context = OperationContext::new(&session, tolerances)
+            .unwrap()
+            .with_budget_overrides(denied_plan);
+        let denied = intersect_bounded_graph_surfaces_with_context(
+            &graph,
+            offset,
+            ranges,
+            nurbs,
+            surface.param_range(),
+            &denied_context,
+        );
+        let GraphSurfaceIntersectionError::OperationPolicy(
+            kcore::operation::OperationPolicyError::LimitReached(crossing),
+        ) = denied.result().unwrap_err()
+        else {
+            panic!("N-1 resource must stop at {stage:?}");
+        };
+        assert_eq!(crossing.stage, stage);
+        assert_eq!(crossing.resource, resource);
+        assert_eq!(crossing.allowed, allowed);
+        assert_eq!(crossing.consumed, consumed);
+    }
+}
+
+#[test]
+fn offset_sphere_nurbs_rejects_stale_or_altered_field_identity_atomically() {
+    let surface = curved_patch(0.5);
+    let tolerances = Tolerances::with_linear(2.0e-3).unwrap();
+    for mutation in 0..3 {
+        let mut graph = GeometryGraph::new();
+        let basis = graph
+            .insert_surface(Sphere::new(Frame::world(), 0.9).unwrap())
+            .unwrap();
+        let offset = graph
+            .insert_surface(OffsetSurfaceDescriptor::new(basis, 0.2))
+            .unwrap();
+        let nurbs = graph.insert_surface(surface.clone()).unwrap();
+        let local = intersect_bounded_graph_surfaces(
+            &graph,
+            offset,
+            sphere_window(),
+            nurbs,
+            surface.param_range(),
+            tolerances,
+        )
+        .unwrap();
+        match mutation {
+            0 => graph.remove_surface(offset).unwrap(),
+            1 => graph
+                .replace_surface(offset, OffsetSurfaceDescriptor::new(basis, 0.3))
+                .unwrap(),
+            2 => graph
+                .replace_surface(basis, Sphere::new(Frame::world(), 0.95).unwrap())
+                .unwrap(),
+            _ => unreachable!(),
+        };
+        let before = (
+            graph.curve_count(),
+            graph.curve2d_count(),
+            graph.geometry().collect::<Vec<_>>(),
+        );
+        assert!(matches!(
+            persist_verified_graph_surface_intersections(&mut graph, &local),
+            Err(GraphSurfaceIntersectionError::GeometryPersistence(
+                GeometryGraphError::InvalidDescriptor { .. }
+                    | GeometryGraphError::StaleGeometryHandle { .. }
+            ))
+        ));
+        assert_eq!(graph.curve_count(), before.0);
+        assert_eq!(graph.curve2d_count(), before.1);
+        assert_eq!(graph.geometry().collect::<Vec<_>>(), before.2);
+        graph.validate().unwrap();
+    }
+}
+
+#[test]
+fn unsafe_offset_sphere_radius_and_other_procedural_pairs_remain_unsupported() {
     let sphere = Sphere::new(Frame::world(), 1.0).unwrap();
     let surface = curved_patch(0.5);
     let other_surface = curved_patch(0.55);
@@ -485,8 +814,8 @@ fn procedural_and_planar_sphere_nurbs_pairs_remain_explicitly_unsupported() {
     let tolerances = Tolerances::with_linear(1.0e-3).unwrap();
     let mut graph = GeometryGraph::new();
     let sphere_handle = graph.insert_surface(sphere).unwrap();
-    let offset_sphere = graph
-        .insert_surface(OffsetSurfaceDescriptor::new(sphere_handle, 0.1))
+    let collapsed_sphere = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(sphere_handle, -1.0))
         .unwrap();
     let nurbs = graph.insert_surface(surface.clone()).unwrap();
     let offset_nurbs = graph
@@ -495,7 +824,12 @@ fn procedural_and_planar_sphere_nurbs_pairs_remain_explicitly_unsupported() {
     let other_nurbs = graph.insert_surface(other_surface.clone()).unwrap();
     let planar_nurbs = graph.insert_surface(planar_surface.clone()).unwrap();
     for (first, first_range, second, second_range) in [
-        (offset_sphere, sphere_window(), nurbs, surface.param_range()),
+        (
+            collapsed_sphere,
+            sphere_window(),
+            nurbs,
+            surface.param_range(),
+        ),
         (
             sphere_handle,
             sphere_window(),

@@ -915,17 +915,20 @@ true only for an empty complete result.
   nonpositive or non-finite. Certified finite line/circle branches persist
   atomically with ordered source/pcurve dependencies and their proof. Tangencies
   stay vertex-only, misses preserve completion, and pole-crossing or out-of-window
-  charts fail with precise typed errors. Exact direct/safe-Offset(Plane) fields
-  and direct Sphere fields against genuinely non-planar direct NURBS now run
+  charts fail with precise typed errors. Exact direct/safe-Offset(Plane) and
+  direct/safe-Offset(Sphere) fields against genuinely non-planar direct NURBS now run
   the fixed-grid marcher in that same owner scope, retain
   its degree-1 carrier and paired pcurves, and mint a separate non-transmitted
   whole-range certificate before atomic persistence. Exact certificate Work is
   `C + S*2^10*(6T+1)`; the curved one-segment fixture pins 7,170/7,169, and
-  failed residual proofs retain attempted Work. Direct Sphere lifts add an
+  failed residual proofs retain attempted Work. Exact Sphere lifts add an
   outward centered mean-value interval per depth-10 cell; the one-segment
   paired proof pins 8,192/8,191 Work, 1,024/1,023 Items, and 10/9 Depth. Lower raw/report evidence,
   complete misses, indeterminate completion, canonical swap, and positional
-  branch/trace identity remain unchanged. Compatible direct NURBS/NURBS fields
+  branch/trace identity remain unchanged. Safe sphere-offset chains retain the
+  live root identity, protect every basis transitively, and pin direct-root
+  graph visits and dependency depth at exact 2/1 boundaries; nested safe chains
+  preserve the same effective-field proof. Compatible direct NURBS/NURBS fields
   now add one exact shared-chart arm: both genuinely non-planar sources must use
   the same finite-open quadratic-linear unit chart, identical constant weights,
   and identical requested ranges. Its rounded scalar difference guides
@@ -938,8 +941,9 @@ true only for an empty complete result.
   outward original controls own misses while the rounded displaced surface is
   discovery-only. The paired proof keeps the same exact Work/Items/Depth
   boundaries and the offset root visits its basis at exact graph depth 2.
-  Planar or unaligned peers, unequal ranges or weights, Offset(Sphere)/NURBS,
-  nested or varying-normal offsets, Offset/Offset, broader NURBS/NURBS, and
+  Planar or unaligned peers, unequal ranges or weights, collapsed or non-finite
+  sphere-offset fields, nested or varying-normal Offset(NURBS), Offset/Offset,
+  broader NURBS/NURBS, and
   other procedural pairs remain typed unsupported.
   The compatibility magnitude-twelve rung runs the complete historical
   magnitude-eleven family first so all prior evidence remains stable, then

@@ -1,6 +1,6 @@
 # F1 procedural geometry graph
 
-Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct-Sphere/NURBS, or compatible direct-NURBS/NURBS descriptors, plus M3c transmitted-chart consumers through endpoint-only equal-limit closure, finite-open/end-terminated `T/F` singular closure, and the first finite-open B-surface/Plane chart with omitted interior Plane UVs are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
+Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, or compatible direct-NURBS/NURBS descriptors, plus M3c transmitted-chart consumers through endpoint-only equal-limit closure, finite-open/end-terminated `T/F` singular closure, and the first finite-open B-surface/Plane chart with omitted interior Plane UVs are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
 
 ## Outcome
 
@@ -668,19 +668,23 @@ at a plane resolve to exact plane fields. Direct spheres and offset chains whose
 effective radius stays positive and finite resolve to exact sphere fields.
 Common-axis and oblique plane/sphere secants and clipped arcs produce certified
 circle edges; tangencies remain vertex-only and misses preserve complete empty
-evidence. Exact direct/safe-Offset(Plane) fields and direct Sphere fields against
+evidence. Exact direct/safe-Offset(Plane) and direct/safe-Offset(Sphere) fields against
 genuinely non-planar direct NURBS now share the same owner scope with the lower fixed-grid marcher. Every retained polyline keeps a
 degree-1 carrier and paired degree-1 pcurves on one exact knot basis; a separate
 non-transmitted `VerifiedNurbsIntersectionCertificate` proves both lifts over
 the whole range at fixed depth 10 before atomic persistence. Certificate Work
 is `C + S*2^10*(6T+1)` for `C` carrier controls, `S` carrier spans, and `T`
 source tensor-span slots. The curved one-segment fixture pins exact 7,170/7,169
-Work, while failed residual proofs report attempted Work. A direct Sphere lift
+Work, while failed residual proofs report attempted Work. An exact Sphere lift
 uses an outward centered mean-value interval on every depth-10 carrier cell;
 paired original-source NURBS evidence yields exact one-segment
 8,192/8,191 Work, 1,024/1,023 Items, and 10/9 Depth boundaries. Raw lower evidence,
 complete misses, indeterminate completion, operand swap, and branch/trace
-ordering remain authoritative. A first direct NURBS/NURBS arm accepts only two
+ordering remain authoritative. Sphere-offset certificates bind the effective
+sphere trace while retaining the actual ordered root handle; persistent graph
+validation recomputes that exact field, and dependency edges protect direct or
+nested basis chains. The direct-root fixture pins exact 2/1 node visits and
+dependency depth, while a two-offset chain observes 3/depth 3. A first direct NURBS/NURBS arm accepts only two
 genuinely non-planar finite-open quadratic-linear unit charts with identical
 constant weights and requested ranges. Their exact shared `(x,y)=(u,v)` chart
 reduces discovery to a scalar control difference, but that rounded derived
@@ -697,8 +701,8 @@ complete misses; the rounded effective surface remains discovery-only. The
 certificate retains the live offset root, signed distance, original basis,
 direct peer, and both pcurves, protects the basis transitively, and preserves
 the same exact 14,336/14,335 Work, 1,024/1,023 Items, and 10/9 Depth boundaries.
-Planar or unaligned peers, unequal ranges or weights, Offset(Sphere)/NURBS,
-nested or varying-normal Offset(NURBS), Offset/Offset, and broader NURBS/NURBS
+Planar or unaligned peers, unequal ranges or weights, collapsed or non-finite
+sphere-offset fields, nested or varying-normal Offset(NURBS), Offset/Offset, and broader NURBS/NURBS
 or other procedural pairs remain unsupported.
 Certified branches can be committed atomically as
 `CurveDescriptor::Intersection` or
@@ -808,11 +812,13 @@ the graph ownership model.
   offset graph visits, retain ordered paired pcurves and original root identity,
   persist atomically in both operand orders, and reject planar encodings,
   Offset(NURBS), other surface pairs, stale sources, and altered sources;
-- direct Sphere/genuinely curved direct-NURBS queries preserve lower raw/report
+- direct or safe-Offset(Sphere)-field/genuinely curved direct-NURBS queries preserve lower raw/report
   evidence, prove the analytic lift with outward midpoint and derivative
   intervals, pin exact 8,192/8,191 Work, 1,024/1,023 Items, and 10/9 Depth,
-  persist ordered sources atomically across swap/miss/stale cases, and reject
-  poles, Offset(Sphere), Offset(NURBS), and planar encodings;
+  pin direct offset roots at 2/1 graph visits and dependency depth, retain and
+  protect nested roots/bases, persist ordered sources atomically across
+  swap/miss/stale/altered cases, and reject poles, collapsed sphere offsets,
+  Offset(NURBS), and planar encodings;
 - compatible direct-NURBS/direct-NURBS queries preserve lower raw/report
   evidence, use their rounded scalar difference only for discovery, prove
   complete misses from outward original-control differences, certify both

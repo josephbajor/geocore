@@ -468,7 +468,7 @@ per retained oblique branch at
 crossing independently of the graph node-visit and dependency-depth stages.
 
 The same graph-surface profile composes the scoped NURBS marcher and the
-operation-generated exact-Plane-field/NURBS, direct-Sphere/NURBS, or compatible
+operation-generated exact-Plane-field/NURBS, exact-Sphere-field/NURBS, or compatible
 direct-NURBS/NURBS proof stage. A retained degree-1 Plane branch charges
 `kops.intersect.nurbs-trace-certificate-work` before certification using
 `C + S*2^10*(6T+1)`, where `C` is carrier controls, `S` carrier spans, and `T`
@@ -478,7 +478,9 @@ Graph evaluation, implicit isolation, grid sampling, and certification all
 remain in one owner scope. A Sphere branch charges
 `S*2^10*(6T+2)` Work and observes `S*2^10` Items plus Depth 10 before proof;
 the one-segment fixture pins exact 8,192/8,191 Work, 1,024/1,023 Items, and
-10/9 Depth, including failed whole-range proof accounting.
+10/9 Depth, including failed whole-range proof accounting. Direct and nested
+safe sphere-offset chains use that same effective-field proof while graph
+node visits and dependency depth account every retained root-to-basis edge.
 A compatible paired-NURBS branch charges
 `S*2^10*((6R_a+1)+(6R_b+1))` Work and observes the same paired-cell Items and
 Depth. Its one-span fixture pins exact 14,336/14,335 Work, 1,024/1,023 Items,

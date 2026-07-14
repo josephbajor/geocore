@@ -1070,7 +1070,8 @@ fn validate_curve_references(
                         == Some(ExactSurfaceField::Plane(*certified))
                 }
                 NurbsIntersectionTrace::Sphere(certified) => {
-                    actual.as_sphere().copied() == Some(*certified)
+                    exact_surface_field(graph, source)?
+                        == Some(ExactSurfaceField::Sphere(*certified))
                 }
                 NurbsIntersectionTrace::Nurbs(certified) => actual.as_nurbs() == Some(certified),
                 NurbsIntersectionTrace::OffsetNurbs(certified) => {

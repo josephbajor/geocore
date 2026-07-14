@@ -2,8 +2,8 @@
 //!
 //! Direct planes/spheres and safe constant-offset chains terminating at those
 //! leaves form exact analytic field families. Genuinely non-planar direct NURBS
-//! surfaces additionally support scoped exact-plane-field/NURBS, direct
-//! Sphere/NURBS, compatible direct NURBS/NURBS marching, and a narrow
+//! surfaces additionally support scoped exact-plane-field/NURBS, exact
+//! sphere-field/NURBS, compatible direct NURBS/NURBS marching, and a narrow
 //! constant-normal direct-Offset(NURBS)/NURBS family. The adapter
 //! promotes discovered branches only after
 //! constructing both pcurves and proving their paired whole-interval residual
@@ -425,7 +425,6 @@ enum ResolvedGraphSurfaceField<'a> {
     },
     Sphere {
         surface: Sphere,
-        direct: bool,
     },
     Nurbs(&'a NurbsSurface),
     OffsetNurbs {
@@ -503,7 +502,7 @@ pub fn intersect_bounded_graph_surfaces_with_context(
 /// classes are resolved exactly once per operand. Direct planes/spheres and
 /// their safe constant-offset chains form exact fields. Plane/plane, finite
 /// regular-chart plane/sphere, exact-plane-field/genuinely-non-planar-
-/// direct-NURBS, direct-Sphere/genuinely-non-planar-direct-NURBS, and
+/// direct-NURBS, exact-Sphere-field/genuinely-non-planar-direct-NURBS, and
 /// compatible genuinely-non-planar direct-NURBS/direct-NURBS branches are
 /// supported. Direct constant-normal Offset(NURBS)/NURBS branches additionally
 /// reuse the compatible paired marcher; all other pairs remain explicitly
@@ -563,34 +562,22 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 surface: plane,
                 direct: direct_plane,
             }),
-            Some(ResolvedGraphSurfaceField::Sphere {
-                surface: sphere,
-                direct: direct_sphere,
-            }),
+            Some(ResolvedGraphSurfaceField::Sphere { surface: sphere }),
         ) => [
             ResolvedGraphSurfaceField::Plane {
                 surface: plane,
                 direct: direct_plane,
             },
-            ResolvedGraphSurfaceField::Sphere {
-                surface: sphere,
-                direct: direct_sphere,
-            },
+            ResolvedGraphSurfaceField::Sphere { surface: sphere },
         ],
         (
-            Some(ResolvedGraphSurfaceField::Sphere {
-                surface: sphere,
-                direct: direct_sphere,
-            }),
+            Some(ResolvedGraphSurfaceField::Sphere { surface: sphere }),
             Some(ResolvedGraphSurfaceField::Plane {
                 surface: plane,
                 direct: direct_plane,
             }),
         ) => [
-            ResolvedGraphSurfaceField::Sphere {
-                surface: sphere,
-                direct: direct_sphere,
-            },
+            ResolvedGraphSurfaceField::Sphere { surface: sphere },
             ResolvedGraphSurfaceField::Plane {
                 surface: plane,
                 direct: direct_plane,
@@ -623,30 +610,18 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
             },
         ],
         (
-            Some(ResolvedGraphSurfaceField::Sphere {
-                surface: sphere,
-                direct: true,
-            }),
+            Some(ResolvedGraphSurfaceField::Sphere { surface: sphere }),
             Some(ResolvedGraphSurfaceField::Nurbs(surface)),
         ) if nurbs_control_net_is_nonplanar(surface, tolerances.linear()) => [
-            ResolvedGraphSurfaceField::Sphere {
-                surface: sphere,
-                direct: true,
-            },
+            ResolvedGraphSurfaceField::Sphere { surface: sphere },
             ResolvedGraphSurfaceField::Nurbs(surface),
         ],
         (
             Some(ResolvedGraphSurfaceField::Nurbs(surface)),
-            Some(ResolvedGraphSurfaceField::Sphere {
-                surface: sphere,
-                direct: true,
-            }),
+            Some(ResolvedGraphSurfaceField::Sphere { surface: sphere }),
         ) if nurbs_control_net_is_nonplanar(surface, tolerances.linear()) => [
             ResolvedGraphSurfaceField::Nurbs(surface),
-            ResolvedGraphSurfaceField::Sphere {
-                surface: sphere,
-                direct: true,
-            },
+            ResolvedGraphSurfaceField::Sphere { surface: sphere },
         ],
         (
             Some(ResolvedGraphSurfaceField::Nurbs(surface_a)),
@@ -712,9 +687,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         ),
         [
             ResolvedGraphSurfaceField::Plane { surface: plane, .. },
-            ResolvedGraphSurfaceField::Sphere {
-                surface: sphere, ..
-            },
+            ResolvedGraphSurfaceField::Sphere { surface: sphere },
         ] => (
             intersect_bounded_plane_sphere(&plane, range_a, &sphere, range_b, tolerances)
                 .map_err(IntersectionError::from)
@@ -722,9 +695,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
             None,
         ),
         [
-            ResolvedGraphSurfaceField::Sphere {
-                surface: sphere, ..
-            },
+            ResolvedGraphSurfaceField::Sphere { surface: sphere },
             ResolvedGraphSurfaceField::Plane { surface: plane, .. },
         ] => (
             intersect_bounded_plane_sphere(&plane, range_b, &sphere, range_a, tolerances)
@@ -751,10 +722,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
             (raw, Some(traces))
         }
         [
-            ResolvedGraphSurfaceField::Sphere {
-                surface: sphere,
-                direct: true,
-            },
+            ResolvedGraphSurfaceField::Sphere { surface: sphere },
             ResolvedGraphSurfaceField::Nurbs(surface),
         ] => {
             let output =
@@ -763,10 +731,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         }
         [
             ResolvedGraphSurfaceField::Nurbs(surface),
-            ResolvedGraphSurfaceField::Sphere {
-                surface: sphere,
-                direct: true,
-            },
+            ResolvedGraphSurfaceField::Sphere { surface: sphere },
         ] => {
             let output =
                 sphere_nurbs_march_in_scope(&sphere, range_b, surface, range_a, tolerances, scope)?;
@@ -1098,10 +1063,7 @@ fn resolve_exact_surface_field<'a>(
         }));
     }
     if let Some(sphere) = descriptor.as_sphere() {
-        return Ok(Some(ResolvedGraphSurfaceField::Sphere {
-            surface: *sphere,
-            direct: true,
-        }));
+        return Ok(Some(ResolvedGraphSurfaceField::Sphere { surface: *sphere }));
     }
     if let Some(surface) = descriptor.as_nurbs() {
         return Ok(Some(ResolvedGraphSurfaceField::Nurbs(surface)));
@@ -1119,10 +1081,7 @@ fn resolve_exact_surface_field<'a>(
                 surface,
                 direct: false,
             },
-            ExactSurfaceField::Sphere(surface) => ResolvedGraphSurfaceField::Sphere {
-                surface,
-                direct: false,
-            },
+            ExactSurfaceField::Sphere(surface) => ResolvedGraphSurfaceField::Sphere { surface },
         }));
     }
     let offset = descriptor
@@ -1538,10 +1497,7 @@ fn build_verified_analytic_nurbs_branch(
             VerifiedNurbsProofFamily::Plane,
         ),
         [
-            ResolvedGraphSurfaceField::Sphere {
-                surface: sphere,
-                direct: true,
-            },
+            ResolvedGraphSurfaceField::Sphere { surface: sphere },
             ResolvedGraphSurfaceField::Nurbs(surface),
         ] => (
             [
@@ -1556,10 +1512,7 @@ fn build_verified_analytic_nurbs_branch(
         ),
         [
             ResolvedGraphSurfaceField::Nurbs(surface),
-            ResolvedGraphSurfaceField::Sphere {
-                surface: sphere,
-                direct: true,
-            },
+            ResolvedGraphSurfaceField::Sphere { surface: sphere },
         ] => (
             [
                 NurbsIntersectionTrace::Nurbs(surface.clone()),
@@ -1758,14 +1711,10 @@ fn build_verified_plane_sphere_circle_branch(
     let (plane, sphere, plane_first) = match fields {
         [
             ResolvedGraphSurfaceField::Plane { surface: plane, .. },
-            ResolvedGraphSurfaceField::Sphere {
-                surface: sphere, ..
-            },
+            ResolvedGraphSurfaceField::Sphere { surface: sphere },
         ] => (plane, sphere, true),
         [
-            ResolvedGraphSurfaceField::Sphere {
-                surface: sphere, ..
-            },
+            ResolvedGraphSurfaceField::Sphere { surface: sphere },
             ResolvedGraphSurfaceField::Plane { surface: plane, .. },
         ] => (plane, sphere, false),
         _ => {
