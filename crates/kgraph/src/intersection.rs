@@ -3166,6 +3166,38 @@ pub fn verified_nurbs_nurbs_intersection_certificate_cost(
     else {
         return None;
     };
+    verified_paired_nurbs_intersection_certificate_cost(carrier, surface_a, surface_b)
+}
+
+/// Deterministic logical resources required by
+/// [`certify_verified_offset_nurbs_nurbs_intersection_residuals`].
+///
+/// The offset trace retains the original basis differential enclosure and
+/// proves its effective unit-normal lift within the same per-trace logical
+/// work unit used by transmitted Offset(NURBS) charts.
+pub fn verified_offset_nurbs_nurbs_intersection_certificate_cost(
+    carrier: &NurbsCurve,
+    traces: &[NurbsIntersectionTrace; 2],
+) -> Option<VerifiedNurbsNurbsCertificateCost> {
+    let (basis, direct) = match traces {
+        [
+            NurbsIntersectionTrace::OffsetNurbs(offset),
+            NurbsIntersectionTrace::Nurbs(direct),
+        ]
+        | [
+            NurbsIntersectionTrace::Nurbs(direct),
+            NurbsIntersectionTrace::OffsetNurbs(offset),
+        ] => (offset.basis(), direct),
+        _ => return None,
+    };
+    verified_paired_nurbs_intersection_certificate_cost(carrier, basis, direct)
+}
+
+fn verified_paired_nurbs_intersection_certificate_cost(
+    carrier: &NurbsCurve,
+    surface_a: &NurbsSurface,
+    surface_b: &NurbsSurface,
+) -> Option<VerifiedNurbsNurbsCertificateCost> {
     let control_count = u64::try_from(carrier.points().len()).ok()?;
     let carrier_spans = control_count.checked_sub(1)?;
     let subdivisions = 1_u64.checked_shl(TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u32)?;
@@ -3199,6 +3231,34 @@ pub fn certify_verified_nurbs_nurbs_intersection_residuals(
     if verified_nurbs_nurbs_intersection_certificate_cost(&carrier, &traces).is_none() {
         return Err(IntersectionCertificateError::InvalidTraceFamily);
     }
+    certify_verified_paired_nurbs_intersection_residuals_impl(carrier, traces, pcurves, tolerance)
+}
+
+/// Certify one operation-generated direct Offset(NURBS)/NURBS marching branch
+/// over its complete finite degree-1 carrier range.
+///
+/// The offset trace retains its original basis and signed distance. Every
+/// proof cell encloses the basis point and partials, proves a regular unit
+/// normal, and certifies the effective displaced lift; the direct trace is
+/// certified independently against its original source.
+pub fn certify_verified_offset_nurbs_nurbs_intersection_residuals(
+    carrier: NurbsCurve,
+    traces: [NurbsIntersectionTrace; 2],
+    pcurves: [NurbsCurve2d; 2],
+    tolerance: f64,
+) -> Result<VerifiedNurbsIntersectionCertificate, IntersectionCertificateError> {
+    if verified_offset_nurbs_nurbs_intersection_certificate_cost(&carrier, &traces).is_none() {
+        return Err(IntersectionCertificateError::InvalidTraceFamily);
+    }
+    certify_verified_paired_nurbs_intersection_residuals_impl(carrier, traces, pcurves, tolerance)
+}
+
+fn certify_verified_paired_nurbs_intersection_residuals_impl(
+    carrier: NurbsCurve,
+    traces: [NurbsIntersectionTrace; 2],
+    pcurves: [NurbsCurve2d; 2],
+    tolerance: f64,
+) -> Result<VerifiedNurbsIntersectionCertificate, IntersectionCertificateError> {
     let carrier_range = carrier.param_range();
     if !carrier_range.is_finite() || carrier_range.width() <= 0.0 {
         return Err(IntersectionCertificateError::InvalidCarrierRange);
@@ -3233,9 +3293,20 @@ pub fn certify_verified_nurbs_nurbs_intersection_residuals(
                         .weights()
                         .is_some_and(|weights| weights.iter().any(|weight| !weight.is_finite()))
             }
-            NurbsIntersectionTrace::Plane(_)
-            | NurbsIntersectionTrace::Sphere(_)
-            | NurbsIntersectionTrace::OffsetNurbs(_) => true,
+            NurbsIntersectionTrace::OffsetNurbs(offset) => {
+                !offset.signed_distance().is_finite()
+                    || offset
+                        .basis()
+                        .points()
+                        .iter()
+                        .copied()
+                        .any(|point| !finite_vec3(point))
+                    || offset
+                        .basis()
+                        .weights()
+                        .is_some_and(|weights| weights.iter().any(|weight| !weight.is_finite()))
+            }
+            NurbsIntersectionTrace::Plane(_) | NurbsIntersectionTrace::Sphere(_) => true,
         })
     {
         return Err(IntersectionCertificateError::NonFiniteGeometry);
@@ -3268,10 +3339,21 @@ pub fn certify_verified_nurbs_nurbs_intersection_residuals(
             return Err(IntersectionCertificateError::NonFiniteGeometry);
         }
 
-        let NurbsIntersectionTrace::Nurbs(surface) = &traces[index] else {
-            return Err(IntersectionCertificateError::InvalidTraceFamily);
+        let bound = match &traces[index] {
+            NurbsIntersectionTrace::Nurbs(surface) => {
+                transmitted_nurbs_trace_residual_bound(&carrier, surface, None, pcurve, trace)?
+            }
+            NurbsIntersectionTrace::OffsetNurbs(offset) => transmitted_nurbs_trace_residual_bound(
+                &carrier,
+                offset.basis(),
+                Some(offset.signed_distance()),
+                pcurve,
+                trace,
+            )?,
+            NurbsIntersectionTrace::Plane(_) | NurbsIntersectionTrace::Sphere(_) => {
+                return Err(IntersectionCertificateError::InvalidTraceFamily);
+            }
         };
-        let bound = transmitted_nurbs_trace_residual_bound(&carrier, surface, None, pcurve, trace)?;
         if bound > tolerance {
             return Err(IntersectionCertificateError::ResidualExceedsTolerance {
                 trace,

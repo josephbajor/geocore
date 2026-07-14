@@ -1073,7 +1073,19 @@ fn validate_curve_references(
                     actual.as_sphere().copied() == Some(*certified)
                 }
                 NurbsIntersectionTrace::Nurbs(certified) => actual.as_nurbs() == Some(certified),
-                NurbsIntersectionTrace::OffsetNurbs(_) => false,
+                NurbsIntersectionTrace::OffsetNurbs(certified) => {
+                    let Some(offset) = actual.as_offset().copied() else {
+                        return Err(invalid_intersection_descriptor(
+                            "verified offset-NURBS source is not an offset descriptor",
+                        ));
+                    };
+                    offset.signed_distance() == certified.signed_distance()
+                        && graph
+                            .surface(offset.basis())
+                            .ok_or_else(|| stale(GeometryRef::Surface(offset.basis())))?
+                            .as_nurbs()
+                            == Some(certified.basis())
+                }
             };
             if !matches {
                 return Err(invalid_intersection_descriptor(

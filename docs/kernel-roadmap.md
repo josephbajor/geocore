@@ -919,10 +919,16 @@ true only for an empty complete result.
   and identical requested ranges. Its rounded scalar difference guides
   discovery only; outward original-control differences own complete misses and
   both original lifts are independently certified. The one-span paired fixture
-  pins 14,336/14,335 Work, 1,024/1,023 Items, and 10/9 Depth. Planar or
-  unaligned encodings, unequal ranges or weights, Offset(Sphere)/NURBS,
-  Offset(NURBS)/NURBS, broader NURBS/NURBS, and other procedural pairs remain
-  typed unsupported.
+  pins 14,336/14,335 Work, 1,024/1,023 Items, and 10/9 Depth. A first direct
+  Offset(NURBS)/NURBS arm admits the exact constant-+Z-normal unit-chart basis
+  against a genuinely non-planar compatible peer. It retains and validates the
+  live root, signed distance, original basis, direct source, and paired pcurves;
+  outward original controls own misses while the rounded displaced surface is
+  discovery-only. The paired proof keeps the same exact Work/Items/Depth
+  boundaries and the offset root visits its basis at exact graph depth 2.
+  Planar or unaligned peers, unequal ranges or weights, Offset(Sphere)/NURBS,
+  nested or varying-normal offsets, Offset/Offset, broader NURBS/NURBS, and
+  other procedural pairs remain typed unsupported.
   The compatibility magnitude-twelve rung runs the complete historical
   magnitude-eleven family first so all prior evidence remains stable, then
   admits only new carrier/residual pairs that reach twelve. An explicit

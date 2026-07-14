@@ -135,6 +135,8 @@ pub use nurbs_nurbs::{
 };
 pub use nurbs_nurbs_surface::{
     intersect_bounded_nurbs_nurbs_surfaces, intersect_bounded_nurbs_nurbs_surfaces_with_context,
+    intersect_bounded_offset_nurbs_nurbs_surfaces,
+    intersect_bounded_offset_nurbs_nurbs_surfaces_with_context,
 };
 pub use nurbs_plane::intersect_bounded_nurbs_plane;
 pub use nurbs_sphere::intersect_bounded_nurbs_sphere;

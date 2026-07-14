@@ -689,9 +689,17 @@ original `z` control nets may prove a miss; every positive branch is separately
 certified against both originals. Its paired cost is
 `S*2^10*((6R_a+1)+(6R_b+1))` Work with `S*2^10` Items and Depth 10; the
 one-span fixture pins `14336/14335` Work, `1024/1023` Items, and `10/9` Depth.
-Planar or unaligned NURBS encodings, unequal ranges or weights,
-Offset(Sphere)/NURBS, Offset(NURBS)/NURBS, and broader NURBS/NURBS or other
-procedural pairs remain unsupported.
+A narrow direct Offset(NURBS)/NURBS arm reuses that paired proof only when the
+offset basis is the exact constant-+Z-normal unit chart and the direct peer is
+genuinely non-planar with matching constant weights and ranges. Outward
+original basis-plus-distance versus direct-source control intervals own
+complete misses; the rounded effective surface remains discovery-only. The
+certificate retains the live offset root, signed distance, original basis,
+direct peer, and both pcurves, protects the basis transitively, and preserves
+the same exact 14,336/14,335 Work, 1,024/1,023 Items, and 10/9 Depth boundaries.
+Planar or unaligned peers, unequal ranges or weights, Offset(Sphere)/NURBS,
+nested or varying-normal Offset(NURBS), Offset/Offset, and broader NURBS/NURBS
+or other procedural pairs remain unsupported.
 Certified branches can be committed atomically as
 `CurveDescriptor::Intersection` or
 `CurveDescriptor::VerifiedNurbsIntersection` nodes with a stable class key,
@@ -768,9 +776,9 @@ whole-range proof. Records 1828 and 1671 are admitted in place, while the
 traversal-masked records 2008 and 1678 are independently certified by focused
 payload transplants.
 
-- Add Offset(NURBS)/NURBS, broader NURBS/NURBS charts, and other
-  exact/procedural families only with contextual accounting and paired trace
-  evidence.
+- Broaden the first direct constant-normal Offset(NURBS)/NURBS unit-chart arm,
+  then add broader NURBS/NURBS charts and other exact/procedural families only
+  with contextual accounting and paired trace evidence.
 - Broaden the M3c consumer to null/general closed limits, other nullable chart
   data, non-endpoint-only periodic trace ranges, noncanonical charts, and further terminator variants
   without recomputing their transmitted scars.
@@ -833,6 +841,12 @@ the graph ownership model.
   graph-accounting boundaries, source/pcurve/carrier identity, dependency
   protection, and typed periodic, closed, altered, stale, mismatched,
   noncanonical, and null-limit rollback paths.
+- Operation-generated direct Offset(NURBS)/NURBS variants cover both operand
+  orders and polynomial/rational constant-normal unit-chart bases, retain the
+  live root, basis, signed distance, direct peer, and paired pcurves, pin exact
+  14,336/1,024/10 certificate accounting plus 2/depth-2 graph traversal, and
+  reject nested, varying-normal, offset/offset, unaligned, altered, and stale
+  sources atomically.
 - Direct constant-normal Offset(B-surface)/B-surface variants cover both operand
   orders and polynomial/rational bases, retain the live root, signed distance,
   basis, and paired pcurves, pin exact 14,336/2/10 proof accounting, reject

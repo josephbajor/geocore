@@ -94,6 +94,73 @@ pub fn intersect_bounded_nurbs_nurbs_surfaces_with_context(
     }
 }
 
+/// Intersect one constant-normal offset of a compatible planar NURBS basis
+/// with one direct compatible NURBS surface.
+pub fn intersect_bounded_offset_nurbs_nurbs_surfaces(
+    basis: &NurbsSurface,
+    signed_distance: f64,
+    offset_range: [ParamRange; 2],
+    direct: &NurbsSurface,
+    direct_range: [ParamRange; 2],
+    tolerances: Tolerances,
+) -> Result<SurfaceSurfaceIntersections> {
+    let session = SessionPolicy::new(
+        SessionPrecision::parasolid(),
+        NumericalPolicy::v1(),
+        ExecutionPolicy::Serial,
+        NurbsSurfaceMarchBudgetProfile::v1_defaults(),
+        PolicyVersion::V1,
+    );
+    let context = OperationContext::new(&session, tolerances)
+        .expect("validated Tolerances always satisfy v1 session precision");
+    intersect_bounded_offset_nurbs_nurbs_surfaces_with_context(
+        basis,
+        signed_distance,
+        offset_range,
+        direct,
+        direct_range,
+        &context,
+    )
+    .expect("built-in v1 Offset(NURBS)/NURBS surface policy is valid")
+    .into_result()
+}
+
+/// Context-aware constant-normal Offset(NURBS)/NURBS surface intersection.
+pub fn intersect_bounded_offset_nurbs_nurbs_surfaces_with_context(
+    basis: &NurbsSurface,
+    signed_distance: f64,
+    offset_range: [ParamRange; 2],
+    direct: &NurbsSurface,
+    direct_range: [ParamRange; 2],
+    context: &OperationContext<'_>,
+) -> core::result::Result<OperationOutcome<SurfaceSurfaceIntersections>, OperationPolicyError> {
+    validate_context_budget(context)?;
+    let mut scope = OperationScope::new(context);
+    let result = intersect_bounded_offset_nurbs_nurbs_surfaces_with_traces_in_scope(
+        basis,
+        signed_distance,
+        offset_range,
+        direct,
+        direct_range,
+        context.tolerances(),
+        &mut scope,
+    );
+    match result {
+        Ok(output) => Ok(scope.finish(Ok(output.result))),
+        Err(ContextMarchError::Kernel(error)) => Ok(scope.finish(Err(error))),
+        Err(ContextMarchError::Limit(snapshot)) => {
+            scope.diagnose(
+                snapshot.stage,
+                NURBS_SURFACE_MARCH_SAMPLE_LIMIT,
+                DiagnosticKind::LimitReached(snapshot),
+                "NURBS surface marching grid sample limit reached",
+            );
+            Ok(scope.finish(Err(Error::ResourceLimit { snapshot })))
+        }
+        Err(ContextMarchError::Policy(error)) => Err(error),
+    }
+}
+
 pub(super) fn supports_direct_nurbs_nurbs_surface_pair(
     surface_a: &NurbsSurface,
     range_a: [ParamRange; 2],
@@ -132,6 +199,25 @@ pub(super) fn supports_direct_nurbs_nurbs_surface_pair(
         && exact_unit_xy_controls(surface_b)
 }
 
+pub(super) fn supports_offset_nurbs_nurbs_surface_pair(
+    basis: &NurbsSurface,
+    signed_distance: f64,
+    offset_range: [ParamRange; 2],
+    direct: &NurbsSurface,
+    direct_range: [ParamRange; 2],
+) -> bool {
+    signed_distance.is_finite()
+        && supports_direct_nurbs_nurbs_surface_pair(basis, offset_range, direct, direct_range)
+        && basis
+            .points()
+            .first()
+            .is_some_and(|first| basis.points().iter().all(|point| point.z == first.z))
+        && basis.points().iter().all(|point| {
+            let lifted = Interval::point(point.z) + Interval::point(signed_distance);
+            lifted.lo().is_finite() && lifted.hi().is_finite()
+        })
+}
+
 fn exact_unit_xy_controls(surface: &NurbsSurface) -> bool {
     let expected_u = [0.0, 0.5, 1.0];
     let expected_v = [0.0, 1.0];
@@ -149,12 +235,67 @@ pub(super) fn intersect_bounded_nurbs_nurbs_surfaces_with_traces_in_scope(
     tolerances: Tolerances,
     scope: &mut OperationScope<'_, '_>,
 ) -> core::result::Result<MarchOutput, ContextMarchError> {
+    intersect_compatible_nurbs_pair_with_traces_in_scope(
+        surface_a, range_a, surface_b, range_b, tolerances, true, scope,
+    )
+}
+
+pub(super) fn intersect_bounded_offset_nurbs_nurbs_surfaces_with_traces_in_scope(
+    basis: &NurbsSurface,
+    signed_distance: f64,
+    offset_range: [ParamRange; 2],
+    direct: &NurbsSurface,
+    direct_range: [ParamRange; 2],
+    tolerances: Tolerances,
+    scope: &mut OperationScope<'_, '_>,
+) -> core::result::Result<MarchOutput, ContextMarchError> {
+    if !supports_offset_nurbs_nurbs_surface_pair(
+        basis,
+        signed_distance,
+        offset_range,
+        direct,
+        direct_range,
+    ) {
+        return Err(ContextMarchError::Kernel(Error::InvalidGeometry {
+            reason: "Offset(NURBS)/NURBS surface intersection requires a direct constant-positive-normal unit-chart basis and compatible direct source",
+        }));
+    }
+    if offset_control_difference_proves_empty(basis, signed_distance, direct) {
+        return Ok(MarchOutput {
+            result: SurfaceSurfaceIntersections::complete_empty(),
+            traces: Vec::new(),
+        });
+    }
+    let effective = constant_normal_offset_surface(basis, signed_distance)?;
+    intersect_compatible_nurbs_pair_with_traces_in_scope(
+        &effective,
+        offset_range,
+        direct,
+        direct_range,
+        tolerances,
+        false,
+        scope,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn intersect_compatible_nurbs_pair_with_traces_in_scope(
+    surface_a: &NurbsSurface,
+    range_a: [ParamRange; 2],
+    surface_b: &NurbsSurface,
+    range_b: [ParamRange; 2],
+    tolerances: Tolerances,
+    original_control_miss_is_authoritative: bool,
+    scope: &mut OperationScope<'_, '_>,
+) -> core::result::Result<MarchOutput, ContextMarchError> {
     if !supports_direct_nurbs_nurbs_surface_pair(surface_a, range_a, surface_b, range_b) {
         return Err(ContextMarchError::Kernel(Error::InvalidGeometry {
             reason: INCOMPATIBLE_REASON,
         }));
     }
-    if original_control_difference_proves_empty(surface_a, surface_b) {
+    if original_control_miss_is_authoritative
+        && original_control_difference_proves_empty(surface_a, surface_b)
+    {
         return Ok(MarchOutput {
             result: SurfaceSurfaceIntersections::complete_empty(),
             traces: Vec::new(),
@@ -196,6 +337,41 @@ pub(super) fn intersect_bounded_nurbs_nurbs_surfaces_with_traces_in_scope(
         scope,
     )?;
     lift_output_to_original_sources(output, surface_a, surface_b)
+}
+
+fn constant_normal_offset_surface(
+    basis: &NurbsSurface,
+    signed_distance: f64,
+) -> Result<NurbsSurface> {
+    let points = basis
+        .points()
+        .iter()
+        .map(|point| Point3::new(point.x, point.y, point.z + signed_distance))
+        .collect();
+    NurbsSurface::new(
+        basis.degree_u(),
+        basis.degree_v(),
+        basis.knots(Dir::U).as_slice().to_vec(),
+        basis.knots(Dir::V).as_slice().to_vec(),
+        points,
+        basis.weights().map(<[f64]>::to_vec),
+    )
+}
+
+fn offset_control_difference_proves_empty(
+    basis: &NurbsSurface,
+    signed_distance: f64,
+    direct: &NurbsSurface,
+) -> bool {
+    let mut lower = f64::INFINITY;
+    let mut upper = f64::NEG_INFINITY;
+    for (basis, direct) in basis.points().iter().zip(direct.points()) {
+        let difference =
+            Interval::point(basis.z) + Interval::point(signed_distance) - Interval::point(direct.z);
+        lower = lower.min(difference.lo());
+        upper = upper.max(difference.hi());
+    }
+    lower > 0.0 || upper < 0.0
 }
 
 fn scalar_difference_surface(
