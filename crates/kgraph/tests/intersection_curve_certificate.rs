@@ -65,6 +65,93 @@ fn second_nonplanar_trace_surface(rational: bool) -> NurbsSurface {
     .unwrap()
 }
 
+fn periodic_polyline_surface() -> NurbsSurface {
+    let mut points = Vec::new();
+    for point in [
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(-1.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 0.0),
+    ] {
+        points.push(point);
+        points.push(point + Vec3::new(0.0, 0.0, 1.0));
+    }
+    NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 2.0, 3.0, 3.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        points,
+        None,
+    )
+    .unwrap()
+    .with_certified_periodicity([true, false], 0.0)
+    .unwrap()
+}
+
+fn periodic_transmitted_chart(
+    seam_end: f64,
+    tolerance: f64,
+) -> (
+    NurbsCurve,
+    NurbsSurface,
+    [NurbsCurve2d; 2],
+    kgraph::TransmittedNurbsIntersectionCertificate,
+) {
+    let knots = vec![0.0, 0.0, 1.0, 2.0, 3.0, 3.0];
+    let carrier = NurbsCurve::new(
+        1,
+        knots.clone(),
+        vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(-1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 0.0),
+        ],
+        None,
+    )
+    .unwrap();
+    let pcurves = [
+        NurbsCurve2d::new(
+            1,
+            knots.clone(),
+            vec![
+                Vec2::new(0.0, 0.0),
+                Vec2::new(1.0, 0.0),
+                Vec2::new(-1.0, 0.0),
+                Vec2::new(0.0, 0.0),
+            ],
+            None,
+        )
+        .unwrap(),
+        NurbsCurve2d::new(
+            1,
+            knots,
+            vec![
+                Vec2::new(0.0, 0.0),
+                Vec2::new(1.0, 0.0),
+                Vec2::new(2.0, 0.0),
+                Vec2::new(seam_end, 0.0),
+            ],
+            None,
+        )
+        .unwrap(),
+    ];
+    let surface = periodic_polyline_surface();
+    let certificate = certify_transmitted_plane_nurbs_intersection_residuals(
+        carrier.clone(),
+        [
+            TransmittedPlaneNurbsTrace::Plane(Plane::new(Frame::world())),
+            TransmittedPlaneNurbsTrace::Nurbs(surface.clone()),
+        ],
+        pcurves.clone(),
+        TransmittedIntersectionChartMetadata::new(0.0, 1.0, 0.0, 0.0, [None, None]).unwrap(),
+        tolerance,
+    )
+    .unwrap();
+    (carrier, surface, pcurves, certificate)
+}
+
 fn carrier() -> Line {
     Line::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap()
 }
@@ -945,6 +1032,68 @@ fn transmitted_plane_nurbs_chart_certifies_nonplanar_polynomial_and_rational_sou
         );
         graph.validate().unwrap();
     }
+}
+
+#[test]
+fn transmitted_equal_seam_chart_alone_mints_periodic_carrier_semantics() {
+    let (carrier, surface, pcurves, certificate) = periodic_transmitted_chart(3.0, 2.0e-3);
+    assert_eq!(certificate.carrier_periodicity(), None);
+
+    let periodic = certificate
+        .clone()
+        .with_certified_carrier_periodicity()
+        .unwrap();
+    assert_eq!(periodic.carrier_periodicity(), Some(3.0));
+
+    let mut graph = GeometryGraph::new();
+    let sources = [
+        graph.insert_surface(Plane::new(Frame::world())).unwrap(),
+        graph.insert_surface(surface).unwrap(),
+    ];
+    let pcurve_handles = [
+        graph.insert_curve2d(pcurves[0].clone()).unwrap(),
+        graph.insert_curve2d(pcurves[1].clone()).unwrap(),
+    ];
+    let open_curve = graph
+        .insert_verified_transmitted_plane_nurbs_intersection_curve(
+            sources,
+            pcurve_handles,
+            certificate,
+        )
+        .unwrap();
+    let curve = graph
+        .insert_verified_transmitted_plane_nurbs_intersection_curve(
+            sources,
+            pcurve_handles,
+            periodic,
+        )
+        .unwrap();
+    let mut eval = EvalContext::new(&graph, EvalLimits::default(), Tolerances::default());
+    assert_eq!(eval.curve_periodicity(open_curve), Ok(None));
+    assert_eq!(
+        eval.eval_curve(open_curve, 3.25, 0),
+        Err(EvalError::ParameterOutsideDomain)
+    );
+    assert_eq!(eval.curve_periodicity(curve), Ok(Some(3.0)));
+    assert_eq!(
+        eval.eval_curve(curve, 3.25, 1).unwrap(),
+        carrier.eval_derivs(0.25, 1)
+    );
+    assert_eq!(
+        eval.curve_bounds(curve, ParamRange::new(3.0, 6.0)).unwrap(),
+        carrier.bounding_box(carrier.param_range())
+    );
+    graph.validate().unwrap();
+
+    let (_, _, _, noncanonical) = periodic_transmitted_chart(2.75, 1.0);
+    assert!(matches!(
+        noncanonical.with_certified_carrier_periodicity(),
+        Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "periodic transmitted pcurve does not cross one complete certified source seam",
+            }
+        )
+    ));
 }
 
 #[test]

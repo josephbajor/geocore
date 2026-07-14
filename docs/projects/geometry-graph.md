@@ -772,11 +772,14 @@ in both operand orders. The production exemplar now passes its first shared-
 then certifies finite-open direct B-surface/Plane record 1252 by exactly
 inverting its paired-null interior Plane UVs. Production v6 then lifts native
 direct-Plane `SP_CURVE` node 30 exactly by applying the affine Plane frame to
-the open, nonperiodic, nonrational 2D B-curve controls. It reaches FACE 1195's
-vertex-less nonperiodic ring-domain boundary rather than another
-transmitted-chart boundary. Exactly one certified periodic NURBS axis may close the equal-limit chart; only its
-endpoints are unwrapped by one exact period before the whole-range interval
-proof. An end terminator contributes a tolerance-close, distinct singularity
+the open, nonperiodic, nonrational 2D B-curve controls. Exactly one certified
+periodic NURBS axis may close an equal-limit chart; only its endpoints are
+unwrapped by one exact period before the whole-range interval proof, and that
+proof alone promotes the closed transmitted carrier to periodic evaluation and
+bounds. FACE 1195 can therefore derive its vertex-less ring domain. The next
+boundary is later `INTERSECTION` 5089 / `INTERSECTION_DATA` 5092, where sample
+2 operand 0 has a null UV pair. An end terminator contributes a
+tolerance-close, distinct singularity
 and one extra paired-UV tuple whose appended span is certified with the same
 whole-range proof. Records 1828 and 1671 are admitted in place, while the
 traversal-masked records 2008 and 1678 are independently certified by focused
@@ -860,8 +863,9 @@ the graph ownership model.
   basis, and paired pcurves, pin exact 14,336/2/10 proof accounting, reject
   singular or underflowed normal fields and altered dependencies, and advance
   the production corpus through record 1828, end-terminated record 1671, and
-  finite-open record 1252 and native direct-Plane `SP_CURVE` node 30 to FACE
-  1195's vertex-less nonperiodic ring-domain boundary. The equal-limit
+  finite-open record 1252 and native direct-Plane `SP_CURVE` node 30 through
+  FACE 1195's vertex-less ring domain to the null chart-data boundary at
+  `INTERSECTION` 5089 / data 5092. The equal-limit
   suite separately pins both records, exact v3
   `115485725/20/10`, record-2008 transplant `124040223/22/10`, endpoint-only
   period unwrapping, and typed null/distinct-closed/off-seam rollback. The
@@ -872,8 +876,8 @@ the graph ownership model.
   Items/Depth, interior-only paired Plane omissions, historical-v4 stability,
   exact N/N-1 rollback, and the preserved v5 chart crossing. The SP-curve
   suite pins exact v6 `208228426/22/10`, per-resource N/N-1 rollback, the
-  affine control lift, typed approximation rejection, and the next ring-domain
-  boundary.
+  affine control lift, typed approximation rejection, certificate-derived
+  periodic carrier semantics, and the next null chart-data boundary.
 
 ### Offset evaluator tests
 

@@ -1,6 +1,5 @@
 //! Production native Plane SP-curve reconstruction contract.
 
-use kcore::error::Error as KernelError;
 use kcore::operation::{
     AccountingMode, BudgetPlan, LimitSpec, OperationContext, ResourceKind, SessionPolicy,
 };
@@ -76,20 +75,21 @@ fn assert_rollback(store: &Store) {
     assert_eq!(store.count::<SurfaceGeom>(), 0);
 }
 
-fn assert_ring_domain_boundary(error: &XtError) {
+fn assert_post_ring_chart_data_boundary(error: &XtError) {
     assert!(
         matches!(
             error,
-            XtError::Kernel(KernelError::InvalidGeometry {
-                reason: "cannot derive face domain from non-periodic ring edge",
-            })
+            XtError::Unsupported {
+                capability: XtCapability::IntersectionChartData,
+                what: "INTERSECTION_DATA contains null or non-finite UV values",
+            }
         ),
         "unexpected post-SP-curve boundary: {error:?}"
     );
 }
 
 #[test]
-fn node_30_pins_the_exact_native_plane_lift_and_next_ring_boundary() {
+fn node_30_and_face_1195_pin_the_exact_plane_lift_and_ring_topology() {
     let file = read_xt(EXEMPLAR).unwrap();
     assert_eq!(file.nodes[&30].code, code::SP_CURVE);
     assert_eq!(field(&file, 30, "sense").as_char(), Some('+'));
@@ -151,10 +151,18 @@ fn node_30_pins_the_exact_native_plane_lift_and_next_ring_boundary() {
     assert_eq!(field(&file, 4724, "edge").as_ptr(), Some(2210));
     assert_eq!(field(&file, 2210, "curve").as_ptr(), Some(2008));
     assert_eq!(file.nodes[&2008].code, code::INTERSECTION);
+
+    assert_eq!(file.nodes[&5089].code, code::INTERSECTION);
+    assert_eq!(field(&file, 5089, "intersection_data").as_ptr(), Some(5092));
+    let next_values = match field(&file, 5092, "values") {
+        Value::Arr(values) => values,
+        value => panic!("unexpected next INTERSECTION_DATA values: {value:?}"),
+    };
+    assert_eq!(&next_values[8..10], &[Value::Null, Value::Null]);
 }
 
 #[test]
-fn v6_lifts_node_30_and_advances_atomically_to_the_ring_domain_boundary() {
+fn v6_lifts_node_30_and_advances_atomically_past_the_ring_domain_boundary() {
     let file = read_xt(EXEMPLAR).unwrap();
     let session = SessionPolicy::v1();
     let mut store = Store::new();
@@ -164,7 +172,7 @@ fn v6_lifts_node_30_and_advances_atomically_to_the_ring_domain_boundary() {
         &context_with_plan(&session, IntersectionImportBudgetProfile::v6_defaults()),
     )
     .unwrap();
-    assert_ring_domain_boundary(outcome.result().as_ref().unwrap_err());
+    assert_post_ring_chart_data_boundary(outcome.result().as_ref().unwrap_err());
     assert!(outcome.report().limit_events().is_empty());
     assert_eq!(
         usage(

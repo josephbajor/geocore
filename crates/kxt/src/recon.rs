@@ -2351,6 +2351,16 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             index: curve_idx,
             source,
         })?;
+        let certificate = if equal_limits {
+            certificate
+                .with_certified_carrier_periodicity()
+                .map_err(|source| XtError::IntersectionCertificate {
+                    index: curve_idx,
+                    source,
+                })?
+        } else {
+            certificate
+        };
         self.scope
             .ledger_mut()
             .charge(INTERSECTION_CHART_CERTIFICATE_WORK, proof_work)

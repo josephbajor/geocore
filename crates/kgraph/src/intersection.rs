@@ -719,6 +719,7 @@ impl NurbsIntersectionTrace {
 pub struct TransmittedNurbsIntersectionCertificate {
     carrier: NurbsCurve,
     carrier_range: ParamRange,
+    carrier_period: Option<f64>,
     traces: [TransmittedNurbsIntersectionTrace; 2],
     pcurves: [NurbsCurve2d; 2],
     residual_bounds: [f64; 2],
@@ -739,6 +740,92 @@ impl TransmittedNurbsIntersectionCertificate {
     /// Complete canonical chart interval covered by the proof.
     pub const fn carrier_range(&self) -> ParamRange {
         self.carrier_range
+    }
+
+    /// Certified full-chart carrier period, when this transmitted chart is a
+    /// one-seam closed ring.
+    pub const fn carrier_periodicity(&self) -> Option<f64> {
+        self.carrier_period
+    }
+
+    /// Promote a closed transmitted chart to a periodic carrier only when its
+    /// retained proof crosses exactly one complete certified NURBS seam.
+    ///
+    /// Ordinary finite-open transmitted charts remain nonperiodic. The
+    /// promotion additionally requires the spatial carrier endpoints to close
+    /// within the certificate tolerance and the paired pcurve endpoints to
+    /// differ by exactly one source-domain period, modulo a bounded floating
+    /// point seam slack.
+    pub fn with_certified_carrier_periodicity(
+        mut self,
+    ) -> Result<Self, IntersectionCertificateError> {
+        let first = self.carrier.points()[0];
+        let last = self.carrier.points()[self.carrier.points().len() - 1];
+        if first.dist(last) > self.tolerance {
+            return Err(
+                IntersectionCertificateError::UnsupportedCarrierParameterization {
+                    reason: "periodic transmitted carrier endpoints do not close within tolerance",
+                },
+            );
+        }
+
+        let mut periodic_axes = 0_usize;
+        for (trace_index, trace) in self.traces.iter().enumerate() {
+            let surface = match trace {
+                TransmittedNurbsIntersectionTrace::Plane(_)
+                | TransmittedNurbsIntersectionTrace::Sphere(_) => continue,
+                TransmittedNurbsIntersectionTrace::Nurbs(surface) => surface,
+                TransmittedNurbsIntersectionTrace::OffsetNurbs(offset) => offset.basis(),
+            };
+            let first_uv = self.pcurves[trace_index].points()[0];
+            let last_uv =
+                self.pcurves[trace_index].points()[self.pcurves[trace_index].points().len() - 1];
+            for (axis, period) in surface.periodicity().into_iter().enumerate() {
+                let Some(period) = period else {
+                    continue;
+                };
+                periodic_axes += 1;
+                let domain = surface
+                    .knots(if axis == 0 { Dir::U } else { Dir::V })
+                    .domain();
+                if period != domain.width() {
+                    return Err(
+                        IntersectionCertificateError::UnsupportedCarrierParameterization {
+                            reason: "periodic transmitted trace period is not its complete source domain",
+                        },
+                    );
+                }
+                let (first_coordinate, last_coordinate) = if axis == 0 {
+                    (first_uv.x, last_uv.x)
+                } else {
+                    (first_uv.y, last_uv.y)
+                };
+                let scale = domain
+                    .lo
+                    .abs()
+                    .max(domain.hi.abs())
+                    .max(period.abs())
+                    .max(1.0);
+                let seam_slack = 16_384.0 * f64::EPSILON * scale;
+                if ((last_coordinate - first_coordinate).abs() - period).abs() > seam_slack {
+                    return Err(
+                        IntersectionCertificateError::UnsupportedCarrierParameterization {
+                            reason: "periodic transmitted pcurve does not cross one complete certified source seam",
+                        },
+                    );
+                }
+            }
+        }
+        if periodic_axes != 1 {
+            return Err(
+                IntersectionCertificateError::UnsupportedCarrierParameterization {
+                    reason: "periodic transmitted carrier requires exactly one certified NURBS seam axis",
+                },
+            );
+        }
+
+        self.carrier_period = Some(self.carrier_range.width());
+        Ok(self)
     }
 
     /// Exact ordered proof sources.
@@ -941,6 +1028,9 @@ impl Curve for TransmittedNurbsIntersectionCurveDescriptor {
     }
 
     fn eval_derivs(&self, parameter: f64, order: usize) -> CurveDerivs {
+        let parameter = self.certificate.carrier_period.map_or(parameter, |period| {
+            wrap_periodic(parameter, self.certificate.carrier_range.lo, period)
+        });
         self.certificate.carrier.eval_derivs(parameter, order)
     }
 
@@ -949,11 +1039,20 @@ impl Curve for TransmittedNurbsIntersectionCurveDescriptor {
     }
 
     fn periodicity(&self) -> Option<f64> {
-        None
+        self.certificate.carrier_period
     }
 
     fn bounding_box(&self, range: ParamRange) -> Aabb3 {
-        self.certificate.carrier.bounding_box(range)
+        if self.certificate.carrier_period.is_some() {
+            // A caller may request an interval outside the retained base
+            // chart. The complete base-chart hull is conservative for every
+            // periodic interval and exact for the full-period ring domain.
+            self.certificate
+                .carrier
+                .bounding_box(self.certificate.carrier_range)
+        } else {
+            self.certificate.carrier.bounding_box(range)
+        }
     }
 }
 
@@ -2426,6 +2525,7 @@ fn certify_transmitted_nurbs_intersection_residuals_impl(
     Ok(TransmittedNurbsIntersectionCertificate {
         carrier,
         carrier_range,
+        carrier_period: None,
         traces,
         pcurves,
         residual_bounds,

@@ -676,11 +676,14 @@ recovering its paired-null interior Plane UVs by exact frame inversion while
 requiring numeric endpoints and NURBS UVs. Production v6 then lifts native
 Plane `SP_CURVE` node 30 exactly from its open, nonperiodic, nonrational 2D
 B-curve controls. The affine Plane map preserves degree, knots, and
-parameterization without approximation. Reconstruction now stops while
-deriving FACE 1195's domain from vertex-less EDGE 2210 and nonperiodic
-equal-limit `INTERSECTION` 2008. Its manifest row remains the committed
-progress meter:
-`reconstruct: fail → pass`, then `tessellate: pass`, then full-checker
+parameterization without approximation. The equal-limit proof now promotes
+its closed carrier to periodic semantics only after one complete certified
+NURBS seam crossing, so vertex-less EDGE 2210 remains a topology ring and FACE
+1195 derives its finite domain. Reconstruction now stops at `INTERSECTION`
+5089 / `INTERSECTION_DATA` 5092, whose sample 2 operand 0 UV pair is null. Its
+manifest row is `reconstruct: unsupported` with
+`xt.read.intersection-chart-data` and remains the committed progress meter:
+`reconstruct: unsupported → pass`, then `tessellate: pass`, then full-checker
 gaps shrinking toward `valid`. Dependency plan:
 
 1. **COMPLETE — geometry graph with the offset-surface evaluator as its first
@@ -742,8 +745,10 @@ gaps shrinking toward `valid`. Dependency plan:
    remains capped there and pins the later attempted 118,406,196-Work chart
    crossing. Production v6 admits the native direct-Plane SP-curve lift and
    every later already-supported chart it exposes at exact
-   `208228426/22/10` Work/Items/Depth, then fails atomically at the nonperiodic
-   ring-edge face-domain boundary. Both
+   `208228426/22/10` Work/Items/Depth, derives FACE 1195's vertex-less ring
+   domain from certificate-owned periodic carrier semantics, then fails
+   atomically at the later null sample-2 operand-0 UV pair in intersection data
+   5092. Both
    original B-surface identities and their paired pcurves are graph-protected
    in source order. Other parameter conventions, limits,
    nullable data, periodic/closed transmitted trace ranges, arbitrary unclamped
@@ -754,8 +759,9 @@ gaps shrinking toward `valid`. Dependency plan:
    periodic/closed flags. Its first Offset(B-surface)/B-surface chart now
    certifies. The endpoint-only equal-limit records 1828 and 2008 and the
    end-terminated records 1671 and 1678, finite-open record 1252, and native
-   Plane SP-curve node 30 now certify, advancing the corpus ratchet to FACE
-   1195's vertex-less ring-domain boundary.
+   Plane SP-curve node 30 now certify; FACE 1195's vertex-less ring domain also
+   derives, advancing the corpus ratchet to `INTERSECTION` 5089's null chart
+   data boundary.
    Original-backed, tolerance-qualified, non-Plane, reversed-basis, periodic,
    closed, rational, or non-2D SP-curves, foreign curves, null/general
    closed-limit, endpoint or NURBS-trace omissions, other nullable
@@ -1206,9 +1212,10 @@ that queue must eventually discharge.
   landed canonical Plane/Plane, Plane/Offset, Offset/Offset, Plane/B-surface,
   safe-Offset(Plane)/B-surface, B-surface/B-surface, and direct
   Offset(B-surface)/B-surface and native direct-Plane SP-curve slices past the
-  exemplar's current nonperiodic ring-domain boundary: broader SP/foreign curves,
-  null/general closed limits, remaining nullable chart data, periodic trace
-  ranges, and noncanonical chart variants.
+  exemplar's now-certified vertex-less ring-domain boundary: broader
+  SP/foreign curves, null/general closed limits, remaining nullable chart data
+  including sample-2 NURBS omissions, non-endpoint-only periodic trace ranges,
+  and noncanonical chart variants.
 - M2.5: finish parameter-space incidence and ratcheted Full-checker proofs for
   periodic/mixed boundaries, multi-loop containment, and curved shells.
 - M4: extend the narrow landed graph-aware Plane/Plane and Plane/Sphere paired-
