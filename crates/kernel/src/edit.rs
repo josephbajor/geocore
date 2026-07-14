@@ -1390,6 +1390,10 @@ impl EditTransaction<'_> {
     }
 
     /// Split one face using the transaction's pcurve-aware checked operator.
+    ///
+    /// The new face inherits the source tolerance and its complete provenance.
+    /// Commit journals describe that propagation without exposing a reusable
+    /// tolerance budget.
     pub fn split_face(&mut self, request: SplitFaceRequest) -> Result<SplitFaceResult> {
         self.validate_part(request.loop_id.part())?;
         self.inner
@@ -1431,6 +1435,10 @@ impl EditTransaction<'_> {
     }
 
     /// Merge the two faces separated by one live edge.
+    ///
+    /// The surviving face selects the larger input tolerance, retaining the
+    /// selected origin/growth provenance. Equal values select the survivor;
+    /// commit journals describe the ordered inputs and selection.
     pub fn merge_faces(&mut self, request: MergeFacesRequest) -> Result<()> {
         self.validate_part(request.edge.part())?;
         self.inner
@@ -1824,8 +1832,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        BlockRequest, CheckOutcome, JournalEntity, Kernel, LineageView, MutationKind,
-        ToleranceOrigin,
+        BlockRequest, CheckOutcome, FaceTolerancePropagationView, JournalEntity, Kernel,
+        LineageView, MutationKind, ToleranceOrigin,
     };
 
     fn block(edit: &mut PartEdit<'_>) -> BodyId {
@@ -2304,6 +2312,25 @@ mod tests {
         let mut edit = session.edit_part(part_id.clone()).unwrap();
         let body = block(&mut edit);
         let request = split_request(&mut edit, &body);
+        let source_face = {
+            let source = edit
+                .store_mut_for_test()
+                .get(request.loop_id.raw())
+                .unwrap()
+                .face();
+            FaceId::new(part_id.clone(), source)
+        };
+        let imported = crate::EntityTolerance::imported_xt(2.0 * LINEAR_RESOLUTION).unwrap();
+        {
+            let store = edit.store_mut_for_test();
+            let mut setup = store.transaction().unwrap();
+            setup
+                .assembly()
+                .get_mut(source_face.raw())
+                .unwrap()
+                .tolerance = Some(imported);
+            setup.commit_checked_body(body.raw()).unwrap();
+        }
         let original_face_count = edit.as_part().faces().len();
 
         let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
@@ -2323,11 +2350,46 @@ mod tests {
         assert_eq!(source, pieces.clone().next().unwrap());
         assert_eq!(pieces.len(), 2);
         assert!(lineage.next().is_none());
+        assert_eq!(journal.face_tolerance_propagation_count(), 1);
+        assert!(matches!(
+            journal.face_tolerance_propagations().next(),
+            Some(FaceTolerancePropagationView::Inherited {
+                source,
+                result,
+                tolerance: Some(value),
+            }) if source == source_face && result == split.face() && value == imported
+        ));
+        assert_eq!(journal.tolerance_budget_count(), 0);
+        assert_eq!(journal.tolerance_event_count(), 0);
         assert_eq!(edit.as_part().faces().len(), original_face_count + 1);
         edit.as_part().face(split.face()).unwrap();
         edit.as_part().edge(split.edge()).unwrap();
 
+        // Simulate a later exact child so the merge-side growth introduces a
+        // distinct operation origin; facade adaptation must retain both input
+        // provenances and the selected result without lower-layer identities.
+        {
+            let store = edit.store_mut_for_test();
+            let mut reset_child = store.transaction().unwrap();
+            reset_child
+                .assembly()
+                .get_mut(split.face().raw())
+                .unwrap()
+                .tolerance = None;
+            reset_child.commit_checked_body(body.raw()).unwrap();
+        }
+
         let mut merge = edit.begin_edit(OperationSettings::default()).unwrap();
+        merge
+            .grow_tolerances(GrowTolerancesRequest::new(
+                "facade-merge-face-maximum",
+                4.0 * LINEAR_RESOLUTION,
+                vec![ToleranceGrowth::new(
+                    ToleranceGrowthTarget::Face(split.face()),
+                    5.0 * LINEAR_RESOLUTION,
+                )],
+            ))
+            .unwrap();
         merge
             .merge_faces(MergeFacesRequest::new(split.edge()))
             .unwrap();
@@ -2336,6 +2398,29 @@ mod tests {
         assert!(matches!(
             journal.lineage().next(),
             Some(LineageView::Merge { .. })
+        ));
+        let inherited = journal.tolerance_events().next().unwrap().current();
+        assert_eq!(
+            inherited.origin(),
+            ToleranceOrigin::Operation("facade-merge-face-maximum")
+        );
+        assert_eq!(
+            inherited.last_operation(),
+            Some("facade-merge-face-maximum")
+        );
+        assert!(matches!(
+            journal.face_tolerance_propagations().next(),
+            Some(FaceTolerancePropagationView::CombinedMax {
+                sources,
+                source_tolerances,
+                result,
+                selected_source: Some(selected),
+                tolerance: Some(value),
+            }) if sources == [source_face.clone(), split.face()]
+                && source_tolerances == [Some(imported), Some(inherited)]
+                && result == source_face
+                && selected == split.face()
+                && value == inherited
         ));
         assert_eq!(edit.as_part().faces().len(), original_face_count);
         assert!(matches!(
@@ -3803,16 +3888,38 @@ mod tests {
         let success = success.commit(core::slice::from_ref(&body)).unwrap();
         let visits = node_visits(&success);
         assert!(visits > 0);
+        assert!(matches!(
+            success
+                .result()
+                .as_ref()
+                .unwrap()
+                .face_tolerance_propagations()
+                .next(),
+            Some(FaceTolerancePropagationView::Inherited {
+                source: _,
+                result,
+                tolerance: None,
+            }) if result == success_split.face()
+        ));
 
         let mut merge = edit.begin_edit(OperationSettings::default()).unwrap();
         merge
             .merge_faces(MergeFacesRequest::new(success_split.edge()))
             .unwrap();
-        merge
+        let merge_journal = merge
             .commit(core::slice::from_ref(&body))
             .unwrap()
             .into_result()
             .unwrap();
+        assert!(matches!(
+            merge_journal.face_tolerance_propagations().next(),
+            Some(FaceTolerancePropagationView::CombinedMax {
+                source_tolerances: [None, None],
+                selected_source: None,
+                tolerance: None,
+                ..
+            })
+        ));
 
         let denied_settings = OperationSettings::default().with_budget_overrides(
             BudgetPlan::new([LimitSpec::new(
@@ -3824,7 +3931,7 @@ mod tests {
             .unwrap(),
         );
         let mut denied = edit.begin_edit(denied_settings).unwrap();
-        let denied_split = denied.split_face(request).unwrap();
+        let denied_split = denied.split_face(request.clone()).unwrap();
         let outcome = denied.commit(core::slice::from_ref(&body)).unwrap();
         let error = outcome.result().unwrap_err();
         let crossing = error.limit().unwrap();
@@ -3837,6 +3944,12 @@ mod tests {
                 kind: EntityKind::Face
             })
         ));
+
+        let mut repeated = edit.begin_edit(OperationSettings::default()).unwrap();
+        let repeated_split = repeated.split_face(request).unwrap();
+        assert_eq!(repeated_split, denied_split);
+        repeated.rollback().unwrap();
+        assert_eq!(edit.as_part().faces().len(), original_face_count);
     }
 
     #[test]

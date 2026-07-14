@@ -8,7 +8,10 @@ use kgraph::{EvalBudgetProfile, EvalContext, EvalLimits, EvalUsage};
 #[cfg(test)]
 use ktopo::check::FullCheckBudgetProfile;
 use ktopo::entity::EntityRef as RawEntityRef;
-use ktopo::transaction::{LineageEvent as RawLineageEvent, MutationKind as RawMutationKind};
+use ktopo::transaction::{
+    FaceTolerancePropagation as RawFaceTolerancePropagation, LineageEvent as RawLineageEvent,
+    MutationKind as RawMutationKind,
+};
 
 use crate::error::{Error, Result};
 use crate::session::{Part, PartEdit};
@@ -406,6 +409,38 @@ impl ToleranceEventView {
     }
 }
 
+/// Descriptive face-tolerance inheritance/combination evidence.
+///
+/// This journal view carries no budget identity or authoring capability.
+/// Complete imported/operation provenance remains inside each tolerance value.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum FaceTolerancePropagationView {
+    /// A face split copied the source tolerance to the new result face.
+    Inherited {
+        /// Existing source face.
+        source: FaceId,
+        /// New result face.
+        result: FaceId,
+        /// Copied tolerance, or `None` when the source was exact.
+        tolerance: Option<crate::EntityTolerance>,
+    },
+    /// A face merge selected the larger input tolerance.
+    CombinedMax {
+        /// Ordered `[surviving, absorbed]` input faces.
+        sources: [FaceId; 2],
+        /// Input values in the same order.
+        source_tolerances: [Option<crate::EntityTolerance>; 2],
+        /// Surviving result face.
+        result: FaceId,
+        /// Input whose complete provenance was retained. Equal values select
+        /// the surviving first source; two exact inputs select `None`.
+        selected_source: Option<FaceId>,
+        /// Selected result tolerance.
+        tolerance: Option<crate::EntityTolerance>,
+    },
+}
+
 /// Opaque owning adapter over one committed lower-layer journal.
 pub struct ChangeJournal {
     part: PartId,
@@ -471,6 +506,16 @@ impl ChangeJournal {
             })
     }
 
+    /// Face split/merge tolerance propagation in semantic operation order.
+    pub fn face_tolerance_propagations(
+        &self,
+    ) -> impl ExactSizeIterator<Item = FaceTolerancePropagationView> + '_ {
+        self.inner
+            .face_tolerance_propagations()
+            .iter()
+            .map(|event| adapt_face_tolerance_propagation(&self.part, event))
+    }
+
     /// Number of committed net mutations.
     pub fn mutation_count(&self) -> usize {
         self.inner.mutations().len()
@@ -489,6 +534,11 @@ impl ChangeJournal {
     /// Number of committed entity-tolerance changes.
     pub fn tolerance_event_count(&self) -> usize {
         self.inner.tolerance_events().len()
+    }
+
+    /// Number of descriptive face-tolerance propagation records.
+    pub fn face_tolerance_propagation_count(&self) -> usize {
+        self.inner.face_tolerance_propagations().len()
     }
 
     #[cfg(test)]
@@ -551,6 +601,37 @@ fn adapt_lineage_event<'journal>(
     }
 }
 
+fn adapt_face_tolerance_propagation(
+    part: &PartId,
+    event: &RawFaceTolerancePropagation,
+) -> FaceTolerancePropagationView {
+    match *event {
+        RawFaceTolerancePropagation::Inherited {
+            source,
+            result,
+            tolerance,
+        } => FaceTolerancePropagationView::Inherited {
+            source: FaceId::new(part.clone(), source),
+            result: FaceId::new(part.clone(), result),
+            tolerance,
+        },
+        RawFaceTolerancePropagation::CombinedMax {
+            sources,
+            source_tolerances,
+            result,
+            selected_source,
+            tolerance,
+        } => FaceTolerancePropagationView::CombinedMax {
+            sources: sources.map(|face| FaceId::new(part.clone(), face)),
+            source_tolerances,
+            result: FaceId::new(part.clone(), result),
+            selected_source: selected_source.map(|face| FaceId::new(part.clone(), face)),
+            tolerance,
+        },
+        _ => unreachable!("unadapted lower-layer face-tolerance propagation reached the facade"),
+    }
+}
+
 impl fmt::Debug for ChangeJournal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ChangeJournal")
@@ -559,6 +640,10 @@ impl fmt::Debug for ChangeJournal {
             .field("lineage_count", &self.lineage_count())
             .field("tolerance_budget_count", &self.tolerance_budget_count())
             .field("tolerance_event_count", &self.tolerance_event_count())
+            .field(
+                "face_tolerance_propagation_count",
+                &self.face_tolerance_propagation_count(),
+            )
             .finish()
     }
 }

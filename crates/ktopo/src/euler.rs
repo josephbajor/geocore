@@ -105,11 +105,7 @@ fn merged_face_metadata(
             Some(_) => {}
         }
     }
-    let tolerance = match (a.tolerance, b.tolerance) {
-        (Some(a), Some(b)) => Some(a.inherited_max(b)),
-        (Some(value), None) | (None, Some(value)) => Some(value),
-        (None, None) => None,
-    };
+    let (_, tolerance) = EntityTolerance::inherited_max_with_source([a.tolerance, b.tolerance]);
     Ok((domain, tolerance))
 }
 

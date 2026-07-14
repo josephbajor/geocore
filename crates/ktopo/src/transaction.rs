@@ -5,7 +5,8 @@
 //! lineage, and tolerance growth without exposing raw operators. Committing
 //! produces raw net mutations in a stable entity-type/slot order plus semantic
 //! operation evidence. Journals also retain declared tolerance-growth
-//! budgets and ordered per-entity changes. Dropping or explicitly rolling back
+//! budgets, ordered per-entity changes, and descriptive face-tolerance
+//! inheritance/combination evidence. Dropping or explicitly rolling back
 //! restores entity contents, handle generations, free-list order, and future
 //! allocations while discarding uncommitted budget usage.
 
@@ -149,6 +150,41 @@ impl ToleranceEvent {
     }
 }
 
+/// Descriptive tolerance propagation performed by a semantic face edit.
+///
+/// These records preserve inherited tolerance origin and growth provenance;
+/// they do not declare growth, consume a budget, or grant reusable authoring
+/// authority. Exact faces are represented explicitly by `None`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum FaceTolerancePropagation {
+    /// MEF copied the source face tolerance to the newly divided face.
+    Inherited {
+        /// Existing face whose complete tolerance value was copied.
+        source: FaceId,
+        /// Newly created face receiving the same tolerance.
+        result: FaceId,
+        /// Exact copied value, including `None` for an exact face.
+        tolerance: Option<EntityTolerance>,
+    },
+    /// KEF selected the larger input tolerance for the surviving face.
+    CombinedMax {
+        /// Ordered `[surviving, absorbed]` input identities.
+        sources: [FaceId; 2],
+        /// Input values in the same order, retained even though the absorbed
+        /// face is stale after commit.
+        source_tolerances: [Option<EntityTolerance>; 2],
+        /// Surviving face identity.
+        result: FaceId,
+        /// Source whose complete tolerance provenance was retained. Equal
+        /// values deterministically select the surviving first source; both
+        /// exact inputs select `None`.
+        selected_source: Option<FaceId>,
+        /// Selected result value, including `None` when both inputs were exact.
+        tolerance: Option<EntityTolerance>,
+    },
+}
+
 /// Semantic identity relationship emitted by a modeling operation.
 ///
 /// Raw mutation lists describe storage changes; lineage describes why model
@@ -199,6 +235,7 @@ pub struct Journal {
     lineage: Vec<LineageEvent>,
     tolerance_budgets: Vec<ToleranceBudgetReport>,
     tolerance_events: Vec<ToleranceEvent>,
+    face_tolerance_propagations: Vec<FaceTolerancePropagation>,
 }
 
 /// Acceptance rule for an opt-in Full-assurance transaction commit.
@@ -479,17 +516,24 @@ impl Journal {
         &self.tolerance_events
     }
 
+    /// Face split/merge tolerance policy evidence in semantic operation order.
+    pub fn face_tolerance_propagations(&self) -> &[FaceTolerancePropagation] {
+        &self.face_tolerance_propagations
+    }
+
     pub(crate) fn new(
         mutations: Vec<Mutation>,
         lineage: Vec<LineageEvent>,
         tolerance_budgets: Vec<ToleranceBudgetReport>,
         tolerance_events: Vec<ToleranceEvent>,
+        face_tolerance_propagations: Vec<FaceTolerancePropagation>,
     ) -> Self {
         Self {
             mutations,
             lineage,
             tolerance_budgets,
             tolerance_events,
+            face_tolerance_propagations,
         }
     }
 }
@@ -505,6 +549,7 @@ pub struct Transaction<'a> {
     lineage: Vec<LineageEvent>,
     tolerance_budgets: Vec<ToleranceBudgetReport>,
     tolerance_events: Vec<ToleranceEvent>,
+    face_tolerance_propagations: Vec<FaceTolerancePropagation>,
     finished: bool,
 }
 
@@ -515,6 +560,7 @@ impl<'a> Transaction<'a> {
             lineage: Vec::new(),
             tolerance_budgets: Vec::new(),
             tolerance_events: Vec::new(),
+            face_tolerance_propagations: Vec::new(),
             finished: false,
         }
     }
@@ -1010,7 +1056,9 @@ impl<'a> Transaction<'a> {
 
     /// Split a face through the pcurve-aware MEF operator and record the
     /// persistent-naming relationship between the old face identity and
-    /// its ordered old/new result pieces.
+    /// its ordered old/new result pieces. The new face inherits the source's
+    /// complete tolerance provenance without declaring growth, and the
+    /// descriptive policy result is retained in the journal.
     #[allow(clippy::too_many_arguments)]
     pub fn split_face(
         &mut self,
@@ -1024,18 +1072,35 @@ impl<'a> Transaction<'a> {
         pcurves: FinPcurvePair,
     ) -> Result<Mef> {
         let source = self.store.get(lp)?.face;
+        let tolerance = self.store.get(source)?.tolerance;
         let made = crate::euler::mef_with_pcurves(
             self.store, lp, i, j, curve, bounds, surface, sense, pcurves,
         )?;
+        debug_assert_eq!(
+            self.store
+                .get(made.face)
+                .expect("MEF result face remains live")
+                .tolerance,
+            tolerance
+        );
         self.lineage.push(LineageEvent::Split {
             source: EntityRef::Face(source),
             pieces: vec![EntityRef::Face(source), EntityRef::Face(made.face)],
         });
+        self.face_tolerance_propagations
+            .push(FaceTolerancePropagation::Inherited {
+                source,
+                result: made.face,
+                tolerance,
+            });
         Ok(made)
     }
 
     /// Merge the two faces separated by `edge` through KEF and record the
-    /// ordered absorbed/surviving identity relationship.
+    /// ordered absorbed/surviving identity relationship. The survivor keeps
+    /// the larger input face tolerance (first-source on equal values) with
+    /// its complete origin/growth provenance, recorded descriptively without
+    /// a tolerance-growth budget.
     pub fn merge_faces(&mut self, edge: EdgeId) -> Result<()> {
         let e = self.store.get(edge)?;
         let [fin_a, fin_b] = e.fins[..] else {
@@ -1045,11 +1110,33 @@ impl<'a> Transaction<'a> {
         };
         let face_a = self.store.get(self.store.get(fin_a)?.parent)?.face;
         let face_b = self.store.get(self.store.get(fin_b)?.parent)?.face;
+        let source_tolerances = [
+            self.store.get(face_a)?.tolerance,
+            self.store.get(face_b)?.tolerance,
+        ];
+        let (selected_index, tolerance) =
+            EntityTolerance::inherited_max_with_source(source_tolerances);
+        let selected_source = selected_index.map(|index| [face_a, face_b][index]);
         crate::euler::kef(self.store, edge)?;
+        debug_assert_eq!(
+            self.store
+                .get(face_a)
+                .expect("KEF surviving face remains live")
+                .tolerance,
+            tolerance
+        );
         self.lineage.push(LineageEvent::Merge {
             sources: vec![EntityRef::Face(face_a), EntityRef::Face(face_b)],
             result: EntityRef::Face(face_a),
         });
+        self.face_tolerance_propagations
+            .push(FaceTolerancePropagation::CombinedMax {
+                sources: [face_a, face_b],
+                source_tolerances,
+                result: face_a,
+                selected_source,
+                tolerance,
+            });
         Ok(())
     }
 
@@ -1228,6 +1315,7 @@ impl<'a> Transaction<'a> {
             core::mem::take(&mut self.lineage),
             core::mem::take(&mut self.tolerance_budgets),
             core::mem::take(&mut self.tolerance_events),
+            core::mem::take(&mut self.face_tolerance_propagations),
         );
         Ok(FullCommitDecision::committed(journal, checks))
     }
@@ -1417,6 +1505,7 @@ impl<'a> Transaction<'a> {
             core::mem::take(&mut self.lineage),
             core::mem::take(&mut self.tolerance_budgets),
             core::mem::take(&mut self.tolerance_events),
+            core::mem::take(&mut self.face_tolerance_propagations),
         ))
     }
 

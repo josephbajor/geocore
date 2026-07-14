@@ -1,6 +1,6 @@
 //! Public Euler mutation is transaction-owned, pcurve-aware, and journaled.
 
-use kcore::tolerance::SIZE_BOX_HALF;
+use kcore::tolerance::{LINEAR_RESOLUTION, SIZE_BOX_HALF};
 use kgeom::curve::Line;
 use kgeom::curve2d::Line2d;
 use kgeom::frame::Frame;
@@ -13,7 +13,10 @@ use ktopo::euler::FinPcurvePair;
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::make;
 use ktopo::store::Store;
-use ktopo::transaction::{Journal, LineageEvent};
+use ktopo::tolerance::{EntityTolerance, ToleranceOrigin};
+use ktopo::transaction::{
+    FaceTolerancePropagation, Journal, LineageEvent, ToleranceGrowth, ToleranceGrowthTarget,
+};
 
 fn line_inputs(
     store: &mut Store,
@@ -325,6 +328,169 @@ fn position_owned_kev_retains_a_point_still_shared_by_a_live_vertex() {
     );
     assert_eq!(*transaction.store().get(point).unwrap(), end_position);
     transaction.rollback().unwrap();
+}
+
+#[test]
+fn face_split_merge_journals_inherited_and_max_combined_tolerance() {
+    let mut store = Store::new();
+    let body = make::block(&mut store, &Frame::world(), [2.0, 2.0, 2.0]).unwrap();
+    let source = store.faces_of_body(body).unwrap()[0];
+    let source_data = store.get(source).unwrap().clone();
+    let outer = source_data.loops[0];
+    let fins = store.get(outer).unwrap().fins.clone();
+    let start = store
+        .vertex_position(store.fin_tail(fins[0]).unwrap().unwrap())
+        .unwrap();
+    let end = store
+        .vertex_position(store.fin_tail(fins[2]).unwrap().unwrap())
+        .unwrap();
+    let (diagonal, bounds, pcurves) = line_inputs(&mut store, source_data.surface, start, end);
+    let imported = EntityTolerance::imported_xt(2.0 * LINEAR_RESOLUTION).unwrap();
+    let mut setup = store.transaction().unwrap();
+    setup.assembly().get_mut(source).unwrap().tolerance = Some(imported);
+    setup.commit_checked_body(body).unwrap();
+
+    let mut split = store.transaction().unwrap();
+    let made = split
+        .split_face(
+            outer,
+            0,
+            2,
+            diagonal,
+            bounds,
+            source_data.surface,
+            source_data.sense,
+            pcurves,
+        )
+        .unwrap();
+    assert_eq!(
+        split.store().get(made.face).unwrap().tolerance,
+        Some(imported)
+    );
+    let split_journal = split.commit_checked_body(body).unwrap();
+    assert_eq!(
+        split_journal.face_tolerance_propagations(),
+        &[FaceTolerancePropagation::Inherited {
+            source,
+            result: made.face,
+            tolerance: Some(imported),
+        }]
+    );
+    assert!(split_journal.tolerance_budgets().is_empty());
+    assert!(split_journal.tolerance_events().is_empty());
+
+    // Simulate a later exact child before a modeled repair introduces its own
+    // operation-origin tolerance. The merge must retain that selected origin
+    // rather than manufacture provenance from the imported survivor.
+    let mut reset_child = store.transaction().unwrap();
+    reset_child.assembly().get_mut(made.face).unwrap().tolerance = None;
+    reset_child.commit_checked_body(body).unwrap();
+
+    let requested = 5.0 * LINEAR_RESOLUTION;
+    let mut merge = store.transaction().unwrap();
+    merge
+        .grow_tolerances(
+            "merge-face-maximum",
+            requested - LINEAR_RESOLUTION,
+            &[ToleranceGrowth::new(
+                ToleranceGrowthTarget::Face(made.face),
+                requested,
+            )],
+        )
+        .unwrap();
+    let absorbed = merge.store().get(made.face).unwrap().tolerance.unwrap();
+    merge.merge_faces(made.edge).unwrap();
+    assert_eq!(merge.store().get(source).unwrap().tolerance, Some(absorbed));
+    let merge_journal = merge.commit_checked_body(body).unwrap();
+    assert_eq!(
+        merge_journal.face_tolerance_propagations(),
+        &[FaceTolerancePropagation::CombinedMax {
+            sources: [source, made.face],
+            source_tolerances: [Some(imported), Some(absorbed)],
+            result: source,
+            selected_source: Some(made.face),
+            tolerance: Some(absorbed),
+        }]
+    );
+    assert_eq!(merge_journal.tolerance_budgets().len(), 1);
+    assert_eq!(merge_journal.tolerance_events().len(), 1);
+    assert_eq!(
+        absorbed.origin(),
+        ToleranceOrigin::Operation("merge-face-maximum")
+    );
+    assert_eq!(absorbed.origin_value(), requested);
+    assert_eq!(absorbed.accumulated_growth(), 0.0);
+    assert_eq!(absorbed.last_operation(), Some("merge-face-maximum"));
+}
+
+#[test]
+fn checked_split_denial_discards_tolerance_propagation_and_reuses_future_ids() {
+    let mut store = Store::new();
+    let body = make::block(&mut store, &Frame::world(), [2.0, 2.0, 2.0]).unwrap();
+    let source = store.faces_of_body(body).unwrap()[0];
+    let source_data = store.get(source).unwrap().clone();
+    let outer = source_data.loops[0];
+    let fins = store.get(outer).unwrap().fins.clone();
+    let start = store
+        .vertex_position(store.fin_tail(fins[0]).unwrap().unwrap())
+        .unwrap();
+    let end = store
+        .vertex_position(store.fin_tail(fins[2]).unwrap().unwrap())
+        .unwrap();
+    let (diagonal, bounds, pcurves) = line_inputs(&mut store, source_data.surface, start, end);
+    let imported = EntityTolerance::imported_xt(2.0 * LINEAR_RESOLUTION).unwrap();
+    let mut setup = store.transaction().unwrap();
+    setup.assembly().get_mut(source).unwrap().tolerance = Some(imported);
+    setup.commit_checked_body(body).unwrap();
+    let original_face_count = store.count::<Face>();
+
+    let mut denied = store.transaction().unwrap();
+    let attempted = denied
+        .split_face(
+            outer,
+            0,
+            2,
+            diagonal,
+            bounds,
+            source_data.surface,
+            source_data.sense,
+            pcurves,
+        )
+        .unwrap();
+    denied
+        .assembly()
+        .get_mut(attempted.face)
+        .unwrap()
+        .loops
+        .clear();
+    assert!(denied.commit_checked_body(body).is_err());
+    assert_eq!(store.count::<Face>(), original_face_count);
+    assert_eq!(store.get(source).unwrap().tolerance, Some(imported));
+
+    let mut repeated = store.transaction().unwrap();
+    let repeated_ids = repeated
+        .split_face(
+            outer,
+            0,
+            2,
+            diagonal,
+            bounds,
+            source_data.surface,
+            source_data.sense,
+            pcurves,
+        )
+        .unwrap();
+    assert_eq!(repeated_ids.edge, attempted.edge);
+    assert_eq!(repeated_ids.face, attempted.face);
+    assert_eq!(repeated_ids.ring, attempted.ring);
+    assert_eq!(repeated_ids.fin_old, attempted.fin_old);
+    assert_eq!(repeated_ids.fin_new, attempted.fin_new);
+    assert_eq!(
+        repeated.store().get(repeated_ids.face).unwrap().tolerance,
+        Some(imported)
+    );
+    repeated.rollback().unwrap();
+    assert_eq!(store.count::<Face>(), original_face_count);
 }
 
 #[test]

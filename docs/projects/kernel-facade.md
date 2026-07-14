@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, failure-atomic operation-owned facade tolerance batching, an evidence-bearing opt-in Full-assurance commit gate, K5 adoption, and facade body tessellation implemented; broader K4 edits and partition history remain
+Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, failure-atomic operation-owned facade tolerance batching, journaled MEF inheritance and KEF ordered-max face-tolerance propagation, an evidence-bearing opt-in Full-assurance commit gate, K5 adoption, and facade body tessellation implemented; broader K4 edits and partition history remain
 
 ## Outcome
 
@@ -51,8 +51,12 @@ The operation-owned tolerance batch closes one prior transaction coupling: an
 ordinary client supplies only ordered part-qualified Face/Edge/Vertex targets,
 final tolerance values, an operation name, and an aggregate limit. The facade
 does not expose or accept the lower transaction-local budget capability.
-Operation-specific combination/propagation policy and partition-history
-composition remain higher-level pressure rather than storage escape hatches.
+MEF/KEF now provide the first operation-specific propagation policy: a split
+copies the source face's complete optional tolerance and provenance without
+growth, while a merge selects the larger ordered `[surviving, absorbed]`
+input and resolves equal values toward the survivor. Policies for other edit
+families and partition-history composition remain higher-level pressure rather
+than storage escape hatches.
 
 The opt-in Full-assurance commit closes the write-path checker coupling without
 changing the existing Fast commit. Ordinary clients choose `RequireValid` or
@@ -502,6 +506,17 @@ resulting `ChangeJournal`. Aggregate N/N-1 rejection, explicit rollback, and a
 checker-denied commit restore both entity tolerances and transaction-local
 budget state.
 
+Face split/merge tolerance propagation is journaled separately from authored
+growth. MEF copies the source `Option<EntityTolerance>` to its new face with
+origin and growth provenance unchanged. KEF selects the larger ordered
+`[surviving, absorbed]` input, chooses the survivor on an equal-value tie, and
+keeps exactness when both inputs are exact. `Inherited` and `CombinedMax`
+records retain the part-qualified inputs, both pre-merge values, result,
+selected source, and selected provenance. They are descriptive evidence only:
+they neither consume a budget nor grant reusable authoring authority. Checked
+or resource-denied commits discard the records, restore tolerances, and reuse
+the exact future face, edge, loop, and fin identities.
+
 `commit_full` is additive: `commit` retains its Fast behavior. Full commit
 validates explicit roots before scope creation, checks distinct explicit roots
 before mutation-affected roots and any store-wide audit remainder, and performs
@@ -534,6 +549,9 @@ impl ChangeJournal {
         -> Option<ToleranceBudgetView>;
     pub fn tolerance_events(&self)
         -> impl ExactSizeIterator<Item = ToleranceEventView> + '_;
+    pub fn face_tolerance_propagations(&self)
+        -> impl ExactSizeIterator<Item = FaceTolerancePropagationView> + '_;
+    pub fn face_tolerance_propagation_count(&self) -> usize;
 }
 ```
 
@@ -820,7 +838,8 @@ Status: typed X_T import/export now returns opaque body IDs, skipped-schema
 summaries, deterministic text, classified source chains, and the exact opaque
 commit journal. Import into populated parts is rollback- and allocator-clean.
 `ChangeJournal` now exposes exact-size facade-ID iterators for net mutations,
-all five semantic lineage forms, tolerance budgets, and tolerance events while
+all five semantic lineage forms, tolerance budgets, tolerance events, and
+descriptive face-tolerance propagation records while
 retaining deleted and point identities without raw handles. Checked semantic
 transactions compose position-owning seed-body creation/removal and
 pcurve-aware strut creation/removal, face split/merge, bridge-edge
@@ -843,6 +862,9 @@ Face/Edge/Vertex targets and model-resolution-valid final values, and completes
 imported-origin-preserving provenance plus exact aggregate accounting before an
 infallible apply. Events retain request order, and the returned budget identity
 is journal-local evidence rather than a reusable authoring capability.
+MEF additionally journals exact source-to-new-face tolerance inheritance, and
+KEF journals ordered maximum selection with survivor tie-breaking and complete
+selected provenance. Neither record is a growth budget or authoring token.
 The opt-in Full-assurance K4 commit makes the existing Full checker
 load-bearing on writes without altering Fast commit compatibility. It retains
 deterministic per-body reports for committed or rollback-clean rejected
@@ -933,10 +955,11 @@ The remaining pressure is explicit:
   application client;
 - X_T reconstruction and oracle fixture authoring remain reviewed trusted raw
   assembly seams pending a separately announced sealed-reconstruction change;
-- broader semantic edit families, operation-specific tolerance
-  combination/propagation policies, and partition-history composition remain
-  K4 work; facade journal iteration, generic operation-owned tolerance
-  batching, and the opt-in Full-assurance write gate are implemented; and
+- broader semantic edit families, tolerance propagation policies beyond the
+  landed MEF inheritance and KEF ordered maximum, and partition-history
+  composition remain K4 work; facade journal iteration, generic
+  operation-owned tolerance batching, and the opt-in Full-assurance write gate
+  are implemented; and
 - `cargo package -p kernel --list` is now an exact CI-reviewed inventory with
   the facade README and lifecycle tests, while full package creation remains
   blocked by the five versionless direct path dependencies (19 internal path

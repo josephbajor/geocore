@@ -106,11 +106,18 @@ impl EntityTolerance {
     }
 
     /// Select the larger inherited tolerance without manufacturing growth.
-    pub(crate) fn inherited_max(self, other: Self) -> Self {
-        if other.value > self.value {
-            other
-        } else {
-            self
+    ///
+    /// The returned index identifies the selected input. Equal tolerant
+    /// values deterministically select the first input, and two exact inputs
+    /// return `(None, None)`.
+    pub(crate) fn inherited_max_with_source(
+        inputs: [Option<Self>; 2],
+    ) -> (Option<usize>, Option<Self>) {
+        match inputs {
+            [Some(first), Some(second)] if second.value > first.value => (Some(1), Some(second)),
+            [Some(first), Some(_)] | [Some(first), None] => (Some(0), Some(first)),
+            [None, Some(second)] => (Some(1), Some(second)),
+            [None, None] => (None, None),
         }
     }
 
@@ -142,5 +149,23 @@ mod tests {
             LINEAR_RESOLUTION * 5.0 - LINEAR_RESOLUTION * 2.0
         );
         assert_eq!(grown.last_operation(), Some("sew"));
+    }
+
+    #[test]
+    fn inherited_max_selects_larger_and_breaks_ties_toward_first() {
+        let imported = EntityTolerance::imported_xt(LINEAR_RESOLUTION * 2.0).unwrap();
+        let operation = EntityTolerance::operation(LINEAR_RESOLUTION * 3.0, "split").unwrap();
+        assert_eq!(
+            EntityTolerance::inherited_max_with_source([Some(imported), Some(operation)]),
+            (Some(1), Some(operation))
+        );
+        assert_eq!(
+            EntityTolerance::inherited_max_with_source([Some(operation), Some(operation)]),
+            (Some(0), Some(operation))
+        );
+        assert_eq!(
+            EntityTolerance::inherited_max_with_source([None, None]),
+            (None, None)
+        );
     }
 }

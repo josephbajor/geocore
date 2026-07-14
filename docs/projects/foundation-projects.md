@@ -435,8 +435,16 @@ remain ratcheted in `docs/oracle-results.tsv`.
    MEV preflights every fallible input before hidden-point allocation; its
    facade KEV inverse deletes and journals the point only when no live vertex
    shares it, without changing ordinary lower KEV ownership. Broader edit
-   families and partition-history composition remain. Operation-owned facade
-   tolerance growth now batches unique part-qualified live Face/Edge/Vertex
+   families and partition-history composition remain. MEF now copies complete
+   optional face-tolerance provenance to the new face without growth; KEF
+   selects the ordered `[surviving, absorbed]` maximum, breaks equal-value ties
+   toward the survivor, and keeps two exact faces exact. The facade journal
+   exposes part-qualified inputs, both merge values, the result, selected
+   source, and selected provenance as descriptive evidence without budget or
+   authoring authority. Checked/resource denial discards those records,
+   restores tolerances, and reuses exact future face/edge/loop/fin identities.
+   Policies for broader edit families remain. Operation-owned facade tolerance
+   growth now batches unique part-qualified live Face/Edge/Vertex
    targets. Identity and liveness precede scalar validation; requested final
    values meet the model-resolution floor; exact aggregate accounting and
    imported-origin-preserving provenance complete before an infallible apply;

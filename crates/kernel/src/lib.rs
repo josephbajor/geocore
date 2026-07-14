@@ -6,8 +6,9 @@
 //! construction, body checking and tessellation, operation-scoped surface
 //! evaluation, and typed X_T import/export plus graph-owned bounded curve
 //! intersection with F2 reports and delegated classified errors. Committed
-//! mutation, lineage, and tolerance evidence is exposed through part-qualified
-//! facade journal views. A narrow checked semantic edit transaction composes
+//! mutation, lineage, tolerance-growth, and descriptive face-tolerance
+//! propagation evidence is exposed through part-qualified facade journal
+//! views. A narrow checked semantic edit transaction composes
 //! pcurve-aware face split/merge operations with validated affine
 //! edge-to-pcurve maps plus facade-owned periodic-chart, seam, closed-use, and
 //! singular-endpoint metadata, without exposing raw assembly.
@@ -290,10 +291,10 @@ pub use iter::{
 pub use operation::{
     BlockRequest, BodyCheckReport, BodyCreated, BoundedCurve, ChangeJournal, CheckBodyRequest,
     CheckEntity, CheckFault, CheckGap, CheckReport, CurveContactKind, CurveCurveIntersections,
-    CurveCurveOverlap, CurveCurvePoint, CurveOverlapOrientation, IntersectCurvesRequest,
-    IntersectionCompletion, JournalEntities, JournalEntity, LineageView, MutationKind,
-    MutationView, OperationOutcome, OperationSettings, SurfaceEvaluation, SurfaceEvaluationRequest,
-    ToleranceBudgetId, ToleranceBudgetView, ToleranceEventView,
+    CurveCurveOverlap, CurveCurvePoint, CurveOverlapOrientation, FaceTolerancePropagationView,
+    IntersectCurvesRequest, IntersectionCompletion, JournalEntities, JournalEntity, LineageView,
+    MutationKind, MutationView, OperationOutcome, OperationSettings, SurfaceEvaluation,
+    SurfaceEvaluationRequest, ToleranceBudgetId, ToleranceBudgetView, ToleranceEventView,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use tessellation::{BodyMesh, EdgePolyline, FaceTriangleRange, TessellateBodyRequest};

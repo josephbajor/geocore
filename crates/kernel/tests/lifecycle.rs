@@ -116,6 +116,8 @@ fn facade_only_client_can_construct_and_check_a_block_with_reports() {
     assert_eq!(created.journal().lineage().len(), 0);
     assert_eq!(created.journal().tolerance_budgets().len(), 0);
     assert_eq!(created.journal().tolerance_events().len(), 0);
+    assert_eq!(created.journal().face_tolerance_propagation_count(), 0);
+    assert_eq!(created.journal().face_tolerance_propagations().len(), 0);
 
     let check = session
         .part(part_id)
