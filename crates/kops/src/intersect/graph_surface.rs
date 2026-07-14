@@ -2,7 +2,7 @@
 //!
 //! Direct planes/spheres and safe constant-offset chains terminating at those
 //! leaves form exact analytic field families. Genuinely non-planar direct NURBS
-//! surfaces additionally support scoped Plane/NURBS marching. The adapter
+//! surfaces additionally support scoped exact-plane-field/NURBS marching. The adapter
 //! promotes discovered branches only after constructing both pcurves and
 //! proving their paired whole-interval residual contracts. Common-axis circles
 //! retain their longitude/latitude fast path; other finite secants use a
@@ -322,7 +322,7 @@ pub struct IntersectionBranchEdge {
 pub enum IntersectionBranchCertificate {
     /// Existing exact analytic line/circle proof family.
     Analytic(Box<VerifiedIntersectionCertificate>),
-    /// Operation-generated degree-1 Plane/NURBS trace proof.
+    /// Operation-generated degree-1 exact-plane-field/NURBS trace proof.
     Nurbs(Box<VerifiedNurbsIntersectionCertificate>),
 }
 
@@ -361,7 +361,7 @@ impl IntersectionBranchCertificate {
         }
     }
 
-    /// Borrow the operation-generated Plane/NURBS proof when it matches.
+    /// Borrow the operation-generated exact-plane-field/NURBS proof when it matches.
     pub fn as_nurbs(&self) -> Option<&VerifiedNurbsIntersectionCertificate> {
         match self {
             Self::Analytic(_) => None,
@@ -465,8 +465,9 @@ pub fn intersect_bounded_graph_surfaces_with_context(
 /// This function never creates or finishes a nested scope. Direct descriptor
 /// classes are resolved exactly once per operand. Direct planes/spheres and
 /// their safe constant-offset chains form exact fields. Plane/plane, finite
-/// regular-chart plane/sphere, and direct Plane/genuinely-non-planar-NURBS
-/// branches are supported; all other pairs remain explicitly unsupported.
+/// regular-chart plane/sphere, and exact-plane-field/genuinely-non-planar-
+/// direct-NURBS branches are supported; all other pairs remain explicitly
+/// unsupported.
 /// Owners must compose [`GraphSurfaceBudgetProfile::v1_defaults`] before
 /// creating `scope` when they may dispatch a scoped proof-bearing branch.
 pub fn intersect_bounded_graph_surfaces_in_scope(
@@ -558,13 +559,13 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         (
             Some(ResolvedGraphSurfaceField::Plane {
                 surface: plane,
-                direct: true,
+                direct,
             }),
             Some(ResolvedGraphSurfaceField::Nurbs(surface)),
         ) if nurbs_control_net_is_nonplanar(surface, tolerances.linear()) => [
             ResolvedGraphSurfaceField::Plane {
                 surface: plane,
-                direct: true,
+                direct,
             },
             ResolvedGraphSurfaceField::Nurbs(surface),
         ],
@@ -572,13 +573,13 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
             Some(ResolvedGraphSurfaceField::Nurbs(surface)),
             Some(ResolvedGraphSurfaceField::Plane {
                 surface: plane,
-                direct: true,
+                direct,
             }),
         ) if nurbs_control_net_is_nonplanar(surface, tolerances.linear()) => [
             ResolvedGraphSurfaceField::Nurbs(surface),
             ResolvedGraphSurfaceField::Plane {
                 surface: plane,
-                direct: true,
+                direct,
             },
         ],
         _ => return Err(unsupported()),
@@ -621,10 +622,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
             None,
         ),
         [
-            ResolvedGraphSurfaceField::Plane {
-                surface: plane,
-                direct: true,
-            },
+            ResolvedGraphSurfaceField::Plane { surface: plane, .. },
             ResolvedGraphSurfaceField::Nurbs(surface),
         ] => {
             let output =
@@ -633,10 +631,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         }
         [
             ResolvedGraphSurfaceField::Nurbs(surface),
-            ResolvedGraphSurfaceField::Plane {
-                surface: plane,
-                direct: true,
-            },
+            ResolvedGraphSurfaceField::Plane { surface: plane, .. },
         ] => {
             let output =
                 plane_nurbs_march_in_scope(&plane, range_b, surface, range_a, tolerances, scope)?;
@@ -1207,10 +1202,7 @@ fn build_verified_plane_nurbs_branch(
     }
     let (traces, pcurves) = match fields {
         [
-            ResolvedGraphSurfaceField::Plane {
-                surface: plane,
-                direct: true,
-            },
+            ResolvedGraphSurfaceField::Plane { surface: plane, .. },
             ResolvedGraphSurfaceField::Nurbs(surface),
         ] => (
             [
@@ -1224,10 +1216,7 @@ fn build_verified_plane_nurbs_branch(
         ),
         [
             ResolvedGraphSurfaceField::Nurbs(surface),
-            ResolvedGraphSurfaceField::Plane {
-                surface: plane,
-                direct: true,
-            },
+            ResolvedGraphSurfaceField::Plane { surface: plane, .. },
         ] => (
             [
                 NurbsIntersectionTrace::Nurbs(surface.clone()),

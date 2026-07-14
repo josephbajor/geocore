@@ -14,7 +14,7 @@ use kgeom::param::ParamRange;
 use kgeom::surface::{Plane, Surface};
 use kgeom::vec::Point3;
 use kgraph::{
-    Curve2dDescriptor, CurveDescriptor, GeometryGraph, GeometryGraphError,
+    Curve2dDescriptor, CurveDescriptor, EvalError, GeometryGraph, GeometryGraphError,
     IntersectionCertificateError, OffsetSurfaceDescriptor,
     verified_plane_nurbs_intersection_certificate_work,
 };
@@ -28,6 +28,10 @@ use kops::intersect::{
 
 fn curved_surface() -> NurbsSurface {
     curved_surface_with(0.01, 0.0)
+}
+
+fn horizontal_plane(height: f64) -> Plane {
+    Plane::new(Frame::world().with_origin(Point3::new(0.0, 0.0, height)))
 }
 
 fn curved_surface_with(bend: f64, height: f64) -> NurbsSurface {
@@ -264,6 +268,346 @@ fn scoped_plane_nurbs_preserves_raw_march_report_and_exact_certificate_boundarie
 }
 
 #[test]
+fn offset_plane_nurbs_preserves_scope_accounting_swap_miss_and_identity() {
+    let basis_plane = horizontal_plane(0.0);
+    let effective_plane = horizontal_plane(0.2);
+    let surface = curved_surface();
+    let plane_range = single_march_segment_plane_window();
+    let tolerances = Tolerances::with_linear(1.0e-5).unwrap();
+    let session = SessionPolicy::v1();
+    let lower_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_family_budget_defaults(NurbsSurfaceMarchBudgetProfile::v1_defaults());
+    let lower = intersect_bounded_plane_nurbs_surface_with_context(
+        &effective_plane,
+        plane_range,
+        &surface,
+        surface.param_range(),
+        &lower_context,
+    )
+    .unwrap();
+
+    let mut graph = GeometryGraph::new();
+    let basis = graph.insert_surface(basis_plane).unwrap();
+    let offset = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(basis, 0.2))
+        .unwrap();
+    let nurbs = graph.insert_surface(surface.clone()).unwrap();
+    let context = OperationContext::new(&session, tolerances).unwrap();
+    let outcome = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        offset,
+        plane_range,
+        nurbs,
+        surface.param_range(),
+        &context,
+    );
+    let result = outcome.result().unwrap();
+    assert_eq!(&result.raw, *lower.result().as_ref().unwrap());
+    assert_eq!(result.branch_graph.source_surfaces, [offset, nurbs]);
+    assert_eq!(result.branch_graph.edges.len(), 1);
+    for (stage, resource) in [
+        (NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS, ResourceKind::Work),
+        (NURBS_IMPLICIT_ISOLATION_CANDIDATES, ResourceKind::Items),
+        (NURBS_IMPLICIT_ISOLATION_DEPTH, ResourceKind::Depth),
+        (NURBS_SURFACE_MARCH_SAMPLES, ResourceKind::Work),
+    ] {
+        assert_eq!(
+            observed(outcome.report(), stage, resource),
+            observed(lower.report(), stage, resource),
+            "lower marcher report parity for {stage:?}"
+        );
+    }
+    assert_eq!(
+        observed(
+            outcome.report(),
+            kgraph::eval_stage::NODE_VISITS,
+            ResourceKind::Work,
+        ),
+        2
+    );
+    assert_eq!(
+        observed(
+            outcome.report(),
+            kgraph::eval_stage::DEPENDENCY_DEPTH,
+            ResourceKind::Depth,
+        ),
+        2
+    );
+    let certificate = result.branch_graph.edges[0].certificate.as_nurbs().unwrap();
+    assert!(matches!(
+        certificate.traces(),
+        [
+            kgraph::NurbsIntersectionTrace::Plane(plane),
+            kgraph::NurbsIntersectionTrace::Nurbs(_),
+        ] if *plane == effective_plane
+    ));
+    let exact_work = verified_plane_nurbs_intersection_certificate_work(
+        certificate.carrier(),
+        certificate.traces(),
+    )
+    .unwrap();
+    assert_eq!(exact_work, 7_170);
+    assert_eq!(
+        usage(outcome.report(), NURBS_TRACE_CERTIFICATE_WORK),
+        exact_work
+    );
+
+    let reverse = intersect_bounded_graph_surfaces(
+        &graph,
+        nurbs,
+        surface.param_range(),
+        offset,
+        plane_range,
+        tolerances,
+    )
+    .unwrap();
+    assert_eq!(reverse.raw, result.raw.clone().swapped());
+    assert_eq!(reverse.branch_graph.source_surfaces, [nurbs, offset]);
+    assert!(matches!(
+        reverse.branch_graph.edges[0]
+            .certificate
+            .as_nurbs()
+            .unwrap()
+            .traces(),
+        [
+            kgraph::NurbsIntersectionTrace::Nurbs(_),
+            kgraph::NurbsIntersectionTrace::Plane(plane),
+        ] if *plane == effective_plane
+    ));
+
+    let persistent = persist_verified_graph_surface_intersections(&mut graph, result).unwrap();
+    let descriptor = graph.curve(persistent.edges[0].curve).unwrap();
+    let verified = descriptor.as_verified_nurbs_intersection().unwrap();
+    assert_eq!(verified.source_surfaces(), [offset, nurbs]);
+    graph.validate().unwrap();
+
+    let miss = curved_surface_with(0.01, 2.0);
+    let miss_handle = graph.insert_surface(miss.clone()).unwrap();
+    let miss_context = OperationContext::new(&session, tolerances).unwrap();
+    let miss_outcome = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        offset,
+        plane_window(),
+        miss_handle,
+        miss.param_range(),
+        &miss_context,
+    );
+    let miss_result = miss_outcome.result().unwrap();
+    let lower_miss = intersect_bounded_plane_nurbs_surface(
+        &effective_plane,
+        plane_window(),
+        &miss,
+        miss.param_range(),
+        tolerances,
+    )
+    .unwrap();
+    assert_eq!(miss_result.raw, lower_miss);
+    assert!(miss_result.raw.is_proven_empty());
+    assert!(miss_result.branch_graph.edges.is_empty());
+    assert_eq!(
+        observed(
+            miss_outcome.report(),
+            kgraph::eval_stage::NODE_VISITS,
+            ResourceKind::Work,
+        ),
+        2
+    );
+    assert_eq!(
+        usage(miss_outcome.report(), NURBS_TRACE_CERTIFICATE_WORK),
+        0
+    );
+
+    assert!(matches!(
+        graph.remove_surface(offset),
+        Err(GeometryGraphError::HasDependents { .. })
+    ));
+    assert!(matches!(
+        graph.remove_surface(basis),
+        Err(GeometryGraphError::HasDependents { .. })
+    ));
+    assert!(matches!(
+        graph.replace_surface(offset, OffsetSurfaceDescriptor::new(basis, 0.3)),
+        Err(GeometryGraphError::HasDependents { .. })
+    ));
+    assert!(matches!(
+        graph.replace_surface(basis, horizontal_plane(0.1)),
+        Err(GeometryGraphError::HasDependents { .. })
+    ));
+    graph.validate().unwrap();
+}
+
+#[test]
+fn offset_plane_nurbs_pins_graph_and_certificate_n_minus_one_boundaries() {
+    let surface = curved_surface();
+    let plane_range = single_march_segment_plane_window();
+    let tolerances = Tolerances::with_linear(1.0e-5).unwrap();
+    let mut graph = GeometryGraph::new();
+    let basis = graph.insert_surface(horizontal_plane(0.0)).unwrap();
+    let offset = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(basis, 0.2))
+        .unwrap();
+    let nurbs = graph.insert_surface(surface.clone()).unwrap();
+    let session = SessionPolicy::v1();
+
+    let exact_plan = BudgetPlan::new([
+        LimitSpec::new(
+            kgraph::eval_stage::NODE_VISITS,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            2,
+        ),
+        LimitSpec::new(
+            NURBS_TRACE_CERTIFICATE_WORK,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            7_170,
+        ),
+    ])
+    .unwrap();
+    let exact_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(exact_plan);
+    let exact = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        offset,
+        plane_range,
+        nurbs,
+        surface.param_range(),
+        &exact_context,
+    );
+    assert!(exact.result().is_ok());
+    assert_eq!(
+        observed(
+            exact.report(),
+            kgraph::eval_stage::NODE_VISITS,
+            ResourceKind::Work,
+        ),
+        2
+    );
+    assert_eq!(usage(exact.report(), NURBS_TRACE_CERTIFICATE_WORK), 7_170);
+
+    for (stage, allowed, consumed) in [
+        (kgraph::eval_stage::NODE_VISITS, 1, 2),
+        (NURBS_TRACE_CERTIFICATE_WORK, 7_169, 7_170),
+    ] {
+        let denied_plan = BudgetPlan::new([LimitSpec::new(
+            stage,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            allowed,
+        )])
+        .unwrap();
+        let denied_context = OperationContext::new(&session, tolerances)
+            .unwrap()
+            .with_budget_overrides(denied_plan);
+        let denied = intersect_bounded_graph_surfaces_with_context(
+            &graph,
+            offset,
+            plane_range,
+            nurbs,
+            surface.param_range(),
+            &denied_context,
+        );
+        let GraphSurfaceIntersectionError::OperationPolicy(
+            kcore::operation::OperationPolicyError::LimitReached(crossing),
+        ) = denied.result().unwrap_err()
+        else {
+            panic!("N-1 work must stop at {stage:?}");
+        };
+        assert_eq!(crossing.stage, stage);
+        assert_eq!(crossing.allowed, allowed);
+        assert_eq!(crossing.consumed, consumed);
+    }
+}
+
+#[test]
+fn offset_plane_nurbs_rejects_stale_or_altered_field_identity_atomically() {
+    let surface = curved_surface();
+    let tolerances = Tolerances::with_linear(1.0e-5).unwrap();
+    for mutation in 0..3 {
+        let mut graph = GeometryGraph::new();
+        let basis = graph.insert_surface(horizontal_plane(0.0)).unwrap();
+        let offset = graph
+            .insert_surface(OffsetSurfaceDescriptor::new(basis, 0.2))
+            .unwrap();
+        let nurbs = graph.insert_surface(surface.clone()).unwrap();
+        let local = intersect_bounded_graph_surfaces(
+            &graph,
+            offset,
+            single_march_segment_plane_window(),
+            nurbs,
+            surface.param_range(),
+            tolerances,
+        )
+        .unwrap();
+        match mutation {
+            0 => {
+                graph.remove_surface(offset).unwrap();
+            }
+            1 => {
+                graph
+                    .replace_surface(offset, OffsetSurfaceDescriptor::new(basis, 0.3))
+                    .unwrap();
+            }
+            2 => {
+                graph.replace_surface(basis, horizontal_plane(0.1)).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = (
+            graph.curve_count(),
+            graph.curve2d_count(),
+            graph.geometry().collect::<Vec<_>>(),
+        );
+        assert!(matches!(
+            persist_verified_graph_surface_intersections(&mut graph, &local),
+            Err(GraphSurfaceIntersectionError::GeometryPersistence(
+                GeometryGraphError::InvalidDescriptor { .. }
+                    | GeometryGraphError::StaleGeometryHandle { .. }
+            ))
+        ));
+        assert_eq!(graph.curve_count(), before.0);
+        assert_eq!(graph.curve2d_count(), before.1);
+        assert_eq!(graph.geometry().collect::<Vec<_>>(), before.2);
+        graph.validate().unwrap();
+    }
+}
+
+#[test]
+fn unsafe_offset_plane_accumulation_fails_before_marching() {
+    let surface = curved_surface();
+    let tolerances = Tolerances::with_linear(1.0e-5).unwrap();
+    let mut graph = GeometryGraph::new();
+    let basis = graph.insert_surface(horizontal_plane(0.0)).unwrap();
+    let inner = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(basis, f64::MAX))
+        .unwrap();
+    let outer = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(inner, f64::MAX))
+        .unwrap();
+    let nurbs = graph.insert_surface(surface.clone()).unwrap();
+    let session = SessionPolicy::v1();
+    let context = OperationContext::new(&session, tolerances).unwrap();
+    let outcome = intersect_bounded_graph_surfaces_with_context(
+        &graph,
+        outer,
+        plane_window(),
+        nurbs,
+        surface.param_range(),
+        &context,
+    );
+    assert!(matches!(
+        outcome.result(),
+        Err(GraphSurfaceIntersectionError::GeometryEvaluation(
+            EvalError::NonFiniteResult { .. }
+        ))
+    ));
+    assert_eq!(usage(outcome.report(), NURBS_SURFACE_MARCH_SAMPLES), 0);
+    assert_eq!(usage(outcome.report(), NURBS_TRACE_CERTIFICATE_WORK), 0);
+}
+
+#[test]
 fn failed_whole_range_residual_consumes_attempted_certificate_work() {
     let plane = Plane::new(Frame::world());
     let surface = curved_surface_with(0.1, 0.0);
@@ -434,21 +778,26 @@ fn stale_and_altered_sources_roll_back_persistence_atomically() {
 }
 
 #[test]
-fn procedural_offsets_and_other_nurbs_pairs_remain_explicitly_unsupported() {
+fn offset_nurbs_and_other_nurbs_pairs_remain_explicitly_unsupported() {
     let plane = Plane::new(Frame::world());
     let source = curved_surface();
     let tolerances = Tolerances::with_linear(1.0e-5).unwrap();
     let mut graph = GeometryGraph::new();
     let plane_basis = graph.insert_surface(plane).unwrap();
-    let offset_plane = graph
-        .insert_surface(OffsetSurfaceDescriptor::new(plane_basis, 0.1))
-        .unwrap();
     let nurbs = graph.insert_surface(source.clone()).unwrap();
+    let offset_nurbs = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(nurbs, 0.1))
+        .unwrap();
     let sphere = graph
         .insert_surface(kgeom::surface::Sphere::new(Frame::world(), 2.0).unwrap())
         .unwrap();
     for (first, first_range, second, second_range) in [
-        (offset_plane, plane_window(), nurbs, source.param_range()),
+        (
+            plane_basis,
+            plane_window(),
+            offset_nurbs,
+            source.param_range(),
+        ),
         (sphere, plane_window(), nurbs, source.param_range()),
     ] {
         assert!(matches!(
