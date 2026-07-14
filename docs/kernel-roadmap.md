@@ -1035,14 +1035,17 @@ true only for an empty complete result.
   When both operands are wide, a bounded arm checks the Cartesian 3×3 grid and
   returns `Complete` after all nine closed child intersections certify empty,
   when exactly one child owns one positive region and its eight siblings
-  certify empty, or when exactly two non-edge-adjacent children own one positive
-  region each and the other seven certify empty. The two-component path also
-  requires both parent longitude spans to remain below a full turn. Closed
+  certify empty, or when exactly two children own one positive region each and
+  the other seven certify empty. Both parent longitude spans must remain below
+  a full turn. Non-edge-adjacent children stay as two components after closed
   sibling ownership excludes every artificial seam, including diagonal corner
-  contact through the two empty orthogonal owners, before parent correspondence
-  is restored. Exact 9/8 piece-pair, 252/251 boundary-pair, and 1,008/1,007
-  arc-witness admission remain pinned. Edge-adjacent or more-than-two-positive
-  unions, full-turn two-component aliases, polar,
+  contact through the two empty orthogonal owners. Edge-adjacent children merge
+  only when their shared seam is one reverse-oriented boundary edge with exactly
+  two consecutive, bit-identical endpoint records; that edge is removed and the
+  complementary paths are spliced before parent correspondence is restored.
+  Exact 9/8 piece-pair, 252/251 boundary-pair, and 1,008/1,007 arc-witness
+  admission remain pinned. More-than-two-positive unions, non-exact or
+  multi-edge shared seams, full-turn aliases, polar,
   non-exact tangent, multiple-cycle, ambiguous, and near-coincident
   non-identical cases remain `Indeterminate` or on their existing typed
   failure boundary.

@@ -570,6 +570,68 @@ fn general_both_wide_windows_certify_two_isolated_regions_repeatably_and_swap() 
 }
 
 #[test]
+fn general_both_wide_windows_merge_exact_adjacent_regions_and_swap() {
+    let a = world_sphere();
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.05);
+    let a_window = window(-0.6, -0.6 + 1.01 * core::f64::consts::PI, -0.2, 0.2);
+    let b_window = window(1.4, 1.4 + 1.3 * core::f64::consts::PI, -0.2, 0.2);
+    let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_general_sphere_window_region(&hit, &a, &b);
+    assert_eq!(hit.regions[0].boundary.len(), 8);
+    let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = hit.regions[0].correspondence
+    else {
+        unreachable!()
+    };
+    assert_eq!(map.first_range(), a_window);
+    assert_eq!(map.second_range(), b_window);
+
+    let shared_seam = a_window[0].lo + 2.0 * a_window[0].width() / 3.0;
+    let seam_vertices = hit.regions[0]
+        .boundary
+        .iter()
+        .enumerate()
+        .filter_map(|(index, vertex)| {
+            (vertex.uv_a[0].to_bits() == shared_seam.to_bits()).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(seam_vertices.len(), 2);
+    assert_ne!(
+        (seam_vertices[0] + 1) % hit.regions[0].boundary.len(),
+        seam_vertices[1]
+    );
+    assert_ne!(
+        (seam_vertices[1] + 1) % hit.regions[0].boundary.len(),
+        seam_vertices[0]
+    );
+    let other_a_seam = a_window[0].lo + a_window[0].width() / 3.0;
+    assert!(
+        hit.regions[0]
+            .boundary
+            .iter()
+            .all(|vertex| vertex.uv_a[0].to_bits() != other_a_seam.to_bits())
+    );
+    for b_seam in [
+        b_window[0].lo + b_window[0].width() / 3.0,
+        b_window[0].lo + 2.0 * b_window[0].width() / 3.0,
+    ] {
+        assert!(
+            hit.regions[0]
+                .boundary
+                .iter()
+                .all(|vertex| vertex.uv_b[0].to_bits() != b_seam.to_bits())
+        );
+    }
+
+    let repeated =
+        intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_eq!(hit, repeated);
+    let swapped =
+        intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
+    assert_eq!(hit.clone().swapped(), swapped);
+    assert_general_sphere_window_region(&swapped, &b, &a);
+}
+
+#[test]
 fn general_single_wide_window_preserves_parent_periodic_seam_evidence() {
     let a = world_sphere();
     let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.2);
@@ -623,7 +685,7 @@ fn general_wide_window_union_fails_closed_across_artificial_seams_and_two_wide_i
     assert!(matches!(
         both_wide.completion(),
         Completion::Indeterminate {
-            reason: "general coincident sphere both-wide union supports at most two seam-isolated positive cells with certified-empty siblings"
+            reason: "general coincident sphere both-wide union supports at most two positive cells with certified-empty siblings and exact shared-seam evidence"
         }
     ));
     let repeated_both_wide =
@@ -641,21 +703,7 @@ fn general_wide_window_union_fails_closed_across_artificial_seams_and_two_wide_i
     .unwrap();
     assert_indeterminate_sphere_window(
         &shared_seam,
-        "general coincident sphere both-wide union supports at most two seam-isolated positive cells with certified-empty siblings",
-    );
-
-    let mild_tilt = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.05);
-    let adjacent_pair = intersect_bounded_spheres(
-        &a,
-        window(-0.6, -0.6 + 1.01 * core::f64::consts::PI, -0.2, 0.2),
-        &mild_tilt,
-        window(1.4, 1.4 + 1.3 * core::f64::consts::PI, -0.2, 0.2),
-        Tolerances::default(),
-    )
-    .unwrap();
-    assert_indeterminate_sphere_window(
-        &adjacent_pair,
-        "general coincident sphere both-wide union supports at most two seam-isolated positive cells with certified-empty siblings",
+        "general coincident sphere both-wide union supports at most two positive cells with certified-empty siblings and exact shared-seam evidence",
     );
 
     let polar = intersect_bounded_spheres(

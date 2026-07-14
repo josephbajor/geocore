@@ -594,12 +594,12 @@ fn certify_double_wide_sphere_window_union(
                 || hit.regions.len() != 1
             {
                 return Err(Error::InvalidGeometry {
-                    reason: "general coincident sphere both-wide union supports at most two seam-isolated positive cells with certified-empty siblings",
+                    reason: "general coincident sphere both-wide union supports at most two positive cells with certified-empty siblings and exact shared-seam evidence",
                 });
             }
             if occupied_regions.len() == 2 {
                 return Err(Error::InvalidGeometry {
-                    reason: "general coincident sphere both-wide union supports at most two seam-isolated positive cells with certified-empty siblings",
+                    reason: "general coincident sphere both-wide union supports at most two positive cells with certified-empty siblings and exact shared-seam evidence",
                 });
             }
             occupied_regions.push((
@@ -620,38 +620,59 @@ fn certify_double_wide_sphere_window_union(
             reason: "general coincident sphere both-wide union did not cover every decomposition cell pair",
         });
     }
-    let isolated_positive_cells = match occupied_regions.as_slice() {
+    let mut merged_adjacent_region = None;
+    let supported_positive_cells = match occupied_regions.as_slice() {
         [_] => certified_empty_pairs + 1 == GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
-        [(first, _), (second, _)] => {
+        [(first, first_region), (second, second_region)] => {
             let a_delta = first[0].abs_diff(second[0]);
             let b_delta = first[1].abs_diff(second[1]);
-            let share_artificial_seam =
-                (a_delta == 1 && b_delta == 0) || (a_delta == 0 && b_delta == 1);
-            certified_empty_pairs + 2 == GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT
-                && !share_artificial_seam
+            let bounded_two_cell_proof = certified_empty_pairs + 2
+                == GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT
                 && a_range[0].width() < core::f64::consts::TAU - parent_parameter_allowance
-                && b_range[0].width() < core::f64::consts::TAU - parent_parameter_allowance
+                && b_range[0].width() < core::f64::consts::TAU - parent_parameter_allowance;
+            if !bounded_two_cell_proof {
+                false
+            } else if a_delta == 1 && b_delta == 0 {
+                let seam = a_pieces[first[0].max(second[0])][0].lo;
+                merged_adjacent_region =
+                    merge_exact_adjacent_sphere_regions(first_region, second_region, true, seam);
+                merged_adjacent_region.is_some()
+            } else if a_delta == 0 && b_delta == 1 {
+                let seam = b_pieces[first[1].max(second[1])][0].lo;
+                merged_adjacent_region =
+                    merge_exact_adjacent_sphere_regions(first_region, second_region, false, seam);
+                merged_adjacent_region.is_some()
+            } else {
+                true
+            }
         }
         _ => false,
     };
-    if !isolated_positive_cells {
+    if !supported_positive_cells {
         return Err(Error::InvalidGeometry {
-            reason: "general coincident sphere both-wide union supports at most two seam-isolated positive cells with certified-empty siblings",
+            reason: "general coincident sphere both-wide union supports at most two positive cells with certified-empty siblings and exact shared-seam evidence",
         });
     }
 
-    // Every artificial-seam neighbor of each retained cell is empty. Thus a
-    // retained region cannot touch an artificial seam; diagonal cells cannot
-    // meet even at a seam crossing because both orthogonal owners are empty.
-    // For two retained cells, pole-clear charts whose parent spans are below a
-    // full turn are injective and the intervening empty cells prove the two
-    // physical components are disconnected. Only true parent boundaries
-    // remain, so each parent chart correspondence is sound.
+    // Empty artificial-seam neighbors isolate nonadjacent retained cells.
+    // Adjacent cells are admitted only when both child cycles expose the same
+    // bit-exact seam edge with reverse orientation; splicing their two outer
+    // paths removes that edge. Pole-clear sub-full-turn parent charts are
+    // injective, so the resulting one or two cycles have only true parent
+    // boundaries and may use the parent correspondence.
     let parent_residual = arbitrary_sphere_octant_residual_bound(a, b, parent_parameter_allowance)?;
     let parent_map = general_sphere_window_map(a, a_range, b, b_range, parent_parameter_allowance);
-    let regions = occupied_regions
+    let source_regions = if let Some(region) = merged_adjacent_region {
+        vec![region]
+    } else {
+        occupied_regions
+            .into_iter()
+            .map(|(_, region)| region)
+            .collect()
+    };
+    let regions = source_regions
         .into_iter()
-        .map(|(_, mut region)| {
+        .map(|mut region| {
             region.correspondence = SurfaceRegionCorrespondence::GeneralSphereWindow(parent_map);
             region.max_residual = region.max_residual.max(parent_residual);
             region
@@ -662,6 +683,101 @@ fn certify_double_wide_sphere_window_union(
         Vec::new(),
         regions,
     )
+}
+
+fn merge_exact_adjacent_sphere_regions(
+    first: &SurfaceSurfaceRegion,
+    second: &SurfaceSurfaceRegion,
+    seam_on_first_operand: bool,
+    seam: f64,
+) -> Option<SurfaceSurfaceRegion> {
+    if first.orientation != SurfaceRegionOrientation::Same
+        || second.orientation != SurfaceRegionOrientation::Same
+    {
+        return None;
+    }
+    let first_edge = exact_sphere_region_seam_edge(first, seam_on_first_operand, seam)?;
+    let second_edge = exact_sphere_region_seam_edge(second, seam_on_first_operand, seam)?;
+    if !sphere_region_vertices_are_bit_exact(
+        first.boundary[first_edge[0]],
+        second.boundary[second_edge[1]],
+    ) || !sphere_region_vertices_are_bit_exact(
+        first.boundary[first_edge[1]],
+        second.boundary[second_edge[0]],
+    ) {
+        return None;
+    }
+
+    let first_outer = sphere_region_complementary_path(&first.boundary, first_edge);
+    let second_outer = sphere_region_complementary_path(&second.boundary, second_edge);
+    let mut boundary = first_outer;
+    boundary.extend_from_slice(&second_outer[1..second_outer.len() - 1]);
+    if boundary.len() < 3 {
+        return None;
+    }
+    Some(SurfaceSurfaceRegion {
+        boundary,
+        orientation: SurfaceRegionOrientation::Same,
+        correspondence: first.correspondence,
+        max_residual: first.max_residual.max(second.max_residual),
+    })
+}
+
+fn sphere_region_vertices_are_bit_exact(
+    first: SurfaceSurfaceRegionVertex,
+    second: SurfaceSurfaceRegionVertex,
+) -> bool {
+    first.point.x.to_bits() == second.point.x.to_bits()
+        && first.point.y.to_bits() == second.point.y.to_bits()
+        && first.point.z.to_bits() == second.point.z.to_bits()
+        && first.uv_a[0].to_bits() == second.uv_a[0].to_bits()
+        && first.uv_a[1].to_bits() == second.uv_a[1].to_bits()
+        && first.uv_b[0].to_bits() == second.uv_b[0].to_bits()
+        && first.uv_b[1].to_bits() == second.uv_b[1].to_bits()
+        && first.residual.to_bits() == second.residual.to_bits()
+}
+
+fn exact_sphere_region_seam_edge(
+    region: &SurfaceSurfaceRegion,
+    seam_on_first_operand: bool,
+    seam: f64,
+) -> Option<[usize; 2]> {
+    let seam_bits = seam.to_bits();
+    let vertices = region
+        .boundary
+        .iter()
+        .enumerate()
+        .filter_map(|(index, vertex)| {
+            let parameter = if seam_on_first_operand {
+                vertex.uv_a[0]
+            } else {
+                vertex.uv_b[0]
+            };
+            (parameter.to_bits() == seam_bits).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let [first, second]: [usize; 2] = vertices.try_into().ok()?;
+    if (first + 1) % region.boundary.len() == second {
+        Some([first, second])
+    } else if (second + 1) % region.boundary.len() == first {
+        Some([second, first])
+    } else {
+        None
+    }
+}
+
+fn sphere_region_complementary_path(
+    boundary: &[SurfaceSurfaceRegionVertex],
+    seam_edge: [usize; 2],
+) -> Vec<SurfaceSurfaceRegionVertex> {
+    let mut path = Vec::with_capacity(boundary.len());
+    let mut index = seam_edge[1];
+    path.push(boundary[index]);
+    while index != seam_edge[0] {
+        index = (index + 1) % boundary.len();
+        path.push(boundary[index]);
+    }
+    path
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3116,16 +3232,24 @@ mod tests {
             }
         );
 
+        let adjacent_angle = 0.05;
+        let adjacent_b = Sphere::new(
+            Frame::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(math::sin(adjacent_angle), 0.0, math::cos(adjacent_angle)),
+                Vec3::new(math::cos(adjacent_angle), 0.0, -math::sin(adjacent_angle)),
+            )
+            .unwrap(),
+            1.0,
+        )
+        .unwrap();
         let double_wide_a_range = [
-            ParamRange::new(-0.6, -0.6 + 1.2 * core::f64::consts::PI),
-            ParamRange::new(-0.25, 0.25),
+            ParamRange::new(-0.6, -0.6 + 1.01 * core::f64::consts::PI),
+            ParamRange::new(-0.2, 0.2),
         ];
         let double_wide_b_range = [
-            ParamRange::new(
-                -0.6 + core::f64::consts::PI,
-                -0.6 + 2.2 * core::f64::consts::PI,
-            ),
-            ParamRange::new(-0.25, 0.25),
+            ParamRange::new(1.4, 1.4 + 1.3 * core::f64::consts::PI),
+            ParamRange::new(-0.2, 0.2),
         ];
         let double_wide_allowance =
             arbitrary_sphere_octant_parameter_allowance(double_wide_a_range, double_wide_b_range)
@@ -3136,7 +3260,7 @@ mod tests {
         let double_wide = certify_double_wide_sphere_window_union(
             &a,
             double_wide_a_range,
-            &wide_b,
+            &adjacent_b,
             double_wide_b_range,
             Tolerances::default(),
             double_wide_allowance,
@@ -3146,12 +3270,31 @@ mod tests {
         )
         .unwrap();
         assert!(double_wide.is_complete());
-        assert_eq!(double_wide.regions.len(), 2);
+        assert_eq!(double_wide.regions.len(), 1);
+        assert_eq!(double_wide.regions[0].boundary.len(), 8);
+        let transposed_allowance =
+            arbitrary_sphere_octant_parameter_allowance(double_wide_b_range, double_wide_a_range)
+                .unwrap();
+        let transposed_double_wide = certify_double_wide_sphere_window_union(
+            &a,
+            double_wide_b_range,
+            &adjacent_b,
+            double_wide_a_range,
+            Tolerances::default(),
+            transposed_allowance,
+            GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+            GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+            GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+        )
+        .unwrap();
+        assert!(transposed_double_wide.is_complete());
+        assert_eq!(transposed_double_wide.regions.len(), 1);
+        assert_eq!(transposed_double_wide.regions[0].boundary.len(), 8);
         assert_eq!(
             certify_double_wide_sphere_window_union(
                 &a,
                 double_wide_a_range,
-                &wide_b,
+                &adjacent_b,
                 double_wide_b_range,
                 Tolerances::default(),
                 double_wide_allowance,
@@ -3168,7 +3311,7 @@ mod tests {
             certify_double_wide_sphere_window_union(
                 &a,
                 double_wide_a_range,
-                &wide_b,
+                &adjacent_b,
                 double_wide_b_range,
                 Tolerances::default(),
                 double_wide_allowance,
@@ -3185,7 +3328,7 @@ mod tests {
             certify_double_wide_sphere_window_union(
                 &a,
                 double_wide_a_range,
-                &wide_b,
+                &adjacent_b,
                 double_wide_b_range,
                 Tolerances::default(),
                 double_wide_allowance,
