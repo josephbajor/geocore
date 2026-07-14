@@ -1051,8 +1051,10 @@ true only for an empty complete result.
   returns `Complete` after all nine closed child intersections certify empty,
   when exactly one child owns one positive region and its eight siblings
   certify empty, when exactly two children own one positive region each and
-  the other seven certify empty, or when exactly three positive children form
-  a two-edge grid path and their six siblings certify empty. Multi-cell parents
+  the other seven certify empty, when exactly three positive children form
+  a two-edge grid path and their six siblings certify empty, or when exactly
+  four positive children form a three-edge grid path and their five siblings
+  certify empty. Multi-cell parents
   must remain below a full turn. Non-edge-adjacent children stay as two
   components after closed
   sibling ownership excludes every artificial seam, including diagonal corner
@@ -1060,10 +1062,11 @@ true only for an empty complete result.
   only when each shared seam is one reverse-oriented boundary edge with exactly
   two consecutive, bit-identical endpoint records; each edge is removed and
   the complementary paths are spliced before parent correspondence is restored.
-  The three-cell path rechecks its second seam after the first splice.
+  Three- and four-cell paths recheck every remaining seam against the current
+  merged boundary after each earlier splice.
   Exact 9/8 piece-pair, 252/251 boundary-pair, and 1,008/1,007 arc-witness
-  admission remain pinned. Four-or-more-positive unions, three-cell non-path
-  layouts, non-exact or multi-edge shared seams, full-turn aliases, polar,
+  admission remain pinned. Five-or-more-positive unions, three- or four-cell
+  non-path layouts, non-exact or multi-edge shared seams, full-turn aliases, polar,
   non-exact tangent, multiple-cycle, ambiguous, and near-coincident
   non-identical cases remain `Indeterminate` or on their existing typed
   failure boundary.

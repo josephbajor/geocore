@@ -567,7 +567,7 @@ fn certify_double_wide_sphere_window_union(
     let a_pieces = decompose_general_sphere_wide_window(a_range, parent_parameter_allowance)?;
     let b_pieces = decompose_general_sphere_wide_window(b_range, parent_parameter_allowance)?;
     let mut certified_empty_pairs = 0;
-    let mut occupied_regions = Vec::with_capacity(3);
+    let mut occupied_regions = Vec::with_capacity(4);
     // Each parent window is exactly the union of its three closed longitude
     // cells, so distributivity gives
     // (union A_i) intersect (union B_j) = union (A_i intersect B_j).
@@ -594,12 +594,12 @@ fn certify_double_wide_sphere_window_union(
                 || hit.regions.len() != 1
             {
                 return Err(Error::InvalidGeometry {
-                    reason: "general coincident sphere both-wide union supports at most three positive cells; three cells require an exact shared-seam path",
+                    reason: "general coincident sphere both-wide union supports at most four positive cells; three or four cells require an exact shared-seam path",
                 });
             }
-            if occupied_regions.len() == 3 {
+            if occupied_regions.len() == 4 {
                 return Err(Error::InvalidGeometry {
-                    reason: "general coincident sphere both-wide union supports at most three positive cells; three cells require an exact shared-seam path",
+                    reason: "general coincident sphere both-wide union supports at most four positive cells; three or four cells require an exact shared-seam path",
                 });
             }
             occupied_regions.push((
@@ -654,7 +654,19 @@ fn certify_double_wide_sphere_window_union(
                 false
             } else {
                 merged_connected_region =
-                    merge_exact_three_sphere_region_path(&occupied_regions, &a_pieces, &b_pieces);
+                    merge_exact_sphere_region_path(&occupied_regions, &a_pieces, &b_pieces);
+                merged_connected_region.is_some()
+            }
+        }
+        [_, _, _, _] => {
+            let bounded_four_cell_proof = certified_empty_pairs + 4
+                == GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT
+                && bounded_multi_cell_parents;
+            if !bounded_four_cell_proof {
+                false
+            } else {
+                merged_connected_region =
+                    merge_exact_sphere_region_path(&occupied_regions, &a_pieces, &b_pieces);
                 merged_connected_region.is_some()
             }
         }
@@ -662,14 +674,15 @@ fn certify_double_wide_sphere_window_union(
     };
     if !supported_positive_cells {
         return Err(Error::InvalidGeometry {
-            reason: "general coincident sphere both-wide union supports at most three positive cells; three cells require an exact shared-seam path",
+            reason: "general coincident sphere both-wide union supports at most four positive cells; three or four cells require an exact shared-seam path",
         });
     }
 
     // Empty artificial-seam neighbors isolate nonadjacent retained cells.
-    // Two or three path-connected cells are admitted only when every child
-    // cycle exposes each internal seam as the same bit-exact edge with reverse
-    // orientation; splicing complementary paths removes those edges.
+    // Three- and four-cell paths are merged from one end. Before every splice,
+    // the current cycle and next child must expose the same bit-exact seam edge
+    // with reverse orientation, so every remaining seam is re-proven after all
+    // earlier splices. Splicing complementary paths removes the seam edges.
     // Pole-clear sub-full-turn parent charts are injective, so the resulting
     // cycles have only true parent boundaries and may use the parent map.
     let parent_residual = arbitrary_sphere_octant_residual_bound(a, b, parent_parameter_allowance)?;
@@ -714,58 +727,74 @@ fn sphere_grid_shared_seam(
     }
 }
 
-fn merge_exact_three_sphere_region_path(
+fn merge_exact_sphere_region_path(
     regions: &[([usize; 2], SurfaceSurfaceRegion)],
     a_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
     b_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
 ) -> Option<SurfaceSurfaceRegion> {
-    if regions.len() != 3 {
+    if !(3..=4).contains(&regions.len()) {
         return None;
     }
-    let mut degrees = [0_u8; 3];
+    let mut adjacent = [[false; 4]; 4];
+    let mut degrees = [0_u8; 4];
     let mut edge_count = 0;
     for first in 0..regions.len() {
         for second in first + 1..regions.len() {
             if sphere_grid_shared_seam(regions[first].0, regions[second].0, a_pieces, b_pieces)
                 .is_some()
             {
+                adjacent[first][second] = true;
+                adjacent[second][first] = true;
                 degrees[first] += 1;
                 degrees[second] += 1;
                 edge_count += 1;
             }
         }
     }
-    if edge_count != 2 {
+    if edge_count != regions.len() - 1
+        || degrees[..regions.len()]
+            .iter()
+            .filter(|degree| **degree == 1)
+            .count()
+            != 2
+        || degrees[..regions.len()]
+            .iter()
+            .filter(|degree| **degree == 2)
+            .count()
+            != regions.len() - 2
+    {
         return None;
     }
-    let center = degrees.iter().position(|degree| *degree == 2)?;
-    let leaves = degrees
-        .iter()
-        .enumerate()
-        .filter_map(|(index, degree)| (*degree == 1).then_some(index))
-        .collect::<Vec<_>>();
-    let [first_leaf, second_leaf]: [usize; 2] = leaves.try_into().ok()?;
 
-    let (first_operand_seam, first_seam) =
-        sphere_grid_shared_seam(regions[center].0, regions[first_leaf].0, a_pieces, b_pieces)?;
-    let first_merge = merge_exact_adjacent_sphere_regions(
-        &regions[center].1,
-        &regions[first_leaf].1,
-        first_operand_seam,
-        first_seam,
-    )?;
-    let (second_operand_seam, second_seam) = sphere_grid_shared_seam(
-        regions[center].0,
-        regions[second_leaf].0,
-        a_pieces,
-        b_pieces,
-    )?;
-    merge_exact_adjacent_sphere_regions(
-        &first_merge,
-        &regions[second_leaf].1,
-        second_operand_seam,
-        second_seam,
-    )
+    let mut current = degrees[..regions.len()]
+        .iter()
+        .position(|degree| *degree == 1)?;
+    let mut previous = None;
+    let mut path = Vec::with_capacity(regions.len());
+    while path.len() < regions.len() {
+        path.push(current);
+        let next = (0..regions.len())
+            .find(|candidate| adjacent[current][*candidate] && Some(*candidate) != previous);
+        previous = Some(current);
+        if let Some(next) = next {
+            current = next;
+        } else if path.len() != regions.len() {
+            return None;
+        }
+    }
+
+    let mut merged = regions[path[0]].1.clone();
+    for edge in path.windows(2) {
+        let (seam_on_first_operand, seam) =
+            sphere_grid_shared_seam(regions[edge[0]].0, regions[edge[1]].0, a_pieces, b_pieces)?;
+        merged = merge_exact_adjacent_sphere_regions(
+            &merged,
+            &regions[edge[1]].1,
+            seam_on_first_operand,
+            seam,
+        )?;
+    }
+    Some(merged)
 }
 
 fn merge_exact_adjacent_sphere_regions(
@@ -3331,7 +3360,7 @@ mod tests {
             ParamRange::new(-0.2, 0.2),
         ];
         let double_wide_b_range = [
-            ParamRange::new(1.4, 1.4 + 1.02 * core::f64::consts::PI),
+            ParamRange::new(0.3, 0.3 + 1.3 * core::f64::consts::PI),
             ParamRange::new(-0.2, 0.2),
         ];
         let double_wide_allowance =
@@ -3354,7 +3383,7 @@ mod tests {
         .unwrap();
         assert!(double_wide.is_complete());
         assert_eq!(double_wide.regions.len(), 1);
-        assert_eq!(double_wide.regions[0].boundary.len(), 10);
+        assert_eq!(double_wide.regions[0].boundary.len(), 12);
         let transposed_allowance =
             arbitrary_sphere_octant_parameter_allowance(double_wide_b_range, double_wide_a_range)
                 .unwrap();
@@ -3372,7 +3401,7 @@ mod tests {
         .unwrap();
         assert!(transposed_double_wide.is_complete());
         assert_eq!(transposed_double_wide.regions.len(), 1);
-        assert_eq!(transposed_double_wide.regions[0].boundary.len(), 10);
+        assert_eq!(transposed_double_wide.regions[0].boundary.len(), 12);
         assert_eq!(
             certify_double_wide_sphere_window_union(
                 &a,
