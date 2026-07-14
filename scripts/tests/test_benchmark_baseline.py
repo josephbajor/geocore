@@ -29,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 156)
+        self.assertEqual(len(cases), 163)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -38,7 +38,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
         topology = [
             case for case in cases if case["benchmark_target"] == "topology_commit"
         ]
-        self.assertEqual(len(topology), 21)
+        self.assertEqual(len(topology), 28)
         self.assertTrue(
             all(case["deterministic_seed"] == 0x51544F504F000002 for case in topology)
         )
@@ -59,6 +59,37 @@ class BenchmarkBaselineTests(unittest.TestCase):
             all(
                 "output_digest" in case["expected_result_counters"]
                 for case in topology
+            )
+        )
+        cohort = [
+            case
+            for case in topology
+            if case["policy_values"]["ladder"] == "cohort"
+        ]
+        self.assertEqual(len(cohort), 7)
+        self.assertEqual(
+            {
+                case["size_parameters"]["bodies"]
+                for case in cohort
+                if case["size_parameters"]["affected_bodies"] == 4
+            },
+            {4, 16, 64, 256},
+        )
+        self.assertEqual(
+            {
+                case["size_parameters"]["affected_bodies"]
+                for case in cohort
+                if case["size_parameters"]["bodies"] == 64
+            },
+            {1, 4, 16, 64},
+        )
+        self.assertTrue(
+            all(
+                case["expected_result_counters"]["affected_bodies"]
+                == case["expected_result_counters"]["refreshed_bodies"]
+                == case["expected_result_counters"]["checked_bodies"]
+                == case["size_parameters"]["affected_bodies"]
+                for case in cohort
             )
         )
         graph_build = [

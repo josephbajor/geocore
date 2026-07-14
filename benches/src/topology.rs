@@ -12,10 +12,12 @@ use ktopo::store::Store;
 
 /// Fixture identity shared by all Q2 cases.
 pub const FIXTURE_VERSION: &str = "topology-commit.v1";
+/// Fixture identity for the mixed-store affected-root scaling matrix.
+pub const COHORT_FIXTURE_VERSION: &str = "topology-commit-cohort.v2";
 /// Deterministic fixture seed (construction itself is not randomized).
 pub const FIXTURE_SEED: u64 = 0x5154_4f50_4f00_0002;
 
-/// One of the six Q2 benchmark ladders.
+/// One of the seven Q2 benchmark ladders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ladder {
     /// Begin and commit a transaction with no edits.
@@ -24,6 +26,8 @@ pub enum Ladder {
     Local,
     /// Edit one point shared by every dependent body.
     Fanout,
+    /// Edit one point shared by a bounded cohort amid unrelated solid bodies.
+    Cohort,
     /// Edit every independent body's point in one transaction.
     Batched,
     /// Attempt one invalid body mutation and verify rollback.
@@ -41,14 +45,16 @@ pub struct TopologyCase {
     pub ladder: Ladder,
     /// Number of bodies in the fixture.
     pub bodies: usize,
+    /// Exact body roots expected to be affected, refreshed, and checked.
+    pub affected_bodies: usize,
     /// Reviewed digest of affected bodies encoded as store ordinals.
     pub expected_affected_digest: u64,
     /// Reviewed digest of complete semantic result evidence.
     pub expected_output_digest: u64,
 }
 
-/// Exactly the 21 Q2 cases specified by the quality contract.
-pub const CASES: [TopologyCase; 21] = [
+/// Exactly the 28 Q2 cases specified by the quality contract.
+pub const CASES: [TopologyCase; 28] = [
     case(
         "topology/checked-commit/isolated-acorns-v1/1/clean-v1",
         Ladder::Clean,
@@ -154,6 +160,55 @@ pub const CASES: [TopologyCase; 21] = [
         Ladder::FullRebuild,
         1_000,
     ),
+    cohort_case(
+        "topology/affected-root-scope/mixed-store-cohort-v2/total-4/affected-4-v2",
+        4,
+        4,
+        0xd8de_f909_5c13_1d26,
+        0x2beb_eafe_609b_daf7,
+    ),
+    cohort_case(
+        "topology/affected-root-scope/mixed-store-cohort-v2/total-16/affected-4-v2",
+        16,
+        4,
+        0xd8de_f909_5c13_1d26,
+        0x3598_0935_f734_98d9,
+    ),
+    cohort_case(
+        "topology/affected-root-scope/mixed-store-cohort-v2/total-64/affected-4-v2",
+        64,
+        4,
+        0xd8de_f909_5c13_1d26,
+        0x428c_9c20_a0f4_1b65,
+    ),
+    cohort_case(
+        "topology/affected-root-scope/mixed-store-cohort-v2/total-256/affected-4-v2",
+        256,
+        4,
+        0xd8de_f909_5c13_1d26,
+        0x40fc_21ff_7e68_c557,
+    ),
+    cohort_case(
+        "topology/affected-root-scope/mixed-store-cohort-v2/total-64/affected-1-v2",
+        64,
+        1,
+        0x0300_00b9_a2c2_19c6,
+        0x08a2_efcc_a4b1_bbe1,
+    ),
+    cohort_case(
+        "topology/affected-root-scope/mixed-store-cohort-v2/total-64/affected-16-v2",
+        64,
+        16,
+        0x121b_7067_4cb3_6c32,
+        0x7966_581c_5db4_4246,
+    ),
+    cohort_case(
+        "topology/affected-root-scope/mixed-store-cohort-v2/total-64/affected-64-v2",
+        64,
+        64,
+        0xac06_c657_a252_9702,
+        0xecc4_d042_f79f_8a7a,
+    ),
 ];
 
 const fn case(path: &'static str, ladder: Ladder, bodies: usize) -> TopologyCase {
@@ -193,6 +248,29 @@ const fn case(path: &'static str, ladder: Ladder, bodies: usize) -> TopologyCase
         path,
         ladder,
         bodies,
+        affected_bodies: match ladder {
+            Ladder::Clean | Ladder::FullRebuild => 0,
+            Ladder::Local | Ladder::Rejected => 1,
+            Ladder::Fanout | Ladder::Batched => bodies,
+            Ladder::Cohort => 0,
+        },
+        expected_affected_digest,
+        expected_output_digest,
+    }
+}
+
+const fn cohort_case(
+    path: &'static str,
+    bodies: usize,
+    affected_bodies: usize,
+    expected_affected_digest: u64,
+    expected_output_digest: u64,
+) -> TopologyCase {
+    TopologyCase {
+        path,
+        ladder: Ladder::Cohort,
+        bodies,
+        affected_bodies,
         expected_affected_digest,
         expected_output_digest,
     }
@@ -255,26 +333,57 @@ impl TopologyFixture {
         fixture
     }
 
+    /// Build a shared-point cohort followed by unrelated production solids.
+    pub fn mixed_store_shared_point_cohort(body_count: usize, cohort_count: usize) -> Self {
+        assert!(cohort_count > 0 && cohort_count <= body_count);
+        let mut store = Store::new();
+        let mut bodies = Vec::with_capacity(body_count);
+        let mut points = Vec::with_capacity(cohort_count);
+        for _ in 0..cohort_count {
+            let body = make::acorn(&mut store, Point3::new(0.0, 0.0, 0.0))
+                .expect("Q2 cohort acorn must be valid");
+            let vertex = store.vertices_of_body(body).expect("valid body")[0];
+            bodies.push(body);
+            points.push(store.get(vertex).expect("valid vertex").point);
+        }
+        for ordinal in 0..body_count - cohort_count {
+            bodies.push(insert_primitive(&mut store, ordinal));
+        }
+
+        let shared = points[0];
+        let mut transaction = store.transaction().expect("cohort fixture transaction");
+        for &body in bodies.iter().take(cohort_count).skip(1) {
+            let vertex = transaction
+                .store()
+                .vertices_of_body(body)
+                .expect("valid body")[0];
+            let old_point = transaction.store().get(vertex).expect("valid vertex").point;
+            transaction
+                .assembly()
+                .get_mut(vertex)
+                .expect("valid vertex")
+                .point = shared;
+            transaction
+                .assembly()
+                .remove(old_point)
+                .expect("unreferenced cohort point");
+        }
+        transaction
+            .commit_checked(&[])
+            .expect("shared cohort fixture must remain valid");
+        Self {
+            store,
+            bodies: bodies.into_boxed_slice(),
+            points: vec![shared].into_boxed_slice(),
+        }
+    }
+
     /// Build a deterministic bounded cycle of all implemented solid primitives.
     pub fn primitive_mix(body_count: usize) -> Self {
         let mut store = Store::new();
         let mut bodies = Vec::with_capacity(body_count);
         for ordinal in 0..body_count {
-            let origin = Point3::new(
-                (ordinal % 10) as f64 * 8.0 - 36.0,
-                ((ordinal / 10) % 10) as f64 * 8.0 - 36.0,
-                (ordinal / 100) as f64 * 8.0 - 36.0,
-            );
-            let frame = Frame::from_z(origin, Frame::world().z()).expect("valid fixture frame");
-            let body = match ordinal % 5 {
-                0 => make::block(&mut store, &frame, [1.0, 2.0, 3.0]),
-                1 => make::cylinder(&mut store, &frame, 1.0, 2.0),
-                2 => make::cone(&mut store, &frame, 1.0, 0.5, 2.0),
-                3 => make::sphere(&mut store, &frame, 1.0),
-                _ => make::torus(&mut store, &frame, 2.0, 0.5),
-            }
-            .expect("Q2 primitive fixture must be valid");
-            bodies.push(body);
+            bodies.push(insert_primitive(&mut store, ordinal));
         }
         Self {
             store,
@@ -315,6 +424,7 @@ impl TopologyFixture {
             Ladder::FullRebuild => unreachable!("handled by prepared read-only path"),
             Ladder::Local => fixture.edit_points(1),
             Ladder::Fanout => fixture.edit_shared_point(),
+            Ladder::Cohort => fixture.edit_shared_point(),
             Ladder::Batched => fixture.edit_points(fixture.bodies.len()),
             Ladder::Rejected => {
                 let mut transaction = fixture.store.transaction().expect("rejected transaction");
@@ -534,12 +644,13 @@ impl ResultHasher {
 
 /// Construct the fixture required by a case.
 pub fn fixture(case: TopologyCase) -> TopologyFixture {
-    if case.ladder == Ladder::Fanout {
-        TopologyFixture::shared_geometry_fanout(case.bodies)
-    } else if case.ladder == Ladder::FullRebuild {
-        TopologyFixture::primitive_mix(case.bodies)
-    } else {
-        TopologyFixture::isolated_acorns(case.bodies)
+    match case.ladder {
+        Ladder::Fanout => TopologyFixture::shared_geometry_fanout(case.bodies),
+        Ladder::Cohort => {
+            TopologyFixture::mixed_store_shared_point_cohort(case.bodies, case.affected_bodies)
+        }
+        Ladder::FullRebuild => TopologyFixture::primitive_mix(case.bodies),
+        _ => TopologyFixture::isolated_acorns(case.bodies),
     }
 }
 
@@ -588,19 +699,32 @@ pub fn verify_full_rebuild(case: TopologyCase, audit: IndexAudit) {
 }
 
 const fn expected_scope(case: TopologyCase) -> usize {
-    match case.ladder {
-        Ladder::Clean | Ladder::FullRebuild => 0,
-        Ladder::Local | Ladder::Rejected => 1,
-        Ladder::Fanout | Ladder::Batched => case.bodies,
-    }
+    case.affected_bodies
 }
 
 const fn expected_mutations(case: TopologyCase) -> usize {
     match case.ladder {
         Ladder::Clean | Ladder::FullRebuild => 0,
-        Ladder::Local | Ladder::Fanout | Ladder::Rejected => 1,
+        Ladder::Local | Ladder::Fanout | Ladder::Cohort | Ladder::Rejected => 1,
         Ladder::Batched => case.bodies,
     }
+}
+
+fn insert_primitive(store: &mut Store, ordinal: usize) -> BodyId {
+    let origin = Point3::new(
+        (ordinal % 10) as f64 * 8.0 - 36.0,
+        ((ordinal / 10) % 10) as f64 * 8.0 - 36.0,
+        (ordinal / 100) as f64 * 8.0 - 36.0,
+    );
+    let frame = Frame::from_z(origin, Frame::world().z()).expect("valid fixture frame");
+    match ordinal % 5 {
+        0 => make::block(store, &frame, [1.0, 2.0, 3.0]),
+        1 => make::cylinder(store, &frame, 1.0, 2.0),
+        2 => make::cone(store, &frame, 1.0, 0.5, 2.0),
+        3 => make::sphere(store, &frame, 1.0),
+        _ => make::torus(store, &frame, 2.0, 0.5),
+    }
+    .expect("Q2 primitive fixture must be valid")
 }
 
 #[cfg(test)]
@@ -611,8 +735,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn registry_contains_exactly_21_unique_canonical_cases() {
-        assert_eq!(CASES.len(), 21);
+    fn registry_contains_exactly_28_unique_canonical_cases() {
+        assert_eq!(CASES.len(), 28);
         let unique: BTreeSet<_> = CASES.iter().map(|case| case.path).collect();
         assert_eq!(unique.len(), CASES.len());
         for case in CASES {
@@ -623,7 +747,7 @@ mod tests {
             include_str!("../cases.json")
                 .matches("\"benchmark_target\": \"topology_commit\"")
                 .count(),
-            21
+            28
         );
     }
 
@@ -640,7 +764,12 @@ mod tests {
             assert_eq!(matches.len(), 1, "registry mismatch for {}", case.path);
             let entry = matches[0];
             assert_eq!(entry["benchmark_target"], "topology_commit");
-            assert_eq!(entry["fixture_version"], FIXTURE_VERSION);
+            let fixture_version = if case.ladder == Ladder::Cohort {
+                COHORT_FIXTURE_VERSION
+            } else {
+                FIXTURE_VERSION
+            };
+            assert_eq!(entry["fixture_version"], fixture_version);
             assert_eq!(entry["deterministic_seed"].as_u64(), Some(FIXTURE_SEED));
             assert_eq!(
                 entry["size_parameters"]["elements"].as_u64(),
@@ -650,6 +779,12 @@ mod tests {
                 entry["size_parameters"]["bodies"].as_u64(),
                 Some(case.bodies as u64)
             );
+            if case.ladder == Ladder::Cohort {
+                assert_eq!(
+                    entry["size_parameters"]["affected_bodies"].as_u64(),
+                    Some(case.affected_bodies as u64)
+                );
+            }
             let counters = &entry["expected_result_counters"];
             assert_eq!(counters["body_count"].as_u64(), Some(case.bodies as u64));
             assert_eq!(
@@ -684,10 +819,43 @@ mod tests {
     }
 
     #[test]
-    fn all_six_smallest_ladders_match_reviewed_result_evidence() {
+    fn all_seven_smallest_ladders_match_reviewed_result_evidence() {
         for case in [
-            CASES[0], CASES[4], CASES[8], CASES[11], CASES[14], CASES[17],
+            CASES[0], CASES[4], CASES[8], CASES[11], CASES[14], CASES[17], CASES[21],
         ] {
+            let result = fixture(case).execute(case.ladder);
+            verify(case, &result);
+        }
+    }
+
+    #[test]
+    fn cohort_matrix_separates_total_bodies_from_affected_roots() {
+        let cohort = CASES
+            .iter()
+            .filter(|case| case.ladder == Ladder::Cohort)
+            .collect::<Vec<_>>();
+        assert_eq!(cohort.len(), 7);
+        let fixed_affected = cohort
+            .iter()
+            .filter(|case| case.affected_bodies == 4)
+            .map(|case| case.bodies)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(fixed_affected, BTreeSet::from([4, 16, 64, 256]));
+        let fixed_total = cohort
+            .iter()
+            .filter(|case| case.bodies == 64)
+            .map(|case| case.affected_bodies)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(fixed_total, BTreeSet::from([1, 4, 16, 64]));
+    }
+
+    #[test]
+    fn every_cohort_case_matches_reviewed_scope_and_digest_evidence() {
+        for case in CASES
+            .iter()
+            .copied()
+            .filter(|case| case.ladder == Ladder::Cohort)
+        {
             let result = fixture(case).execute(case.ladder);
             verify(case, &result);
         }

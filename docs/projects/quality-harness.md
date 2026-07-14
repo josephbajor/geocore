@@ -171,7 +171,7 @@ Q1 implementation:
 
 Owner: `ktopo`.
 
-Implemented as 21 registered cases in the isolated `benches/` package. The
+Implemented as 28 registered cases in the isolated `benches/` package. The
 `benchmark-internals` feature adds only read-only commit counters, stable
 ordinal-based digests, store/index snapshots, and a full-rebuild audit; it is
 absent from normal `ktopo` builds. Fixture cloning, snapshots, and invariant
@@ -191,6 +191,8 @@ Fixtures:
 - `primitive_mix`: deterministic box/cylinder/cone/sphere/torus repetitions;
 - `shared_geometry_fanout`: bodies that legally depend on the same immutable
   geometry where the model supports it; and
+- `mixed_store_shared_point_cohort`: a bounded shared-point cohort followed by
+  unrelated block/cylinder/cone/sphere/torus bodies; and
 - `rejected_edit`: one deterministic mutation that fails checked commit.
 
 Ladders:
@@ -200,6 +202,7 @@ Ladders:
 | clean checked commit | 1, 10, 100, 1,000 bodies | begin plus no-op checked commit | body count unchanged; affected-body count |
 | local refresh | same store sizes | mutate one body's point/tolerance and commit | exactly expected body scope checked; index entries unchanged outside scope |
 | fanout refresh | 1, 10, 100 dependent bodies | mutate one referenced geometry and commit | deterministic affected-body set and order |
+| mixed-store cohort | four affected roots across 4, 16, 64, 256 total bodies; 1, 4, 16, 64 affected roots across 64 total bodies | mutate one cohort-shared point and commit | affected = refreshed = checked cohort size; stable affected order and full result digests |
 | batched refresh | 1, 10, 100 edited bodies | perform deterministic edits in one transaction | one atomic commit; refreshed-body count |
 | rejected commit | 1, 10, 100 bodies | commit one invalid mutation | identical pre/post store digest and index digest |
 | full rebuild reference | 1, 10, 100, 1,000 bodies | explicitly rebuild/audit index through crate-private seam | rebuilt index equals committed incremental index |
@@ -207,6 +210,11 @@ Ladders:
 Record entity counts, affected/refreshed body counts, checker obligations, and
 allocation counts when allocation instrumentation becomes available. The
 rejected-edit case protects failure atomicity, not merely throughput.
+The cohort matrix proves the scoped index/checker counters rather than a wall-
+clock threshold. Ordinary commit still performs full graph validation,
+committed-index cloning, and body-order refresh, and the affected roots remain
+minimal one-vertex bodies; total latency and affected solid-footprint scaling
+remain separate performance boundaries.
 
 ## Stage Q2a — geometry graph construction and reverse-dependency ladder
 

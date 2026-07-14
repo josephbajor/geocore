@@ -16,7 +16,7 @@ Every case is registered in `cases.json` with a five-segment path:
 Fixture construction, seeds, expected counters, and invariant checks are
 deterministic. Criterion measures elapsed time, but timing never establishes
 correctness. The runner always marks measurements advisory.
-The manifest currently registers 156 cases, including the 32-row Q3
+The manifest currently registers 163 cases, including the 32-row Q3
 `body-tessellation.v3` matrix.
 
 Criterion is pinned to `0.8.2`. Machine-readable measured runs use
@@ -87,15 +87,28 @@ axis-wise inflated-box test. Resource-limited controls remain zero-certificate
 cases.
 
 The Q1 target verifies the result digest before measurement and again in every
-timed iteration. The Q2 target provides the 21 checked-commit, incremental
+timed iteration. The Q2 target provides the 28 checked-commit, incremental
 index-refresh, rejection, and full-rebuild cases in the quality contract. It
 times only the transaction edit and ordinary `commit_checked`, except that the
 full-rebuild ladder times the independent reference-index rebuild itself.
 Fixture cloning, store/index snapshots, rollback probes, and correctness checks
 run outside the accumulated duration. Read-only full-rebuild samples reuse one
 verified prepared fixture so Criterion calibration does not repeat excluded
-cloning and snapshot work. Set `KERNEL_BENCH_SMOKE=1` and pass one full case
-path after `--` for a bounded local smoke run.
+cloning and snapshot work. Seven v2 mixed-store cohort rows add a two-axis
+affected-root scaling matrix. One axis holds four shared-point dependents while
+total bodies grow through 4, 16, 64, and 256; the other holds 64 total bodies
+while dependents grow through 1, 4, 16, and 64. Unaffected bodies cycle through
+the closed block, cylinder, cone, sphere, and torus fixtures. Every row pins one
+mutation and exact equality of affected, refreshed, and checked body counts to
+the dependent cohort, plus stable affected-order and full-output digests.
+These counters, not elapsed time, establish affected-root scope. The timed
+ordinary commit still includes full geometry-graph validation, cloning the
+committed index, and refreshing its store body order, so this baseline does not
+claim total-store-independent end-to-end latency. The affected cohort remains
+the minimal one-vertex body needed to isolate dependency-index scope; scaling
+the footprint of each affected solid is a separate boundary. Set
+`KERNEL_BENCH_SMOKE=1` and pass one full case path after `--` for a bounded
+local smoke run.
 
 The Q2a v2 target registers 21 graph-construction cases: independent plane nodes
 at 1 through 10,000 nodes, offset dependency chains and shared-basis fanout at
