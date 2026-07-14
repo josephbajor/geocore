@@ -280,6 +280,7 @@ const GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT: usize =
     GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_PAIR_LIMIT;
 const GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT: usize =
     GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_ARC_LIMIT;
+const GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON: &str = "general coincident sphere both-wide union supports at most five positive cells; exactly three may be pairwise non-edge-adjacent, otherwise three to five require an exact shared-seam path";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SphereWindowConstraint {
@@ -567,6 +568,8 @@ fn certify_double_wide_sphere_window_union(
     let a_pieces = decompose_general_sphere_wide_window(a_range, parent_parameter_allowance)?;
     let b_pieces = decompose_general_sphere_wide_window(b_range, parent_parameter_allowance)?;
     let mut certified_empty_pairs = 0;
+    let mut certified_empty_cells =
+        [[false; GENERAL_SPHERE_WIDE_PIECE_LIMIT]; GENERAL_SPHERE_WIDE_PIECE_LIMIT];
     let mut occupied_regions = Vec::with_capacity(5);
     // Each parent window is exactly the union of its three closed longitude
     // cells, so distributivity gives
@@ -586,6 +589,7 @@ fn certify_double_wide_sphere_window_union(
             )?;
             if hit.is_proven_empty() {
                 certified_empty_pairs += 1;
+                certified_empty_cells[a_index][b_index] = true;
                 continue;
             }
             if !hit.is_complete()
@@ -594,12 +598,12 @@ fn certify_double_wide_sphere_window_union(
                 || hit.regions.len() != 1
             {
                 return Err(Error::InvalidGeometry {
-                    reason: "general coincident sphere both-wide union supports at most five positive cells; three to five cells require an exact shared-seam path",
+                    reason: GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON,
                 });
             }
             if occupied_regions.len() == 5 {
                 return Err(Error::InvalidGeometry {
-                    reason: "general coincident sphere both-wide union supports at most five positive cells; three to five cells require an exact shared-seam path",
+                    reason: GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON,
                 });
             }
             occupied_regions.push((
@@ -643,7 +647,10 @@ fn certify_double_wide_sphere_window_union(
                 );
                 merged_connected_region.is_some()
             } else {
-                true
+                sphere_grid_regions_are_pairwise_independent(
+                    &occupied_regions,
+                    &certified_empty_cells,
+                )
             }
         }
         [_, _, _] => {
@@ -652,6 +659,11 @@ fn certify_double_wide_sphere_window_union(
                 && bounded_multi_cell_parents;
             if !bounded_three_cell_proof {
                 false
+            } else if sphere_grid_regions_are_pairwise_independent(
+                &occupied_regions,
+                &certified_empty_cells,
+            ) {
+                true
             } else {
                 merged_connected_region =
                     merge_exact_sphere_region_path(&occupied_regions, &a_pieces, &b_pieces);
@@ -686,12 +698,14 @@ fn certify_double_wide_sphere_window_union(
     };
     if !supported_positive_cells {
         return Err(Error::InvalidGeometry {
-            reason: "general coincident sphere both-wide union supports at most five positive cells; three to five cells require an exact shared-seam path",
+            reason: GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON,
         });
     }
 
-    // Empty artificial-seam neighbors isolate nonadjacent retained cells.
-    // Three- through five-cell paths are merged from one end. Before every
+    // Certified-empty orthogonal corner owners isolate each diagonal pair in
+    // a two- or three-cell independent set; the remaining empty siblings
+    // exclude every other artificial seam. Three- through five-cell paths are
+    // merged from one end. Before every
     // splice, the current cycle and next child must expose the same bit-exact
     // seam edge with reverse orientation, so every remaining seam is re-proven
     // after all earlier splices. Splicing complementary paths removes the seam
@@ -721,6 +735,32 @@ fn certify_double_wide_sphere_window_union(
         Vec::new(),
         regions,
     )
+}
+
+fn sphere_grid_regions_are_pairwise_independent(
+    regions: &[([usize; 2], SurfaceSurfaceRegion)],
+    certified_empty_cells: &[[bool; GENERAL_SPHERE_WIDE_PIECE_LIMIT];
+         GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+) -> bool {
+    regions.iter().enumerate().all(|(first_index, first)| {
+        regions.iter().skip(first_index + 1).all(|second| {
+            let a_delta = first.0[0].abs_diff(second.0[0]);
+            let b_delta = first.0[1].abs_diff(second.0[1]);
+            if a_delta + b_delta <= 1 {
+                return false;
+            }
+            if a_delta == 1 && b_delta == 1 {
+                // Diagonal closed cells share one grid corner. Both
+                // orthogonal cells own that same corner, so both must have
+                // certified empty before corner contact is excluded.
+                let orthogonal = [[first.0[0], second.0[1]], [second.0[0], first.0[1]]];
+                return orthogonal
+                    .into_iter()
+                    .all(|cell| certified_empty_cells[cell[0]][cell[1]]);
+            }
+            true
+        })
+    })
 }
 
 fn sphere_grid_shared_seam(
