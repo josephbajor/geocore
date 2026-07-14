@@ -372,6 +372,36 @@ impl IntersectionImportBudgetProfile {
         .expect("built-in X_T cubic dual-offset intersection profile is valid")
     }
 
+    /// Corpus-backed defaults through the next canonical quadratic
+    /// dual-offset chart whose source uses zero-multiplicity null-knot
+    /// padding, plus the already-supported 11-sample Plane/Offset(B-surface)
+    /// chart 3745 it exposes before the next unsupported dual-offset family.
+    ///
+    /// Historical v1-v10 profiles retain their exact policy contracts.
+    pub fn v11_defaults() -> BudgetPlan {
+        BudgetPlan::new([
+            LimitSpec::new(
+                INTERSECTION_CHART_CERTIFICATE_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                388_125_799,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_ITEMS,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                65_536,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64,
+            ),
+        ])
+        .expect("built-in X_T zero-multiplicity knot-padding profile is valid")
+    }
+
     fn validate(ledger: &WorkLedger) -> core::result::Result<(), OperationPolicyError> {
         ledger.require_limit(
             INTERSECTION_CHART_CERTIFICATE_WORK,
@@ -416,7 +446,7 @@ pub struct Reconstruction {
 pub fn reconstruction_budget_profile() -> BudgetPlan {
     let graph = EvalBudgetProfile::v1_defaults();
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v10_defaults();
+    let intersection = IntersectionImportBudgetProfile::v11_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -432,7 +462,7 @@ fn reconstruction_compatibility_budget() -> BudgetPlan {
     let graph =
         EvalBudgetProfile::for_limits(EvalLimits::default().max_dependency_depth, usize::MAX);
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v10_defaults();
+    let intersection = IntersectionImportBudgetProfile::v11_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -1066,8 +1096,8 @@ fn transmitted_knot_control_count(
 ) -> Result<u64> {
     let knots_index = ptr(file, nurbs, knots_field)?;
     let multiplicities_index = ptr(file, nurbs, multiplicities_field)?;
-    let knot_count = match field(file, xnode(file, knots_index)?, "knots")? {
-        Value::Arr(values) => values.len(),
+    let knots = match field(file, xnode(file, knots_index)?, "knots")? {
+        Value::Arr(values) => values,
         _ => {
             return Err(XtError::BadField {
                 index: knots_index,
@@ -1076,7 +1106,7 @@ fn transmitted_knot_control_count(
         }
     };
     let multiplicities = match field(file, xnode(file, multiplicities_index)?, "mult")? {
-        Value::Arr(values) if values.len() == knot_count => values,
+        Value::Arr(values) if values.len() == knots.len() => values,
         Value::Arr(_) => {
             return Err(XtError::BadField {
                 index: multiplicities_index,
@@ -1090,19 +1120,40 @@ fn transmitted_knot_control_count(
             });
         }
     };
-    let expanded_count = multiplicities.iter().try_fold(0_u64, |count, value| {
-        let multiplicity = value.as_int().and_then(|value| u64::try_from(value).ok());
-        let Some(multiplicity) = multiplicity.filter(|value| *value > 0) else {
-            return Err(XtError::BadField {
-                index: multiplicities_index,
-                what: "B-surface knot multiplicity is not a positive integer",
-            });
-        };
-        count.checked_add(multiplicity).ok_or(XtError::BadField {
-            index: multiplicities_index,
-            what: "B-surface expanded knot count overflows",
-        })
-    })?;
+    let expanded_count =
+        knots
+            .iter()
+            .zip(multiplicities)
+            .try_fold(0_u64, |count, (knot, multiplicity)| {
+                let multiplicity = multiplicity
+                    .as_int()
+                    .and_then(|value| u64::try_from(value).ok())
+                    .ok_or(XtError::BadField {
+                        index: multiplicities_index,
+                        what: "B-surface knot multiplicity is negative, nonintegral, or too large",
+                    })?;
+                if multiplicity == 0 {
+                    if matches!(knot, Value::Null)
+                        || knot.as_f64().is_some_and(|value| value.is_finite())
+                    {
+                        return Ok(count);
+                    }
+                    return Err(XtError::BadField {
+                        index: knots_index,
+                        what: "zero-multiplicity knot padding is neither null nor finite numeric",
+                    });
+                }
+                if !knot.as_f64().is_some_and(|value| value.is_finite()) {
+                    return Err(XtError::BadField {
+                        index: knots_index,
+                        what: "positive-multiplicity knot is null, non-numeric, or non-finite",
+                    });
+                }
+                count.checked_add(multiplicity).ok_or(XtError::BadField {
+                    index: multiplicities_index,
+                    what: "B-surface expanded knot count overflows",
+                })
+            })?;
     expanded_count
         .checked_sub(degree)
         .and_then(|count| count.checked_sub(1))
@@ -2879,10 +2930,19 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
     /// Expand an XT (distinct knots, multiplicities) pair into the full
     /// knot vector.
     fn knot_vector(&mut self, knots_idx: u32, mult_idx: u32) -> Result<Vec<f64>> {
-        let knots = self.doubles(knots_idx, "knots")?;
+        let knot_node = xnode(self.file, knots_idx)?;
+        let knots = match field(self.file, knot_node, "knots")? {
+            Value::Arr(values) => values,
+            _ => {
+                return Err(XtError::BadField {
+                    index: knots_idx,
+                    what: "knot values are not an array",
+                });
+            }
+        };
         let mult_node = xnode(self.file, mult_idx)?;
-        let mults: Vec<i64> = match field(self.file, mult_node, "mult")? {
-            Value::Arr(vs) => vs.iter().filter_map(Value::as_int).collect(),
+        let mults = match field(self.file, mult_node, "mult")? {
+            Value::Arr(values) => values,
             _ => {
                 return Err(XtError::BadField {
                     index: mult_idx,
@@ -2897,9 +2957,40 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             });
         }
         let mut out = Vec::new();
-        for (k, m) in knots.iter().zip(&mults) {
-            for _ in 0..*m {
-                out.push(*k);
+        for (knot, multiplicity) in knots.iter().zip(mults) {
+            let multiplicity = multiplicity.as_int().ok_or(XtError::BadField {
+                index: mult_idx,
+                what: "knot multiplicity is not integral",
+            })?;
+            let multiplicity = usize::try_from(multiplicity).map_err(|_| XtError::BadField {
+                index: mult_idx,
+                what: "knot multiplicity is negative or too large",
+            })?;
+            if multiplicity == 0 {
+                if matches!(knot, Value::Null)
+                    || knot.as_f64().is_some_and(|value| value.is_finite())
+                {
+                    continue;
+                }
+                return Err(XtError::BadField {
+                    index: knots_idx,
+                    what: "zero-multiplicity knot padding is neither null nor finite numeric",
+                });
+            }
+            let knot =
+                knot.as_f64()
+                    .filter(|value| value.is_finite())
+                    .ok_or(XtError::BadField {
+                        index: knots_idx,
+                        what: "positive-multiplicity knot is null, non-numeric, or non-finite",
+                    })?;
+            out.try_reserve(multiplicity)
+                .map_err(|_| XtError::BadField {
+                    index: mult_idx,
+                    what: "expanded knot vector is too large",
+                })?;
+            for _ in 0..multiplicity {
+                out.push(knot);
             }
         }
         Ok(out)

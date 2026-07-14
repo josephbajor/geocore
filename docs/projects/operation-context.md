@@ -534,7 +534,11 @@ Items, and Depth N/N-1 denial. Corpus-backed v10 admits four-sample cubic
 dual-offset record 3819 at exact `336,759,900/22/10`; the chart itself pins
 `12,945,408/4/10`, and its unique degree-3 clamped interpolants remain
 subordinate to two independent original-source proofs. Historical v1-v9
-budgets remain exact. Material and interior overhangs are never
+budgets remain exact. V11 accepts only null or finite-numeric
+zero-multiplicity source-knot padding, admits quadratic record 3790 at isolated
+`8,593,408/3/10`, then exposes and certifies 11-sample Plane/Offset record 3745
+at isolated `42,772,491/11/10`; the corpus reaches
+`388,125,799/22/10` with historical v1-v10 parity. Material and interior overhangs are never
 normalized, and every snapped endpoint remains subordinate to its original-
 source whole-carrier certificate.
 The v5 extension permits paired-null Plane UVs only at interior samples of an

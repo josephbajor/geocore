@@ -108,8 +108,12 @@ statement accompanied the individual files.
   four-sample dual-offset chart with unique degree-3 clamped carrier and
   pcurves plus two independent original-source interval proofs. Historical
   v1-v9 profiles remain exact, and the isolated chart pins
-  `12945408/4/10`. The next source retains zero-multiplicity null-knot padding
-  at knot set 6764 as the stable raw `BadField` boundary. General closed
+  `12945408/4/10`. V11 accepts knot-set padding only when multiplicity zero is
+  paired with null or a finite number. It certifies quadratic record 3790 at
+  isolated `8593408/3/10`, then the exposed 11-sample Plane/Offset record 3745
+  at isolated `42772491/11/10`, reaching `388125799/22/10` with historical
+  v1-v10 parity. Seven-sample dual-offset record 3615 is the stable typed
+  `xt.read.intersection-surface-family` boundary. General closed
   limits, other nullable chart data, periodic-trace-range, broader carrier
   families, and noncanonical chart forms remain unsupported. Primary
   reference for modern writer conventions: TRIMMED_CURVE/GEOMETRIC_OWNER linkage,

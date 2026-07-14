@@ -146,7 +146,7 @@ fn record_3819_pins_the_canonical_four_sample_dual_offset_payload() {
 }
 
 #[test]
-fn v10_certifies_3819_and_stops_at_zero_multiplicity_knot_padding() {
+fn v10_certifies_3819_and_stops_before_the_next_quadratic_proof() {
     let file = read_xt(EXEMPLAR).unwrap();
     let session = SessionPolicy::v1();
     let mut store = Store::new();
@@ -156,13 +156,21 @@ fn v10_certifies_3819_and_stops_at_zero_multiplicity_knot_padding() {
         &context_with_plan(&session, IntersectionImportBudgetProfile::v10_defaults()),
     )
     .unwrap();
-    assert!(matches!(
-        outcome.result().as_ref().unwrap_err(),
-        XtError::BadField {
-            index: 6764,
-            what: "non-numeric value in double array",
-        }
-    ));
+    let crossing = outcome.result().as_ref().unwrap_err().limit().unwrap();
+    assert_eq!(
+        (
+            crossing.stage,
+            crossing.resource,
+            crossing.consumed,
+            crossing.allowed,
+        ),
+        (
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+            345_353_308,
+            V10_WORK,
+        )
+    );
     assert_eq!(
         usage(
             outcome.report(),

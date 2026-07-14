@@ -800,8 +800,13 @@ depth-10 original-source offset-NURBS residual certificates prove it. V10
 admits record 3819 at exact `336759900/22/10`; roots `[3370, 773]` bind the
 unique common degree-3 clamped carrier/pcurve interpolants through four samples,
 again proved against both original offset-NURBS sources. The isolated chart
-pins `12945408/4/10` and historical v1-v9 parity. Zero-multiplicity null-knot
-padding at knot set 6764 is the next deterministic raw-field boundary.
+pins `12945408/4/10` and historical v1-v9 parity. V11 accepts a
+zero-multiplicity nonperiodic source knot only when its padding value is null or
+finite numeric, certifies quadratic record 3790 at isolated `8593408/3/10`,
+then exposes and certifies 11-sample Plane/Offset record 3745 at isolated
+`42772491/11/10`. The corpus reaches `388125799/22/10` with historical v1-v10
+parity; seven-sample dual-offset record 3615 is the next typed surface-family
+boundary.
 An end terminator contributes a
 tolerance-close, distinct singularity
 and one extra paired-UV tuple whose appended span is certified with the same
@@ -890,8 +895,9 @@ the graph ownership model.
   finite-open records 1252 and 5089 and native direct-Plane `SP_CURVE` node 30
   through FACE 1195's vertex-less ring domain, nonperiodic endpoint-roundoff
   `INTERSECTION` 1984, the canonical finite-open three-sample dual-offset
-  `INTERSECTION` 5945, and the canonical four-sample cubic dual-offset
-  `INTERSECTION` 3819. The equal-limit
+  `INTERSECTION` 5945, the canonical four-sample cubic dual-offset
+  `INTERSECTION` 3819, zero-padded quadratic dual-offset `INTERSECTION` 3790,
+  and exposed 11-sample Plane/Offset `INTERSECTION` 3745. The equal-limit
   suite separately pins both records, exact v3
   `115485725/20/10`, record-2008 transplant `124040223/22/10`, endpoint-only
   period unwrapping, and typed null/distinct-closed/off-seam rollback. The
@@ -918,7 +924,11 @@ the graph ownership model.
   stale rejection. The cubic suite pins exact v10 `336759900/22/10`, isolated
   `12945408/4/10`, historical v1-v9 stability, unique degree-3 interpolation,
   polynomial-control-hull/Taylor enclosure agreement, dependency identity,
-  and typed malformed or altered rejection.
+  and typed malformed or altered rejection. The zero-multiplicity padding suite
+  pins strict null/finite validation, positive-multiplicity numeric validation,
+  isolated record-3790 `8593408/3/10`, record-3745 `42772491/11/10`, exact v11
+  `388125799/22/10`, historical v1-v10 parity, and the next typed record-3615
+  surface-family boundary.
 
 ### Offset evaluator tests
 

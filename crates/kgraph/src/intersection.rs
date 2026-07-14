@@ -3272,6 +3272,7 @@ fn transmitted_quadratic_offset_trace_residual_bound(
 ) -> Result<f64, IntersectionCertificateError> {
     let carrier_coefficients = quadratic_interval_coefficients3(carrier.points());
     let pcurve_coefficients = quadratic_interval_coefficients2(pcurve.points());
+    let pcurve_control_hull = polynomial_pcurve_control_hull(pcurve);
     let domains = [
         offset.basis().knots(Dir::U).domain(),
         offset.basis().knots(Dir::V).domain(),
@@ -3310,12 +3311,18 @@ fn transmitted_quadratic_offset_trace_residual_bound(
                 pcurve_coefficients[1][axis]
                     + pcurve_coefficients[2][axis] * Interval::point(2.0 * fraction_mid)
             });
-            let uv_box = core::array::from_fn(|axis| {
-                let enclosure = uv_center[axis]
+            let mut uv_box = [ParamRange::new(0.0, 0.0); 2];
+            for axis in 0..2 {
+                let taylor = uv_center[axis]
                     + uv_direction[axis] * delta
                     + pcurve_coefficients[2][axis] * delta_squared;
-                ParamRange::new(enclosure.lo(), enclosure.hi())
-            });
+                uv_box[axis] = intersect_polynomial_pcurve_enclosures(
+                    taylor,
+                    pcurve_control_hull[axis],
+                    trace,
+                    "dual-offset quadratic pcurve enclosure is inconsistent with its polynomial control hull",
+                )?;
+            }
             if (0..2).any(|axis| {
                 uv_box[axis].lo < domains[axis].lo || uv_box[axis].hi > domains[axis].hi
             }) {

@@ -738,9 +738,14 @@ dual-offset record 3819 at exact `336759900/22/10`. Its ordered roots
 `[3370, 773]`, four positions, and sixteen paired UV values determine the
 unique common degree-3 clamped interpolants, while two independent depth-10
 original-source proofs remain authoritative. Historical v1-v9 profiles retain
-exact parity. The next source stops at the deterministic raw zero-multiplicity
-null-knot `BadField` boundary at knot set 6764. Its manifest row is
-`reconstruct: fail` without a capability and remains the committed progress
+exact parity. Production v11 normalizes only null or finite-numeric
+zero-multiplicity nonperiodic source-knot padding. It admits quadratic
+dual-offset record 3790 at isolated `8593408/3/10`, exposes and certifies the
+existing 11-sample Plane/Offset(B-surface) record 3745 at isolated
+`42772491/11/10`, and reaches exact `388125799/22/10` with historical v1-v10
+parity. Seven-sample dual-offset record 3615 is the next typed boundary. Its
+manifest row is `reconstruct: unsupported` with capability
+`xt.read.intersection-surface-family` and remains the committed progress
 meter: `reconstruct: unsupported → pass`, then `tessellate: pass`, then
 full-checker gaps shrinking toward `valid`. Dependency plan:
 
@@ -824,8 +829,11 @@ full-checker gaps shrinking toward `valid`. Dependency plan:
    `323814492/22/10`, with exact N/N-1 crossings and historical v1-v8 profile
    parity. Production v10 admits four-sample cubic record 3819 at exact
    `336759900/22/10`, with isolated `12945408/4/10` accounting, exact N/N-1
-   crossings, and historical v1-v9 parity; zero-multiplicity null-knot padding
-   at knot set 6764 is the next deterministic raw-field boundary.
+   crossings, and historical v1-v9 parity. Production v11 accepts only null or
+   finite-numeric zero-multiplicity source-knot padding, certifies quadratic
+   record 3790 and the exposed 11-sample Plane/Offset record 3745 at exact
+   `388125799/22/10`, and preserves v1-v10 parity; seven-sample dual-offset
+   record 3615 remains typed unsupported.
    Both
    original B-surface identities and their paired pcurves are graph-protected
    in source order. Other parameter conventions, limits,
@@ -840,8 +848,9 @@ full-checker gaps shrinking toward `valid`. Dependency plan:
    native Plane SP-curve node 30 now certify; FACE 1195's vertex-less ring
    domain also derives. Nonperiodic NURBS endpoint-roundoff record 1984 and the
    canonical finite-open three-sample dual-offset record 5945 and four-sample
-   cubic dual-offset record 3819 now certify, advancing the corpus ratchet to
-   zero-multiplicity null-knot padding in the next quadratic chart.
+   cubic dual-offset record 3819, zero-padded quadratic record 3790, and exposed
+   11-sample Plane/Offset record 3745 now certify, advancing the corpus ratchet
+   to seven-sample dual-offset record 3615.
    Original-backed, tolerance-qualified, non-Plane, reversed-basis, periodic,
    closed, rational, or non-2D SP-curves, foreign curves, null/general
    closed-limit, endpoint or NURBS-trace omissions, other nullable
