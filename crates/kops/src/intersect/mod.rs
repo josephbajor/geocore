@@ -157,6 +157,7 @@ pub use result::{
     accept_curve_curve_candidate, accept_curve_surface_candidate, accept_surface_surface_candidate,
 };
 pub use sphere_nurbs_surface::intersect_bounded_sphere_nurbs_surface;
+pub use sphere_nurbs_surface::intersect_bounded_sphere_nurbs_surface_with_context;
 pub use sphere_sphere::intersect_bounded_spheres;
 pub use sphere_torus::intersect_bounded_sphere_torus;
 pub use surface_surface::intersect_bounded_surfaces;

@@ -401,8 +401,8 @@ impl GeometryGraph {
         )))
     }
 
-    /// Insert an operation-generated degree-1 exact-plane-field/NURBS branch
-    /// after binding its whole-range proof to live sources and pcurves.
+    /// Insert an operation-generated degree-1 analytic/NURBS branch after
+    /// binding its whole-range proof to live sources and pcurves.
     pub fn insert_verified_nurbs_intersection_curve(
         &mut self,
         source_surfaces: [SurfaceHandle; 2],
@@ -1069,6 +1069,9 @@ fn validate_curve_references(
                     exact_surface_field(graph, source)?
                         == Some(ExactSurfaceField::Plane(*certified))
                 }
+                NurbsIntersectionTrace::Sphere(certified) => {
+                    actual.as_sphere().copied() == Some(*certified)
+                }
                 NurbsIntersectionTrace::Nurbs(certified) => actual.as_nurbs() == Some(certified),
                 NurbsIntersectionTrace::OffsetNurbs(_) => false,
             };
@@ -1137,6 +1140,7 @@ fn validate_curve_references(
                     exact_surface_field(graph, source)?
                         == Some(ExactSurfaceField::Plane(*certified))
                 }
+                TransmittedNurbsIntersectionTrace::Sphere(_) => false,
                 TransmittedNurbsIntersectionTrace::Nurbs(certified) => {
                     graph
                         .surface(source)

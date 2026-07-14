@@ -1,10 +1,22 @@
 use super::conic::{fit_periodic_parameter, parameter_tolerance};
-use super::nurbs_surface_march::{MarchConfig, MarchPoint, march_nurbs_surface_intersection};
+use super::nurbs_surface_march::{
+    ContextMarchError, MarchConfig, MarchOutput, MarchPoint, NURBS_SURFACE_MARCH_SAMPLE_LIMIT,
+    NurbsSurfaceMarchBudgetProfile, march_nurbs_surface_intersection_with_traces_in_scope,
+};
 use super::result::{ContactKind, SurfaceSurfaceIntersections};
 use kcore::error::{Error, Result};
 use kcore::math;
+use kcore::operation::{
+    AccountingMode, DiagnosticKind, ExecutionPolicy, NumericalPolicy, OperationContext,
+    OperationOutcome, OperationPolicyError, OperationScope, PolicyVersion, ResourceKind,
+    SessionPolicy, SessionPrecision,
+};
 use kcore::tolerance::Tolerances;
 use kgeom::nurbs::NurbsSurface;
+use kgeom::nurbs::{
+    NURBS_IMPLICIT_ISOLATION_CANDIDATES, NURBS_IMPLICIT_ISOLATION_DEPTH,
+    NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
+};
 use kgeom::param::ParamRange;
 use kgeom::surface::{Sphere, Surface};
 use kgeom::vec::{Point3, Vec3};
@@ -21,26 +33,151 @@ pub fn intersect_bounded_sphere_nurbs_surface(
     surface_range: [ParamRange; 2],
     tolerances: Tolerances,
 ) -> Result<SurfaceSurfaceIntersections> {
+    let session = SessionPolicy::new(
+        SessionPrecision::parasolid(),
+        NumericalPolicy::v1(),
+        ExecutionPolicy::Serial,
+        NurbsSurfaceMarchBudgetProfile::v1_defaults(),
+        PolicyVersion::V1,
+    );
+    let context = OperationContext::new(&session, tolerances)
+        .expect("validated Tolerances always satisfy v1 session precision");
+    intersect_bounded_sphere_nurbs_surface_with_context(
+        sphere,
+        sphere_range,
+        surface,
+        surface_range,
+        &context,
+    )
+    .expect("built-in v1 sphere/NURBS policy is valid")
+    .into_result()
+}
+
+/// Context-aware sphere/NURBS-surface intersection with deterministic work
+/// accounting and a retained operation report.
+pub fn intersect_bounded_sphere_nurbs_surface_with_context(
+    sphere: &Sphere,
+    sphere_range: [ParamRange; 2],
+    surface: &NurbsSurface,
+    surface_range: [ParamRange; 2],
+    context: &OperationContext<'_>,
+) -> core::result::Result<OperationOutcome<SurfaceSurfaceIntersections>, OperationPolicyError> {
+    validate_context_budget(context)?;
+    let mut scope = OperationScope::new(context);
+    let result = intersect_bounded_sphere_nurbs_surface_impl(
+        sphere,
+        sphere_range,
+        surface,
+        surface_range,
+        context.tolerances(),
+        &mut scope,
+    );
+    match result {
+        Ok(result) => Ok(scope.finish(Ok(result))),
+        Err(ContextMarchError::Kernel(error)) => Ok(scope.finish(Err(error))),
+        Err(ContextMarchError::Limit(snapshot)) => {
+            scope.diagnose(
+                snapshot.stage,
+                NURBS_SURFACE_MARCH_SAMPLE_LIMIT,
+                DiagnosticKind::LimitReached(snapshot),
+                "NURBS surface marching grid sample limit reached",
+            );
+            Ok(scope.finish(Err(Error::ResourceLimit { snapshot })))
+        }
+        Err(ContextMarchError::Policy(error)) => Err(error),
+    }
+}
+
+fn validate_context_budget(
+    context: &OperationContext<'_>,
+) -> core::result::Result<(), OperationPolicyError> {
+    let budget = context.effective_budget();
+    for (stage, resource, mode) in [
+        (
+            NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+        ),
+        (
+            NURBS_IMPLICIT_ISOLATION_CANDIDATES,
+            ResourceKind::Items,
+            AccountingMode::HighWater,
+        ),
+        (
+            NURBS_IMPLICIT_ISOLATION_DEPTH,
+            ResourceKind::Depth,
+            AccountingMode::HighWater,
+        ),
+        (
+            super::NURBS_SURFACE_MARCH_SAMPLES,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+        ),
+    ] {
+        let Some(limit) = budget
+            .limits()
+            .iter()
+            .find(|limit| limit.stage == stage && limit.resource == resource)
+        else {
+            return Err(OperationPolicyError::UnknownLimit { stage, resource });
+        };
+        if limit.mode != mode {
+            return Err(OperationPolicyError::AccountingModeMismatch { stage, resource });
+        }
+    }
+    Ok(())
+}
+
+fn intersect_bounded_sphere_nurbs_surface_impl(
+    sphere: &Sphere,
+    sphere_range: [ParamRange; 2],
+    surface: &NurbsSurface,
+    surface_range: [ParamRange; 2],
+    tolerances: Tolerances,
+    scope: &mut OperationScope<'_, '_>,
+) -> core::result::Result<SurfaceSurfaceIntersections, ContextMarchError> {
+    intersect_bounded_sphere_nurbs_surface_with_traces_in_scope(
+        sphere,
+        sphere_range,
+        surface,
+        surface_range,
+        tolerances,
+        scope,
+    )
+    .map(|output| output.result)
+}
+
+pub(super) fn intersect_bounded_sphere_nurbs_surface_with_traces_in_scope(
+    sphere: &Sphere,
+    sphere_range: [ParamRange; 2],
+    surface: &NurbsSurface,
+    surface_range: [ParamRange; 2],
+    tolerances: Tolerances,
+    scope: &mut OperationScope<'_, '_>,
+) -> core::result::Result<MarchOutput, ContextMarchError> {
     validate_sphere_range(sphere_range)?;
 
     let signed_distance = |point| sphere.frame().to_local(point).norm() - sphere.radius();
     let other_uv = |point| sphere_uv_at(point, sphere, sphere_range, tolerances);
     let branch_kind =
         |points: &[MarchPoint]| sphere_branch_kind(surface, sphere, points, tolerances);
-    march_nurbs_surface_intersection(MarchConfig {
-        surface,
-        surface_range,
-        tolerances,
-        implicit_surface: sphere,
-        signed_distance: &signed_distance,
-        other_uv: &other_uv,
-        branch_kind: &branch_kind,
-        overlap_reason: "coincident sphere/nurbs-surface intersection is a surface overlap",
-        non_finite_reason: "sphere/nurbs-surface intersection sampled non-finite geometry",
-        finite_range_reason: "sphere/nurbs-surface intersection requires finite non-reversed NURBS surface ranges",
-        clamped_surface_reason: "sphere/nurbs-surface intersection requires a clamped NURBS surface",
-        domain_range_reason: "sphere/nurbs-surface intersection surface range must lie within the NURBS domain",
-    })
+    march_nurbs_surface_intersection_with_traces_in_scope(
+        MarchConfig {
+            surface,
+            surface_range,
+            tolerances,
+            implicit_surface: sphere,
+            signed_distance: &signed_distance,
+            other_uv: &other_uv,
+            branch_kind: &branch_kind,
+            overlap_reason: "coincident sphere/nurbs-surface intersection is a surface overlap",
+            non_finite_reason: "sphere/nurbs-surface intersection sampled non-finite geometry",
+            finite_range_reason: "sphere/nurbs-surface intersection requires finite non-reversed NURBS surface ranges",
+            clamped_surface_reason: "sphere/nurbs-surface intersection requires a clamped NURBS surface",
+            domain_range_reason: "sphere/nurbs-surface intersection surface range must lie within the NURBS domain",
+        },
+        scope,
+    )
 }
 
 fn sphere_branch_kind(

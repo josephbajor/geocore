@@ -778,7 +778,7 @@ fn stale_and_altered_sources_roll_back_persistence_atomically() {
 }
 
 #[test]
-fn offset_nurbs_and_other_nurbs_pairs_remain_explicitly_unsupported() {
+fn offset_nurbs_remains_explicitly_unsupported() {
     let plane = Plane::new(Frame::world());
     let source = curved_surface();
     let tolerances = Tolerances::with_linear(1.0e-5).unwrap();
@@ -788,30 +788,17 @@ fn offset_nurbs_and_other_nurbs_pairs_remain_explicitly_unsupported() {
     let offset_nurbs = graph
         .insert_surface(OffsetSurfaceDescriptor::new(nurbs, 0.1))
         .unwrap();
-    let sphere = graph
-        .insert_surface(kgeom::surface::Sphere::new(Frame::world(), 2.0).unwrap())
-        .unwrap();
-    for (first, first_range, second, second_range) in [
-        (
+    assert!(matches!(
+        intersect_bounded_graph_surfaces(
+            &graph,
             plane_basis,
             plane_window(),
             offset_nurbs,
             source.param_range(),
+            tolerances,
         ),
-        (sphere, plane_window(), nurbs, source.param_range()),
-    ] {
-        assert!(matches!(
-            intersect_bounded_graph_surfaces(
-                &graph,
-                first,
-                first_range,
-                second,
-                second_range,
-                tolerances,
-            ),
-            Err(GraphSurfaceIntersectionError::Intersection(
-                IntersectionError::UnsupportedSurfacePair { .. }
-            ))
-        ));
-    }
+        Err(GraphSurfaceIntersectionError::Intersection(
+            IntersectionError::UnsupportedSurfacePair { .. }
+        ))
+    ));
 }

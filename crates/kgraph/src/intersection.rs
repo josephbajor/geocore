@@ -655,6 +655,8 @@ impl TransmittedOffsetNurbsTrace {
 pub enum NurbsIntersectionTrace {
     /// Exact direct or effective plane field.
     Plane(Plane),
+    /// Exact direct sphere field.
+    Sphere(Sphere),
     /// Original source NURBS surface descriptor.
     Nurbs(NurbsSurface),
     /// Constant normal offset of an original NURBS basis.
@@ -671,6 +673,15 @@ impl NurbsIntersectionTrace {
     pub const fn as_plane(&self) -> Option<Plane> {
         if let Self::Plane(plane) = self {
             Some(*plane)
+        } else {
+            None
+        }
+    }
+
+    /// Borrow the trace as a sphere when its family matches.
+    pub const fn as_sphere(&self) -> Option<Sphere> {
+        if let Self::Sphere(sphere) = self {
+            Some(*sphere)
         } else {
             None
         }
@@ -2316,6 +2327,7 @@ fn certify_transmitted_nurbs_intersection_residuals_impl(
         .any(|point| !finite_vec3(point))
         || traces.iter().any(|trace| match trace {
             TransmittedNurbsIntersectionTrace::Plane(plane) => !finite_plane(*plane),
+            TransmittedNurbsIntersectionTrace::Sphere(_) => true,
             TransmittedNurbsIntersectionTrace::Nurbs(surface) => {
                 surface
                     .points()
@@ -2384,6 +2396,9 @@ fn certify_transmitted_nurbs_intersection_residuals_impl(
                     bound = bound.max(control_bound);
                 }
                 bound
+            }
+            TransmittedNurbsIntersectionTrace::Sphere(_) => {
+                return Err(IntersectionCertificateError::InvalidTraceFamily);
             }
             TransmittedNurbsIntersectionTrace::Nurbs(surface) => {
                 transmitted_nurbs_trace_residual_bound(&carrier, surface, None, pcurve, trace)?
@@ -2810,12 +2825,13 @@ fn finite_frame(frame: &kgeom::frame::Frame) -> bool {
         && finite_vec3(frame.z())
 }
 
-/// Whole-range proof for one operation-generated degree-1 Plane/NURBS branch.
+/// Whole-range proof for one operation-generated degree-1 analytic/NURBS
+/// branch.
 ///
 /// Unlike [`TransmittedNurbsIntersectionCertificate`], this contract carries
 /// no interchange metadata. It binds only the operation-generated carrier,
-/// its paired degree-1 marching traces, the ordered direct graph sources, and
-/// the complete residual proof.
+/// its paired degree-1 marching traces, the ordered exact graph fields, and the
+/// complete residual proof.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VerifiedNurbsIntersectionCertificate {
     carrier: NurbsCurve,
@@ -2838,7 +2854,7 @@ impl VerifiedNurbsIntersectionCertificate {
         self.carrier_range
     }
 
-    /// Exact ordered direct source traces.
+    /// Exact ordered source-field traces.
     pub const fn traces(&self) -> &[NurbsIntersectionTrace; 2] {
         &self.traces
     }
@@ -2864,7 +2880,7 @@ impl VerifiedNurbsIntersectionCertificate {
     }
 }
 
-/// Persistent descriptor for an operation-generated verified Plane/NURBS
+/// Persistent descriptor for an operation-generated verified analytic/NURBS
 /// branch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VerifiedNurbsIntersectionCurveDescriptor {
@@ -2961,6 +2977,7 @@ pub fn verified_plane_nurbs_intersection_certificate_work(
     traces.iter().try_fold(0_u64, |total, trace| {
         let work = match trace {
             NurbsIntersectionTrace::Plane(_) => control_count,
+            NurbsIntersectionTrace::Sphere(_) => return None,
             NurbsIntersectionTrace::Nurbs(surface) => {
                 let (control_u, control_v) = surface.net_size();
                 let span_u = u64::try_from(control_u.checked_sub(surface.degree_u())?).ok()?;
@@ -3016,6 +3033,7 @@ pub fn certify_verified_plane_nurbs_intersection_residuals(
         .any(|point| !finite_vec3(point))
         || traces.iter().any(|trace| match trace {
             NurbsIntersectionTrace::Plane(plane) => !finite_plane(*plane),
+            NurbsIntersectionTrace::Sphere(_) => true,
             NurbsIntersectionTrace::Nurbs(surface) => {
                 surface
                     .points()
@@ -3073,6 +3091,9 @@ pub fn certify_verified_plane_nurbs_intersection_residuals(
                 }
                 bound
             }
+            NurbsIntersectionTrace::Sphere(_) => {
+                return Err(IntersectionCertificateError::InvalidTraceFamily);
+            }
             NurbsIntersectionTrace::Nurbs(surface) => {
                 transmitted_nurbs_trace_residual_bound(&carrier, surface, None, pcurve, trace)?
             }
@@ -3099,4 +3120,366 @@ pub fn certify_verified_plane_nurbs_intersection_residuals(
         tolerance,
         proof_depth: TRANSMITTED_NURBS_TRACE_PROOF_DEPTH,
     })
+}
+
+/// Exact logical resources consumed by one operation-generated Sphere/NURBS
+/// whole-range certificate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifiedSphereNurbsCertificateCost {
+    work: u64,
+    items: u64,
+    depth: u64,
+}
+
+impl VerifiedSphereNurbsCertificateCost {
+    /// Paired interval-enclosure work.
+    pub const fn work(self) -> u64 {
+        self.work
+    }
+
+    /// Paired carrier subdivision cells proved over the complete trace.
+    pub const fn items(self) -> u64 {
+        self.items
+    }
+
+    /// Fixed binary subdivision depth used within every carrier span.
+    pub const fn depth(self) -> u64 {
+        self.depth
+    }
+}
+
+/// Deterministic logical resources required by
+/// [`certify_verified_sphere_nurbs_intersection_residuals`].
+///
+/// Each paired subdivision cell costs one analytic-sphere mean-value
+/// enclosure plus `6 * source tensor span slots + 1` original-NURBS
+/// differential enclosure operations. One paired cell is observed as one
+/// proof item, and every carrier span uses the fixed depth retained by the
+/// certificate.
+pub fn verified_sphere_nurbs_intersection_certificate_cost(
+    carrier: &NurbsCurve,
+    traces: &[NurbsIntersectionTrace; 2],
+) -> Option<VerifiedSphereNurbsCertificateCost> {
+    let surface = match traces {
+        [
+            NurbsIntersectionTrace::Sphere(_),
+            NurbsIntersectionTrace::Nurbs(surface),
+        ]
+        | [
+            NurbsIntersectionTrace::Nurbs(surface),
+            NurbsIntersectionTrace::Sphere(_),
+        ] => surface,
+        _ => return None,
+    };
+    let control_count = u64::try_from(carrier.points().len()).ok()?;
+    let carrier_spans = control_count.checked_sub(1)?;
+    let subdivisions = 1_u64.checked_shl(TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u32)?;
+    let items = carrier_spans.checked_mul(subdivisions)?;
+    let (control_u, control_v) = surface.net_size();
+    let span_u = u64::try_from(control_u.checked_sub(surface.degree_u())?).ok()?;
+    let span_v = u64::try_from(control_v.checked_sub(surface.degree_v())?).ok()?;
+    let source_slots = span_u.checked_mul(span_v)?;
+    let work_per_item = source_slots.checked_mul(6)?.checked_add(2)?;
+    Some(VerifiedSphereNurbsCertificateCost {
+        work: items.checked_mul(work_per_item)?,
+        items,
+        depth: TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64,
+    })
+}
+
+/// Certify one operation-generated Sphere/NURBS marching branch over its
+/// complete finite degree-1 carrier range.
+///
+/// The sphere lift uses a centered mean-value interval residual on every
+/// fixed-depth carrier subdivision. The NURBS lift reuses the correlated
+/// original-source interval enclosure. Sphere traces crossing a latitude
+/// pole fail closed because their longitude pcurve is not a regular chart.
+pub fn certify_verified_sphere_nurbs_intersection_residuals(
+    carrier: NurbsCurve,
+    traces: [NurbsIntersectionTrace; 2],
+    pcurves: [NurbsCurve2d; 2],
+    tolerance: f64,
+) -> Result<VerifiedNurbsIntersectionCertificate, IntersectionCertificateError> {
+    if verified_sphere_nurbs_intersection_certificate_cost(&carrier, &traces).is_none() {
+        return Err(IntersectionCertificateError::InvalidTraceFamily);
+    }
+    let carrier_range = carrier.param_range();
+    if !carrier_range.is_finite() || carrier_range.width() <= 0.0 {
+        return Err(IntersectionCertificateError::InvalidCarrierRange);
+    }
+    if !tolerance.is_finite() || tolerance < 0.0 {
+        return Err(IntersectionCertificateError::InvalidTolerance);
+    }
+    if carrier.degree() != 1
+        || carrier.weights().is_some()
+        || !carrier.knots().is_clamped()
+        || carrier.points().len() < 2
+    {
+        return Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "verified NURBS branch carrier must be open clamped polynomial degree 1",
+            },
+        );
+    }
+    if carrier
+        .points()
+        .iter()
+        .copied()
+        .any(|point| !finite_vec3(point))
+        || traces.iter().any(|trace| match trace {
+            NurbsIntersectionTrace::Sphere(sphere) => !finite_sphere(*sphere),
+            NurbsIntersectionTrace::Nurbs(surface) => {
+                surface
+                    .points()
+                    .iter()
+                    .copied()
+                    .any(|point| !finite_vec3(point))
+                    || surface
+                        .weights()
+                        .is_some_and(|weights| weights.iter().any(|weight| !weight.is_finite()))
+            }
+            NurbsIntersectionTrace::Plane(_) | NurbsIntersectionTrace::OffsetNurbs(_) => true,
+        })
+    {
+        return Err(IntersectionCertificateError::NonFiniteGeometry);
+    }
+
+    let carrier_knots = carrier.knots().as_slice();
+    let mut residual_bounds = [0.0; 2];
+    for index in 0..2 {
+        let trace = paired_trace(index);
+        let pcurve = &pcurves[index];
+        if pcurve.degree() != 1
+            || pcurve.weights().is_some()
+            || !pcurve.knots().is_clamped()
+            || pcurve.knots().as_slice() != carrier_knots
+            || pcurve.points().len() != carrier.points().len()
+            || pcurve.param_range() != carrier_range
+        {
+            return Err(
+                IntersectionCertificateError::UnsupportedTraceParameterization {
+                    trace,
+                    reason: "verified NURBS pcurve must share the carrier's open clamped polynomial degree-1 basis",
+                },
+            );
+        }
+        if pcurve
+            .points()
+            .iter()
+            .any(|point| !point.x.is_finite() || !point.y.is_finite())
+        {
+            return Err(IntersectionCertificateError::NonFiniteGeometry);
+        }
+
+        let bound = match &traces[index] {
+            NurbsIntersectionTrace::Sphere(surface) => {
+                verified_sphere_trace_residual_bound(&carrier, *surface, pcurve, tolerance, trace)?
+            }
+            NurbsIntersectionTrace::Nurbs(surface) => {
+                transmitted_nurbs_trace_residual_bound(&carrier, surface, None, pcurve, trace)?
+            }
+            NurbsIntersectionTrace::Plane(_) | NurbsIntersectionTrace::OffsetNurbs(_) => {
+                return Err(IntersectionCertificateError::InvalidTraceFamily);
+            }
+        };
+        if bound > tolerance {
+            return Err(IntersectionCertificateError::ResidualExceedsTolerance {
+                trace,
+                residual_bound: bound,
+                tolerance,
+            });
+        }
+        residual_bounds[index] = bound;
+    }
+
+    Ok(VerifiedNurbsIntersectionCertificate {
+        carrier,
+        carrier_range,
+        traces,
+        pcurves,
+        residual_bounds,
+        tolerance,
+        proof_depth: TRANSMITTED_NURBS_TRACE_PROOF_DEPTH,
+    })
+}
+
+fn verified_sphere_trace_residual_bound(
+    carrier: &NurbsCurve,
+    sphere: Sphere,
+    pcurve: &NurbsCurve2d,
+    tolerance: f64,
+    trace: PairedTrace,
+) -> Result<f64, IntersectionCertificateError> {
+    let latitude_domain = sphere.param_range()[1];
+    if pcurve
+        .points()
+        .iter()
+        .any(|point| point.y < latitude_domain.lo || point.y > latitude_domain.hi)
+    {
+        return Err(IntersectionCertificateError::SphereTraceOutsideWindow {
+            coordinate: "latitude",
+        });
+    }
+
+    let radius = sphere.radius();
+    let radius_sq = radius * radius;
+    let mut squared_pole_clearance = f64::INFINITY;
+    for points in pcurve.points().windows(2) {
+        let lo = points[0].y.min(points[1].y);
+        let hi = points[0].y.max(points[1].y);
+        let cosine = trig_interval(lo, hi, false);
+        let squared = finite_interval(cosine.square() * Interval::point(radius_sq))
+            .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+        squared_pole_clearance = squared_pole_clearance.min(squared.lo().max(0.0));
+    }
+    if squared_pole_clearance <= tolerance * tolerance {
+        return Err(IntersectionCertificateError::SingularSphereChart {
+            squared_pole_clearance,
+        });
+    }
+
+    let subdivisions = 1_usize << TRANSMITTED_NURBS_TRACE_PROOF_DEPTH;
+    let frame = sphere.frame();
+    let origin = frame.origin().to_array();
+    let axes = [
+        frame.x().to_array(),
+        frame.y().to_array(),
+        frame.z().to_array(),
+    ];
+    let mut maximum = 0.0_f64;
+    for (carrier_points, pcurve_points) in
+        carrier.points().windows(2).zip(pcurve.points().windows(2))
+    {
+        let carrier_start = carrier_points[0];
+        let carrier_delta = interval_vec3_difference(carrier_points[1], carrier_start);
+        let uv_start = pcurve_points[0];
+        let uv_delta = [
+            finite_interval(Interval::point(pcurve_points[1].x) - Interval::point(uv_start.x))
+                .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?,
+            finite_interval(Interval::point(pcurve_points[1].y) - Interval::point(uv_start.y))
+                .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?,
+        ];
+        for subdivision in 0..subdivisions {
+            let lo = subdivision as f64 / subdivisions as f64;
+            let hi = (subdivision + 1) as f64 / subdivisions as f64;
+            let midpoint = (lo + hi) * 0.5;
+            let midpoint_fraction = Interval::point(midpoint);
+            let carrier_midpoint = interval_affine_vec3(carrier_start, carrier_delta, midpoint);
+            let uv_midpoint = [
+                finite_interval(Interval::point(uv_start.x) + uv_delta[0] * midpoint_fraction)
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?,
+                finite_interval(Interval::point(uv_start.y) + uv_delta[1] * midpoint_fraction)
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?,
+            ];
+            let midpoint_sine_u = trig_interval(uv_midpoint[0].lo(), uv_midpoint[0].hi(), true);
+            let midpoint_cosine_u = trig_interval(uv_midpoint[0].lo(), uv_midpoint[0].hi(), false);
+            let midpoint_sine_v = trig_interval(uv_midpoint[1].lo(), uv_midpoint[1].hi(), true);
+            let midpoint_cosine_v = trig_interval(uv_midpoint[1].lo(), uv_midpoint[1].hi(), false);
+            let radius = Interval::point(radius);
+            let midpoint_local = [
+                finite_interval(midpoint_cosine_v * midpoint_cosine_u)
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?,
+                finite_interval(midpoint_cosine_v * midpoint_sine_u)
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?,
+                midpoint_sine_v,
+            ];
+            let residual_midpoint: [Interval; 3] = core::array::from_fn(|axis| {
+                let mut local_to_world = Interval::point(0.0);
+                for local_axis in 0..3 {
+                    local_to_world = local_to_world
+                        + Interval::point(axes[local_axis][axis]) * midpoint_local[local_axis];
+                }
+                carrier_midpoint[axis] - (Interval::point(origin[axis]) + radius * local_to_world)
+            });
+
+            let fraction_range = Interval::new(lo, hi);
+            let u_range =
+                finite_interval(Interval::point(uv_start.x) + uv_delta[0] * fraction_range)
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+            let v_range =
+                finite_interval(Interval::point(uv_start.y) + uv_delta[1] * fraction_range)
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+            let sine_u = trig_interval(u_range.lo(), u_range.hi(), true);
+            let cosine_u = trig_interval(u_range.lo(), u_range.hi(), false);
+            let sine_v = trig_interval(v_range.lo(), v_range.hi(), true);
+            let cosine_v = trig_interval(v_range.lo(), v_range.hi(), false);
+            let du_local = [
+                finite_interval(Interval::point(-1.0) * radius * cosine_v * sine_u)
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?,
+                finite_interval(radius * cosine_v * cosine_u)
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?,
+                Interval::point(0.0),
+            ];
+            let dv_local = [
+                finite_interval(Interval::point(-1.0) * radius * sine_v * cosine_u)
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?,
+                finite_interval(Interval::point(-1.0) * radius * sine_v * sine_u)
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?,
+                finite_interval(radius * cosine_v)
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?,
+            ];
+            let mut squared_norm = Interval::point(0.0);
+            let centered_fraction =
+                Interval::new((lo - midpoint).next_down(), (hi - midpoint).next_up());
+            for (axis, carrier_component) in carrier_delta.iter().copied().enumerate() {
+                let mut derivative_u = Interval::point(0.0);
+                let mut derivative_v = Interval::point(0.0);
+                for local_axis in 0..3 {
+                    derivative_u = finite_interval(
+                        derivative_u
+                            + finite_interval(
+                                Interval::point(axes[local_axis][axis]) * du_local[local_axis],
+                            )
+                            .ok_or(
+                                IntersectionCertificateError::NonFiniteResidualBound { trace },
+                            )?,
+                    )
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+                    derivative_v = finite_interval(
+                        derivative_v
+                            + finite_interval(
+                                Interval::point(axes[local_axis][axis]) * dv_local[local_axis],
+                            )
+                            .ok_or(
+                                IntersectionCertificateError::NonFiniteResidualBound { trace },
+                            )?,
+                    )
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+                }
+                let lifted_derivative = finite_interval(
+                    finite_interval(derivative_u * uv_delta[0])
+                        .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?
+                        + finite_interval(derivative_v * uv_delta[1]).ok_or(
+                            IntersectionCertificateError::NonFiniteResidualBound { trace },
+                        )?,
+                )
+                .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+                let residual_derivative = finite_interval(carrier_component - lifted_derivative)
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+                let residual = finite_interval(
+                    residual_midpoint[axis]
+                        + finite_interval(residual_derivative * centered_fraction).ok_or(
+                            IntersectionCertificateError::NonFiniteResidualBound { trace },
+                        )?,
+                )
+                .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+                squared_norm = finite_interval(
+                    squared_norm
+                        + finite_interval(residual.square()).ok_or(
+                            IntersectionCertificateError::NonFiniteResidualBound { trace },
+                        )?,
+                )
+                .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+            }
+            let bound = finite_interval(
+                squared_norm
+                    .sqrt()
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?,
+            )
+            .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?
+            .hi();
+            maximum = maximum.max(bound);
+        }
+    }
+    Ok(maximum)
 }
