@@ -6,7 +6,7 @@ use crate::param::ParamRange;
 use crate::vec::Vec3;
 use kcore::interval::Interval;
 
-const MAX_LINEAR_FORM_COEFFICIENT: i8 = 12;
+const MAX_LINEAR_FORM_COEFFICIENT: i8 = 13;
 
 /// Exact number of source knot-span slots inspected by one position-range
 /// enclosure.
@@ -134,8 +134,8 @@ pub(super) fn derivative_component_interval(
 ///
 /// The scalar numerator is formed in homogeneous source-control space before
 /// interval de Boor evaluation. This preserves correlations such as `x+y`
-/// that independent component bounds lose. Coefficients outside `[-12,12]`
-/// and inconclusive arithmetic fail closed.
+/// that independent component bounds lose. Coefficients outside the reviewed
+/// `[-13,13]` corridor and inconclusive arithmetic fail closed.
 pub(super) fn derivative_signed_linear_form_interval(
     curve: &NurbsCurve,
     range: ParamRange,
@@ -402,14 +402,17 @@ mod tests {
         let signed = derivative_signed_linear_form_interval(&curve, range, [1, -1, 1]).unwrap();
         let magnitude_twelve =
             derivative_signed_linear_form_interval(&curve, range, [12, -11, 0]).unwrap();
-        assert!(derivative_signed_linear_form_interval(&curve, range, [13, 0, 0]).is_none());
-        assert!(derivative_signed_linear_form_interval(&curve, range, [-13, 0, 0]).is_none());
+        let magnitude_thirteen =
+            derivative_signed_linear_form_interval(&curve, range, [13, -12, 0]).unwrap();
+        assert!(derivative_signed_linear_form_interval(&curve, range, [14, 0, 0]).is_none());
+        assert!(derivative_signed_linear_form_interval(&curve, range, [-14, 0, 0]).is_none());
         for sample in 0..=512 {
             let derivative = curve
                 .eval_derivs(range.lerp(f64::from(sample) / 512.0), 1)
                 .d[1];
             assert!(signed.contains(derivative.x - derivative.y + derivative.z));
             assert!(magnitude_twelve.contains(12.0 * derivative.x - 11.0 * derivative.y));
+            assert!(magnitude_thirteen.contains(13.0 * derivative.x - 12.0 * derivative.y));
         }
     }
 

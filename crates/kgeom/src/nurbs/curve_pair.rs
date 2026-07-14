@@ -17,6 +17,9 @@ use std::sync::Arc;
 const DEFAULT_DEPTH: u32 = 6;
 const DEFAULT_CANDIDATES: u64 = 4_096;
 const DEFAULT_SUBDIVISIONS: u64 = 6_828;
+const MIN_ALGEBRAIC_FORM_COEFFICIENT: u8 = 6;
+const DEFAULT_ALGEBRAIC_FORM_COEFFICIENT: u8 = 12;
+const MAX_ALGEBRAIC_FORM_COEFFICIENT: u8 = 13;
 
 const fn stage(value: &'static str) -> StageId {
     match StageId::new(value) {
@@ -116,6 +119,94 @@ pub enum CurvePairProjectionPlane {
     Yz,
 }
 
+/// Validated finite search contract for exact algebraic curve-pair lifts.
+///
+/// The compatibility default searches the complete canonical primitive-
+/// integer carrier/residual family through coefficient magnitude twelve. A
+/// caller may explicitly opt into the magnitude-thirteen shell. The supported
+/// interval is deliberately narrow: it makes the additional exact search a
+/// reviewed, deterministic finite limit rather than an unbounded integer-form
+/// enumeration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CurvePairAlgebraicSearchConfig {
+    maximum_primitive_form_coefficient: u8,
+}
+
+impl CurvePairAlgebraicSearchConfig {
+    /// Construct a validated primitive-integer coefficient ceiling.
+    ///
+    /// Magnitudes six through thirteen are accepted. The magnitude-six tier
+    /// contains the complete smaller-form prefix; larger values add one
+    /// canonical exact-magnitude shell at a time.
+    pub const fn new(
+        maximum_primitive_form_coefficient: u8,
+    ) -> core::result::Result<Self, CurvePairAlgebraicSearchConfigError> {
+        if maximum_primitive_form_coefficient < MIN_ALGEBRAIC_FORM_COEFFICIENT
+            || maximum_primitive_form_coefficient > MAX_ALGEBRAIC_FORM_COEFFICIENT
+        {
+            return Err(CurvePairAlgebraicSearchConfigError {
+                requested: maximum_primitive_form_coefficient,
+            });
+        }
+        Ok(Self {
+            maximum_primitive_form_coefficient,
+        })
+    }
+
+    /// Compatibility ceiling used by [`Default`].
+    pub const fn compatibility_maximum_primitive_form_coefficient() -> u8 {
+        DEFAULT_ALGEBRAIC_FORM_COEFFICIENT
+    }
+
+    /// Largest reviewed coefficient magnitude accepted by [`Self::new`].
+    pub const fn supported_maximum_primitive_form_coefficient() -> u8 {
+        MAX_ALGEBRAIC_FORM_COEFFICIENT
+    }
+
+    /// Configured inclusive primitive-integer coefficient ceiling.
+    pub const fn maximum_primitive_form_coefficient(self) -> u8 {
+        self.maximum_primitive_form_coefficient
+    }
+}
+
+impl Default for CurvePairAlgebraicSearchConfig {
+    fn default() -> Self {
+        Self {
+            maximum_primitive_form_coefficient: DEFAULT_ALGEBRAIC_FORM_COEFFICIENT,
+        }
+    }
+}
+
+/// Rejection of an unreviewed algebraic curve-pair search ceiling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CurvePairAlgebraicSearchConfigError {
+    requested: u8,
+}
+
+impl CurvePairAlgebraicSearchConfigError {
+    /// Rejected coefficient ceiling.
+    pub const fn requested(self) -> u8 {
+        self.requested
+    }
+
+    /// Inclusive supported coefficient-ceiling interval.
+    pub const fn supported_range(self) -> core::ops::RangeInclusive<u8> {
+        MIN_ALGEBRAIC_FORM_COEFFICIENT..=MAX_ALGEBRAIC_FORM_COEFFICIENT
+    }
+}
+
+impl core::fmt::Display for CurvePairAlgebraicSearchConfigError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            formatter,
+            "algebraic curve-pair coefficient ceiling {} is outside the supported range {}..={}",
+            self.requested, MIN_ALGEBRAIC_FORM_COEFFICIENT, MAX_ALGEBRAIC_FORM_COEFFICIENT,
+        )
+    }
+}
+
+impl std::error::Error for CurvePairAlgebraicSearchConfigError {}
+
 /// Proof that one retained NURBS pair cell contains exactly one transverse root.
 ///
 /// The certificate combines an exact existence witness with a strictly
@@ -209,6 +300,19 @@ impl CurvePairCandidateCell {
     /// non-coplanar, tangent, singular, and interval-inconclusive cells return
     /// `None` without weakening the cover.
     pub fn certify_unique_root(&self) -> Option<CurvePairRootCertificate> {
+        self.certify_unique_root_with_config(CurvePairAlgebraicSearchConfig::default())
+    }
+
+    /// Certify one exact root under an explicit algebraic-search ceiling.
+    ///
+    /// This is the candidate-cell counterpart of
+    /// [`certify_curve_pair_unique_root_with_config`]. The cell retains its
+    /// original source representations; rounded subdivision controls never
+    /// participate in the algebraic proof.
+    pub fn certify_unique_root_with_config(
+        &self,
+        algebraic_search: CurvePairAlgebraicSearchConfig,
+    ) -> Option<CurvePairRootCertificate> {
         if self.first_source.degree() == 0 || self.second_source.degree() == 0 {
             return None;
         }
@@ -217,27 +321,30 @@ impl CurvePairCandidateCell {
         if first_range == self.first_source.param_range()
             && second_range == self.second_source.param_range()
         {
-            return certify_full_source_pair(
+            return certify_full_source_pair_with_config(
                 &self.first_source,
                 &self.second_source,
                 first_range,
                 second_range,
+                algebraic_search,
             );
         }
-        certify_partial_source_pair(
+        certify_partial_source_pair_with_config(
             &self.first_source,
             first_range,
             &self.second_source,
             second_range,
+            algebraic_search,
         )
     }
 }
 
-fn certify_full_source_pair(
+fn certify_full_source_pair_with_config(
     first: &NurbsCurve,
     second: &NurbsCurve,
     first_range: ParamRange,
     second_range: ParamRange,
+    algebraic_search: CurvePairAlgebraicSearchConfig,
 ) -> Option<CurvePairRootCertificate> {
     let certificate = |projection_plane, determinant_lower_bound| CurvePairRootCertificate {
         first_range,
@@ -269,6 +376,7 @@ fn certify_full_source_pair(
             first_range,
             second,
             second_range,
+            algebraic_search,
         )
     {
         return Some(certificate(projection_plane, determinant_lower_bound));
@@ -282,11 +390,12 @@ fn certify_full_source_pair(
     None
 }
 
-fn certify_partial_source_pair(
+fn certify_partial_source_pair_with_config(
     first: &NurbsCurve,
     first_range: ParamRange,
     second: &NurbsCurve,
     second_range: ParamRange,
+    algebraic_search: CurvePairAlgebraicSearchConfig,
 ) -> Option<CurvePairRootCertificate> {
     if let Some((projection_plane, determinant_lower_bound)) =
         super::spatial_curve_pair::certify_injective_projection_in_ranges(
@@ -329,6 +438,7 @@ fn certify_partial_source_pair(
             first_range,
             second,
             second_range,
+            algebraic_search,
         )
     {
         return Some(CurvePairRootCertificate {
@@ -411,6 +521,29 @@ pub fn certify_curve_pair_unique_root(
     second: &NurbsCurve,
     second_range: ParamRange,
 ) -> Result<Option<CurvePairRootCertificate>> {
+    certify_curve_pair_unique_root_with_config(
+        first,
+        first_range,
+        second,
+        second_range,
+        CurvePairAlgebraicSearchConfig::default(),
+    )
+}
+
+/// Certify one exact unique transverse root under an explicit algebraic-search
+/// ceiling.
+///
+/// All non-algebraic certificate families are unchanged. The configuration
+/// only controls the inclusive coefficient magnitude reached by the canonical
+/// primitive-integer carrier/residual enumeration. Unsupported, broken, or
+/// arithmetic-inconclusive forms still fail closed.
+pub fn certify_curve_pair_unique_root_with_config(
+    first: &NurbsCurve,
+    first_range: ParamRange,
+    second: &NurbsCurve,
+    second_range: ParamRange,
+    algebraic_search: CurvePairAlgebraicSearchConfig,
+) -> Result<Option<CurvePairRootCertificate>> {
     validate_inputs(first, first_range, second, second_range, 0.0)?;
     if !first.knots().is_clamped() || !second.knots().is_clamped() {
         return Err(Error::InvalidGeometry {
@@ -418,18 +551,20 @@ pub fn certify_curve_pair_unique_root(
         });
     }
     if first_range == first.param_range() && second_range == second.param_range() {
-        Ok(certify_full_source_pair(
+        Ok(certify_full_source_pair_with_config(
             first,
             second,
             first_range,
             second_range,
+            algebraic_search,
         ))
     } else {
-        Ok(certify_partial_source_pair(
+        Ok(certify_partial_source_pair_with_config(
             first,
             first_range,
             second,
             second_range,
+            algebraic_search,
         ))
     }
 }

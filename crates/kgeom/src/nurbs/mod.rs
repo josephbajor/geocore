@@ -42,11 +42,12 @@ mod spatial_interior_root;
 mod surface_range_interval;
 
 pub use curve_pair::{
-    ContextCurvePairIsolationError, CurvePairCandidateCell, CurvePairIsolation,
+    ContextCurvePairIsolationError, CurvePairAlgebraicSearchConfig,
+    CurvePairAlgebraicSearchConfigError, CurvePairCandidateCell, CurvePairIsolation,
     CurvePairIsolationLimits, CurvePairProjectionPlane, CurvePairRootCertificate,
     NURBS_CURVE_PAIR_CANDIDATES, NURBS_CURVE_PAIR_DEPTH, NURBS_CURVE_PAIR_SUBDIVISIONS,
     NurbsCurvePairBudgetProfile, certify_curve_pair_unique_root,
-    isolate_curve_pair_candidates_in_scope,
+    certify_curve_pair_unique_root_with_config, isolate_curve_pair_candidates_in_scope,
 };
 pub use fit::interpolate;
 pub use inverse_refinement::{CHECKED_REFINEMENT_ANCESTOR_LIMIT, checked_refinement_ancestors};

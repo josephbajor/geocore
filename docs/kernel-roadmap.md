@@ -870,7 +870,8 @@ true only for an empty complete result.
   solve fixture v18 pin resource
   usage/allowances, common-refinement and checked inverse-history success,
   altered-history rejection, ordered overlap extents and orientation,
-  primitive magnitude-two through magnitude-twelve algebraic completion, and
+  primitive magnitude-two through compatibility-default magnitude-twelve
+  algebraic completion, and
   independent overlap Work/Items N-1 denial. G5a now adds invertible affine
   carrier/pcurve maps and whole-interval paired residual certificates. The
   graph-aware adapter builds deterministic verified branches for exact
@@ -890,14 +891,17 @@ true only for an empty complete result.
   stay vertex-only, misses preserve completion, and pole-crossing or out-of-window
   charts fail with precise typed errors. Contextual NURBS and other procedural
   pairs remain typed unsupported.
-  The magnitude-twelve rung runs the complete historical magnitude-eleven family
-  first so all prior evidence remains stable, then admits only new carrier/
-  residual pairs that reach twelve. Direct correlated homogeneous derivative
-  bounds accept coefficients through twelve, explicitly reject magnitude thirteen,
-  and preserve fail-closed overflow/non-finite behavior. Next, broaden the
-  bounded exact family beyond magnitude twelve and extend the adapter to
-  contextual NURBS/non-plane fields and
-  further verified carrier families.
+  The compatibility magnitude-twelve rung runs the complete historical
+  magnitude-eleven family first so all prior evidence remains stable, then
+  admits only new carrier/residual pairs that reach twelve. An explicit
+  validated search configuration can add the magnitude-thirteen shell while
+  leaving twelve as the default and exact prefix. Direct correlated homogeneous
+  derivative bounds accept coefficients only through the reviewed
+  magnitude-thirteen corridor; 230 carrier forms and 8,121 residual forms pin
+  that finite ceiling, and invalid ceilings plus overflow/non-finite arithmetic
+  fail closed. Next, extend the adapter to contextual NURBS/non-plane fields
+  and further verified carrier families; coefficients above thirteen remain
+  unsupported.
 - Analytic special cases and the generic solver feed the same canonical result type.
 - Consolidate the per-pair analytic curve/surface and SSI boilerplate behind
   shared drivers with the same result contract. The complete-support-curve
