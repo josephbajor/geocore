@@ -892,8 +892,16 @@ true only for an empty complete result.
   nonpositive or non-finite. Certified finite line/circle branches persist
   atomically with ordered source/pcurve dependencies and their proof. Tangencies
   stay vertex-only, misses preserve completion, and pole-crossing or out-of-window
-  charts fail with precise typed errors. Contextual NURBS and other procedural
-  pairs remain typed unsupported.
+  charts fail with precise typed errors. Direct Plane/genuinely non-planar
+  NURBS fields now run the fixed-grid marcher in that same owner scope, retain
+  its degree-1 carrier and paired pcurves, and mint a separate non-transmitted
+  whole-range certificate before atomic persistence. Exact certificate Work is
+  `C + S*2^10*(6T+1)`; the curved one-segment fixture pins 7,170/7,169, and
+  failed residual proofs retain attempted Work. Lower raw/report evidence,
+  complete misses, indeterminate completion, canonical swap, and positional
+  branch/trace identity remain unchanged. Planar encodings, Offset/NURBS,
+  Sphere/NURBS, NURBS/NURBS, and other procedural pairs remain typed
+  unsupported.
   The compatibility magnitude-twelve rung runs the complete historical
   magnitude-eleven family first so all prior evidence remains stable, then
   admits only new carrier/residual pairs that reach twelve. An explicit
@@ -902,8 +910,8 @@ true only for an empty complete result.
   derivative bounds accept coefficients only through the reviewed
   magnitude-thirteen corridor; 230 carrier forms and 8,121 residual forms pin
   that finite ceiling, and invalid ceilings plus overflow/non-finite arithmetic
-  fail closed. Next, extend the adapter to contextual NURBS/non-plane fields
-  and further verified carrier families; coefficients above thirteen remain
+  fail closed. Next, extend the adapter to further contextual non-plane fields
+  and verified carrier families; coefficients above thirteen remain
   unsupported.
 - Analytic special cases and the generic solver feed the same canonical result type.
 - Consolidate the per-pair analytic curve/surface and SSI boilerplate behind

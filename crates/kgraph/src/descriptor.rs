@@ -10,6 +10,7 @@ use crate::graph::{GeometryRef, SurfaceHandle};
 use crate::intersection::{
     SphericalCirclePcurve, TransmittedIntersectionCurveDescriptor,
     TransmittedNurbsIntersectionCurveDescriptor, VerifiedIntersectionCurveDescriptor,
+    VerifiedNurbsIntersectionCurveDescriptor,
 };
 
 /// Constant signed displacement along a basis surface's natural unit normal.
@@ -53,6 +54,8 @@ pub enum CurveDescriptor {
     Nurbs(NurbsCurve),
     /// Finite graph-owned intersection branch with paired trace proof.
     Intersection(Box<VerifiedIntersectionCurveDescriptor>),
+    /// Operation-generated degree-1 Plane/NURBS branch with paired trace proof.
+    VerifiedNurbsIntersection(Box<VerifiedNurbsIntersectionCurveDescriptor>),
     /// Verified chordal intersection geometry retained from interchange.
     TransmittedIntersection(Box<TransmittedIntersectionCurveDescriptor>),
     /// Verified chordal chart with original NURBS traces retained from interchange.
@@ -73,6 +76,7 @@ impl CurveDescriptor {
             Self::Ellipse(value) => value,
             Self::Nurbs(value) => value,
             Self::Intersection(value) => value.as_ref(),
+            Self::VerifiedNurbsIntersection(value) => value.as_ref(),
             Self::TransmittedIntersection(value) => value.as_ref(),
             Self::TransmittedNurbsIntersection(value) => value.as_ref(),
         }
@@ -86,6 +90,7 @@ impl CurveDescriptor {
             Self::Ellipse(_) => CurveClass::Ellipse,
             Self::Nurbs(_) => CurveClass::Nurbs,
             Self::Intersection(_) => CurveClass::Intersection,
+            Self::VerifiedNurbsIntersection(_) => CurveClass::Intersection,
             Self::TransmittedIntersection(_) => CurveClass::Intersection,
             Self::TransmittedNurbsIntersection(_) => CurveClass::Intersection,
         }
@@ -142,6 +147,18 @@ impl CurveDescriptor {
         }
     }
 
+    /// Borrow this descriptor as an operation-generated verified Plane/NURBS
+    /// branch.
+    pub fn as_verified_nurbs_intersection(
+        &self,
+    ) -> Option<&VerifiedNurbsIntersectionCurveDescriptor> {
+        if let Self::VerifiedNurbsIntersection(value) = self {
+            Some(value.as_ref())
+        } else {
+            None
+        }
+    }
+
     /// Borrow this descriptor as a verified transmitted chordal intersection.
     pub fn as_transmitted_intersection(&self) -> Option<&TransmittedIntersectionCurveDescriptor> {
         if let Self::TransmittedIntersection(value) = self {
@@ -168,6 +185,7 @@ impl CurveDescriptor {
         matches!(
             self,
             Self::Intersection(_)
+                | Self::VerifiedNurbsIntersection(_)
                 | Self::TransmittedIntersection(_)
                 | Self::TransmittedNurbsIntersection(_)
         )
@@ -454,6 +472,9 @@ impl GeometryDependencies for CurveDescriptor {
     fn visit_dependencies(&self, visit: &mut dyn FnMut(GeometryRef)) {
         match self {
             Self::Intersection(intersection) => intersection.visit_dependencies(visit),
+            Self::VerifiedNurbsIntersection(intersection) => {
+                intersection.visit_dependencies(visit);
+            }
             Self::TransmittedIntersection(intersection) => {
                 intersection.visit_dependencies(visit);
             }

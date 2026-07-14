@@ -6,12 +6,13 @@ use crate::descriptor::{
 use crate::error::{GeometryGraphError, GeometryGraphResult};
 use crate::eval::ExactSurfaceField;
 use crate::intersection::{
-    PairedPlaneLineResidualCertificate, PairedPlaneSphereCircleResidualCertificate,
-    PlaneSphereCircleTrace, TransmittedIntersectionCurveDescriptor,
-    TransmittedNurbsIntersectionCertificate, TransmittedNurbsIntersectionCurveDescriptor,
-    TransmittedNurbsIntersectionTrace, TransmittedPlaneIntersectionCertificate,
-    VerifiedIntersectionCarrier, VerifiedIntersectionCertificate,
-    VerifiedIntersectionCurveDescriptor,
+    NurbsIntersectionTrace, PairedPlaneLineResidualCertificate,
+    PairedPlaneSphereCircleResidualCertificate, PlaneSphereCircleTrace,
+    TransmittedIntersectionCurveDescriptor, TransmittedNurbsIntersectionCertificate,
+    TransmittedNurbsIntersectionCurveDescriptor, TransmittedNurbsIntersectionTrace,
+    TransmittedPlaneIntersectionCertificate, VerifiedIntersectionCarrier,
+    VerifiedIntersectionCertificate, VerifiedIntersectionCurveDescriptor,
+    VerifiedNurbsIntersectionCertificate, VerifiedNurbsIntersectionCurveDescriptor,
 };
 use kcore::arena::{Arena, ArenaChange, Handle};
 use kcore::error::Result as CoreResult;
@@ -397,6 +398,19 @@ impl GeometryGraph {
                 pcurves,
                 VerifiedIntersectionCertificate::PlaneSphereCircle(certificate),
             ),
+        )))
+    }
+
+    /// Insert an operation-generated degree-1 Plane/NURBS branch after
+    /// binding its whole-range proof to direct live sources and pcurves.
+    pub fn insert_verified_nurbs_intersection_curve(
+        &mut self,
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: VerifiedNurbsIntersectionCertificate,
+    ) -> GeometryGraphResult<CurveHandle> {
+        self.insert_curve(CurveDescriptor::VerifiedNurbsIntersection(Box::new(
+            VerifiedNurbsIntersectionCurveDescriptor::new(source_surfaces, pcurves, certificate),
         )))
     }
 
@@ -1041,6 +1055,42 @@ fn validate_curve_references(
             }
         }
     }
+    if let Some(intersection) = descriptor.as_verified_nurbs_intersection() {
+        let certificate = intersection.certificate();
+        for (source, certified) in intersection
+            .source_surfaces()
+            .into_iter()
+            .zip(certificate.traces())
+        {
+            let geometry = GeometryRef::Surface(source);
+            let actual = graph.surface(source).ok_or_else(|| stale(geometry))?;
+            let matches = match certified {
+                NurbsIntersectionTrace::Plane(certified) => {
+                    actual.as_plane().copied() == Some(*certified)
+                }
+                NurbsIntersectionTrace::Nurbs(certified) => actual.as_nurbs() == Some(certified),
+                NurbsIntersectionTrace::OffsetNurbs(_) => false,
+            };
+            if !matches {
+                return Err(invalid_intersection_descriptor(
+                    "verified NURBS-branch source does not match its ordered direct trace",
+                ));
+            }
+        }
+        for (pcurve, certified) in intersection
+            .pcurves()
+            .into_iter()
+            .zip(certificate.pcurves())
+        {
+            let geometry = GeometryRef::Curve2d(pcurve);
+            let actual = graph.curve2d(pcurve).ok_or_else(|| stale(geometry))?;
+            if actual.as_nurbs() != Some(certified) {
+                return Err(invalid_intersection_descriptor(
+                    "verified NURBS-branch pcurve does not match its certificate",
+                ));
+            }
+        }
+    }
     if let Some(intersection) = descriptor.as_transmitted_intersection() {
         let certificate = intersection.certificate();
         for (source, certified) in intersection
@@ -1235,6 +1285,16 @@ fn validate_curve(descriptor: &CurveDescriptor) -> GeometryGraphResult<()> {
                 }
             };
             carrier_valid && v.carrier_range().is_finite() && v.carrier_range().width() >= 0.0
+        }
+        CurveDescriptor::VerifiedNurbsIntersection(v) => {
+            let carrier = v.certificate().carrier();
+            carrier.points().iter().copied().all(finite3)
+                && carrier.knots().as_slice().iter().all(|x| x.is_finite())
+                && carrier
+                    .weights()
+                    .is_none_or(|weights| weights.iter().all(|value| value.is_finite()))
+                && v.certificate().carrier_range().is_finite()
+                && v.certificate().carrier_range().width() > 0.0
         }
         CurveDescriptor::TransmittedIntersection(v) => {
             let carrier = v.certificate().carrier();

@@ -10,6 +10,7 @@ use kcore::operation::{
 use kcore::proof::{IncompleteCause, IncompleteEvidence};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
+use kgeom::curve2d::NurbsCurve2d;
 use kgeom::implicit::ImplicitSurface;
 use kgeom::nurbs::{
     ContextImplicitIsolationError, ImplicitIsolationLimits,
@@ -20,7 +21,7 @@ use kgeom::nurbs::{
 };
 use kgeom::param::ParamRange;
 use kgeom::surface::{Dir, Surface};
-use kgeom::vec::Point3;
+use kgeom::vec::{Point3, Vec2};
 
 const MIN_GRID_STEPS: usize = 24;
 const MAX_GRID_STEPS: usize = 96;
@@ -154,6 +155,23 @@ pub(super) struct MarchPoint {
     pub point: Point3,
 }
 
+/// Degree-1 carrier and paired parameter traces retained from one joined
+/// marching polyline before the public result discards interior UV samples.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct MarchTrace {
+    pub carrier: NurbsCurve,
+    pub other_pcurve: NurbsCurve2d,
+    pub surface_pcurve: NurbsCurve2d,
+}
+
+/// Public lower result plus operation-local trace material for proof-bearing
+/// graph adapters.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct MarchOutput {
+    pub result: SurfaceSurfaceIntersections,
+    pub traces: Vec<MarchTrace>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Sample {
     uv: [f64; 2],
@@ -230,21 +248,34 @@ pub(super) fn march_nurbs_surface_intersection_in_scope(
     config: MarchConfig<'_>,
     scope: &mut OperationScope<'_, '_>,
 ) -> core::result::Result<SurfaceSurfaceIntersections, ContextMarchError> {
+    march_nurbs_surface_intersection_with_traces_in_scope(config, scope).map(|output| output.result)
+}
+
+pub(super) fn march_nurbs_surface_intersection_with_traces_in_scope(
+    config: MarchConfig<'_>,
+    scope: &mut OperationScope<'_, '_>,
+) -> core::result::Result<MarchOutput, ContextMarchError> {
     validate_nurbs_surface_range(config)?;
     let mut incomplete_evidence = match contextual_proof_coverage(config, scope)? {
-        ProofCoverage::ProvenEmpty => return Ok(SurfaceSurfaceIntersections::complete_empty()),
+        ProofCoverage::ProvenEmpty => {
+            return Ok(MarchOutput {
+                result: SurfaceSurfaceIntersections::complete_empty(),
+                traces: Vec::new(),
+            });
+        }
         ProofCoverage::Incomplete(evidence) => evidence,
     };
 
     let parameter_tol = surface_parameter_tolerance(config.surface_range, config.tolerances);
     if parameter_window_is_tiny(config.surface_range, parameter_tol) {
         incomplete_evidence.push(fixed_grid_incomplete_evidence());
-        return Ok(
-            SurfaceSurfaceIntersections::indeterminate_empty_with_evidence(
+        return Ok(MarchOutput {
+            result: SurfaceSurfaceIntersections::indeterminate_empty_with_evidence(
                 COMPLETION_REASON,
                 incomplete_evidence,
             ),
-        );
+            traces: Vec::new(),
+        });
     }
 
     let (u_steps, v_steps) = marching_steps(config.surface);
@@ -419,7 +450,7 @@ fn finish_sampled_march(
     v_steps: usize,
     samples: Vec<Sample>,
     incomplete_evidence: Vec<IncompleteEvidence>,
-) -> Result<SurfaceSurfaceIntersections> {
+) -> Result<MarchOutput> {
     if samples
         .iter()
         .all(|sample| sample.distance.abs() <= config.tolerances.linear())
@@ -447,13 +478,27 @@ fn finish_sampled_march(
     }
 
     let polylines = join_segments(segments, parameter_tol, config.tolerances);
-    let mut curves = Vec::new();
+    let mut branches = Vec::new();
     for polyline in polylines {
-        if let Some(curve) = branch_from_polyline(config, polyline, parameter_tol)? {
-            curves.push(curve);
+        if let Some((curve, trace)) = branch_from_polyline(config, polyline, parameter_tol)? {
+            branches.push((curve, trace));
         }
     }
-    provisional_result(curves, incomplete_evidence)
+    // Preserve the public result's canonical curve order as the exact trace
+    // order. The public constructor applies this same stable comparator again.
+    branches.sort_by(|(a, _), (b, _)| {
+        a.curve_range
+            .lo
+            .total_cmp(&b.curve_range.lo)
+            .then(a.curve_range.hi.total_cmp(&b.curve_range.hi))
+            .then(a.uv_a_start[0].total_cmp(&b.uv_a_start[0]))
+            .then(a.uv_a_start[1].total_cmp(&b.uv_a_start[1]))
+    });
+    let (curves, traces): (Vec<_>, Vec<_>) = branches.into_iter().unzip();
+    Ok(MarchOutput {
+        result: provisional_result(curves, incomplete_evidence)?,
+        traces,
+    })
 }
 
 fn collect_cell_segments(
@@ -571,35 +616,45 @@ fn branch_from_polyline(
     config: MarchConfig<'_>,
     polyline: Vec<MarchPoint>,
     parameter_tol: f64,
-) -> Result<Option<SurfaceSurfaceCurve>> {
+) -> Result<Option<(SurfaceSurfaceCurve, MarchTrace)>> {
     let points = distinct_polyline_points(polyline, config.tolerances);
     if points.len() < 2 {
         return Ok(None);
     }
-    let Some(nurbs) = polyline_nurbs(&points, config.tolerances)? else {
+    let Some(trace) = polyline_nurbs_trace(&points, config.tolerances)? else {
         return Ok(None);
     };
-    let range = nurbs.param_range();
+    let range = trace.carrier.param_range();
     let start = points[0];
     let end = points[points.len() - 1];
-    Ok(Some(SurfaceSurfaceCurve {
-        curve: SurfaceIntersectionCurve::Nurbs(nurbs),
-        curve_range: range,
-        uv_a_start: start.other_uv,
-        uv_a_end: end.other_uv,
-        uv_b_start: fit_uv(start.surface_uv, config.surface_range, parameter_tol)
-            .unwrap_or(start.surface_uv),
-        uv_b_end: fit_uv(end.surface_uv, config.surface_range, parameter_tol)
-            .unwrap_or(end.surface_uv),
-        kind: (config.branch_kind)(&points),
-    }))
+    Ok(Some((
+        SurfaceSurfaceCurve {
+            curve: SurfaceIntersectionCurve::Nurbs(trace.carrier.clone()),
+            curve_range: range,
+            uv_a_start: start.other_uv,
+            uv_a_end: end.other_uv,
+            uv_b_start: fit_uv(start.surface_uv, config.surface_range, parameter_tol)
+                .unwrap_or(start.surface_uv),
+            uv_b_end: fit_uv(end.surface_uv, config.surface_range, parameter_tol)
+                .unwrap_or(end.surface_uv),
+            kind: (config.branch_kind)(&points),
+        },
+        trace,
+    )))
 }
 
-fn polyline_nurbs(points: &[MarchPoint], tolerances: Tolerances) -> Result<Option<NurbsCurve>> {
+fn polyline_nurbs_trace(
+    points: &[MarchPoint],
+    tolerances: Tolerances,
+) -> Result<Option<MarchTrace>> {
     let mut controls = Vec::with_capacity(points.len());
+    let mut other_controls = Vec::with_capacity(points.len());
+    let mut surface_controls = Vec::with_capacity(points.len());
     let mut cumulative = Vec::with_capacity(points.len());
     let mut length = 0.0;
     controls.push(points[0].point);
+    other_controls.push(Vec2::new(points[0].other_uv[0], points[0].other_uv[1]));
+    surface_controls.push(Vec2::new(points[0].surface_uv[0], points[0].surface_uv[1]));
     cumulative.push(0.0);
     for point in &points[1..] {
         let step = controls[controls.len() - 1].dist(point.point);
@@ -608,6 +663,8 @@ fn polyline_nurbs(points: &[MarchPoint], tolerances: Tolerances) -> Result<Optio
         }
         length += step;
         controls.push(point.point);
+        other_controls.push(Vec2::new(point.other_uv[0], point.other_uv[1]));
+        surface_controls.push(Vec2::new(point.surface_uv[0], point.surface_uv[1]));
         cumulative.push(length);
     }
     if controls.len() < 2 || length <= tolerances.linear() {
@@ -624,7 +681,11 @@ fn polyline_nurbs(points: &[MarchPoint], tolerances: Tolerances) -> Result<Optio
     }
     knots.push(1.0);
     knots.push(1.0);
-    Ok(Some(NurbsCurve::new(1, knots, controls, None)?))
+    Ok(Some(MarchTrace {
+        carrier: NurbsCurve::new(1, knots.clone(), controls, None)?,
+        other_pcurve: NurbsCurve2d::new(1, knots.clone(), other_controls, None)?,
+        surface_pcurve: NurbsCurve2d::new(1, knots, surface_controls, None)?,
+    }))
 }
 
 fn distinct_polyline_points(polyline: Vec<MarchPoint>, tolerances: Tolerances) -> Vec<MarchPoint> {

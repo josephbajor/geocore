@@ -97,9 +97,10 @@ pub use error::{
 };
 pub use graph_surface::{
     BRANCH_CERTIFICATE_FAILURE, GraphSurfaceBudgetProfile, GraphSurfaceIntersectionError,
-    GraphSurfaceIntersectionResult, GraphSurfaceSurfaceIntersections, IntersectionBranchEdge,
-    IntersectionBranchEndpointEvent, IntersectionBranchGraph, IntersectionBranchVertex,
-    IntersectionBranchVertexEvent, PERSISTENT_DESCRIPTOR_FAILURE, PersistentIntersectionBranchEdge,
+    GraphSurfaceIntersectionResult, GraphSurfaceSurfaceIntersections,
+    IntersectionBranchCertificate, IntersectionBranchEdge, IntersectionBranchEndpointEvent,
+    IntersectionBranchGraph, IntersectionBranchVertex, IntersectionBranchVertexEvent,
+    NURBS_TRACE_CERTIFICATE_WORK, PERSISTENT_DESCRIPTOR_FAILURE, PersistentIntersectionBranchEdge,
     PersistentIntersectionBranchGraph, SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS,
     intersect_bounded_graph_surfaces, intersect_bounded_graph_surfaces_in_scope,
     intersect_bounded_graph_surfaces_with_context, persist_verified_graph_surface_intersections,

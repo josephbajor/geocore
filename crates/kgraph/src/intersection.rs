@@ -2809,3 +2809,294 @@ fn finite_frame(frame: &kgeom::frame::Frame) -> bool {
         && finite_vec3(frame.y())
         && finite_vec3(frame.z())
 }
+
+/// Whole-range proof for one operation-generated degree-1 Plane/NURBS branch.
+///
+/// Unlike [`TransmittedNurbsIntersectionCertificate`], this contract carries
+/// no interchange metadata. It binds only the operation-generated carrier,
+/// its paired degree-1 marching traces, the ordered direct graph sources, and
+/// the complete residual proof.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VerifiedNurbsIntersectionCertificate {
+    carrier: NurbsCurve,
+    carrier_range: ParamRange,
+    traces: [NurbsIntersectionTrace; 2],
+    pcurves: [NurbsCurve2d; 2],
+    residual_bounds: [f64; 2],
+    tolerance: f64,
+    proof_depth: usize,
+}
+
+impl VerifiedNurbsIntersectionCertificate {
+    /// Operation-generated degree-1 model-space carrier.
+    pub const fn carrier(&self) -> &NurbsCurve {
+        &self.carrier
+    }
+
+    /// Complete finite carrier interval covered by the proof.
+    pub const fn carrier_range(&self) -> ParamRange {
+        self.carrier_range
+    }
+
+    /// Exact ordered direct source traces.
+    pub const fn traces(&self) -> &[NurbsIntersectionTrace; 2] {
+        &self.traces
+    }
+
+    /// Paired degree-1 pcurves in source operand order.
+    pub const fn pcurves(&self) -> &[NurbsCurve2d; 2] {
+        &self.pcurves
+    }
+
+    /// Conservative whole-range lifted residual bounds.
+    pub const fn residual_bounds(&self) -> [f64; 2] {
+        self.residual_bounds
+    }
+
+    /// Model-space tolerance used by the proof.
+    pub const fn tolerance(&self) -> f64 {
+        self.tolerance
+    }
+
+    /// Binary proof depth used on every carrier knot span.
+    pub const fn proof_depth(&self) -> usize {
+        self.proof_depth
+    }
+}
+
+/// Persistent descriptor for an operation-generated verified Plane/NURBS
+/// branch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VerifiedNurbsIntersectionCurveDescriptor {
+    source_surfaces: [SurfaceHandle; 2],
+    pcurves: [Curve2dHandle; 2],
+    certificate: VerifiedNurbsIntersectionCertificate,
+}
+
+impl VerifiedNurbsIntersectionCurveDescriptor {
+    pub(crate) const fn new(
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: VerifiedNurbsIntersectionCertificate,
+    ) -> Self {
+        Self {
+            source_surfaces,
+            pcurves,
+            certificate,
+        }
+    }
+
+    /// Ordered live source identities.
+    pub const fn source_surfaces(&self) -> [SurfaceHandle; 2] {
+        self.source_surfaces
+    }
+
+    /// Ordered persistent pcurve identities.
+    pub const fn pcurves(&self) -> [Curve2dHandle; 2] {
+        self.pcurves
+    }
+
+    /// Immutable whole-range proof payload.
+    pub const fn certificate(&self) -> &VerifiedNurbsIntersectionCertificate {
+        &self.certificate
+    }
+
+    pub(crate) fn visit_dependencies(&self, visit: &mut dyn FnMut(GeometryRef)) {
+        for surface in self.source_surfaces {
+            visit(GeometryRef::Surface(surface));
+        }
+        for pcurve in self.pcurves {
+            visit(GeometryRef::Curve2d(pcurve));
+        }
+    }
+}
+
+impl Curve for VerifiedNurbsIntersectionCurveDescriptor {
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
+    fn eval_derivs(&self, parameter: f64, order: usize) -> CurveDerivs {
+        self.certificate.carrier.eval_derivs(parameter, order)
+    }
+
+    fn param_range(&self) -> ParamRange {
+        self.certificate.carrier_range
+    }
+
+    fn periodicity(&self) -> Option<f64> {
+        None
+    }
+
+    fn bounding_box(&self, range: ParamRange) -> Aabb3 {
+        self.certificate.carrier.bounding_box(range)
+    }
+}
+
+/// Deterministic logical work required by
+/// [`certify_verified_plane_nurbs_intersection_residuals`].
+///
+/// Plane controls cost one unit each. Every NURBS carrier span costs one unit
+/// for each fixed proof subdivision and each logical source differential-
+/// enclosure operation (`6 * source tensor span slots + 1`).
+pub fn verified_plane_nurbs_intersection_certificate_work(
+    carrier: &NurbsCurve,
+    traces: &[NurbsIntersectionTrace; 2],
+) -> Option<u64> {
+    if !matches!(
+        traces,
+        [
+            NurbsIntersectionTrace::Plane(_),
+            NurbsIntersectionTrace::Nurbs(_)
+        ] | [
+            NurbsIntersectionTrace::Nurbs(_),
+            NurbsIntersectionTrace::Plane(_)
+        ]
+    ) {
+        return None;
+    }
+    let control_count = u64::try_from(carrier.points().len()).ok()?;
+    let carrier_spans = control_count.checked_sub(1)?;
+    let subdivisions = 1_u64.checked_shl(TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u32)?;
+    traces.iter().try_fold(0_u64, |total, trace| {
+        let work = match trace {
+            NurbsIntersectionTrace::Plane(_) => control_count,
+            NurbsIntersectionTrace::Nurbs(surface) => {
+                let (control_u, control_v) = surface.net_size();
+                let span_u = u64::try_from(control_u.checked_sub(surface.degree_u())?).ok()?;
+                let span_v = u64::try_from(control_v.checked_sub(surface.degree_v())?).ok()?;
+                let source_slots = span_u.checked_mul(span_v)?;
+                let enclosure_work = source_slots.checked_mul(6)?.checked_add(1)?;
+                carrier_spans
+                    .checked_mul(subdivisions)?
+                    .checked_mul(enclosure_work)?
+            }
+            NurbsIntersectionTrace::OffsetNurbs(_) => return None,
+        };
+        total.checked_add(work)
+    })
+}
+
+/// Certify one operation-generated Plane/NURBS marching branch over its whole
+/// finite degree-1 carrier range.
+///
+/// The proof is the same original-source interval enclosure used by imported
+/// NURBS traces, without constructing or retaining transmitted chart metadata.
+pub fn certify_verified_plane_nurbs_intersection_residuals(
+    carrier: NurbsCurve,
+    traces: [NurbsIntersectionTrace; 2],
+    pcurves: [NurbsCurve2d; 2],
+    tolerance: f64,
+) -> Result<VerifiedNurbsIntersectionCertificate, IntersectionCertificateError> {
+    if verified_plane_nurbs_intersection_certificate_work(&carrier, &traces).is_none() {
+        return Err(IntersectionCertificateError::InvalidTraceFamily);
+    }
+    let carrier_range = carrier.param_range();
+    if !carrier_range.is_finite() || carrier_range.width() <= 0.0 {
+        return Err(IntersectionCertificateError::InvalidCarrierRange);
+    }
+    if !tolerance.is_finite() || tolerance < 0.0 {
+        return Err(IntersectionCertificateError::InvalidTolerance);
+    }
+    if carrier.degree() != 1
+        || carrier.weights().is_some()
+        || !carrier.knots().is_clamped()
+        || carrier.points().len() < 2
+    {
+        return Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "verified NURBS branch carrier must be open clamped polynomial degree 1",
+            },
+        );
+    }
+    if carrier
+        .points()
+        .iter()
+        .copied()
+        .any(|point| !finite_vec3(point))
+        || traces.iter().any(|trace| match trace {
+            NurbsIntersectionTrace::Plane(plane) => !finite_plane(*plane),
+            NurbsIntersectionTrace::Nurbs(surface) => {
+                surface
+                    .points()
+                    .iter()
+                    .copied()
+                    .any(|point| !finite_vec3(point))
+                    || surface
+                        .weights()
+                        .is_some_and(|weights| weights.iter().any(|weight| !weight.is_finite()))
+            }
+            NurbsIntersectionTrace::OffsetNurbs(_) => true,
+        })
+    {
+        return Err(IntersectionCertificateError::NonFiniteGeometry);
+    }
+
+    let carrier_knots = carrier.knots().as_slice();
+    let mut residual_bounds = [0.0; 2];
+    for index in 0..2 {
+        let trace = paired_trace(index);
+        let pcurve = &pcurves[index];
+        if pcurve.degree() != 1
+            || pcurve.weights().is_some()
+            || !pcurve.knots().is_clamped()
+            || pcurve.knots().as_slice() != carrier_knots
+            || pcurve.points().len() != carrier.points().len()
+            || pcurve.param_range() != carrier_range
+        {
+            return Err(
+                IntersectionCertificateError::UnsupportedTraceParameterization {
+                    trace,
+                    reason: "verified NURBS pcurve must share the carrier's open clamped polynomial degree-1 basis",
+                },
+            );
+        }
+        if pcurve
+            .points()
+            .iter()
+            .any(|point| !point.x.is_finite() || !point.y.is_finite())
+        {
+            return Err(IntersectionCertificateError::NonFiniteGeometry);
+        }
+
+        let bound = match &traces[index] {
+            NurbsIntersectionTrace::Plane(surface) => {
+                let mut bound = 0.0_f64;
+                for (&point, &uv) in carrier.points().iter().zip(pcurve.points()) {
+                    let control_bound = transmitted_plane_control_residual_bound(
+                        point,
+                        *surface,
+                        Vec2::new(uv.x, uv.y),
+                    )
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+                    bound = bound.max(control_bound);
+                }
+                bound
+            }
+            NurbsIntersectionTrace::Nurbs(surface) => {
+                transmitted_nurbs_trace_residual_bound(&carrier, surface, None, pcurve, trace)?
+            }
+            NurbsIntersectionTrace::OffsetNurbs(_) => {
+                return Err(IntersectionCertificateError::InvalidTraceFamily);
+            }
+        };
+        if bound > tolerance {
+            return Err(IntersectionCertificateError::ResidualExceedsTolerance {
+                trace,
+                residual_bound: bound,
+                tolerance,
+            });
+        }
+        residual_bounds[index] = bound;
+    }
+
+    Ok(VerifiedNurbsIntersectionCertificate {
+        carrier,
+        carrier_range,
+        traces,
+        pcurves,
+        residual_bounds,
+        tolerance,
+        proof_depth: TRANSMITTED_NURBS_TRACE_PROOF_DEPTH,
+    })
+}

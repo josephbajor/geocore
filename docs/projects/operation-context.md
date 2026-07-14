@@ -467,6 +467,15 @@ per retained oblique branch at
 `kops.intersect.spherical-circle-proof-subdivisions`. Exact N/N-1 tests pin the
 crossing independently of the graph node-visit and dependency-depth stages.
 
+The same graph-surface profile composes the scoped NURBS marcher and the
+operation-generated Plane/NURBS proof stage. A retained degree-1 branch charges
+`kops.intersect.nurbs-trace-certificate-work` before certification using
+`C + S*2^10*(6T+1)`, where `C` is carrier controls, `S` carrier spans, and `T`
+original-source tensor-span slots. The genuinely curved one-segment fixture
+pins exact 7,170/7,169 Work; residual failure retains the attempted charge.
+Graph evaluation, implicit isolation, grid sampling, and certification all
+remain in one owner scope.
+
 Verified X_T intersection-chart import likewise owns its proof budget outside
 `EvalContext`. The historical `IntersectionImportBudgetProfile::v1_defaults()`
 retains its 131,072 cumulative-Work, 65,536 Items, and Depth-10 contract.

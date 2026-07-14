@@ -1,6 +1,6 @@
 # F1 procedural geometry graph
 
-Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line plus common-axis and oblique plane/sphere-circle descriptors, and M3c transmitted-chart consumers through direct constant-normal Offset(B-surface)/B-surface are implemented; broader corpus coverage, contextual NURBS/procedural intersection families, and further descriptor families remain
+Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and direct Plane/NURBS descriptors, plus M3c transmitted-chart consumers through endpoint-only equal-limit closure are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
 
 ## Outcome
 
@@ -668,9 +668,20 @@ at a plane resolve to exact plane fields. Direct spheres and offset chains whose
 effective radius stays positive and finite resolve to exact sphere fields.
 Common-axis and oblique plane/sphere secants and clipped arcs produce certified
 circle edges; tangencies remain vertex-only and misses preserve complete empty
-evidence. Other procedural families and NURBS fields remain unsupported.
-Certified branches can be committed
-atomically as `CurveDescriptor::Intersection` nodes with a stable class key,
+evidence. Direct Plane/genuinely non-planar NURBS fields now share the same
+owner scope with the lower fixed-grid marcher. Every retained polyline keeps a
+degree-1 carrier and paired degree-1 pcurves on one exact knot basis; a separate
+non-transmitted `VerifiedNurbsIntersectionCertificate` proves both lifts over
+the whole range at fixed depth 10 before atomic persistence. Certificate Work
+is `C + S*2^10*(6T+1)` for `C` carrier controls, `S` carrier spans, and `T`
+source tensor-span slots. The curved one-segment fixture pins exact 7,170/7,169
+Work, while failed residual proofs report attempted Work. Raw lower evidence,
+complete misses, indeterminate completion, operand swap, and branch/trace
+ordering remain authoritative. Planar NURBS encodings, Offset/NURBS,
+Sphere/NURBS, NURBS/NURBS, and other procedural pairs remain unsupported.
+Certified branches can be committed atomically as
+`CurveDescriptor::Intersection` or
+`CurveDescriptor::VerifiedNurbsIntersection` nodes with a stable class key,
 ordered source-surface and pcurve dependencies, a finite carrier interval, and
 the paired whole-interval certificate. Stale or altered proof sources fail
 before allocation or roll the complete persistence batch back.
@@ -739,8 +750,8 @@ endpoints are unwrapped by one exact period before the whole-range interval
 proof. Record 1828 is admitted in place, while the traversal-masked record 2008
 is independently certified by a focused payload transplant.
 
-- Add contextual NURBS/non-plane fields and other exact/procedural families
-  only with contextual accounting and paired trace evidence.
+- Add Offset/NURBS, Sphere/NURBS, NURBS/NURBS, and other exact/procedural
+  families only with contextual accounting and paired trace evidence.
 - Broaden the M3c consumer to null/general closed limits, non-endpoint-only
   periodic trace ranges, noncanonical charts, and further terminated variants
   without recomputing their transmitted scars.
@@ -763,6 +774,10 @@ the graph ownership model.
 - depth and node-visit limits report consumed and allowed values;
 - graph clone preserves values but has independent undo state;
 - graph validation catches reverse-index disagreement in a test-only corruptor.
+- direct Plane/genuinely curved NURBS queries preserve lower raw/report
+  evidence, pin exact 7,170/7,169 proof Work, retain ordered paired pcurves,
+  persist atomically in both operand orders, and reject planar encodings,
+  offsets, other surface pairs, stale sources, and altered sources;
 - transmitted chart descriptors retain ordered plane/pcurve dependencies,
   reject mismatched or mutated proof inputs, and evaluate the certified carrier;
 - transmitted charts whose actual source is a safe nested plane-offset chain

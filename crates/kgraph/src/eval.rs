@@ -870,6 +870,7 @@ fn curve_leaf(descriptor: &CurveDescriptor) -> &dyn Curve {
         CurveDescriptor::Ellipse(v) => v,
         CurveDescriptor::Nurbs(v) => v,
         CurveDescriptor::Intersection(v) => v.as_ref(),
+        CurveDescriptor::VerifiedNurbsIntersection(v) => v.as_ref(),
         CurveDescriptor::TransmittedIntersection(v) => v.as_ref(),
         CurveDescriptor::TransmittedNurbsIntersection(v) => v.as_ref(),
     }

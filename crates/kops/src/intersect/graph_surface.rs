@@ -1,13 +1,20 @@
 //! Graph-aware, verified surface-intersection adapter.
 //!
 //! Direct planes/spheres and safe constant-offset chains terminating at those
-//! leaves form exact field families. The adapter promotes plane/plane lines and
-//! plane/sphere circles only after constructing both pcurves and proving their
-//! paired whole-interval residual contracts. Common-axis circles retain their
-//! longitude/latitude fast path; other finite secants use a certified nonlinear
-//! spherical pcurve and fail closed at chart singularities or outside windows.
+//! leaves form exact analytic field families. Genuinely non-planar direct NURBS
+//! surfaces additionally support scoped Plane/NURBS marching. The adapter
+//! promotes discovered branches only after constructing both pcurves and
+//! proving their paired whole-interval residual contracts. Common-axis circles
+//! retain their longitude/latitude fast path; other finite secants use a
+//! certified nonlinear spherical pcurve and fail closed at chart singularities
+//! or outside windows.
 
 use super::error::IntersectionError;
+use super::nurbs_surface_march::{
+    ContextMarchError, MarchOutput, MarchTrace, NURBS_SURFACE_MARCH_SAMPLE_LIMIT,
+    NurbsSurfaceMarchBudgetProfile,
+};
+use super::plane_nurbs_surface::intersect_bounded_plane_nurbs_surface_with_traces_in_scope;
 use super::plane_plane::intersect_bounded_planes;
 use super::plane_sphere::intersect_bounded_plane_sphere;
 use super::result::{
@@ -17,27 +24,32 @@ use core::fmt;
 use kcore::error::{CapabilityId, ClassifiedError, ErrorClass, ErrorCode};
 use kcore::math;
 use kcore::operation::{
-    AccountingMode, BudgetPlan, LimitSnapshot, LimitSpec, OperationContext, OperationOutcome,
-    OperationPolicyError, OperationScope, ResourceKind, SequentialWorkLedger, SessionPolicy,
-    StageId,
+    AccountingMode, BudgetPlan, DiagnosticKind, LimitSnapshot, LimitSpec, OperationContext,
+    OperationOutcome, OperationPolicyError, OperationScope, ResourceKind, SequentialWorkLedger,
+    SessionPolicy, StageId,
 };
 use kcore::tolerance::Tolerances;
-use kgeom::curve::{Circle, Line};
+use kgeom::curve::{Circle, Curve, Line};
 use kgeom::curve2d::{Circle2d, Line2d};
+use kgeom::nurbs::NurbsSurface;
 use kgeom::param::ParamRange;
 use kgeom::surface::{Plane, Sphere};
 use kgeom::vec::{Point3, Vec2};
 use kgraph::{
     AffineParamMap1d, Curve2dDescriptor, Curve2dHandle, CurveDescriptor, CurveHandle,
     EvalBudgetProfile, EvalContext, EvalError, EvalLimits, EvalUsage, ExactSurfaceField,
-    GeometryGraph, GeometryGraphError, GeometryRef, IntersectionCertificateError, PairedTrace,
-    PlaneCircleTrace, PlaneSphereCircleTrace, SphereLatitudeTrace, SurfaceDescriptor,
-    SurfaceHandle, VerifiedIntersectionCertificate, certify_paired_plane_line_residuals,
+    GeometryGraph, GeometryGraphError, GeometryRef, IntersectionCertificateError,
+    NurbsIntersectionTrace, PairedTrace, PlaneCircleTrace, PlaneSphereCircleTrace,
+    SphereLatitudeTrace, SurfaceDescriptor, SurfaceHandle, VerifiedIntersectionCertificate,
+    VerifiedNurbsIntersectionCertificate, certify_paired_plane_line_residuals,
     certify_paired_plane_sphere_circle_residuals,
     certify_paired_plane_sphere_oblique_circle_residuals,
+    certify_verified_plane_nurbs_intersection_residuals,
+    verified_plane_nurbs_intersection_certificate_work,
 };
 
 const MAX_SPHERICAL_CIRCLE_PROOFS_PER_QUERY: u64 = 4_096;
+const MAX_NURBS_TRACE_CERTIFICATE_WORK_PER_QUERY: u64 = 134_217_728;
 
 /// Stable work stage for fixed whole-branch inverse sphere-chart subdivisions.
 pub const SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS: StageId =
@@ -46,22 +58,45 @@ pub const SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS: StageId =
         Err(_) => panic!("valid spherical-circle proof stage"),
     };
 
+/// Stable work stage for fixed-depth whole-range Plane/NURBS trace proofs.
+pub const NURBS_TRACE_CERTIFICATE_WORK: StageId =
+    match StageId::new("kops.intersect.nurbs-trace-certificate-work") {
+        Ok(stage) => stage,
+        Err(_) => panic!("valid NURBS trace-certificate stage"),
+    };
+
 /// Version-1 composed budget for graph-owned surface intersection.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GraphSurfaceBudgetProfile;
 
 impl GraphSurfaceBudgetProfile {
-    /// Graph evaluation plus a bounded number of fixed spherical-circle chart
-    /// proofs. Each oblique branch consumes exactly
-    /// [`kgraph::SPHERICAL_CIRCLE_PROOF_SEGMENTS`] work units.
+    /// Graph evaluation, scoped NURBS-surface marching, and bounded
+    /// whole-range branch proofs.
     pub fn v1_defaults() -> BudgetPlan {
         let evaluation = EvalBudgetProfile::v1_defaults();
-        BudgetPlan::new(evaluation.limits().iter().copied().chain([LimitSpec::new(
-            SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS,
-            ResourceKind::Work,
-            AccountingMode::Cumulative,
-            kgraph::SPHERICAL_CIRCLE_PROOF_SEGMENTS as u64 * MAX_SPHERICAL_CIRCLE_PROOFS_PER_QUERY,
-        )]))
+        let marcher = NurbsSurfaceMarchBudgetProfile::v1_defaults();
+        BudgetPlan::new(
+            evaluation
+                .limits()
+                .iter()
+                .copied()
+                .chain(marcher.limits().iter().copied())
+                .chain([
+                    LimitSpec::new(
+                        SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        kgraph::SPHERICAL_CIRCLE_PROOF_SEGMENTS as u64
+                            * MAX_SPHERICAL_CIRCLE_PROOFS_PER_QUERY,
+                    ),
+                    LimitSpec::new(
+                        NURBS_TRACE_CERTIFICATE_WORK,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        MAX_NURBS_TRACE_CERTIFICATE_WORK_PER_QUERY,
+                    ),
+                ]),
+        )
         .expect("built-in graph surface-intersection budget is valid")
     }
 }
@@ -88,7 +123,7 @@ pub const PERSISTENT_DESCRIPTOR_FAILURE: ErrorCode =
 pub enum GraphSurfaceIntersectionError {
     /// A graph source handle could not be resolved.
     GeometryEvaluation(EvalError),
-    /// The existing analytic solver or support-matrix boundary failed.
+    /// The lower solver or support-matrix boundary failed.
     Intersection(IntersectionError),
     /// A discovered branch failed whole-interval promotion.
     BranchCertificate(IntersectionCertificateError),
@@ -279,7 +314,60 @@ pub struct IntersectionBranchEdge {
     /// Local contact character along the branch.
     pub kind: ContactKind,
     /// Whole-interval proof covering both lifted pcurve traces.
-    pub certificate: VerifiedIntersectionCertificate,
+    pub certificate: IntersectionBranchCertificate,
+}
+
+/// Whole-range proof retained by one operation-local branch.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IntersectionBranchCertificate {
+    /// Existing exact analytic line/circle proof family.
+    Analytic(Box<VerifiedIntersectionCertificate>),
+    /// Operation-generated degree-1 Plane/NURBS trace proof.
+    Nurbs(Box<VerifiedNurbsIntersectionCertificate>),
+}
+
+impl IntersectionBranchCertificate {
+    /// Conservative paired residual bounds in operand order.
+    pub fn residual_bounds(&self) -> [f64; 2] {
+        match self {
+            Self::Analytic(certificate) => certificate.residual_bounds(),
+            Self::Nurbs(certificate) => certificate.residual_bounds(),
+        }
+    }
+
+    /// Model-space tolerance used by the proof.
+    pub fn tolerance(&self) -> f64 {
+        match self {
+            Self::Analytic(certificate) => certificate.tolerance(),
+            Self::Nurbs(certificate) => certificate.tolerance(),
+        }
+    }
+
+    /// Borrow the analytic plane-line proof when it matches.
+    pub fn as_plane_line(&self) -> Option<kgraph::PairedPlaneLineResidualCertificate> {
+        match self {
+            Self::Analytic(certificate) => certificate.as_plane_line(),
+            Self::Nurbs(_) => None,
+        }
+    }
+
+    /// Borrow the analytic plane/sphere proof when it matches.
+    pub fn as_plane_sphere_circle(
+        &self,
+    ) -> Option<kgraph::PairedPlaneSphereCircleResidualCertificate> {
+        match self {
+            Self::Analytic(certificate) => certificate.as_plane_sphere_circle(),
+            Self::Nurbs(_) => None,
+        }
+    }
+
+    /// Borrow the operation-generated Plane/NURBS proof when it matches.
+    pub fn as_nurbs(&self) -> Option<&VerifiedNurbsIntersectionCertificate> {
+        match self {
+            Self::Analytic(_) => None,
+            Self::Nurbs(certificate) => Some(certificate.as_ref()),
+        }
+    }
 }
 
 /// Deterministic verified branch graph derived from one solver result.
@@ -296,10 +384,17 @@ pub struct IntersectionBranchGraph {
 /// Legacy solver evidence paired with its operation-local verified graph.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraphSurfaceSurfaceIntersections {
-    /// Unchanged result returned by the authoritative analytic solver.
+    /// Unchanged result returned by the authoritative lower solver.
     pub raw: SurfaceSurfaceIntersections,
     /// Verified operation-local branch graph derived from `raw`.
     pub branch_graph: IntersectionBranchGraph,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ResolvedGraphSurfaceField<'a> {
+    Plane { surface: Plane, direct: bool },
+    Sphere { surface: Sphere, direct: bool },
+    Nurbs(&'a NurbsSurface),
 }
 
 /// One branch whose carrier and paired pcurves are persistent graph nodes.
@@ -369,11 +464,11 @@ pub fn intersect_bounded_graph_surfaces_with_context(
 ///
 /// This function never creates or finishes a nested scope. Direct descriptor
 /// classes are resolved exactly once per operand. Direct planes/spheres and
-/// their safe constant-offset chains form exact fields. Plane/plane and finite
-/// regular-chart plane/sphere branches are supported; all other pairs remain
-/// explicitly unsupported. Owners that may dispatch oblique plane/sphere
-/// branches must compose [`GraphSurfaceBudgetProfile::v1_defaults`] before
-/// creating `scope`.
+/// their safe constant-offset chains form exact fields. Plane/plane, finite
+/// regular-chart plane/sphere, and direct Plane/genuinely-non-planar-NURBS
+/// branches are supported; all other pairs remain explicitly unsupported.
+/// Owners must compose [`GraphSurfaceBudgetProfile::v1_defaults`] before
+/// creating `scope` when they may dispatch a scoped proof-bearing branch.
 pub fn intersect_bounded_graph_surfaces_in_scope(
     graph: &GeometryGraph,
     surface_a: SurfaceHandle,
@@ -403,47 +498,193 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
     };
     let tolerances = scope.context().tolerances();
     let fields = match (field_a, field_b) {
-        (Some(ExactSurfaceField::Plane(plane_a)), Some(ExactSurfaceField::Plane(plane_b))) => [
-            ExactSurfaceField::Plane(plane_a),
-            ExactSurfaceField::Plane(plane_b),
+        (
+            Some(ResolvedGraphSurfaceField::Plane {
+                surface: plane_a,
+                direct: direct_a,
+            }),
+            Some(ResolvedGraphSurfaceField::Plane {
+                surface: plane_b,
+                direct: direct_b,
+            }),
+        ) => [
+            ResolvedGraphSurfaceField::Plane {
+                surface: plane_a,
+                direct: direct_a,
+            },
+            ResolvedGraphSurfaceField::Plane {
+                surface: plane_b,
+                direct: direct_b,
+            },
         ],
-        (Some(ExactSurfaceField::Plane(plane)), Some(ExactSurfaceField::Sphere(sphere))) => [
-            ExactSurfaceField::Plane(plane),
-            ExactSurfaceField::Sphere(sphere),
+        (
+            Some(ResolvedGraphSurfaceField::Plane {
+                surface: plane,
+                direct: direct_plane,
+            }),
+            Some(ResolvedGraphSurfaceField::Sphere {
+                surface: sphere,
+                direct: direct_sphere,
+            }),
+        ) => [
+            ResolvedGraphSurfaceField::Plane {
+                surface: plane,
+                direct: direct_plane,
+            },
+            ResolvedGraphSurfaceField::Sphere {
+                surface: sphere,
+                direct: direct_sphere,
+            },
         ],
-        (Some(ExactSurfaceField::Sphere(sphere)), Some(ExactSurfaceField::Plane(plane))) => [
-            ExactSurfaceField::Sphere(sphere),
-            ExactSurfaceField::Plane(plane),
+        (
+            Some(ResolvedGraphSurfaceField::Sphere {
+                surface: sphere,
+                direct: direct_sphere,
+            }),
+            Some(ResolvedGraphSurfaceField::Plane {
+                surface: plane,
+                direct: direct_plane,
+            }),
+        ) => [
+            ResolvedGraphSurfaceField::Sphere {
+                surface: sphere,
+                direct: direct_sphere,
+            },
+            ResolvedGraphSurfaceField::Plane {
+                surface: plane,
+                direct: direct_plane,
+            },
+        ],
+        (
+            Some(ResolvedGraphSurfaceField::Plane {
+                surface: plane,
+                direct: true,
+            }),
+            Some(ResolvedGraphSurfaceField::Nurbs(surface)),
+        ) if nurbs_control_net_is_nonplanar(surface, tolerances.linear()) => [
+            ResolvedGraphSurfaceField::Plane {
+                surface: plane,
+                direct: true,
+            },
+            ResolvedGraphSurfaceField::Nurbs(surface),
+        ],
+        (
+            Some(ResolvedGraphSurfaceField::Nurbs(surface)),
+            Some(ResolvedGraphSurfaceField::Plane {
+                surface: plane,
+                direct: true,
+            }),
+        ) if nurbs_control_net_is_nonplanar(surface, tolerances.linear()) => [
+            ResolvedGraphSurfaceField::Nurbs(surface),
+            ResolvedGraphSurfaceField::Plane {
+                surface: plane,
+                direct: true,
+            },
         ],
         _ => return Err(unsupported()),
     };
-    let raw = match fields {
+    let (raw, march_traces) = match fields {
         [
-            ExactSurfaceField::Plane(plane_a),
-            ExactSurfaceField::Plane(plane_b),
-        ] => intersect_bounded_planes(&plane_a, range_a, &plane_b, range_b, tolerances),
+            ResolvedGraphSurfaceField::Plane {
+                surface: plane_a, ..
+            },
+            ResolvedGraphSurfaceField::Plane {
+                surface: plane_b, ..
+            },
+        ] => (
+            intersect_bounded_planes(&plane_a, range_a, &plane_b, range_b, tolerances)
+                .map_err(IntersectionError::from)
+                .map_err(GraphSurfaceIntersectionError::Intersection)?,
+            None,
+        ),
         [
-            ExactSurfaceField::Plane(plane),
-            ExactSurfaceField::Sphere(sphere),
-        ] => intersect_bounded_plane_sphere(&plane, range_a, &sphere, range_b, tolerances),
+            ResolvedGraphSurfaceField::Plane { surface: plane, .. },
+            ResolvedGraphSurfaceField::Sphere {
+                surface: sphere, ..
+            },
+        ] => (
+            intersect_bounded_plane_sphere(&plane, range_a, &sphere, range_b, tolerances)
+                .map_err(IntersectionError::from)
+                .map_err(GraphSurfaceIntersectionError::Intersection)?,
+            None,
+        ),
         [
-            ExactSurfaceField::Sphere(sphere),
-            ExactSurfaceField::Plane(plane),
-        ] => intersect_bounded_plane_sphere(&plane, range_b, &sphere, range_a, tolerances)
-            .map(SurfaceSurfaceIntersections::swapped),
+            ResolvedGraphSurfaceField::Sphere {
+                surface: sphere, ..
+            },
+            ResolvedGraphSurfaceField::Plane { surface: plane, .. },
+        ] => (
+            intersect_bounded_plane_sphere(&plane, range_b, &sphere, range_a, tolerances)
+                .map(SurfaceSurfaceIntersections::swapped)
+                .map_err(IntersectionError::from)
+                .map_err(GraphSurfaceIntersectionError::Intersection)?,
+            None,
+        ),
+        [
+            ResolvedGraphSurfaceField::Plane {
+                surface: plane,
+                direct: true,
+            },
+            ResolvedGraphSurfaceField::Nurbs(surface),
+        ] => {
+            let output =
+                plane_nurbs_march_in_scope(&plane, range_a, surface, range_b, tolerances, scope)?;
+            (output.result, Some(output.traces))
+        }
+        [
+            ResolvedGraphSurfaceField::Nurbs(surface),
+            ResolvedGraphSurfaceField::Plane {
+                surface: plane,
+                direct: true,
+            },
+        ] => {
+            let output =
+                plane_nurbs_march_in_scope(&plane, range_b, surface, range_a, tolerances, scope)?;
+            let (raw, traces) = swap_plane_nurbs_march_output(output)?;
+            (raw, Some(traces))
+        }
         _ => unreachable!("supported graph surface fields were preclassified"),
-    }
-    .map_err(IntersectionError::from)
-    .map_err(GraphSurfaceIntersectionError::Intersection)?;
+    };
     let branch_graph = build_verified_branch_graph(
         [surface_a, surface_b],
         fields,
         [range_a, range_b],
         &raw,
+        march_traces.as_deref(),
         tolerances.linear(),
         scope,
     )?;
     Ok(GraphSurfaceSurfaceIntersections { raw, branch_graph })
+}
+
+/// Swap lower Plane/NURBS evidence while keeping every retained trace attached
+/// to its original branch position through the swapped result's canonical
+/// ordering. This intentionally binds by position before sorting; it never
+/// searches for a geometrically equal carrier.
+fn swap_plane_nurbs_march_output(
+    output: MarchOutput,
+) -> GraphSurfaceIntersectionResult<(SurfaceSurfaceIntersections, Vec<MarchTrace>)> {
+    if output.result.curves.len() != output.traces.len() {
+        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+            IntersectionCertificateError::InvalidTraceFamily,
+        ));
+    }
+    let mut paired = output
+        .result
+        .curves
+        .iter()
+        .zip(output.traces)
+        .collect::<Vec<_>>();
+    paired.sort_by(|(a, _), (b, _)| {
+        a.curve_range
+            .lo
+            .total_cmp(&b.curve_range.lo)
+            .then(a.curve_range.hi.total_cmp(&b.curve_range.hi))
+            .then(a.uv_b_start[0].total_cmp(&b.uv_b_start[0]))
+            .then(a.uv_b_start[1].total_cmp(&b.uv_b_start[1]))
+    });
+    let traces = paired.into_iter().map(|(_, trace)| trace).collect();
+    Ok((output.result.swapped(), traces))
 }
 
 /// Persist every certified positive-length branch into the geometry graph.
@@ -486,18 +727,26 @@ fn persist_verified_graph_surface_intersections_impl(
             graph.insert_curve2d(edge.pcurves[0].clone())?,
             graph.insert_curve2d(edge.pcurves[1].clone())?,
         ];
-        let curve = match edge.certificate {
-            VerifiedIntersectionCertificate::PlaneLine(certificate) => graph
-                .insert_verified_plane_intersection_curve(
+        let curve = match &edge.certificate {
+            IntersectionBranchCertificate::Analytic(certificate) => match certificate.as_ref() {
+                VerifiedIntersectionCertificate::PlaneLine(certificate) => graph
+                    .insert_verified_plane_intersection_curve(
+                        edge.source_surfaces,
+                        pcurves,
+                        *certificate,
+                    )?,
+                VerifiedIntersectionCertificate::PlaneSphereCircle(certificate) => graph
+                    .insert_verified_plane_sphere_intersection_curve(
+                        edge.source_surfaces,
+                        pcurves,
+                        *certificate,
+                    )?,
+            },
+            IntersectionBranchCertificate::Nurbs(certificate) => graph
+                .insert_verified_nurbs_intersection_curve(
                     edge.source_surfaces,
                     pcurves,
-                    certificate,
-                )?,
-            VerifiedIntersectionCertificate::PlaneSphereCircle(certificate) => graph
-                .insert_verified_plane_sphere_intersection_curve(
-                    edge.source_surfaces,
-                    pcurves,
-                    certificate,
+                    certificate.as_ref().clone(),
                 )?,
         };
         edges.push(PersistentIntersectionBranchEdge {
@@ -521,25 +770,126 @@ fn supports_constant_latitude_plane_sphere_chart(plane: Plane, sphere: Sphere) -
     plane_frame.z() == sphere_frame.z() || plane_frame.z() == -sphere_frame.z()
 }
 
-fn resolve_exact_surface_field(
+fn plane_nurbs_march_in_scope(
+    plane: &Plane,
+    plane_range: [ParamRange; 2],
+    surface: &NurbsSurface,
+    surface_range: [ParamRange; 2],
+    tolerances: Tolerances,
+    scope: &mut OperationScope<'_, '_>,
+) -> GraphSurfaceIntersectionResult<MarchOutput> {
+    match intersect_bounded_plane_nurbs_surface_with_traces_in_scope(
+        plane,
+        plane_range,
+        surface,
+        surface_range,
+        tolerances,
+        scope,
+    ) {
+        Ok(output) => Ok(output),
+        Err(ContextMarchError::Kernel(error)) => Err(GraphSurfaceIntersectionError::Intersection(
+            IntersectionError::from(error),
+        )),
+        Err(ContextMarchError::Limit(snapshot)) => {
+            scope.diagnose(
+                snapshot.stage,
+                NURBS_SURFACE_MARCH_SAMPLE_LIMIT,
+                DiagnosticKind::LimitReached(snapshot),
+                "NURBS surface marching grid sample limit reached",
+            );
+            Err(GraphSurfaceIntersectionError::Intersection(
+                IntersectionError::from(kcore::error::Error::ResourceLimit { snapshot }),
+            ))
+        }
+        Err(ContextMarchError::Policy(error)) => {
+            Err(GraphSurfaceIntersectionError::OperationPolicy(error))
+        }
+    }
+}
+
+fn resolve_exact_surface_field<'a>(
     graph: &GeometryGraph,
     surface: SurfaceHandle,
-    descriptor: &SurfaceDescriptor,
+    descriptor: &'a SurfaceDescriptor,
     scope: &mut OperationScope<'_, '_>,
-) -> GraphSurfaceIntersectionResult<Option<ExactSurfaceField>> {
+) -> GraphSurfaceIntersectionResult<Option<ResolvedGraphSurfaceField<'a>>> {
     if let Some(plane) = descriptor.as_plane() {
-        return Ok(Some(ExactSurfaceField::Plane(*plane)));
+        return Ok(Some(ResolvedGraphSurfaceField::Plane {
+            surface: *plane,
+            direct: true,
+        }));
     }
     if let Some(sphere) = descriptor.as_sphere() {
-        return Ok(Some(ExactSurfaceField::Sphere(*sphere)));
+        return Ok(Some(ResolvedGraphSurfaceField::Sphere {
+            surface: *sphere,
+            direct: true,
+        }));
+    }
+    if let Some(surface) = descriptor.as_nurbs() {
+        return Ok(Some(ResolvedGraphSurfaceField::Nurbs(surface)));
     }
     if descriptor.as_offset().is_none() {
         return Ok(None);
     }
-    query_graph_in_scope(scope, graph, |evaluator| {
+    let field = query_graph_in_scope(scope, graph, |evaluator| {
         evaluator.surface_exact_field(surface)
     })?
-    .map_err(GraphSurfaceIntersectionError::GeometryEvaluation)
+    .map_err(GraphSurfaceIntersectionError::GeometryEvaluation)?;
+    Ok(field.map(|field| match field {
+        ExactSurfaceField::Plane(surface) => ResolvedGraphSurfaceField::Plane {
+            surface,
+            direct: false,
+        },
+        ExactSurfaceField::Sphere(surface) => ResolvedGraphSurfaceField::Sphere {
+            surface,
+            direct: false,
+        },
+    }))
+}
+
+/// Returns whether the Euclidean control net proves that the NURBS surface is
+/// non-planar at the operation's linear resolution.
+///
+/// A NURBS surface contained in a plane has every Euclidean control point in
+/// that plane. The converse lets contextual Plane/NURBS support reject planar
+/// encodings before marching, while accepting only sources whose control net
+/// supplies direct non-plane evidence.
+fn nurbs_control_net_is_nonplanar(surface: &NurbsSurface, linear_tolerance: f64) -> bool {
+    let points = surface.points();
+    let Some((&origin, rest)) = points.split_first() else {
+        return false;
+    };
+    let Some(axis) = rest
+        .iter()
+        .map(|point| *point - origin)
+        .max_by(|a, b| a.norm_sq().total_cmp(&b.norm_sq()))
+    else {
+        return false;
+    };
+    let axis_length = axis.norm();
+    if axis_length <= linear_tolerance {
+        return false;
+    }
+    let Some(normal) = rest
+        .iter()
+        .map(|point| axis.cross(*point - origin))
+        .max_by(|a, b| a.norm_sq().total_cmp(&b.norm_sq()))
+    else {
+        return false;
+    };
+    let normal_length = normal.norm();
+    if normal_length <= linear_tolerance * axis_length {
+        return false;
+    }
+    let unit_normal = normal / normal_length;
+    let scale = points
+        .iter()
+        .map(|point| (*point - origin).norm())
+        .fold(1.0_f64, f64::max);
+    let coplanar_tolerance = linear_tolerance + 256.0 * f64::EPSILON * scale;
+    points
+        .iter()
+        .any(|point| (*point - origin).dot(unit_normal).abs() > coplanar_tolerance)
 }
 
 fn query_graph_in_scope<T>(
@@ -680,9 +1030,10 @@ fn account_graph_query(
 
 fn build_verified_branch_graph(
     source_surfaces: [SurfaceHandle; 2],
-    fields: [ExactSurfaceField; 2],
+    fields: [ResolvedGraphSurfaceField<'_>; 2],
     surface_ranges: [[ParamRange; 2]; 2],
     raw: &SurfaceSurfaceIntersections,
+    march_traces: Option<&[MarchTrace]>,
     tolerance: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> GraphSurfaceIntersectionResult<IntersectionBranchGraph> {
@@ -697,8 +1048,15 @@ fn build_verified_branch_graph(
         })
         .collect::<Vec<_>>();
     let mut edges = Vec::with_capacity(raw.curves.len());
+    if let Some(traces) = march_traces
+        && traces.len() != raw.curves.len()
+    {
+        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+            IntersectionCertificateError::InvalidTraceFamily,
+        ));
+    }
 
-    for branch in &raw.curves {
+    for (branch_index, branch) in raw.curves.iter().enumerate() {
         let VerifiedBranchPayload {
             carrier,
             carrier_range,
@@ -709,8 +1067,12 @@ fn build_verified_branch_graph(
             (
                 SurfaceIntersectionCurve::Line(raw_line),
                 [
-                    ExactSurfaceField::Plane(plane_a),
-                    ExactSurfaceField::Plane(plane_b),
+                    ResolvedGraphSurfaceField::Plane {
+                        surface: plane_a, ..
+                    },
+                    ResolvedGraphSurfaceField::Plane {
+                        surface: plane_b, ..
+                    },
                 ],
             ) => {
                 let (carrier, carrier_range) = canonical_line(*raw_line, branch.curve_range)
@@ -735,7 +1097,9 @@ fn build_verified_branch_graph(
                         Curve2dDescriptor::Line(pcurve_b),
                     ],
                     parameter_maps: [map_a, map_b],
-                    certificate: VerifiedIntersectionCertificate::PlaneLine(certificate),
+                    certificate: IntersectionBranchCertificate::Analytic(Box::new(
+                        VerifiedIntersectionCertificate::PlaneLine(certificate),
+                    )),
                 }
             }
             (SurfaceIntersectionCurve::Circle(raw_circle), fields) => {
@@ -744,6 +1108,19 @@ fn build_verified_branch_graph(
                     branch,
                     fields,
                     surface_ranges,
+                    tolerance,
+                    scope,
+                )?
+            }
+            (SurfaceIntersectionCurve::Nurbs(raw_carrier), fields) => {
+                build_verified_plane_nurbs_branch(
+                    raw_carrier,
+                    fields,
+                    march_traces
+                        .and_then(|traces| traces.get(branch_index))
+                        .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
+                            IntersectionCertificateError::InvalidTraceFamily,
+                        ))?,
                     tolerance,
                     scope,
                 )?
@@ -813,25 +1190,108 @@ struct VerifiedBranchPayload {
     carrier_range: ParamRange,
     pcurves: [Curve2dDescriptor; 2],
     parameter_maps: [AffineParamMap1d; 2],
-    certificate: VerifiedIntersectionCertificate,
+    certificate: IntersectionBranchCertificate,
+}
+
+fn build_verified_plane_nurbs_branch(
+    raw_carrier: &kgeom::nurbs::NurbsCurve,
+    fields: [ResolvedGraphSurfaceField<'_>; 2],
+    march_trace: &MarchTrace,
+    tolerance: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> GraphSurfaceIntersectionResult<VerifiedBranchPayload> {
+    if march_trace.carrier != *raw_carrier {
+        return Err(GraphSurfaceIntersectionError::BranchCertificate(
+            IntersectionCertificateError::InvalidTraceFamily,
+        ));
+    }
+    let (traces, pcurves) = match fields {
+        [
+            ResolvedGraphSurfaceField::Plane {
+                surface: plane,
+                direct: true,
+            },
+            ResolvedGraphSurfaceField::Nurbs(surface),
+        ] => (
+            [
+                NurbsIntersectionTrace::Plane(plane),
+                NurbsIntersectionTrace::Nurbs(surface.clone()),
+            ],
+            [
+                march_trace.other_pcurve.clone(),
+                march_trace.surface_pcurve.clone(),
+            ],
+        ),
+        [
+            ResolvedGraphSurfaceField::Nurbs(surface),
+            ResolvedGraphSurfaceField::Plane {
+                surface: plane,
+                direct: true,
+            },
+        ] => (
+            [
+                NurbsIntersectionTrace::Nurbs(surface.clone()),
+                NurbsIntersectionTrace::Plane(plane),
+            ],
+            [
+                march_trace.surface_pcurve.clone(),
+                march_trace.other_pcurve.clone(),
+            ],
+        ),
+        _ => {
+            return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                IntersectionCertificateError::InvalidTraceFamily,
+            ));
+        }
+    };
+    let proof_work = verified_plane_nurbs_intersection_certificate_work(raw_carrier, &traces)
+        .ok_or(GraphSurfaceIntersectionError::OperationPolicy(
+            OperationPolicyError::AccountingOverflow {
+                stage: NURBS_TRACE_CERTIFICATE_WORK,
+                resource: ResourceKind::Work,
+            },
+        ))?;
+    scope
+        .ledger_mut()
+        .charge(NURBS_TRACE_CERTIFICATE_WORK, proof_work)?;
+    let certificate = certify_verified_plane_nurbs_intersection_residuals(
+        raw_carrier.clone(),
+        traces,
+        pcurves.clone(),
+        tolerance,
+    )
+    .map_err(GraphSurfaceIntersectionError::BranchCertificate)?;
+    let identity = AffineParamMap1d::new(1.0, 0.0)
+        .map_err(GraphSurfaceIntersectionError::BranchCertificate)?;
+    Ok(VerifiedBranchPayload {
+        carrier: CurveDescriptor::Nurbs(raw_carrier.clone()),
+        carrier_range: raw_carrier.param_range(),
+        pcurves: pcurves.map(Curve2dDescriptor::Nurbs),
+        parameter_maps: [identity, identity],
+        certificate: IntersectionBranchCertificate::Nurbs(Box::new(certificate)),
+    })
 }
 
 fn build_verified_plane_sphere_circle_branch(
     raw_carrier: Circle,
     raw_branch: &SurfaceSurfaceCurve,
-    fields: [ExactSurfaceField; 2],
+    fields: [ResolvedGraphSurfaceField<'_>; 2],
     surface_ranges: [[ParamRange; 2]; 2],
     tolerance: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> GraphSurfaceIntersectionResult<VerifiedBranchPayload> {
     let (plane, sphere, plane_first) = match fields {
         [
-            ExactSurfaceField::Plane(plane),
-            ExactSurfaceField::Sphere(sphere),
+            ResolvedGraphSurfaceField::Plane { surface: plane, .. },
+            ResolvedGraphSurfaceField::Sphere {
+                surface: sphere, ..
+            },
         ] => (plane, sphere, true),
         [
-            ExactSurfaceField::Sphere(sphere),
-            ExactSurfaceField::Plane(plane),
+            ResolvedGraphSurfaceField::Sphere {
+                surface: sphere, ..
+            },
+            ResolvedGraphSurfaceField::Plane { surface: plane, .. },
         ] => (plane, sphere, false),
         _ => {
             return Err(GraphSurfaceIntersectionError::BranchCertificate(
@@ -937,7 +1397,9 @@ fn build_verified_plane_sphere_circle_branch(
         } else {
             [identity, plane_map]
         },
-        certificate: VerifiedIntersectionCertificate::PlaneSphereCircle(certificate),
+        certificate: IntersectionBranchCertificate::Analytic(Box::new(
+            VerifiedIntersectionCertificate::PlaneSphereCircle(certificate),
+        )),
     })
 }
 
@@ -1009,7 +1471,9 @@ fn build_verified_oblique_plane_sphere_circle_branch(
         carrier_range: raw_branch.curve_range,
         pcurves,
         parameter_maps: [identity, identity],
-        certificate: VerifiedIntersectionCertificate::PlaneSphereCircle(certificate),
+        certificate: IntersectionBranchCertificate::Analytic(Box::new(
+            VerifiedIntersectionCertificate::PlaneSphereCircle(certificate),
+        )),
     })
 }
 
@@ -1102,4 +1566,77 @@ fn plane_pcurve(
     let map = AffineParamMap1d::new(scale, 0.0)
         .map_err(GraphSurfaceIntersectionError::BranchCertificate)?;
     Ok((pcurve, map))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kgeom::curve2d::NurbsCurve2d;
+    use kgeom::nurbs::NurbsCurve;
+
+    fn trace_branch(
+        height: f64,
+        uv_a_start: [f64; 2],
+        uv_b_start: [f64; 2],
+    ) -> (SurfaceSurfaceCurve, MarchTrace) {
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let carrier = NurbsCurve::new(
+            1,
+            knots.clone(),
+            vec![Point3::new(0.0, height, 0.0), Point3::new(1.0, height, 0.0)],
+            None,
+        )
+        .unwrap();
+        let other_pcurve = NurbsCurve2d::new(
+            1,
+            knots.clone(),
+            vec![Vec2::new(0.0, height), Vec2::new(1.0, height)],
+            None,
+        )
+        .unwrap();
+        let surface_pcurve = other_pcurve.clone();
+        (
+            SurfaceSurfaceCurve {
+                curve: SurfaceIntersectionCurve::Nurbs(carrier.clone()),
+                curve_range: ParamRange::new(0.0, 1.0),
+                uv_a_start,
+                uv_a_end: [uv_a_start[0] + 1.0, uv_a_start[1]],
+                uv_b_start,
+                uv_b_end: [uv_b_start[0] + 1.0, uv_b_start[1]],
+                kind: ContactKind::Transverse,
+            },
+            MarchTrace {
+                carrier,
+                other_pcurve,
+                surface_pcurve,
+            },
+        )
+    }
+
+    #[test]
+    fn swapped_march_output_reorders_branch_trace_pairs_positionally() {
+        let (first, first_trace) = trace_branch(0.0, [0.0, 0.0], [1.0, 0.0]);
+        let (second, second_trace) = trace_branch(1.0, [1.0, 0.0], [0.0, 0.0]);
+        let result = SurfaceSurfaceIntersections::canonicalized_indeterminate(
+            Vec::new(),
+            vec![first, second],
+            "test marcher evidence",
+        )
+        .unwrap();
+        let (swapped, traces) = swap_plane_nurbs_march_output(MarchOutput {
+            result,
+            traces: vec![first_trace, second_trace],
+        })
+        .unwrap();
+
+        assert_eq!(swapped.curves.len(), traces.len());
+        for (branch, trace) in swapped.curves.iter().zip(&traces) {
+            assert_eq!(
+                branch.curve,
+                SurfaceIntersectionCurve::Nurbs(trace.carrier.clone())
+            );
+        }
+        assert_eq!(traces[0].carrier.points()[0].y, 1.0);
+        assert_eq!(traces[1].carrier.points()[0].y, 0.0);
+    }
 }

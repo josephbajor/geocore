@@ -1,6 +1,6 @@
 use super::nurbs_surface_march::{
-    ContextMarchError, MarchConfig, MarchPoint, NURBS_SURFACE_MARCH_SAMPLE_LIMIT,
-    NurbsSurfaceMarchBudgetProfile, march_nurbs_surface_intersection_in_scope,
+    ContextMarchError, MarchConfig, MarchOutput, MarchPoint, NURBS_SURFACE_MARCH_SAMPLE_LIMIT,
+    NurbsSurfaceMarchBudgetProfile, march_nurbs_surface_intersection_with_traces_in_scope,
 };
 use super::result::{ContactKind, SurfaceSurfaceIntersections};
 use kcore::error::{Error, Result};
@@ -141,6 +141,25 @@ fn intersect_bounded_plane_nurbs_surface_impl(
     tolerances: Tolerances,
     scope: &mut OperationScope<'_, '_>,
 ) -> core::result::Result<SurfaceSurfaceIntersections, ContextMarchError> {
+    intersect_bounded_plane_nurbs_surface_with_traces_in_scope(
+        plane,
+        plane_range,
+        surface,
+        surface_range,
+        tolerances,
+        scope,
+    )
+    .map(|output| output.result)
+}
+
+pub(super) fn intersect_bounded_plane_nurbs_surface_with_traces_in_scope(
+    plane: &Plane,
+    plane_range: [ParamRange; 2],
+    surface: &NurbsSurface,
+    surface_range: [ParamRange; 2],
+    tolerances: Tolerances,
+    scope: &mut OperationScope<'_, '_>,
+) -> core::result::Result<MarchOutput, ContextMarchError> {
     validate_plane_range(plane_range)?;
 
     let signed_distance = |point| plane.frame().to_local(point).z;
@@ -160,7 +179,7 @@ fn intersect_bounded_plane_nurbs_surface_impl(
         clamped_surface_reason: "plane/nurbs-surface intersection requires a clamped NURBS surface",
         domain_range_reason: "plane/nurbs-surface intersection surface range must lie within the NURBS domain",
     };
-    march_nurbs_surface_intersection_in_scope(config, scope)
+    march_nurbs_surface_intersection_with_traces_in_scope(config, scope)
 }
 
 fn plane_branch_kind(
