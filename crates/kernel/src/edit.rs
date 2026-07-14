@@ -9,16 +9,17 @@ use ktopo::entity::{
 };
 use ktopo::euler::FinPcurvePair;
 use ktopo::transaction::{
-    ToleranceGrowth as RawToleranceGrowth, ToleranceGrowthTarget as RawToleranceGrowthTarget,
-    Transaction,
+    FullCommitRequirement as RawFullCommitRequirement, ToleranceGrowth as RawToleranceGrowth,
+    ToleranceGrowthTarget as RawToleranceGrowthTarget, Transaction,
 };
 
 use crate::error::{Error, Result};
+use crate::operation::adapt_transaction_check;
 use crate::session::PartEdit;
 use crate::{
-    BodyId, BoundedCurve, ChangeJournal, CurveId, EdgeId, EntityKind, FaceId, FinId, LoopId,
-    OperationOutcome, OperationSettings, ParamRange, PartId, PcurveId, RegionId, Sense, ShellId,
-    SurfaceId, ToleranceBudgetId, VertexId,
+    BodyCheckReport, BodyId, BoundedCurve, ChangeJournal, CurveId, EdgeId, EntityKind, FaceId,
+    FinId, LoopId, OperationOutcome, OperationSettings, ParamRange, PartId, PcurveId, RegionId,
+    Sense, ShellId, SurfaceId, ToleranceBudgetId, VertexId,
 };
 
 /// Validated affine correspondence from edge parameter `t` to pcurve
@@ -504,6 +505,54 @@ impl GrowTolerancesRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GrowTolerancesResult {
     budget: ToleranceBudgetId,
+}
+
+/// Acceptance rule for an opt-in Full-assurance edit commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FullCommitRequirement {
+    /// Persist only when every selected body is proof-complete.
+    RequireValid,
+    /// Persist Fast-clean bodies while retaining explicit Full proof gaps.
+    /// Proven Full faults still reject the complete transaction.
+    AllowIndeterminate,
+}
+
+/// Evidence-bearing result of a Full-assurance edit commit attempt.
+///
+/// A rejected result has no journal because the transaction has already
+/// restored its entry state. Operation execution and resource failures remain
+/// errors in the enclosing [`OperationOutcome`].
+#[derive(Debug)]
+pub struct FullCommitResult {
+    journal: Option<ChangeJournal>,
+    reports: Vec<BodyCheckReport>,
+}
+
+impl FullCommitResult {
+    /// Whether the candidate was persisted.
+    pub fn is_committed(&self) -> bool {
+        self.journal.is_some()
+    }
+
+    /// Committed journal, absent after proof-policy rejection.
+    pub const fn journal(&self) -> Option<&ChangeJournal> {
+        self.journal.as_ref()
+    }
+
+    /// Full reports in explicit-root, affected-root, then store order.
+    pub fn reports(&self) -> &[BodyCheckReport] {
+        &self.reports
+    }
+
+    /// Consume the result and return its journal when committed.
+    pub fn into_journal(self) -> Option<ChangeJournal> {
+        self.journal
+    }
+
+    /// Consume the result into its optional journal and owned body reports.
+    pub fn into_parts(self) -> (Option<ChangeJournal>, Vec<BodyCheckReport>) {
+        (self.journal, self.reports)
+    }
 }
 
 impl GrowTolerancesResult {
@@ -1656,6 +1705,52 @@ impl EditTransaction<'_> {
             .map_err(Error::from))
     }
 
+    /// Full-check every selected body and decide whether to commit atomically.
+    ///
+    /// Wrong-part and stale explicit roots are rejected before the operation
+    /// scope starts. Fast faults and execution failures remain errors. Full
+    /// proof faults produce a rollback-clean rejected result, while proof gaps
+    /// are accepted only under [`FullCommitRequirement::AllowIndeterminate`].
+    /// Every returned checker subject is adapted while retaining candidate
+    /// point values even when rejection has already rolled the store back.
+    pub fn commit_full(
+        self,
+        roots: &[BodyId],
+        requirement: FullCommitRequirement,
+    ) -> Result<OperationOutcome<FullCommitResult>> {
+        for root in roots {
+            self.validate_part(root.part())?;
+            self.inner
+                .store()
+                .get(root.raw())
+                .map_err(|_| Error::StaleEntity {
+                    kind: EntityKind::Body,
+                })?;
+        }
+        let raw_roots = roots.iter().map(BodyId::raw).collect::<Vec<_>>();
+        let raw_requirement = match requirement {
+            FullCommitRequirement::RequireValid => RawFullCommitRequirement::RequireValid,
+            FullCommitRequirement::AllowIndeterminate => {
+                RawFullCommitRequirement::AllowIndeterminate
+            }
+        };
+        let part = self.part.clone();
+        let outcome =
+            self.inner
+                .commit_full_with_context(&raw_roots, raw_requirement, &self.context)?;
+        Ok(outcome.map_err(Error::from).map(|decision| {
+            let (journal, checks) = decision.into_parts();
+            let reports = checks
+                .iter()
+                .map(|check| adapt_transaction_check(&part, check))
+                .collect::<Vec<_>>();
+            FullCommitResult {
+                journal: journal.map(|journal| ChangeJournal::from_raw(part, journal)),
+                reports,
+            }
+        }))
+    }
+
     /// Explicitly restore the transaction's entry state.
     ///
     /// Dropping without commit is equivalent.
@@ -1728,7 +1823,10 @@ mod tests {
     use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 
     use super::*;
-    use crate::{BlockRequest, JournalEntity, Kernel, LineageView, MutationKind, ToleranceOrigin};
+    use crate::{
+        BlockRequest, CheckOutcome, JournalEntity, Kernel, LineageView, MutationKind,
+        ToleranceOrigin,
+    };
 
     fn block(edit: &mut PartEdit<'_>) -> BodyId {
         edit.create_block(BlockRequest::new(Frame::world(), [2.0, 2.0, 2.0]))
@@ -2493,6 +2591,219 @@ mod tests {
         assert_eq!(
             edit.as_part().face(face).unwrap().tolerance(),
             Some(committed_face)
+        );
+    }
+
+    #[test]
+    fn full_commit_adapts_evidence_and_restores_rejected_candidates() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let mut edit = session.edit_part(part_id.clone()).unwrap();
+        let body = block(&mut edit);
+        let raw_face = edit.store_mut_for_test().faces_of_body(body.raw()).unwrap()[0];
+        let original_domain = edit.store_mut_for_test().get(raw_face).unwrap().domain();
+
+        let mut rejected = edit.begin_edit(OperationSettings::default()).unwrap();
+        rejected.inner.assembly().get_mut(raw_face).unwrap().domain = None;
+        let rejected = rejected
+            .commit_full(
+                core::slice::from_ref(&body),
+                FullCommitRequirement::RequireValid,
+            )
+            .unwrap();
+        let rejected = rejected.result().unwrap();
+        assert!(!rejected.is_committed());
+        assert!(rejected.journal().is_none());
+        assert_eq!(rejected.reports().len(), 1);
+        assert_eq!(rejected.reports()[0].body(), body);
+        assert_eq!(
+            rejected.reports()[0].report().outcome(),
+            CheckOutcome::Indeterminate
+        );
+        assert_eq!(
+            edit.store_mut_for_test().get(raw_face).unwrap().domain(),
+            original_domain
+        );
+
+        let mut allowed = edit.begin_edit(OperationSettings::default()).unwrap();
+        allowed.inner.assembly().get_mut(raw_face).unwrap().domain = None;
+        let allowed = allowed
+            .commit_full(
+                core::slice::from_ref(&body),
+                FullCommitRequirement::AllowIndeterminate,
+            )
+            .unwrap();
+        assert!(!allowed.report().usage().is_empty());
+        let allowed = allowed.result().unwrap();
+        assert!(allowed.is_committed());
+        assert!(allowed.journal().is_some());
+        assert_eq!(
+            allowed.reports()[0].report().outcome(),
+            CheckOutcome::Indeterminate
+        );
+
+        let raw_sphere =
+            ktopo::make::sphere(edit.store_mut_for_test(), &Frame::world(), 2.0).unwrap();
+        let sphere = BodyId::new(part_id.clone(), raw_sphere);
+        let raw_sphere_face = edit.store_mut_for_test().faces_of_body(raw_sphere).unwrap()[0];
+        let sphere_face = FaceId::new(part_id, raw_sphere_face);
+        let original_sense = edit
+            .store_mut_for_test()
+            .get(raw_sphere_face)
+            .unwrap()
+            .sense();
+        let mut invalid = edit.begin_edit(OperationSettings::default()).unwrap();
+        invalid
+            .grow_tolerances(GrowTolerancesRequest::new(
+                "full-facade-rejected",
+                LINEAR_RESOLUTION,
+                vec![ToleranceGrowth::new(
+                    ToleranceGrowthTarget::Face(sphere_face.clone()),
+                    2.0 * LINEAR_RESOLUTION,
+                )],
+            ))
+            .unwrap();
+        invalid
+            .inner
+            .assembly()
+            .get_mut(raw_sphere_face)
+            .unwrap()
+            .sense = match original_sense {
+            RawSense::Forward => RawSense::Reversed,
+            RawSense::Reversed => RawSense::Forward,
+        };
+        let invalid = invalid
+            .commit_full(&[], FullCommitRequirement::RequireValid)
+            .unwrap();
+        let invalid = invalid.result().unwrap();
+        assert!(!invalid.is_committed());
+        assert_eq!(invalid.reports().len(), 1);
+        assert_eq!(invalid.reports()[0].body(), sphere);
+        assert_eq!(
+            invalid.reports()[0].report().outcome(),
+            CheckOutcome::Invalid
+        );
+        assert_eq!(edit.as_part().face(sphere_face).unwrap().tolerance(), None);
+        assert_eq!(
+            edit.store_mut_for_test()
+                .get(raw_sphere_face)
+                .unwrap()
+                .sense(),
+            original_sense
+        );
+    }
+
+    #[test]
+    fn full_commit_preflights_wrong_part_and_stale_explicit_roots() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let foreign_part = session.create_part();
+        let foreign_body = session
+            .edit_part(foreign_part)
+            .unwrap()
+            .create_block(BlockRequest::new(Frame::world(), [1.0, 1.0, 1.0]))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+
+        let mut edit = session.edit_part(part_id).unwrap();
+        let body = block(&mut edit);
+        let wrong_part = edit
+            .begin_edit(OperationSettings::default())
+            .unwrap()
+            .commit_full(
+                core::slice::from_ref(&foreign_body),
+                FullCommitRequirement::RequireValid,
+            )
+            .unwrap_err();
+        assert!(matches!(wrong_part, Error::WrongPart { .. }));
+
+        let request = seed_body_request(&mut edit, &body);
+        let stale_body = {
+            let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+            let seed = transaction.create_seed_body(request).unwrap();
+            transaction.rollback().unwrap();
+            seed.body()
+        };
+        let stale = edit
+            .begin_edit(OperationSettings::default())
+            .unwrap()
+            .commit_full(
+                core::slice::from_ref(&stale_body),
+                FullCommitRequirement::RequireValid,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            stale,
+            Error::StaleEntity {
+                kind: EntityKind::Body
+            }
+        ));
+        edit.as_part().body(body).unwrap();
+    }
+
+    #[test]
+    fn full_commit_graph_limit_is_structured_and_atomic_at_n_minus_one() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let mut edit = session.edit_part(part_id).unwrap();
+        let body = block(&mut edit);
+        let (face, _, _) = tolerance_targets(&mut edit, &body);
+        let settings = |allowed| {
+            OperationSettings::new()
+                .with_budget_overrides(kgraph::EvalBudgetProfile::for_limits(64, allowed))
+        };
+        let growth = || {
+            GrowTolerancesRequest::new(
+                "full-limit",
+                LINEAR_RESOLUTION,
+                vec![ToleranceGrowth::new(
+                    ToleranceGrowthTarget::Face(face.clone()),
+                    2.0 * LINEAR_RESOLUTION,
+                )],
+            )
+        };
+
+        let mut denied = edit.begin_edit(settings(305)).unwrap();
+        denied.grow_tolerances(growth()).unwrap();
+        let denied = denied
+            .commit_full(
+                core::slice::from_ref(&body),
+                FullCommitRequirement::RequireValid,
+            )
+            .unwrap();
+        assert_eq!(denied.report().limit_events().len(), 1);
+        let crossing = denied.report().limit_events()[0];
+        assert_eq!(crossing.stage, eval_stage::NODE_VISITS);
+        assert_eq!(crossing.resource, ResourceKind::Work);
+        assert_eq!((crossing.consumed, crossing.allowed), (306, 305));
+        assert_eq!(denied.result().unwrap_err().limit(), Some(crossing));
+        assert_eq!(edit.as_part().face(face.clone()).unwrap().tolerance(), None);
+
+        let mut admitted = edit.begin_edit(settings(306)).unwrap();
+        admitted.grow_tolerances(growth()).unwrap();
+        let admitted = admitted
+            .commit_full(
+                core::slice::from_ref(&body),
+                FullCommitRequirement::RequireValid,
+            )
+            .unwrap();
+        assert!(admitted.report().limit_events().is_empty());
+        let admitted = admitted.result().unwrap();
+        assert!(admitted.is_committed());
+        assert_eq!(
+            admitted.reports()[0].report().outcome(),
+            CheckOutcome::Valid
+        );
+        assert_eq!(
+            edit.as_part()
+                .face(face)
+                .unwrap()
+                .tolerance()
+                .unwrap()
+                .value(),
+            2.0 * LINEAR_RESOLUTION
         );
     }
 

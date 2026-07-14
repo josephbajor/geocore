@@ -201,6 +201,116 @@ pub struct Journal {
     tolerance_events: Vec<ToleranceEvent>,
 }
 
+/// Acceptance rule for an opt-in Full-assurance transaction commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FullCommitRequirement {
+    /// Commit only when every checked body is proof-complete.
+    RequireValid,
+    /// Commit a Fast-clean body even when Full checking retains explicit proof
+    /// gaps. Proven Full faults still reject the transaction.
+    AllowIndeterminate,
+}
+
+/// Full-check evidence for one deterministically selected body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FullBodyCheck {
+    body: BodyId,
+    report: crate::check::CheckReport,
+    point_values: Vec<(PointId, Point3)>,
+}
+
+impl FullBodyCheck {
+    fn new(store: &Store, body: BodyId, report: crate::check::CheckReport) -> Result<Self> {
+        let mut point_values = Vec::new();
+        for entity in report
+            .faults
+            .iter()
+            .map(|fault| fault.entity)
+            .chain(report.gaps.iter().map(|gap| gap.entity))
+        {
+            let EntityRef::Point(point) = entity else {
+                continue;
+            };
+            if point_values
+                .iter()
+                .any(|(candidate, _)| *candidate == point)
+            {
+                continue;
+            }
+            point_values.push((point, *store.get(point)?));
+        }
+        Ok(Self {
+            body,
+            report,
+            point_values,
+        })
+    }
+
+    /// Body checked in explicit-root, affected-root, then store order.
+    pub fn body(&self) -> BodyId {
+        self.body
+    }
+
+    /// Exact Full checker report captured before commit or rollback.
+    pub fn report(&self) -> &crate::check::CheckReport {
+        &self.report
+    }
+
+    /// Snapshot one point-valued checker subject while candidate state was live.
+    pub fn point_value(&self, point: PointId) -> Option<Point3> {
+        self.point_values
+            .iter()
+            .find_map(|(candidate, value)| (*candidate == point).then_some(*value))
+    }
+}
+
+/// Evidence-bearing outcome of an opt-in Full-assurance commit attempt.
+///
+/// A rejected decision has already restored the transaction entry state and
+/// therefore carries no journal. Execution and resource failures remain
+/// ordinary errors rather than decisions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FullCommitDecision {
+    journal: Option<Journal>,
+    checks: Vec<FullBodyCheck>,
+}
+
+impl FullCommitDecision {
+    fn committed(journal: Journal, checks: Vec<FullBodyCheck>) -> Self {
+        Self {
+            journal: Some(journal),
+            checks,
+        }
+    }
+
+    fn rejected(checks: Vec<FullBodyCheck>) -> Self {
+        Self {
+            journal: None,
+            checks,
+        }
+    }
+
+    /// Whether the candidate was persisted.
+    pub fn is_committed(&self) -> bool {
+        self.journal.is_some()
+    }
+
+    /// Committed journal, absent after proof-policy rejection.
+    pub fn journal(&self) -> Option<&Journal> {
+        self.journal.as_ref()
+    }
+
+    /// Full reports in deterministic checked-body order.
+    pub fn checks(&self) -> &[FullBodyCheck] {
+        &self.checks
+    }
+
+    /// Consume the decision into its optional journal and owned reports.
+    pub fn into_parts(self) -> (Option<Journal>, Vec<FullBodyCheck>) {
+        (self.journal, self.checks)
+    }
+}
+
 /// Low-level entity assembly available only while a transaction owns every
 /// arena's undo frame.
 ///
@@ -941,6 +1051,185 @@ impl<'a> Transaction<'a> {
             result: EntityRef::Face(face_a),
         });
         Ok(())
+    }
+
+    /// Full-check every selected body and decide whether to commit atomically.
+    ///
+    /// This additive gate preserves [`Self::commit_checked`] as the Fast
+    /// compatibility path. Full reports are returned for proof-policy
+    /// acceptance or rejection; proven Fast faults and execution failures
+    /// remain errors. Rejection restores model state, journals, tolerance
+    /// usage, the committed dependency index, and future handle allocation.
+    pub fn commit_full(
+        self,
+        bodies: &[BodyId],
+        requirement: FullCommitRequirement,
+    ) -> Result<FullCommitDecision> {
+        let session = kcore::operation::SessionPolicy::v1();
+        let context = OperationContext::new(&session, Tolerances::default())
+            .expect("built-in Full-commit context is valid");
+        self.commit_full_with_context(bodies, requirement, &context)
+            .expect("built-in Full-check budget is valid")
+            .into_result()
+    }
+
+    /// Contextual Full-check commit retaining exact operation accounting.
+    pub fn commit_full_with_context(
+        self,
+        bodies: &[BodyId],
+        requirement: FullCommitRequirement,
+        context: &OperationContext<'_>,
+    ) -> core::result::Result<OperationOutcome<FullCommitDecision>, OperationPolicyError> {
+        let context = context.clone().with_family_budget_defaults(
+            crate::check::CheckBudgetProfile::v1_defaults(crate::check::CheckLevel::Full),
+        );
+        EvalLimits::from_budget_plan(&context.effective_budget())?;
+        crate::check::validate_full_check_budget(&context)?;
+        let mut scope = OperationScope::new(&context);
+        let result = self.commit_full_in_scope(bodies, requirement, &mut scope, 0);
+        Ok(scope.finish(result))
+    }
+
+    /// Full-assurance commit inside one caller-owned operation scope.
+    ///
+    /// Fast graph validation and every Full proof borrow the same scope. The
+    /// graph child is merged before persistence, so accounting denial cannot
+    /// follow a committed model change.
+    pub fn commit_full_in_scope(
+        mut self,
+        bodies: &[BodyId],
+        requirement: FullCommitRequirement,
+        scope: &mut OperationScope<'_, '_>,
+        child_ordinal: u64,
+    ) -> Result<FullCommitDecision> {
+        let pending = self.store.pending_transaction_mutations()?;
+        let validate_all = self.store.full_validation_required();
+        #[cfg(feature = "benchmark-internals")]
+        let (candidate_index, refreshed_bodies) = if validate_all {
+            (
+                crate::index::StoreIndex::build(self.store),
+                self.store.count::<crate::entity::Body>(),
+            )
+        } else {
+            crate::index::StoreIndex::candidate_with_stats(
+                self.store,
+                self.store.committed_index(),
+                &pending,
+            )
+        };
+        #[cfg(not(feature = "benchmark-internals"))]
+        let candidate_index = if validate_all {
+            crate::index::StoreIndex::build(self.store)
+        } else {
+            crate::index::StoreIndex::candidate(self.store, self.store.committed_index(), &pending)
+        };
+        candidate_index.debug_assert_full_rebuild_parity(self.store);
+        let affected = candidate_index.affected_bodies(self.store.committed_index(), &pending);
+
+        self.store.validate_geometry()?;
+        if candidate_index.ownership_fault_count() != 0 {
+            return Err(Error::TopologyCheckFailed {
+                fault_count: candidate_index.ownership_fault_count(),
+            });
+        }
+
+        let mut checked = Vec::new();
+        for &body in bodies {
+            if !checked.contains(&body) {
+                checked.push(body);
+            }
+        }
+        for body in affected.iter().copied() {
+            if !checked.contains(&body) && self.store.contains(body) {
+                checked.push(body);
+            }
+        }
+        if validate_all {
+            for (body, _) in self.store.iter::<crate::entity::Body>() {
+                if !checked.contains(&body) {
+                    checked.push(body);
+                }
+            }
+        }
+
+        let mut graph = GraphQueryWork::reserve(scope, child_ordinal).map_err(Error::from)?;
+        let mut fast_reports = Vec::with_capacity(checked.len());
+        let mut fault_count = 0;
+        let fast_result: Result<()> = (|| {
+            for &body in &checked {
+                let body_value = self.store.get(body)?;
+                let report = crate::check::check_body_fast_report_with_graph(
+                    self.store, body, body_value, &mut graph,
+                )?;
+                fault_count += report.faults.len();
+                fast_reports.push((body, report));
+            }
+            Ok(())
+        })();
+        let accounting = graph.merge(scope).map_err(Error::from);
+        fast_result?;
+        accounting?;
+        if fault_count != 0 {
+            return Err(Error::TopologyCheckFailed { fault_count });
+        }
+
+        let mut checks = Vec::with_capacity(fast_reports.len());
+        for (body, fast_report) in fast_reports {
+            let body_value = self.store.get(body)?;
+            let report = crate::check::complete_full_report_in_scope(
+                self.store,
+                body,
+                body_value,
+                fast_report,
+                scope,
+            )?;
+            checks.push(FullBodyCheck::new(self.store, body, report)?);
+        }
+
+        let rejected = checks.iter().any(|check| {
+            !check.report.faults.is_empty()
+                || (requirement == FullCommitRequirement::RequireValid
+                    && !check.report.gaps.is_empty())
+        });
+        if rejected {
+            self.store.rollback_transaction()?;
+            #[cfg(feature = "benchmark-internals")]
+            self.store
+                .set_benchmark_observation(crate::benchmark::CommitObservation {
+                    committed: false,
+                    body_count: self.store.count::<crate::entity::Body>(),
+                    affected_bodies: affected.len(),
+                    refreshed_bodies,
+                    checked_bodies: checked.len(),
+                    mutations: pending.len(),
+                    affected_order_digest: crate::benchmark::affected_digest(self.store, &affected),
+                });
+            self.finished = true;
+            return Ok(FullCommitDecision::rejected(checks));
+        }
+
+        let mutations = self.store.commit_transaction()?;
+        debug_assert_eq!(mutations, pending);
+        self.store.install_committed_index(candidate_index);
+        #[cfg(feature = "benchmark-internals")]
+        self.store
+            .set_benchmark_observation(crate::benchmark::CommitObservation {
+                committed: true,
+                body_count: self.store.count::<crate::entity::Body>(),
+                affected_bodies: affected.len(),
+                refreshed_bodies,
+                checked_bodies: checked.len(),
+                mutations: pending.len(),
+                affected_order_digest: crate::benchmark::affected_digest(self.store, &affected),
+            });
+        self.finished = true;
+        let journal = Journal::new(
+            mutations,
+            core::mem::take(&mut self.lineage),
+            core::mem::take(&mut self.tolerance_budgets),
+            core::mem::take(&mut self.tolerance_events),
+        );
+        Ok(FullCommitDecision::committed(journal, checks))
     }
 
     /// Validate every affected body and the complete topology ownership

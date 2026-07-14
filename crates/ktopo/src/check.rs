@@ -398,16 +398,31 @@ pub fn check_body_report_in_scope(
     let mut graph = GraphQueryWork::reserve(scope, 0).map_err(Error::from)?;
     let fast = check_body_fast_report_with_graph(store, body, b, &mut graph);
     graph.merge(scope).map_err(Error::from)?;
-    let mut report = fast?;
+    let report = fast?;
     if level == CheckLevel::Fast {
         return Ok(report);
     }
+    complete_full_report_in_scope(store, body, b, report, scope)
+}
+
+/// Extend one already-computed Fast-clean report with Full proof evidence.
+///
+/// Transaction commit uses this seam so structural validation and graph work
+/// are performed exactly once before proof-complete acceptance is decided.
+pub(crate) fn complete_full_report_in_scope(
+    store: &Store,
+    body: BodyId,
+    body_value: &Body,
+    mut report: CheckReport,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<CheckReport> {
+    debug_assert_eq!(report.level, CheckLevel::Fast);
     let (proof_faults, gaps) = if report.faults.is_empty() {
-        collect_full_verification(store, body, b, scope)?
+        collect_full_verification(store, body, body_value, scope)?
     } else {
         (Vec::new(), Vec::new())
     };
-    report.level = level;
+    report.level = CheckLevel::Full;
     report.faults.extend(proof_faults);
     report.gaps = gaps;
     Ok(report)
@@ -454,7 +469,7 @@ fn legacy_check_budget(level: CheckLevel) -> BudgetPlan {
     }
 }
 
-fn validate_full_check_budget(
+pub(crate) fn validate_full_check_budget(
     context: &OperationContext<'_>,
 ) -> core::result::Result<(), OperationPolicyError> {
     let plan = context.effective_budget();

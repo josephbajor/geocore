@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, failure-atomic operation-owned facade tolerance batching, K5 adoption, and facade body tessellation implemented; broader K4 edits and partition history remain
+Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, failure-atomic operation-owned facade tolerance batching, an evidence-bearing opt-in Full-assurance commit gate, K5 adoption, and facade body tessellation implemented; broader K4 edits and partition history remain
 
 ## Outcome
 
@@ -53,6 +53,12 @@ final tolerance values, an operation name, and an aggregate limit. The facade
 does not expose or accept the lower transaction-local budget capability.
 Operation-specific combination/propagation policy and partition-history
 composition remain higher-level pressure rather than storage escape hatches.
+
+The opt-in Full-assurance commit closes the write-path checker coupling without
+changing the existing Fast commit. Ordinary clients choose `RequireValid` or
+`AllowIndeterminate` and receive ordered part-qualified body reports whether
+the candidate commits or is rejected; proof-policy rejection is a result with
+no journal, while execution and structured resource failures remain errors.
 
 The facade solves these problems by stabilizing concepts and behavior, not the
 current storage representation.
@@ -443,6 +449,11 @@ impl EditTransaction<'_> {
     pub fn split_face(&mut self, request: SplitFaceRequest) -> Result<SplitFaceResult>;
     pub fn merge_faces(&mut self, request: MergeFacesRequest) -> Result<()>;
     pub fn commit(self, roots: &[BodyId]) -> Result<OperationOutcome<ChangeJournal>>;
+    pub fn commit_full(
+        self,
+        roots: &[BodyId],
+        requirement: FullCommitRequirement,
+    ) -> Result<OperationOutcome<FullCommitResult>>;
     pub fn rollback(self) -> Result<()>;
 }
 ```
@@ -490,6 +501,20 @@ identity: no edit method accepts it, and callers resolve it against the
 resulting `ChangeJournal`. Aggregate N/N-1 rejection, explicit rollback, and a
 checker-denied commit restore both entity tolerances and transaction-local
 budget state.
+
+`commit_full` is additive: `commit` retains its Fast behavior. Full commit
+validates explicit roots before scope creation, checks distinct explicit roots
+before mutation-affected roots and any store-wide audit remainder, and performs
+Fast graph validation once before borrowing the same operation scope for Full
+proofs. Full faults always reject. `RequireValid` also rejects any proof gap;
+`AllowIndeterminate` may persist only a Fast-clean, Full-fault-free candidate
+and returns every gap unchanged. A committed result owns its journal and all
+per-body reports; a proof-policy rejection owns the same ordered reports but no
+journal. Point-valued checker subjects are snapshotted while candidate state is
+live, so facade adaptation remains valid after rollback. Proof rejection,
+graph-work N/N-1 denial, and other execution failures restore topology,
+tolerances and transaction budget usage, the committed dependency index, and
+future identities.
 
 `ChangeJournal` is an owning adapter over `ktopo::transaction::Journal`, not a
 copied facade journal schema:
@@ -818,6 +843,11 @@ Face/Edge/Vertex targets and model-resolution-valid final values, and completes
 imported-origin-preserving provenance plus exact aggregate accounting before an
 infallible apply. Events retain request order, and the returned budget identity
 is journal-local evidence rather than a reusable authoring capability.
+The opt-in Full-assurance K4 commit makes the existing Full checker
+load-bearing on writes without altering Fast commit compatibility. It retains
+deterministic per-body reports for committed or rollback-clean rejected
+candidates, distinguishes proof gaps from faults, and shares one contextual
+scope across Fast graph validation and Full proofs.
 KFMRH/MFKRH
 preflight part ownership, liveness, shell/loop shape, and cross-carrier pcurve
 incidence while preserving exact pcurve metadata and lineage. Topology does
@@ -905,8 +935,8 @@ The remaining pressure is explicit:
   assembly seams pending a separately announced sealed-reconstruction change;
 - broader semantic edit families, operation-specific tolerance
   combination/propagation policies, and partition-history composition remain
-  K4 work; facade journal iteration and generic operation-owned tolerance
-  batching are implemented; and
+  K4 work; facade journal iteration, generic operation-owned tolerance
+  batching, and the opt-in Full-assurance write gate are implemented; and
 - `cargo package -p kernel --list` is now an exact CI-reviewed inventory with
   the facade README and lifecycle tests, while full package creation remains
   blocked by the five versionless direct path dependencies (19 internal path
@@ -936,6 +966,8 @@ examples that:
   part; and
 - construct facade-owned strut, bridge/ring, and face/hole edit requests, observe
   classified preflight failure, and prove rollback leaves a Fast-valid body.
+- Full-commit a facade edit with `RequireValid`, then inspect the committed
+  journal and ordered part-qualified Full reports without lower-layer types.
 
 ### Compile-fail boundary tests
 
@@ -965,6 +997,10 @@ Lower-layer tests also retain the existing compile-fail guarantees against
 - Failed construction/import/edit leaves counts, live IDs, future allocation,
   graph dependencies, journal state, and operation report consistent with
   rollback.
+- Full-commit proof faults, disallowed gaps, and exact graph-work N/N-1 denial
+  restore model/tolerance state, transaction-local budget evidence, the
+  committed dependency index, and future identities; accepted Indeterminate
+  reports retain their exact gaps and no rejected decision carries a journal.
 - A wrong-part ID returns the stable facade code without consulting the other
   part's arena.
 - Deleted journal identities remain reportable but cannot resolve as live

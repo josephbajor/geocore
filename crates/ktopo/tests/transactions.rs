@@ -1,13 +1,14 @@
 //! Failure-atomic Store transactions and deterministic lineage journals.
 
 use kcore::error::{Error, Result};
+use kcore::tolerance::LINEAR_RESOLUTION;
 use kgeom::curve::Line;
 use kgeom::curve2d::Line2d;
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
 use kgeom::surface::Plane;
 use kgeom::vec::{Point2, Point3, Vec3};
-use ktopo::check::check_body;
+use ktopo::check::{CheckOutcome, check_body};
 use ktopo::entity::{
     Body, BodyId, BodyKind, Edge, EntityRef, Face, Fin, FinPcurve, Loop, ParamMap1d, Region,
     RegionKind, Sense, Shell, Vertex,
@@ -17,7 +18,9 @@ use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::make::{block, block_with_journal, torus_with_journal};
 use ktopo::store::Store;
 use ktopo::tolerance::EntityTolerance;
-use ktopo::transaction::{LineageEvent, MutationKind};
+use ktopo::transaction::{
+    FullCommitRequirement, LineageEvent, MutationKind, ToleranceGrowth, ToleranceGrowthTarget,
+};
 
 fn seed_geometry(
     store: &mut Store,
@@ -286,6 +289,144 @@ fn checked_commit_rejects_faulted_topology_and_restores_the_body() {
     ));
     assert_eq!(store.get(body).unwrap().regions, original_regions);
     assert!(check_body(&store, body).unwrap().is_empty());
+}
+
+#[test]
+fn full_commit_distinguishes_valid_indeterminate_and_rejected_candidates() {
+    let mut valid_store = Store::new();
+    let valid_body = block(&mut valid_store, &Frame::world(), [2.0, 2.0, 2.0]).unwrap();
+    let valid_face = valid_store.faces_of_body(valid_body).unwrap()[0];
+    let mut valid = valid_store.transaction().unwrap();
+    valid
+        .grow_tolerances(
+            "full-valid",
+            LINEAR_RESOLUTION,
+            &[ToleranceGrowth::new(
+                ToleranceGrowthTarget::Face(valid_face),
+                2.0 * LINEAR_RESOLUTION,
+            )],
+        )
+        .unwrap();
+    let valid_decision = valid
+        .commit_full(&[valid_body], FullCommitRequirement::RequireValid)
+        .unwrap();
+    assert!(valid_decision.is_committed());
+    assert_eq!(valid_decision.checks().len(), 1);
+    assert_eq!(valid_decision.checks()[0].body(), valid_body);
+    assert_eq!(
+        valid_decision.checks()[0].report().outcome(),
+        CheckOutcome::Valid
+    );
+    assert_eq!(
+        valid_decision.journal().unwrap().tolerance_events().len(),
+        1
+    );
+
+    let mut store = Store::new();
+    let body = block(&mut store, &Frame::world(), [2.0, 2.0, 2.0]).unwrap();
+    let face = store.faces_of_body(body).unwrap()[0];
+    let original_domain = store.get(face).unwrap().domain;
+
+    let mut rejected = store.transaction().unwrap();
+    rejected.assembly().get_mut(face).unwrap().domain = None;
+    let rejected = rejected
+        .commit_full(&[body], FullCommitRequirement::RequireValid)
+        .unwrap();
+    assert!(!rejected.is_committed());
+    assert!(rejected.journal().is_none());
+    assert_eq!(rejected.checks().len(), 1);
+    assert_eq!(
+        rejected.checks()[0].report().outcome(),
+        CheckOutcome::Indeterminate
+    );
+    assert_eq!(store.get(face).unwrap().domain, original_domain);
+
+    let mut allowed = store.transaction().unwrap();
+    allowed.assembly().get_mut(face).unwrap().domain = None;
+    let allowed = allowed
+        .commit_full(&[body], FullCommitRequirement::AllowIndeterminate)
+        .unwrap();
+    assert!(allowed.is_committed());
+    assert_eq!(
+        allowed.checks()[0].report().outcome(),
+        CheckOutcome::Indeterminate
+    );
+    assert!(allowed.journal().is_some());
+    assert_eq!(store.get(face).unwrap().domain, None);
+}
+
+#[test]
+fn full_commit_proof_fault_restores_tolerances_and_future_point_identity() {
+    let mut store = Store::new();
+    let body = ktopo::make::sphere(&mut store, &Frame::world(), 2.0).unwrap();
+    let face = store.faces_of_body(body).unwrap()[0];
+    let original_sense = store.get(face).unwrap().sense;
+    let mut control = store.clone();
+
+    let mut transaction = store.transaction().unwrap();
+    let attempted_point = transaction.assembly().add(Point3::new(4.0, 5.0, 6.0));
+    transaction
+        .grow_tolerances(
+            "full-rejected",
+            LINEAR_RESOLUTION,
+            &[ToleranceGrowth::new(
+                ToleranceGrowthTarget::Face(face),
+                2.0 * LINEAR_RESOLUTION,
+            )],
+        )
+        .unwrap();
+    transaction.assembly().get_mut(face).unwrap().sense = match original_sense {
+        Sense::Forward => Sense::Reversed,
+        Sense::Reversed => Sense::Forward,
+    };
+    let decision = transaction
+        .commit_full(&[], FullCommitRequirement::RequireValid)
+        .unwrap();
+    assert!(!decision.is_committed());
+    assert_eq!(decision.checks().len(), 1, "affected root must be checked");
+    assert_eq!(decision.checks()[0].body(), body);
+    assert_eq!(
+        decision.checks()[0].report().outcome(),
+        CheckOutcome::Invalid
+    );
+    assert_eq!(store.get(face).unwrap().sense, original_sense);
+    assert_eq!(store.get(face).unwrap().tolerance, None);
+
+    let next = store.insert_point(Point3::new(4.0, 5.0, 6.0)).unwrap();
+    let control_next = control.insert_point(Point3::new(4.0, 5.0, 6.0)).unwrap();
+    assert_eq!(next, control_next);
+    assert_eq!(next, attempted_point);
+}
+
+#[test]
+fn full_commit_checks_duplicate_explicit_roots_once_before_affected_roots() {
+    let mut store = Store::new();
+    let explicit = block(&mut store, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
+    let affected = block(&mut store, &Frame::world(), [2.0, 2.0, 2.0]).unwrap();
+    let affected_face = store.faces_of_body(affected).unwrap()[0];
+
+    let mut transaction = store.transaction().unwrap();
+    transaction
+        .assembly()
+        .get_mut(affected_face)
+        .unwrap()
+        .domain = None;
+    let decision = transaction
+        .commit_full(&[explicit, explicit], FullCommitRequirement::RequireValid)
+        .unwrap();
+    assert!(!decision.is_committed());
+    assert_eq!(
+        decision
+            .checks()
+            .iter()
+            .map(|check| check.body())
+            .collect::<Vec<_>>(),
+        vec![explicit, affected]
+    );
+    assert_eq!(
+        decision.checks()[1].report().outcome(),
+        CheckOutcome::Indeterminate
+    );
 }
 
 #[test]

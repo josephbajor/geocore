@@ -1027,6 +1027,25 @@ impl CheckReport {
     }
 }
 
+/// One body and its Full checker evidence from an edit commit decision.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BodyCheckReport {
+    body: BodyId,
+    report: CheckReport,
+}
+
+impl BodyCheckReport {
+    /// Part-qualified body checked before commit or rollback.
+    pub fn body(&self) -> BodyId {
+        self.body.clone()
+    }
+
+    /// Exact Full report retained for this body.
+    pub const fn report(&self) -> &CheckReport {
+        &self.report
+    }
+}
+
 /// F2 outcome retaining one operation report and a classified facade error.
 pub type OperationOutcome<T> = kcore::operation::OperationOutcome<T, Error>;
 
@@ -1239,12 +1258,41 @@ fn adapt_check_report(
     store: &ktopo::store::Store,
     report: ktopo::check::CheckReport,
 ) -> Result<CheckReport> {
+    adapt_check_report_with_points(part, report, |point| {
+        store
+            .get(point)
+            .copied()
+            .map_err(|source| Error::InconsistentTopology { source })
+    })
+}
+
+pub(crate) fn adapt_transaction_check(
+    part: &PartId,
+    check: &ktopo::transaction::FullBodyCheck,
+) -> BodyCheckReport {
+    let report = adapt_check_report_with_points(part, check.report().clone(), |point| {
+        Ok(check
+            .point_value(point)
+            .expect("FullBodyCheck snapshots every point-valued report subject"))
+    })
+    .expect("transaction check adaptation is total over captured evidence");
+    BodyCheckReport {
+        body: BodyId::new(part.clone(), check.body()),
+        report,
+    }
+}
+
+fn adapt_check_report_with_points(
+    part: &PartId,
+    report: ktopo::check::CheckReport,
+    mut point_value: impl FnMut(ktopo::entity::PointId) -> Result<Point3>,
+) -> Result<CheckReport> {
     let faults = report
         .faults
         .into_iter()
         .map(|fault| {
             Ok(CheckFault {
-                entity: adapt_check_entity(part, store, fault.entity)?,
+                entity: adapt_check_entity(part, fault.entity, &mut point_value)?,
                 kind: fault.kind,
             })
         })
@@ -1254,7 +1302,7 @@ fn adapt_check_report(
         .into_iter()
         .map(|gap| {
             Ok(CheckGap {
-                entity: adapt_check_entity(part, store, gap.entity)?,
+                entity: adapt_check_entity(part, gap.entity, &mut point_value)?,
                 kind: gap.kind,
                 cause: gap.cause,
             })
@@ -1269,8 +1317,8 @@ fn adapt_check_report(
 
 fn adapt_check_entity(
     part: &PartId,
-    store: &ktopo::store::Store,
     entity: RawEntityRef,
+    point_value: &mut impl FnMut(ktopo::entity::PointId) -> Result<Point3>,
 ) -> Result<CheckEntity> {
     let part = part.clone();
     Ok(match entity {
@@ -1285,11 +1333,7 @@ fn adapt_check_entity(
         RawEntityRef::Curve(raw) => CheckEntity::Curve(CurveId::new(part, raw)),
         RawEntityRef::Surface(raw) => CheckEntity::Surface(SurfaceId::new(part, raw)),
         RawEntityRef::Curve2d(raw) => CheckEntity::Pcurve(PcurveId::new(part, raw)),
-        RawEntityRef::Point(raw) => CheckEntity::Point(
-            *store
-                .get(raw)
-                .map_err(|source| Error::InconsistentTopology { source })?,
-        ),
+        RawEntityRef::Point(raw) => CheckEntity::Point(point_value(raw)?),
     })
 }
 

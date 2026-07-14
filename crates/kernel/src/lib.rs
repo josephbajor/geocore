@@ -263,11 +263,12 @@ mod view;
 
 pub use edit::{
     BoundedPcurve, CreateSeedBodyRequest, CreateSeedBodyResult, CreateStrutRequest,
-    CreateStrutResult, EditTransaction, GrowTolerancesRequest, GrowTolerancesResult,
-    JoinRingRequest, JoinRingResult, MergeFaceAsHoleRequest, MergeFaceAsHoleResult,
-    MergeFacesRequest, PcurveChart, PcurveEndpointKind, PcurveMetadata, PcurveParameterMap,
-    PcurveSeam, PcurveSeamSide, RemoveBridgeRequest, RemoveBridgeResult, RemoveSeedBodyRequest,
-    RemoveSeedBodyResult, RemoveStrutRequest, RemoveStrutResult, SplitFaceRequest, SplitFaceResult,
+    CreateStrutResult, EditTransaction, FullCommitRequirement, FullCommitResult,
+    GrowTolerancesRequest, GrowTolerancesResult, JoinRingRequest, JoinRingResult,
+    MergeFaceAsHoleRequest, MergeFaceAsHoleResult, MergeFacesRequest, PcurveChart,
+    PcurveEndpointKind, PcurveMetadata, PcurveParameterMap, PcurveSeam, PcurveSeamSide,
+    RemoveBridgeRequest, RemoveBridgeResult, RemoveSeedBodyRequest, RemoveSeedBodyResult,
+    RemoveStrutRequest, RemoveStrutResult, SplitFaceRequest, SplitFaceResult,
     SplitHoleAsFaceRequest, SplitHoleAsFaceResult, SurfaceParameter, ToleranceGrowth,
     ToleranceGrowthTarget,
 };
@@ -287,8 +288,8 @@ pub use iter::{
     SurfaceIds, VertexIds,
 };
 pub use operation::{
-    BlockRequest, BodyCreated, BoundedCurve, ChangeJournal, CheckBodyRequest, CheckEntity,
-    CheckFault, CheckGap, CheckReport, CurveContactKind, CurveCurveIntersections,
+    BlockRequest, BodyCheckReport, BodyCreated, BoundedCurve, ChangeJournal, CheckBodyRequest,
+    CheckEntity, CheckFault, CheckGap, CheckReport, CurveContactKind, CurveCurveIntersections,
     CurveCurveOverlap, CurveCurvePoint, CurveOverlapOrientation, IntersectCurvesRequest,
     IntersectionCompletion, JournalEntities, JournalEntity, LineageView, MutationKind,
     MutationView, OperationOutcome, OperationSettings, SurfaceEvaluation, SurfaceEvaluationRequest,

@@ -69,7 +69,7 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 | M0 Foundations | IMPLEMENTED SLICE | Deterministic math, current predicates, intervals, tolerances, arenas with copy-on-write undo frames, and deterministic map primitives exist; conformance debt remains. |
 | M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS evaluation plus exact curve/surface splitting, restriction, Bezier extraction and active-subrange bounds, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, topology-internal Euler operators, transaction-owned public Euler edits, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, checked transaction-scoped assembly, and deterministic journals exist; general bodies and several degenerate topology classes remain. |
-| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance, transaction-owned aggregate budgets, and one checked facade batch for operation-owned Face/Edge/Vertex tolerance growth; shared incidence validation; a complete transaction-owned public Euler surface with position-owning transient MVFS/KVFS, mandatory pcurve creation, hidden-point cleanup, and derived/split/merge/delete lineage; private generic Store mutation; transaction-scoped low-level assembly whose only public persistence path uses deterministic mutation preview, incrementally replaced per-body ownership/shared-geometry dependency footprints, affected-root Fast checks, and complete ownership closure; pcurve-driven tessellation; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; a reusable validated simple-polygon planar profile; checked X_T reconstruction; explicit face metadata; certified imported domains; adaptive full-active-interval analytic/clamped-NURBS face-domain containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring loop proofs; and convex-planar, whole sphere/torus, sphere-cap, and single-planar-face shell embedding proofs have landed. General NURBS/mixed-parameter incidence, periodic/unclamped and unsupported exact/mixed-boundary containment, profiles with holes/curves, operation-specific tolerance combination/propagation rules beyond the generic batch, curved-loop/general curved-shell proofs, production seam/singularity interchange fixtures, geometry graph, higher-operation migration, and multi-body performance baselines remain. |
+| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance, transaction-owned aggregate budgets, and one checked facade batch for operation-owned Face/Edge/Vertex tolerance growth; shared incidence validation; a complete transaction-owned public Euler surface with position-owning transient MVFS/KVFS, mandatory pcurve creation, hidden-point cleanup, and derived/split/merge/delete lineage; private generic Store mutation; transaction-scoped low-level assembly whose only public persistence path uses deterministic mutation preview, incrementally replaced per-body ownership/shared-geometry dependency footprints, affected-root Fast checks, complete ownership closure, and an opt-in evidence-bearing Full-assurance commit gate; pcurve-driven tessellation; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; a reusable validated simple-polygon planar profile; checked X_T reconstruction; explicit face metadata; certified imported domains; adaptive full-active-interval analytic/clamped-NURBS face-domain containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring loop proofs; and convex-planar, whole sphere/torus, sphere-cap, and single-planar-face shell embedding proofs have landed. General NURBS/mixed-parameter incidence, periodic/unclamped and unsupported exact/mixed-boundary containment, profiles with holes/curves, operation-specific tolerance combination/propagation rules beyond the generic batch, curved-loop/general curved-shell proofs, production seam/singularity interchange fixtures, geometry graph, higher-operation migration, and multi-body performance baselines remain. |
 | M3 X_T | IN PROGRESS | The modern-schema subset reads both wire encodings and writes text, including bounded tolerant edges as trimmed SP-curves over finite 2D B-curves; production coverage and external certification remain. |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases, explicit `Complete`/`Indeterminate` result evidence, exact NURBS patch subdivision/BVH, analytic implicit-surface exclusion, deterministic recursive candidate covers with structured limits and proof-bearing miss exits, source-range-certified curve-pair exclusion bounds, bounded cell-local curve-pair polishing, and several exact-cell interval-certified root/overlap slices exist; general root discovery and boolean-ready paired-pcurve branches do not. |
 | M5–M8 | NOT STARTED | No end-to-end booleans, general modeling, blends, stable API, or production hardening. |
@@ -87,7 +87,7 @@ proof-bearing contracts. Work therefore advances through these gates in order:
 
 | Order | Delivery tranche | Required result | What it unlocks |
 |---|---|---|---|
-| 1 | Close M2.5 topology contracts | Production seam/pole/apex interchange fixtures; operation-specific combination/propagation rules over the landed tolerance provenance, budgets, and checked facade batch; multi-body performance baselines for the landed incremental affected-root index; and discharge the remaining checker-v2 `Full` proof gaps with adaptive incidence, curved-loop/multi-loop containment, and shell proofs. Full-active-interval face-domain containment, private/checked mutation, transaction lineage, affected-root selection, per-body incremental indexing, and failure-atomic facade tolerance batching are landed. | A B-rep that intersections and features can modify without inventing representation rules mid-boolean. |
+| 1 | Close M2.5 topology contracts | Production seam/pole/apex interchange fixtures; operation-specific combination/propagation rules over the landed tolerance provenance, budgets, and checked facade batch; multi-body performance baselines for the landed incremental affected-root index; and discharge the remaining checker-v2 `Full` proof gaps with adaptive incidence, curved-loop/multi-loop containment, and shell proofs. Full-active-interval face-domain containment, private/checked mutation, transaction lineage, affected-root selection, per-body incremental indexing, failure-atomic facade tolerance batching, and the opt-in Full-assurance write gate are landed. | A B-rep that intersections and features can modify without inventing representation rules mid-boolean. |
 | 2 | Build the M4 proof substrate | Geometry-graph descriptors for procedural/intersection curves; generalize the landed verified seed/polish path and exact-cell root/overlap certificates over adaptive NURBS/implicit candidate isolation; extend the landed common `Complete`/`Indeterminate` evidence with paired pcurves and verified residual bounds. | Certified general CC/CS/SSI and trustworthy empty results. |
 | 3 | Ship one end-to-end feature ladder | Profile-region builder with holes, deterministic body copy/transform, extrude/revolve, point-on-face and point-in-body classification, then block/block and block/cylinder booleans. Every result is atomic, journaled, checker-v2 clean, and externally X_T checked. | The first honest CAD modeling vertical slice. |
 | 4 | Broaden general modeling | Expand analytic booleans, then periodic NURBS booleans, sweep/loft, sewing/healing, and STEP. | General mechanical part construction and imported-body repair. |
@@ -493,15 +493,17 @@ Landed slice:
   budget exhaustion and invalid limits have stable typed kernel errors. Adversarial tests
   cover arithmetic-boundary accounting, deterministic journals, imported-origin
   retention, exhaustion before mutation, and checker-triggered rollback.
+- Opt-in Full-assurance commits preserve the Fast compatibility path, run Fast graph
+  validation exactly once, and then make Full proofs load-bearing before persistence.
+  Explicit roots precede affected roots and store-wide audit roots, with duplicates checked
+  once. `RequireValid` rolls back on any fault or proof gap; `AllowIndeterminate` accepts
+  only Fast-clean, Full-fault-free candidates and retains every gap. Both committed and
+  rejected decisions own ordered per-body Full reports, while rejected decisions carry no
+  journal. Wrong-part/stale facade roots fail before scope creation; proof or accounting
+  denial restores model/tolerance state, the committed dependency index, and future IDs.
 
 Remaining before the gate closes:
 
-- Wire `Full` checking into an opt-in commit gate: a commit variant that rejects
-  `Invalid` and can require `Valid` (or bounded `Indeterminate`) outcomes for its
-  result roots. Today `commit_checked` enforces the Fast (structural/sampled) level
-  only and the Full proof apparatus is exercised solely by tests and the corpus
-  inspector; the proofs must become load-bearing on a write path before booleans
-  consume them as an acceptance oracle.
 - Define operation-specific tolerance combination/propagation rules and route every
   future modeling/healing tolerance change through the landed transaction budget API.
 - Introduce capability and completion errors rather than treating unsupported or
@@ -538,6 +540,11 @@ Remaining before the gate closes:
   growth and the facade batch, including identity/liveness-before-values, unique targets,
   model-resolution validation, complete-preflight/infallible-apply, exact aggregate N/N-1
   accounting, and journal-local non-authoring budget identity.**
+- An opt-in commit can require Full `Valid` or accept explicit `Indeterminate` evidence;
+  Full faults always reject. **Landed with exact explicit/affected-root ordering,
+  duplicate suppression, one-scope Fast-plus-Full accounting, owned per-body reports,
+  rollback-clean rejected decisions without journals, tolerance/index/future-ID restore,
+  and exact graph-work N/N-1 denial. The existing Fast commit remains unchanged.**
 - External code cannot mutate topology without checked topology APIs. **Landed: generic
   Store mutation and unchecked commit are private; transaction-scoped assembly is
   affected-body checker/whole-store ownership-gated, with compile-fail, dependency, and
@@ -1303,7 +1310,7 @@ that queue must eventually discharge.
 - M2.5: finish parameter-space incidence and ratcheted Full-checker proofs for
   periodic/mixed boundaries, multi-loop containment, and curved shells; define
   operation-specific tolerance combination/propagation policies above the landed generic
-  failure-atomic facade batch.
+  failure-atomic facade batch. The opt-in Full-assurance write gate is landed.
 - M4: extend the narrow landed graph-aware Plane/Plane and Plane/Sphere paired-
   pcurve and whole-interval residual proofs across the common SSI branch
   contract; extend bounded Plane/Plane, cylinder/cylinder, common-axis

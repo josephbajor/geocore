@@ -3,12 +3,12 @@
 use kernel::{
     BlockRequest, BodyTessellationBudgetProfile, BoundedCurve, BoundedPcurve, CheckBodyRequest,
     CheckLevel, CheckOutcome, CreateSeedBodyRequest, CreateStrutRequest, EntityKind, Error,
-    ExportXtRequest, Frame, GrowTolerancesRequest, ImportXtRequest, IntersectCurvesRequest,
-    JoinRingRequest, Kernel, MergeFaceAsHoleRequest, MutationKind, OperationSettings, ParamRange,
-    PcurveChart, PcurveEndpointKind, PcurveMetadata, PcurveSeam, PcurveSeamSide, Point3,
-    RemoveBridgeRequest, RemoveSeedBodyRequest, RemoveStrutRequest, SessionPolicy,
-    SplitHoleAsFaceRequest, SurfaceDerivativeOrder, SurfaceEvaluationRequest, SurfaceParameter,
-    TessOptions, TessellateBodyRequest, ToleranceGrowth, ToleranceGrowthTarget,
+    ExportXtRequest, Frame, FullCommitRequirement, GrowTolerancesRequest, ImportXtRequest,
+    IntersectCurvesRequest, JoinRingRequest, Kernel, MergeFaceAsHoleRequest, MutationKind,
+    OperationSettings, ParamRange, PcurveChart, PcurveEndpointKind, PcurveMetadata, PcurveSeam,
+    PcurveSeamSide, Point3, RemoveBridgeRequest, RemoveSeedBodyRequest, RemoveStrutRequest,
+    SessionPolicy, SplitHoleAsFaceRequest, SurfaceDerivativeOrder, SurfaceEvaluationRequest,
+    SurfaceParameter, TessOptions, TessellateBodyRequest, ToleranceGrowth, ToleranceGrowthTarget,
 };
 
 #[test]
@@ -636,6 +636,75 @@ fn facade_only_client_can_run_a_full_check_with_family_defaults() {
 
     assert_eq!(check.result().unwrap().outcome(), CheckOutcome::Valid);
     assert!(!check.report().usage().is_empty());
+}
+
+#[test]
+fn facade_only_client_can_full_commit_with_owned_evidence() {
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let body = session
+        .edit_part(part_id.clone())
+        .unwrap()
+        .create_block(BlockRequest::new(Frame::world(), [2.0, 3.0, 4.0]))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .body();
+    let face = session
+        .part(part_id.clone())
+        .unwrap()
+        .body(body.clone())
+        .unwrap()
+        .faces()
+        .unwrap()
+        .next()
+        .unwrap();
+    let resolution = OperationSettings::default().tolerances().linear();
+    let mut edit = session.edit_part(part_id).unwrap();
+    let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+    let applied = transaction
+        .grow_tolerances(GrowTolerancesRequest::new(
+            "facade-full-commit",
+            resolution,
+            vec![ToleranceGrowth::new(
+                ToleranceGrowthTarget::Face(face.clone()),
+                2.0 * resolution,
+            )],
+        ))
+        .unwrap();
+    let outcome = transaction
+        .commit_full(
+            core::slice::from_ref(&body),
+            FullCommitRequirement::RequireValid,
+        )
+        .unwrap();
+    assert!(!outcome.report().usage().is_empty());
+    let committed = outcome.into_result().unwrap();
+    assert!(committed.is_committed());
+    assert_eq!(committed.reports().len(), 1);
+    assert_eq!(committed.reports()[0].body(), body);
+    assert_eq!(
+        committed.reports()[0].report().outcome(),
+        CheckOutcome::Valid
+    );
+    let journal = committed.journal().unwrap();
+    assert_eq!(
+        journal
+            .tolerance_budget(applied.budget())
+            .unwrap()
+            .consumed(),
+        resolution
+    );
+    assert_eq!(journal.tolerance_events().len(), 1);
+    assert_eq!(
+        edit.as_part()
+            .face(face)
+            .unwrap()
+            .tolerance()
+            .unwrap()
+            .value(),
+        2.0 * resolution
+    );
 }
 
 #[test]

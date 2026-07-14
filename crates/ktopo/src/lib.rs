@@ -62,3 +62,5 @@ pub(crate) mod shell_proof;
 pub mod store;
 pub mod tolerance;
 pub mod transaction;
+
+pub use transaction::{FullBodyCheck, FullCommitDecision, FullCommitRequirement};
