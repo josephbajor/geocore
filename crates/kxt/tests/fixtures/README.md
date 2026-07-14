@@ -115,11 +115,15 @@ statement accompanied the individual files.
   v1-v10 parity. V12 certifies seven-sample dual-offset record 3615 with one
   common degree-1 open-clamped carrier/pcurve polyline and two independent
   original-source proofs. Its isolated cost is `26443776/7/10`; the corpus
-  reaches `414569575/22/10` with historical v1-v11 parity. Two-sample
-  dual-offset record 3595 is the stable typed
-  `xt.read.intersection-surface-family` boundary. General closed
-  limits, other nullable chart data, periodic-trace-range, broader carrier
-  families, and noncanonical chart forms remain unsupported. Primary
+  reaches `414569575/22/10` with historical v1-v11 parity. The separately
+  transplanted two-sample dual-offset record 3595 now certifies as the exact
+  common open-clamped line at isolated `4352000/2/10`, with residuals
+  `[3.468467250779673e-5, 3.384554176162513e-5]`; it is not reached by the
+  production traversal. The actual first production boundary is five-sample
+  dual-offset record 4230, roots `[3320, 773]`, chart 4231, at the unchanged
+  `414569575/22/10` v12 aggregate. General closed limits, other nullable chart
+  data, periodic-trace-range, broader carrier families, and noncanonical chart
+  forms remain unsupported. Primary
   reference for modern writer conventions: TRIMMED_CURVE/GEOMETRIC_OWNER linkage,
   tolerant-edge fin curves, POINT ownership by vertex, and the resolved
   37102 node layouts (133/141 match base 13006 exactly).

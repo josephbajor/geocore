@@ -763,12 +763,19 @@ parity. Production v12 admits seven-sample dual-offset record 3615 at isolated
 the exact transmitted positions and paired UVs define a common degree-1
 open-clamped polyline, while both original offset-NURBS proofs remain
 authoritative. The corpus reaches exact `414569575/22/10` with historical
-v1-v11 parity. Two-sample dual-offset record 3595, roots `[783, 773]`, is the
-next typed boundary. Its
-manifest row is `reconstruct: unsupported` with capability
-`xt.read.intersection-surface-family` and remains the committed progress
-meter: `reconstruct: unsupported → pass`, then `tessellate: pass`, then
-full-checker gaps shrinking toward `valid`. Dependency plan:
+v1-v11 parity. Two-sample dual-offset record 3595, roots `[783, 773]`, now
+certifies independently as the canonical open-clamped line at isolated
+`4352000/2/10`; residual bounds
+`[3.468467250779673e-5, 3.384554176162513e-5]` remain below its
+`1.817100064117055e-4` chordal tolerance. It is not reached by production
+traversal. The actual first typed production boundary is five-sample
+dual-offset record 4230, roots `[3320, 773]`, chart 4231, at the unchanged v12
+aggregate. The exemplar manifest row therefore remains
+`reconstruct: unsupported` with capability
+`xt.read.intersection-surface-family` and remains
+the committed progress meter: `reconstruct: unsupported → pass`, then
+`tessellate: pass`, then full-checker gaps shrinking toward `valid`. Dependency
+plan:
 
 1. **COMPLETE — geometry graph with the offset-surface evaluator as its first
    import client.** The M2.5-B evaluation context and `OFFSET_SURF`
@@ -801,10 +808,11 @@ full-checker gaps shrinking toward `valid`. Dependency plan:
    and every applicable reversed operand order now retain
    the same degree-1 carrier/pcurves while a separate certificate proves each
    polynomial or rational source NURBS trace. The additional bounded
-   Offset(B-surface)/Offset(B-surface) family accepts exactly three pairwise-
-   distinct finite-open `L/?` samples and uses the unique common-parameter
-   degree-2 clamped interpolants through the model-space and canonicalized UV
-   tuples. Those rounded interpolants define only the candidate; both original
+   Offset(B-surface)/Offset(B-surface) family accepts only the canonical
+   finite-open two-sample degree-1 line, three-sample degree-2 quadratic,
+   four-sample degree-3 cubic, or seven-sample degree-1 polyline forms. Their
+   model-space and canonicalized UV tuples share one exact open-clamped basis.
+   Those retained/interpolated controls define only the candidate; both original
    offset-NURBS sources must independently pass the whole-range interval proof.
    A plane trace may bind either a direct plane or a safe finite offset chain
    resolving to an exact plane. A direct Offset(B-surface) trace instead binds
@@ -856,7 +864,9 @@ full-checker gaps shrinking toward `valid`. Dependency plan:
    `388125799/22/10`, and preserves v1-v10 parity; seven-sample dual-offset
    record 3615 is admitted by v12 at exact `414569575/22/10`, with isolated
    `26443776/7/10` accounting and historical v1-v11 parity. Two-sample
-   dual-offset record 3595 remains typed unsupported.
+   dual-offset record 3595 independently certifies at isolated
+   `4352000/2/10` with exact per-resource N/N-1 rollback evidence. The
+   production traversal remains v12 and first stops at five-sample record 4230.
    Both
    original B-surface identities and their paired pcurves are graph-protected
    in source order. Other parameter conventions, limits,
@@ -871,15 +881,17 @@ full-checker gaps shrinking toward `valid`. Dependency plan:
    native Plane SP-curve node 30 now certify; FACE 1195's vertex-less ring
    domain also derives. Nonperiodic NURBS endpoint-roundoff record 1984 and the
    canonical finite-open three-sample dual-offset record 5945 and four-sample
-   cubic dual-offset record 3819, zero-padded quadratic record 3790, and exposed
-   11-sample Plane/Offset record 3745 now certify, advancing the corpus ratchet
-   through seven-sample dual-offset record 3615, advancing the corpus ratchet
-   to two-sample dual-offset record 3595.
+   cubic dual-offset record 3819, zero-padded quadratic record 3790, exposed
+   11-sample Plane/Offset record 3745, seven-sample dual-offset record 3615, and
+   the independently transplanted two-sample record 3595 now certify. The
+   production corpus ratchet remains v12 and stops first at five-sample
+   dual-offset record 4230.
    Original-backed, tolerance-qualified, non-Plane, reversed-basis, periodic,
    closed, rational, or non-2D SP-curves, foreign curves, null/general
    closed-limit, endpoint or NURBS-trace omissions, other nullable
-   chart-data, non-endpoint-only periodic trace ranges, and noncanonical chart
-   conventions remain. Re-deriving
+   chart-data, the five-sample dual-offset interpolation family,
+   non-endpoint-only periodic trace ranges, and noncanonical chart conventions
+   remain. Re-deriving
    boolean scars through our own surface/surface intersector remains an M4
    concern; import must not wait on it.
 3. **COMPLETE VERTICAL SLICE — certified clamped periodic/closed B-surfaces.**

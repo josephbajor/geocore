@@ -406,17 +406,17 @@ fn v1_through_v11_are_stable_and_v12_has_the_exact_aggregate_profile() {
 }
 
 #[test]
-fn v12_certifies_3615_and_pins_the_next_frontier() {
+fn v12_certifies_3615_and_pins_the_actual_first_production_frontier() {
     let file = read_xt(EXEMPLAR).unwrap();
-    assert_eq!(file.nodes[&3595].code, code::INTERSECTION);
+    assert_eq!(file.nodes[&4230].code, code::INTERSECTION);
     assert_eq!(
-        field(&file, 3595, "surface"),
-        &Value::Arr(vec![Value::Ptr(783), Value::Ptr(773)])
+        field(&file, 4230, "surface"),
+        &Value::Arr(vec![Value::Ptr(3320), Value::Ptr(773)])
     );
-    assert_eq!(file.nodes[&783].code, code::OFFSET_SURF);
+    assert_eq!(file.nodes[&3320].code, code::OFFSET_SURF);
     assert_eq!(file.nodes[&773].code, code::OFFSET_SURF);
-    assert_eq!(field(&file, 3595, "chart").as_ptr(), Some(3593));
-    assert_eq!(field(&file, 3593, "chart_count").as_int(), Some(2));
+    assert_eq!(field(&file, 4230, "chart").as_ptr(), Some(4231));
+    assert_eq!(field(&file, 4231, "chart_count").as_int(), Some(5));
     let session = SessionPolicy::v1();
     let mut store = Store::new();
     let outcome = reconstruct_with_context(
@@ -429,7 +429,7 @@ fn v12_certifies_3615_and_pins_the_next_frontier() {
         outcome.result(),
         Err(XtError::Unsupported {
             capability: XtCapability::IntersectionSurfaceFamily,
-            what: "dual Offset(B-surface) charts require a canonical finite-open three-sample quadratic, four-sample cubic, or seven-sample polyline family",
+            what: "dual Offset(B-surface) charts require a canonical finite-open two-sample line, three-sample quadratic, four-sample cubic, or seven-sample polyline family",
         })
     ));
     assert_eq!(

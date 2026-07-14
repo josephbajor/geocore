@@ -2458,6 +2458,80 @@ pub fn certify_transmitted_offset_nurbs_intersection_residuals(
     )
 }
 
+/// Certify the strictly bounded canonical finite-open two-sample
+/// Offset(NURBS)/Offset(NURBS) transmitted family.
+///
+/// The exact transmitted endpoints and paired UV tuples are retained as one
+/// common open-clamped degree-1 carrier/pcurve basis. Candidate linearity is
+/// structural only: both traces still require independent whole-range
+/// original-basis, unit-normal, and effective-offset interval proofs.
+pub fn certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals(
+    carrier: NurbsCurve,
+    traces: [TransmittedNurbsIntersectionTrace; 2],
+    pcurves: [NurbsCurve2d; 2],
+    metadata: TransmittedIntersectionChartMetadata,
+    tolerance: f64,
+) -> Result<TransmittedNurbsIntersectionCertificate, IntersectionCertificateError> {
+    let expected_knots = [0.0, 0.0, 1.0, 1.0];
+    if carrier.param_range() != ParamRange::new(0.0, 1.0) {
+        return Err(IntersectionCertificateError::InvalidCarrierRange);
+    }
+    if !matches!(
+        &traces,
+        [
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(_),
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(_)
+        ]
+    ) {
+        return Err(IntersectionCertificateError::InvalidTraceFamily);
+    }
+    if carrier.degree() != 1
+        || carrier.weights().is_some()
+        || carrier.points().len() != 2
+        || carrier.knots().as_slice() != expected_knots
+    {
+        return Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "dual-offset two-sample carrier must be the canonical open clamped line",
+            },
+        );
+    }
+    if carrier.points()[0] == carrier.points()[1] {
+        return Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "dual-offset two-sample carrier endpoints must be distinct",
+            },
+        );
+    }
+    for (index, pcurve) in pcurves.iter().enumerate() {
+        let trace = paired_trace(index);
+        if pcurve.degree() != 1
+            || pcurve.weights().is_some()
+            || pcurve.points().len() != 2
+            || pcurve.knots().as_slice() != expected_knots
+            || pcurve.param_range() != carrier.param_range()
+        {
+            return Err(
+                IntersectionCertificateError::UnsupportedTraceParameterization {
+                    trace,
+                    reason: "dual-offset two-sample pcurve must share the canonical carrier basis",
+                },
+            );
+        }
+        if pcurve.points()[0] == pcurve.points()[1] {
+            return Err(
+                IntersectionCertificateError::UnsupportedTraceParameterization {
+                    trace,
+                    reason: "dual-offset two-sample pcurve endpoints must be distinct",
+                },
+            );
+        }
+    }
+    certify_transmitted_nurbs_intersection_residuals_impl(
+        carrier, traces, pcurves, metadata, tolerance,
+    )
+}
+
 /// Certify the strictly bounded canonical finite-open seven-sample
 /// Offset(NURBS)/Offset(NURBS) transmitted family.
 ///

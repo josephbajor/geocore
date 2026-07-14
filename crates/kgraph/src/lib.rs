@@ -55,6 +55,7 @@ pub use intersection::{
     certify_transmitted_plane_nurbs_intersection_residuals,
     certify_transmitted_quadratic_dual_offset_nurbs_intersection_residuals,
     certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals,
+    certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals,
     certify_verified_nurbs_nurbs_intersection_residuals,
     certify_verified_offset_nurbs_nurbs_intersection_residuals,
     certify_verified_plane_nurbs_intersection_residuals,

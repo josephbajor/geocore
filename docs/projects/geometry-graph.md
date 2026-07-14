@@ -809,8 +809,12 @@ parity. V12 admits seven-sample dual-offset record 3615 at isolated
 `26443776/7/10`: roots `[3374, 773]` retain bases `[3730, 1186]`, and the exact
 transmitted controls form one common degree-1 open-clamped carrier/pcurve
 polyline while both original sources retain whole-range proofs. The corpus
-reaches `414569575/22/10` with historical v1-v11 parity; two-sample dual-offset
-record 3595 is the next typed surface-family boundary.
+reaches `414569575/22/10` with historical v1-v11 parity. Two-sample dual-offset
+record 3595 independently certifies as a canonical open-clamped line at
+isolated `4352000/2/10`, with two original-source proofs and exact
+per-resource N/N-1 rollback evidence. Production does not reach it and remains
+v12; the actual first typed surface-family boundary is five-sample record 4230,
+roots `[3320, 773]`, chart 4231.
 An end terminator contributes a
 tolerance-close, distinct singularity
 and one extra paired-UV tuple whose appended span is certified with the same
@@ -901,8 +905,9 @@ the graph ownership model.
   `INTERSECTION` 1984, the canonical finite-open three-sample dual-offset
   `INTERSECTION` 5945, the canonical four-sample cubic dual-offset
   `INTERSECTION` 3819, zero-padded quadratic dual-offset `INTERSECTION` 3790,
-  exposed 11-sample Plane/Offset `INTERSECTION` 3745, and seven-sample
-  dual-offset polyline `INTERSECTION` 3615. The equal-limit
+  exposed 11-sample Plane/Offset `INTERSECTION` 3745, seven-sample dual-offset
+  polyline `INTERSECTION` 3615, and independently transplanted two-sample
+  dual-offset line `INTERSECTION` 3595. The equal-limit
   suite separately pins both records, exact v3
   `115485725/20/10`, record-2008 transplant `124040223/22/10`, endpoint-only
   period unwrapping, and typed null/distinct-closed/off-seam rollback. The
@@ -934,8 +939,11 @@ the graph ownership model.
   isolated record-3790 `8593408/3/10`, record-3745 `42772491/11/10`, exact v11
   `388125799/22/10` and historical v1-v10 parity. The seven-sample suite pins
   the degree-1 open-clamped family, isolated `26443776/7/10`, exact v12
-  `414569575/22/10`, historical v1-v11 parity, and the next typed record-3595
-  surface-family boundary.
+  `414569575/22/10`, and historical v1-v11 parity. The two-sample suite pins
+  record 3595's canonical line, isolated `4352000/2/10`, original-source
+  residuals, per-resource N/N-1 rollback, and malformed carrier/pcurve failure;
+  the production suite pins five-sample record 4230 as the actual next typed
+  boundary.
 
 ### Offset evaluator tests
 

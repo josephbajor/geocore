@@ -24,6 +24,7 @@ use kgraph::{
     certify_transmitted_plane_nurbs_intersection_residuals,
     certify_transmitted_quadratic_dual_offset_nurbs_intersection_residuals,
     certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals,
+    certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals,
 };
 
 fn nonplanar_trace_surface(rational: bool) -> NurbsSurface {
@@ -371,6 +372,125 @@ fn transmitted_cubic_dual_offset_interpolant_binds_witnesses_sources_and_pcurves
             trace: PairedTrace::First,
             ..
         })
+    ));
+}
+
+#[test]
+fn transmitted_two_sample_dual_offset_line_is_narrow_and_original_source_backed() {
+    let knots = vec![0.0, 0.0, 1.0, 1.0];
+    let carrier = NurbsCurve::new(
+        1,
+        knots.clone(),
+        vec![Vec3::new(0.1, 0.0, 0.0), Vec3::new(0.9, 0.0, 0.0)],
+        None,
+    )
+    .unwrap();
+    let pcurves = [
+        NurbsCurve2d::new(
+            1,
+            knots.clone(),
+            vec![Vec2::new(0.1, 0.0), Vec2::new(0.9, 0.0)],
+            None,
+        )
+        .unwrap(),
+        NurbsCurve2d::new(
+            1,
+            knots.clone(),
+            vec![Vec2::new(0.1, 0.0), Vec2::new(0.9, 0.0)],
+            None,
+        )
+        .unwrap(),
+    ];
+    let surface_knots = vec![-1.0, -1.0, 1.0, 1.0];
+    let first_basis = NurbsSurface::new(
+        1,
+        1,
+        surface_knots.clone(),
+        surface_knots.clone(),
+        vec![
+            Vec3::new(-1.0, -1.0, -0.25),
+            Vec3::new(-1.0, 1.0, -0.25),
+            Vec3::new(1.0, -1.0, -0.25),
+            Vec3::new(1.0, 1.0, -0.25),
+        ],
+        None,
+    )
+    .unwrap();
+    let second_basis = NurbsSurface::new(
+        1,
+        1,
+        surface_knots.clone(),
+        surface_knots,
+        vec![
+            Vec3::new(-1.0, 0.5, -1.0),
+            Vec3::new(-1.0, 0.5, 1.0),
+            Vec3::new(1.0, 0.5, -1.0),
+            Vec3::new(1.0, 0.5, 1.0),
+        ],
+        None,
+    )
+    .unwrap();
+    let traces = [
+        TransmittedPlaneNurbsTrace::OffsetNurbs(TransmittedOffsetNurbsTrace::new(
+            first_basis,
+            0.25,
+        )),
+        TransmittedPlaneNurbsTrace::OffsetNurbs(TransmittedOffsetNurbsTrace::new(
+            second_basis,
+            0.5,
+        )),
+    ];
+    let metadata =
+        TransmittedIntersectionChartMetadata::new(0.0, 1.0, 1.0e-8, 0.0, [None, None]).unwrap();
+    let certificate = certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals(
+        carrier.clone(),
+        traces.clone(),
+        pcurves.clone(),
+        metadata,
+        1.0e-8,
+    )
+    .unwrap();
+    assert_eq!(certificate.carrier(), &carrier);
+    assert_eq!(certificate.pcurves(), &pcurves);
+    assert_eq!(certificate.proof_depth(), 10);
+    assert!(
+        certificate
+            .residual_bounds()
+            .into_iter()
+            .all(|bound| bound <= 1.0e-8)
+    );
+
+    let duplicate_carrier =
+        NurbsCurve::new(1, knots.clone(), vec![Vec3::new(0.1, 0.0, 0.0); 2], None).unwrap();
+    assert!(matches!(
+        certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals(
+            duplicate_carrier,
+            traces.clone(),
+            pcurves.clone(),
+            metadata,
+            1.0e-8,
+        ),
+        Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "dual-offset two-sample carrier endpoints must be distinct",
+            }
+        )
+    ));
+    let duplicate_pcurve = NurbsCurve2d::new(1, knots, vec![Vec2::new(0.1, 0.0); 2], None).unwrap();
+    assert!(matches!(
+        certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals(
+            carrier,
+            traces,
+            [duplicate_pcurve, pcurves[1].clone()],
+            metadata,
+            1.0e-8,
+        ),
+        Err(
+            IntersectionCertificateError::UnsupportedTraceParameterization {
+                trace: PairedTrace::First,
+                reason: "dual-offset two-sample pcurve endpoints must be distinct",
+            }
+        )
     ));
 }
 

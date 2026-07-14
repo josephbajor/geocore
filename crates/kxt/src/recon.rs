@@ -58,6 +58,7 @@ use kgraph::{
     certify_transmitted_plane_nurbs_intersection_residuals,
     certify_transmitted_quadratic_dual_offset_nurbs_intersection_residuals,
     certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals,
+    certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals,
 };
 use ktopo::entity::{
     Body, BodyId, BodyKind, Curve2dId, CurveId, Edge, EdgeId, Face, FaceDomain, FaceId, Fin,
@@ -2397,6 +2398,8 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
         }
 
         let dual_offset_nurbs = offset_nurbs_sources == [true, true];
+        let two_sample_dual_offset =
+            dual_offset_nurbs && retained_count == 2 && !equal_limits && !terminated;
         let quadratic_dual_offset =
             dual_offset_nurbs && retained_count == 3 && !equal_limits && !terminated;
         let cubic_dual_offset =
@@ -2404,13 +2407,14 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
         let seven_sample_dual_offset =
             dual_offset_nurbs && retained_count == 7 && !equal_limits && !terminated;
         if dual_offset_nurbs
+            && !two_sample_dual_offset
             && !quadratic_dual_offset
             && !cubic_dual_offset
             && !seven_sample_dual_offset
         {
             return Err(XtError::Unsupported {
                 capability: XtCapability::IntersectionSurfaceFamily,
-                what: "dual Offset(B-surface) charts require a canonical finite-open three-sample quadratic, four-sample cubic, or seven-sample polyline family",
+                what: "dual Offset(B-surface) charts require a canonical finite-open two-sample line, three-sample quadratic, four-sample cubic, or seven-sample polyline family",
             });
         }
         let quadratic_position_samples =
@@ -2603,7 +2607,15 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 .map_err(XtError::Kernel)?,
         ];
         preflight_intersection_chart(self.scope, retained_count_u64, proof_depth, proof_work)?;
-        let certificate = if quadratic_dual_offset {
+        let certificate = if two_sample_dual_offset {
+            certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals(
+                carrier,
+                traces,
+                pcurves.clone(),
+                metadata,
+                proof_tolerance,
+            )
+        } else if quadratic_dual_offset {
             certify_transmitted_quadratic_dual_offset_nurbs_intersection_residuals(
                 carrier,
                 traces,
