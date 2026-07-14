@@ -262,9 +262,10 @@ mod tessellation;
 mod view;
 
 pub use edit::{
-    BoundedPcurve, EditTransaction, MergeFacesRequest, PcurveChart, PcurveEndpointKind,
-    PcurveMetadata, PcurveParameterMap, PcurveSeam, PcurveSeamSide, SplitFaceRequest,
-    SplitFaceResult, SurfaceParameter,
+    BoundedPcurve, EditTransaction, JoinRingRequest, JoinRingResult, MergeFacesRequest,
+    PcurveChart, PcurveEndpointKind, PcurveMetadata, PcurveParameterMap, PcurveSeam,
+    PcurveSeamSide, RemoveBridgeRequest, RemoveBridgeResult, SplitFaceRequest, SplitFaceResult,
+    SurfaceParameter,
 };
 pub use error::{
     BodyTessellationError, EntityKind, Error, GeometryEvaluationError, GeometryIntersectionError,

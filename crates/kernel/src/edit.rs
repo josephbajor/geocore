@@ -405,6 +405,14 @@ impl BoundedPcurve {
     pub const fn metadata(&self) -> PcurveMetadata {
         self.metadata
     }
+
+    fn into_raw_use(self) -> Result<FinPcurve> {
+        Ok(self.metadata.apply_to_raw(FinPcurve::new(
+            self.pcurve.raw(),
+            self.range,
+            self.parameter_map.into_raw(),
+        )?))
+    }
 }
 
 /// Split one loop between two stored fin positions using existing geometry.
@@ -506,6 +514,137 @@ impl MergeFacesRequest {
     }
 }
 
+/// Remove a live bridge edge whose two fins occur in one loop.
+///
+/// The surviving loop keeps its identity and the fins between the bridge uses
+/// become a new ring on the same face. Both resulting loops must be nonempty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoveBridgeRequest {
+    edge: EdgeId,
+}
+
+impl RemoveBridgeRequest {
+    /// Select the bridge edge to remove.
+    pub const fn new(edge: EdgeId) -> Self {
+        Self { edge }
+    }
+
+    /// Bridge edge to remove.
+    pub fn edge(&self) -> EdgeId {
+        self.edge.clone()
+    }
+}
+
+/// Loop identities produced by removing one bridge edge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoveBridgeResult {
+    outer: LoopId,
+    ring: LoopId,
+}
+
+impl RemoveBridgeResult {
+    /// Surviving source-loop identity.
+    pub fn outer(&self) -> LoopId {
+        self.outer.clone()
+    }
+
+    /// Newly created inner-ring identity.
+    pub fn ring(&self) -> LoopId {
+        self.ring.clone()
+    }
+}
+
+/// Join an outer loop to a ring of the same face with a new bridge edge.
+///
+/// Fin indices select the tail vertices joined by the new edge. The pcurve
+/// uses are ordered by edge sense: forward from outer to ring, then reversed
+/// returning from ring to outer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JoinRingRequest {
+    outer: LoopId,
+    outer_fin_index: usize,
+    ring: LoopId,
+    ring_fin_index: usize,
+    curve: BoundedCurve,
+    pcurves: [BoundedPcurve; 2],
+}
+
+impl JoinRingRequest {
+    /// Construct one pcurve-aware ring join request.
+    pub const fn new(
+        outer: LoopId,
+        outer_fin_index: usize,
+        ring: LoopId,
+        ring_fin_index: usize,
+        curve: BoundedCurve,
+        pcurves: [BoundedPcurve; 2],
+    ) -> Self {
+        Self {
+            outer,
+            outer_fin_index,
+            ring,
+            ring_fin_index,
+            curve,
+            pcurves,
+        }
+    }
+
+    /// Surviving outer loop.
+    pub fn outer(&self) -> LoopId {
+        self.outer.clone()
+    }
+
+    /// Stored outer-loop fin position whose tail starts the bridge.
+    pub const fn outer_fin_index(&self) -> usize {
+        self.outer_fin_index
+    }
+
+    /// Ring dissolved into the outer loop.
+    pub fn ring(&self) -> LoopId {
+        self.ring.clone()
+    }
+
+    /// Stored ring-fin position whose tail ends the bridge.
+    pub const fn ring_fin_index(&self) -> usize {
+        self.ring_fin_index
+    }
+
+    /// Existing 3D bridge geometry and active interval.
+    pub const fn curve(&self) -> &BoundedCurve {
+        &self.curve
+    }
+
+    /// Forward/reversed pcurve uses for the bridge fins.
+    pub const fn pcurves(&self) -> &[BoundedPcurve; 2] {
+        &self.pcurves
+    }
+}
+
+/// Opaque identities created by joining one ring into an outer loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JoinRingResult {
+    loop_id: LoopId,
+    edge: EdgeId,
+    fins: [FinId; 2],
+}
+
+impl JoinRingResult {
+    /// Surviving merged-loop identity.
+    pub fn loop_id(&self) -> LoopId {
+        self.loop_id.clone()
+    }
+
+    /// New bridge edge.
+    pub fn edge(&self) -> EdgeId {
+        self.edge.clone()
+    }
+
+    /// Bridge fins in forward/reversed sense order.
+    pub fn fins(&self) -> [FinId; 2] {
+        self.fins.clone()
+    }
+}
+
 /// Failure-atomic composition of checked semantic edits on one part.
 ///
 /// Dropping this value rolls every uncommitted mutation back. Only the
@@ -559,18 +698,7 @@ impl EditTransaction<'_> {
         let surface = source.surface();
         let sense = source.sense();
         let [forward, reversed] = request.pcurves;
-        let pcurves = FinPcurvePair::new(
-            forward.metadata.apply_to_raw(FinPcurve::new(
-                forward.pcurve.raw(),
-                forward.range,
-                forward.parameter_map.into_raw(),
-            )?),
-            reversed.metadata.apply_to_raw(FinPcurve::new(
-                reversed.pcurve.raw(),
-                reversed.range,
-                reversed.parameter_map.into_raw(),
-            )?),
-        );
+        let pcurves = FinPcurvePair::new(forward.into_raw_use()?, reversed.into_raw_use()?);
         let made = self.inner.split_face(
             request.loop_id.raw(),
             request.fin_indices[0],
@@ -604,6 +732,114 @@ impl EditTransaction<'_> {
         self.inner
             .merge_faces(request.edge.raw())
             .map_err(Error::from)
+    }
+
+    /// Remove one bridge edge and split its loop into outer and ring loops.
+    pub fn remove_bridge(&mut self, request: RemoveBridgeRequest) -> Result<RemoveBridgeResult> {
+        self.validate_part(request.edge.part())?;
+        let edge = self
+            .inner
+            .store()
+            .get(request.edge.raw())
+            .map_err(|_| Error::StaleEntity {
+                kind: EntityKind::Edge,
+            })?;
+        let [first, _] = edge.fins() else {
+            return Err(kcore::error::Error::InvalidGeometry {
+                reason: "bridge removal requires an edge with exactly two fins",
+            }
+            .into());
+        };
+        let outer = self.inner.store().get(*first)?.parent();
+        let ring = self
+            .inner
+            .kill_edge_make_ring(request.edge.raw())
+            .map_err(Error::from)?;
+        Ok(RemoveBridgeResult {
+            outer: LoopId::new(self.part.clone(), outer),
+            ring: LoopId::new(self.part.clone(), ring),
+        })
+    }
+
+    /// Join an outer loop to a ring with a pcurve-bearing bridge edge.
+    pub fn join_ring(&mut self, request: JoinRingRequest) -> Result<JoinRingResult> {
+        self.validate_part(request.outer.part())?;
+        self.validate_part(request.ring.part())?;
+        let outer =
+            self.inner
+                .store()
+                .get(request.outer.raw())
+                .map_err(|_| Error::StaleEntity {
+                    kind: EntityKind::Loop,
+                })?;
+        let ring = self
+            .inner
+            .store()
+            .get(request.ring.raw())
+            .map_err(|_| Error::StaleEntity {
+                kind: EntityKind::Loop,
+            })?;
+        if request.outer == request.ring {
+            return Err(kcore::error::Error::InvalidGeometry {
+                reason: "ring join requires two distinct loops",
+            }
+            .into());
+        }
+        if outer.face() != ring.face() {
+            return Err(kcore::error::Error::InvalidGeometry {
+                reason: "ring join requires loops owned by one face",
+            }
+            .into());
+        }
+        let selected = [
+            outer.fins().get(request.outer_fin_index),
+            ring.fins().get(request.ring_fin_index),
+        ];
+        for fin in selected {
+            let Some(&fin) = fin else {
+                return Err(kcore::error::Error::InvalidGeometry {
+                    reason: "ring join fin index is out of range",
+                }
+                .into());
+            };
+            let vertex = self.inner.store().fin_tail(fin)?.ok_or_else(|| {
+                Error::from(kcore::error::Error::InvalidGeometry {
+                    reason: "ring join cannot select a ring-edge fin",
+                })
+            })?;
+            self.inner.store().vertex_position(vertex)?;
+        }
+        self.require_curve(&request.curve.curve)?;
+        for pcurve in &request.pcurves {
+            self.require_pcurve(&pcurve.pcurve)?;
+        }
+
+        let JoinRingRequest {
+            outer,
+            outer_fin_index,
+            ring,
+            ring_fin_index,
+            curve,
+            pcurves: [forward, reversed],
+        } = request;
+        let pcurves = FinPcurvePair::new(forward.into_raw_use()?, reversed.into_raw_use()?);
+        let made = self.inner.make_edge_kill_ring(
+            outer.raw(),
+            outer_fin_index,
+            ring.raw(),
+            ring_fin_index,
+            curve.curve.raw(),
+            (curve.range.lo, curve.range.hi),
+            pcurves,
+        )?;
+        Ok(JoinRingResult {
+            loop_id: outer,
+            edge: EdgeId::new(self.part.clone(), made.edge),
+            fins: [
+                FinId::new(self.part.clone(), made.fin_out),
+                FinId::new(self.part.clone(), made.fin_back),
+            ],
+        })
     }
 
     /// Fast-check every affected body and commit one journal atomically.
@@ -683,13 +919,14 @@ mod tests {
     use kgeom::vec::{Point2, Point3, Vec2, Vec3};
     use kgraph::eval_stage;
     use ktopo::entity::{
-        FaceDomain as RawFaceDomain, FinPcurve, ParamMap1d,
-        PcurveEndpointKind as RawPcurveEndpointKind,
+        Edge as RawEdge, FaceDomain as RawFaceDomain, Fin as RawFin, FinPcurve, Loop as RawLoop,
+        ParamMap1d, PcurveEndpointKind as RawPcurveEndpointKind, Sense as RawSense,
+        Vertex as RawVertex,
     };
     use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 
     use super::*;
-    use crate::{BlockRequest, Kernel, LineageView, MutationKind};
+    use crate::{BlockRequest, JournalEntity, Kernel, LineageView, MutationKind};
 
     fn block(edit: &mut PartEdit<'_>) -> BodyId {
         edit.create_block(BlockRequest::new(Frame::world(), [2.0, 2.0, 2.0]))
@@ -870,6 +1107,127 @@ mod tests {
         (body, request)
     }
 
+    fn planar_annulus_join_request(edit: &mut PartEdit<'_>) -> (BodyId, JoinRingRequest) {
+        let part = edit.id();
+        let store = edit.store_mut_for_test();
+        let raw_body = ktopo::make::planar_sheet(
+            store,
+            &Frame::world(),
+            &[
+                Point2::new(-2.0, -2.0),
+                Point2::new(2.0, -2.0),
+                Point2::new(2.0, 2.0),
+                Point2::new(-2.0, 2.0),
+            ],
+        )
+        .unwrap();
+        let face = store.faces_of_body(raw_body).unwrap()[0];
+        let outer = store.get(face).unwrap().loops()[0];
+        let inner_points = [
+            Point2::new(-1.0, -1.0),
+            Point2::new(-1.0, 1.0),
+            Point2::new(1.0, 1.0),
+            Point2::new(1.0, -1.0),
+        ];
+
+        let mut add_ring = store.transaction().unwrap();
+        let ring;
+        {
+            let mut assembly = add_ring.assembly();
+            ring = assembly.add(RawLoop {
+                face,
+                fins: Vec::new(),
+            });
+            assembly.get_mut(face).unwrap().loops.push(ring);
+            let vertices = inner_points.map(|point| {
+                let point = assembly.add(Point3::new(point.x, point.y, 0.0));
+                assembly.add(RawVertex {
+                    point,
+                    tolerance: None,
+                })
+            });
+            for index in 0..inner_points.len() {
+                let next = (index + 1) % inner_points.len();
+                let start = inner_points[index];
+                let end = inner_points[next];
+                let delta = end - start;
+                let length = delta.norm();
+                let curve = assembly
+                    .insert_curve(CurveGeom::Line(
+                        Line::new(
+                            Point3::new(start.x, start.y, 0.0),
+                            Vec3::new(delta.x, delta.y, 0.0),
+                        )
+                        .unwrap(),
+                    ))
+                    .unwrap();
+                let pcurve = assembly
+                    .insert_pcurve(Curve2dGeom::Line(Line2d::new(start, delta).unwrap()))
+                    .unwrap();
+                let edge = assembly.add(RawEdge {
+                    curve: Some(curve),
+                    vertices: [Some(vertices[index]), Some(vertices[next])],
+                    bounds: Some((0.0, length)),
+                    fins: Vec::new(),
+                    tolerance: None,
+                });
+                let fin = assembly.add(RawFin {
+                    parent: ring,
+                    edge,
+                    sense: RawSense::Forward,
+                    pcurve: Some(
+                        FinPcurve::new(
+                            pcurve,
+                            ParamRange::new(0.0, length),
+                            ParamMap1d::identity(),
+                        )
+                        .unwrap(),
+                    ),
+                });
+                assembly.get_mut(edge).unwrap().fins.push(fin);
+                assembly.get_mut(ring).unwrap().fins.push(fin);
+            }
+        }
+        add_ring.commit_checked_body(raw_body).unwrap();
+
+        let start = Point3::new(-2.0, -2.0, 0.0);
+        let end = Point3::new(-1.0, -1.0, 0.0);
+        let delta = end - start;
+        let length = delta.norm();
+        let curve = store
+            .insert_curve(CurveGeom::Line(Line::new(start, delta).unwrap()))
+            .unwrap();
+        let make_reversed_pcurve = |store: &mut ktopo::store::Store| {
+            store
+                .insert_pcurve(Curve2dGeom::Line(
+                    Line2d::new(
+                        Point2::new(end.x, end.y),
+                        Vec2::new(start.x - end.x, start.y - end.y),
+                    )
+                    .unwrap(),
+                ))
+                .unwrap()
+        };
+        let forward = make_reversed_pcurve(store);
+        let reversed = make_reversed_pcurve(store);
+        let range = ParamRange::new(0.0, length);
+        let map = PcurveParameterMap::affine(-1.0, length).unwrap();
+        let request = JoinRingRequest::new(
+            LoopId::new(part.clone(), outer),
+            0,
+            LoopId::new(part.clone(), ring),
+            0,
+            BoundedCurve::new(CurveId::new(part.clone(), curve), range),
+            [
+                BoundedPcurve::new(PcurveId::new(part.clone(), forward), range)
+                    .with_parameter_map(map),
+                BoundedPcurve::new(PcurveId::new(part.clone(), reversed), range)
+                    .with_parameter_map(map),
+            ],
+        );
+        (BodyId::new(part, raw_body), request)
+    }
+
     fn split_request_with_parameterization(
         edit: &mut PartEdit<'_>,
         body: &BodyId,
@@ -998,6 +1356,223 @@ mod tests {
                 kind: EntityKind::Edge
             })
         ));
+    }
+
+    #[test]
+    fn checked_join_remove_ring_round_trip_preserves_metadata_lineage_and_identity() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let mut edit = session.edit_part(part_id).unwrap();
+        let (body, request) = planar_annulus_join_request(&mut edit);
+        let original_ring = request.ring();
+        let outer = request.outer();
+        let expected_map = request.pcurves()[0].parameter_map();
+        let expected_metadata = request.pcurves()[0].metadata();
+        let original_loop_count = edit
+            .as_part()
+            .face(edit.as_part().loop_(outer.clone()).unwrap().face())
+            .unwrap()
+            .loops()
+            .len();
+        assert_eq!(original_loop_count, 2);
+
+        let rolled_back = {
+            let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+            let joined = transaction.join_ring(request.clone()).unwrap();
+            assert_eq!(joined.loop_id(), outer);
+            for fin in joined.fins() {
+                let raw_use = transaction
+                    .inner
+                    .store()
+                    .get(fin.raw())
+                    .unwrap()
+                    .pcurve()
+                    .unwrap();
+                assert_eq!(
+                    PcurveParameterMap::from_raw(raw_use.edge_to_pcurve()),
+                    expected_map
+                );
+                assert_eq!(PcurveMetadata::from_raw(raw_use), expected_metadata);
+            }
+            transaction.rollback().unwrap();
+            joined
+        };
+        assert!(edit.as_part().loop_(original_ring.clone()).is_ok());
+        assert!(matches!(
+            edit.as_part().edge(rolled_back.edge()),
+            Err(Error::StaleEntity {
+                kind: EntityKind::Edge
+            })
+        ));
+
+        let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+        let joined = transaction.join_ring(request).unwrap();
+        assert_eq!(joined, rolled_back);
+        let split = transaction
+            .remove_bridge(RemoveBridgeRequest::new(joined.edge()))
+            .unwrap();
+        assert_eq!(split.outer(), outer);
+        let outcome = transaction.commit(core::slice::from_ref(&body)).unwrap();
+        let journal = outcome.result().unwrap();
+        let lineage = journal.lineage().collect::<Vec<_>>();
+        assert_eq!(lineage.len(), 3);
+        let LineageView::DerivedFrom { derived, source } = &lineage[0] else {
+            panic!("ring join must derive the bridge from the ring");
+        };
+        assert_eq!(*derived, JournalEntity::Edge(joined.edge()));
+        assert_eq!(*source, JournalEntity::Loop(original_ring.clone()));
+        let LineageView::Merge { sources, result } = &lineage[1] else {
+            panic!("ring join must merge the ring into the outer loop");
+        };
+        assert_eq!(
+            sources.clone().collect::<Vec<_>>(),
+            vec![
+                JournalEntity::Loop(outer.clone()),
+                JournalEntity::Loop(original_ring.clone())
+            ]
+        );
+        assert_eq!(*result, JournalEntity::Loop(outer.clone()));
+        let LineageView::Split { source, pieces } = &lineage[2] else {
+            panic!("bridge removal must split the merged loop");
+        };
+        assert_eq!(*source, JournalEntity::Loop(outer.clone()));
+        assert_eq!(
+            pieces.clone().collect::<Vec<_>>(),
+            vec![
+                JournalEntity::Loop(outer.clone()),
+                JournalEntity::Loop(split.ring())
+            ]
+        );
+        assert!(edit.as_part().loop_(split.outer()).is_ok());
+        assert!(edit.as_part().loop_(split.ring()).is_ok());
+        assert!(matches!(
+            edit.as_part().loop_(original_ring),
+            Err(Error::StaleEntity {
+                kind: EntityKind::Loop
+            })
+        ));
+        assert!(matches!(
+            edit.as_part().edge(joined.edge()),
+            Err(Error::StaleEntity {
+                kind: EntityKind::Edge
+            })
+        ));
+    }
+
+    #[test]
+    fn ring_join_preflight_rejects_positions_and_pcurves_without_mutation() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let mut edit = session.edit_part(part_id).unwrap();
+        let (body, request) = planar_annulus_join_request(&mut edit);
+        let ring = request.ring();
+        let loop_count = edit.as_part().loops().len();
+
+        let mut bad_index = request.clone();
+        bad_index.outer_fin_index = usize::MAX;
+        let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+        assert!(transaction.join_ring(bad_index).is_err());
+        assert!(transaction.inner.store().get(ring.raw()).is_ok());
+        transaction.rollback().unwrap();
+
+        let mut bad_range = request.clone();
+        let range = bad_range.pcurves[0].range;
+        bad_range.pcurves[0].range = ParamRange::new(range.lo, range.lerp(0.5));
+        let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+        assert!(transaction.join_ring(bad_range).is_err());
+        assert!(transaction.inner.store().get(ring.raw()).is_ok());
+        transaction.rollback().unwrap();
+
+        let mut bad_chart = request.clone();
+        bad_chart.pcurves[0].metadata =
+            PcurveMetadata::regular().with_chart(PcurveChart::shifted([1.0, 0.0]).unwrap());
+        let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+        assert!(transaction.join_ring(bad_chart).is_err());
+        assert!(transaction.inner.store().get(ring.raw()).is_ok());
+        transaction.rollback().unwrap();
+
+        let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+        let joined = transaction.join_ring(request).unwrap();
+        let split = transaction
+            .remove_bridge(RemoveBridgeRequest::new(joined.edge()))
+            .unwrap();
+        transaction
+            .commit(core::slice::from_ref(&body))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(edit.as_part().loops().len(), loop_count);
+        assert!(edit.as_part().loop_(split.ring()).is_ok());
+    }
+
+    #[test]
+    fn ring_edits_reject_wrong_part_and_stale_identities_before_mutation() {
+        let mut session = Kernel::new().create_session();
+        let first_part = session.create_part();
+        let second_part = session.create_part();
+        let (first_body, first_request) = {
+            let mut edit = session.edit_part(first_part.clone()).unwrap();
+            planar_annulus_join_request(&mut edit)
+        };
+        let (second_request, foreign_bridge) = {
+            let mut edit = session.edit_part(second_part.clone()).unwrap();
+            let (_, request) = planar_annulus_join_request(&mut edit);
+            let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+            let bridge = transaction.join_ring(request.clone()).unwrap().edge();
+            transaction.rollback().unwrap();
+            (request, bridge)
+        };
+
+        let mut edit = session.edit_part(first_part.clone()).unwrap();
+        let loop_count = edit.as_part().loops().len();
+        let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+        assert!(matches!(
+            transaction.join_ring(second_request),
+            Err(Error::WrongPart { expected, actual })
+                if expected == first_part && actual == second_part
+        ));
+        assert!(matches!(
+            transaction.remove_bridge(RemoveBridgeRequest::new(foreign_bridge)),
+            Err(Error::WrongPart { expected, actual })
+                if expected == first_part && actual == second_part
+        ));
+        transaction.rollback().unwrap();
+        assert_eq!(edit.as_part().loops().len(), loop_count);
+
+        let stale_ring = first_request.ring();
+        let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+        let joined = transaction.join_ring(first_request.clone()).unwrap();
+        let stale_edge = joined.edge();
+        transaction
+            .remove_bridge(RemoveBridgeRequest::new(stale_edge.clone()))
+            .unwrap();
+        transaction
+            .commit(core::slice::from_ref(&first_body))
+            .unwrap()
+            .into_result()
+            .unwrap();
+
+        let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+        assert!(matches!(
+            transaction.join_ring(first_request),
+            Err(Error::StaleEntity {
+                kind: EntityKind::Loop
+            })
+        ));
+        assert!(matches!(
+            transaction.remove_bridge(RemoveBridgeRequest::new(stale_edge)),
+            Err(Error::StaleEntity {
+                kind: EntityKind::Edge
+            })
+        ));
+        transaction.rollback().unwrap();
+        assert!(matches!(
+            edit.as_part().loop_(stale_ring),
+            Err(Error::StaleEntity {
+                kind: EntityKind::Loop
+            })
+        ));
+        assert_eq!(edit.as_part().loops().len(), loop_count);
     }
 
     #[test]

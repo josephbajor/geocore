@@ -1,12 +1,12 @@
 //! Facade-only lifecycle tests: no lower-layer crate is imported.
 
 use kernel::{
-    BlockRequest, BodyTessellationBudgetProfile, BoundedCurve, CheckBodyRequest, CheckLevel,
-    CheckOutcome, EntityKind, Error, ExportXtRequest, Frame, ImportXtRequest,
-    IntersectCurvesRequest, Kernel, MutationKind, OperationSettings, ParamRange, PcurveChart,
-    PcurveEndpointKind, PcurveMetadata, PcurveSeam, PcurveSeamSide, SessionPolicy,
-    SurfaceDerivativeOrder, SurfaceEvaluationRequest, SurfaceParameter, TessOptions,
-    TessellateBodyRequest,
+    BlockRequest, BodyTessellationBudgetProfile, BoundedCurve, BoundedPcurve, CheckBodyRequest,
+    CheckLevel, CheckOutcome, EntityKind, Error, ExportXtRequest, Frame, ImportXtRequest,
+    IntersectCurvesRequest, JoinRingRequest, Kernel, MutationKind, OperationSettings, ParamRange,
+    PcurveChart, PcurveEndpointKind, PcurveMetadata, PcurveSeam, PcurveSeamSide,
+    RemoveBridgeRequest, SessionPolicy, SurfaceDerivativeOrder, SurfaceEvaluationRequest,
+    SurfaceParameter, TessOptions, TessellateBodyRequest,
 };
 
 #[test]
@@ -171,6 +171,77 @@ fn facade_only_client_can_inspect_and_author_pcurve_metadata_values() {
     assert_eq!(periodic.chart().period_shifts(), [1, 0]);
     assert_eq!(periodic.seam(), Some(seam));
     assert!(PcurveChart::shifted([f64::NAN, 0.0]).is_err());
+}
+
+#[test]
+fn facade_only_ring_edit_requests_remain_checked_and_failure_atomic() {
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let body = session
+        .edit_part(part_id.clone())
+        .unwrap()
+        .create_block(BlockRequest::new(Frame::world(), [2.0, 3.0, 4.0]))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .body();
+    let (loop_id, fin_id, edge_id, curve, pcurve) = {
+        let part = session.part(part_id.clone()).unwrap();
+        let face = part
+            .body(body.clone())
+            .unwrap()
+            .faces()
+            .unwrap()
+            .next()
+            .unwrap();
+        let loop_id = part.face(face).unwrap().loops().next().unwrap();
+        let fin_id = part.loop_(loop_id.clone()).unwrap().fins().next().unwrap();
+        let fin = part.fin(fin_id.clone()).unwrap();
+        let edge_id = fin.edge();
+        let edge = part.edge(edge_id.clone()).unwrap();
+        let (lo, hi) = edge.bounds().unwrap();
+        let curve = BoundedCurve::new(edge.curve().unwrap(), ParamRange::new(lo, hi));
+        let pcurve = BoundedPcurve::new(fin.pcurve().unwrap(), fin.pcurve_range().unwrap())
+            .with_parameter_map(fin.pcurve_parameter_map().unwrap())
+            .with_metadata(fin.pcurve_metadata().unwrap());
+        (loop_id, fin_id, edge_id, curve, pcurve)
+    };
+    let request = JoinRingRequest::new(
+        loop_id.clone(),
+        0,
+        loop_id.clone(),
+        0,
+        curve,
+        [pcurve.clone(), pcurve],
+    );
+    assert_eq!(request.outer(), loop_id);
+    assert_eq!(request.ring(), loop_id);
+    assert_eq!(request.outer_fin_index(), 0);
+    assert_eq!(request.ring_fin_index(), 0);
+    assert_eq!(request.pcurves().len(), 2);
+
+    let mut edit = session.edit_part(part_id.clone()).unwrap();
+    let original_loop_count = edit.as_part().loops().len();
+    let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+    assert!(transaction.join_ring(request).is_err());
+    transaction.rollback().unwrap();
+    let mut transaction = edit.begin_edit(OperationSettings::default()).unwrap();
+    assert!(
+        transaction
+            .remove_bridge(RemoveBridgeRequest::new(edge_id))
+            .is_err()
+    );
+    transaction.rollback().unwrap();
+    assert_eq!(edit.as_part().loops().len(), original_loop_count);
+    assert!(edit.as_part().fin(fin_id).is_ok());
+    drop(edit);
+
+    let check = session
+        .part(part_id)
+        .unwrap()
+        .check_body(CheckBodyRequest::new(body, CheckLevel::Fast))
+        .unwrap();
+    assert_eq!(check.result().unwrap().outcome(), CheckOutcome::Valid);
 }
 
 #[test]

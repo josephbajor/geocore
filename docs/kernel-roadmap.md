@@ -500,8 +500,9 @@ Remaining before the gate closes:
   pass checker v2 without reconstructing UVs from 3D samples.
 - A deliberately failing multi-step topology operation restores bit-identical entities,
   handle validity, and next-allocation behavior. **Landed for scoped Store transactions.**
-- A successful split/merge scenario emits deterministic lineage events. **Landed for the
-  checked pcurve-aware transaction wrappers.**
+- Successful split/merge scenarios emit deterministic lineage events. **Landed for the
+  checked pcurve-aware face wrappers and the facade-owned bridge-edge removal/ring-join
+  wrappers, including exact rollback identity and affine pcurve metadata transport.**
 - Budget exhaustion and a checker-failing tolerance edit restore the prior entity state;
   successful growth preserves imported origin and emits deterministic usage/events.
   **Landed for transaction-owned face/edge/vertex tolerance growth.**
