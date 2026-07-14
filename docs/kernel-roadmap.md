@@ -981,10 +981,15 @@ true only for an empty complete result.
   proof scans at most 112 open arrangement arcs after those pair checks and
   returns `Complete` empty only when every boundary component is excluded; its
   disjoint exemplar pins exact 96/95 Work-style witness evidence and swap
-  parity. Wider, polar, tangent, multiple-cycle, ambiguous, and near-coincident
-  non-identical cases remain `Indeterminate` or on their existing typed failure
-  boundary. Decomposition/union and collapsed general contacts are the next
-  analytic sphere boundaries.
+  parity. Bit-exact equality locks additionally collapse to tangent circle arcs
+  or points. A first wide arm splits exactly one pole-clear wide operand into
+  three closed sub-π cells and returns `Complete` only for three certified-empty
+  cells or one positive region with two certified-empty siblings; sibling
+  emptiness cancels the artificial seams before parent correspondence is
+  restored. Its piece/pair/arc ceilings pin 3/2, 84/83, and 336/335 evidence.
+  Multi-cell positive unions, two-wide inputs, polar, non-exact tangent,
+  multiple-cycle, ambiguous, and near-coincident non-identical cases remain
+  `Indeterminate` or on their existing typed failure boundary.
 
 ### M4b — Curve/curve and curve/surface completion
 

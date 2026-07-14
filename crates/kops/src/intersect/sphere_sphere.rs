@@ -198,14 +198,24 @@ fn intersect_orthogonal_sphere_octants(
         exact_sphere_octant_signs(a_range, tolerances),
         exact_sphere_octant_signs(b_range, tolerances),
     ) else {
+        let needs_wide_union = a_range[0].width() >= core::f64::consts::PI
+            || b_range[0].width() >= core::f64::consts::PI;
         return intersect_certified_general_sphere_windows(
             a,
             a_range,
             b,
             b_range,
             tolerances,
-            GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
-            GENERAL_SPHERE_WINDOW_ARC_LIMIT,
+            if needs_wide_union {
+                GENERAL_SPHERE_WIDE_PAIR_LIMIT
+            } else {
+                GENERAL_SPHERE_WINDOW_PAIR_LIMIT
+            },
+            if needs_wide_union {
+                GENERAL_SPHERE_WIDE_ARC_LIMIT
+            } else {
+                GENERAL_SPHERE_WINDOW_ARC_LIMIT
+            },
         );
     };
     let Some(axis_map) = exact_signed_coordinate_axis_map(a, b) else {
@@ -258,6 +268,11 @@ const GENERAL_SPHERE_WINDOW_PAIR_LIMIT: usize = 28;
 // Eight boundary circles meet at most fourteen roots each. Sampling every
 // open arrangement arc therefore consumes at most 8 * 14 fixed witnesses.
 const GENERAL_SPHERE_WINDOW_ARC_LIMIT: usize = 112;
+const GENERAL_SPHERE_WIDE_PIECE_LIMIT: usize = 3;
+const GENERAL_SPHERE_WIDE_PAIR_LIMIT: usize =
+    GENERAL_SPHERE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_PAIR_LIMIT;
+const GENERAL_SPHERE_WIDE_ARC_LIMIT: usize =
+    GENERAL_SPHERE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_ARC_LIMIT;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SphereWindowConstraint {
@@ -336,6 +351,47 @@ fn certify_general_sphere_windows(
     arc_limit: usize,
     parameter_allowance: f64,
 ) -> Result<SurfaceSurfaceIntersections> {
+    validate_general_sphere_window_base(a_range, parameter_allowance)?;
+    validate_general_sphere_window_base(b_range, parameter_allowance)?;
+    match (
+        a_range[0].width() >= core::f64::consts::PI,
+        b_range[0].width() >= core::f64::consts::PI,
+    ) {
+        (true, false) => {
+            return certify_single_wide_sphere_window_union(
+                a,
+                a_range,
+                b,
+                b_range,
+                true,
+                tolerances,
+                parameter_allowance,
+                GENERAL_SPHERE_WIDE_PIECE_LIMIT,
+                pair_limit,
+                arc_limit,
+            );
+        }
+        (false, true) => {
+            return certify_single_wide_sphere_window_union(
+                a,
+                a_range,
+                b,
+                b_range,
+                false,
+                tolerances,
+                parameter_allowance,
+                GENERAL_SPHERE_WIDE_PIECE_LIMIT,
+                pair_limit,
+                arc_limit,
+            );
+        }
+        (true, true) => {
+            return Err(Error::InvalidGeometry {
+                reason: "general coincident sphere wide-window union supports exactly one wide longitude operand",
+            });
+        }
+        (false, false) => {}
+    }
     validate_general_sphere_window_slice(a_range, parameter_allowance)?;
     validate_general_sphere_window_slice(b_range, parameter_allowance)?;
 
@@ -458,6 +514,136 @@ fn certify_general_sphere_windows(
         ),
         max_residual,
     };
+    SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
+        Vec::new(),
+        Vec::new(),
+        vec![region],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn certify_single_wide_sphere_window_union(
+    a: &Sphere,
+    a_range: [ParamRange; 2],
+    b: &Sphere,
+    b_range: [ParamRange; 2],
+    first_is_wide: bool,
+    tolerances: Tolerances,
+    parent_parameter_allowance: f64,
+    piece_limit: usize,
+    pair_limit: usize,
+    arc_limit: usize,
+) -> Result<SurfaceSurfaceIntersections> {
+    if piece_limit < GENERAL_SPHERE_WIDE_PIECE_LIMIT {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere wide-window piece limit exhausted",
+        });
+    }
+    if pair_limit < GENERAL_SPHERE_WIDE_PAIR_LIMIT {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere wide-window pair limit exhausted",
+        });
+    }
+    if arc_limit < GENERAL_SPHERE_WIDE_ARC_LIMIT {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere wide-window arc limit exhausted",
+        });
+    }
+
+    let wide_range = if first_is_wide { a_range } else { b_range };
+    let width = wide_range[0].width();
+    if width / GENERAL_SPHERE_WIDE_PIECE_LIMIT as f64
+        >= core::f64::consts::PI - parent_parameter_allowance
+    {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere wide-window union requires three sub-pi decomposition cells",
+        });
+    }
+    let seams = [
+        wide_range[0].lo,
+        wide_range[0].lo + width / 3.0,
+        wide_range[0].lo + 2.0 * width / 3.0,
+        wide_range[0].hi,
+    ];
+    if seams[0] != wide_range[0].lo
+        || seams[3] != wide_range[0].hi
+        || seams.windows(2).any(|pair| pair[0] >= pair[1])
+    {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere wide-window decomposition is not ordered and exact at source endpoints",
+        });
+    }
+
+    let mut occupied_region = None;
+    let mut empty_pieces = 0;
+    for piece in 0..GENERAL_SPHERE_WIDE_PIECE_LIMIT {
+        let piece_range = [
+            ParamRange::new(seams[piece], seams[piece + 1]),
+            wide_range[1],
+        ];
+        let (piece_a_range, piece_b_range) = if first_is_wide {
+            (piece_range, b_range)
+        } else {
+            (a_range, piece_range)
+        };
+        let piece_allowance =
+            arbitrary_sphere_octant_parameter_allowance(piece_a_range, piece_b_range)?;
+        let hit = certify_general_sphere_windows(
+            a,
+            piece_a_range,
+            b,
+            piece_b_range,
+            tolerances,
+            GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
+            GENERAL_SPHERE_WINDOW_ARC_LIMIT,
+            piece_allowance,
+        )?;
+        if hit.is_proven_empty() {
+            empty_pieces += 1;
+            continue;
+        }
+        if !hit.is_complete()
+            || !hit.points.is_empty()
+            || !hit.curves.is_empty()
+            || hit.regions.len() != 1
+            || occupied_region.is_some()
+        {
+            return Err(Error::InvalidGeometry {
+                reason: "general coincident sphere wide-window union requires one positive-area cell and certified-empty siblings",
+            });
+        }
+        occupied_region = hit.regions.into_iter().next();
+    }
+
+    let Some(mut region) = occupied_region else {
+        if empty_pieces == GENERAL_SPHERE_WIDE_PIECE_LIMIT {
+            return Ok(SurfaceSurfaceIntersections::complete_empty());
+        }
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere wide-window union did not cover every decomposition cell",
+        });
+    };
+    if empty_pieces + 1 != GENERAL_SPHERE_WIDE_PIECE_LIMIT {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere wide-window union did not cancel every artificial seam",
+        });
+    }
+
+    // All cells are closed. A point on either artificial seam belongs to both
+    // adjacent cells, so a certified-empty sibling proves that the occupied
+    // cell cannot meet that seam. The retained region therefore has only true
+    // source-window boundaries, and replacing its cell map with the parent
+    // source map is an exact union identity rather than an interpolation.
+    region.correspondence = SurfaceRegionCorrespondence::GeneralSphereWindow(
+        general_sphere_window_map(a, a_range, b, b_range, parent_parameter_allowance),
+    );
+    region.max_residual = region
+        .max_residual
+        .max(arbitrary_sphere_octant_residual_bound(
+            a,
+            b,
+            parent_parameter_allowance,
+        )?);
     SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
         Vec::new(),
         Vec::new(),
@@ -842,15 +1028,27 @@ fn validate_general_sphere_window_slice(
     range: [ParamRange; 2],
     parameter_allowance: f64,
 ) -> Result<()> {
+    validate_general_sphere_window_base(range, parameter_allowance)?;
+    if range[0].width() >= core::f64::consts::PI - parameter_allowance {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere window fallback supports only positive-area pole-clear windows with longitude span below pi",
+        });
+    }
+    Ok(())
+}
+
+fn validate_general_sphere_window_base(
+    range: [ParamRange; 2],
+    parameter_allowance: f64,
+) -> Result<()> {
     let half_pi = core::f64::consts::FRAC_PI_2;
     if range[0].width() <= parameter_allowance
-        || range[0].width() >= core::f64::consts::PI - parameter_allowance
         || range[1].width() <= parameter_allowance
         || range[1].lo <= -half_pi + parameter_allowance
         || range[1].hi >= half_pi - parameter_allowance
     {
         return Err(Error::InvalidGeometry {
-            reason: "general coincident sphere window fallback supports only positive-area pole-clear windows with longitude span below pi",
+            reason: "general coincident sphere window proof supports only positive-area pole-clear windows",
         });
     }
     Ok(())
@@ -2662,6 +2860,135 @@ mod tests {
             .unwrap_err(),
             Error::InvalidGeometry {
                 reason: "general coincident sphere window proof arc limit exhausted"
+            }
+        );
+
+        let wide_angle = 0.2;
+        let wide_b = Sphere::new(
+            Frame::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(math::sin(wide_angle), 0.0, math::cos(wide_angle)),
+                Vec3::new(math::cos(wide_angle), 0.0, -math::sin(wide_angle)),
+            )
+            .unwrap(),
+            1.0,
+        )
+        .unwrap();
+        let wide_a_range = [
+            ParamRange::new(-0.6, core::f64::consts::PI - 0.6),
+            ParamRange::new(-0.8, 0.8),
+        ];
+        let wide_b_range = [ParamRange::new(-0.25, 0.25), ParamRange::new(-0.2, 0.2)];
+        let wide_allowance =
+            arbitrary_sphere_octant_parameter_allowance(wide_a_range, wide_b_range).unwrap();
+        let wide = certify_single_wide_sphere_window_union(
+            &a,
+            wide_a_range,
+            &wide_b,
+            wide_b_range,
+            true,
+            Tolerances::default(),
+            wide_allowance,
+            GENERAL_SPHERE_WIDE_PIECE_LIMIT,
+            GENERAL_SPHERE_WIDE_PAIR_LIMIT,
+            GENERAL_SPHERE_WIDE_ARC_LIMIT,
+        )
+        .unwrap();
+        assert!(wide.is_complete());
+        assert_eq!(wide.regions.len(), 1);
+        let wide_swapped = certify_single_wide_sphere_window_union(
+            &wide_b,
+            wide_b_range,
+            &a,
+            wide_a_range,
+            false,
+            Tolerances::default(),
+            wide_allowance,
+            GENERAL_SPHERE_WIDE_PIECE_LIMIT,
+            GENERAL_SPHERE_WIDE_PAIR_LIMIT,
+            GENERAL_SPHERE_WIDE_ARC_LIMIT,
+        )
+        .unwrap();
+        assert_eq!(wide.clone().swapped(), wide_swapped);
+
+        assert_eq!(
+            certify_single_wide_sphere_window_union(
+                &a,
+                wide_a_range,
+                &wide_b,
+                wide_b_range,
+                true,
+                Tolerances::default(),
+                wide_allowance,
+                GENERAL_SPHERE_WIDE_PIECE_LIMIT - 1,
+                GENERAL_SPHERE_WIDE_PAIR_LIMIT,
+                GENERAL_SPHERE_WIDE_ARC_LIMIT,
+            )
+            .unwrap_err(),
+            Error::InvalidGeometry {
+                reason: "general coincident sphere wide-window piece limit exhausted"
+            }
+        );
+        assert_eq!(
+            certify_single_wide_sphere_window_union(
+                &a,
+                wide_a_range,
+                &wide_b,
+                wide_b_range,
+                true,
+                Tolerances::default(),
+                wide_allowance,
+                GENERAL_SPHERE_WIDE_PIECE_LIMIT,
+                GENERAL_SPHERE_WIDE_PAIR_LIMIT - 1,
+                GENERAL_SPHERE_WIDE_ARC_LIMIT,
+            )
+            .unwrap_err(),
+            Error::InvalidGeometry {
+                reason: "general coincident sphere wide-window pair limit exhausted"
+            }
+        );
+        assert_eq!(
+            certify_single_wide_sphere_window_union(
+                &a,
+                wide_a_range,
+                &wide_b,
+                wide_b_range,
+                true,
+                Tolerances::default(),
+                wide_allowance,
+                GENERAL_SPHERE_WIDE_PIECE_LIMIT,
+                GENERAL_SPHERE_WIDE_PAIR_LIMIT,
+                GENERAL_SPHERE_WIDE_ARC_LIMIT - 1,
+            )
+            .unwrap_err(),
+            Error::InvalidGeometry {
+                reason: "general coincident sphere wide-window arc limit exhausted"
+            }
+        );
+
+        let recursively_wide_a_range = [
+            ParamRange::new(-0.6, 3.0 * core::f64::consts::PI - 0.6),
+            ParamRange::new(-0.8, 0.8),
+        ];
+        let recursively_wide_allowance =
+            arbitrary_sphere_octant_parameter_allowance(recursively_wide_a_range, wide_b_range)
+                .unwrap();
+        assert_eq!(
+            certify_single_wide_sphere_window_union(
+                &a,
+                recursively_wide_a_range,
+                &wide_b,
+                wide_b_range,
+                true,
+                Tolerances::default(),
+                recursively_wide_allowance,
+                GENERAL_SPHERE_WIDE_PIECE_LIMIT,
+                GENERAL_SPHERE_WIDE_PAIR_LIMIT,
+                GENERAL_SPHERE_WIDE_ARC_LIMIT,
+            )
+            .unwrap_err(),
+            Error::InvalidGeometry {
+                reason: "general coincident sphere wide-window union requires three sub-pi decomposition cells"
             }
         );
     }
