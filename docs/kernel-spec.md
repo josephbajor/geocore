@@ -125,6 +125,12 @@ implicit uncertainty. The resulting deterministic cells conservatively cover eve
 possible contact and expose cell-budget or floating-parameter-resolution limits. Empty
 complete isolation is completion evidence; non-empty cells remain candidates and cannot
 be promoted by fixed-grid sampling alone.
+The first direct NURBS/NURBS graph arm is deliberately narrower: two non-planar
+quadratic-linear unit charts with identical constant weights and finite-open ranges share
+the exact injective parameterization `(x,y)=(u,v)`. A rounded scalar difference guides
+discovery only. Complete misses come from outward differences of the original control
+nets, and retained degree-1 branches require independent whole-range lift certificates
+against both originals before persistence.
 
 ### L2 — Topology
 Parasolid's exact hierarchy:

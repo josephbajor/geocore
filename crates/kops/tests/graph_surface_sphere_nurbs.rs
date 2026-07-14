@@ -477,7 +477,7 @@ fn sphere_nurbs_stale_and_altered_sources_roll_back_atomically() {
 }
 
 #[test]
-fn procedural_and_nurbs_nurbs_pairs_remain_explicitly_unsupported() {
+fn procedural_and_planar_sphere_nurbs_pairs_remain_explicitly_unsupported() {
     let sphere = Sphere::new(Frame::world(), 1.0).unwrap();
     let surface = curved_patch(0.5);
     let other_surface = curved_patch(0.55);
@@ -504,12 +504,6 @@ fn procedural_and_nurbs_nurbs_pairs_remain_explicitly_unsupported() {
         ),
         (
             offset_nurbs,
-            surface.param_range(),
-            other_nurbs,
-            other_surface.param_range(),
-        ),
-        (
-            nurbs,
             surface.param_range(),
             other_nurbs,
             other_surface.param_range(),

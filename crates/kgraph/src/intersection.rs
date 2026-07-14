@@ -3122,6 +3122,177 @@ pub fn certify_verified_plane_nurbs_intersection_residuals(
     })
 }
 
+/// Exact logical resources consumed by one operation-generated direct
+/// NURBS/NURBS whole-range certificate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifiedNurbsNurbsCertificateCost {
+    work: u64,
+    items: u64,
+    depth: u64,
+}
+
+impl VerifiedNurbsNurbsCertificateCost {
+    /// Paired original-source interval-enclosure work.
+    pub const fn work(self) -> u64 {
+        self.work
+    }
+
+    /// Paired carrier subdivision cells proved over the complete trace.
+    pub const fn items(self) -> u64 {
+        self.items
+    }
+
+    /// Fixed binary subdivision depth used within every carrier span.
+    pub const fn depth(self) -> u64 {
+        self.depth
+    }
+}
+
+/// Deterministic logical resources required by
+/// [`certify_verified_nurbs_nurbs_intersection_residuals`].
+///
+/// Every paired subdivision cell costs the sum of the two original-source
+/// differential enclosures: `6 * source tensor span slots + 1` per trace.
+/// One paired cell is observed as one proof item, and every carrier span uses
+/// the fixed depth retained by the certificate.
+pub fn verified_nurbs_nurbs_intersection_certificate_cost(
+    carrier: &NurbsCurve,
+    traces: &[NurbsIntersectionTrace; 2],
+) -> Option<VerifiedNurbsNurbsCertificateCost> {
+    let [
+        NurbsIntersectionTrace::Nurbs(surface_a),
+        NurbsIntersectionTrace::Nurbs(surface_b),
+    ] = traces
+    else {
+        return None;
+    };
+    let control_count = u64::try_from(carrier.points().len()).ok()?;
+    let carrier_spans = control_count.checked_sub(1)?;
+    let subdivisions = 1_u64.checked_shl(TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u32)?;
+    let items = carrier_spans.checked_mul(subdivisions)?;
+    let trace_work = |surface: &NurbsSurface| {
+        let (control_u, control_v) = surface.net_size();
+        let span_u = u64::try_from(control_u.checked_sub(surface.degree_u())?).ok()?;
+        let span_v = u64::try_from(control_v.checked_sub(surface.degree_v())?).ok()?;
+        span_u.checked_mul(span_v)?.checked_mul(6)?.checked_add(1)
+    };
+    let work_per_item = trace_work(surface_a)?.checked_add(trace_work(surface_b)?)?;
+    Some(VerifiedNurbsNurbsCertificateCost {
+        work: items.checked_mul(work_per_item)?,
+        items,
+        depth: TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64,
+    })
+}
+
+/// Certify one operation-generated direct NURBS/NURBS marching branch over
+/// its complete finite degree-1 carrier range.
+///
+/// Both ordered traces use original-source interval differential enclosures
+/// and centered mean-value residuals. No transmitted interchange metadata,
+/// point sample, or recomputed spatial intersection is proof evidence.
+pub fn certify_verified_nurbs_nurbs_intersection_residuals(
+    carrier: NurbsCurve,
+    traces: [NurbsIntersectionTrace; 2],
+    pcurves: [NurbsCurve2d; 2],
+    tolerance: f64,
+) -> Result<VerifiedNurbsIntersectionCertificate, IntersectionCertificateError> {
+    if verified_nurbs_nurbs_intersection_certificate_cost(&carrier, &traces).is_none() {
+        return Err(IntersectionCertificateError::InvalidTraceFamily);
+    }
+    let carrier_range = carrier.param_range();
+    if !carrier_range.is_finite() || carrier_range.width() <= 0.0 {
+        return Err(IntersectionCertificateError::InvalidCarrierRange);
+    }
+    if !tolerance.is_finite() || tolerance < 0.0 {
+        return Err(IntersectionCertificateError::InvalidTolerance);
+    }
+    if carrier.degree() != 1
+        || carrier.weights().is_some()
+        || !carrier.knots().is_clamped()
+        || carrier.points().len() < 2
+    {
+        return Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "verified NURBS branch carrier must be open clamped polynomial degree 1",
+            },
+        );
+    }
+    if carrier
+        .points()
+        .iter()
+        .copied()
+        .any(|point| !finite_vec3(point))
+        || traces.iter().any(|trace| match trace {
+            NurbsIntersectionTrace::Nurbs(surface) => {
+                surface
+                    .points()
+                    .iter()
+                    .copied()
+                    .any(|point| !finite_vec3(point))
+                    || surface
+                        .weights()
+                        .is_some_and(|weights| weights.iter().any(|weight| !weight.is_finite()))
+            }
+            NurbsIntersectionTrace::Plane(_)
+            | NurbsIntersectionTrace::Sphere(_)
+            | NurbsIntersectionTrace::OffsetNurbs(_) => true,
+        })
+    {
+        return Err(IntersectionCertificateError::NonFiniteGeometry);
+    }
+
+    let carrier_knots = carrier.knots().as_slice();
+    let mut residual_bounds = [0.0; 2];
+    for index in 0..2 {
+        let trace = paired_trace(index);
+        let pcurve = &pcurves[index];
+        if pcurve.degree() != 1
+            || pcurve.weights().is_some()
+            || !pcurve.knots().is_clamped()
+            || pcurve.knots().as_slice() != carrier_knots
+            || pcurve.points().len() != carrier.points().len()
+            || pcurve.param_range() != carrier_range
+        {
+            return Err(
+                IntersectionCertificateError::UnsupportedTraceParameterization {
+                    trace,
+                    reason: "verified NURBS pcurve must share the carrier's open clamped polynomial degree-1 basis",
+                },
+            );
+        }
+        if pcurve
+            .points()
+            .iter()
+            .any(|point| !point.x.is_finite() || !point.y.is_finite())
+        {
+            return Err(IntersectionCertificateError::NonFiniteGeometry);
+        }
+
+        let NurbsIntersectionTrace::Nurbs(surface) = &traces[index] else {
+            return Err(IntersectionCertificateError::InvalidTraceFamily);
+        };
+        let bound = transmitted_nurbs_trace_residual_bound(&carrier, surface, None, pcurve, trace)?;
+        if bound > tolerance {
+            return Err(IntersectionCertificateError::ResidualExceedsTolerance {
+                trace,
+                residual_bound: bound,
+                tolerance,
+            });
+        }
+        residual_bounds[index] = bound;
+    }
+
+    Ok(VerifiedNurbsIntersectionCertificate {
+        carrier,
+        carrier_range,
+        traces,
+        pcurves,
+        residual_bounds,
+        tolerance,
+        proof_depth: TRANSMITTED_NURBS_TRACE_PROOF_DEPTH,
+    })
+}
+
 /// Exact logical resources consumed by one operation-generated Sphere/NURBS
 /// whole-range certificate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

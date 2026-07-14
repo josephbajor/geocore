@@ -1,6 +1,6 @@
 # F1 procedural geometry graph
 
-Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field or direct-Sphere/NURBS descriptors, plus M3c transmitted-chart consumers through endpoint-only equal-limit closure, finite-open/end-terminated `T/F` singular closure, and the first finite-open B-surface/Plane chart with omitted interior Plane UVs are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
+Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct-Sphere/NURBS, or compatible direct-NURBS/NURBS descriptors, plus M3c transmitted-chart consumers through endpoint-only equal-limit closure, finite-open/end-terminated `T/F` singular closure, and the first finite-open B-surface/Plane chart with omitted interior Plane UVs are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
 
 ## Outcome
 
@@ -680,8 +680,18 @@ uses an outward centered mean-value interval on every depth-10 carrier cell;
 paired original-source NURBS evidence yields exact one-segment
 8,192/8,191 Work, 1,024/1,023 Items, and 10/9 Depth boundaries. Raw lower evidence,
 complete misses, indeterminate completion, operand swap, and branch/trace
-ordering remain authoritative. Planar NURBS encodings, Offset(Sphere)/NURBS,
-Offset(NURBS)/NURBS, NURBS/NURBS, and other procedural pairs remain unsupported.
+ordering remain authoritative. A first direct NURBS/NURBS arm accepts only two
+genuinely non-planar finite-open quadratic-linear unit charts with identical
+constant weights and requested ranges. Their exact shared `(x,y)=(u,v)` chart
+reduces discovery to a scalar control difference, but that rounded derived
+surface cannot complete an empty result. Only outward subtraction of both
+original `z` control nets may prove a miss; every positive branch is separately
+certified against both originals. Its paired cost is
+`S*2^10*((6R_a+1)+(6R_b+1))` Work with `S*2^10` Items and Depth 10; the
+one-span fixture pins `14336/14335` Work, `1024/1023` Items, and `10/9` Depth.
+Planar or unaligned NURBS encodings, unequal ranges or weights,
+Offset(Sphere)/NURBS, Offset(NURBS)/NURBS, and broader NURBS/NURBS or other
+procedural pairs remain unsupported.
 Certified branches can be committed atomically as
 `CurveDescriptor::Intersection` or
 `CurveDescriptor::VerifiedNurbsIntersection` nodes with a stable class key,
@@ -758,8 +768,9 @@ whole-range proof. Records 1828 and 1671 are admitted in place, while the
 traversal-masked records 2008 and 1678 are independently certified by focused
 payload transplants.
 
-- Add Offset(NURBS)/NURBS, NURBS/NURBS, and other exact/procedural
-  families only with contextual accounting and paired trace evidence.
+- Add Offset(NURBS)/NURBS, broader NURBS/NURBS charts, and other
+  exact/procedural families only with contextual accounting and paired trace
+  evidence.
 - Broaden the M3c consumer to null/general closed limits, other nullable chart
   data, non-endpoint-only periodic trace ranges, noncanonical charts, and further terminator variants
   without recomputing their transmitted scars.
@@ -791,7 +802,13 @@ the graph ownership model.
   evidence, prove the analytic lift with outward midpoint and derivative
   intervals, pin exact 8,192/8,191 Work, 1,024/1,023 Items, and 10/9 Depth,
   persist ordered sources atomically across swap/miss/stale cases, and reject
-  poles, Offset(Sphere), Offset(NURBS), NURBS/NURBS, and planar encodings;
+  poles, Offset(Sphere), Offset(NURBS), and planar encodings;
+- compatible direct-NURBS/direct-NURBS queries preserve lower raw/report
+  evidence, use their rounded scalar difference only for discovery, prove
+  complete misses from outward original-control differences, certify both
+  original lifts, pin exact 14,336/14,335 Work, 1,024/1,023 Items, and 10/9
+  Depth, preserve ordered identity through swap and persistence, and reject
+  offsets, planar or unaligned charts, unequal ranges, and incompatible weights;
 - transmitted chart descriptors retain ordered plane/pcurve dependencies,
   reject mismatched or mutated proof inputs, and evaluate the certified carrier;
 - transmitted charts whose actual source is a safe nested plane-offset chain

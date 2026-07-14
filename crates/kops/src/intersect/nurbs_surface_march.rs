@@ -138,6 +138,11 @@ pub(super) struct MarchConfig<'a> {
     pub surface_range: [ParamRange; 2],
     pub tolerances: Tolerances,
     pub implicit_surface: &'a dyn ImplicitSurface,
+    /// Whether the implicit proof may terminate with complete-empty evidence.
+    /// Derived discovery fields whose coefficients were formed in floating
+    /// point set this false and supply any original-source miss proof before
+    /// entering the marcher.
+    pub implicit_empty_is_authoritative: bool,
     pub signed_distance: &'a dyn Fn(Point3) -> f64,
     pub other_uv: &'a dyn Fn(Point3) -> Option<[f64; 2]>,
     pub branch_kind: &'a dyn Fn(&[MarchPoint]) -> ContactKind,
@@ -257,12 +262,13 @@ pub(super) fn march_nurbs_surface_intersection_with_traces_in_scope(
 ) -> core::result::Result<MarchOutput, ContextMarchError> {
     validate_nurbs_surface_range(config)?;
     let mut incomplete_evidence = match contextual_proof_coverage(config, scope)? {
-        ProofCoverage::ProvenEmpty => {
+        ProofCoverage::ProvenEmpty if config.implicit_empty_is_authoritative => {
             return Ok(MarchOutput {
                 result: SurfaceSurfaceIntersections::complete_empty(),
                 traces: Vec::new(),
             });
         }
+        ProofCoverage::ProvenEmpty => Vec::new(),
         ProofCoverage::Incomplete(evidence) => evidence,
     };
 

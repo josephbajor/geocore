@@ -43,6 +43,7 @@ mod nurbs_cone;
 mod nurbs_curve_march;
 mod nurbs_cylinder;
 mod nurbs_nurbs;
+mod nurbs_nurbs_surface;
 mod nurbs_plane;
 mod nurbs_sphere;
 mod nurbs_surface_march;
@@ -131,6 +132,9 @@ pub use nurbs_nurbs::{
     NURBS_CURVE_PAIR_PROOF_DIAGNOSTICS, NURBS_CURVE_PAIR_SEED_ATTEMPTS,
     NURBS_CURVE_PAIR_SEED_LIMIT, intersect_bounded_nurbs_nurbs,
     intersect_bounded_nurbs_nurbs_with_context,
+};
+pub use nurbs_nurbs_surface::{
+    intersect_bounded_nurbs_nurbs_surfaces, intersect_bounded_nurbs_nurbs_surfaces_with_context,
 };
 pub use nurbs_plane::intersect_bounded_nurbs_plane;
 pub use nurbs_sphere::intersect_bounded_nurbs_sphere;

@@ -170,6 +170,7 @@ pub(super) fn intersect_bounded_plane_nurbs_surface_with_traces_in_scope(
         surface_range,
         tolerances,
         implicit_surface: plane,
+        implicit_empty_is_authoritative: true,
         signed_distance: &signed_distance,
         other_uv: &other_uv,
         branch_kind: &branch_kind,
