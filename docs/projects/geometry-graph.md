@@ -701,9 +701,16 @@ complete misses; the rounded effective surface remains discovery-only. The
 certificate retains the live offset root, signed distance, original basis,
 direct peer, and both pcurves, protects the basis transitively, and preserves
 the same exact 14,336/14,335 Work, 1,024/1,023 Items, and 10/9 Depth boundaries.
+Two independent direct Offset(NURBS) roots now have a narrower complete-empty
+arm when both bases use that same constant-+Z-normal unit chart and outward
+original basis-plus-distance control intervals prove strict separation. The
+proof visits exactly four graph nodes at dependency depth two; 3/4 visits and
+1/2 depth pin denial/admission. It emits no carrier or certificate, preserves
+ordered roots under swap, and does not promote coincident effective sheets.
 Planar or unaligned peers, unequal ranges or weights, collapsed or non-finite
-sphere-offset fields, nested or varying-normal Offset(NURBS), Offset/Offset, and broader NURBS/NURBS
-or other procedural pairs remain unsupported.
+sphere-offset fields, nested or varying-normal Offset(NURBS), intersecting or
+coincident Offset(NURBS)/Offset(NURBS), and broader NURBS/NURBS or other
+procedural pairs remain unsupported.
 Certified branches can be committed atomically as
 `CurveDescriptor::Intersection` or
 `CurveDescriptor::VerifiedNurbsIntersection` nodes with a stable class key,

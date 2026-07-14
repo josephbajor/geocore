@@ -208,6 +208,30 @@ pub(super) fn supports_offset_nurbs_nurbs_surface_pair(
 ) -> bool {
     signed_distance.is_finite()
         && supports_direct_nurbs_nurbs_surface_pair(basis, offset_range, direct, direct_range)
+        && supports_constant_positive_normal_offset(basis, signed_distance)
+}
+
+pub(super) fn supports_strictly_separated_constant_normal_offset_nurbs_pair(
+    basis_a: &NurbsSurface,
+    signed_distance_a: f64,
+    range_a: [ParamRange; 2],
+    basis_b: &NurbsSurface,
+    signed_distance_b: f64,
+    range_b: [ParamRange; 2],
+) -> bool {
+    supports_direct_nurbs_nurbs_surface_pair(basis_a, range_a, basis_b, range_b)
+        && supports_constant_positive_normal_offset(basis_a, signed_distance_a)
+        && supports_constant_positive_normal_offset(basis_b, signed_distance_b)
+        && constant_normal_offset_nurbs_pair_proves_empty(
+            basis_a,
+            signed_distance_a,
+            basis_b,
+            signed_distance_b,
+        )
+}
+
+fn supports_constant_positive_normal_offset(basis: &NurbsSurface, signed_distance: f64) -> bool {
+    signed_distance.is_finite()
         && basis
             .points()
             .first()
@@ -368,6 +392,24 @@ fn offset_control_difference_proves_empty(
     for (basis, direct) in basis.points().iter().zip(direct.points()) {
         let difference =
             Interval::point(basis.z) + Interval::point(signed_distance) - Interval::point(direct.z);
+        lower = lower.min(difference.lo());
+        upper = upper.max(difference.hi());
+    }
+    lower > 0.0 || upper < 0.0
+}
+
+fn constant_normal_offset_nurbs_pair_proves_empty(
+    basis_a: &NurbsSurface,
+    signed_distance_a: f64,
+    basis_b: &NurbsSurface,
+    signed_distance_b: f64,
+) -> bool {
+    let mut lower = f64::INFINITY;
+    let mut upper = f64::NEG_INFINITY;
+    for (basis_a, basis_b) in basis_a.points().iter().zip(basis_b.points()) {
+        let difference = Interval::point(basis_a.z) + Interval::point(signed_distance_a)
+            - Interval::point(basis_b.z)
+            - Interval::point(signed_distance_b);
         lower = lower.min(difference.lo());
         upper = upper.max(difference.hi());
     }

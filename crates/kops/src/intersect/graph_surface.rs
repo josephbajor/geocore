@@ -4,7 +4,9 @@
 //! leaves form exact analytic field families. Genuinely non-planar direct NURBS
 //! surfaces additionally support scoped exact-plane-field/NURBS, exact
 //! sphere-field/NURBS, compatible direct NURBS/NURBS marching, and a narrow
-//! constant-normal direct-Offset(NURBS)/NURBS family. The adapter
+//! constant-normal direct-Offset(NURBS)/NURBS family. Strictly separated pairs
+//! of compatible direct constant-normal Offset(NURBS) roots additionally own
+//! a graph-level complete-empty proof. The adapter
 //! promotes discovered branches only after
 //! constructing both pcurves and proving their paired whole-interval residual
 //! contracts. Common-axis circles retain their longitude/latitude fast path;
@@ -16,6 +18,7 @@ use super::nurbs_nurbs_surface::{
     intersect_bounded_nurbs_nurbs_surfaces_with_traces_in_scope,
     intersect_bounded_offset_nurbs_nurbs_surfaces_with_traces_in_scope,
     supports_direct_nurbs_nurbs_surface_pair, supports_offset_nurbs_nurbs_surface_pair,
+    supports_strictly_separated_constant_normal_offset_nurbs_pair,
 };
 use super::nurbs_surface_march::{
     ContextMarchError, MarchOutput, MarchTrace, NURBS_SURFACE_MARCH_SAMPLE_LIMIT,
@@ -505,8 +508,10 @@ pub fn intersect_bounded_graph_surfaces_with_context(
 /// direct-NURBS, exact-Sphere-field/genuinely-non-planar-direct-NURBS, and
 /// compatible genuinely-non-planar direct-NURBS/direct-NURBS branches are
 /// supported. Direct constant-normal Offset(NURBS)/NURBS branches additionally
-/// reuse the compatible paired marcher; all other pairs remain explicitly
-/// unsupported.
+/// reuse the compatible paired marcher. Two compatible direct constant-normal
+/// Offset(NURBS) roots return a complete miss only from strict outward
+/// original-control separation; coincident or intersecting effective sheets
+/// and all other pairs remain explicitly unsupported.
 /// Owners must compose [`GraphSurfaceBudgetProfile::v1_defaults`] before
 /// creating `scope` when they may dispatch a scoped proof-bearing branch.
 pub fn intersect_bounded_graph_surfaces_in_scope(
@@ -669,6 +674,35 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 ResolvedGraphSurfaceField::OffsetNurbs { offset, basis },
             ]
         }
+        (
+            Some(ResolvedGraphSurfaceField::OffsetNurbs {
+                offset: offset_a,
+                basis: basis_a,
+            }),
+            Some(ResolvedGraphSurfaceField::OffsetNurbs {
+                offset: offset_b,
+                basis: basis_b,
+            }),
+        ) if supports_strictly_separated_constant_normal_offset_nurbs_pair(
+            basis_a,
+            offset_a.signed_distance(),
+            range_a,
+            basis_b,
+            offset_b.signed_distance(),
+            range_b,
+        ) =>
+        {
+            [
+                ResolvedGraphSurfaceField::OffsetNurbs {
+                    offset: offset_a,
+                    basis: basis_a,
+                },
+                ResolvedGraphSurfaceField::OffsetNurbs {
+                    offset: offset_b,
+                    basis: basis_b,
+                },
+            ]
+        }
         _ => return Err(unsupported()),
     };
     let (raw, march_traces) = match fields {
@@ -778,6 +812,10 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
             let (raw, traces) = swap_nurbs_march_output(output)?;
             (raw, Some(traces))
         }
+        [
+            ResolvedGraphSurfaceField::OffsetNurbs { .. },
+            ResolvedGraphSurfaceField::OffsetNurbs { .. },
+        ] => (SurfaceSurfaceIntersections::complete_empty(), None),
         _ => unreachable!("supported graph surface fields were preclassified"),
     };
     let branch_graph = build_verified_branch_graph(

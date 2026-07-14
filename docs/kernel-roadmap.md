@@ -956,9 +956,14 @@ true only for an empty complete result.
   outward original controls own misses while the rounded displaced surface is
   discovery-only. The paired proof keeps the same exact Work/Items/Depth
   boundaries and the offset root visits its basis at exact graph depth 2.
+  Two independent direct Offset(NURBS) roots also prove a complete miss when
+  both bases use the exact constant-+Z-normal unit chart and outward original
+  basis-plus-distance controls are strictly separated. This no-branch arm pins
+  exact 4/3 graph visits and 2/1 dependency depth, preserves operand order, and
+  rejects coincident effective sheets.
   Planar or unaligned peers, unequal ranges or weights, collapsed or non-finite
-  sphere-offset fields, nested or varying-normal Offset(NURBS), Offset/Offset,
-  broader NURBS/NURBS, and
+  sphere-offset fields, nested or varying-normal Offset(NURBS), intersecting or
+  coincident Offset(NURBS)/Offset(NURBS), broader NURBS/NURBS, and
   other procedural pairs remain typed unsupported.
   The compatibility magnitude-twelve rung runs the complete historical
   magnitude-eleven family first so all prior evidence remains stable, then

@@ -385,6 +385,177 @@ fn outward_offset_control_proof_returns_a_complete_miss() {
 }
 
 #[test]
+fn separated_constant_normal_dual_offsets_prove_a_complete_miss_in_both_orders() {
+    let tolerances = Tolerances::with_linear(1.0e-3).unwrap();
+    for rational in [false, true] {
+        let mut graph = GeometryGraph::new();
+        let basis_a = graph
+            .insert_surface(unit_chart_surface([0.25; 3], rational))
+            .unwrap();
+        let offset_a = graph
+            .insert_surface(OffsetSurfaceDescriptor::new(basis_a, 0.05))
+            .unwrap();
+        let basis_b = graph
+            .insert_surface(unit_chart_surface([0.70; 3], rational))
+            .unwrap();
+        let offset_b = graph
+            .insert_surface(OffsetSurfaceDescriptor::new(basis_b, -0.10))
+            .unwrap();
+
+        let session = SessionPolicy::v1();
+        let context = OperationContext::new(&session, tolerances).unwrap();
+        let outcome = intersect_bounded_graph_surfaces_with_context(
+            &graph,
+            offset_a,
+            narrow_window(),
+            offset_b,
+            narrow_window(),
+            &context,
+        );
+        let result = outcome.result().unwrap();
+        assert!(result.raw.is_proven_empty());
+        assert_eq!(result.branch_graph.source_surfaces, [offset_a, offset_b]);
+        assert!(result.branch_graph.vertices.is_empty());
+        assert!(result.branch_graph.edges.is_empty());
+        assert_eq!(
+            observed(
+                outcome.report(),
+                kgraph::eval_stage::NODE_VISITS,
+                ResourceKind::Work,
+            ),
+            4
+        );
+        assert_eq!(
+            observed(
+                outcome.report(),
+                kgraph::eval_stage::DEPENDENCY_DEPTH,
+                ResourceKind::Depth,
+            ),
+            2
+        );
+
+        let reverse = intersect_bounded_graph_surfaces(
+            &graph,
+            offset_b,
+            narrow_window(),
+            offset_a,
+            narrow_window(),
+            tolerances,
+        )
+        .unwrap();
+        assert_eq!(reverse.raw, result.raw.clone().swapped());
+        assert_eq!(reverse.branch_graph.source_surfaces, [offset_b, offset_a]);
+        assert!(reverse.branch_graph.edges.is_empty());
+
+        let unequal_window = [ParamRange::new(0.0, 0.5), narrow_window()[1]];
+        assert!(matches!(
+            intersect_bounded_graph_surfaces(
+                &graph,
+                offset_a,
+                narrow_window(),
+                offset_b,
+                unequal_window,
+                tolerances,
+            ),
+            Err(GraphSurfaceIntersectionError::Intersection(
+                IntersectionError::UnsupportedSurfacePair { .. }
+            ))
+        ));
+    }
+}
+
+#[test]
+fn dual_offset_miss_pins_graph_resource_boundaries() {
+    let tolerances = Tolerances::with_linear(1.0e-3).unwrap();
+    let mut graph = GeometryGraph::new();
+    let basis_a = graph.insert_surface(basis(false)).unwrap();
+    let offset_a = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(basis_a, 0.05))
+        .unwrap();
+    let basis_b = graph
+        .insert_surface(unit_chart_surface([0.70; 3], false))
+        .unwrap();
+    let offset_b = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(basis_b, -0.10))
+        .unwrap();
+    let session = SessionPolicy::v1();
+
+    let exact_plan = BudgetPlan::new([
+        LimitSpec::new(
+            kgraph::eval_stage::NODE_VISITS,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            4,
+        ),
+        LimitSpec::new(
+            kgraph::eval_stage::DEPENDENCY_DEPTH,
+            ResourceKind::Depth,
+            AccountingMode::HighWater,
+            2,
+        ),
+    ])
+    .unwrap();
+    let exact_context = OperationContext::new(&session, tolerances)
+        .unwrap()
+        .with_budget_overrides(exact_plan);
+    assert!(
+        intersect_bounded_graph_surfaces_with_context(
+            &graph,
+            offset_a,
+            narrow_window(),
+            offset_b,
+            narrow_window(),
+            &exact_context,
+        )
+        .result()
+        .unwrap()
+        .raw
+        .is_proven_empty()
+    );
+
+    for (stage, resource, mode, allowed, consumed) in [
+        (
+            kgraph::eval_stage::NODE_VISITS,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            3,
+            4,
+        ),
+        (
+            kgraph::eval_stage::DEPENDENCY_DEPTH,
+            ResourceKind::Depth,
+            AccountingMode::HighWater,
+            1,
+            2,
+        ),
+    ] {
+        let denied_plan =
+            BudgetPlan::new([LimitSpec::new(stage, resource, mode, allowed)]).unwrap();
+        let denied_context = OperationContext::new(&session, tolerances)
+            .unwrap()
+            .with_budget_overrides(denied_plan);
+        let denied = intersect_bounded_graph_surfaces_with_context(
+            &graph,
+            offset_a,
+            narrow_window(),
+            offset_b,
+            narrow_window(),
+            &denied_context,
+        );
+        let GraphSurfaceIntersectionError::OperationPolicy(
+            kcore::operation::OperationPolicyError::LimitReached(crossing),
+        ) = denied.result().unwrap_err()
+        else {
+            panic!("N-1 graph resource must stop at {stage:?}");
+        };
+        assert_eq!(crossing.stage, stage);
+        assert_eq!(crossing.resource, resource);
+        assert_eq!(crossing.allowed, allowed);
+        assert_eq!(crossing.consumed, consumed);
+    }
+}
+
+#[test]
 fn stale_and_altered_offset_sources_roll_back_atomically() {
     let signed_distance = 0.05;
     let original_basis = basis(false);
@@ -525,6 +696,19 @@ fn broader_offset_families_and_unaligned_charts_fail_closed() {
             signed_distance,
         ))
         .unwrap();
+    let coincident_basis = graph.insert_surface(basis(false)).unwrap();
+    let coincident_offset = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(
+            coincident_basis,
+            signed_distance,
+        ))
+        .unwrap();
+    let rational_basis = graph
+        .insert_surface(unit_chart_surface([0.70; 3], true))
+        .unwrap();
+    let unequal_weight_offset = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(rational_basis, -0.10))
+        .unwrap();
     let unaligned = graph.insert_surface(unaligned).unwrap();
     for (first, second) in [
         (nested, direct_handle),
@@ -534,6 +718,10 @@ fn broader_offset_families_and_unaligned_charts_fail_closed() {
         (offset, unaligned),
         (unaligned, offset),
         (offset, curved_offset),
+        (offset, coincident_offset),
+        (coincident_offset, offset),
+        (offset, unequal_weight_offset),
+        (unequal_weight_offset, offset),
     ] {
         assert!(matches!(
             intersect_bounded_graph_surfaces(
