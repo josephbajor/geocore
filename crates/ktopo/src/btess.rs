@@ -1,4 +1,4 @@
-//! Whole-body tessellation: one watertight mesh per body.
+//! Whole-body tessellation: one conforming indexed mesh per body.
 //!
 //! The crack-elimination contract (spec §L2, M2 exit criterion):
 //!
@@ -15,10 +15,11 @@
 //!    welding.
 //!
 //! Result: across any two adjacent faces the shared edge contributes the
-//! same vertex indices to both, so the mesh is watertight by construction;
-//! [`check_watertight`] verifies every interior mesh edge is used by
-//! exactly two triangles with opposite orientation. Triangles are oriented
-//! outward (away from material).
+//! same vertex indices to both. Closed solids are therefore watertight by
+//! construction; sheets retain their true one-fin topological boundaries
+//! while two-fin seams remain internal. [`check_watertight`] verifies the
+//! stricter closed-solid contract. Triangles follow face sense: outward from
+//! solid material, and consistently oriented on sheets.
 //!
 //! Crack-prevention rule: edge polylines are refined until every segment
 //! satisfies `kgeom::tess`'s own boundary criterion — the surface point at
@@ -99,13 +100,13 @@ pub use policy::{
 
 type Result<T> = TessellationResult<T>;
 
-/// A watertight tessellation of one body.
+/// A conforming indexed tessellation of one body.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BodyMesh {
     /// Vertex positions in model space.
     pub positions: Vec<Point3>,
-    /// Triangles as vertex-index triples, oriented outward (counter-
-    /// clockwise seen from outside the material).
+    /// Triangles as vertex-index triples, oriented by face sense: outward for
+    /// solids and consistently across each sheet.
     pub triangles: Vec<[u32; 3]>,
     /// Per face, the range of `triangles` it produced, in
     /// [`Store::faces_of_body`] order.
@@ -2931,7 +2932,7 @@ fn tess_face(
     }
 }
 
-/// Tessellate a body into one watertight mesh (see module docs).
+/// Tessellate a body into one conforming indexed mesh (see module docs).
 #[deprecated(
     since = "0.1.0",
     note = "use kernel::Part::tessellate_body for application code; lower-layer integrations should use tessellate_body_with_context or tessellate_body_in_scope"

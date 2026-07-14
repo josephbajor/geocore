@@ -22,23 +22,26 @@ use ktopo::btess::{
     BODY_TESSELLATION_STRUCTURAL_ITEMS, BodyMesh, BodyTessellationBudgetProfile, TessOptions,
     TessellationError, check_watertight, signed_volume, tessellate_body_with_context,
 };
-use ktopo::entity::{Body, BodyId, EdgeId, FaceId};
+use ktopo::entity::{Body, BodyId, BodyKind, EdgeId, FaceId, Sense};
 use ktopo::geom::{Curve2dGeom, SurfaceGeom};
 use ktopo::make;
 use ktopo::store::Store;
 
-/// Fixture identity shared by the first Q3 analytic-solid slice.
-pub const FIXTURE_VERSION: &str = "body-tessellation.v2";
+/// Fixture identity shared by the Q3 solid/sheet representation matrix.
+pub const FIXTURE_VERSION: &str = "body-tessellation.v3";
 /// Deterministic fixture seed (construction itself is not randomized).
 pub const FIXTURE_SEED: u64 = 0x5154_4553_5300_0003;
-/// Public entry point measured by the Q3 v2 contract.
+/// Public entry point measured by the Q3 v3 contract.
 pub const API_IDENTITY: &str = "tessellate_body_with_context";
-/// Complete body-family defaults used by the Q3 v2 contract.
+/// Complete body-family defaults used by the Q3 v3 contract.
 pub const PROFILE_IDENTITY: &str = "body-tessellation.compatibility-v1";
 /// Deterministic execution policy used by the Q3 v2 contract.
 pub const EXECUTION_IDENTITY: &str = "serial";
 /// Canonical number of body, face, graph, and projection usage stages.
 pub const USAGE_STAGE_COUNT: usize = 21;
+/// Source-evidence label shared by the 2026-07-11 licensed-host corpus.
+pub const HOST_ACCEPTED_SOURCE_EVIDENCE: &str =
+    "historical-host-accepted:onshape-cloud-2026-07-11";
 /// Exact licensed-host-certified corpus identity used by the first Q3 NURBS slice.
 pub const IMPORTED_NURBS_FACE_IDENTITY: &str =
     "solid_block_nurbs_face.x_t@onshape-cloud-2026-07-11";
@@ -67,6 +70,48 @@ pub const IMPORTED_CYLINDER_SHA256: &str =
 /// Portable in-harness byte digest for the exact certified cylinder bytes.
 pub const IMPORTED_CYLINDER_BYTE_DIGEST: u64 = 0x57b8_9bfc_e92d_c85a;
 const IMPORTED_CYLINDER_BYTES: &[u8] = include_bytes!("../../oracle/outbox/solid_cylinder.x_t");
+/// Locally generated curved exact-NURBS block used before licensed-host certification.
+pub const CURVED_NURBS_BLOCK_IDENTITY: &str =
+    "solid_block_curved_nurbs_face.x_t@local-import-verified-2026-07-13";
+/// Review boundary for this local fixture while licensed-host certification is pending.
+pub const CURVED_NURBS_BLOCK_SOURCE_EVIDENCE: &str =
+    "local-import-verified;host-certification=pending";
+/// SHA-256 of the reviewed local curved-NURBS block bytes.
+pub const CURVED_NURBS_BLOCK_SHA256: &str =
+    "7fad6999a2d2bd0653a3b7558e0460e9ccfe07a43d00f249709ea7aae642829e";
+/// Portable in-harness byte digest of the reviewed local curved-NURBS block bytes.
+pub const CURVED_NURBS_BLOCK_BYTE_DIGEST: u64 = 0xb8e1_8725_bad5_df39;
+const CURVED_NURBS_BLOCK_BYTES: &[u8] =
+    include_bytes!("../testdata/solid_block_curved_nurbs_face.local.x_t");
+/// Licensed-host-certified concave planar sheet identity.
+pub const IMPORTED_PLANE_SHEET_IDENTITY: &str =
+    "sheet_plane_polygon.x_t@onshape-cloud-2026-07-11";
+/// SHA-256 pinned by the licensed-host-certified oracle corpus.
+pub const IMPORTED_PLANE_SHEET_SHA256: &str =
+    "38cec426b656aba55e949d16e50bbf66c1a084941bf333f5f26a2d64f3d9391c";
+/// Portable in-harness byte digest of the certified planar-sheet bytes.
+pub const IMPORTED_PLANE_SHEET_BYTE_DIGEST: u64 = 0x74e5_96ca_4fb6_fa2a;
+const IMPORTED_PLANE_SHEET_BYTES: &[u8] =
+    include_bytes!("../testdata/sheet_plane_polygon.certified.x_t");
+/// Licensed-host-certified periodic cylindrical sheet identity.
+pub const IMPORTED_CYLINDER_SHEET_IDENTITY: &str =
+    "sheet_cylinder_seam.x_t@onshape-cloud-2026-07-11";
+/// SHA-256 pinned by the licensed-host-certified oracle corpus.
+pub const IMPORTED_CYLINDER_SHEET_SHA256: &str =
+    "94af58ef0905b5bca7596966510f6da3b1f2832fe50cd07518189d1fd48926d6";
+/// Portable in-harness byte digest of the certified cylindrical-sheet bytes.
+pub const IMPORTED_CYLINDER_SHEET_BYTE_DIGEST: u64 = 0x2370_4889_3149_88da;
+const IMPORTED_CYLINDER_SHEET_BYTES: &[u8] =
+    include_bytes!("../testdata/sheet_cylinder_seam.certified.x_t");
+
+/// Body-kind-aware correctness contract for one Q3 representation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValidationKind {
+    /// Closed manifold: incidence, watertightness, outwardness, and volume.
+    ClosedSolid,
+    /// Open two-manifold: incidence, face-sense alignment, and surface area.
+    OrientedSheet,
+}
 
 /// Closed solid represented by one Q3 case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +134,24 @@ pub enum FixtureKind {
     ImportedTolerantEdge,
     /// Certified X_T cylinder reconstructed into analytic curved topology.
     ImportedCylinder,
+    /// Local X_T block with one genuinely curved exact NURBS face.
+    CurvedNurbsBlock,
+    /// Certified X_T concave planar sheet.
+    ImportedPlaneSheet,
+    /// Certified X_T periodic cylindrical sheet with a shared seam.
+    ImportedCylinderSheet,
+}
+
+impl FixtureKind {
+    /// Correctness contract implied by the source body's point-set kind.
+    pub const fn validation(self) -> ValidationKind {
+        match self {
+            Self::ImportedPlaneSheet | Self::ImportedCylinderSheet => {
+                ValidationKind::OrientedSheet
+            }
+            _ => ValidationKind::ClosedSolid,
+        }
+    }
 }
 
 /// Stable Q3 case definition.
@@ -120,193 +183,303 @@ pub struct BodyTessellationCase {
     pub expected_face_ranges: usize,
     /// Reviewed edge-polyline count.
     pub expected_edge_polylines: usize,
+    /// Reviewed number of triangle-boundary segments matching one-fin topology.
+    pub expected_boundary_segments: usize,
     /// Reviewed consumed values for all canonical usage stages.
     pub expected_usage: [u64; USAGE_STAGE_COUNT],
     /// Reviewed portable canonical usage-stage digest.
     pub expected_usage_stage_digest: u64,
 }
 
-/// Twelve analytic/store-shape cases plus eight certified imported corpus rows.
-pub const CASES: [BodyTessellationCase; 20] = [
+/// Twenty legacy solid rows plus twelve representation/trim matrix rows.
+pub const CASES: [BodyTessellationCase; 32] = [
     case(
-        "topology/body-tessellation/block-v2/1/chord-1e-2-v2",
+        "topology/body-tessellation/block-v3/1/chord-1e-2-v3",
         FixtureKind::Block,
         1.0e-2,
         8,
         12,
         0x3773_8ea0_abf2_68a7,
-        0xd5d4_e021_7441_32d8,
+        0x55b9_3194_7701_ef91,
     ),
     case(
-        "topology/body-tessellation/block-v2/1/chord-1e-3-v2",
+        "topology/body-tessellation/block-v3/1/chord-1e-3-v3",
         FixtureKind::Block,
         1.0e-3,
         8,
         12,
         0x3773_8ea0_abf2_68a7,
-        0xd5d4_e021_7441_32d8,
+        0x55b9_3194_7701_ef91,
     ),
     case(
-        "topology/body-tessellation/cylinder-v2/1/chord-1e-2-v2",
+        "topology/body-tessellation/cylinder-v3/1/chord-1e-2-v3",
         FixtureKind::Cylinder,
         1.0e-2,
         2_913,
         5_822,
         0x3047_4187_c9d8_a9ce,
-        0xb964_2497_18cf_75e6,
+        0xb294_d366_1cfc_2a6b,
     ),
     case(
-        "topology/body-tessellation/cylinder-v2/1/chord-1e-3-v2",
+        "topology/body-tessellation/cylinder-v3/1/chord-1e-3-v3",
         FixtureKind::Cylinder,
         1.0e-3,
         85_683,
         171_362,
         0xc18e_8ba3_3c72_5d33,
-        0x5f29_ed51_1dd0_7c8b,
+        0x6c55_3f56_87b1_c514,
     ),
     case(
-        "topology/body-tessellation/mixed-store-cylinder-v2/1/chord-1e-2-v2",
+        "topology/body-tessellation/mixed-store-cylinder-v3/1/chord-1e-2-v3",
         FixtureKind::MixedStoreCylinder,
         1.0e-2,
         2_913,
         5_822,
         0x3047_4187_c9d8_a9ce,
-        0xb964_2497_18cf_75e6,
+        0xb294_d366_1cfc_2a6b,
     ),
     case(
-        "topology/body-tessellation/mixed-store-cylinder-v2/1/chord-1e-3-v2",
+        "topology/body-tessellation/mixed-store-cylinder-v3/1/chord-1e-3-v3",
         FixtureKind::MixedStoreCylinder,
         1.0e-3,
         85_683,
         171_362,
         0xc18e_8ba3_3c72_5d33,
-        0x5f29_ed51_1dd0_7c8b,
+        0x6c55_3f56_87b1_c514,
     ),
     case(
-        "topology/body-tessellation/cone-v2/1/chord-1e-2-v2",
+        "topology/body-tessellation/cone-v3/1/chord-1e-2-v3",
         FixtureKind::Cone,
         1.0e-2,
         2_737,
         5_470,
         0x2ce0_b59e_91e2_2400,
-        0xb602_3ef6_8ee4_c2ee,
+        0x6cb0_5b06_6df5_d3c7,
     ),
     case(
-        "topology/body-tessellation/cone-v2/1/chord-1e-3-v2",
+        "topology/body-tessellation/cone-v3/1/chord-1e-3-v3",
         FixtureKind::Cone,
         1.0e-3,
         54_432,
         108_860,
         0x4159_97ae_b0ba_bc82,
-        0x4266_bd85_9caf_2548,
+        0x11e8_589b_f8b7_ad75,
     ),
     case(
-        "topology/body-tessellation/sphere-v2/1/chord-1e-2-v2",
+        "topology/body-tessellation/sphere-v3/1/chord-1e-2-v3",
         FixtureKind::Sphere,
         1.0e-2,
         2_704,
         5_404,
         0x79f4_2a54_6c49_f36f,
-        0x9396_9a9a_2e3e_2b9d,
+        0x5bd7_82d1_7be2_b032,
     ),
     case(
-        "topology/body-tessellation/sphere-v2/1/chord-1e-3-v2",
+        "topology/body-tessellation/sphere-v3/1/chord-1e-3-v3",
         FixtureKind::Sphere,
         1.0e-3,
         75_430,
         150_856,
         0xf827_bff6_d901_87a7,
-        0x65a5_9f05_ace3_e62f,
+        0x1b2c_3f1a_631f_0fb2,
     ),
     case(
-        "topology/body-tessellation/torus-v2/1/chord-1e-2-v2",
+        "topology/body-tessellation/torus-v3/1/chord-1e-2-v3",
         FixtureKind::Torus,
         1.0e-2,
         11_340,
         22_680,
         0xbec9_d49d_9830_dc7e,
-        0x49b3_c184_bb15_572c,
+        0x0248_4e80_2b50_7779,
     ),
     case(
-        "topology/body-tessellation/torus-v2/1/chord-1e-3-v2",
+        "topology/body-tessellation/torus-v3/1/chord-1e-3-v3",
         FixtureKind::Torus,
         1.0e-3,
         148_178,
         296_356,
         0x39d6_eb3f_0319_b7f7,
-        0x9492_ef50_35aa_53ed,
+        0x4276_248d_43e1_4f1a,
     ),
     case(
-        "topology/body-tessellation/imported-nurbs-face-v2/1/chord-1e-2-v2",
+        "topology/body-tessellation/imported-nurbs-face-v3/1/chord-1e-2-v3",
         FixtureKind::ImportedNurbsFace,
         1.0e-2,
         8,
         12,
         0x226e_dd2a_120c_74b0,
-        0x621e_45af_fa38_7187,
+        0x0f5d_a999_70d6_f41a,
     ),
     case(
-        "topology/body-tessellation/imported-nurbs-face-v2/1/chord-1e-3-v2",
+        "topology/body-tessellation/imported-nurbs-face-v3/1/chord-1e-3-v3",
         FixtureKind::ImportedNurbsFace,
         1.0e-3,
         8,
         12,
         0x226e_dd2a_120c_74b0,
-        0x621e_45af_fa38_7187,
+        0x0f5d_a999_70d6_f41a,
     ),
     case(
-        "topology/body-tessellation/imported-tolerant-edge-v2/1/chord-1e-2-v2",
+        "topology/body-tessellation/imported-tolerant-edge-v3/1/chord-1e-2-v3",
         FixtureKind::ImportedTolerantEdge,
         1.0e-2,
         8,
         12,
         0x226e_dd2a_120c_74b0,
-        0xe30c_4f87_158c_d78e,
+        0x3340_2f6c_178b_c67f,
     ),
     case(
-        "topology/body-tessellation/imported-tolerant-edge-v2/1/chord-1e-3-v2",
+        "topology/body-tessellation/imported-tolerant-edge-v3/1/chord-1e-3-v3",
         FixtureKind::ImportedTolerantEdge,
         1.0e-3,
         8,
         12,
         0x226e_dd2a_120c_74b0,
-        0xe30c_4f87_158c_d78e,
+        0x3340_2f6c_178b_c67f,
     ),
     case(
-        "topology/body-tessellation/imported-cylinder-v2/1/chord-1e-2-v2",
+        "topology/body-tessellation/imported-cylinder-v3/1/chord-1e-2-v3",
         FixtureKind::ImportedCylinder,
         1.0e-2,
         202,
         400,
         0xf770_2f5f_5022_0f95,
-        0x2eef_9932_85f8_11dc,
+        0x7e97_894b_e33b_2217,
     ),
     case(
-        "topology/body-tessellation/imported-cylinder-v2/1/chord-3e-3-v2",
+        "topology/body-tessellation/imported-cylinder-v3/1/chord-3e-3-v3",
         FixtureKind::ImportedCylinder,
         3.0e-3,
         540,
         1_076,
         0x57c3_295c_221c_4f73,
-        0xd56f_60cd_d3a7_6735,
+        0xc6df_e970_f13e_ceb0,
     ),
     case(
-        "topology/body-tessellation/imported-cylinder-v2/1/chord-1e-3-v2",
+        "topology/body-tessellation/imported-cylinder-v3/1/chord-1e-3-v3",
         FixtureKind::ImportedCylinder,
         1.0e-3,
         2_320,
         4_636,
         0xc4ba_635c_11a1_e117,
-        0xcf79_fce5_b7bf_d10d,
+        0x3c27_fbc8_e7ff_5a66,
     ),
     case(
-        "topology/body-tessellation/imported-cylinder-v2/1/chord-3e-4-v2",
+        "topology/body-tessellation/imported-cylinder-v3/1/chord-3e-4-v3",
         FixtureKind::ImportedCylinder,
         3.0e-4,
         12_248,
         24_492,
         0x135a_e581_4e82_5469,
-        0x92ae_1819_ef1c_3cf6,
+        0xe1f9_cb58_e265_b8fb,
+    ),
+    case(
+        "topology/body-tessellation/imported-curved-nurbs-block-v3/1/chord-1e-2-v3",
+        FixtureKind::CurvedNurbsBlock,
+        1.0e-2,
+        8,
+        12,
+        0x226e_dd2a_120c_74b0,
+        0x0f5d_a999_70d6_f41a,
+    ),
+    case(
+        "topology/body-tessellation/imported-curved-nurbs-block-v3/1/chord-3e-3-v3",
+        FixtureKind::CurvedNurbsBlock,
+        3.0e-3,
+        9,
+        14,
+        0xb245_e9dd_d554_fd49,
+        0xe653_f539_fa39_238d,
+    ),
+    case(
+        "topology/body-tessellation/imported-curved-nurbs-block-v3/1/chord-1e-3-v3",
+        FixtureKind::CurvedNurbsBlock,
+        1.0e-3,
+        25,
+        46,
+        0xdaef_2eb7_4d11_c10a,
+        0xbf63_3349_9e20_cbbc,
+    ),
+    case(
+        "topology/body-tessellation/imported-curved-nurbs-block-v3/1/chord-5e-4-v3",
+        FixtureKind::CurvedNurbsBlock,
+        5.0e-4,
+        57,
+        110,
+        0x6818_abb1_c6ba_fc83,
+        0x046a_d9a0_dcda_c765,
+    ),
+    case(
+        "topology/body-tessellation/imported-plane-sheet-v3/1/chord-1e-2-v3",
+        FixtureKind::ImportedPlaneSheet,
+        1.0e-2,
+        6,
+        4,
+        0x383a_2d10_1866_0156,
+        0xec8a_582d_f526_3aa1,
+    ),
+    case(
+        "topology/body-tessellation/imported-plane-sheet-v3/1/chord-3e-3-v3",
+        FixtureKind::ImportedPlaneSheet,
+        3.0e-3,
+        6,
+        4,
+        0x383a_2d10_1866_0156,
+        0xec8a_582d_f526_3aa1,
+    ),
+    case(
+        "topology/body-tessellation/imported-plane-sheet-v3/1/chord-1e-3-v3",
+        FixtureKind::ImportedPlaneSheet,
+        1.0e-3,
+        6,
+        4,
+        0x383a_2d10_1866_0156,
+        0xec8a_582d_f526_3aa1,
+    ),
+    case(
+        "topology/body-tessellation/imported-plane-sheet-v3/1/chord-3e-4-v3",
+        FixtureKind::ImportedPlaneSheet,
+        3.0e-4,
+        6,
+        4,
+        0x383a_2d10_1866_0156,
+        0xec8a_582d_f526_3aa1,
+    ),
+    case(
+        "topology/body-tessellation/imported-cylinder-sheet-v3/1/chord-1e-2-v3",
+        FixtureKind::ImportedCylinderSheet,
+        1.0e-2,
+        36,
+        40,
+        0x2099_6c44_7801_8a8b,
+        0x50c5_4031_bd89_a6e0,
+    ),
+    case(
+        "topology/body-tessellation/imported-cylinder-sheet-v3/1/chord-3e-3-v3",
+        FixtureKind::ImportedCylinderSheet,
+        3.0e-3,
+        52,
+        72,
+        0x2162_9ed9_1eb7_2c2a,
+        0x7007_ceb8_c0a5_ecb2,
+    ),
+    case(
+        "topology/body-tessellation/imported-cylinder-sheet-v3/1/chord-1e-3-v3",
+        FixtureKind::ImportedCylinderSheet,
+        1.0e-3,
+        252,
+        440,
+        0xf252_7d3b_3582_452a,
+        0x92b9_90eb_5e87_65e3,
+    ),
+    case(
+        "topology/body-tessellation/imported-cylinder-sheet-v3/1/chord-3e-4-v3",
+        FixtureKind::ImportedCylinderSheet,
+        3.0e-4,
+        1_492,
+        2_856,
+        0xe8f3_4bc8_0f77_7a96,
+        0x59a4_b369_5b03_e58a,
     ),
 ];
 
@@ -320,7 +493,10 @@ const fn case(
     expected_output_digest: u64,
 ) -> BodyTessellationCase {
     let (source_faces, source_edges, source_vertices) = match fixture_kind {
-        FixtureKind::Block | FixtureKind::ImportedNurbsFace | FixtureKind::ImportedTolerantEdge => {
+        FixtureKind::Block
+        | FixtureKind::ImportedNurbsFace
+        | FixtureKind::ImportedTolerantEdge
+        | FixtureKind::CurvedNurbsBlock => {
             (6, 12, 8)
         }
         FixtureKind::Cylinder
@@ -328,6 +504,8 @@ const fn case(
         | FixtureKind::ImportedCylinder
         | FixtureKind::Cone => (3, 2, 0),
         FixtureKind::Sphere | FixtureKind::Torus => (1, 0, 0),
+        FixtureKind::ImportedPlaneSheet => (1, 6, 6),
+        FixtureKind::ImportedCylinderSheet => (1, 3, 2),
     };
     let store_bodies = match fixture_kind {
         FixtureKind::MixedStoreCylinder => 3,
@@ -348,6 +526,22 @@ const fn case(
         expected_store_bodies: store_bodies,
         expected_face_ranges: source_faces,
         expected_edge_polylines: source_edges,
+        expected_boundary_segments: match fixture_kind {
+            FixtureKind::ImportedPlaneSheet => 6,
+            FixtureKind::ImportedCylinderSheet
+                if chord_tol.to_bits() == 1.0e-2_f64.to_bits()
+                    || chord_tol.to_bits() == 3.0e-3_f64.to_bits() =>
+            {
+                32
+            }
+            FixtureKind::ImportedCylinderSheet
+                if chord_tol.to_bits() == 1.0e-3_f64.to_bits() =>
+            {
+                64
+            }
+            FixtureKind::ImportedCylinderSheet => 128,
+            _ => 0,
+        },
         expected_usage: usage,
         expected_usage_stage_digest: usage_stage_digest,
     }
@@ -361,6 +555,7 @@ const fn reviewed_accounting(
         chord_tol.to_bits() == 1.0e-2_f64.to_bits()
             || chord_tol.to_bits() == 3.0e-3_f64.to_bits()
             || chord_tol.to_bits() == 1.0e-3_f64.to_bits()
+            || chord_tol.to_bits() == 5.0e-4_f64.to_bits()
             || chord_tol.to_bits() == 3.0e-4_f64.to_bits()
     );
     if matches!(fixture_kind, FixtureKind::ImportedCylinder) {
@@ -396,6 +591,86 @@ const fn reviewed_accounting(
                 24_492, 23,
             ],
             0x5503_6a96_7093_eaef,
+        );
+    }
+    if matches!(fixture_kind, FixtureKind::CurvedNurbsBlock) {
+        if chord_tol.to_bits() == 1.0e-2_f64.to_bits() {
+            return (
+                [
+                    0, 1, 1, 16, 625, 0, 0, 0, 2, 24, 1, 54, 0, 0, 120, 0, 0, 8, 120, 12,
+                    84,
+                ],
+                0x8e9a_f09b_d104_3a00,
+            );
+        }
+        if chord_tol.to_bits() == 3.0e-3_f64.to_bits() {
+            return (
+                [
+                    0, 1, 1, 16, 625, 0, 0, 1, 4, 25, 1, 54, 0, 0, 120, 0, 0, 9, 121, 14,
+                    84,
+                ],
+                0xdd87_5541_8cbd_2232,
+            );
+        }
+        if chord_tol.to_bits() == 1.0e-3_f64.to_bits() {
+            return (
+                [
+                    0, 1, 1, 16, 625, 0, 0, 5, 36, 41, 1, 54, 0, 0, 120, 0, 0, 25, 137, 46,
+                    84,
+                ],
+                0x5d0f_cffa_1463_cb7e,
+            );
+        }
+        return (
+            [
+                0, 1, 1, 16, 625, 0, 0, 6, 100, 73, 1, 54, 0, 0, 120, 0, 0, 57, 169, 110,
+                84,
+            ],
+            0x0e72_cb68_b372_9557,
+        );
+    }
+    if matches!(fixture_kind, FixtureKind::ImportedPlaneSheet) {
+        return (
+            [
+                0, 0, 0, 0, 0, 0, 0, 0, 4, 6, 1, 13, 0, 0, 54, 0, 0, 6, 30, 4, 36,
+            ],
+            0x627d_bafd_11e0_c984,
+        );
+    }
+    if matches!(fixture_kind, FixtureKind::ImportedCylinderSheet) {
+        if chord_tol.to_bits() == 1.0e-2_f64.to_bits() {
+            return (
+                [
+                    0, 0, 0, 0, 0, 0, 0, 4, 10, 44, 1, 69, 2, 24, 118, 0, 0, 36, 276, 40,
+                    23,
+                ],
+                0xbef1_dd9c_663f_31ae,
+            );
+        }
+        if chord_tol.to_bits() == 3.0e-3_f64.to_bits() {
+            return (
+                [
+                    0, 0, 0, 0, 0, 0, 0, 8, 18, 60, 1, 69, 2, 24, 118, 0, 0, 52, 292, 72,
+                    23,
+                ],
+                0x598f_284e_b091_01da,
+            );
+        }
+        if chord_tol.to_bits() == 1.0e-3_f64.to_bits() {
+            return (
+                [
+                    0, 0, 0, 0, 0, 0, 0, 12, 110, 260, 1, 133, 3, 56, 214, 0, 0, 252, 684,
+                    440, 23,
+                ],
+                0x86e6_e8eb_1abb_2b0c,
+            );
+        }
+        return (
+            [
+                0, 0, 0, 0, 0, 0, 0, 16, 714, 1_500, 1, 261, 4, 120, 406, 0, 0, 1_492,
+                2_308, 2_856, 23,
+            ],
+            0x49dc_a081_ce6d_2499,
         );
     }
     let fine = chord_tol < 5.0e-3;
@@ -473,6 +748,12 @@ const fn reviewed_accounting(
             ],
             0x0604_73f6_2ba7_442f,
         ),
+        (
+            FixtureKind::CurvedNurbsBlock
+            | FixtureKind::ImportedPlaneSheet
+            | FixtureKind::ImportedCylinderSheet,
+            _,
+        ) => unreachable!(),
         (FixtureKind::ImportedCylinder, _) => unreachable!(),
     }
 }
@@ -509,8 +790,10 @@ pub struct BodyTessellationRun {
 pub struct BodyTessellationFixture {
     store: Store,
     body: BodyId,
-    exact_volume: f64,
-    minimum_volume_ratio: f64,
+    validation: ValidationKind,
+    exact_measure: f64,
+    minimum_measure_ratio: f64,
+    maximum_measure_ratio: f64,
     source_faces: usize,
     source_edges: usize,
     source_vertices: usize,
@@ -580,12 +863,8 @@ impl BodyTessellationFixture {
                 .iter()
                 .zip(&self.expected_edges)
                 .all(|((owner, _), expected)| owner == expected);
-        let watertight = check_watertight(mesh).is_empty();
-        let volume = signed_volume(mesh);
-        let outward = volume.is_finite() && volume > 0.0;
-        let volume_within_tolerance = outward
-            && volume >= self.exact_volume * self.minimum_volume_ratio
-            && volume <= self.exact_volume * (1.0 + 1.0e-9);
+        let incidence = self.incidence_evidence(mesh);
+        let (orientation_valid, measure_within_tolerance) = self.geometric_evidence(mesh);
         let mesh_digest = self.mesh_digest(mesh);
         let report = report_evidence(&run.report);
         let mut evidence = BodyTessellationEvidence {
@@ -599,9 +878,11 @@ impl BodyTessellationFixture {
             positions_finite,
             indices_valid: triangle_indices_valid && edge_indices_valid && face_ranges_valid,
             owner_mapping_valid,
-            watertight,
-            outward,
-            volume_within_tolerance,
+            manifold: incidence.manifold,
+            boundary_matches_topology: incidence.boundary_matches_topology,
+            boundary_segments: incidence.boundary_segments,
+            orientation_valid,
+            measure_within_tolerance,
             mesh_digest,
             api_identity: API_IDENTITY,
             profile_identity: PROFILE_IDENTITY,
@@ -669,6 +950,181 @@ impl BodyTessellationFixture {
         }
         digest.finish()
     }
+
+    fn incidence_evidence(&self, mesh: &BodyMesh) -> IncidenceEvidence {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let topology_valid = self.expected_edges.iter().all(|&edge_id| {
+            let Ok(edge) = self.store.get(edge_id) else {
+                return false;
+            };
+            let expected_fin_count = match self.validation {
+                ValidationKind::ClosedSolid => edge.fins().len() == 2,
+                ValidationKind::OrientedSheet => matches!(edge.fins().len(), 1 | 2),
+            };
+            expected_fin_count
+                && edge.fins().iter().all(|&fin_id| {
+                    let Ok(fin) = self.store.get(fin_id) else {
+                        return false;
+                    };
+                    fin.edge() == edge_id
+                        && self
+                            .store
+                            .get(fin.parent())
+                            .is_ok_and(|loop_| self.expected_faces.contains(&loop_.face()))
+                })
+                && (edge.fins().len() != 2
+                    || match (
+                        self.store.get(edge.fins()[0]),
+                        self.store.get(edge.fins()[1]),
+                    ) {
+                        (Ok(a), Ok(b)) => a.sense() != b.sense(),
+                        _ => false,
+                    })
+        });
+
+        let mut incidence = BTreeMap::<(u32, u32), [usize; 2]>::new();
+        let mut degenerate = false;
+        for triangle in &mesh.triangles {
+            if triangle[0] == triangle[1]
+                || triangle[1] == triangle[2]
+                || triangle[2] == triangle[0]
+            {
+                degenerate = true;
+                continue;
+            }
+            for [a, b] in [
+                [triangle[0], triangle[1]],
+                [triangle[1], triangle[2]],
+                [triangle[2], triangle[0]],
+            ] {
+                let entry = incidence.entry((a.min(b), a.max(b))).or_default();
+                entry[usize::from(a > b)] += 1;
+            }
+        }
+        let actual_boundary: BTreeSet<_> = incidence
+            .iter()
+            .filter_map(|(&segment, counts)| ((counts[0] + counts[1]) == 1).then_some(segment))
+            .collect();
+        let directed_manifold = !degenerate
+            && !incidence.is_empty()
+            && incidence
+                .values()
+                .all(|counts| matches!(counts, [1, 0] | [0, 1] | [1, 1]));
+
+        let mut expected_boundary = BTreeSet::new();
+        let mut unique_expected = true;
+        for (edge_id, polyline) in &mesh.edge_polylines {
+            let Ok(edge) = self.store.get(*edge_id) else {
+                unique_expected = false;
+                continue;
+            };
+            if edge.fins().len() == 1 {
+                for pair in polyline.windows(2) {
+                    let segment = (pair[0].min(pair[1]), pair[0].max(pair[1]));
+                    unique_expected &= segment.0 != segment.1 && expected_boundary.insert(segment);
+                }
+            }
+        }
+        let boundary_matches_topology = unique_expected && expected_boundary == actual_boundary;
+        let kind_boundary_valid = match self.validation {
+            ValidationKind::ClosedSolid => {
+                expected_boundary.is_empty()
+                    && actual_boundary.is_empty()
+                    && check_watertight(mesh).is_empty()
+            }
+            ValidationKind::OrientedSheet => !expected_boundary.is_empty(),
+        };
+        IncidenceEvidence {
+            manifold: topology_valid && directed_manifold && kind_boundary_valid,
+            boundary_matches_topology,
+            boundary_segments: actual_boundary.len(),
+        }
+    }
+
+    fn geometric_evidence(&self, mesh: &BodyMesh) -> (bool, bool) {
+        let (orientation_valid, measure) = match self.validation {
+            ValidationKind::ClosedSolid => {
+                let volume = signed_volume(mesh);
+                (volume.is_finite() && volume > 0.0, volume)
+            }
+            ValidationKind::OrientedSheet => self.sheet_orientation_and_area(mesh),
+        };
+        let measure_within_tolerance = orientation_valid
+            && measure.is_finite()
+            && measure >= self.exact_measure * self.minimum_measure_ratio
+            && measure <= self.exact_measure * self.maximum_measure_ratio;
+        (orientation_valid, measure_within_tolerance)
+    }
+
+    fn sheet_orientation_and_area(&self, mesh: &BodyMesh) -> (bool, f64) {
+        let dust_threshold = 64.0 * f64::EPSILON * self.exact_measure;
+        let mut surface_area = 0.0;
+        let valid = mesh.face_ranges.iter().all(|&(face_id, ref range)| {
+            let Ok(face) = self.store.get(face_id) else {
+                return false;
+            };
+            let Ok(surface) = self.store.get(face.surface()) else {
+                return false;
+            };
+            let mut signed_alignment = 0.0;
+            let mut absolute_alignment = 0.0;
+            let mut faceted_area = 0.0;
+            let finite = !range.is_empty()
+                && mesh.triangles[range.clone()].iter().all(|&triangle| {
+                    let [a, b, c] = triangle.map(|index| mesh.positions[index as usize]);
+                    let area_vector = (b - a).cross(c - a);
+                    let centroid = Point3::new(
+                        (a.x + b.x + c.x) / 3.0,
+                        (a.y + b.y + c.y) / 3.0,
+                        (a.z + b.z + c.z) / 3.0,
+                    );
+                    let Some(mut expected_normal) = sheet_surface_normal(surface, centroid) else {
+                        return false;
+                    };
+                    if face.sense() == Sense::Reversed {
+                        expected_normal = -expected_normal;
+                    }
+                    let area = 0.5 * area_vector.norm();
+                    let alignment = area_vector.dot(expected_normal);
+                    signed_alignment += alignment;
+                    absolute_alignment += alignment.abs();
+                    faceted_area += area;
+                    area.is_finite()
+                        && alignment.is_finite()
+                        && (alignment >= -(2.0 * area) * 1.0e-10
+                            || area <= dust_threshold)
+                });
+            let aligned = finite
+                && absolute_alignment > 0.0
+                && signed_alignment > 0.0
+                && signed_alignment >= absolute_alignment * (1.0 - 1.0e-10);
+            if aligned {
+                surface_area += faceted_area;
+            }
+            aligned
+        });
+        (valid, surface_area)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct IncidenceEvidence {
+    manifold: bool,
+    boundary_matches_topology: bool,
+    boundary_segments: usize,
+}
+
+fn sheet_surface_normal(surface: &SurfaceGeom, point: Point3) -> Option<Vec3> {
+    match surface {
+        SurfaceGeom::Plane(plane) => Some(plane.frame().z()),
+        SurfaceGeom::Cylinder(cylinder) => {
+            let frame = cylinder.frame();
+            let delta = point - frame.origin();
+            (delta - frame.z() * delta.dot(frame.z())).normalized()
+        }
+        _ => None,
+    }
 }
 
 impl BodyTessellationRun {
@@ -705,12 +1161,16 @@ pub struct BodyTessellationEvidence {
     pub indices_valid: bool,
     /// Whether face and edge outputs retain their exact source-owner order.
     pub owner_mapping_valid: bool,
-    /// Whether the closed-solid mesh passes the complete watertightness audit.
-    pub watertight: bool,
-    /// Whether signed volume proves outward orientation.
-    pub outward: bool,
-    /// Whether signed volume remains within the fixture's reviewed error bound.
-    pub volume_within_tolerance: bool,
+    /// Whether every mesh edge has valid directed manifold incidence.
+    pub manifold: bool,
+    /// Whether triangle boundary segments exactly equal one-fin edge polylines.
+    pub boundary_matches_topology: bool,
+    /// Exact number of triangle boundary segments.
+    pub boundary_segments: usize,
+    /// Whether volume or face-sense evidence proves the output orientation.
+    pub orientation_valid: bool,
+    /// Whether volume or area remains within the fixture's reviewed error bound.
+    pub measure_within_tolerance: bool,
     /// Stable digest of every mesh coordinate, triangle, range, and polyline.
     pub mesh_digest: u64,
     /// Contextual entry-point identity.
@@ -781,9 +1241,11 @@ impl BodyTessellationEvidence {
         digest.boolean(self.positions_finite);
         digest.boolean(self.indices_valid);
         digest.boolean(self.owner_mapping_valid);
-        digest.boolean(self.watertight);
-        digest.boolean(self.outward);
-        digest.boolean(self.volume_within_tolerance);
+        digest.boolean(self.manifold);
+        digest.boolean(self.boundary_matches_topology);
+        digest.count(self.boundary_segments);
+        digest.boolean(self.orientation_valid);
+        digest.boolean(self.measure_within_tolerance);
         digest.u64(self.mesh_digest);
         digest.string(self.api_identity);
         digest.string(self.profile_identity);
@@ -922,7 +1384,7 @@ pub fn fixture(case: BodyTessellationCase) -> BodyTessellationFixture {
     )
     .expect("valid Q3 fixture frame");
     let mut store = Store::new();
-    let (body, exact_volume, minimum_volume_ratio) = match case.fixture_kind {
+    let (body, exact_measure, minimum_measure_ratio) = match case.fixture_kind {
         FixtureKind::Block => (
             make::block(&mut store, &frame, [2.0, 3.0, 4.0]).expect("valid block fixture"),
             24.0,
@@ -1083,6 +1545,134 @@ pub fn fixture(case: BodyTessellationCase) -> BodyTessellationFixture {
                 minimum_volume_ratio,
             )
         }
+        FixtureKind::CurvedNurbsBlock => {
+            assert_eq!(CURVED_NURBS_BLOCK_BYTES.len(), 6_785);
+            let mut source_digest = StableHasher::new();
+            source_digest.bytes(CURVED_NURBS_BLOCK_BYTES);
+            assert_eq!(
+                source_digest.finish(),
+                CURVED_NURBS_BLOCK_BYTE_DIGEST,
+                "local curved-NURBS fixture bytes drifted"
+            );
+            let reconstruction = kxt::import(CURVED_NURBS_BLOCK_BYTES, &mut store)
+                .expect("local curved-NURBS block must import");
+            assert!(reconstruction.skipped.is_empty());
+            assert_eq!(reconstruction.bodies.len(), 1);
+            let body = reconstruction.bodies[0];
+            assert_eq!(store.get(body).expect("live body").kind(), BodyKind::Solid);
+            let faces = store.faces_of_body(body).expect("live curved block");
+            let edges = store.edges_of_body(body).expect("live curved block");
+            let vertices = store.vertices_of_body(body).expect("live curved block");
+            assert_eq!((faces.len(), edges.len(), vertices.len()), (6, 12, 8));
+            let nurbs: Vec<_> = faces
+                .into_iter()
+                .filter_map(|face| match store
+                    .get(store.get(face).expect("live face").surface)
+                    .expect("live surface")
+                {
+                    SurfaceGeom::Nurbs(surface) => Some(surface),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(nurbs.len(), 1);
+            let nurbs = nurbs[0];
+            assert_eq!((nurbs.degree_u(), nurbs.degree_v()), (2, 2));
+            assert_eq!(nurbs.net_size(), (3, 3));
+            assert!(!nurbs.is_rational());
+            let points = nurbs.points();
+            let boundary_normal = (points[2] - points[0])
+                .cross(points[6] - points[0])
+                .normalized()
+                .expect("curved patch boundary spans a plane");
+            let center_offset = (points[4] - points[0]).dot(boundary_normal).abs();
+            assert!((center_offset - 0.04).abs() <= 1.0e-12);
+            for (index, point) in points.iter().enumerate() {
+                if index != 4 {
+                    assert!(((*point - points[0]).dot(boundary_normal)).abs() <= 1.0e-12);
+                }
+            }
+            let minimum_volume_ratio = match case.chord_tol.to_bits() {
+                bits if bits == 1.0e-2_f64.to_bits() => 0.988,
+                bits if bits == 3.0e-3_f64.to_bits() => 0.997,
+                bits if bits == 1.0e-3_f64.to_bits() => 0.999_7,
+                bits if bits == 5.0e-4_f64.to_bits() => 0.999_4,
+                _ => unreachable!("reviewed curved-NURBS tolerance"),
+            };
+            (
+                body,
+                0.024_266_666_666_666_67,
+                minimum_volume_ratio,
+            )
+        }
+        FixtureKind::ImportedPlaneSheet => {
+            assert_eq!(IMPORTED_PLANE_SHEET_BYTES.len(), 3_113);
+            let mut source_digest = StableHasher::new();
+            source_digest.bytes(IMPORTED_PLANE_SHEET_BYTES);
+            assert_eq!(source_digest.finish(), IMPORTED_PLANE_SHEET_BYTE_DIGEST);
+            let reconstruction = kxt::import(IMPORTED_PLANE_SHEET_BYTES, &mut store)
+                .expect("certified planar sheet must import");
+            assert!(reconstruction.skipped.is_empty());
+            assert_eq!(reconstruction.bodies.len(), 1);
+            let body = reconstruction.bodies[0];
+            assert_eq!(store.get(body).expect("live body").kind(), BodyKind::Sheet);
+            let faces = store.faces_of_body(body).expect("live planar sheet");
+            let edges = store.edges_of_body(body).expect("live planar sheet");
+            let vertices = store.vertices_of_body(body).expect("live planar sheet");
+            assert_eq!((faces.len(), edges.len(), vertices.len()), (1, 6, 6));
+            assert!(matches!(
+                store
+                    .get(store.get(faces[0]).expect("live face").surface)
+                    .expect("live surface"),
+                SurfaceGeom::Plane(_)
+            ));
+            assert!(edges
+                .into_iter()
+                .all(|edge| store.get(edge).expect("live boundary edge").fins().len() == 1));
+            (body, 0.09, 1.0 - 1.0e-12)
+        }
+        FixtureKind::ImportedCylinderSheet => {
+            assert_eq!(IMPORTED_CYLINDER_SHEET_BYTES.len(), 2_209);
+            let mut source_digest = StableHasher::new();
+            source_digest.bytes(IMPORTED_CYLINDER_SHEET_BYTES);
+            assert_eq!(
+                source_digest.finish(),
+                IMPORTED_CYLINDER_SHEET_BYTE_DIGEST
+            );
+            let reconstruction = kxt::import(IMPORTED_CYLINDER_SHEET_BYTES, &mut store)
+                .expect("certified cylindrical sheet must import");
+            assert!(reconstruction.skipped.is_empty());
+            assert_eq!(reconstruction.bodies.len(), 1);
+            let body = reconstruction.bodies[0];
+            assert_eq!(store.get(body).expect("live body").kind(), BodyKind::Sheet);
+            let faces = store.faces_of_body(body).expect("live cylindrical sheet");
+            let edges = store.edges_of_body(body).expect("live cylindrical sheet");
+            let vertices = store.vertices_of_body(body).expect("live cylindrical sheet");
+            assert_eq!((faces.len(), edges.len(), vertices.len()), (1, 3, 2));
+            assert!(matches!(
+                store
+                    .get(store.get(faces[0]).expect("live face").surface)
+                    .expect("live surface"),
+                SurfaceGeom::Cylinder(_)
+            ));
+            let fin_counts: Vec<_> = edges
+                .into_iter()
+                .map(|edge| store.get(edge).expect("live cylinder edge").fins().len())
+                .collect();
+            assert_eq!(fin_counts.iter().filter(|&&count| count == 2).count(), 1);
+            assert_eq!(fin_counts.iter().filter(|&&count| count == 1).count(), 2);
+            let minimum_area_ratio = match case.chord_tol.to_bits() {
+                bits if bits == 1.0e-2_f64.to_bits() => 1.001,
+                bits if bits == 3.0e-3_f64.to_bits() => 0.994,
+                bits if bits == 1.0e-3_f64.to_bits() => 1.0,
+                bits if bits == 3.0e-4_f64.to_bits() => 1.0,
+                _ => unreachable!("reviewed cylindrical-sheet tolerance"),
+            };
+            (
+                body,
+                core::f64::consts::TAU * 0.13 * 0.2,
+                minimum_area_ratio,
+            )
+        }
     };
     assert_eq!(
         store.count::<Body>(),
@@ -1094,11 +1684,32 @@ pub fn fixture(case: BodyTessellationCase) -> BodyTessellationFixture {
     let source_faces = expected_faces.len();
     let source_edges = expected_edges.len();
     let source_vertices = store.vertices_of_body(body).expect("valid body").len();
+    let maximum_measure_ratio = match case.fixture_kind {
+        FixtureKind::ImportedCylinderSheet
+            if case.chord_tol.to_bits() == 1.0e-2_f64.to_bits() =>
+        {
+            1.002
+        }
+        FixtureKind::ImportedCylinderSheet
+            if case.chord_tol.to_bits() == 3.0e-3_f64.to_bits() =>
+        {
+            0.996
+        }
+        FixtureKind::ImportedCylinderSheet
+            if case.chord_tol.to_bits() == 1.0e-3_f64.to_bits() =>
+        {
+            1.001
+        }
+        FixtureKind::ImportedCylinderSheet => 1.002,
+        _ => 1.0 + 1.0e-9,
+    };
     BodyTessellationFixture {
         store,
         body,
-        exact_volume,
-        minimum_volume_ratio,
+        validation: case.fixture_kind.validation(),
+        exact_measure,
+        minimum_measure_ratio,
+        maximum_measure_ratio,
         source_faces,
         source_edges,
         source_vertices,
@@ -1112,9 +1723,10 @@ pub fn verify(case: BodyTessellationCase, evidence: BodyTessellationEvidence) {
     assert!(evidence.positions_finite);
     assert!(evidence.indices_valid);
     assert!(evidence.owner_mapping_valid);
-    assert!(evidence.watertight);
-    assert!(evidence.outward);
-    assert!(evidence.volume_within_tolerance);
+    assert!(evidence.manifold);
+    assert!(evidence.boundary_matches_topology);
+    assert!(evidence.orientation_valid);
+    assert!(evidence.measure_within_tolerance);
     assert_eq!(evidence.api_identity, API_IDENTITY);
     assert_eq!(evidence.profile_identity, PROFILE_IDENTITY);
     assert_eq!(evidence.execution_identity, EXECUTION_IDENTITY);
@@ -1133,6 +1745,10 @@ pub fn verify(case: BodyTessellationCase, evidence: BodyTessellationEvidence) {
     assert_eq!(evidence.source_vertices, case.expected_source_vertices);
     assert_eq!(evidence.face_ranges, case.expected_face_ranges);
     assert_eq!(evidence.edge_polylines, case.expected_edge_polylines);
+    assert_eq!(
+        evidence.boundary_segments,
+        case.expected_boundary_segments
+    );
     assert_eq!(evidence.mesh_digest, case.expected_mesh_digest);
     assert_eq!(evidence.usage_consumed, case.expected_usage);
     assert_eq!(
@@ -1212,8 +1828,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn registry_contains_exactly_twenty_unique_canonical_cases() {
-        assert_eq!(CASES.len(), 20);
+    fn registry_contains_exactly_thirty_two_unique_canonical_cases() {
+        assert_eq!(CASES.len(), 32);
         let unique: BTreeSet<_> = CASES.iter().map(|case| case.path).collect();
         assert_eq!(unique.len(), CASES.len());
         for case in CASES {
@@ -1251,12 +1867,116 @@ mod tests {
                 Some(case.chord_tol)
             );
             assert_eq!(entry["policy_values"]["max_edge_len"], "unbounded");
-            assert_eq!(entry["policy_values"]["validation"], "closed-solid");
+            assert_eq!(
+                entry["policy_values"]["validation"],
+                match case.fixture_kind.validation() {
+                    ValidationKind::ClosedSolid => "closed-solid",
+                    ValidationKind::OrientedSheet => "oriented-sheet",
+                }
+            );
             assert_eq!(entry["policy_values"]["api"], API_IDENTITY);
             assert_eq!(entry["policy_values"]["budget_profile"], PROFILE_IDENTITY);
             assert_eq!(entry["policy_values"]["execution"], EXECUTION_IDENTITY);
             assert_eq!(entry["policy_values"]["policy_version"], "v1");
             assert_eq!(entry["policy_values"]["usage_contract"], "q3-usage.v1");
+            let (body_kind, measure, orientation_proof) = match case.fixture_kind.validation() {
+                ValidationKind::ClosedSolid => {
+                    ("solid", "signed-volume", "positive-signed-volume")
+                }
+                ValidationKind::OrientedSheet => (
+                    "sheet",
+                    "faceted-surface-area",
+                    "surface-normal-times-face-sense",
+                ),
+            };
+            assert_eq!(entry["policy_values"]["body_kind"], body_kind);
+            assert_eq!(entry["policy_values"]["measure"], measure);
+            assert_eq!(
+                entry["policy_values"]["orientation_proof"],
+                orientation_proof
+            );
+            assert_eq!(
+                entry["policy_values"]["incidence_proof"],
+                "directed-manifold+exact-topological-boundary"
+            );
+            match case.fixture_kind.validation() {
+                ValidationKind::ClosedSolid => {
+                    assert!(entry["policy_values"]["orientation_dust_threshold"].is_null());
+                }
+                ValidationKind::OrientedSheet => {
+                    assert_eq!(
+                        entry["policy_values"]["orientation_dust_threshold"],
+                        "64*epsilon*exact-measure"
+                    );
+                }
+            }
+            let expected_floor = match case.fixture_kind {
+                FixtureKind::Block
+                | FixtureKind::ImportedNurbsFace
+                | FixtureKind::ImportedTolerantEdge
+                | FixtureKind::ImportedPlaneSheet => 1.0 - 1.0e-12,
+                FixtureKind::Cylinder
+                | FixtureKind::MixedStoreCylinder
+                | FixtureKind::Cone
+                | FixtureKind::Sphere
+                | FixtureKind::Torus => 0.98,
+                FixtureKind::ImportedCylinder => match case.chord_tol.to_bits() {
+                    bits if bits == 1.0e-2_f64.to_bits() => 0.94,
+                    bits if bits == 3.0e-3_f64.to_bits() => 0.98,
+                    bits if bits == 1.0e-3_f64.to_bits() => 0.99,
+                    bits if bits == 3.0e-4_f64.to_bits() => 0.998,
+                    _ => unreachable!("reviewed imported-cylinder tolerance"),
+                },
+                FixtureKind::CurvedNurbsBlock => match case.chord_tol.to_bits() {
+                    bits if bits == 1.0e-2_f64.to_bits() => 0.988,
+                    bits if bits == 3.0e-3_f64.to_bits() => 0.997,
+                    bits if bits == 1.0e-3_f64.to_bits() => 0.999_7,
+                    bits if bits == 5.0e-4_f64.to_bits() => 0.999_4,
+                    _ => unreachable!("reviewed curved-NURBS tolerance"),
+                },
+                FixtureKind::ImportedCylinderSheet => match case.chord_tol.to_bits() {
+                    bits if bits == 1.0e-2_f64.to_bits() => 1.001,
+                    bits if bits == 3.0e-3_f64.to_bits() => 0.994,
+                    bits if bits == 1.0e-3_f64.to_bits() => 1.0,
+                    bits if bits == 3.0e-4_f64.to_bits() => 1.0,
+                    _ => unreachable!("reviewed cylindrical-sheet tolerance"),
+                },
+            };
+            let expected_ceiling = match case.fixture_kind {
+                FixtureKind::ImportedCylinderSheet => match case.chord_tol.to_bits() {
+                    bits if bits == 1.0e-2_f64.to_bits() => 1.002,
+                    bits if bits == 3.0e-3_f64.to_bits() => 0.996,
+                    bits if bits == 1.0e-3_f64.to_bits() => 1.001,
+                    bits if bits == 3.0e-4_f64.to_bits() => 1.002,
+                    _ => unreachable!("reviewed cylindrical-sheet tolerance"),
+                },
+                _ => 1.0 + 1.0e-9,
+            };
+            assert_eq!(
+                entry["policy_values"]["measure_ratio_floor"].as_f64(),
+                Some(expected_floor)
+            );
+            assert_eq!(
+                entry["policy_values"]["measure_ratio_ceiling"].as_f64(),
+                Some(expected_ceiling)
+            );
+            let expected_source_evidence = match case.fixture_kind {
+                FixtureKind::ImportedNurbsFace
+                | FixtureKind::ImportedTolerantEdge
+                | FixtureKind::ImportedCylinder
+                | FixtureKind::ImportedPlaneSheet
+                | FixtureKind::ImportedCylinderSheet => {
+                    serde_json::Value::String(HOST_ACCEPTED_SOURCE_EVIDENCE.into())
+                }
+                FixtureKind::CurvedNurbsBlock => {
+                    serde_json::Value::String(CURVED_NURBS_BLOCK_SOURCE_EVIDENCE.into())
+                }
+                _ => serde_json::Value::Null,
+            };
+            assert_eq!(
+                entry["policy_values"]["source_evidence"],
+                expected_source_evidence
+            );
             match case.fixture_kind {
                 FixtureKind::ImportedNurbsFace => {
                     assert_eq!(
@@ -1311,15 +2031,61 @@ mod tests {
                         entry["policy_values"]["source_sha256"],
                         IMPORTED_CYLINDER_SHA256
                     );
+                }
+                FixtureKind::CurvedNurbsBlock => {
                     assert_eq!(
-                        entry["policy_values"]["volume_ratio_floor"].as_f64(),
-                        Some(match case.chord_tol.to_bits() {
-                            bits if bits == 1.0e-2_f64.to_bits() => 0.94,
-                            bits if bits == 3.0e-3_f64.to_bits() => 0.98,
-                            bits if bits == 1.0e-3_f64.to_bits() => 0.99,
-                            bits if bits == 3.0e-4_f64.to_bits() => 0.998,
-                            _ => unreachable!("reviewed imported-cylinder tolerance"),
-                        })
+                        entry["size_parameters"]["input_bytes"].as_u64(),
+                        Some(CURVED_NURBS_BLOCK_BYTES.len() as u64)
+                    );
+                    assert_eq!(
+                        entry["policy_values"]["source_fixture"],
+                        CURVED_NURBS_BLOCK_IDENTITY
+                    );
+                    assert_eq!(
+                        entry["policy_values"]["source_sha256"],
+                        CURVED_NURBS_BLOCK_SHA256
+                    );
+                    assert_eq!(
+                        entry["policy_values"]["source_evidence"],
+                        CURVED_NURBS_BLOCK_SOURCE_EVIDENCE
+                    );
+                    assert_eq!(
+                        entry["policy_values"]["rejected_finer_tier"],
+                        if case.chord_tol.to_bits() == 5.0e-4_f64.to_bits() {
+                            serde_json::Value::String(
+                                "chord-3e-4;interior-refinement-passes=25;allowed=24".into(),
+                            )
+                        } else {
+                            serde_json::Value::Null
+                        }
+                    );
+                }
+                FixtureKind::ImportedPlaneSheet => {
+                    assert_eq!(
+                        entry["size_parameters"]["input_bytes"].as_u64(),
+                        Some(IMPORTED_PLANE_SHEET_BYTES.len() as u64)
+                    );
+                    assert_eq!(
+                        entry["policy_values"]["source_fixture"],
+                        IMPORTED_PLANE_SHEET_IDENTITY
+                    );
+                    assert_eq!(
+                        entry["policy_values"]["source_sha256"],
+                        IMPORTED_PLANE_SHEET_SHA256
+                    );
+                }
+                FixtureKind::ImportedCylinderSheet => {
+                    assert_eq!(
+                        entry["size_parameters"]["input_bytes"].as_u64(),
+                        Some(IMPORTED_CYLINDER_SHEET_BYTES.len() as u64)
+                    );
+                    assert_eq!(
+                        entry["policy_values"]["source_fixture"],
+                        IMPORTED_CYLINDER_SHEET_IDENTITY
+                    );
+                    assert_eq!(
+                        entry["policy_values"]["source_sha256"],
+                        IMPORTED_CYLINDER_SHEET_SHA256
                     );
                 }
                 FixtureKind::MixedStoreCylinder => {
@@ -1367,13 +2133,18 @@ mod tests {
                 counters["edge_polylines"].as_u64(),
                 Some(case.expected_edge_polylines as u64)
             );
+            assert_eq!(
+                counters["boundary_segments"].as_u64(),
+                Some(case.expected_boundary_segments as u64)
+            );
             for field in [
                 "positions_finite",
                 "indices_valid",
                 "owner_mapping_valid",
-                "watertight",
-                "outward",
-                "volume_within_tolerance",
+                "manifold",
+                "boundary_matches_topology",
+                "orientation_valid",
+                "measure_within_tolerance",
             ] {
                 assert_eq!(counters[field].as_bool(), Some(true), "{field}");
             }
@@ -1517,4 +2288,153 @@ mod tests {
         assert!(!wrong_edge_order.owner_mapping_valid);
         assert_ne!(wrong_edge_order.mesh_digest, reviewed.mesh_digest);
     }
+
+    #[test]
+    fn missing_solid_triangle_is_neither_manifold_nor_topological_boundary() {
+        let case = CASES[0];
+        let fixture = fixture(case);
+        let session = compatibility_session();
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let run = fixture.tessellate(case.chord_tol, &context);
+        let mut mesh = run.mesh;
+        mesh.triangles.pop().unwrap();
+        mesh.face_ranges.last_mut().unwrap().1.end -= 1;
+        let evidence = fixture.evidence(&BodyTessellationRun {
+            mesh,
+            report: run.report,
+        });
+        assert!(!evidence.manifold);
+        assert!(!evidence.boundary_matches_topology);
+        assert_ne!(evidence.boundary_segments, 0);
+    }
+
+    #[test]
+    fn materially_reversed_sheet_triangle_breaks_direction_and_face_sense() {
+        let case = CASES
+            .into_iter()
+            .find(|case| case.fixture_kind == FixtureKind::ImportedPlaneSheet)
+            .unwrap();
+        let fixture = fixture(case);
+        let session = compatibility_session();
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let run = fixture.tessellate(case.chord_tol, &context);
+        let mut mesh = run.mesh;
+        let largest = mesh
+            .triangles
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| {
+                let area = |triangle: &&[u32; 3]| {
+                    let [p0, p1, p2] =
+                        triangle.map(|index| mesh.positions[index as usize]);
+                    (p1 - p0).cross(p2 - p0).norm()
+                };
+                area(a).total_cmp(&area(b))
+            })
+            .map(|(index, _)| index)
+            .unwrap();
+        mesh.triangles[largest].swap(1, 2);
+        let evidence = fixture.evidence(&BodyTessellationRun {
+            mesh,
+            report: run.report,
+        });
+        assert!(!evidence.manifold);
+        assert!(evidence.boundary_matches_topology);
+        assert!(!evidence.orientation_valid);
+    }
+
+    #[test]
+    fn cylinder_seam_is_excluded_from_the_sheet_boundary() {
+        let case = CASES
+            .into_iter()
+            .find(|case| {
+                case.fixture_kind == FixtureKind::ImportedCylinderSheet
+                    && case.chord_tol.to_bits() == 1.0e-2_f64.to_bits()
+            })
+            .unwrap();
+        let fixture = fixture(case);
+        let session = compatibility_session();
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let run = fixture.tessellate(case.chord_tol, &context);
+        let seam_segment = run
+            .mesh
+            .edge_polylines
+            .iter()
+            .find(|(edge, _)| fixture.store.get(*edge).unwrap().fins().len() == 2)
+            .and_then(|(_, polyline)| polyline.windows(2).next())
+            .map(|pair| (pair[0].min(pair[1]), pair[0].max(pair[1])))
+            .unwrap();
+        let mut mesh = run.mesh;
+        let adjacent = mesh
+            .triangles
+            .iter()
+            .position(|triangle| {
+                [
+                    (triangle[0], triangle[1]),
+                    (triangle[1], triangle[2]),
+                    (triangle[2], triangle[0]),
+                ]
+                .into_iter()
+                .any(|(a, b)| (a.min(b), a.max(b)) == seam_segment)
+            })
+            .unwrap();
+        mesh.triangles.remove(adjacent);
+        mesh.face_ranges[0].1.end -= 1;
+        let evidence = fixture.evidence(&BodyTessellationRun {
+            mesh,
+            report: run.report,
+        });
+        assert!(evidence.manifold);
+        assert!(!evidence.boundary_matches_topology);
+        assert!(evidence.boundary_segments > case.expected_boundary_segments);
+    }
+
+    #[test]
+    fn degenerate_and_duplicate_triangle_incidence_are_rejected() {
+        let case = CASES[0];
+        let fixture = fixture(case);
+        let session = compatibility_session();
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let run = fixture.tessellate(case.chord_tol, &context);
+
+        let mut degenerate = run.mesh.clone();
+        degenerate.triangles[0][1] = degenerate.triangles[0][0];
+        let degenerate = fixture.evidence(&BodyTessellationRun {
+            mesh: degenerate,
+            report: run.report.clone(),
+        });
+        assert!(!degenerate.manifold);
+
+        let mut duplicate = run.mesh;
+        duplicate.triangles.push(duplicate.triangles[0]);
+        duplicate.face_ranges.last_mut().unwrap().1.end += 1;
+        let duplicate = fixture.evidence(&BodyTessellationRun {
+            mesh: duplicate,
+            report: run.report,
+        });
+        assert!(!duplicate.manifold);
+    }
+
+    #[test]
+    fn sheet_area_drift_is_rejected_without_invalidating_orientation() {
+        let case = CASES
+            .into_iter()
+            .find(|case| case.fixture_kind == FixtureKind::ImportedPlaneSheet)
+            .unwrap();
+        let fixture = fixture(case);
+        let session = compatibility_session();
+        let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+        let run = fixture.tessellate(case.chord_tol, &context);
+        let mut scaled = run.mesh;
+        for point in &mut scaled.positions {
+            *point = Point3::new(point.x * 2.0, point.y * 2.0, point.z * 2.0);
+        }
+        let scaled = fixture.evidence(&BodyTessellationRun {
+            mesh: scaled,
+            report: run.report,
+        });
+        assert!(scaled.orientation_valid);
+        assert!(!scaled.measure_within_tolerance);
+    }
+
 }

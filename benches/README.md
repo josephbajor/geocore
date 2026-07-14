@@ -16,6 +16,8 @@ Every case is registered in `cases.json` with a five-segment path:
 Fixture construction, seeds, expected counters, and invariant checks are
 deterministic. Criterion measures elapsed time, but timing never establishes
 correctness. The runner always marks measurements advisory.
+The manifest currently registers 156 cases, including the 32-row Q3
+`body-tessellation.v3` matrix.
 
 Criterion is pinned to `0.8.2`. Machine-readable measured runs use
 `cargo-criterion 1.1.0` because its JSON-lines output is a documented external
@@ -122,12 +124,16 @@ order digest, and repeatability. Traversal output and cycle paths remain
 vector-ordered, while active/completed membership uses hash lookup that is never
 iterated. The smallest chain closure row runs in CI.
 
-The Q3 v2 contract registers twenty closed-solid cases: ten analytic block,
-cylinder, cone, sphere, and torus rows; two mixed-store target-cylinder rows;
-four certified imported NURBS-face and tolerant-edge rows at `1e-2` and
-`1e-3`; and a four-point certified imported-cylinder ladder at `1e-2`,
-`3e-3`, `1e-3`, and `3e-4`. Cylinder, sphere, and torus exercise periodic
-seam/pole assembly. The NURBS fixture is an
+The Q3 `body-tessellation.v3` contract registers 32 cases: the twenty existing
+closed-solid rows plus four tiers each for a locally verified genuinely curved
+NURBS block, a historically host-certified plane sheet, and a historically
+host-certified full-period cylinder sheet. The complete matrix has 24 solids
+and eight sheets. Its existing rows comprise ten analytic block, cylinder,
+cone, sphere, and torus rows; two mixed-store target-cylinder rows; four
+certified imported NURBS-face and tolerant-edge rows at `1e-2` and `1e-3`;
+and a four-point certified imported-cylinder ladder at `1e-2`, `3e-3`,
+`1e-3`, and `3e-4`. Cylinder, sphere, and torus exercise periodic seam/pole
+assembly. The legacy NURBS fixture is an
 exact benchmark-owned copy of `solid_block_nurbs_face.x_t`; setup asserts its
 6,488-byte identity, portable digest, one B-surface, and absence of pcurves.
 The tolerant fixture references the current certified oracle outbox and asserts
@@ -136,8 +142,11 @@ NURBS pcurve uses, and four intentionally skipped geometric-owner records. The
 Python contract checks all three imported SHA-256 values against
 `docs/oracle-certification.json`. One immutable fixture and one Serial
 compatibility-v1 operation context are prepared per case. Import, context
-construction, outcome unpacking, finite/range, watertightness, orientation,
-volume, and exact mesh/report repeatability checks run outside timing. Only the
+construction, outcome unpacking, finite/range, exact directed incidence,
+topological-boundary, face-sense orientation, measure, and exact mesh/report
+repeatability checks run outside timing. Solids prove a closed two-fin
+incidence and signed volume; sheets prove their one-fin boundary, exclude
+two-fin seams from it, and measure faceted area. Only the
 `tessellate_body_with_context` call is measured.
 
 `usage_consumed` follows the closed `q3-usage.v1` order:
@@ -153,10 +162,15 @@ execution identity, and zero completion-event counts. Existing mesh bits and
 digests remain unchanged. The NURBS-face rows activate projection candidates,
 Newton depth, queries, and samples; the tolerant rows prove the explicit
 SP-curve/NURBS-pcurve path remains projection-free and account for its graph
-queries. These measurements do not justify finite `bounded_v1` caps:
-projection backtracking remains zero, and genuinely curved NURBS, more imported
-representations, and four-point ladders across additional representations are
-still required. The
+queries. The 12 new representation rows close the named body evidence gate.
+The curved block runs at `1e-2`, `3e-3`, `1e-3`, and `5e-4`; `3e-4` is
+deliberately rejected because it consumes 25 face-refinement passes against
+compatibility v1's limit of 24. The two sheets run at `1e-2`, `3e-3`, `1e-3`,
+and `3e-4`. The curved payload is locally import-verified, while the expanded
+15-file licensed-host certification remains pending and the historical
+14-file record is correctly stale. These measurements support the next
+finite-preset review; they do not themselves implement or adopt `bounded_v1`.
+The
 mixed-store rows prepare a block, the target cylinder, and a sphere; they pin
 three stored bodies, a shifted target identity, and exact equality with the
 standalone cylinder's normalized output and complete report.
@@ -169,6 +183,13 @@ explicitly `0.94`, `0.98`, `0.99`, and `0.998` because the coarsest chord
 request is about 7.7% of the fixture radius. Face passes progress `3 → 4 → 5 →
 6`, edge depth `2 → 2 → 3 → 4`, and target vertices `202 → 540 → 2,320 →
 12,248`, making the non-smooth tolerance-tier transitions part of the contract.
+
+The full-period cylinder sheet is recognized only after its single trim loop
+is proven to be the complete rectangular parameter window. Tessellation then
+uses four quarter-period patches with shared iso columns, preserves the frozen
+topological ring boundaries, and excludes the two-fin seam from the sheet
+boundary. All four tiers meet their reviewed faceted-area bands without a
+special area exception; non-rectangular cases retain the generic path.
 
 The standalone Q3 face matrix measures plane, analytic half-cylinder, and exact
 rational-quadratic NURBS representations across outer-only, one-hole, and

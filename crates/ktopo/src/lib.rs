@@ -37,7 +37,7 @@
 //! - [`profile`] — validated planar inputs shared by sheet and feature builders.
 //! - [`tolerance`] — entity tolerance provenance and growth contracts.
 //! - [`check`] — the body checker (structural + geometric invariants).
-//! - [`btess`] — whole-body watertight tessellation.
+//! - [`btess`] — conforming whole-body solid and sheet tessellation.
 //! - [`domain`] — certified conservative face UV work-box construction.
 //! - `loop_proof` / `shell_proof` — checker-v2 whole-entity certificates
 //!   kept private until their representation coverage is production-ready.

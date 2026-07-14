@@ -29,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 144)
+        self.assertEqual(len(cases), 156)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -150,7 +150,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
         tessellation = [
             case for case in cases if case["benchmark_target"] == "body_tessellation"
         ]
-        self.assertEqual(len(tessellation), 20)
+        self.assertEqual(len(tessellation), 32)
         self.assertTrue(
             all(
                 case["deterministic_seed"] == 0x5154455353000003
@@ -159,11 +159,11 @@ class BenchmarkBaselineTests(unittest.TestCase):
         )
         self.assertEqual(
             {case["tolerances"]["chord_tol"] for case in tessellation},
-            {1e-2, 3e-3, 1e-3, 3e-4},
+            {1e-2, 3e-3, 1e-3, 5e-4, 3e-4},
         )
         self.assertTrue(
             all(
-                case["fixture_version"] == "body-tessellation.v2"
+                case["fixture_version"] == "body-tessellation.v3"
                 and case["policy_values"]["api"]
                 == "tessellate_body_with_context"
                 and case["policy_values"]["budget_profile"]
@@ -193,10 +193,39 @@ class BenchmarkBaselineTests(unittest.TestCase):
         )
         self.assertTrue(
             all(
-                case["expected_result_counters"]["watertight"]
-                and case["expected_result_counters"]["outward"]
-                and case["expected_result_counters"]["volume_within_tolerance"]
+                case["expected_result_counters"]["manifold"]
+                and case["expected_result_counters"]["boundary_matches_topology"]
+                and case["expected_result_counters"]["orientation_valid"]
+                and case["expected_result_counters"]["measure_within_tolerance"]
+                and case["policy_values"]["incidence_proof"]
+                == "directed-manifold+exact-topological-boundary"
                 for case in tessellation
+            )
+        )
+        solids = [
+            case for case in tessellation if case["policy_values"]["body_kind"] == "solid"
+        ]
+        sheets = [
+            case for case in tessellation if case["policy_values"]["body_kind"] == "sheet"
+        ]
+        self.assertEqual(len(solids), 24)
+        self.assertEqual(len(sheets), 8)
+        self.assertTrue(
+            all(
+                case["policy_values"]["validation"] == "closed-solid"
+                and case["policy_values"]["measure"] == "signed-volume"
+                and case["expected_result_counters"]["boundary_segments"] == 0
+                for case in solids
+            )
+        )
+        self.assertTrue(
+            all(
+                case["policy_values"]["validation"] == "oriented-sheet"
+                and case["policy_values"]["measure"] == "faceted-surface-area"
+                and case["expected_result_counters"]["boundary_segments"] > 0
+                and case["policy_values"]["orientation_dust_threshold"]
+                == "64*epsilon*exact-measure"
+                for case in sheets
             )
         )
         mixed_store = [
@@ -222,6 +251,9 @@ class BenchmarkBaselineTests(unittest.TestCase):
         ]
         self.assertEqual(len(imported_nurbs), 2)
         certified = benchmark.load_json(ROOT / "docs" / "oracle-certification.json")
+        historical_evidence = (
+            "historical-host-accepted:onshape-cloud-2026-07-11"
+        )
         expected_sha256 = certified["fixtures_sha256"]["solid_block_nurbs_face.x_t"]
         fixture_bytes = (
             ROOT / "benches" / "testdata" / "solid_block_nurbs_face.certified.x_t"
@@ -232,6 +264,8 @@ class BenchmarkBaselineTests(unittest.TestCase):
             all(
                 case["size_parameters"]["input_bytes"] == len(fixture_bytes)
                 and case["policy_values"]["source_sha256"] == expected_sha256
+                and case["policy_values"]["source_evidence"]
+                == historical_evidence
                 for case in imported_nurbs
             )
         )
@@ -252,9 +286,11 @@ class BenchmarkBaselineTests(unittest.TestCase):
             all(
                 case["size_parameters"]["input_bytes"] == len(cylinder_bytes)
                 and case["policy_values"]["source_sha256"] == cylinder_sha256
+                and case["policy_values"]["source_evidence"]
+                == historical_evidence
                 and case["expected_result_counters"]["source_faces"] == 3
                 and case["expected_result_counters"]["source_edges"] == 2
-                and case["policy_values"]["volume_ratio_floor"]
+                and case["policy_values"]["measure_ratio_floor"]
                 == {
                     1e-2: 0.94,
                     3e-3: 0.98,
@@ -281,11 +317,129 @@ class BenchmarkBaselineTests(unittest.TestCase):
             all(
                 case["size_parameters"]["input_bytes"] == len(tolerant_bytes)
                 and case["policy_values"]["source_sha256"] == tolerant_sha256
+                and case["policy_values"]["source_evidence"]
+                == historical_evidence
                 and case["expected_result_counters"]["tolerant_edges"] == 1
                 and case["expected_result_counters"]["pcurve_uses"] == 2
                 and case["expected_result_counters"]["skipped_geometric_owners"]
                 == 4
                 for case in imported_tolerant
+            )
+        )
+        curved_nurbs = [
+            case
+            for case in tessellation
+            if case["policy_values"].get("source_fixture")
+            == "solid_block_curved_nurbs_face.x_t@local-import-verified-2026-07-13"
+        ]
+        self.assertEqual(len(curved_nurbs), 4)
+        curved_bytes = (
+            ROOT
+            / "benches"
+            / "testdata"
+            / "solid_block_curved_nurbs_face.local.x_t"
+        ).read_bytes()
+        curved_sha256 = (
+            "7fad6999a2d2bd0653a3b7558e0460e9ccfe07a43d00f249709ea7aae642829e"
+        )
+        self.assertEqual(len(curved_bytes), 6_785)
+        self.assertEqual(hashlib.sha256(curved_bytes).hexdigest(), curved_sha256)
+        self.assertEqual(
+            {case["tolerances"]["chord_tol"] for case in curved_nurbs},
+            {1e-2, 3e-3, 1e-3, 5e-4},
+        )
+        self.assertTrue(
+            all(
+                case["size_parameters"]["input_bytes"] == len(curved_bytes)
+                and case["policy_values"]["source_sha256"] == curved_sha256
+                and case["policy_values"]["source_evidence"]
+                == "local-import-verified;host-certification=pending"
+                and case["expected_result_counters"]["source_faces"] == 6
+                and case["expected_result_counters"]["source_edges"] == 12
+                and case["expected_result_counters"]["source_vertices"] == 8
+                for case in curved_nurbs
+            )
+        )
+        curved_finest = next(
+            case
+            for case in curved_nurbs
+            if case["tolerances"]["chord_tol"] == 5e-4
+        )
+        self.assertEqual(
+            curved_finest["policy_values"]["rejected_finer_tier"],
+            "chord-3e-4;interior-refinement-passes=25;allowed=24",
+        )
+        plane_sheets = [
+            case
+            for case in tessellation
+            if case["policy_values"].get("source_fixture")
+            == "sheet_plane_polygon.x_t@onshape-cloud-2026-07-11"
+        ]
+        self.assertEqual(len(plane_sheets), 4)
+        plane_sheet_bytes = (
+            ROOT / "benches" / "testdata" / "sheet_plane_polygon.certified.x_t"
+        ).read_bytes()
+        plane_sheet_sha256 = certified["fixtures_sha256"]["sheet_plane_polygon.x_t"]
+        self.assertEqual(len(plane_sheet_bytes), 3_113)
+        self.assertEqual(
+            hashlib.sha256(plane_sheet_bytes).hexdigest(), plane_sheet_sha256
+        )
+        self.assertTrue(
+            all(
+                case["size_parameters"]["input_bytes"] == len(plane_sheet_bytes)
+                and case["policy_values"]["source_sha256"] == plane_sheet_sha256
+                and case["policy_values"]["source_evidence"]
+                == historical_evidence
+                and case["expected_result_counters"]["source_faces"] == 1
+                and case["expected_result_counters"]["source_edges"] == 6
+                and case["expected_result_counters"]["source_vertices"] == 6
+                and case["expected_result_counters"]["boundary_segments"] == 6
+                for case in plane_sheets
+            )
+        )
+        cylinder_sheets = [
+            case
+            for case in tessellation
+            if case["policy_values"].get("source_fixture")
+            == "sheet_cylinder_seam.x_t@onshape-cloud-2026-07-11"
+        ]
+        self.assertEqual(len(cylinder_sheets), 4)
+        cylinder_sheet_bytes = (
+            ROOT / "benches" / "testdata" / "sheet_cylinder_seam.certified.x_t"
+        ).read_bytes()
+        cylinder_sheet_sha256 = certified["fixtures_sha256"][
+            "sheet_cylinder_seam.x_t"
+        ]
+        self.assertEqual(len(cylinder_sheet_bytes), 2_209)
+        self.assertEqual(
+            hashlib.sha256(cylinder_sheet_bytes).hexdigest(), cylinder_sheet_sha256
+        )
+        cylinder_sheet_boundary = {1e-2: 32, 3e-3: 32, 1e-3: 64, 3e-4: 128}
+        cylinder_sheet_measure = {
+            1e-2: (1.001, 1.002),
+            3e-3: (0.994, 0.996),
+            1e-3: (1.0, 1.001),
+            3e-4: (1.0, 1.002),
+        }
+        self.assertTrue(
+            all(
+                case["size_parameters"]["input_bytes"]
+                == len(cylinder_sheet_bytes)
+                and case["policy_values"]["source_sha256"]
+                == cylinder_sheet_sha256
+                and case["policy_values"]["source_evidence"]
+                == historical_evidence
+                and case["expected_result_counters"]["source_faces"] == 1
+                and case["expected_result_counters"]["source_edges"] == 3
+                and case["expected_result_counters"]["source_vertices"] == 2
+                and case["expected_result_counters"]["boundary_segments"]
+                == cylinder_sheet_boundary[case["tolerances"]["chord_tol"]]
+                and (
+                    case["policy_values"]["measure_ratio_floor"],
+                    case["policy_values"]["measure_ratio_ceiling"],
+                )
+                == cylinder_sheet_measure[case["tolerances"]["chord_tol"]]
+                for case in cylinder_sheets
             )
         )
         face_tessellation = [

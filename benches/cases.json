@@ -856,9 +856,9 @@
       "expected_result_counters": {"nodes": 7, "dependency_edges": 6, "result_nodes": 0, "reached": false, "stable": true, "result_digest": "0934d007b5c6e019", "output_digest": "55e4e90b16074b8d"}
     },
     {
-      "path": "topology/body-tessellation/block-v2/1/chord-1e-2-v2",
+      "path": "topology/body-tessellation/block-v3/1/chord-1e-2-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -874,7 +874,13 @@
         "max_edge_len": "unbounded",
         "policy_version": "v1",
         "usage_contract": "q3-usage.v1",
-        "validation": "closed-solid"
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.999999999999,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary"
       },
       "expected_result_counters": {
         "source_faces": 6,
@@ -887,9 +893,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 0, 2, 24, 1, 150, 0, 0, 120, 0, 0, 8, 120, 12, 84],
         "usage_stage_digest": "bf3b615d9b62211b",
@@ -898,13 +901,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "37738ea0abf268a7",
-        "output_digest": "d5d4e021744132d8"
+        "output_digest": "55b931947701ef91",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/block-v2/1/chord-1e-3-v2",
+      "path": "topology/body-tessellation/block-v3/1/chord-1e-3-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -920,7 +928,13 @@
         "max_edge_len": "unbounded",
         "policy_version": "v1",
         "usage_contract": "q3-usage.v1",
-        "validation": "closed-solid"
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.999999999999,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary"
       },
       "expected_result_counters": {
         "source_faces": 6,
@@ -933,9 +947,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 0, 2, 24, 1, 150, 0, 0, 120, 0, 0, 8, 120, 12, 84],
         "usage_stage_digest": "bf3b615d9b62211b",
@@ -944,13 +955,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "37738ea0abf268a7",
-        "output_digest": "d5d4e021744132d8"
+        "output_digest": "55b931947701ef91",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/cylinder-v2/1/chord-1e-2-v2",
+      "path": "topology/body-tessellation/cylinder-v3/1/chord-1e-2-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -966,7 +982,13 @@
         "max_edge_len": "unbounded",
         "policy_version": "v1",
         "usage_contract": "q3-usage.v1",
-        "validation": "closed-solid"
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.98,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary"
       },
       "expected_result_counters": {
         "source_faces": 3,
@@ -979,9 +1001,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 5, 5762, 2979, 1, 647, 3, 56, 206, 0, 0, 2913, 3497, 5822, 23],
         "usage_stage_digest": "7a3d7472ee4990c7",
@@ -990,13 +1009,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "30474187c9d8a9ce",
-        "output_digest": "b964249718cf75e6"
+        "output_digest": "b294d3661cfc2a6b",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/cylinder-v2/1/chord-1e-3-v2",
+      "path": "topology/body-tessellation/cylinder-v3/1/chord-1e-3-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1012,7 +1036,13 @@
         "max_edge_len": "unbounded",
         "policy_version": "v1",
         "usage_contract": "q3-usage.v1",
-        "validation": "closed-solid"
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.98,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary"
       },
       "expected_result_counters": {
         "source_faces": 3,
@@ -1025,9 +1055,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 7, 171110, 85941, 1, 2567, 5, 248, 782, 0, 0, 85683, 87995, 171362, 23],
         "usage_stage_digest": "39fce57f8d9bef9b",
@@ -1036,13 +1063,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "c18e8ba33c725d33",
-        "output_digest": "5f29ed511dd07c8b"
+        "output_digest": "6c553f5687b1c514",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/mixed-store-cylinder-v2/1/chord-1e-2-v2",
+      "path": "topology/body-tessellation/mixed-store-cylinder-v3/1/chord-1e-2-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1059,7 +1091,13 @@
         "policy_version": "v1",
         "store_shape": "block-cylinder-sphere; target=cylinder",
         "usage_contract": "q3-usage.v1",
-        "validation": "closed-solid"
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.98,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary"
       },
       "expected_result_counters": {
         "source_faces": 3,
@@ -1072,9 +1110,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 5, 5762, 2979, 1, 647, 3, 56, 206, 0, 0, 2913, 3497, 5822, 23],
         "usage_stage_digest": "7a3d7472ee4990c7",
@@ -1083,13 +1118,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "30474187c9d8a9ce",
-        "output_digest": "b964249718cf75e6"
+        "output_digest": "b294d3661cfc2a6b",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/mixed-store-cylinder-v2/1/chord-1e-3-v2",
+      "path": "topology/body-tessellation/mixed-store-cylinder-v3/1/chord-1e-3-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1106,7 +1146,13 @@
         "policy_version": "v1",
         "store_shape": "block-cylinder-sphere; target=cylinder",
         "usage_contract": "q3-usage.v1",
-        "validation": "closed-solid"
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.98,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary"
       },
       "expected_result_counters": {
         "source_faces": 3,
@@ -1119,9 +1165,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 7, 171110, 85941, 1, 2567, 5, 248, 782, 0, 0, 85683, 87995, 171362, 23],
         "usage_stage_digest": "39fce57f8d9bef9b",
@@ -1130,13 +1173,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "c18e8ba33c725d33",
-        "output_digest": "5f29ed511dd07c8b"
+        "output_digest": "6c553f5687b1c514",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/cone-v2/1/chord-1e-2-v2",
+      "path": "topology/body-tessellation/cone-v3/1/chord-1e-2-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1152,7 +1200,13 @@
         "max_edge_len": "unbounded",
         "policy_version": "v1",
         "usage_contract": "q3-usage.v1",
-        "validation": "closed-solid"
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.98,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary"
       },
       "expected_result_counters": {
         "source_faces": 3,
@@ -1165,9 +1219,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 5, 5410, 2803, 1, 647, 3, 56, 206, 0, 0, 2737, 3321, 5470, 23],
         "usage_stage_digest": "54384a78bc47d770",
@@ -1176,13 +1227,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "2ce0b59e91e22400",
-        "output_digest": "b6023ef68ee4c2ee"
+        "output_digest": "6cb05b066df5d3c7",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/cone-v2/1/chord-1e-3-v2",
+      "path": "topology/body-tessellation/cone-v3/1/chord-1e-3-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1198,7 +1254,13 @@
         "max_edge_len": "unbounded",
         "policy_version": "v1",
         "usage_contract": "q3-usage.v1",
-        "validation": "closed-solid"
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.98,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary"
       },
       "expected_result_counters": {
         "source_faces": 3,
@@ -1211,9 +1273,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 7, 108672, 54626, 1, 1927, 5, 184, 590, 0, 0, 54432, 56168, 108860, 23],
         "usage_stage_digest": "1e568d215d3434c3",
@@ -1222,13 +1281,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "415997aeb0babc82",
-        "output_digest": "4266bd859caf2548"
+        "output_digest": "11e8589bf8b7ad75",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/sphere-v2/1/chord-1e-2-v2",
+      "path": "topology/body-tessellation/sphere-v3/1/chord-1e-2-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1244,7 +1308,13 @@
         "max_edge_len": "unbounded",
         "policy_version": "v1",
         "usage_contract": "q3-usage.v1",
-        "validation": "closed-solid"
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.98,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary"
       },
       "expected_result_counters": {
         "source_faces": 1,
@@ -1257,9 +1327,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 10, 2728, 2788, 0, 0, 0, 0, 0, 4, 30, 2704, 3127, 5404, 6],
         "usage_stage_digest": "340666f2a5737072",
@@ -1268,13 +1335,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "79f42a546c49f36f",
-        "output_digest": "93969a9a2e3e2b9d"
+        "output_digest": "5bd782d17be2b032",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/sphere-v2/1/chord-1e-3-v2",
+      "path": "topology/body-tessellation/sphere-v3/1/chord-1e-3-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1290,7 +1362,13 @@
         "max_edge_len": "unbounded",
         "policy_version": "v1",
         "usage_contract": "q3-usage.v1",
-        "validation": "closed-solid"
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.98,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary"
       },
       "expected_result_counters": {
         "source_faces": 1,
@@ -1303,9 +1381,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 12, 75506, 75714, 0, 0, 0, 0, 0, 6, 126, 75430, 76893, 150856, 6],
         "usage_stage_digest": "9edf8608c7123093",
@@ -1314,13 +1389,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "f827bff6d90187a7",
-        "output_digest": "65a59f05ace3e62f"
+        "output_digest": "1b2c3f1a631f0fb2",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/torus-v2/1/chord-1e-2-v2",
+      "path": "topology/body-tessellation/torus-v3/1/chord-1e-2-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1336,7 +1416,13 @@
         "max_edge_len": "unbounded",
         "policy_version": "v1",
         "usage_contract": "q3-usage.v1",
-        "validation": "closed-solid"
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.98,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary"
       },
       "expected_result_counters": {
         "source_faces": 1,
@@ -1349,9 +1435,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 20, 6244, 11504, 0, 0, 0, 0, 0, 5, 152, 11340, 12480, 22680, 22],
         "usage_stage_digest": "e7d813a7f1cb300b",
@@ -1360,13 +1443,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "bec9d49d9830dc7e",
-        "output_digest": "49b3c184bb15572c"
+        "output_digest": "02484e802b507779",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/torus-v2/1/chord-1e-3-v2",
+      "path": "topology/body-tessellation/torus-v3/1/chord-1e-3-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1382,7 +1470,13 @@
         "max_edge_len": "unbounded",
         "policy_version": "v1",
         "usage_contract": "q3-usage.v1",
-        "validation": "closed-solid"
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.98,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary"
       },
       "expected_result_counters": {
         "source_faces": 1,
@@ -1395,9 +1489,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 28, 76164, 148566, 0, 0, 0, 0, 0, 6, 376, 148178, 150886, 296356, 22],
         "usage_stage_digest": "2135eeba3fb0dfa7",
@@ -1406,13 +1497,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "39d6eb3f0319b7f7",
-        "output_digest": "9492ef5035aa53ed"
+        "output_digest": "4276248d43e14f1a",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/imported-nurbs-face-v2/1/chord-1e-2-v2",
+      "path": "topology/body-tessellation/imported-nurbs-face-v3/1/chord-1e-2-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1431,7 +1527,14 @@
         "source_fixture": "solid_block_nurbs_face.x_t@onshape-cloud-2026-07-11",
         "source_sha256": "410831b258864b3f55a221f329a49743b3863c664f1d2a53435f74a72ea5d9db",
         "usage_contract": "q3-usage.v1",
-        "validation": "closed-solid"
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.999999999999,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "source_evidence": "historical-host-accepted:onshape-cloud-2026-07-11"
       },
       "expected_result_counters": {
         "source_faces": 6,
@@ -1444,9 +1547,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 1, 1, 16, 625, 0, 0, 0, 2, 24, 1, 54, 0, 0, 120, 0, 0, 8, 120, 12, 84],
         "usage_stage_digest": "8e9af09bd1043a00",
@@ -1455,13 +1555,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "226edd2a120c74b0",
-        "output_digest": "621e45affa387187"
+        "output_digest": "0f5da99970d6f41a",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/imported-nurbs-face-v2/1/chord-1e-3-v2",
+      "path": "topology/body-tessellation/imported-nurbs-face-v3/1/chord-1e-3-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1480,7 +1585,14 @@
         "source_fixture": "solid_block_nurbs_face.x_t@onshape-cloud-2026-07-11",
         "source_sha256": "410831b258864b3f55a221f329a49743b3863c664f1d2a53435f74a72ea5d9db",
         "usage_contract": "q3-usage.v1",
-        "validation": "closed-solid"
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.999999999999,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "source_evidence": "historical-host-accepted:onshape-cloud-2026-07-11"
       },
       "expected_result_counters": {
         "source_faces": 6,
@@ -1493,9 +1605,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 1, 1, 16, 625, 0, 0, 0, 2, 24, 1, 54, 0, 0, 120, 0, 0, 8, 120, 12, 84],
         "usage_stage_digest": "8e9af09bd1043a00",
@@ -1504,13 +1613,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "226edd2a120c74b0",
-        "output_digest": "621e45affa387187"
+        "output_digest": "0f5da99970d6f41a",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/imported-tolerant-edge-v2/1/chord-1e-2-v2",
+      "path": "topology/body-tessellation/imported-tolerant-edge-v3/1/chord-1e-2-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1529,7 +1643,14 @@
         "source_fixture": "solid_block_tolerant_edge.x_t@onshape-cloud-2026-07-11",
         "source_sha256": "49e1c858c73200f82816b6c352b2a4e92b7af7d45e8f82f10e00abb6d4edf831",
         "usage_contract": "q3-usage.v1",
-        "validation": "closed-solid"
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.999999999999,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "source_evidence": "historical-host-accepted:onshape-cloud-2026-07-11"
       },
       "expected_result_counters": {
         "source_faces": 6,
@@ -1545,9 +1666,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 0, 2, 24, 1, 66, 0, 0, 120, 0, 0, 8, 120, 12, 84],
         "usage_stage_digest": "060473f62ba7442f",
@@ -1556,13 +1674,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "226edd2a120c74b0",
-        "output_digest": "e30c4f87158cd78e"
+        "output_digest": "33402f6c178bc67f",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/imported-tolerant-edge-v2/1/chord-1e-3-v2",
+      "path": "topology/body-tessellation/imported-tolerant-edge-v3/1/chord-1e-3-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1581,7 +1704,14 @@
         "source_fixture": "solid_block_tolerant_edge.x_t@onshape-cloud-2026-07-11",
         "source_sha256": "49e1c858c73200f82816b6c352b2a4e92b7af7d45e8f82f10e00abb6d4edf831",
         "usage_contract": "q3-usage.v1",
-        "validation": "closed-solid"
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.999999999999,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "source_evidence": "historical-host-accepted:onshape-cloud-2026-07-11"
       },
       "expected_result_counters": {
         "source_faces": 6,
@@ -1597,9 +1727,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 0, 2, 24, 1, 66, 0, 0, 120, 0, 0, 8, 120, 12, 84],
         "usage_stage_digest": "060473f62ba7442f",
@@ -1608,13 +1735,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "226edd2a120c74b0",
-        "output_digest": "e30c4f87158cd78e"
+        "output_digest": "33402f6c178bc67f",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/imported-cylinder-v2/1/chord-1e-2-v2",
+      "path": "topology/body-tessellation/imported-cylinder-v3/1/chord-1e-2-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1634,7 +1766,13 @@
         "source_sha256": "f1f2389c98ca323a8e5aef2f19ed2e88f406f8569c2c87a14d86c79111c6a9c4",
         "usage_contract": "q3-usage.v1",
         "validation": "closed-solid",
-        "volume_ratio_floor": 0.94
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.94,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "source_evidence": "historical-host-accepted:onshape-cloud-2026-07-11"
       },
       "expected_result_counters": {
         "source_faces": 3,
@@ -1647,9 +1785,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 3, 372, 236, 1, 131, 2, 24, 110, 0, 0, 202, 498, 400, 23],
         "usage_stage_digest": "6ee8a7e7c94f6b33",
@@ -1658,13 +1793,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "f7702f5f50220f95",
-        "output_digest": "2eef993285f811dc"
+        "output_digest": "7e97894be33b2217",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/imported-cylinder-v2/1/chord-1e-3-v2",
+      "path": "topology/body-tessellation/imported-cylinder-v3/1/chord-1e-3-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1684,7 +1824,13 @@
         "source_sha256": "f1f2389c98ca323a8e5aef2f19ed2e88f406f8569c2c87a14d86c79111c6a9c4",
         "usage_contract": "q3-usage.v1",
         "validation": "closed-solid",
-        "volume_ratio_floor": 0.99
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.99,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "source_evidence": "historical-host-accepted:onshape-cloud-2026-07-11"
       },
       "expected_result_counters": {
         "source_faces": 3,
@@ -1697,9 +1843,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 5, 4576, 2386, 1, 259, 3, 56, 206, 0, 0, 2320, 2904, 4636, 23],
         "usage_stage_digest": "d07b2989d806bb46",
@@ -1708,13 +1851,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "c4ba635c11a1e117",
-        "output_digest": "cf79fce5b7bfd10d"
+        "output_digest": "3c27fbc8e7ff5a66",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/imported-cylinder-v2/1/chord-3e-3-v2",
+      "path": "topology/body-tessellation/imported-cylinder-v3/1/chord-3e-3-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1734,7 +1882,13 @@
         "source_sha256": "f1f2389c98ca323a8e5aef2f19ed2e88f406f8569c2c87a14d86c79111c6a9c4",
         "usage_contract": "q3-usage.v1",
         "validation": "closed-solid",
-        "volume_ratio_floor": 0.98
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.98,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "source_evidence": "historical-host-accepted:onshape-cloud-2026-07-11"
       },
       "expected_result_counters": {
         "source_faces": 3,
@@ -1747,9 +1901,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 4, 1048, 574, 1, 131, 2, 24, 110, 0, 0, 540, 836, 1076, 23],
         "usage_stage_digest": "4331bcf7e7497126",
@@ -1758,13 +1909,18 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "57c3295c221c4f73",
-        "output_digest": "d56f60cdd3a76735"
+        "output_digest": "c6dfe970f13eceb0",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
       }
     },
     {
-      "path": "topology/body-tessellation/imported-cylinder-v2/1/chord-3e-4-v2",
+      "path": "topology/body-tessellation/imported-cylinder-v3/1/chord-3e-4-v3",
       "benchmark_target": "body_tessellation",
-      "fixture_version": "body-tessellation.v2",
+      "fixture_version": "body-tessellation.v3",
       "deterministic_seed": 5860385239292968963,
       "size_parameters": {
         "elements": 1,
@@ -1784,7 +1940,13 @@
         "source_sha256": "f1f2389c98ca323a8e5aef2f19ed2e88f406f8569c2c87a14d86c79111c6a9c4",
         "usage_contract": "q3-usage.v1",
         "validation": "closed-solid",
-        "volume_ratio_floor": 0.998
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.998,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "source_evidence": "historical-host-accepted:onshape-cloud-2026-07-11"
       },
       "expected_result_counters": {
         "source_faces": 3,
@@ -1797,9 +1959,6 @@
         "positions_finite": true,
         "indices_valid": true,
         "owner_mapping_valid": true,
-        "watertight": true,
-        "outward": true,
-        "volume_within_tolerance": true,
         "usage_stage_count": 21,
         "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 6, 24368, 12378, 1, 515, 4, 120, 398, 0, 0, 12248, 13408, 24492, 23],
         "usage_stage_digest": "55036a967093eaef",
@@ -1808,7 +1967,717 @@
         "diagnostic_count": 0,
         "dropped_diagnostic_count": 0,
         "mesh_digest": "135ae5814e825469",
-        "output_digest": "92ae1819ef1c3cf6"
+        "output_digest": "e1f9cb58e265b8fb",
+        "boundary_segments": 0,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true
+      }
+    },
+    {
+      "path": "topology/body-tessellation/imported-curved-nurbs-block-v3/1/chord-1e-2-v3",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v3",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1,
+        "input_bytes": 6785
+      },
+      "tolerances": {
+        "chord_tol": 0.01
+      },
+      "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
+        "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.988,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "source_fixture": "solid_block_curved_nurbs_face.x_t@local-import-verified-2026-07-13",
+        "source_sha256": "7fad6999a2d2bd0653a3b7558e0460e9ccfe07a43d00f249709ea7aae642829e",
+        "source_evidence": "local-import-verified;host-certification=pending"
+      },
+      "expected_result_counters": {
+        "source_faces": 6,
+        "source_edges": 12,
+        "source_vertices": 8,
+        "mesh_vertices": 8,
+        "mesh_triangles": 12,
+        "face_ranges": 6,
+        "edge_polylines": 12,
+        "boundary_segments": 0,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 1, 1, 16, 625, 0, 0, 0, 2, 24, 1, 54, 0, 0, 120, 0, 0, 8, 120, 12, 84],
+        "usage_stage_digest": "8e9af09bd1043a00",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
+        "mesh_digest": "226edd2a120c74b0",
+        "output_digest": "0f5da99970d6f41a"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/imported-curved-nurbs-block-v3/1/chord-3e-3-v3",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v3",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1,
+        "input_bytes": 6785
+      },
+      "tolerances": {
+        "chord_tol": 0.003
+      },
+      "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
+        "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.997,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "source_fixture": "solid_block_curved_nurbs_face.x_t@local-import-verified-2026-07-13",
+        "source_sha256": "7fad6999a2d2bd0653a3b7558e0460e9ccfe07a43d00f249709ea7aae642829e",
+        "source_evidence": "local-import-verified;host-certification=pending"
+      },
+      "expected_result_counters": {
+        "source_faces": 6,
+        "source_edges": 12,
+        "source_vertices": 8,
+        "mesh_vertices": 9,
+        "mesh_triangles": 14,
+        "face_ranges": 6,
+        "edge_polylines": 12,
+        "boundary_segments": 0,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 1, 1, 16, 625, 0, 0, 1, 4, 25, 1, 54, 0, 0, 120, 0, 0, 9, 121, 14, 84],
+        "usage_stage_digest": "dd8755418cbd2232",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
+        "mesh_digest": "b245e9ddd554fd49",
+        "output_digest": "e653f539fa39238d"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/imported-curved-nurbs-block-v3/1/chord-1e-3-v3",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v3",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1,
+        "input_bytes": 6785
+      },
+      "tolerances": {
+        "chord_tol": 0.001
+      },
+      "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
+        "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.9997,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "source_fixture": "solid_block_curved_nurbs_face.x_t@local-import-verified-2026-07-13",
+        "source_sha256": "7fad6999a2d2bd0653a3b7558e0460e9ccfe07a43d00f249709ea7aae642829e",
+        "source_evidence": "local-import-verified;host-certification=pending"
+      },
+      "expected_result_counters": {
+        "source_faces": 6,
+        "source_edges": 12,
+        "source_vertices": 8,
+        "mesh_vertices": 25,
+        "mesh_triangles": 46,
+        "face_ranges": 6,
+        "edge_polylines": 12,
+        "boundary_segments": 0,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 1, 1, 16, 625, 0, 0, 5, 36, 41, 1, 54, 0, 0, 120, 0, 0, 25, 137, 46, 84],
+        "usage_stage_digest": "5d0fcffa1463cb7e",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
+        "mesh_digest": "daef2eb74d11c10a",
+        "output_digest": "bf6333499e20cbbc"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/imported-curved-nurbs-block-v3/1/chord-5e-4-v3",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v3",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1,
+        "input_bytes": 6785
+      },
+      "tolerances": {
+        "chord_tol": 0.0005
+      },
+      "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
+        "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
+        "validation": "closed-solid",
+        "body_kind": "solid",
+        "measure": "signed-volume",
+        "measure_ratio_floor": 0.9994,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "positive-signed-volume",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "source_fixture": "solid_block_curved_nurbs_face.x_t@local-import-verified-2026-07-13",
+        "source_sha256": "7fad6999a2d2bd0653a3b7558e0460e9ccfe07a43d00f249709ea7aae642829e",
+        "source_evidence": "local-import-verified;host-certification=pending",
+        "rejected_finer_tier": "chord-3e-4;interior-refinement-passes=25;allowed=24"
+      },
+      "expected_result_counters": {
+        "source_faces": 6,
+        "source_edges": 12,
+        "source_vertices": 8,
+        "mesh_vertices": 57,
+        "mesh_triangles": 110,
+        "face_ranges": 6,
+        "edge_polylines": 12,
+        "boundary_segments": 0,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 1, 1, 16, 625, 0, 0, 6, 100, 73, 1, 54, 0, 0, 120, 0, 0, 57, 169, 110, 84],
+        "usage_stage_digest": "0e72cb68b3729557",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
+        "mesh_digest": "6818abb1c6bafc83",
+        "output_digest": "046ad9a0dcdac765"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/imported-plane-sheet-v3/1/chord-1e-2-v3",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v3",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1,
+        "input_bytes": 3113
+      },
+      "tolerances": {
+        "chord_tol": 0.01
+      },
+      "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
+        "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
+        "validation": "oriented-sheet",
+        "body_kind": "sheet",
+        "measure": "faceted-surface-area",
+        "measure_ratio_floor": 0.999999999999,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "surface-normal-times-face-sense",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "orientation_dust_threshold": "64*epsilon*exact-measure",
+        "source_fixture": "sheet_plane_polygon.x_t@onshape-cloud-2026-07-11",
+        "source_sha256": "38cec426b656aba55e949d16e50bbf66c1a084941bf333f5f26a2d64f3d9391c",
+        "source_evidence": "historical-host-accepted:onshape-cloud-2026-07-11"
+      },
+      "expected_result_counters": {
+        "source_faces": 1,
+        "source_edges": 6,
+        "source_vertices": 6,
+        "mesh_vertices": 6,
+        "mesh_triangles": 4,
+        "face_ranges": 1,
+        "edge_polylines": 6,
+        "boundary_segments": 6,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 0, 4, 6, 1, 13, 0, 0, 54, 0, 0, 6, 30, 4, 36],
+        "usage_stage_digest": "627dbafd11e0c984",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
+        "mesh_digest": "383a2d1018660156",
+        "output_digest": "ec8a582df5263aa1"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/imported-plane-sheet-v3/1/chord-3e-3-v3",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v3",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1,
+        "input_bytes": 3113
+      },
+      "tolerances": {
+        "chord_tol": 0.003
+      },
+      "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
+        "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
+        "validation": "oriented-sheet",
+        "body_kind": "sheet",
+        "measure": "faceted-surface-area",
+        "measure_ratio_floor": 0.999999999999,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "surface-normal-times-face-sense",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "orientation_dust_threshold": "64*epsilon*exact-measure",
+        "source_fixture": "sheet_plane_polygon.x_t@onshape-cloud-2026-07-11",
+        "source_sha256": "38cec426b656aba55e949d16e50bbf66c1a084941bf333f5f26a2d64f3d9391c",
+        "source_evidence": "historical-host-accepted:onshape-cloud-2026-07-11"
+      },
+      "expected_result_counters": {
+        "source_faces": 1,
+        "source_edges": 6,
+        "source_vertices": 6,
+        "mesh_vertices": 6,
+        "mesh_triangles": 4,
+        "face_ranges": 1,
+        "edge_polylines": 6,
+        "boundary_segments": 6,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 0, 4, 6, 1, 13, 0, 0, 54, 0, 0, 6, 30, 4, 36],
+        "usage_stage_digest": "627dbafd11e0c984",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
+        "mesh_digest": "383a2d1018660156",
+        "output_digest": "ec8a582df5263aa1"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/imported-plane-sheet-v3/1/chord-1e-3-v3",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v3",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1,
+        "input_bytes": 3113
+      },
+      "tolerances": {
+        "chord_tol": 0.001
+      },
+      "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
+        "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
+        "validation": "oriented-sheet",
+        "body_kind": "sheet",
+        "measure": "faceted-surface-area",
+        "measure_ratio_floor": 0.999999999999,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "surface-normal-times-face-sense",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "orientation_dust_threshold": "64*epsilon*exact-measure",
+        "source_fixture": "sheet_plane_polygon.x_t@onshape-cloud-2026-07-11",
+        "source_sha256": "38cec426b656aba55e949d16e50bbf66c1a084941bf333f5f26a2d64f3d9391c",
+        "source_evidence": "historical-host-accepted:onshape-cloud-2026-07-11"
+      },
+      "expected_result_counters": {
+        "source_faces": 1,
+        "source_edges": 6,
+        "source_vertices": 6,
+        "mesh_vertices": 6,
+        "mesh_triangles": 4,
+        "face_ranges": 1,
+        "edge_polylines": 6,
+        "boundary_segments": 6,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 0, 4, 6, 1, 13, 0, 0, 54, 0, 0, 6, 30, 4, 36],
+        "usage_stage_digest": "627dbafd11e0c984",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
+        "mesh_digest": "383a2d1018660156",
+        "output_digest": "ec8a582df5263aa1"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/imported-plane-sheet-v3/1/chord-3e-4-v3",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v3",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1,
+        "input_bytes": 3113
+      },
+      "tolerances": {
+        "chord_tol": 0.0003
+      },
+      "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
+        "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
+        "validation": "oriented-sheet",
+        "body_kind": "sheet",
+        "measure": "faceted-surface-area",
+        "measure_ratio_floor": 0.999999999999,
+        "measure_ratio_ceiling": 1.000000001,
+        "orientation_proof": "surface-normal-times-face-sense",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "orientation_dust_threshold": "64*epsilon*exact-measure",
+        "source_fixture": "sheet_plane_polygon.x_t@onshape-cloud-2026-07-11",
+        "source_sha256": "38cec426b656aba55e949d16e50bbf66c1a084941bf333f5f26a2d64f3d9391c",
+        "source_evidence": "historical-host-accepted:onshape-cloud-2026-07-11"
+      },
+      "expected_result_counters": {
+        "source_faces": 1,
+        "source_edges": 6,
+        "source_vertices": 6,
+        "mesh_vertices": 6,
+        "mesh_triangles": 4,
+        "face_ranges": 1,
+        "edge_polylines": 6,
+        "boundary_segments": 6,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 0, 4, 6, 1, 13, 0, 0, 54, 0, 0, 6, 30, 4, 36],
+        "usage_stage_digest": "627dbafd11e0c984",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
+        "mesh_digest": "383a2d1018660156",
+        "output_digest": "ec8a582df5263aa1"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/imported-cylinder-sheet-v3/1/chord-1e-2-v3",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v3",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1,
+        "input_bytes": 2209
+      },
+      "tolerances": {
+        "chord_tol": 0.01
+      },
+      "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
+        "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
+        "validation": "oriented-sheet",
+        "body_kind": "sheet",
+        "measure": "faceted-surface-area",
+        "measure_ratio_floor": 1.001,
+        "measure_ratio_ceiling": 1.002,
+        "orientation_proof": "surface-normal-times-face-sense",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "orientation_dust_threshold": "64*epsilon*exact-measure",
+        "source_fixture": "sheet_cylinder_seam.x_t@onshape-cloud-2026-07-11",
+        "source_sha256": "94af58ef0905b5bca7596966510f6da3b1f2832fe50cd07518189d1fd48926d6",
+        "source_evidence": "historical-host-accepted:onshape-cloud-2026-07-11"
+      },
+      "expected_result_counters": {
+        "source_faces": 1,
+        "source_edges": 3,
+        "source_vertices": 2,
+        "mesh_vertices": 36,
+        "mesh_triangles": 40,
+        "face_ranges": 1,
+        "edge_polylines": 3,
+        "boundary_segments": 32,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 4, 10, 44, 1, 69, 2, 24, 118, 0, 0, 36, 276, 40, 23],
+        "usage_stage_digest": "bef1dd9c663f31ae",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
+        "mesh_digest": "20996c4478018a8b",
+        "output_digest": "50c54031bd89a6e0"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/imported-cylinder-sheet-v3/1/chord-3e-3-v3",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v3",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1,
+        "input_bytes": 2209
+      },
+      "tolerances": {
+        "chord_tol": 0.003
+      },
+      "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
+        "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
+        "validation": "oriented-sheet",
+        "body_kind": "sheet",
+        "measure": "faceted-surface-area",
+        "measure_ratio_floor": 0.994,
+        "measure_ratio_ceiling": 0.996,
+        "orientation_proof": "surface-normal-times-face-sense",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "orientation_dust_threshold": "64*epsilon*exact-measure",
+        "source_fixture": "sheet_cylinder_seam.x_t@onshape-cloud-2026-07-11",
+        "source_sha256": "94af58ef0905b5bca7596966510f6da3b1f2832fe50cd07518189d1fd48926d6",
+        "source_evidence": "historical-host-accepted:onshape-cloud-2026-07-11"
+      },
+      "expected_result_counters": {
+        "source_faces": 1,
+        "source_edges": 3,
+        "source_vertices": 2,
+        "mesh_vertices": 52,
+        "mesh_triangles": 72,
+        "face_ranges": 1,
+        "edge_polylines": 3,
+        "boundary_segments": 32,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 8, 18, 60, 1, 69, 2, 24, 118, 0, 0, 52, 292, 72, 23],
+        "usage_stage_digest": "598f284eb09101da",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
+        "mesh_digest": "21629ed91eb72c2a",
+        "output_digest": "7007ceb8c0a5ecb2"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/imported-cylinder-sheet-v3/1/chord-1e-3-v3",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v3",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1,
+        "input_bytes": 2209
+      },
+      "tolerances": {
+        "chord_tol": 0.001
+      },
+      "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
+        "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
+        "validation": "oriented-sheet",
+        "body_kind": "sheet",
+        "measure": "faceted-surface-area",
+        "measure_ratio_floor": 1.0,
+        "measure_ratio_ceiling": 1.001,
+        "orientation_proof": "surface-normal-times-face-sense",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "orientation_dust_threshold": "64*epsilon*exact-measure",
+        "source_fixture": "sheet_cylinder_seam.x_t@onshape-cloud-2026-07-11",
+        "source_sha256": "94af58ef0905b5bca7596966510f6da3b1f2832fe50cd07518189d1fd48926d6",
+        "source_evidence": "historical-host-accepted:onshape-cloud-2026-07-11"
+      },
+      "expected_result_counters": {
+        "source_faces": 1,
+        "source_edges": 3,
+        "source_vertices": 2,
+        "mesh_vertices": 252,
+        "mesh_triangles": 440,
+        "face_ranges": 1,
+        "edge_polylines": 3,
+        "boundary_segments": 64,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 12, 110, 260, 1, 133, 3, 56, 214, 0, 0, 252, 684, 440, 23],
+        "usage_stage_digest": "86e6e8eb1abb2b0c",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
+        "mesh_digest": "f2527d3b3582452a",
+        "output_digest": "92b990eb5e8765e3"
+      }
+    },
+    {
+      "path": "topology/body-tessellation/imported-cylinder-sheet-v3/1/chord-3e-4-v3",
+      "benchmark_target": "body_tessellation",
+      "fixture_version": "body-tessellation.v3",
+      "deterministic_seed": 5860385239292968963,
+      "size_parameters": {
+        "elements": 1,
+        "bodies": 1,
+        "input_bytes": 2209
+      },
+      "tolerances": {
+        "chord_tol": 0.0003
+      },
+      "policy_values": {
+        "api": "tessellate_body_with_context",
+        "budget_profile": "body-tessellation.compatibility-v1",
+        "execution": "serial",
+        "max_edge_len": "unbounded",
+        "policy_version": "v1",
+        "usage_contract": "q3-usage.v1",
+        "validation": "oriented-sheet",
+        "body_kind": "sheet",
+        "measure": "faceted-surface-area",
+        "measure_ratio_floor": 1.0,
+        "measure_ratio_ceiling": 1.002,
+        "orientation_proof": "surface-normal-times-face-sense",
+        "incidence_proof": "directed-manifold+exact-topological-boundary",
+        "orientation_dust_threshold": "64*epsilon*exact-measure",
+        "source_fixture": "sheet_cylinder_seam.x_t@onshape-cloud-2026-07-11",
+        "source_sha256": "94af58ef0905b5bca7596966510f6da3b1f2832fe50cd07518189d1fd48926d6",
+        "source_evidence": "historical-host-accepted:onshape-cloud-2026-07-11"
+      },
+      "expected_result_counters": {
+        "source_faces": 1,
+        "source_edges": 3,
+        "source_vertices": 2,
+        "mesh_vertices": 1492,
+        "mesh_triangles": 2856,
+        "face_ranges": 1,
+        "edge_polylines": 3,
+        "boundary_segments": 128,
+        "positions_finite": true,
+        "indices_valid": true,
+        "owner_mapping_valid": true,
+        "manifold": true,
+        "boundary_matches_topology": true,
+        "orientation_valid": true,
+        "measure_within_tolerance": true,
+        "usage_stage_count": 21,
+        "usage_consumed": [0, 0, 0, 0, 0, 0, 0, 16, 714, 1500, 1, 261, 4, 120, 406, 0, 0, 1492, 2308, 2856, 23],
+        "usage_stage_digest": "49dca081ce6d2499",
+        "limit_event_count": 0,
+        "numeric_resolution_stage_count": 0,
+        "diagnostic_count": 0,
+        "dropped_diagnostic_count": 0,
+        "mesh_digest": "e8f34bc80f777a96",
+        "output_digest": "59a4b3695b03e58a"
       }
     },
     {

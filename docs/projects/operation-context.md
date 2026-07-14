@@ -1,6 +1,6 @@
 # Operation context and numerical policy
 
-Status: Stage 1b composition, the NURBS contact/minimizer scale gate, and representative Stage 2-5 pilots implemented; whole-body tessellation has an adopted facade and state-4 wrapper ratchet, standalone-face internal-use ratcheting and the body allocation-accounting boundary are complete, while projection adoption, corpus-backed bounded presets, and broader ratchets remain
+Status: Stage 1b composition, the NURBS contact/minimizer scale gate, and representative Stage 2-5 pilots implemented; whole-body tessellation has an adopted facade and state-4 wrapper ratchet, standalone-face internal-use ratcheting, the body allocation-accounting boundary, and the face/body tessellation evidence matrices are complete, while projection adoption, corpus-backed bounded presets, and broader ratchets remain
 
 ## Purpose
 
@@ -934,8 +934,10 @@ records and indices. A structural-items stage now admits one shared topology
 plan, identity-membership scratch, topology/mesh mappings, owner ranges, and
 all remaining non-edge holder slots before allocation. Compatibility-v1 body-
 wide preparation, edge-storage, structural, and triangle allowances remain
-accounting-only at `u64::MAX`. Corpus-backed finite presets are now the
-remaining gate before the product path is described as hostile-input bounded.
+accounting-only at `u64::MAX`. The 18-row face matrix and 32-row
+`body-tessellation.v3` matrix now close the corpus evidence gate. Selecting,
+testing, and adopting finite presets is the remaining gate before the product
+path is described as hostile-input bounded.
 
 - Add fallible contextual projection APIs and remove public panic behavior through the
   new path.
@@ -1008,10 +1010,13 @@ land before any product cap is selected:
    ordinary loop/trim holders. Closed-sphere, torus, multi-hole, N/N+1, paired-
    holder atomicity, shared-scope, overflow, diagnostic, legacy, and execution-
    policy evidence is in the owning tests.
-7. **Analytic evidence plus the first certified corpus slices implemented:**
-   Q3's contextual v2 ladder records all 21 aggregate stages for ten analytic
-   solids, two imported NURBS-face rows, and two tolerant-edge/pcurve rows,
-   preserves the legacy analytic mesh bits, and verifies identical reports on
+7. **Face and body representation evidence gates closed:** Q3's contextual
+   `body-tessellation.v3` ladder records all 21 aggregate stages across 32
+   rows: twenty generalized legacy solids plus four tiers each for a locally
+   verified genuinely curved NURBS block, a historically host-certified plane
+   sheet, and a historically host-certified full-period cylinder sheet. The
+   matrix has 24 solids and eight sheets, preserves the legacy analytic mesh
+   bits, and verifies identical reports on
    repetition. The certified B-surface fixture activates projection candidates,
    Newton depth, queries, and samples. The certified tolerant edge proves two
    explicit NURBS pcurve uses remain projection-free while graph work composes.
@@ -1021,9 +1026,14 @@ land before any product cap is selected:
    analytic half-cylinder, and genuinely curved rational-quadratic NURBS
    surfaces with outer, one-hole, and three-hole trims at two tolerances; it
    pins all five face-profile stages plus trim/boundary, lift, orientation, and
-   area evidence. The face representation/trim evidence gate is therefore
-   closed. Add genuinely curved NURBS, sheet, broader imported-corpus, and
-   tighter-tolerance body measurements before proposing explicit
+   area evidence. Solids and sheets share exact directed-incidence,
+   topological-boundary, and face-sense orientation checks, with signed volume
+   for solids and faceted area for sheets. The curved block's `3e-4` tier is
+   truthfully excluded because 25 refinement passes exceed compatibility v1's
+   limit of 24; its finest admitted tier is `5e-4`. The full-period cylinder
+   sheet uses a proven rectangular chart split into quarter-period patches and
+   needs no area exception. Both representation/trim evidence gates are now
+   closed. Next, select and review explicit
    `FaceTessellationBudgetProfile::bounded_v1()` and
    `BodyTessellationBudgetProfile::bounded_v1()` presets with finite aggregate
    and root caps. Legacy wrappers stay on compatibility `v1_defaults`; facade,

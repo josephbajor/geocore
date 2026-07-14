@@ -84,9 +84,11 @@ jobs:
           cargo bench --manifest-path benches/Cargo.toml --locked --bench benchmark_contract -- harness/contract/tiny-v1/64/default-v1
           cargo bench --manifest-path benches/Cargo.toml --locked --bench graph_build -- graph/build/independent-planes-v1/1/default-v1
           cargo bench --manifest-path benches/Cargo.toml --locked --bench graph_traversal -- graph/traverse/offset-chain-closure-v1/1/dependency-first-v1
-          cargo bench --manifest-path benches/Cargo.toml --locked --bench body_tessellation -- topology/body-tessellation/block-v2/1/chord-1e-2-v2
-          cargo bench --manifest-path benches/Cargo.toml --locked --bench body_tessellation -- topology/body-tessellation/mixed-store-cylinder-v2/1/chord-1e-2-v2
-          cargo bench --manifest-path benches/Cargo.toml --locked --bench body_tessellation -- topology/body-tessellation/imported-cylinder-v2/1/chord-1e-2-v2
+          cargo bench --manifest-path benches/Cargo.toml --locked --bench body_tessellation -- topology/body-tessellation/block-v3/1/chord-1e-2-v3
+          cargo bench --manifest-path benches/Cargo.toml --locked --bench body_tessellation -- topology/body-tessellation/mixed-store-cylinder-v3/1/chord-1e-2-v3
+          cargo bench --manifest-path benches/Cargo.toml --locked --bench body_tessellation -- topology/body-tessellation/imported-curved-nurbs-block-v3/1/chord-1e-2-v3
+          cargo bench --manifest-path benches/Cargo.toml --locked --bench body_tessellation -- topology/body-tessellation/imported-plane-sheet-v3/1/chord-1e-2-v3
+          cargo bench --manifest-path benches/Cargo.toml --locked --bench body_tessellation -- topology/body-tessellation/imported-cylinder-sheet-v3/1/chord-1e-2-v3
           cargo bench --manifest-path benches/Cargo.toml --locked --bench face_tessellation -- geometry/face-tessellation/plane-v2/outer/chord-1e-2-v2
           cargo bench --manifest-path benches/Cargo.toml --locked --bench curve_pair_isolation -- geometry/curve-pair-isolation/poly-separated-v1/1/depth-3-v1
           cargo bench --manifest-path benches/Cargo.toml --locked --bench curve_pair_solve -- geometry/curve-pair-solve/poly-transverse-v1/1/default-v1
@@ -99,7 +101,10 @@ jobs:
             benches/target/criterion/harness_contract_tiny-v1_64/default-v1/new/
             benches/target/criterion/graph_build_independent-planes-v1_1/default-v1/new/
             benches/target/criterion/graph_traverse_offset-chain-closure-v1_1/dependency-first-v1/new/
-            benches/target/criterion/topology_body-tessellation_block-v2_1/chord-1e-2-v2/new/
+            benches/target/criterion/topology_body-tessellation_block-v3_1/chord-1e-2-v3/new/
+            benches/target/criterion/topology_body-tessellation_imported-curved-nurbs-block-v3_1/chord-1e-2-v3/new/
+            benches/target/criterion/topology_body-tessellation_imported-plane-sheet-v3_1/chord-1e-2-v3/new/
+            benches/target/criterion/topology_body-tessellation_imported-cylinder-sheet-v3_1/chord-1e-2-v3/new/
             benches/target/criterion/geometry_face-tessellation_plane-v2_outer/chord-1e-2-v2/new/
             benches/target/criterion/geometry_curve-pair-isolation_poly-separated-v1_1/depth-3-v1/new/
             benches/target/criterion/geometry_curve-pair-solve_poly-transverse-v1_1/default-v1/new/

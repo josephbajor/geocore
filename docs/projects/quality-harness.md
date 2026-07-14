@@ -279,17 +279,25 @@ after it is captured in a named stable-host baseline.
 
 Owner: `ktopo`, consuming `kgeom` tessellation.
 
-Status: the closed-solid ladder uses the contextual v2 contract across twenty
-registered cases: ten analytic block, cylinder, cone, sphere, and torus rows;
-two mixed-store target-cylinder rows; four certified imported NURBS-face and
-tolerant-edge rows at chord tolerances `1e-2` and `1e-3`; and a four-point
+Status: `body-tessellation.v3` uses the contextual contract across 32
+registered cases: the twenty generalized legacy solid rows plus four tiers
+each for a locally verified genuinely curved NURBS block, a historically
+host-certified plane sheet, and a historically host-certified full-period
+cylinder sheet. The matrix contains 24 solids and eight sheets. The twenty
+existing rows remain ten analytic block, cylinder, cone, sphere, and torus
+rows; two mixed-store target-cylinder rows; four certified imported NURBS-face
+and tolerant-edge rows at chord tolerances `1e-2` and `1e-3`; and a four-point
 certified imported-cylinder ladder at `1e-2`, `3e-3`, `1e-3`, and `3e-4`.
 Each case uses a Serial, compatibility-v1 session and measures only
 `tessellate_body_with_context`; primitive construction or X_T import,
 session/context construction, outcome unpacking, and verification remain
 outside timing. Repetition proves both the mesh and complete operation report
-are identical. Existing analytic mesh counts, bits, ownership order, volume
-evidence, and mesh digests remain pinned unchanged.
+are identical. Exact directed incidence and topological-boundary evidence is
+shared across body kinds. Closed solids additionally pin face-sense
+orientation and signed volume; sheets pin face-sense orientation, their
+one-fin boundary with two-fin seams excluded, and faceted area. Existing
+analytic mesh counts, bits, ownership order, volume evidence, and mesh digests
+remain pinned unchanged.
 
 The `q3-usage.v1` evidence records all 21 canonical report stages in profile
 order, not output-size proxies: five surface-projection stages, five face-
@@ -325,10 +333,20 @@ ladder, reviewed volume ratios are approximately `0.94968`, `0.98487`,
 floors admit each row without pretending coarse output has fine-row accuracy.
 Face-refinement passes progress `3 → 4 → 5 → 6`, edge depth `2 → 2 → 3 → 4`,
 and target vertices `202 → 540 → 2,320 → 12,248`, so finite presets must not
-assume smooth scaling between tolerance tiers. Genuinely curved NURBS, more
-imported representations, and four-point ladders across additional
-representations remain required before corpus-backed finite body `bounded_v1`
-allowances are proposed.
+assume smooth scaling between tolerance tiers.
+
+The genuinely curved block adds four locally import-verified tiers at `1e-2`,
+`3e-3`, `1e-3`, and `5e-4`. A requested `3e-4` row is rejected because it
+needs 25 face-refinement passes while the compatibility-v1 limit is 24. The
+curved payload expands the declared writer set to 15, so licensed-host
+certification remains pending and the historical 14-file record remains
+correctly stale. Both sheet fixtures run at `1e-2`, `3e-3`, `1e-3`, and
+`3e-4`. The cylinder sheet's proven full-period rectangular chart is split
+into four quarter-period patches with shared iso columns, preserving its two
+topological ring boundaries and excluding its two-fin seam. Its reviewed area
+bands require no exception. These rows close the named body representation
+evidence gate; selecting and adopting finite `bounded_v1` caps is the next
+policy task and remains unimplemented.
 
 Face-profile evidence is owned by a separate standalone matrix. Whole-body
 tessellation pre-refines each shared edge against every adjacent surface with a
@@ -344,7 +362,7 @@ NURBS fixture is a genuinely curved exact quarter-cylinder chart with explicit
 rational, non-coplanar, and normal-curvature witnesses. Surface and trim
 construction plus session/context setup stay outside timing. The named face
 representation/trim evidence gate is closed; selecting finite face caps remains
-a separate policy review after the body matrix is reconciled.
+the next policy review alongside the now-reconciled body matrix.
 
 Fixtures use existing deterministic primitive constructors first, followed by
 trimmed NURBS fixtures promoted from the test corpus:
@@ -572,8 +590,8 @@ regression remains portable.
 ## Stage Q8 — bounded CI jobs
 
 Status: implemented. Existing benchmark targets and the two current fuzz
-targets run in bounded Linux jobs; more matrices and targets remain behind the
-post-Q8 landing order.
+targets run in bounded Linux jobs; more targets remain behind the post-Q8
+landing order. The benchmark manifest contains 156 registered cases.
 
 CI has three bounded jobs/surfaces for the existing Q1 and Q6 assets. The
 Python contract surface is load-bearing: CI runs
@@ -585,8 +603,9 @@ covers them.
 
 - pinned workspace toolchain;
 - Linux only;
-- build every benchmark and run the smallest fixture with Criterion's bounded
-  100 ms warm-up, 10-sample, 200 ms measurement smoke;
+- build every benchmark and run selected smallest fixtures with Criterion's
+  bounded 100 ms warm-up, 10-sample, 200 ms measurement smoke, including
+  representative v3 curved-solid and plane/cylinder-sheet body rows;
 - verify invariants and metadata schema;
 - hard job timeout of 10 minutes; and
 - upload results for inspection without enforcing timing thresholds.
