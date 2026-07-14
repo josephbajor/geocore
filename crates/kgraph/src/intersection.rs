@@ -706,6 +706,29 @@ impl NurbsIntersectionTrace {
     }
 }
 
+/// Exact three-sample chart tuples retained as interpolation witnesses.
+///
+/// These values determine the canonical quadratic carrier and pcurves. They
+/// are not themselves whole-range proof geometry; acceptance still requires
+/// the original-source interval residual certificate.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransmittedQuadraticInterpolationWitnesses {
+    positions: [Vec3; 3],
+    canonicalized_pcurve_points: [[Vec2; 3]; 2],
+}
+
+impl TransmittedQuadraticInterpolationWitnesses {
+    /// Exact transmitted model-space positions in chart order.
+    pub const fn positions(self) -> [Vec3; 3] {
+        self.positions
+    }
+
+    /// Canonicalized transmitted paired UV tuples in operand order.
+    pub const fn canonicalized_pcurve_points(self) -> [[Vec2; 3]; 2] {
+        self.canonicalized_pcurve_points
+    }
+}
+
 /// Whole-range proof retained for a transmitted exact-plane-field/NURBS,
 /// NURBS/NURBS, direct Offset(NURBS)/NURBS, or
 /// exact-plane-field/Offset(NURBS) chart.
@@ -726,13 +749,14 @@ pub struct TransmittedNurbsIntersectionCertificate {
     tolerance: f64,
     metadata: TransmittedIntersectionChartMetadata,
     proof_depth: usize,
+    quadratic_witnesses: Option<TransmittedQuadraticInterpolationWitnesses>,
 }
 
 /// Compatibility name for the original mixed Plane/NURBS certificate API.
 pub type TransmittedPlaneNurbsIntersectionCertificate = TransmittedNurbsIntersectionCertificate;
 
 impl TransmittedNurbsIntersectionCertificate {
-    /// Retained degree-1 model-space chart carrier.
+    /// Retained certified model-space chart carrier.
     pub fn carrier(&self) -> &NurbsCurve {
         &self.carrier
     }
@@ -833,7 +857,7 @@ impl TransmittedNurbsIntersectionCertificate {
         &self.traces
     }
 
-    /// Retained paired degree-1 pcurves in operand order.
+    /// Retained paired pcurves in operand order.
     pub const fn pcurves(&self) -> &[NurbsCurve2d; 2] {
         &self.pcurves
     }
@@ -856,6 +880,14 @@ impl TransmittedNurbsIntersectionCertificate {
     /// Binary proof depth used on each carrier knot span.
     pub const fn proof_depth(&self) -> usize {
         self.proof_depth
+    }
+
+    /// Exact three-sample witnesses for the bounded quadratic dual-offset
+    /// family, or `None` for every historical transmitted family.
+    pub const fn quadratic_interpolation_witnesses(
+        &self,
+    ) -> Option<TransmittedQuadraticInterpolationWitnesses> {
+        self.quadratic_witnesses
     }
 }
 
@@ -2394,6 +2426,396 @@ pub fn certify_transmitted_offset_nurbs_intersection_residuals(
     )
 }
 
+/// Certify the strictly bounded canonical finite-open three-sample
+/// Offset(NURBS)/Offset(NURBS) transmitted family.
+///
+/// The degree-2 carrier and pcurves are deterministic common-parameter
+/// interpolants through the exact transmitted tuples. Those rounded curves
+/// define the candidate geometry only; two independent whole-range
+/// original-source interval residuals are the proof evidence.
+pub fn certify_transmitted_quadratic_dual_offset_nurbs_intersection_residuals(
+    carrier: NurbsCurve,
+    traces: [TransmittedNurbsIntersectionTrace; 2],
+    pcurves: [NurbsCurve2d; 2],
+    positions: [Vec3; 3],
+    canonicalized_pcurve_points: [[Vec2; 3]; 2],
+    metadata: TransmittedIntersectionChartMetadata,
+    tolerance: f64,
+) -> Result<TransmittedNurbsIntersectionCertificate, IntersectionCertificateError> {
+    let carrier_range = carrier.param_range();
+    let expected_knots = [0.0, 0.0, 0.0, 2.0, 2.0, 2.0];
+    if !carrier_range.is_finite() || carrier_range != ParamRange::new(0.0, 2.0) {
+        return Err(IntersectionCertificateError::InvalidCarrierRange);
+    }
+    if !tolerance.is_finite() || tolerance < 0.0 {
+        return Err(IntersectionCertificateError::InvalidTolerance);
+    }
+    if !matches!(
+        &traces,
+        [
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(_),
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(_)
+        ]
+    ) {
+        return Err(IntersectionCertificateError::InvalidTraceFamily);
+    }
+    if carrier.degree() != 2
+        || carrier.weights().is_some()
+        || carrier.points().len() != 3
+        || carrier.knots().as_slice() != expected_knots
+    {
+        return Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "dual-offset quadratic carrier must be the canonical three-sample clamped interpolant",
+            },
+        );
+    }
+    if carrier
+        .points()
+        .iter()
+        .copied()
+        .any(|point| !finite_vec3(point))
+        || positions.into_iter().any(|point| !finite_vec3(point))
+    {
+        return Err(IntersectionCertificateError::NonFiniteGeometry);
+    }
+    let expected_carrier_points = quadratic_interpolant_controls3(positions);
+    if carrier.points() != expected_carrier_points {
+        return Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "dual-offset quadratic carrier must be the canonical three-sample clamped interpolant",
+            },
+        );
+    }
+    if positions[0] == positions[1] || positions[0] == positions[2] || positions[1] == positions[2]
+    {
+        return Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "dual-offset quadratic carrier samples must be pairwise distinct",
+            },
+        );
+    }
+    let witness_slack = 16_384.0
+        * f64::EPSILON
+        * positions
+            .iter()
+            .flat_map(|point| point.to_array())
+            .map(f64::abs)
+            .fold(1.0_f64, f64::max);
+    if quadratic_interpolation_witness_bound3(&carrier, positions) > witness_slack {
+        return Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "quadratic carrier does not interpolate the exact transmitted positions",
+            },
+        );
+    }
+
+    let offsets = traces.each_ref().map(|trace| {
+        trace
+            .as_offset_nurbs()
+            .expect("dual-offset family was checked before quadratic proof")
+    });
+    let mut residual_bounds = [0.0; 2];
+    for index in 0..2 {
+        let trace = paired_trace(index);
+        let pcurve = &pcurves[index];
+        if pcurve.degree() != 2
+            || pcurve.weights().is_some()
+            || pcurve.points().len() != 3
+            || pcurve.knots().as_slice() != expected_knots
+            || pcurve.param_range() != carrier_range
+        {
+            return Err(
+                IntersectionCertificateError::UnsupportedTraceParameterization {
+                    trace,
+                    reason: "dual-offset quadratic pcurve must share the canonical carrier basis",
+                },
+            );
+        }
+        if pcurve
+            .points()
+            .iter()
+            .any(|point| !point.x.is_finite() || !point.y.is_finite())
+            || !offsets[index].signed_distance().is_finite()
+            || canonicalized_pcurve_points[index]
+                .into_iter()
+                .any(|point| !point.x.is_finite() || !point.y.is_finite())
+            || offsets[index]
+                .basis()
+                .points()
+                .iter()
+                .copied()
+                .any(|point| !finite_vec3(point))
+            || offsets[index]
+                .basis()
+                .weights()
+                .is_some_and(|weights| weights.iter().any(|weight| !weight.is_finite()))
+        {
+            return Err(IntersectionCertificateError::NonFiniteGeometry);
+        }
+        let expected_pcurve_points =
+            quadratic_interpolant_controls2(canonicalized_pcurve_points[index]);
+        if pcurve.points() != expected_pcurve_points {
+            return Err(
+                IntersectionCertificateError::UnsupportedTraceParameterization {
+                    trace,
+                    reason: "dual-offset quadratic pcurve must share the canonical carrier basis",
+                },
+            );
+        }
+        if canonicalized_pcurve_points[index][0] == canonicalized_pcurve_points[index][1]
+            || canonicalized_pcurve_points[index][0] == canonicalized_pcurve_points[index][2]
+            || canonicalized_pcurve_points[index][1] == canonicalized_pcurve_points[index][2]
+        {
+            return Err(
+                IntersectionCertificateError::UnsupportedTraceParameterization {
+                    trace,
+                    reason: "dual-offset quadratic pcurve samples must be pairwise distinct",
+                },
+            );
+        }
+        let parameter_scale = canonicalized_pcurve_points[index]
+            .iter()
+            .flat_map(|point| [point.x.abs(), point.y.abs()])
+            .fold(1.0_f64, f64::max);
+        if quadratic_interpolation_witness_bound2(pcurve, canonicalized_pcurve_points[index])
+            > 16_384.0 * f64::EPSILON * parameter_scale
+        {
+            return Err(
+                IntersectionCertificateError::UnsupportedTraceParameterization {
+                    trace,
+                    reason: "quadratic pcurve does not interpolate the exact transmitted UV tuples",
+                },
+            );
+        }
+        let bound = transmitted_quadratic_offset_trace_residual_bound(
+            &carrier,
+            offsets[index],
+            pcurve,
+            trace,
+        )?;
+        if bound > tolerance {
+            return Err(IntersectionCertificateError::ResidualExceedsTolerance {
+                trace,
+                residual_bound: bound,
+                tolerance,
+            });
+        }
+        residual_bounds[index] = bound;
+    }
+
+    Ok(TransmittedNurbsIntersectionCertificate {
+        carrier,
+        carrier_range,
+        carrier_period: None,
+        traces,
+        pcurves,
+        residual_bounds,
+        tolerance,
+        metadata,
+        proof_depth: TRANSMITTED_NURBS_TRACE_PROOF_DEPTH,
+        quadratic_witnesses: Some(TransmittedQuadraticInterpolationWitnesses {
+            positions,
+            canonicalized_pcurve_points,
+        }),
+    })
+}
+
+fn quadratic_interpolant_controls3(samples: [Vec3; 3]) -> [Vec3; 3] {
+    [
+        samples[0],
+        samples[1] * 2.0 - (samples[0] + samples[2]) * 0.5,
+        samples[2],
+    ]
+}
+
+fn quadratic_interpolant_controls2(samples: [Vec2; 3]) -> [Vec2; 3] {
+    [
+        samples[0],
+        samples[1] * 2.0 - (samples[0] + samples[2]) * 0.5,
+        samples[2],
+    ]
+}
+
+fn quadratic_interval_coefficients3(points: &[Vec3]) -> [[Interval; 3]; 3] {
+    let point = |value: Vec3| value.to_array().map(Interval::point);
+    let first = point(points[0]);
+    let middle = point(points[1]);
+    let last = point(points[2]);
+    [
+        first,
+        core::array::from_fn(|axis| (middle[axis] - first[axis]) * Interval::point(2.0)),
+        core::array::from_fn(|axis| first[axis] - middle[axis] * Interval::point(2.0) + last[axis]),
+    ]
+}
+
+fn quadratic_interval_coefficients2(points: &[Vec2]) -> [[Interval; 2]; 3] {
+    let point = |value: Vec2| [Interval::point(value.x), Interval::point(value.y)];
+    let first = point(points[0]);
+    let middle = point(points[1]);
+    let last = point(points[2]);
+    [
+        first,
+        core::array::from_fn(|axis| (middle[axis] - first[axis]) * Interval::point(2.0)),
+        core::array::from_fn(|axis| first[axis] - middle[axis] * Interval::point(2.0) + last[axis]),
+    ]
+}
+
+fn quadratic_interpolation_witness_bound3(curve: &NurbsCurve, samples: [Vec3; 3]) -> f64 {
+    let coefficients = quadratic_interval_coefficients3(curve.points());
+    [0.0, 0.5, 1.0]
+        .into_iter()
+        .zip(samples)
+        .map(|(parameter, sample)| {
+            let parameter = Interval::point(parameter);
+            let sample = sample.to_array();
+            let squared = (0..3).fold(Interval::point(0.0), |sum, axis| {
+                let value = coefficients[0][axis]
+                    + coefficients[1][axis] * parameter
+                    + coefficients[2][axis] * parameter.square();
+                sum + (value - Interval::point(sample[axis])).square()
+            });
+            squared.sqrt().map_or(f64::INFINITY, |value| value.hi())
+        })
+        .fold(0.0_f64, f64::max)
+}
+
+fn quadratic_interpolation_witness_bound2(curve: &NurbsCurve2d, samples: [Vec2; 3]) -> f64 {
+    let coefficients = quadratic_interval_coefficients2(curve.points());
+    [0.0, 0.5, 1.0]
+        .into_iter()
+        .zip(samples)
+        .map(|(parameter, sample)| {
+            let parameter = Interval::point(parameter);
+            let sample = [sample.x, sample.y];
+            (0..2)
+                .map(|axis| {
+                    let value = coefficients[0][axis]
+                        + coefficients[1][axis] * parameter
+                        + coefficients[2][axis] * parameter.square();
+                    let residual = value - Interval::point(sample[axis]);
+                    residual.lo().abs().max(residual.hi().abs())
+                })
+                .fold(0.0_f64, f64::max)
+        })
+        .fold(0.0_f64, f64::max)
+}
+
+fn transmitted_quadratic_offset_trace_residual_bound(
+    carrier: &NurbsCurve,
+    offset: &TransmittedOffsetNurbsTrace,
+    pcurve: &NurbsCurve2d,
+    trace: PairedTrace,
+) -> Result<f64, IntersectionCertificateError> {
+    let carrier_coefficients = quadratic_interval_coefficients3(carrier.points());
+    let pcurve_coefficients = quadratic_interval_coefficients2(pcurve.points());
+    let domains = [
+        offset.basis().knots(Dir::U).domain(),
+        offset.basis().knots(Dir::V).domain(),
+    ];
+    let subdivisions = 1_usize << TRANSMITTED_NURBS_TRACE_PROOF_DEPTH;
+    let finite = |interval| {
+        finite_interval(interval)
+            .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })
+    };
+    let mut bound = 0.0_f64;
+    for chart_span in 0..2 {
+        for subdivision in 0..subdivisions {
+            let fraction_lo = (chart_span as f64 + subdivision as f64 / subdivisions as f64) * 0.5;
+            let fraction_hi =
+                (chart_span as f64 + (subdivision + 1) as f64 / subdivisions as f64) * 0.5;
+            let fraction_mid = fraction_lo + 0.5 * (fraction_hi - fraction_lo);
+            let delta = Interval::new(fraction_lo - fraction_mid, fraction_hi - fraction_mid);
+            let delta_squared = delta.square();
+            let mid = Interval::point(fraction_mid);
+            let mid_squared = mid.square();
+            let carrier_center: [Interval; 3] = core::array::from_fn(|axis| {
+                carrier_coefficients[0][axis]
+                    + carrier_coefficients[1][axis] * mid
+                    + carrier_coefficients[2][axis] * mid_squared
+            });
+            let carrier_direction: [Interval; 3] = core::array::from_fn(|axis| {
+                carrier_coefficients[1][axis]
+                    + carrier_coefficients[2][axis] * Interval::point(2.0 * fraction_mid)
+            });
+            let uv_center: [Interval; 2] = core::array::from_fn(|axis| {
+                pcurve_coefficients[0][axis]
+                    + pcurve_coefficients[1][axis] * mid
+                    + pcurve_coefficients[2][axis] * mid_squared
+            });
+            let uv_direction: [Interval; 2] = core::array::from_fn(|axis| {
+                pcurve_coefficients[1][axis]
+                    + pcurve_coefficients[2][axis] * Interval::point(2.0 * fraction_mid)
+            });
+            let uv_box = core::array::from_fn(|axis| {
+                let enclosure = uv_center[axis]
+                    + uv_direction[axis] * delta
+                    + pcurve_coefficients[2][axis] * delta_squared;
+                ParamRange::new(enclosure.lo(), enclosure.hi())
+            });
+            if (0..2).any(|axis| {
+                uv_box[axis].lo < domains[axis].lo || uv_box[axis].hi > domains[axis].hi
+            }) {
+                return Err(
+                    IntersectionCertificateError::UnsupportedTraceParameterization {
+                        trace,
+                        reason: "dual-offset quadratic pcurve leaves the original source domain",
+                    },
+                );
+            }
+            let source_center = uv_box.map(|range| range.lo + 0.5 * range.width());
+            let enclosure = offset
+                .basis()
+                .source_differential_enclosure(uv_box, source_center)
+                .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+            let position = enclosure.position();
+            let derivative_u = enclosure.derivative_u();
+            let derivative_v = enclosure.derivative_v();
+            let normal = interval_unit_normal(derivative_u, derivative_v, trace)?;
+            let uv_center_delta = [
+                uv_center[0] - Interval::point(source_center[0]),
+                uv_center[1] - Interval::point(source_center[1]),
+            ];
+            let mut squared_norm = Interval::point(0.0);
+            for axis in 0..3 {
+                let residual_center = finite(
+                    finite(
+                        finite(carrier_center[axis] - position[axis])?
+                            - finite(derivative_u[axis] * uv_center_delta[0])?,
+                    )? - finite(derivative_v[axis] * uv_center_delta[1])?,
+                )?;
+                let residual_direction = finite(
+                    finite(
+                        carrier_direction[axis] - finite(derivative_u[axis] * uv_direction[0])?,
+                    )? - finite(derivative_v[axis] * uv_direction[1])?,
+                )?;
+                let residual_quadratic = finite(
+                    finite(
+                        carrier_coefficients[2][axis]
+                            - finite(derivative_u[axis] * pcurve_coefficients[2][0])?,
+                    )? - finite(derivative_v[axis] * pcurve_coefficients[2][1])?,
+                )?;
+                let residual = finite(
+                    finite(residual_center + finite(residual_direction * delta)?)?
+                        + finite(residual_quadratic * delta_squared)?,
+                )?;
+                let residual = finite(
+                    residual - finite(Interval::point(offset.signed_distance()) * normal[axis])?,
+                )?;
+                squared_norm = finite(squared_norm + finite(residual.square())?)?;
+            }
+            let local = finite(
+                squared_norm
+                    .sqrt()
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?,
+            )?
+            .hi();
+            bound = bound.max(local);
+        }
+    }
+    Ok(bound)
+}
+
 fn certify_transmitted_nurbs_intersection_residuals_impl(
     carrier: NurbsCurve,
     traces: [TransmittedNurbsIntersectionTrace; 2],
@@ -2532,6 +2954,7 @@ fn certify_transmitted_nurbs_intersection_residuals_impl(
         tolerance,
         metadata,
         proof_depth: TRANSMITTED_NURBS_TRACE_PROOF_DEPTH,
+        quadratic_witnesses: None,
     })
 }
 

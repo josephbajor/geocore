@@ -55,6 +55,7 @@ use kgraph::{
     certify_transmitted_offset_nurbs_intersection_residuals,
     certify_transmitted_plane_intersection_residuals,
     certify_transmitted_plane_nurbs_intersection_residuals,
+    certify_transmitted_quadratic_dual_offset_nurbs_intersection_residuals,
 };
 use ktopo::entity::{
     Body, BodyId, BodyKind, Curve2dId, CurveId, Edge, EdgeId, Face, FaceDomain, FaceId, Fin,
@@ -314,6 +315,34 @@ impl IntersectionImportBudgetProfile {
         .expect("built-in X_T finite-open NURBS endpoint-roundoff profile is valid")
     }
 
+    /// Corpus-backed defaults through the canonical finite-open three-sample
+    /// Offset(B-surface)/Offset(B-surface) quadratic chart.
+    ///
+    /// Historical v1-v8 profiles retain their exact policy contracts.
+    pub fn v9_defaults() -> BudgetPlan {
+        BudgetPlan::new([
+            LimitSpec::new(
+                INTERSECTION_CHART_CERTIFICATE_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                323_814_492,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_ITEMS,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                65_536,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64,
+            ),
+        ])
+        .expect("built-in X_T quadratic dual-offset intersection profile is valid")
+    }
+
     fn validate(ledger: &WorkLedger) -> core::result::Result<(), OperationPolicyError> {
         ledger.require_limit(
             INTERSECTION_CHART_CERTIFICATE_WORK,
@@ -358,7 +387,7 @@ pub struct Reconstruction {
 pub fn reconstruction_budget_profile() -> BudgetPlan {
     let graph = EvalBudgetProfile::v1_defaults();
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v8_defaults();
+    let intersection = IntersectionImportBudgetProfile::v9_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -374,7 +403,7 @@ fn reconstruction_compatibility_budget() -> BudgetPlan {
     let graph =
         EvalBudgetProfile::for_limits(EvalLimits::default().max_dependency_depth, usize::MAX);
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v8_defaults();
+    let intersection = IntersectionImportBudgetProfile::v9_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -2258,11 +2287,32 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             }
         }
 
-        let mut knots = vec![0.0, 0.0];
-        knots.extend((1..retained_count - 1).map(|index| index as f64));
-        knots.extend([retained_count_u64.saturating_sub(1) as f64; 2]);
-        let carrier =
-            NurbsCurve::new(1, knots.clone(), positions, None).map_err(XtError::Kernel)?;
+        let dual_offset_nurbs = offset_nurbs_sources == [true, true];
+        let quadratic_dual_offset =
+            dual_offset_nurbs && retained_count == 3 && !equal_limits && !terminated;
+        if dual_offset_nurbs && !quadratic_dual_offset {
+            return Err(XtError::Unsupported {
+                capability: XtCapability::IntersectionSurfaceFamily,
+                what: "dual Offset(B-surface) charts require the canonical finite-open three-sample quadratic family",
+            });
+        }
+        let quadratic_position_samples =
+            quadratic_dual_offset.then(|| [positions[0], positions[1], positions[2]]);
+        let (carrier_degree, knots, carrier_points) = if quadratic_dual_offset {
+            let midpoint_control = positions[1] * 2.0 - (positions[0] + positions[2]) * 0.5;
+            (
+                2,
+                vec![0.0, 0.0, 0.0, 2.0, 2.0, 2.0],
+                vec![positions[0], midpoint_control, positions[2]],
+            )
+        } else {
+            let mut knots = vec![0.0, 0.0];
+            knots.extend((1..retained_count - 1).map(|index| index as f64));
+            knots.extend([retained_count_u64.saturating_sub(1) as f64; 2]);
+            (1, knots, positions)
+        };
+        let carrier = NurbsCurve::new(carrier_degree, knots.clone(), carrier_points, None)
+            .map_err(XtError::Kernel)?;
 
         let source_surfaces = if let Some(sources) = early_source_surfaces {
             sources
@@ -2375,12 +2425,47 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
         } else {
             canonicalize_trace_endpoint_roundoff(&traces, &mut uv);
         }
+        let quadratic_canonicalized_pcurve_samples = quadratic_dual_offset.then(|| {
+            [
+                [uv[0][0], uv[0][1], uv[0][2]],
+                [uv[1][0], uv[1][1], uv[1][2]],
+            ]
+        });
+        let pcurve_points = if quadratic_dual_offset {
+            uv.each_ref().map(|points| {
+                vec![
+                    points[0],
+                    points[1] * 2.0 - (points[0] + points[2]) * 0.5,
+                    points[2],
+                ]
+            })
+        } else {
+            uv
+        };
         let pcurves = [
-            NurbsCurve2d::new(1, knots.clone(), uv[0].clone(), None).map_err(XtError::Kernel)?,
-            NurbsCurve2d::new(1, knots, uv[1].clone(), None).map_err(XtError::Kernel)?,
+            NurbsCurve2d::new(
+                carrier_degree,
+                knots.clone(),
+                pcurve_points[0].clone(),
+                None,
+            )
+            .map_err(XtError::Kernel)?,
+            NurbsCurve2d::new(carrier_degree, knots, pcurve_points[1].clone(), None)
+                .map_err(XtError::Kernel)?,
         ];
         preflight_intersection_chart(self.scope, retained_count_u64, proof_depth, proof_work)?;
-        let certificate = if offset_nurbs_sources.into_iter().any(|offset| offset) {
+        let certificate = if quadratic_dual_offset {
+            certify_transmitted_quadratic_dual_offset_nurbs_intersection_residuals(
+                carrier,
+                traces,
+                pcurves.clone(),
+                quadratic_position_samples.expect("quadratic carrier retains three positions"),
+                quadratic_canonicalized_pcurve_samples
+                    .expect("quadratic pcurves retain three canonicalized paired UV tuples"),
+                metadata,
+                proof_tolerance,
+            )
+        } else if offset_nurbs_sources.into_iter().any(|offset| offset) {
             certify_transmitted_offset_nurbs_intersection_residuals(
                 carrier,
                 traces,

@@ -711,10 +711,15 @@ next denied attempt at 285,283,414 Work. Production v8 certifies nonperiodic
 NURBS/Offset(B-surface) `INTERSECTION` 1984 after snapping only the final first-
 trace `u` value from `-2.02217766823431e-15` to its exact source-domain lower
 bound, then rerunning the unchanged whole-carrier proof. V8 admits exact
-`315245660/22/10` Work/Items/Depth and stops atomically at `INTERSECTION` 5945's
-323,814,492-Work proof preflight. That next record retains ordered Offset roots
-`[3338, 773]`; a diagnostic larger cap reaches typed `InvalidTraceFamily`, so
-the broader transmitted Offset/Offset arm remains closed. Its manifest row is
+`315245660/22/10` Work/Items/Depth and preserves its atomic stop at
+`INTERSECTION` 5945's 323,814,492-Work proof preflight. Production v9 admits
+that record at exact `323814492/22/10`. Its ordered Offset(B-surface) roots
+`[3338, 773]`, three model-space positions, and twelve paired UV values define
+one common degree-2 clamped carrier/pcurve basis; independent depth-10 interval
+proofs against both original NURBS bases, distances, and unit-normal fields are
+the acceptance evidence. The next dual-offset chart is outside this exact
+three-sample finite-open family and fails typed without additional proof Work.
+Its manifest row is
 `reconstruct: fail` with no capability and remains the committed
 progress meter: `reconstruct: fail → pass`, then `tessellate: pass`, then
 full-checker gaps shrinking toward `valid`. Dependency plan:
@@ -749,7 +754,12 @@ full-checker gaps shrinking toward `valid`. Dependency plan:
    B-surface/B-surface, direct constant-normal Offset(B-surface)/B-surface,
    and every applicable reversed operand order now retain
    the same degree-1 carrier/pcurves while a separate certificate proves each
-   polynomial or rational source NURBS trace.
+   polynomial or rational source NURBS trace. The additional bounded
+   Offset(B-surface)/Offset(B-surface) family accepts exactly three pairwise-
+   distinct finite-open `L/?` samples and uses the unique common-parameter
+   degree-2 clamped interpolants through the model-space and canonicalized UV
+   tuples. Those rounded interpolants define only the candidate; both original
+   offset-NURBS sources must independently pass the whole-range interval proof.
    A plane trace may bind either a direct plane or a safe finite offset chain
    resolving to an exact plane. A direct Offset(B-surface) trace instead binds
    the live offset root, signed distance, and original NURBS basis; each proof
@@ -788,8 +798,12 @@ full-checker gaps shrinking toward `valid`. Dependency plan:
    NURBS coordinates may snap across a source-domain boundary within
    `16384 * EPSILON * domain-scale`, and the original-source whole-carrier
    certificate remains authoritative. Material or interior overhangs and
-   displaced carriers remain typed and atomic. V8 stops before `INTERSECTION`
-   5945's attempted 323,814,492-Work proof. Both
+   displaced carriers remain typed and atomic. V8 still stops before
+   `INTERSECTION` 5945's attempted 323,814,492-Work proof. Production v9 admits
+   its bounded quadratic dual-offset certificate at exact
+   `323814492/22/10`, with exact N/N-1 crossings and historical v1-v8 profile
+   parity; the next noncanonical dual-offset family remains typed unsupported.
+   Both
    original B-surface identities and their paired pcurves are graph-protected
    in source order. Other parameter conventions, limits,
    nullable data, periodic/closed transmitted trace ranges, arbitrary unclamped
@@ -801,9 +815,9 @@ full-checker gaps shrinking toward `valid`. Dependency plan:
    certifies. The endpoint-only equal-limit records 1828 and 2008 and the
    end-terminated records 1671 and 1678, finite-open records 1252 and 5089, and
    native Plane SP-curve node 30 now certify; FACE 1195's vertex-less ring
-   domain also derives. Nonperiodic NURBS endpoint-roundoff record 1984 now
-   certifies, advancing the corpus ratchet to `INTERSECTION` 5945's
-   proof-preflight boundary.
+   domain also derives. Nonperiodic NURBS endpoint-roundoff record 1984 and the
+   canonical finite-open three-sample dual-offset record 5945 now certify,
+   advancing the corpus ratchet to the next broader dual-offset chart family.
    Original-backed, tolerance-qualified, non-Plane, reversed-basis, periodic,
    closed, rational, or non-2D SP-curves, foreign curves, null/general
    closed-limit, endpoint or NURBS-trace omissions, other nullable

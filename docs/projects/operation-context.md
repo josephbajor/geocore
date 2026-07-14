@@ -526,9 +526,13 @@ are inverted analytically, while NURBS endpoint roundoff may snap only within
 Corpus-backed v8 applies that existing endpoint-only rule to finite-open
 nonperiodic record 1984, pins exact `315,245,660/22/10` Work/Items/Depth and
 per-resource N/N-1 denial, and stops before record 5945's attempted 323,814,492
-Work. Historical v1-v7 budgets remain exact. Material and interior overhangs are
-never normalized, and every snapped endpoint is still subordinate to the
-original-source whole-carrier certificate.
+Work. Corpus-backed v9 admits that exact three-sample finite-open dual-offset
+chart at `323,814,492/22/10`; its common degree-2 interpolants determine the
+candidate, while two original-source offset-NURBS interval residuals determine
+acceptance. Historical v1-v8 budgets remain exact, and v9 has isolated Work,
+Items, and Depth N/N-1 denial. Material and interior overhangs are never
+normalized, and every snapped endpoint remains subordinate to its original-
+source whole-carrier certificate.
 The v5 extension permits paired-null Plane UVs only at interior samples of an
 unterminated finite-open direct Plane/B-surface chart; both endpoints and every
 NURBS UV remain numeric. It then advances the corpus boundary to procedural

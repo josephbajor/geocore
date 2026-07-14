@@ -22,9 +22,10 @@
 //! writing emits their current metric value. Valid
 //! content outside the declared subset reports a stable [`XtCapability`]
 //! code as well as human-readable context.
-//! A narrow verified transmitted exact-plane-field intersection-chart subset
-//! (Plane/Plane or one direct plane paired with a finite plane-offset chain)
-//! is reconstructed as graph-owned degree-1 carriers with paired pcurves.
+//! Narrow verified transmitted intersection-chart subsets are reconstructed
+//! as graph-owned carriers with paired pcurves, including exact-plane-field
+//! degree-1 charts and the canonical finite-open three-sample quadratic chart
+//! between two direct Offset(B-surface) roots.
 //! Other intersection and procedural geometry, nested/shared-basis offset
 //! export, broader tolerant topology, periodic or
 //! circular pcurve encoding, periodic NURBS, pre-13006 schemas, assemblies,
