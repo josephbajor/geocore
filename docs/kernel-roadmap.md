@@ -729,8 +729,9 @@ proofs against both original NURBS bases, distances, and unit-normal fields are
 the acceptance evidence. The next dual-offset chart is outside this exact
 three-sample finite-open family and fails typed without additional proof Work.
 Its manifest row is
-`reconstruct: fail` with no capability and remains the committed
-progress meter: `reconstruct: fail → pass`, then `tessellate: pass`, then
+`reconstruct: unsupported` with capability
+`xt.read.intersection-surface-family` and remains the committed progress
+meter: `reconstruct: unsupported → pass`, then `tessellate: pass`, then
 full-checker gaps shrinking toward `valid`. Dependency plan:
 
 1. **COMPLETE — geometry graph with the offset-surface evaluator as its first

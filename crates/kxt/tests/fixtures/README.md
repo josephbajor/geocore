@@ -95,10 +95,19 @@ statement accompanied the individual files.
   first finite-open/end-terminated `T/F` record at `116396069/20/10`.
   Production v5 additionally certifies record 1252, a direct B-surface/Plane
   chart whose six interior Plane UV pairs are null and recovered by exact frame
-  inversion; the corpus reaches `117478445/20/10` before stopping at procedural
-  `SP_CURVE` node 30 (`xt.geometry.procedural-curves`). General closed limits,
-  endpoint or NURBS-trace omissions, other nullable chart data,
-  periodic-trace-range, and noncanonical chart forms remain unsupported. Primary
+  inversion, at `117478445/20/10`. V6 certifies native direct-Plane `SP_CURVE`
+  node 30 and derives FACE 1195's vertex-less periodic ring domain at
+  `208228426/22/10`; v7 recovers record 5089's paired-null interior Plane UV and
+  proves its Plane/Offset(B-surface) carrier at `272430166/22/10`; and v8
+  certifies record 1984 by endpoint-only nonperiodic NURBS source-boundary
+  normalization at `315245660/22/10`. Production v9 reaches
+  `323814492/22/10` by certifying record 5945's finite-open three-sample
+  Offset(B-surface)/Offset(B-surface) chart with canonical clamped quadratic
+  carrier and pcurves plus two independent original-source interval proofs. The
+  next broader dual-offset chart is retained as the stable typed
+  `xt.read.intersection-surface-family` unsupported boundary. General closed
+  limits, other nullable chart data, periodic-trace-range, broader carrier
+  families, and noncanonical chart forms remain unsupported. Primary
   reference for modern writer conventions: TRIMMED_CURVE/GEOMETRIC_OWNER linkage,
   tolerant-edge fin curves, POINT ownership by vertex, and the resolved
   37102 node layouts (133/141 match base 13006 exactly).
