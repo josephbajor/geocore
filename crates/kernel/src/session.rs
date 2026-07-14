@@ -141,8 +141,9 @@ impl Part<'_> {
 
 /// Exclusive borrowed capability for one part.
 ///
-/// K1 exposes reads through [`PartEdit::as_part`]. Semantic operations and
-/// edit transactions are added in later façade stages without exposing Store.
+/// K1 exposes reads through [`PartEdit::as_part`]. Contextual one-shot
+/// operations and the narrow checked semantic edit transaction extend this
+/// capability without exposing `Store`.
 pub struct PartEdit<'session> {
     pub(crate) policy: &'session SessionPolicy,
     pub(crate) id: PartId,

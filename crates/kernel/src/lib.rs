@@ -7,8 +7,9 @@
 //! evaluation, and typed X_T import/export plus graph-owned bounded curve
 //! intersection with F2 reports and delegated classified errors. Committed
 //! mutation, lineage, and tolerance evidence is exposed through part-qualified
-//! facade journal views. Broader modeling and semantic edit transactions
-//! remain later façade stages.
+//! facade journal views. A narrow checked semantic edit transaction composes
+//! pcurve-aware face split/merge operations without exposing raw assembly.
+//! Broader modeling operations remain later façade stages.
 //!
 //! Raw lower-layer storage is not reachable through this crate:
 //!
@@ -128,6 +129,14 @@
 //! }
 //! ```
 //!
+//! Semantic edit transactions expose no raw store or unchecked commit seam:
+//!
+//! ```compile_fail
+//! fn raw_edit(mut edit: kernel::EditTransaction<'_>) {
+//!     let _ = edit.store();
+//! }
+//! ```
+//!
 //! Operation settings are extended through typed builders rather than direct
 //! field mutation:
 //!
@@ -239,6 +248,7 @@
 //! }
 //! ```
 
+mod edit;
 mod error;
 mod id;
 mod interchange;
@@ -249,6 +259,9 @@ mod session;
 mod tessellation;
 mod view;
 
+pub use edit::{
+    BoundedPcurve, EditTransaction, MergeFacesRequest, SplitFaceRequest, SplitFaceResult,
+};
 pub use error::{
     BodyTessellationError, EntityKind, Error, GeometryEvaluationError, GeometryIntersectionError,
     KernelError, Result, XtInterchangeError, code as error_code,

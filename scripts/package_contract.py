@@ -16,6 +16,7 @@ KERNEL_PACKAGE_FILES = {
     "Cargo.toml",
     "Cargo.toml.orig",
     "README.md",
+    "src/edit.rs",
     "src/error.rs",
     "src/id.rs",
     "src/intersection.rs",

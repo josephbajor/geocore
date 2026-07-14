@@ -13,12 +13,15 @@ The current facade supports:
 - operation-accounted conforming solid and sheet tessellation;
 - bounded, operation-accounted surface evaluation; and
 - atomic typed X_T import and deterministic X_T export; and
-- deterministic facade-ID mutation, lineage, and tolerance journal iteration.
+- deterministic facade-ID mutation, lineage, and tolerance journal iteration;
+  and
+- checked, failure-atomic face split/merge transactions using existing curve
+  and pcurve identities.
 
-Broader modeling operations and semantic edit transactions remain under active
-development. The facade is additive: lower crates remain available to kernel
-implementation and trusted adapter work, but their raw layouts are not part of
-the facade compatibility promise.
+Broader modeling operations, additional semantic edits, and noncanonical
+pcurve parameter maps remain under active development. The facade is additive:
+lower crates remain available to kernel implementation and trusted adapter
+work, but their raw layouts are not part of the facade compatibility promise.
 
 ## Application boundary
 

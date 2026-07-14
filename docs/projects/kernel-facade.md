@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1-K3, typed K4 interchange and journal views, K5 adoption, and facade body tessellation implemented; semantic K4 edits remain
+Status: K1-K3, typed K4 interchange and journal views, the first checked semantic K4 transaction, K5 adoption, and facade body tessellation implemented; broader K4 edits remain
 
 ## Outcome
 
@@ -418,20 +418,20 @@ compose multiple already-defined topology edits:
 ```rust
 pub struct EditTransaction<'part> {
     inner: ktopo::transaction::Transaction<'part>,
-    // facade identity and active OperationScope borrow
+    // facade part identity and validated OperationContext
 }
 
 impl PartEdit<'_> {
-    pub fn begin_edit<'a>(
-        &'a mut self,
-        settings: OperationSettings<'a>,
-    ) -> Result<EditTransaction<'a>>;
+    pub fn begin_edit(
+        &mut self,
+        settings: OperationSettings,
+    ) -> Result<EditTransaction<'_>>;
 }
 
 impl EditTransaction<'_> {
     pub fn split_face(&mut self, request: SplitFaceRequest) -> Result<SplitFaceResult>;
     pub fn merge_faces(&mut self, request: MergeFacesRequest) -> Result<()>;
-    pub fn commit(self, roots: &[BodyId]) -> OperationOutcome<ChangeJournal>;
+    pub fn commit(self, roots: &[BodyId]) -> Result<OperationOutcome<ChangeJournal>>;
     pub fn rollback(self) -> Result<()>;
 }
 ```
@@ -441,6 +441,14 @@ It does not expose `Store`, `Store::get_mut`, `AssemblyStore`, raw Euler
 functions, or unchecked commit. Dropping it rolls back. Nested edit
 transactions remain rejected until journal composition and partition history
 have their own contract.
+
+The implemented first slice accepts existing bounded curve and pcurve IDs and
+uses the identity edge-to-pcurve parameter map. It validates part ownership and
+liveness before mutation, inherits the source face carrier and sense, and
+commits only through contextual affected-body validation. Drop, explicit
+rollback, and a denied checked commit restore both candidate topology and exact
+future opaque identities. Period-shifted, reversed-map, singular-endpoint, and
+closed pcurve uses await facade-owned value contracts.
 
 `ChangeJournal` is an owning adapter over `ktopo::transaction::Journal`, not a
 copied facade journal schema:
@@ -745,16 +753,17 @@ summaries, deterministic text, classified source chains, and the exact opaque
 commit journal. Import into populated parts is rollback- and allocator-clean.
 `ChangeJournal` now exposes exact-size facade-ID iterators for net mutations,
 all five semantic lineage forms, tolerance budgets, and tolerance events while
-retaining deleted and point identities without raw handles. Semantic edit
-transactions remain.
+retaining deleted and point identities without raw handles. The first semantic
+transaction composes canonical pcurve-aware face split/merge through checked
+contextual commit without exposing raw assembly.
 
-Those remaining semantic edit surfaces resume after the K5 adoption pass. The
+Broader semantic edit surfaces resume after the K5 adoption pass. The
 interchange facade stays thin: `kxt` reconstruction and checked-commit Fast
 validation share one contextual graph child and return one truthful
 facade report.
 
 - Add the semantic `EditTransaction` wrapper over currently public checked
-  transaction methods.
+  transaction methods. **First canonical split/merge slice implemented.**
 - Add `ChangeJournal` and its facade-ID iterators. **Implemented.**
 - Add typed X_T import/export requests and preserve source error detail.
 - Ensure raw assembly is not reachable through the facade.
@@ -825,7 +834,8 @@ The remaining pressure is explicit:
   application client;
 - X_T reconstruction and oracle fixture authoring remain reviewed trusted raw
   assembly seams pending a separately announced sealed-reconstruction change;
-- semantic edit transactions and facade journal iteration remain K4 work; and
+- broader semantic edit families and noncanonical pcurve maps remain K4 work;
+  facade journal iteration is implemented; and
 - `cargo package -p kernel --list` is now an exact CI-reviewed inventory with
   the facade README and lifecycle tests, while full package creation remains
   blocked by the five versionless direct path dependencies (19 internal path
