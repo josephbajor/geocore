@@ -310,6 +310,83 @@ fn general_non_octant_disjoint_windows_have_certified_empty_evidence_and_swap() 
 }
 
 #[test]
+fn general_non_octant_exact_boundary_lock_emits_tangent_arc_and_swap() {
+    let a = world_sphere();
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.4);
+    let a_window = window(0.0, 0.8, -0.3, 0.5);
+    let b_window = window(-0.8, 0.0, -0.2, 0.4);
+    let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert!(hit.is_complete());
+    assert!(hit.points.is_empty());
+    assert!(hit.regions.is_empty());
+    assert_eq!(hit.curves.len(), 1);
+    assert_eq!(hit.curves[0].kind, ContactKind::Tangent);
+    assert!(matches!(
+        hit.curves[0].curve,
+        SurfaceIntersectionCurve::Circle(_)
+    ));
+    assert!(hit.curves[0].curve_range.width() > 0.0);
+    assert!(
+        a.eval(hit.curves[0].uv_a_start)
+            .dist(b.eval(hit.curves[0].uv_b_start))
+            <= Tolerances::default().linear()
+    );
+    assert!(
+        a.eval(hit.curves[0].uv_a_end)
+            .dist(b.eval(hit.curves[0].uv_b_end))
+            <= Tolerances::default().linear()
+    );
+
+    let swapped =
+        intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
+    assert_eq!(hit.swapped(), swapped);
+}
+
+#[test]
+fn general_non_octant_two_exact_boundary_locks_emit_tangent_point_and_swap() {
+    let a = world_sphere();
+    let b = Sphere::new(
+        Frame::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, -1.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        1.0,
+    )
+    .unwrap();
+    let a_window = window(0.0, 0.8, 0.0, 0.5);
+    let b_window = window(-0.8, 0.0, 0.0, 0.5);
+    let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert!(hit.is_complete());
+    assert_eq!(hit.points.len(), 1);
+    assert!(hit.curves.is_empty());
+    assert!(hit.regions.is_empty());
+    assert_eq!(hit.points[0].kind, ContactKind::Tangent);
+    assert!(hit.points[0].point.dist(Point3::new(1.0, 0.0, 0.0)) <= 1.0e-14);
+
+    let swapped =
+        intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
+    assert_eq!(hit.swapped(), swapped);
+}
+
+#[test]
+fn general_non_octant_near_lock_stays_indeterminate_without_exact_equality() {
+    let a = world_sphere();
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.4);
+    let hit = intersect_bounded_spheres(
+        &a,
+        window(0.0, 0.8, -0.3, 0.5),
+        &b,
+        window(-0.8, 1.0e-12, -0.2, 0.4),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(hit.is_empty());
+    assert!(matches!(hit.completion(), Completion::Indeterminate { .. }));
+}
+
+#[test]
 fn arbitrary_rotated_octants_emit_nonlinear_regions_and_swap_exactly() {
     let a = world_sphere();
     let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.4);

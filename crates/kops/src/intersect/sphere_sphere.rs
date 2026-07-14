@@ -259,7 +259,7 @@ const GENERAL_SPHERE_WINDOW_PAIR_LIMIT: usize = 28;
 // open arrangement arc therefore consumes at most 8 * 14 fixed witnesses.
 const GENERAL_SPHERE_WINDOW_ARC_LIMIT: usize = 112;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct SphereWindowConstraint {
     normal: Vec3,
     offset: f64,
@@ -284,6 +284,13 @@ struct CertifiedSphereBoundaryArc {
 struct CertifiedSphereBoundaryArrangement {
     feasible_arcs: Vec<CertifiedSphereBoundaryArc>,
     all_boundaries_excluded: bool,
+}
+
+#[derive(Debug)]
+struct ExactSphereBoundaryLock {
+    plane: SphereWindowConstraint,
+    representative: usize,
+    members: Vec<usize>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -355,6 +362,20 @@ fn certify_general_sphere_windows(
                 tolerances,
             )?);
         }
+    }
+
+    if let Some(collapsed) = certify_collapsed_general_sphere_windows(
+        a,
+        a_range,
+        b,
+        b_range,
+        &constraints,
+        &roots,
+        tolerances,
+        arc_limit,
+        parameter_allowance,
+    )? {
+        return Ok(collapsed);
     }
 
     for index in 0..roots.len() {
@@ -442,6 +463,379 @@ fn certify_general_sphere_windows(
         Vec::new(),
         vec![region],
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn certify_collapsed_general_sphere_windows(
+    a: &Sphere,
+    a_range: [ParamRange; 2],
+    b: &Sphere,
+    b_range: [ParamRange; 2],
+    constraints: &[SphereWindowConstraint],
+    roots: &[CertifiedSphereBoundaryRoot],
+    tolerances: Tolerances,
+    arc_limit: usize,
+    parameter_allowance: f64,
+) -> Result<Option<SurfaceSurfaceIntersections>> {
+    let locks = exact_sphere_boundary_locks(constraints);
+    match locks.as_slice() {
+        [] => Ok(None),
+        [lock] => certify_locked_sphere_circle(
+            a,
+            a_range,
+            b,
+            b_range,
+            constraints,
+            roots,
+            lock,
+            tolerances,
+            arc_limit,
+            parameter_allowance,
+        )
+        .map(Some),
+        [first, second] => {
+            if sphere_planes_are_exactly_parallel(first.plane.normal, second.plane.normal) {
+                if first.plane == second.plane {
+                    return Err(Error::InvalidGeometry {
+                        reason: "general coincident sphere collapsed proof retained duplicate equality locks",
+                    });
+                }
+                return Ok(Some(SurfaceSurfaceIntersections::complete_empty()));
+            }
+            certify_locked_sphere_points(
+                a,
+                a_range,
+                b,
+                b_range,
+                constraints,
+                roots,
+                first,
+                second,
+                tolerances,
+                parameter_allowance,
+            )
+            .map(Some)
+        }
+        _ => Err(Error::InvalidGeometry {
+            reason: "general coincident sphere collapsed proof supports at most two independent equality locks",
+        }),
+    }
+}
+
+fn exact_sphere_boundary_locks(
+    constraints: &[SphereWindowConstraint],
+) -> Vec<ExactSphereBoundaryLock> {
+    let mut locks: Vec<ExactSphereBoundaryLock> = Vec::new();
+    for first in 0..constraints.len() {
+        for second in first + 1..constraints.len() {
+            // A collapsed result is admitted only for bit-exact opposing
+            // normalized plane equations. Angular or offset tolerances never
+            // create equality locks; near locks remain in the indeterminate
+            // arrangement path.
+            if constraints[first].normal != -constraints[second].normal
+                || constraints[first].offset != -constraints[second].offset
+            {
+                continue;
+            }
+            let (plane, representative) =
+                canonical_sphere_constraint(constraints[first], first, constraints[second], second);
+            if let Some(existing) = locks.iter_mut().find(|lock| lock.plane == plane) {
+                existing.members.extend([first, second]);
+                existing.members.sort_unstable();
+                existing.members.dedup();
+                existing.representative = existing.representative.min(representative);
+            } else {
+                locks.push(ExactSphereBoundaryLock {
+                    plane,
+                    representative,
+                    members: vec![first, second],
+                });
+            }
+        }
+    }
+    locks.sort_by(|first, second| {
+        compare_sphere_constraints(first.plane, second.plane)
+            .then(first.representative.cmp(&second.representative))
+    });
+    locks
+}
+
+fn canonical_sphere_constraint(
+    first: SphereWindowConstraint,
+    first_index: usize,
+    second: SphereWindowConstraint,
+    second_index: usize,
+) -> (SphereWindowConstraint, usize) {
+    if compare_sphere_constraints(first, second).is_le() {
+        (first, first_index)
+    } else {
+        (second, second_index)
+    }
+}
+
+fn compare_sphere_constraints(
+    first: SphereWindowConstraint,
+    second: SphereWindowConstraint,
+) -> core::cmp::Ordering {
+    compare_sphere_directions(first.normal, second.normal)
+        .then(first.offset.total_cmp(&second.offset))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn certify_locked_sphere_circle(
+    a: &Sphere,
+    a_range: [ParamRange; 2],
+    b: &Sphere,
+    b_range: [ParamRange; 2],
+    constraints: &[SphereWindowConstraint],
+    roots: &[CertifiedSphereBoundaryRoot],
+    lock: &ExactSphereBoundaryLock,
+    tolerances: Tolerances,
+    arc_limit: usize,
+    parameter_allowance: f64,
+) -> Result<SurfaceSurfaceIntersections> {
+    let unit_frame = Frame::from_z(Point3::new(0.0, 0.0, 0.0), lock.plane.normal)?;
+    let radius_squared = 1.0 - lock.plane.offset * lock.plane.offset;
+    if radius_squared <= 0.0 {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere collapsed circle is singular",
+        });
+    }
+    let unit_radius = radius_squared.sqrt();
+    let unit_center = lock.plane.normal * lock.plane.offset;
+    let circle = Circle::new(
+        Frame::new(
+            a.frame().origin() + lock.plane.normal * (a.radius() * lock.plane.offset),
+            lock.plane.normal,
+            unit_frame.x(),
+        )?,
+        a.radius() * unit_radius,
+    )?;
+
+    let mut circle_roots = roots
+        .iter()
+        .copied()
+        .filter(|root| root.active.contains(&lock.representative))
+        .filter(|root| {
+            root.active
+                .iter()
+                .any(|index| !lock.members.contains(index))
+        })
+        .map(|mut root| {
+            root.feasible =
+                certify_sphere_root_membership_ignoring(root, constraints, &lock.members)?;
+            let radial = root.direction - unit_center;
+            let mut angle = math::atan2(radial.dot(unit_frame.y()), radial.dot(unit_frame.x()));
+            if angle < 0.0 {
+                angle += core::f64::consts::TAU;
+            }
+            Ok((angle, root))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    circle_roots.sort_by(|first, second| {
+        first
+            .0
+            .total_cmp(&second.0)
+            .then_with(|| compare_sphere_directions(first.1.direction, second.1.direction))
+    });
+    for first in 0..circle_roots.len() {
+        for second in first + 1..circle_roots.len() {
+            if (circle_roots[first].1.direction - circle_roots[second].1.direction).norm()
+                <= tolerances.angular()
+            {
+                return Err(Error::InvalidGeometry {
+                    reason: "general coincident sphere collapsed circle has an unresolved multiple boundary root",
+                });
+            }
+        }
+    }
+
+    let mut remaining_arcs = arc_limit;
+    let mut feasible_arcs = Vec::new();
+    if circle_roots.is_empty() {
+        spend_sphere_boundary_arc(&mut remaining_arcs)?;
+        let direction = sphere_boundary_direction(unit_center, unit_frame, unit_radius, 0.0);
+        if certify_sphere_direction_membership_ignoring(
+            direction,
+            None,
+            constraints,
+            tolerances,
+            false,
+            &lock.members,
+        )? {
+            feasible_arcs.push((0.0, core::f64::consts::TAU));
+        }
+    } else {
+        for index in 0..circle_roots.len() {
+            spend_sphere_boundary_arc(&mut remaining_arcs)?;
+            let (lo, first) = circle_roots[index];
+            let (mut hi, second) = circle_roots[(index + 1) % circle_roots.len()];
+            if index + 1 == circle_roots.len() {
+                hi += core::f64::consts::TAU;
+            }
+            let midpoint = sphere_boundary_direction(
+                unit_center,
+                unit_frame,
+                unit_radius,
+                lo + 0.5 * (hi - lo),
+            );
+            // Every remaining inequality can change sign on the locked circle
+            // only at one of the interval-certified roots above. One strict
+            // midpoint classification therefore certifies the complete open
+            // arc between consecutive roots.
+            if certify_sphere_direction_membership_ignoring(
+                midpoint,
+                None,
+                constraints,
+                tolerances,
+                false,
+                &lock.members,
+            )? {
+                if !first.feasible || !second.feasible {
+                    return Err(Error::InvalidGeometry {
+                        reason: "general coincident sphere collapsed circle arc topology is not certified",
+                    });
+                }
+                feasible_arcs.push((lo, hi));
+            }
+        }
+    }
+
+    if !feasible_arcs.is_empty() {
+        let mut curves = Vec::with_capacity(feasible_arcs.len());
+        for (lo, hi) in feasible_arcs {
+            let start_direction =
+                sphere_boundary_direction(unit_center, unit_frame, unit_radius, lo);
+            let end_direction = sphere_boundary_direction(unit_center, unit_frame, unit_radius, hi);
+            let start = paired_general_sphere_direction(
+                a,
+                a_range,
+                b,
+                b_range,
+                start_direction,
+                parameter_allowance,
+                tolerances,
+            )?;
+            let end = paired_general_sphere_direction(
+                a,
+                a_range,
+                b,
+                b_range,
+                end_direction,
+                parameter_allowance,
+                tolerances,
+            )?;
+            curves.push(SurfaceSurfaceCurve {
+                curve: SurfaceIntersectionCurve::Circle(circle),
+                curve_range: ParamRange::new(lo, hi),
+                uv_a_start: start.uv_a,
+                uv_a_end: end.uv_a,
+                uv_b_start: start.uv_b,
+                uv_b_end: end.uv_b,
+                kind: ContactKind::Tangent,
+            });
+        }
+        return SurfaceSurfaceIntersections::canonicalized_complete(Vec::new(), curves);
+    }
+
+    let points = circle_roots
+        .into_iter()
+        .filter_map(|(_, root)| root.feasible.then_some(root.direction))
+        .map(|direction| {
+            paired_general_sphere_contact(
+                a,
+                a_range,
+                b,
+                b_range,
+                direction,
+                parameter_allowance,
+                tolerances,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    SurfaceSurfaceIntersections::canonicalized_complete(points, Vec::new())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn certify_locked_sphere_points(
+    a: &Sphere,
+    a_range: [ParamRange; 2],
+    b: &Sphere,
+    b_range: [ParamRange; 2],
+    constraints: &[SphereWindowConstraint],
+    roots: &[CertifiedSphereBoundaryRoot],
+    first: &ExactSphereBoundaryLock,
+    second: &ExactSphereBoundaryLock,
+    tolerances: Tolerances,
+    parameter_allowance: f64,
+) -> Result<SurfaceSurfaceIntersections> {
+    let mut ignored = first.members.clone();
+    ignored.extend(&second.members);
+    ignored.sort_unstable();
+    ignored.dedup();
+    let candidates = roots
+        .iter()
+        .copied()
+        .filter(|root| {
+            root.active.contains(&first.representative)
+                && root.active.contains(&second.representative)
+        })
+        .collect::<Vec<_>>();
+    let mut points = Vec::new();
+    for mut candidate in candidates {
+        candidate.feasible =
+            certify_sphere_root_membership_ignoring(candidate, constraints, &ignored)?;
+        if candidate.feasible {
+            points.push(paired_general_sphere_contact(
+                a,
+                a_range,
+                b,
+                b_range,
+                candidate.direction,
+                parameter_allowance,
+                tolerances,
+            )?);
+        }
+    }
+    SurfaceSurfaceIntersections::canonicalized_complete(points, Vec::new())
+}
+
+fn sphere_boundary_direction(center: Vec3, frame: Frame, radius: f64, parameter: f64) -> Vec3 {
+    let (sin_parameter, cos_parameter) = math::sincos(parameter);
+    center + (frame.x() * cos_parameter + frame.y() * sin_parameter) * radius
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paired_general_sphere_contact(
+    a: &Sphere,
+    a_range: [ParamRange; 2],
+    b: &Sphere,
+    b_range: [ParamRange; 2],
+    direction: Vec3,
+    parameter_allowance: f64,
+    tolerances: Tolerances,
+) -> Result<SurfaceSurfacePoint> {
+    let sample = paired_general_sphere_direction(
+        a,
+        a_range,
+        b,
+        b_range,
+        direction,
+        parameter_allowance,
+        tolerances,
+    )?;
+    let kind = if a.normal(sample.uv_a).is_none() || b.normal(sample.uv_b).is_none() {
+        ContactKind::Singular
+    } else {
+        ContactKind::Tangent
+    };
+    Ok(SurfaceSurfacePoint {
+        point: sample.point,
+        uv_a: sample.uv_a,
+        uv_b: sample.uv_b,
+        residual: sample.residual,
+        kind,
+    })
 }
 
 fn validate_general_sphere_window_slice(
@@ -583,9 +977,17 @@ fn certify_sphere_root_membership(
     constraints: &[SphereWindowConstraint],
     _tolerances: Tolerances,
 ) -> Result<bool> {
+    certify_sphere_root_membership_ignoring(root, constraints, &[])
+}
+
+fn certify_sphere_root_membership_ignoring(
+    root: CertifiedSphereBoundaryRoot,
+    constraints: &[SphereWindowConstraint],
+    ignored: &[usize],
+) -> Result<bool> {
     let mut undecided = false;
     for (index, constraint) in constraints.iter().enumerate() {
-        if root.active.contains(&index) {
+        if root.active.contains(&index) || ignored.contains(&index) {
             continue;
         }
         let margin = interval_dot(
@@ -706,13 +1108,31 @@ fn certify_sphere_direction_membership(
     tolerances: Tolerances,
     strict: bool,
 ) -> Result<bool> {
+    certify_sphere_direction_membership_ignoring(
+        direction,
+        active,
+        constraints,
+        tolerances,
+        strict,
+        &[],
+    )
+}
+
+fn certify_sphere_direction_membership_ignoring(
+    direction: Vec3,
+    active: Option<usize>,
+    constraints: &[SphereWindowConstraint],
+    tolerances: Tolerances,
+    strict: bool,
+    ignored: &[usize],
+) -> Result<bool> {
     let arithmetic_allowance = 256.0 * f64::EPSILON;
     let enclosure = direction
         .to_array()
         .map(|value| Interval::new(value - arithmetic_allowance, value + arithmetic_allowance));
     let mut undecided = false;
     for (index, constraint) in constraints.iter().enumerate() {
-        if active == Some(index) {
+        if active == Some(index) || ignored.contains(&index) {
             continue;
         }
         let margin = interval_dot(enclosure, constraint.normal.to_array().map(Interval::point))
@@ -2203,6 +2623,41 @@ mod tests {
                 GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
                 EMPTY_EXEMPLAR_ARC_LIMIT - 1,
                 empty_allowance,
+            )
+            .unwrap_err(),
+            Error::InvalidGeometry {
+                reason: "general coincident sphere window proof arc limit exhausted"
+            }
+        );
+
+        let curve_a_range = [ParamRange::new(0.0, 0.8), ParamRange::new(-0.3, 0.5)];
+        let curve_b_range = [ParamRange::new(-0.8, 0.0), ParamRange::new(-0.2, 0.4)];
+        let curve_allowance =
+            arbitrary_sphere_octant_parameter_allowance(curve_a_range, curve_b_range).unwrap();
+        const COLLAPSED_CURVE_ARC_LIMIT: usize = 12;
+        let curve = certify_general_sphere_windows(
+            &a,
+            curve_a_range,
+            &b,
+            curve_b_range,
+            Tolerances::default(),
+            GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
+            COLLAPSED_CURVE_ARC_LIMIT,
+            curve_allowance,
+        )
+        .unwrap();
+        assert!(curve.is_complete());
+        assert_eq!(curve.curves.len(), 1);
+        assert_eq!(
+            certify_general_sphere_windows(
+                &a,
+                curve_a_range,
+                &b,
+                curve_b_range,
+                Tolerances::default(),
+                GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
+                COLLAPSED_CURVE_ARC_LIMIT - 1,
+                curve_allowance,
             )
             .unwrap_err(),
             Error::InvalidGeometry {
