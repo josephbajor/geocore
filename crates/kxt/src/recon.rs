@@ -57,6 +57,7 @@ use kgraph::{
     certify_transmitted_plane_intersection_residuals,
     certify_transmitted_plane_nurbs_intersection_residuals,
     certify_transmitted_quadratic_dual_offset_nurbs_intersection_residuals,
+    certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals,
 };
 use ktopo::entity::{
     Body, BodyId, BodyKind, Curve2dId, CurveId, Edge, EdgeId, Face, FaceDomain, FaceId, Fin,
@@ -402,6 +403,34 @@ impl IntersectionImportBudgetProfile {
         .expect("built-in X_T zero-multiplicity knot-padding profile is valid")
     }
 
+    /// Corpus-backed defaults through the canonical finite-open seven-sample
+    /// Offset(B-surface)/Offset(B-surface) polyline chart.
+    ///
+    /// Historical v1-v11 profiles retain their exact policy contracts.
+    pub fn v12_defaults() -> BudgetPlan {
+        BudgetPlan::new([
+            LimitSpec::new(
+                INTERSECTION_CHART_CERTIFICATE_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                414_569_575,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_ITEMS,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                65_536,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64,
+            ),
+        ])
+        .expect("built-in X_T seven-sample dual-offset intersection profile is valid")
+    }
+
     fn validate(ledger: &WorkLedger) -> core::result::Result<(), OperationPolicyError> {
         ledger.require_limit(
             INTERSECTION_CHART_CERTIFICATE_WORK,
@@ -446,7 +475,7 @@ pub struct Reconstruction {
 pub fn reconstruction_budget_profile() -> BudgetPlan {
     let graph = EvalBudgetProfile::v1_defaults();
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v11_defaults();
+    let intersection = IntersectionImportBudgetProfile::v12_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -462,7 +491,7 @@ fn reconstruction_compatibility_budget() -> BudgetPlan {
     let graph =
         EvalBudgetProfile::for_limits(EvalLimits::default().max_dependency_depth, usize::MAX);
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v11_defaults();
+    let intersection = IntersectionImportBudgetProfile::v12_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -2372,10 +2401,16 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             dual_offset_nurbs && retained_count == 3 && !equal_limits && !terminated;
         let cubic_dual_offset =
             dual_offset_nurbs && retained_count == 4 && !equal_limits && !terminated;
-        if dual_offset_nurbs && !quadratic_dual_offset && !cubic_dual_offset {
+        let seven_sample_dual_offset =
+            dual_offset_nurbs && retained_count == 7 && !equal_limits && !terminated;
+        if dual_offset_nurbs
+            && !quadratic_dual_offset
+            && !cubic_dual_offset
+            && !seven_sample_dual_offset
+        {
             return Err(XtError::Unsupported {
                 capability: XtCapability::IntersectionSurfaceFamily,
-                what: "dual Offset(B-surface) charts require a canonical finite-open three-sample quadratic or four-sample cubic family",
+                what: "dual Offset(B-surface) charts require a canonical finite-open three-sample quadratic, four-sample cubic, or seven-sample polyline family",
             });
         }
         let quadratic_position_samples =
@@ -2587,6 +2622,14 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 cubic_position_samples.expect("cubic carrier retains four positions"),
                 cubic_canonicalized_pcurve_samples
                     .expect("cubic pcurves retain four canonicalized paired UV tuples"),
+                metadata,
+                proof_tolerance,
+            )
+        } else if seven_sample_dual_offset {
+            certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals(
+                carrier,
+                traces,
+                pcurves.clone(),
                 metadata,
                 proof_tolerance,
             )

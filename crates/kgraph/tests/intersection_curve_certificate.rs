@@ -23,6 +23,7 @@ use kgraph::{
     certify_transmitted_plane_intersection_residuals,
     certify_transmitted_plane_nurbs_intersection_residuals,
     certify_transmitted_quadratic_dual_offset_nurbs_intersection_residuals,
+    certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals,
 };
 
 fn nonplanar_trace_surface(rational: bool) -> NurbsSurface {
@@ -367,6 +368,213 @@ fn transmitted_cubic_dual_offset_interpolant_binds_witnesses_sources_and_pcurves
             1.0e-8,
         ),
         Err(IntersectionCertificateError::SingularOffsetNormal {
+            trace: PairedTrace::First,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn transmitted_seven_sample_dual_offset_polyline_is_narrow_sound_and_bound() {
+    let knots = vec![0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 6.0];
+    let positions = (1..=7)
+        .map(|index| Vec3::new(f64::from(index) / 10.0, 0.0, 0.0))
+        .collect::<Vec<_>>();
+    let uv = positions
+        .iter()
+        .map(|point| Vec2::new(point.x, 0.0))
+        .collect::<Vec<_>>();
+    let carrier = NurbsCurve::new(1, knots.clone(), positions.clone(), None).unwrap();
+    let pcurves = [
+        NurbsCurve2d::new(1, knots.clone(), uv.clone(), None).unwrap(),
+        NurbsCurve2d::new(1, knots.clone(), uv.clone(), None).unwrap(),
+    ];
+    let surface_knots = vec![-1.0, -1.0, 1.0, 1.0];
+    let first_basis = NurbsSurface::new(
+        1,
+        1,
+        surface_knots.clone(),
+        surface_knots.clone(),
+        vec![
+            Vec3::new(-1.0, -1.0, -0.25),
+            Vec3::new(-1.0, 1.0, -0.25),
+            Vec3::new(1.0, -1.0, -0.25),
+            Vec3::new(1.0, 1.0, -0.25),
+        ],
+        None,
+    )
+    .unwrap();
+    let second_basis = NurbsSurface::new(
+        1,
+        1,
+        surface_knots.clone(),
+        surface_knots,
+        vec![
+            Vec3::new(-1.0, 0.5, -1.0),
+            Vec3::new(-1.0, 0.5, 1.0),
+            Vec3::new(1.0, 0.5, -1.0),
+            Vec3::new(1.0, 0.5, 1.0),
+        ],
+        None,
+    )
+    .unwrap();
+    let traces = [
+        TransmittedPlaneNurbsTrace::OffsetNurbs(TransmittedOffsetNurbsTrace::new(
+            first_basis.clone(),
+            0.25,
+        )),
+        TransmittedPlaneNurbsTrace::OffsetNurbs(TransmittedOffsetNurbsTrace::new(
+            second_basis.clone(),
+            0.5,
+        )),
+    ];
+    let metadata =
+        TransmittedIntersectionChartMetadata::new(0.0, 1.0, 1.0e-8, 0.0, [None, None]).unwrap();
+    let certificate = certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals(
+        carrier.clone(),
+        traces.clone(),
+        pcurves.clone(),
+        metadata,
+        1.0e-8,
+    )
+    .unwrap();
+    assert_eq!(certificate.carrier(), &carrier);
+    assert_eq!(certificate.pcurves(), &pcurves);
+    assert_eq!(certificate.proof_depth(), 10);
+    assert!(certificate.quadratic_interpolation_witnesses().is_none());
+    assert!(certificate.cubic_interpolation_witnesses().is_none());
+    assert!(
+        certificate
+            .residual_bounds()
+            .into_iter()
+            .all(|bound| bound <= 1.0e-8)
+    );
+
+    let mut graph = GeometryGraph::new();
+    let bases = [
+        graph.insert_surface(first_basis.clone()).unwrap(),
+        graph.insert_surface(second_basis.clone()).unwrap(),
+    ];
+    let roots = [
+        graph
+            .insert_surface(OffsetSurfaceDescriptor::new(bases[0], 0.25))
+            .unwrap(),
+        graph
+            .insert_surface(OffsetSurfaceDescriptor::new(bases[1], 0.5))
+            .unwrap(),
+    ];
+    let altered_root = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(bases[0], 0.3))
+        .unwrap();
+    let stale_root = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(bases[1], 0.5))
+        .unwrap();
+    graph.remove_surface(stale_root).unwrap();
+    let pcurve_handles = [
+        graph.insert_curve2d(pcurves[0].clone()).unwrap(),
+        graph.insert_curve2d(pcurves[1].clone()).unwrap(),
+    ];
+    let mut altered_uv = uv.clone();
+    altered_uv[3].y = 0.1;
+    let altered_pcurve = graph
+        .insert_curve2d(NurbsCurve2d::new(1, knots.clone(), altered_uv, None).unwrap())
+        .unwrap();
+    let curve_count = graph.curve_count();
+    for (sources, chart_pcurves) in [
+        ([altered_root, roots[1]], pcurve_handles),
+        ([roots[0], stale_root], pcurve_handles),
+        ([roots[1], roots[0]], pcurve_handles),
+        ([roots[0], roots[1]], [altered_pcurve, pcurve_handles[1]]),
+    ] {
+        assert!(
+            graph
+                .insert_verified_transmitted_nurbs_intersection_curve(
+                    sources,
+                    chart_pcurves,
+                    certificate.clone(),
+                )
+                .is_err()
+        );
+        assert_eq!(graph.curve_count(), curve_count);
+    }
+    let curve = graph
+        .insert_verified_transmitted_nurbs_intersection_curve(
+            roots,
+            pcurve_handles,
+            certificate.clone(),
+        )
+        .unwrap();
+    let closure = graph.dependency_closure(GeometryRef::Curve(curve)).unwrap();
+    assert!(closure.contains(&GeometryRef::Surface(bases[0])));
+    assert!(closure.contains(&GeometryRef::Surface(bases[1])));
+    graph.validate().unwrap();
+
+    let noncanonical_knots = vec![0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.5, 6.0, 6.0];
+    let noncanonical = NurbsCurve::new(1, noncanonical_knots, positions.clone(), None).unwrap();
+    assert!(matches!(
+        certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals(
+            noncanonical,
+            traces.clone(),
+            pcurves.clone(),
+            metadata,
+            1.0e-8,
+        ),
+        Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "dual-offset seven-sample carrier must be the canonical open clamped polyline",
+            }
+        )
+    ));
+
+    let mut duplicate_positions = positions.clone();
+    duplicate_positions[3] = duplicate_positions[2];
+    let duplicate_carrier = NurbsCurve::new(1, knots.clone(), duplicate_positions, None).unwrap();
+    assert!(matches!(
+        certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals(
+            duplicate_carrier,
+            traces.clone(),
+            pcurves.clone(),
+            metadata,
+            1.0e-8,
+        ),
+        Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "dual-offset seven-sample carrier controls must be pairwise distinct",
+            }
+        )
+    ));
+
+    let mut duplicate_uv = uv.clone();
+    duplicate_uv[3] = duplicate_uv[2];
+    let duplicate_pcurve = NurbsCurve2d::new(1, knots.clone(), duplicate_uv, None).unwrap();
+    assert!(matches!(
+        certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals(
+            carrier.clone(),
+            traces.clone(),
+            [duplicate_pcurve, pcurves[1].clone()],
+            metadata,
+            1.0e-8,
+        ),
+        Err(
+            IntersectionCertificateError::UnsupportedTraceParameterization {
+                trace: PairedTrace::First,
+                reason: "dual-offset seven-sample pcurve controls must be pairwise distinct",
+            }
+        )
+    ));
+
+    let mut residual_positions = positions;
+    residual_positions[3].z = 1.0e-4;
+    let residual_carrier = NurbsCurve::new(1, knots, residual_positions, None).unwrap();
+    assert!(matches!(
+        certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals(
+            residual_carrier,
+            traces,
+            pcurves,
+            metadata,
+            1.0e-8,
+        ),
+        Err(IntersectionCertificateError::ResidualExceedsTolerance {
             trace: PairedTrace::First,
             ..
         })

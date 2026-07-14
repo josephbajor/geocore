@@ -743,7 +743,13 @@ zero-multiplicity nonperiodic source-knot padding. It admits quadratic
 dual-offset record 3790 at isolated `8593408/3/10`, exposes and certifies the
 existing 11-sample Plane/Offset(B-surface) record 3745 at isolated
 `42772491/11/10`, and reaches exact `388125799/22/10` with historical v1-v10
-parity. Seven-sample dual-offset record 3615 is the next typed boundary. Its
+parity. Production v12 admits seven-sample dual-offset record 3615 at isolated
+`26443776/7/10`. Its ordered roots `[3374, 773]` retain bases `[3730, 1186]`;
+the exact transmitted positions and paired UVs define a common degree-1
+open-clamped polyline, while both original offset-NURBS proofs remain
+authoritative. The corpus reaches exact `414569575/22/10` with historical
+v1-v11 parity. Two-sample dual-offset record 3595, roots `[783, 773]`, is the
+next typed boundary. Its
 manifest row is `reconstruct: unsupported` with capability
 `xt.read.intersection-surface-family` and remains the committed progress
 meter: `reconstruct: unsupported → pass`, then `tessellate: pass`, then
@@ -833,7 +839,9 @@ full-checker gaps shrinking toward `valid`. Dependency plan:
    finite-numeric zero-multiplicity source-knot padding, certifies quadratic
    record 3790 and the exposed 11-sample Plane/Offset record 3745 at exact
    `388125799/22/10`, and preserves v1-v10 parity; seven-sample dual-offset
-   record 3615 remains typed unsupported.
+   record 3615 is admitted by v12 at exact `414569575/22/10`, with isolated
+   `26443776/7/10` accounting and historical v1-v11 parity. Two-sample
+   dual-offset record 3595 remains typed unsupported.
    Both
    original B-surface identities and their paired pcurves are graph-protected
    in source order. Other parameter conventions, limits,
@@ -850,7 +858,8 @@ full-checker gaps shrinking toward `valid`. Dependency plan:
    canonical finite-open three-sample dual-offset record 5945 and four-sample
    cubic dual-offset record 3819, zero-padded quadratic record 3790, and exposed
    11-sample Plane/Offset record 3745 now certify, advancing the corpus ratchet
-   to seven-sample dual-offset record 3615.
+   through seven-sample dual-offset record 3615, advancing the corpus ratchet
+   to two-sample dual-offset record 3595.
    Original-backed, tolerance-qualified, non-Plane, reversed-basis, periodic,
    closed, rational, or non-2D SP-curves, foreign curves, null/general
    closed-limit, endpoint or NURBS-trace omissions, other nullable

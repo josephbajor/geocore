@@ -538,7 +538,10 @@ budgets remain exact. V11 accepts only null or finite-numeric
 zero-multiplicity source-knot padding, admits quadratic record 3790 at isolated
 `8,593,408/3/10`, then exposes and certifies 11-sample Plane/Offset record 3745
 at isolated `42,772,491/11/10`; the corpus reaches
-`388,125,799/22/10` with historical v1-v10 parity. Material and interior overhangs are never
+`388,125,799/22/10` with historical v1-v10 parity. V12 admits seven-sample
+dual-offset polyline record 3615 at isolated `26,443,776/7/10`, reaching
+`414,569,575/22/10` with historical v1-v11 parity before two-sample
+dual-offset record 3595. Material and interior overhangs are never
 normalized, and every snapped endpoint remains subordinate to its original-
 source whole-carrier certificate.
 The v5 extension permits paired-null Plane UVs only at interior samples of an

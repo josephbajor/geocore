@@ -112,7 +112,11 @@ statement accompanied the individual files.
   paired with null or a finite number. It certifies quadratic record 3790 at
   isolated `8593408/3/10`, then the exposed 11-sample Plane/Offset record 3745
   at isolated `42772491/11/10`, reaching `388125799/22/10` with historical
-  v1-v10 parity. Seven-sample dual-offset record 3615 is the stable typed
+  v1-v10 parity. V12 certifies seven-sample dual-offset record 3615 with one
+  common degree-1 open-clamped carrier/pcurve polyline and two independent
+  original-source proofs. Its isolated cost is `26443776/7/10`; the corpus
+  reaches `414569575/22/10` with historical v1-v11 parity. Two-sample
+  dual-offset record 3595 is the stable typed
   `xt.read.intersection-surface-family` boundary. General closed
   limits, other nullable chart data, periodic-trace-range, broader carrier
   families, and noncanonical chart forms remain unsupported. Primary

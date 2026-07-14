@@ -10,7 +10,7 @@ use ktopo::store::Store;
 use kxt::parse::{Value, read_xt};
 use kxt::{
     INTERSECTION_CHART_CERTIFICATE_WORK, INTERSECTION_CHART_DEPTH, INTERSECTION_CHART_ITEMS,
-    IntersectionImportBudgetProfile, XtCapability, XtError, reconstruct, reconstruct_with_context,
+    IntersectionImportBudgetProfile, XtError, reconstruct, reconstruct_with_context,
 };
 
 const EXEMPLAR: &[u8] = include_bytes!("fixtures/exemplar.x_t");
@@ -200,7 +200,7 @@ fn record_3790_transplant_has_exact_isolated_work_and_n_minus_one_boundaries() {
 }
 
 #[test]
-fn v11_certifies_3790_and_stops_at_the_count_seven_dual_offset_family() {
+fn v11_certifies_3790_and_stops_before_the_count_seven_dual_offset_proof() {
     let file = read_xt(EXEMPLAR).unwrap();
     let session = SessionPolicy::v1();
     let mut store = Store::new();
@@ -210,16 +210,20 @@ fn v11_certifies_3790_and_stops_at_the_count_seven_dual_offset_family() {
         &context_with_plan(&session, IntersectionImportBudgetProfile::v11_defaults()),
     )
     .unwrap();
-    assert!(
-        matches!(
-            outcome.result(),
-            Err(XtError::Unsupported {
-                capability: XtCapability::IntersectionSurfaceFamily,
-                what: "dual Offset(B-surface) charts require a canonical finite-open three-sample quadratic or four-sample cubic family",
-            })
+    let crossing = outcome.result().as_ref().unwrap_err().limit().unwrap();
+    assert_eq!(
+        (
+            crossing.stage,
+            crossing.resource,
+            crossing.consumed,
+            crossing.allowed,
         ),
-        "{:?}",
-        outcome.result()
+        (
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+            414_569_575,
+            V11_WORK,
+        )
     );
     assert_eq!(
         usage(
