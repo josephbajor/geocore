@@ -4,7 +4,7 @@
 //! leaves form exact analytic field families. Genuinely non-planar direct NURBS
 //! surfaces additionally support scoped exact-plane-field/NURBS, exact
 //! sphere-field/NURBS, compatible direct NURBS/NURBS marching, and a narrow
-//! constant-normal Offset(NURBS)/NURBS family capped at three offset
+//! constant-normal Offset(NURBS)/NURBS family capped at four offset
 //! descriptors.
 //! Strictly separated pairs of compatible constant-normal Offset(NURBS) roots
 //! capped at three offset descriptors additionally own a graph-level
@@ -71,7 +71,7 @@ use kgraph::{
 const MAX_SPHERICAL_CIRCLE_PROOFS_PER_QUERY: u64 = 4_096;
 const MAX_NURBS_TRACE_CERTIFICATE_WORK_PER_QUERY: u64 = 134_217_728;
 const MAX_NURBS_TRACE_CERTIFICATE_ITEMS_PER_QUERY: u64 = 16_777_216;
-const MAX_OFFSET_NURBS_INTERSECTION_CHAIN_LENGTH: usize = 3;
+const MAX_OFFSET_NURBS_INTERSECTION_CHAIN_LENGTH: usize = 4;
 const MAX_DUAL_OFFSET_NURBS_EMPTY_CHAIN_LENGTH: usize = 3;
 
 /// Stable work stage for fixed whole-branch inverse sphere-chart subdivisions.
@@ -514,7 +514,7 @@ pub fn intersect_bounded_graph_surfaces_with_context(
 /// direct-NURBS, exact-Sphere-field/genuinely-non-planar-direct-NURBS, and
 /// compatible genuinely-non-planar direct-NURBS/direct-NURBS branches are
 /// supported. Constant-normal Offset(NURBS)/NURBS roots containing at most
-/// three offset descriptors additionally reuse the compatible paired marcher
+/// four offset descriptors additionally reuse the compatible paired marcher
 /// across the positive-area overlap of distinct operand windows. Two
 /// compatible constant-normal Offset(NURBS) roots containing at most three
 /// offset descriptors return a complete miss only from strict outward

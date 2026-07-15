@@ -21,7 +21,7 @@ use kcore::interval::Interval;
 use std::collections::{HashMap, HashSet};
 
 const MAX_VERIFIED_OFFSET_NURBS_CHAIN_LENGTH: usize = 2;
-const MAX_VERIFIED_OFFSET_NURBS_DIRECT_NURBS_CHAIN_LENGTH: usize = 3;
+const MAX_VERIFIED_OFFSET_NURBS_DIRECT_NURBS_CHAIN_LENGTH: usize = 4;
 
 /// Immutable 3D curve node. The descriptor is the node payload itself so
 /// topology's historical geometry-enum names can remain source compatible.

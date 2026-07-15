@@ -191,7 +191,11 @@ fn overlapping_windows_promote_in_both_orders_and_persist_identities() {
 fn capped_nested_constant_normal_offsets_preserve_chain_proof_and_exact_limits() {
     let tolerances = Tolerances::with_linear(1.0e-3).unwrap();
     let session = SessionPolicy::v1();
-    for distances in [&[0.02, 0.03][..], &[0.01, 0.015, 0.025][..]] {
+    for distances in [
+        &[0.02, 0.03][..],
+        &[0.01, 0.015, 0.025][..],
+        &[0.005, 0.01, 0.015, 0.02][..],
+    ] {
         let signed_distance = distances.iter().sum::<f64>();
         let basis = basis(false);
         let direct = crossing_direct(0.25 + signed_distance, false);
@@ -329,6 +333,58 @@ fn capped_nested_constant_normal_offsets_preserve_chain_proof_and_exact_limits()
             .is_ok()
         );
 
+        if distances.len() == 4 {
+            for (resource, mode, allowed, consumed) in [
+                (
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    cost.work() - 1,
+                    cost.work(),
+                ),
+                (
+                    ResourceKind::Items,
+                    AccountingMode::HighWater,
+                    cost.items() - 1,
+                    cost.items(),
+                ),
+                (
+                    ResourceKind::Depth,
+                    AccountingMode::HighWater,
+                    cost.depth() - 1,
+                    cost.depth(),
+                ),
+            ] {
+                let denied_plan = BudgetPlan::new([LimitSpec::new(
+                    NURBS_TRACE_CERTIFICATE_WORK,
+                    resource,
+                    mode,
+                    allowed,
+                )])
+                .unwrap();
+                let denied_context = OperationContext::new(&session, tolerances)
+                    .unwrap()
+                    .with_budget_overrides(denied_plan);
+                let denied = intersect_bounded_graph_surfaces_with_context(
+                    &graph,
+                    root,
+                    overlapping_offset_window(),
+                    direct_handle,
+                    overlapping_direct_window(),
+                    &denied_context,
+                );
+                let GraphSurfaceIntersectionError::OperationPolicy(
+                    kcore::operation::OperationPolicyError::LimitReached(crossing),
+                ) = denied.result().unwrap_err()
+                else {
+                    panic!("N-1 four-descriptor certificate resource must stop at proof stage");
+                };
+                assert_eq!(crossing.stage, NURBS_TRACE_CERTIFICATE_WORK);
+                assert_eq!(crossing.resource, resource);
+                assert_eq!(crossing.allowed, allowed);
+                assert_eq!(crossing.consumed, consumed);
+            }
+        }
+
         for (stage, resource, mode) in [
             (
                 kgraph::eval_stage::NODE_VISITS,
@@ -393,11 +449,12 @@ fn capped_nested_constant_normal_offsets_preserve_chain_proof_and_exact_limits()
 }
 
 #[test]
-fn altered_three_descriptor_offset_rolls_persistence_back_atomically() {
+fn altered_four_descriptor_offset_rolls_persistence_back_atomically() {
     let inner_distance = 0.01;
-    let middle_distance = 0.015;
-    let outer_distance = 0.025;
-    let signed_distance = inner_distance + middle_distance + outer_distance;
+    let middle_distance = 0.01;
+    let penultimate_distance = 0.015;
+    let outer_distance = 0.015;
+    let signed_distance = inner_distance + middle_distance + penultimate_distance + outer_distance;
     let tolerances = Tolerances::with_linear(1.0e-3).unwrap();
     let mut graph = GeometryGraph::new();
     let basis_handle = graph.insert_surface(basis(false)).unwrap();
@@ -407,8 +464,11 @@ fn altered_three_descriptor_offset_rolls_persistence_back_atomically() {
     let middle = graph
         .insert_surface(OffsetSurfaceDescriptor::new(inner, middle_distance))
         .unwrap();
+    let penultimate = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(middle, penultimate_distance))
+        .unwrap();
     let outer = graph
-        .insert_surface(OffsetSurfaceDescriptor::new(middle, outer_distance))
+        .insert_surface(OffsetSurfaceDescriptor::new(penultimate, outer_distance))
         .unwrap();
     let direct = graph
         .insert_surface(crossing_direct(0.25 + signed_distance, false))
@@ -425,8 +485,8 @@ fn altered_three_descriptor_offset_rolls_persistence_back_atomically() {
 
     graph
         .replace_surface(
-            middle,
-            OffsetSurfaceDescriptor::new(inner, middle_distance + 0.001),
+            penultimate,
+            OffsetSurfaceDescriptor::new(middle, penultimate_distance + 0.001),
         )
         .unwrap();
     let before = (
@@ -649,9 +709,12 @@ fn outward_offset_control_proof_returns_a_complete_miss() {
 
     let mut graph = GeometryGraph::new();
     let basis_handle = graph.insert_surface(basis.clone()).unwrap();
-    let offset_handle = graph
-        .insert_surface(OffsetSurfaceDescriptor::new(basis_handle, signed_distance))
-        .unwrap();
+    let mut offset_handle = basis_handle;
+    for distance in [0.005, 0.01, 0.015, 0.02] {
+        offset_handle = graph
+            .insert_surface(OffsetSurfaceDescriptor::new(offset_handle, distance))
+            .unwrap();
+    }
     let direct_handle = graph.insert_surface(direct.clone()).unwrap();
     let miss = intersect_bounded_graph_surfaces(
         &graph,
@@ -1178,8 +1241,11 @@ fn broader_offset_families_and_unaligned_charts_fail_closed() {
     let capped = graph
         .insert_surface(OffsetSurfaceDescriptor::new(nested, 0.01))
         .unwrap();
-    let too_deep = graph
+    let supported_four = graph
         .insert_surface(OffsetSurfaceDescriptor::new(capped, 0.01))
+        .unwrap();
+    let too_deep = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(supported_four, 0.01))
         .unwrap();
     let direct_handle = graph.insert_surface(direct).unwrap();
     let curved_basis_handle = graph.insert_surface(curved_basis).unwrap();
@@ -1188,6 +1254,15 @@ fn broader_offset_families_and_unaligned_charts_fail_closed() {
             curved_basis_handle,
             signed_distance,
         ))
+        .unwrap();
+    let curved_nested = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(curved_offset, 0.01))
+        .unwrap();
+    let curved_capped = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(curved_nested, 0.01))
+        .unwrap();
+    let curved_four = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(curved_capped, 0.01))
         .unwrap();
     let coincident_basis = graph.insert_surface(basis(false)).unwrap();
     let coincident_offset = graph
@@ -1234,8 +1309,12 @@ fn broader_offset_families_and_unaligned_charts_fail_closed() {
         (direct_handle, too_deep),
         (curved_offset, direct_handle),
         (direct_handle, curved_offset),
+        (curved_four, direct_handle),
+        (direct_handle, curved_four),
         (offset, unaligned),
         (unaligned, offset),
+        (supported_four, unaligned),
+        (unaligned, supported_four),
         (offset, curved_offset),
         (offset, coincident_offset),
         (coincident_offset, offset),
@@ -1243,6 +1322,8 @@ fn broader_offset_families_and_unaligned_charts_fail_closed() {
         (nested_coincident_offset, nested),
         (capped, capped_coincident_root),
         (capped_coincident_root, capped),
+        (supported_four, separated_offset),
+        (separated_offset, supported_four),
         (too_deep, separated_offset),
         (separated_offset, too_deep),
         (offset, unequal_weight_offset),
