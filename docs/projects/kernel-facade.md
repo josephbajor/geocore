@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, deterministic checked complete-body rigid copy, failure-atomic operation-owned facade tolerance batching, journaled MEF inheritance and KEF ordered-max face-tolerance propagation, an evidence-bearing opt-in Full-assurance commit gate, K5 adoption, and facade body tessellation implemented; broader K4 edits and partition history remain
+Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, deterministic checked complete-body rigid copy, checked polygonal-profile extrusion, failure-atomic operation-owned facade tolerance batching, journaled MEF inheritance and KEF ordered-max face-tolerance propagation, an evidence-bearing opt-in Full-assurance commit gate, K5 adoption, and facade body tessellation implemented; broader K4 edits and partition history remain
 
 ## Outcome
 
@@ -368,6 +368,11 @@ pub struct BlockRequest<'a> {
     pub settings: OperationSettings<'a>,
 }
 
+pub struct ExtrudeProfileRequest {
+    // private Frame, polygonal outer boundary, polygonal holes, positive height,
+    // and OperationSettings
+}
+
 pub struct BodyCreated {
     body: BodyId,
     journal: ChangeJournal,
@@ -375,6 +380,8 @@ pub struct BodyCreated {
 
 impl PartEdit<'_> {
     pub fn create_block(&mut self, request: BlockRequest<'_>)
+        -> OperationOutcome<BodyCreated>;
+    pub fn extrude_profile(&mut self, request: ExtrudeProfileRequest)
         -> OperationOutcome<BodyCreated>;
 }
 ```
@@ -887,6 +894,14 @@ verified-intersection proof-reissuance failures are rejected before scope
 creation, with the last exposed as a stable Unsupported capability. Lower
 transaction tests pin Full validity, ownership disjointness, holed-sheet area,
 rollback cleanliness, and future-identity reuse.
+
+`PartEdit::extrude_profile` adds the first facade feature-creation operation.
+Its typed request accepts one validated polygonal outer boundary, zero or more
+polygonal holes, a positioning frame, and a positive height. The lower builder
+owns exact cap and side topology, line pcurves on every use, shared vertical and
+perimeter edges, failure-atomic checked creation, and the exact prism shell
+proof consumed by Full checking. Facade-only tests pin a holed solid through
+construction and Full validity without importing a lower-layer crate.
 
 Broader semantic edit surfaces resume after the K5 adoption pass. The
 interchange facade stays thin: `kxt` reconstruction and checked-commit Fast

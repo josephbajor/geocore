@@ -188,6 +188,70 @@ impl CopyBodyRequest {
     }
 }
 
+/// Typed request to extrude one polygonal planar profile into a checked solid.
+///
+/// The outer boundary and each hole omit a repeated closing point. Validation
+/// normalizes the outer boundary counterclockwise and holes clockwise, rejects
+/// degenerate/intersecting/nested inputs, and extrudes along the positive
+/// `frame.z()` direction.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtrudeProfileRequest {
+    frame: Frame,
+    outer: Vec<kgeom::vec::Point2>,
+    holes: Vec<Vec<kgeom::vec::Point2>>,
+    height: f64,
+    settings: OperationSettings,
+}
+
+impl ExtrudeProfileRequest {
+    /// Construct a polygonal-profile extrusion using default operation settings.
+    pub fn new(
+        frame: Frame,
+        outer: Vec<kgeom::vec::Point2>,
+        holes: Vec<Vec<kgeom::vec::Point2>>,
+        height: f64,
+    ) -> Self {
+        Self {
+            frame,
+            outer,
+            holes,
+            height,
+            settings: OperationSettings::default(),
+        }
+    }
+
+    /// Replace contextual operation settings.
+    pub fn with_settings(mut self, settings: OperationSettings) -> Self {
+        self.settings = settings;
+        self
+    }
+
+    /// Positioned profile plane and positive extrusion axis.
+    pub const fn frame(&self) -> Frame {
+        self.frame
+    }
+
+    /// Outer polygon without a repeated closing point.
+    pub fn outer(&self) -> &[kgeom::vec::Point2] {
+        &self.outer
+    }
+
+    /// Hole polygons in deterministic request order.
+    pub fn holes(&self) -> &[Vec<kgeom::vec::Point2>] {
+        &self.holes
+    }
+
+    /// Positive extrusion distance along `frame.z()`.
+    pub const fn height(&self) -> f64 {
+        self.height
+    }
+
+    /// Contextual operation settings.
+    pub const fn settings(&self) -> &OperationSettings {
+        &self.settings
+    }
+}
+
 /// Facade-safe identity retained by a committed journal.
 ///
 /// Every variant is part-qualified. A deleted topology or geometry identity
@@ -1256,6 +1320,47 @@ impl PartEdit<'_> {
         .map_err(Error::from);
         Ok(scope.finish_typed(result))
     }
+
+    /// Validate, construct, and checked-commit one polygonal-profile prism.
+    ///
+    /// Every cap and side use receives an exact line pcurve. Profile holes
+    /// become material voids bounded by inward-facing side rings. Input,
+    /// topology, geometry, checking, and journal failures are atomic and are
+    /// paired with the single facade operation report once the scope starts.
+    pub fn extrude_profile(
+        &mut self,
+        request: ExtrudeProfileRequest,
+    ) -> Result<OperationOutcome<BodyCreated>> {
+        let ExtrudeProfileRequest {
+            frame,
+            outer,
+            holes,
+            height,
+            settings,
+        } = request;
+        let context = settings.context(self.policy)?;
+        let scope = OperationScope::new(&context);
+        let part = self.id.clone();
+        let hole_slices = holes.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let result =
+            ktopo::profile::PlanarProfile::from_polygon_with_holes(frame, &outer, &hole_slices)
+                .and_then(|profile| {
+                    ktopo::make::extrude_profile_with_journal(
+                        &mut self.state.store,
+                        &profile,
+                        height,
+                    )
+                })
+                .map(|creation| {
+                    let (raw_body, inner) = creation.into_parts();
+                    BodyCreated {
+                        body: BodyId::new(part.clone(), raw_body),
+                        journal: ChangeJournal::from_raw(part, inner),
+                    }
+                })
+                .map_err(Error::from);
+        Ok(scope.finish_typed(result))
+    }
 }
 
 impl Part<'_> {
@@ -1528,7 +1633,7 @@ mod tests {
         SessionPrecision, TOTAL_WORK_STAGE,
     };
     use kgeom::surface::Plane;
-    use kgeom::vec::Vec3;
+    use kgeom::vec::{Point2, Vec3};
     use kgraph::{EvalBudgetProfile, EvalError, OffsetSurfaceDescriptor};
     use ktopo::check::VerificationGapCause;
     use ktopo::entity::{Body as RawBody, Edge as RawEdge, Face as RawFace, Vertex as RawVertex};
@@ -1642,6 +1747,76 @@ mod tests {
         assert!(facade_check.report().limit_events().is_empty());
         let expected = adapt_check_report(&part_id, &direct_store, direct_check).unwrap();
         assert_eq!(facade_check.result(), Ok(&expected));
+    }
+
+    #[test]
+    fn polygonal_profile_extrusion_is_full_valid_and_failure_atomic() {
+        let outer = vec![
+            Point2::new(-2.0, -2.0),
+            Point2::new(2.0, -2.0),
+            Point2::new(2.0, 2.0),
+            Point2::new(-2.0, 2.0),
+        ];
+        let hole = vec![
+            Point2::new(-1.0, -1.0),
+            Point2::new(1.0, -1.0),
+            Point2::new(1.0, 1.0),
+            Point2::new(-1.0, 1.0),
+        ];
+        let request =
+            ExtrudeProfileRequest::new(Frame::world(), outer.clone(), vec![hole.clone()], 2.0);
+        assert_eq!(request.frame(), Frame::world());
+        assert_eq!(request.outer(), outer);
+        assert_eq!(request.holes(), &[hole]);
+        assert_eq!(request.height(), 2.0);
+
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let rejected = session
+            .edit_part(part_id.clone())
+            .unwrap()
+            .extrude_profile(ExtrudeProfileRequest::new(
+                Frame::world(),
+                outer.clone(),
+                Vec::new(),
+                -1.0,
+            ))
+            .unwrap();
+        assert!(matches!(
+            rejected.into_result(),
+            Err(KernelError::Core {
+                source: kcore::error::Error::InvalidGeometry { .. }
+            })
+        ));
+        assert_eq!(session.part(part_id.clone()).unwrap().bodies().len(), 0);
+
+        let outcome = session
+            .edit_part(part_id.clone())
+            .unwrap()
+            .extrude_profile(request)
+            .unwrap();
+        assert!(outcome.report().usage().is_empty());
+        let created = outcome.into_result().unwrap();
+        assert!(
+            created
+                .journal()
+                .mutations()
+                .all(|mutation| mutation.kind() == MutationKind::Created)
+        );
+        assert_eq!(created.journal().lineage_count(), 0);
+
+        let part = session.part(part_id).unwrap();
+        assert_eq!(part.bodies().len(), 1);
+        assert_eq!(part.faces().len(), 10);
+        assert_eq!(part.loops().len(), 12);
+        assert_eq!(part.edges().len(), 24);
+        assert_eq!(part.vertices().len(), 16);
+        let full = part
+            .check_body(CheckBodyRequest::new(created.body(), CheckLevel::Full))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(full.outcome(), CheckOutcome::Valid);
     }
 
     #[test]

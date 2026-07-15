@@ -2,9 +2,10 @@
 //!
 //! The implemented foundation owns sessions and independent parts, exposes
 //! opaque part-qualified topology and geometry identities, and returns
-//! immutable semantic views. Contextual operations cover checked block
-//! construction, deterministic complete-body rigid copy, body checking and
-//! tessellation, operation-scoped surface evaluation, and typed X_T
+//! immutable semantic views. Contextual operations cover checked block and
+//! polygonal-profile extrusion construction, deterministic complete-body
+//! rigid copy, body checking and tessellation, operation-scoped surface
+//! evaluation, and typed X_T
 //! import/export plus graph-owned bounded curve intersection with F2 reports
 //! and delegated classified errors. Rigid copies own disjoint topology and
 //! geometry closures and retain exact `DerivedFrom` lineage. Committed
@@ -294,10 +295,10 @@ pub use operation::{
     BlockRequest, BodyCheckReport, BodyCreated, BoundedCurve, ChangeJournal, CheckBodyRequest,
     CheckEntity, CheckFault, CheckGap, CheckReport, CopyBodyRequest, CurveContactKind,
     CurveCurveIntersections, CurveCurveOverlap, CurveCurvePoint, CurveOverlapOrientation,
-    FaceTolerancePropagationView, IntersectCurvesRequest, IntersectionCompletion, JournalEntities,
-    JournalEntity, LineageView, MutationKind, MutationView, OperationOutcome, OperationSettings,
-    SurfaceEvaluation, SurfaceEvaluationRequest, ToleranceBudgetId, ToleranceBudgetView,
-    ToleranceEventView,
+    ExtrudeProfileRequest, FaceTolerancePropagationView, IntersectCurvesRequest,
+    IntersectionCompletion, JournalEntities, JournalEntity, LineageView, MutationKind,
+    MutationView, OperationOutcome, OperationSettings, SurfaceEvaluation, SurfaceEvaluationRequest,
+    ToleranceBudgetId, ToleranceBudgetView, ToleranceEventView,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use tessellation::{BodyMesh, EdgePolyline, FaceTriangleRange, TessellateBodyRequest};
@@ -319,7 +320,7 @@ pub use kgeom::nurbs::{CurvePairProjectionPlane, CurvePairRootCertificate};
 pub use kgeom::param::ParamRange;
 pub use kgeom::surface::SurfaceDerivs;
 pub use kgeom::tess::TessOptions;
-pub use kgeom::vec::{Point3, Vec3};
+pub use kgeom::vec::{Point2, Point3, Vec3};
 pub use kgraph::{EvalBudgetProfile, GeometryClassKey, SurfaceDerivativeOrder};
 pub use ktopo::btess::BodyTessellationBudgetProfile;
 pub use ktopo::check::{

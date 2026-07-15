@@ -3,12 +3,13 @@
 use kernel::{
     BlockRequest, BodyTessellationBudgetProfile, BoundedCurve, BoundedPcurve, CheckBodyRequest,
     CheckLevel, CheckOutcome, CreateSeedBodyRequest, CreateStrutRequest, EntityKind, Error,
-    ExportXtRequest, Frame, FullCommitRequirement, GrowTolerancesRequest, ImportXtRequest,
-    IntersectCurvesRequest, JoinRingRequest, Kernel, MergeFaceAsHoleRequest, MutationKind,
-    OperationSettings, ParamRange, PcurveChart, PcurveEndpointKind, PcurveMetadata, PcurveSeam,
-    PcurveSeamSide, Point3, RemoveBridgeRequest, RemoveSeedBodyRequest, RemoveStrutRequest,
-    SessionPolicy, SplitHoleAsFaceRequest, SurfaceDerivativeOrder, SurfaceEvaluationRequest,
-    SurfaceParameter, TessOptions, TessellateBodyRequest, ToleranceGrowth, ToleranceGrowthTarget,
+    ExportXtRequest, ExtrudeProfileRequest, Frame, FullCommitRequirement, GrowTolerancesRequest,
+    ImportXtRequest, IntersectCurvesRequest, JoinRingRequest, Kernel, MergeFaceAsHoleRequest,
+    MutationKind, OperationSettings, ParamRange, PcurveChart, PcurveEndpointKind, PcurveMetadata,
+    PcurveSeam, PcurveSeamSide, Point2, Point3, RemoveBridgeRequest, RemoveSeedBodyRequest,
+    RemoveStrutRequest, SessionPolicy, SplitHoleAsFaceRequest, SurfaceDerivativeOrder,
+    SurfaceEvaluationRequest, SurfaceParameter, TessOptions, TessellateBodyRequest,
+    ToleranceGrowth, ToleranceGrowthTarget,
 };
 
 #[test]
@@ -128,6 +129,54 @@ fn facade_only_client_can_construct_and_check_a_block_with_reports() {
     assert!(check.result().unwrap().faults().is_empty());
     assert!(!check.report().usage().is_empty());
     assert!(check.report().limit_events().is_empty());
+}
+
+#[test]
+fn facade_only_client_can_extrude_a_holed_polygonal_profile() {
+    let outer = vec![
+        Point2::new(-2.0, -2.0),
+        Point2::new(2.0, -2.0),
+        Point2::new(2.0, 2.0),
+        Point2::new(-2.0, 2.0),
+    ];
+    let hole = vec![
+        Point2::new(-1.0, -1.0),
+        Point2::new(1.0, -1.0),
+        Point2::new(1.0, 1.0),
+        Point2::new(-1.0, 1.0),
+    ];
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let outcome = session
+        .edit_part(part_id.clone())
+        .unwrap()
+        .extrude_profile(ExtrudeProfileRequest::new(
+            Frame::world(),
+            outer,
+            vec![hole],
+            2.0,
+        ))
+        .unwrap();
+    assert!(outcome.report().usage().is_empty());
+    let created = outcome.into_result().unwrap();
+    assert_eq!(created.journal().part(), part_id);
+    assert!(
+        created
+            .journal()
+            .mutations()
+            .all(|mutation| mutation.kind() == MutationKind::Created)
+    );
+    assert_eq!(created.journal().lineage_count(), 0);
+
+    let part = session.part(part_id).unwrap();
+    assert_eq!(part.faces().len(), 10);
+    assert_eq!(part.edges().len(), 24);
+    let check = part
+        .check_body(CheckBodyRequest::new(created.body(), CheckLevel::Full))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(check.outcome(), CheckOutcome::Valid);
 }
 
 #[test]
