@@ -56,6 +56,21 @@ fn usage(
         .consumed
 }
 
+fn limit(plan: &BudgetPlan, resource: ResourceKind) -> LimitSpec {
+    let stage = match resource {
+        ResourceKind::Work => INTERSECTION_CHART_CERTIFICATE_WORK,
+        ResourceKind::Items => INTERSECTION_CHART_ITEMS,
+        ResourceKind::Depth => INTERSECTION_CHART_DEPTH,
+        ResourceKind::Bytes => unreachable!(),
+        _ => unreachable!(),
+    };
+    plan.limits()
+        .iter()
+        .copied()
+        .find(|limit| limit.stage == stage && limit.resource == resource)
+        .unwrap()
+}
+
 fn assert_rollback(store: &Store) {
     assert_eq!(store.count::<Body>(), 0);
     assert_eq!(store.count::<CurveGeom>(), 0);
@@ -146,56 +161,37 @@ fn record_3819_pins_the_canonical_four_sample_dual_offset_payload() {
 }
 
 #[test]
-fn v10_certifies_3819_and_stops_before_the_next_quadratic_proof() {
-    let file = read_xt(EXEMPLAR).unwrap();
-    let session = SessionPolicy::v1();
-    let mut store = Store::new();
-    let outcome = reconstruct_with_context(
-        &file,
-        &mut store,
-        &context_with_plan(&session, IntersectionImportBudgetProfile::v10_defaults()),
-    )
-    .unwrap();
-    let crossing = outcome.result().as_ref().unwrap_err().limit().unwrap();
+fn v10_profile_pins_the_3819_aggregate_budget_contract() {
+    // The v12 production-frontier test replays this corpus prefix end to end.
+    // Keep the historical plan contract here without repeating that traversal.
+    let plan = IntersectionImportBudgetProfile::v10_defaults();
     assert_eq!(
-        (
-            crossing.stage,
-            crossing.resource,
-            crossing.consumed,
-            crossing.allowed,
-        ),
-        (
+        limit(&plan, ResourceKind::Work),
+        LimitSpec::new(
             INTERSECTION_CHART_CERTIFICATE_WORK,
             ResourceKind::Work,
-            345_353_308,
+            AccountingMode::Cumulative,
             V10_WORK,
         )
     );
     assert_eq!(
-        usage(
-            outcome.report(),
-            INTERSECTION_CHART_CERTIFICATE_WORK,
-            ResourceKind::Work,
-        ),
-        V10_WORK
-    );
-    assert_eq!(
-        usage(
-            outcome.report(),
+        limit(&plan, ResourceKind::Items),
+        LimitSpec::new(
             INTERSECTION_CHART_ITEMS,
             ResourceKind::Items,
-        ),
-        22
+            AccountingMode::HighWater,
+            65_536,
+        )
     );
     assert_eq!(
-        usage(
-            outcome.report(),
+        limit(&plan, ResourceKind::Depth),
+        LimitSpec::new(
             INTERSECTION_CHART_DEPTH,
             ResourceKind::Depth,
-        ),
-        10
+            AccountingMode::HighWater,
+            10,
+        )
     );
-    assert_rollback(&store);
 }
 
 #[test]
