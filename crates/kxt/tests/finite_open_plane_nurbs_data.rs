@@ -230,24 +230,39 @@ fn v4_cap_is_stable_and_v5_has_exact_n_minus_one_crossings() {
 }
 
 #[test]
-fn endpoint_plane_uv_omission_remains_typed_and_atomic() {
-    let mut file = read_xt(EXEMPLAR).unwrap();
-    let mut values = match field(&file, 2237, "values").clone() {
+fn direct_plane_or_nurbs_endpoint_uv_omissions_remain_typed_and_atomic() {
+    let mut cases = Vec::new();
+
+    let mut plane_endpoint = read_xt(EXEMPLAR).unwrap();
+    let mut values = match field(&plane_endpoint, 2237, "values").clone() {
         Value::Arr(values) => values,
         _ => unreachable!(),
     };
     values[2] = Value::Null;
     values[3] = Value::Null;
-    set_field(&mut file, 2237, "values", Value::Arr(values));
+    set_field(&mut plane_endpoint, 2237, "values", Value::Arr(values));
+    cases.push(plane_endpoint);
 
-    let mut store = Store::new();
-    let error = reconstruct(&file, &mut store).unwrap_err();
-    assert!(matches!(
-        error,
-        XtError::Unsupported {
-            capability: XtCapability::IntersectionChartData,
-            what: "INTERSECTION_DATA contains null or non-finite UV values",
-        }
-    ));
-    assert_rollback(&store);
+    let mut nurbs_endpoint = read_xt(EXEMPLAR).unwrap();
+    let mut values = match field(&nurbs_endpoint, 2237, "values").clone() {
+        Value::Arr(values) => values,
+        _ => unreachable!(),
+    };
+    values[0] = Value::Null;
+    values[1] = Value::Null;
+    set_field(&mut nurbs_endpoint, 2237, "values", Value::Arr(values));
+    cases.push(nurbs_endpoint);
+
+    for file in cases {
+        let mut store = Store::new();
+        let error = reconstruct(&file, &mut store).unwrap_err();
+        assert!(matches!(
+            error,
+            XtError::Unsupported {
+                capability: XtCapability::IntersectionChartData,
+                what: "INTERSECTION_DATA contains null or non-finite UV values",
+            }
+        ));
+        assert_rollback(&store);
+    }
 }

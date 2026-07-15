@@ -48,9 +48,11 @@ modern appended pointer and inserted-field layouts. The later certified
 constant-normal `Offset(B-surface)/B-surface` rung covers the exemplar's first
 such chart. Endpoint-only equal limits, finite-open/end-terminated `T/F`
 charts, and the first finite-open direct B-surface/Plane chart with paired-null
-interior Plane UVs are now certified. General closed limits, omissions on a
-NURBS trace or chart endpoint, and other nullable chart-data forms remain
-unsupported.
+interior Plane UVs are now certified. Canonical finite-open
+Plane/Offset(B-surface) charts additionally recover paired-null Plane UVs at
+endpoints through the same exact frame inversion and whole-carrier proof.
+General closed limits, omissions on a NURBS trace, endpoints outside that
+narrow Plane/Offset family, and other nullable chart-data forms remain unsupported.
 
 ## Downloaded (public GitHub repositories)
 
@@ -98,7 +100,9 @@ statement accompanied the individual files.
   inversion, at `117478445/20/10`. V6 certifies native direct-Plane `SP_CURVE`
   node 30 and derives FACE 1195's vertex-less periodic ring domain at
   `208228426/22/10`; v7 recovers record 5089's paired-null interior Plane UV and
-  proves its Plane/Offset(B-surface) carrier at `272430166/22/10`; and v8
+  proves its Plane/Offset(B-surface) carrier at `272430166/22/10`. A synthetic
+  endpoint-null Plane variant preserves that exact v7 report and next crossing,
+  while the unchanged whole-carrier proof rejects a displaced endpoint; v8
   certifies record 1984 by endpoint-only nonperiodic NURBS source-boundary
   normalization at `315245660/22/10`. Production v9 reaches
   `323814492/22/10` by certifying record 5945's finite-open three-sample

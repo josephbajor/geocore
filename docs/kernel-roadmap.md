@@ -737,7 +737,10 @@ NURBS seam crossing, so vertex-less EDGE 2210 remains a topology ring and FACE
 1195 derives its finite domain. Production v7 then certifies finite-open
 Plane/Offset(B-surface) `INTERSECTION` 5089 by recovering sample 2 operand 0's
 paired-null interior Plane UV through exact frame inversion and rerunning the
-whole-carrier Plane/Offset-NURBS proof. V1-v7 remain unchanged; v7 pins its
+whole-carrier Plane/Offset-NURBS proof. The same canonical family now permits
+paired-null Plane UVs at endpoints: a synthetic record-5089 variant preserves
+the exact v7 report, while endpoint displacement still fails that unchanged
+proof. V1-v7 remain unchanged; v7 pins its
 next denied attempt at 285,283,414 Work. Production v8 certifies nonperiodic
 NURBS/Offset(B-surface) `INTERSECTION` 1984 after snapping only the final first-
 trace `u` value from `-2.02217766823431e-15` to its exact source-domain lower
@@ -858,8 +861,10 @@ plan:
    domain from certificate-owned periodic carrier semantics, then pins its next
    denied chart proof at 221,060,174 Work. Production v7 admits finite-open
    Plane/Offset(B-surface) record 5089 at exact `272430166/22/10`: only
-   paired-null interior Plane samples may use exact frame inversion, and the
-   existing whole-carrier certificate remains authoritative. Production v8
+   paired-null Plane samples may use exact frame inversion, with endpoints
+   admitted only for this canonical Plane/Offset family; the existing
+   whole-carrier certificate remains authoritative. A synthetic endpoint-null
+   variant preserves the exact v7 report and next crossing. Production v8
    then admits `INTERSECTION` 1984 at exact `315245660/22/10`: only first/last
    NURBS coordinates may snap across a source-domain boundary within
    `16384 * EPSILON * domain-scale`, and the original-source whole-carrier

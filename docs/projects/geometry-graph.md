@@ -1,6 +1,6 @@
 # F1 procedural geometry graph
 
-Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, or compatible direct-NURBS/NURBS descriptors, plus M3c transmitted-chart consumers through endpoint-only equal-limit closure, finite-open/end-terminated `T/F` singular closure, and finite-open B-surface/Plane or Plane/Offset(B-surface) charts with omitted interior Plane UVs are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
+Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, or compatible direct-NURBS/NURBS descriptors, plus M3c transmitted-chart consumers through endpoint-only equal-limit closure, finite-open/end-terminated `T/F` singular closure, and finite-open B-surface/Plane or Plane/Offset(B-surface) charts with omitted Plane UVs, including canonical Plane/Offset endpoints, are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
 
 ## Outcome
 
@@ -800,7 +800,10 @@ proof alone promotes the closed transmitted carrier to periodic evaluation and
 bounds. FACE 1195 can therefore derive its vertex-less ring domain. Production
 v7 certifies later `INTERSECTION` 5089 / `INTERSECTION_DATA` 5092, where
 sample 2 operand 0 has a paired-null interior Plane UV, through exact frame
-inversion plus the unchanged whole-carrier Plane/Offset-NURBS proof. V6 remains
+inversion plus the unchanged whole-carrier Plane/Offset-NURBS proof. Canonical
+Plane/Offset endpoints may now use the same recovery: a synthetic endpoint-null
+record-5089 variant preserves the exact v7 report and next crossing, while a
+displaced endpoint still fails the unchanged proof. V6 remains
 exact at `208228426/22/10` and pins its next attempted 221,060,174 Work; v7 is
 exact at `272430166/22/10` and pins record 1984's attempted 285,283,414 Work.
 Historical v8 certifies record 1984 by snapping only its final first-trace `u`
@@ -957,8 +960,9 @@ the graph ownership model.
   affine control lift, typed approximation rejection, certificate-derived
   periodic carrier semantics, and the 221,060,174-Work next attempt. The next
   omitted-data suite pins exact v7 `272430166/22/10`, per-resource N/N-1
-  rollback, paired-null interior Plane recovery for Plane/Offset(B-surface),
-  typed endpoint/half-null/NURBS omissions, whole-carrier residual rejection,
+  rollback, paired-null interior and endpoint Plane recovery for canonical
+  Plane/Offset(B-surface), typed direct-Plane endpoint, half-null, and NURBS
+  omissions, whole-carrier residual rejection,
   and the 285,283,414-Work next proof preflight.
   The endpoint-roundoff suite pins exact v8 `315245660/22/10`, historical-v7
   stability, per-resource N/N-1 rollback, endpoint-only source-boundary

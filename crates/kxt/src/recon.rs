@@ -2443,6 +2443,8 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             && !terminated
             && nurbs_trace_count == 1
             && exact_trace_planes.iter().flatten().count() == 1;
+        let finite_open_plane_offset_nurbs_endpoint_omissions =
+            finite_open_plane_nurbs_interior_omissions && offset_nurbs_sources.contains(&true);
         let mut uv = [
             Vec::with_capacity(retained_count),
             Vec::with_capacity(retained_count),
@@ -2458,8 +2460,8 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                     (None, None)
                         if (terminated
                             || (finite_open_plane_nurbs_interior_omissions
-                                && sample != 0
-                                && sample + 1 != retained_count))
+                                && ((sample != 0 && sample + 1 != retained_count)
+                                    || finite_open_plane_offset_nurbs_endpoint_omissions)))
                             && matches!(tuple[offset], Value::Null)
                             && matches!(tuple[offset + 1], Value::Null)
                             && exact_trace_planes[operand].is_some() =>

@@ -80,6 +80,58 @@ fn assert_rollback(store: &Store) {
     assert_eq!(store.count::<SurfaceGeom>(), 0);
 }
 
+fn assert_v7_frontier(file: &kxt::XtFile) {
+    let session = SessionPolicy::v1();
+    let mut store = Store::new();
+    let outcome = reconstruct_with_context(
+        file,
+        &mut store,
+        &context_with_plan(&session, IntersectionImportBudgetProfile::v7_defaults()),
+    )
+    .unwrap();
+    let crossing = outcome.result().as_ref().unwrap_err().limit().unwrap();
+    assert_eq!(
+        (
+            crossing.stage,
+            crossing.resource,
+            crossing.consumed,
+            crossing.allowed,
+        ),
+        (
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+            V7_ATTEMPTED_WORK,
+            V7_WORK,
+        )
+    );
+    assert!(outcome.report().limit_events().is_empty());
+    assert_eq!(
+        usage(
+            outcome.report(),
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+        ),
+        V7_WORK
+    );
+    assert_eq!(
+        usage(
+            outcome.report(),
+            INTERSECTION_CHART_ITEMS,
+            ResourceKind::Items,
+        ),
+        22
+    );
+    assert_eq!(
+        usage(
+            outcome.report(),
+            INTERSECTION_CHART_DEPTH,
+            ResourceKind::Depth,
+        ),
+        10
+    );
+    assert_rollback(&store);
+}
+
 fn transplant_5089(file: &mut kxt::XtFile, destination: u32) {
     for name in ["surface", "chart", "start", "end", "intersection_data"] {
         let value = field(file, 5089, name).clone();
@@ -154,55 +206,21 @@ fn record_5089_pins_one_interior_plane_omission_and_exact_inversion() {
 #[test]
 fn v7_certifies_5089_and_stops_atomically_at_the_next_chart_proof() {
     let file = read_xt(EXEMPLAR).unwrap();
-    let session = SessionPolicy::v1();
-    let mut store = Store::new();
-    let outcome = reconstruct_with_context(
-        &file,
-        &mut store,
-        &context_with_plan(&session, IntersectionImportBudgetProfile::v7_defaults()),
-    )
-    .unwrap();
-    let crossing = outcome.result().as_ref().unwrap_err().limit().unwrap();
-    assert_eq!(
-        (
-            crossing.stage,
-            crossing.resource,
-            crossing.consumed,
-            crossing.allowed,
-        ),
-        (
-            INTERSECTION_CHART_CERTIFICATE_WORK,
-            ResourceKind::Work,
-            V7_ATTEMPTED_WORK,
-            V7_WORK,
-        )
-    );
-    assert!(outcome.report().limit_events().is_empty());
-    assert_eq!(
-        usage(
-            outcome.report(),
-            INTERSECTION_CHART_CERTIFICATE_WORK,
-            ResourceKind::Work,
-        ),
-        V7_WORK
-    );
-    assert_eq!(
-        usage(
-            outcome.report(),
-            INTERSECTION_CHART_ITEMS,
-            ResourceKind::Items,
-        ),
-        22
-    );
-    assert_eq!(
-        usage(
-            outcome.report(),
-            INTERSECTION_CHART_DEPTH,
-            ResourceKind::Depth,
-        ),
-        10
-    );
-    assert_rollback(&store);
+    assert_v7_frontier(&file);
+}
+
+#[test]
+fn synthetic_endpoint_plane_omission_preserves_v7_accounting_and_whole_carrier_proof() {
+    let mut file = read_xt(EXEMPLAR).unwrap();
+    let mut values = match field(&file, 5092, "values").clone() {
+        Value::Arr(values) => values,
+        _ => unreachable!(),
+    };
+    values[0] = Value::Null;
+    values[1] = Value::Null;
+    set_field(&mut file, 5092, "values", Value::Arr(values));
+
+    assert_v7_frontier(&file);
 }
 
 #[test]
@@ -294,19 +312,19 @@ fn v6_is_stable_and_v7_has_exact_work_items_and_depth_n_minus_one_crossings() {
 }
 
 #[test]
-fn non_plane_or_non_interior_omissions_remain_typed_and_atomic() {
+fn nurbs_trace_or_half_null_omissions_remain_typed_and_atomic() {
     let mut cases = Vec::new();
 
-    let mut endpoint = read_xt(EXEMPLAR).unwrap();
-    transplant_5089(&mut endpoint, 1828);
-    let mut values = match field(&endpoint, 5092, "values").clone() {
+    let mut endpoint_trace = read_xt(EXEMPLAR).unwrap();
+    transplant_5089(&mut endpoint_trace, 1828);
+    let mut values = match field(&endpoint_trace, 5092, "values").clone() {
         Value::Arr(values) => values,
         _ => unreachable!(),
     };
-    values[0] = Value::Null;
-    values[1] = Value::Null;
-    set_field(&mut endpoint, 5092, "values", Value::Arr(values));
-    cases.push(endpoint);
+    values[2] = Value::Null;
+    values[3] = Value::Null;
+    set_field(&mut endpoint_trace, 5092, "values", Value::Arr(values));
+    cases.push(endpoint_trace);
 
     let mut offset_trace = read_xt(EXEMPLAR).unwrap();
     transplant_5089(&mut offset_trace, 1828);
@@ -325,7 +343,7 @@ fn non_plane_or_non_interior_omissions_remain_typed_and_atomic() {
         Value::Arr(values) => values,
         _ => unreachable!(),
     };
-    values[9] = Value::Double(0.027_211_312_268_295_4);
+    values[0] = Value::Null;
     set_field(&mut half_null, 5092, "values", Value::Arr(values));
     cases.push(half_null);
 
@@ -344,30 +362,76 @@ fn non_plane_or_non_interior_omissions_remain_typed_and_atomic() {
 }
 
 #[test]
-fn recovered_plane_uv_still_requires_the_whole_carrier_certificate() {
+fn record_778_noncanonical_carrier_remains_typed_and_atomic() {
     let mut file = read_xt(EXEMPLAR).unwrap();
-    transplant_5089(&mut file, 1828);
-    let mut positions = match field(&file, 5088, "hvec").clone() {
-        Value::Arr(values) => values,
-        _ => unreachable!(),
-    };
-    let mut displaced = positions[2].as_vector().unwrap();
-    displaced[1] += 0.601815023152048 * 1.0e-3;
-    displaced[2] -= 0.798635510047293 * 1.0e-3;
-    positions[2] = Value::Vector(Some(displaced));
-    set_field(&mut file, 5088, "hvec", Value::Arr(positions));
+    for name in ["surface", "chart", "start", "end", "intersection_data"] {
+        let value = field(&file, 778, name).clone();
+        set_field(&mut file, 1828, name, value);
+    }
+    assert_eq!(field(&file, 778, "chart").as_ptr(), Some(782));
+    assert_eq!(
+        field(&file, 782, "base_parameter").as_f64(),
+        Some(0.003_586_209_316_397_325)
+    );
+    assert_eq!(
+        field(&file, 782, "base_scale").as_f64(),
+        Some(0.999_999_996_408_403)
+    );
 
     let mut store = Store::new();
     let error = reconstruct(&file, &mut store).unwrap_err();
     assert!(matches!(
         error,
-        XtError::IntersectionCertificate {
-            index: 1828,
-            source: IntersectionCertificateError::ResidualExceedsTolerance {
-                trace: PairedTrace::First,
-                ..
-            },
+        XtError::Unsupported {
+            capability: XtCapability::IntersectionChartConvention,
+            what: "only canonical base_parameter=0/base_scale=1 charts are supported",
         }
     ));
     assert_rollback(&store);
+}
+
+#[test]
+fn recovered_interior_and_endpoint_plane_uv_still_require_the_whole_carrier_certificate() {
+    for sample in [2, 0] {
+        let mut file = read_xt(EXEMPLAR).unwrap();
+        transplant_5089(&mut file, 1828);
+        let mut positions = match field(&file, 5088, "hvec").clone() {
+            Value::Arr(values) => values,
+            _ => unreachable!(),
+        };
+        let mut displaced = positions[sample].as_vector().unwrap();
+        displaced[1] += 0.601815023152048 * 1.0e-3;
+        displaced[2] -= 0.798635510047293 * 1.0e-3;
+        positions[sample] = Value::Vector(Some(displaced));
+        set_field(&mut file, 5088, "hvec", Value::Arr(positions));
+        if sample == 0 {
+            set_field(
+                &mut file,
+                5091,
+                "hvec",
+                Value::Arr(vec![Value::Vector(Some(displaced))]),
+            );
+            let mut values = match field(&file, 5092, "values").clone() {
+                Value::Arr(values) => values,
+                _ => unreachable!(),
+            };
+            values[0] = Value::Null;
+            values[1] = Value::Null;
+            set_field(&mut file, 5092, "values", Value::Arr(values));
+        }
+
+        let mut store = Store::new();
+        let error = reconstruct(&file, &mut store).unwrap_err();
+        assert!(matches!(
+            error,
+            XtError::IntersectionCertificate {
+                index: 1828,
+                source: IntersectionCertificateError::ResidualExceedsTolerance {
+                    trace: PairedTrace::First,
+                    ..
+                },
+            }
+        ));
+        assert_rollback(&store);
+    }
 }
