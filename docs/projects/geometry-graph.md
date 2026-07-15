@@ -1,6 +1,6 @@
 # F1 procedural geometry graph
 
-Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, compatible direct-NURBS/NURBS, or single-descriptor varying-normal Offset(NURBS)/safe-Offset(Plane) descriptors, plus M3c transmitted-chart consumers through single-axis one-period equal-limit closure with one shared or two distinct same-point `H/?` limits and unique exact interior aliases, finite-open/end-terminated `T/F` singular closure, omitted Plane UV recovery, and bounded noncanonical affine direct B-surface/B-surface charts, are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
+Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, compatible direct-NURBS/NURBS, or single-descriptor varying-normal Offset(NURBS)/safe-Offset(Plane) descriptors, plus M3c transmitted-chart consumers through single-axis one-period equal-limit closure with one shared or two distinct same-point `H/?` limits and unique exact interior aliases, finite-open/end-terminated `T/F` singular closure, omitted Plane UV recovery, and bounded noncanonical affine direct B-surface/B-surface or direct constant-normal Offset(B-surface)/direct B-surface charts, are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
 
 ## Outcome
 
@@ -811,7 +811,15 @@ bound, divides to the complete unit-normal field, and applies the signed
 displacement before checking the transmitted carrier residual. The six shared
 position/partial scans also pay for that normal proof, so the canonical
 one-span Offset(B)/B fixture remains exactly 14,336 Work, 2 Items, and Depth 10
-in both operand orders. The production exemplar now passes its first shared-
+in both operand orders. The bounded noncanonical direct Offset(B)/B slice keeps
+that same descriptor and unchanged original-source proof for two through five
+finite-open samples in either order and with polynomial or rational bases. Its
+exact Work/Items/Depth costs are `14336/2/10`, `28672/3/10`, `43008/4/10`, and
+`57344/5/10`; affine metadata remains separate from the canonical sample-index
+carrier/pcurves, and the live root, signed distance, original direct basis, and
+ordered peer remain graph-protected. Nested, multi-offset, dual-offset, and
+six-sample noncanonical forms remain typed unsupported. The production
+exemplar now passes its first shared-
 `H/?` equal-limit chart and its first finite-open/end-terminated `T/F` chart,
 then certifies finite-open direct B-surface/Plane record 1252 by exactly
 inverting its paired-null interior Plane UVs. Production v6 then lifts native
@@ -828,8 +836,8 @@ Plane/Offset endpoints may now use the same recovery: a synthetic endpoint-null
 record-5089 variant preserves the exact v7 report and next crossing, while a
 displaced endpoint still fails the unchanged proof. A separate bounded
 noncanonical affine slice accepts two- through five-sample direct-Plane/B-
-surface, safe-Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), or
-direct-B-surface/B-surface
+surface, safe-Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), direct
+constant-normal Offset(B-surface)/direct B-surface, or direct-B-surface/B-surface
 charts, retains finite positive affine metadata on the
 canonical shared sample-index basis,
 and preserves the unchanged original-source proof and ordered dependencies;
@@ -892,8 +900,9 @@ payload transplants.
 - Broaden the M3c consumer to null, mixed/non-`H`, or broader closed limits,
   other nullable chart data, ambiguous or multi-period trace aliases,
   noncanonical charts outside the bounded direct-Plane/B-surface, safe-
-  Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), and direct-B-surface/
-  B-surface affine slices,
+  Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), direct
+  Offset(B-surface)/direct B-surface, and direct-B-surface/B-surface affine
+  slices,
   and further terminator variants
   without recomputing their
   transmitted scars.
@@ -991,8 +1000,13 @@ the graph ownership model.
   incompatible pairs rejected.
 - Direct constant-normal Offset(B-surface)/B-surface variants cover both operand
   orders and polynomial/rational bases, retain the live root, signed distance,
-  basis, and paired pcurves, pin exact 14,336/2/10 proof accounting, reject
-  singular or underflowed normal fields and altered dependencies, and advance
+  basis, and paired pcurves, and reject singular or underflowed normal fields
+  and altered dependencies. Their bounded noncanonical two- through five-sample
+  forms additionally retain affine metadata on canonical sample-index
+  carrier/pcurves and pin exact `14336/2/10`, `28672/3/10`, `43008/4/10`, and
+  `57344/5/10` proof accounting with N/N-1 rollback; stale distances or bases,
+  malformed peers, nested roots, and six-sample forms fail atomically. They
+  advance
   the production corpus through record 1828, end-terminated record 1671, and
   finite-open records 1252 and 5089 and native direct-Plane `SP_CURVE` node 30
   through FACE 1195's vertex-less ring domain, nonperiodic endpoint-roundoff
@@ -1023,9 +1037,12 @@ the graph ownership model.
   Plane/Offset(B-surface), typed direct-Plane endpoint, half-null, and NURBS
   omissions, whole-carrier residual rejection, plus bounded noncanonical
   affine metadata for direct Plane/B-surface, safe-Offset(Plane)/B-surface,
-  Plane/Offset(B-surface), and direct B-surface/B-surface. The safe-offset 2–5 sample boundaries are
+  Plane/Offset(B-surface), direct Offset(B-surface)/direct B-surface, and direct
+  B-surface/B-surface. The safe-offset 2–5 sample boundaries are
   `7170/2/10`, `14339/3/10`, `21508/4/10`, and `28677/5/10`; direct B/B pins
-  `14336/2/10`, `28672/3/10`, `43008/4/10`, and `57344/5/10`; transplanted cumulative `127115320` Work and
+  `14336/2/10`, `28672/3/10`, `43008/4/10`, and `57344/5/10`; direct Offset(B)/B
+  pins the same four boundaries in both orders and both basis forms;
+  transplanted cumulative `127115320` Work and
   `139792442/4/10`, with typed record-778/3620 original-domain rollback,
   and the 285,283,414-Work next proof preflight.
   The endpoint-roundoff suite pins exact v8 `315245660/22/10`, historical-v7

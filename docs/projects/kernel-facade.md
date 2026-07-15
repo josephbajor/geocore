@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, deterministic checked complete-body rigid copy with direct Plane/Plane line-certificate reissuance, checked polygonal-profile extrusion, failure-atomic operation-owned facade tolerance batching, journaled MEF inheritance and KEF ordered-max face-tolerance propagation, an evidence-bearing opt-in Full-assurance commit gate, K5 adoption, and facade body tessellation implemented; broader K4 edits and partition history remain
+Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, deterministic checked complete-body rigid copy with direct Plane/Plane line and direct Plane/Sphere latitude/oblique circle certificate reissuance, checked polygonal-profile extrusion, failure-atomic operation-owned facade tolerance batching, journaled MEF inheritance and KEF ordered-max face-tolerance propagation, an evidence-bearing opt-in Full-assurance commit gate, K5 adoption, and facade body tessellation implemented; broader K4 edits and partition history remain
 
 ## Outcome
 
@@ -897,11 +897,15 @@ request maps source model coordinates through one orientation-preserving
 checked-commits inside the caller's single operation scope. Pcurves, bounds,
 tolerances, offset bases, and periodic chart metadata remain exact; every new
 identity has deterministic `DerivedFrom` evidence. Direct Plane/Plane verified
-line curves copy their ordered source planes and pcurves, transform the carrier,
-and reissue the whole-range certificate before insertion. Wrong-part, stale,
-and unsupported Plane/Sphere, NURBS, or transmitted proof-reissuance failures
-are rejected before scope creation, with the last exposed as a stable
-Unsupported capability. Lower
+line curves and direct Plane/Sphere latitude or oblique circles copy their
+ordered sources in either order and reissue the whole-range certificate before
+insertion. The circle path transforms the carrier, copies aligned Plane and
+latitude pcurves into the copied surface frames, or regenerates the oblique
+spherical pcurve against the copied Sphere and retained chart window. Facade
+preflight admits only direct `PlaneLine` and `PlaneSphereCircle` certificates.
+Wrong-part, stale, offset-backed, NURBS, and transmitted proof families are rejected before
+scope creation, with unsupported proof families exposed as a stable Unsupported
+capability. Lower
 transaction tests pin Full validity, ownership disjointness, holed-sheet area,
 rollback cleanliness, and future-identity reuse.
 

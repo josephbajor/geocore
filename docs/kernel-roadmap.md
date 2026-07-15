@@ -833,11 +833,16 @@ plan:
    `uv_type=4` UVs with paired-null recovery only for an exact Plane trace, and
    the canonical affine chart recurrence. A bounded finite-open two- through
    five-sample direct-Plane/B-surface, safe-Offset(Plane)/B-surface, direct-
-   Plane/Offset(B-surface), or direct-B-surface/B-surface slice may instead
+   Plane/Offset(B-surface), direct constant-normal Offset(B-surface)/direct
+   B-surface, or direct-B-surface/B-surface slice may instead
    retain finite positive affine chart metadata while
-   canonicalizing only the common sample-index basis. Direct B/B pins exact
-   2–5 sample Work/Items/Depth at `14336/2/10`, `28672/3/10`, `43008/4/10`,
-   and `57344/5/10`. Canonical
+   canonicalizing only the common sample-index basis. Direct B/B and direct
+   Offset(B)/B pin exact 2–5 sample Work/Items/Depth at `14336/2/10`,
+   `28672/3/10`, `43008/4/10`, and `57344/5/10`. The offset slice covers both
+   source orders and polynomial or rational bases while retaining its live root,
+   signed distance, direct original basis, ordered peer, and unchanged proof;
+   nested, multi-offset, and dual-offset noncanonical forms remain unsupported.
+   Canonical
    Plane/B-surface, safe-Offset(Plane)/B-surface,
    B-surface/B-surface, direct constant-normal Offset(B-surface)/B-surface,
    and every applicable reversed operand order now retain
@@ -865,8 +870,9 @@ plan:
    `P*N+(N-1)*2^10*sum_i(6R_i+1)` Work, `N` Items, and Depth 10, with exact
    N/N-1 rollback coverage. The canonical two-position, one-span B/B fixture
    consumes `14336/2/10`; the historical Plane/B fixture remains
-   `7170/2/10`; the synthetic Offset(B)/B fixture consumes `14336/2/10` in
-   both operand orders and rational variants. Historical import profile v1
+   `7170/2/10`; the synthetic Offset(B)/B fixtures consume `14336/2/10`,
+   `28672/3/10`, `43008/4/10`, and `57344/5/10` in both operand orders and
+   polynomial/rational variants. Historical import profile v1
    remains capped at 131,072 Work and v2 retains its 81,267,732 Work
    compatibility boundary. Production v3 admits the exemplar through record
    1828 and all later equal-limit charts at exact `115485725/20/10`.
@@ -1266,24 +1272,30 @@ true only for an empty complete result.
   cells with the three closed sub-π longitude cells of exactly one pole-clear
   wide peer. It accepts all six cells empty, exactly one occupied child with
   five certified-empty siblings, exactly two edge-adjacent same-row children
-  with four certified-empty siblings, or the exact full three-child cap row
-  with all three lower-row siblings certified empty. The single-child path excludes every
+  with four certified-empty siblings, an exact same-column vertical pair with
+  the other four siblings certified empty, or the exact
+  full three-child cap row with all three lower-row siblings certified empty.
+  The single-child path excludes every
   artificial seam through sibling emptiness. The two-child path additionally
-  requires one reverse-oriented, bit-exact shared edge on a regular longitude
-  seam in either latitude row, removes only that edge, rejects any surviving
-  latitude or unused-longitude seam, and restores the parent correspondence without
-  introducing a polar seam-merger rule. The reviewed `[1,1]` single-cell
+  requires one reverse-oriented, bit-exact shared edge on the applicable regular
+  longitude or latitude seam, removes only that edge, rejects any surviving used
+  seam or unused-longitude seam, and restores the parent correspondence. The
+  vertical slice requires strict bit-exact latitude-seam cancellation; its
+  reviewed fixture is `[0,2]`/`[1,2]`. The reviewed `[1,1]` single-cell
   fixture retains the canonical singular pole alias and three-anchor region;
   the reviewed `[1,0]`/`[1,1]` adjacent fixture retains that alias in one
   five-anchor region. A one-turn-shifted `[0,0]`/`[0,1]` lower-row fixture
-  retains one six-anchor region without a pole alias. A one-turn-shifted
+  retains one six-anchor region without a pole alias. The `[0,2]`/`[1,2]`
+  vertical fixture retains one merged region after exact latitude-seam
+  cancellation and proves the other four siblings empty. A one-turn-shifted
   `[1,0]`/`[1,1]`/`[1,2]` fixture
   cancels both strict regular-longitude seams and retains the pole alias in one
   11-anchor region after the empty lower row excludes the latitude seam. All
-  four layouts pin exact repeat/swap and outward residual evidence,
+  five layouts pin exact repeat/swap and outward residual evidence,
   while the arm retains exact 6/5 piece, 147/146 pair, and 588/587 arc
-  admission. A one-ULP shared-edge mutation and broader or non-adjacent
-  multi-occupied layouts remain fail-closed. A first wide arm splits exactly one pole-clear wide operand into
+  admission. A one-ULP shared-edge mutation and broader or non-adjacent layouts
+  outside the admitted exact same-row, same-column, and cap-row families remain
+  fail-closed. A first wide arm splits exactly one pole-clear wide operand into
   three closed sub-π cells and returns `Complete` only for three certified-empty
   cells or one positive region with two certified-empty siblings; sibling
   emptiness cancels the artificial seams before parent correspondence is
@@ -1394,11 +1406,16 @@ true only for an empty complete result.
   orientation-preserving rigid placement duplicates the full topology and geometry
   ownership closure, including offset bases and pcurves, preserves bounds, tolerances,
   and periodic-chart metadata, and records `DerivedFrom` lineage for every new identity
-  before checked atomic commit. A direct Plane/Plane verified line descriptor
-  copies both source planes and pcurves, transforms its carrier, and reissues the
-  whole-range certificate before graph insertion. Plane/Sphere, NURBS, and
-  transmitted intersection descriptors remain typed unsupported. Extend this
-  seam to those remaining certified curves, attributes, and non-rigid transform families.
+  before checked atomic commit. Direct Plane/Plane verified lines and direct
+  Plane/Sphere latitude or oblique circles copy their ordered sources in either
+  order, transform the carrier, copy aligned Plane and latitude pcurves into the
+  copied surface frames or regenerate the oblique spherical pcurve, and reissue
+  the whole-range certificate before graph insertion. Facade preflight admits
+  only the direct `PlaneLine` and `PlaneSphereCircle` families; offset-backed,
+  NURBS, and
+  transmitted intersection descriptors remain typed unsupported before scope
+  creation. Extend this seam to those remaining certified curves, attributes,
+  and non-rigid transform families.
 - The first checked extrusion slice is implemented for one validated polygonal
   profile with holes along any finite translation having a nonzero component
   on the profile-frame normal. A reverse translation reflects the profile chart
@@ -1557,7 +1574,9 @@ that queue must eventually discharge.
   nullable chart data including NURBS-side omissions, ambiguous or multi-
   period trace aliases, and noncanonical chart variants outside the bounded
   direct-Plane/B-surface, safe-Offset(Plane)/B-surface, direct-
-  Plane/Offset(B-surface), and direct-B-surface/B-surface affine slices.
+  Plane/Offset(B-surface), direct Offset(B-surface)/direct B-surface, and
+  direct-B-surface/B-surface affine slices; nested, multi-offset, and
+  dual-offset noncanonical forms remain outside the landed direct-offset slice.
 - M2.5: finish parameter-space incidence and ratcheted Full-checker proofs for
   periodic/mixed boundaries, multi-loop containment, and curved shells; define
   operation-specific tolerance combination/propagation policies beyond the
