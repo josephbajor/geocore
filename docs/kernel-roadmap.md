@@ -832,9 +832,12 @@ plan:
    finite open `L/?` limits plus the bounded end `T/F` singular terminator,
    `uv_type=4` UVs with paired-null recovery only for an exact Plane trace, and
    the canonical affine chart recurrence. A bounded finite-open two- through
-   five-sample direct-Plane/B-surface, safe-Offset(Plane)/B-surface, or direct-
-   Plane/Offset(B-surface) slice may instead retain finite positive affine chart metadata while
-   canonicalizing only the common sample-index basis. Canonical
+   five-sample direct-Plane/B-surface, safe-Offset(Plane)/B-surface, direct-
+   Plane/Offset(B-surface), or direct-B-surface/B-surface slice may instead
+   retain finite positive affine chart metadata while
+   canonicalizing only the common sample-index basis. Direct B/B pins exact
+   2–5 sample Work/Items/Depth at `14336/2/10`, `28672/3/10`, `43008/4/10`,
+   and `57344/5/10`. Canonical
    Plane/B-surface, safe-Offset(Plane)/B-surface,
    B-surface/B-surface, direct constant-normal Offset(B-surface)/B-surface,
    and every applicable reversed operand order now retain
@@ -1134,8 +1137,9 @@ true only for an empty complete result.
   admission.
   The first varying-normal operation-generated arm accepts exactly one offset
   descriptor over an exact rational quarter-cylinder extrusion and either a
-  canonical bilinear planar direct-NURBS peer or direct analytic Plane normal
-  to the global X, Y, or Z axis. An original-derivative interval
+  canonical bilinear planar direct-NURBS peer, direct analytic Plane, or one
+  safe Offset(Plane) descriptor over a direct Plane basis normal to the global
+  X, Y, or Z axis. An original-derivative interval
   enclosure proves a nonzero normal over the complete positive operand window
   before the true rational parallel surface guides discovery; orientation-
   selected original control intervals, radially scaled only for X/Y, alone own
@@ -1146,8 +1150,11 @@ true only for an empty complete result.
   41-control horizontal quarter-circle chordal carrier. Analytic-Plane X/Y
   peers instead pin combined 7,177/7,176 Work and 1,024/1,023 Items; their
   40-span Z-normal peer pins 286,768/286,767 Work and 40,960/40,959 Items. All
-  orientations retain 10/9 Depth plus 2/1 graph traversal. The paired trace retains the live
-  root, original basis, direct peer, and both pcurves. Singular or inconclusive
+  orientations retain 10/9 certificate Depth. Direct peers pin
+  2/1 graph Work; an Offset(Plane) peer pins 4/3 graph Work and 2/1 dependency
+  Depth because both live roots traverse their direct bases. The paired trace
+  retains the live NURBS root, original basis, peer root and direct Plane basis
+  when present, and both pcurves. Singular or inconclusive
   normal fields, nested
   varying-normal roots, incompatible peers, and stale or altered sources fail
   closed and persist nothing.
@@ -1258,19 +1265,22 @@ true only for an empty complete result.
   remain fail-closed. A broader polar-by-wide arm crosses those two latitude
   cells with the three closed sub-π longitude cells of exactly one pole-clear
   wide peer. It accepts all six cells empty, exactly one occupied child with
-  five certified-empty siblings, exactly two edge-adjacent cap-row children
+  five certified-empty siblings, exactly two edge-adjacent same-row children
   with four certified-empty siblings, or the exact full three-child cap row
   with all three lower-row siblings certified empty. The single-child path excludes every
   artificial seam through sibling emptiness. The two-child path additionally
   requires one reverse-oriented, bit-exact shared edge on a regular longitude
-  seam, removes only that edge, and restores the parent correspondence without
+  seam in either latitude row, removes only that edge, rejects any surviving
+  latitude or unused-longitude seam, and restores the parent correspondence without
   introducing a polar seam-merger rule. The reviewed `[1,1]` single-cell
   fixture retains the canonical singular pole alias and three-anchor region;
   the reviewed `[1,0]`/`[1,1]` adjacent fixture retains that alias in one
-  five-anchor region. A one-turn-shifted `[1,0]`/`[1,1]`/`[1,2]` fixture
+  five-anchor region. A one-turn-shifted `[0,0]`/`[0,1]` lower-row fixture
+  retains one six-anchor region without a pole alias. A one-turn-shifted
+  `[1,0]`/`[1,1]`/`[1,2]` fixture
   cancels both strict regular-longitude seams and retains the pole alias in one
   11-anchor region after the empty lower row excludes the latitude seam. All
-  three layouts pin exact repeat/swap and outward residual evidence,
+  four layouts pin exact repeat/swap and outward residual evidence,
   while the arm retains exact 6/5 piece, 147/146 pair, and 588/587 arc
   admission. A one-ULP shared-edge mutation and broader or non-adjacent
   multi-occupied layouts remain fail-closed. A first wide arm splits exactly one pole-clear wide operand into
@@ -1384,9 +1394,11 @@ true only for an empty complete result.
   orientation-preserving rigid placement duplicates the full topology and geometry
   ownership closure, including offset bases and pcurves, preserves bounds, tolerances,
   and periodic-chart metadata, and records `DerivedFrom` lineage for every new identity
-  before checked atomic commit. Verified intersection descriptors fail through a typed
-  unsupported capability until transformed certificates can be reissued. Extend this
-  seam to certified intersection curves, attributes, and non-rigid transform families.
+  before checked atomic commit. A direct Plane/Plane verified line descriptor
+  copies both source planes and pcurves, transforms its carrier, and reissues the
+  whole-range certificate before graph insertion. Plane/Sphere, NURBS, and
+  transmitted intersection descriptors remain typed unsupported. Extend this
+  seam to those remaining certified curves, attributes, and non-rigid transform families.
 - The first checked extrusion slice is implemented for one validated polygonal
   profile with holes along any finite translation having a nonzero component
   on the profile-frame normal. A reverse translation reflects the profile chart
@@ -1544,8 +1556,8 @@ that queue must eventually discharge.
   SP/foreign curves, null, mixed/non-`H`, or broader closed limits, remaining
   nullable chart data including NURBS-side omissions, ambiguous or multi-
   period trace aliases, and noncanonical chart variants outside the bounded
-  direct-Plane/B-surface, safe-Offset(Plane)/B-surface, and direct-
-  Plane/Offset(B-surface) affine slices.
+  direct-Plane/B-surface, safe-Offset(Plane)/B-surface, direct-
+  Plane/Offset(B-surface), and direct-B-surface/B-surface affine slices.
 - M2.5: finish parameter-space incidence and ratcheted Full-checker proofs for
   periodic/mixed boundaries, multi-loop containment, and curved shells; define
   operation-specific tolerance combination/propagation policies beyond the

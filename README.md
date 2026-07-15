@@ -58,7 +58,8 @@ application boundary.
   safe offset surfaces, certified clamped periodic/closed B-surfaces, canonical
   transmitted Plane/Offset/NURBS intersection-chart slices, and bounded
   noncanonical affine direct-Plane/B-surface, safe-Offset(Plane)/B-surface,
-  and direct-Plane/Offset(B-surface) slices are implemented. The committed
+  direct-Plane/Offset(B-surface), and direct-B-surface/B-surface slices are
+  implemented. The committed
   corpus includes a production 7,423-node Onshape part and reconstructs under the exact v15
   profile at `440483945/22/10` Work/Items/Depth. Two-sample dual-offset record 3595
   certifies independently; v13 admits five-sample record 4230 at isolated
@@ -76,10 +77,12 @@ application boundary.
   evidence, source-provenanced adaptive NURBS covers, interval implicit exclusion,
   Work-bounded polishing, exact algebraic seed/overlap certificates, selected paired
   pcurves, a first exact varying-normal Offset(NURBS) arm with global-X-,
-  global-Y-, and global-Z-normal planar-NURBS or analytic-Plane peers, and bounded coincident
+  global-Y-, and global-Z-normal planar-NURBS, analytic-Plane, or one-descriptor
+  safe-Offset(Plane) peers, and bounded coincident
   Plane/Cylinder/Sphere/Cone/Torus regions including exact polar-cap and
-  full-cap-row polar-by-wide families have landed. Polygonal profiles with
-  holes, checked complete-body rigid copy, and checked nonzero-normal oblique
+  same-row adjacent and full-cap-row polar-by-wide families have landed.
+  Polygonal profiles with holes, checked complete-body rigid copy with direct
+  Plane/Plane line-certificate reissuance, and checked nonzero-normal oblique
   polygonal-profile extrusion are the first M4 modeling consumers.
   General root discovery, complete verified residuals across every result family, and
   boolean-ready paired-pcurve branches remain gated.

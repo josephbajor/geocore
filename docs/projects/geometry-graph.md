@@ -1,6 +1,6 @@
 # F1 procedural geometry graph
 
-Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, or compatible direct-NURBS/NURBS descriptors, plus M3c transmitted-chart consumers through single-axis one-period equal-limit closure with one shared or two distinct same-point `H/?` limits and unique exact interior aliases, finite-open/end-terminated `T/F` singular closure, and finite-open B-surface/Plane or Plane/Offset(B-surface) charts with omitted Plane UVs, including canonical Plane/Offset endpoints, are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
+Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, compatible direct-NURBS/NURBS, or single-descriptor varying-normal Offset(NURBS)/safe-Offset(Plane) descriptors, plus M3c transmitted-chart consumers through single-axis one-period equal-limit closure with one shared or two distinct same-point `H/?` limits and unique exact interior aliases, finite-open/end-terminated `T/F` singular closure, omitted Plane UV recovery, and bounded noncanonical affine direct B-surface/B-surface charts, are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
 
 ## Outcome
 
@@ -714,7 +714,8 @@ basis chain transitively, and preserves the same exact 14,336/14,335 Work,
 pin exact 5/4.
 A first varying-normal arm admits one offset descriptor over an exact rational
 quarter-cylinder extrusion and either a canonical bilinear planar direct-NURBS
-peer or direct analytic Plane normal to the global X, Y, or Z axis. The source derivatives prove
+peer, direct analytic Plane, or one safe Offset(Plane) descriptor over a direct
+Plane basis normal to the global X, Y, or Z axis. The source derivatives prove
 a nonzero normal over the complete positive operand window before discovery;
 a true rational parallel surface then guides the march, while orientation-
 selected original control intervals, radially scaled only for X/Y, alone own complete
@@ -724,9 +725,12 @@ proof costs exactly 7 Work, 1 Item, and Depth 1. Planar-NURBS X/Y generators
 pin combined 14,343/14,342 Work and 1,024/1,023 Items, while their Z peer pins
 573,447/573,446 Work and 40,960/40,959 Items. Analytic-Plane X/Y peers pin
 7,177/7,176 Work and 1,024/1,023 Items; their Z peer pins 286,768/286,767 Work
-and 40,960/40,959 Items. Both Z cases retain a certified 40-span horizontal
-quarter-circle chordal carrier with 41 controls, and every orientation
-pins 2/1 graph node visits and dependency depth. Singular or
+and 40,960/40,959 Items. A safe Offset(Plane) peer retains those certificate
+boundaries and additionally pins 4/3 graph Work plus 2/1 dependency Depth,
+while its live root, direct basis, and signed distance remain proof identity.
+All Z cases retain a certified 40-span horizontal
+quarter-circle chordal carrier with 41 controls, and every orientation retains
+10/9 certificate Depth. Direct peers pin 2/1 graph Work. Singular or
 inconclusive normal fields, nested varying-normal roots, and incompatible
 direct peers fail closed.
 Two independent one- through four-descriptor Offset(NURBS) roots now have a
@@ -824,11 +828,14 @@ Plane/Offset endpoints may now use the same recovery: a synthetic endpoint-null
 record-5089 variant preserves the exact v7 report and next crossing, while a
 displaced endpoint still fails the unchanged proof. A separate bounded
 noncanonical affine slice accepts two- through five-sample direct-Plane/B-
-surface, safe-Offset(Plane)/B-surface, or direct-Plane/Offset(B-surface)
+surface, safe-Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), or
+direct-B-surface/B-surface
 charts, retains finite positive affine metadata on the
 canonical shared sample-index basis,
 and preserves the unchanged original-source proof and ordered dependencies;
-safe offset roots additionally protect every nested Plane basis.
+safe offset roots additionally protect every nested Plane basis. Direct B/B
+charts retain both ordered original NURBS sources and pin structural 2–5 sample
+costs of `14336/2/10`, `28672/3/10`, `43008/4/10`, and `57344/5/10`.
 An exact record-5089 variant pins cumulative `139792442/4/10`; corpus records
 778 and 3620 remain typed original-domain failures, and the exemplar has no
 NURBS-side paired-null tuple. V6 remains
@@ -885,7 +892,8 @@ payload transplants.
 - Broaden the M3c consumer to null, mixed/non-`H`, or broader closed limits,
   other nullable chart data, ambiguous or multi-period trace aliases,
   noncanonical charts outside the bounded direct-Plane/B-surface, safe-
-  Offset(Plane)/B-surface, and direct-Plane/Offset(B-surface) affine slices,
+  Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), and direct-B-surface/
+  B-surface affine slices,
   and further terminator variants
   without recomputing their
   transmitted scars.
@@ -961,15 +969,18 @@ the graph ownership model.
   other varying-normal or nested offset/offset,
   unaligned, altered, and stale sources atomically.
 - The single-descriptor varying-normal rational-quarter-cylinder/direct-planar-
-  NURBS or analytic-Plane arm covers canonical global-X-, global-Y-, and global-Z-normal peers
+  NURBS, analytic-Plane, or one-descriptor safe-Offset(Plane) arm covers
+  canonical global-X-, global-Y-, and global-Z-normal peers
   and proves the original derivative normal field over the complete
   window, uses the true rational parallel surface only for discovery, and owns
   misses from orientation-selected original controls. Both operand orders retain the
   live root, original basis, direct peer, and paired pcurves. Planar-NURBS X/Y
   fixtures pin 14,343/14,342 Work and the Z fixture 573,447/573,446; analytic-
-  Plane X/Y fixtures pin 7,177/7,176 and the Z fixture 286,768/286,767. X/Y
-  retain 1,024/1,023 Items and Z retains 40,960/40,959; all retain 10/9 Depth and 2/1
-  graph evidence,
+  Plane or Offset(Plane) X/Y fixtures pin 7,177/7,176 and their Z fixtures
+  286,768/286,767. X/Y retain 1,024/1,023 Items and Z retains 40,960/40,959;
+  all retain 10/9 certificate Depth. Direct peers retain 2/1 graph Work;
+  Offset(Plane) peers retain their live root/basis/distance with 4/3 Work and
+  2/1 dependency Depth,
   while singular, nested, incompatible, altered, and stale cases fail
   atomically.
 - Strictly separated one- through four-descriptor constant-normal
@@ -1012,8 +1023,9 @@ the graph ownership model.
   Plane/Offset(B-surface), typed direct-Plane endpoint, half-null, and NURBS
   omissions, whole-carrier residual rejection, plus bounded noncanonical
   affine metadata for direct Plane/B-surface, safe-Offset(Plane)/B-surface,
-  and Plane/Offset(B-surface). The safe-offset 2–5 sample boundaries are
-  `7170/2/10`, `14339/3/10`, `21508/4/10`, and `28677/5/10`; transplanted cumulative `127115320` Work and
+  Plane/Offset(B-surface), and direct B-surface/B-surface. The safe-offset 2–5 sample boundaries are
+  `7170/2/10`, `14339/3/10`, `21508/4/10`, and `28677/5/10`; direct B/B pins
+  `14336/2/10`, `28672/3/10`, `43008/4/10`, and `57344/5/10`; transplanted cumulative `127115320` Work and
   `139792442/4/10`, with typed record-778/3620 original-domain rollback,
   and the 285,283,414-Work next proof preflight.
   The endpoint-roundoff suite pins exact v8 `315245660/22/10`, historical-v7
