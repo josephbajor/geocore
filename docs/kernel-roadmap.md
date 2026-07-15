@@ -1086,14 +1086,16 @@ true only for an empty complete result.
   discovery-only. The paired proof keeps the same exact Work/Items/Depth
   boundaries; a direct root uses exact 2/depth-2 graph traversal and a nested
   root pins exact 3/2 visits and 3/2 dependency-depth admission.
-  Two independent direct Offset(NURBS) roots also prove a complete miss when
-  both bases use the exact constant-+Z-normal unit chart and outward original
-  basis-plus-distance controls are strictly separated. This no-branch arm pins
-  exact 4/3 graph visits and 2/1 dependency depth, preserves operand order, and
-  rejects coincident effective sheets.
+  Two independent direct or one-level nested Offset(NURBS) roots also prove a
+  complete miss when both terminal bases use the exact constant-+Z-normal unit
+  chart and outward original basis-plus-accumulated-distance controls are
+  strictly separated. This no-branch arm pins direct/direct 4/depth-2,
+  direct/nested 5/depth-3, and nested/nested 6/depth-3 traversal with exact
+  N/N-1 evidence, zero certificate usage, no persistence allocation, preserved
+  operand order, and rejection of coincident effective sheets.
   Planar or unaligned peers, disjoint or boundary-only ranges, unequal weights,
   collapsed or non-finite sphere-offset fields, chains of three offset
-  descriptors, varying-normal Offset(NURBS), nested or intersecting/coincident
+  descriptors, varying-normal Offset(NURBS), nested intersecting/coincident
   Offset(NURBS)/Offset(NURBS), broader NURBS/NURBS, and
   other procedural pairs remain typed unsupported.
   The compatibility magnitude-twelve rung runs the complete historical

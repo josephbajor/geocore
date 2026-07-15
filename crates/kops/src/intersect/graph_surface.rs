@@ -5,9 +5,9 @@
 //! surfaces additionally support scoped exact-plane-field/NURBS, exact
 //! sphere-field/NURBS, compatible direct NURBS/NURBS marching, and a narrow
 //! constant-normal direct- or one-level nested-Offset(NURBS)/NURBS family.
-//! Strictly separated pairs
-//! of compatible direct constant-normal Offset(NURBS) roots additionally own
-//! a graph-level complete-empty proof. The adapter
+//! Strictly separated pairs of compatible direct or one-level nested
+//! constant-normal Offset(NURBS) roots additionally own a graph-level
+//! complete-empty proof. The adapter
 //! promotes discovered branches only after
 //! constructing both pcurves and proving their paired whole-interval residual
 //! contracts. Common-axis circles retain their longitude/latitude fast path;
@@ -514,10 +514,10 @@ pub fn intersect_bounded_graph_surfaces_with_context(
 /// supported. Direct or one-level nested constant-normal
 /// Offset(NURBS)/NURBS branches additionally reuse the compatible paired
 /// marcher across the positive-area overlap of distinct operand windows. Two
-/// compatible direct constant-normal
-/// Offset(NURBS) roots return a complete miss only from strict outward
-/// original-control separation; coincident or intersecting effective sheets
-/// and all other pairs remain explicitly unsupported.
+/// compatible direct or one-level nested constant-normal Offset(NURBS) roots
+/// return a complete miss only from strict outward original-control
+/// separation; coincident or intersecting effective sheets and all other pairs
+/// remain explicitly unsupported.
 /// Owners must compose [`GraphSurfaceBudgetProfile::v1_defaults`] before
 /// creating `scope` when they may dispatch a scoped proof-bearing branch.
 pub fn intersect_bounded_graph_surfaces_in_scope(
@@ -707,8 +707,8 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 basis: basis_b,
                 chain_length: chain_length_b,
             }),
-        ) if chain_length_a == 1
-            && chain_length_b == 1
+        ) if chain_length_a <= MAX_OFFSET_NURBS_CHAIN_LENGTH
+            && chain_length_b <= MAX_OFFSET_NURBS_CHAIN_LENGTH
             && supports_strictly_separated_constant_normal_offset_nurbs_pair(
                 basis_a,
                 signed_distance_a,
