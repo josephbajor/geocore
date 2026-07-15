@@ -56,8 +56,9 @@ application boundary.
 - M3 X_T interchange is in progress. Modern text and neutral-binary reading, atomic
   reconstruction, deterministic analytic text writing, bounded tolerant-edge SP-curves,
   safe offset surfaces, certified clamped periodic/closed B-surfaces, canonical
-  transmitted Plane/Offset/NURBS intersection-chart slices, and one bounded
-  noncanonical affine direct-Plane/Offset(B-surface) slice are implemented. The committed
+  transmitted Plane/Offset/NURBS intersection-chart slices, and bounded
+  noncanonical affine direct-Plane/B-surface and direct-Plane/Offset(B-surface)
+  slices are implemented. The committed
   corpus includes a production 7,423-node Onshape part and reconstructs under the exact v15
   profile at `440483945/22/10` Work/Items/Depth. Two-sample dual-offset record 3595
   certifies independently; v13 admits five-sample record 4230 at isolated
@@ -74,11 +75,12 @@ application boundary.
 - M4 intersections are useful but provisional. Shared `Complete`/`Indeterminate`
   evidence, source-provenanced adaptive NURBS covers, interval implicit exclusion,
   Work-bounded polishing, exact algebraic seed/overlap certificates, selected paired
-  pcurves, a first exact varying-normal Offset(NURBS) arm with global-X- and
-  global-Y-normal planar peers, and bounded coincident Plane/Cylinder/Sphere/Cone/Torus
-  regions including exact polar-cap and polar-by-wide families have landed. Polygonal
-  profiles with holes, checked complete-body rigid copy, and checked polygonal-profile
-  extrusion are the first M4 modeling consumers.
+  pcurves, a first exact varying-normal Offset(NURBS) arm with global-X-,
+  global-Y-, and global-Z-normal planar peers, and bounded coincident
+  Plane/Cylinder/Sphere/Cone/Torus regions including exact polar-cap and
+  adjacent-cap-row polar-by-wide families have landed. Polygonal profiles with
+  holes, checked complete-body rigid copy, and checked positive-normal oblique
+  polygonal-profile extrusion are the first M4 modeling consumers.
   General root discovery, complete verified residuals across every result family, and
   boolean-ready paired-pcurve branches remain gated.
 - M5-M8 are not started: there are no end-to-end booleans, general sweeps/sewing,
