@@ -64,7 +64,9 @@ use crate::incidence::{
     check_pcurve_incidence_contextual, check_pcurve_metadata_contextual,
     check_pcurve_parameterization,
 };
-use crate::loop_proof::{LoopSimplicity, certify_loop_simplicity};
+use crate::loop_proof::{
+    LoopContainment, LoopSimplicity, certify_loop_containment, certify_loop_simplicity,
+};
 use crate::shell_proof::{ShellEmbedding, ShellOrientation, certify_shell};
 use crate::store::{Entity, Store};
 use kcore::arena::Handle;
@@ -558,7 +560,9 @@ fn collect_full_verification(
                 }
             }
         }
-        if face.loops.len() > 1 {
+        if face.loops.len() > 1
+            && certify_loop_containment(store, &face.loops)? != LoopContainment::Certified
+        {
             push(
                 EntityRef::Face(face_id),
                 VerificationGapKind::LoopContainment,

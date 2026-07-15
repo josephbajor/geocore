@@ -3,7 +3,8 @@
 //! A profile is geometry input, not B-rep topology. Validating it once keeps
 //! sheet, extrude, revolve, and future region builders on the same robust
 //! winding and degeneracy contract. The initial slice supports one simple
-//! polygonal outer loop; holes and curve loops remain explicit future work.
+//! polygonal outer loop plus strictly contained, pairwise-disjoint polygonal
+//! holes. Curve loops and nested material islands remain future work.
 
 use kcore::error::{Error, Result};
 use kcore::predicates::{Orientation, orient2d};
@@ -16,6 +17,7 @@ use kgeom::vec::Point2;
 pub struct PlanarProfile {
     frame: Frame,
     outer: Vec<Point2>,
+    holes: Vec<Vec<Point2>>,
 }
 
 impl PlanarProfile {
@@ -24,8 +26,49 @@ impl PlanarProfile {
     /// Repeated, sub-resolution, collinear-consecutive, non-finite,
     /// outside-size-box, and self-intersecting boundaries are rejected.
     pub fn from_polygon(frame: Frame, polygon: &[Point2]) -> Result<Self> {
-        let outer = simple_ccw_polygon(&frame, polygon)?;
-        Ok(Self { frame, outer })
+        Self::from_polygon_with_holes(frame, polygon, &[])
+    }
+
+    /// Validate a polygonal outer boundary and zero or more polygonal holes.
+    ///
+    /// The outer boundary is normalized counterclockwise and holes clockwise.
+    /// Every hole must lie strictly inside the outer boundary; holes may not
+    /// touch, cross, overlap, or nest one another.
+    pub fn from_polygon_with_holes(
+        frame: Frame,
+        polygon: &[Point2],
+        holes: &[&[Point2]],
+    ) -> Result<Self> {
+        let outer = simple_polygon(&frame, polygon, true)?;
+        let mut normalized_holes: Vec<Vec<Point2>> = Vec::with_capacity(holes.len());
+        for hole in holes {
+            let hole = simple_polygon(&frame, hole, false)?;
+            if polygons_intersect(&outer, &hole)
+                || hole
+                    .iter()
+                    .any(|&point| point_location(&outer, point) != PointLocation::Inside)
+            {
+                return Err(Error::InvalidGeometry {
+                    reason: "planar profile hole must lie strictly inside the outer boundary",
+                });
+            }
+            for other in &normalized_holes {
+                if polygons_intersect(other, &hole)
+                    || point_location(other, hole[0]) != PointLocation::Outside
+                    || point_location(&hole, other[0]) != PointLocation::Outside
+                {
+                    return Err(Error::InvalidGeometry {
+                        reason: "planar profile holes must be pairwise disjoint and unnested",
+                    });
+                }
+            }
+            normalized_holes.push(hole);
+        }
+        Ok(Self {
+            frame,
+            outer,
+            holes: normalized_holes,
+        })
     }
 
     /// Positioned plane in which the profile coordinates are expressed.
@@ -37,6 +80,18 @@ impl PlanarProfile {
     pub fn outer(&self) -> &[Point2] {
         &self.outer
     }
+
+    /// Clockwise simple polygonal holes in deterministic input order.
+    pub fn holes(&self) -> &[Vec<Point2>] {
+        &self.holes
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PointLocation {
+    Outside,
+    Boundary,
+    Inside,
 }
 
 fn uv(point: Point2) -> [f64; 2] {
@@ -68,7 +123,44 @@ fn segments_intersect(a: Point2, b: Point2, c: Point2, d: Point2) -> bool {
         || (cd_b == Orientation::Zero && point_on_segment(b, c, d))
 }
 
-fn simple_ccw_polygon(frame: &Frame, polygon: &[Point2]) -> Result<Vec<Point2>> {
+fn polygons_intersect(a: &[Point2], b: &[Point2]) -> bool {
+    a.iter().enumerate().any(|(a_index, &a_start)| {
+        let a_end = a[(a_index + 1) % a.len()];
+        b.iter().enumerate().any(|(b_index, &b_start)| {
+            let b_end = b[(b_index + 1) % b.len()];
+            segments_intersect(a_start, a_end, b_start, b_end)
+        })
+    })
+}
+
+fn point_location(polygon: &[Point2], point: Point2) -> PointLocation {
+    let mut winding = 0_i32;
+    for (index, &start) in polygon.iter().enumerate() {
+        let end = polygon[(index + 1) % polygon.len()];
+        if point_on_segment(point, start, end) {
+            return PointLocation::Boundary;
+        }
+        let side = orient2d(uv(start), uv(end), uv(point));
+        if start.y <= point.y {
+            if end.y > point.y && side == Orientation::Positive {
+                winding += 1;
+            }
+        } else if end.y <= point.y && side == Orientation::Negative {
+            winding -= 1;
+        }
+    }
+    if winding == 0 {
+        PointLocation::Outside
+    } else {
+        PointLocation::Inside
+    }
+}
+
+fn simple_polygon(
+    frame: &Frame,
+    polygon: &[Point2],
+    counterclockwise: bool,
+) -> Result<Vec<Point2>> {
     if polygon.len() < 3 {
         return Err(Error::InvalidGeometry {
             reason: "planar profile polygon requires at least three vertices",
@@ -130,7 +222,7 @@ fn simple_ccw_polygon(frame: &Frame, polygon: &[Point2]) -> Result<Vec<Point2>> 
         uv(points[leftmost]),
         uv(points[(leftmost + 1) % points.len()]),
     );
-    if winding == Orientation::Negative {
+    if (winding == Orientation::Positive) != counterclockwise {
         points.reverse();
     }
     Ok(points)
@@ -166,6 +258,75 @@ mod tests {
                 uv(points[(leftmost + 1) % points.len()]),
             ),
             Orientation::Positive
+        );
+    }
+
+    #[test]
+    fn holes_are_normalized_and_must_be_strictly_disjoint() {
+        let outer = [
+            Point2::new(-3.0, -3.0),
+            Point2::new(3.0, -3.0),
+            Point2::new(3.0, 3.0),
+            Point2::new(-3.0, 3.0),
+        ];
+        let first = [
+            Point2::new(-2.0, -1.0),
+            Point2::new(-1.0, -1.0),
+            Point2::new(-1.0, 1.0),
+            Point2::new(-2.0, 1.0),
+        ];
+        let second = [
+            Point2::new(1.0, -1.0),
+            Point2::new(2.0, -1.0),
+            Point2::new(2.0, 1.0),
+            Point2::new(1.0, 1.0),
+        ];
+        let profile =
+            PlanarProfile::from_polygon_with_holes(Frame::world(), &outer, &[&first, &second])
+                .unwrap();
+        assert_eq!(profile.holes().len(), 2);
+        assert_eq!(
+            point_location(profile.outer(), Point2::new(0.0, 0.0)),
+            PointLocation::Inside
+        );
+        for hole in profile.holes() {
+            assert_eq!(point_location(hole, hole[0]), PointLocation::Boundary);
+            let leftmost = (0..hole.len())
+                .min_by(|&a, &b| {
+                    hole[a]
+                        .x
+                        .total_cmp(&hole[b].x)
+                        .then(hole[a].y.total_cmp(&hole[b].y))
+                })
+                .unwrap();
+            assert_eq!(
+                orient2d(
+                    uv(hole[(leftmost + hole.len() - 1) % hole.len()]),
+                    uv(hole[leftmost]),
+                    uv(hole[(leftmost + 1) % hole.len()]),
+                ),
+                Orientation::Negative
+            );
+        }
+
+        let touching = [
+            Point2::new(-3.0, -0.5),
+            Point2::new(-2.0, -0.5),
+            Point2::new(-2.0, 0.5),
+            Point2::new(-3.0, 0.5),
+        ];
+        assert!(
+            PlanarProfile::from_polygon_with_holes(Frame::world(), &outer, &[&touching]).is_err()
+        );
+        let nested = [
+            Point2::new(-1.8, -0.5),
+            Point2::new(-1.2, -0.5),
+            Point2::new(-1.2, 0.5),
+            Point2::new(-1.8, 0.5),
+        ];
+        assert!(
+            PlanarProfile::from_polygon_with_holes(Frame::world(), &outer, &[&first, &nested])
+                .is_err()
         );
     }
 }

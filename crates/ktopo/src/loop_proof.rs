@@ -31,6 +31,17 @@ pub(crate) enum LoopSimplicity {
     Indeterminate,
 }
 
+/// Result of attempting to prove one outer polygonal loop and its holes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LoopContainment {
+    /// Exactly one loop contains every other loop, and hole loops are pairwise
+    /// disjoint and unnested.
+    Certified,
+    /// At least one loop representation is outside this proof slice or the
+    /// supported strict-containment relation was not established.
+    Indeterminate,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Segment2 {
     start: Point2,
@@ -60,9 +71,78 @@ pub(crate) fn certify_loop_simplicity(store: &Store, loop_id: LoopId) -> Result<
         }
         tails.push(tail);
     }
+    let Some(segments) = planar_segment_ring(store, loop_id)? else {
+        return Ok(LoopSimplicity::Indeterminate);
+    };
+    Ok(certify_segment_ring(&segments))
+}
+
+/// Certify strict outer/hole containment for exact polygonal loops on a plane.
+pub(crate) fn certify_loop_containment(
+    store: &Store,
+    loop_ids: &[LoopId],
+) -> Result<LoopContainment> {
+    if loop_ids.len() < 2 {
+        return Ok(LoopContainment::Certified);
+    }
+    let mut rings = Vec::with_capacity(loop_ids.len());
+    for &loop_id in loop_ids {
+        let Some(segments) = planar_segment_ring(store, loop_id)? else {
+            return Ok(LoopContainment::Indeterminate);
+        };
+        if certify_segment_ring(&segments) != LoopSimplicity::Certified {
+            return Ok(LoopContainment::Indeterminate);
+        }
+        rings.push(segments);
+    }
+    for first in 0..rings.len() {
+        for second in first + 1..rings.len() {
+            if rings[first].iter().any(|&left| {
+                rings[second]
+                    .iter()
+                    .any(|&right| segments_intersect(left, right))
+            }) {
+                return Ok(LoopContainment::Indeterminate);
+            }
+        }
+    }
+
+    let mut containers = vec![Vec::new(); rings.len()];
+    for inner in 0..rings.len() {
+        let witness = rings[inner][0].start;
+        for (outer, ring) in rings.iter().enumerate() {
+            if inner != outer && point_location(witness, ring) == PointLocation::Inside {
+                containers[inner].push(outer);
+            }
+        }
+    }
+    let outers: Vec<_> = containers
+        .iter()
+        .enumerate()
+        .filter_map(|(index, containers)| containers.is_empty().then_some(index))
+        .collect();
+    let [outer] = outers.as_slice() else {
+        return Ok(LoopContainment::Indeterminate);
+    };
+    if containers
+        .iter()
+        .enumerate()
+        .all(|(index, containers)| index == *outer || containers.as_slice() == [*outer])
+    {
+        Ok(LoopContainment::Certified)
+    } else {
+        Ok(LoopContainment::Indeterminate)
+    }
+}
+
+fn planar_segment_ring(store: &Store, loop_id: LoopId) -> Result<Option<Vec<Segment2>>> {
+    let loop_ = store.get(loop_id)?;
+    if loop_.fins.len() < 2 {
+        return Ok(None);
+    }
     let face = store.get(loop_.face)?;
     let SurfaceGeom::Plane(plane) = store.get(face.surface)? else {
-        return Ok(LoopSimplicity::Indeterminate);
+        return Ok(None);
     };
 
     let mut segments = Vec::with_capacity(loop_.fins.len());
@@ -70,33 +150,33 @@ pub(crate) fn certify_loop_simplicity(store: &Store, loop_id: LoopId) -> Result<
         let fin = store.get(fin_id)?;
         let edge = store.get(fin.edge)?;
         if edge.tolerance.is_some() {
-            return Ok(LoopSimplicity::Indeterminate);
+            return Ok(None);
         }
         let Some(range) = active_edge_range(edge, store) else {
-            return Ok(LoopSimplicity::Indeterminate);
+            return Ok(None);
         };
         let tolerance = LINEAR_RESOLUTION;
         let segment = if let Some(pcurve) = fin.pcurve {
             if certify_pcurve_incidence(store, fin.edge, face.surface, pcurve, tolerance)?
                 != IncidenceCertification::Certified
             {
-                return Ok(LoopSimplicity::Indeterminate);
+                return Ok(None);
             }
             pcurve_line_segment(store, pcurve, edge, fin.sense, range)?
         } else {
             if certify_edge_surface_incidence(store, fin.edge, face.surface, tolerance)?
                 != IncidenceCertification::Certified
             {
-                return Ok(LoopSimplicity::Indeterminate);
+                return Ok(None);
             }
             model_line_segment(store, edge, fin.sense, range, plane.frame())?
         };
         let Some(segment) = segment else {
-            return Ok(LoopSimplicity::Indeterminate);
+            return Ok(None);
         };
         segments.push(segment);
     }
-    Ok(certify_segment_ring(&segments))
+    Ok(Some(segments))
 }
 
 fn active_edge_range(edge: &Edge, store: &Store) -> Option<ParamRange> {
@@ -277,6 +357,37 @@ fn point_on_segment(point: Point2, segment: Segment2) -> bool {
         && point.x <= segment.start.x.max(segment.end.x)
         && point.y >= segment.start.y.min(segment.end.y)
         && point.y <= segment.start.y.max(segment.end.y)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PointLocation {
+    Outside,
+    Boundary,
+    Inside,
+}
+
+fn point_location(point: Point2, segments: &[Segment2]) -> PointLocation {
+    let mut winding = 0_i32;
+    for &segment in segments {
+        if orient(segment.start, segment.end, point) == Orientation::Zero
+            && point_on_segment(point, segment)
+        {
+            return PointLocation::Boundary;
+        }
+        let side = orient(segment.start, segment.end, point);
+        if segment.start.y <= point.y {
+            if segment.end.y > point.y && side == Orientation::Positive {
+                winding += 1;
+            }
+        } else if segment.end.y <= point.y && side == Orientation::Negative {
+            winding -= 1;
+        }
+    }
+    if winding == 0 {
+        PointLocation::Outside
+    } else {
+        PointLocation::Inside
+    }
 }
 
 #[cfg(test)]

@@ -14,8 +14,9 @@
 //!   closed surface — no edges, no vertices.
 //! - [`cylindrical_sheet`]: a full-period cylindrical face whose shared
 //!   longitudinal edge has explicit paired lower/upper seam roles.
-//! - [`planar_sheet`]: one simple polygonal profile on a plane, with an
-//!   explicit line pcurve on every boundary use.
+//! - [`planar_sheet`]: one simple polygonal profile on a plane; reusable
+//!   [`PlanarProfile`] inputs may add strictly contained polygonal holes, with
+//!   an explicit line pcurve on every boundary use.
 //! - [`wire_polyline`]: an open or closed chain of bounded line edges.
 //! - [`acorn`]: one isolated model-space point.
 //!
@@ -196,8 +197,9 @@ fn non_solid_body_scaffold(store: &mut Store, kind: BodyKind) -> (BodyId, ShellI
 ///
 /// `polygon` is expressed in the `frame` XY plane. Clockwise input is
 /// normalized; repeated, collinear-consecutive, sub-resolution, non-finite,
-/// outside-size-box, and self-intersecting boundaries are rejected. Holes are
-/// intentionally deferred to the profile-region builder.
+/// outside-size-box, and self-intersecting boundaries are rejected. Use
+/// [`PlanarProfile::from_polygon_with_holes`] with
+/// [`planar_sheet_from_profile`] for polygonal holes.
 pub fn planar_sheet(store: &mut Store, frame: &Frame, polygon: &[Point2]) -> Result<BodyId> {
     Ok(planar_sheet_with_journal(store, frame, polygon)?.body)
 }
@@ -227,11 +229,6 @@ pub fn planar_sheet_from_profile_with_journal(
 
 fn planar_sheet_in(store: &mut Store, profile: &PlanarProfile) -> Result<BodyId> {
     let frame = profile.frame();
-    let polygon = profile.outer();
-    let positions: Vec<_> = polygon
-        .iter()
-        .map(|point| frame.point_at(point.x, point.y, 0.0))
-        .collect();
     let (body, shell) = non_solid_body_scaffold(store, BodyKind::Sheet);
     let surface = store.insert_surface(SurfaceGeom::Plane(Plane::new(*frame)))?;
     let face = store.add(Face {
@@ -239,10 +236,28 @@ fn planar_sheet_in(store: &mut Store, profile: &PlanarProfile) -> Result<BodyId>
         loops: Vec::new(),
         surface,
         sense: Sense::Forward,
-        domain: Some(point_domain(polygon.iter().copied())?),
+        domain: Some(point_domain(profile.outer().iter().copied())?),
         tolerance: None,
     });
     store.get_mut(shell)?.faces.push(face);
+    for polygon in
+        core::iter::once(profile.outer()).chain(profile.holes().iter().map(Vec::as_slice))
+    {
+        add_planar_polygon_loop(store, face, frame, polygon)?;
+    }
+    Ok(body)
+}
+
+fn add_planar_polygon_loop(
+    store: &mut Store,
+    face: FaceId,
+    frame: &Frame,
+    polygon: &[Point2],
+) -> Result<()> {
+    let positions: Vec<_> = polygon
+        .iter()
+        .map(|point| frame.point_at(point.x, point.y, 0.0))
+        .collect();
     let loop_id = store.add(Loop {
         face,
         fins: Vec::new(),
@@ -281,7 +296,7 @@ fn planar_sheet_in(store: &mut Store, profile: &PlanarProfile) -> Result<BodyId>
         store.get_mut(loop_id)?.fins.push(fin);
         store.get_mut(edge)?.fins.push(fin);
     }
-    Ok(body)
+    Ok(())
 }
 
 /// Create a failure-atomic line-segment wire from ordered model-space points.

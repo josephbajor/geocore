@@ -4,12 +4,15 @@
 //! facet a supporting plane of the complete vertex set, is the boundary of
 //! its convex hull. That gives a compact proof of both global
 //! non-self-intersection and outward orientation. A single planar sheet face
-//! is embedded when its sole loop is proven simple.
+//! is embedded when every polygonal loop is proven simple and the holes have
+//! certified strict containment.
 
 use crate::entity::{BodyKind, FaceId, RegionKind, Sense, ShellId, VertexId};
 use crate::geom::{CurveGeom, SurfaceGeom};
 use crate::incidence::{IncidenceCertification, certify_edge_surface_incidence};
-use crate::loop_proof::{LoopSimplicity, certify_loop_simplicity};
+use crate::loop_proof::{
+    LoopContainment, LoopSimplicity, certify_loop_containment, certify_loop_simplicity,
+};
 use crate::store::Store;
 use kcore::error::Result;
 use kcore::predicates::{Orientation as PredicateOrientation, orient2d, orient3d};
@@ -56,10 +59,13 @@ pub(crate) fn certify_shell(
     if body_kind == BodyKind::Sheet && shell.faces.len() == 1 {
         let face = store.get(shell.faces[0])?;
         let planar = matches!(store.get(face.surface)?, SurfaceGeom::Plane(_));
-        let simple = face.loops.len() == 1
-            && certify_loop_simplicity(store, face.loops[0])? == LoopSimplicity::Certified;
+        let mut simple = !face.loops.is_empty();
+        for &loop_id in &face.loops {
+            simple &= certify_loop_simplicity(store, loop_id)? == LoopSimplicity::Certified;
+        }
+        let contained = certify_loop_containment(store, &face.loops)? == LoopContainment::Certified;
         return Ok(ShellCertification {
-            embedding: if planar && simple {
+            embedding: if planar && simple && contained {
                 ShellEmbedding::Certified
             } else {
                 ShellEmbedding::Indeterminate

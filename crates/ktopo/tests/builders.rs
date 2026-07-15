@@ -9,7 +9,7 @@ use kgeom::frame::Frame;
 use kgeom::vec::{Point2, Point3};
 use ktopo::btess::{TessOptions, tessellate_body};
 use ktopo::check::{CheckLevel, CheckOutcome, VerificationGapKind, check_body_report};
-use ktopo::entity::{BodyKind, Edge, Face, Fin, Region, Shell, Vertex};
+use ktopo::entity::{BodyKind, Edge, Face, Fin, Loop, Region, Shell, Vertex};
 use ktopo::make;
 use ktopo::profile::PlanarProfile;
 use ktopo::store::Store;
@@ -68,6 +68,57 @@ fn planar_sheet_normalizes_and_certifies_a_concave_polygon() {
     )
     .unwrap();
     assert!(!mesh.triangles.is_empty());
+}
+
+#[test]
+fn planar_sheet_builds_checks_and_tessellates_polygonal_holes() {
+    let outer = [
+        Point2::new(-2.0, -2.0),
+        Point2::new(2.0, -2.0),
+        Point2::new(2.0, 2.0),
+        Point2::new(-2.0, 2.0),
+    ];
+    let hole = [
+        Point2::new(-1.0, -1.0),
+        Point2::new(1.0, -1.0),
+        Point2::new(1.0, 1.0),
+        Point2::new(-1.0, 1.0),
+    ];
+    let profile = PlanarProfile::from_polygon_with_holes(Frame::world(), &outer, &[&hole]).unwrap();
+    let mut store = Store::new();
+    let made = make::planar_sheet_from_profile_with_journal(&mut store, &profile).unwrap();
+    let body = made.body();
+
+    assert_eq!(store.count::<Face>(), 1);
+    assert_eq!(store.count::<Loop>(), 2);
+    assert_eq!(store.count::<Edge>(), 8);
+    assert_eq!(store.count::<Vertex>(), 8);
+    assert_eq!(store.count::<Fin>(), 8);
+    let full = check_body_report(&store, body, CheckLevel::Full).unwrap();
+    assert_eq!(full.outcome(), CheckOutcome::Valid, "{full:?}");
+
+    let mesh = tessellate_body(
+        &store,
+        body,
+        &TessOptions {
+            chord_tol: 1e-3,
+            max_edge_len: Some(0.5),
+        },
+    )
+    .unwrap();
+    assert!(!mesh.triangles.is_empty());
+    let area = mesh
+        .triangles
+        .iter()
+        .map(|triangle| {
+            let [a, b, c] = triangle.map(|index| mesh.positions[index as usize]);
+            (b - a).cross(c - a).norm() * 0.5
+        })
+        .sum::<f64>();
+    assert!(
+        (area - 12.0).abs() <= 1.0e-10,
+        "unexpected holed sheet area {area}"
+    );
 }
 
 #[test]
