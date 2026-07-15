@@ -813,7 +813,7 @@ fn general_polar_by_wide_multi_occupied_and_near_pole_cases_fail_closed() {
     .unwrap();
     assert_indeterminate_sphere_window(
         &straddling,
-        "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent cap-row pair, or the exact three-cell cap-row path with every other sibling certified empty",
+        "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, or the exact three-cell cap-row path with every other sibling certified empty",
     );
 
     let near_pole = f64::from_bits(half_pi.to_bits() - 1);
@@ -906,6 +906,148 @@ fn general_polar_by_wide_two_adjacent_cap_cells_merge_exactly_and_swap() {
         intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
     assert_eq!(hit.clone().swapped(), swapped);
     assert_general_sphere_window_region(&swapped, &b, &a);
+}
+
+#[test]
+fn general_polar_by_wide_two_adjacent_lower_cells_merge_exactly_and_swap() {
+    let a = world_sphere();
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.4);
+    let half_pi = core::f64::consts::FRAC_PI_2;
+    let tau = 2.0 * core::f64::consts::PI;
+    let a_window = window(-0.5, 0.5, -1.3, half_pi);
+    let b_window = window(1.9 - core::f64::consts::PI + tau, 1.9 + tau, -1.3, -0.6);
+    let latitude_seam = a_window[1].lo + 0.5 * a_window[1].width();
+    let a_pieces = [
+        window(-0.5, 0.5, -1.3, latitude_seam),
+        window(-0.5, 0.5, latitude_seam, half_pi),
+    ];
+    let longitude_width = b_window[0].width() / 3.0;
+    let longitude_seams = [
+        b_window[0].lo,
+        b_window[0].lo + longitude_width,
+        b_window[0].lo + 2.0 * longitude_width,
+        b_window[0].hi,
+    ];
+    let mut empty = Vec::new();
+    let mut occupied = Vec::new();
+    for (a_index, a_piece) in a_pieces.into_iter().enumerate() {
+        for b_index in 0..3 {
+            let child = intersect_bounded_spheres(
+                &a,
+                a_piece,
+                &b,
+                window(
+                    longitude_seams[b_index],
+                    longitude_seams[b_index + 1],
+                    -1.3,
+                    -0.6,
+                ),
+                Tolerances::default(),
+            )
+            .unwrap();
+            if child.is_proven_empty() {
+                empty.push([a_index, b_index]);
+                continue;
+            }
+            assert!(child.is_complete());
+            assert!(child.points.is_empty());
+            assert!(child.curves.is_empty());
+            assert_eq!(child.regions.len(), 1);
+            assert_general_sphere_window_region(&child, &a, &b);
+            occupied.push([a_index, b_index]);
+        }
+    }
+    assert_eq!(empty, [[0, 2], [1, 0], [1, 1], [1, 2]]);
+    assert_eq!(occupied, [[0, 0], [0, 1]]);
+
+    let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_general_sphere_window_region(&hit, &a, &b);
+    assert_eq!(hit.regions[0].boundary.len(), 6);
+    let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = hit.regions[0].correspondence
+    else {
+        unreachable!()
+    };
+    assert_eq!(map.first_range(), a_window);
+    assert_eq!(map.second_range(), b_window);
+    let boundary = &hit.regions[0].boundary;
+    assert!(boundary.iter().all(|vertex| {
+        vertex.uv_a[1].to_bits() != latitude_seam.to_bits()
+            && vertex.uv_b[0].to_bits() != longitude_seams[2].to_bits()
+            && a.eval(vertex.uv_a).dist(b.eval(vertex.uv_b)) <= hit.regions[0].max_residual
+    }));
+    for (index, vertex) in boundary.iter().enumerate() {
+        let next = boundary[(index + 1) % boundary.len()];
+        assert!(
+            vertex.uv_b[0].to_bits() != longitude_seams[1].to_bits()
+                || next.uv_b[0].to_bits() != longitude_seams[1].to_bits(),
+            "shared lower-row longitude seam edge survived the exact merge"
+        );
+    }
+
+    let repeated =
+        intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_eq!(hit, repeated);
+    let swapped =
+        intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
+    assert_eq!(hit.clone().swapped(), swapped);
+    assert_general_sphere_window_region(&swapped, &b, &a);
+}
+
+#[test]
+fn general_polar_by_wide_two_nonadjacent_lower_cells_fail_closed() {
+    let a = world_sphere();
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.4);
+    let half_pi = core::f64::consts::FRAC_PI_2;
+    let a_window = window(-0.5, 0.5, -1.3, half_pi);
+    let b_window = window(-0.2, 5.95, -1.3, -0.6);
+    let latitude_seam = a_window[1].lo + 0.5 * a_window[1].width();
+    let a_pieces = [
+        window(-0.5, 0.5, -1.3, latitude_seam),
+        window(-0.5, 0.5, latitude_seam, half_pi),
+    ];
+    let longitude_width = b_window[0].width() / 3.0;
+    let longitude_seams = [
+        b_window[0].lo,
+        b_window[0].lo + longitude_width,
+        b_window[0].lo + 2.0 * longitude_width,
+        b_window[0].hi,
+    ];
+    let mut empty = Vec::new();
+    let mut occupied = Vec::new();
+    for (a_index, a_piece) in a_pieces.into_iter().enumerate() {
+        for b_index in 0..3 {
+            let child = intersect_bounded_spheres(
+                &a,
+                a_piece,
+                &b,
+                window(
+                    longitude_seams[b_index],
+                    longitude_seams[b_index + 1],
+                    -1.3,
+                    -0.6,
+                ),
+                Tolerances::default(),
+            )
+            .unwrap();
+            if child.is_proven_empty() {
+                empty.push([a_index, b_index]);
+                continue;
+            }
+            assert!(child.is_complete());
+            assert!(child.points.is_empty());
+            assert!(child.curves.is_empty());
+            assert_eq!(child.regions.len(), 1);
+            occupied.push([a_index, b_index]);
+        }
+    }
+    assert_eq!(empty, [[0, 1], [1, 0], [1, 1], [1, 2]]);
+    assert_eq!(occupied, [[0, 0], [0, 2]]);
+
+    let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_indeterminate_sphere_window(
+        &hit,
+        "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, or the exact three-cell cap-row path with every other sibling certified empty",
+    );
 }
 
 #[test]
