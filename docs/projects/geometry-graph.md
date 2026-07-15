@@ -1,6 +1,6 @@
 # F1 procedural geometry graph
 
-Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, or compatible direct-NURBS/NURBS descriptors, plus M3c transmitted-chart consumers through single-axis one-period equal-limit closure with unique exact interior aliases, finite-open/end-terminated `T/F` singular closure, and finite-open B-surface/Plane or Plane/Offset(B-surface) charts with omitted Plane UVs, including canonical Plane/Offset endpoints, are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
+Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, or compatible direct-NURBS/NURBS descriptors, plus M3c transmitted-chart consumers through single-axis one-period equal-limit closure with one shared or two distinct same-point `H/?` limits and unique exact interior aliases, finite-open/end-terminated `T/F` singular closure, and finite-open B-surface/Plane or Plane/Offset(B-surface) charts with omitted Plane UVs, including canonical Plane/Offset endpoints, are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
 
 ## Outcome
 
@@ -712,6 +712,18 @@ basis chain transitively, and preserves the same exact 14,336/14,335 Work,
 1,024/1,023 Items, and 10/9 Depth boundaries. Two offset descriptors pin exact
 3/2 node-visit and dependency-depth admission, three pin exact 4/3, and four
 pin exact 5/4.
+A first varying-normal arm admits one offset descriptor over an exact rational
+quarter-cylinder extrusion and one canonical bilinear planar direct-NURBS
+peer. The source derivatives prove a nonzero normal over the complete positive
+operand window before discovery; a true rational parallel surface then guides
+the march, while outward-scaled original control intervals alone own complete
+misses. Every positive branch retains the live offset root, original cylinder
+basis, direct peer, and paired pcurves under one certificate scope. The normal
+proof costs exactly 7 Work, 1 Item, and Depth 1, so a positive one-span branch
+pins combined 14,343/14,342 Work, 1,024/1,023 Items, and 10/9 Depth admission;
+the graph root pins 2/1 node visits and dependency depth. Singular or
+inconclusive normal fields, nested varying-normal roots, and incompatible
+direct peers fail closed.
 Two independent one- through four-descriptor Offset(NURBS) roots now have a
 narrower complete-empty arm when both terminal bases use that same
 constant-+Z-normal unit chart and outward original basis-plus-accumulated-
@@ -723,7 +735,7 @@ nothing during empty persistence, and does not promote coincident effective
 sheets.
 Planar or unaligned peers, unequal ranges or weights, collapsed or non-finite
 sphere-offset fields, Offset(NURBS) chains of five or more descriptors,
-varying-normal Offset(NURBS), nested
+other varying-normal Offset(NURBS) families, nested varying-normal roots,
 Offset(NURBS)/Offset(NURBS), intersecting or coincident
 Offset(NURBS)/Offset(NURBS), and broader NURBS/NURBS or other procedural pairs
 remain unsupported.
@@ -856,9 +868,10 @@ payload transplants.
   NURBS/NURBS
   charts and other exact/procedural families only
   with contextual accounting and paired trace evidence.
-- Broaden the M3c consumer to null/general closed limits, other nullable chart
-  data, ambiguous or multi-period trace aliases, noncanonical charts, and further terminator variants
-  without recomputing their transmitted scars.
+- Broaden the M3c consumer to null, mixed/non-`H`, or broader closed limits,
+  other nullable chart data, ambiguous or multi-period trace aliases,
+  noncanonical charts, and further terminator variants without recomputing
+  their transmitted scars.
 - Add swept, spun, and blend descriptors only with their own evaluator,
   validity, bounds, interchange, and test contracts.
 
@@ -928,8 +941,16 @@ the graph ownership model.
   certificate accounting plus exact 2/depth-2, 3/depth-3, 4/depth-4, and
   5/depth-5 graph traversal with exact N/N-1 evidence, and reject disjoint or
   boundary-only windows, five-or-more-descriptor positive chains,
-  varying-normal or nested offset/offset,
+  other varying-normal or nested offset/offset,
   unaligned, altered, and stale sources atomically.
+- The single-descriptor varying-normal rational-quarter-cylinder/direct-planar-
+  NURBS arm proves the original derivative normal field over the complete
+  window, uses the true rational parallel surface only for discovery, and owns
+  misses from outward-scaled original controls. Both operand orders retain the
+  live root, original basis, direct peer, and paired pcurves; fixtures pin exact
+  14,343/14,342 Work, 1,024/1,023 Items, 10/9 Depth, and 2/1 graph evidence,
+  while singular, nested, incompatible, altered, and stale cases fail
+  atomically.
 - Strictly separated one- through four-descriptor constant-normal
   Offset(NURBS) pairs return graph-owned complete misses for the complete 4×4
   chain matrix at exact `A+B+2` Work and `max(A+1,B+1)` depth, with maximum
@@ -954,8 +975,8 @@ the graph ownership model.
   `115485725/20/10`, record-2008 transplant `124040223/22/10`, unique exact
   one-period endpoint or interior alias lifting, the unchanged whole-range
   proof, exact synthetic Work/Items/Depth N/N-1 rollback, and typed null,
-  material, ambiguous, multi-period, nonperiodic-axis, distinct-closed, or
-  off-seam rollback. The
+  material, ambiguous, multi-period, nonperiodic-axis, mixed-limit, mismatched-
+  point, multi-position-closed, or off-seam rollback. The
   terminator suite pins exact v4 `116396069/20/10`, record-1678 transplant
   `116413476` Work, the appended final span, analytic Plane UV recovery,
   endpoint-only NURBS roundoff snapping, and typed malformed rollback. The

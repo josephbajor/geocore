@@ -725,8 +725,9 @@ curves, 131 curve-less tolerant edges, 7,423 nodes). It parses fully today, and
 the geometry-graph/offset reconstruction slice is complete. The three production
 periodic/closed B-surface leaves now reconstruct through a certified clamped
 position/C1 seam contract. The equal-limit form at records 1828 and 2008 is
-certified when a shared `H/?` limit closes spatially on exactly one periodic
-NURBS axis. Every coordinate on that periodic trace axis is preserved modulo
+certified when one shared or two distinct `H/?` limits identify the same
+spatial point and the chart closes on exactly one periodic NURBS axis. Every
+coordinate on that periodic trace axis is preserved modulo
 at most one exact declared period; a unique predecessor-relative lift may
 normalize interior aliases, while the result must traverse exactly one period
 and pass the unchanged whole-range original-source certificate. The finite-open/end-
@@ -1119,6 +1120,18 @@ true only for an empty complete result.
   boundaries; one, two, three, or four offset descriptors use exact 2/depth-2,
   3/depth-3, 4/depth-4, or 5/depth-5 graph traversal with matching N/N-1
   admission.
+  The first varying-normal operation-generated arm accepts exactly one offset
+  descriptor over an exact rational quarter-cylinder extrusion and one
+  canonical bilinear planar direct-NURBS peer. An original-derivative interval
+  enclosure proves a nonzero normal over the complete positive operand window
+  before the true rational parallel surface guides discovery; outward-scaled
+  original control intervals alone own complete misses. The normal proof costs
+  7 Work, 1 Item, and Depth 1, so a positive one-span branch pins combined
+  14,343/14,342 Work, 1,024/1,023 Items, and 10/9 Depth plus 2/1 graph
+  traversal. Its paired trace retains the live root, original basis, direct
+  peer, and both pcurves. Singular or inconclusive normal fields, nested
+  varying-normal roots, incompatible peers, and stale or altered sources fail
+  closed and persist nothing.
   Two independent one- through four-descriptor Offset(NURBS) roots also prove
   a complete miss when both terminal bases use the exact constant-+Z-normal
   unit chart and outward original basis-plus-accumulated-distance controls are
@@ -1130,7 +1143,8 @@ true only for an empty complete result.
   Planar or unaligned peers, disjoint or boundary-only ranges, unequal weights,
   collapsed or non-finite sphere-offset fields, positive
   Offset(NURBS)/direct-NURBS chains of five or more offset descriptors,
-  varying-normal Offset(NURBS), nested intersecting/coincident
+  other varying-normal Offset(NURBS) families, nested varying-normal roots,
+  nested intersecting/coincident
   Offset(NURBS)/Offset(NURBS), broader NURBS/NURBS, and
   other procedural pairs remain typed unsupported.
   The compatibility magnitude-twelve rung runs the complete historical
@@ -1209,7 +1223,20 @@ true only for an empty complete result.
   returns `Complete` empty only when every boundary component is excluded; its
   disjoint exemplar pins exact 96/95 Work-style witness evidence and swap
   parity. Bit-exact equality locks additionally collapse to tangent circle arcs
-  or points. A first wide arm splits exactly one pole-clear wide operand into
+  or points. A bounded polar arm accepts exactly one sub-π source window ending
+  at one bit-exact natural pole while the other source window remains pole-clear
+  and sub-π. It splits the polar latitude range into one closed pole-clear cell
+  and one closed cap, requires both cells to certify empty or exactly one cell
+  to own all retained evidence while its sibling certifies empty, and restores
+  the parent correspondence only after sibling emptiness excludes the
+  artificial latitude seam. The cap omits the collapsed pole-latitude plane as
+  a redundant inequality; its longitude planes meet at one canonical singular
+  pole anchor, and exact source-pole aliases map identically. The reviewed cap
+  produces one three-anchor positive-area region with exact repeat/swap and
+  outward residual evidence. Piece/pair/arc admission pins exact 2/1, 49/48,
+  and 196/195 ceilings. One-ULP near-poles, two polar sources, wide polar
+  sources, tangent boundary circles, and layouts occupying both latitude cells
+  remain fail-closed. A first wide arm splits exactly one pole-clear wide operand into
   three closed sub-π cells and returns `Complete` only for three certified-empty
   cells or one positive region with two certified-empty siblings; sibling
   emptiness cancels the artificial seams before parent correspondence is
@@ -1287,7 +1314,7 @@ true only for an empty complete result.
   admission remain pinned. Other seven-, eight-, or nine-positive unions, disconnected five-cell
   layouts without exact sibling separation, non-exact or otherwise ambiguous
   multi-edge shared seams, full-turn
-  aliases, polar, non-exact tangent, ambiguous multiple-cycle,
+  aliases, other polar, non-exact tangent, ambiguous multiple-cycle,
   and near-coincident
   non-identical cases remain `Indeterminate` or on their existing typed
   failure boundary.
@@ -1313,11 +1340,16 @@ true only for an empty complete result.
 
 ### M4d — First modeling consumers: profiles, transforms, extrude, and revolve
 
-- Extend the landed validated simple-polygon `PlanarProfile` to curve loops, holes,
-  nesting/arrangements, and explicit pcurves without weakening its exact-sign rejection
-  of degenerate or self-intersecting boundaries.
-- Add deterministic checked copy/transform for geometry and complete bodies, preserving
-  incidence, attributes, tolerances, and lineage without aliasing mutable ownership.
+- Extend the landed polygon-with-holes `PlanarProfile` and checked planar-sheet builder
+  to curve loops, nesting/material islands, and arrangements without weakening their
+  exact-sign rejection of degenerate, intersecting, touching, or unnested boundaries.
+- The first deterministic complete-body transform slice is implemented: an
+  orientation-preserving rigid placement duplicates the full topology and geometry
+  ownership closure, including offset bases and pcurves, preserves bounds, tolerances,
+  and periodic-chart metadata, and records `DerivedFrom` lineage for every new identity
+  before checked atomic commit. Verified intersection descriptors fail through a typed
+  unsupported capability until transformed certificates can be reissued. Extend this
+  seam to certified intersection curves, attributes, and non-rigid transform families.
 - Extrude and revolve them through the transaction/journal/topology APIs.
 - Exercise seams, axis contacts, caps, inner loops, and full/partial revolutions.
 
@@ -1458,9 +1490,9 @@ that queue must eventually discharge.
   safe-Offset(Plane)/B-surface, B-surface/B-surface, and direct
   Offset(B-surface)/B-surface and native direct-Plane SP-curve slices past the
   exemplar's now-certified vertex-less ring-domain boundary: broader
-  SP/foreign curves, null/general closed limits, remaining nullable chart data
-  including sample-2 NURBS omissions, ambiguous or multi-period trace aliases,
-  and noncanonical chart variants.
+  SP/foreign curves, null, mixed/non-`H`, or broader closed limits, remaining
+  nullable chart data including sample-2 NURBS omissions, ambiguous or multi-
+  period trace aliases, and noncanonical chart variants.
 - M2.5: finish parameter-space incidence and ratcheted Full-checker proofs for
   periodic/mixed boundaries, multi-loop containment, and curved shells; define
   operation-specific tolerance combination/propagation policies beyond the

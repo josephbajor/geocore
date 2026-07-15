@@ -73,7 +73,10 @@ application boundary.
 - M4 intersections are useful but provisional. Shared `Complete`/`Indeterminate`
   evidence, source-provenanced adaptive NURBS covers, interval implicit exclusion,
   Work-bounded polishing, exact algebraic seed/overlap certificates, selected paired
-  pcurves, and bounded coincident Plane/Cylinder/Sphere/Cone/Torus regions have landed.
+  pcurves, a first exact varying-normal Offset(NURBS) arm, and bounded coincident
+  Plane/Cylinder/Sphere/Cone/Torus regions including one exact polar-cap family have
+  landed. Polygonal profiles with holes and checked complete-body rigid copy are the
+  first M4 modeling consumers.
   General root discovery, complete verified residuals across every result family, and
   boolean-ready paired-pcurve branches remain gated.
 - M5-M8 are not started: there are no end-to-end booleans, general sweeps/sewing,
