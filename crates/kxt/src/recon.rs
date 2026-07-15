@@ -2100,10 +2100,10 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
         .map_err(XtError::Kernel)
     }
 
-    /// Import canonical finite-open charts and the one-shared-`H` periodic
-    /// equal-limit form without recomputing the spatial intersection. The
-    /// transmitted positions and interleaved UVs become one shared degree-1
-    /// basis and are certified over every span.
+    /// Import bounded finite-open charts and periodic closed-limit forms
+    /// without recomputing the spatial intersection. The transmitted
+    /// positions and interleaved UVs become one shared basis and are certified
+    /// over every span.
     fn intersection_curve(&mut self, curve_idx: u32, node: &Node) -> Result<CurveId> {
         let file = self.file;
         let source_indices = match field(file, node, "surface")? {
@@ -2185,12 +2185,13 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
         }
         let base_parameter = f64_of(file, chart, "base_parameter")?;
         let base_scale = f64_of(file, chart, "base_scale")?;
-        if base_parameter != 0.0 || base_scale != 1.0 {
+        if !base_parameter.is_finite() || !base_scale.is_finite() || base_scale <= 0.0 {
             return Err(XtError::Unsupported {
                 capability: XtCapability::IntersectionChartConvention,
-                what: "only canonical base_parameter=0/base_scale=1 charts are supported",
+                what: "INTERSECTION CHART base_parameter/base_scale must be finite with positive scale",
             });
         }
+        let noncanonical_chart = base_parameter != 0.0 || base_scale != 1.0;
         let count_i64 = field(file, chart, "chart_count")?
             .as_int()
             .ok_or(XtError::BadField {
@@ -2465,6 +2466,19 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             index: chart_idx,
             what: "INTERSECTION retained sample count is too large",
         })?;
+        let chart_parameters = (0..retained_count)
+            .map(|sample| base_parameter + base_scale * sample as f64)
+            .collect::<Vec<_>>();
+        if chart_parameters
+            .iter()
+            .any(|parameter| !parameter.is_finite())
+            || chart_parameters.windows(2).any(|pair| pair[1] <= pair[0])
+        {
+            return Err(XtError::Unsupported {
+                capability: XtCapability::IntersectionChartConvention,
+                what: "INTERSECTION CHART affine sample parameters must be finite and strictly increasing",
+            });
+        }
         let (proof_work, proof_depth) = if has_nurbs_source {
             let plane_trace_count = 2_u64 - nurbs_trace_count;
             let mut proof_work =
@@ -2551,6 +2565,22 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             && exact_trace_planes.iter().flatten().count() == 1;
         let finite_open_plane_offset_nurbs_endpoint_omissions =
             finite_open_plane_nurbs_interior_omissions && offset_nurbs_sources.contains(&true);
+        let noncanonical_plane_offset_nurbs = !closed_limits
+            && !terminated
+            && (2..=5).contains(&retained_count)
+            && direct_planes.iter().flatten().count() == 1
+            && offset_nurbs_sources
+                .iter()
+                .filter(|&&offset| offset)
+                .count()
+                == 1
+            && nurbs_source_count == 0;
+        if noncanonical_chart && !noncanonical_plane_offset_nurbs {
+            return Err(XtError::Unsupported {
+                capability: XtCapability::IntersectionChartConvention,
+                what: "noncanonical affine charts require the bounded finite-open two- through five-sample direct-Plane/Offset(B-surface) family",
+            });
+        }
         let mut uv = [
             Vec::with_capacity(retained_count),
             Vec::with_capacity(retained_count),

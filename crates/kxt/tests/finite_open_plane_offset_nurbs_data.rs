@@ -22,6 +22,10 @@ const V6_WORK: u64 = 208_228_426;
 const V6_ATTEMPTED_WORK: u64 = 221_060_174;
 const V7_WORK: u64 = 272_430_166;
 const V7_ATTEMPTED_WORK: u64 = 285_283_414;
+const NONCANONICAL_5089_WORK: u64 = 139_792_442;
+const NONCANONICAL_5089_PRIOR_WORK: u64 = 49_970_212;
+const NONCANONICAL_BASE_PARAMETER: f64 = 0.003_586_209_316_397_325;
+const NONCANONICAL_BASE_SCALE: f64 = 0.999_999_996_408_403;
 
 fn field<'a>(file: &'a kxt::XtFile, index: u32, name: &str) -> &'a Value {
     file.field(&file.nodes[&index], name).unwrap()
@@ -137,6 +141,22 @@ fn transplant_5089(file: &mut kxt::XtFile, destination: u32) {
         let value = field(file, 5089, name).clone();
         set_field(file, destination, name, value);
     }
+}
+
+fn make_5089_affine_noncanonical(file: &mut kxt::XtFile, destination: u32) {
+    transplant_5089(file, destination);
+    set_field(
+        file,
+        5088,
+        "base_parameter",
+        Value::Double(NONCANONICAL_BASE_PARAMETER),
+    );
+    set_field(
+        file,
+        5088,
+        "base_scale",
+        Value::Double(NONCANONICAL_BASE_SCALE),
+    );
 }
 
 #[test]
@@ -362,32 +382,159 @@ fn nurbs_trace_or_half_null_omissions_remain_typed_and_atomic() {
 }
 
 #[test]
-fn record_778_noncanonical_carrier_remains_typed_and_atomic() {
+fn affine_noncanonical_record_5089_variant_has_exact_resources_and_rollback() {
     let mut file = read_xt(EXEMPLAR).unwrap();
-    for name in ["surface", "chart", "start", "end", "intersection_data"] {
-        let value = field(&file, 778, name).clone();
-        set_field(&mut file, 1828, name, value);
-    }
-    assert_eq!(field(&file, 778, "chart").as_ptr(), Some(782));
+    make_5089_affine_noncanonical(&mut file, 1828);
+    assert_eq!(field(&file, 1828, "chart").as_ptr(), Some(5088));
+    assert_eq!(field(&file, 5088, "chart_count").as_int(), Some(4));
     assert_eq!(
-        field(&file, 782, "base_parameter").as_f64(),
-        Some(0.003_586_209_316_397_325)
+        field(&file, 5088, "base_parameter").as_f64(),
+        Some(NONCANONICAL_BASE_PARAMETER)
     );
     assert_eq!(
-        field(&file, 782, "base_scale").as_f64(),
-        Some(0.999_999_996_408_403)
+        field(&file, 5088, "base_scale").as_f64(),
+        Some(NONCANONICAL_BASE_SCALE)
+    );
+    let session = SessionPolicy::v1();
+    for (stage, resource, mode, exact, prior) in [
+        (
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            NONCANONICAL_5089_WORK,
+            NONCANONICAL_5089_PRIOR_WORK,
+        ),
+        (
+            INTERSECTION_CHART_ITEMS,
+            ResourceKind::Items,
+            AccountingMode::HighWater,
+            4,
+            0,
+        ),
+        (
+            INTERSECTION_CHART_DEPTH,
+            ResourceKind::Depth,
+            AccountingMode::HighWater,
+            10,
+            0,
+        ),
+    ] {
+        for allowed in [exact - 1, exact] {
+            let mut store = Store::new();
+            let outcome = reconstruct_with_context(
+                &file,
+                &mut store,
+                &context_with_limit(&session, stage, resource, mode, allowed),
+            )
+            .unwrap();
+            if allowed + 1 == exact {
+                let crossing = outcome.result().as_ref().unwrap_err().limit().unwrap();
+                assert_eq!(
+                    (
+                        crossing.stage,
+                        crossing.resource,
+                        crossing.consumed,
+                        crossing.allowed,
+                    ),
+                    (stage, resource, exact, allowed)
+                );
+                assert_eq!(usage(outcome.report(), stage, resource), prior);
+            } else {
+                assert_eq!(usage(outcome.report(), stage, resource), exact);
+            }
+            assert_rollback(&store);
+        }
+    }
+}
+
+#[test]
+fn corpus_noncanonical_candidates_remain_original_domain_typed_and_atomic() {
+    for (intersection, trace) in [(778, PairedTrace::Second), (3620, PairedTrace::First)] {
+        let mut file = read_xt(EXEMPLAR).unwrap();
+        for name in ["surface", "chart", "start", "end", "intersection_data"] {
+            let value = field(&file, intersection, name).clone();
+            set_field(&mut file, 1828, name, value);
+        }
+        let mut store = Store::new();
+        let error = reconstruct(&file, &mut store).unwrap_err();
+        assert!(matches!(
+            error,
+            XtError::IntersectionCertificate {
+                index: 1828,
+                source: IntersectionCertificateError::UnsupportedTraceParameterization {
+                    trace: actual,
+                    reason: "transmitted NURBS pcurve leaves the source surface domain",
+                },
+            } if actual == trace
+        ));
+        assert_rollback(&store);
+    }
+}
+
+#[test]
+fn invalid_or_out_of_family_affine_conventions_remain_typed_and_atomic() {
+    let mut zero_scale = read_xt(EXEMPLAR).unwrap();
+    make_5089_affine_noncanonical(&mut zero_scale, 1828);
+    set_field(&mut zero_scale, 5088, "base_scale", Value::Double(0.0));
+
+    let mut collapsed_samples = read_xt(EXEMPLAR).unwrap();
+    make_5089_affine_noncanonical(&mut collapsed_samples, 1828);
+    set_field(
+        &mut collapsed_samples,
+        5088,
+        "base_parameter",
+        Value::Double(f64::MAX),
+    );
+    set_field(
+        &mut collapsed_samples,
+        5088,
+        "base_scale",
+        Value::Double(1.0),
     );
 
-    let mut store = Store::new();
-    let error = reconstruct(&file, &mut store).unwrap_err();
-    assert!(matches!(
-        error,
-        XtError::Unsupported {
-            capability: XtCapability::IntersectionChartConvention,
-            what: "only canonical base_parameter=0/base_scale=1 charts are supported",
-        }
-    ));
-    assert_rollback(&store);
+    let mut out_of_family = read_xt(EXEMPLAR).unwrap();
+    for name in ["surface", "chart", "start", "end", "intersection_data"] {
+        let value = field(&out_of_family, 1252, name).clone();
+        set_field(&mut out_of_family, 1828, name, value);
+    }
+    set_field(
+        &mut out_of_family,
+        2234,
+        "base_parameter",
+        Value::Double(NONCANONICAL_BASE_PARAMETER),
+    );
+    set_field(
+        &mut out_of_family,
+        2234,
+        "base_scale",
+        Value::Double(NONCANONICAL_BASE_SCALE),
+    );
+
+    for (file, what) in [
+        (
+            zero_scale,
+            "INTERSECTION CHART base_parameter/base_scale must be finite with positive scale",
+        ),
+        (
+            collapsed_samples,
+            "INTERSECTION CHART affine sample parameters must be finite and strictly increasing",
+        ),
+        (
+            out_of_family,
+            "noncanonical affine charts require the bounded finite-open two- through five-sample direct-Plane/Offset(B-surface) family",
+        ),
+    ] {
+        let mut store = Store::new();
+        let error = reconstruct(&file, &mut store).unwrap_err();
+        assert!(matches!(
+            error,
+            XtError::Unsupported {
+                capability: XtCapability::IntersectionChartConvention,
+                what: actual,
+            } if actual == what
+        ));
+        assert_rollback(&store);
+    }
 }
 
 #[test]
