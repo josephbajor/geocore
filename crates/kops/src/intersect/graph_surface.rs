@@ -4,7 +4,8 @@
 //! leaves form exact analytic field families. Genuinely non-planar direct NURBS
 //! surfaces additionally support scoped exact-plane-field/NURBS, exact
 //! sphere-field/NURBS, compatible direct NURBS/NURBS marching, and a narrow
-//! constant-normal direct- or one-level nested-Offset(NURBS)/NURBS family.
+//! constant-normal Offset(NURBS)/NURBS family capped at three offset
+//! descriptors.
 //! Strictly separated pairs of compatible direct or one-level nested
 //! constant-normal Offset(NURBS) roots additionally own a graph-level
 //! complete-empty proof. The adapter
@@ -70,7 +71,8 @@ use kgraph::{
 const MAX_SPHERICAL_CIRCLE_PROOFS_PER_QUERY: u64 = 4_096;
 const MAX_NURBS_TRACE_CERTIFICATE_WORK_PER_QUERY: u64 = 134_217_728;
 const MAX_NURBS_TRACE_CERTIFICATE_ITEMS_PER_QUERY: u64 = 16_777_216;
-const MAX_OFFSET_NURBS_CHAIN_LENGTH: usize = 2;
+const MAX_OFFSET_NURBS_INTERSECTION_CHAIN_LENGTH: usize = 3;
+const MAX_DUAL_OFFSET_NURBS_EMPTY_CHAIN_LENGTH: usize = 2;
 
 /// Stable work stage for fixed whole-branch inverse sphere-chart subdivisions.
 pub const SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS: StageId =
@@ -511,9 +513,9 @@ pub fn intersect_bounded_graph_surfaces_with_context(
 /// regular-chart plane/sphere, exact-plane-field/genuinely-non-planar-
 /// direct-NURBS, exact-Sphere-field/genuinely-non-planar-direct-NURBS, and
 /// compatible genuinely-non-planar direct-NURBS/direct-NURBS branches are
-/// supported. Direct or one-level nested constant-normal
-/// Offset(NURBS)/NURBS branches additionally reuse the compatible paired
-/// marcher across the positive-area overlap of distinct operand windows. Two
+/// supported. Constant-normal Offset(NURBS)/NURBS roots containing at most
+/// three offset descriptors additionally reuse the compatible paired marcher
+/// across the positive-area overlap of distinct operand windows. Two
 /// compatible direct or one-level nested constant-normal Offset(NURBS) roots
 /// return a complete miss only from strict outward original-control
 /// separation; coincident or intersecting effective sheets and all other pairs
@@ -707,8 +709,8 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 basis: basis_b,
                 chain_length: chain_length_b,
             }),
-        ) if chain_length_a <= MAX_OFFSET_NURBS_CHAIN_LENGTH
-            && chain_length_b <= MAX_OFFSET_NURBS_CHAIN_LENGTH
+        ) if chain_length_a <= MAX_DUAL_OFFSET_NURBS_EMPTY_CHAIN_LENGTH
+            && chain_length_b <= MAX_DUAL_OFFSET_NURBS_EMPTY_CHAIN_LENGTH
             && supports_strictly_separated_constant_normal_offset_nurbs_pair(
                 basis_a,
                 signed_distance_a,
@@ -1178,7 +1180,7 @@ fn resolve_offset_nurbs_field(
         match descriptor {
             SurfaceDescriptor::Offset(offset) => {
                 distances.push(offset.signed_distance());
-                if distances.len() > MAX_OFFSET_NURBS_CHAIN_LENGTH {
+                if distances.len() > MAX_OFFSET_NURBS_INTERSECTION_CHAIN_LENGTH {
                     return Ok(None);
                 }
                 current = offset.basis();

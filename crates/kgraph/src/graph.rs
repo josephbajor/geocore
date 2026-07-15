@@ -21,6 +21,7 @@ use kcore::interval::Interval;
 use std::collections::{HashMap, HashSet};
 
 const MAX_VERIFIED_OFFSET_NURBS_CHAIN_LENGTH: usize = 2;
+const MAX_VERIFIED_OFFSET_NURBS_DIRECT_NURBS_CHAIN_LENGTH: usize = 3;
 
 /// Immutable 3D curve node. The descriptor is the node payload itself so
 /// topology's historical geometry-enum names can remain source compatible.
@@ -1061,6 +1062,20 @@ fn validate_curve_references(
     }
     if let Some(intersection) = descriptor.as_verified_nurbs_intersection() {
         let certificate = intersection.certificate();
+        let max_offset_nurbs_chain_length = if matches!(
+            certificate.traces(),
+            [
+                NurbsIntersectionTrace::OffsetNurbs(_),
+                NurbsIntersectionTrace::Nurbs(_)
+            ] | [
+                NurbsIntersectionTrace::Nurbs(_),
+                NurbsIntersectionTrace::OffsetNurbs(_)
+            ]
+        ) {
+            MAX_VERIFIED_OFFSET_NURBS_DIRECT_NURBS_CHAIN_LENGTH
+        } else {
+            MAX_VERIFIED_OFFSET_NURBS_CHAIN_LENGTH
+        };
         for (source, certified) in intersection
             .source_surfaces()
             .into_iter()
@@ -1084,7 +1099,12 @@ fn validate_curve_references(
                             "verified offset-NURBS source is not an offset descriptor",
                         ));
                     }
-                    verified_offset_nurbs_trace_matches(graph, source, certified)?
+                    verified_offset_nurbs_trace_matches(
+                        graph,
+                        source,
+                        certified,
+                        max_offset_nurbs_chain_length,
+                    )?
                 }
             };
             if !matches {
@@ -1277,10 +1297,12 @@ fn verified_offset_nurbs_trace_matches(
     graph: &GeometryGraph,
     root: SurfaceHandle,
     certified: &TransmittedOffsetNurbsTrace,
+    max_chain_length: usize,
 ) -> GeometryGraphResult<bool> {
-    // Operation-generated certificates admit one direct offset or one nested
-    // root. Walk every retained descriptor so validation reaches the live
-    // terminal basis and recomputes the effective distance from the source.
+    // Operation-generated Offset(NURBS)/direct-NURBS certificates admit one
+    // additional nested descriptor beyond the other verified families. Walk
+    // every retained descriptor so validation reaches the live terminal basis
+    // and recomputes the effective distance from the source.
     let mut current = root;
     let mut distances = Vec::new();
     loop {
@@ -1288,7 +1310,7 @@ fn verified_offset_nurbs_trace_matches(
         match graph.surface(current).ok_or_else(|| stale(geometry))? {
             SurfaceDescriptor::Offset(offset) => {
                 distances.push(offset.signed_distance());
-                if distances.len() > MAX_VERIFIED_OFFSET_NURBS_CHAIN_LENGTH {
+                if distances.len() > max_chain_length {
                     return Ok(false);
                 }
                 current = offset.basis();

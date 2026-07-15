@@ -1077,10 +1077,10 @@ true only for an empty complete result.
   and identical requested ranges. Its rounded scalar difference guides
   discovery only; outward original-control differences own complete misses and
   both original lifts are independently certified. The one-span paired fixture
-  pins 14,336/14,335 Work, 1,024/1,023 Items, and 10/9 Depth. A capped direct or
-  one-level nested Offset(NURBS)/NURBS arm admits the exact constant-+Z-normal
-  unit-chart terminal basis against a genuinely non-planar compatible peer.
-  At most two offset descriptors are accumulated inner-to-outer, with every
+  pins 14,336/14,335 Work, 1,024/1,023 Items, and 10/9 Depth. A capped
+  Offset(NURBS)/direct-NURBS arm admits the exact constant-+Z-normal unit-chart
+  terminal basis against a genuinely non-planar compatible peer. At most three
+  offset descriptors are accumulated inner-to-outer, with every
   partial distance and outward basis lift required finite. Distinct finite
   operand
   windows are accepted only when their exact axiswise overlap has positive
@@ -1089,8 +1089,8 @@ true only for an empty complete result.
   basis, direct source, and paired pcurves;
   outward original controls own misses while the rounded displaced surface is
   discovery-only. The paired proof keeps the same exact Work/Items/Depth
-  boundaries; a direct root uses exact 2/depth-2 graph traversal and a nested
-  root pins exact 3/2 visits and 3/2 dependency-depth admission.
+  boundaries; one, two, or three offset descriptors use exact 2/depth-2,
+  3/depth-3, or 4/depth-4 graph traversal with matching N/N-1 admission.
   Two independent direct or one-level nested Offset(NURBS) roots also prove a
   complete miss when both terminal bases use the exact constant-+Z-normal unit
   chart and outward original basis-plus-accumulated-distance controls are
@@ -1099,7 +1099,7 @@ true only for an empty complete result.
   N/N-1 evidence, zero certificate usage, no persistence allocation, preserved
   operand order, and rejection of coincident effective sheets.
   Planar or unaligned peers, disjoint or boundary-only ranges, unequal weights,
-  collapsed or non-finite sphere-offset fields, chains of three offset
+  collapsed or non-finite sphere-offset fields, chains of four or more offset
   descriptors, varying-normal Offset(NURBS), nested intersecting/coincident
   Offset(NURBS)/Offset(NURBS), broader NURBS/NURBS, and
   other procedural pairs remain typed unsupported.

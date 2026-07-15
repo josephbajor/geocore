@@ -188,213 +188,227 @@ fn overlapping_windows_promote_in_both_orders_and_persist_identities() {
 }
 
 #[test]
-fn nested_constant_normal_offset_preserves_chain_proof_and_exact_limits() {
-    let inner_distance = 0.02;
-    let outer_distance = 0.03;
-    let signed_distance = inner_distance + outer_distance;
-    let basis = basis(false);
-    let direct = crossing_direct(0.25 + signed_distance, false);
+fn capped_nested_constant_normal_offsets_preserve_chain_proof_and_exact_limits() {
     let tolerances = Tolerances::with_linear(1.0e-3).unwrap();
-    let lower = intersect_bounded_offset_nurbs_nurbs_surfaces(
-        &basis,
-        signed_distance,
-        overlapping_offset_window(),
-        &direct,
-        overlapping_direct_window(),
-        tolerances,
-    )
-    .unwrap();
-
-    let mut graph = GeometryGraph::new();
-    let basis_handle = graph.insert_surface(basis.clone()).unwrap();
-    let inner = graph
-        .insert_surface(OffsetSurfaceDescriptor::new(basis_handle, inner_distance))
-        .unwrap();
-    let outer = graph
-        .insert_surface(OffsetSurfaceDescriptor::new(inner, outer_distance))
-        .unwrap();
-    let direct_handle = graph.insert_surface(direct.clone()).unwrap();
     let session = SessionPolicy::v1();
-    let context = OperationContext::new(&session, tolerances).unwrap();
-    let outcome = intersect_bounded_graph_surfaces_with_context(
-        &graph,
-        outer,
-        overlapping_offset_window(),
-        direct_handle,
-        overlapping_direct_window(),
-        &context,
-    );
-    let result = outcome.result().unwrap();
-    assert_eq!(&result.raw, &lower);
-    assert_eq!(
-        observed(
-            outcome.report(),
-            kgraph::eval_stage::NODE_VISITS,
-            ResourceKind::Work,
-        ),
-        3
-    );
-    assert_eq!(
-        observed(
-            outcome.report(),
-            kgraph::eval_stage::DEPENDENCY_DEPTH,
-            ResourceKind::Depth,
-        ),
-        3
-    );
-
-    let certificate = result.branch_graph.edges[0].certificate.as_nurbs().unwrap();
-    let offset_trace = certificate.traces()[0].as_offset_nurbs().unwrap();
-    assert_eq!(offset_trace.basis(), &basis);
-    assert_eq!(offset_trace.signed_distance(), signed_distance);
-    assert_eq!(certificate.traces()[1].as_nurbs(), Some(&direct));
-    let cost = verified_offset_nurbs_nurbs_intersection_certificate_cost(
-        certificate.carrier(),
-        certificate.traces(),
-    )
-    .unwrap();
-    assert_eq!(
-        (cost.work(), cost.items(), cost.depth()),
-        (14_336, 1_024, 10)
-    );
-
-    let reverse = intersect_bounded_graph_surfaces(
-        &graph,
-        direct_handle,
-        overlapping_direct_window(),
-        outer,
-        overlapping_offset_window(),
-        tolerances,
-    )
-    .unwrap();
-    assert_eq!(reverse.raw, result.raw.clone().swapped());
-    let reverse_certificate = reverse.branch_graph.edges[0]
-        .certificate
-        .as_nurbs()
-        .unwrap();
-    assert_eq!(reverse_certificate.traces()[0].as_nurbs(), Some(&direct));
-    assert_eq!(
-        reverse_certificate.traces()[1].as_offset_nurbs(),
-        Some(offset_trace)
-    );
-
-    let exact_plan = BudgetPlan::new([
-        LimitSpec::new(
-            kgraph::eval_stage::NODE_VISITS,
-            ResourceKind::Work,
-            AccountingMode::Cumulative,
-            3,
-        ),
-        LimitSpec::new(
-            kgraph::eval_stage::DEPENDENCY_DEPTH,
-            ResourceKind::Depth,
-            AccountingMode::HighWater,
-            3,
-        ),
-        LimitSpec::new(
-            NURBS_TRACE_CERTIFICATE_WORK,
-            ResourceKind::Work,
-            AccountingMode::Cumulative,
-            cost.work(),
-        ),
-        LimitSpec::new(
-            NURBS_TRACE_CERTIFICATE_WORK,
-            ResourceKind::Items,
-            AccountingMode::HighWater,
-            cost.items(),
-        ),
-        LimitSpec::new(
-            NURBS_TRACE_CERTIFICATE_WORK,
-            ResourceKind::Depth,
-            AccountingMode::HighWater,
-            cost.depth(),
-        ),
-    ])
-    .unwrap();
-    let exact_context = OperationContext::new(&session, tolerances)
-        .unwrap()
-        .with_budget_overrides(exact_plan);
-    assert!(
-        intersect_bounded_graph_surfaces_with_context(
-            &graph,
-            outer,
+    for distances in [&[0.02, 0.03][..], &[0.01, 0.015, 0.025][..]] {
+        let signed_distance = distances.iter().sum::<f64>();
+        let basis = basis(false);
+        let direct = crossing_direct(0.25 + signed_distance, false);
+        let lower = intersect_bounded_offset_nurbs_nurbs_surfaces(
+            &basis,
+            signed_distance,
             overlapping_offset_window(),
-            direct_handle,
+            &direct,
             overlapping_direct_window(),
-            &exact_context,
+            tolerances,
         )
-        .result()
-        .is_ok()
-    );
+        .unwrap();
 
-    for (stage, resource, mode) in [
-        (
-            kgraph::eval_stage::NODE_VISITS,
-            ResourceKind::Work,
-            AccountingMode::Cumulative,
-        ),
-        (
-            kgraph::eval_stage::DEPENDENCY_DEPTH,
-            ResourceKind::Depth,
-            AccountingMode::HighWater,
-        ),
-    ] {
-        let denied_plan = BudgetPlan::new([LimitSpec::new(stage, resource, mode, 2)]).unwrap();
-        let denied_context = OperationContext::new(&session, tolerances)
-            .unwrap()
-            .with_budget_overrides(denied_plan);
-        let denied = intersect_bounded_graph_surfaces_with_context(
+        let mut graph = GeometryGraph::new();
+        let basis_handle = graph.insert_surface(basis.clone()).unwrap();
+        let mut chain_handles = vec![basis_handle];
+        let mut root = basis_handle;
+        for &distance in distances {
+            root = graph
+                .insert_surface(OffsetSurfaceDescriptor::new(root, distance))
+                .unwrap();
+            chain_handles.push(root);
+        }
+        let direct_handle = graph.insert_surface(direct.clone()).unwrap();
+        let expected_graph_resource = distances.len() as u64 + 1;
+        let context = OperationContext::new(&session, tolerances).unwrap();
+        let outcome = intersect_bounded_graph_surfaces_with_context(
             &graph,
-            outer,
+            root,
             overlapping_offset_window(),
             direct_handle,
             overlapping_direct_window(),
-            &denied_context,
+            &context,
         );
-        let GraphSurfaceIntersectionError::OperationPolicy(
-            kcore::operation::OperationPolicyError::LimitReached(crossing),
-        ) = denied.result().unwrap_err()
-        else {
-            panic!("N-1 nested graph resource must stop at {stage:?}");
-        };
-        assert_eq!(crossing.stage, stage);
-        assert_eq!(crossing.resource, resource);
-        assert_eq!(crossing.allowed, 2);
-        assert_eq!(crossing.consumed, 3);
-    }
+        let result = outcome.result().unwrap();
+        assert_eq!(&result.raw, &lower);
+        assert_eq!(
+            observed(
+                outcome.report(),
+                kgraph::eval_stage::NODE_VISITS,
+                ResourceKind::Work,
+            ),
+            expected_graph_resource
+        );
+        assert_eq!(
+            observed(
+                outcome.report(),
+                kgraph::eval_stage::DEPENDENCY_DEPTH,
+                ResourceKind::Depth,
+            ),
+            expected_graph_resource
+        );
 
-    let persistent = persist_verified_graph_surface_intersections(&mut graph, result).unwrap();
-    assert_eq!(
-        graph
-            .curve(persistent.edges[0].curve)
+        let certificate = result.branch_graph.edges[0].certificate.as_nurbs().unwrap();
+        let offset_trace = certificate.traces()[0].as_offset_nurbs().unwrap();
+        assert_eq!(offset_trace.basis(), &basis);
+        assert_eq!(offset_trace.signed_distance(), signed_distance);
+        assert_eq!(certificate.traces()[1].as_nurbs(), Some(&direct));
+        let cost = verified_offset_nurbs_nurbs_intersection_certificate_cost(
+            certificate.carrier(),
+            certificate.traces(),
+        )
+        .unwrap();
+        assert_eq!(
+            (cost.work(), cost.items(), cost.depth()),
+            (14_336, 1_024, 10)
+        );
+
+        let reverse = intersect_bounded_graph_surfaces(
+            &graph,
+            direct_handle,
+            overlapping_direct_window(),
+            root,
+            overlapping_offset_window(),
+            tolerances,
+        )
+        .unwrap();
+        assert_eq!(reverse.raw, result.raw.clone().swapped());
+        let reverse_certificate = reverse.branch_graph.edges[0]
+            .certificate
+            .as_nurbs()
+            .unwrap();
+        assert_eq!(reverse_certificate.traces()[0].as_nurbs(), Some(&direct));
+        assert_eq!(
+            reverse_certificate.traces()[1].as_offset_nurbs(),
+            Some(offset_trace)
+        );
+
+        let exact_plan = BudgetPlan::new([
+            LimitSpec::new(
+                kgraph::eval_stage::NODE_VISITS,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                expected_graph_resource,
+            ),
+            LimitSpec::new(
+                kgraph::eval_stage::DEPENDENCY_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                expected_graph_resource,
+            ),
+            LimitSpec::new(
+                NURBS_TRACE_CERTIFICATE_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                cost.work(),
+            ),
+            LimitSpec::new(
+                NURBS_TRACE_CERTIFICATE_WORK,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                cost.items(),
+            ),
+            LimitSpec::new(
+                NURBS_TRACE_CERTIFICATE_WORK,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                cost.depth(),
+            ),
+        ])
+        .unwrap();
+        let exact_context = OperationContext::new(&session, tolerances)
             .unwrap()
-            .as_verified_nurbs_intersection()
-            .unwrap()
-            .source_surfaces(),
-        [outer, direct_handle]
-    );
-    for protected in [basis_handle, inner, outer, direct_handle] {
-        assert!(matches!(
-            graph.remove_surface(protected),
-            Err(GeometryGraphError::HasDependents { .. })
-        ));
+            .with_budget_overrides(exact_plan);
+        assert!(
+            intersect_bounded_graph_surfaces_with_context(
+                &graph,
+                root,
+                overlapping_offset_window(),
+                direct_handle,
+                overlapping_direct_window(),
+                &exact_context,
+            )
+            .result()
+            .is_ok()
+        );
+
+        for (stage, resource, mode) in [
+            (
+                kgraph::eval_stage::NODE_VISITS,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+            ),
+            (
+                kgraph::eval_stage::DEPENDENCY_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+            ),
+        ] {
+            let denied_plan = BudgetPlan::new([LimitSpec::new(
+                stage,
+                resource,
+                mode,
+                expected_graph_resource - 1,
+            )])
+            .unwrap();
+            let denied_context = OperationContext::new(&session, tolerances)
+                .unwrap()
+                .with_budget_overrides(denied_plan);
+            let denied = intersect_bounded_graph_surfaces_with_context(
+                &graph,
+                root,
+                overlapping_offset_window(),
+                direct_handle,
+                overlapping_direct_window(),
+                &denied_context,
+            );
+            let GraphSurfaceIntersectionError::OperationPolicy(
+                kcore::operation::OperationPolicyError::LimitReached(crossing),
+            ) = denied.result().unwrap_err()
+            else {
+                panic!("N-1 nested graph resource must stop at {stage:?}");
+            };
+            assert_eq!(crossing.stage, stage);
+            assert_eq!(crossing.resource, resource);
+            assert_eq!(crossing.allowed, expected_graph_resource - 1);
+            assert_eq!(crossing.consumed, expected_graph_resource);
+        }
+
+        let persistent = persist_verified_graph_surface_intersections(&mut graph, result).unwrap();
+        assert_eq!(
+            graph
+                .curve(persistent.edges[0].curve)
+                .unwrap()
+                .as_verified_nurbs_intersection()
+                .unwrap()
+                .source_surfaces(),
+            [root, direct_handle]
+        );
+        chain_handles.push(direct_handle);
+        for protected in chain_handles {
+            assert!(matches!(
+                graph.remove_surface(protected),
+                Err(GeometryGraphError::HasDependents { .. })
+            ));
+        }
+        graph.validate().unwrap();
     }
-    graph.validate().unwrap();
 }
 
 #[test]
-fn altered_nested_offset_rolls_persistence_back_atomically() {
-    let inner_distance = 0.02;
-    let outer_distance = 0.03;
-    let signed_distance = inner_distance + outer_distance;
+fn altered_three_descriptor_offset_rolls_persistence_back_atomically() {
+    let inner_distance = 0.01;
+    let middle_distance = 0.015;
+    let outer_distance = 0.025;
+    let signed_distance = inner_distance + middle_distance + outer_distance;
     let tolerances = Tolerances::with_linear(1.0e-3).unwrap();
     let mut graph = GeometryGraph::new();
     let basis_handle = graph.insert_surface(basis(false)).unwrap();
     let inner = graph
         .insert_surface(OffsetSurfaceDescriptor::new(basis_handle, inner_distance))
         .unwrap();
+    let middle = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(inner, middle_distance))
+        .unwrap();
     let outer = graph
-        .insert_surface(OffsetSurfaceDescriptor::new(inner, outer_distance))
+        .insert_surface(OffsetSurfaceDescriptor::new(middle, outer_distance))
         .unwrap();
     let direct = graph
         .insert_surface(crossing_direct(0.25 + signed_distance, false))
@@ -411,8 +425,8 @@ fn altered_nested_offset_rolls_persistence_back_atomically() {
 
     graph
         .replace_surface(
-            inner,
-            OffsetSurfaceDescriptor::new(basis_handle, inner_distance + 0.001),
+            middle,
+            OffsetSurfaceDescriptor::new(inner, middle_distance + 0.001),
         )
         .unwrap();
     let before = (
@@ -1134,8 +1148,11 @@ fn broader_offset_families_and_unaligned_charts_fail_closed() {
     let nested = graph
         .insert_surface(OffsetSurfaceDescriptor::new(offset, 0.01))
         .unwrap();
-    let too_deep = graph
+    let capped = graph
         .insert_surface(OffsetSurfaceDescriptor::new(nested, 0.01))
+        .unwrap();
+    let too_deep = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(capped, 0.01))
         .unwrap();
     let direct_handle = graph.insert_surface(direct).unwrap();
     let curved_basis_handle = graph.insert_surface(curved_basis).unwrap();
@@ -1184,6 +1201,8 @@ fn broader_offset_families_and_unaligned_charts_fail_closed() {
         (coincident_offset, offset),
         (nested, nested_coincident_offset),
         (nested_coincident_offset, nested),
+        (capped, separated_offset),
+        (separated_offset, capped),
         (too_deep, separated_offset),
         (separated_offset, too_deep),
         (offset, unequal_weight_offset),
