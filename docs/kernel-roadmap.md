@@ -1099,7 +1099,7 @@ true only for an empty complete result.
   pins 14,336/14,335 Work, 1,024/1,023 Items, and 10/9 Depth; equal windows remain
   supported while disjoint or boundary-only windows fail closed. A capped
   Offset(NURBS)/direct-NURBS arm admits the exact constant-+Z-normal unit-chart
-  terminal basis against a genuinely non-planar compatible peer. At most three
+  terminal basis against a genuinely non-planar compatible peer. At most four
   offset descriptors are accumulated inner-to-outer, with every
   partial distance and outward basis lift required finite. Distinct finite
   operand
@@ -1109,8 +1109,9 @@ true only for an empty complete result.
   basis, direct source, and paired pcurves;
   outward original controls own misses while the rounded displaced surface is
   discovery-only. The paired proof keeps the same exact Work/Items/Depth
-  boundaries; one, two, or three offset descriptors use exact 2/depth-2,
-  3/depth-3, or 4/depth-4 graph traversal with matching N/N-1 admission.
+  boundaries; one, two, three, or four offset descriptors use exact 2/depth-2,
+  3/depth-3, 4/depth-4, or 5/depth-5 graph traversal with matching N/N-1
+  admission.
   Two independent one- through three-descriptor Offset(NURBS) roots also prove
   a complete miss when both terminal bases use the exact constant-+Z-normal
   unit chart and outward original basis-plus-accumulated-distance controls are
@@ -1120,8 +1121,9 @@ true only for an empty complete result.
   allocation, preserved operand order, and rejection of coincident effective
   sheets and four-or-more-descriptor roots.
   Planar or unaligned peers, disjoint or boundary-only ranges, unequal weights,
-  collapsed or non-finite sphere-offset fields, chains of four or more offset
-  descriptors, varying-normal Offset(NURBS), nested intersecting/coincident
+  collapsed or non-finite sphere-offset fields, positive
+  Offset(NURBS)/direct-NURBS chains of five or more offset descriptors,
+  varying-normal Offset(NURBS), nested intersecting/coincident
   Offset(NURBS)/Offset(NURBS), broader NURBS/NURBS, and
   other procedural pairs remain typed unsupported.
   The compatibility magnitude-twelve rung runs the complete historical
@@ -1260,6 +1262,11 @@ true only for an empty complete result.
   empty `[2,1]` and returns one canonical 18-edge outer cycle. All nine occupied
   adjacencies own reverse-oriented bit-exact seam pairs; repeat and operand swap
   are bit-exact, while the general merger retains the bounded one-owner rule.
+  A second reviewed eight-cell fixture leaves the corner cell `[2,0]`
+  certified empty rather than an edge-middle cell. Its distinct corner-notch
+  adjacency topology passes the same generic exact seam proof and returns one
+  canonical 17-edge outer cycle with exact repeat/swap, proving the arm is not
+  limited to the original all-but-`[2,1]` layout.
   The reviewed nine-cell fixture needs no empty sibling because its closed 3×3
   decomposition exhausts the parent. All twelve internal adjacencies certify
   and cancel, leaving one canonical 17-edge outer cycle with exact repeat/swap;

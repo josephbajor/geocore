@@ -3850,6 +3850,33 @@ mod tests {
         (a, b, a_range, b_range)
     }
 
+    fn corner_empty_eight_cell_fixture() -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+        let a = Sphere::new(Frame::world(), 1.0).unwrap();
+        let angle = 1.0232556972921847;
+        let b = Sphere::new(
+            Frame::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(math::sin(angle), 0.0, math::cos(angle)),
+                Vec3::new(math::cos(angle), 0.0, -math::sin(angle)),
+            )
+            .unwrap(),
+            1.0,
+        )
+        .unwrap();
+        (
+            a,
+            b,
+            [
+                ParamRange::new(-0.5962248359795472, 3.724488143015183),
+                ParamRange::new(-0.5588244443273177, 1.2462339159163787),
+            ],
+            [
+                ParamRange::new(-0.02643539714706078, 3.7993244942837436),
+                ParamRange::new(-0.6331431121684868, 1.3252780316345976),
+            ],
+        )
+    }
+
     fn nine_cell_fixture() -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
         let a = Sphere::new(Frame::world(), 1.0).unwrap();
         let angle = 0.941731645814849;
@@ -4238,6 +4265,64 @@ mod tests {
     #[test]
     fn nine_cell_exhaustive_union_and_limits_are_exact() {
         let (a, b, a_range, b_range) = nine_cell_fixture();
+        let allowance = arbitrary_sphere_octant_parameter_allowance(a_range, b_range).unwrap();
+        let hit = certify_double_wide_sphere_window_union(
+            &a,
+            a_range,
+            &b,
+            b_range,
+            Tolerances::default(),
+            allowance,
+            GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+            GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+            GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+        )
+        .unwrap();
+        assert!(hit.is_complete());
+        assert_eq!(hit.regions.len(), 1);
+        assert_eq!(hit.regions[0].boundary.len(), 17);
+
+        for (piece_limit, pair_limit, arc_limit, reason) in [
+            (
+                GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT - 1,
+                GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+                "general coincident sphere both-wide union piece limit exhausted",
+            ),
+            (
+                GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT - 1,
+                GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+                "general coincident sphere both-wide union pair limit exhausted",
+            ),
+            (
+                GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT - 1,
+                "general coincident sphere both-wide union arc limit exhausted",
+            ),
+        ] {
+            assert_eq!(
+                certify_double_wide_sphere_window_union(
+                    &a,
+                    a_range,
+                    &b,
+                    b_range,
+                    Tolerances::default(),
+                    allowance,
+                    piece_limit,
+                    pair_limit,
+                    arc_limit,
+                )
+                .unwrap_err(),
+                Error::InvalidGeometry { reason }
+            );
+        }
+    }
+
+    #[test]
+    fn corner_empty_eight_cell_union_and_limits_are_exact() {
+        let (a, b, a_range, b_range) = corner_empty_eight_cell_fixture();
         let allowance = arbitrary_sphere_octant_parameter_allowance(a_range, b_range).unwrap();
         let hit = certify_double_wide_sphere_window_union(
             &a,

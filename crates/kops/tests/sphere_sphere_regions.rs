@@ -170,6 +170,25 @@ fn eight_cell_non_path_wide_fixture() -> (Sphere, Sphere, [ParamRange; 2], [Para
     (a, b, a_window, b_window)
 }
 
+fn corner_empty_eight_cell_wide_fixture() -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+    (
+        world_sphere(),
+        y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 1.0232556972921847),
+        window(
+            -0.5962248359795472,
+            3.724488143015183,
+            -0.5588244443273177,
+            1.2462339159163787,
+        ),
+        window(
+            -0.02643539714706078,
+            3.7993244942837436,
+            -0.6331431121684868,
+            1.3252780316345976,
+        ),
+    )
+}
+
 fn nine_cell_non_path_wide_fixture() -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
     (
         world_sphere(),
@@ -1695,6 +1714,55 @@ fn general_both_wide_nine_positive_cells_certify_exhaustive_union_and_swap() {
                 || parameter(end).to_bits() != seam.to_bits()
         }));
     }
+    for (first, second) in hit.regions[0]
+        .boundary
+        .iter()
+        .zip(hit.regions[0].boundary.iter().cycle().skip(1))
+    {
+        assert_ne!(first, second);
+        assert!(a.eval(first.uv_a).dist(b.eval(first.uv_b)) <= hit.regions[0].max_residual);
+    }
+
+    let repeated =
+        intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_eq!(hit, repeated);
+    let swapped =
+        intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
+    assert_eq!(hit.clone().swapped(), swapped);
+    assert_general_sphere_window_region(&swapped, &b, &a);
+}
+
+#[test]
+fn general_both_wide_corner_empty_eight_cells_certify_distinct_union_and_swap() {
+    let (a, b, a_window, b_window) = corner_empty_eight_cell_wide_fixture();
+    let empty_cell = [2, 0];
+    for a_index in 0..3 {
+        for b_index in 0..3 {
+            let child = intersect_bounded_spheres(
+                &a,
+                wide_grid_piece(a_window, a_index),
+                &b,
+                wide_grid_piece(b_window, b_index),
+                Tolerances::default(),
+            )
+            .unwrap();
+            if [a_index, b_index] == empty_cell {
+                assert!(child.is_proven_empty());
+            } else {
+                assert_general_sphere_window_region(&child, &a, &b);
+            }
+        }
+    }
+
+    let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_general_sphere_window_region(&hit, &a, &b);
+    assert_eq!(hit.regions[0].boundary.len(), 17);
+    let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = hit.regions[0].correspondence
+    else {
+        unreachable!()
+    };
+    assert_eq!(map.first_range(), a_window);
+    assert_eq!(map.second_range(), b_window);
     for (first, second) in hit.regions[0]
         .boundary
         .iter()
