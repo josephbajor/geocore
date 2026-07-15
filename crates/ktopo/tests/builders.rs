@@ -6,7 +6,7 @@
 //! Checked builders for non-solid topology used by profiles and interchange.
 
 use kgeom::frame::Frame;
-use kgeom::vec::{Point2, Point3};
+use kgeom::vec::{Point2, Point3, Vec3};
 use ktopo::btess::{TessOptions, check_watertight, signed_volume, tessellate_body};
 use ktopo::check::{CheckLevel, CheckOutcome, VerificationGapKind, check_body_report};
 use ktopo::entity::{BodyKind, Edge, Face, Fin, Loop, Region, Shell, Vertex};
@@ -187,6 +187,53 @@ fn polygonal_profile_extrusion_with_a_hole_is_full_valid_watertight_and_exact() 
 }
 
 #[test]
+fn oblique_polygonal_profile_extrusion_is_full_valid_watertight_and_volume_preserving() {
+    let outer = [
+        Point2::new(-2.0, -1.0),
+        Point2::new(2.0, -1.0),
+        Point2::new(2.0, 3.0),
+        Point2::new(-2.0, 3.0),
+    ];
+    let hole = [
+        Point2::new(-1.0, 0.0),
+        Point2::new(1.0, 0.0),
+        Point2::new(1.0, 2.0),
+        Point2::new(-1.0, 2.0),
+    ];
+    let profile = PlanarProfile::from_polygon_with_holes(Frame::world(), &outer, &[&hole]).unwrap();
+    let translation = Vec3::new(0.75, -0.5, 2.0);
+    let mut store = Store::new();
+    let made = make::extrude_profile_along_with_journal(&mut store, &profile, translation).unwrap();
+    let body = made.body();
+
+    assert_eq!(store.count::<Face>(), 10);
+    assert_eq!(store.count::<Loop>(), 12);
+    assert_eq!(store.count::<Edge>(), 24);
+    assert_eq!(store.count::<Vertex>(), 16);
+    assert_eq!(store.count::<Fin>(), 48);
+    assert!(
+        made.journal()
+            .mutations()
+            .iter()
+            .all(|mutation| mutation.kind == MutationKind::Created)
+    );
+    let full = check_body_report(&store, body, CheckLevel::Full).unwrap();
+    assert_eq!(full.outcome(), CheckOutcome::Valid, "{full:?}");
+
+    let mesh = tessellate_body(
+        &store,
+        body,
+        &TessOptions {
+            chord_tol: 1.0e-3,
+            max_edge_len: Some(0.5),
+        },
+    )
+    .unwrap();
+    assert!(check_watertight(&mesh).is_empty());
+    assert!((signed_volume(&mesh) - 24.0).abs() <= 1.0e-9);
+}
+
+#[test]
 fn rejected_profile_extrusions_are_atomic_and_reuse_future_identity() {
     let polygon = [
         Point2::new(-1.0, -1.0),
@@ -203,6 +250,36 @@ fn rejected_profile_extrusions_are_atomic_and_reuse_future_identity() {
     let made_after = make::extrude_profile_with_journal(&mut after_failure, &profile, 2.0).unwrap();
     let mut control = Store::new();
     let made_control = make::extrude_profile_with_journal(&mut control, &profile, 2.0).unwrap();
+    assert_eq!(made_after.body(), made_control.body());
+    assert_eq!(made_after.journal(), made_control.journal());
+}
+
+#[test]
+fn rejected_oblique_profile_extrusions_are_atomic_and_reuse_future_identity() {
+    let polygon = [
+        Point2::new(-1.0, -1.0),
+        Point2::new(1.0, -1.0),
+        Point2::new(1.0, 1.0),
+        Point2::new(-1.0, 1.0),
+    ];
+    let profile = PlanarProfile::from_polygon(Frame::world(), &polygon).unwrap();
+    let mut after_failure = Store::new();
+    for translation in [
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, -1.0),
+        Vec3::new(f64::NAN, 0.0, 1.0),
+    ] {
+        assert!(make::extrude_profile_along(&mut after_failure, &profile, translation).is_err());
+    }
+    assert_eq!(after_failure.count::<Region>(), 0);
+
+    let translation = Vec3::new(0.25, -0.5, 2.0);
+    let made_after =
+        make::extrude_profile_along_with_journal(&mut after_failure, &profile, translation)
+            .unwrap();
+    let mut control = Store::new();
+    let made_control =
+        make::extrude_profile_along_with_journal(&mut control, &profile, translation).unwrap();
     assert_eq!(made_after.body(), made_control.body());
     assert_eq!(made_after.journal(), made_control.journal());
 }

@@ -275,8 +275,9 @@ struct PrismTranslation {
 /// Certify the exact topology product emitted by the polygonal-profile
 /// extrusion builder: two translated planar regions and one planar quad for
 /// every boundary segment. Profile loop simplicity/containment proves the
-/// planar material region; the one-to-one translated edge/quad closure then
-/// proves that sweeping it through a nonzero interval is embedded.
+/// planar material region; the one-to-one translated edge/quad closure and a
+/// nonzero translation component normal to the caps then prove that its affine
+/// sweep is embedded.
 fn certify_planar_profile_prism(
     store: &Store,
     shell_id: ShellId,
@@ -300,9 +301,6 @@ fn certify_planar_profile_prism(
     let Some(translation) = translated_prism_vertices(store, &bottom, &top)? else {
         return Ok(None);
     };
-    let Some(axis) = translation.vector.normalized() else {
-        return Ok(None);
-    };
     let bottom_face = store.get(bottom.face)?;
     let top_face = store.get(top.face)?;
     let SurfaceGeom::Plane(bottom_plane) = store.get(bottom_face.surface)? else {
@@ -311,11 +309,17 @@ fn certify_planar_profile_prism(
     let SurfaceGeom::Plane(top_plane) = store.get(top_face.surface)? else {
         unreachable!("prism cap classification retains a plane");
     };
-    if 1.0 - bottom_plane.frame().z().dot(axis).abs() > ANGULAR_RESOLUTION
-        || 1.0 - top_plane.frame().z().dot(axis).abs() > ANGULAR_RESOLUTION
+    let top_surface_axis = top_plane.frame().z();
+    if translation.vector.dot(top_surface_axis) == 0.0
+        || 1.0 - bottom_plane.frame().z().dot(top_surface_axis).abs() > ANGULAR_RESOLUTION
     {
         return Ok(None);
     }
+    let axis = if translation.vector.dot(top_surface_axis) > 0.0 {
+        top_surface_axis
+    } else {
+        -top_surface_axis
+    };
 
     let bottom_edges: Vec<_> = bottom.uses.iter().map(|use_| use_.edge).collect();
     let top_edges: Vec<_> = top.uses.iter().map(|use_| use_.edge).collect();
@@ -391,7 +395,7 @@ fn certify_planar_profile_prism(
 
         let tangent =
             store.vertex_position(boundary.head)? - store.vertex_position(boundary.tail)?;
-        let Some(expected_side_normal) = tangent.cross(expected_bottom_normal).normalized() else {
+        let Some(expected_side_normal) = translation.vector.cross(tangent).normalized() else {
             return Ok(None);
         };
         let side_face = store.get(side_face_id)?;
@@ -731,11 +735,11 @@ fn strictly_convex(points: &[Point2]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::make::{block, cylinder, extrude_profile, sphere, torus};
+    use crate::make::{block, cylinder, extrude_profile, extrude_profile_along, sphere, torus};
     use crate::profile::PlanarProfile;
     use crate::store::Store;
     use kgeom::frame::Frame;
-    use kgeom::vec::Point2;
+    use kgeom::vec::{Point2, Vec3};
 
     fn solid_shell(store: &Store, body: crate::entity::BodyId) -> ShellId {
         let solid = store
@@ -825,6 +829,36 @@ mod tests {
                 embedding: ShellEmbedding::Certified,
                 orientation: ShellOrientation::Invalid,
             }
+        );
+    }
+
+    #[test]
+    fn oblique_polygonal_profile_prism_is_embedded_and_orientation_is_decidable() {
+        let polygon = [
+            Point2::new(-1.0, -1.0),
+            Point2::new(1.0, -1.0),
+            Point2::new(1.0, 1.0),
+            Point2::new(-1.0, 1.0),
+        ];
+        let profile = PlanarProfile::from_polygon(Frame::world(), &polygon).unwrap();
+        let mut store = Store::new();
+        let body = extrude_profile_along(&mut store, &profile, Vec3::new(0.75, -0.5, 2.0)).unwrap();
+        let shell = solid_shell(&store, body);
+        assert_eq!(
+            certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
+            ShellCertification {
+                embedding: ShellEmbedding::Certified,
+                orientation: ShellOrientation::Certified,
+            }
+        );
+
+        let side = store.get(shell).unwrap().faces[2];
+        store.get_mut(side).unwrap().sense = store.get(side).unwrap().sense.flipped();
+        assert_eq!(
+            certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid)
+                .unwrap()
+                .orientation,
+            ShellOrientation::Invalid
         );
     }
 

@@ -18,8 +18,9 @@
 //!   [`PlanarProfile`] inputs may add strictly contained polygonal holes, with
 //!   an explicit line pcurve on every boundary use.
 //! - [`extrude_profile`]: a positive-height solid prism from a reusable
-//!   polygonal profile, including one side-face ring for every outer or hole
-//!   boundary and explicit line pcurves on every cap and side use.
+//!   polygonal profile; [`extrude_profile_along`] admits a positive-normal
+//!   oblique translation. Both include one side-face ring for every outer or
+//!   hole boundary and explicit line pcurves on every cap and side use.
 //! - [`wire_polyline`]: an open or closed chain of bounded line edges.
 //! - [`acorn`]: one isolated model-space point.
 //!
@@ -318,26 +319,73 @@ pub fn extrude_profile_with_journal(
     profile: &PlanarProfile,
     height: f64,
 ) -> Result<BodyCreation> {
-    checked_body_creation(store, |store| extrude_profile_in(store, profile, height))
+    checked_body_creation(store, |store| {
+        let height = positive_dimension(height, "profile extrusion height")?;
+        extrude_profile_along_in(store, profile, profile.frame().z() * height)
+    })
 }
 
-fn extrude_profile_in(store: &mut Store, profile: &PlanarProfile, height: f64) -> Result<BodyId> {
-    let height = positive_dimension(height, "profile extrusion height")?;
+/// Extrude one validated polygonal profile by an oblique translation.
+///
+/// `translation` may have any tangential component but must have a finite,
+/// positive component along `profile.frame().z()`. This makes the affine
+/// sweep injective and preserves the profile's material orientation.
+pub fn extrude_profile_along(
+    store: &mut Store,
+    profile: &PlanarProfile,
+    translation: Vec3,
+) -> Result<BodyId> {
+    Ok(extrude_profile_along_with_journal(store, profile, translation)?.body)
+}
+
+/// Failure-atomic [`extrude_profile_along`] creation with its deterministic journal.
+pub fn extrude_profile_along_with_journal(
+    store: &mut Store,
+    profile: &PlanarProfile,
+    translation: Vec3,
+) -> Result<BodyCreation> {
+    checked_body_creation(store, |store| {
+        extrude_profile_along_in(store, profile, translation)
+    })
+}
+
+fn extrude_profile_along_in(
+    store: &mut Store,
+    profile: &PlanarProfile,
+    translation: Vec3,
+) -> Result<BodyId> {
     let frame = profile.frame();
-    let top_origin = frame.origin() + frame.z() * height;
+    check_in_size_box(translation.to_array())?;
+    if translation.dot(frame.z()) <= 0.0 {
+        return Err(Error::InvalidGeometry {
+            reason: "profile extrusion translation must have a positive normal component",
+        });
+    }
+    let top_origin = frame.origin() + translation;
     for point in core::iter::once(profile.outer()).chain(profile.holes().iter().map(Vec::as_slice))
     {
         for point in point {
-            check_in_size_box(frame.point_at(point.x, point.y, height).to_array())?;
+            check_in_size_box((frame.point_at(point.x, point.y, 0.0) + translation).to_array())?;
         }
     }
 
     let (body, shell) = solid_body_scaffold(store);
     let bottom_frame = Frame::new(frame.origin(), -frame.z(), frame.x())?;
     let top_frame = Frame::new(top_origin, frame.z(), frame.x())?;
-    let domain = point_domain(profile.outer().iter().copied())?;
-    let bottom = add_extrusion_cap(store, shell, bottom_frame, domain)?;
-    let top = add_extrusion_cap(store, shell, top_frame, domain)?;
+    let bottom_domain = point_domain(
+        profile
+            .outer()
+            .iter()
+            .map(|point| frame_uv(&bottom_frame, frame.point_at(point.x, point.y, 0.0))),
+    )?;
+    let top_domain = point_domain(profile.outer().iter().map(|point| {
+        frame_uv(
+            &top_frame,
+            frame.point_at(point.x, point.y, 0.0) + translation,
+        )
+    }))?;
+    let bottom = add_extrusion_cap(store, shell, bottom_frame, bottom_domain)?;
+    let top = add_extrusion_cap(store, shell, top_frame, top_domain)?;
 
     for polygon in
         core::iter::once(profile.outer()).chain(profile.holes().iter().map(Vec::as_slice))
@@ -351,7 +399,7 @@ fn extrude_profile_in(store: &mut Store, profile: &PlanarProfile, height: f64) -
             &top_frame,
             frame,
             polygon,
-            height,
+            translation,
         )?;
     }
     Ok(body)
@@ -386,7 +434,7 @@ fn add_extruded_polygon_ring(
     top_frame: &Frame,
     profile_frame: &Frame,
     polygon: &[Point2],
-    height: f64,
+    translation: Vec3,
 ) -> Result<()> {
     let count = polygon.len();
     let bottom_positions: Vec<_> = polygon
@@ -395,7 +443,7 @@ fn add_extruded_polygon_ring(
         .collect();
     let top_positions: Vec<_> = polygon
         .iter()
-        .map(|point| profile_frame.point_at(point.x, point.y, height))
+        .map(|point| profile_frame.point_at(point.x, point.y, 0.0) + translation)
         .collect();
     let bottom_vertices: Vec<_> = bottom_positions
         .iter()
@@ -408,7 +456,7 @@ fn add_extruded_polygon_ring(
 
     let mut bottom_edges = Vec::with_capacity(count);
     let mut top_edges = Vec::with_capacity(count);
-    let mut vertical_edges = Vec::with_capacity(count);
+    let mut sweep_edges = Vec::with_capacity(count);
     for index in 0..count {
         let next = (index + 1) % count;
         bottom_edges.push(add_exact_line_edge(
@@ -425,7 +473,7 @@ fn add_extruded_polygon_ring(
             top_positions[index],
             top_positions[next],
         )?);
-        vertical_edges.push(add_exact_line_edge(
+        sweep_edges.push(add_exact_line_edge(
             store,
             bottom_vertices[index],
             top_vertices[index],
@@ -456,15 +504,26 @@ fn add_extruded_polygon_ring(
         let start = bottom_positions[index];
         let end = bottom_positions[next];
         let edge_vector = end - start;
-        let edge_length = edge_vector.norm();
-        let side_frame = Frame::new(start, edge_vector.cross(profile_frame.z()), edge_vector)?;
+        let side_frame = Frame::new(start, edge_vector.cross(translation), edge_vector)?;
+        let side_points = [
+            bottom_positions[index],
+            bottom_positions[next],
+            top_positions[next],
+            top_positions[index],
+        ];
+        let side_domain = point_domain(
+            side_points
+                .iter()
+                .copied()
+                .map(|point| frame_uv(&side_frame, point)),
+        )?;
         let surface = store.insert_surface(SurfaceGeom::Plane(Plane::new(side_frame)))?;
         let face = store.add(Face {
             shell,
             loops: Vec::new(),
             surface,
             sense: Sense::Forward,
-            domain: Some(FaceDomain::from_bounds(0.0, edge_length, 0.0, height)?),
+            domain: Some(side_domain),
             tolerance: None,
         });
         store.get_mut(shell)?.faces.push(face);
@@ -474,37 +533,29 @@ fn add_extruded_polygon_ring(
         });
         store.get_mut(face)?.loops.push(loop_);
         let uses = [
+            (bottom_edges[index], Sense::Forward, start, end),
             (
-                bottom_edges[index],
+                sweep_edges[next],
                 Sense::Forward,
-                Point2::new(0.0, 0.0),
-                Vec2::new(1.0, 0.0),
-                edge_length,
-            ),
-            (
-                vertical_edges[next],
-                Sense::Forward,
-                Point2::new(edge_length, 0.0),
-                Vec2::new(0.0, 1.0),
-                height,
+                bottom_positions[next],
+                top_positions[next],
             ),
             (
                 top_edges[index],
                 Sense::Reversed,
-                Point2::new(0.0, height),
-                Vec2::new(1.0, 0.0),
-                edge_length,
+                top_positions[index],
+                top_positions[next],
             ),
             (
-                vertical_edges[index],
+                sweep_edges[index],
                 Sense::Reversed,
-                Point2::new(0.0, 0.0),
-                Vec2::new(0.0, 1.0),
-                height,
+                bottom_positions[index],
+                top_positions[index],
             ),
         ];
-        for (edge, sense, origin, direction, length) in uses {
-            let pcurve = straight_pcurve(store, origin, direction, length)?;
+        for (edge, sense, curve_start, curve_end) in uses {
+            let length = (curve_end - curve_start).norm();
+            let pcurve = line_pcurve(store, &side_frame, curve_start, curve_end, length)?;
             let fin = store.add(Fin {
                 parent: loop_,
                 edge,
@@ -581,16 +632,6 @@ fn add_extrusion_cap_loop(
         store.get_mut(edges[index])?.fins.push(fin);
     }
     Ok(())
-}
-
-fn straight_pcurve(
-    store: &mut Store,
-    origin: Point2,
-    direction: Vec2,
-    length: f64,
-) -> Result<FinPcurve> {
-    let curve = store.insert_pcurve(Curve2dGeom::Line(Line2d::new(origin, direction)?))?;
-    FinPcurve::new(curve, ParamRange::new(0.0, length), ParamMap1d::identity())
 }
 
 /// Create a failure-atomic line-segment wire from ordered model-space points.
