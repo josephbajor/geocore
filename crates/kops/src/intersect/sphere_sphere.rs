@@ -280,8 +280,8 @@ const GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT: usize =
     GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_PAIR_LIMIT;
 const GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT: usize =
     GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_ARC_LIMIT;
-const GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT: usize = 7;
-const GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON: &str = "general coincident sphere both-wide union supports at most seven positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, and seven require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components";
+const GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT: usize = 8;
+const GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON: &str = "general coincident sphere both-wide union supports at most eight positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, seven, and eight require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SphereWindowConstraint {
@@ -765,6 +765,22 @@ fn certify_double_wide_sphere_window_union(
                 resolved_regions.is_some()
             }
         }
+        [_, _, _, _, _, _, _, _] => {
+            let bounded_eight_cell_proof = certified_empty_pairs + 8
+                == GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT
+                && bounded_multi_cell_parents;
+            if !bounded_eight_cell_proof {
+                false
+            } else {
+                resolved_regions = merge_exact_sphere_region_non_path_union(
+                    &occupied_regions,
+                    &a_pieces,
+                    &b_pieces,
+                )
+                .map(|region| vec![region]);
+                resolved_regions.is_some()
+            }
+        }
         _ => false,
     };
     if !supported_positive_cells {
@@ -777,7 +793,7 @@ fn certify_double_wide_sphere_window_union(
     // an independent set or between a merged pair and its singleton; the
     // remaining empty siblings exclude every other artificial seam. Three-
     // through six-cell paths are merged in deterministic adjacency order.
-    // Four- through seven-cell non-path unions cancel every shared edge only
+    // Four- through eight-cell non-path unions cancel every shared edge only
     // after paired owners prove reverse-oriented bit-exact seam records or one
     // exact owner supplies the closed-cell/complementary-chart proof described
     // by `exact_sphere_region_shared_seam_edges`; the remaining edges must
@@ -3806,6 +3822,13 @@ mod tests {
         )
     }
 
+    fn eight_cell_fixture() -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+        let (a, b, mut a_range, mut b_range) = seven_cell_fixture();
+        a_range[1].lo = -1.0834779757705633;
+        b_range[1].lo = -1.1949143527370887;
+        (a, b, a_range, b_range)
+    }
+
     #[test]
     fn general_window_proof_limits_are_exact_at_n_and_n_minus_one() {
         let a = Sphere::new(Frame::world(), 1.0).unwrap();
@@ -4049,7 +4072,7 @@ mod tests {
             arbitrary_sphere_octant_parameter_allowance(double_wide_a_range, double_wide_b_range)
                 .unwrap();
         assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT, 9);
-        assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT, 7);
+        assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT, 8);
         assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT, 252);
         assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT, 1_008);
         let double_wide = certify_double_wide_sphere_window_union(
@@ -4162,6 +4185,64 @@ mod tests {
                 reason: "general coincident sphere wide-window union requires three sub-pi decomposition cells"
             }
         );
+    }
+
+    #[test]
+    fn eight_cell_union_and_limits_are_exact() {
+        let (a, b, a_range, b_range) = eight_cell_fixture();
+        let allowance = arbitrary_sphere_octant_parameter_allowance(a_range, b_range).unwrap();
+        let hit = certify_double_wide_sphere_window_union(
+            &a,
+            a_range,
+            &b,
+            b_range,
+            Tolerances::default(),
+            allowance,
+            GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+            GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+            GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+        )
+        .unwrap();
+        assert!(hit.is_complete());
+        assert_eq!(hit.regions.len(), 1);
+        assert_eq!(hit.regions[0].boundary.len(), 18);
+
+        for (piece_limit, pair_limit, arc_limit, reason) in [
+            (
+                GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT - 1,
+                GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+                "general coincident sphere both-wide union piece limit exhausted",
+            ),
+            (
+                GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT - 1,
+                GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+                "general coincident sphere both-wide union pair limit exhausted",
+            ),
+            (
+                GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT - 1,
+                "general coincident sphere both-wide union arc limit exhausted",
+            ),
+        ] {
+            assert_eq!(
+                certify_double_wide_sphere_window_union(
+                    &a,
+                    a_range,
+                    &b,
+                    b_range,
+                    Tolerances::default(),
+                    allowance,
+                    piece_limit,
+                    pair_limit,
+                    arc_limit,
+                )
+                .unwrap_err(),
+                Error::InvalidGeometry { reason }
+            );
+        }
     }
 
     #[test]

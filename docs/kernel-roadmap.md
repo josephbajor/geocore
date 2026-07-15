@@ -1202,9 +1202,11 @@ true only for an empty complete result.
   when exactly four positive children form a three-edge grid path and their five siblings
   certify empty, or when exactly five positive children form a four-edge grid
   path and their four siblings certify empty, when four, five, or six positive
-  children form an exact connected shared-seam union, or when the exact
+  children form an exact connected shared-seam union, when the exact
   seven-cell 2×3-block-plus-tail layout satisfies the bounded complementary-
-  chart seam proof with every other sibling certified empty. Multi-cell parents
+  chart seam proof with every other sibling certified empty, or when eight
+  positive children form an exact connected shared-seam union and the sole
+  remaining sibling certifies empty. Multi-cell parents
   must remain below a full turn. Two or three pairwise non-edge-adjacent
   children stay as separate components after closed sibling ownership excludes
   every artificial seam, including diagonal corner contact through both
@@ -1215,7 +1217,7 @@ true only for an empty complete result.
   two consecutive, bit-identical endpoint records; each edge is removed and
   the complementary paths are spliced before parent correspondence is restored.
   Three- through six-cell paths recheck every remaining seam against the current
-  merged boundary after each earlier splice. Connected four- through seven-cell
+  merged boundary after each earlier splice. Connected four- through eight-cell
   non-path unions prove all internal seams together. Paired owners require
   reverse-oriented bit-exact edge records; one exact owner may canonicalize a
   unique reverse consecutive edge only when its endpoints are bit-identical in
@@ -1237,8 +1239,12 @@ true only for an empty complete result.
   and pole-clear constraint topology prove the whole shared arc, and operand
   swap is bit-exact. Approximate complementary endpoints, ambiguity, and the
   existing one-ULP central-grid adversary remain fail-closed.
+  The reviewed eight-cell fixture occupies every grid cell except certified-
+  empty `[2,1]` and returns one canonical 18-edge outer cycle. All nine occupied
+  adjacencies own reverse-oriented bit-exact seam pairs; repeat and operand swap
+  are bit-exact, while the general merger retains the bounded one-owner rule.
   Exact 9/8 piece-pair, 252/251 boundary-pair, and 1,008/1,007 arc-witness
-  admission remain pinned. Other seven-positive and eight-/nine-positive unions, disconnected five-cell
+  admission remain pinned. Other seven- or eight-positive and all nine-positive unions, disconnected five-cell
   layouts without exact sibling separation, non-exact or otherwise ambiguous
   multi-edge shared seams, full-turn
   aliases, polar, non-exact tangent, ambiguous multiple-cycle,
