@@ -69,7 +69,7 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 | M0 Foundations | IMPLEMENTED SLICE | Deterministic math, current predicates, intervals, tolerances, arenas with copy-on-write undo frames, and deterministic map primitives exist; conformance debt remains. |
 | M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS evaluation plus exact curve/surface splitting, restriction, Bezier extraction and active-subrange bounds, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, topology-internal Euler operators, transaction-owned public Euler edits, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, checked transaction-scoped assembly, and deterministic journals exist; general bodies and several degenerate topology classes remain. |
-| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance, transaction-owned aggregate budgets, one checked facade batch for operation-owned Face/Edge/Vertex tolerance growth, and descriptive MEF inheritance plus KEF ordered-max face-tolerance journals; shared incidence validation; a complete transaction-owned public Euler surface with position-owning transient MVFS/KVFS, mandatory pcurve creation, hidden-point cleanup, and derived/split/merge/delete lineage; private generic Store mutation; transaction-scoped low-level assembly whose only public persistence path uses deterministic mutation preview, incrementally replaced per-body ownership/shared-geometry dependency footprints, affected-root Fast checks, complete ownership closure, and an opt-in evidence-bearing Full-assurance commit gate; pcurve-driven tessellation; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; reusable validated polygonal planar profiles with strictly contained pairwise-disjoint holes, checked holed-sheet construction, and checked positive-normal oblique extrusion; checked X_T reconstruction; explicit face metadata; certified imported domains; adaptive full-active-interval analytic/clamped-NURBS face-domain containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring and strict outer/hole containment proofs; and convex-planar, whole sphere/torus, sphere-cap, single-planar-face, and exact polygonal-prism shell embedding proofs have landed. General NURBS/mixed-parameter incidence, periodic/unclamped and unsupported exact/mixed-boundary containment, curved or nested-island profiles, operation-specific tolerance combination/propagation rules beyond the landed MEF/KEF policy and generic batch, curved-loop/general curved-shell proofs, production seam/singularity interchange fixtures, broader higher-operation migration, and affected solid-footprint plus remaining global commit-cost performance baselines remain. |
+| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance, transaction-owned aggregate budgets, one checked facade batch for operation-owned Face/Edge/Vertex tolerance growth, and descriptive MEF inheritance plus KEF ordered-max face-tolerance journals; shared incidence validation; a complete transaction-owned public Euler surface with position-owning transient MVFS/KVFS, mandatory pcurve creation, hidden-point cleanup, and derived/split/merge/delete lineage; private generic Store mutation; transaction-scoped low-level assembly whose only public persistence path uses deterministic mutation preview, incrementally replaced per-body ownership/shared-geometry dependency footprints, affected-root Fast checks, complete ownership closure, and an opt-in evidence-bearing Full-assurance commit gate; pcurve-driven tessellation; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; reusable validated polygonal planar profiles with strictly contained pairwise-disjoint holes, checked holed-sheet construction, and checked nonzero-normal oblique extrusion; checked X_T reconstruction; explicit face metadata; certified imported domains; adaptive full-active-interval analytic/clamped-NURBS face-domain containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring and strict outer/hole containment proofs; and convex-planar, whole sphere/torus, sphere-cap, single-planar-face, and exact polygonal-prism shell embedding proofs have landed. General NURBS/mixed-parameter incidence, periodic/unclamped and unsupported exact/mixed-boundary containment, curved or nested-island profiles, operation-specific tolerance combination/propagation rules beyond the landed MEF/KEF policy and generic batch, curved-loop/general curved-shell proofs, production seam/singularity interchange fixtures, broader higher-operation migration, and affected solid-footprint plus remaining global commit-cost performance baselines remain. |
 | M3 X_T | IN PROGRESS | The modern-schema subset reads both wire encodings and writes text, including bounded tolerant edges as trimmed SP-curves over finite 2D B-curves; production coverage and external certification remain. |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases, explicit `Complete`/`Indeterminate` result evidence, exact NURBS patch subdivision/BVH, analytic implicit-surface exclusion, deterministic recursive candidate covers with structured limits and proof-bearing miss exits, source-range-certified curve-pair exclusion bounds, bounded cell-local curve-pair polishing, several exact-cell interval-certified root/overlap slices, rigid complete-body copy, and the first checked polygonal-profile extrusion exist; general root discovery and boolean-ready paired-pcurve branches do not. |
 | M5–M8 | NOT STARTED | No end-to-end booleans, general modeling, blends, stable API, or production hardening. |
@@ -832,8 +832,8 @@ plan:
    finite open `L/?` limits plus the bounded end `T/F` singular terminator,
    `uv_type=4` UVs with paired-null recovery only for an exact Plane trace, and
    the canonical affine chart recurrence. A bounded finite-open two- through
-   five-sample direct-Plane/B-surface or direct-Plane/Offset(B-surface) slice
-   may instead retain finite positive affine chart metadata while
+   five-sample direct-Plane/B-surface, safe-Offset(Plane)/B-surface, or direct-
+   Plane/Offset(B-surface) slice may instead retain finite positive affine chart metadata while
    canonicalizing only the common sample-index basis. Canonical
    Plane/B-surface, safe-Offset(Plane)/B-surface,
    B-surface/B-surface, direct constant-normal Offset(B-surface)/B-surface,
@@ -1133,18 +1133,20 @@ true only for an empty complete result.
   3/depth-3, 4/depth-4, or 5/depth-5 graph traversal with matching N/N-1
   admission.
   The first varying-normal operation-generated arm accepts exactly one offset
-  descriptor over an exact rational quarter-cylinder extrusion and any of
-  three canonical bilinear planar direct-NURBS peers normal to the global X,
-  Y, or Z axis. An original-derivative interval
+  descriptor over an exact rational quarter-cylinder extrusion and either a
+  canonical bilinear planar direct-NURBS peer or direct analytic Plane normal
+  to the global X, Y, or Z axis. An original-derivative interval
   enclosure proves a nonzero normal over the complete positive operand window
   before the true rational parallel surface guides discovery; orientation-
   selected original control intervals, radially scaled only for X/Y, alone own
   complete misses. The normal proof costs
-  7 Work, 1 Item, and Depth 1. X/Y vertical generators pin combined
-  14,343/14,342 Work and 1,024/1,023 Items. The Z-normal peer retains a
-  certified 40-span, 41-control horizontal quarter-circle chordal carrier and
-  pins combined 573,447/573,446 Work and 40,960/40,959 Items. All orientations
-  retain 10/9 Depth plus 2/1 graph traversal. The paired trace retains the live
+  7 Work, 1 Item, and Depth 1. Planar-NURBS X/Y generators pin combined
+  14,343/14,342 Work and 1,024/1,023 Items, while their Z-normal peer pins
+  573,447/573,446 Work and 40,960/40,959 Items on a certified 40-span,
+  41-control horizontal quarter-circle chordal carrier. Analytic-Plane X/Y
+  peers instead pin combined 7,177/7,176 Work and 1,024/1,023 Items; their
+  40-span Z-normal peer pins 286,768/286,767 Work and 40,960/40,959 Items. All
+  orientations retain 10/9 Depth plus 2/1 graph traversal. The paired trace retains the live
   root, original basis, direct peer, and both pcurves. Singular or inconclusive
   normal fields, nested
   varying-normal roots, incompatible peers, and stale or altered sources fail
@@ -1256,15 +1258,19 @@ true only for an empty complete result.
   remain fail-closed. A broader polar-by-wide arm crosses those two latitude
   cells with the three closed sub-π longitude cells of exactly one pole-clear
   wide peer. It accepts all six cells empty, exactly one occupied child with
-  five certified-empty siblings, or exactly two edge-adjacent cap-row children
-  with four certified-empty siblings. The single-child path excludes every
+  five certified-empty siblings, exactly two edge-adjacent cap-row children
+  with four certified-empty siblings, or the exact full three-child cap row
+  with all three lower-row siblings certified empty. The single-child path excludes every
   artificial seam through sibling emptiness. The two-child path additionally
   requires one reverse-oriented, bit-exact shared edge on a regular longitude
   seam, removes only that edge, and restores the parent correspondence without
   introducing a polar seam-merger rule. The reviewed `[1,1]` single-cell
   fixture retains the canonical singular pole alias and three-anchor region;
   the reviewed `[1,0]`/`[1,1]` adjacent fixture retains that alias in one
-  five-anchor region. Both pin exact repeat/swap and outward residual evidence,
+  five-anchor region. A one-turn-shifted `[1,0]`/`[1,1]`/`[1,2]` fixture
+  cancels both strict regular-longitude seams and retains the pole alias in one
+  11-anchor region after the empty lower row excludes the latitude seam. All
+  three layouts pin exact repeat/swap and outward residual evidence,
   while the arm retains exact 6/5 piece, 147/146 pair, and 588/587 arc
   admission. A one-ULP shared-edge mutation and broader or non-adjacent
   multi-occupied layouts remain fail-closed. A first wide arm splits exactly one pole-clear wide operand into
@@ -1382,16 +1388,18 @@ true only for an empty complete result.
   unsupported capability until transformed certificates can be reissued. Extend this
   seam to certified intersection curves, attributes, and non-rigid transform families.
 - The first checked extrusion slice is implemented for one validated polygonal
-  profile with holes along any finite translation having a positive component
-  on the profile-frame normal. It builds exact planar cap regions plus one
+  profile with holes along any finite translation having a nonzero component
+  on the profile-frame normal. A reverse translation reflects the profile chart
+  and reference normal together before using the same certified branch, without
+  changing model-space points or translation. It builds exact planar cap regions plus one
   planar parallelogram per boundary segment, shares every perimeter and sweep
   edge, authors a line pcurve on every fin from the actual cap/side frames, and
   commits atomically with a deterministic creation journal. Full checking
   proves the translated cap bijection and affine side-ring embedding; the
   oblique holed fixture is watertight and has signed volume 24 within `1e-9`.
   The typed facade exposes both the height wrapper and translation request
-  without a lower-layer type. Extend this to curved profiles, reverse or
-  zero-normal sweep directions, axis contacts, and revolve.
+  without a lower-layer type. Extend this to curved profiles, zero-normal
+  degenerate sweeps, axis contacts, and revolve.
 - Exercise seams, axis contacts, caps, inner loops, and full/partial revolutions.
 
 ### Exit gate
@@ -1536,7 +1544,8 @@ that queue must eventually discharge.
   SP/foreign curves, null, mixed/non-`H`, or broader closed limits, remaining
   nullable chart data including NURBS-side omissions, ambiguous or multi-
   period trace aliases, and noncanonical chart variants outside the bounded
-  direct-Plane/B-surface and direct-Plane/Offset(B-surface) affine slices.
+  direct-Plane/B-surface, safe-Offset(Plane)/B-surface, and direct-
+  Plane/Offset(B-surface) affine slices.
 - M2.5: finish parameter-space incidence and ratcheted Full-checker proofs for
   periodic/mixed boundaries, multi-loop containment, and curved shells; define
   operation-specific tolerance combination/propagation policies beyond the
@@ -1550,8 +1559,8 @@ that queue must eventually discharge.
   sphere and remaining coincident or singular families; and generalize the
   landed exact-cell root/overlap certificates, bounded in-cell tolerance
   witnesses, and typed local-solver stops to complete solver-integrated
-  coverage. Extend the landed positive-normal oblique polygonal-profile
-  extrusion to curved profiles, reverse or zero-normal sweep directions,
+  coverage. Extend the landed nonzero-normal oblique polygonal-profile
+  extrusion to curved profiles, zero-normal degenerate sweeps,
   revolve, and external X_T validation while preserving its atomic journal,
   pcurve, and Full-proof contracts.
 - M5: grow planar profiles and booleans only after facade adoption and the

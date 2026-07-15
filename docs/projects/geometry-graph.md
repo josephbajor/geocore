@@ -713,18 +713,19 @@ basis chain transitively, and preserves the same exact 14,336/14,335 Work,
 3/2 node-visit and dependency-depth admission, three pin exact 4/3, and four
 pin exact 5/4.
 A first varying-normal arm admits one offset descriptor over an exact rational
-quarter-cylinder extrusion and any of three canonical bilinear planar direct-
-NURBS peers normal to the global X, Y, or Z axis. The source derivatives prove
+quarter-cylinder extrusion and either a canonical bilinear planar direct-NURBS
+peer or direct analytic Plane normal to the global X, Y, or Z axis. The source derivatives prove
 a nonzero normal over the complete positive operand window before discovery;
 a true rational parallel surface then guides the march, while orientation-
 selected original control intervals, radially scaled only for X/Y, alone own complete
 misses. Every positive branch retains the live offset root, original cylinder
 basis, direct peer, and paired pcurves under one certificate scope. The normal
-proof costs exactly 7 Work, 1 Item, and Depth 1. The X/Y vertical generators
-remain one-span branches at combined 14,343/14,342 Work, 1,024/1,023 Items,
-and 10/9 Depth. The Z-normal peer retains a certified 40-span horizontal
-quarter-circle chordal carrier with 41 controls, pinning combined
-573,447/573,446 Work, 40,960/40,959 Items, and 10/9 Depth. Every orientation
+proof costs exactly 7 Work, 1 Item, and Depth 1. Planar-NURBS X/Y generators
+pin combined 14,343/14,342 Work and 1,024/1,023 Items, while their Z peer pins
+573,447/573,446 Work and 40,960/40,959 Items. Analytic-Plane X/Y peers pin
+7,177/7,176 Work and 1,024/1,023 Items; their Z peer pins 286,768/286,767 Work
+and 40,960/40,959 Items. Both Z cases retain a certified 40-span horizontal
+quarter-circle chordal carrier with 41 controls, and every orientation
 pins 2/1 graph node visits and dependency depth. Singular or
 inconclusive normal fields, nested varying-normal roots, and incompatible
 direct peers fail closed.
@@ -822,11 +823,12 @@ inversion plus the unchanged whole-carrier Plane/Offset-NURBS proof. Canonical
 Plane/Offset endpoints may now use the same recovery: a synthetic endpoint-null
 record-5089 variant preserves the exact v7 report and next crossing, while a
 displaced endpoint still fails the unchanged proof. A separate bounded
-noncanonical affine slice
-accepts two- through five-sample direct-Plane/B-surface or direct-Plane/
-Offset(B-surface) charts, retains finite positive affine metadata on the
+noncanonical affine slice accepts two- through five-sample direct-Plane/B-
+surface, safe-Offset(Plane)/B-surface, or direct-Plane/Offset(B-surface)
+charts, retains finite positive affine metadata on the
 canonical shared sample-index basis,
-and preserves the unchanged original-source proof and ordered dependencies.
+and preserves the unchanged original-source proof and ordered dependencies;
+safe offset roots additionally protect every nested Plane basis.
 An exact record-5089 variant pins cumulative `139792442/4/10`; corpus records
 778 and 3620 remain typed original-domain failures, and the exemplar has no
 NURBS-side paired-null tuple. V6 remains
@@ -882,8 +884,9 @@ payload transplants.
   with contextual accounting and paired trace evidence.
 - Broaden the M3c consumer to null, mixed/non-`H`, or broader closed limits,
   other nullable chart data, ambiguous or multi-period trace aliases,
-  noncanonical charts outside the bounded direct-Plane/B-surface and direct-
-  Plane/Offset(B-surface) affine slices, and further terminator variants
+  noncanonical charts outside the bounded direct-Plane/B-surface, safe-
+  Offset(Plane)/B-surface, and direct-Plane/Offset(B-surface) affine slices,
+  and further terminator variants
   without recomputing their
   transmitted scars.
 - Add swept, spun, and blend descriptors only with their own evaluator,
@@ -958,13 +961,14 @@ the graph ownership model.
   other varying-normal or nested offset/offset,
   unaligned, altered, and stale sources atomically.
 - The single-descriptor varying-normal rational-quarter-cylinder/direct-planar-
-  NURBS arm covers canonical global-X-, global-Y-, and global-Z-normal peers
+  NURBS or analytic-Plane arm covers canonical global-X-, global-Y-, and global-Z-normal peers
   and proves the original derivative normal field over the complete
   window, uses the true rational parallel surface only for discovery, and owns
   misses from orientation-selected original controls. Both operand orders retain the
-  live root, original basis, direct peer, and paired pcurves. X/Y fixtures pin
-  exact 14,343/14,342 Work and 1,024/1,023 Items; the 40-span Z fixture pins
-  573,447/573,446 Work and 40,960/40,959 Items; all retain 10/9 Depth and 2/1
+  live root, original basis, direct peer, and paired pcurves. Planar-NURBS X/Y
+  fixtures pin 14,343/14,342 Work and the Z fixture 573,447/573,446; analytic-
+  Plane X/Y fixtures pin 7,177/7,176 and the Z fixture 286,768/286,767. X/Y
+  retain 1,024/1,023 Items and Z retains 40,960/40,959; all retain 10/9 Depth and 2/1
   graph evidence,
   while singular, nested, incompatible, altered, and stale cases fail
   atomically.
@@ -1007,8 +1011,9 @@ the graph ownership model.
   rollback, paired-null interior and endpoint Plane recovery for canonical
   Plane/Offset(B-surface), typed direct-Plane endpoint, half-null, and NURBS
   omissions, whole-carrier residual rejection, plus bounded noncanonical
-  affine metadata for both direct Plane/B-surface and Plane/Offset(B-surface)
-  at structural `7170/2/10`, transplanted cumulative `127115320` Work and
+  affine metadata for direct Plane/B-surface, safe-Offset(Plane)/B-surface,
+  and Plane/Offset(B-surface). The safe-offset 2–5 sample boundaries are
+  `7170/2/10`, `14339/3/10`, `21508/4/10`, and `28677/5/10`; transplanted cumulative `127115320` Work and
   `139792442/4/10`, with typed record-778/3620 original-domain rollback,
   and the 285,283,414-Work next proof preflight.
   The endpoint-roundoff suite pins exact v8 `315245660/22/10`, historical-v7

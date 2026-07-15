@@ -374,7 +374,7 @@ pub struct ExtrudeProfileRequest {
 }
 
 pub struct ExtrudeProfileAlongRequest {
-    // private Frame, polygonal outer boundary, polygonal holes, positive-normal
+    // private Frame, polygonal outer boundary, polygonal holes, nonzero-normal
     // model-space translation, and OperationSettings
 }
 
@@ -911,9 +911,12 @@ proof consumed by Full checking. Facade-only tests pin a holed solid through
 construction and Full validity without importing a lower-layer crate.
 
 `PartEdit::extrude_profile_along` preserves that boundary while admitting a
-finite tangential translation component. The positive frame-normal component
-keeps the affine sweep injective; actual cap and side frames own the sheared
-pcurves and domains, and the same exact Full prism proof remains authoritative.
+finite tangential translation component and either nonzero frame-normal sign.
+The reverse path reflects the profile chart and reference normal together
+before using the same certified builder, so model-space points and translation
+stay unchanged while cap/fin orientation remains canonical. Actual cap and side
+frames own the sheared pcurves and domains, and the same exact Full prism proof
+remains authoritative.
 
 Broader semantic edit surfaces resume after the K5 adoption pass. The
 interchange facade stays thin: `kxt` reconstruction and checked-commit Fast
