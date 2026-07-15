@@ -1175,7 +1175,7 @@ true only for an empty complete result.
   children form a two-edge grid path and their six siblings certify empty, or
   when exactly four positive children form a three-edge grid path and their five siblings
   certify empty, or when exactly five positive children form a four-edge grid
-  path and their four siblings certify empty, or when four or five positive
+  path and their four siblings certify empty, or when four, five, or six positive
   children form an exact connected shared-seam union with every other sibling
   certified empty. Multi-cell parents
   must remain below a full turn. Two or three pairwise non-edge-adjacent
@@ -1187,16 +1187,17 @@ true only for an empty complete result.
   only when each shared seam is one reverse-oriented boundary edge with exactly
   two consecutive, bit-identical endpoint records; each edge is removed and
   the complementary paths are spliced before parent correspondence is restored.
-  Three- through five-cell paths recheck every remaining seam against the current
-  merged boundary after each earlier splice. Connected four- and five-cell
+  Three- through six-cell paths recheck every remaining seam against the current
+  merged boundary after each earlier splice. Connected four- through six-cell
   non-path unions prove all internal seam owners together, cancel only
   reverse-oriented bit-exact edge pairs, and admit the result only when the
   remaining edges trace one unambiguous outer boundary cycle. The certified
-  five-cell 2×2-cycle-plus-tail fixture has one 12-edge boundary; bit-mismatched
+  five-cell 2×2-cycle-plus-tail fixture has one 12-edge boundary, and the exact
+  connected six-cell fixture has one 14-edge boundary; bit-mismatched
   central seam records remain indeterminate even when their physical points
   differ by only a few machine epsilons.
   Exact 9/8 piece-pair, 252/251 boundary-pair, and 1,008/1,007 arc-witness
-  admission remain pinned. Six-or-more-positive unions, disconnected five-cell
+  admission remain pinned. Seven-or-more-positive unions, disconnected five-cell
   layouts, non-exact or otherwise ambiguous multi-edge shared seams, full-turn
   aliases, polar, non-exact tangent, ambiguous multiple-cycle,
   and near-coincident

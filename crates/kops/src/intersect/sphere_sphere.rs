@@ -280,7 +280,8 @@ const GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT: usize =
     GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_PAIR_LIMIT;
 const GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT: usize =
     GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_ARC_LIMIT;
-const GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON: &str = "general coincident sphere both-wide union supports at most five positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four to five require an exact connected shared-seam union";
+const GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT: usize = 6;
+const GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON: &str = "general coincident sphere both-wide union supports at most six positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four to six require an exact connected shared-seam union";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SphereWindowConstraint {
@@ -570,7 +571,7 @@ fn certify_double_wide_sphere_window_union(
     let mut certified_empty_pairs = 0;
     let mut certified_empty_cells =
         [[false; GENERAL_SPHERE_WIDE_PIECE_LIMIT]; GENERAL_SPHERE_WIDE_PIECE_LIMIT];
-    let mut occupied_regions = Vec::with_capacity(5);
+    let mut occupied_regions = Vec::with_capacity(GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT);
     // Each parent window is exactly the union of its three closed longitude
     // cells, so distributivity gives
     // (union A_i) intersect (union B_j) = union (A_i intersect B_j).
@@ -601,7 +602,7 @@ fn certify_double_wide_sphere_window_union(
                     reason: GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON,
                 });
             }
-            if occupied_regions.len() == 5 {
+            if occupied_regions.len() == GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT {
                 return Err(Error::InvalidGeometry {
                     reason: GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON,
                 });
@@ -720,6 +721,26 @@ fn certify_double_wide_sphere_window_union(
                 resolved_regions.is_some()
             }
         }
+        [_, _, _, _, _, _] => {
+            let bounded_six_cell_proof = certified_empty_pairs + 6
+                == GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT
+                && bounded_multi_cell_parents;
+            if !bounded_six_cell_proof {
+                false
+            } else {
+                resolved_regions =
+                    merge_exact_sphere_region_path(&occupied_regions, &a_pieces, &b_pieces)
+                        .or_else(|| {
+                            merge_exact_sphere_region_non_path_union(
+                                &occupied_regions,
+                                &a_pieces,
+                                &b_pieces,
+                            )
+                        })
+                        .map(|region| vec![region]);
+                resolved_regions.is_some()
+            }
+        }
         _ => false,
     };
     if !supported_positive_cells {
@@ -731,8 +752,8 @@ fn certify_double_wide_sphere_window_union(
     // Certified-empty orthogonal corner owners isolate each diagonal pair in
     // an independent set or between a merged pair and its singleton; the
     // remaining empty siblings exclude every other artificial seam. Three-
-    // through five-cell paths are merged in deterministic adjacency order.
-    // Four- and five-cell non-path unions cancel every shared edge only after
+    // through six-cell paths are merged in deterministic adjacency order.
+    // Four- through six-cell non-path unions cancel every shared edge only after
     // all owners prove reverse-oriented bit-exact seam records, then require
     // the remaining edges to trace one unambiguous outer cycle.
     // Pole-clear sub-full-turn parent charts are injective, so the resulting
@@ -861,11 +882,12 @@ fn merge_exact_sphere_region_path(
     a_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
     b_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
 ) -> Option<SurfaceSurfaceRegion> {
-    if !(3..=5).contains(&regions.len()) {
+    if !(3..=GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT).contains(&regions.len()) {
         return None;
     }
-    let mut adjacent = [[false; 5]; 5];
-    let mut degrees = [0_u8; 5];
+    let mut adjacent = [[false; GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT];
+        GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT];
+    let mut degrees = [0_u8; GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT];
     let mut edge_count = 0;
     for first in 0..regions.len() {
         for second in first + 1..regions.len() {
@@ -931,11 +953,12 @@ fn merge_exact_sphere_region_non_path_union(
     a_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
     b_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
 ) -> Option<SurfaceSurfaceRegion> {
-    if !(4..=5).contains(&regions.len()) {
+    if !(4..=GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT).contains(&regions.len()) {
         return None;
     }
-    let mut adjacent = [[false; 5]; 5];
-    let mut degrees = [0_u8; 5];
+    let mut adjacent = [[false; GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT];
+        GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT];
+    let mut degrees = [0_u8; GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT];
     let mut edge_count = 0;
     for first in 0..regions.len() {
         for second in first + 1..regions.len() {
@@ -965,7 +988,7 @@ fn merge_exact_sphere_region_non_path_union(
         return None;
     }
 
-    let mut included = [false; 5];
+    let mut included = [false; GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT];
     included[0] = true;
     let mut included_count = 1;
     while included_count < regions.len() {
@@ -3618,7 +3641,7 @@ mod tests {
             }
         );
 
-        let non_path_angle = 0.6262133187963131;
+        let non_path_angle = 0.9054345637982375;
         let non_path_b = Sphere::new(
             Frame::new(
                 Point3::new(0.0, 0.0, 0.0),
@@ -3630,20 +3653,18 @@ mod tests {
         )
         .unwrap();
         let double_wide_a_range = [
-            ParamRange::new(-1.9846283117352035, -1.9846283117352035 + 4.243344332010903),
-            ParamRange::new(-0.6755006209846244, 0.7250364320693048),
+            ParamRange::new(-0.5929589703265958, 4.542973834373202),
+            ParamRange::new(-0.45247797577056326, 0.9706234964995796),
         ];
         let double_wide_b_range = [
-            ParamRange::new(
-                -0.11076369393899554,
-                -0.11076369393899554 + 3.738241202226847,
-            ),
-            ParamRange::new(-0.16878390777804864, 1.0641254995346001),
+            ParamRange::new(-0.4436018548841436, 3.5517236306126825),
+            ParamRange::new(-0.27691435273708875, 0.8493651816976383),
         ];
         let double_wide_allowance =
             arbitrary_sphere_octant_parameter_allowance(double_wide_a_range, double_wide_b_range)
                 .unwrap();
         assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT, 9);
+        assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT, 6);
         assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT, 252);
         assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT, 1_008);
         let double_wide = certify_double_wide_sphere_window_union(
@@ -3660,7 +3681,7 @@ mod tests {
         .unwrap();
         assert!(double_wide.is_complete());
         assert_eq!(double_wide.regions.len(), 1);
-        assert_eq!(double_wide.regions[0].boundary.len(), 12);
+        assert_eq!(double_wide.regions[0].boundary.len(), 14);
         let transposed_allowance =
             arbitrary_sphere_octant_parameter_allowance(double_wide_b_range, double_wide_a_range)
                 .unwrap();
@@ -3678,7 +3699,7 @@ mod tests {
         .unwrap();
         assert!(transposed_double_wide.is_complete());
         assert_eq!(transposed_double_wide.regions.len(), 1);
-        assert_eq!(transposed_double_wide.regions[0].boundary.len(), 12);
+        assert_eq!(transposed_double_wide.regions[0].boundary.len(), 14);
         assert_eq!(
             certify_double_wide_sphere_window_union(
                 &a,
