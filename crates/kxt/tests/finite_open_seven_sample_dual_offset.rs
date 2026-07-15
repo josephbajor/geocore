@@ -18,6 +18,7 @@ use kxt::{
 const EXEMPLAR: &[u8] = include_bytes!("fixtures/exemplar.x_t");
 const V11_WORK: u64 = 388_125_799;
 const RECORD_3615_WORK: u64 = 26_443_776;
+const RECORD_4230_WORK: u64 = 17_285_120;
 const V12_WORK: u64 = 414_569_575;
 
 fn field<'a>(file: &'a kxt::XtFile, index: u32, name: &str) -> &'a Value {
@@ -406,7 +407,7 @@ fn v1_through_v11_are_stable_and_v12_has_the_exact_aggregate_profile() {
 }
 
 #[test]
-fn v12_certifies_3615_and_pins_the_actual_first_production_frontier() {
+fn v12_certifies_3615_and_stops_at_the_five_sample_proof_boundary() {
     let file = read_xt(EXEMPLAR).unwrap();
     assert_eq!(file.nodes[&4230].code, code::INTERSECTION);
     assert_eq!(
@@ -425,13 +426,11 @@ fn v12_certifies_3615_and_pins_the_actual_first_production_frontier() {
         &context_with_plan(&session, IntersectionImportBudgetProfile::v12_defaults()),
     )
     .unwrap();
-    assert!(matches!(
-        outcome.result(),
-        Err(XtError::Unsupported {
-            capability: XtCapability::IntersectionSurfaceFamily,
-            what: "dual Offset(B-surface) charts require a canonical finite-open two-sample line, three-sample quadratic, four-sample cubic, or seven-sample polyline family",
-        })
-    ));
+    let crossing = outcome.result().as_ref().unwrap_err().limit().unwrap();
+    assert_eq!(crossing.stage, INTERSECTION_CHART_CERTIFICATE_WORK);
+    assert_eq!(crossing.resource, ResourceKind::Work);
+    assert_eq!(crossing.allowed, V12_WORK);
+    assert_eq!(crossing.consumed, V12_WORK + RECORD_4230_WORK);
     assert_eq!(
         usage(
             outcome.report(),

@@ -34,14 +34,14 @@ class ClassificationTests(unittest.TestCase):
             self.inventory.embedded_exemplar_ratchets,
             tuple(sorted(EMBEDDED_EXEMPLAR_RATCHETS)),
         )
-        self.assertEqual(len(self.inventory.embedded_exemplar_ratchets), 12)
+        self.assertEqual(len(self.inventory.embedded_exemplar_ratchets), 13)
 
     def test_slow_group_adds_the_manifest_driven_corpus_ratchet(self) -> None:
         self.assertEqual(
             self.inventory.production_corpus_ratchets,
             tuple(sorted(PRODUCTION_CORPUS_RATCHETS)),
         )
-        self.assertEqual(len(self.inventory.production_corpus_ratchets), 13)
+        self.assertEqual(len(self.inventory.production_corpus_ratchets), 14)
         self.assertIn(
             IntegrationTarget("kxt", "corpus_manifest"),
             self.inventory.production_corpus_ratchets,
@@ -110,10 +110,11 @@ class ClassificationTests(unittest.TestCase):
         self.assertIn("standard kxt targets retained (7):", first)
         self.assertIn("kxt::read", first)
         self.assertIn(
-            "production-corpus ratchets excluded from standard (13):", first
+            "production-corpus ratchets excluded from standard (14):", first
         )
         self.assertIn("kxt::corpus_manifest", first)
-        self.assertIn("embedded exemplar users within that group (12):", first)
+        self.assertIn("embedded exemplar users within that group (13):", first)
+        self.assertIn("kxt::finite_open_five_sample_dual_offset", first)
         self.assertIn("kxt::finite_open_seven_sample_dual_offset", first)
 
 

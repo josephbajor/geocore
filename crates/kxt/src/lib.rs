@@ -25,8 +25,8 @@
 //! Narrow verified transmitted intersection-chart subsets are reconstructed
 //! as graph-owned carriers with paired pcurves, including exact-plane-field
 //! degree-1 charts and canonical finite-open two-sample line, three-sample
-//! quadratic, four-sample cubic, or seven-sample polyline charts between two
-//! direct Offset(B-surface) roots.
+//! quadratic, four-sample cubic, five-sample polyline, or seven-sample
+//! polyline charts between two direct Offset(B-surface) roots.
 //! Other intersection and procedural geometry, nested/shared-basis offset
 //! export, broader tolerant topology, periodic or
 //! circular pcurve encoding, periodic NURBS, pre-13006 schemas, assemblies,

@@ -52,6 +52,7 @@ use kgraph::{
     TRANSMITTED_NURBS_TRACE_PROOF_DEPTH, TransmittedIntersectionChartMetadata,
     TransmittedNurbsIntersectionTrace, TransmittedOffsetNurbsTrace,
     certify_transmitted_cubic_dual_offset_nurbs_intersection_residuals,
+    certify_transmitted_five_sample_dual_offset_nurbs_intersection_residuals,
     certify_transmitted_nurbs_nurbs_intersection_residuals,
     certify_transmitted_offset_nurbs_intersection_residuals,
     certify_transmitted_plane_intersection_residuals,
@@ -2404,17 +2405,20 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             dual_offset_nurbs && retained_count == 3 && !equal_limits && !terminated;
         let cubic_dual_offset =
             dual_offset_nurbs && retained_count == 4 && !equal_limits && !terminated;
+        let five_sample_dual_offset =
+            dual_offset_nurbs && retained_count == 5 && !equal_limits && !terminated;
         let seven_sample_dual_offset =
             dual_offset_nurbs && retained_count == 7 && !equal_limits && !terminated;
         if dual_offset_nurbs
             && !two_sample_dual_offset
             && !quadratic_dual_offset
             && !cubic_dual_offset
+            && !five_sample_dual_offset
             && !seven_sample_dual_offset
         {
             return Err(XtError::Unsupported {
                 capability: XtCapability::IntersectionSurfaceFamily,
-                what: "dual Offset(B-surface) charts require a canonical finite-open two-sample line, three-sample quadratic, four-sample cubic, or seven-sample polyline family",
+                what: "dual Offset(B-surface) charts require a canonical finite-open two-sample line, three-sample quadratic, four-sample cubic, five-sample polyline, or seven-sample polyline family",
             });
         }
         let quadratic_position_samples =
@@ -2634,6 +2638,14 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 cubic_position_samples.expect("cubic carrier retains four positions"),
                 cubic_canonicalized_pcurve_samples
                     .expect("cubic pcurves retain four canonicalized paired UV tuples"),
+                metadata,
+                proof_tolerance,
+            )
+        } else if five_sample_dual_offset {
+            certify_transmitted_five_sample_dual_offset_nurbs_intersection_residuals(
+                carrier,
+                traces,
+                pcurves.clone(),
                 metadata,
                 proof_tolerance,
             )

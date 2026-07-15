@@ -2532,6 +2532,85 @@ pub fn certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals(
     )
 }
 
+/// Certify the strictly bounded canonical finite-open five-sample
+/// Offset(NURBS)/Offset(NURBS) transmitted family.
+///
+/// The open clamped degree-1 carrier and paired pcurves retain the exact
+/// transmitted tuples as their controls at common parameters `0..=4`.
+/// Those polylines define the candidate geometry only; both traces still
+/// require independent whole-range original-source offset-NURBS interval
+/// residual proofs.
+pub fn certify_transmitted_five_sample_dual_offset_nurbs_intersection_residuals(
+    carrier: NurbsCurve,
+    traces: [TransmittedNurbsIntersectionTrace; 2],
+    pcurves: [NurbsCurve2d; 2],
+    metadata: TransmittedIntersectionChartMetadata,
+    tolerance: f64,
+) -> Result<TransmittedNurbsIntersectionCertificate, IntersectionCertificateError> {
+    let expected_knots = [0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0];
+    if carrier.param_range() != ParamRange::new(0.0, 4.0) {
+        return Err(IntersectionCertificateError::InvalidCarrierRange);
+    }
+    if !matches!(
+        &traces,
+        [
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(_),
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(_)
+        ]
+    ) {
+        return Err(IntersectionCertificateError::InvalidTraceFamily);
+    }
+    if carrier.degree() != 1
+        || carrier.weights().is_some()
+        || carrier.points().len() != 5
+        || carrier.knots().as_slice() != expected_knots
+    {
+        return Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "dual-offset five-sample carrier must be the canonical open clamped polyline",
+            },
+        );
+    }
+    if (0..5).any(|first| {
+        (first + 1..5).any(|second| carrier.points()[first] == carrier.points()[second])
+    }) {
+        return Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "dual-offset five-sample carrier controls must be pairwise distinct",
+            },
+        );
+    }
+    for (index, pcurve) in pcurves.iter().enumerate() {
+        let trace = paired_trace(index);
+        if pcurve.degree() != 1
+            || pcurve.weights().is_some()
+            || pcurve.points().len() != 5
+            || pcurve.knots().as_slice() != expected_knots
+            || pcurve.param_range() != carrier.param_range()
+        {
+            return Err(
+                IntersectionCertificateError::UnsupportedTraceParameterization {
+                    trace,
+                    reason: "dual-offset five-sample pcurve must share the canonical carrier basis",
+                },
+            );
+        }
+        if (0..5).any(|first| {
+            (first + 1..5).any(|second| pcurve.points()[first] == pcurve.points()[second])
+        }) {
+            return Err(
+                IntersectionCertificateError::UnsupportedTraceParameterization {
+                    trace,
+                    reason: "dual-offset five-sample pcurve controls must be pairwise distinct",
+                },
+            );
+        }
+    }
+    certify_transmitted_nurbs_intersection_residuals_impl(
+        carrier, traces, pcurves, metadata, tolerance,
+    )
+}
+
 /// Certify the strictly bounded canonical finite-open seven-sample
 /// Offset(NURBS)/Offset(NURBS) transmitted family.
 ///

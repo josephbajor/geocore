@@ -77,12 +77,13 @@ retains all seven current lightweight `kxt` integration binaries:
 - `read`; and
 - `write`.
 
-Only these 13 reviewed production-corpus ratchets are excluded from
+Only these 14 reviewed production-corpus ratchets are excluded from
 `standard`:
 
 - `corpus_manifest`;
 - `equal_limit_intersection`;
 - `finite_open_cubic_dual_offset`;
+- `finite_open_five_sample_dual_offset`;
 - `finite_open_nurbs_endpoint_roundoff`;
 - `finite_open_plane_nurbs_data`;
 - `finite_open_plane_offset_nurbs_data`;
@@ -94,15 +95,15 @@ Only these 13 reviewed production-corpus ratchets are excluded from
 - `terminated_intersection`; and
 - `zero_multiplicity_knot_padding`.
 
-Twelve binaries are classified by a concrete source boundary: each names the
+Thirteen binaries are classified by a concrete source boundary: each names the
 908 KiB, 7,423-node `exemplar.x_t` production fixture. `corpus_manifest` is the
-thirteenth because its observed-corpus-stage test reaches the production
+fourteenth because its observed-corpus-stage test reaches the production
 fixture through `manifest.tsv` and performs the same production-scale
-reconstruction work. All 13 remain mandatory in `full`. Cargo metadata is the
+reconstruction work. All 14 remain mandatory in `full`. Cargo metadata is the
 authority for integration-target names and source paths; nonstandard explicit
 targets therefore cannot silently fall outside `standard`. The runner also
 validates workspace/package identity, smoke membership, direct fixture
-references, and the exact 92/79/13 total/standard/corpus counts before every
+references, and the exact 93/79/14 total/standard/corpus counts before every
 listing or run. Drift fails closed until the reviewed inventory is updated.
 
 The `docs` lane runs `cargo test --workspace --doc` explicitly. Its executable

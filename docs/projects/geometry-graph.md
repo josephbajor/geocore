@@ -815,8 +815,10 @@ reaches `414569575/22/10` with historical v1-v11 parity. Two-sample dual-offset
 record 3595 independently certifies as a canonical open-clamped line at
 isolated `4352000/2/10`, with two original-source proofs and exact
 per-resource N/N-1 rollback evidence. Production does not reach it and remains
-v12; the actual first typed surface-family boundary is five-sample record 4230,
-roots `[3320, 773]`, chart 4231.
+v12. Five-sample record 4230, roots `[3320, 773]`, chart 4231, independently
+certifies as a canonical degree-1 open-clamped polyline at isolated
+`17285120/5/10`; v12 stops atomically at its exact `431854695`-Work preflight,
+and a v13 production frontier remains pending.
 An end terminator contributes a
 tolerance-close, distinct singularity
 and one extra paired-UV tuple whose appended span is certified with the same
@@ -910,7 +912,8 @@ the graph ownership model.
   `INTERSECTION` 5945, the canonical four-sample cubic dual-offset
   `INTERSECTION` 3819, zero-padded quadratic dual-offset `INTERSECTION` 3790,
   exposed 11-sample Plane/Offset `INTERSECTION` 3745, seven-sample dual-offset
-  polyline `INTERSECTION` 3615, and independently transplanted two-sample
+  polyline `INTERSECTION` 3615, independently certified five-sample polyline
+  `INTERSECTION` 4230, and independently transplanted two-sample
   dual-offset line `INTERSECTION` 3595. The equal-limit
   suite separately pins both records, exact v3
   `115485725/20/10`, record-2008 transplant `124040223/22/10`, endpoint-only
@@ -946,8 +949,10 @@ the graph ownership model.
   `414569575/22/10`, and historical v1-v11 parity. The two-sample suite pins
   record 3595's canonical line, isolated `4352000/2/10`, original-source
   residuals, per-resource N/N-1 rollback, and malformed carrier/pcurve failure;
-  the production suite pins five-sample record 4230 as the actual next typed
-  boundary.
+  the five-sample suite pins record 4230's canonical polyline, isolated
+  `17285120/5/10`, per-resource N/N-1 rollback, and typed malformed failure.
+  Production v12 pins the exact `431854695`-Work preflight and does not claim a
+  v13 frontier.
 
 ### Offset evaluator tests
 

@@ -55,6 +55,7 @@ EMBEDDED_EXEMPLAR_RATCHETS = tuple(
     for target in (
         "equal_limit_intersection",
         "finite_open_cubic_dual_offset",
+        "finite_open_five_sample_dual_offset",
         "finite_open_nurbs_endpoint_roundoff",
         "finite_open_plane_nurbs_data",
         "finite_open_plane_offset_nurbs_data",
@@ -70,8 +71,8 @@ EMBEDDED_EXEMPLAR_RATCHETS = tuple(
 
 # `corpus_manifest` reads the production fixture through the manifest rather
 # than embedding it, but its observed-corpus-stage contract performs the same
-# production-scale reconstruction work. Keep the mechanism-specific 12-target
-# source-reference contract above while excluding all 13 measured slow targets
+# production-scale reconstruction work. Keep the mechanism-specific 13-target
+# source-reference contract above while excluding all 14 measured slow targets
 # here.
 PRODUCTION_CORPUS_RATCHETS = tuple(
     sorted(
@@ -104,7 +105,7 @@ FAST_SMOKE_TARGETS = tuple(
     )
 )
 
-EXPECTED_INTEGRATION_TARGET_COUNT = 92
+EXPECTED_INTEGRATION_TARGET_COUNT = 93
 EXPECTED_STANDARD_TARGET_COUNT = 79
 
 

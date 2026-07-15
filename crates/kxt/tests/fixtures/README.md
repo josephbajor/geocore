@@ -119,9 +119,13 @@ statement accompanied the individual files.
   transplanted two-sample dual-offset record 3595 now certifies as the exact
   common open-clamped line at isolated `4352000/2/10`, with residuals
   `[3.468467250779673e-5, 3.384554176162513e-5]`; it is not reached by the
-  production traversal. The actual first production boundary is five-sample
-  dual-offset record 4230, roots `[3320, 773]`, chart 4231, at the unchanged
-  `414569575/22/10` v12 aggregate. General closed limits, other nullable chart
+  production traversal. Five-sample dual-offset record 4230, roots
+  `[3320, 773]`, chart 4231, independently certifies as a common degree-1
+  open-clamped polyline at exact isolated `17285120/5/10`. The unchanged
+  `414569575/22/10` v12 profile stops atomically before that proof with a
+  `431854695`-Work request; a production v13 frontier traversal remains pending.
+  The exemplar manifest therefore records a structured reconstruction failure
+  with no unsupported capability. General closed limits, other nullable chart
   data, periodic-trace-range, broader carrier families, and noncanonical chart
   forms remain unsupported. Primary
   reference for modern writer conventions: TRIMMED_CURVE/GEOMETRIC_OWNER linkage,

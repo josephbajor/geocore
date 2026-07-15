@@ -657,11 +657,11 @@ runner in `scripts/test_lanes.py`. `focused` selects one package library or
 integration target, `fast` combines workspace library/binary tests with 13
 reviewed integration smoke targets, `standard` retains all 79 non-corpus
 integration targets plus tooling contracts, `docs` runs the compiler-intensive
-workspace doctests explicitly, and `full` retains all 92 integration targets
-including the 13 production-corpus ratchets as well as docs and tooling. The
+workspace doctests explicitly, and `full` retains all 93 integration targets
+including the 14 production-corpus ratchets as well as docs and tooling. The
 runner validates workspace membership, package identity, the smoke inventory,
-and all 12 direct `exemplar.x_t` consumers before execution;
-`corpus_manifest` is the thirteenth slow target because it reaches the same
+and all 13 direct `exemplar.x_t` consumers before execution;
+`corpus_manifest` is the fourteenth slow target because it reaches the same
 exemplar through the manifest.
 
 The explicit docs stage preserves executable examples and compile-fail

@@ -768,12 +768,13 @@ certifies independently as the canonical open-clamped line at isolated
 `4352000/2/10`; residual bounds
 `[3.468467250779673e-5, 3.384554176162513e-5]` remain below its
 `1.817100064117055e-4` chordal tolerance. It is not reached by production
-traversal. The actual first typed production boundary is five-sample
-dual-offset record 4230, roots `[3320, 773]`, chart 4231, at the unchanged v12
-aggregate. The exemplar manifest row therefore remains
-`reconstruct: unsupported` with capability
-`xt.read.intersection-surface-family` and remains
-the committed progress meter: `reconstruct: unsupported → pass`, then
+traversal. Five-sample dual-offset record 4230, roots `[3320, 773]`, chart 4231,
+independently certifies as a canonical degree-1 open-clamped polyline at
+isolated `17285120/5/10`. The unchanged v12 production profile stops atomically
+at its exact `431854695`-Work preflight; a v13 frontier traversal remains
+pending. The exemplar manifest row is therefore `reconstruct: fail` with no
+unsupported capability and remains
+the committed progress meter: `reconstruct: fail → pass`, then
 `tessellate: pass`, then full-checker gaps shrinking toward `valid`. Dependency
 plan:
 
@@ -810,7 +811,8 @@ plan:
    polynomial or rational source NURBS trace. The additional bounded
    Offset(B-surface)/Offset(B-surface) family accepts only the canonical
    finite-open two-sample degree-1 line, three-sample degree-2 quadratic,
-   four-sample degree-3 cubic, or seven-sample degree-1 polyline forms. Their
+   four-sample degree-3 cubic, five-sample degree-1 polyline, or seven-sample
+   degree-1 polyline forms. Their
    model-space and canonicalized UV tuples share one exact open-clamped basis.
    Those retained/interpolated controls define only the candidate; both original
    offset-NURBS sources must independently pass the whole-range interval proof.
@@ -866,7 +868,9 @@ plan:
    `26443776/7/10` accounting and historical v1-v11 parity. Two-sample
    dual-offset record 3595 independently certifies at isolated
    `4352000/2/10` with exact per-resource N/N-1 rollback evidence. The
-   production traversal remains v12 and first stops at five-sample record 4230.
+   five-sample record 4230 independently certifies at `17285120/5/10`. The
+   production traversal remains v12 and stops at its exact `431854695`-Work
+   preflight; a v13 frontier is not yet claimed.
    Both
    original B-surface identities and their paired pcurves are graph-protected
    in source order. Other parameter conventions, limits,
@@ -883,13 +887,13 @@ plan:
    canonical finite-open three-sample dual-offset record 5945 and four-sample
    cubic dual-offset record 3819, zero-padded quadratic record 3790, exposed
    11-sample Plane/Offset record 3745, seven-sample dual-offset record 3615, and
-   the independently transplanted two-sample record 3595 now certify. The
-   production corpus ratchet remains v12 and stops first at five-sample
-   dual-offset record 4230.
+   the independently transplanted two-sample record 3595 and five-sample record
+   4230 now certify. The production corpus ratchet remains v12 and stops at
+   record 4230's exact `431854695`-Work preflight pending a v13 frontier run.
    Original-backed, tolerance-qualified, non-Plane, reversed-basis, periodic,
    closed, rational, or non-2D SP-curves, foreign curves, null/general
    closed-limit, endpoint or NURBS-trace omissions, other nullable
-   chart-data, the five-sample dual-offset interpolation family,
+   chart-data, production-profile admission past the isolated five-sample family,
    non-endpoint-only periodic trace ranges, and noncanonical chart conventions
    remain. Re-deriving
    boolean scars through our own surface/surface intersector remains an M4

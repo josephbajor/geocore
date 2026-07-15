@@ -49,6 +49,7 @@ pub use intersection::{
     certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
     certify_paired_plane_sphere_oblique_circle_residuals,
     certify_transmitted_cubic_dual_offset_nurbs_intersection_residuals,
+    certify_transmitted_five_sample_dual_offset_nurbs_intersection_residuals,
     certify_transmitted_nurbs_nurbs_intersection_residuals,
     certify_transmitted_offset_nurbs_intersection_residuals,
     certify_transmitted_plane_intersection_residuals,
