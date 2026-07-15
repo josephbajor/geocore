@@ -90,7 +90,9 @@ statement accompanied the individual files.
   live offset root, signed distance, periodic NURBS basis, paired pcurves, and
   whole-range unit-normal proof. Records 1828 and 2008 each reuse one `H/?`
   limit pointer as both start and end. Their single-periodic-axis, one-period
-  payloads now certify, and an exact synthetic record-1828 variant shifts
+  payloads now certify; an exact synthetic record-1828 variant clones the
+  shared `H/?` limit into a distinct same-point end record with unchanged
+  proof resources, and another shifts
   samples 10 through 18 by one declared U period without changing endpoints:
   record 1828 advances untouched
   production reconstruction through exact v3 `115485725/20/10`
@@ -139,9 +141,9 @@ statement accompanied the individual files.
   open nonperiodic source domain, so certification still fails atomically and
   the retained report remains `440483945/22/10`.
   The exemplar manifest therefore records a structured reconstruction failure
-  with no unsupported capability. General closed limits, other nullable chart
-  data, ambiguous or multi-period trace aliases, broader carrier families, and
-  noncanonical chart forms remain unsupported. Primary
+  with no unsupported capability. Null, mixed/non-`H`, or broader closed
+  limits, other nullable chart data, ambiguous or multi-period trace aliases,
+  broader carrier families, and noncanonical chart forms remain unsupported. Primary
   reference for modern writer conventions: TRIMMED_CURVE/GEOMETRIC_OWNER linkage,
   tolerant-edge fin curves, POINT ownership by vertex, and the resolved
   37102 node layouts (133/141 match base 13006 exactly).

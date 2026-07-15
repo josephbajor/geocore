@@ -960,6 +960,37 @@ fn equal_intersection_limit(file: &XtFile, index: u32) -> Result<Point3> {
     }
 }
 
+fn distinct_closed_intersection_limit(file: &XtFile, index: u32) -> Result<Point3> {
+    let node = xnode(file, index)?;
+    if node.code != code::LIMIT {
+        return Err(XtError::BadField {
+            index,
+            what: "INTERSECTION distinct closed-limit pointer is not a LIMIT",
+        });
+    }
+    if ch(file, node, "type")? != 'H'
+        || !matches!(file.field(node, "term_use"), Some(Value::Char('?')))
+    {
+        return Err(XtError::Unsupported {
+            capability: XtCapability::IntersectionLimits,
+            what: "distinct closed LIMIT must use type H with term_use ?",
+        });
+    }
+    match field(file, node, "hvec")? {
+        Value::Arr(values) if values.len() == 1 => {
+            let value = values[0].as_vector().ok_or(XtError::BadField {
+                index,
+                what: "distinct closed LIMIT contains a null or malformed position",
+            })?;
+            in_size_box(Point3::new(value[0], value[1], value[2]))
+        }
+        _ => Err(XtError::Unsupported {
+            capability: XtCapability::IntersectionLimits,
+            what: "distinct closed LIMIT must contain exactly one position",
+        }),
+    }
+}
+
 fn terminated_intersection_limit(file: &XtFile, index: u32) -> Result<[Point3; 2]> {
     let node = xnode(file, index)?;
     if node.code != code::LIMIT {
@@ -2356,13 +2387,34 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             });
         }
         let equal_limits = start_idx == end_idx;
+        let distinct_closed_limits = if equal_limits {
+            false
+        } else {
+            [start_idx, end_idx]
+                .into_iter()
+                .try_fold(true, |closed, index| {
+                    let limit = xnode(file, index)?;
+                    Ok::<_, XtError>(
+                        closed
+                            && limit.code == code::LIMIT
+                            && matches!(file.field(limit, "type"), Some(Value::Char('H')))
+                            && matches!(file.field(limit, "term_use"), Some(Value::Char('?'))),
+                    )
+                })?
+        };
+        let closed_limits = equal_limits || distinct_closed_limits;
         let end_limit = xnode(file, end_idx)?;
-        let terminated = !equal_limits
+        let terminated = !closed_limits
             && end_limit.code == code::LIMIT
             && matches!(file.field(end_limit, "type"), Some(Value::Char('T')));
         let (start, end) = if equal_limits {
             let limit = equal_intersection_limit(file, start_idx)?;
             (limit, limit)
+        } else if distinct_closed_limits {
+            (
+                distinct_closed_intersection_limit(file, start_idx)?,
+                distinct_closed_intersection_limit(file, end_idx)?,
+            )
         } else if terminated {
             let start = intersection_limit(file, start_idx)?;
             let [singularity, branch] = terminated_intersection_limit(file, end_idx)?;
@@ -2387,6 +2439,12 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 intersection_limit(file, end_idx)?,
             )
         };
+        if closed_limits && start.dist(end) > proof_tolerance {
+            return Err(XtError::BadField {
+                index: curve_idx,
+                what: "closed INTERSECTION LIMIT positions do not identify one point",
+            });
+        }
         if start.dist(positions[0]) > proof_tolerance
             || end.dist(positions[positions.len() - 1]) > proof_tolerance
         {
@@ -2395,7 +2453,7 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 what: "INTERSECTION LIMIT endpoints do not match the CHART endpoints",
             });
         }
-        if equal_limits && positions[0].dist(positions[count - 1]) > proof_tolerance {
+        if closed_limits && positions[0].dist(positions[count - 1]) > proof_tolerance {
             return Err(XtError::BadField {
                 index: curve_idx,
                 what: "equal-limit INTERSECTION CHART is not spatially closed",
@@ -2487,7 +2545,7 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 .or(nurbs_effective_offset_planes[1])
                 .or_else(|| planes.map(|planes| planes[1])),
         ];
-        let finite_open_plane_nurbs_interior_omissions = !equal_limits
+        let finite_open_plane_nurbs_interior_omissions = !closed_limits
             && !terminated
             && nurbs_trace_count == 1
             && exact_trace_planes.iter().flatten().count() == 1;
@@ -2534,15 +2592,15 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
 
         let dual_offset_nurbs = offset_nurbs_sources == [true, true];
         let two_sample_dual_offset =
-            dual_offset_nurbs && retained_count == 2 && !equal_limits && !terminated;
+            dual_offset_nurbs && retained_count == 2 && !closed_limits && !terminated;
         let quadratic_dual_offset =
-            dual_offset_nurbs && retained_count == 3 && !equal_limits && !terminated;
+            dual_offset_nurbs && retained_count == 3 && !closed_limits && !terminated;
         let cubic_dual_offset =
-            dual_offset_nurbs && retained_count == 4 && !equal_limits && !terminated;
+            dual_offset_nurbs && retained_count == 4 && !closed_limits && !terminated;
         let five_sample_dual_offset =
-            dual_offset_nurbs && retained_count == 5 && !equal_limits && !terminated;
+            dual_offset_nurbs && retained_count == 5 && !closed_limits && !terminated;
         let seven_sample_dual_offset =
-            dual_offset_nurbs && retained_count == 7 && !equal_limits && !terminated;
+            dual_offset_nurbs && retained_count == 7 && !closed_limits && !terminated;
         if dual_offset_nurbs
             && !two_sample_dual_offset
             && !quadratic_dual_offset
@@ -2597,7 +2655,7 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             ]
         };
         if let Some(planes) = planes {
-            if equal_limits {
+            if closed_limits {
                 return Err(XtError::Unsupported {
                     capability: XtCapability::IntersectionLimits,
                     what: "equal-limit chart must close on exactly one certified periodic NURBS axis",
@@ -2694,7 +2752,7 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
         let traces: [TransmittedNurbsIntersectionTrace; 2] = traces
             .try_into()
             .expect("two transmitted sources remain two ordered traces");
-        if equal_limits {
+        if closed_limits {
             canonicalize_equal_limit_periodic_trace_range(curve_idx, &traces, &mut uv)?;
         } else {
             canonicalize_trace_endpoint_roundoff(&traces, &mut uv);
@@ -2820,7 +2878,7 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             index: curve_idx,
             source,
         })?;
-        let certificate = if equal_limits {
+        let certificate = if closed_limits {
             certificate
                 .with_certified_carrier_periodicity()
                 .map_err(|source| XtError::IntersectionCertificate {

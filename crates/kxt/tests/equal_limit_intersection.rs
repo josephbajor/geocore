@@ -98,6 +98,62 @@ fn alias_record_1828_interior_period(file: &mut kxt::XtFile, shift: f64) {
     set_field(file, 2204, "values", Value::Arr(values));
 }
 
+fn make_record_1828_limits_distinct(file: &mut kxt::XtFile) -> u32 {
+    let duplicate = file.nodes.keys().copied().max().unwrap() + 1;
+    let limit = file.nodes[&2205].clone();
+    file.nodes.insert(duplicate, limit);
+    set_field(file, 1828, "end", Value::Ptr(duplicate));
+    duplicate
+}
+
+fn assert_equal_limit_resource_boundaries(file: &kxt::XtFile) {
+    let session = SessionPolicy::v1();
+    for (stage, resource, mode, exact, prior) in [
+        (
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            EQUAL_LIMIT_WORK,
+            81_267_732,
+        ),
+        (
+            INTERSECTION_CHART_ITEMS,
+            ResourceKind::Items,
+            AccountingMode::HighWater,
+            20,
+            0,
+        ),
+        (
+            INTERSECTION_CHART_DEPTH,
+            ResourceKind::Depth,
+            AccountingMode::HighWater,
+            10,
+            0,
+        ),
+    ] {
+        for allowed in [exact - 1, exact] {
+            let mut store = Store::new();
+            let outcome = reconstruct_with_context(
+                file,
+                &mut store,
+                &context_with_limit(&session, stage, resource, mode, allowed),
+            )
+            .unwrap();
+            if allowed + 1 == exact {
+                let limit = outcome.result().as_ref().unwrap_err().limit().unwrap();
+                assert_eq!(
+                    (limit.stage, limit.resource, limit.consumed, limit.allowed),
+                    (stage, resource, exact, allowed)
+                );
+                assert_eq!(usage(outcome.report(), stage, resource), prior);
+            } else {
+                assert_eq!(usage(outcome.report(), stage, resource), exact);
+            }
+            assert_rollback(&store);
+        }
+    }
+}
+
 #[test]
 fn exemplar_pins_both_equal_limit_records_and_exact_period_unwraps() {
     let file = read_xt(EXEMPLAR).unwrap();
@@ -271,51 +327,23 @@ fn interior_period_alias_has_exact_work_items_depth_boundaries_and_rollback() {
     assert_eq!(aliased_values[0], original_values[0]);
     assert_eq!(aliased_values[76], original_values[76]);
 
-    let session = SessionPolicy::v1();
-    for (stage, resource, mode, exact, prior) in [
-        (
-            INTERSECTION_CHART_CERTIFICATE_WORK,
-            ResourceKind::Work,
-            AccountingMode::Cumulative,
-            EQUAL_LIMIT_WORK,
-            81_267_732,
-        ),
-        (
-            INTERSECTION_CHART_ITEMS,
-            ResourceKind::Items,
-            AccountingMode::HighWater,
-            20,
-            0,
-        ),
-        (
-            INTERSECTION_CHART_DEPTH,
-            ResourceKind::Depth,
-            AccountingMode::HighWater,
-            10,
-            0,
-        ),
-    ] {
-        for allowed in [exact - 1, exact] {
-            let mut store = Store::new();
-            let outcome = reconstruct_with_context(
-                &aliased,
-                &mut store,
-                &context_with_limit(&session, stage, resource, mode, allowed),
-            )
-            .unwrap();
-            if allowed + 1 == exact {
-                let limit = outcome.result().as_ref().unwrap_err().limit().unwrap();
-                assert_eq!(
-                    (limit.stage, limit.resource, limit.consumed, limit.allowed),
-                    (stage, resource, exact, allowed)
-                );
-                assert_eq!(usage(outcome.report(), stage, resource), prior);
-            } else {
-                assert_eq!(usage(outcome.report(), stage, resource), exact);
-            }
-            assert_rollback(&store);
-        }
+    assert_equal_limit_resource_boundaries(&aliased);
+}
+
+#[test]
+fn distinct_closed_limits_have_exact_periodic_proof_resources_and_rollback() {
+    let mut file = read_xt(EXEMPLAR).unwrap();
+    let end = make_record_1828_limits_distinct(&mut file);
+    assert_ne!(end, 2205);
+    assert_eq!(field(&file, 1828, "start").as_ptr(), Some(2205));
+    assert_eq!(field(&file, 1828, "end").as_ptr(), Some(end));
+    for limit in [2205, end] {
+        assert_eq!(file.nodes[&limit].code, code::LIMIT);
+        assert_eq!(field(&file, limit, "type").as_char(), Some('H'));
+        assert_eq!(field(&file, limit, "term_use").as_char(), Some('?'));
+        assert_eq!(field(&file, limit, "hvec"), field(&file, 2205, "hvec"));
     }
+    assert_equal_limit_resource_boundaries(&file);
 }
 
 #[test]
@@ -458,18 +486,36 @@ fn record_2008_payload_certifies_independently_of_the_earlier_terminated_boundar
 }
 
 #[test]
-fn malformed_equal_limits_and_noncanonical_periodic_endpoints_remain_typed_and_atomic() {
+fn malformed_closed_limits_and_noncanonical_periodic_endpoints_remain_typed_and_atomic() {
     let mut cases = Vec::new();
 
     let mut null = read_xt(EXEMPLAR).unwrap();
     set_field(&mut null, 1828, "end", Value::Ptr(0));
     cases.push((null, "transmitted intersection has a null limit"));
 
-    let mut distinct_closed = read_xt(EXEMPLAR).unwrap();
-    set_field(&mut distinct_closed, 1828, "end", Value::Ptr(2208));
+    let mut mixed_closed = read_xt(EXEMPLAR).unwrap();
+    let mixed_end = make_record_1828_limits_distinct(&mut mixed_closed);
+    set_field(&mut mixed_closed, mixed_end, "type", Value::Char('L'));
     cases.push((
-        distinct_closed,
+        mixed_closed,
         "only finite open LIMIT type L with term_use ? is supported",
+    ));
+
+    let mut ambiguous_closed = read_xt(EXEMPLAR).unwrap();
+    let ambiguous_end = make_record_1828_limits_distinct(&mut ambiguous_closed);
+    let position = match field(&ambiguous_closed, ambiguous_end, "hvec") {
+        Value::Arr(values) => values[0].clone(),
+        _ => unreachable!(),
+    };
+    set_field(
+        &mut ambiguous_closed,
+        ambiguous_end,
+        "hvec",
+        Value::Arr(vec![position.clone(), position]),
+    );
+    cases.push((
+        ambiguous_closed,
+        "distinct closed LIMIT must contain exactly one position",
     ));
 
     let mut off_seam = read_xt(EXEMPLAR).unwrap();
@@ -496,4 +542,16 @@ fn malformed_equal_limits_and_noncanonical_periodic_endpoints_remain_typed_and_a
         ));
         assert_rollback(&store);
     }
+
+    let mut material_closed = read_xt(EXEMPLAR).unwrap();
+    set_field(&mut material_closed, 1828, "end", Value::Ptr(2208));
+    let error = reconstruct(&material_closed, &mut store).unwrap_err();
+    assert!(matches!(
+        error,
+        XtError::BadField {
+            index: 1828,
+            what: "closed INTERSECTION LIMIT positions do not identify one point",
+        }
+    ));
+    assert_rollback(&store);
 }
