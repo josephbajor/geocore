@@ -521,7 +521,7 @@ fn invalid_or_out_of_family_affine_conventions_remain_typed_and_atomic() {
         ),
         (
             out_of_family,
-            "noncanonical affine charts require the bounded finite-open two- through five-sample direct-Plane/B-surface, safe-Offset(Plane)/B-surface, or direct-Plane/Offset(B-surface) family",
+            "noncanonical affine charts require the bounded finite-open two- through five-sample direct-Plane/B-surface, safe-Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), or direct-B-surface/B-surface family",
         ),
     ] {
         let mut store = Store::new();
