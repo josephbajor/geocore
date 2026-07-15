@@ -5,11 +5,18 @@
 
 //! Checked deterministic complete-body rigid-copy contracts.
 
+use kgeom::curve::Line;
+use kgeom::curve2d::Line2d;
 use kgeom::frame::Frame;
-use kgeom::vec::{Point2, Point3, Vec3};
+use kgeom::param::ParamRange;
+use kgeom::surface::Plane;
+use kgeom::vec::{Point2, Point3, Vec2, Vec3};
+use kgraph::{
+    AffineParamMap1d, VerifiedIntersectionCertificate, certify_paired_plane_line_residuals,
+};
 use ktopo::btess::{TessOptions, tessellate_body};
 use ktopo::check::{CheckLevel, CheckOutcome, check_body_report};
-use ktopo::entity::{Body, Edge, Face, Fin, Loop, Region, Shell, Vertex};
+use ktopo::entity::{Body, BodyKind, Edge, Face, Fin, Loop, Region, RegionKind, Shell, Vertex};
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::make;
 use ktopo::profile::PlanarProfile;
@@ -39,6 +46,89 @@ fn copy_checked(
     let copied = transaction.copy_body_rigid(source, placement).unwrap();
     let journal = transaction.commit_checked_body(copied).unwrap();
     (copied, journal)
+}
+
+fn verified_plane_line_wire(
+    store: &mut Store,
+) -> (
+    ktopo::entity::BodyId,
+    ktopo::entity::CurveId,
+    [ktopo::entity::SurfaceId; 2],
+    [ktopo::entity::Curve2dId; 2],
+) {
+    let planes = [
+        Plane::new(Frame::world()),
+        Plane::new(
+            Frame::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap(),
+        ),
+    ];
+    let pcurves = [
+        Line2d::new(Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap(),
+        Line2d::new(Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap(),
+    ];
+    let maps = [
+        AffineParamMap1d::new(1.0, 0.0).unwrap(),
+        AffineParamMap1d::new(1.0, 0.0).unwrap(),
+    ];
+    let carrier = Line::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap();
+    let range = ParamRange::new(-1.0, 2.0);
+    let certificate =
+        certify_paired_plane_line_residuals(carrier, range, planes, pcurves, maps, 1.0e-12)
+            .unwrap();
+    let surfaces = planes.map(|plane| store.insert_surface(SurfaceGeom::Plane(plane)).unwrap());
+    let pcurve_handles =
+        pcurves.map(|pcurve| store.insert_pcurve(Curve2dGeom::Line(pcurve)).unwrap());
+    let curve = store
+        .insert_verified_plane_intersection_curve(surfaces, pcurve_handles, certificate)
+        .unwrap();
+
+    let mut transaction = store.transaction().unwrap();
+    let body = {
+        let mut assembly = transaction.assembly();
+        let body = assembly.add(Body {
+            kind: BodyKind::Wire,
+            regions: Vec::new(),
+        });
+        let region = assembly.add(Region {
+            body,
+            kind: RegionKind::Void,
+            shells: Vec::new(),
+        });
+        let shell = assembly.add(Shell {
+            region,
+            faces: Vec::new(),
+            edges: Vec::new(),
+            vertex: None,
+        });
+        let points = [
+            assembly.add(Point3::new(-1.0, 0.0, 0.0)),
+            assembly.add(Point3::new(2.0, 0.0, 0.0)),
+        ];
+        let vertices = points.map(|point| {
+            assembly.add(Vertex {
+                point,
+                tolerance: None,
+            })
+        });
+        let edge = assembly.add(Edge {
+            curve: Some(curve),
+            vertices: vertices.map(Some),
+            bounds: Some((range.lo, range.hi)),
+            fins: Vec::new(),
+            tolerance: None,
+        });
+        assembly.get_mut(shell).unwrap().edges.push(edge);
+        assembly.get_mut(region).unwrap().shells.push(shell);
+        assembly.get_mut(body).unwrap().regions.push(region);
+        body
+    };
+    transaction.commit_checked_body(body).unwrap();
+    (body, curve, surfaces, pcurve_handles)
 }
 
 #[test]
@@ -178,6 +268,74 @@ fn rigid_holed_sheet_copy_preserves_pcurves_full_proof_and_area() {
         })
         .sum::<f64>();
     assert!((area - 12.0).abs() <= 1.0e-10);
+}
+
+#[test]
+fn rigid_copy_reissues_plane_line_intersection_certificate() {
+    let mut store = Store::new();
+    let (source, source_curve, source_surfaces, source_pcurves) =
+        verified_plane_line_wire(&mut store);
+
+    let (copied, journal) = copy_checked(&mut store, source, placement());
+    let copied_edge = store.edges_of_body(copied).unwrap()[0];
+    let copied_curve = store.get(copied_edge).unwrap().curve.unwrap();
+    assert_ne!(copied_curve, source_curve);
+    let copied_intersection = store
+        .get(copied_curve)
+        .unwrap()
+        .as_intersection()
+        .copied()
+        .unwrap();
+    assert!(
+        copied_intersection
+            .source_surfaces()
+            .into_iter()
+            .zip(source_surfaces)
+            .all(|(copied, source)| copied != source)
+    );
+    assert!(
+        copied_intersection
+            .pcurves()
+            .into_iter()
+            .zip(source_pcurves)
+            .all(|(copied, source)| copied != source)
+    );
+    let VerifiedIntersectionCertificate::PlaneLine(certificate) = copied_intersection.certificate()
+    else {
+        panic!("copy changed the intersection certificate family");
+    };
+    assert_eq!(
+        certificate.carrier(),
+        Line::new(
+            map_point(placement(), Point3::new(0.0, 0.0, 0.0)),
+            placement().x(),
+        )
+        .unwrap()
+    );
+    assert_eq!(certificate.carrier_range(), ParamRange::new(-1.0, 2.0));
+    for (index, surface) in copied_intersection
+        .source_surfaces()
+        .into_iter()
+        .enumerate()
+    {
+        assert_eq!(
+            store.get(surface).unwrap().as_plane().copied(),
+            Some(certificate.surfaces()[index])
+        );
+    }
+    for (index, pcurve) in copied_intersection.pcurves().into_iter().enumerate() {
+        assert_eq!(
+            store.get(pcurve).unwrap().as_line().copied(),
+            Some(certificate.pcurves()[index])
+        );
+    }
+    assert!(journal.lineage().iter().any(|event| matches!(
+        event,
+        LineageEvent::DerivedFrom {
+            derived: ktopo::entity::EntityRef::Curve(derived),
+            source: ktopo::entity::EntityRef::Curve(original),
+        } if *derived == copied_curve && *original == source_curve
+    )));
 }
 
 #[test]

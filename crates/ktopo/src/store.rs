@@ -24,8 +24,9 @@ use kcore::error::{Error, Result};
 use kcore::tolerance::{Tolerances, check_in_size_box};
 use kgeom::vec::Point3;
 use kgraph::{
-    Curve2dHandle, GeometryGraph, GeometryGraphError, GeometryRef, SurfaceHandle,
-    TransmittedNurbsIntersectionCertificate, TransmittedPlaneIntersectionCertificate,
+    Curve2dHandle, GeometryGraph, GeometryGraphError, GeometryRef,
+    PairedPlaneLineResidualCertificate, SurfaceHandle, TransmittedNurbsIntersectionCertificate,
+    TransmittedPlaneIntersectionCertificate,
 };
 
 pub(crate) mod sealed {
@@ -385,6 +386,19 @@ impl Store {
     /// Insert immutable 3D curve geometry.
     pub fn insert_curve(&mut self, curve: CurveGeom) -> Result<CurveId> {
         self.geometry.insert_curve(curve).map_err(map_graph_error)
+    }
+
+    /// Insert a certified finite Plane/Plane intersection line with graph-owned
+    /// source and pcurve proof bindings.
+    pub fn insert_verified_plane_intersection_curve(
+        &mut self,
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: PairedPlaneLineResidualCertificate,
+    ) -> Result<CurveId> {
+        self.geometry
+            .insert_verified_plane_intersection_curve(source_surfaces, pcurves, certificate)
+            .map_err(map_graph_error)
     }
 
     /// Insert a certified transmitted exact-plane-field intersection with

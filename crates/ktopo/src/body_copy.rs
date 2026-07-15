@@ -9,11 +9,14 @@ use crate::store::Store;
 use kcore::error::{Error, Result};
 use kcore::tolerance::{LINEAR_RESOLUTION, check_in_size_box};
 use kgeom::curve::{Circle, Ellipse, Line};
+use kgeom::curve2d::Line2d;
 use kgeom::frame::Frame;
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::surface::{Cone, Cylinder, Dir, Plane, Sphere, Surface, Torus};
 use kgeom::vec::{Point3, Vec3};
-use kgraph::OffsetSurfaceDescriptor;
+use kgraph::{
+    OffsetSurfaceDescriptor, VerifiedIntersectionCertificate, certify_paired_plane_line_residuals,
+};
 use std::collections::HashMap;
 
 pub(crate) struct BodyCopy {
@@ -218,6 +221,74 @@ impl Copier<'_> {
             return Ok(curve);
         }
         let descriptor = self.store.get(source)?.clone();
+        if let CurveGeom::Intersection(intersection) = &descriptor {
+            let certificate = intersection.certificate();
+            let VerifiedIntersectionCertificate::PlaneLine(certificate) = certificate else {
+                return Err(Error::InvalidGeometry {
+                    reason: "rigid body copy does not yet reissue this verified intersection certificate",
+                });
+            };
+            let source_surfaces = intersection.source_surfaces();
+            let copied_surfaces = [
+                self.copy_surface(source_surfaces[0])?,
+                self.copy_surface(source_surfaces[1])?,
+            ];
+            let copied_plane = |surface: SurfaceId| -> Result<Plane> {
+                self.store
+                    .get(surface)?
+                    .as_plane()
+                    .copied()
+                    .ok_or(Error::InvalidGeometry {
+                        reason: "Plane/Plane certificate must retain Plane sources",
+                    })
+            };
+            let surfaces = [
+                copied_plane(copied_surfaces[0])?,
+                copied_plane(copied_surfaces[1])?,
+            ];
+            let source_pcurves = intersection.pcurves();
+            let copied_pcurves = [
+                self.copy_pcurve(source_pcurves[0])?,
+                self.copy_pcurve(source_pcurves[1])?,
+            ];
+            let copied_line = |pcurve: Curve2dId| -> Result<Line2d> {
+                self.store
+                    .get(pcurve)?
+                    .as_line()
+                    .copied()
+                    .ok_or(Error::InvalidGeometry {
+                        reason: "Plane/Plane certificate must retain line pcurves",
+                    })
+            };
+            let pcurves = [
+                copied_line(copied_pcurves[0])?,
+                copied_line(copied_pcurves[1])?,
+            ];
+            let carrier = certificate.carrier();
+            let carrier = Line::new(
+                self.checked_point(carrier.origin())?,
+                self.vector(carrier.dir()),
+            )?;
+            let certificate = certify_paired_plane_line_residuals(
+                carrier,
+                certificate.carrier_range(),
+                surfaces,
+                pcurves,
+                certificate.parameter_maps(),
+                certificate.tolerance(),
+            )
+            .map_err(|_| Error::InvalidGeometry {
+                reason: "rigid body copy could not reissue the Plane/Plane intersection certificate",
+            })?;
+            let curve = self.store.insert_verified_plane_intersection_curve(
+                copied_surfaces,
+                copied_pcurves,
+                certificate,
+            )?;
+            self.curves.insert(source, curve);
+            self.derived(EntityRef::Curve(curve), EntityRef::Curve(source));
+            return Ok(curve);
+        }
         let transformed = match descriptor {
             CurveGeom::Line(line) => CurveGeom::Line(Line::new(
                 self.checked_point(line.origin())?,
@@ -241,8 +312,8 @@ impl Copier<'_> {
                     .collect::<Result<Vec<_>>>()?,
                 nurbs.weights().map(<[f64]>::to_vec),
             )?),
-            CurveGeom::Intersection(_)
-            | CurveGeom::VerifiedNurbsIntersection(_)
+            CurveGeom::Intersection(_) => unreachable!("handled above"),
+            CurveGeom::VerifiedNurbsIntersection(_)
             | CurveGeom::TransmittedIntersection(_)
             | CurveGeom::TransmittedNurbsIntersection(_) => {
                 return Err(Error::InvalidGeometry {
