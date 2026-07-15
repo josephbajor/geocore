@@ -819,11 +819,13 @@ polyline while both original sources retain whole-range proofs. The corpus
 reaches `414569575/22/10` with historical v1-v11 parity. Two-sample dual-offset
 record 3595 independently certifies as a canonical open-clamped line at
 isolated `4352000/2/10`, with two original-source proofs and exact
-per-resource N/N-1 rollback evidence. Production does not reach it and remains
-v12. Five-sample record 4230, roots `[3320, 773]`, chart 4231, independently
+per-resource N/N-1 rollback evidence. Production does not reach it. Five-sample
+record 4230, roots `[3320, 773]`, chart 4231, independently
 certifies as a canonical degree-1 open-clamped polyline at isolated
-`17285120/5/10`; v12 stops atomically at its exact `431854695`-Work preflight,
-and a v13 production frontier remains pending.
+`17285120/5/10`. Production v13 admits it at exact `431854695/22/10` with
+historical v1-v12 parity, then stops before two-sample direct Plane/Offset
+record 3609, chart 3607, whose isolated `4277250` Work would request cumulative
+`436131945`.
 An end terminator contributes a
 tolerance-close, distinct singularity
 and one extra paired-UV tuple whose appended span is certified with the same
@@ -959,8 +961,8 @@ the graph ownership model.
   residuals, per-resource N/N-1 rollback, and malformed carrier/pcurve failure;
   the five-sample suite pins record 4230's canonical polyline, isolated
   `17285120/5/10`, per-resource N/N-1 rollback, and typed malformed failure.
-  Production v12 pins the exact `431854695`-Work preflight and does not claim a
-  v13 frontier.
+  Production v13 pins exact `431854695/22/10`, historical v1-v12 parity, and
+  the next atomic resource stop at record 3609's `436131945`-Work request.
 
 ### Offset evaluator tests
 

@@ -684,8 +684,9 @@ evidence. Actual CI wall-time improvement remains a CI-run measurement.
 The first corpus consolidation removes redundant full-exemplar v10 and v11
 historical replays from the cubic and zero-knot suites. Their exact aggregate
 budget-profile assertions, isolated record certificates, Work/Items/Depth
-boundaries, malformed-input atomicity, and the v12 record-4230 end-to-end
-frontier remain. Timing evidence and the remaining consolidation policy live
+boundaries, malformed-input atomicity, the historical v12 record-4230 boundary,
+and the v13 record-3609 end-to-end frontier remain. Timing evidence and the
+remaining consolidation policy live
 in `docs/projects/test-throughput.md`; elapsed time remains diagnostic rather
 than a correctness threshold.
 

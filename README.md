@@ -57,11 +57,11 @@ application boundary.
   reconstruction, deterministic analytic text writing, bounded tolerant-edge SP-curves,
   safe offset surfaces, certified clamped periodic/closed B-surfaces, and canonical
   transmitted Plane/Offset/NURBS intersection-chart slices are implemented. The committed
-  corpus includes a production 7,423-node Onshape part and reconstructs under the exact v12
-  profile at `414569575/22/10` Work/Items/Depth. Two-sample dual-offset record 3595 and
-  five-sample record 4230 certify independently without changing that profile; record 4230
-  costs `17285120/5/10`, and production v12 stops atomically at its exact
-  `431854695`-Work preflight while a v13 frontier remains pending. Broader cyclic
+  corpus includes a production 7,423-node Onshape part and reconstructs under the exact v13
+  profile at `431854695/22/10` Work/Items/Depth. Two-sample dual-offset record 3595
+  certifies independently; five-sample record 4230 costs `17285120/5/10` and is
+  admitted by v13. Production next stops atomically before two-sample Plane/Offset
+  record 3609 at its exact `436131945`-Work request. Broader cyclic
   B-geometry, periodic/circular pcurves,
   remaining intersection/procedural families, assemblies, older schemas, neutral-binary
   writing, and broader external Parasolid certification remain.

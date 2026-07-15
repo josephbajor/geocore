@@ -163,8 +163,9 @@ The post-documentation run that rebuilt the ledger-bearing `kcore` target took
 into 1,556.453s for all workspace targets, 166.816s for documentation tests,
 and 3.231s for 87 Python tooling contracts.
 The longest remaining individual X_T suites were endpoint roundoff at 294.22s
-and finite-open Plane/Offset(NURBS) data at 236.18s. The unchanged v12
-seven-sample frontier passed in 166.46s.
+and finite-open Plane/Offset(NURBS) data at 236.18s. The retained historical
+v12 seven-sample frontier passed in 166.46s; the later v13 five-sample
+production frontier passed in 183.38s.
 
 Before X_T test consolidation, this machine measured the representative
 seven-sample ratchet at 172.58 seconds of test time and 185.92 seconds of wall
@@ -180,7 +181,7 @@ production-corpus group and excluded from `standard` despite lacking a direct
 fixture reference. These are diagnostic baselines, not pass/fail thresholds.
 
 The first audit removed two historical full-exemplar replays whose accepted
-prefixes are subsumed by the retained v12 record-4230 frontier. Each suite keeps
+prefixes are subsumed by the retained v13 record-3609 frontier. Each suite keeps
 its exact aggregate profile values and accounting modes, source-payload pins,
 isolated certificate and N/N-1 resource crossings, malformed-input evidence,
 and rollback assertions:
@@ -191,10 +192,11 @@ and rollback assertions:
 | `zero_multiplicity_knot_padding` | 159.50 s | 3.79 s | 155.71 s |
 | **Combined cargo-reported test time** | **304.75 s** | **10.01 s** | **294.74 s** |
 
-The unchanged seven-sample suite remains the authoritative end-to-end v12
-production traversal and record-4230 frontier. Its 166.46s rerun passed in the
-integrated checkpoint gate; the consolidation did not replace it with profile
-arithmetic.
+The seven-sample suite remains the authoritative end-to-end historical v12
+record-4230 boundary. Its 166.46s rerun passed in the integrated checkpoint
+gate; the five-sample suite now adds the v13 production traversal through
+record 4230 and the exact record-3609 resource stop. Neither was replaced with
+profile arithmetic.
 
 ## Follow-on measured work
 

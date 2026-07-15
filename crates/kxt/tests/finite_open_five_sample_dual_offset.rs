@@ -17,6 +17,8 @@ use kxt::{
 
 const EXEMPLAR: &[u8] = include_bytes!("fixtures/exemplar.x_t");
 const RECORD_4230_WORK: u64 = 17_285_120;
+const RECORD_3609_WORK: u64 = 4_277_250;
+const V13_WORK: u64 = 431_854_695;
 
 fn field<'a>(file: &'a kxt::XtFile, index: u32, name: &str) -> &'a Value {
     file.field(&file.nodes[&index], name).unwrap()
@@ -283,5 +285,56 @@ fn malformed_record_4230_controls_limits_and_residuals_fail_typed_and_atomically
             what: "only one shared closed LIMIT type H with term_use ? is supported for an equal-limit chart",
         })
     ));
+    assert_rollback(&store);
+}
+
+#[test]
+fn v13_certifies_4230_and_pins_the_next_plane_offset_frontier() {
+    let file = read_xt(EXEMPLAR).unwrap();
+    assert_eq!(file.nodes[&3609].code, code::INTERSECTION);
+    assert_eq!(
+        field(&file, 3609, "surface"),
+        &Value::Arr(vec![Value::Ptr(3321), Value::Ptr(773)])
+    );
+    assert_eq!(file.nodes[&3321].code, code::PLANE);
+    assert_eq!(file.nodes[&773].code, code::OFFSET_SURF);
+    assert_eq!(field(&file, 3609, "chart").as_ptr(), Some(3607));
+    assert_eq!(field(&file, 3607, "chart_count").as_int(), Some(2));
+    assert_eq!(field(&file, 3609, "start").as_ptr(), Some(3608));
+    assert_eq!(field(&file, 3609, "end").as_ptr(), Some(3606));
+    assert_eq!(field(&file, 3609, "intersection_data").as_ptr(), Some(3613));
+    let session = SessionPolicy::v1();
+    let mut store = Store::new();
+    let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+    let outcome = reconstruct_with_context(&file, &mut store, &context).unwrap();
+    let crossing = outcome.result().as_ref().unwrap_err().limit().unwrap();
+    assert_eq!(crossing.stage, INTERSECTION_CHART_CERTIFICATE_WORK);
+    assert_eq!(crossing.resource, ResourceKind::Work);
+    assert_eq!(crossing.allowed, V13_WORK);
+    assert_eq!(crossing.consumed, V13_WORK + RECORD_3609_WORK);
+    assert_eq!(
+        usage(
+            outcome.report(),
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+        ),
+        V13_WORK
+    );
+    assert_eq!(
+        usage(
+            outcome.report(),
+            INTERSECTION_CHART_ITEMS,
+            ResourceKind::Items,
+        ),
+        22
+    );
+    assert_eq!(
+        usage(
+            outcome.report(),
+            INTERSECTION_CHART_DEPTH,
+            ResourceKind::Depth,
+        ),
+        10
+    );
     assert_rollback(&store);
 }

@@ -544,8 +544,9 @@ dual-offset polyline record 3615 at isolated `26,443,776/7/10`, reaching
 record 3595 separately certifies at isolated `4,352,000/2/10` with exact
 Work/Items/Depth N/N-1 rollback evidence, without changing the production
 profile. Five-sample record 4230, roots `[3320, 773]`, chart 4231, independently
-certifies at isolated `17,285,120/5/10`; unchanged v12 stops atomically at the
-exact `431,854,695`-Work preflight pending a v13 frontier. Material and interior
+certifies at isolated `17,285,120/5/10`; v13 admits it at exact
+`431,854,695/22/10`, preserves historical v1-v12 parity, and stops atomically
+before record 3609's `436,131,945`-Work request. Material and interior
 overhangs are never normalized, and every snapped endpoint remains subordinate to its original-
 source whole-carrier certificate.
 The v5 extension permits paired-null Plane UVs only at interior samples of an

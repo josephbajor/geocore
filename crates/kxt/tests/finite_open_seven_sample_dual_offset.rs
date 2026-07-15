@@ -20,6 +20,7 @@ const V11_WORK: u64 = 388_125_799;
 const RECORD_3615_WORK: u64 = 26_443_776;
 const RECORD_4230_WORK: u64 = 17_285_120;
 const V12_WORK: u64 = 414_569_575;
+const V13_WORK: u64 = 431_854_695;
 
 fn field<'a>(file: &'a kxt::XtFile, index: u32, name: &str) -> &'a Value {
     file.field(&file.nodes[&index], name).unwrap()
@@ -370,7 +371,7 @@ fn malformed_record_3615_witnesses_and_limits_fail_typed_and_atomically() {
 }
 
 #[test]
-fn v1_through_v11_are_stable_and_v12_has_the_exact_aggregate_profile() {
+fn v1_through_v12_are_stable_and_v13_has_the_exact_aggregate_profile() {
     let expected = [
         131_072,
         81_267_732,
@@ -384,6 +385,7 @@ fn v1_through_v11_are_stable_and_v12_has_the_exact_aggregate_profile() {
         336_759_900,
         V11_WORK,
         V12_WORK,
+        V13_WORK,
     ];
     let plans = [
         IntersectionImportBudgetProfile::v1_defaults(),
@@ -398,6 +400,7 @@ fn v1_through_v11_are_stable_and_v12_has_the_exact_aggregate_profile() {
         IntersectionImportBudgetProfile::v10_defaults(),
         IntersectionImportBudgetProfile::v11_defaults(),
         IntersectionImportBudgetProfile::v12_defaults(),
+        IntersectionImportBudgetProfile::v13_defaults(),
     ];
     for (plan, expected_work) in plans.iter().zip(expected) {
         assert_eq!(limit(plan, ResourceKind::Work).allowed, expected_work);
