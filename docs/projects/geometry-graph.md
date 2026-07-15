@@ -1,6 +1,6 @@
 # F1 procedural geometry graph
 
-Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, or compatible direct-NURBS/NURBS descriptors, plus M3c transmitted-chart consumers through endpoint-only equal-limit closure, finite-open/end-terminated `T/F` singular closure, and finite-open B-surface/Plane or Plane/Offset(B-surface) charts with omitted Plane UVs, including canonical Plane/Offset endpoints, are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
+Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, or compatible direct-NURBS/NURBS descriptors, plus M3c transmitted-chart consumers through single-axis one-period equal-limit closure with unique exact interior aliases, finite-open/end-terminated `T/F` singular closure, and finite-open B-surface/Plane or Plane/Offset(B-surface) charts with omitted Plane UVs, including canonical Plane/Offset endpoints, are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
 
 ## Outcome
 
@@ -857,7 +857,7 @@ payload transplants.
   charts and other exact/procedural families only
   with contextual accounting and paired trace evidence.
 - Broaden the M3c consumer to null/general closed limits, other nullable chart
-  data, non-endpoint-only periodic trace ranges, noncanonical charts, and further terminator variants
+  data, ambiguous or multi-period trace aliases, noncanonical charts, and further terminator variants
   without recomputing their transmitted scars.
 - Add swept, spun, and blend descriptors only with their own evaluator,
   validity, bounds, interchange, and test contracts.
@@ -951,8 +951,11 @@ the graph ownership model.
   `INTERSECTION` 4230, and independently transplanted two-sample
   dual-offset line `INTERSECTION` 3595. The equal-limit
   suite separately pins both records, exact v3
-  `115485725/20/10`, record-2008 transplant `124040223/22/10`, endpoint-only
-  period unwrapping, and typed null/distinct-closed/off-seam rollback. The
+  `115485725/20/10`, record-2008 transplant `124040223/22/10`, unique exact
+  one-period endpoint or interior alias lifting, the unchanged whole-range
+  proof, exact synthetic Work/Items/Depth N/N-1 rollback, and typed null,
+  material, ambiguous, multi-period, nonperiodic-axis, distinct-closed, or
+  off-seam rollback. The
   terminator suite pins exact v4 `116396069/20/10`, record-1678 transplant
   `116413476` Work, the appended final span, analytic Plane UV recovery,
   endpoint-only NURBS roundoff snapping, and typed malformed rollback. The

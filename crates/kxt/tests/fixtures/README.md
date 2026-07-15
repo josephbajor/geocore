@@ -89,8 +89,10 @@ statement accompanied the individual files.
   first constant-normal `Offset(B-surface)/B-surface` chart now retains the
   live offset root, signed distance, periodic NURBS basis, paired pcurves, and
   whole-range unit-normal proof. Records 1828 and 2008 each reuse one `H/?`
-  limit pointer as both start and end. Their endpoint-only,
-  single-periodic-axis payloads now certify: record 1828 advances untouched
+  limit pointer as both start and end. Their single-periodic-axis, one-period
+  payloads now certify, and an exact synthetic record-1828 variant shifts
+  samples 10 through 18 by one declared U period without changing endpoints:
+  record 1828 advances untouched
   production reconstruction through exact v3 `115485725/20/10`
   Work/Items/Depth, while record 2008 is independently pinned by a focused
   payload transplant at `124040223/22/10`. Production v4 then certifies the
@@ -138,8 +140,8 @@ statement accompanied the individual files.
   the retained report remains `440483945/22/10`.
   The exemplar manifest therefore records a structured reconstruction failure
   with no unsupported capability. General closed limits, other nullable chart
-  data, periodic-trace-range, broader carrier families, and noncanonical chart
-  forms remain unsupported. Primary
+  data, ambiguous or multi-period trace aliases, broader carrier families, and
+  noncanonical chart forms remain unsupported. Primary
   reference for modern writer conventions: TRIMMED_CURVE/GEOMETRIC_OWNER linkage,
   tolerant-edge fin curves, POINT ownership by vertex, and the resolved
   37102 node layouts (133/141 match base 13006 exactly).

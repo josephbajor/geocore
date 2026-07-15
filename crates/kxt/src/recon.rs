@@ -995,7 +995,11 @@ fn terminated_intersection_limit(file: &XtFile, index: u32) -> Result<[Point3; 2
     }
 }
 
-fn canonicalize_equal_limit_periodic_trace_endpoints(
+/// Lift one equal-limit trace through exactly one certified source period.
+/// Every transmitted coordinate is preserved modulo at most one exact period,
+/// each interior lift must be unique relative to its predecessor, and the
+/// resulting whole pcurve still passes the original-source certificate.
+fn canonicalize_equal_limit_periodic_trace_range(
     curve_idx: u32,
     traces: &[TransmittedNurbsIntersectionTrace; 2],
     uv: &mut [Vec<Point2>; 2],
@@ -1042,7 +1046,6 @@ fn canonicalize_equal_limit_periodic_trace_endpoints(
                 });
             }
             let second = coordinate(uv[trace_index][1]);
-            let penultimate = coordinate(uv[trace_index][last_index - 1]);
             let nearest_boundary = |neighbor: f64| {
                 if (neighbor - domain.lo).abs() <= (neighbor - domain.hi).abs() {
                     domain.lo
@@ -1050,20 +1053,65 @@ fn canonicalize_equal_limit_periodic_trace_endpoints(
                     domain.hi
                 }
             };
-            let unwrap_endpoint = |raw: f64, neighbor: f64| {
-                let raw_boundary = nearest_boundary(raw);
-                let desired_boundary = nearest_boundary(neighbor);
-                // Preserve the transmitted value modulo one exact certified
-                // period. No intermediate UV or model-space chart position
-                // is rewritten.
-                raw + (desired_boundary - raw_boundary)
-            };
+            let mut previous = first_raw + (nearest_boundary(second) - nearest_boundary(first_raw));
             if axis == 0 {
-                uv[trace_index][0].x = unwrap_endpoint(first_raw, second);
-                uv[trace_index][last_index].x = unwrap_endpoint(last_raw, penultimate);
+                uv[trace_index][0].x = previous;
             } else {
-                uv[trace_index][0].y = unwrap_endpoint(first_raw, second);
-                uv[trace_index][last_index].y = unwrap_endpoint(last_raw, penultimate);
+                uv[trace_index][0].y = previous;
+            }
+            for point in uv[trace_index].iter_mut().take(last_index + 1).skip(1) {
+                let raw = coordinate(*point);
+                if raw < domain.lo - period - seam_slack || raw > domain.hi + period + seam_slack {
+                    return Err(XtError::Unsupported {
+                        capability: XtCapability::IntersectionLimits,
+                        what: "equal-limit periodic trace uses more than one alias period",
+                    });
+                }
+                let candidates = [raw - period, raw, raw + period];
+                let mut best = candidates[0];
+                let mut best_distance = (best - previous).abs();
+                let mut ambiguous = false;
+                for candidate in candidates.into_iter().skip(1) {
+                    let distance = (candidate - previous).abs();
+                    if distance < best_distance {
+                        best = candidate;
+                        best_distance = distance;
+                        ambiguous = false;
+                    } else if distance == best_distance {
+                        ambiguous = true;
+                    }
+                }
+                if ambiguous || best_distance + seam_slack >= period * 0.5 {
+                    return Err(XtError::Unsupported {
+                        capability: XtCapability::IntersectionLimits,
+                        what: "equal-limit periodic trace has an ambiguous period alias",
+                    });
+                }
+                if axis == 0 {
+                    point.x = best;
+                } else {
+                    point.y = best;
+                }
+                previous = best;
+            }
+            let first = coordinate(uv[trace_index][0]);
+            let last = coordinate(uv[trace_index][last_index]);
+            if ((last - first).abs() - period).abs() > seam_slack {
+                return Err(XtError::Unsupported {
+                    capability: XtCapability::IntersectionLimits,
+                    what: "equal-limit periodic trace does not traverse exactly one certified period",
+                });
+            }
+            let traversal_lo = first.min(last) - seam_slack;
+            let traversal_hi = first.max(last) + seam_slack;
+            if uv[trace_index].iter().copied().any(|point| {
+                let value = coordinate(point);
+                value < traversal_lo || value > traversal_hi
+            }) {
+                return Err(XtError::Unsupported {
+                    capability: XtCapability::IntersectionLimits,
+                    what: "equal-limit periodic trace leaves its one-period traversal",
+                });
             }
         }
     }
@@ -2647,7 +2695,7 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             .try_into()
             .expect("two transmitted sources remain two ordered traces");
         if equal_limits {
-            canonicalize_equal_limit_periodic_trace_endpoints(curve_idx, &traces, &mut uv)?;
+            canonicalize_equal_limit_periodic_trace_range(curve_idx, &traces, &mut uv)?;
         } else {
             canonicalize_trace_endpoint_roundoff(&traces, &mut uv);
         }
