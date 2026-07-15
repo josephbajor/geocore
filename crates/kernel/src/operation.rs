@@ -18,7 +18,7 @@ use crate::session::{Part, PartEdit};
 use crate::{
     BodyId, BudgetPlan, CheckLevel, CheckOutcome, CurveId, DiagnosticLevel, EdgeId, EntityKind,
     FaceId, FaultKind, FinId, Frame, JournalPointId, LoopId, PartId, PcurveId, Point3, RegionId,
-    SessionPolicy, ShellId, SurfaceId, Tolerances, VerificationGapCause, VerificationGapKind,
+    SessionPolicy, ShellId, SurfaceId, Tolerances, Vec3, VerificationGapCause, VerificationGapKind,
     VertexId,
 };
 
@@ -255,7 +255,7 @@ impl ExtrudeProfileRequest {
 /// Typed request to extrude one polygonal profile by an oblique translation.
 ///
 /// The translation may contain an in-plane component but must have a finite,
-/// positive component along `frame.z()`. Boundary normalization and rejection
+/// nonzero component along `frame.z()`. Boundary normalization and rejection
 /// rules match [`ExtrudeProfileRequest`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExtrudeProfileAlongRequest {
@@ -289,7 +289,7 @@ impl ExtrudeProfileAlongRequest {
         self
     }
 
-    /// Positioned profile plane and positive normal orientation.
+    /// Positioned profile plane and reference normal orientation.
     pub const fn frame(&self) -> Frame {
         self.frame
     }
@@ -1936,7 +1936,7 @@ mod tests {
             Point2::new(1.0, 2.0),
             Point2::new(-1.0, 2.0),
         ];
-        let translation = Vec3::new(0.75, -0.5, 2.0);
+        let translation = Vec3::new(0.75, -0.5, -2.0);
         let request = ExtrudeProfileAlongRequest::new(
             Frame::world(),
             outer.clone(),

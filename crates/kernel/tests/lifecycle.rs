@@ -202,7 +202,7 @@ fn facade_only_client_can_extrude_a_holed_profile_obliquely() {
             Frame::world(),
             outer,
             vec![hole],
-            Vec3::new(0.75, -0.5, 2.0),
+            Vec3::new(0.75, -0.5, -2.0),
         ))
         .unwrap()
         .into_result()
