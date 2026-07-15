@@ -9,46 +9,113 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    # The three-OS matrix is load-bearing: the determinism suite pins golden
-    # hashes of numeric results, so any cross-platform drift fails here.
+  checks:
+    name: Checks (${{ matrix.os }})
+    # Preserve the existing cross-platform format and Clippy evidence.
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       # Keep this exact version synchronized with rust-toolchain.toml and the
       # workspace rust-version. An explicit input prevents runner-level rustup
       # environment overrides from silently selecting a floating toolchain.
       - name: Install pinned Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
           toolchain: 1.93.0
           components: rustfmt, clippy
+      - name: Cache Cargo downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-home-${{ runner.os }}-1.93.0-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-home-${{ runner.os }}-1.93.0-
+      - name: Cache debug build artifacts
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/
+          key: cargo-target-checks-${{ runner.os }}-1.93.0-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: cargo-target-checks-${{ runner.os }}-1.93.0-${{ hashFiles('Cargo.lock') }}-
       - name: Report Rust toolchain
         run: rustc --version --verbose
       - name: Format
         run: cargo fmt --all --check
       - name: Lint
         run: cargo clippy --all-targets -- -D warnings
-      - name: Test (debug)
-        run: cargo test --workspace
-      - name: Test (release)
+
+  test:
+    name: Test (${{ matrix.os }}, ${{ matrix.profile.name }})
+    # The three-OS matrix is load-bearing: the determinism suite pins golden
+    # hashes of numeric results, so any cross-platform drift fails here.
+    # Debug and release retain full three-OS coverage, but run concurrently.
+    # Keep the workspace command whole so new members and test targets remain
+    # covered automatically without maintaining a hand-written shard manifest.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        profile:
+          - name: debug
+            args: ""
+          - name: release
+            args: --release
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.93.0
+      - name: Cache Cargo downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-home-${{ runner.os }}-1.93.0-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-home-${{ runner.os }}-1.93.0-
+      - name: Cache ${{ matrix.profile.name }} build artifacts
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/
+          key: cargo-target-tests-${{ runner.os }}-1.93.0-${{ matrix.profile.name }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: cargo-target-tests-${{ runner.os }}-1.93.0-${{ matrix.profile.name }}-${{ hashFiles('Cargo.lock') }}-
+      - name: Test (${{ matrix.profile.name }})
         # Optimized codegen must not change numeric results either.
-        run: cargo test --workspace --release
+        run: cargo test --workspace ${{ matrix.profile.args }}
 
   quality-contracts:
     name: Python and oracle contracts
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Install pinned Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
           toolchain: 1.93.0
+      - name: Cache Cargo downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-home-${{ runner.os }}-1.93.0-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-home-${{ runner.os }}-1.93.0-
+      - name: Cache release build artifacts
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/
+          key: cargo-target-quality-${{ runner.os }}-1.93.0-release-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: cargo-target-quality-${{ runner.os }}-1.93.0-release-${{ hashFiles('Cargo.lock') }}-
       - name: Validate Python tooling contracts
         run: |
           python3 -m unittest discover -s scripts/tests -v
@@ -66,11 +133,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Install pinned Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
           toolchain: 1.93.0
+      - name: Cache benchmark Cargo downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-home-bench-${{ runner.os }}-1.93.0-${{ hashFiles('benches/Cargo.lock') }}
+          restore-keys: cargo-home-bench-${{ runner.os }}-1.93.0-
+      - name: Cache benchmark build artifacts
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: benches/target/
+          key: cargo-target-bench-${{ runner.os }}-1.93.0-${{ hashFiles('benches/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: cargo-target-bench-${{ runner.os }}-1.93.0-${{ hashFiles('benches/Cargo.lock') }}-
       - name: Validate excluded benchmark package and lock
         run: |
           cargo metadata --manifest-path benches/Cargo.toml --locked --format-version 1 --no-deps > /dev/null
@@ -94,7 +176,7 @@ jobs:
           cargo bench --manifest-path benches/Cargo.toml --locked --bench curve_pair_solve -- geometry/curve-pair-solve/poly-transverse-v1/1/default-v1
       - name: Upload advisory smoke samples
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: benchmark-smoke-${{ github.sha }}
           path: |
@@ -118,11 +200,26 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: nightly-2026-01-22
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Install exact fuzz toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
           toolchain: nightly-2026-01-22
+      - name: Cache fuzz Cargo downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-home-fuzz-${{ runner.os }}-nightly-2026-01-22-cargo-fuzz-0.13.2-${{ hashFiles('fuzz/Cargo.lock') }}
+          restore-keys: cargo-home-fuzz-${{ runner.os }}-nightly-2026-01-22-cargo-fuzz-0.13.2-
+      - name: Cache fuzz build artifacts
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: fuzz/target/
+          key: cargo-target-fuzz-${{ runner.os }}-nightly-2026-01-22-${{ hashFiles('fuzz/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: cargo-target-fuzz-${{ runner.os }}-nightly-2026-01-22-${{ hashFiles('fuzz/Cargo.lock') }}-
       - name: Install exact fuzz runner
         run: |
           cargo install cargo-fuzz --version 0.13.2 --locked --root "$RUNNER_TEMP/cargo-fuzz"
@@ -164,7 +261,7 @@ jobs:
           git diff --exit-code -- Cargo.toml Cargo.lock contract.json corpus
       - name: Upload X_T failure artifact
         if: ${{ always() && steps.fuzz_xt_read.outcome == 'failure' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fuzz-xt-read-${{ github.run_id }}
           path: fuzz/artifacts/xt_read/
@@ -172,7 +269,7 @@ jobs:
           retention-days: 7
       - name: Upload NURBS failure artifact
         if: ${{ always() && steps.fuzz_nurbs.outcome == 'failure' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: fuzz-nurbs-constructors-${{ github.run_id }}
           path: fuzz/artifacts/nurbs_constructors/
