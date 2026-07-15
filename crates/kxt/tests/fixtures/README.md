@@ -122,9 +122,11 @@ statement accompanied the individual files.
   production traversal. Five-sample dual-offset record 4230, roots
   `[3320, 773]`, chart 4231, independently certifies as a common degree-1
   open-clamped polyline at exact isolated `17285120/5/10`. V13 admits that proof
-  at exact `431854695/22/10` with historical v1-v12 parity, then stops before
-  two-sample direct Plane/Offset(B-surface) record 3609, chart 3607: its isolated
-  `4277250` Work would request cumulative `436131945`.
+  at exact `431854695/22/10` with historical v1-v12 parity. V14 admits two-sample
+  direct Plane/Offset(B-surface) record 3609, chart 3607, at isolated `4277250`
+  Work and exact cumulative `436131945/22/10`, then stops before two-sample
+  dual-offset record 6044, chart 6043, whose isolated `4352000` Work would
+  request cumulative `440483945`.
   The exemplar manifest therefore records a structured reconstruction failure
   with no unsupported capability. General closed limits, other nullable chart
   data, periodic-trace-range, broader carrier families, and noncanonical chart

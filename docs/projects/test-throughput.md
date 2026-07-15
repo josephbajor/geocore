@@ -164,8 +164,8 @@ into 1,556.453s for all workspace targets, 166.816s for documentation tests,
 and 3.231s for 87 Python tooling contracts.
 The longest remaining individual X_T suites were endpoint roundoff at 294.22s
 and finite-open Plane/Offset(NURBS) data at 236.18s. The retained historical
-v12 seven-sample frontier passed in 166.46s; the later v13 five-sample
-production frontier passed in 183.38s.
+v12 seven-sample frontier passed in 166.46s; the v13 five-sample production
+frontier passed in 183.38s, and its v14 successor passed in 183.23s.
 
 Before X_T test consolidation, this machine measured the representative
 seven-sample ratchet at 172.58 seconds of test time and 185.92 seconds of wall
@@ -181,7 +181,7 @@ production-corpus group and excluded from `standard` despite lacking a direct
 fixture reference. These are diagnostic baselines, not pass/fail thresholds.
 
 The first audit removed two historical full-exemplar replays whose accepted
-prefixes are subsumed by the retained v13 record-3609 frontier. Each suite keeps
+prefixes are subsumed by the retained v14 record-6044 frontier. Each suite keeps
 its exact aggregate profile values and accounting modes, source-payload pins,
 isolated certificate and N/N-1 resource crossings, malformed-input evidence,
 and rollback assertions:
@@ -194,9 +194,9 @@ and rollback assertions:
 
 The seven-sample suite remains the authoritative end-to-end historical v12
 record-4230 boundary. Its 166.46s rerun passed in the integrated checkpoint
-gate; the five-sample suite now adds the v13 production traversal through
-record 4230 and the exact record-3609 resource stop. Neither was replaced with
-profile arithmetic.
+gate; the five-sample suite now adds the v13/v14 production traversals through
+records 4230 and 3609 and the exact record-6044 resource stop. None was replaced
+with profile arithmetic.
 
 ## Follow-on measured work
 

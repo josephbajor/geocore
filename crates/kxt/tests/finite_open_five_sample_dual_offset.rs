@@ -18,7 +18,9 @@ use kxt::{
 const EXEMPLAR: &[u8] = include_bytes!("fixtures/exemplar.x_t");
 const RECORD_4230_WORK: u64 = 17_285_120;
 const RECORD_3609_WORK: u64 = 4_277_250;
+const RECORD_6044_WORK: u64 = 4_352_000;
 const V13_WORK: u64 = 431_854_695;
+const V14_WORK: u64 = 436_131_945;
 
 fn field<'a>(file: &'a kxt::XtFile, index: u32, name: &str) -> &'a Value {
     file.field(&file.nodes[&index], name).unwrap()
@@ -319,6 +321,57 @@ fn v13_certifies_4230_and_pins_the_next_plane_offset_frontier() {
             ResourceKind::Work,
         ),
         V13_WORK
+    );
+    assert_eq!(
+        usage(
+            outcome.report(),
+            INTERSECTION_CHART_ITEMS,
+            ResourceKind::Items,
+        ),
+        22
+    );
+    assert_eq!(
+        usage(
+            outcome.report(),
+            INTERSECTION_CHART_DEPTH,
+            ResourceKind::Depth,
+        ),
+        10
+    );
+    assert_rollback(&store);
+}
+
+#[test]
+fn v14_certifies_3609_and_pins_the_next_two_sample_dual_offset_frontier() {
+    let file = read_xt(EXEMPLAR).unwrap();
+    assert_eq!(file.nodes[&6044].code, code::INTERSECTION);
+    assert_eq!(
+        field(&file, 6044, "surface"),
+        &Value::Arr(vec![Value::Ptr(3312), Value::Ptr(773)])
+    );
+    assert_eq!(file.nodes[&3312].code, code::OFFSET_SURF);
+    assert_eq!(file.nodes[&773].code, code::OFFSET_SURF);
+    assert_eq!(field(&file, 6044, "chart").as_ptr(), Some(6043));
+    assert_eq!(field(&file, 6043, "chart_count").as_int(), Some(2));
+    assert_eq!(field(&file, 6044, "start").as_ptr(), Some(6049));
+    assert_eq!(field(&file, 6044, "end").as_ptr(), Some(6046));
+    assert_eq!(field(&file, 6044, "intersection_data").as_ptr(), Some(6050));
+    let session = SessionPolicy::v1();
+    let mut store = Store::new();
+    let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+    let outcome = reconstruct_with_context(&file, &mut store, &context).unwrap();
+    let crossing = outcome.result().as_ref().unwrap_err().limit().unwrap();
+    assert_eq!(crossing.stage, INTERSECTION_CHART_CERTIFICATE_WORK);
+    assert_eq!(crossing.resource, ResourceKind::Work);
+    assert_eq!(crossing.allowed, V14_WORK);
+    assert_eq!(crossing.consumed, V14_WORK + RECORD_6044_WORK);
+    assert_eq!(
+        usage(
+            outcome.report(),
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+        ),
+        V14_WORK
     );
     assert_eq!(
         usage(
