@@ -469,7 +469,10 @@ crossing independently of the graph node-visit and dependency-depth stages.
 
 The same graph-surface profile composes the scoped NURBS marcher and the
 operation-generated exact-Plane-field/NURBS, exact-Sphere-field/NURBS, or compatible
-direct-NURBS/NURBS proof stage. A retained degree-1 Plane branch charges
+direct-NURBS/NURBS proof stage. Compatible direct pairs may use distinct finite
+unit-chart windows only when their axiswise overlap has positive area; discovery
+is clipped to that rectangle while original-control intervals remain the sole
+complete-miss authority. A retained degree-1 Plane branch charges
 `kops.intersect.nurbs-trace-certificate-work` before certification using
 `C + S*2^10*(6T+1)`, where `C` is carrier controls, `S` carrier spans, and `T`
 original-source tensor-span slots. The genuinely curved one-segment fixture

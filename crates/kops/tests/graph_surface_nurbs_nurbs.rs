@@ -6,7 +6,6 @@ use kcore::operation::{
 use kcore::tolerance::Tolerances;
 use kgeom::nurbs::NurbsSurface;
 use kgeom::param::ParamRange;
-use kgeom::surface::Surface;
 use kgeom::vec::Point3;
 use kgraph::{
     GeometryGraph, GeometryGraphError, NurbsIntersectionTrace, OffsetSurfaceDescriptor,
@@ -60,6 +59,14 @@ fn narrow_window() -> [ParamRange; 2] {
     [ParamRange::new(0.0, 1.0), ParamRange::new(0.0, 0.0015)]
 }
 
+fn overlapping_window_a() -> [ParamRange; 2] {
+    [ParamRange::new(0.0, 0.8), ParamRange::new(0.0, 0.0015)]
+}
+
+fn overlapping_window_b() -> [ParamRange; 2] {
+    [ParamRange::new(0.2, 1.0), ParamRange::new(0.0005, 0.0015)]
+}
+
 fn planar_surface() -> NurbsSurface {
     let mut points = Vec::with_capacity(6);
     for &u in &[0.0, 0.5, 1.0] {
@@ -86,9 +93,9 @@ fn direct_nurbs_nurbs_promotes_a_paired_whole_range_trace() {
         let surface_b = paired_surface([-0.2, -0.0148, 0.1704], 0.25, rational);
         let lower = intersect_bounded_nurbs_nurbs_surfaces(
             &surface_a,
-            narrow_window(),
+            overlapping_window_a(),
             &surface_b,
-            narrow_window(),
+            overlapping_window_b(),
             tolerances,
         )
         .unwrap();
@@ -101,15 +108,30 @@ fn direct_nurbs_nurbs_promotes_a_paired_whole_range_trace() {
         let result = intersect_bounded_graph_surfaces(
             &graph,
             source_a,
-            narrow_window(),
+            overlapping_window_a(),
             source_b,
-            narrow_window(),
+            overlapping_window_b(),
             tolerances,
         )
         .unwrap();
         assert_eq!(result.raw, lower);
         assert_eq!(result.branch_graph.source_surfaces, [source_a, source_b]);
         assert_eq!(result.branch_graph.edges.len(), 1);
+        let raw_branch = &result.raw.curves[0];
+        assert_eq!(raw_branch.uv_a_start[1], 0.0005);
+        assert_eq!(raw_branch.uv_b_start[1], 0.0005);
+        assert_eq!(raw_branch.uv_a_end[1], 0.0015);
+        assert_eq!(raw_branch.uv_b_end[1], 0.0015);
+        assert_eq!(
+            result.branch_graph.edges[0]
+                .endpoint_events
+                .map(|event| match event {
+                    kops::intersect::IntersectionBranchEndpointEvent::SurfaceWindowBoundary {
+                        surfaces,
+                    } => surfaces,
+                }),
+            [[true, true], [true, true]]
+        );
         let certificate = result.branch_graph.edges[0].certificate.as_nurbs().unwrap();
         assert!(matches!(
             certificate.traces(),
@@ -130,9 +152,9 @@ fn direct_nurbs_nurbs_promotes_a_paired_whole_range_trace() {
         let reverse = intersect_bounded_graph_surfaces(
             &graph,
             source_b,
-            narrow_window(),
+            overlapping_window_b(),
             source_a,
-            narrow_window(),
+            overlapping_window_a(),
             tolerances,
         )
         .unwrap();
@@ -144,6 +166,38 @@ fn direct_nurbs_nurbs_promotes_a_paired_whole_range_trace() {
             .unwrap();
         assert_eq!(reverse_certificate.traces()[0].as_nurbs(), Some(&surface_b));
         assert_eq!(reverse_certificate.traces()[1].as_nurbs(), Some(&surface_a));
+
+        let identical_lower = intersect_bounded_nurbs_nurbs_surfaces(
+            &surface_a,
+            narrow_window(),
+            &surface_b,
+            narrow_window(),
+            tolerances,
+        )
+        .unwrap();
+        let identical = intersect_bounded_graph_surfaces(
+            &graph,
+            source_a,
+            narrow_window(),
+            source_b,
+            narrow_window(),
+            tolerances,
+        )
+        .unwrap();
+        assert_eq!(identical.raw, identical_lower);
+        assert_eq!(identical.branch_graph.edges.len(), 1);
+        let identical_certificate = identical.branch_graph.edges[0]
+            .certificate
+            .as_nurbs()
+            .unwrap();
+        assert_eq!(
+            identical_certificate.traces()[0].as_nurbs(),
+            Some(&surface_a)
+        );
+        assert_eq!(
+            identical_certificate.traces()[1].as_nurbs(),
+            Some(&surface_b)
+        );
 
         let persistent = persist_verified_graph_surface_intersections(&mut graph, &result).unwrap();
         let descriptor = graph
@@ -176,9 +230,9 @@ fn scoped_nurbs_nurbs_preserves_raw_report_and_exact_certificate_boundaries() {
         .with_family_budget_defaults(NurbsSurfaceMarchBudgetProfile::v1_defaults());
     let lower = intersect_bounded_nurbs_nurbs_surfaces_with_context(
         &surface_a,
-        narrow_window(),
+        overlapping_window_a(),
         &surface_b,
-        narrow_window(),
+        overlapping_window_b(),
         &lower_context,
     )
     .unwrap();
@@ -190,13 +244,29 @@ fn scoped_nurbs_nurbs_preserves_raw_report_and_exact_certificate_boundaries() {
     let outcome = intersect_bounded_graph_surfaces_with_context(
         &graph,
         source_a,
-        narrow_window(),
+        overlapping_window_a(),
         source_b,
-        narrow_window(),
+        overlapping_window_b(),
         &context,
     );
     let result = outcome.result().unwrap();
     assert_eq!(&result.raw, *lower.result().as_ref().unwrap());
+    assert_eq!(
+        observed(
+            outcome.report(),
+            kgraph::eval_stage::NODE_VISITS,
+            ResourceKind::Work,
+        ),
+        0
+    );
+    assert_eq!(
+        observed(
+            outcome.report(),
+            kgraph::eval_stage::DEPENDENCY_DEPTH,
+            ResourceKind::Depth,
+        ),
+        0
+    );
     for (stage, resource) in [
         (
             kgeom::nurbs::NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
@@ -267,9 +337,9 @@ fn scoped_nurbs_nurbs_preserves_raw_report_and_exact_certificate_boundaries() {
     let exact = intersect_bounded_graph_surfaces_with_context(
         &graph,
         source_a,
-        narrow_window(),
+        overlapping_window_a(),
         source_b,
-        narrow_window(),
+        overlapping_window_b(),
         &exact_context,
     );
     assert!(exact.result().is_ok());
@@ -317,9 +387,9 @@ fn scoped_nurbs_nurbs_preserves_raw_report_and_exact_certificate_boundaries() {
         let denied = intersect_bounded_graph_surfaces_with_context(
             &graph,
             source_a,
-            narrow_window(),
+            overlapping_window_a(),
             source_b,
-            narrow_window(),
+            overlapping_window_b(),
             &denied_context,
         );
         let GraphSurfaceIntersectionError::OperationPolicy(
@@ -342,9 +412,9 @@ fn outward_original_control_proof_returns_a_complete_miss() {
     let tolerances = Tolerances::with_linear(1.0e-3).unwrap();
     let lower = intersect_bounded_nurbs_nurbs_surfaces(
         &surface_a,
-        surface_a.param_range(),
+        overlapping_window_a(),
         &surface_b,
-        surface_b.param_range(),
+        overlapping_window_b(),
         tolerances,
     )
     .unwrap();
@@ -356,9 +426,9 @@ fn outward_original_control_proof_returns_a_complete_miss() {
     let miss = intersect_bounded_graph_surfaces(
         &graph,
         source_a,
-        surface_a.param_range(),
+        overlapping_window_a(),
         source_b,
-        surface_b.param_range(),
+        overlapping_window_b(),
         tolerances,
     )
     .unwrap();
@@ -381,9 +451,9 @@ fn stale_and_altered_nurbs_sources_roll_back_atomically() {
         let local = intersect_bounded_graph_surfaces(
             &graph,
             source_a,
-            narrow_window(),
+            overlapping_window_a(),
             source_b,
-            narrow_window(),
+            overlapping_window_b(),
             tolerances,
         )
         .unwrap();
@@ -418,6 +488,37 @@ fn stale_and_altered_nurbs_sources_roll_back_atomically() {
         assert_eq!(graph.geometry().collect::<Vec<_>>(), before.2);
         graph.validate().unwrap();
     }
+}
+
+#[test]
+fn clipped_derived_empty_candidate_cannot_claim_original_source_completion() {
+    let surface_a = paired_surface([0.0; 3], 0.25, false);
+    let surface_b = paired_surface([-0.2, -0.0148, 0.1704], 0.25, false);
+    let range_a = [ParamRange::new(0.0, 0.4), narrow_window()[1]];
+    let range_b = [ParamRange::new(0.2, 0.45), ParamRange::new(0.0005, 0.0015)];
+    let tolerances = Tolerances::with_linear(1.0e-3).unwrap();
+    let lower = intersect_bounded_nurbs_nurbs_surfaces(
+        &surface_a, range_a, &surface_b, range_b, tolerances,
+    )
+    .unwrap();
+    assert!(lower.curves.is_empty());
+    assert!(!lower.is_complete());
+
+    let mut graph = GeometryGraph::new();
+    let source_a = graph.insert_surface(surface_a).unwrap();
+    let source_b = graph.insert_surface(surface_b).unwrap();
+    let result =
+        intersect_bounded_graph_surfaces(&graph, source_a, range_a, source_b, range_b, tolerances)
+            .unwrap();
+    assert_eq!(result.raw, lower);
+    assert!(result.branch_graph.edges.is_empty());
+    assert!(result.branch_graph.vertices.is_empty());
+
+    let reverse =
+        intersect_bounded_graph_surfaces(&graph, source_b, range_b, source_a, range_a, tolerances)
+            .unwrap();
+    assert_eq!(reverse.raw, result.raw.swapped());
+    assert_eq!(reverse.branch_graph.source_surfaces, [source_b, source_a]);
 }
 
 #[test]
@@ -484,8 +585,12 @@ fn offset_planar_unaligned_and_incompatible_basis_pairs_remain_unsupported() {
 
     for ranges in [
         [
-            narrow_window(),
-            [ParamRange::new(0.0, 0.9), ParamRange::new(0.0, 0.0015)],
+            [ParamRange::new(0.0, 0.4), ParamRange::new(0.0, 0.0015)],
+            [ParamRange::new(0.6, 1.0), ParamRange::new(0.0, 0.0015)],
+        ],
+        [
+            [ParamRange::new(0.0, 0.5), ParamRange::new(0.0, 0.0015)],
+            [ParamRange::new(0.5, 1.0), ParamRange::new(0.0, 0.0015)],
         ],
         [
             [ParamRange::new(0.5, 0.5), ParamRange::new(0.0, 0.0015)],

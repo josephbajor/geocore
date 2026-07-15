@@ -686,13 +686,17 @@ validation recomputes that exact field, and dependency edges protect direct or
 nested basis chains. The direct-root fixture pins exact 2/1 node visits and
 dependency depth, while a two-offset chain observes 3/depth 3. A first direct NURBS/NURBS arm accepts only two
 genuinely non-planar finite-open quadratic-linear unit charts with identical
-constant weights and requested ranges. Their exact shared `(x,y)=(u,v)` chart
-reduces discovery to a scalar control difference, but that rounded derived
+constant weights. Their finite requested unit-chart windows may differ, but
+must have a positive-area axiswise overlap; discovery is clipped to that exact
+shared rectangle. The exact shared `(x,y)=(u,v)` chart reduces discovery to a
+scalar control difference, but that rounded derived
 surface cannot complete an empty result. Only outward subtraction of both
 original `z` control nets may prove a miss; every positive branch is separately
 certified against both originals. Its paired cost is
 `S*2^10*((6R_a+1)+(6R_b+1))` Work with `S*2^10` Items and Depth 10; the
-one-span fixture pins `14336/14335` Work, `1024/1023` Items, and `10/9` Depth.
+one-span clipped fixture pins `14336/14335` Work, `1024/1023` Items, and `10/9`
+Depth. Equal windows remain supported; disjoint or boundary-only windows fail
+closed.
 A narrow Offset(NURBS)/direct-NURBS arm reuses that paired proof only when the
 terminal basis is the exact constant-+Z-normal unit chart and the direct peer
 is genuinely non-planar with matching constant weights. At most three offset

@@ -2,10 +2,9 @@
 //!
 //! This first paired-surface slice accepts two finite-open clamped sources
 //! with the same quadratic-linear unit-square basis, constant shared weights,
-//! and exact identity `x/y` control fields. Direct pairs require the same
-//! requested parameter window. The constant-normal Offset(NURBS)/NURBS arm
-//! additionally accepts distinct windows with a positive-area overlap and
-//! clips discovery to that shared rectangle. Both
+//! and exact identity `x/y` control fields. Direct and constant-normal
+//! Offset(NURBS)/NURBS pairs accept distinct windows with a positive-area
+//! overlap and clip discovery to that shared rectangle. Both
 //! sources therefore have the injective chart `(x,y) = (u,v)`, and their
 //! spatial difference is confined to `z`, so a zero contour of the scalar `z`
 //! difference is a surface/surface contact.
@@ -37,9 +36,10 @@ use kgeom::param::ParamRange;
 use kgeom::surface::{Dir, Plane, Surface};
 use kgeom::vec::Point3;
 
-const INCOMPATIBLE_REASON: &str = "direct NURBS/NURBS surface intersection requires the identical finite-open quadratic-linear unit chart, constant weights, and parameter windows";
+const INCOMPATIBLE_REASON: &str = "direct NURBS/NURBS surface intersection requires the identical finite-open quadratic-linear unit chart, constant weights, and positive-area parameter-window overlap";
 
-/// Intersect one compatible pair of direct clamped NURBS surfaces.
+/// Intersect one compatible pair of direct clamped NURBS surfaces over their
+/// positive-area shared unit-chart window.
 pub fn intersect_bounded_nurbs_nurbs_surfaces(
     surface_a: &NurbsSurface,
     range_a: [ParamRange; 2],
@@ -172,9 +172,8 @@ pub(super) fn supports_direct_nurbs_nurbs_surface_pair(
     surface_b: &NurbsSurface,
     range_b: [ParamRange; 2],
 ) -> bool {
-    range_a == range_b
-        && positive_unit_chart_window(range_a)
-        && supports_compatible_nurbs_unit_chart_pair(surface_a, surface_b)
+    supports_compatible_nurbs_unit_chart_pair(surface_a, surface_b)
+        && shared_positive_unit_chart_window(range_a, range_b).is_some()
 }
 
 fn supports_compatible_nurbs_unit_chart_pair(
@@ -249,7 +248,9 @@ pub(super) fn supports_strictly_separated_constant_normal_offset_nurbs_pair(
     signed_distance_b: f64,
     range_b: [ParamRange; 2],
 ) -> bool {
-    supports_direct_nurbs_nurbs_surface_pair(basis_a, range_a, basis_b, range_b)
+    range_a == range_b
+        && positive_unit_chart_window(range_a)
+        && supports_compatible_nurbs_unit_chart_pair(basis_a, basis_b)
         && supports_constant_positive_normal_offset(basis_a, signed_distance_a)
         && supports_constant_positive_normal_offset(basis_b, signed_distance_b)
         && constant_normal_offset_nurbs_pair_proves_empty(

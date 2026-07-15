@@ -1087,10 +1087,12 @@ true only for an empty complete result.
   preserve the same effective-field proof. Compatible direct NURBS/NURBS fields
   now add one exact shared-chart arm: both genuinely non-planar sources must use
   the same finite-open quadratic-linear unit chart, identical constant weights,
-  and identical requested ranges. Its rounded scalar difference guides
+  and finite requested windows with a positive-area axiswise overlap. Discovery
+  is clipped to that exact shared rectangle. Its rounded scalar difference guides
   discovery only; outward original-control differences own complete misses and
   both original lifts are independently certified. The one-span paired fixture
-  pins 14,336/14,335 Work, 1,024/1,023 Items, and 10/9 Depth. A capped
+  pins 14,336/14,335 Work, 1,024/1,023 Items, and 10/9 Depth; equal windows remain
+  supported while disjoint or boundary-only windows fail closed. A capped
   Offset(NURBS)/direct-NURBS arm admits the exact constant-+Z-normal unit-chart
   terminal basis against a genuinely non-planar compatible peer. At most three
   offset descriptors are accumulated inner-to-outer, with every
