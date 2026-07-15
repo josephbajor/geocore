@@ -2591,6 +2591,9 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 .count()
                 == 1
             && nurbs_source_count == 1;
+        let direct_dual_offset_bsurface = offset_source_count == 2
+            && offset_nurbs_sources == [true, true]
+            && nurbs_source_count == 0;
         let bounded_noncanonical_chart = !closed_limits
             && !terminated
             && (2..=5).contains(&retained_count)
@@ -2598,11 +2601,12 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 || safe_offset_plane_bsurface
                 || direct_plane_offset_bsurface
                 || direct_offset_bsurface_bsurface
+                || direct_dual_offset_bsurface
                 || direct_bsurface_bsurface);
         if noncanonical_chart && !bounded_noncanonical_chart {
             return Err(XtError::Unsupported {
                 capability: XtCapability::IntersectionChartConvention,
-                what: "noncanonical affine charts require the bounded finite-open two- through five-sample direct-Plane/B-surface, safe-Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), direct-Offset(B-surface)/B-surface, or direct-B-surface/B-surface family",
+                what: "noncanonical affine charts require the bounded finite-open two- through five-sample direct-Plane/B-surface, safe-Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), direct-Offset(B-surface)/B-surface, independent direct-Offset(B-surface)/Offset(B-surface), or direct-B-surface/B-surface family",
             });
         }
         let mut uv = [

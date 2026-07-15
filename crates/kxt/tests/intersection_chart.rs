@@ -7,7 +7,7 @@ use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::curve2d::Curve2d;
 use kgeom::frame::Frame;
-use kgeom::vec::{Point3, Vec3};
+use kgeom::vec::{Point2, Point3, Vec3};
 use kgraph::{CurveClass, GeometryRef, SurfaceClass};
 use ktopo::entity::{Body, Edge};
 use ktopo::make;
@@ -1192,6 +1192,120 @@ fn noncanonical_offset_nurbs_bsurface_intersection_file(
     file
 }
 
+/// Wrap both independent sources of the verified B/B fixture in one direct
+/// nonzero offset descriptor. Each basis is translated against its own exact
+/// constant normal, so both lifted point sets retain the original common
+/// intersection while the transmitted roots and signed distances stay live.
+fn noncanonical_dual_offset_nurbs_intersection_file(
+    rational: [bool; 2],
+    swapped: bool,
+    retained_count: usize,
+) -> XtFile {
+    let mut file = bsurface_bsurface_intersection_file(rational[0], rational[1], false);
+    let intersection = file
+        .nodes
+        .iter()
+        .find_map(|(&index, node)| (node.code == code::INTERSECTION).then_some(index))
+        .unwrap();
+    let mut sources = match file
+        .field(&file.nodes[&intersection], "surface")
+        .unwrap()
+        .clone()
+    {
+        Value::Arr(values) => values,
+        _ => unreachable!(),
+    };
+    let chart = ptr(&file, intersection, "chart");
+    let chart_positions = match file.field(&file.nodes[&chart], "hvec").unwrap() {
+        Value::Arr(values) => values
+            .iter()
+            .map(|value| {
+                let point = value.as_vector().unwrap();
+                Point3::new(point[0], point[1], point[2])
+            })
+            .collect::<Vec<_>>(),
+        _ => unreachable!(),
+    };
+    let tangent = (chart_positions[1] - chart_positions[0])
+        .normalized()
+        .unwrap();
+    let transverse_a = Frame::from_z(Point3::default(), tangent).unwrap().x();
+    let normal_a = tangent.cross(transverse_a).normalized().unwrap();
+    let transverse = [transverse_a, normal_a];
+    let amounts = [0.125, 0.1875];
+
+    file.defs.insert(
+        code::OFFSET_SURF,
+        kxt::schema::base_schema()
+            .into_iter()
+            .find(|definition| definition.code == code::OFFSET_SURF)
+            .unwrap(),
+    );
+    let mut next = file.nodes.keys().next_back().copied().unwrap() + 1;
+    for operand in 0..2 {
+        let basis = sources[operand].as_ptr().unwrap();
+        assert_eq!(file.nodes[&basis].code, code::B_SURFACE);
+        let sense = file
+            .field(&file.nodes[&basis], "sense")
+            .and_then(Value::as_char)
+            .unwrap();
+        let signed_distance = if sense == '+' {
+            amounts[operand]
+        } else {
+            -amounts[operand]
+        };
+        let natural_normal = tangent.cross(transverse[operand]).normalized().unwrap();
+        let shift = natural_normal * -signed_distance;
+        let nurbs = ptr(&file, basis, "nurbs");
+        let rational = matches!(
+            file.field(&file.nodes[&nurbs], "rational"),
+            Some(Value::Logical(true))
+        );
+        let poles = ptr(&file, nurbs, "bspline_vertices");
+        let mut raw = Vec::new();
+        for origin in &chart_positions {
+            for parameter in [0.0, 0.5, 1.0] {
+                let point = *origin + transverse[operand] * parameter + shift;
+                raw.extend(point.to_array().into_iter().map(Value::Double));
+                if rational {
+                    raw.push(Value::Double(1.0));
+                }
+            }
+        }
+        set_field(&mut file, poles, "vertices", Value::Arr(raw));
+
+        let root = next;
+        next += 1;
+        file.nodes.insert(
+            root,
+            Node {
+                code: code::OFFSET_SURF,
+                values: vec![
+                    Value::Int(i64::from(root)),
+                    Value::Ptr(0),
+                    Value::Ptr(0),
+                    Value::Ptr(0),
+                    Value::Ptr(0),
+                    Value::Ptr(0),
+                    Value::Char(sense),
+                    Value::Char('U'),
+                    Value::Logical(false),
+                    Value::Ptr(basis),
+                    Value::Double(amounts[operand]),
+                    Value::Null,
+                ],
+            },
+        );
+        sources[operand] = Value::Ptr(root);
+    }
+    set_field(&mut file, intersection, "surface", Value::Arr(sources));
+    if swapped {
+        swap_intersection_operands_and_orientation(&mut file, intersection);
+    }
+    make_affine_noncanonical_finite_open_chart(&mut file, retained_count);
+    file
+}
+
 /// Replace both ordered plane operands with independent offset chains whose
 /// effective fields remain the original distinct nonparallel planes.
 fn offset_offset_intersection_file(
@@ -2199,6 +2313,301 @@ fn noncanonical_offset_nurbs_bsurface_two_through_five_cover_both_orders_and_bas
             }
         }
     }
+}
+
+#[test]
+fn noncanonical_dual_offset_nurbs_two_through_five_retain_both_ordered_roots_and_traces() {
+    const BASE_PARAMETER: f64 = 0.003_586_209_316_397_325;
+    const BASE_SCALE: f64 = 0.999_999_996_408_403;
+
+    for retained_count in 2..=5 {
+        for rational_a in [false, true] {
+            for rational_b in [false, true] {
+                for swapped in [false, true] {
+                    let file = noncanonical_dual_offset_nurbs_intersection_file(
+                        [rational_a, rational_b],
+                        swapped,
+                        retained_count,
+                    );
+                    let mut store = Store::new();
+                    reconstruct(&file, &mut store).unwrap();
+                    let (curve, descriptor) = store
+                        .geometry()
+                        .curves()
+                        .find(|(_, curve)| curve.as_transmitted_nurbs_intersection().is_some())
+                        .unwrap();
+                    let intersection = descriptor.as_transmitted_nurbs_intersection().unwrap();
+                    let certificate = intersection.certificate();
+                    assert_eq!(
+                        (
+                            certificate.metadata().base_parameter(),
+                            certificate.metadata().base_scale()
+                        ),
+                        (BASE_PARAMETER, BASE_SCALE)
+                    );
+                    assert_eq!(certificate.proof_depth(), 10);
+                    assert_eq!(
+                        certificate.carrier().degree(),
+                        match retained_count {
+                            2 | 5 => 1,
+                            3 => 2,
+                            4 => 3,
+                            _ => unreachable!(),
+                        }
+                    );
+                    assert_eq!(
+                        (
+                            certificate.carrier_range().lo,
+                            certificate.carrier_range().hi
+                        ),
+                        (0.0, (retained_count - 1) as f64)
+                    );
+                    let expected_uv_endpoints = if swapped {
+                        [Point2::new(1.0, 0.0), Point2::new(0.0, 0.0)]
+                    } else {
+                        [Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)]
+                    };
+                    for pcurve in certificate.pcurves() {
+                        assert_eq!(pcurve.degree(), certificate.carrier().degree());
+                        assert_eq!(
+                            pcurve.knots().as_slice(),
+                            certificate.carrier().knots().as_slice()
+                        );
+                        assert_eq!(pcurve.param_range(), certificate.carrier_range());
+                        assert_eq!(
+                            [
+                                pcurve.eval(certificate.carrier_range().lo),
+                                pcurve.eval(certificate.carrier_range().hi),
+                            ],
+                            expected_uv_endpoints
+                        );
+                    }
+                    assert!(
+                        certificate
+                            .residual_bounds()
+                            .into_iter()
+                            .all(|bound| bound <= certificate.tolerance())
+                    );
+
+                    let sources = intersection.source_surfaces();
+                    assert_ne!(sources[0], sources[1]);
+                    assert_eq!(
+                        sources.map(|source| store.get(source).unwrap().class()),
+                        [SurfaceClass::Offset, SurfaceClass::Offset]
+                    );
+                    let expected_rational = if swapped {
+                        [rational_b, rational_a]
+                    } else {
+                        [rational_a, rational_b]
+                    };
+                    let expected_amounts = if swapped {
+                        [0.1875, 0.125]
+                    } else {
+                        [0.125, 0.1875]
+                    };
+                    let roots = sources
+                        .map(|source| store.get(source).unwrap().as_offset().copied().unwrap());
+                    assert_ne!(roots[0].basis(), roots[1].basis());
+                    for index in 0..2 {
+                        let trace = certificate.traces()[index].as_offset_nurbs().unwrap();
+                        assert_eq!(trace.signed_distance(), roots[index].signed_distance());
+                        assert_eq!(trace.signed_distance().abs(), expected_amounts[index]);
+                        let basis = store.get(roots[index].basis()).unwrap().as_nurbs().unwrap();
+                        assert_eq!(trace.basis(), basis);
+                        assert_eq!(basis.is_rational(), expected_rational[index]);
+                        assert!(
+                            store
+                                .geometry()
+                                .dependents(GeometryRef::Surface(roots[index].basis()))
+                                .unwrap()
+                                .contains(&GeometryRef::Surface(sources[index]))
+                        );
+                    }
+                    assert_eq!(
+                        store
+                            .geometry()
+                            .direct_dependencies(GeometryRef::Curve(curve))
+                            .unwrap(),
+                        vec![
+                            GeometryRef::Surface(sources[0]),
+                            GeometryRef::Surface(sources[1]),
+                            GeometryRef::Curve2d(intersection.pcurves()[0]),
+                            GeometryRef::Curve2d(intersection.pcurves()[1]),
+                        ]
+                    );
+                    store.geometry().validate().unwrap();
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn noncanonical_dual_offset_nurbs_two_through_five_have_exact_atomic_boundaries() {
+    for (retained_count, exact_work) in [(2, 14_336), (3, 28_672), (4, 43_008), (5, 57_344)] {
+        let file = noncanonical_dual_offset_nurbs_intersection_file(
+            [retained_count != 5, retained_count >= 4],
+            retained_count % 2 == 1,
+            retained_count,
+        );
+        for (stage, resource, mode, exact) in [
+            (
+                INTERSECTION_CHART_CERTIFICATE_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                exact_work,
+            ),
+            (
+                INTERSECTION_CHART_ITEMS,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                retained_count as u64,
+            ),
+            (
+                INTERSECTION_CHART_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                10,
+            ),
+        ] {
+            let (store, outcome) =
+                contextual_with_limit(&file, LimitSpec::new(stage, resource, mode, exact));
+            assert!(
+                outcome.result().is_ok(),
+                "{retained_count}-sample exact {stage:?} limit must pass: {:?}",
+                outcome.result()
+            );
+            assert_eq!(store.count::<Body>(), 1);
+            let usage = outcome
+                .report()
+                .usage()
+                .iter()
+                .find(|entry| entry.stage == stage)
+                .unwrap();
+            assert_eq!((usage.consumed, usage.allowed), (exact, exact));
+
+            let (store, outcome) =
+                contextual_with_limit(&file, LimitSpec::new(stage, resource, mode, exact - 1));
+            let result = outcome.result();
+            let error = result.as_ref().unwrap_err();
+            let limit = error.limit().unwrap();
+            assert_eq!(limit.stage, stage);
+            assert_eq!((limit.consumed, limit.allowed), (exact, exact - 1));
+            assert_eq!(store_counts(&store), (0, 0, 0));
+        }
+    }
+}
+
+#[test]
+fn noncanonical_dual_offset_nurbs_nested_shared_invalid_null_and_out_of_range_fail_atomically() {
+    let fixture = || noncanonical_dual_offset_nurbs_intersection_file([true, false], false, 5);
+    let mut store = Store::new();
+
+    let mut nested = fixture();
+    let intersection = nested
+        .nodes
+        .iter()
+        .find_map(|(&index, node)| (node.code == code::INTERSECTION).then_some(index))
+        .unwrap();
+    let sources = match nested
+        .field(&nested.nodes[&intersection], "surface")
+        .unwrap()
+        .clone()
+    {
+        Value::Arr(values) => values,
+        _ => unreachable!(),
+    };
+    let root = sources[0].as_ptr().unwrap();
+    let basis = ptr(&nested, root, "surface");
+    let inner = nested.nodes.keys().next_back().copied().unwrap() + 1;
+    nested.nodes.insert(inner, nested.nodes[&root].clone());
+    set_field(&mut nested, inner, "node_id", Value::Int(i64::from(inner)));
+    set_field(&mut nested, inner, "surface", Value::Ptr(basis));
+    set_field(&mut nested, root, "surface", Value::Ptr(inner));
+    assert!(matches!(
+        reconstruct(&nested, &mut store),
+        Err(XtError::Unsupported {
+            capability: XtCapability::IntersectionSurfaceFamily,
+            what: "INTERSECTION offset source does not resolve to an exact plane field",
+        })
+    ));
+    assert_eq!(store_counts(&store), (0, 0, 0));
+
+    let mut shared = fixture();
+    let intersection = shared
+        .nodes
+        .iter()
+        .find_map(|(&index, node)| (node.code == code::INTERSECTION).then_some(index))
+        .unwrap();
+    let sources = match shared
+        .field(&shared.nodes[&intersection], "surface")
+        .unwrap()
+        .clone()
+    {
+        Value::Arr(values) => values,
+        _ => unreachable!(),
+    };
+    let roots = [sources[0].as_ptr().unwrap(), sources[1].as_ptr().unwrap()];
+    let shared_basis = ptr(&shared, roots[0], "surface");
+    let shared_sense = shared
+        .field(&shared.nodes[&roots[0]], "sense")
+        .and_then(Value::as_char)
+        .unwrap();
+    set_field(&mut shared, roots[1], "sense", Value::Char(shared_sense));
+    set_field(&mut shared, roots[1], "surface", Value::Ptr(shared_basis));
+    assert!(matches!(
+        reconstruct(&shared, &mut store),
+        Err(XtError::Unsupported {
+            capability: XtCapability::IntersectionSurfaceFamily,
+            what: "Offset/Offset transmitted sources must have independent basis chains",
+        })
+    ));
+    assert_eq!(store_counts(&store), (0, 0, 0));
+
+    let mut invalid = fixture();
+    let invalid_root = intersection_offset_source(&invalid);
+    set_field(&mut invalid, invalid_root, "check", Value::Char('I'));
+    assert!(matches!(
+        reconstruct(&invalid, &mut store),
+        Err(XtError::BadField { index, .. }) if index == invalid_root
+    ));
+    assert_eq!(store_counts(&store), (0, 0, 0));
+
+    let mut mixed_null = fixture();
+    let intersection = mixed_null
+        .nodes
+        .iter()
+        .find_map(|(&index, node)| (node.code == code::INTERSECTION).then_some(index))
+        .unwrap();
+    let data = ptr(&mixed_null, intersection, "intersection_data");
+    let mut values = match mixed_null
+        .field(&mixed_null.nodes[&data], "values")
+        .unwrap()
+        .clone()
+    {
+        Value::Arr(values) => values,
+        _ => unreachable!(),
+    };
+    values[8] = Value::Null;
+    set_field(&mut mixed_null, data, "values", Value::Arr(values));
+    assert!(matches!(
+        reconstruct(&mixed_null, &mut store),
+        Err(XtError::Unsupported {
+            capability: XtCapability::IntersectionChartData,
+            what: "INTERSECTION_DATA contains null or non-finite UV values",
+        })
+    ));
+    assert_eq!(store_counts(&store), (0, 0, 0));
+
+    let out_of_family = noncanonical_dual_offset_nurbs_intersection_file([false, true], true, 6);
+    assert!(matches!(
+        reconstruct(&out_of_family, &mut store),
+        Err(XtError::Unsupported {
+            capability: XtCapability::IntersectionChartConvention,
+            what: "noncanonical affine charts require the bounded finite-open two- through five-sample direct-Plane/B-surface, safe-Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), direct-Offset(B-surface)/B-surface, independent direct-Offset(B-surface)/Offset(B-surface), or direct-B-surface/B-surface family",
+        })
+    ));
+    assert_eq!(store_counts(&store), (0, 0, 0));
 }
 
 #[test]
@@ -3522,7 +3931,7 @@ fn bsurface_bsurface_periodic_closed_altered_and_noncanonical_cases_fail_with_re
         reconstruct(&out_of_family, &mut store),
         Err(XtError::Unsupported {
             capability: XtCapability::IntersectionChartConvention,
-            what: "noncanonical affine charts require the bounded finite-open two- through five-sample direct-Plane/B-surface, safe-Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), direct-Offset(B-surface)/B-surface, or direct-B-surface/B-surface family",
+            what: "noncanonical affine charts require the bounded finite-open two- through five-sample direct-Plane/B-surface, safe-Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), direct-Offset(B-surface)/B-surface, independent direct-Offset(B-surface)/Offset(B-surface), or direct-B-surface/B-surface family",
         })
     ));
     assert_eq!(store_counts(&store), (0, 0, 0));
@@ -3688,7 +4097,7 @@ fn noncanonical_offset_nurbs_bsurface_stale_nested_and_out_of_family_fail_atomic
         reconstruct(&out_of_family, &mut store),
         Err(XtError::Unsupported {
             capability: XtCapability::IntersectionChartConvention,
-            what: "noncanonical affine charts require the bounded finite-open two- through five-sample direct-Plane/B-surface, safe-Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), direct-Offset(B-surface)/B-surface, or direct-B-surface/B-surface family",
+            what: "noncanonical affine charts require the bounded finite-open two- through five-sample direct-Plane/B-surface, safe-Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), direct-Offset(B-surface)/B-surface, independent direct-Offset(B-surface)/Offset(B-surface), or direct-B-surface/B-surface family",
         })
     ));
     assert_eq!(store_counts(&store), (0, 0, 0));
@@ -3754,7 +4163,7 @@ fn noncanonical_offset_plane_bsurface_unsafe_nonplane_and_out_of_family_fail_ato
         reconstruct(&out_of_family, &mut store),
         Err(XtError::Unsupported {
             capability: XtCapability::IntersectionChartConvention,
-            what: "noncanonical affine charts require the bounded finite-open two- through five-sample direct-Plane/B-surface, safe-Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), direct-Offset(B-surface)/B-surface, or direct-B-surface/B-surface family",
+            what: "noncanonical affine charts require the bounded finite-open two- through five-sample direct-Plane/B-surface, safe-Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), direct-Offset(B-surface)/B-surface, independent direct-Offset(B-surface)/Offset(B-surface), or direct-B-surface/B-surface family",
         })
     ));
     assert_eq!(store_counts(&store), (0, 0, 0));
