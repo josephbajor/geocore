@@ -7,7 +7,8 @@
 //! overlap and clip discovery to that shared rectangle. A second bounded
 //! Offset(NURBS)/NURBS family uses an exact rational quarter-cylinder source,
 //! its true varying-normal parallel NURBS surface, and a canonical direct
-//! planar NURBS peer. In the shared-chart family, both sources therefore have
+//! planar NURBS peer normal to either the global X or Y axis. In the
+//! shared-chart family, both sources therefore have
 //! the injective chart `(x,y) = (u,v)`, and their
 //! spatial difference is confined to `z`, so a zero contour of the scalar `z`
 //! difference is a surface/surface contact.
@@ -40,7 +41,7 @@ use kgeom::surface::{Dir, Plane, Surface};
 use kgeom::vec::{Point3, Vec3};
 
 const INCOMPATIBLE_REASON: &str = "direct NURBS/NURBS surface intersection requires the identical finite-open quadratic-linear unit chart, constant weights, and positive-area parameter-window overlap";
-const VARYING_OFFSET_NORMAL_REASON: &str = "varying-normal Offset(NURBS)/NURBS surface intersection requires a certified regular rational quarter-cylinder basis, one finite offset descriptor, a canonical direct planar NURBS peer, and positive-area parameter windows";
+const VARYING_OFFSET_NORMAL_REASON: &str = "varying-normal Offset(NURBS)/NURBS surface intersection requires a certified regular rational quarter-cylinder basis, one finite offset descriptor, a canonical axis-aligned direct planar NURBS peer, and positive-area parameter windows";
 
 #[derive(Debug, Clone, Copy)]
 struct RationalQuarterCylinderSource {
@@ -50,9 +51,55 @@ struct RationalQuarterCylinderSource {
 #[derive(Debug, Clone, Copy)]
 struct CanonicalDirectNurbsPlane {
     plane: Plane,
-    plane_x: f64,
-    y_range: ParamRange,
+    orientation: CanonicalPlaneOrientation,
+    plane_coordinate: f64,
+    tangent_range: ParamRange,
     z_range: ParamRange,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CanonicalPlaneOrientation {
+    X,
+    Y,
+}
+
+impl CanonicalPlaneOrientation {
+    fn normal_coordinate(self, point: Point3) -> f64 {
+        match self {
+            Self::X => point.x,
+            Self::Y => point.y,
+        }
+    }
+
+    fn tangent_coordinate(self, point: Point3) -> f64 {
+        match self {
+            Self::X => point.y,
+            Self::Y => point.x,
+        }
+    }
+
+    fn point(self, normal: f64, tangent: f64, z: f64) -> Point3 {
+        match self {
+            Self::X => Point3::new(normal, tangent, z),
+            Self::Y => Point3::new(tangent, normal, z),
+        }
+    }
+
+    fn plane(self, coordinate: f64) -> Option<Plane> {
+        let (origin, normal, tangent) = match self {
+            Self::X => (
+                Point3::new(coordinate, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ),
+            Self::Y => (
+                Point3::new(0.0, coordinate, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+            ),
+        };
+        Frame::new(origin, normal, tangent).ok().map(Plane::new)
+    }
 }
 
 /// Intersect one compatible pair of direct clamped NURBS surfaces over their
@@ -360,32 +407,39 @@ fn canonical_direct_nurbs_plane(surface: &NurbsSurface) -> Option<CanonicalDirec
     {
         return None;
     }
+    [CanonicalPlaneOrientation::X, CanonicalPlaneOrientation::Y]
+        .into_iter()
+        .find_map(|orientation| canonical_direct_nurbs_plane_for_orientation(surface, orientation))
+}
+
+fn canonical_direct_nurbs_plane_for_orientation(
+    surface: &NurbsSurface,
+    orientation: CanonicalPlaneOrientation,
+) -> Option<CanonicalDirectNurbsPlane> {
     let points = surface.points();
-    let plane_x = points[0].x;
-    let y_range = ParamRange::new(points[0].y, points[2].y);
+    let plane_coordinate = orientation.normal_coordinate(points[0]);
+    let tangent_range = ParamRange::new(
+        orientation.tangent_coordinate(points[0]),
+        orientation.tangent_coordinate(points[2]),
+    );
     let z_range = ParamRange::new(points[0].z, points[1].z);
-    if !plane_x.is_finite()
-        || !y_range.is_finite()
-        || y_range.width() <= 0.0
+    if !plane_coordinate.is_finite()
+        || !tangent_range.is_finite()
+        || tangent_range.width() <= 0.0
         || !z_range.is_finite()
         || z_range.width() <= 0.0
-        || points[0] != Point3::new(plane_x, y_range.lo, z_range.lo)
-        || points[1] != Point3::new(plane_x, y_range.lo, z_range.hi)
-        || points[2] != Point3::new(plane_x, y_range.hi, z_range.lo)
-        || points[3] != Point3::new(plane_x, y_range.hi, z_range.hi)
+        || points[0] != orientation.point(plane_coordinate, tangent_range.lo, z_range.lo)
+        || points[1] != orientation.point(plane_coordinate, tangent_range.lo, z_range.hi)
+        || points[2] != orientation.point(plane_coordinate, tangent_range.hi, z_range.lo)
+        || points[3] != orientation.point(plane_coordinate, tangent_range.hi, z_range.hi)
     {
         return None;
     }
-    let frame = Frame::new(
-        Point3::new(plane_x, 0.0, 0.0),
-        Vec3::new(1.0, 0.0, 0.0),
-        Vec3::new(0.0, 1.0, 0.0),
-    )
-    .ok()?;
     Some(CanonicalDirectNurbsPlane {
-        plane: Plane::new(frame),
-        plane_x,
-        y_range,
+        plane: orientation.plane(plane_coordinate)?,
+        orientation,
+        plane_coordinate,
+        tangent_range,
         z_range,
     })
 }
@@ -458,7 +512,7 @@ pub(super) fn intersect_bounded_offset_nurbs_nurbs_surfaces_with_traces_in_scope
         direct_range,
     ) {
         return Err(ContextMarchError::Kernel(Error::InvalidGeometry {
-            reason: "Offset(NURBS)/NURBS surface intersection requires either a direct constant-positive-normal unit-chart basis and compatible peer or the bounded varying-normal rational-cylinder/planar-NURBS family",
+            reason: "Offset(NURBS)/NURBS surface intersection requires either a direct constant-positive-normal unit-chart basis and compatible peer or the bounded varying-normal rational-cylinder/axis-aligned-planar-NURBS family",
         }));
     }
     intersect_varying_normal_offset_nurbs_nurbs_with_traces_in_scope(
@@ -501,7 +555,7 @@ fn intersect_varying_normal_offset_nurbs_nurbs_with_traces_in_scope(
         basis,
         source,
         signed_distance,
-        direct_plane.plane_x,
+        direct_plane,
     ) {
         return Ok(MarchOutput {
             result: SurfaceSurfaceIntersections::complete_empty(),
@@ -509,7 +563,9 @@ fn intersect_varying_normal_offset_nurbs_nurbs_with_traces_in_scope(
         });
     }
     let effective = varying_normal_offset_surface(basis, source, signed_distance)?;
-    let signed_plane_distance = |point: Point3| point.x - direct_plane.plane_x;
+    let signed_plane_distance = |point: Point3| {
+        direct_plane.orientation.normal_coordinate(point) - direct_plane.plane_coordinate
+    };
     let direct_uv = |point: Point3| {
         direct_nurbs_plane_uv_at(point, direct_plane, direct_range, tolerances.linear())
     };
@@ -602,7 +658,7 @@ fn varying_offset_plane_control_difference_proves_empty(
     basis: &NurbsSurface,
     source: RationalQuarterCylinderSource,
     signed_distance: f64,
-    plane_x: f64,
+    direct: CanonicalDirectNurbsPlane,
 ) -> bool {
     let Some(scale) = Interval::point(source.radius + signed_distance)
         .checked_div(Interval::point(source.radius))
@@ -612,11 +668,11 @@ fn varying_offset_plane_control_difference_proves_empty(
     let mut lower = f64::INFINITY;
     let mut upper = f64::NEG_INFINITY;
     for point in basis.points() {
-        let lifted_x = Interval::point(point.x) * scale;
-        lower = lower.min(lifted_x.lo());
-        upper = upper.max(lifted_x.hi());
+        let lifted = Interval::point(direct.orientation.normal_coordinate(*point)) * scale;
+        lower = lower.min(lifted.lo());
+        upper = upper.max(lifted.hi());
     }
-    let plane = Interval::point(plane_x);
+    let plane = Interval::point(direct.plane_coordinate);
     lower > plane.hi() || upper < plane.lo()
 }
 
@@ -626,10 +682,11 @@ fn direct_nurbs_plane_uv_at(
     requested: [ParamRange; 2],
     tolerance: f64,
 ) -> Option<[f64; 2]> {
-    let u = (point.y - direct.y_range.lo) / direct.y_range.width();
+    let u = (direct.orientation.tangent_coordinate(point) - direct.tangent_range.lo)
+        / direct.tangent_range.width();
     let v = (point.z - direct.z_range.lo) / direct.z_range.width();
     Some([
-        fit_normalized_parameter(u, requested[0], tolerance / direct.y_range.width())?,
+        fit_normalized_parameter(u, requested[0], tolerance / direct.tangent_range.width())?,
         fit_normalized_parameter(v, requested[1], tolerance / direct.z_range.width())?,
     ])
 }
