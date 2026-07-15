@@ -4,8 +4,11 @@
 //! with the same quadratic-linear unit-square basis, constant shared weights,
 //! and exact identity `x/y` control fields. Direct and constant-normal
 //! Offset(NURBS)/NURBS pairs accept distinct windows with a positive-area
-//! overlap and clip discovery to that shared rectangle. Both
-//! sources therefore have the injective chart `(x,y) = (u,v)`, and their
+//! overlap and clip discovery to that shared rectangle. A second bounded
+//! Offset(NURBS)/NURBS family uses an exact rational quarter-cylinder source,
+//! its true varying-normal parallel NURBS surface, and a canonical direct
+//! planar NURBS peer. In the shared-chart family, both sources therefore have
+//! the injective chart `(x,y) = (u,v)`, and their
 //! spatial difference is confined to `z`, so a zero contour of the scalar `z`
 //! difference is a surface/surface contact.
 //! The derived scalar surface is discovery-only: complete misses are proved
@@ -34,9 +37,23 @@ use kgeom::nurbs::{
 };
 use kgeom::param::ParamRange;
 use kgeom::surface::{Dir, Plane, Surface};
-use kgeom::vec::Point3;
+use kgeom::vec::{Point3, Vec3};
 
 const INCOMPATIBLE_REASON: &str = "direct NURBS/NURBS surface intersection requires the identical finite-open quadratic-linear unit chart, constant weights, and positive-area parameter-window overlap";
+const VARYING_OFFSET_NORMAL_REASON: &str = "varying-normal Offset(NURBS)/NURBS surface intersection requires a certified regular rational quarter-cylinder basis, one finite offset descriptor, a canonical direct planar NURBS peer, and positive-area parameter windows";
+
+#[derive(Debug, Clone, Copy)]
+struct RationalQuarterCylinderSource {
+    radius: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CanonicalDirectNurbsPlane {
+    plane: Plane,
+    plane_x: f64,
+    y_range: ParamRange,
+    z_range: ParamRange,
+}
 
 /// Intersect one compatible pair of direct clamped NURBS surfaces over their
 /// positive-area shared unit-chart window.
@@ -97,9 +114,9 @@ pub fn intersect_bounded_nurbs_nurbs_surfaces_with_context(
     }
 }
 
-/// Intersect one constant-normal offset of a compatible planar NURBS basis
-/// with one direct compatible NURBS surface over their positive-area shared
-/// unit-chart window.
+/// Intersect one supported offset of a NURBS basis with a direct compatible
+/// NURBS surface. This includes the constant-normal shared-chart family and
+/// the bounded varying-normal rational-cylinder/planar-NURBS family.
 pub fn intersect_bounded_offset_nurbs_nurbs_surfaces(
     basis: &NurbsSurface,
     signed_distance: f64,
@@ -129,8 +146,7 @@ pub fn intersect_bounded_offset_nurbs_nurbs_surfaces(
     .into_result()
 }
 
-/// Context-aware constant-normal Offset(NURBS)/NURBS surface intersection
-/// over the positive-area overlap of the two requested unit-chart windows.
+/// Context-aware supported Offset(NURBS)/NURBS surface intersection.
 pub fn intersect_bounded_offset_nurbs_nurbs_surfaces_with_context(
     basis: &NurbsSurface,
     signed_distance: f64,
@@ -227,7 +243,7 @@ fn shared_positive_unit_chart_window(
     Some([shared_axis(0)?, shared_axis(1)?])
 }
 
-pub(super) fn supports_offset_nurbs_nurbs_surface_pair(
+pub(super) fn supports_constant_normal_offset_nurbs_nurbs_surface_pair(
     basis: &NurbsSurface,
     signed_distance: f64,
     offset_range: [ParamRange; 2],
@@ -238,6 +254,29 @@ pub(super) fn supports_offset_nurbs_nurbs_surface_pair(
         && supports_compatible_nurbs_unit_chart_pair(basis, direct)
         && shared_positive_unit_chart_window(offset_range, direct_range).is_some()
         && supports_constant_positive_normal_offset(basis, signed_distance)
+}
+
+pub(super) fn supports_varying_normal_offset_nurbs_nurbs_surface_pair(
+    basis: &NurbsSurface,
+    signed_distance: f64,
+    offset_range: [ParamRange; 2],
+    direct: &NurbsSurface,
+    direct_range: [ParamRange; 2],
+) -> bool {
+    let Some(source) = rational_quarter_cylinder_source(basis) else {
+        return false;
+    };
+    let effective_radius = source.radius + signed_distance;
+    signed_distance.is_finite()
+        && effective_radius.is_finite()
+        && effective_radius > 0.0
+        && positive_unit_chart_window(offset_range)
+        && positive_unit_chart_window(direct_range)
+        && canonical_direct_nurbs_plane(direct).is_some()
+}
+
+pub(super) fn varying_normal_offset_window_proof_work(basis: &NurbsSurface) -> Option<u64> {
+    u64::try_from(basis.source_differential_enclosure_work_units()?).ok()
 }
 
 pub(super) fn supports_strictly_separated_constant_normal_offset_nurbs_pair(
@@ -271,6 +310,84 @@ fn supports_constant_positive_normal_offset(basis: &NurbsSurface, signed_distanc
             let lifted = Interval::point(point.z) + Interval::point(signed_distance);
             lifted.lo().is_finite() && lifted.hi().is_finite()
         })
+}
+
+fn rational_quarter_cylinder_source(
+    surface: &NurbsSurface,
+) -> Option<RationalQuarterCylinderSource> {
+    // These homogeneous controls encode
+    // x/r=(1-u²)/(1+u²), y/r=2u/(1+u²). The natural unit normal is therefore
+    // exactly radial, so multiplying x/y by (r+d)/r represents the true
+    // signed normal offset rather than a sampled approximation.
+    if surface.param_range() != [ParamRange::new(0.0, 1.0), ParamRange::new(0.0, 1.0)]
+        || surface.periodicity() != [None, None]
+        || surface.degree_u() != 2
+        || surface.degree_v() != 1
+        || surface.knots(Dir::U).as_slice() != [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]
+        || surface.knots(Dir::V).as_slice() != [0.0, 0.0, 1.0, 1.0]
+        || surface.weights() != Some(&[1.0, 1.0, 1.0, 1.0, 2.0, 2.0][..])
+        || surface.points().len() != 6
+    {
+        return None;
+    }
+    let points = surface.points();
+    let radius = points[0].x;
+    let z_lo = points[0].z;
+    let z_hi = points[1].z;
+    (radius.is_finite()
+        && radius >= 0.0
+        && z_lo.is_finite()
+        && z_hi.is_finite()
+        && z_hi > z_lo
+        && points[0] == Point3::new(radius, 0.0, z_lo)
+        && points[1] == Point3::new(radius, 0.0, z_hi)
+        && points[2] == Point3::new(radius, radius, z_lo)
+        && points[3] == Point3::new(radius, radius, z_hi)
+        && points[4] == Point3::new(0.0, radius, z_lo)
+        && points[5] == Point3::new(0.0, radius, z_hi))
+    .then_some(RationalQuarterCylinderSource { radius })
+}
+
+fn canonical_direct_nurbs_plane(surface: &NurbsSurface) -> Option<CanonicalDirectNurbsPlane> {
+    if surface.param_range() != [ParamRange::new(0.0, 1.0), ParamRange::new(0.0, 1.0)]
+        || surface.periodicity() != [None, None]
+        || surface.degree_u() != 1
+        || surface.degree_v() != 1
+        || surface.knots(Dir::U).as_slice() != [0.0, 0.0, 1.0, 1.0]
+        || surface.knots(Dir::V).as_slice() != [0.0, 0.0, 1.0, 1.0]
+        || surface.weights().is_some()
+        || surface.points().len() != 4
+    {
+        return None;
+    }
+    let points = surface.points();
+    let plane_x = points[0].x;
+    let y_range = ParamRange::new(points[0].y, points[2].y);
+    let z_range = ParamRange::new(points[0].z, points[1].z);
+    if !plane_x.is_finite()
+        || !y_range.is_finite()
+        || y_range.width() <= 0.0
+        || !z_range.is_finite()
+        || z_range.width() <= 0.0
+        || points[0] != Point3::new(plane_x, y_range.lo, z_range.lo)
+        || points[1] != Point3::new(plane_x, y_range.lo, z_range.hi)
+        || points[2] != Point3::new(plane_x, y_range.hi, z_range.lo)
+        || points[3] != Point3::new(plane_x, y_range.hi, z_range.hi)
+    {
+        return None;
+    }
+    let frame = Frame::new(
+        Point3::new(plane_x, 0.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    )
+    .ok()?;
+    Some(CanonicalDirectNurbsPlane {
+        plane: Plane::new(frame),
+        plane_x,
+        y_range,
+        z_range,
+    })
 }
 
 fn exact_unit_xy_controls(surface: &NurbsSurface) -> bool {
@@ -309,7 +426,31 @@ pub(super) fn intersect_bounded_offset_nurbs_nurbs_surfaces_with_traces_in_scope
     tolerances: Tolerances,
     scope: &mut OperationScope<'_, '_>,
 ) -> core::result::Result<MarchOutput, ContextMarchError> {
-    if !supports_offset_nurbs_nurbs_surface_pair(
+    if supports_constant_normal_offset_nurbs_nurbs_surface_pair(
+        basis,
+        signed_distance,
+        offset_range,
+        direct,
+        direct_range,
+    ) {
+        if offset_control_difference_proves_empty(basis, signed_distance, direct) {
+            return Ok(MarchOutput {
+                result: SurfaceSurfaceIntersections::complete_empty(),
+                traces: Vec::new(),
+            });
+        }
+        let effective = constant_normal_offset_surface(basis, signed_distance)?;
+        return intersect_compatible_nurbs_pair_with_traces_in_scope(
+            &effective,
+            offset_range,
+            direct,
+            direct_range,
+            tolerances,
+            false,
+            scope,
+        );
+    }
+    if !supports_varying_normal_offset_nurbs_nurbs_surface_pair(
         basis,
         signed_distance,
         offset_range,
@@ -317,24 +458,297 @@ pub(super) fn intersect_bounded_offset_nurbs_nurbs_surfaces_with_traces_in_scope
         direct_range,
     ) {
         return Err(ContextMarchError::Kernel(Error::InvalidGeometry {
-            reason: "Offset(NURBS)/NURBS surface intersection requires a direct constant-positive-normal unit-chart basis, compatible direct source, and positive-area window overlap",
+            reason: "Offset(NURBS)/NURBS surface intersection requires either a direct constant-positive-normal unit-chart basis and compatible peer or the bounded varying-normal rational-cylinder/planar-NURBS family",
         }));
     }
-    if offset_control_difference_proves_empty(basis, signed_distance, direct) {
+    intersect_varying_normal_offset_nurbs_nurbs_with_traces_in_scope(
+        basis,
+        signed_distance,
+        offset_range,
+        direct,
+        direct_range,
+        tolerances,
+        scope,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn intersect_varying_normal_offset_nurbs_nurbs_with_traces_in_scope(
+    basis: &NurbsSurface,
+    signed_distance: f64,
+    offset_range: [ParamRange; 2],
+    direct: &NurbsSurface,
+    direct_range: [ParamRange; 2],
+    tolerances: Tolerances,
+    scope: &mut OperationScope<'_, '_>,
+) -> core::result::Result<MarchOutput, ContextMarchError> {
+    let source = rational_quarter_cylinder_source(basis).ok_or({
+        ContextMarchError::Kernel(Error::InvalidGeometry {
+            reason: VARYING_OFFSET_NORMAL_REASON,
+        })
+    })?;
+    let direct_plane = canonical_direct_nurbs_plane(direct).ok_or({
+        ContextMarchError::Kernel(Error::InvalidGeometry {
+            reason: VARYING_OFFSET_NORMAL_REASON,
+        })
+    })?;
+    if !source_window_has_certified_nonzero_normal(basis, offset_range) {
+        return Err(ContextMarchError::Kernel(Error::InvalidGeometry {
+            reason: "varying-normal Offset(NURBS) basis normal is singular or interval-inconclusive over the requested window",
+        }));
+    }
+    if varying_offset_plane_control_difference_proves_empty(
+        basis,
+        source,
+        signed_distance,
+        direct_plane.plane_x,
+    ) {
         return Ok(MarchOutput {
             result: SurfaceSurfaceIntersections::complete_empty(),
             traces: Vec::new(),
         });
     }
-    let effective = constant_normal_offset_surface(basis, signed_distance)?;
-    intersect_compatible_nurbs_pair_with_traces_in_scope(
-        &effective,
-        offset_range,
-        direct,
-        direct_range,
-        tolerances,
-        false,
+    let effective = varying_normal_offset_surface(basis, source, signed_distance)?;
+    let signed_plane_distance = |point: Point3| point.x - direct_plane.plane_x;
+    let direct_uv = |point: Point3| {
+        direct_nurbs_plane_uv_at(point, direct_plane, direct_range, tolerances.linear())
+    };
+    let branch_kind = |points: &[MarchPoint]| {
+        varying_offset_plane_branch_kind(basis, direct_plane.plane, points, tolerances)
+    };
+    let output = march_nurbs_surface_intersection_with_traces_in_scope(
+        MarchConfig {
+            surface: &effective,
+            surface_range: offset_range,
+            tolerances: Tolerances::with_linear(
+                (tolerances.linear() / 1_024.0).max(LINEAR_RESOLUTION),
+            )
+            .expect("derived discovery tolerance respects the session floor"),
+            implicit_surface: &direct_plane.plane,
+            // The exact family conversion is used only for discovery. The
+            // outward original-control proof above owns complete misses.
+            implicit_empty_is_authoritative: false,
+            signed_distance: &signed_plane_distance,
+            other_uv: &direct_uv,
+            branch_kind: &branch_kind,
+            overlap_reason: "coincident varying-normal Offset(NURBS)/NURBS intersection is a surface overlap",
+            non_finite_reason: "varying-normal Offset(NURBS)/NURBS intersection sampled non-finite geometry",
+            finite_range_reason: "varying-normal Offset(NURBS)/NURBS intersection requires finite non-reversed ranges",
+            clamped_surface_reason: "varying-normal Offset(NURBS)/NURBS intersection requires clamped surfaces",
+            domain_range_reason: "varying-normal Offset(NURBS)/NURBS ranges must lie within their source domains",
+        },
         scope,
+    )?;
+    lift_varying_offset_output_to_original_sources(
+        output,
+        basis,
+        signed_distance,
+        direct,
+        tolerances,
+    )
+}
+
+fn varying_normal_offset_surface(
+    basis: &NurbsSurface,
+    source: RationalQuarterCylinderSource,
+    signed_distance: f64,
+) -> Result<NurbsSurface> {
+    if source.radius <= 0.0 {
+        return Err(Error::InvalidGeometry {
+            reason: VARYING_OFFSET_NORMAL_REASON,
+        });
+    }
+    let scale = (source.radius + signed_distance) / source.radius;
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(Error::InvalidGeometry {
+            reason: VARYING_OFFSET_NORMAL_REASON,
+        });
+    }
+    let points = basis
+        .points()
+        .iter()
+        .map(|point| Point3::new(point.x * scale, point.y * scale, point.z))
+        .collect();
+    NurbsSurface::new(
+        basis.degree_u(),
+        basis.degree_v(),
+        basis.knots(Dir::U).as_slice().to_vec(),
+        basis.knots(Dir::V).as_slice().to_vec(),
+        points,
+        basis.weights().map(<[f64]>::to_vec),
+    )
+}
+
+fn source_window_has_certified_nonzero_normal(
+    basis: &NurbsSurface,
+    range: [ParamRange; 2],
+) -> bool {
+    let center = range.map(|axis| axis.lo + 0.5 * axis.width());
+    let Some(enclosure) = basis.source_differential_enclosure(range, center) else {
+        return false;
+    };
+    let du = enclosure.derivative_u();
+    let dv = enclosure.derivative_v();
+    let cross = [
+        du[1] * dv[2] - du[2] * dv[1],
+        du[2] * dv[0] - du[0] * dv[2],
+        du[0] * dv[1] - du[1] * dv[0],
+    ];
+    let squared_norm = cross[0].square() + cross[1].square() + cross[2].square();
+    squared_norm.lo().is_finite() && squared_norm.hi().is_finite() && squared_norm.lo() > 0.0
+}
+
+fn varying_offset_plane_control_difference_proves_empty(
+    basis: &NurbsSurface,
+    source: RationalQuarterCylinderSource,
+    signed_distance: f64,
+    plane_x: f64,
+) -> bool {
+    let Some(scale) = Interval::point(source.radius + signed_distance)
+        .checked_div(Interval::point(source.radius))
+    else {
+        return false;
+    };
+    let mut lower = f64::INFINITY;
+    let mut upper = f64::NEG_INFINITY;
+    for point in basis.points() {
+        let lifted_x = Interval::point(point.x) * scale;
+        lower = lower.min(lifted_x.lo());
+        upper = upper.max(lifted_x.hi());
+    }
+    let plane = Interval::point(plane_x);
+    lower > plane.hi() || upper < plane.lo()
+}
+
+fn direct_nurbs_plane_uv_at(
+    point: Point3,
+    direct: CanonicalDirectNurbsPlane,
+    requested: [ParamRange; 2],
+    tolerance: f64,
+) -> Option<[f64; 2]> {
+    let u = (point.y - direct.y_range.lo) / direct.y_range.width();
+    let v = (point.z - direct.z_range.lo) / direct.z_range.width();
+    Some([
+        fit_normalized_parameter(u, requested[0], tolerance / direct.y_range.width())?,
+        fit_normalized_parameter(v, requested[1], tolerance / direct.z_range.width())?,
+    ])
+}
+
+fn fit_normalized_parameter(candidate: f64, requested: ParamRange, tolerance: f64) -> Option<f64> {
+    (candidate.is_finite()
+        && candidate >= requested.lo - tolerance
+        && candidate <= requested.hi + tolerance)
+        .then(|| candidate.clamp(requested.lo, requested.hi))
+}
+
+fn varying_offset_plane_branch_kind(
+    basis: &NurbsSurface,
+    plane: Plane,
+    points: &[MarchPoint],
+    tolerances: Tolerances,
+) -> ContactKind {
+    let uv = points[points.len() / 2].surface_uv;
+    let Some(normal) = basis.normal(uv) else {
+        return ContactKind::Singular;
+    };
+    if normal.cross(plane.frame().z()).norm() <= tolerances.angular() {
+        ContactKind::Tangent
+    } else {
+        ContactKind::Transverse
+    }
+}
+
+fn lift_varying_offset_output_to_original_sources(
+    mut output: MarchOutput,
+    basis: &NurbsSurface,
+    signed_distance: f64,
+    direct: &NurbsSurface,
+    tolerances: Tolerances,
+) -> core::result::Result<MarchOutput, ContextMarchError> {
+    if output.result.curves.len() != output.traces.len() {
+        return Err(ContextMarchError::Kernel(Error::InvalidGeometry {
+            reason: "varying-normal Offset(NURBS)/NURBS march trace count does not match discovered branches",
+        }));
+    }
+    for (branch, trace) in output.result.curves.iter_mut().zip(&mut output.traces) {
+        let offset_pcurve =
+            simplify_varying_generator_pcurve(&trace.surface_pcurve, tolerances.linear())?;
+        let direct_pcurve =
+            simplify_varying_generator_pcurve(&trace.other_pcurve, tolerances.linear())?;
+        if offset_pcurve.knots() != direct_pcurve.knots()
+            || offset_pcurve.points().len() != direct_pcurve.points().len()
+        {
+            return Err(ContextMarchError::Kernel(Error::InvalidGeometry {
+                reason: "varying-normal Offset(NURBS)/NURBS paired pcurves do not share one affine basis",
+            }));
+        }
+        let mut controls = Vec::with_capacity(offset_pcurve.points().len());
+        for (&offset_uv, &direct_uv) in offset_pcurve.points().iter().zip(direct_pcurve.points()) {
+            let derivatives = basis.eval_derivs([offset_uv.x, offset_uv.y], 1);
+            let normal = derivatives
+                .du
+                .cross(derivatives.dv)
+                .normalized()
+                .ok_or({
+                    ContextMarchError::Kernel(Error::InvalidGeometry {
+                        reason: "varying-normal Offset(NURBS) discovery reached a singular source normal",
+                    })
+                })?;
+            let offset_point = derivatives.p + normal * signed_distance;
+            let direct_point = direct.eval([direct_uv.x, direct_uv.y]);
+            controls.push((offset_point + direct_point) * 0.5);
+        }
+        let carrier =
+            NurbsCurve::new(1, offset_pcurve.knots().as_slice().to_vec(), controls, None)?;
+        let offset_start = offset_pcurve.points()[0];
+        let offset_end = offset_pcurve.points()[offset_pcurve.points().len() - 1];
+        let direct_start = direct_pcurve.points()[0];
+        let direct_end = direct_pcurve.points()[direct_pcurve.points().len() - 1];
+        branch.curve = SurfaceIntersectionCurve::Nurbs(carrier.clone());
+        branch.curve_range = carrier.param_range();
+        branch.uv_a_start = [offset_start.x, offset_start.y];
+        branch.uv_a_end = [offset_end.x, offset_end.y];
+        branch.uv_b_start = [direct_start.x, direct_start.y];
+        branch.uv_b_end = [direct_end.x, direct_end.y];
+        trace.carrier = carrier;
+        // Graph certification expects operand-A pcurve first for an
+        // Offset(NURBS)/NURBS march, matching the older shared-chart arm.
+        trace.other_pcurve = offset_pcurve;
+        trace.surface_pcurve = direct_pcurve;
+    }
+    Ok(output)
+}
+
+/// Collapse the bounded family's numerically discovered vertical generator to
+/// one affine trace. This remains candidate conditioning: the original-source
+/// whole-range certificate validates the resulting constant-u chord.
+fn simplify_varying_generator_pcurve(
+    pcurve: &NurbsCurve2d,
+    parameter_tolerance: f64,
+) -> Result<NurbsCurve2d> {
+    let points = pcurve.points();
+    let first = points[0];
+    let last = points[points.len() - 1];
+    let (u_lo, u_hi) = points
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), point| {
+            (lo.min(point.x), hi.max(point.x))
+        });
+    let between = |value: f64| value >= first.y.min(last.y) && value <= first.y.max(last.y);
+    if u_hi - u_lo > parameter_tolerance || !points.iter().all(|point| between(point.y)) {
+        return Err(Error::InvalidGeometry {
+            reason: "varying-normal Offset(NURBS)/NURBS discovery did not produce one bounded generator",
+        });
+    }
+    let u = u_lo + 0.5 * (u_hi - u_lo);
+    NurbsCurve2d::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            kgeom::vec::Vec2::new(u, first.y),
+            kgeom::vec::Vec2::new(u, last.y),
+        ],
+        None,
     )
 }
 

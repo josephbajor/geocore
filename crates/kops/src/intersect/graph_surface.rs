@@ -5,7 +5,9 @@
 //! surfaces additionally support scoped exact-plane-field/NURBS, exact
 //! sphere-field/NURBS, compatible direct NURBS/NURBS marching, and a narrow
 //! constant-normal Offset(NURBS)/NURBS family capped at four offset
-//! descriptors.
+//! descriptors. One exact rational quarter-cylinder family additionally
+//! supports a single varying-normal Offset(NURBS) root against a canonical
+//! direct planar NURBS peer.
 //! Strictly separated pairs of compatible constant-normal Offset(NURBS) roots
 //! capped at four offset descriptors additionally own a graph-level
 //! complete-empty proof. The adapter
@@ -19,8 +21,11 @@ use super::error::IntersectionError;
 use super::nurbs_nurbs_surface::{
     intersect_bounded_nurbs_nurbs_surfaces_with_traces_in_scope,
     intersect_bounded_offset_nurbs_nurbs_surfaces_with_traces_in_scope,
-    supports_direct_nurbs_nurbs_surface_pair, supports_offset_nurbs_nurbs_surface_pair,
+    supports_constant_normal_offset_nurbs_nurbs_surface_pair,
+    supports_direct_nurbs_nurbs_surface_pair,
     supports_strictly_separated_constant_normal_offset_nurbs_pair,
+    supports_varying_normal_offset_nurbs_nurbs_surface_pair,
+    varying_normal_offset_window_proof_work,
 };
 use super::nurbs_surface_march::{
     ContextMarchError, MarchOutput, MarchTrace, NURBS_SURFACE_MARCH_SAMPLE_LIMIT,
@@ -519,7 +524,10 @@ pub fn intersect_bounded_graph_surfaces_with_context(
 /// compatible constant-normal Offset(NURBS) roots containing at most four
 /// offset descriptors return a complete miss only from strict outward
 /// original-control separation; coincident or intersecting effective sheets
-/// and all other pairs remain explicitly unsupported.
+/// and all other pairs remain explicitly unsupported. A single varying-normal
+/// rational quarter-cylinder offset additionally marches against one canonical
+/// direct planar NURBS peer after a whole-window original-derivative normal
+/// proof; nested varying-normal roots remain unsupported.
 /// Owners must compose [`GraphSurfaceBudgetProfile::v1_defaults`] before
 /// creating `scope` when they may dispatch a scoped proof-bearing branch.
 pub fn intersect_bounded_graph_surfaces_in_scope(
@@ -655,14 +663,22 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 chain_length,
             }),
             Some(ResolvedGraphSurfaceField::Nurbs(surface)),
-        ) if nurbs_control_net_is_nonplanar(surface, tolerances.linear())
-            && supports_offset_nurbs_nurbs_surface_pair(
+        ) if (nurbs_control_net_is_nonplanar(surface, tolerances.linear())
+            && supports_constant_normal_offset_nurbs_nurbs_surface_pair(
                 basis,
                 signed_distance,
                 range_a,
                 surface,
                 range_b,
-            ) =>
+            ))
+            || (chain_length == 1
+                && supports_varying_normal_offset_nurbs_nurbs_surface_pair(
+                    basis,
+                    signed_distance,
+                    range_a,
+                    surface,
+                    range_b,
+                )) =>
         {
             [
                 ResolvedGraphSurfaceField::OffsetNurbs {
@@ -680,14 +696,22 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 basis,
                 chain_length,
             }),
-        ) if nurbs_control_net_is_nonplanar(surface, tolerances.linear())
-            && supports_offset_nurbs_nurbs_surface_pair(
+        ) if (nurbs_control_net_is_nonplanar(surface, tolerances.linear())
+            && supports_constant_normal_offset_nurbs_nurbs_surface_pair(
                 basis,
                 signed_distance,
                 range_b,
                 surface,
                 range_a,
-            ) =>
+            ))
+            || (chain_length == 1
+                && supports_varying_normal_offset_nurbs_nurbs_surface_pair(
+                    basis,
+                    signed_distance,
+                    range_b,
+                    surface,
+                    range_a,
+                )) =>
         {
             [
                 ResolvedGraphSurfaceField::Nurbs(surface),
@@ -1096,6 +1120,31 @@ fn offset_nurbs_nurbs_march_in_scope(
     tolerances: Tolerances,
     scope: &mut OperationScope<'_, '_>,
 ) -> GraphSurfaceIntersectionResult<MarchOutput> {
+    if supports_varying_normal_offset_nurbs_nurbs_surface_pair(
+        basis,
+        signed_distance,
+        offset_range,
+        surface,
+        surface_range,
+    ) {
+        let work = varying_normal_offset_window_proof_work(basis).ok_or(
+            GraphSurfaceIntersectionError::OperationPolicy(
+                OperationPolicyError::AccountingOverflow {
+                    stage: NURBS_TRACE_CERTIFICATE_WORK,
+                    resource: ResourceKind::Work,
+                },
+            ),
+        )?;
+        scope
+            .ledger_mut()
+            .charge(NURBS_TRACE_CERTIFICATE_WORK, work)?;
+        scope
+            .ledger_mut()
+            .observe(NURBS_TRACE_CERTIFICATE_WORK, ResourceKind::Items, 1)?;
+        scope
+            .ledger_mut()
+            .observe(NURBS_TRACE_CERTIFICATE_WORK, ResourceKind::Depth, 1)?;
+    }
     match intersect_bounded_offset_nurbs_nurbs_surfaces_with_traces_in_scope(
         basis,
         signed_distance,

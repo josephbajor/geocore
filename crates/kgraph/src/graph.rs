@@ -1299,10 +1299,11 @@ fn verified_offset_nurbs_trace_matches(
     certified: &TransmittedOffsetNurbsTrace,
     max_chain_length: usize,
 ) -> GeometryGraphResult<bool> {
-    // Operation-generated Offset(NURBS)/direct-NURBS certificates admit one
-    // additional nested descriptor beyond the other verified families. Walk
-    // every retained descriptor so validation reaches the live terminal basis
-    // and recomputes the effective distance from the source.
+    // Operation-generated constant-normal Offset(NURBS)/direct-NURBS
+    // certificates admit the verified nested cap. Varying-normal proofs admit
+    // exactly one descriptor. Walk every retained descriptor so validation
+    // reaches the live terminal basis and recomputes the effective distance
+    // from the source.
     let mut current = root;
     let mut distances = Vec::new();
     loop {
@@ -1316,6 +1317,13 @@ fn verified_offset_nurbs_trace_matches(
                 current = offset.basis();
             }
             SurfaceDescriptor::Nurbs(basis) => {
+                let constant_positive_normal_basis = basis
+                    .points()
+                    .first()
+                    .is_some_and(|first| basis.points().iter().all(|point| point.z == first.z));
+                if distances.len() > 1 && !constant_positive_normal_basis {
+                    return Ok(false);
+                }
                 let distance = distances.iter().rev().try_fold(0.0, |sum, &value| {
                     let next = sum + value;
                     (next.is_finite()
