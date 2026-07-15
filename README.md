@@ -59,9 +59,12 @@ application boundary.
   transmitted Plane/Offset/NURBS intersection-chart slices, and bounded
   noncanonical affine direct-Plane/B-surface, safe-Offset(Plane)/B-surface,
   direct-Plane/Offset(B-surface), direct constant-normal Offset(B-surface)/direct
-  B-surface, and direct-B-surface/B-surface slices are implemented. The direct
-  Offset(B)/B slice is limited to two through five finite-open samples, either
-  source order, and polynomial or rational bases; nested/multi/dual-offset
+  B-surface, independent direct one-descriptor Offset(B-surface)/Offset(B-surface),
+  and direct-B-surface/B-surface slices are implemented. The noncanonical direct
+  offset slices are limited to two through five finite-open samples, preserve
+  ordered roots and paired UVs, and cover polynomial or rational bases and
+  operand swap at exact `14336/28672/43008/57344` Work, `N` Items, and Depth
+  10. Nested, shared-basis, multi-offset, null/mixed, and out-of-range
   noncanonical forms remain unsupported. The committed
   corpus includes a production 7,423-node Onshape part and reconstructs under the exact v15
   profile at `440483945/22/10` Work/Items/Depth. Two-sample dual-offset record 3595
@@ -84,11 +87,16 @@ application boundary.
   safe-Offset(Plane) peers, and bounded coincident
   Plane/Cylinder/Sphere/Cone/Torus regions including exact polar-cap and
   same-row adjacent, exact same-column vertical (reviewed at
-  `[0,2]`/`[1,2]`), and full-cap-row polar-by-wide families have landed.
-  Polygonal profiles with holes, checked complete-body rigid copy with direct
-  Plane/Plane line and direct Plane/Sphere latitude/oblique circle certificate
-  reissuance in either source order, and checked nonzero-normal oblique
+  `[0,2]`/`[1,2]`), and either exact full latitude row in the polar-by-wide
+  family have landed; the non-cap row retains eight vertices. Polygonal
+  profiles with holes, checked complete-body rigid copy with direct Plane or
+  safe finite Offset(Plane)-backed Plane/Plane lines, and Plane/Sphere latitude
+  or oblique circles backed by direct Plane or safe finite Offset(Plane) sources
+  plus direct Sphere or safe finite Offset(Sphere) sources whose effective
+  Sphere radius is positive and finite, in either source order and through
+  leaf-inclusive depth at most 64, and checked nonzero-normal oblique
   polygonal-profile extrusion are the first M4 modeling consumers.
+  Rigid-copy NURBS/transmitted proofs, attributes, and non-rigid transforms remain.
   General root discovery, complete verified residuals across every result family, and
   boolean-ready paired-pcurve branches remain gated.
 - M5-M8 are not started: there are no end-to-end booleans, general sweeps/sewing,

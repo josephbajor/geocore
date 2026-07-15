@@ -834,21 +834,24 @@ plan:
    the canonical affine chart recurrence. A bounded finite-open two- through
    five-sample direct-Plane/B-surface, safe-Offset(Plane)/B-surface, direct-
    Plane/Offset(B-surface), direct constant-normal Offset(B-surface)/direct
-   B-surface, or direct-B-surface/B-surface slice may instead
+   B-surface, independent direct one-descriptor Offset(B-surface)/Offset(B-surface),
+   or direct-B-surface/B-surface slice may instead
    retain finite positive affine chart metadata while
-   canonicalizing only the common sample-index basis. Direct B/B and direct
-   Offset(B)/B pin exact 2–5 sample Work/Items/Depth at `14336/2/10`,
-   `28672/3/10`, `43008/4/10`, and `57344/5/10`. The offset slice covers both
-   source orders and polynomial or rational bases while retaining its live root,
-   signed distance, direct original basis, ordered peer, and unchanged proof;
-   nested, multi-offset, and dual-offset noncanonical forms remain unsupported.
+   canonicalizing only the common sample-index basis. Direct B/B, direct
+   Offset(B)/B, and independent direct Offset(B)/Offset(B) pin exact 2–5 sample
+   Work/Items/Depth at `14336/2/10`, `28672/3/10`, `43008/4/10`, and
+   `57344/5/10`. The offset slices cover source swap and polynomial or rational
+   bases; the dual-offset arm retains both live roots, signed distances,
+   independent direct original bases, paired UVs, and the unchanged two-source
+   proof. Nested, shared-basis, multi-offset, null/mixed, and out-of-range
+   noncanonical forms remain unsupported.
    Canonical
    Plane/B-surface, safe-Offset(Plane)/B-surface,
    B-surface/B-surface, direct constant-normal Offset(B-surface)/B-surface,
    and every applicable reversed operand order now retain
    the same degree-1 carrier/pcurves while a separate certificate proves each
-   polynomial or rational source NURBS trace. The additional bounded
-   Offset(B-surface)/Offset(B-surface) family accepts only the canonical
+   polynomial or rational source NURBS trace. The additional canonical
+   Offset(B-surface)/Offset(B-surface) arms remain bounded to the
    finite-open two-sample degree-1 line, three-sample degree-2 quadratic,
    four-sample degree-3 cubic, five-sample degree-1 polyline, or seven-sample
    degree-1 polyline forms. Their
@@ -1274,7 +1277,8 @@ true only for an empty complete result.
   five certified-empty siblings, exactly two edge-adjacent same-row children
   with four certified-empty siblings, an exact same-column vertical pair with
   the other four siblings certified empty, or the exact
-  full three-child cap row with all three lower-row siblings certified empty.
+  full three-child row in either latitude row with all three opposite-row
+  siblings certified empty.
   The single-child path excludes every
   artificial seam through sibling emptiness. The two-child path additionally
   requires one reverse-oriented, bit-exact shared edge on the applicable regular
@@ -1290,11 +1294,13 @@ true only for an empty complete result.
   cancellation and proves the other four siblings empty. A one-turn-shifted
   `[1,0]`/`[1,1]`/`[1,2]` fixture
   cancels both strict regular-longitude seams and retains the pole alias in one
-  11-anchor region after the empty lower row excludes the latitude seam. All
-  five layouts pin exact repeat/swap and outward residual evidence,
+  11-anchor region after the empty lower row excludes the latitude seam. The
+  exact opposite non-cap row instead retains one canonical eight-vertex region
+  after the empty cap row excludes the latitude seam. All six layouts pin exact
+  repeat/swap and outward residual evidence,
   while the arm retains exact 6/5 piece, 147/146 pair, and 588/587 arc
   admission. A one-ULP shared-edge mutation and broader or non-adjacent layouts
-  outside the admitted exact same-row, same-column, and cap-row families remain
+  outside the admitted exact same-row, same-column, and full-row families remain
   fail-closed. A first wide arm splits exactly one pole-clear wide operand into
   three closed sub-π cells and returns `Complete` only for three certified-empty
   cells or one positive region with two certified-empty siblings; sibling
@@ -1406,13 +1412,17 @@ true only for an empty complete result.
   orientation-preserving rigid placement duplicates the full topology and geometry
   ownership closure, including offset bases and pcurves, preserves bounds, tolerances,
   and periodic-chart metadata, and records `DerivedFrom` lineage for every new identity
-  before checked atomic commit. Direct Plane/Plane verified lines and direct
-  Plane/Sphere latitude or oblique circles copy their ordered sources in either
-  order, transform the carrier, copy aligned Plane and latitude pcurves into the
-  copied surface frames or regenerate the oblique spherical pcurve, and reissue
-  the whole-range certificate before graph insertion. Facade preflight admits
-  only the direct `PlaneLine` and `PlaneSphereCircle` families; offset-backed,
-  NURBS, and
+  before checked atomic commit. Plane/Plane verified lines copy direct Plane
+  sources or safe finite Offset(Plane) chains, while Plane/Sphere latitude or
+  oblique circles copy direct Plane or safe finite Offset(Plane) sources plus
+  direct Sphere or safe finite Offset(Sphere) sources whose effective Sphere
+  radius is positive and finite, in either order. Both paths transform
+  the carrier, copy aligned Plane and latitude pcurves into the copied effective
+  surface frames or regenerate the oblique spherical pcurve, and reissue the
+  whole-range certificate before graph insertion. The copied proof closure is
+  leaf-inclusive with depth at most 64. Facade preflight admits exactly those
+  direct/safe-offset `PlaneLine` and `PlaneSphereCircle` families; NURBS,
+  nonpositive/nonfinite effective spheres, and
   transmitted intersection descriptors remain typed unsupported before scope
   creation. Extend this seam to those remaining certified curves, attributes,
   and non-rigid transform families.
@@ -1575,8 +1585,9 @@ that queue must eventually discharge.
   period trace aliases, and noncanonical chart variants outside the bounded
   direct-Plane/B-surface, safe-Offset(Plane)/B-surface, direct-
   Plane/Offset(B-surface), direct Offset(B-surface)/direct B-surface, and
-  direct-B-surface/B-surface affine slices; nested, multi-offset, and
-  dual-offset noncanonical forms remain outside the landed direct-offset slice.
+  independent direct one-descriptor Offset(B-surface)/Offset(B-surface), and
+  direct-B-surface/B-surface affine slices; nested, shared-basis, multi-offset,
+  null/mixed, and out-of-range noncanonical forms remain outside the landed slice.
 - M2.5: finish parameter-space incidence and ratcheted Full-checker proofs for
   periodic/mixed boundaries, multi-loop containment, and curved shells; define
   operation-specific tolerance combination/propagation policies beyond the

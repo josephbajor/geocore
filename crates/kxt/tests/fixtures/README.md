@@ -51,9 +51,14 @@ charts, and the first finite-open direct B-surface/Plane chart with paired-null
 interior Plane UVs are now certified. Canonical finite-open
 Plane/Offset(B-surface) charts additionally recover paired-null Plane UVs at
 endpoints through the same exact frame inversion and whole-carrier proof. A
-bounded two- through five-sample direct-Plane/B-surface or direct-Plane/
-Offset(B-surface) slice retains finite positive noncanonical affine chart
-metadata on the canonical shared sample-index basis.
+bounded two- through five-sample direct-Plane/B-surface, safe-Offset(Plane)/
+B-surface, direct-Plane/Offset(B-surface), direct Offset(B-surface)/direct
+B-surface, independent direct one-descriptor Offset(B-surface)/Offset(B-surface),
+or direct-B-surface/B-surface slice retains finite positive noncanonical affine
+chart metadata on the canonical shared sample-index basis. The direct offset
+slices cover polynomial/rational bases and operand swap at exact
+`14336/28672/43008/57344` Work, `N` Items, and Depth 10; the dual arm retains
+both ordered roots, distances, independent bases, and paired UVs.
 General closed limits, omissions on a NURBS trace, endpoints outside that
 narrow Plane/Offset family, and other nullable chart-data forms remain unsupported.
 
@@ -155,8 +160,11 @@ statement accompanied the individual files.
   with no unsupported capability. Null, mixed/non-`H`, or broader closed
   limits, other nullable chart data, ambiguous or multi-period trace aliases,
   broader carrier families, and noncanonical chart forms outside the bounded
-  direct-Plane/B-surface and direct-Plane/Offset(B-surface) slices remain
-  unsupported. Primary
+  direct-Plane/B-surface, safe-Offset(Plane)/B-surface, direct-Plane/
+  Offset(B-surface), direct Offset(B-surface)/direct B-surface, independent
+  direct one-descriptor Offset(B-surface)/Offset(B-surface), and direct-
+  B-surface/B-surface slices remain unsupported; nested, shared-basis,
+  multi-offset, null/mixed, and out-of-range forms remain unsupported. Primary
   reference for modern writer conventions: TRIMMED_CURVE/GEOMETRIC_OWNER linkage,
   tolerant-edge fin curves, POINT ownership by vertex, and the resolved
   37102 node layouts (133/141 match base 13006 exactly).

@@ -1,6 +1,6 @@
 # F1 procedural geometry graph
 
-Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, compatible direct-NURBS/NURBS, or single-descriptor varying-normal Offset(NURBS)/safe-Offset(Plane) descriptors, plus M3c transmitted-chart consumers through single-axis one-period equal-limit closure with one shared or two distinct same-point `H/?` limits and unique exact interior aliases, finite-open/end-terminated `T/F` singular closure, omitted Plane UV recovery, and bounded noncanonical affine direct B-surface/B-surface or direct constant-normal Offset(B-surface)/direct B-surface charts, are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
+Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, compatible direct-NURBS/NURBS, or single-descriptor varying-normal Offset(NURBS)/safe-Offset(Plane) descriptors, plus M3c transmitted-chart consumers through single-axis one-period equal-limit closure with one shared or two distinct same-point `H/?` limits and unique exact interior aliases, finite-open/end-terminated `T/F` singular closure, omitted Plane UV recovery, and bounded noncanonical affine direct B-surface/B-surface, direct constant-normal Offset(B-surface)/direct B-surface, or independent direct one-descriptor Offset(B-surface)/Offset(B-surface) charts, are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
 
 ## Outcome
 
@@ -817,8 +817,11 @@ finite-open samples in either order and with polynomial or rational bases. Its
 exact Work/Items/Depth costs are `14336/2/10`, `28672/3/10`, `43008/4/10`, and
 `57344/5/10`; affine metadata remains separate from the canonical sample-index
 carrier/pcurves, and the live root, signed distance, original direct basis, and
-ordered peer remain graph-protected. Nested, multi-offset, dual-offset, and
-six-sample noncanonical forms remain typed unsupported. The production
+ordered peer remain graph-protected. An independent direct one-descriptor
+Offset(B)/Offset(B) arm retains both ordered roots, signed distances, direct
+polynomial or rational bases, and paired UVs under operand swap with the same
+exact costs and two-source proof. Nested, shared-basis, multi-offset, null/mixed,
+and out-of-range noncanonical forms remain typed unsupported. The production
 exemplar now passes its first shared-
 `H/?` equal-limit chart and its first finite-open/end-terminated `T/F` chart,
 then certifies finite-open direct B-surface/Plane record 1252 by exactly
@@ -837,7 +840,8 @@ record-5089 variant preserves the exact v7 report and next crossing, while a
 displaced endpoint still fails the unchanged proof. A separate bounded
 noncanonical affine slice accepts two- through five-sample direct-Plane/B-
 surface, safe-Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), direct
-constant-normal Offset(B-surface)/direct B-surface, or direct-B-surface/B-surface
+constant-normal Offset(B-surface)/direct B-surface, independent direct
+one-descriptor Offset(B-surface)/Offset(B-surface), or direct-B-surface/B-surface
 charts, retains finite positive affine metadata on the
 canonical shared sample-index basis,
 and preserves the unchanged original-source proof and ordered dependencies;
@@ -901,7 +905,8 @@ payload transplants.
   other nullable chart data, ambiguous or multi-period trace aliases,
   noncanonical charts outside the bounded direct-Plane/B-surface, safe-
   Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), direct
-  Offset(B-surface)/direct B-surface, and direct-B-surface/B-surface affine
+  Offset(B-surface)/direct B-surface, independent direct one-descriptor
+  Offset(B-surface)/Offset(B-surface), and direct-B-surface/B-surface affine
   slices,
   and further terminator variants
   without recomputing their
@@ -1006,7 +1011,11 @@ the graph ownership model.
   carrier/pcurves and pin exact `14336/2/10`, `28672/3/10`, `43008/4/10`, and
   `57344/5/10` proof accounting with N/N-1 rollback; stale distances or bases,
   malformed peers, nested roots, and six-sample forms fail atomically. They
-  advance
+  share those exact boundaries with the independent direct one-descriptor
+  Offset(B-surface)/Offset(B-surface) noncanonical arm, which retains both
+  ordered roots, distances, direct polynomial/rational bases, paired UVs, and
+  swap identity while rejecting nested/shared/multi-offset, null/mixed, and
+  out-of-range forms. Together they advance
   the production corpus through record 1828, end-terminated record 1671, and
   finite-open records 1252 and 5089 and native direct-Plane `SP_CURVE` node 30
   through FACE 1195's vertex-less ring domain, nonperiodic endpoint-roundoff

@@ -26,7 +26,13 @@
 //! as graph-owned carriers with paired pcurves, including exact-plane-field
 //! degree-1 charts and canonical finite-open two-sample line, three-sample
 //! quadratic, four-sample cubic, five-sample polyline, or seven-sample
-//! polyline charts between two direct Offset(B-surface) roots.
+//! polyline charts between two direct Offset(B-surface) roots. A bounded
+//! noncanonical finite-open arm admits exactly two through five samples between
+//! independent direct one-descriptor Offset(B-surface) roots over direct
+//! polynomial or rational B-surface bases, preserves operand order and paired
+//! UVs, and pins exact `14336/28672/43008/57344` Work, `N` Items, and Depth 10.
+//! Nested, shared-basis, multi-offset, null/mixed, and out-of-range forms remain
+//! unsupported.
 //! Other intersection and procedural geometry, nested/shared-basis offset
 //! export, broader tolerant topology, periodic or
 //! circular pcurve encoding, periodic NURBS, pre-13006 schemas, assemblies,

@@ -514,6 +514,12 @@ position/UV arrays or graph geometry, charges Work only after both whole-range
 lifts certify, and relies on the enclosing reconstruction transaction for
 complete topology/geometry rollback. Exact tests pin the canonical plane
 fixture at `4/2/1`, the synthetic two-NURBS-trace proof at `14,336/2/10`, and
+the bounded noncanonical finite-open independent direct one-descriptor
+Offset(B-surface)/Offset(B-surface) family at `14,336/2/10`, `28,672/3/10`,
+`43,008/4/10`, and `57,344/5/10` under polynomial/rational basis combinations
+and operand swap. It retains both roots, signed distances, independent bases,
+and paired UVs; nested, shared-basis, multi-offset, null/mixed, and out-of-range
+forms fail atomically. Exact tests also pin
 the exemplar's v3 equal-limit, v4 terminator, and v5 omitted-Plane-data
 Work/Items/Depth boundaries at `115,485,725/20/10`, `116,396,069/20/10`, and
 `117,478,445/20/10`, including historical-profile rejection, exact N/N-1
