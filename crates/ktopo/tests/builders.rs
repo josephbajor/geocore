@@ -201,36 +201,38 @@ fn oblique_polygonal_profile_extrusion_is_full_valid_watertight_and_volume_prese
         Point2::new(-1.0, 2.0),
     ];
     let profile = PlanarProfile::from_polygon_with_holes(Frame::world(), &outer, &[&hole]).unwrap();
-    let translation = Vec3::new(0.75, -0.5, 2.0);
-    let mut store = Store::new();
-    let made = make::extrude_profile_along_with_journal(&mut store, &profile, translation).unwrap();
-    let body = made.body();
+    for translation in [Vec3::new(0.75, -0.5, 2.0), Vec3::new(0.75, -0.5, -2.0)] {
+        let mut store = Store::new();
+        let made =
+            make::extrude_profile_along_with_journal(&mut store, &profile, translation).unwrap();
+        let body = made.body();
 
-    assert_eq!(store.count::<Face>(), 10);
-    assert_eq!(store.count::<Loop>(), 12);
-    assert_eq!(store.count::<Edge>(), 24);
-    assert_eq!(store.count::<Vertex>(), 16);
-    assert_eq!(store.count::<Fin>(), 48);
-    assert!(
-        made.journal()
-            .mutations()
-            .iter()
-            .all(|mutation| mutation.kind == MutationKind::Created)
-    );
-    let full = check_body_report(&store, body, CheckLevel::Full).unwrap();
-    assert_eq!(full.outcome(), CheckOutcome::Valid, "{full:?}");
+        assert_eq!(store.count::<Face>(), 10);
+        assert_eq!(store.count::<Loop>(), 12);
+        assert_eq!(store.count::<Edge>(), 24);
+        assert_eq!(store.count::<Vertex>(), 16);
+        assert_eq!(store.count::<Fin>(), 48);
+        assert!(
+            made.journal()
+                .mutations()
+                .iter()
+                .all(|mutation| mutation.kind == MutationKind::Created)
+        );
+        let full = check_body_report(&store, body, CheckLevel::Full).unwrap();
+        assert_eq!(full.outcome(), CheckOutcome::Valid, "{full:?}");
 
-    let mesh = tessellate_body(
-        &store,
-        body,
-        &TessOptions {
-            chord_tol: 1.0e-3,
-            max_edge_len: Some(0.5),
-        },
-    )
-    .unwrap();
-    assert!(check_watertight(&mesh).is_empty());
-    assert!((signed_volume(&mesh) - 24.0).abs() <= 1.0e-9);
+        let mesh = tessellate_body(
+            &store,
+            body,
+            &TessOptions {
+                chord_tol: 1.0e-3,
+                max_edge_len: Some(0.5),
+            },
+        )
+        .unwrap();
+        assert!(check_watertight(&mesh).is_empty());
+        assert!((signed_volume(&mesh) - 24.0).abs() <= 1.0e-9);
+    }
 }
 
 #[test]
@@ -266,7 +268,7 @@ fn rejected_oblique_profile_extrusions_are_atomic_and_reuse_future_identity() {
     let mut after_failure = Store::new();
     for translation in [
         Vec3::new(1.0, 0.0, 0.0),
-        Vec3::new(0.0, 0.0, -1.0),
+        Vec3::new(0.0, 0.0, 0.0),
         Vec3::new(f64::NAN, 0.0, 1.0),
     ] {
         assert!(make::extrude_profile_along(&mut after_failure, &profile, translation).is_err());

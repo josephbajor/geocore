@@ -18,9 +18,10 @@
 //!   [`PlanarProfile`] inputs may add strictly contained polygonal holes, with
 //!   an explicit line pcurve on every boundary use.
 //! - [`extrude_profile`]: a positive-height solid prism from a reusable
-//!   polygonal profile; [`extrude_profile_along`] admits a positive-normal
-//!   oblique translation. Both include one side-face ring for every outer or
-//!   hole boundary and explicit line pcurves on every cap and side use.
+//!   polygonal profile; [`extrude_profile_along`] admits an oblique translation
+//!   with either nonzero normal orientation. Both include one side-face ring
+//!   for every outer or hole boundary and explicit line pcurves on every cap
+//!   and side use.
 //! - [`wire_polyline`]: an open or closed chain of bounded line edges.
 //! - [`acorn`]: one isolated model-space point.
 //!
@@ -328,8 +329,8 @@ pub fn extrude_profile_with_journal(
 /// Extrude one validated polygonal profile by an oblique translation.
 ///
 /// `translation` may have any tangential component but must have a finite,
-/// positive component along `profile.frame().z()`. This makes the affine
-/// sweep injective and preserves the profile's material orientation.
+/// nonzero component along `profile.frame().z()`. The cap and side orientation
+/// follows that sign so either affine sweep direction remains injective.
 pub fn extrude_profile_along(
     store: &mut Store,
     profile: &PlanarProfile,
@@ -356,10 +357,38 @@ fn extrude_profile_along_in(
 ) -> Result<BodyId> {
     let frame = profile.frame();
     check_in_size_box(translation.to_array())?;
-    if translation.dot(frame.z()) <= 0.0 {
+    let normal_component = translation.dot(frame.z());
+    if normal_component == 0.0 {
         return Err(Error::InvalidGeometry {
-            reason: "profile extrusion translation must have a positive normal component",
+            reason: "profile extrusion translation must have a nonzero normal component",
         });
+    }
+    if normal_component < 0.0 {
+        let reflected_frame = Frame::new(frame.origin(), -frame.z(), frame.x())?;
+        let reflected_outer = profile
+            .outer()
+            .iter()
+            .map(|point| Point2::new(point.x, -point.y))
+            .collect::<Vec<_>>();
+        let reflected_holes = profile
+            .holes()
+            .iter()
+            .map(|hole| {
+                hole.iter()
+                    .map(|point| Point2::new(point.x, -point.y))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let reflected_hole_slices = reflected_holes
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        let reflected = PlanarProfile::from_polygon_with_holes(
+            reflected_frame,
+            &reflected_outer,
+            &reflected_hole_slices,
+        )?;
+        return extrude_profile_along_in(store, &reflected, translation);
     }
     let top_origin = frame.origin() + translation;
     for point in core::iter::once(profile.outer()).chain(profile.holes().iter().map(Vec::as_slice))
