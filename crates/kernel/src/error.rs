@@ -14,6 +14,13 @@ const fn known_error_code(value: &'static str) -> ErrorCode {
     }
 }
 
+const fn known_capability(value: &'static str) -> CapabilityId {
+    match CapabilityId::new(value) {
+        Ok(capability) => capability,
+        Err(_) => panic!("invalid built-in kernel facade capability ID"),
+    }
+}
+
 /// Stable machine-readable identities owned by the native façade.
 pub mod code {
     use super::{ErrorCode, known_error_code};
@@ -26,6 +33,9 @@ pub mod code {
     pub const STALE_ENTITY: ErrorCode = known_error_code("kernel.entity.stale");
     /// A stored relationship was inconsistent during a façade read.
     pub const INCONSISTENT_TOPOLOGY: ErrorCode = known_error_code("kernel.topology.inconsistent");
+    /// A body-copy request contains geometry whose proof cannot be reissued.
+    pub const UNSUPPORTED_BODY_COPY_GEOMETRY: ErrorCode =
+        known_error_code("kernel.modeling.body-copy.unsupported-geometry");
 
     /// Every code currently owned by the façade, in deterministic order.
     pub const ALL: &[ErrorCode] = &[
@@ -33,7 +43,17 @@ pub mod code {
         WRONG_PART,
         STALE_ENTITY,
         INCONSISTENT_TOPOLOGY,
+        UNSUPPORTED_BODY_COPY_GEOMETRY,
     ];
+}
+
+/// Stable capability identities owned by façade modeling operations.
+pub mod capability {
+    use super::{CapabilityId, known_capability};
+
+    /// Reissuing verified intersection certificates under rigid body copy.
+    pub const RIGID_COPY_VERIFIED_INTERSECTION: CapabilityId =
+        known_capability("kernel.modeling.rigid-copy.verified-intersection");
 }
 
 /// Facade identity kind used in stale-ID diagnostics and committed journals.
@@ -365,6 +385,12 @@ pub enum KernelError {
         /// Exact lower-layer failure encountered while following the relationship.
         source: kcore::error::Error,
     },
+    /// A rigid body copy needs a geometry-proof transformation that is not
+    /// yet implemented.
+    UnsupportedBodyCopyGeometry {
+        /// Exact missing copy capability.
+        capability: CapabilityId,
+    },
     /// A lower kernel layer rejected an operation.
     ///
     /// Classification, stable identity, capability, and structured limit
@@ -404,6 +430,9 @@ impl fmt::Display for KernelError {
             Self::InconsistentTopology { .. } => {
                 f.write_str("stored topology is inconsistent during deterministic traversal")
             }
+            Self::UnsupportedBodyCopyGeometry { .. } => {
+                f.write_str("body geometry cannot yet be copied with its proof evidence")
+            }
             Self::Core { source } => write!(f, "kernel operation failed: {source}"),
             Self::GeometryEvaluation { source } => source.fmt(f),
             Self::GeometryIntersection { source } => source.fmt(f),
@@ -421,7 +450,10 @@ impl std::error::Error for KernelError {
             Self::GeometryIntersection { source } => Some(source),
             Self::BodyTessellation { source } => Some(source),
             Self::Interchange { source } => Some(source),
-            Self::UnknownPart | Self::WrongPart { .. } | Self::StaleEntity { .. } => None,
+            Self::UnknownPart
+            | Self::WrongPart { .. }
+            | Self::StaleEntity { .. }
+            | Self::UnsupportedBodyCopyGeometry { .. } => None,
         }
     }
 }
@@ -458,6 +490,7 @@ impl KernelError {
                 ErrorClass::InvalidInput
             }
             Self::InconsistentTopology { .. } => ErrorClass::InternalInvariant,
+            Self::UnsupportedBodyCopyGeometry { .. } => ErrorClass::Unsupported,
             Self::Core { source } => source.class(),
             Self::GeometryEvaluation { source } => source.class(),
             Self::GeometryIntersection { source } => source.class(),
@@ -473,6 +506,7 @@ impl KernelError {
             Self::WrongPart { .. } => code::WRONG_PART,
             Self::StaleEntity { .. } => code::STALE_ENTITY,
             Self::InconsistentTopology { .. } => code::INCONSISTENT_TOPOLOGY,
+            Self::UnsupportedBodyCopyGeometry { .. } => code::UNSUPPORTED_BODY_COPY_GEOMETRY,
             Self::Core { source } => source.code(),
             Self::GeometryEvaluation { source } => source.code(),
             Self::GeometryIntersection { source } => source.code(),
@@ -489,6 +523,7 @@ impl KernelError {
             Self::GeometryIntersection { source } => source.capability(),
             Self::BodyTessellation { source } => source.capability(),
             Self::Interchange { source } => source.capability(),
+            Self::UnsupportedBodyCopyGeometry { capability } => Some(*capability),
             Self::UnknownPart
             | Self::WrongPart { .. }
             | Self::StaleEntity { .. }
@@ -507,7 +542,8 @@ impl KernelError {
             Self::UnknownPart
             | Self::WrongPart { .. }
             | Self::StaleEntity { .. }
-            | Self::InconsistentTopology { .. } => None,
+            | Self::InconsistentTopology { .. }
+            | Self::UnsupportedBodyCopyGeometry { .. } => None,
         }
     }
 }
@@ -586,6 +622,21 @@ mod tests {
             error.source().and_then(|source| source.downcast_ref()),
             Some(kcore::error::Error::StaleHandle)
         ));
+    }
+
+    #[test]
+    fn unsupported_body_copy_geometry_has_stable_typed_classification() {
+        let error = Error::UnsupportedBodyCopyGeometry {
+            capability: capability::RIGID_COPY_VERIFIED_INTERSECTION,
+        };
+        assert_eq!(error.class(), ErrorClass::Unsupported);
+        assert_eq!(error.code(), code::UNSUPPORTED_BODY_COPY_GEOMETRY);
+        assert_eq!(
+            error.capability(),
+            Some(capability::RIGID_COPY_VERIFIED_INTERSECTION)
+        );
+        assert_eq!(error.limit(), None);
+        assert!(error.source().is_none());
     }
 
     #[test]

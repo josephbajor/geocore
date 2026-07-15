@@ -3,9 +3,11 @@
 //! The implemented foundation owns sessions and independent parts, exposes
 //! opaque part-qualified topology and geometry identities, and returns
 //! immutable semantic views. Contextual operations cover checked block
-//! construction, body checking and tessellation, operation-scoped surface
-//! evaluation, and typed X_T import/export plus graph-owned bounded curve
-//! intersection with F2 reports and delegated classified errors. Committed
+//! construction, deterministic complete-body rigid copy, body checking and
+//! tessellation, operation-scoped surface evaluation, and typed X_T
+//! import/export plus graph-owned bounded curve intersection with F2 reports
+//! and delegated classified errors. Rigid copies own disjoint topology and
+//! geometry closures and retain exact `DerivedFrom` lineage. Committed
 //! mutation, lineage, tolerance-growth, and descriptive face-tolerance
 //! propagation evidence is exposed through part-qualified facade journal
 //! views. A narrow checked semantic edit transaction composes
@@ -290,11 +292,12 @@ pub use iter::{
 };
 pub use operation::{
     BlockRequest, BodyCheckReport, BodyCreated, BoundedCurve, ChangeJournal, CheckBodyRequest,
-    CheckEntity, CheckFault, CheckGap, CheckReport, CurveContactKind, CurveCurveIntersections,
-    CurveCurveOverlap, CurveCurvePoint, CurveOverlapOrientation, FaceTolerancePropagationView,
-    IntersectCurvesRequest, IntersectionCompletion, JournalEntities, JournalEntity, LineageView,
-    MutationKind, MutationView, OperationOutcome, OperationSettings, SurfaceEvaluation,
-    SurfaceEvaluationRequest, ToleranceBudgetId, ToleranceBudgetView, ToleranceEventView,
+    CheckEntity, CheckFault, CheckGap, CheckReport, CopyBodyRequest, CurveContactKind,
+    CurveCurveIntersections, CurveCurveOverlap, CurveCurvePoint, CurveOverlapOrientation,
+    FaceTolerancePropagationView, IntersectCurvesRequest, IntersectionCompletion, JournalEntities,
+    JournalEntity, LineageView, MutationKind, MutationView, OperationOutcome, OperationSettings,
+    SurfaceEvaluation, SurfaceEvaluationRequest, ToleranceBudgetId, ToleranceBudgetView,
+    ToleranceEventView,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use tessellation::{BodyMesh, EdgePolyline, FaceTriangleRange, TessellateBodyRequest};

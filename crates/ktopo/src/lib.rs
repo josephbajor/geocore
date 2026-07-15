@@ -45,6 +45,7 @@
 #[cfg(feature = "benchmark-internals")]
 #[doc(hidden)]
 pub mod benchmark;
+pub(crate) mod body_copy;
 pub mod btess;
 pub mod check;
 pub mod domain;

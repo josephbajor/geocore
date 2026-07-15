@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, failure-atomic operation-owned facade tolerance batching, journaled MEF inheritance and KEF ordered-max face-tolerance propagation, an evidence-bearing opt-in Full-assurance commit gate, K5 adoption, and facade body tessellation implemented; broader K4 edits and partition history remain
+Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, deterministic checked complete-body rigid copy, failure-atomic operation-owned facade tolerance batching, journaled MEF inheritance and KEF ordered-max face-tolerance propagation, an evidence-bearing opt-in Full-assurance commit gate, K5 adoption, and facade body tessellation implemented; broader K4 edits and partition history remain
 
 ## Outcome
 
@@ -877,6 +877,17 @@ not pre-certify geometric hole containment: checked commit remains the
 failure-atomic persistence authority for supported Fast checks, and callers
 retain operation-specific evidence obligations that Fast cannot discharge.
 
+`PartEdit::copy_body_rigid` adds the first facade modeling transform. Its typed
+request maps source model coordinates through one orientation-preserving
+`Frame`, duplicates the complete topology and geometry ownership closure, and
+checked-commits inside the caller's single operation scope. Pcurves, bounds,
+tolerances, offset bases, and periodic chart metadata remain exact; every new
+identity has deterministic `DerivedFrom` evidence. Wrong-part, stale, and
+verified-intersection proof-reissuance failures are rejected before scope
+creation, with the last exposed as a stable Unsupported capability. Lower
+transaction tests pin Full validity, ownership disjointness, holed-sheet area,
+rollback cleanliness, and future-identity reuse.
+
 Broader semantic edit surfaces resume after the K5 adoption pass. The
 interchange facade stays thin: `kxt` reconstruction and checked-commit Fast
 validation share one contextual graph child and return one truthful
@@ -884,7 +895,8 @@ facade report.
 
 - Add the semantic `EditTransaction` wrapper over currently public checked
   transaction methods. **MVFS/KVFS seed-body, MEV/KEV strut, face split/merge,
-  bridge/ring, and face/hole KFMRH/MFKRH slices implemented.**
+  bridge/ring, face/hole KFMRH/MFKRH, and complete-body rigid-copy slices
+  implemented.**
 - Add `ChangeJournal` and its facade-ID iterators. **Implemented.**
 - Add typed X_T import/export requests and preserve source error detail.
 - Ensure raw assembly is not reachable through the facade.

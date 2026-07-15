@@ -142,6 +142,52 @@ impl BlockRequest {
     }
 }
 
+/// Typed request to duplicate one complete body under an
+/// orientation-preserving rigid placement.
+///
+/// Source model coordinates are interpreted in the placement frame: a source
+/// point `(x, y, z)` becomes `placement.point_at(x, y, z)`. Topology,
+/// supporting geometry, pcurves, bounds, tolerances, and periodic chart
+/// metadata are independently owned by the result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CopyBodyRequest {
+    body: BodyId,
+    placement: Frame,
+    settings: OperationSettings,
+}
+
+impl CopyBodyRequest {
+    /// Construct a rigid body-copy request using default operation settings.
+    pub fn new(body: BodyId, placement: Frame) -> Self {
+        Self {
+            body,
+            placement,
+            settings: OperationSettings::default(),
+        }
+    }
+
+    /// Replace contextual operation settings.
+    pub fn with_settings(mut self, settings: OperationSettings) -> Self {
+        self.settings = settings;
+        self
+    }
+
+    /// Source body identity.
+    pub fn body(&self) -> BodyId {
+        self.body.clone()
+    }
+
+    /// Rigid placement applied to source model coordinates.
+    pub const fn placement(&self) -> Frame {
+        self.placement
+    }
+
+    /// Contextual operation settings.
+    pub const fn settings(&self) -> &OperationSettings {
+        &self.settings
+    }
+}
+
 /// Facade-safe identity retained by a committed journal.
 ///
 /// Every variant is part-qualified. A deleted topology or geometry identity
@@ -1160,6 +1206,56 @@ impl PartEdit<'_> {
             .map_err(Error::from);
         Ok(scope.finish_typed(result))
     }
+
+    /// Duplicate one complete body under a rigid placement and checked-commit
+    /// it atomically.
+    ///
+    /// The result owns a disjoint topology and geometry closure and the
+    /// journal records `DerivedFrom` lineage for every copied identity.
+    /// Wrong-part, stale, and unsupported proof-bearing geometry are rejected
+    /// before an operation scope starts. Verified intersection descriptors
+    /// remain unsupported until their certificates can be reissued for the
+    /// transformed source surfaces.
+    pub fn copy_body_rigid(
+        &mut self,
+        request: CopyBodyRequest,
+    ) -> Result<OperationOutcome<BodyCreated>> {
+        let CopyBodyRequest {
+            body,
+            placement,
+            settings,
+        } = request;
+        self.as_part().body(body.clone())?;
+
+        for edge in self.state.store.edges_of_body(body.raw())? {
+            let Some(curve) = self.state.store.get(edge)?.curve() else {
+                continue;
+            };
+            if self.state.store.curve(curve)?.is_verified_intersection() {
+                return Err(Error::UnsupportedBodyCopyGeometry {
+                    capability: crate::error::capability::RIGID_COPY_VERIFIED_INTERSECTION,
+                });
+            }
+        }
+
+        let context = settings
+            .context(self.policy)?
+            .with_family_budget_defaults(EvalBudgetProfile::v1_defaults());
+        EvalLimits::from_budget_plan(&context.effective_budget())?;
+        let mut scope = OperationScope::new(&context);
+        let part = self.id.clone();
+        let result = (|| -> core::result::Result<BodyCreated, kcore::error::Error> {
+            let mut transaction = self.state.store.transaction()?;
+            let copied = transaction.copy_body_rigid(body.raw(), placement)?;
+            let raw_journal = transaction.commit_checked_body_in_scope(copied, &mut scope, 0)?;
+            Ok(BodyCreated {
+                body: BodyId::new(part.clone(), copied),
+                journal: ChangeJournal::from_raw(part, raw_journal),
+            })
+        })()
+        .map_err(Error::from);
+        Ok(scope.finish_typed(result))
+    }
 }
 
 impl Part<'_> {
@@ -1432,6 +1528,7 @@ mod tests {
         SessionPrecision, TOTAL_WORK_STAGE,
     };
     use kgeom::surface::Plane;
+    use kgeom::vec::Vec3;
     use kgraph::{EvalBudgetProfile, EvalError, OffsetSurfaceDescriptor};
     use ktopo::check::VerificationGapCause;
     use ktopo::entity::{Body as RawBody, Edge as RawEdge, Face as RawFace, Vertex as RawVertex};
@@ -1545,6 +1642,116 @@ mod tests {
         assert!(facade_check.report().limit_events().is_empty());
         let expected = adapt_check_report(&part_id, &direct_store, direct_check).unwrap();
         assert_eq!(facade_check.result(), Ok(&expected));
+    }
+
+    #[test]
+    fn rigid_body_copy_is_disjoint_checked_and_fully_lineaged() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let source = session
+            .edit_part(part_id.clone())
+            .unwrap()
+            .create_block(BlockRequest::new(Frame::world(), [2.0, 3.0, 4.0]))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let before = {
+            let part = session.part(part_id.clone()).unwrap();
+            (
+                part.bodies().len(),
+                part.faces().len(),
+                part.edges().len(),
+                part.vertices().len(),
+                part.curves().len(),
+                part.surfaces().len(),
+                part.pcurves().len(),
+            )
+        };
+        let placement = Frame::new(
+            Point3::new(4.0, -3.0, 2.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let outcome = session
+            .edit_part(part_id.clone())
+            .unwrap()
+            .copy_body_rigid(CopyBodyRequest::new(source.clone(), placement))
+            .unwrap();
+        let created = outcome.into_result().unwrap();
+        assert_ne!(created.body(), source);
+        assert!(
+            created
+                .journal()
+                .mutations()
+                .all(|mutation| mutation.kind() == MutationKind::Created)
+        );
+        assert_eq!(
+            created.journal().lineage_count(),
+            created.journal().mutation_count()
+        );
+        assert!(created.journal().lineage().any(|lineage| matches!(
+            lineage,
+            LineageView::DerivedFrom {
+                derived: JournalEntity::Body(derived),
+                source: JournalEntity::Body(original),
+            } if derived == created.body() && original == source
+        )));
+
+        let part = session.part(part_id.clone()).unwrap();
+        assert_eq!(
+            (
+                part.bodies().len(),
+                part.faces().len(),
+                part.edges().len(),
+                part.vertices().len(),
+                part.curves().len(),
+                part.surfaces().len(),
+                part.pcurves().len(),
+            ),
+            (
+                before.0 * 2,
+                before.1 * 2,
+                before.2 * 2,
+                before.3 * 2,
+                before.4 * 2,
+                before.5 * 2,
+                before.6 * 2,
+            )
+        );
+        let full = part
+            .check_body(CheckBodyRequest::new(created.body(), CheckLevel::Full))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(full.outcome(), CheckOutcome::Valid);
+    }
+
+    #[test]
+    fn rigid_body_copy_rejects_wrong_part_before_starting_an_operation() {
+        let mut session = Kernel::new().create_session();
+        let source_part = session.create_part();
+        let receiving_part = session.create_part();
+        let source = session
+            .edit_part(source_part)
+            .unwrap()
+            .create_block(BlockRequest::new(Frame::world(), [1.0, 1.0, 1.0]))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let error = session
+            .edit_part(receiving_part.clone())
+            .unwrap()
+            .copy_body_rigid(CopyBodyRequest::new(source.clone(), Frame::world()))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            KernelError::WrongPart { expected, actual }
+                if expected == receiving_part && actual == source.part().clone()
+        ));
+        assert_eq!(session.part(receiving_part).unwrap().bodies().len(), 0);
     }
 
     #[test]

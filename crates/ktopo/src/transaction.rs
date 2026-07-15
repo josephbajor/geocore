@@ -584,6 +584,30 @@ impl<'a> Transaction<'a> {
         AssemblyStore { store: self.store }
     }
 
+    /// Duplicate one complete body under an orientation-preserving rigid
+    /// placement while retaining deterministic DerivedFrom lineage.
+    ///
+    /// Every owned topology identity, point, curve, surface, offset basis,
+    /// and pcurve is newly allocated. Surface/curve parameterization,
+    /// pcurve maps, charts, tolerances, domains, and ownership order are
+    /// preserved exactly. Verified intersection descriptors remain an
+    /// explicit unsupported boundary until their certificates can be
+    /// reissued over transformed source geometry.
+    pub fn copy_body_rigid(
+        &mut self,
+        source: BodyId,
+        placement: kgeom::frame::Frame,
+    ) -> Result<BodyId> {
+        let copied = crate::body_copy::copy_body_rigid(self.store, source, placement)?;
+        self.lineage.extend(
+            copied
+                .lineage
+                .into_iter()
+                .map(|(derived, source)| LineageEvent::DerivedFrom { derived, source }),
+        );
+        Ok(copied.body)
+    }
+
     /// Declare the aggregate tolerance growth available to one operation.
     ///
     /// The budget is transaction-owned: rollback discards both its usage and
