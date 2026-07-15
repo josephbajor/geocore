@@ -7,7 +7,7 @@
 
 use kgeom::frame::Frame;
 use kgeom::vec::{Point2, Point3};
-use ktopo::btess::{TessOptions, tessellate_body};
+use ktopo::btess::{TessOptions, check_watertight, signed_volume, tessellate_body};
 use ktopo::check::{CheckLevel, CheckOutcome, VerificationGapKind, check_body_report};
 use ktopo::entity::{BodyKind, Edge, Face, Fin, Loop, Region, Shell, Vertex};
 use ktopo::make;
@@ -119,6 +119,92 @@ fn planar_sheet_builds_checks_and_tessellates_polygonal_holes() {
         (area - 12.0).abs() <= 1.0e-10,
         "unexpected holed sheet area {area}"
     );
+}
+
+#[test]
+fn polygonal_profile_extrusion_with_a_hole_is_full_valid_watertight_and_exact() {
+    let outer = [
+        Point2::new(-2.0, -2.0),
+        Point2::new(2.0, -2.0),
+        Point2::new(2.0, 2.0),
+        Point2::new(-2.0, 2.0),
+    ];
+    let hole = [
+        Point2::new(-1.0, -1.0),
+        Point2::new(1.0, -1.0),
+        Point2::new(1.0, 1.0),
+        Point2::new(-1.0, 1.0),
+    ];
+    let profile = PlanarProfile::from_polygon_with_holes(Frame::world(), &outer, &[&hole]).unwrap();
+    let mut store = Store::new();
+    let made = make::extrude_profile_with_journal(&mut store, &profile, 2.0).unwrap();
+    let body = made.body();
+
+    assert_eq!(store.get(body).unwrap().kind, BodyKind::Solid);
+    assert_eq!(store.count::<Region>(), 2);
+    assert_eq!(store.count::<Shell>(), 1);
+    assert_eq!(store.count::<Face>(), 10);
+    assert_eq!(store.count::<Loop>(), 12);
+    assert_eq!(store.count::<Edge>(), 24);
+    assert_eq!(store.count::<Vertex>(), 16);
+    assert_eq!(store.count::<Fin>(), 48);
+    for edge in store.edges_of_body(body).unwrap() {
+        let edge = store.get(edge).unwrap();
+        assert_eq!(edge.fins.len(), 2);
+        assert_ne!(
+            store.get(edge.fins[0]).unwrap().sense,
+            store.get(edge.fins[1]).unwrap().sense
+        );
+        assert!(
+            edge.fins
+                .iter()
+                .all(|&fin| store.get(fin).unwrap().pcurve.is_some())
+        );
+    }
+    assert!(
+        made.journal()
+            .mutations()
+            .iter()
+            .all(|mutation| mutation.kind == MutationKind::Created)
+    );
+    let full = check_body_report(&store, body, CheckLevel::Full).unwrap();
+    assert_eq!(full.outcome(), CheckOutcome::Valid, "{full:?}");
+
+    let mesh = tessellate_body(
+        &store,
+        body,
+        &TessOptions {
+            chord_tol: 1.0e-3,
+            max_edge_len: Some(0.5),
+        },
+    )
+    .unwrap();
+    assert!(
+        check_watertight(&mesh).is_empty(),
+        "extruded profile mesh is not watertight"
+    );
+    assert!((signed_volume(&mesh) - 24.0).abs() <= 1.0e-9);
+}
+
+#[test]
+fn rejected_profile_extrusions_are_atomic_and_reuse_future_identity() {
+    let polygon = [
+        Point2::new(-1.0, -1.0),
+        Point2::new(1.0, -1.0),
+        Point2::new(1.0, 1.0),
+        Point2::new(-1.0, 1.0),
+    ];
+    let profile = PlanarProfile::from_polygon(Frame::world(), &polygon).unwrap();
+    let mut after_failure = Store::new();
+    assert!(make::extrude_profile(&mut after_failure, &profile, -1.0).is_err());
+    assert!(make::extrude_profile(&mut after_failure, &profile, f64::NAN).is_err());
+    assert_eq!(after_failure.count::<Region>(), 0);
+
+    let made_after = make::extrude_profile_with_journal(&mut after_failure, &profile, 2.0).unwrap();
+    let mut control = Store::new();
+    let made_control = make::extrude_profile_with_journal(&mut control, &profile, 2.0).unwrap();
+    assert_eq!(made_after.body(), made_control.body());
+    assert_eq!(made_after.journal(), made_control.journal());
 }
 
 #[test]

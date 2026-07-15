@@ -18,7 +18,7 @@ use kcore::error::Result;
 use kcore::predicates::{Orientation as PredicateOrientation, orient2d, orient3d};
 use kcore::tolerance::{ANGULAR_RESOLUTION, LINEAR_RESOLUTION};
 use kgeom::curve::Curve;
-use kgeom::vec::Point2;
+use kgeom::vec::{Point2, Vec3};
 
 /// Proof state for global shell self-intersection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +80,9 @@ pub(crate) fn certify_shell(
         return Ok(certification);
     }
     if let Some(certification) = certify_sphere_cap_shell(store, shell_id)? {
+        return Ok(certification);
+    }
+    if let Some(certification) = certify_planar_profile_prism(store, shell_id)? {
         return Ok(certification);
     }
     certify_convex_planar_shell(store, shell_id)
@@ -248,6 +251,337 @@ fn sense_factor(sense: Sense) -> f64 {
     if sense.is_forward() { 1.0 } else { -1.0 }
 }
 
+#[derive(Debug)]
+struct PrismCap {
+    face: FaceId,
+    vertices: Vec<VertexId>,
+    uses: Vec<PrismBoundaryUse>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PrismBoundaryUse {
+    fin: crate::entity::FinId,
+    edge: crate::entity::EdgeId,
+    tail: VertexId,
+    head: VertexId,
+}
+
+#[derive(Debug)]
+struct PrismTranslation {
+    vector: Vec3,
+    vertices: Vec<(VertexId, VertexId)>,
+}
+
+/// Certify the exact topology product emitted by the polygonal-profile
+/// extrusion builder: two translated planar regions and one planar quad for
+/// every boundary segment. Profile loop simplicity/containment proves the
+/// planar material region; the one-to-one translated edge/quad closure then
+/// proves that sweeping it through a nonzero interval is embedded.
+fn certify_planar_profile_prism(
+    store: &Store,
+    shell_id: ShellId,
+) -> Result<Option<ShellCertification>> {
+    let shell = store.get(shell_id)?;
+    if shell.faces.len() < 5 || !shell.edges.is_empty() || shell.vertex.is_some() {
+        return Ok(None);
+    }
+    let Some(bottom) = planar_prism_cap(store, shell.faces[0])? else {
+        return Ok(None);
+    };
+    let Some(top) = planar_prism_cap(store, shell.faces[1])? else {
+        return Ok(None);
+    };
+    if bottom.vertices.len() != top.vertices.len()
+        || bottom.uses.len() != top.uses.len()
+        || shell.faces.len() != bottom.uses.len() + 2
+    {
+        return Ok(None);
+    }
+    let Some(translation) = translated_prism_vertices(store, &bottom, &top)? else {
+        return Ok(None);
+    };
+    let Some(axis) = translation.vector.normalized() else {
+        return Ok(None);
+    };
+    let bottom_face = store.get(bottom.face)?;
+    let top_face = store.get(top.face)?;
+    let SurfaceGeom::Plane(bottom_plane) = store.get(bottom_face.surface)? else {
+        unreachable!("prism cap classification retains a plane");
+    };
+    let SurfaceGeom::Plane(top_plane) = store.get(top_face.surface)? else {
+        unreachable!("prism cap classification retains a plane");
+    };
+    if 1.0 - bottom_plane.frame().z().dot(axis).abs() > ANGULAR_RESOLUTION
+        || 1.0 - top_plane.frame().z().dot(axis).abs() > ANGULAR_RESOLUTION
+    {
+        return Ok(None);
+    }
+
+    let bottom_edges: Vec<_> = bottom.uses.iter().map(|use_| use_.edge).collect();
+    let top_edges: Vec<_> = top.uses.iter().map(|use_| use_.edge).collect();
+    let side_faces = &shell.faces[2..];
+    let mut used_sides = Vec::with_capacity(side_faces.len());
+    let mut used_top_edges = Vec::with_capacity(top_edges.len());
+    let mut orientation_invalid = false;
+    let expected_bottom_normal = -axis;
+    let bottom_normal = bottom_plane.frame().z() * sense_factor(bottom_face.sense);
+    let top_normal = top_plane.frame().z() * sense_factor(top_face.sense);
+    orientation_invalid |= bottom_normal.dot(expected_bottom_normal) <= 0.0;
+    orientation_invalid |= top_normal.dot(axis) <= 0.0;
+
+    for boundary in &bottom.uses {
+        let edge = store.get(boundary.edge)?;
+        if edge.fins.len() != 2 {
+            return Ok(None);
+        }
+        let Some(other_fin) = edge.fins.iter().copied().find(|&fin| fin != boundary.fin) else {
+            return Ok(None);
+        };
+        let other_loop = store.get(store.get(other_fin)?.parent)?;
+        let side_face_id = other_loop.face;
+        if !side_faces.contains(&side_face_id) || used_sides.contains(&side_face_id) {
+            return Ok(None);
+        }
+        let Some(side_edges) = planar_prism_side(store, side_face_id)? else {
+            return Ok(None);
+        };
+        if !side_edges.contains(&boundary.edge) {
+            return Ok(None);
+        }
+        let Some(mapped_tail) = mapped_prism_vertex(&translation.vertices, boundary.tail) else {
+            return Ok(None);
+        };
+        let Some(mapped_head) = mapped_prism_vertex(&translation.vertices, boundary.head) else {
+            return Ok(None);
+        };
+        let mut mapped_top_edge = None;
+        for edge in side_edges
+            .iter()
+            .copied()
+            .filter(|edge| top_edges.contains(edge))
+        {
+            if edge_has_vertices(store, edge, mapped_tail, mapped_head)?
+                && mapped_top_edge.replace(edge).is_some()
+            {
+                return Ok(None);
+            }
+        }
+        let Some(mapped_top_edge) = mapped_top_edge else {
+            return Ok(None);
+        };
+        let mut tail_vertical = false;
+        let mut head_vertical = false;
+        for edge in side_edges.iter().copied() {
+            tail_vertical |= edge_has_vertices(store, edge, boundary.tail, mapped_tail)?;
+            head_vertical |= edge_has_vertices(store, edge, boundary.head, mapped_head)?;
+        }
+        if used_top_edges.contains(&mapped_top_edge) || !tail_vertical || !head_vertical {
+            return Ok(None);
+        }
+        let allowed = [boundary.edge, mapped_top_edge];
+        if side_edges
+            .iter()
+            .filter(|edge| allowed.contains(edge))
+            .count()
+            != 2
+            || side_edges.len() != 4
+        {
+            return Ok(None);
+        }
+
+        let tangent =
+            store.vertex_position(boundary.head)? - store.vertex_position(boundary.tail)?;
+        let Some(expected_side_normal) = tangent.cross(expected_bottom_normal).normalized() else {
+            return Ok(None);
+        };
+        let side_face = store.get(side_face_id)?;
+        let SurfaceGeom::Plane(side_plane) = store.get(side_face.surface)? else {
+            unreachable!("prism side classification retains a plane");
+        };
+        let side_surface_normal = side_plane.frame().z();
+        if 1.0 - side_surface_normal.dot(expected_side_normal).abs() > ANGULAR_RESOLUTION {
+            return Ok(None);
+        }
+        let side_normal = side_surface_normal * sense_factor(side_face.sense);
+        orientation_invalid |= side_normal.dot(expected_side_normal) <= 0.0;
+        used_sides.push(side_face_id);
+        used_top_edges.push(mapped_top_edge);
+    }
+    if used_sides.len() != side_faces.len()
+        || used_top_edges.len() != top_edges.len()
+        || bottom_edges.len() != top_edges.len()
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(ShellCertification {
+        embedding: ShellEmbedding::Certified,
+        orientation: if orientation_invalid {
+            ShellOrientation::Invalid
+        } else {
+            ShellOrientation::Certified
+        },
+    }))
+}
+
+fn planar_prism_cap(store: &Store, face_id: FaceId) -> Result<Option<PrismCap>> {
+    let face = store.get(face_id)?;
+    if face.loops.is_empty() || !matches!(store.get(face.surface)?, SurfaceGeom::Plane(_)) {
+        return Ok(None);
+    }
+    if certify_loop_containment(store, &face.loops)? != LoopContainment::Certified {
+        return Ok(None);
+    }
+    let mut vertices = Vec::new();
+    let mut uses = Vec::new();
+    for &loop_id in &face.loops {
+        if certify_loop_simplicity(store, loop_id)? != LoopSimplicity::Certified {
+            return Ok(None);
+        }
+        let loop_ = store.get(loop_id)?;
+        if loop_.fins.len() < 3 {
+            return Ok(None);
+        }
+        for &fin in &loop_.fins {
+            let fin_value = store.get(fin)?;
+            let edge = store.get(fin_value.edge)?;
+            let (Some(curve), Some(tail), Some(head)) =
+                (edge.curve, store.fin_tail(fin)?, store.fin_head(fin)?)
+            else {
+                return Ok(None);
+            };
+            if edge.tolerance.is_some()
+                || edge.bounds.is_none()
+                || !matches!(store.get(curve)?, CurveGeom::Line(_))
+                || certify_edge_surface_incidence(
+                    store,
+                    fin_value.edge,
+                    face.surface,
+                    LINEAR_RESOLUTION,
+                )? != IncidenceCertification::Certified
+                || uses
+                    .iter()
+                    .any(|use_: &PrismBoundaryUse| use_.edge == fin_value.edge)
+            {
+                return Ok(None);
+            }
+            if !vertices.contains(&tail) {
+                vertices.push(tail);
+            }
+            uses.push(PrismBoundaryUse {
+                fin,
+                edge: fin_value.edge,
+                tail,
+                head,
+            });
+        }
+    }
+    if vertices.len() != uses.len() {
+        return Ok(None);
+    }
+    Ok(Some(PrismCap {
+        face: face_id,
+        vertices,
+        uses,
+    }))
+}
+
+fn translated_prism_vertices(
+    store: &Store,
+    bottom: &PrismCap,
+    top: &PrismCap,
+) -> Result<Option<PrismTranslation>> {
+    let anchor = store.vertex_position(bottom.vertices[0])?;
+    for &candidate in &top.vertices {
+        let translation = store.vertex_position(candidate)? - anchor;
+        if translation.norm() <= LINEAR_RESOLUTION {
+            continue;
+        }
+        let mut map = Vec::with_capacity(bottom.vertices.len());
+        let mut used = Vec::with_capacity(top.vertices.len());
+        let mut valid = true;
+        for &source in &bottom.vertices {
+            let expected = store.vertex_position(source)? + translation;
+            let matches: Vec<_> = top
+                .vertices
+                .iter()
+                .copied()
+                .filter(|target| {
+                    !used.contains(target)
+                        && store
+                            .vertex_position(*target)
+                            .is_ok_and(|point| point.dist(expected) <= LINEAR_RESOLUTION)
+                })
+                .collect();
+            if matches.len() != 1 {
+                valid = false;
+                break;
+            }
+            used.push(matches[0]);
+            map.push((source, matches[0]));
+        }
+        if valid && used.len() == top.vertices.len() {
+            return Ok(Some(PrismTranslation {
+                vector: translation,
+                vertices: map,
+            }));
+        }
+    }
+    Ok(None)
+}
+
+fn mapped_prism_vertex(map: &[(VertexId, VertexId)], source: VertexId) -> Option<VertexId> {
+    map.iter()
+        .find_map(|&(candidate, target)| (candidate == source).then_some(target))
+}
+
+fn planar_prism_side(store: &Store, face_id: FaceId) -> Result<Option<Vec<crate::entity::EdgeId>>> {
+    let face = store.get(face_id)?;
+    if face.loops.len() != 1 || !matches!(store.get(face.surface)?, SurfaceGeom::Plane(_)) {
+        return Ok(None);
+    }
+    let loop_id = face.loops[0];
+    if certify_loop_simplicity(store, loop_id)? != LoopSimplicity::Certified {
+        return Ok(None);
+    }
+    let loop_ = store.get(loop_id)?;
+    if loop_.fins.len() != 4 {
+        return Ok(None);
+    }
+    let mut edges = Vec::with_capacity(4);
+    for &fin in &loop_.fins {
+        let fin = store.get(fin)?;
+        let edge = store.get(fin.edge)?;
+        let Some(curve) = edge.curve else {
+            return Ok(None);
+        };
+        if edge.tolerance.is_some()
+            || edge.bounds.is_none()
+            || !matches!(store.get(curve)?, CurveGeom::Line(_))
+            || certify_edge_surface_incidence(store, fin.edge, face.surface, LINEAR_RESOLUTION)?
+                != IncidenceCertification::Certified
+            || edges.contains(&fin.edge)
+        {
+            return Ok(None);
+        }
+        edges.push(fin.edge);
+    }
+    Ok(Some(edges))
+}
+
+fn edge_has_vertices(
+    store: &Store,
+    edge: crate::entity::EdgeId,
+    first: VertexId,
+    second: VertexId,
+) -> Result<bool> {
+    let vertices = store.get(edge)?.vertices;
+    Ok(matches!(
+        vertices,
+        [Some(a), Some(b)] if (a == first && b == second) || (a == second && b == first)
+    ))
+}
+
 fn certify_convex_planar_shell(store: &Store, shell_id: ShellId) -> Result<ShellCertification> {
     let shell = store.get(shell_id)?;
     if shell.faces.len() < 4 {
@@ -397,9 +731,11 @@ fn strictly_convex(points: &[Point2]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::make::{block, cylinder, sphere, torus};
+    use crate::make::{block, cylinder, extrude_profile, sphere, torus};
+    use crate::profile::PlanarProfile;
     use crate::store::Store;
     use kgeom::frame::Frame;
+    use kgeom::vec::Point2;
 
     fn solid_shell(store: &Store, body: crate::entity::BodyId) -> ShellId {
         let solid = store
@@ -452,6 +788,44 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn polygonal_profile_prism_is_embedded_and_orientation_is_decidable() {
+        let outer = [
+            Point2::new(-2.0, -2.0),
+            Point2::new(2.0, -2.0),
+            Point2::new(2.0, 2.0),
+            Point2::new(-2.0, 2.0),
+        ];
+        let hole = [
+            Point2::new(-1.0, -1.0),
+            Point2::new(1.0, -1.0),
+            Point2::new(1.0, 1.0),
+            Point2::new(-1.0, 1.0),
+        ];
+        let profile =
+            PlanarProfile::from_polygon_with_holes(Frame::world(), &outer, &[&hole]).unwrap();
+        let mut store = Store::new();
+        let body = extrude_profile(&mut store, &profile, 2.0).unwrap();
+        let shell = solid_shell(&store, body);
+        assert_eq!(
+            certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
+            ShellCertification {
+                embedding: ShellEmbedding::Certified,
+                orientation: ShellOrientation::Certified,
+            }
+        );
+
+        let side = store.get(shell).unwrap().faces[2];
+        store.get_mut(side).unwrap().sense = store.get(side).unwrap().sense.flipped();
+        assert_eq!(
+            certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
+            ShellCertification {
+                embedding: ShellEmbedding::Certified,
+                orientation: ShellOrientation::Invalid,
+            }
+        );
     }
 
     #[test]

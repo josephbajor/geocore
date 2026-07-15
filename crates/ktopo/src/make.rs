@@ -17,6 +17,9 @@
 //! - [`planar_sheet`]: one simple polygonal profile on a plane; reusable
 //!   [`PlanarProfile`] inputs may add strictly contained polygonal holes, with
 //!   an explicit line pcurve on every boundary use.
+//! - [`extrude_profile`]: a positive-height solid prism from a reusable
+//!   polygonal profile, including one side-face ring for every outer or hole
+//!   boundary and explicit line pcurves on every cap and side use.
 //! - [`wire_polyline`]: an open or closed chain of bounded line edges.
 //! - [`acorn`]: one isolated model-space point.
 //!
@@ -297,6 +300,297 @@ fn add_planar_polygon_loop(
         store.get_mut(edge)?.fins.push(fin);
     }
     Ok(())
+}
+
+/// Extrude one validated polygonal profile along its positive frame axis.
+///
+/// The base lies in `profile.frame()` and the top is displaced by
+/// `height * profile.frame().z()`. The result is a checked solid with planar
+/// top and bottom caps, one planar side face per profile segment, and material
+/// voids for every profile hole. `height` must be finite and positive.
+pub fn extrude_profile(store: &mut Store, profile: &PlanarProfile, height: f64) -> Result<BodyId> {
+    Ok(extrude_profile_with_journal(store, profile, height)?.body)
+}
+
+/// Failure-atomic [`extrude_profile`] creation with its deterministic journal.
+pub fn extrude_profile_with_journal(
+    store: &mut Store,
+    profile: &PlanarProfile,
+    height: f64,
+) -> Result<BodyCreation> {
+    checked_body_creation(store, |store| extrude_profile_in(store, profile, height))
+}
+
+fn extrude_profile_in(store: &mut Store, profile: &PlanarProfile, height: f64) -> Result<BodyId> {
+    let height = positive_dimension(height, "profile extrusion height")?;
+    let frame = profile.frame();
+    let top_origin = frame.origin() + frame.z() * height;
+    for point in core::iter::once(profile.outer()).chain(profile.holes().iter().map(Vec::as_slice))
+    {
+        for point in point {
+            check_in_size_box(frame.point_at(point.x, point.y, height).to_array())?;
+        }
+    }
+
+    let (body, shell) = solid_body_scaffold(store);
+    let bottom_frame = Frame::new(frame.origin(), -frame.z(), frame.x())?;
+    let top_frame = Frame::new(top_origin, frame.z(), frame.x())?;
+    let domain = point_domain(profile.outer().iter().copied())?;
+    let bottom = add_extrusion_cap(store, shell, bottom_frame, domain)?;
+    let top = add_extrusion_cap(store, shell, top_frame, domain)?;
+
+    for polygon in
+        core::iter::once(profile.outer()).chain(profile.holes().iter().map(Vec::as_slice))
+    {
+        add_extruded_polygon_ring(
+            store,
+            shell,
+            bottom,
+            top,
+            &bottom_frame,
+            &top_frame,
+            frame,
+            polygon,
+            height,
+        )?;
+    }
+    Ok(body)
+}
+
+fn add_extrusion_cap(
+    store: &mut Store,
+    shell: ShellId,
+    frame: Frame,
+    domain: FaceDomain,
+) -> Result<FaceId> {
+    let surface = store.insert_surface(SurfaceGeom::Plane(Plane::new(frame)))?;
+    let face = store.add(Face {
+        shell,
+        loops: Vec::new(),
+        surface,
+        sense: Sense::Forward,
+        domain: Some(domain),
+        tolerance: None,
+    });
+    store.get_mut(shell)?.faces.push(face);
+    Ok(face)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_extruded_polygon_ring(
+    store: &mut Store,
+    shell: ShellId,
+    bottom_face: FaceId,
+    top_face: FaceId,
+    bottom_frame: &Frame,
+    top_frame: &Frame,
+    profile_frame: &Frame,
+    polygon: &[Point2],
+    height: f64,
+) -> Result<()> {
+    let count = polygon.len();
+    let bottom_positions: Vec<_> = polygon
+        .iter()
+        .map(|point| profile_frame.point_at(point.x, point.y, 0.0))
+        .collect();
+    let top_positions: Vec<_> = polygon
+        .iter()
+        .map(|point| profile_frame.point_at(point.x, point.y, height))
+        .collect();
+    let bottom_vertices: Vec<_> = bottom_positions
+        .iter()
+        .map(|&position| add_exact_vertex(store, position))
+        .collect();
+    let top_vertices: Vec<_> = top_positions
+        .iter()
+        .map(|&position| add_exact_vertex(store, position))
+        .collect();
+
+    let mut bottom_edges = Vec::with_capacity(count);
+    let mut top_edges = Vec::with_capacity(count);
+    let mut vertical_edges = Vec::with_capacity(count);
+    for index in 0..count {
+        let next = (index + 1) % count;
+        bottom_edges.push(add_exact_line_edge(
+            store,
+            bottom_vertices[index],
+            bottom_vertices[next],
+            bottom_positions[index],
+            bottom_positions[next],
+        )?);
+        top_edges.push(add_exact_line_edge(
+            store,
+            top_vertices[index],
+            top_vertices[next],
+            top_positions[index],
+            top_positions[next],
+        )?);
+        vertical_edges.push(add_exact_line_edge(
+            store,
+            bottom_vertices[index],
+            top_vertices[index],
+            bottom_positions[index],
+            top_positions[index],
+        )?);
+    }
+
+    add_extrusion_cap_loop(
+        store,
+        bottom_face,
+        bottom_frame,
+        &bottom_positions,
+        &bottom_edges,
+        true,
+    )?;
+    add_extrusion_cap_loop(
+        store,
+        top_face,
+        top_frame,
+        &top_positions,
+        &top_edges,
+        false,
+    )?;
+
+    for index in 0..count {
+        let next = (index + 1) % count;
+        let start = bottom_positions[index];
+        let end = bottom_positions[next];
+        let edge_vector = end - start;
+        let edge_length = edge_vector.norm();
+        let side_frame = Frame::new(start, edge_vector.cross(profile_frame.z()), edge_vector)?;
+        let surface = store.insert_surface(SurfaceGeom::Plane(Plane::new(side_frame)))?;
+        let face = store.add(Face {
+            shell,
+            loops: Vec::new(),
+            surface,
+            sense: Sense::Forward,
+            domain: Some(FaceDomain::from_bounds(0.0, edge_length, 0.0, height)?),
+            tolerance: None,
+        });
+        store.get_mut(shell)?.faces.push(face);
+        let loop_ = store.add(Loop {
+            face,
+            fins: Vec::new(),
+        });
+        store.get_mut(face)?.loops.push(loop_);
+        let uses = [
+            (
+                bottom_edges[index],
+                Sense::Forward,
+                Point2::new(0.0, 0.0),
+                Vec2::new(1.0, 0.0),
+                edge_length,
+            ),
+            (
+                vertical_edges[next],
+                Sense::Forward,
+                Point2::new(edge_length, 0.0),
+                Vec2::new(0.0, 1.0),
+                height,
+            ),
+            (
+                top_edges[index],
+                Sense::Reversed,
+                Point2::new(0.0, height),
+                Vec2::new(1.0, 0.0),
+                edge_length,
+            ),
+            (
+                vertical_edges[index],
+                Sense::Reversed,
+                Point2::new(0.0, 0.0),
+                Vec2::new(0.0, 1.0),
+                height,
+            ),
+        ];
+        for (edge, sense, origin, direction, length) in uses {
+            let pcurve = straight_pcurve(store, origin, direction, length)?;
+            let fin = store.add(Fin {
+                parent: loop_,
+                edge,
+                sense,
+                pcurve: Some(pcurve),
+            });
+            store.get_mut(loop_)?.fins.push(fin);
+            store.get_mut(edge)?.fins.push(fin);
+        }
+    }
+    Ok(())
+}
+
+fn add_exact_vertex(store: &mut Store, position: Point3) -> VertexId {
+    let point = store.add(position);
+    store.add(Vertex {
+        point,
+        tolerance: None,
+    })
+}
+
+fn add_exact_line_edge(
+    store: &mut Store,
+    start_vertex: VertexId,
+    end_vertex: VertexId,
+    start: Point3,
+    end: Point3,
+) -> Result<EdgeId> {
+    let vector = end - start;
+    let length = vector.norm();
+    let curve = store.insert_curve(CurveGeom::Line(Line::new(start, vector)?))?;
+    Ok(store.add(Edge {
+        curve: Some(curve),
+        vertices: [Some(start_vertex), Some(end_vertex)],
+        bounds: Some((0.0, length)),
+        fins: Vec::new(),
+        tolerance: None,
+    }))
+}
+
+fn add_extrusion_cap_loop(
+    store: &mut Store,
+    face: FaceId,
+    frame: &Frame,
+    positions: &[Point3],
+    edges: &[EdgeId],
+    reversed: bool,
+) -> Result<()> {
+    let loop_ = store.add(Loop {
+        face,
+        fins: Vec::new(),
+    });
+    store.get_mut(face)?.loops.push(loop_);
+    let indices: Box<dyn Iterator<Item = usize>> = if reversed {
+        Box::new((0..positions.len()).rev())
+    } else {
+        Box::new(0..positions.len())
+    };
+    for index in indices {
+        let next = (index + 1) % positions.len();
+        let length = (positions[next] - positions[index]).norm();
+        let pcurve = line_pcurve(store, frame, positions[index], positions[next], length)?;
+        let fin = store.add(Fin {
+            parent: loop_,
+            edge: edges[index],
+            sense: if reversed {
+                Sense::Reversed
+            } else {
+                Sense::Forward
+            },
+            pcurve: Some(pcurve),
+        });
+        store.get_mut(loop_)?.fins.push(fin);
+        store.get_mut(edges[index])?.fins.push(fin);
+    }
+    Ok(())
+}
+
+fn straight_pcurve(
+    store: &mut Store,
+    origin: Point2,
+    direction: Vec2,
+    length: f64,
+) -> Result<FinPcurve> {
+    let curve = store.insert_pcurve(Curve2dGeom::Line(Line2d::new(origin, direction)?))?;
+    FinPcurve::new(curve, ParamRange::new(0.0, length), ParamMap1d::identity())
 }
 
 /// Create a failure-atomic line-segment wire from ordered model-space points.
