@@ -853,7 +853,7 @@ fn general_both_wide_three_regions_reject_nonempty_orthogonal_corner_owner() {
     let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
     assert_indeterminate_sphere_window(
         &hit,
-        "general coincident sphere both-wide union supports at most six positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four and six require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components",
+        "general coincident sphere both-wide union supports at most seven positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, and seven require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components",
     );
     let repeated =
         intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
@@ -1436,7 +1436,7 @@ fn general_both_wide_disconnected_five_cells_certify_exact_components_and_swap()
 }
 
 #[test]
-fn general_both_wide_seven_positive_cells_remain_bounded_and_indeterminate() {
+fn general_both_wide_seven_positive_cells_certify_exact_union_and_swap() {
     let (a, b, mut a_window, mut b_window) = six_cell_non_path_wide_fixture();
     a_window[1].lo = -0.8524779757705633;
     b_window[1].lo = -0.6769143527370888;
@@ -1459,17 +1459,100 @@ fn general_both_wide_seven_positive_cells_remain_bounded_and_indeterminate() {
         }
     }
 
-    let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
-    assert_indeterminate_sphere_window(
-        &hit,
-        "general coincident sphere both-wide union supports at most six positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four and six require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components",
+    let shared_b_seam = b_window[0].lo + b_window[0].width() / 3.0;
+    let first_owner = intersect_bounded_spheres(
+        &a,
+        wide_grid_piece(a_window, 1),
+        &b,
+        wide_grid_piece(b_window, 0),
+        Tolerances::default(),
+    )
+    .unwrap()
+    .regions
+    .into_iter()
+    .next()
+    .unwrap();
+    let second_owner = intersect_bounded_spheres(
+        &a,
+        wide_grid_piece(a_window, 1),
+        &b,
+        wide_grid_piece(b_window, 1),
+        Tolerances::default(),
+    )
+    .unwrap()
+    .regions
+    .into_iter()
+    .next()
+    .unwrap();
+    let first_seam_vertices = first_owner
+        .boundary
+        .iter()
+        .enumerate()
+        .filter_map(|(index, vertex)| {
+            (vertex.uv_b[0].to_bits() == shared_b_seam.to_bits()).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let second_seam_vertices = second_owner
+        .boundary
+        .iter()
+        .filter(|vertex| vertex.uv_b[0].to_bits() == shared_b_seam.to_bits())
+        .count();
+    assert_eq!(first_seam_vertices.len(), 2);
+    assert_eq!(second_seam_vertices, 1);
+    let first_edge =
+        if (first_seam_vertices[0] + 1) % first_owner.boundary.len() == first_seam_vertices[1] {
+            [first_seam_vertices[0], first_seam_vertices[1]]
+        } else {
+            [first_seam_vertices[1], first_seam_vertices[0]]
+        };
+    let reverse_edges = (0..second_owner.boundary.len())
+        .filter(|&start| {
+            let end = (start + 1) % second_owner.boundary.len();
+            second_owner.boundary[start].uv_a == first_owner.boundary[first_edge[1]].uv_a
+                && second_owner.boundary[end].uv_a == first_owner.boundary[first_edge[0]].uv_a
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(reverse_edges.len(), 1);
+    let reconstructed = second_owner.boundary[(reverse_edges[0] + 1) % second_owner.boundary.len()];
+    let exact = first_owner.boundary[first_edge[0]];
+    assert_eq!(reconstructed.uv_a, exact.uv_a);
+    assert_ne!(reconstructed.uv_b[0].to_bits(), exact.uv_b[0].to_bits());
+    assert_eq!(
+        reconstructed.uv_b[0]
+            .to_bits()
+            .abs_diff(exact.uv_b[0].to_bits()),
+        1
     );
+
+    let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_general_sphere_window_region(&hit, &a, &b);
+    assert_eq!(hit.regions[0].boundary.len(), 15);
+    let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = hit.regions[0].correspondence
+    else {
+        unreachable!()
+    };
+    assert_eq!(map.first_range(), a_window);
+    assert_eq!(map.second_range(), b_window);
+    assert!((0..hit.regions[0].boundary.len()).all(|start| {
+        let end = (start + 1) % hit.regions[0].boundary.len();
+        hit.regions[0].boundary[start].uv_b[0].to_bits() != shared_b_seam.to_bits()
+            || hit.regions[0].boundary[end].uv_b[0].to_bits() != shared_b_seam.to_bits()
+    }));
+    for (first, second) in hit.regions[0]
+        .boundary
+        .iter()
+        .zip(hit.regions[0].boundary.iter().cycle().skip(1))
+    {
+        assert_ne!(first, second);
+        assert!(a.eval(first.uv_a).dist(b.eval(first.uv_b)) <= hit.regions[0].max_residual);
+    }
     let repeated =
         intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
     assert_eq!(hit, repeated);
     let swapped =
         intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
-    assert_eq!(hit.swapped(), swapped);
+    assert_eq!(hit.clone().swapped(), swapped);
+    assert_general_sphere_window_region(&swapped, &b, &a);
 }
 
 #[test]
@@ -1527,7 +1610,7 @@ fn general_both_wide_five_cell_non_path_rejects_nonexact_shared_seam() {
     let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
     assert_indeterminate_sphere_window(
         &hit,
-        "general coincident sphere both-wide union supports at most six positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four and six require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components",
+        "general coincident sphere both-wide union supports at most seven positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, and seven require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components",
     );
     let repeated =
         intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
@@ -1592,7 +1675,7 @@ fn general_both_wide_four_cell_cycle_rejects_one_ulp_artificial_seam() {
     let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
     assert_indeterminate_sphere_window(
         &hit,
-        "general coincident sphere both-wide union supports at most six positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four and six require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components",
+        "general coincident sphere both-wide union supports at most seven positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, and seven require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components",
     );
     let repeated =
         intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
@@ -1614,7 +1697,7 @@ fn general_both_wide_four_cell_path_rejects_approximate_shared_seam() {
     let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
     assert_indeterminate_sphere_window(
         &hit,
-        "general coincident sphere both-wide union supports at most six positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four and six require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components",
+        "general coincident sphere both-wide union supports at most seven positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, and seven require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components",
     );
 
     let repeated =
@@ -1693,7 +1776,7 @@ fn general_both_wide_five_cell_path_rejects_approximate_shared_seam() {
     let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
     assert_indeterminate_sphere_window(
         &hit,
-        "general coincident sphere both-wide union supports at most six positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four and six require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components",
+        "general coincident sphere both-wide union supports at most seven positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, and seven require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components",
     );
 
     let repeated =
@@ -1717,7 +1800,7 @@ fn general_both_wide_broad_five_cell_path_rejects_nonexact_seams() {
             intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
         assert_indeterminate_sphere_window(
             &hit,
-            "general coincident sphere both-wide union supports at most six positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four and six require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components",
+            "general coincident sphere both-wide union supports at most seven positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, and seven require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components",
         );
 
         let repeated =
@@ -1740,7 +1823,7 @@ fn general_both_wide_broad_five_cell_path_rejects_nonexact_seams() {
     .unwrap();
     assert_indeterminate_sphere_window(
         &overfull,
-        "general coincident sphere both-wide union supports at most six positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four and six require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components",
+        "general coincident sphere both-wide union supports at most seven positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, and seven require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components",
     );
 }
 
@@ -1799,7 +1882,7 @@ fn general_wide_window_union_fails_closed_across_artificial_seams_and_two_wide_i
     .unwrap();
     assert_indeterminate_sphere_window(
         &shared_seam,
-        "general coincident sphere both-wide union supports at most six positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four and six require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components",
+        "general coincident sphere both-wide union supports at most seven positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, and seven require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components",
     );
 
     let polar = intersect_bounded_spheres(

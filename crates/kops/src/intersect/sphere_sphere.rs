@@ -280,8 +280,8 @@ const GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT: usize =
     GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_PAIR_LIMIT;
 const GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT: usize =
     GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_ARC_LIMIT;
-const GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT: usize = 6;
-const GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON: &str = "general coincident sphere both-wide union supports at most six positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four and six require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components";
+const GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT: usize = 7;
+const GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON: &str = "general coincident sphere both-wide union supports at most seven positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, and seven require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SphereWindowConstraint {
@@ -749,6 +749,22 @@ fn certify_double_wide_sphere_window_union(
                 resolved_regions.is_some()
             }
         }
+        [_, _, _, _, _, _, _] => {
+            let bounded_seven_cell_proof = certified_empty_pairs + 7
+                == GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT
+                && bounded_multi_cell_parents;
+            if !bounded_seven_cell_proof {
+                false
+            } else {
+                resolved_regions = merge_exact_sphere_region_non_path_union(
+                    &occupied_regions,
+                    &a_pieces,
+                    &b_pieces,
+                )
+                .map(|region| vec![region]);
+                resolved_regions.is_some()
+            }
+        }
         _ => false,
     };
     if !supported_positive_cells {
@@ -761,9 +777,11 @@ fn certify_double_wide_sphere_window_union(
     // an independent set or between a merged pair and its singleton; the
     // remaining empty siblings exclude every other artificial seam. Three-
     // through six-cell paths are merged in deterministic adjacency order.
-    // Four- through six-cell non-path unions cancel every shared edge only after
-    // all owners prove reverse-oriented bit-exact seam records, then require
-    // the remaining edges to trace one unambiguous outer cycle. Disconnected
+    // Four- through seven-cell non-path unions cancel every shared edge only
+    // after paired owners prove reverse-oriented bit-exact seam records or one
+    // exact owner supplies the closed-cell/complementary-chart proof described
+    // by `exact_sphere_region_shared_seam_edges`; the remaining edges must
+    // trace one unambiguous outer cycle. Disconnected
     // five-cell layouts partition in canonical grid order, merge each component
     // under the same seam rules, and require certified-empty sibling owners to
     // separate every pair of components, including both owners of a diagonal
@@ -1107,6 +1125,10 @@ fn merge_exact_sphere_region_non_path_union(
         .iter()
         .map(|(_, region)| vec![false; region.boundary.len()])
         .collect::<Vec<_>>();
+    let mut canonical_vertices = regions
+        .iter()
+        .map(|(_, region)| vec![None; region.boundary.len()])
+        .collect::<Vec<Vec<Option<SurfaceSurfaceRegionVertex>>>>();
     for first in 0..regions.len() {
         for second in first + 1..regions.len() {
             if !adjacent[first][second] {
@@ -1114,43 +1136,62 @@ fn merge_exact_sphere_region_non_path_union(
             }
             let (seam_on_first_operand, seam) =
                 sphere_grid_shared_seam(regions[first].0, regions[second].0, a_pieces, b_pieces)?;
-            let first_edge =
-                exact_sphere_region_seam_edge(&regions[first].1, seam_on_first_operand, seam)?;
-            let second_edge =
-                exact_sphere_region_seam_edge(&regions[second].1, seam_on_first_operand, seam)?;
-            if removed_edges[first][first_edge[0]]
-                || removed_edges[second][second_edge[0]]
-                || !sphere_region_vertices_are_bit_exact(
-                    regions[first].1.boundary[first_edge[0]],
-                    regions[second].1.boundary[second_edge[1]],
-                )
-                || !sphere_region_vertices_are_bit_exact(
-                    regions[first].1.boundary[first_edge[1]],
-                    regions[second].1.boundary[second_edge[0]],
-                )
-            {
+            let shared = exact_sphere_region_shared_seam_edges(
+                &regions[first].1,
+                &regions[second].1,
+                seam_on_first_operand,
+                seam,
+                a_pieces,
+                b_pieces,
+            )?;
+            let first_edge = shared.first_edge;
+            let second_edge = shared.second_edge;
+            if removed_edges[first][first_edge[0]] || removed_edges[second][second_edge[0]] {
                 return None;
+            }
+            match shared.exact_owner {
+                ExactSphereSeamOwner::Both => {}
+                ExactSphereSeamOwner::First => {
+                    if !record_canonical_sphere_region_vertex(
+                        &mut canonical_vertices[second][second_edge[0]],
+                        regions[first].1.boundary[first_edge[1]],
+                    ) || !record_canonical_sphere_region_vertex(
+                        &mut canonical_vertices[second][second_edge[1]],
+                        regions[first].1.boundary[first_edge[0]],
+                    ) {
+                        return None;
+                    }
+                }
+                ExactSphereSeamOwner::Second => {
+                    if !record_canonical_sphere_region_vertex(
+                        &mut canonical_vertices[first][first_edge[0]],
+                        regions[second].1.boundary[second_edge[1]],
+                    ) || !record_canonical_sphere_region_vertex(
+                        &mut canonical_vertices[first][first_edge[1]],
+                        regions[second].1.boundary[second_edge[0]],
+                    ) {
+                        return None;
+                    }
+                }
             }
             removed_edges[first][first_edge[0]] = true;
             removed_edges[second][second_edge[0]] = true;
         }
     }
 
-    let outer_edges = regions
-        .iter()
-        .enumerate()
-        .flat_map(|(region_index, (_, region))| {
-            let removed_region_edges = &removed_edges[region_index];
-            (0..region.boundary.len())
-                .filter(move |edge| !removed_region_edges[*edge])
-                .map(move |edge| {
-                    [
-                        region.boundary[edge],
-                        region.boundary[(edge + 1) % region.boundary.len()],
-                    ]
-                })
-        })
-        .collect::<Vec<_>>();
+    let mut outer_edges = Vec::new();
+    for (region_index, (_, region)) in regions.iter().enumerate() {
+        for edge in 0..region.boundary.len() {
+            if removed_edges[region_index][edge] {
+                continue;
+            }
+            let next = (edge + 1) % region.boundary.len();
+            outer_edges.push([
+                canonical_vertices[region_index][edge].unwrap_or(region.boundary[edge]),
+                canonical_vertices[region_index][next].unwrap_or(region.boundary[next]),
+            ]);
+        }
+    }
     if outer_edges.len() < 3 {
         return None;
     }
@@ -1189,6 +1230,199 @@ fn merge_exact_sphere_region_non_path_union(
             .map(|(_, region)| region.max_residual)
             .fold(0.0_f64, f64::max),
     })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExactSphereSeamOwner {
+    Both,
+    First,
+    Second,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ExactSphereSharedSeamEdges {
+    first_edge: [usize; 2],
+    second_edge: [usize; 2],
+    exact_owner: ExactSphereSeamOwner,
+}
+
+fn exact_sphere_region_shared_seam_edges(
+    first: &SurfaceSurfaceRegion,
+    second: &SurfaceSurfaceRegion,
+    seam_on_first_operand: bool,
+    seam: f64,
+    a_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+    b_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+) -> Option<ExactSphereSharedSeamEdges> {
+    let first_exact = exact_sphere_region_seam_edge(first, seam_on_first_operand, seam);
+    let second_exact = exact_sphere_region_seam_edge(second, seam_on_first_operand, seam);
+    match (first_exact, second_exact) {
+        (Some(first_edge), Some(second_edge)) => {
+            if !sphere_region_vertices_are_bit_exact(
+                first.boundary[first_edge[0]],
+                second.boundary[second_edge[1]],
+            ) || !sphere_region_vertices_are_bit_exact(
+                first.boundary[first_edge[1]],
+                second.boundary[second_edge[0]],
+            ) {
+                return None;
+            }
+            Some(ExactSphereSharedSeamEdges {
+                first_edge,
+                second_edge,
+                exact_owner: ExactSphereSeamOwner::Both,
+            })
+        }
+        (Some(first_edge), None) => {
+            let second_edge = exact_complementary_chart_sphere_region_edge(
+                second,
+                first,
+                first_edge,
+                seam_on_first_operand,
+                a_pieces,
+                b_pieces,
+            )?;
+            Some(ExactSphereSharedSeamEdges {
+                first_edge,
+                second_edge,
+                exact_owner: ExactSphereSeamOwner::First,
+            })
+        }
+        (None, Some(second_edge)) => {
+            let first_edge = exact_complementary_chart_sphere_region_edge(
+                first,
+                second,
+                second_edge,
+                seam_on_first_operand,
+                a_pieces,
+                b_pieces,
+            )?;
+            Some(ExactSphereSharedSeamEdges {
+                first_edge,
+                second_edge,
+                exact_owner: ExactSphereSeamOwner::Second,
+            })
+        }
+        (None, None) => None,
+    }
+}
+
+fn exact_complementary_chart_sphere_region_edge(
+    non_owner: &SurfaceSurfaceRegion,
+    exact_owner: &SurfaceSurfaceRegion,
+    exact_owner_edge: [usize; 2],
+    seam_on_first_operand: bool,
+    a_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+    b_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+) -> Option<[usize; 2]> {
+    // The two grid cells are closed, differ only in the longitude interval on
+    // the seam-owning chart, and share that interval endpoint exactly. Hence
+    // the exact owner's complete seam arc belongs to the non-owner cell too.
+    // It is also on that cell's boundary: every child chart is pole-clear and
+    // narrower than pi, so its longitude parameterization is injective. The
+    // only child constraints that change across the adjacency are the two
+    // exterior longitude planes; either meets the shared longitude plane only
+    // at the excluded poles. An owner edge with consecutive anchors therefore
+    // remains one whole arrangement arc in the neighboring child.
+    //
+    // The complementary chart is unchanged across the adjacency and is
+    // injective over the retained pole-clear window. Bit-identical endpoint
+    // parameters there prove exact physical endpoint identity without using a
+    // distance or ULP allowance. Requiring one unique reverse consecutive edge
+    // identifies the same whole arc; ambiguity and merely approximate endpoint
+    // recovery fail closed. The exact owner's records can then canonically
+    // replace the neighboring reconstructions before outer-cycle tracing.
+    let owner_start = exact_owner.boundary[exact_owner_edge[0]];
+    let owner_end = exact_owner.boundary[exact_owner_edge[1]];
+    let mut found = None;
+    for edge_start in 0..non_owner.boundary.len() {
+        let edge_end = (edge_start + 1) % non_owner.boundary.len();
+        if exact_complementary_chart_sphere_endpoint(
+            non_owner.boundary[edge_start],
+            owner_end,
+            seam_on_first_operand,
+            a_pieces,
+            b_pieces,
+        ) && exact_complementary_chart_sphere_endpoint(
+            non_owner.boundary[edge_end],
+            owner_start,
+            seam_on_first_operand,
+            a_pieces,
+            b_pieces,
+        ) {
+            if found.is_some() {
+                return None;
+            }
+            found = Some([edge_start, edge_end]);
+        }
+    }
+    found
+}
+
+fn exact_complementary_chart_sphere_endpoint(
+    non_owner: SurfaceSurfaceRegionVertex,
+    exact_owner: SurfaceSurfaceRegionVertex,
+    seam_on_first_operand: bool,
+    a_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+    b_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+) -> bool {
+    if !sphere_region_vertices_are_bit_exact_in_complementary_chart(
+        non_owner,
+        exact_owner,
+        seam_on_first_operand,
+    ) {
+        return false;
+    }
+    if sphere_region_vertices_are_bit_exact(non_owner, exact_owner) {
+        return true;
+    }
+
+    // A non-exact reconstruction at the crossing of both decomposition seam
+    // families would have up to four closed-cell owners. Two-cell evidence is
+    // insufficient to choose one canonical multi-owner vertex, so retain the
+    // established fail-closed behavior there. The admitted seven-cell case
+    // differs at a true latitude boundary, while its grid-corner endpoint is
+    // already bit exact in both records.
+    let complementary_u = if seam_on_first_operand {
+        exact_owner.uv_b[0]
+    } else {
+        exact_owner.uv_a[0]
+    };
+    let complementary_pieces = if seam_on_first_operand {
+        b_pieces
+    } else {
+        a_pieces
+    };
+    [complementary_pieces[1][0].lo, complementary_pieces[2][0].lo]
+        .into_iter()
+        .all(|seam| complementary_u.to_bits() != seam.to_bits())
+}
+
+fn sphere_region_vertices_are_bit_exact_in_complementary_chart(
+    first: SurfaceSurfaceRegionVertex,
+    second: SurfaceSurfaceRegionVertex,
+    seam_on_first_operand: bool,
+) -> bool {
+    let (first_uv, second_uv) = if seam_on_first_operand {
+        (first.uv_b, second.uv_b)
+    } else {
+        (first.uv_a, second.uv_a)
+    };
+    first_uv[0].to_bits() == second_uv[0].to_bits()
+        && first_uv[1].to_bits() == second_uv[1].to_bits()
+}
+
+fn record_canonical_sphere_region_vertex(
+    slot: &mut Option<SurfaceSurfaceRegionVertex>,
+    vertex: SurfaceSurfaceRegionVertex,
+) -> bool {
+    match *slot {
+        Some(existing) => sphere_region_vertices_are_bit_exact(existing, vertex),
+        None => {
+            *slot = Some(vertex);
+            true
+        }
+    }
 }
 
 fn merge_exact_adjacent_sphere_regions(
@@ -3545,6 +3779,33 @@ mod tests {
         )
     }
 
+    fn seven_cell_fixture() -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+        let a = Sphere::new(Frame::world(), 1.0).unwrap();
+        let angle = 0.9054345637982375;
+        let b = Sphere::new(
+            Frame::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(math::sin(angle), 0.0, math::cos(angle)),
+                Vec3::new(math::cos(angle), 0.0, -math::sin(angle)),
+            )
+            .unwrap(),
+            1.0,
+        )
+        .unwrap();
+        (
+            a,
+            b,
+            [
+                ParamRange::new(-0.5929589703265958, 4.542973834373202),
+                ParamRange::new(-0.8524779757705633, 0.9706234964995796),
+            ],
+            [
+                ParamRange::new(-0.4436018548841436, 3.5517236306126825),
+                ParamRange::new(-0.6769143527370888, 0.8493651816976383),
+            ],
+        )
+    }
+
     #[test]
     fn general_window_proof_limits_are_exact_at_n_and_n_minus_one() {
         let a = Sphere::new(Frame::world(), 1.0).unwrap();
@@ -3788,7 +4049,7 @@ mod tests {
             arbitrary_sphere_octant_parameter_allowance(double_wide_a_range, double_wide_b_range)
                 .unwrap();
         assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT, 9);
-        assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT, 6);
+        assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT, 7);
         assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT, 252);
         assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT, 1_008);
         let double_wide = certify_double_wide_sphere_window_union(
@@ -3900,6 +4161,118 @@ mod tests {
             Error::InvalidGeometry {
                 reason: "general coincident sphere wide-window union requires three sub-pi decomposition cells"
             }
+        );
+    }
+
+    #[test]
+    fn seven_cell_closed_seam_proof_and_limits_are_exact() {
+        let (a, b, a_range, b_range) = seven_cell_fixture();
+        let allowance = arbitrary_sphere_octant_parameter_allowance(a_range, b_range).unwrap();
+        let hit = certify_double_wide_sphere_window_union(
+            &a,
+            a_range,
+            &b,
+            b_range,
+            Tolerances::default(),
+            allowance,
+            GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+            GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+            GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+        )
+        .unwrap();
+        assert!(hit.is_complete());
+        assert_eq!(hit.regions.len(), 1);
+        assert_eq!(hit.regions[0].boundary.len(), 15);
+
+        for (piece_limit, pair_limit, arc_limit, reason) in [
+            (
+                GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT - 1,
+                GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+                "general coincident sphere both-wide union piece limit exhausted",
+            ),
+            (
+                GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT - 1,
+                GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+                "general coincident sphere both-wide union pair limit exhausted",
+            ),
+            (
+                GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT - 1,
+                "general coincident sphere both-wide union arc limit exhausted",
+            ),
+        ] {
+            assert_eq!(
+                certify_double_wide_sphere_window_union(
+                    &a,
+                    a_range,
+                    &b,
+                    b_range,
+                    Tolerances::default(),
+                    allowance,
+                    piece_limit,
+                    pair_limit,
+                    arc_limit,
+                )
+                .unwrap_err(),
+                Error::InvalidGeometry { reason }
+            );
+        }
+
+        let a_pieces = decompose_general_sphere_wide_window(a_range, allowance).unwrap();
+        let b_pieces = decompose_general_sphere_wide_window(b_range, allowance).unwrap();
+        let child_region = |a_index, b_index| {
+            let child_range_a = a_pieces[a_index];
+            let child_range_b = b_pieces[b_index];
+            let child_allowance =
+                arbitrary_sphere_octant_parameter_allowance(child_range_a, child_range_b).unwrap();
+            certify_general_sphere_windows(
+                &a,
+                child_range_a,
+                &b,
+                child_range_b,
+                Tolerances::default(),
+                GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
+                GENERAL_SPHERE_WINDOW_ARC_LIMIT,
+                child_allowance,
+            )
+            .unwrap()
+            .regions
+            .into_iter()
+            .next()
+            .unwrap()
+        };
+        let first = child_region(1, 0);
+        let second = child_region(1, 1);
+        let shared = exact_sphere_region_shared_seam_edges(
+            &first,
+            &second,
+            false,
+            b_pieces[1][0].lo,
+            &a_pieces,
+            &b_pieces,
+        )
+        .unwrap();
+        assert_eq!(shared.exact_owner, ExactSphereSeamOwner::First);
+
+        // Exact identity in the unchanged chart is mandatory. A one-ULP
+        // mismatch there cannot borrow the closed-cell proof.
+        let mut mismatched = second;
+        let endpoint = shared.second_edge[0];
+        mismatched.boundary[endpoint].uv_a[0] =
+            f64::from_bits(mismatched.boundary[endpoint].uv_a[0].to_bits() + 1);
+        assert!(
+            exact_sphere_region_shared_seam_edges(
+                &first,
+                &mismatched,
+                false,
+                b_pieces[1][0].lo,
+                &a_pieces,
+                &b_pieces,
+            )
+            .is_none()
         );
     }
 

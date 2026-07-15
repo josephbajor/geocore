@@ -1196,9 +1196,10 @@ true only for an empty complete result.
   children form a two-edge grid path and their six siblings certify empty, or
   when exactly four positive children form a three-edge grid path and their five siblings
   certify empty, or when exactly five positive children form a four-edge grid
-  path and their four siblings certify empty, or when four, five, or six positive
-  children form an exact connected shared-seam union with every other sibling
-  certified empty. Multi-cell parents
+  path and their four siblings certify empty, when four, five, or six positive
+  children form an exact connected shared-seam union, or when the exact
+  seven-cell 2×3-block-plus-tail layout satisfies the bounded complementary-
+  chart seam proof with every other sibling certified empty. Multi-cell parents
   must remain below a full turn. Two or three pairwise non-edge-adjacent
   children stay as separate components after closed sibling ownership excludes
   every artificial seam, including diagonal corner contact through both
@@ -1209,10 +1210,13 @@ true only for an empty complete result.
   two consecutive, bit-identical endpoint records; each edge is removed and
   the complementary paths are spliced before parent correspondence is restored.
   Three- through six-cell paths recheck every remaining seam against the current
-  merged boundary after each earlier splice. Connected four- through six-cell
-  non-path unions prove all internal seam owners together, cancel only
-  reverse-oriented bit-exact edge pairs, and admit the result only when the
-  remaining edges trace one unambiguous outer boundary cycle. The certified
+  merged boundary after each earlier splice. Connected four- through seven-cell
+  non-path unions prove all internal seams together. Paired owners require
+  reverse-oriented bit-exact edge records; one exact owner may canonicalize a
+  unique reverse consecutive edge only when its endpoints are bit-identical in
+  the unchanged pole-clear complementary chart and are not a non-exact
+  multi-owner grid corner. The remaining edges must trace one unambiguous outer
+  boundary cycle. The certified
   five-cell 2×2-cycle-plus-tail fixture has one 12-edge boundary, and the exact
   connected six-cell fixture has one 14-edge boundary; bit-mismatched
   central seam records remain indeterminate even when their physical points
@@ -1222,14 +1226,14 @@ true only for an empty complete result.
   both orthogonal empty owners at each diagonal corner. The pinned singleton
   plus four-cell fixture retains two regions with 3- and 8-edge boundaries;
   removing either separator owner fails closed.
-  The reviewed seven-cell 2×3-block-plus-tail fixture remains fail-closed: seven
-  of eight grid adjacencies own reverse-oriented bit-exact seam pairs, but
-  `[1,0]/[1,1]` has a full seam edge on only one child. Treating that grid
-  adjacency as cancellable would invent an internal edge, so seven-cell support
-  requires a new exact proof for non-owning grid adjacency before outer-cycle
-  tracing can be extended.
+  The reviewed seven-cell 2×3-block-plus-tail fixture now returns one canonical
+  15-edge region: seven adjacencies own reverse-oriented bit-exact seam pairs,
+  while `[1,0]/[1,1]` uses the one-owner proof above. Closed-cell containment
+  and pole-clear constraint topology prove the whole shared arc, and operand
+  swap is bit-exact. Approximate complementary endpoints, ambiguity, and the
+  existing one-ULP central-grid adversary remain fail-closed.
   Exact 9/8 piece-pair, 252/251 boundary-pair, and 1,008/1,007 arc-witness
-  admission remain pinned. Seven-or-more-positive unions, disconnected five-cell
+  admission remain pinned. Other seven-positive and eight-/nine-positive unions, disconnected five-cell
   layouts without exact sibling separation, non-exact or otherwise ambiguous
   multi-edge shared seams, full-turn
   aliases, polar, non-exact tangent, ambiguous multiple-cycle,
