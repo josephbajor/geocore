@@ -59,10 +59,12 @@ pub use intersection::{
     certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals,
     certify_verified_nurbs_nurbs_intersection_residuals,
     certify_verified_offset_nurbs_nurbs_intersection_residuals,
+    certify_verified_offset_nurbs_plane_intersection_residuals,
     certify_verified_plane_nurbs_intersection_residuals,
     certify_verified_sphere_nurbs_intersection_residuals,
     verified_nurbs_nurbs_intersection_certificate_cost,
     verified_offset_nurbs_nurbs_intersection_certificate_cost,
+    verified_offset_nurbs_plane_intersection_certificate_cost,
     verified_plane_nurbs_intersection_certificate_work,
     verified_sphere_nurbs_intersection_certificate_cost,
 };

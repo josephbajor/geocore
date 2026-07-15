@@ -4448,8 +4448,8 @@ pub fn certify_verified_plane_nurbs_intersection_residuals(
     })
 }
 
-/// Exact logical resources consumed by one operation-generated direct
-/// NURBS/NURBS whole-range certificate.
+/// Exact logical resources consumed by one operation-generated paired
+/// NURBS-source whole-range certificate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VerifiedNurbsNurbsCertificateCost {
     work: u64,
@@ -4519,6 +4519,44 @@ pub fn verified_offset_nurbs_nurbs_intersection_certificate_cost(
     verified_paired_nurbs_intersection_certificate_cost(carrier, basis, direct)
 }
 
+/// Deterministic logical resources required by
+/// [`certify_verified_offset_nurbs_plane_intersection_residuals`].
+///
+/// Every carrier subdivision cell proves the effective Offset(NURBS) lift
+/// from the original basis differential enclosure. The affine Plane trace is
+/// proved independently at each carrier/pcurve control pair.
+pub fn verified_offset_nurbs_plane_intersection_certificate_cost(
+    carrier: &NurbsCurve,
+    traces: &[NurbsIntersectionTrace; 2],
+) -> Option<VerifiedNurbsNurbsCertificateCost> {
+    let basis = match traces {
+        [
+            NurbsIntersectionTrace::OffsetNurbs(offset),
+            NurbsIntersectionTrace::Plane(_),
+        ]
+        | [
+            NurbsIntersectionTrace::Plane(_),
+            NurbsIntersectionTrace::OffsetNurbs(offset),
+        ] => offset.basis(),
+        _ => return None,
+    };
+    let control_count = u64::try_from(carrier.points().len()).ok()?;
+    let carrier_spans = control_count.checked_sub(1)?;
+    let subdivisions = 1_u64.checked_shl(TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u32)?;
+    let items = carrier_spans.checked_mul(subdivisions)?;
+    let (control_u, control_v) = basis.net_size();
+    let span_u = u64::try_from(control_u.checked_sub(basis.degree_u())?).ok()?;
+    let span_v = u64::try_from(control_v.checked_sub(basis.degree_v())?).ok()?;
+    let offset_work_per_item = span_u.checked_mul(span_v)?.checked_mul(6)?.checked_add(1)?;
+    Some(VerifiedNurbsNurbsCertificateCost {
+        work: items
+            .checked_mul(offset_work_per_item)?
+            .checked_add(control_count)?,
+        items,
+        depth: TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64,
+    })
+}
+
 fn verified_paired_nurbs_intersection_certificate_cost(
     carrier: &NurbsCurve,
     surface_a: &NurbsSurface,
@@ -4579,6 +4617,24 @@ pub fn certify_verified_offset_nurbs_nurbs_intersection_residuals(
     certify_verified_paired_nurbs_intersection_residuals_impl(carrier, traces, pcurves, tolerance)
 }
 
+/// Certify one operation-generated direct Offset(NURBS)/Plane marching branch
+/// over its complete finite degree-1 carrier range.
+///
+/// The offset trace is certified from its original basis and signed distance;
+/// the Plane trace uses an exact affine control-hull residual bound. Neither
+/// proof relies on retained discovery samples.
+pub fn certify_verified_offset_nurbs_plane_intersection_residuals(
+    carrier: NurbsCurve,
+    traces: [NurbsIntersectionTrace; 2],
+    pcurves: [NurbsCurve2d; 2],
+    tolerance: f64,
+) -> Result<VerifiedNurbsIntersectionCertificate, IntersectionCertificateError> {
+    if verified_offset_nurbs_plane_intersection_certificate_cost(&carrier, &traces).is_none() {
+        return Err(IntersectionCertificateError::InvalidTraceFamily);
+    }
+    certify_verified_paired_nurbs_intersection_residuals_impl(carrier, traces, pcurves, tolerance)
+}
+
 fn certify_verified_paired_nurbs_intersection_residuals_impl(
     carrier: NurbsCurve,
     traces: [NurbsIntersectionTrace; 2],
@@ -4632,7 +4688,8 @@ fn certify_verified_paired_nurbs_intersection_residuals_impl(
                         .weights()
                         .is_some_and(|weights| weights.iter().any(|weight| !weight.is_finite()))
             }
-            NurbsIntersectionTrace::Plane(_) | NurbsIntersectionTrace::Sphere(_) => true,
+            NurbsIntersectionTrace::Plane(plane) => !finite_plane(*plane),
+            NurbsIntersectionTrace::Sphere(_) => true,
         })
     {
         return Err(IntersectionCertificateError::NonFiniteGeometry);
@@ -4666,6 +4723,19 @@ fn certify_verified_paired_nurbs_intersection_residuals_impl(
         }
 
         let bound = match &traces[index] {
+            NurbsIntersectionTrace::Plane(surface) => {
+                let mut bound = 0.0_f64;
+                for (&point, &uv) in carrier.points().iter().zip(pcurve.points()) {
+                    let control_bound = transmitted_plane_control_residual_bound(
+                        point,
+                        *surface,
+                        Vec2::new(uv.x, uv.y),
+                    )
+                    .ok_or(IntersectionCertificateError::NonFiniteResidualBound { trace })?;
+                    bound = bound.max(control_bound);
+                }
+                bound
+            }
             NurbsIntersectionTrace::Nurbs(surface) => {
                 transmitted_nurbs_trace_residual_bound(&carrier, surface, None, pcurve, trace)?
             }
@@ -4676,7 +4746,7 @@ fn certify_verified_paired_nurbs_intersection_residuals_impl(
                 pcurve,
                 trace,
             )?,
-            NurbsIntersectionTrace::Plane(_) | NurbsIntersectionTrace::Sphere(_) => {
+            NurbsIntersectionTrace::Sphere(_) => {
                 return Err(IntersectionCertificateError::InvalidTraceFamily);
             }
         };

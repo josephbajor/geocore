@@ -22,6 +22,7 @@ use std::collections::{HashMap, HashSet};
 
 const MAX_VERIFIED_OFFSET_NURBS_CHAIN_LENGTH: usize = 2;
 const MAX_VERIFIED_OFFSET_NURBS_DIRECT_NURBS_CHAIN_LENGTH: usize = 4;
+const MAX_VERIFIED_VARYING_OFFSET_NURBS_CHAIN_LENGTH: usize = 1;
 
 /// Immutable 3D curve node. The descriptor is the node payload itself so
 /// topology's historical geometry-enum names can remain source compatible.
@@ -1062,19 +1063,24 @@ fn validate_curve_references(
     }
     if let Some(intersection) = descriptor.as_verified_nurbs_intersection() {
         let certificate = intersection.certificate();
-        let max_offset_nurbs_chain_length = if matches!(
-            certificate.traces(),
+        let max_offset_nurbs_chain_length = match certificate.traces() {
             [
                 NurbsIntersectionTrace::OffsetNurbs(_),
-                NurbsIntersectionTrace::Nurbs(_)
-            ] | [
                 NurbsIntersectionTrace::Nurbs(_),
-                NurbsIntersectionTrace::OffsetNurbs(_)
             ]
-        ) {
-            MAX_VERIFIED_OFFSET_NURBS_DIRECT_NURBS_CHAIN_LENGTH
-        } else {
-            MAX_VERIFIED_OFFSET_NURBS_CHAIN_LENGTH
+            | [
+                NurbsIntersectionTrace::Nurbs(_),
+                NurbsIntersectionTrace::OffsetNurbs(_),
+            ] => MAX_VERIFIED_OFFSET_NURBS_DIRECT_NURBS_CHAIN_LENGTH,
+            [
+                NurbsIntersectionTrace::OffsetNurbs(_),
+                NurbsIntersectionTrace::Plane(_),
+            ]
+            | [
+                NurbsIntersectionTrace::Plane(_),
+                NurbsIntersectionTrace::OffsetNurbs(_),
+            ] => MAX_VERIFIED_VARYING_OFFSET_NURBS_CHAIN_LENGTH,
+            _ => MAX_VERIFIED_OFFSET_NURBS_CHAIN_LENGTH,
         };
         for (source, certified) in intersection
             .source_surfaces()
