@@ -508,7 +508,8 @@ pub fn intersect_bounded_graph_surfaces_with_context(
 /// direct-NURBS, exact-Sphere-field/genuinely-non-planar-direct-NURBS, and
 /// compatible genuinely-non-planar direct-NURBS/direct-NURBS branches are
 /// supported. Direct constant-normal Offset(NURBS)/NURBS branches additionally
-/// reuse the compatible paired marcher. Two compatible direct constant-normal
+/// reuse the compatible paired marcher across the positive-area overlap of
+/// distinct operand windows. Two compatible direct constant-normal
 /// Offset(NURBS) roots return a complete miss only from strict outward
 /// original-control separation; coincident or intersecting effective sheets
 /// and all other pairs remain explicitly unsupported.

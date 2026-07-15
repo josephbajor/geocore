@@ -338,8 +338,9 @@ remain ratcheted in `docs/oracle-results.tsv`.
    graph arm now marches direct or safe finite Offset(Plane) or Offset(Sphere)
    fields against a genuinely curved direct NURBS, plus compatible pairs of
    genuinely curved direct NURBS unit charts and the first direct
-   constant-normal Offset(NURBS)/NURBS unit chart, in one owner scope. It retains
-   paired degree-1 traces, certifies both lifts over the whole range at depth
+   constant-normal Offset(NURBS)/NURBS unit chart with exact positive-area
+   clipping across distinct finite operand windows, in one owner scope. It
+   retains paired degree-1 traces, certifies both lifts over the whole range at depth
    10, and persists the ordered live source identity in a non-transmitted
    verified NURBS descriptor atomically. The Plane fixture pins exact 7170/7169
    certificate Work and one Offset(Plane) pins exact 2/1 graph visits. The
@@ -352,9 +353,10 @@ remain ratcheted in `docs/oracle-results.tsv`.
    differences are discovery-only and outward original-control differences own
    complete misses. The offset proof also binds the live root, signed distance,
    original constant-+Z-normal basis, direct peer, and paired pcurves at exact
-   2/depth-2 graph traversal. Planar or unaligned charts, unequal ranges or
-   weights, collapsed or non-finite sphere offsets, nested or varying-normal
-   Offset(NURBS), intersecting or coincident Offset(NURBS)/Offset(NURBS), and
+   2/depth-2 graph traversal. Planar or unaligned charts, disjoint or
+   boundary-only offset/direct ranges, unequal weights, collapsed or non-finite
+   sphere offsets, nested or varying-normal Offset(NURBS), intersecting or
+   coincident Offset(NURBS)/Offset(NURBS), and
    broader NURBS/NURBS remain explicit unsupported boundaries. Compatible
    direct constant-normal Offset(NURBS) pairs additionally own a graph-only
    complete-miss proof from strict outward original-control separation, with

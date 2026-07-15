@@ -695,7 +695,9 @@ certified against both originals. Its paired cost is
 one-span fixture pins `14336/14335` Work, `1024/1023` Items, and `10/9` Depth.
 A narrow direct Offset(NURBS)/NURBS arm reuses that paired proof only when the
 offset basis is the exact constant-+Z-normal unit chart and the direct peer is
-genuinely non-planar with matching constant weights and ranges. Outward
+genuinely non-planar with matching constant weights. Their finite requested
+unit-chart windows may differ, but must have a positive-area overlap; discovery
+is clipped to that exact shared rectangle. Outward
 original basis-plus-distance versus direct-source control intervals own
 complete misses; the rounded effective surface remains discovery-only. The
 certificate retains the live offset root, signed distance, original basis,
@@ -822,8 +824,9 @@ whole-range proof. Records 1828 and 1671 are admitted in place, while the
 traversal-masked records 2008 and 1678 are independently certified by focused
 payload transplants.
 
-- Broaden the first direct constant-normal Offset(NURBS)/NURBS unit-chart arm,
-  then add broader NURBS/NURBS charts and other exact/procedural families only
+- Broaden the first direct constant-normal Offset(NURBS)/NURBS unit-chart arm
+  beyond positive-area finite-window overlap, then add broader NURBS/NURBS
+  charts and other exact/procedural families only
   with contextual accounting and paired trace evidence.
 - Broaden the M3c consumer to null/general closed limits, other nullable chart
   data, non-endpoint-only periodic trace ranges, noncanonical charts, and further terminator variants
@@ -890,11 +893,12 @@ the graph ownership model.
   protection, and typed periodic, closed, altered, stale, mismatched,
   noncanonical, and null-limit rollback paths.
 - Operation-generated direct Offset(NURBS)/NURBS variants cover both operand
-  orders and polynomial/rational constant-normal unit-chart bases, retain the
+  orders, polynomial/rational constant-normal unit-chart bases, and distinct
+  finite operand windows with a positive-area shared rectangle; they retain the
   live root, basis, signed distance, direct peer, and paired pcurves, pin exact
   14,336/1,024/10 certificate accounting plus 2/depth-2 graph traversal, and
-  reject nested, varying-normal, offset/offset, unaligned, altered, and stale
-  sources atomically.
+  reject disjoint or boundary-only windows and nested, varying-normal,
+  offset/offset, unaligned, altered, and stale sources atomically.
 - Direct constant-normal Offset(B-surface)/B-surface variants cover both operand
   orders and polynomial/rational bases, retain the live root, signed distance,
   basis, and paired pcurves, pin exact 14,336/2/10 proof accounting, reject

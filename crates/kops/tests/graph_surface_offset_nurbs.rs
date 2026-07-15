@@ -56,6 +56,14 @@ fn narrow_window() -> [ParamRange; 2] {
     [ParamRange::new(0.0, 1.0), ParamRange::new(0.0, 0.0015)]
 }
 
+fn overlapping_offset_window() -> [ParamRange; 2] {
+    [ParamRange::new(0.0, 0.8), ParamRange::new(0.0, 0.0015)]
+}
+
+fn overlapping_direct_window() -> [ParamRange; 2] {
+    [ParamRange::new(0.2, 1.0), ParamRange::new(0.0005, 0.0015)]
+}
+
 fn observed(
     report: &kcore::operation::OperationReport,
     stage: StageId,
@@ -69,7 +77,7 @@ fn observed(
 }
 
 #[test]
-fn direct_constant_normal_offset_promotes_in_both_orders_and_persists_identities() {
+fn overlapping_windows_promote_in_both_orders_and_persist_identities() {
     let signed_distance = 0.05;
     let tolerances = Tolerances::with_linear(1.0e-3).unwrap();
     for rational in [false, true] {
@@ -78,9 +86,9 @@ fn direct_constant_normal_offset_promotes_in_both_orders_and_persists_identities
         let lower = intersect_bounded_offset_nurbs_nurbs_surfaces(
             &basis,
             signed_distance,
-            narrow_window(),
+            overlapping_offset_window(),
             &direct,
-            narrow_window(),
+            overlapping_direct_window(),
             tolerances,
         )
         .unwrap();
@@ -96,18 +104,35 @@ fn direct_constant_normal_offset_promotes_in_both_orders_and_persists_identities
         let result = intersect_bounded_graph_surfaces(
             &graph,
             offset_handle,
-            narrow_window(),
+            overlapping_offset_window(),
             direct_handle,
-            narrow_window(),
+            overlapping_direct_window(),
             tolerances,
         )
         .unwrap();
         assert_eq!(result.raw, lower);
+        let raw_branch = &result.raw.curves[0];
+        for coordinate in [raw_branch.uv_a_start[1], raw_branch.uv_b_start[1]] {
+            assert!((coordinate - 0.0005).abs() <= f64::EPSILON);
+        }
+        for coordinate in [raw_branch.uv_a_end[1], raw_branch.uv_b_end[1]] {
+            assert!((coordinate - 0.0015).abs() <= f64::EPSILON);
+        }
         assert_eq!(
             result.branch_graph.source_surfaces,
             [offset_handle, direct_handle]
         );
         assert_eq!(result.branch_graph.edges.len(), 1);
+        assert_eq!(
+            result.branch_graph.edges[0]
+                .endpoint_events
+                .map(|event| match event {
+                    kops::intersect::IntersectionBranchEndpointEvent::SurfaceWindowBoundary {
+                        surfaces,
+                    } => surfaces,
+                }),
+            [[true, true], [true, true]]
+        );
         let certificate = result.branch_graph.edges[0].certificate.as_nurbs().unwrap();
         let offset_trace = certificate.traces()[0].as_offset_nurbs().unwrap();
         assert_eq!(offset_trace.basis(), &basis);
@@ -123,9 +148,9 @@ fn direct_constant_normal_offset_promotes_in_both_orders_and_persists_identities
         let reverse = intersect_bounded_graph_surfaces(
             &graph,
             direct_handle,
-            narrow_window(),
+            overlapping_direct_window(),
             offset_handle,
-            narrow_window(),
+            overlapping_offset_window(),
             tolerances,
         )
         .unwrap();
@@ -175,9 +200,9 @@ fn scoped_offset_pair_preserves_marcher_report_and_has_exact_certificate_cost() 
     let lower = intersect_bounded_offset_nurbs_nurbs_surfaces_with_context(
         &basis,
         signed_distance,
-        narrow_window(),
+        overlapping_offset_window(),
         &direct,
-        narrow_window(),
+        overlapping_direct_window(),
         &lower_context,
     )
     .unwrap();
@@ -192,9 +217,9 @@ fn scoped_offset_pair_preserves_marcher_report_and_has_exact_certificate_cost() 
     let outcome = intersect_bounded_graph_surfaces_with_context(
         &graph,
         offset_handle,
-        narrow_window(),
+        overlapping_offset_window(),
         direct_handle,
-        narrow_window(),
+        overlapping_direct_window(),
         &context,
     );
     let result = outcome.result().unwrap();
@@ -286,9 +311,9 @@ fn scoped_offset_pair_preserves_marcher_report_and_has_exact_certificate_cost() 
         intersect_bounded_graph_surfaces_with_context(
             &graph,
             offset_handle,
-            narrow_window(),
+            overlapping_offset_window(),
             direct_handle,
-            narrow_window(),
+            overlapping_direct_window(),
             &exact_context,
         )
         .result()
@@ -328,9 +353,9 @@ fn scoped_offset_pair_preserves_marcher_report_and_has_exact_certificate_cost() 
         let denied = intersect_bounded_graph_surfaces_with_context(
             &graph,
             offset_handle,
-            narrow_window(),
+            overlapping_offset_window(),
             direct_handle,
-            narrow_window(),
+            overlapping_direct_window(),
             &denied_context,
         );
         let GraphSurfaceIntersectionError::OperationPolicy(
@@ -571,9 +596,9 @@ fn stale_and_altered_offset_sources_roll_back_atomically() {
         let local = intersect_bounded_graph_surfaces(
             &graph,
             offset_handle,
-            narrow_window(),
+            overlapping_offset_window(),
             direct_handle,
-            narrow_window(),
+            overlapping_direct_window(),
             tolerances,
         )
         .unwrap();
@@ -627,9 +652,9 @@ fn stale_and_altered_offset_sources_roll_back_atomically() {
     let local = intersect_bounded_graph_surfaces(
         &original,
         original_offset,
-        narrow_window(),
+        overlapping_offset_window(),
         original_direct,
-        narrow_window(),
+        overlapping_direct_window(),
         tolerances,
     )
     .unwrap();
@@ -730,6 +755,31 @@ fn broader_offset_families_and_unaligned_charts_fail_closed() {
                 narrow_window(),
                 second,
                 narrow_window(),
+                tolerances,
+            ),
+            Err(GraphSurfaceIntersectionError::Intersection(
+                IntersectionError::UnsupportedSurfacePair { .. }
+            ))
+        ));
+    }
+
+    for (offset_window, direct_window) in [
+        (
+            [ParamRange::new(0.0, 0.4), narrow_window()[1]],
+            [ParamRange::new(0.6, 1.0), narrow_window()[1]],
+        ),
+        (
+            [ParamRange::new(0.0, 0.5), narrow_window()[1]],
+            [ParamRange::new(0.5, 1.0), narrow_window()[1]],
+        ),
+    ] {
+        assert!(matches!(
+            intersect_bounded_graph_surfaces(
+                &graph,
+                offset,
+                offset_window,
+                direct_handle,
+                direct_window,
                 tolerances,
             ),
             Err(GraphSurfaceIntersectionError::Intersection(

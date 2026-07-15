@@ -1067,8 +1067,10 @@ true only for an empty complete result.
   both original lifts are independently certified. The one-span paired fixture
   pins 14,336/14,335 Work, 1,024/1,023 Items, and 10/9 Depth. A first direct
   Offset(NURBS)/NURBS arm admits the exact constant-+Z-normal unit-chart basis
-  against a genuinely non-planar compatible peer. It retains and validates the
-  live root, signed distance, original basis, direct source, and paired pcurves;
+  against a genuinely non-planar compatible peer. Distinct finite operand
+  windows are accepted only when their exact axiswise overlap has positive
+  area, and discovery is clipped to that shared rectangle. It retains and
+  validates the live root, signed distance, original basis, direct source, and paired pcurves;
   outward original controls own misses while the rounded displaced surface is
   discovery-only. The paired proof keeps the same exact Work/Items/Depth
   boundaries and the offset root visits its basis at exact graph depth 2.
@@ -1077,8 +1079,8 @@ true only for an empty complete result.
   basis-plus-distance controls are strictly separated. This no-branch arm pins
   exact 4/3 graph visits and 2/1 dependency depth, preserves operand order, and
   rejects coincident effective sheets.
-  Planar or unaligned peers, unequal ranges or weights, collapsed or non-finite
-  sphere-offset fields, nested or varying-normal Offset(NURBS), intersecting or
+  Planar or unaligned peers, disjoint or boundary-only ranges, unequal weights,
+  collapsed or non-finite sphere-offset fields, nested or varying-normal Offset(NURBS), intersecting or
   coincident Offset(NURBS)/Offset(NURBS), broader NURBS/NURBS, and
   other procedural pairs remain typed unsupported.
   The compatibility magnitude-twelve rung runs the complete historical

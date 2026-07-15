@@ -2,7 +2,10 @@
 //!
 //! This first paired-surface slice accepts two finite-open clamped sources
 //! with the same quadratic-linear unit-square basis, constant shared weights,
-//! requested parameter window, and exact identity `x/y` control fields. Both
+//! and exact identity `x/y` control fields. Direct pairs require the same
+//! requested parameter window. The constant-normal Offset(NURBS)/NURBS arm
+//! additionally accepts distinct windows with a positive-area overlap and
+//! clips discovery to that shared rectangle. Both
 //! sources therefore have the injective chart `(x,y) = (u,v)`, and their
 //! spatial difference is confined to `z`, so a zero contour of the scalar `z`
 //! difference is a surface/surface contact.
@@ -95,7 +98,8 @@ pub fn intersect_bounded_nurbs_nurbs_surfaces_with_context(
 }
 
 /// Intersect one constant-normal offset of a compatible planar NURBS basis
-/// with one direct compatible NURBS surface.
+/// with one direct compatible NURBS surface over their positive-area shared
+/// unit-chart window.
 pub fn intersect_bounded_offset_nurbs_nurbs_surfaces(
     basis: &NurbsSurface,
     signed_distance: f64,
@@ -125,7 +129,8 @@ pub fn intersect_bounded_offset_nurbs_nurbs_surfaces(
     .into_result()
 }
 
-/// Context-aware constant-normal Offset(NURBS)/NURBS surface intersection.
+/// Context-aware constant-normal Offset(NURBS)/NURBS surface intersection
+/// over the positive-area overlap of the two requested unit-chart windows.
 pub fn intersect_bounded_offset_nurbs_nurbs_surfaces_with_context(
     basis: &NurbsSurface,
     signed_distance: f64,
@@ -167,15 +172,17 @@ pub(super) fn supports_direct_nurbs_nurbs_surface_pair(
     surface_b: &NurbsSurface,
     range_b: [ParamRange; 2],
 ) -> bool {
-    let domain = [ParamRange::new(0.0, 1.0), ParamRange::new(0.0, 1.0)];
     range_a == range_b
-        && range_a.iter().zip(domain).all(|(range, domain)| {
-            range.is_finite()
-                && range.width() > 0.0
-                && range.lo >= domain.lo
-                && range.hi <= domain.hi
-        })
-        && surface_a.param_range() == domain
+        && positive_unit_chart_window(range_a)
+        && supports_compatible_nurbs_unit_chart_pair(surface_a, surface_b)
+}
+
+fn supports_compatible_nurbs_unit_chart_pair(
+    surface_a: &NurbsSurface,
+    surface_b: &NurbsSurface,
+) -> bool {
+    let domain = [ParamRange::new(0.0, 1.0), ParamRange::new(0.0, 1.0)];
+    surface_a.param_range() == domain
         && surface_b.param_range() == domain
         && surface_a.periodicity() == [None, None]
         && surface_b.periodicity() == [None, None]
@@ -199,6 +206,28 @@ pub(super) fn supports_direct_nurbs_nurbs_surface_pair(
         && exact_unit_xy_controls(surface_b)
 }
 
+fn positive_unit_chart_window(window: [ParamRange; 2]) -> bool {
+    let domain = [ParamRange::new(0.0, 1.0), ParamRange::new(0.0, 1.0)];
+    window.iter().zip(domain).all(|(range, domain)| {
+        range.is_finite() && range.width() > 0.0 && range.lo >= domain.lo && range.hi <= domain.hi
+    })
+}
+
+fn shared_positive_unit_chart_window(
+    window_a: [ParamRange; 2],
+    window_b: [ParamRange; 2],
+) -> Option<[ParamRange; 2]> {
+    if !positive_unit_chart_window(window_a) || !positive_unit_chart_window(window_b) {
+        return None;
+    }
+    let shared_axis = |axis: usize| {
+        let lo = window_a[axis].lo.max(window_b[axis].lo);
+        let hi = window_a[axis].hi.min(window_b[axis].hi);
+        (hi > lo).then(|| ParamRange::new(lo, hi))
+    };
+    Some([shared_axis(0)?, shared_axis(1)?])
+}
+
 pub(super) fn supports_offset_nurbs_nurbs_surface_pair(
     basis: &NurbsSurface,
     signed_distance: f64,
@@ -207,7 +236,8 @@ pub(super) fn supports_offset_nurbs_nurbs_surface_pair(
     direct_range: [ParamRange; 2],
 ) -> bool {
     signed_distance.is_finite()
-        && supports_direct_nurbs_nurbs_surface_pair(basis, offset_range, direct, direct_range)
+        && supports_compatible_nurbs_unit_chart_pair(basis, direct)
+        && shared_positive_unit_chart_window(offset_range, direct_range).is_some()
         && supports_constant_positive_normal_offset(basis, signed_distance)
 }
 
@@ -259,6 +289,11 @@ pub(super) fn intersect_bounded_nurbs_nurbs_surfaces_with_traces_in_scope(
     tolerances: Tolerances,
     scope: &mut OperationScope<'_, '_>,
 ) -> core::result::Result<MarchOutput, ContextMarchError> {
+    if !supports_direct_nurbs_nurbs_surface_pair(surface_a, range_a, surface_b, range_b) {
+        return Err(ContextMarchError::Kernel(Error::InvalidGeometry {
+            reason: INCOMPATIBLE_REASON,
+        }));
+    }
     intersect_compatible_nurbs_pair_with_traces_in_scope(
         surface_a, range_a, surface_b, range_b, tolerances, true, scope,
     )
@@ -281,7 +316,7 @@ pub(super) fn intersect_bounded_offset_nurbs_nurbs_surfaces_with_traces_in_scope
         direct_range,
     ) {
         return Err(ContextMarchError::Kernel(Error::InvalidGeometry {
-            reason: "Offset(NURBS)/NURBS surface intersection requires a direct constant-positive-normal unit-chart basis and compatible direct source",
+            reason: "Offset(NURBS)/NURBS surface intersection requires a direct constant-positive-normal unit-chart basis, compatible direct source, and positive-area window overlap",
         }));
     }
     if offset_control_difference_proves_empty(basis, signed_distance, direct) {
@@ -312,7 +347,12 @@ fn intersect_compatible_nurbs_pair_with_traces_in_scope(
     original_control_miss_is_authoritative: bool,
     scope: &mut OperationScope<'_, '_>,
 ) -> core::result::Result<MarchOutput, ContextMarchError> {
-    if !supports_direct_nurbs_nurbs_surface_pair(surface_a, range_a, surface_b, range_b) {
+    let Some(shared_range) = shared_positive_unit_chart_window(range_a, range_b) else {
+        return Err(ContextMarchError::Kernel(Error::InvalidGeometry {
+            reason: INCOMPATIBLE_REASON,
+        }));
+    };
+    if !supports_compatible_nurbs_unit_chart_pair(surface_a, surface_b) {
         return Err(ContextMarchError::Kernel(Error::InvalidGeometry {
             reason: INCOMPATIBLE_REASON,
         }));
@@ -335,7 +375,7 @@ fn intersect_compatible_nurbs_pair_with_traces_in_scope(
     let output = march_nurbs_surface_intersection_with_traces_in_scope(
         MarchConfig {
             surface: &difference,
-            surface_range: range_a,
+            surface_range: shared_range,
             // A tighter discovery tolerance keeps sub-tolerance cell edges
             // available for joining into a positive-length branch. The
             // caller tolerance still owns final whole-range certification.
