@@ -4,7 +4,11 @@
 //! with the same quadratic-linear unit-square basis, constant shared weights,
 //! and exact identity `x/y` control fields. Direct and constant-normal
 //! Offset(NURBS)/NURBS pairs accept distinct windows with a positive-area
-//! overlap and clip discovery to that shared rectangle. A second bounded
+//! overlap and clip discovery to that shared rectangle. Compatible pairs of
+//! planar constant-normal Offset(NURBS) roots additionally normalize their
+//! translated source charts to the positive-area shared physical XY window,
+//! march a strict interior crossing there, then lift both pcurves back to the
+//! original source parameters. A second bounded
 //! Offset(NURBS)/NURBS family uses an exact rational quarter-cylinder source,
 //! its true varying-normal parallel NURBS surface, and either a canonical
 //! direct planar NURBS peer or direct analytic Plane normal to the global X,
@@ -57,6 +61,14 @@ struct CanonicalDirectNurbsPlane {
     orientation: CanonicalPlaneOrientation,
     plane_coordinate: f64,
     chart_ranges: [ParamRange; 2],
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ConstantNormalUnitChart {
+    slope_u: f64,
+    slope_v: f64,
+    intercept: f64,
+    normal: Vec3,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -390,6 +402,136 @@ pub(super) fn supports_strictly_separated_constant_normal_offset_nurbs_pair(
         )
 }
 
+pub(super) fn supports_intersecting_constant_normal_offset_nurbs_pair(
+    basis_a: &NurbsSurface,
+    signed_distance_a: f64,
+    range_a: [ParamRange; 2],
+    basis_b: &NurbsSurface,
+    signed_distance_b: f64,
+    range_b: [ParamRange; 2],
+) -> bool {
+    if !signed_distance_a.is_finite()
+        || !signed_distance_b.is_finite()
+        || !supports_compatible_nurbs_unit_chart_pair(basis_a, basis_b)
+    {
+        return false;
+    }
+    let (Some(chart_a), Some(chart_b)) = (
+        constant_normal_unit_chart(basis_a),
+        constant_normal_unit_chart(basis_b),
+    ) else {
+        return false;
+    };
+    let Some(shared) = shared_effective_xy_window(
+        chart_a,
+        signed_distance_a,
+        range_a,
+        chart_b,
+        signed_distance_b,
+        range_b,
+    ) else {
+        return false;
+    };
+
+    // A strict sign change at the four affine-chart corners proves that the
+    // effective plane/plane line crosses the interior of the positive-area
+    // shared window. Exact coincidence, boundary-only contact, and separated
+    // or interval-ambiguous pairs remain outside this branch arm.
+    let mut lower = f64::INFINITY;
+    let mut upper = f64::NEG_INFINITY;
+    let mut scale = 1.0_f64;
+    for u in [shared[0].lo, shared[0].hi] {
+        for v in [shared[1].lo, shared[1].hi] {
+            let Some((height_a, height_b)) =
+                effective_chart_height(chart_a, signed_distance_a, u, v)
+                    .zip(effective_chart_height(chart_b, signed_distance_b, u, v))
+            else {
+                return false;
+            };
+            scale = scale.max(height_a.abs()).max(height_b.abs());
+            let difference = Interval::point(height_a) - Interval::point(height_b);
+            lower = lower.min(difference.lo());
+            upper = upper.max(difference.hi());
+        }
+    }
+    let strict_slack = 32_768.0 * f64::EPSILON * scale;
+    lower < -strict_slack && upper > strict_slack
+}
+
+fn constant_normal_unit_chart(surface: &NurbsSurface) -> Option<ConstantNormalUnitChart> {
+    if !exact_unit_xy_controls(surface) || surface.points().len() != 6 {
+        return None;
+    }
+    let points = surface.points();
+    let intercept = points[0].z;
+    let slope_u = points[4].z - intercept;
+    let slope_v = points[1].z - intercept;
+    for (index, point) in points.iter().enumerate() {
+        let u = [0.0, 0.5, 1.0][index / 2];
+        let v = [0.0, 1.0][index % 2];
+        let expected = intercept + slope_u * u + slope_v * v;
+        if !point.z.is_finite() || !expected.is_finite() || point.z != expected {
+            return None;
+        }
+    }
+    let normal = Vec3::new(-slope_u, -slope_v, 1.0).normalized()?;
+    Some(ConstantNormalUnitChart {
+        slope_u,
+        slope_v,
+        intercept,
+        normal,
+    })
+}
+
+fn shared_effective_xy_window(
+    chart_a: ConstantNormalUnitChart,
+    signed_distance_a: f64,
+    range_a: [ParamRange; 2],
+    chart_b: ConstantNormalUnitChart,
+    signed_distance_b: f64,
+    range_b: [ParamRange; 2],
+) -> Option<[ParamRange; 2]> {
+    if !positive_unit_chart_window(range_a) || !positive_unit_chart_window(range_b) {
+        return None;
+    }
+    let shift_a = chart_a.normal * signed_distance_a;
+    let shift_b = chart_b.normal * signed_distance_b;
+    let shifted = |range: ParamRange, shift: f64| {
+        let lo = range.lo + shift;
+        let hi = range.hi + shift;
+        (lo.is_finite() && hi.is_finite() && hi > lo).then(|| ParamRange::new(lo, hi))
+    };
+    let windows = [
+        [
+            shifted(range_a[0], shift_a.x)?,
+            shifted(range_a[1], shift_a.y)?,
+        ],
+        [
+            shifted(range_b[0], shift_b.x)?,
+            shifted(range_b[1], shift_b.y)?,
+        ],
+    ];
+    let shared_axis = |axis: usize| {
+        let lo = windows[0][axis].lo.max(windows[1][axis].lo);
+        let hi = windows[0][axis].hi.min(windows[1][axis].hi);
+        (lo.is_finite() && hi.is_finite() && hi > lo).then(|| ParamRange::new(lo, hi))
+    };
+    Some([shared_axis(0)?, shared_axis(1)?])
+}
+
+fn effective_chart_height(
+    chart: ConstantNormalUnitChart,
+    signed_distance: f64,
+    x: f64,
+    y: f64,
+) -> Option<f64> {
+    let shift = chart.normal * signed_distance;
+    let u = x - shift.x;
+    let v = y - shift.y;
+    let height = chart.intercept + chart.slope_u * u + chart.slope_v * v + shift.z;
+    height.is_finite().then_some(height)
+}
+
 fn supports_constant_positive_normal_offset(basis: &NurbsSurface, signed_distance: f64) -> bool {
     signed_distance.is_finite()
         && basis
@@ -596,6 +738,175 @@ pub(super) fn intersect_bounded_offset_nurbs_nurbs_surfaces_with_traces_in_scope
         tolerances,
         scope,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn intersect_bounded_dual_offset_nurbs_surfaces_with_traces_in_scope(
+    basis_a: &NurbsSurface,
+    signed_distance_a: f64,
+    range_a: [ParamRange; 2],
+    basis_b: &NurbsSurface,
+    signed_distance_b: f64,
+    range_b: [ParamRange; 2],
+    tolerances: Tolerances,
+    scope: &mut OperationScope<'_, '_>,
+) -> core::result::Result<MarchOutput, ContextMarchError> {
+    if !supports_intersecting_constant_normal_offset_nurbs_pair(
+        basis_a,
+        signed_distance_a,
+        range_a,
+        basis_b,
+        signed_distance_b,
+        range_b,
+    ) {
+        return Err(ContextMarchError::Kernel(Error::InvalidGeometry {
+            reason: "dual Offset(NURBS) intersection requires compatible planar constant-normal unit charts whose effective sheets cross the interior of a positive-area shared physical window",
+        }));
+    }
+    let chart_a = constant_normal_unit_chart(basis_a).ok_or({
+        ContextMarchError::Kernel(Error::InvalidGeometry {
+            reason: INCOMPATIBLE_REASON,
+        })
+    })?;
+    let chart_b = constant_normal_unit_chart(basis_b).ok_or({
+        ContextMarchError::Kernel(Error::InvalidGeometry {
+            reason: INCOMPATIBLE_REASON,
+        })
+    })?;
+    let shared = shared_effective_xy_window(
+        chart_a,
+        signed_distance_a,
+        range_a,
+        chart_b,
+        signed_distance_b,
+        range_b,
+    )
+    .ok_or(ContextMarchError::Kernel(Error::InvalidGeometry {
+        reason: INCOMPATIBLE_REASON,
+    }))?;
+    let effective_a = normalized_effective_plane_surface(chart_a, signed_distance_a, shared)?;
+    let effective_b = normalized_effective_plane_surface(chart_b, signed_distance_b, shared)?;
+    let output = intersect_compatible_nurbs_pair_with_traces_in_scope(
+        &effective_a,
+        [ParamRange::new(0.0, 1.0), ParamRange::new(0.0, 1.0)],
+        &effective_b,
+        [ParamRange::new(0.0, 1.0), ParamRange::new(0.0, 1.0)],
+        tolerances,
+        false,
+        scope,
+    )?;
+    lift_dual_offset_output_to_original_sources(
+        output,
+        basis_a,
+        chart_a,
+        signed_distance_a,
+        basis_b,
+        chart_b,
+        signed_distance_b,
+        shared,
+    )
+}
+
+fn normalized_effective_plane_surface(
+    chart: ConstantNormalUnitChart,
+    signed_distance: f64,
+    shared: [ParamRange; 2],
+) -> Result<NurbsSurface> {
+    let mut points = Vec::with_capacity(6);
+    for u in [0.0, 0.5, 1.0] {
+        for v in [0.0, 1.0] {
+            let x = shared[0].lo + u * shared[0].width();
+            let y = shared[1].lo + v * shared[1].width();
+            let z = effective_chart_height(chart, signed_distance, x, y).ok_or(
+                Error::InvalidGeometry {
+                    reason: "dual Offset(NURBS) normalized discovery chart is non-finite",
+                },
+            )?;
+            // Normalized XY is discovery parameterization only. The original
+            // source lift below restores model-space carrier controls and both
+            // ordered source pcurves before certification.
+            points.push(Point3::new(u, v, z));
+        }
+    }
+    NurbsSurface::new(
+        2,
+        1,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        points,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lift_dual_offset_output_to_original_sources(
+    mut output: MarchOutput,
+    basis_a: &NurbsSurface,
+    chart_a: ConstantNormalUnitChart,
+    signed_distance_a: f64,
+    basis_b: &NurbsSurface,
+    chart_b: ConstantNormalUnitChart,
+    signed_distance_b: f64,
+    shared: [ParamRange; 2],
+) -> core::result::Result<MarchOutput, ContextMarchError> {
+    if output.result.curves.len() != output.traces.len() {
+        return Err(ContextMarchError::Kernel(Error::InvalidGeometry {
+            reason: "dual Offset(NURBS) march trace count does not match discovered branches",
+        }));
+    }
+    let shift_a = chart_a.normal * signed_distance_a;
+    let shift_b = chart_b.normal * signed_distance_b;
+    for (branch, trace) in output.result.curves.iter_mut().zip(&mut output.traces) {
+        let normalized = simplify_axis_aligned_pcurve(&trace.surface_pcurve)?;
+        let source_points = |shift: Vec3| {
+            normalized
+                .points()
+                .iter()
+                .map(|point| {
+                    let x = shared[0].lo + point.x * shared[0].width();
+                    let y = shared[1].lo + point.y * shared[1].width();
+                    kgeom::vec::Vec2::new(x - shift.x, y - shift.y)
+                })
+                .collect::<Vec<_>>()
+        };
+        let pcurve_a = NurbsCurve2d::new(
+            1,
+            normalized.knots().as_slice().to_vec(),
+            source_points(shift_a),
+            None,
+        )?;
+        let pcurve_b = NurbsCurve2d::new(
+            1,
+            normalized.knots().as_slice().to_vec(),
+            source_points(shift_b),
+            None,
+        )?;
+        let controls = pcurve_a
+            .points()
+            .iter()
+            .zip(pcurve_b.points())
+            .map(|(&uv_a, &uv_b)| {
+                let point_a = basis_a.eval([uv_a.x, uv_a.y]) + shift_a;
+                let point_b = basis_b.eval([uv_b.x, uv_b.y]) + shift_b;
+                (point_a + point_b) * 0.5
+            })
+            .collect();
+        let carrier = NurbsCurve::new(1, normalized.knots().as_slice().to_vec(), controls, None)?;
+        let a_start = pcurve_a.points()[0];
+        let a_end = pcurve_a.points()[pcurve_a.points().len() - 1];
+        let b_start = pcurve_b.points()[0];
+        let b_end = pcurve_b.points()[pcurve_b.points().len() - 1];
+        branch.curve = SurfaceIntersectionCurve::Nurbs(carrier.clone());
+        branch.curve_range = carrier.param_range();
+        branch.uv_a_start = [a_start.x, a_start.y];
+        branch.uv_a_end = [a_end.x, a_end.y];
+        branch.uv_b_start = [b_start.x, b_start.y];
+        branch.uv_b_end = [b_end.x, b_end.y];
+        trace.carrier = carrier;
+        trace.other_pcurve = pcurve_a;
+        trace.surface_pcurve = pcurve_b;
+    }
+    Ok(output)
 }
 
 pub(super) fn intersect_bounded_offset_nurbs_plane_with_traces_in_scope(

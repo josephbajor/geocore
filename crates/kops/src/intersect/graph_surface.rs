@@ -9,9 +9,10 @@
 //! supports a single varying-normal Offset(NURBS) root against a canonical
 //! direct planar NURBS or analytic Plane peer normal to the global X, Y, or Z
 //! axis.
-//! Strictly separated pairs of compatible constant-normal Offset(NURBS) roots
-//! capped at four offset descriptors additionally own a graph-level
-//! complete-empty proof. The adapter
+//! Pairs of compatible planar constant-normal Offset(NURBS) roots capped at
+//! four descriptors additionally march strict interior crossings in a shared
+//! physical chart, while strictly separated vertical-chart pairs retain their
+//! graph-level complete-empty proof. The adapter
 //! promotes discovered branches only after
 //! constructing both pcurves and proving their paired whole-interval residual
 //! contracts. Common-axis circles retain their longitude/latitude fast path;
@@ -20,11 +21,13 @@
 
 use super::error::IntersectionError;
 use super::nurbs_nurbs_surface::{
+    intersect_bounded_dual_offset_nurbs_surfaces_with_traces_in_scope,
     intersect_bounded_nurbs_nurbs_surfaces_with_traces_in_scope,
     intersect_bounded_offset_nurbs_nurbs_surfaces_with_traces_in_scope,
     intersect_bounded_offset_nurbs_plane_with_traces_in_scope,
     supports_constant_normal_offset_nurbs_nurbs_surface_pair,
     supports_direct_nurbs_nurbs_surface_pair,
+    supports_intersecting_constant_normal_offset_nurbs_pair,
     supports_strictly_separated_constant_normal_offset_nurbs_pair,
     supports_varying_normal_offset_nurbs_nurbs_surface_pair,
     supports_varying_normal_offset_nurbs_plane_surface_pair,
@@ -66,11 +69,13 @@ use kgraph::{
     VerifiedIntersectionCertificate, VerifiedNurbsIntersectionCertificate,
     certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
     certify_paired_plane_sphere_oblique_circle_residuals,
+    certify_verified_dual_offset_nurbs_intersection_residuals,
     certify_verified_nurbs_nurbs_intersection_residuals,
     certify_verified_offset_nurbs_nurbs_intersection_residuals,
     certify_verified_offset_nurbs_plane_intersection_residuals,
     certify_verified_plane_nurbs_intersection_residuals,
     certify_verified_sphere_nurbs_intersection_residuals,
+    verified_dual_offset_nurbs_intersection_certificate_cost,
     verified_nurbs_nurbs_intersection_certificate_cost,
     verified_offset_nurbs_nurbs_intersection_certificate_cost,
     verified_offset_nurbs_plane_intersection_certificate_cost,
@@ -82,7 +87,7 @@ const MAX_SPHERICAL_CIRCLE_PROOFS_PER_QUERY: u64 = 4_096;
 const MAX_NURBS_TRACE_CERTIFICATE_WORK_PER_QUERY: u64 = 134_217_728;
 const MAX_NURBS_TRACE_CERTIFICATE_ITEMS_PER_QUERY: u64 = 16_777_216;
 const MAX_OFFSET_NURBS_INTERSECTION_CHAIN_LENGTH: usize = 4;
-const MAX_DUAL_OFFSET_NURBS_EMPTY_CHAIN_LENGTH: usize = 4;
+const MAX_DUAL_OFFSET_NURBS_CHAIN_LENGTH: usize = 4;
 
 /// Stable work stage for fixed whole-branch inverse sphere-chart subdivisions.
 pub const SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS: StageId =
@@ -526,10 +531,12 @@ pub fn intersect_bounded_graph_surfaces_with_context(
 /// supported. Constant-normal Offset(NURBS)/NURBS roots containing at most
 /// four offset descriptors additionally reuse the compatible paired marcher
 /// across the positive-area overlap of distinct operand windows. Two
-/// compatible constant-normal Offset(NURBS) roots containing at most four
-/// offset descriptors return a complete miss only from strict outward
-/// original-control separation; coincident or intersecting effective sheets
-/// and all other pairs remain explicitly unsupported. A single varying-normal
+/// compatible planar constant-normal Offset(NURBS) roots containing at most
+/// four offset descriptors march strict interior crossings over their shared
+/// physical window, while the existing vertical-chart family returns a
+/// complete miss only from strict outward original-control separation.
+/// Coincident, boundary-only, warped, or otherwise ambiguous pairs remain
+/// explicitly unsupported. A single varying-normal
 /// rational quarter-cylinder offset additionally marches against one canonical
 /// X-, Y-, or Z-normal direct planar NURBS or analytic Plane peer after a
 /// whole-window original-derivative normal proof; nested varying-normal roots
@@ -869,9 +876,44 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 basis: basis_b,
                 chain_length: chain_length_b,
             }),
-        ) if chain_length_a <= MAX_DUAL_OFFSET_NURBS_EMPTY_CHAIN_LENGTH
-            && chain_length_b <= MAX_DUAL_OFFSET_NURBS_EMPTY_CHAIN_LENGTH
+        ) if chain_length_a <= MAX_DUAL_OFFSET_NURBS_CHAIN_LENGTH
+            && chain_length_b <= MAX_DUAL_OFFSET_NURBS_CHAIN_LENGTH
             && supports_strictly_separated_constant_normal_offset_nurbs_pair(
+                basis_a,
+                signed_distance_a,
+                range_a,
+                basis_b,
+                signed_distance_b,
+                range_b,
+            ) =>
+        {
+            [
+                ResolvedGraphSurfaceField::OffsetNurbs {
+                    signed_distance: signed_distance_a,
+                    basis: basis_a,
+                    chain_length: chain_length_a,
+                },
+                ResolvedGraphSurfaceField::OffsetNurbs {
+                    signed_distance: signed_distance_b,
+                    basis: basis_b,
+                    chain_length: chain_length_b,
+                },
+            ]
+        }
+        (
+            Some(ResolvedGraphSurfaceField::OffsetNurbs {
+                signed_distance: signed_distance_a,
+                basis: basis_a,
+                chain_length: chain_length_a,
+            }),
+            Some(ResolvedGraphSurfaceField::OffsetNurbs {
+                signed_distance: signed_distance_b,
+                basis: basis_b,
+                chain_length: chain_length_b,
+            }),
+        ) if chain_length_a <= MAX_DUAL_OFFSET_NURBS_CHAIN_LENGTH
+            && chain_length_b <= MAX_DUAL_OFFSET_NURBS_CHAIN_LENGTH
+            && supports_intersecting_constant_normal_offset_nurbs_pair(
                 basis_a,
                 signed_distance_a,
                 range_a,
@@ -1050,9 +1092,40 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
             (raw, Some(traces))
         }
         [
-            ResolvedGraphSurfaceField::OffsetNurbs { .. },
-            ResolvedGraphSurfaceField::OffsetNurbs { .. },
-        ] => (SurfaceSurfaceIntersections::complete_empty(), None),
+            ResolvedGraphSurfaceField::OffsetNurbs {
+                signed_distance: signed_distance_a,
+                basis: basis_a,
+                ..
+            },
+            ResolvedGraphSurfaceField::OffsetNurbs {
+                signed_distance: signed_distance_b,
+                basis: basis_b,
+                ..
+            },
+        ] => {
+            if supports_strictly_separated_constant_normal_offset_nurbs_pair(
+                basis_a,
+                signed_distance_a,
+                range_a,
+                basis_b,
+                signed_distance_b,
+                range_b,
+            ) {
+                (SurfaceSurfaceIntersections::complete_empty(), None)
+            } else {
+                let output = dual_offset_nurbs_march_in_scope(
+                    basis_a,
+                    signed_distance_a,
+                    range_a,
+                    basis_b,
+                    signed_distance_b,
+                    range_b,
+                    tolerances,
+                    scope,
+                )?;
+                (output.result, Some(output.traces))
+            }
+        }
         _ => unreachable!("supported graph surface fields were preclassified"),
     };
     let branch_graph = build_verified_branch_graph(
@@ -1329,6 +1402,48 @@ fn offset_nurbs_nurbs_march_in_scope(
         offset_range,
         surface,
         surface_range,
+        tolerances,
+        scope,
+    ) {
+        Ok(output) => Ok(output),
+        Err(ContextMarchError::Kernel(error)) => Err(GraphSurfaceIntersectionError::Intersection(
+            IntersectionError::from(error),
+        )),
+        Err(ContextMarchError::Limit(snapshot)) => {
+            scope.diagnose(
+                snapshot.stage,
+                NURBS_SURFACE_MARCH_SAMPLE_LIMIT,
+                DiagnosticKind::LimitReached(snapshot),
+                "NURBS surface marching grid sample limit reached",
+            );
+            Err(GraphSurfaceIntersectionError::Intersection(
+                IntersectionError::from(kcore::error::Error::ResourceLimit { snapshot }),
+            ))
+        }
+        Err(ContextMarchError::Policy(error)) => {
+            Err(GraphSurfaceIntersectionError::OperationPolicy(error))
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dual_offset_nurbs_march_in_scope(
+    basis_a: &NurbsSurface,
+    signed_distance_a: f64,
+    range_a: [ParamRange; 2],
+    basis_b: &NurbsSurface,
+    signed_distance_b: f64,
+    range_b: [ParamRange; 2],
+    tolerances: Tolerances,
+    scope: &mut OperationScope<'_, '_>,
+) -> GraphSurfaceIntersectionResult<MarchOutput> {
+    match intersect_bounded_dual_offset_nurbs_surfaces_with_traces_in_scope(
+        basis_a,
+        signed_distance_a,
+        range_a,
+        basis_b,
+        signed_distance_b,
+        range_b,
         tolerances,
         scope,
     ) {
@@ -1878,6 +1993,7 @@ enum VerifiedNurbsProofFamily {
     Sphere,
     PairedSources,
     OffsetPair,
+    DualOffsetPair,
     OffsetPlane,
 }
 
@@ -1985,6 +2101,34 @@ fn build_verified_analytic_nurbs_branch(
                 march_trace.surface_pcurve.clone(),
             ],
             VerifiedNurbsProofFamily::OffsetPair,
+        ),
+        [
+            ResolvedGraphSurfaceField::OffsetNurbs {
+                signed_distance: signed_distance_a,
+                basis: basis_a,
+                ..
+            },
+            ResolvedGraphSurfaceField::OffsetNurbs {
+                signed_distance: signed_distance_b,
+                basis: basis_b,
+                ..
+            },
+        ] => (
+            [
+                NurbsIntersectionTrace::OffsetNurbs(kgraph::TransmittedOffsetNurbsTrace::new(
+                    basis_a.clone(),
+                    signed_distance_a,
+                )),
+                NurbsIntersectionTrace::OffsetNurbs(kgraph::TransmittedOffsetNurbsTrace::new(
+                    basis_b.clone(),
+                    signed_distance_b,
+                )),
+            ],
+            [
+                march_trace.other_pcurve.clone(),
+                march_trace.surface_pcurve.clone(),
+            ],
+            VerifiedNurbsProofFamily::DualOffsetPair,
         ),
         [
             ResolvedGraphSurfaceField::Nurbs(surface),
@@ -2149,6 +2293,36 @@ fn build_verified_analytic_nurbs_branch(
                 cost.depth(),
             )?;
             certify_verified_offset_nurbs_nurbs_intersection_residuals(
+                raw_carrier.clone(),
+                traces,
+                pcurves.clone(),
+                tolerance,
+            )
+            .map_err(GraphSurfaceIntersectionError::BranchCertificate)?
+        }
+        VerifiedNurbsProofFamily::DualOffsetPair => {
+            let cost =
+                verified_dual_offset_nurbs_intersection_certificate_cost(raw_carrier, &traces)
+                    .ok_or(GraphSurfaceIntersectionError::OperationPolicy(
+                        OperationPolicyError::AccountingOverflow {
+                            stage: NURBS_TRACE_CERTIFICATE_WORK,
+                            resource: ResourceKind::Work,
+                        },
+                    ))?;
+            scope
+                .ledger_mut()
+                .charge(NURBS_TRACE_CERTIFICATE_WORK, cost.work())?;
+            scope.ledger_mut().observe(
+                NURBS_TRACE_CERTIFICATE_WORK,
+                ResourceKind::Items,
+                cost.items(),
+            )?;
+            scope.ledger_mut().observe(
+                NURBS_TRACE_CERTIFICATE_WORK,
+                ResourceKind::Depth,
+                cost.depth(),
+            )?;
+            certify_verified_dual_offset_nurbs_intersection_residuals(
                 raw_carrier.clone(),
                 traces,
                 pcurves.clone(),

@@ -10,6 +10,7 @@ use kgeom::surface::Surface;
 use kgeom::vec::Point3;
 use kgraph::{
     GeometryGraph, GeometryGraphError, OffsetSurfaceDescriptor,
+    verified_dual_offset_nurbs_intersection_certificate_cost,
     verified_offset_nurbs_nurbs_intersection_certificate_cost,
 };
 use kops::intersect::{
@@ -50,6 +51,39 @@ fn crossing_direct(effective_height: f64, rational: bool) -> NurbsSurface {
         std::array::from_fn(|index| effective_height + bend[index] + delta[index]),
         rational,
     )
+}
+
+fn crossing_constant_normal_basis(rational: bool) -> NurbsSurface {
+    unit_chart_surface([0.05, 0.25, 0.45], rational)
+}
+
+fn dual_window_a() -> [ParamRange; 2] {
+    [ParamRange::new(0.1, 0.9), ParamRange::new(0.1, 0.8)]
+}
+
+fn dual_window_b() -> [ParamRange; 2] {
+    [ParamRange::new(0.15, 0.95), ParamRange::new(0.0, 0.9)]
+}
+
+fn insert_offset_chain(
+    graph: &mut GeometryGraph,
+    surface: NurbsSurface,
+    distances: &[f64],
+) -> (
+    kgraph::SurfaceHandle,
+    kgraph::SurfaceHandle,
+    Vec<kgraph::SurfaceHandle>,
+) {
+    let basis = graph.insert_surface(surface).unwrap();
+    let mut root = basis;
+    let mut chain = vec![basis];
+    for &distance in distances {
+        root = graph
+            .insert_surface(OffsetSurfaceDescriptor::new(root, distance))
+            .unwrap();
+        chain.push(root);
+    }
+    (basis, root, chain)
 }
 
 fn narrow_window() -> [ParamRange; 2] {
@@ -691,6 +725,383 @@ fn scoped_offset_pair_preserves_marcher_report_and_has_exact_certificate_cost() 
 }
 
 #[test]
+fn intersecting_dual_offsets_cover_the_full_one_through_four_chain_matrix() {
+    let tolerances = Tolerances::with_linear(1.0e-3).unwrap();
+    let session = SessionPolicy::v1();
+    let chains_a = [
+        &[0.05][..],
+        &[0.02, 0.03][..],
+        &[0.01, 0.015, 0.025][..],
+        &[0.005, 0.01, 0.015, 0.02][..],
+    ];
+    let chains_b = [
+        &[0.02][..],
+        &[0.008, 0.012][..],
+        &[0.004, 0.006, 0.01][..],
+        &[0.002, 0.004, 0.006, 0.008][..],
+    ];
+
+    for distances_a in chains_a {
+        for distances_b in chains_b {
+            let mut graph = GeometryGraph::new();
+            let (basis_a_handle, root_a, chain_a) =
+                insert_offset_chain(&mut graph, basis(false), distances_a);
+            let (basis_b_handle, root_b, chain_b) = insert_offset_chain(
+                &mut graph,
+                crossing_constant_normal_basis(false),
+                distances_b,
+            );
+            let expected_visits = (distances_a.len() + distances_b.len() + 2) as u64;
+            let expected_depth = (distances_a.len().max(distances_b.len()) + 1) as u64;
+            let context = OperationContext::new(&session, tolerances).unwrap();
+            let outcome = intersect_bounded_graph_surfaces_with_context(
+                &graph,
+                root_a,
+                dual_window_a(),
+                root_b,
+                dual_window_b(),
+                &context,
+            );
+            let result = outcome.result().unwrap();
+            assert!(!result.raw.is_complete());
+            assert_eq!(result.raw.curves.len(), 1);
+            assert_eq!(result.branch_graph.source_surfaces, [root_a, root_b]);
+            assert_eq!(result.branch_graph.edges.len(), 1);
+            assert_eq!(
+                observed(
+                    outcome.report(),
+                    kgraph::eval_stage::NODE_VISITS,
+                    ResourceKind::Work,
+                ),
+                expected_visits
+            );
+            assert_eq!(
+                observed(
+                    outcome.report(),
+                    kgraph::eval_stage::DEPENDENCY_DEPTH,
+                    ResourceKind::Depth,
+                ),
+                expected_depth
+            );
+
+            let certificate = result.branch_graph.edges[0].certificate.as_nurbs().unwrap();
+            let trace_a = certificate.traces()[0].as_offset_nurbs().unwrap();
+            let trace_b = certificate.traces()[1].as_offset_nurbs().unwrap();
+            assert_eq!(
+                trace_a.basis(),
+                graph.surface(basis_a_handle).unwrap().as_nurbs().unwrap()
+            );
+            assert_eq!(
+                trace_b.basis(),
+                graph.surface(basis_b_handle).unwrap().as_nurbs().unwrap()
+            );
+            assert_eq!(trace_a.signed_distance(), 0.05);
+            assert_eq!(trace_b.signed_distance(), 0.02);
+            assert!(
+                certificate
+                    .residual_bounds()
+                    .into_iter()
+                    .all(|bound| bound <= tolerances.linear())
+            );
+            let cost = verified_dual_offset_nurbs_intersection_certificate_cost(
+                certificate.carrier(),
+                certificate.traces(),
+            )
+            .unwrap();
+            assert_eq!(
+                (cost.work(), cost.items(), cost.depth()),
+                (14_336, 1_024, 10)
+            );
+            for (resource, expected) in [
+                (ResourceKind::Work, cost.work()),
+                (ResourceKind::Items, cost.items()),
+                (ResourceKind::Depth, cost.depth()),
+            ] {
+                assert_eq!(
+                    observed(outcome.report(), NURBS_TRACE_CERTIFICATE_WORK, resource),
+                    expected
+                );
+            }
+
+            if distances_a.len() == 4 && distances_b.len() == 4 {
+                assert_eq!((expected_visits, expected_depth), (10, 5));
+                let reverse = intersect_bounded_graph_surfaces(
+                    &graph,
+                    root_b,
+                    dual_window_b(),
+                    root_a,
+                    dual_window_a(),
+                    tolerances,
+                )
+                .unwrap();
+                assert_eq!(reverse.raw, result.raw.clone().swapped());
+                assert_eq!(reverse.branch_graph.source_surfaces, [root_b, root_a]);
+                let reverse_certificate = reverse.branch_graph.edges[0]
+                    .certificate
+                    .as_nurbs()
+                    .unwrap();
+                assert_eq!(reverse_certificate.traces()[0], certificate.traces()[1]);
+                assert_eq!(reverse_certificate.traces()[1], certificate.traces()[0]);
+
+                let exact_plan = BudgetPlan::new([
+                    LimitSpec::new(
+                        kgraph::eval_stage::NODE_VISITS,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        expected_visits,
+                    ),
+                    LimitSpec::new(
+                        kgraph::eval_stage::DEPENDENCY_DEPTH,
+                        ResourceKind::Depth,
+                        AccountingMode::HighWater,
+                        expected_depth,
+                    ),
+                    LimitSpec::new(
+                        NURBS_TRACE_CERTIFICATE_WORK,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        cost.work(),
+                    ),
+                    LimitSpec::new(
+                        NURBS_TRACE_CERTIFICATE_WORK,
+                        ResourceKind::Items,
+                        AccountingMode::HighWater,
+                        cost.items(),
+                    ),
+                    LimitSpec::new(
+                        NURBS_TRACE_CERTIFICATE_WORK,
+                        ResourceKind::Depth,
+                        AccountingMode::HighWater,
+                        cost.depth(),
+                    ),
+                ])
+                .unwrap();
+                let exact_context = OperationContext::new(&session, tolerances)
+                    .unwrap()
+                    .with_budget_overrides(exact_plan);
+                assert!(
+                    intersect_bounded_graph_surfaces_with_context(
+                        &graph,
+                        root_a,
+                        dual_window_a(),
+                        root_b,
+                        dual_window_b(),
+                        &exact_context,
+                    )
+                    .result()
+                    .is_ok()
+                );
+
+                for (stage, resource, mode, allowed, consumed) in [
+                    (
+                        kgraph::eval_stage::NODE_VISITS,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        expected_visits - 1,
+                        expected_visits,
+                    ),
+                    (
+                        kgraph::eval_stage::DEPENDENCY_DEPTH,
+                        ResourceKind::Depth,
+                        AccountingMode::HighWater,
+                        expected_depth - 1,
+                        expected_depth,
+                    ),
+                    (
+                        NURBS_TRACE_CERTIFICATE_WORK,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        cost.work() - 1,
+                        cost.work(),
+                    ),
+                    (
+                        NURBS_TRACE_CERTIFICATE_WORK,
+                        ResourceKind::Items,
+                        AccountingMode::HighWater,
+                        cost.items() - 1,
+                        cost.items(),
+                    ),
+                    (
+                        NURBS_TRACE_CERTIFICATE_WORK,
+                        ResourceKind::Depth,
+                        AccountingMode::HighWater,
+                        cost.depth() - 1,
+                        cost.depth(),
+                    ),
+                ] {
+                    let denied_plan =
+                        BudgetPlan::new([LimitSpec::new(stage, resource, mode, allowed)]).unwrap();
+                    let denied_context = OperationContext::new(&session, tolerances)
+                        .unwrap()
+                        .with_budget_overrides(denied_plan);
+                    let before = (
+                        graph.curve_count(),
+                        graph.curve2d_count(),
+                        graph.geometry().collect::<Vec<_>>(),
+                    );
+                    let denied = intersect_bounded_graph_surfaces_with_context(
+                        &graph,
+                        root_a,
+                        dual_window_a(),
+                        root_b,
+                        dual_window_b(),
+                        &denied_context,
+                    );
+                    let GraphSurfaceIntersectionError::OperationPolicy(
+                        kcore::operation::OperationPolicyError::LimitReached(crossing),
+                    ) = denied.result().unwrap_err()
+                    else {
+                        panic!("N-1 maximum-depth dual-offset resource must stop at {stage:?}");
+                    };
+                    assert_eq!(crossing.stage, stage);
+                    assert_eq!(crossing.resource, resource);
+                    assert_eq!(crossing.allowed, allowed);
+                    assert_eq!(crossing.consumed, consumed);
+                    assert_eq!(graph.curve_count(), before.0);
+                    assert_eq!(graph.curve2d_count(), before.1);
+                    assert_eq!(graph.geometry().collect::<Vec<_>>(), before.2);
+                }
+
+                let persistent =
+                    persist_verified_graph_surface_intersections(&mut graph, result).unwrap();
+                let descriptor = graph
+                    .curve(persistent.edges[0].curve)
+                    .unwrap()
+                    .as_verified_nurbs_intersection()
+                    .unwrap();
+                assert_eq!(descriptor.source_surfaces(), [root_a, root_b]);
+                assert_eq!(descriptor.certificate().traces(), certificate.traces());
+                for protected in chain_a.into_iter().chain(chain_b) {
+                    assert!(matches!(
+                        graph.remove_surface(protected),
+                        Err(GeometryGraphError::HasDependents { .. })
+                    ));
+                }
+                graph.validate().unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn rational_dual_offset_hits_retain_independent_sources_and_swap() {
+    let tolerances = Tolerances::with_linear(1.0e-3).unwrap();
+    for depths in [(1, 4), (4, 1)] {
+        let mut graph = GeometryGraph::new();
+        let distances_a = vec![0.05 / depths.0 as f64; depths.0];
+        let distances_b = vec![0.02 / depths.1 as f64; depths.1];
+        let (_, root_a, _) = insert_offset_chain(&mut graph, basis(true), &distances_a);
+        let (_, root_b, _) = insert_offset_chain(
+            &mut graph,
+            crossing_constant_normal_basis(true),
+            &distances_b,
+        );
+        let forward = intersect_bounded_graph_surfaces(
+            &graph,
+            root_a,
+            dual_window_a(),
+            root_b,
+            dual_window_b(),
+            tolerances,
+        )
+        .unwrap();
+        let reverse = intersect_bounded_graph_surfaces(
+            &graph,
+            root_b,
+            dual_window_b(),
+            root_a,
+            dual_window_a(),
+            tolerances,
+        )
+        .unwrap();
+        assert_eq!(forward.raw.curves.len(), 1);
+        assert_eq!(reverse.raw, forward.raw.clone().swapped());
+        let forward_certificate = forward.branch_graph.edges[0]
+            .certificate
+            .as_nurbs()
+            .unwrap();
+        let reverse_certificate = reverse.branch_graph.edges[0]
+            .certificate
+            .as_nurbs()
+            .unwrap();
+        assert_eq!(
+            forward_certificate.traces()[0]
+                .as_offset_nurbs()
+                .unwrap()
+                .basis()
+                .weights(),
+            Some(&[2.0; 6][..])
+        );
+        assert_eq!(
+            reverse_certificate.traces()[0],
+            forward_certificate.traces()[1]
+        );
+        assert_eq!(
+            reverse_certificate.traces()[1],
+            forward_certificate.traces()[0]
+        );
+    }
+}
+
+#[test]
+fn stale_or_altered_dual_offset_roots_roll_persistence_back_atomically() {
+    let tolerances = Tolerances::with_linear(1.0e-3).unwrap();
+    let distances_a = [0.005, 0.01, 0.015, 0.02];
+    let distances_b = [0.002, 0.004, 0.006, 0.008];
+    for mutation in 0..4 {
+        let mut graph = GeometryGraph::new();
+        let (_, root_a, chain_a) = insert_offset_chain(&mut graph, basis(false), &distances_a);
+        let (_, root_b, chain_b) = insert_offset_chain(
+            &mut graph,
+            crossing_constant_normal_basis(false),
+            &distances_b,
+        );
+        let local = intersect_bounded_graph_surfaces(
+            &graph,
+            root_a,
+            dual_window_a(),
+            root_b,
+            dual_window_b(),
+            tolerances,
+        )
+        .unwrap();
+        match mutation {
+            0 => graph.remove_surface(root_a).unwrap(),
+            1 => graph.remove_surface(root_b).unwrap(),
+            2 => graph
+                .replace_surface(
+                    root_a,
+                    OffsetSurfaceDescriptor::new(chain_a[chain_a.len() - 2], 0.021),
+                )
+                .unwrap(),
+            3 => graph
+                .replace_surface(
+                    root_b,
+                    OffsetSurfaceDescriptor::new(chain_b[chain_b.len() - 2], 0.009),
+                )
+                .unwrap(),
+            _ => unreachable!(),
+        };
+        let before = (
+            graph.curve_count(),
+            graph.curve2d_count(),
+            graph.geometry().collect::<Vec<_>>(),
+        );
+        assert!(matches!(
+            persist_verified_graph_surface_intersections(&mut graph, &local),
+            Err(GraphSurfaceIntersectionError::GeometryPersistence(
+                GeometryGraphError::InvalidDescriptor { .. }
+                    | GeometryGraphError::StaleGeometryHandle { .. }
+            ))
+        ));
+        assert_eq!(graph.curve_count(), before.0);
+        assert_eq!(graph.curve2d_count(), before.1);
+        assert_eq!(graph.geometry().collect::<Vec<_>>(), before.2);
+        graph.validate().unwrap();
+    }
+}
+
+#[test]
 fn outward_offset_control_proof_returns_a_complete_miss() {
     let signed_distance = 0.05;
     let basis = basis(true);
@@ -1222,6 +1633,17 @@ fn broader_offset_families_and_unaligned_charts_fail_closed() {
     let planar_basis = basis(false);
     let direct = crossing_direct(0.25 + signed_distance, false);
     let curved_basis = unit_chart_surface([0.25, 0.27, 0.25], false);
+    let mut warped_points = crossing_constant_normal_basis(false).points().to_vec();
+    warped_points[2].z += 1.0e-10;
+    let slightly_warped_basis = NurbsSurface::new(
+        2,
+        1,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        warped_points,
+        None,
+    )
+    .unwrap();
     let mut unaligned_points = direct.points().to_vec();
     unaligned_points[0].x += 0.01;
     let unaligned = NurbsSurface::new(
@@ -1271,6 +1693,10 @@ fn broader_offset_families_and_unaligned_charts_fail_closed() {
     let curved_four = graph
         .insert_surface(OffsetSurfaceDescriptor::new(curved_capped, 0.01))
         .unwrap();
+    let slightly_warped_basis = graph.insert_surface(slightly_warped_basis).unwrap();
+    let slightly_warped_offset = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(slightly_warped_basis, 0.02))
+        .unwrap();
     let coincident_basis = graph.insert_surface(basis(false)).unwrap();
     let coincident_offset = graph
         .insert_surface(OffsetSurfaceDescriptor::new(
@@ -1313,6 +1739,18 @@ fn broader_offset_families_and_unaligned_charts_fail_closed() {
     let unequal_weight_offset = graph
         .insert_surface(OffsetSurfaceDescriptor::new(rational_basis, -0.10))
         .unwrap();
+    let intersecting_peer_basis = graph
+        .insert_surface(crossing_constant_normal_basis(false))
+        .unwrap();
+    let intersecting_peer = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(intersecting_peer_basis, 0.02))
+        .unwrap();
+    let boundary_peer_basis = graph
+        .insert_surface(unit_chart_surface([-0.1, 0.1, 0.3], false))
+        .unwrap();
+    let boundary_peer = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(boundary_peer_basis, 0.0))
+        .unwrap();
     let unaligned = graph.insert_surface(unaligned).unwrap();
     for (first, second) in [
         (too_deep, direct_handle),
@@ -1328,6 +1766,8 @@ fn broader_offset_families_and_unaligned_charts_fail_closed() {
         (offset, curved_offset),
         (supported_four, curved_four),
         (curved_four, supported_four),
+        (offset, slightly_warped_offset),
+        (slightly_warped_offset, offset),
         (offset, coincident_offset),
         (coincident_offset, offset),
         (nested, nested_coincident_offset),
@@ -1338,6 +1778,10 @@ fn broader_offset_families_and_unaligned_charts_fail_closed() {
         (four_coincident_root, supported_four),
         (too_deep, separated_offset),
         (separated_offset, too_deep),
+        (too_deep, intersecting_peer),
+        (intersecting_peer, too_deep),
+        (offset, boundary_peer),
+        (boundary_peer, offset),
         (offset, unequal_weight_offset),
         (unequal_weight_offset, offset),
     ] {
