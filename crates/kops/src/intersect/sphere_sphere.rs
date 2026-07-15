@@ -210,6 +210,15 @@ fn intersect_orthogonal_sphere_octants(
                 GENERAL_SPHERE_WIDE_PAIR_LIMIT,
                 GENERAL_SPHERE_WIDE_ARC_LIMIT,
             ),
+            (false, false)
+                if exact_general_sphere_window_pole(a_range).is_some()
+                    ^ exact_general_sphere_window_pole(b_range).is_some() =>
+            {
+                (
+                    GENERAL_SPHERE_POLAR_UNION_PAIR_LIMIT,
+                    GENERAL_SPHERE_POLAR_UNION_ARC_LIMIT,
+                )
+            }
             (false, false) => (
                 GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
                 GENERAL_SPHERE_WINDOW_ARC_LIMIT,
@@ -269,6 +278,16 @@ const GENERAL_SPHERE_WINDOW_PAIR_LIMIT: usize = 28;
 // Eight boundary circles meet at most fourteen roots each. Sampling every
 // open arrangement arc therefore consumes at most 8 * 14 fixed witnesses.
 const GENERAL_SPHERE_WINDOW_ARC_LIMIT: usize = 112;
+// One exact polar window contributes two longitude constraints and one
+// nondegenerate latitude constraint. Paired with one pole-clear window, the
+// seven boundary circles have at most 21 pairs and 84 open arrangement arcs.
+const GENERAL_SPHERE_POLAR_CELL_PAIR_LIMIT: usize = 21;
+const GENERAL_SPHERE_POLAR_CELL_ARC_LIMIT: usize = 84;
+const GENERAL_SPHERE_POLAR_UNION_PIECE_LIMIT: usize = 2;
+const GENERAL_SPHERE_POLAR_UNION_PAIR_LIMIT: usize =
+    GENERAL_SPHERE_WINDOW_PAIR_LIMIT + GENERAL_SPHERE_POLAR_CELL_PAIR_LIMIT;
+const GENERAL_SPHERE_POLAR_UNION_ARC_LIMIT: usize =
+    GENERAL_SPHERE_WINDOW_ARC_LIMIT + GENERAL_SPHERE_POLAR_CELL_ARC_LIMIT;
 const GENERAL_SPHERE_WIDE_PIECE_LIMIT: usize = 3;
 const GENERAL_SPHERE_WIDE_PAIR_LIMIT: usize =
     GENERAL_SPHERE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_PAIR_LIMIT;
@@ -362,6 +381,31 @@ fn certify_general_sphere_windows(
 ) -> Result<SurfaceSurfaceIntersections> {
     validate_general_sphere_window_base(a_range, parameter_allowance)?;
     validate_general_sphere_window_base(b_range, parameter_allowance)?;
+    let polar_windows = usize::from(exact_general_sphere_window_pole(a_range).is_some())
+        + usize::from(exact_general_sphere_window_pole(b_range).is_some());
+    if polar_windows > 0
+        && (polar_windows != 1
+            || a_range[0].width() >= core::f64::consts::PI
+            || b_range[0].width() >= core::f64::consts::PI)
+    {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere polar-window proof requires exactly one exact-pole sub-pi window and one pole-clear sub-pi window",
+        });
+    }
+    if polar_windows == 1 {
+        return certify_single_polar_sphere_window_union(
+            a,
+            a_range,
+            b,
+            b_range,
+            exact_general_sphere_window_pole(a_range).is_some(),
+            tolerances,
+            parameter_allowance,
+            GENERAL_SPHERE_POLAR_UNION_PIECE_LIMIT,
+            pair_limit,
+            arc_limit,
+        );
+    }
     match (
         a_range[0].width() >= core::f64::consts::PI,
         b_range[0].width() >= core::f64::consts::PI,
@@ -412,11 +456,36 @@ fn certify_general_sphere_windows(
     validate_general_sphere_window_slice(a_range, parameter_allowance)?;
     validate_general_sphere_window_slice(b_range, parameter_allowance)?;
 
+    certify_general_sphere_window_arrangement(
+        a,
+        a_range,
+        b,
+        b_range,
+        tolerances,
+        pair_limit,
+        arc_limit,
+        parameter_allowance,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn certify_general_sphere_window_arrangement(
+    a: &Sphere,
+    a_range: [ParamRange; 2],
+    b: &Sphere,
+    b_range: [ParamRange; 2],
+    tolerances: Tolerances,
+    pair_limit: usize,
+    arc_limit: usize,
+    parameter_allowance: f64,
+) -> Result<SurfaceSurfaceIntersections> {
+    let polar_windows = usize::from(exact_general_sphere_window_pole(a_range).is_some())
+        + usize::from(exact_general_sphere_window_pole(b_range).is_some());
     let constraints = general_sphere_window_constraints(a, a_range)?
         .into_iter()
         .chain(general_sphere_window_constraints(b, b_range)?)
         .collect::<Vec<_>>();
-    debug_assert_eq!(constraints.len(), 8);
+    debug_assert_eq!(constraints.len(), 8 - polar_windows);
 
     let mut remaining_pairs = pair_limit;
     let mut roots = Vec::new();
@@ -465,7 +534,7 @@ fn certify_general_sphere_windows(
 
     let arrangement = certify_sphere_boundary_arcs(&constraints, &roots, tolerances, arc_limit)?;
     if arrangement.all_boundaries_excluded {
-        // Pairwise interval discriminants found every crossing of the eight
+        // Pairwise interval discriminants found every crossing of all retained
         // boundary circles. Each circle was partitioned at those crossings,
         // every endpoint has a certified violated halfspace, and one witness
         // on every open arc has a certified violated halfspace. Constraint
@@ -536,6 +605,132 @@ fn certify_general_sphere_windows(
         Vec::new(),
         vec![region],
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn certify_single_polar_sphere_window_union(
+    a: &Sphere,
+    a_range: [ParamRange; 2],
+    b: &Sphere,
+    b_range: [ParamRange; 2],
+    first_is_polar: bool,
+    tolerances: Tolerances,
+    parent_parameter_allowance: f64,
+    piece_limit: usize,
+    pair_limit: usize,
+    arc_limit: usize,
+) -> Result<SurfaceSurfaceIntersections> {
+    if piece_limit < GENERAL_SPHERE_POLAR_UNION_PIECE_LIMIT {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere polar-window union piece limit exhausted",
+        });
+    }
+    if pair_limit < GENERAL_SPHERE_POLAR_UNION_PAIR_LIMIT {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere polar-window union pair limit exhausted",
+        });
+    }
+    if arc_limit < GENERAL_SPHERE_POLAR_UNION_ARC_LIMIT {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere polar-window union arc limit exhausted",
+        });
+    }
+
+    let polar_range = if first_is_polar { a_range } else { b_range };
+    let [pole_clear_piece, polar_cap] = decompose_general_sphere_polar_window(polar_range)?;
+    let mut occupied = None;
+    let mut empty_pieces = 0;
+    for (piece_range, piece_pair_limit, piece_arc_limit) in [
+        (
+            pole_clear_piece,
+            GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
+            GENERAL_SPHERE_WINDOW_ARC_LIMIT,
+        ),
+        (
+            polar_cap,
+            GENERAL_SPHERE_POLAR_CELL_PAIR_LIMIT,
+            GENERAL_SPHERE_POLAR_CELL_ARC_LIMIT,
+        ),
+    ] {
+        let (piece_a_range, piece_b_range) = if first_is_polar {
+            (piece_range, b_range)
+        } else {
+            (a_range, piece_range)
+        };
+        let piece_allowance =
+            arbitrary_sphere_octant_parameter_allowance(piece_a_range, piece_b_range)?;
+        validate_general_sphere_window_slice(piece_a_range, piece_allowance)?;
+        validate_general_sphere_window_slice(piece_b_range, piece_allowance)?;
+        let hit = certify_general_sphere_window_arrangement(
+            a,
+            piece_a_range,
+            b,
+            piece_b_range,
+            tolerances,
+            piece_pair_limit,
+            piece_arc_limit,
+            piece_allowance,
+        )?;
+        if hit.is_proven_empty() {
+            empty_pieces += 1;
+        } else if !hit.is_complete() || occupied.replace(hit).is_some() {
+            return Err(Error::InvalidGeometry {
+                reason: "general coincident sphere polar-window union requires one occupied cell and one certified-empty sibling",
+            });
+        }
+    }
+
+    let Some(mut hit) = occupied else {
+        if empty_pieces == GENERAL_SPHERE_POLAR_UNION_PIECE_LIMIT {
+            return Ok(SurfaceSurfaceIntersections::complete_empty());
+        }
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere polar-window union did not cover both decomposition cells",
+        });
+    };
+    if empty_pieces != 1 {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere polar-window union did not cancel its artificial latitude seam",
+        });
+    }
+
+    // Both latitude cells are closed. The certified-empty sibling proves that
+    // the occupied cell cannot touch the artificial latitude seam, so its
+    // evidence has only true parent boundaries. A retained singular pole is
+    // represented once at the polar source range's lower longitude; the
+    // nonlinear map applies the same canonical alias in both directions.
+    let parent_map = general_sphere_window_map(a, a_range, b, b_range, parent_parameter_allowance);
+    let parent_residual = arbitrary_sphere_octant_residual_bound(a, b, parent_parameter_allowance)?;
+    for region in &mut hit.regions {
+        region.correspondence = SurfaceRegionCorrespondence::GeneralSphereWindow(parent_map);
+        region.max_residual = region.max_residual.max(parent_residual);
+    }
+    SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
+        hit.points,
+        hit.curves,
+        hit.regions,
+    )
+}
+
+fn decompose_general_sphere_polar_window(
+    polar_range: [ParamRange; 2],
+) -> Result<[[ParamRange; 2]; GENERAL_SPHERE_POLAR_UNION_PIECE_LIMIT]> {
+    let pole = exact_general_sphere_window_pole(polar_range).ok_or(Error::InvalidGeometry {
+        reason: "general coincident sphere polar-window decomposition requires one exact natural pole",
+    })?;
+    let seam = polar_range[1].lo + 0.5 * polar_range[1].width();
+    if !seam.is_finite() || seam <= polar_range[1].lo || seam >= polar_range[1].hi {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere polar-window latitude decomposition is not ordered",
+        });
+    }
+    let lower = [polar_range[0], ParamRange::new(polar_range[1].lo, seam)];
+    let upper = [polar_range[0], ParamRange::new(seam, polar_range[1].hi)];
+    Ok(if pole > 0 {
+        [lower, upper]
+    } else {
+        [upper, lower]
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2085,51 +2280,72 @@ fn validate_general_sphere_window_base(
     parameter_allowance: f64,
 ) -> Result<()> {
     let half_pi = core::f64::consts::FRAC_PI_2;
+    let pole = exact_general_sphere_window_pole(range);
+    let latitude_is_supported = match pole {
+        Some(1) => range[1].lo > -half_pi + parameter_allowance,
+        Some(-1) => range[1].hi < half_pi - parameter_allowance,
+        Some(_) => unreachable!("sphere pole sign is normalized"),
+        None => {
+            range[1].lo > -half_pi + parameter_allowance
+                && range[1].hi < half_pi - parameter_allowance
+        }
+    };
     if range[0].width() <= parameter_allowance
         || range[1].width() <= parameter_allowance
-        || range[1].lo <= -half_pi + parameter_allowance
-        || range[1].hi >= half_pi - parameter_allowance
+        || !latitude_is_supported
     {
         return Err(Error::InvalidGeometry {
-            reason: "general coincident sphere window proof supports only positive-area pole-clear windows",
+            reason: "general coincident sphere window proof supports only positive-area pole-clear windows or one exact natural-pole boundary",
         });
     }
     Ok(())
 }
 
+fn exact_general_sphere_window_pole(range: [ParamRange; 2]) -> Option<i8> {
+    let half_pi = core::f64::consts::FRAC_PI_2;
+    if range[1].hi.to_bits() == half_pi.to_bits() {
+        Some(1)
+    } else if range[1].lo.to_bits() == (-half_pi).to_bits() {
+        Some(-1)
+    } else {
+        None
+    }
+}
+
 fn general_sphere_window_constraints(
     sphere: &Sphere,
     range: [ParamRange; 2],
-) -> Result<[SphereWindowConstraint; 4]> {
+) -> Result<Vec<SphereWindowConstraint>> {
     let frame = sphere.frame();
     let (sin_u_lo, cos_u_lo) = math::sincos(range[0].lo);
     let (sin_u_hi, cos_u_hi) = math::sincos(range[0].hi);
     let (sin_v_lo, _) = math::sincos(range[1].lo);
     let (sin_v_hi, _) = math::sincos(range[1].hi);
-    [
+    let mut planes = vec![
         (frame.y() * cos_u_lo - frame.x() * sin_u_lo, 0.0),
         (frame.x() * sin_u_hi - frame.y() * cos_u_hi, 0.0),
-        (frame.z(), sin_v_lo),
-        (-frame.z(), -sin_v_hi),
-    ]
-    .map(|(normal, offset)| {
-        let norm = normal.norm();
-        if !norm.is_finite() || norm == 0.0 {
-            return Err(Error::InvalidGeometry {
-                reason: "general coincident sphere window boundary plane is singular",
-            });
-        }
-        Ok(SphereWindowConstraint {
-            normal: normal / norm,
-            offset: offset / norm,
+    ];
+    if range[1].lo.to_bits() != (-core::f64::consts::FRAC_PI_2).to_bits() {
+        planes.push((frame.z(), sin_v_lo));
+    }
+    if range[1].hi.to_bits() != core::f64::consts::FRAC_PI_2.to_bits() {
+        planes.push((-frame.z(), -sin_v_hi));
+    }
+    planes
+        .into_iter()
+        .map(|(normal, offset)| {
+            let norm = normal.norm();
+            if !norm.is_finite() || norm == 0.0 {
+                return Err(Error::InvalidGeometry {
+                    reason: "general coincident sphere window boundary plane is singular",
+                });
+            }
+            Ok(SphereWindowConstraint {
+                normal: normal / norm,
+                offset: offset / norm,
+            })
         })
-    })
-    .into_iter()
-    .collect::<Result<Vec<_>>>()?
-    .try_into()
-    .map_err(|_| Error::InvalidGeometry {
-        reason: "general coincident sphere window boundary plane count is invalid",
-    })
+        .collect()
 }
 
 fn certified_sphere_boundary_pair(
@@ -3871,6 +4087,30 @@ mod tests {
         )
     }
 
+    fn exact_polar_window_fixture() -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+        let a = Sphere::new(Frame::world(), 1.0).unwrap();
+        let angle = 0.4;
+        let b = Sphere::new(
+            Frame::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(math::sin(angle), 0.0, math::cos(angle)),
+                Vec3::new(math::cos(angle), 0.0, -math::sin(angle)),
+            )
+            .unwrap(),
+            1.0,
+        )
+        .unwrap();
+        (
+            a,
+            b,
+            [
+                ParamRange::new(-0.5, 0.5),
+                ParamRange::new(0.3, core::f64::consts::FRAC_PI_2),
+            ],
+            [ParamRange::new(2.7, 3.5), ParamRange::new(0.6, 1.3)],
+        )
+    }
+
     fn eight_cell_fixture() -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
         let (a, b, mut a_range, mut b_range) = seven_cell_fixture();
         a_range[1].lo = -1.0834779757705633;
@@ -4288,6 +4528,135 @@ mod tests {
                 reason: "general coincident sphere wide-window union requires three sub-pi decomposition cells"
             }
         );
+    }
+
+    #[test]
+    fn exact_polar_window_cells_and_limits_are_exact() {
+        let (a, b, a_range, b_range) = exact_polar_window_fixture();
+        let allowance = arbitrary_sphere_octant_parameter_allowance(a_range, b_range).unwrap();
+        let hit = certify_single_polar_sphere_window_union(
+            &a,
+            a_range,
+            &b,
+            b_range,
+            true,
+            Tolerances::default(),
+            allowance,
+            GENERAL_SPHERE_POLAR_UNION_PIECE_LIMIT,
+            GENERAL_SPHERE_POLAR_UNION_PAIR_LIMIT,
+            GENERAL_SPHERE_POLAR_UNION_ARC_LIMIT,
+        )
+        .unwrap();
+        assert!(hit.is_complete());
+        assert_eq!(hit.regions.len(), 1);
+        assert_eq!(hit.regions[0].boundary.len(), 3);
+
+        let [pole_clear_piece, polar_cap] = decompose_general_sphere_polar_window(a_range).unwrap();
+        let pole_clear_allowance =
+            arbitrary_sphere_octant_parameter_allowance(pole_clear_piece, b_range).unwrap();
+        let pole_clear = certify_general_sphere_window_arrangement(
+            &a,
+            pole_clear_piece,
+            &b,
+            b_range,
+            Tolerances::default(),
+            GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
+            GENERAL_SPHERE_WINDOW_ARC_LIMIT,
+            pole_clear_allowance,
+        )
+        .unwrap();
+        assert!(pole_clear.is_proven_empty());
+        let cap_allowance =
+            arbitrary_sphere_octant_parameter_allowance(polar_cap, b_range).unwrap();
+        let cap = certify_general_sphere_window_arrangement(
+            &a,
+            polar_cap,
+            &b,
+            b_range,
+            Tolerances::default(),
+            GENERAL_SPHERE_POLAR_CELL_PAIR_LIMIT,
+            GENERAL_SPHERE_POLAR_CELL_ARC_LIMIT,
+            cap_allowance,
+        )
+        .unwrap();
+        assert!(cap.is_complete());
+        assert_eq!(cap.regions.len(), 1);
+        for (piece, piece_allowance, pair_limit, arc_limit, reason) in [
+            (
+                pole_clear_piece,
+                pole_clear_allowance,
+                GENERAL_SPHERE_WINDOW_PAIR_LIMIT - 1,
+                GENERAL_SPHERE_WINDOW_ARC_LIMIT,
+                "general coincident sphere window proof pair limit exhausted",
+            ),
+            (
+                polar_cap,
+                cap_allowance,
+                GENERAL_SPHERE_POLAR_CELL_PAIR_LIMIT - 1,
+                GENERAL_SPHERE_POLAR_CELL_ARC_LIMIT,
+                "general coincident sphere window proof pair limit exhausted",
+            ),
+        ] {
+            assert_eq!(
+                certify_general_sphere_window_arrangement(
+                    &a,
+                    piece,
+                    &b,
+                    b_range,
+                    Tolerances::default(),
+                    pair_limit,
+                    arc_limit,
+                    piece_allowance,
+                )
+                .unwrap_err(),
+                Error::InvalidGeometry { reason }
+            );
+        }
+        let seam = pole_clear_piece[1].hi;
+        assert!(
+            hit.regions[0]
+                .boundary
+                .iter()
+                .all(|vertex| vertex.uv_a[1].to_bits() != seam.to_bits())
+        );
+
+        for (piece_limit, pair_limit, arc_limit, reason) in [
+            (
+                GENERAL_SPHERE_POLAR_UNION_PIECE_LIMIT - 1,
+                GENERAL_SPHERE_POLAR_UNION_PAIR_LIMIT,
+                GENERAL_SPHERE_POLAR_UNION_ARC_LIMIT,
+                "general coincident sphere polar-window union piece limit exhausted",
+            ),
+            (
+                GENERAL_SPHERE_POLAR_UNION_PIECE_LIMIT,
+                GENERAL_SPHERE_POLAR_UNION_PAIR_LIMIT - 1,
+                GENERAL_SPHERE_POLAR_UNION_ARC_LIMIT,
+                "general coincident sphere polar-window union pair limit exhausted",
+            ),
+            (
+                GENERAL_SPHERE_POLAR_UNION_PIECE_LIMIT,
+                GENERAL_SPHERE_POLAR_UNION_PAIR_LIMIT,
+                GENERAL_SPHERE_POLAR_UNION_ARC_LIMIT - 1,
+                "general coincident sphere polar-window union arc limit exhausted",
+            ),
+        ] {
+            assert_eq!(
+                certify_single_polar_sphere_window_union(
+                    &a,
+                    a_range,
+                    &b,
+                    b_range,
+                    true,
+                    Tolerances::default(),
+                    allowance,
+                    piece_limit,
+                    pair_limit,
+                    arc_limit,
+                )
+                .unwrap_err(),
+                Error::InvalidGeometry { reason }
+            );
+        }
     }
 
     #[test]

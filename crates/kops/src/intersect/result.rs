@@ -1502,7 +1502,14 @@ fn map_arbitrary_sphere_octant_parameter(
     }
     let (sin_u, cos_u) = math::sincos(uv[0]);
     let (sin_v, cos_v) = math::sincos(uv[1]);
-    let source_local = [cos_v * cos_u, cos_v * sin_u, sin_v];
+    let half_pi = core::f64::consts::FRAC_PI_2;
+    let source_local = if uv[1].to_bits() == half_pi.to_bits() {
+        [0.0, 0.0, 1.0]
+    } else if uv[1].to_bits() == (-half_pi).to_bits() {
+        [0.0, 0.0, -1.0]
+    } else {
+        [cos_v * cos_u, cos_v * sin_u, sin_v]
+    };
     let target_local = target_from_source
         .map(|row| row[0] * source_local[0] + row[1] * source_local[1] + row[2] * source_local[2]);
     let radial = (target_local[0] * target_local[0] + target_local[1] * target_local[1]).sqrt();

@@ -539,7 +539,7 @@ fn general_non_octant_fallback_rejects_unsupported_and_uncertified_windows() {
             Tolerances::default(),
         )
         .unwrap(),
-        "general coincident sphere window proof supports only positive-area pole-clear windows",
+        "general coincident sphere window proof encountered an unresolved multiple boundary vertex",
     );
 
     let near_parallel = y_tilted_sphere(
@@ -594,6 +594,123 @@ fn general_non_octant_disjoint_windows_have_certified_empty_evidence_and_swap() 
     let disjoint_swapped =
         intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
     assert_eq!(disjoint.clone().swapped(), disjoint_swapped);
+}
+
+#[test]
+fn general_exact_polar_window_cap_cancels_empty_latitude_cell_and_swaps() {
+    let a = world_sphere();
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.4);
+    let half_pi = core::f64::consts::FRAC_PI_2;
+    let a_window = window(-0.5, 0.5, 0.3, half_pi);
+    let b_window = window(2.7, 3.5, 0.6, 1.3);
+
+    let seam = a_window[1].lo + 0.5 * a_window[1].width();
+    let pole_clear = intersect_bounded_spheres(
+        &a,
+        window(-0.5, 0.5, 0.3, seam),
+        &b,
+        b_window,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(pole_clear.is_proven_empty());
+
+    let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_general_sphere_window_region(&hit, &a, &b);
+    assert_eq!(hit.regions[0].boundary.len(), 3);
+    let pole = hit.regions[0]
+        .boundary
+        .iter()
+        .filter(|vertex| vertex.uv_a[1].to_bits() == half_pi.to_bits())
+        .collect::<Vec<_>>();
+    assert_eq!(pole.len(), 1);
+    assert_eq!(pole[0].uv_a[0], a_window[0].lo);
+    assert!(a.normal(pole[0].uv_a).is_none());
+
+    let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = hit.regions[0].correspondence
+    else {
+        unreachable!()
+    };
+    assert_eq!(map.first_range(), a_window);
+    assert_eq!(map.second_range(), b_window);
+    let mapped_lo = map.map_first_to_second([a_window[0].lo, half_pi]).unwrap();
+    let mapped_hi = map.map_first_to_second([a_window[0].hi, half_pi]).unwrap();
+    assert_eq!(mapped_lo, mapped_hi);
+    assert_eq!(map.map_second_to_first(mapped_lo).unwrap(), [-0.5, half_pi]);
+
+    let repeated =
+        intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_eq!(hit, repeated);
+    let swapped =
+        intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
+    assert_eq!(hit.clone().swapped(), swapped);
+    assert_general_sphere_window_region(&swapped, &b, &a);
+
+    let disjoint_b_window = window(1.0, 1.5, -1.0, -0.5);
+    let disjoint =
+        intersect_bounded_spheres(&a, a_window, &b, disjoint_b_window, Tolerances::default())
+            .unwrap();
+    assert!(disjoint.is_proven_empty());
+    let disjoint_swapped =
+        intersect_bounded_spheres(&b, disjoint_b_window, &a, a_window, Tolerances::default())
+            .unwrap();
+    assert_eq!(disjoint.clone().swapped(), disjoint_swapped);
+}
+
+#[test]
+fn general_polar_window_near_pole_double_pole_wide_and_tangent_cases_fail_closed() {
+    let a = world_sphere();
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.4);
+    let half_pi = core::f64::consts::FRAC_PI_2;
+    let b_window = window(2.7, 3.5, 0.6, 1.3);
+    let near_pole = f64::from_bits(half_pi.to_bits() - 1);
+    assert_indeterminate_sphere_window(
+        &intersect_bounded_spheres(
+            &a,
+            window(-0.5, 0.5, 0.3, near_pole),
+            &b,
+            b_window,
+            Tolerances::default(),
+        )
+        .unwrap(),
+        "general coincident sphere window proof supports only positive-area pole-clear windows or one exact natural-pole boundary",
+    );
+
+    let family_reason = "general coincident sphere polar-window proof requires exactly one exact-pole sub-pi window and one pole-clear sub-pi window";
+    assert_indeterminate_sphere_window(
+        &intersect_bounded_spheres(
+            &a,
+            window(-0.5, 0.5, 0.3, half_pi),
+            &b,
+            window(2.7, 3.5, 0.6, half_pi),
+            Tolerances::default(),
+        )
+        .unwrap(),
+        family_reason,
+    );
+    assert_indeterminate_sphere_window(
+        &intersect_bounded_spheres(
+            &a,
+            window(-0.5, -0.5 + core::f64::consts::PI, 0.3, half_pi),
+            &b,
+            b_window,
+            Tolerances::default(),
+        )
+        .unwrap(),
+        family_reason,
+    );
+
+    assert_indeterminate_sphere_window(
+        &intersect_bounded_spheres(
+            &a,
+            window(-0.5, 0.5, 0.3, half_pi),
+            &b,
+            window(2.7, 3.5, 0.7, 1.3),
+            Tolerances::default(),
+        )
+        .unwrap(),
+        "general coincident sphere window boundary tangency is not certified by this fallback arm",
+    );
 }
 
 #[test]
@@ -2197,7 +2314,7 @@ fn general_wide_window_union_fails_closed_across_artificial_seams_and_two_wide_i
     .unwrap();
     assert_indeterminate_sphere_window(
         &polar,
-        "general coincident sphere window proof supports only positive-area pole-clear windows",
+        "general coincident sphere polar-window proof requires exactly one exact-pole sub-pi window and one pole-clear sub-pi window",
     );
 }
 
