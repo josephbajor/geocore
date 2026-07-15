@@ -812,14 +812,20 @@ fn separated_constant_normal_dual_offsets_prove_a_complete_miss_in_both_orders()
 }
 
 #[test]
-fn one_to_three_descriptor_dual_offset_misses_pin_matrix_accounting_and_no_artifacts() {
+fn one_to_four_descriptor_dual_offset_misses_pin_matrix_accounting_and_no_artifacts() {
     let tolerances = Tolerances::with_linear(1.0e-3).unwrap();
     let session = SessionPolicy::v1();
-    let distance_chains_a = [&[0.05][..], &[0.02, 0.03][..], &[0.01, 0.015, 0.025][..]];
+    let distance_chains_a = [
+        &[0.05][..],
+        &[0.02, 0.03][..],
+        &[0.01, 0.015, 0.025][..],
+        &[0.005, 0.01, 0.015, 0.02][..],
+    ];
     let distance_chains_b = [
         &[-0.10][..],
         &[-0.04, -0.06][..],
         &[-0.02, -0.03, -0.05][..],
+        &[-0.01, -0.02, -0.03, -0.04][..],
     ];
     for distances_a in distance_chains_a {
         for distances_b in distance_chains_b {
@@ -922,7 +928,8 @@ fn one_to_three_descriptor_dual_offset_misses_pin_matrix_accounting_and_no_artif
                 );
             }
 
-            if distances_a.len() == 3 && distances_b.len() == 3 {
+            if distances_a.len() == 4 && distances_b.len() == 4 {
+                assert_eq!((expected_visits, expected_depth), (10, 5));
                 let exact_plan = BudgetPlan::new([
                     LimitSpec::new(
                         kgraph::eval_stage::NODE_VISITS,
@@ -989,7 +996,7 @@ fn one_to_three_descriptor_dual_offset_misses_pin_matrix_accounting_and_no_artif
                         kcore::operation::OperationPolicyError::LimitReached(crossing),
                     ) = denied.result().unwrap_err()
                     else {
-                        panic!("N-1 capped dual-offset resource must stop at {stage:?}");
+                        panic!("N-1 four-descriptor dual-offset resource must stop at {stage:?}");
                     };
                     assert_eq!(crossing.stage, stage);
                     assert_eq!(crossing.resource, resource);
@@ -1291,6 +1298,9 @@ fn broader_offset_families_and_unaligned_charts_fail_closed() {
     let capped_coincident_root = graph
         .insert_surface(OffsetSurfaceDescriptor::new(capped_coincident_middle, 0.01))
         .unwrap();
+    let four_coincident_root = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(capped_coincident_root, 0.01))
+        .unwrap();
     let separated_basis = graph
         .insert_surface(unit_chart_surface([0.70; 3], false))
         .unwrap();
@@ -1316,14 +1326,16 @@ fn broader_offset_families_and_unaligned_charts_fail_closed() {
         (supported_four, unaligned),
         (unaligned, supported_four),
         (offset, curved_offset),
+        (supported_four, curved_four),
+        (curved_four, supported_four),
         (offset, coincident_offset),
         (coincident_offset, offset),
         (nested, nested_coincident_offset),
         (nested_coincident_offset, nested),
         (capped, capped_coincident_root),
         (capped_coincident_root, capped),
-        (supported_four, separated_offset),
-        (separated_offset, supported_four),
+        (supported_four, four_coincident_root),
+        (four_coincident_root, supported_four),
         (too_deep, separated_offset),
         (separated_offset, too_deep),
         (offset, unequal_weight_offset),

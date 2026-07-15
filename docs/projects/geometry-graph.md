@@ -712,18 +712,18 @@ basis chain transitively, and preserves the same exact 14,336/14,335 Work,
 1,024/1,023 Items, and 10/9 Depth boundaries. Two offset descriptors pin exact
 3/2 node-visit and dependency-depth admission, three pin exact 4/3, and four
 pin exact 5/4.
-Two independent one- through three-descriptor Offset(NURBS) roots now have a
+Two independent one- through four-descriptor Offset(NURBS) roots now have a
 narrower complete-empty arm when both terminal bases use that same
 constant-+Z-normal unit chart and outward original basis-plus-accumulated-
 distance control intervals prove strict separation. For chain lengths `A` and
 `B`, graph Work is exactly `A+B+2` and dependency depth is
-`max(A+1,B+1)`; the 3×3 maximum pins exact 8/7 Work and 4/3 Depth admission. It
+`max(A+1,B+1)`; the 4×4 maximum pins exact 10/9 Work and 5/4 Depth admission. It
 emits no carrier or certificate, preserves ordered roots under swap, allocates
 nothing during empty persistence, and does not promote coincident effective
 sheets.
 Planar or unaligned peers, unequal ranges or weights, collapsed or non-finite
-sphere-offset fields, positive Offset(NURBS)/direct-NURBS chains of five or
-more offset descriptors, varying-normal Offset(NURBS), nested
+sphere-offset fields, Offset(NURBS) chains of five or more descriptors,
+varying-normal Offset(NURBS), nested
 Offset(NURBS)/Offset(NURBS), intersecting or coincident
 Offset(NURBS)/Offset(NURBS), and broader NURBS/NURBS or other procedural pairs
 remain unsupported.
@@ -930,11 +930,11 @@ the graph ownership model.
   boundary-only windows, five-or-more-descriptor positive chains,
   varying-normal or nested offset/offset,
   unaligned, altered, and stale sources atomically.
-- Strictly separated one- through three-descriptor constant-normal
-  Offset(NURBS) pairs return graph-owned complete misses for the complete 3×3
+- Strictly separated one- through four-descriptor constant-normal
+  Offset(NURBS) pairs return graph-owned complete misses for the complete 4×4
   chain matrix at exact `A+B+2` Work and `max(A+1,B+1)` depth, with maximum
-  8/7 Work and 4/3 Depth admission, zero certificate usage, no persistence
-  allocation, and coincident, intersecting, four-or-more-descriptor, or
+  10/9 Work and 5/4 Depth admission, zero certificate usage, no persistence
+  allocation, and coincident, intersecting, five-or-more-descriptor, or
   incompatible pairs rejected.
 - Direct constant-normal Offset(B-surface)/B-surface variants cover both operand
   orders and polynomial/rational bases, retain the live root, signed distance,
