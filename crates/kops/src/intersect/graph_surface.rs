@@ -6,8 +6,8 @@
 //! sphere-field/NURBS, compatible direct NURBS/NURBS marching, and a narrow
 //! constant-normal Offset(NURBS)/NURBS family capped at three offset
 //! descriptors.
-//! Strictly separated pairs of compatible direct or one-level nested
-//! constant-normal Offset(NURBS) roots additionally own a graph-level
+//! Strictly separated pairs of compatible constant-normal Offset(NURBS) roots
+//! capped at three offset descriptors additionally own a graph-level
 //! complete-empty proof. The adapter
 //! promotes discovered branches only after
 //! constructing both pcurves and proving their paired whole-interval residual
@@ -72,7 +72,7 @@ const MAX_SPHERICAL_CIRCLE_PROOFS_PER_QUERY: u64 = 4_096;
 const MAX_NURBS_TRACE_CERTIFICATE_WORK_PER_QUERY: u64 = 134_217_728;
 const MAX_NURBS_TRACE_CERTIFICATE_ITEMS_PER_QUERY: u64 = 16_777_216;
 const MAX_OFFSET_NURBS_INTERSECTION_CHAIN_LENGTH: usize = 3;
-const MAX_DUAL_OFFSET_NURBS_EMPTY_CHAIN_LENGTH: usize = 2;
+const MAX_DUAL_OFFSET_NURBS_EMPTY_CHAIN_LENGTH: usize = 3;
 
 /// Stable work stage for fixed whole-branch inverse sphere-chart subdivisions.
 pub const SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS: StageId =
@@ -516,10 +516,10 @@ pub fn intersect_bounded_graph_surfaces_with_context(
 /// supported. Constant-normal Offset(NURBS)/NURBS roots containing at most
 /// three offset descriptors additionally reuse the compatible paired marcher
 /// across the positive-area overlap of distinct operand windows. Two
-/// compatible direct or one-level nested constant-normal Offset(NURBS) roots
-/// return a complete miss only from strict outward original-control
-/// separation; coincident or intersecting effective sheets and all other pairs
-/// remain explicitly unsupported.
+/// compatible constant-normal Offset(NURBS) roots containing at most three
+/// offset descriptors return a complete miss only from strict outward
+/// original-control separation; coincident or intersecting effective sheets
+/// and all other pairs remain explicitly unsupported.
 /// Owners must compose [`GraphSurfaceBudgetProfile::v1_defaults`] before
 /// creating `scope` when they may dispatch a scoped proof-bearing branch.
 pub fn intersect_bounded_graph_surfaces_in_scope(

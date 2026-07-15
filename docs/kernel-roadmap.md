@@ -1091,13 +1091,14 @@ true only for an empty complete result.
   discovery-only. The paired proof keeps the same exact Work/Items/Depth
   boundaries; one, two, or three offset descriptors use exact 2/depth-2,
   3/depth-3, or 4/depth-4 graph traversal with matching N/N-1 admission.
-  Two independent direct or one-level nested Offset(NURBS) roots also prove a
-  complete miss when both terminal bases use the exact constant-+Z-normal unit
-  chart and outward original basis-plus-accumulated-distance controls are
-  strictly separated. This no-branch arm pins direct/direct 4/depth-2,
-  direct/nested 5/depth-3, and nested/nested 6/depth-3 traversal with exact
-  N/N-1 evidence, zero certificate usage, no persistence allocation, preserved
-  operand order, and rejection of coincident effective sheets.
+  Two independent one- through three-descriptor Offset(NURBS) roots also prove
+  a complete miss when both terminal bases use the exact constant-+Z-normal
+  unit chart and outward original basis-plus-accumulated-distance controls are
+  strictly separated. This no-branch arm pins the complete 3×3 chain matrix at
+  exact `A+B+2` Work and `max(A+1,B+1)` dependency depth, including maximum
+  8/7 Work and 4/3 Depth admission, zero certificate usage, no persistence
+  allocation, preserved operand order, and rejection of coincident effective
+  sheets and four-or-more-descriptor roots.
   Planar or unaligned peers, disjoint or boundary-only ranges, unequal weights,
   collapsed or non-finite sphere-offset fields, chains of four or more offset
   descriptors, varying-normal Offset(NURBS), nested intersecting/coincident

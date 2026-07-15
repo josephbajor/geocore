@@ -749,178 +749,205 @@ fn separated_constant_normal_dual_offsets_prove_a_complete_miss_in_both_orders()
 }
 
 #[test]
-fn capped_nested_dual_offset_misses_pin_swap_accounting_and_no_artifacts() {
+fn one_to_three_descriptor_dual_offset_misses_pin_matrix_accounting_and_no_artifacts() {
     let tolerances = Tolerances::with_linear(1.0e-3).unwrap();
     let session = SessionPolicy::v1();
-    for (distances_a, distances_b, expected_visits) in [
-        (&[0.05][..], &[-0.04, -0.06][..], 5),
-        (&[0.02, 0.03][..], &[-0.04, -0.06][..], 6),
-    ] {
-        let mut graph = GeometryGraph::new();
-        let insert_root = |graph: &mut GeometryGraph, surface: NurbsSurface, distances: &[f64]| {
-            let mut root = graph.insert_surface(surface).unwrap();
-            for &distance in distances {
-                root = graph
-                    .insert_surface(OffsetSurfaceDescriptor::new(root, distance))
-                    .unwrap();
-            }
-            root
-        };
-        let root_a = insert_root(
-            &mut graph,
-            unit_chart_surface([0.25; 3], false),
-            distances_a,
-        );
-        let root_b = insert_root(
-            &mut graph,
-            unit_chart_surface([0.70; 3], false),
-            distances_b,
-        );
-        let context = OperationContext::new(&session, tolerances).unwrap();
-        let outcome = intersect_bounded_graph_surfaces_with_context(
-            &graph,
-            root_a,
-            narrow_window(),
-            root_b,
-            narrow_window(),
-            &context,
-        );
-        let result = outcome.result().unwrap();
-        assert!(result.raw.is_proven_empty());
-        assert_eq!(result.branch_graph.source_surfaces, [root_a, root_b]);
-        assert!(result.branch_graph.vertices.is_empty());
-        assert!(result.branch_graph.edges.is_empty());
-        assert_eq!(
-            observed(
-                outcome.report(),
-                kgraph::eval_stage::NODE_VISITS,
-                ResourceKind::Work,
-            ),
-            expected_visits
-        );
-        assert_eq!(
-            observed(
-                outcome.report(),
-                kgraph::eval_stage::DEPENDENCY_DEPTH,
-                ResourceKind::Depth,
-            ),
-            3
-        );
-        for resource in [ResourceKind::Work, ResourceKind::Items, ResourceKind::Depth] {
+    let distance_chains_a = [&[0.05][..], &[0.02, 0.03][..], &[0.01, 0.015, 0.025][..]];
+    let distance_chains_b = [
+        &[-0.10][..],
+        &[-0.04, -0.06][..],
+        &[-0.02, -0.03, -0.05][..],
+    ];
+    for distances_a in distance_chains_a {
+        for distances_b in distance_chains_b {
+            let mut graph = GeometryGraph::new();
+            let insert_root =
+                |graph: &mut GeometryGraph, surface: NurbsSurface, distances: &[f64]| {
+                    let mut root = graph.insert_surface(surface).unwrap();
+                    for &distance in distances {
+                        root = graph
+                            .insert_surface(OffsetSurfaceDescriptor::new(root, distance))
+                            .unwrap();
+                    }
+                    root
+                };
+            let root_a = insert_root(
+                &mut graph,
+                unit_chart_surface([0.25; 3], false),
+                distances_a,
+            );
+            let root_b = insert_root(
+                &mut graph,
+                unit_chart_surface([0.70; 3], false),
+                distances_b,
+            );
+            let expected_visits = (distances_a.len() + distances_b.len() + 2) as u64;
+            let expected_depth = (distances_a.len().max(distances_b.len()) + 1) as u64;
+            let context = OperationContext::new(&session, tolerances).unwrap();
+            let outcome = intersect_bounded_graph_surfaces_with_context(
+                &graph,
+                root_a,
+                narrow_window(),
+                root_b,
+                narrow_window(),
+                &context,
+            );
+            let result = outcome.result().unwrap();
+            assert!(result.raw.is_proven_empty());
+            assert_eq!(result.branch_graph.source_surfaces, [root_a, root_b]);
+            assert!(result.branch_graph.vertices.is_empty());
+            assert!(result.branch_graph.edges.is_empty());
             assert_eq!(
-                observed(outcome.report(), NURBS_TRACE_CERTIFICATE_WORK, resource),
-                0
+                observed(
+                    outcome.report(),
+                    kgraph::eval_stage::NODE_VISITS,
+                    ResourceKind::Work,
+                ),
+                expected_visits
             );
-        }
+            assert_eq!(
+                observed(
+                    outcome.report(),
+                    kgraph::eval_stage::DEPENDENCY_DEPTH,
+                    ResourceKind::Depth,
+                ),
+                expected_depth
+            );
+            for resource in [ResourceKind::Work, ResourceKind::Items, ResourceKind::Depth] {
+                assert_eq!(
+                    observed(outcome.report(), NURBS_TRACE_CERTIFICATE_WORK, resource),
+                    0
+                );
+            }
 
-        let reverse_outcome = intersect_bounded_graph_surfaces_with_context(
-            &graph,
-            root_b,
-            narrow_window(),
-            root_a,
-            narrow_window(),
-            &context,
-        );
-        let reverse = reverse_outcome.result().unwrap();
-        assert_eq!(reverse.raw, result.raw.clone().swapped());
-        assert_eq!(reverse.branch_graph.source_surfaces, [root_b, root_a]);
-        assert!(reverse.branch_graph.edges.is_empty());
-        assert_eq!(
-            observed(
-                reverse_outcome.report(),
-                kgraph::eval_stage::NODE_VISITS,
-                ResourceKind::Work,
-            ),
-            expected_visits
-        );
-        assert_eq!(
-            observed(
-                reverse_outcome.report(),
-                kgraph::eval_stage::DEPENDENCY_DEPTH,
-                ResourceKind::Depth,
-            ),
-            3
-        );
-
-        let exact_plan = BudgetPlan::new([
-            LimitSpec::new(
-                kgraph::eval_stage::NODE_VISITS,
-                ResourceKind::Work,
-                AccountingMode::Cumulative,
-                expected_visits,
-            ),
-            LimitSpec::new(
-                kgraph::eval_stage::DEPENDENCY_DEPTH,
-                ResourceKind::Depth,
-                AccountingMode::HighWater,
-                3,
-            ),
-        ])
-        .unwrap();
-        let exact_context = OperationContext::new(&session, tolerances)
-            .unwrap()
-            .with_budget_overrides(exact_plan);
-        assert!(
-            intersect_bounded_graph_surfaces_with_context(
+            let reverse_outcome = intersect_bounded_graph_surfaces_with_context(
                 &graph,
-                root_a,
-                narrow_window(),
                 root_b,
                 narrow_window(),
-                &exact_context,
-            )
-            .result()
-            .unwrap()
-            .raw
-            .is_proven_empty()
-        );
-
-        for (stage, resource, mode, allowed, consumed) in [
-            (
-                kgraph::eval_stage::NODE_VISITS,
-                ResourceKind::Work,
-                AccountingMode::Cumulative,
-                expected_visits - 1,
-                expected_visits,
-            ),
-            (
-                kgraph::eval_stage::DEPENDENCY_DEPTH,
-                ResourceKind::Depth,
-                AccountingMode::HighWater,
-                2,
-                3,
-            ),
-        ] {
-            let denied_plan =
-                BudgetPlan::new([LimitSpec::new(stage, resource, mode, allowed)]).unwrap();
-            let denied_context = OperationContext::new(&session, tolerances)
-                .unwrap()
-                .with_budget_overrides(denied_plan);
-            let denied = intersect_bounded_graph_surfaces_with_context(
-                &graph,
                 root_a,
                 narrow_window(),
-                root_b,
-                narrow_window(),
-                &denied_context,
+                &context,
             );
-            let GraphSurfaceIntersectionError::OperationPolicy(
-                kcore::operation::OperationPolicyError::LimitReached(crossing),
-            ) = denied.result().unwrap_err()
-            else {
-                panic!("N-1 capped dual-offset resource must stop at {stage:?}");
-            };
-            assert_eq!(crossing.stage, stage);
-            assert_eq!(crossing.resource, resource);
-            assert_eq!(crossing.allowed, allowed);
-            assert_eq!(crossing.consumed, consumed);
-        }
+            let reverse = reverse_outcome.result().unwrap();
+            assert_eq!(reverse.raw, result.raw.clone().swapped());
+            assert_eq!(reverse.branch_graph.source_surfaces, [root_b, root_a]);
+            assert!(reverse.branch_graph.edges.is_empty());
+            assert_eq!(
+                observed(
+                    reverse_outcome.report(),
+                    kgraph::eval_stage::NODE_VISITS,
+                    ResourceKind::Work,
+                ),
+                expected_visits
+            );
+            assert_eq!(
+                observed(
+                    reverse_outcome.report(),
+                    kgraph::eval_stage::DEPENDENCY_DEPTH,
+                    ResourceKind::Depth,
+                ),
+                expected_depth
+            );
+            for resource in [ResourceKind::Work, ResourceKind::Items, ResourceKind::Depth] {
+                assert_eq!(
+                    observed(
+                        reverse_outcome.report(),
+                        NURBS_TRACE_CERTIFICATE_WORK,
+                        resource,
+                    ),
+                    0
+                );
+            }
 
-        let before = (graph.curve_count(), graph.curve2d_count());
-        let persistent = persist_verified_graph_surface_intersections(&mut graph, result).unwrap();
-        assert!(persistent.edges.is_empty());
-        assert_eq!((graph.curve_count(), graph.curve2d_count()), before);
-        graph.validate().unwrap();
+            if distances_a.len() == 3 && distances_b.len() == 3 {
+                let exact_plan = BudgetPlan::new([
+                    LimitSpec::new(
+                        kgraph::eval_stage::NODE_VISITS,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        expected_visits,
+                    ),
+                    LimitSpec::new(
+                        kgraph::eval_stage::DEPENDENCY_DEPTH,
+                        ResourceKind::Depth,
+                        AccountingMode::HighWater,
+                        expected_depth,
+                    ),
+                ])
+                .unwrap();
+                let exact_context = OperationContext::new(&session, tolerances)
+                    .unwrap()
+                    .with_budget_overrides(exact_plan);
+                assert!(
+                    intersect_bounded_graph_surfaces_with_context(
+                        &graph,
+                        root_a,
+                        narrow_window(),
+                        root_b,
+                        narrow_window(),
+                        &exact_context,
+                    )
+                    .result()
+                    .unwrap()
+                    .raw
+                    .is_proven_empty()
+                );
+
+                for (stage, resource, mode, allowed, consumed) in [
+                    (
+                        kgraph::eval_stage::NODE_VISITS,
+                        ResourceKind::Work,
+                        AccountingMode::Cumulative,
+                        expected_visits - 1,
+                        expected_visits,
+                    ),
+                    (
+                        kgraph::eval_stage::DEPENDENCY_DEPTH,
+                        ResourceKind::Depth,
+                        AccountingMode::HighWater,
+                        expected_depth - 1,
+                        expected_depth,
+                    ),
+                ] {
+                    let denied_plan =
+                        BudgetPlan::new([LimitSpec::new(stage, resource, mode, allowed)]).unwrap();
+                    let denied_context = OperationContext::new(&session, tolerances)
+                        .unwrap()
+                        .with_budget_overrides(denied_plan);
+                    let denied = intersect_bounded_graph_surfaces_with_context(
+                        &graph,
+                        root_a,
+                        narrow_window(),
+                        root_b,
+                        narrow_window(),
+                        &denied_context,
+                    );
+                    let GraphSurfaceIntersectionError::OperationPolicy(
+                        kcore::operation::OperationPolicyError::LimitReached(crossing),
+                    ) = denied.result().unwrap_err()
+                    else {
+                        panic!("N-1 capped dual-offset resource must stop at {stage:?}");
+                    };
+                    assert_eq!(crossing.stage, stage);
+                    assert_eq!(crossing.resource, resource);
+                    assert_eq!(crossing.allowed, allowed);
+                    assert_eq!(crossing.consumed, consumed);
+                }
+            }
+
+            let before = (
+                graph.curve_count(),
+                graph.curve2d_count(),
+                graph.geometry().collect::<Vec<_>>(),
+            );
+            let persistent =
+                persist_verified_graph_surface_intersections(&mut graph, result).unwrap();
+            assert!(persistent.edges.is_empty());
+            assert_eq!(graph.curve_count(), before.0);
+            assert_eq!(graph.curve2d_count(), before.1);
+            assert_eq!(graph.geometry().collect::<Vec<_>>(), before.2);
+            graph.validate().unwrap();
+        }
     }
 }
 
@@ -1176,6 +1203,19 @@ fn broader_offset_families_and_unaligned_charts_fail_closed() {
             signed_distance + 0.01,
         ))
         .unwrap();
+    let capped_coincident_basis = graph.insert_surface(basis(false)).unwrap();
+    let capped_coincident_inner = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(
+            capped_coincident_basis,
+            signed_distance,
+        ))
+        .unwrap();
+    let capped_coincident_middle = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(capped_coincident_inner, 0.01))
+        .unwrap();
+    let capped_coincident_root = graph
+        .insert_surface(OffsetSurfaceDescriptor::new(capped_coincident_middle, 0.01))
+        .unwrap();
     let separated_basis = graph
         .insert_surface(unit_chart_surface([0.70; 3], false))
         .unwrap();
@@ -1201,8 +1241,8 @@ fn broader_offset_families_and_unaligned_charts_fail_closed() {
         (coincident_offset, offset),
         (nested, nested_coincident_offset),
         (nested_coincident_offset, nested),
-        (capped, separated_offset),
-        (separated_offset, capped),
+        (capped, capped_coincident_root),
+        (capped_coincident_root, capped),
         (too_deep, separated_offset),
         (separated_offset, too_deep),
         (offset, unequal_weight_offset),
