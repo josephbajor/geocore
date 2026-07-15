@@ -27,6 +27,7 @@ use kgraph::{
     Curve2dHandle, GeometryGraph, GeometryGraphError, GeometryRef,
     PairedPlaneLineResidualCertificate, PairedPlaneSphereCircleResidualCertificate, SurfaceHandle,
     TransmittedNurbsIntersectionCertificate, TransmittedPlaneIntersectionCertificate,
+    VerifiedNurbsIntersectionCertificate,
 };
 
 pub(crate) mod sealed {
@@ -411,6 +412,19 @@ impl Store {
     ) -> Result<CurveId> {
         self.geometry
             .insert_verified_plane_sphere_intersection_curve(source_surfaces, pcurves, certificate)
+            .map_err(map_graph_error)
+    }
+
+    /// Insert an operation-generated analytic/NURBS branch after binding its
+    /// reissued whole-range proof to live ordered sources and pcurves.
+    pub fn insert_verified_nurbs_intersection_curve(
+        &mut self,
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: VerifiedNurbsIntersectionCertificate,
+    ) -> Result<CurveId> {
+        self.geometry
+            .insert_verified_nurbs_intersection_curve(source_surfaces, pcurves, certificate)
             .map_err(map_graph_error)
     }
 

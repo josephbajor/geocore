@@ -8,17 +8,26 @@
 use kcore::error::Error;
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Line};
-use kgeom::curve2d::{Circle2d, Curve2d, Line2d};
+use kgeom::curve2d::{Circle2d, Curve2d, Line2d, NurbsCurve2d};
 use kgeom::frame::Frame;
+use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::param::ParamRange;
 use kgeom::surface::{Plane, Sphere, Surface};
 use kgeom::vec::{Point2, Point3, Vec2, Vec3};
 use kgraph::{
-    AffineParamMap1d, EvalLimits, ExactSurfaceField, OffsetSurfaceDescriptor, PairedTrace,
-    PlaneCircleTrace, PlaneSphereCircleTrace, SphereLatitudeTrace, SurfaceDerivativeOrder,
-    VerifiedIntersectionCertificate, certify_paired_plane_line_residuals,
+    AffineParamMap1d, EvalLimits, ExactSurfaceField, NurbsIntersectionTrace,
+    OffsetSurfaceDescriptor, PairedTrace, PlaneCircleTrace, PlaneSphereCircleTrace,
+    SphereLatitudeTrace, SurfaceDerivativeOrder, TransmittedOffsetNurbsTrace,
+    TransmittedOffsetPlaneTrace, VerifiedIntersectionCertificate,
+    VerifiedNurbsIntersectionCertificate, certify_paired_plane_line_residuals,
     certify_paired_plane_sphere_circle_residuals,
     certify_paired_plane_sphere_oblique_circle_residuals,
+    certify_verified_dual_offset_nurbs_intersection_residuals,
+    certify_verified_nurbs_nurbs_intersection_residuals,
+    certify_verified_offset_nurbs_nurbs_intersection_residuals,
+    certify_verified_offset_nurbs_plane_intersection_residuals,
+    certify_verified_plane_nurbs_intersection_residuals,
+    certify_verified_sphere_nurbs_intersection_residuals,
 };
 use ktopo::btess::{TessOptions, tessellate_body};
 use ktopo::check::{CheckLevel, CheckOutcome, check_body_report};
@@ -39,8 +48,84 @@ fn placement() -> Frame {
     .unwrap()
 }
 
+fn oblique_placement() -> Frame {
+    let z = Vec3::new(1.0, 2.0, 3.0).normalized().unwrap();
+    let x = Vec3::new(2.0, -1.0, 0.0).normalized().unwrap();
+    Frame::new(Point3::new(-2.5, 1.25, 3.75), z, x).unwrap()
+}
+
 fn map_point(placement: Frame, point: Point3) -> Point3 {
     placement.point_at(point.x, point.y, point.z)
+}
+
+fn map_vector(placement: Frame, vector: Vec3) -> Vec3 {
+    placement.x() * vector.x + placement.y() * vector.y + placement.z() * vector.z
+}
+
+fn assert_transformed_nurbs_trace(
+    source: &NurbsIntersectionTrace,
+    copied: &NurbsIntersectionTrace,
+    placement: Frame,
+) {
+    let transformed_surface = |source: &NurbsSurface, copied: &NurbsSurface| {
+        assert_eq!(copied.degree_u(), source.degree_u());
+        assert_eq!(copied.degree_v(), source.degree_v());
+        assert_eq!(
+            copied.knots(kgeom::surface::Dir::U),
+            source.knots(kgeom::surface::Dir::U)
+        );
+        assert_eq!(
+            copied.knots(kgeom::surface::Dir::V),
+            source.knots(kgeom::surface::Dir::V)
+        );
+        assert_eq!(copied.weights(), source.weights());
+        assert_eq!(
+            copied.points(),
+            source
+                .points()
+                .iter()
+                .map(|&point| map_point(placement, point))
+                .collect::<Vec<_>>()
+        );
+    };
+    let transformed_frame = |source: &Frame| {
+        Frame::new(
+            map_point(placement, source.origin()),
+            map_vector(placement, source.z()),
+            map_vector(placement, source.x()),
+        )
+        .unwrap()
+    };
+    match (source, copied) {
+        (NurbsIntersectionTrace::Plane(source), NurbsIntersectionTrace::Plane(copied)) => {
+            assert_eq!(*copied.frame(), transformed_frame(source.frame()));
+        }
+        (NurbsIntersectionTrace::Sphere(source), NurbsIntersectionTrace::Sphere(copied)) => {
+            assert_eq!(*copied.frame(), transformed_frame(source.frame()));
+            assert_eq!(copied.radius(), source.radius());
+        }
+        (NurbsIntersectionTrace::Nurbs(source), NurbsIntersectionTrace::Nurbs(copied)) => {
+            transformed_surface(source, copied);
+        }
+        (
+            NurbsIntersectionTrace::OffsetNurbs(source),
+            NurbsIntersectionTrace::OffsetNurbs(copied),
+        ) => {
+            transformed_surface(source.basis(), copied.basis());
+            assert_eq!(copied.signed_distance(), source.signed_distance());
+        }
+        (
+            NurbsIntersectionTrace::OffsetPlane(source),
+            NurbsIntersectionTrace::OffsetPlane(copied),
+        ) => {
+            assert_eq!(
+                *copied.basis().frame(),
+                transformed_frame(source.basis().frame())
+            );
+            assert_eq!(copied.signed_distance(), source.signed_distance());
+        }
+        _ => panic!("rigid copy changed the verified NURBS trace family or operand order"),
+    }
 }
 
 fn copy_checked(
@@ -120,7 +205,8 @@ fn assert_copied_surface_chain(
                 assert_eq!(copied.signed_distance(), source.signed_distance());
             }
             (SurfaceGeom::Plane(_), SurfaceGeom::Plane(_))
-            | (SurfaceGeom::Sphere(_), SurfaceGeom::Sphere(_)) => {}
+            | (SurfaceGeom::Sphere(_), SurfaceGeom::Sphere(_))
+            | (SurfaceGeom::Nurbs(_), SurfaceGeom::Nurbs(_)) => {}
             _ => panic!("copy changed an exact-field dependency descriptor family"),
         }
         assert!(journal.lineage().iter().any(|event| matches!(
@@ -131,6 +217,214 @@ fn assert_copied_surface_chain(
             } if *derived == copied && *original == source
         )));
     }
+}
+
+fn linear_nurbs_curve(points: [Point3; 2]) -> NurbsCurve {
+    NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], points.to_vec(), None).unwrap()
+}
+
+fn linear_nurbs_pcurve(points: [Point2; 2]) -> NurbsCurve2d {
+    NurbsCurve2d::new(1, vec![0.0, 0.0, 1.0, 1.0], points.to_vec(), None).unwrap()
+}
+
+fn horizontal_nurbs_surface(z: f64, rational: bool) -> NurbsSurface {
+    NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, z),
+            Point3::new(0.0, 1.0, z),
+            Point3::new(1.0, 0.0, z),
+            Point3::new(1.0, 1.0, z),
+        ],
+        rational.then(|| vec![2.0; 4]),
+    )
+    .unwrap()
+}
+
+fn vertical_nurbs_surface(rational: bool) -> NurbsSurface {
+    NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 1.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 1.0),
+        ],
+        rational.then(|| vec![3.0; 4]),
+    )
+    .unwrap()
+}
+
+fn insert_offset_nurbs_field(
+    store: &mut Store,
+    basis: NurbsSurface,
+    offsets: &[f64],
+) -> ktopo::entity::SurfaceId {
+    let mut root = store.insert_surface(SurfaceGeom::Nurbs(basis)).unwrap();
+    for &distance in offsets {
+        root = store
+            .insert_surface(SurfaceGeom::Offset(OffsetSurfaceDescriptor::new(
+                root, distance,
+            )))
+            .unwrap();
+    }
+    root
+}
+
+fn verified_nurbs_wire(
+    store: &mut Store,
+    surfaces: [ktopo::entity::SurfaceId; 2],
+    pcurves: [NurbsCurve2d; 2],
+    certificate: VerifiedNurbsIntersectionCertificate,
+) -> (
+    ktopo::entity::BodyId,
+    ktopo::entity::CurveId,
+    [ktopo::entity::Curve2dId; 2],
+) {
+    let carrier = certificate.carrier().clone();
+    let range = certificate.carrier_range();
+    let pcurves = pcurves.map(|pcurve| store.insert_pcurve(Curve2dGeom::Nurbs(pcurve)).unwrap());
+    let curve = store
+        .insert_verified_nurbs_intersection_curve(surfaces, pcurves, certificate)
+        .unwrap();
+    let mut transaction = store.transaction().unwrap();
+    let body = {
+        let mut assembly = transaction.assembly();
+        let body = assembly.add(Body {
+            kind: BodyKind::Wire,
+            regions: Vec::new(),
+        });
+        let region = assembly.add(Region {
+            body,
+            kind: RegionKind::Void,
+            shells: Vec::new(),
+        });
+        let shell = assembly.add(Shell {
+            region,
+            faces: Vec::new(),
+            edges: Vec::new(),
+            vertex: None,
+        });
+        let vertices = [carrier.eval(range.lo), carrier.eval(range.hi)].map(|position| {
+            let point = assembly.add(position);
+            assembly.add(Vertex {
+                point,
+                tolerance: None,
+            })
+        });
+        let edge = assembly.add(Edge {
+            curve: Some(curve),
+            vertices: vertices.map(Some),
+            bounds: Some((range.lo, range.hi)),
+            fins: Vec::new(),
+            tolerance: None,
+        });
+        assembly.get_mut(shell).unwrap().edges.push(edge);
+        assembly.get_mut(region).unwrap().shells.push(shell);
+        assembly.get_mut(body).unwrap().regions.push(region);
+        body
+    };
+    transaction.commit_checked_body(body).unwrap();
+    (body, curve, pcurves)
+}
+
+fn assert_verified_nurbs_copy(
+    store: &mut Store,
+    source: ktopo::entity::BodyId,
+    source_curve: ktopo::entity::CurveId,
+    source_surfaces: [ktopo::entity::SurfaceId; 2],
+    source_pcurves: [ktopo::entity::Curve2dId; 2],
+    rigid_placement: Frame,
+) {
+    let source_certificate = store
+        .get(source_curve)
+        .unwrap()
+        .as_verified_nurbs_intersection()
+        .unwrap()
+        .certificate()
+        .clone();
+    let (copied, journal) = copy_checked(store, source, rigid_placement);
+    let copied_curve = store
+        .get(store.edges_of_body(copied).unwrap()[0])
+        .unwrap()
+        .curve
+        .unwrap();
+    let copied_descriptor = store
+        .get(copied_curve)
+        .unwrap()
+        .as_verified_nurbs_intersection()
+        .unwrap();
+    let copied_certificate = copied_descriptor.certificate();
+    assert_ne!(copied_curve, source_curve);
+    assert_eq!(
+        copied_certificate.carrier_range(),
+        source_certificate.carrier_range()
+    );
+    assert_eq!(
+        copied_certificate.carrier().degree(),
+        source_certificate.carrier().degree()
+    );
+    assert_eq!(
+        copied_certificate.carrier().knots(),
+        source_certificate.carrier().knots()
+    );
+    assert_eq!(
+        copied_certificate.carrier().weights(),
+        source_certificate.carrier().weights()
+    );
+    assert_eq!(
+        copied_certificate.carrier().points(),
+        source_certificate
+            .carrier()
+            .points()
+            .iter()
+            .map(|&point| map_point(rigid_placement, point))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        copied_certificate.pcurves(),
+        source_certificate.pcurves(),
+        "rigid placement must not alter parameter-space traces"
+    );
+    assert_eq!(
+        copied_certificate.tolerance(),
+        source_certificate.tolerance()
+    );
+    assert_eq!(
+        copied_certificate.proof_depth(),
+        source_certificate.proof_depth()
+    );
+    for (source, copied) in source_certificate
+        .traces()
+        .iter()
+        .zip(copied_certificate.traces())
+    {
+        assert_transformed_nurbs_trace(source, copied, rigid_placement);
+    }
+    for ((copied_root, source_root), (copied_pcurve, source_pcurve)) in copied_descriptor
+        .source_surfaces()
+        .into_iter()
+        .zip(source_surfaces)
+        .zip(copied_descriptor.pcurves().into_iter().zip(source_pcurves))
+    {
+        assert_ne!(copied_root, source_root);
+        assert_ne!(copied_pcurve, source_pcurve);
+        assert_copied_surface_chain(store, &journal, copied_root, source_root);
+    }
+    assert!(journal.lineage().iter().any(|event| matches!(
+        event,
+        LineageEvent::DerivedFrom {
+            derived: ktopo::entity::EntityRef::Curve(derived),
+            source: ktopo::entity::EntityRef::Curve(original),
+        } if *derived == copied_curve && *original == source_curve
+    )));
+    store.geometry().validate().unwrap();
 }
 
 fn verified_plane_line_wire(
@@ -428,6 +722,415 @@ fn verified_oblique_plane_sphere_wire(
         .unwrap();
     let body = wire_body_for_curve(store, curve, carrier, range);
     (body, curve, surfaces, pcurves)
+}
+
+#[test]
+fn rigid_copy_reissues_plane_and_sphere_nurbs_certificates_in_both_orders() {
+    for analytic_first in [false, true] {
+        let mut store = Store::new();
+        let carrier = linear_nurbs_curve([Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]);
+        let pcurve = linear_nurbs_pcurve([Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)]);
+        let plane = Plane::new(
+            Frame::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap(),
+        );
+        let nurbs = vertical_nurbs_surface(true);
+        let plane_source = insert_plane_field(&mut store, plane, &[0.125, 0.125]);
+        let nurbs_source = store
+            .insert_surface(SurfaceGeom::Nurbs(nurbs.clone()))
+            .unwrap();
+        let traces = if analytic_first {
+            [
+                NurbsIntersectionTrace::Plane(plane),
+                NurbsIntersectionTrace::Nurbs(nurbs),
+            ]
+        } else {
+            [
+                NurbsIntersectionTrace::Nurbs(nurbs),
+                NurbsIntersectionTrace::Plane(plane),
+            ]
+        };
+        let surfaces = if analytic_first {
+            [plane_source, nurbs_source]
+        } else {
+            [nurbs_source, plane_source]
+        };
+        let certificate = certify_verified_plane_nurbs_intersection_residuals(
+            carrier,
+            traces,
+            [pcurve.clone(), pcurve.clone()],
+            1.0e-10,
+        )
+        .unwrap();
+        let (source, source_curve, source_pcurves) =
+            verified_nurbs_wire(&mut store, surfaces, [pcurve.clone(), pcurve], certificate);
+        assert_verified_nurbs_copy(
+            &mut store,
+            source,
+            source_curve,
+            surfaces,
+            source_pcurves,
+            oblique_placement(),
+        );
+    }
+
+    for sphere_first in [false, true] {
+        let mut store = Store::new();
+        let longitude = 0.2_f64;
+        let endpoints = [
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(
+                kcore::math::cos(longitude),
+                kcore::math::sin(longitude),
+                0.0,
+            ),
+        ];
+        let carrier = linear_nurbs_curve(endpoints);
+        let sphere_pcurve =
+            linear_nurbs_pcurve([Point2::new(0.0, 0.0), Point2::new(longitude, 0.0)]);
+        let nurbs_pcurve = linear_nurbs_pcurve([
+            Point2::new(endpoints[0].x, endpoints[0].y),
+            Point2::new(endpoints[1].x, endpoints[1].y),
+        ]);
+        let sphere = Sphere::new(Frame::world(), 1.0).unwrap();
+        let nurbs = horizontal_nurbs_surface(0.0, true);
+        let sphere_source = insert_sphere_field(&mut store, sphere, &[0.25, -0.125]);
+        let nurbs_source = store
+            .insert_surface(SurfaceGeom::Nurbs(nurbs.clone()))
+            .unwrap();
+        let (surfaces, traces, pcurves) = if sphere_first {
+            (
+                [sphere_source, nurbs_source],
+                [
+                    NurbsIntersectionTrace::Sphere(sphere),
+                    NurbsIntersectionTrace::Nurbs(nurbs),
+                ],
+                [sphere_pcurve, nurbs_pcurve],
+            )
+        } else {
+            (
+                [nurbs_source, sphere_source],
+                [
+                    NurbsIntersectionTrace::Nurbs(nurbs),
+                    NurbsIntersectionTrace::Sphere(sphere),
+                ],
+                [nurbs_pcurve, sphere_pcurve],
+            )
+        };
+        let certificate = certify_verified_sphere_nurbs_intersection_residuals(
+            carrier,
+            traces,
+            pcurves.clone(),
+            0.05,
+        )
+        .unwrap();
+        let (source, source_curve, source_pcurves) =
+            verified_nurbs_wire(&mut store, surfaces, pcurves, certificate);
+        assert_verified_nurbs_copy(
+            &mut store,
+            source,
+            source_curve,
+            surfaces,
+            source_pcurves,
+            oblique_placement(),
+        );
+    }
+}
+
+#[test]
+fn rigid_copy_reissues_direct_and_nested_offset_nurbs_source_pairs() {
+    for offset_first in [false, true] {
+        let mut store = Store::new();
+        let carrier = linear_nurbs_curve([Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]);
+        let pcurve = linear_nurbs_pcurve([Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)]);
+        let offsets = [0.025; 4];
+        let basis = horizontal_nurbs_surface(-0.1, true);
+        let direct = vertical_nurbs_surface(false);
+        let offset_source = insert_offset_nurbs_field(&mut store, basis.clone(), &offsets);
+        let direct_source = store
+            .insert_surface(SurfaceGeom::Nurbs(direct.clone()))
+            .unwrap();
+        let offset_trace = NurbsIntersectionTrace::OffsetNurbs(TransmittedOffsetNurbsTrace::new(
+            basis,
+            offsets.iter().sum(),
+        ));
+        let direct_trace = NurbsIntersectionTrace::Nurbs(direct);
+        let (surfaces, traces) = if offset_first {
+            ([offset_source, direct_source], [offset_trace, direct_trace])
+        } else {
+            ([direct_source, offset_source], [direct_trace, offset_trace])
+        };
+        let certificate = certify_verified_offset_nurbs_nurbs_intersection_residuals(
+            carrier,
+            traces,
+            [pcurve.clone(), pcurve.clone()],
+            1.0e-10,
+        )
+        .unwrap();
+        let (source, source_curve, source_pcurves) =
+            verified_nurbs_wire(&mut store, surfaces, [pcurve.clone(), pcurve], certificate);
+        assert_verified_nurbs_copy(
+            &mut store,
+            source,
+            source_curve,
+            surfaces,
+            source_pcurves,
+            placement(),
+        );
+    }
+
+    let mut store = Store::new();
+    let carrier = linear_nurbs_curve([Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]);
+    let pcurve = linear_nurbs_pcurve([Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)]);
+    let first = horizontal_nurbs_surface(0.0, true);
+    let second = vertical_nurbs_surface(true);
+    let surfaces = [
+        store
+            .insert_surface(SurfaceGeom::Nurbs(first.clone()))
+            .unwrap(),
+        store
+            .insert_surface(SurfaceGeom::Nurbs(second.clone()))
+            .unwrap(),
+    ];
+    let certificate = certify_verified_nurbs_nurbs_intersection_residuals(
+        carrier,
+        [
+            NurbsIntersectionTrace::Nurbs(first),
+            NurbsIntersectionTrace::Nurbs(second),
+        ],
+        [pcurve.clone(), pcurve.clone()],
+        1.0e-10,
+    )
+    .unwrap();
+    let (source, source_curve, source_pcurves) =
+        verified_nurbs_wire(&mut store, surfaces, [pcurve.clone(), pcurve], certificate);
+    assert_verified_nurbs_copy(
+        &mut store,
+        source,
+        source_curve,
+        surfaces,
+        source_pcurves,
+        placement(),
+    );
+}
+
+#[test]
+fn rigid_copy_reissues_offset_nurbs_with_direct_and_offset_plane_traces() {
+    for plane_is_offset in [false, true] {
+        for plane_first in [false, true] {
+            let mut store = Store::new();
+            let carrier =
+                linear_nurbs_curve([Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]);
+            let pcurve = linear_nurbs_pcurve([Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)]);
+            let basis = horizontal_nurbs_surface(-0.1, false);
+            let offset_source = insert_offset_nurbs_field(&mut store, basis.clone(), &[0.1]);
+            let effective_plane = Plane::new(
+                Frame::new(
+                    Point3::new(0.0, 0.0, 0.0),
+                    Vec3::new(0.0, 1.0, 0.0),
+                    Vec3::new(1.0, 0.0, 0.0),
+                )
+                .unwrap(),
+            );
+            let (plane_source, plane_trace) = if plane_is_offset {
+                let distance = 0.25;
+                let frame = effective_plane.frame();
+                let plane_basis =
+                    Plane::new(frame.with_origin(frame.origin() - frame.z() * distance));
+                let basis_handle = store
+                    .insert_surface(SurfaceGeom::Plane(plane_basis))
+                    .unwrap();
+                let root = store
+                    .insert_surface(SurfaceGeom::Offset(OffsetSurfaceDescriptor::new(
+                        basis_handle,
+                        distance,
+                    )))
+                    .unwrap();
+                (
+                    root,
+                    NurbsIntersectionTrace::OffsetPlane(TransmittedOffsetPlaneTrace::new(
+                        plane_basis,
+                        distance,
+                    )),
+                )
+            } else {
+                (
+                    store
+                        .insert_surface(SurfaceGeom::Plane(effective_plane))
+                        .unwrap(),
+                    NurbsIntersectionTrace::Plane(effective_plane),
+                )
+            };
+            let offset_trace =
+                NurbsIntersectionTrace::OffsetNurbs(TransmittedOffsetNurbsTrace::new(basis, 0.1));
+            let (surfaces, traces) = if plane_first {
+                ([plane_source, offset_source], [plane_trace, offset_trace])
+            } else {
+                ([offset_source, plane_source], [offset_trace, plane_trace])
+            };
+            let certificate = certify_verified_offset_nurbs_plane_intersection_residuals(
+                carrier,
+                traces,
+                [pcurve.clone(), pcurve.clone()],
+                1.0e-10,
+            )
+            .unwrap();
+            let (source, source_curve, source_pcurves) =
+                verified_nurbs_wire(&mut store, surfaces, [pcurve.clone(), pcurve], certificate);
+            assert_verified_nurbs_copy(
+                &mut store,
+                source,
+                source_curve,
+                surfaces,
+                source_pcurves,
+                placement(),
+            );
+        }
+    }
+}
+
+#[test]
+fn rigid_copy_reissues_two_independent_nested_offset_nurbs_roots() {
+    let mut store = Store::new();
+    let carrier = linear_nurbs_curve([Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]);
+    let pcurve = linear_nurbs_pcurve([Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)]);
+    let first_offsets = [0.025; 4];
+    let second_offsets = [0.05, 0.05];
+    let first_basis = horizontal_nurbs_surface(-0.1, true);
+    let mut second_basis = vertical_nurbs_surface(true);
+    second_basis = NurbsSurface::new(
+        second_basis.degree_u(),
+        second_basis.degree_v(),
+        second_basis
+            .knots(kgeom::surface::Dir::U)
+            .as_slice()
+            .to_vec(),
+        second_basis
+            .knots(kgeom::surface::Dir::V)
+            .as_slice()
+            .to_vec(),
+        second_basis
+            .points()
+            .iter()
+            .map(|point| *point + Vec3::new(0.0, 0.1, 0.0))
+            .collect(),
+        second_basis.weights().map(<[f64]>::to_vec),
+    )
+    .unwrap();
+    let first_source = insert_offset_nurbs_field(&mut store, first_basis.clone(), &first_offsets);
+    let second_source =
+        insert_offset_nurbs_field(&mut store, second_basis.clone(), &second_offsets);
+    let surfaces = [first_source, second_source];
+    let certificate = certify_verified_dual_offset_nurbs_intersection_residuals(
+        carrier,
+        [
+            NurbsIntersectionTrace::OffsetNurbs(TransmittedOffsetNurbsTrace::new(
+                first_basis,
+                first_offsets.iter().sum(),
+            )),
+            NurbsIntersectionTrace::OffsetNurbs(TransmittedOffsetNurbsTrace::new(
+                second_basis,
+                second_offsets.iter().sum(),
+            )),
+        ],
+        [pcurve.clone(), pcurve.clone()],
+        1.0e-10,
+    )
+    .unwrap();
+    let (source, source_curve, source_pcurves) =
+        verified_nurbs_wire(&mut store, surfaces, [pcurve.clone(), pcurve], certificate);
+    assert_verified_nurbs_copy(
+        &mut store,
+        source,
+        source_curve,
+        surfaces,
+        source_pcurves,
+        oblique_placement(),
+    );
+}
+
+#[test]
+fn verified_nurbs_source_binding_rejects_altered_and_overdeep_offset_roots_atomically() {
+    let mut store = Store::new();
+    let carrier = linear_nurbs_curve([Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]);
+    let pcurve = linear_nurbs_pcurve([Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)]);
+    let basis = horizontal_nurbs_surface(-0.1, true);
+    let direct = vertical_nurbs_surface(false);
+    let traces = [
+        NurbsIntersectionTrace::OffsetNurbs(TransmittedOffsetNurbsTrace::new(basis.clone(), 0.1)),
+        NurbsIntersectionTrace::Nurbs(direct.clone()),
+    ];
+    let certificate = certify_verified_offset_nurbs_nurbs_intersection_residuals(
+        carrier,
+        traces,
+        [pcurve.clone(), pcurve.clone()],
+        1.0e-10,
+    )
+    .unwrap();
+    let basis_handle = store.insert_surface(SurfaceGeom::Nurbs(basis)).unwrap();
+    let direct_handle = store.insert_surface(SurfaceGeom::Nurbs(direct)).unwrap();
+    let altered = store
+        .insert_surface(SurfaceGeom::Offset(OffsetSurfaceDescriptor::new(
+            basis_handle,
+            0.2,
+        )))
+        .unwrap();
+    let mut overdeep = basis_handle;
+    for _ in 0..5 {
+        overdeep = store
+            .insert_surface(SurfaceGeom::Offset(OffsetSurfaceDescriptor::new(
+                overdeep, 0.02,
+            )))
+            .unwrap();
+    }
+    let pcurves = [pcurve.clone(), pcurve]
+        .map(|pcurve| store.insert_pcurve(Curve2dGeom::Nurbs(pcurve)).unwrap());
+    let before = store.count::<CurveGeom>();
+    assert!(
+        store
+            .insert_verified_nurbs_intersection_curve(
+                [altered, direct_handle],
+                pcurves,
+                certificate.clone(),
+            )
+            .is_err()
+    );
+    assert_eq!(store.count::<CurveGeom>(), before);
+    assert!(
+        store
+            .insert_verified_nurbs_intersection_curve(
+                [overdeep, direct_handle],
+                pcurves,
+                certificate.clone(),
+            )
+            .is_err()
+    );
+    assert_eq!(store.count::<CurveGeom>(), before);
+
+    let mut valid = basis_handle;
+    for _ in 0..4 {
+        valid = store
+            .insert_surface(SurfaceGeom::Offset(OffsetSurfaceDescriptor::new(
+                valid, 0.025,
+            )))
+            .unwrap();
+    }
+    let accepted = store
+        .insert_verified_nurbs_intersection_curve([valid, direct_handle], pcurves, certificate)
+        .unwrap();
+    assert_eq!(store.count::<CurveGeom>(), before + 1);
+    assert!(
+        store
+            .get(accepted)
+            .unwrap()
+            .as_verified_nurbs_intersection()
+            .is_some()
+    );
+    store.geometry().validate().unwrap();
 }
 
 #[test]

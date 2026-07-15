@@ -22,6 +22,7 @@ use std::collections::{HashMap, HashSet};
 
 const MAX_VERIFIED_OFFSET_NURBS_CHAIN_LENGTH: usize = 2;
 const MAX_VERIFIED_OFFSET_NURBS_DIRECT_NURBS_CHAIN_LENGTH: usize = 4;
+const MAX_VERIFIED_DUAL_OFFSET_NURBS_CHAIN_LENGTH: usize = 4;
 const MAX_VERIFIED_VARYING_OFFSET_NURBS_CHAIN_LENGTH: usize = 1;
 
 /// Immutable 3D curve node. The descriptor is the node payload itself so
@@ -1074,6 +1075,10 @@ fn validate_curve_references(
             ] => MAX_VERIFIED_OFFSET_NURBS_DIRECT_NURBS_CHAIN_LENGTH,
             [
                 NurbsIntersectionTrace::OffsetNurbs(_),
+                NurbsIntersectionTrace::OffsetNurbs(_),
+            ] => MAX_VERIFIED_DUAL_OFFSET_NURBS_CHAIN_LENGTH,
+            [
+                NurbsIntersectionTrace::OffsetNurbs(_),
                 NurbsIntersectionTrace::Plane(_) | NurbsIntersectionTrace::OffsetPlane(_),
             ]
             | [
@@ -1327,21 +1332,24 @@ fn verified_offset_nurbs_trace_matches(
                 current = offset.basis();
             }
             SurfaceDescriptor::Nurbs(basis) => {
-                let constant_positive_normal_basis = basis
-                    .points()
-                    .first()
-                    .is_some_and(|first| basis.points().iter().all(|point| point.z == first.z));
-                if distances.len() > 1 && !constant_positive_normal_basis {
+                if distances.len() > 1 && !constant_normal_nurbs_basis(basis) {
                     return Ok(false);
                 }
                 let distance = distances.iter().rev().try_fold(0.0, |sum, &value| {
                     let next = sum + value;
-                    (next.is_finite()
-                        && basis.points().iter().all(|point| {
-                            let lifted = Interval::point(point.z) + Interval::point(next);
+                    if !next.is_finite() {
+                        return None;
+                    }
+                    let displacement = Interval::new(-next.abs(), next.abs());
+                    basis
+                        .points()
+                        .iter()
+                        .flat_map(|point| point.to_array())
+                        .all(|coordinate| {
+                            let lifted = Interval::point(coordinate) + displacement;
                             lifted.lo().is_finite() && lifted.hi().is_finite()
-                        }))
-                    .then_some(next)
+                        })
+                        .then_some(next)
                 });
                 return Ok(
                     distance == Some(certified.signed_distance()) && basis == certified.basis()
@@ -1350,6 +1358,65 @@ fn verified_offset_nurbs_trace_matches(
             _ => return Ok(false),
         }
     }
+}
+
+/// Rigid-invariant constant-normal test for nested verified Offset(NURBS)
+/// traces.
+///
+/// A rigid copy of a planar source generally loses bit-identical global-Z
+/// controls even though its geometric normal is still constant. Use a tight
+/// scale-aware floating-point coplanarity envelope instead of a privileged
+/// coordinate axis. The whole-range intersection certificate remains the
+/// authority for regularity and residual acceptance.
+fn constant_normal_nurbs_basis(basis: &kgeom::nurbs::NurbsSurface) -> bool {
+    let points = basis.points();
+    let Some((&origin, rest)) = points.split_first() else {
+        return false;
+    };
+    let Some(axis) = rest
+        .iter()
+        .map(|point| *point - origin)
+        .filter(|axis| axis.to_array().into_iter().all(f64::is_finite))
+        .max_by(|a, b| a.norm_sq().total_cmp(&b.norm_sq()))
+    else {
+        return false;
+    };
+    let axis_length = axis.norm();
+    if !axis_length.is_finite() || axis_length == 0.0 {
+        return false;
+    }
+    let Some(normal) = rest
+        .iter()
+        .map(|point| axis.cross(*point - origin))
+        .filter(|normal| normal.to_array().into_iter().all(f64::is_finite))
+        .max_by(|a, b| a.norm_sq().total_cmp(&b.norm_sq()))
+    else {
+        return false;
+    };
+    let normal_length = normal.norm();
+    if !normal_length.is_finite() || normal_length == 0.0 {
+        return false;
+    }
+    let unit_normal = normal / normal_length;
+    let relative_scale = points
+        .iter()
+        .map(|point| (*point - origin).norm())
+        .fold(1.0_f64, f64::max);
+    let coordinate_scale = points
+        .iter()
+        .flat_map(|point| point.to_array())
+        .map(f64::abs)
+        .fold(relative_scale, f64::max);
+    if !coordinate_scale.is_finite() {
+        return false;
+    }
+    // A rigid point transform and the subsequent relative-vector/dot test use
+    // only a bounded handful of multiply-adds. This envelope admits that
+    // roundoff without treating a materially warped source as constant-normal.
+    let coplanar_slack = 1_024.0 * f64::EPSILON * coordinate_scale;
+    points
+        .iter()
+        .all(|point| (*point - origin).dot(unit_normal).abs() <= coplanar_slack)
 }
 
 fn verified_offset_plane_trace_matches(

@@ -1343,8 +1343,10 @@ impl PartEdit<'_> {
     /// before an operation scope starts. Plane/Plane line and Plane/Sphere
     /// circle descriptors backed by direct fields or safe finite constant-
     /// normal offset chains are admitted because the lower copy transaction
-    /// reissues their whole-range certificates; NURBS and transmitted proof
-    /// families remain unsupported.
+    /// reissues their whole-range certificates. Operation-generated verified
+    /// analytic/NURBS descriptors are admitted under their graph-validated
+    /// direct and bounded offset-source contracts; transmitted proof families
+    /// remain unsupported.
     pub fn copy_body_rigid(
         &mut self,
         request: CopyBodyRequest,
@@ -1477,7 +1479,7 @@ fn rigid_copy_curve_is_reissuable(
         return Ok(true);
     }
     let Some(intersection) = descriptor.as_intersection() else {
-        return Ok(false);
+        return Ok(descriptor.as_verified_nurbs_intersection().is_some());
     };
     let [first, second] = intersection.source_surfaces();
     let exact_field = |surface| {
@@ -1775,15 +1777,17 @@ mod tests {
     };
     use kgeom::curve::{Circle, Line};
     use kgeom::curve2d::{Circle2d, Line2d, NurbsCurve2d};
-    use kgeom::nurbs::NurbsCurve;
+    use kgeom::nurbs::{NurbsCurve, NurbsSurface};
     use kgeom::param::ParamRange;
     use kgeom::surface::{Plane, Sphere};
     use kgeom::vec::{Point2, Point3, Vec2, Vec3};
     use kgraph::{
-        AffineParamMap1d, EvalBudgetProfile, EvalError, OffsetSurfaceDescriptor, PlaneCircleTrace,
-        PlaneSphereCircleTrace, SphereLatitudeTrace, TransmittedIntersectionChartMetadata,
-        certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
+        AffineParamMap1d, EvalBudgetProfile, EvalError, NurbsIntersectionTrace,
+        OffsetSurfaceDescriptor, PlaneCircleTrace, PlaneSphereCircleTrace, SphereLatitudeTrace,
+        TransmittedIntersectionChartMetadata, certify_paired_plane_line_residuals,
+        certify_paired_plane_sphere_circle_residuals,
         certify_transmitted_plane_intersection_residuals,
+        certify_verified_plane_nurbs_intersection_residuals,
     };
     use ktopo::check::VerificationGapCause;
     use ktopo::entity::{
@@ -1853,6 +1857,110 @@ mod tests {
 
     fn transmitted_plane_wire(store: &mut Store) -> ktopo::entity::BodyId {
         let curve = transmitted_plane_curve(store);
+        let mut transaction = store.transaction().unwrap();
+        let body = {
+            let mut assembly = transaction.assembly();
+            let body = assembly.add(RawBody {
+                kind: BodyKind::Wire,
+                regions: Vec::new(),
+            });
+            let region = assembly.add(RawRegion {
+                body,
+                kind: RegionKind::Void,
+                shells: Vec::new(),
+            });
+            let shell = assembly.add(RawShell {
+                region,
+                faces: Vec::new(),
+                edges: Vec::new(),
+                vertex: None,
+            });
+            let points = [
+                assembly.add(Point3::new(0.0, 0.0, 0.0)),
+                assembly.add(Point3::new(1.0, 0.0, 0.0)),
+            ];
+            let vertices = points.map(|point| {
+                assembly.add(RawVertex {
+                    point,
+                    tolerance: None,
+                })
+            });
+            let edge = assembly.add(RawEdge {
+                curve: Some(curve),
+                vertices: vertices.map(Some),
+                bounds: Some((0.0, 1.0)),
+                fins: Vec::new(),
+                tolerance: None,
+            });
+            assembly.get_mut(shell).unwrap().edges.push(edge);
+            assembly.get_mut(region).unwrap().shells.push(shell);
+            assembly.get_mut(body).unwrap().regions.push(region);
+            body
+        };
+        transaction.commit_checked_body(body).unwrap();
+        body
+    }
+
+    fn verified_nurbs_wire(store: &mut Store) -> ktopo::entity::BodyId {
+        let plane = Plane::new(
+            Frame::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap(),
+        );
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.0, 0.0, 1.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 1.0),
+            ],
+            Some(vec![2.0; 4]),
+        )
+        .unwrap();
+        let surfaces = [
+            store.insert_surface(SurfaceGeom::Plane(plane)).unwrap(),
+            store
+                .insert_surface(SurfaceGeom::Nurbs(surface.clone()))
+                .unwrap(),
+        ];
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let carrier = NurbsCurve::new(
+            1,
+            knots.clone(),
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
+            None,
+        )
+        .unwrap();
+        let pcurve = NurbsCurve2d::new(
+            1,
+            knots,
+            vec![Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)],
+            None,
+        )
+        .unwrap();
+        let certificate = certify_verified_plane_nurbs_intersection_residuals(
+            carrier,
+            [
+                NurbsIntersectionTrace::Plane(plane),
+                NurbsIntersectionTrace::Nurbs(surface),
+            ],
+            [pcurve.clone(), pcurve.clone()],
+            1.0e-10,
+        )
+        .unwrap();
+        let pcurves = [pcurve.clone(), pcurve]
+            .map(|pcurve| store.insert_pcurve(Curve2dGeom::Nurbs(pcurve)).unwrap());
+        let curve = store
+            .insert_verified_nurbs_intersection_curve(surfaces, pcurves, certificate)
+            .unwrap();
+
         let mut transaction = store.transaction().unwrap();
         let body = {
             let mut assembly = transaction.assembly();
@@ -2411,6 +2519,52 @@ mod tests {
                 edit.state.store.count::<RawEdge>(),
             )
         );
+    }
+
+    #[test]
+    fn rigid_body_copy_facade_admits_and_reissues_verified_nurbs_proofs() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let mut edit = session.edit_part(part_id.clone()).unwrap();
+        let raw_source = verified_nurbs_wire(&mut edit.state.store);
+        let source = BodyId::new(part_id, raw_source);
+        let placement = Frame::new(
+            Point3::new(2.0, -1.0, 3.0),
+            Vec3::new(1.0, 2.0, 3.0).normalized().unwrap(),
+            Vec3::new(2.0, -1.0, 0.0).normalized().unwrap(),
+        )
+        .unwrap();
+
+        let created = edit
+            .copy_body_rigid(CopyBodyRequest::new(source, placement))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        let copied_edge = edit
+            .state
+            .store
+            .edges_of_body(created.body().raw())
+            .unwrap()[0];
+        let copied_curve = edit.state.store.get(copied_edge).unwrap().curve.unwrap();
+        let copied = edit
+            .state
+            .store
+            .get(copied_curve)
+            .unwrap()
+            .as_verified_nurbs_intersection()
+            .unwrap();
+        assert_eq!(
+            copied.certificate().carrier_range(),
+            ParamRange::new(0.0, 1.0)
+        );
+        assert_eq!(
+            copied.certificate().carrier().points(),
+            &[
+                placement.point_at(0.0, 0.0, 0.0),
+                placement.point_at(1.0, 0.0, 0.0),
+            ]
+        );
+        edit.state.store.geometry().validate().unwrap();
     }
 
     #[test]

@@ -4260,6 +4260,77 @@ impl VerifiedNurbsIntersectionCertificate {
     }
 }
 
+/// Reissue an operation-generated analytic/NURBS branch certificate after an
+/// exact geometry-preserving transformation.
+///
+/// This is the authoritative family dispatcher for retained verified NURBS
+/// traces. Callers supply the transformed model-space carrier and original
+/// source fields together with the unchanged paired parameter-space curves
+/// and tolerance. The selected family certifier then reruns its complete
+/// whole-range proof; no residual bound from the source certificate is reused.
+pub fn reissue_verified_nurbs_intersection_residuals(
+    carrier: NurbsCurve,
+    traces: [NurbsIntersectionTrace; 2],
+    pcurves: [NurbsCurve2d; 2],
+    tolerance: f64,
+) -> Result<VerifiedNurbsIntersectionCertificate, IntersectionCertificateError> {
+    match &traces {
+        [
+            NurbsIntersectionTrace::Plane(_),
+            NurbsIntersectionTrace::Nurbs(_),
+        ]
+        | [
+            NurbsIntersectionTrace::Nurbs(_),
+            NurbsIntersectionTrace::Plane(_),
+        ] => {
+            certify_verified_plane_nurbs_intersection_residuals(carrier, traces, pcurves, tolerance)
+        }
+        [
+            NurbsIntersectionTrace::Sphere(_),
+            NurbsIntersectionTrace::Nurbs(_),
+        ]
+        | [
+            NurbsIntersectionTrace::Nurbs(_),
+            NurbsIntersectionTrace::Sphere(_),
+        ] => certify_verified_sphere_nurbs_intersection_residuals(
+            carrier, traces, pcurves, tolerance,
+        ),
+        [
+            NurbsIntersectionTrace::Nurbs(_),
+            NurbsIntersectionTrace::Nurbs(_),
+        ] => {
+            certify_verified_nurbs_nurbs_intersection_residuals(carrier, traces, pcurves, tolerance)
+        }
+        [
+            NurbsIntersectionTrace::OffsetNurbs(_),
+            NurbsIntersectionTrace::Nurbs(_),
+        ]
+        | [
+            NurbsIntersectionTrace::Nurbs(_),
+            NurbsIntersectionTrace::OffsetNurbs(_),
+        ] => certify_verified_offset_nurbs_nurbs_intersection_residuals(
+            carrier, traces, pcurves, tolerance,
+        ),
+        [
+            NurbsIntersectionTrace::OffsetNurbs(_),
+            NurbsIntersectionTrace::OffsetNurbs(_),
+        ] => certify_verified_dual_offset_nurbs_intersection_residuals(
+            carrier, traces, pcurves, tolerance,
+        ),
+        [
+            NurbsIntersectionTrace::OffsetNurbs(_),
+            NurbsIntersectionTrace::Plane(_) | NurbsIntersectionTrace::OffsetPlane(_),
+        ]
+        | [
+            NurbsIntersectionTrace::Plane(_) | NurbsIntersectionTrace::OffsetPlane(_),
+            NurbsIntersectionTrace::OffsetNurbs(_),
+        ] => certify_verified_offset_nurbs_plane_intersection_residuals(
+            carrier, traces, pcurves, tolerance,
+        ),
+        _ => Err(IntersectionCertificateError::InvalidTraceFamily),
+    }
+}
+
 /// Persistent descriptor for an operation-generated verified analytic/NURBS
 /// branch.
 #[derive(Debug, Clone, PartialEq)]
@@ -4579,6 +4650,27 @@ pub fn verified_offset_nurbs_nurbs_intersection_certificate_cost(
 }
 
 /// Deterministic logical resources required by
+/// [`certify_verified_dual_offset_nurbs_intersection_residuals`].
+///
+/// Both offset traces retain their independent original bases and accumulated
+/// signed distances. Every paired subdivision cell therefore costs the sum of
+/// the two original-source differential enclosures, exactly as for the direct
+/// NURBS/NURBS and mixed Offset(NURBS)/NURBS proof families.
+pub fn verified_dual_offset_nurbs_intersection_certificate_cost(
+    carrier: &NurbsCurve,
+    traces: &[NurbsIntersectionTrace; 2],
+) -> Option<VerifiedNurbsNurbsCertificateCost> {
+    let [
+        NurbsIntersectionTrace::OffsetNurbs(offset_a),
+        NurbsIntersectionTrace::OffsetNurbs(offset_b),
+    ] = traces
+    else {
+        return None;
+    };
+    verified_paired_nurbs_intersection_certificate_cost(carrier, offset_a.basis(), offset_b.basis())
+}
+
+/// Deterministic logical resources required by
 /// [`certify_verified_offset_nurbs_plane_intersection_residuals`].
 ///
 /// Every carrier subdivision cell proves the effective Offset(NURBS) lift
@@ -4672,6 +4764,25 @@ pub fn certify_verified_offset_nurbs_nurbs_intersection_residuals(
     tolerance: f64,
 ) -> Result<VerifiedNurbsIntersectionCertificate, IntersectionCertificateError> {
     if verified_offset_nurbs_nurbs_intersection_certificate_cost(&carrier, &traces).is_none() {
+        return Err(IntersectionCertificateError::InvalidTraceFamily);
+    }
+    certify_verified_paired_nurbs_intersection_residuals_impl(carrier, traces, pcurves, tolerance)
+}
+
+/// Certify one operation-generated Offset(NURBS)/Offset(NURBS) marching
+/// branch over its complete finite degree-1 carrier range.
+///
+/// Each ordered trace retains its independent original basis and accumulated
+/// signed distance. The shared paired certifier encloses both effective
+/// unit-normal lifts directly from those original sources; discovery-only
+/// effective surfaces and their sampled points are not proof authority.
+pub fn certify_verified_dual_offset_nurbs_intersection_residuals(
+    carrier: NurbsCurve,
+    traces: [NurbsIntersectionTrace; 2],
+    pcurves: [NurbsCurve2d; 2],
+    tolerance: f64,
+) -> Result<VerifiedNurbsIntersectionCertificate, IntersectionCertificateError> {
+    if verified_dual_offset_nurbs_intersection_certificate_cost(&carrier, &traces).is_none() {
         return Err(IntersectionCertificateError::InvalidTraceFamily);
     }
     certify_verified_paired_nurbs_intersection_residuals_impl(carrier, traces, pcurves, tolerance)
