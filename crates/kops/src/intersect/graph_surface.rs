@@ -4,7 +4,8 @@
 //! leaves form exact analytic field families. Genuinely non-planar direct NURBS
 //! surfaces additionally support scoped exact-plane-field/NURBS, exact
 //! sphere-field/NURBS, compatible direct NURBS/NURBS marching, and a narrow
-//! constant-normal direct-Offset(NURBS)/NURBS family. Strictly separated pairs
+//! constant-normal direct- or one-level nested-Offset(NURBS)/NURBS family.
+//! Strictly separated pairs
 //! of compatible direct constant-normal Offset(NURBS) roots additionally own
 //! a graph-level complete-empty proof. The adapter
 //! promotes discovered branches only after
@@ -33,6 +34,7 @@ use super::result::{
 use super::sphere_nurbs_surface::intersect_bounded_sphere_nurbs_surface_with_traces_in_scope;
 use core::fmt;
 use kcore::error::{CapabilityId, ClassifiedError, ErrorClass, ErrorCode};
+use kcore::interval::Interval;
 use kcore::math;
 use kcore::operation::{
     AccountingMode, BudgetPlan, DiagnosticKind, LimitSnapshot, LimitSpec, OperationContext,
@@ -50,10 +52,10 @@ use kgraph::{
     AffineParamMap1d, Curve2dDescriptor, Curve2dHandle, CurveDescriptor, CurveHandle,
     EvalBudgetProfile, EvalContext, EvalError, EvalLimits, EvalUsage, ExactSurfaceField,
     GeometryGraph, GeometryGraphError, GeometryRef, IntersectionCertificateError,
-    NurbsIntersectionTrace, OffsetSurfaceDescriptor, PairedTrace, PlaneCircleTrace,
-    PlaneSphereCircleTrace, SphereLatitudeTrace, SurfaceDescriptor, SurfaceHandle,
-    VerifiedIntersectionCertificate, VerifiedNurbsIntersectionCertificate,
-    certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
+    NurbsIntersectionTrace, PairedTrace, PlaneCircleTrace, PlaneSphereCircleTrace,
+    SphereLatitudeTrace, SurfaceDescriptor, SurfaceHandle, VerifiedIntersectionCertificate,
+    VerifiedNurbsIntersectionCertificate, certify_paired_plane_line_residuals,
+    certify_paired_plane_sphere_circle_residuals,
     certify_paired_plane_sphere_oblique_circle_residuals,
     certify_verified_nurbs_nurbs_intersection_residuals,
     certify_verified_offset_nurbs_nurbs_intersection_residuals,
@@ -68,6 +70,7 @@ use kgraph::{
 const MAX_SPHERICAL_CIRCLE_PROOFS_PER_QUERY: u64 = 4_096;
 const MAX_NURBS_TRACE_CERTIFICATE_WORK_PER_QUERY: u64 = 134_217_728;
 const MAX_NURBS_TRACE_CERTIFICATE_ITEMS_PER_QUERY: u64 = 16_777_216;
+const MAX_OFFSET_NURBS_CHAIN_LENGTH: usize = 2;
 
 /// Stable work stage for fixed whole-branch inverse sphere-chart subdivisions.
 pub const SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS: StageId =
@@ -431,8 +434,9 @@ enum ResolvedGraphSurfaceField<'a> {
     },
     Nurbs(&'a NurbsSurface),
     OffsetNurbs {
-        offset: OffsetSurfaceDescriptor,
+        signed_distance: f64,
         basis: &'a NurbsSurface,
+        chain_length: usize,
     },
 }
 
@@ -507,9 +511,10 @@ pub fn intersect_bounded_graph_surfaces_with_context(
 /// regular-chart plane/sphere, exact-plane-field/genuinely-non-planar-
 /// direct-NURBS, exact-Sphere-field/genuinely-non-planar-direct-NURBS, and
 /// compatible genuinely-non-planar direct-NURBS/direct-NURBS branches are
-/// supported. Direct constant-normal Offset(NURBS)/NURBS branches additionally
-/// reuse the compatible paired marcher across the positive-area overlap of
-/// distinct operand windows. Two compatible direct constant-normal
+/// supported. Direct or one-level nested constant-normal
+/// Offset(NURBS)/NURBS branches additionally reuse the compatible paired
+/// marcher across the positive-area overlap of distinct operand windows. Two
+/// compatible direct constant-normal
 /// Offset(NURBS) roots return a complete miss only from strict outward
 /// original-control separation; coincident or intersecting effective sheets
 /// and all other pairs remain explicitly unsupported.
@@ -642,65 +647,87 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
             ]
         }
         (
-            Some(ResolvedGraphSurfaceField::OffsetNurbs { offset, basis }),
+            Some(ResolvedGraphSurfaceField::OffsetNurbs {
+                signed_distance,
+                basis,
+                chain_length,
+            }),
             Some(ResolvedGraphSurfaceField::Nurbs(surface)),
         ) if nurbs_control_net_is_nonplanar(surface, tolerances.linear())
             && supports_offset_nurbs_nurbs_surface_pair(
                 basis,
-                offset.signed_distance(),
+                signed_distance,
                 range_a,
                 surface,
                 range_b,
             ) =>
-        {
-            [
-                ResolvedGraphSurfaceField::OffsetNurbs { offset, basis },
-                ResolvedGraphSurfaceField::Nurbs(surface),
-            ]
-        }
-        (
-            Some(ResolvedGraphSurfaceField::Nurbs(surface)),
-            Some(ResolvedGraphSurfaceField::OffsetNurbs { offset, basis }),
-        ) if nurbs_control_net_is_nonplanar(surface, tolerances.linear())
-            && supports_offset_nurbs_nurbs_surface_pair(
-                basis,
-                offset.signed_distance(),
-                range_b,
-                surface,
-                range_a,
-            ) =>
-        {
-            [
-                ResolvedGraphSurfaceField::Nurbs(surface),
-                ResolvedGraphSurfaceField::OffsetNurbs { offset, basis },
-            ]
-        }
-        (
-            Some(ResolvedGraphSurfaceField::OffsetNurbs {
-                offset: offset_a,
-                basis: basis_a,
-            }),
-            Some(ResolvedGraphSurfaceField::OffsetNurbs {
-                offset: offset_b,
-                basis: basis_b,
-            }),
-        ) if supports_strictly_separated_constant_normal_offset_nurbs_pair(
-            basis_a,
-            offset_a.signed_distance(),
-            range_a,
-            basis_b,
-            offset_b.signed_distance(),
-            range_b,
-        ) =>
         {
             [
                 ResolvedGraphSurfaceField::OffsetNurbs {
-                    offset: offset_a,
+                    signed_distance,
+                    basis,
+                    chain_length,
+                },
+                ResolvedGraphSurfaceField::Nurbs(surface),
+            ]
+        }
+        (
+            Some(ResolvedGraphSurfaceField::Nurbs(surface)),
+            Some(ResolvedGraphSurfaceField::OffsetNurbs {
+                signed_distance,
+                basis,
+                chain_length,
+            }),
+        ) if nurbs_control_net_is_nonplanar(surface, tolerances.linear())
+            && supports_offset_nurbs_nurbs_surface_pair(
+                basis,
+                signed_distance,
+                range_b,
+                surface,
+                range_a,
+            ) =>
+        {
+            [
+                ResolvedGraphSurfaceField::Nurbs(surface),
+                ResolvedGraphSurfaceField::OffsetNurbs {
+                    signed_distance,
+                    basis,
+                    chain_length,
+                },
+            ]
+        }
+        (
+            Some(ResolvedGraphSurfaceField::OffsetNurbs {
+                signed_distance: signed_distance_a,
+                basis: basis_a,
+                chain_length: chain_length_a,
+            }),
+            Some(ResolvedGraphSurfaceField::OffsetNurbs {
+                signed_distance: signed_distance_b,
+                basis: basis_b,
+                chain_length: chain_length_b,
+            }),
+        ) if chain_length_a == 1
+            && chain_length_b == 1
+            && supports_strictly_separated_constant_normal_offset_nurbs_pair(
+                basis_a,
+                signed_distance_a,
+                range_a,
+                basis_b,
+                signed_distance_b,
+                range_b,
+            ) =>
+        {
+            [
+                ResolvedGraphSurfaceField::OffsetNurbs {
+                    signed_distance: signed_distance_a,
                     basis: basis_a,
+                    chain_length: chain_length_a,
                 },
                 ResolvedGraphSurfaceField::OffsetNurbs {
-                    offset: offset_b,
+                    signed_distance: signed_distance_b,
                     basis: basis_b,
+                    chain_length: chain_length_b,
                 },
             ]
         }
@@ -783,12 +810,16 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
             (output.result, Some(output.traces))
         }
         [
-            ResolvedGraphSurfaceField::OffsetNurbs { offset, basis },
+            ResolvedGraphSurfaceField::OffsetNurbs {
+                signed_distance,
+                basis,
+                ..
+            },
             ResolvedGraphSurfaceField::Nurbs(surface),
         ] => {
             let output = offset_nurbs_nurbs_march_in_scope(
                 basis,
-                offset.signed_distance(),
+                signed_distance,
                 range_a,
                 surface,
                 range_b,
@@ -799,11 +830,15 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         }
         [
             ResolvedGraphSurfaceField::Nurbs(surface),
-            ResolvedGraphSurfaceField::OffsetNurbs { offset, basis },
+            ResolvedGraphSurfaceField::OffsetNurbs {
+                signed_distance,
+                basis,
+                ..
+            },
         ] => {
             let output = offset_nurbs_nurbs_march_in_scope(
                 basis,
-                offset.signed_distance(),
+                signed_distance,
                 range_b,
                 surface,
                 range_a,
@@ -1123,21 +1158,57 @@ fn resolve_exact_surface_field<'a>(
             ExactSurfaceField::Sphere(surface) => ResolvedGraphSurfaceField::Sphere { surface },
         }));
     }
-    let offset = descriptor
-        .as_offset()
-        .copied()
-        .expect("offset descriptor was classified before graph evaluation");
-    let basis_descriptor =
-        graph
-            .surface(offset.basis())
-            .ok_or(GraphSurfaceIntersectionError::GeometryEvaluation(
-                EvalError::StaleGeometryHandle {
-                    geometry: GeometryRef::Surface(offset.basis()),
-                },
-            ))?;
-    Ok(basis_descriptor
-        .as_nurbs()
-        .map(|basis| ResolvedGraphSurfaceField::OffsetNurbs { offset, basis }))
+    resolve_offset_nurbs_field(graph, surface)
+}
+
+fn resolve_offset_nurbs_field(
+    graph: &GeometryGraph,
+    root: SurfaceHandle,
+) -> GraphSurfaceIntersectionResult<Option<ResolvedGraphSurfaceField<'_>>> {
+    let mut current = root;
+    let mut distances = Vec::new();
+    loop {
+        let geometry = GeometryRef::Surface(current);
+        let descriptor =
+            graph
+                .surface(current)
+                .ok_or(GraphSurfaceIntersectionError::GeometryEvaluation(
+                    EvalError::StaleGeometryHandle { geometry },
+                ))?;
+        match descriptor {
+            SurfaceDescriptor::Offset(offset) => {
+                distances.push(offset.signed_distance());
+                if distances.len() > MAX_OFFSET_NURBS_CHAIN_LENGTH {
+                    return Ok(None);
+                }
+                current = offset.basis();
+            }
+            SurfaceDescriptor::Nurbs(basis) => {
+                let Some(signed_distance) = accumulated_regular_offset_distance(basis, &distances)
+                else {
+                    return Ok(None);
+                };
+                return Ok(Some(ResolvedGraphSurfaceField::OffsetNurbs {
+                    signed_distance,
+                    basis,
+                    chain_length: distances.len(),
+                }));
+            }
+            _ => return Ok(None),
+        }
+    }
+}
+
+fn accumulated_regular_offset_distance(basis: &NurbsSurface, distances: &[f64]) -> Option<f64> {
+    distances.iter().rev().try_fold(0.0, |sum, &distance| {
+        let next = sum + distance;
+        (next.is_finite()
+            && basis.points().iter().all(|point| {
+                let lifted = Interval::point(point.z) + Interval::point(next);
+                lifted.lo().is_finite() && lifted.hi().is_finite()
+            }))
+        .then_some(next)
+    })
 }
 
 /// Returns whether the Euclidean control net proves that the NURBS surface is
@@ -1578,13 +1649,17 @@ fn build_verified_analytic_nurbs_branch(
             VerifiedNurbsProofFamily::PairedSources,
         ),
         [
-            ResolvedGraphSurfaceField::OffsetNurbs { offset, basis },
+            ResolvedGraphSurfaceField::OffsetNurbs {
+                signed_distance,
+                basis,
+                ..
+            },
             ResolvedGraphSurfaceField::Nurbs(surface),
         ] => (
             [
                 NurbsIntersectionTrace::OffsetNurbs(kgraph::TransmittedOffsetNurbsTrace::new(
                     basis.clone(),
-                    offset.signed_distance(),
+                    signed_distance,
                 )),
                 NurbsIntersectionTrace::Nurbs(surface.clone()),
             ],
@@ -1596,13 +1671,17 @@ fn build_verified_analytic_nurbs_branch(
         ),
         [
             ResolvedGraphSurfaceField::Nurbs(surface),
-            ResolvedGraphSurfaceField::OffsetNurbs { offset, basis },
+            ResolvedGraphSurfaceField::OffsetNurbs {
+                signed_distance,
+                basis,
+                ..
+            },
         ] => (
             [
                 NurbsIntersectionTrace::Nurbs(surface.clone()),
                 NurbsIntersectionTrace::OffsetNurbs(kgraph::TransmittedOffsetNurbsTrace::new(
                     basis.clone(),
-                    offset.signed_distance(),
+                    signed_distance,
                 )),
             ],
             [

@@ -10,13 +10,17 @@ use crate::intersection::{
     PairedPlaneSphereCircleResidualCertificate, PlaneSphereCircleTrace,
     TransmittedIntersectionCurveDescriptor, TransmittedNurbsIntersectionCertificate,
     TransmittedNurbsIntersectionCurveDescriptor, TransmittedNurbsIntersectionTrace,
-    TransmittedPlaneIntersectionCertificate, VerifiedIntersectionCarrier,
-    VerifiedIntersectionCertificate, VerifiedIntersectionCurveDescriptor,
-    VerifiedNurbsIntersectionCertificate, VerifiedNurbsIntersectionCurveDescriptor,
+    TransmittedOffsetNurbsTrace, TransmittedPlaneIntersectionCertificate,
+    VerifiedIntersectionCarrier, VerifiedIntersectionCertificate,
+    VerifiedIntersectionCurveDescriptor, VerifiedNurbsIntersectionCertificate,
+    VerifiedNurbsIntersectionCurveDescriptor,
 };
 use kcore::arena::{Arena, ArenaChange, Handle};
 use kcore::error::Result as CoreResult;
+use kcore::interval::Interval;
 use std::collections::{HashMap, HashSet};
+
+const MAX_VERIFIED_OFFSET_NURBS_CHAIN_LENGTH: usize = 2;
 
 /// Immutable 3D curve node. The descriptor is the node payload itself so
 /// topology's historical geometry-enum names can remain source compatible.
@@ -1075,17 +1079,12 @@ fn validate_curve_references(
                 }
                 NurbsIntersectionTrace::Nurbs(certified) => actual.as_nurbs() == Some(certified),
                 NurbsIntersectionTrace::OffsetNurbs(certified) => {
-                    let Some(offset) = actual.as_offset().copied() else {
+                    if actual.as_offset().is_none() {
                         return Err(invalid_intersection_descriptor(
                             "verified offset-NURBS source is not an offset descriptor",
                         ));
-                    };
-                    offset.signed_distance() == certified.signed_distance()
-                        && graph
-                            .surface(offset.basis())
-                            .ok_or_else(|| stale(GeometryRef::Surface(offset.basis())))?
-                            .as_nurbs()
-                            == Some(certified.basis())
+                    }
+                    verified_offset_nurbs_trace_matches(graph, source, certified)?
                 }
             };
             if !matches {
@@ -1270,6 +1269,45 @@ fn exact_surface_field(
                 invalid_intersection_descriptor("exact sphere-field radius is invalid")
             })?;
             Ok(Some(ExactSurfaceField::Sphere(sphere)))
+        }
+    }
+}
+
+fn verified_offset_nurbs_trace_matches(
+    graph: &GeometryGraph,
+    root: SurfaceHandle,
+    certified: &TransmittedOffsetNurbsTrace,
+) -> GeometryGraphResult<bool> {
+    // Operation-generated certificates admit one direct offset or one nested
+    // root. Walk every retained descriptor so validation reaches the live
+    // terminal basis and recomputes the effective distance from the source.
+    let mut current = root;
+    let mut distances = Vec::new();
+    loop {
+        let geometry = GeometryRef::Surface(current);
+        match graph.surface(current).ok_or_else(|| stale(geometry))? {
+            SurfaceDescriptor::Offset(offset) => {
+                distances.push(offset.signed_distance());
+                if distances.len() > MAX_VERIFIED_OFFSET_NURBS_CHAIN_LENGTH {
+                    return Ok(false);
+                }
+                current = offset.basis();
+            }
+            SurfaceDescriptor::Nurbs(basis) => {
+                let distance = distances.iter().rev().try_fold(0.0, |sum, &value| {
+                    let next = sum + value;
+                    (next.is_finite()
+                        && basis.points().iter().all(|point| {
+                            let lifted = Interval::point(point.z) + Interval::point(next);
+                            lifted.lo().is_finite() && lifted.hi().is_finite()
+                        }))
+                    .then_some(next)
+                });
+                return Ok(
+                    distance == Some(certified.signed_distance()) && basis == certified.basis()
+                );
+            }
+            _ => return Ok(false),
         }
     }
 }

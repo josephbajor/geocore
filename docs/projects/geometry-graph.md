@@ -693,16 +693,20 @@ original `z` control nets may prove a miss; every positive branch is separately
 certified against both originals. Its paired cost is
 `S*2^10*((6R_a+1)+(6R_b+1))` Work with `S*2^10` Items and Depth 10; the
 one-span fixture pins `14336/14335` Work, `1024/1023` Items, and `10/9` Depth.
-A narrow direct Offset(NURBS)/NURBS arm reuses that paired proof only when the
-offset basis is the exact constant-+Z-normal unit chart and the direct peer is
-genuinely non-planar with matching constant weights. Their finite requested
+A narrow direct or one-level nested Offset(NURBS)/NURBS arm reuses that paired
+proof only when the terminal basis is the exact constant-+Z-normal unit chart
+and the direct peer is genuinely non-planar with matching constant weights.
+At most two offset descriptors are walked inner-to-outer; every partial
+distance and outward basis lift must remain finite. Their finite requested
 unit-chart windows may differ, but must have a positive-area overlap; discovery
 is clipped to that exact shared rectangle. Outward
 original basis-plus-distance versus direct-source control intervals own
 complete misses; the rounded effective surface remains discovery-only. The
-certificate retains the live offset root, signed distance, original basis,
-direct peer, and both pcurves, protects the basis transitively, and preserves
-the same exact 14,336/14,335 Work, 1,024/1,023 Items, and 10/9 Depth boundaries.
+certificate retains the live outer offset root, accumulated signed distance,
+terminal original basis, direct peer, and both pcurves, protects the entire
+basis chain transitively, and preserves the same exact 14,336/14,335 Work,
+1,024/1,023 Items, and 10/9 Depth boundaries. A nested root pins exact 3/2
+node-visit and 3/2 dependency-depth admission.
 Two independent direct Offset(NURBS) roots now have a narrower complete-empty
 arm when both bases use that same constant-+Z-normal unit chart and outward
 original basis-plus-distance control intervals prove strict separation. The
@@ -710,9 +714,10 @@ proof visits exactly four graph nodes at dependency depth two; 3/4 visits and
 1/2 depth pin denial/admission. It emits no carrier or certificate, preserves
 ordered roots under swap, and does not promote coincident effective sheets.
 Planar or unaligned peers, unequal ranges or weights, collapsed or non-finite
-sphere-offset fields, nested or varying-normal Offset(NURBS), intersecting or
-coincident Offset(NURBS)/Offset(NURBS), and broader NURBS/NURBS or other
-procedural pairs remain unsupported.
+sphere-offset fields, chains of three offset descriptors, varying-normal
+Offset(NURBS), nested Offset(NURBS)/Offset(NURBS), intersecting or coincident
+Offset(NURBS)/Offset(NURBS), and broader NURBS/NURBS or other procedural pairs
+remain unsupported.
 Certified branches can be committed atomically as
 `CurveDescriptor::Intersection` or
 `CurveDescriptor::VerifiedNurbsIntersection` nodes with a stable class key,
@@ -826,8 +831,9 @@ whole-range proof. Records 1828 and 1671 are admitted in place, while the
 traversal-masked records 2008 and 1678 are independently certified by focused
 payload transplants.
 
-- Broaden the first direct constant-normal Offset(NURBS)/NURBS unit-chart arm
-  beyond positive-area finite-window overlap, then add broader NURBS/NURBS
+- Broaden the capped direct-or-one-nested constant-normal Offset(NURBS)/NURBS
+  unit-chart arm beyond positive-area finite-window overlap, then add broader
+  NURBS/NURBS
   charts and other exact/procedural families only
   with contextual accounting and paired trace evidence.
 - Broaden the M3c consumer to null/general closed limits, other nullable chart
@@ -894,13 +900,15 @@ the graph ownership model.
   graph-accounting boundaries, source/pcurve/carrier identity, dependency
   protection, and typed periodic, closed, altered, stale, mismatched,
   noncanonical, and null-limit rollback paths.
-- Operation-generated direct Offset(NURBS)/NURBS variants cover both operand
-  orders, polynomial/rational constant-normal unit-chart bases, and distinct
-  finite operand windows with a positive-area shared rectangle; they retain the
-  live root, basis, signed distance, direct peer, and paired pcurves, pin exact
-  14,336/1,024/10 certificate accounting plus 2/depth-2 graph traversal, and
-  reject disjoint or boundary-only windows and nested, varying-normal,
-  offset/offset, unaligned, altered, and stale sources atomically.
+- Operation-generated direct or one-level nested Offset(NURBS)/NURBS variants
+  cover both operand orders, polynomial/rational constant-normal unit-chart
+  bases, and distinct finite operand windows with a positive-area shared
+  rectangle; they retain the live outer root, terminal basis, accumulated
+  signed distance, direct peer, and paired pcurves, pin exact 14,336/1,024/10
+  certificate accounting plus direct 2/depth-2 or nested 3/depth-3 graph
+  traversal with exact N/N-1 evidence, and reject disjoint or boundary-only
+  windows, three-descriptor chains, varying-normal or nested offset/offset,
+  unaligned, altered, and stale sources atomically.
 - Direct constant-normal Offset(B-surface)/B-surface variants cover both operand
   orders and polynomial/rational bases, retain the live root, signed distance,
   basis, and paired pcurves, pin exact 14,336/2/10 proof accounting, reject
