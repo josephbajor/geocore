@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shlex
 import subprocess
 import sys
@@ -31,7 +32,7 @@ WORKSPACE_PACKAGES = (
     ("kernel-lifecycle", Path("examples/kernel-lifecycle")),
 )
 
-PRODUCTION_FIXTURE_MARKER = 'include_bytes!("fixtures/exemplar.x_t")'
+PRODUCTION_FIXTURE_NAME = "exemplar.x_t"
 
 
 @dataclass(frozen=True, order=True)
@@ -70,7 +71,8 @@ EMBEDDED_EXEMPLAR_RATCHETS = tuple(
 # `corpus_manifest` reads the production fixture through the manifest rather
 # than embedding it, but its observed-corpus-stage contract performs the same
 # production-scale reconstruction work. Keep the mechanism-specific 12-target
-# marker contract above while excluding all 13 measured slow targets here.
+# source-reference contract above while excluding all 13 measured slow targets
+# here.
 PRODUCTION_CORPUS_RATCHETS = tuple(
     sorted(
         (IntegrationTarget("kxt", "corpus_manifest"),)
@@ -78,9 +80,36 @@ PRODUCTION_CORPUS_RATCHETS = tuple(
     )
 )
 
+# The fast lane is intentionally a representative smoke gate rather than the
+# 79-target non-corpus partition. Workspace library/binary tests already carry
+# the dense unit-test surface; these integration targets protect the principal
+# cross-crate, determinism, topology, completion, interchange, and facade seams.
+FAST_SMOKE_TARGETS = tuple(
+    sorted(
+        (
+            IntegrationTarget("kcore", "determinism"),
+            IntegrationTarget("kcore", "roadmap_ledger"),
+            IntegrationTarget("kgeom", "determinism"),
+            IntegrationTarget("kgraph", "intersection_curve_certificate"),
+            IntegrationTarget("kernel", "lifecycle"),
+            IntegrationTarget("ktopo", "euler_transactions"),
+            IntegrationTarget("ktopo", "transactions"),
+            IntegrationTarget("kops", "completion"),
+            IntegrationTarget("kops", "operation_intersection"),
+            IntegrationTarget("kxt", "intersection_chart"),
+            IntegrationTarget("kxt", "read"),
+            IntegrationTarget("kxt", "write"),
+            IntegrationTarget("kernel-lifecycle", "cli"),
+        )
+    )
+)
+
+EXPECTED_INTEGRATION_TARGET_COUNT = 92
+EXPECTED_STANDARD_TARGET_COUNT = 79
+
 
 class LaneContractError(RuntimeError):
-    """The reviewed fast/full classification no longer matches the workspace."""
+    """The reviewed lane classification no longer matches the workspace."""
 
 
 @dataclass(frozen=True)
@@ -88,7 +117,8 @@ class LaneInventory:
     """Deterministic partition of workspace integration tests."""
 
     all_targets: tuple[IntegrationTarget, ...]
-    fast_targets: tuple[IntegrationTarget, ...]
+    fast_smoke_targets: tuple[IntegrationTarget, ...]
+    standard_targets: tuple[IntegrationTarget, ...]
     production_corpus_ratchets: tuple[IntegrationTarget, ...]
     embedded_exemplar_ratchets: tuple[IntegrationTarget, ...]
 
@@ -104,17 +134,53 @@ class Stage:
 def discover_integration_targets(
     repository: Path = REPOSITORY_ROOT,
 ) -> tuple[IntegrationTarget, ...]:
-    """Discover workspace integration-test binaries in stable order."""
-    targets: list[IntegrationTarget] = []
-    for package, relative_directory in WORKSPACE_PACKAGES:
-        tests_directory = repository / relative_directory / "tests"
-        if not tests_directory.is_dir():
-            continue
-        targets.extend(
-            IntegrationTarget(package, source.stem)
-            for source in sorted(tests_directory.glob("*.rs"))
+    """Discover Cargo-authoritative integration-test binaries in stable order."""
+    return tuple(discover_integration_sources(repository))
+
+
+def discover_integration_sources(
+    repository: Path = REPOSITORY_ROOT,
+) -> dict[IntegrationTarget, Path]:
+    """Map every workspace Cargo integration target to its declared source."""
+    result = subprocess.run(
+        ("cargo", "metadata", "--no-deps", "--format-version", "1"),
+        cwd=repository,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise LaneContractError(
+            "cargo metadata failed while discovering integration targets: "
+            f"{result.stderr.strip()}"
         )
-    return tuple(sorted(targets))
+    try:
+        metadata = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise LaneContractError(f"cargo metadata returned invalid JSON: {error}") from error
+
+    workspace_package_ids = set(metadata["workspace_members"])
+    reviewed_packages = {name for name, _ in WORKSPACE_PACKAGES}
+    sources: dict[IntegrationTarget, Path] = {}
+    for package in metadata["packages"]:
+        if package["id"] not in workspace_package_ids:
+            continue
+        package_name = package["name"]
+        if package_name not in reviewed_packages:
+            raise LaneContractError(
+                f"unreviewed workspace package in Cargo metadata: {package_name}"
+            )
+        for cargo_target in package["targets"]:
+            if "test" not in cargo_target["kind"]:
+                continue
+            target = IntegrationTarget(package_name, cargo_target["name"])
+            source = Path(cargo_target["src_path"]).resolve()
+            if target in sources:
+                raise LaneContractError(
+                    f"duplicate Cargo integration target: {target.display()}"
+                )
+            sources[target] = source
+    return dict(sorted(sources.items()))
 
 
 def validate_workspace_packages(repository: Path = REPOSITORY_ROOT) -> None:
@@ -148,14 +214,37 @@ def validate_workspace_packages(repository: Path = REPOSITORY_ROOT) -> None:
 
 def discover_production_fixture_users(
     repository: Path = REPOSITORY_ROOT,
+    integration_sources: dict[IntegrationTarget, Path] | None = None,
 ) -> tuple[IntegrationTarget, ...]:
-    """Find integration targets that embed the production X_T exemplar."""
+    """Find Cargo targets whose source names the production X_T exemplar."""
+    sources = integration_sources or discover_integration_sources(repository)
+    source_targets = {source: target for target, source in sources.items()}
+    if len(source_targets) != len(sources):
+        raise LaneContractError(
+            "multiple Cargo integration targets share one source path; "
+            "production-fixture ownership is ambiguous"
+        )
     users: list[IntegrationTarget] = []
-    for target in discover_integration_targets(repository):
-        package_directory = dict(WORKSPACE_PACKAGES)[target.package]
-        source = repository / package_directory / "tests" / f"{target.target}.rs"
-        if PRODUCTION_FIXTURE_MARKER in source.read_text(encoding="utf-8"):
-            users.append(target)
+    referenced_sources: set[Path] = set()
+    for _, relative_directory in WORKSPACE_PACKAGES:
+        tests_directory = repository / relative_directory / "tests"
+        if not tests_directory.is_dir():
+            continue
+        for source in tests_directory.rglob("*.rs"):
+            text = source.read_text(encoding="utf-8")
+            if PRODUCTION_FIXTURE_NAME in text or (
+                "exemplar" in text and ".x_t" in text
+            ):
+                referenced_sources.add(source.resolve())
+
+    unmapped_sources = tuple(sorted(referenced_sources - set(source_targets)))
+    if unmapped_sources:
+        raise LaneContractError(
+            "production fixture reference is outside a declared Cargo test target: "
+            f"{[str(source) for source in unmapped_sources]}"
+        )
+    for source in sorted(referenced_sources):
+        users.append(source_targets[source])
     return tuple(sorted(users))
 
 
@@ -168,15 +257,35 @@ def classify_targets(
     all_set = set(all_ordered)
     expected_slow = set(PRODUCTION_CORPUS_RATCHETS)
     expected_embedded = set(EMBEDDED_EXEMPLAR_RATCHETS)
+    expected_fast_smoke = set(FAST_SMOKE_TARGETS)
     actual = set(production_fixture_users)
 
+    count_drift = (
+        len(all_ordered) != EXPECTED_INTEGRATION_TARGET_COUNT
+        or len(all_set - expected_slow) != EXPECTED_STANDARD_TARGET_COUNT
+    )
     missing_targets = sorted(expected_slow - all_set)
+    missing_fast_smoke = sorted(expected_fast_smoke - all_set)
+    slow_fast_smoke = sorted(expected_fast_smoke & expected_slow)
     unreviewed_users = sorted(actual - expected_embedded)
     stale_embedded_ratchets = sorted(expected_embedded - actual)
-    if missing_targets or unreviewed_users or stale_embedded_ratchets:
+    if (
+        count_drift
+        or missing_targets
+        or missing_fast_smoke
+        or slow_fast_smoke
+        or unreviewed_users
+        or stale_embedded_ratchets
+    ):
         raise LaneContractError(
             "production-corpus classification changed: "
+            f"target_counts={len(all_ordered)}/{len(all_set - expected_slow)}, "
+            "expected_counts="
+            f"{EXPECTED_INTEGRATION_TARGET_COUNT}/{EXPECTED_STANDARD_TARGET_COUNT}, "
             f"missing_targets={[target.display() for target in missing_targets]}, "
+            "missing_fast_smoke="
+            f"{[target.display() for target in missing_fast_smoke]}, "
+            f"slow_fast_smoke={[target.display() for target in slow_fast_smoke]}, "
             f"unreviewed_users={[target.display() for target in unreviewed_users]}, "
             "stale_embedded_ratchets="
             f"{[target.display() for target in stale_embedded_ratchets]}"
@@ -184,7 +293,8 @@ def classify_targets(
 
     return LaneInventory(
         all_targets=all_ordered,
-        fast_targets=tuple(
+        fast_smoke_targets=tuple(sorted(expected_fast_smoke)),
+        standard_targets=tuple(
             target for target in all_ordered if target not in expected_slow
         ),
         production_corpus_ratchets=tuple(sorted(expected_slow)),
@@ -195,25 +305,29 @@ def classify_targets(
 def repository_inventory(repository: Path = REPOSITORY_ROOT) -> LaneInventory:
     """Return the validated classification for a repository checkout."""
     validate_workspace_packages(repository)
+    integration_sources = discover_integration_sources(repository)
     return classify_targets(
-        discover_integration_targets(repository),
-        discover_production_fixture_users(repository),
+        integration_sources,
+        discover_production_fixture_users(repository, integration_sources),
     )
 
 
 def format_inventory(inventory: LaneInventory) -> str:
     """Render the classification in deterministic, reviewable order."""
-    kxt_fast = tuple(
-        target for target in inventory.fast_targets if target.package == "kxt"
+    kxt_standard = tuple(
+        target for target in inventory.standard_targets if target.package == "kxt"
     )
     lines = [
-        f"fast integration targets ({len(inventory.fast_targets)}):",
-        *(f"  {target.display()}" for target in inventory.fast_targets),
+        f"fast smoke integration targets ({len(inventory.fast_smoke_targets)}):",
+        *(f"  {target.display()}" for target in inventory.fast_smoke_targets),
         "",
-        f"fast kxt targets retained ({len(kxt_fast)}):",
-        *(f"  {target.display()}" for target in kxt_fast),
+        f"standard non-corpus integration targets ({len(inventory.standard_targets)}):",
+        *(f"  {target.display()}" for target in inventory.standard_targets),
         "",
-        "production-corpus ratchets excluded from fast "
+        f"standard kxt targets retained ({len(kxt_standard)}):",
+        *(f"  {target.display()}" for target in kxt_standard),
+        "",
+        "production-corpus ratchets excluded from standard "
         f"({len(inventory.production_corpus_ratchets)}):",
         *(
             f"  {target.display()}"
@@ -254,8 +368,25 @@ def _tooling_contract_stage() -> Stage:
     )
 
 
-def fast_stages(inventory: LaneInventory, release: bool = False) -> tuple[Stage, ...]:
-    """Build fast-lane stages without selecting production-corpus ratchets."""
+def _lane_contract_stage() -> Stage:
+    return Stage(
+        "test-lane contracts",
+        (
+            sys.executable,
+            "-m",
+            "unittest",
+            "scripts.tests.test_test_lanes",
+            "-v",
+        ),
+    )
+
+
+def _workspace_and_integration_stages(
+    targets: Sequence[IntegrationTarget],
+    release: bool,
+    lane_name: str,
+) -> list[Stage]:
+    """Build the shared workspace-unit plus selected-integration prefix."""
     base = _cargo_test_base(release)
     stages = [
         Stage(
@@ -267,7 +398,7 @@ def fast_stages(inventory: LaneInventory, release: bool = False) -> tuple[Stage,
     for package, _ in WORKSPACE_PACKAGES:
         package_targets = tuple(
             target.target
-            for target in inventory.fast_targets
+            for target in targets
             if target.package == package
         )
         if not package_targets:
@@ -275,7 +406,31 @@ def fast_stages(inventory: LaneInventory, release: bool = False) -> tuple[Stage,
         command = base + ["-p", package]
         for target in package_targets:
             command.extend(("--test", target))
-        stages.append(Stage(f"{package} fast integration tests", tuple(command)))
+        stages.append(Stage(f"{package} {lane_name} integration tests", tuple(command)))
+    return stages
+
+
+def fast_stages(inventory: LaneInventory, release: bool = False) -> tuple[Stage, ...]:
+    """Build the curated inner-loop smoke gate."""
+    stages = _workspace_and_integration_stages(
+        inventory.fast_smoke_targets,
+        release,
+        "fast-smoke",
+    )
+    stages.append(_lane_contract_stage())
+    return tuple(stages)
+
+
+def standard_stages(
+    inventory: LaneInventory, release: bool = False
+) -> tuple[Stage, ...]:
+    """Build the broad local gate without production-corpus ratchets."""
+    base = _cargo_test_base(release)
+    stages = _workspace_and_integration_stages(
+        inventory.standard_targets,
+        release,
+        "standard",
+    )
 
     stages.extend(
         (
@@ -403,13 +558,19 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="lane", required=True)
 
     subparsers.add_parser(
-        "list", help="list the reviewed fast/full integration-test classification"
+        "list", help="list the reviewed fast/standard/full target classification"
     )
 
     fast = subparsers.add_parser(
-        "fast", help="run all ordinary tests except named production-corpus ratchets"
+        "fast", help="run workspace unit tests and a curated integration smoke set"
     )
     _add_execution_flags(fast)
+
+    standard = subparsers.add_parser(
+        "standard",
+        help="run every non-corpus target plus documentation and tooling contracts",
+    )
+    _add_execution_flags(standard)
 
     full = subparsers.add_parser(
         "full", help="run every workspace target, doc test, and tooling contract"
@@ -445,6 +606,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.lane == "fast":
             return run_stages(
                 fast_stages(inventory, release=arguments.release),
+                dry_run=arguments.dry_run,
+            )
+        if arguments.lane == "standard":
+            return run_stages(
+                standard_stages(inventory, release=arguments.release),
                 dry_run=arguments.dry_run,
             )
         if arguments.lane == "full":

@@ -80,11 +80,28 @@ not a second execution queue.
 ## Building
 
 ```sh
-cargo test          # all unit + determinism tests
+# Tight inner loop for one package target.
+python3 scripts/test_lanes.py focused -p kxt -t read
+
+# Normal edit/commit gate: workspace unit tests plus representative integration
+# coverage across determinism, topology, operations, interchange, and facade use.
+python3 scripts/test_lanes.py fast
+
+# Broad local gate: every non-corpus integration target plus docs and tooling.
+python3 scripts/test_lanes.py standard
+
+# Mandatory pre-merge/handoff gate, including every corpus ratchet.
+python3 scripts/test_lanes.py full
+
 cargo clippy --all-targets -- -D warnings
 ```
 
-Requires stable Rust (1.93+). The workspace is dependency-free by policy at L0.
+Direct `cargo test --workspace` remains complete and supported. The
+[test-throughput contract](docs/projects/test-throughput.md) documents the
+fail-closed lane inventory, timing evidence, and CI scheduling policy.
+
+Requires stable Rust (1.93+). The lane runner requires Python 3.11+ and uses
+only the standard library. The workspace is dependency-free by policy at L0.
 
 ## Determinism contract
 

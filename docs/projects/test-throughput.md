@@ -1,6 +1,6 @@
-# Blocking test-throughput foundation subproject
+# Test-throughput foundation subproject
 
-Status: developer fast/full/focused lanes and CI scheduling implemented; corpus consolidation remains blocking
+Status: initial blocking checkpoint implemented and verified; continuous measured optimization remains
 
 ## Outcome
 
@@ -10,9 +10,10 @@ standard library and Cargo, adds no dependency to a kernel crate, and reports
 elapsed wall time for every stage and for the complete lane. Timing is
 diagnostic evidence, never a correctness threshold.
 
-This subproject remains blocking for further core-system breadth until the
-production-corpus duplication is consolidated. The landed developer lanes and
-CI scheduling make the boundary explicit and measurable in the meantime.
+The initial checkpoint no longer blocks further core-system work: the
+integrated full lane passed after the lane split and first corpus
+consolidation. `full` remains the required pre-merge/handoff gate; the shorter
+lanes change scheduling, not the definition of complete correctness evidence.
 
 ## Commands
 
@@ -22,8 +23,11 @@ Run these from the repository root:
 # Inspect the exact reviewed target classification without running tests.
 python3 scripts/test_lanes.py list
 
-# Normal development gate: unit, binary, doc, tooling, and ordinary integration tests.
+# Normal edit/commit gate: unit/binary tests plus a curated integration smoke set.
 python3 scripts/test_lanes.py fast
+
+# Broad local gate: all non-corpus integration targets, docs, and tooling.
+python3 scripts/test_lanes.py standard
 
 # Tight inner loop for one integration binary or one package library.
 python3 scripts/test_lanes.py focused -p kxt -t read
@@ -37,13 +41,29 @@ Each executable lane accepts `--dry-run` to show its exact Cargo/Python
 commands and `--release` to select Cargo's release profile. The focused lane
 also accepts `--filter`, `--exact`, and `--nocapture`.
 
+The runner requires Python 3.11+ for standard-library TOML parsing.
+
 The runner prints a start line, exact shell-quoted command, pass/fail result,
 and elapsed seconds for every stage. It fails at the first unsuccessful stage
 and preserves that subprocess's exit status.
 
 ## Lane contract
 
-The fast lane is not `cargo test --workspace --exclude kxt`. It retains all
+The `fast` lane runs every workspace library and binary test, then 13 curated
+integration targets spanning determinism, roadmap-ledger shape, intersection
+certificates, kernel lifecycle, topology transactions, operation completion,
+X_T read/write/charts, and the facade-only example. Its X_T smoke set is:
+
+- `intersection_chart`;
+- `read`; and
+- `write`.
+
+It intentionally omits broad doc/tooling stages and the remaining integration
+binaries so ordinary edit/commit feedback stays bounded, while retaining its
+own 14-test lane-classification/command contract suite as a final stage.
+
+The `standard` lane adds every one of the 79 current non-corpus integration
+targets, documentation tests, and Python tooling contracts. It retains all
 seven current lightweight `kxt` integration binaries:
 
 - `import_tess`;
@@ -54,7 +74,8 @@ seven current lightweight `kxt` integration binaries:
 - `read`; and
 - `write`.
 
-Only these 13 reviewed production-corpus ratchets are excluded from fast:
+Only these 13 reviewed production-corpus ratchets are excluded from
+`standard`:
 
 - `corpus_manifest`;
 - `equal_limit_intersection`;
@@ -70,23 +91,53 @@ Only these 13 reviewed production-corpus ratchets are excluded from fast:
 - `terminated_intersection`; and
 - `zero_multiplicity_knot_padding`.
 
-Twelve binaries are classified by a concrete source boundary: each embeds the
+Twelve binaries are classified by a concrete source boundary: each names the
 908 KiB, 7,423-node `exemplar.x_t` production fixture. `corpus_manifest` is the
 thirteenth because its observed-corpus-stage test reaches the production
 fixture through `manifest.tsv` and performs the same production-scale
-reconstruction work. All 13 remain mandatory in `full`. The runner validates
-the Cargo workspace, package identities, and source tree before every listing
-or run. A new workspace package, embedded-exemplar consumer, or renamed/removed
-ratchet fails closed until the reviewed inventory is updated.
+reconstruction work. All 13 remain mandatory in `full`. Cargo metadata is the
+authority for integration-target names and source paths; nonstandard explicit
+targets therefore cannot silently fall outside `standard`. The runner also
+validates workspace/package identity, smoke membership, direct fixture
+references, and the exact 92/79/13 total/standard/corpus counts before every
+listing or run. Drift fails closed until the reviewed inventory is updated.
 
-The contract tests live in `scripts/tests/test_test_lanes.py` and run as part
-of both developer lanes through the existing standard-library tooling suite:
+The contract tests live in `scripts/tests/test_test_lanes.py`. They run in
+`fast` directly, within the `standard` and `full` tooling stages, and can be
+invoked independently during runner work:
 
 ```sh
 python3 -m unittest scripts.tests.test_test_lanes -v
 ```
 
-## Initial timing evidence
+## Timing evidence
+
+Measurements below were taken on 2026-07-14 on a MacBook Pro `Mac16,7` with an
+Apple M4 Pro (14 cores) and 48 GB RAM, Darwin 25.5.0 arm64, rustc 1.93.0, and
+Python 3.14.0. Commands used Cargo's debug profile and redirected output to a
+file. Build artifacts were incremental; the final `fast` run was warm after
+the integrated `full` run. Timing remains diagnostic and is not a test
+threshold.
+
+The first broad non-corpus implementation—now the `standard` command
+shape—passed but took 1,432.237 seconds (23m52s). Its largest stages were
+`kops` integration at 752.725s, documentation at 268.521s, and `ktopo`
+integration at 204.313s. That observation motivated the curated smoke tier;
+it was not used to remove tests.
+
+| Lane or observation | Total wall time | Role |
+| --- | ---: | --- |
+| broad non-corpus precursor (`standard` shape) | 1,432.237 s | units/binaries, all 79 non-corpus integration targets, docs, tooling |
+| final warm `fast` | 14.430 s | edit/commit gate with unit/binary tests, 13 integration targets, and self-contract |
+| integrated `full` | 1,726.501 s | every workspace target, docs, tooling |
+
+The post-documentation run that rebuilt the ledger-bearing `kcore` target took
+44.484s; its immediate warm repeat took 14.430s. The full result breaks down
+into 1,556.453s for all workspace targets, 166.816s for documentation tests,
+and 3.231s for 87 Python tooling contracts.
+The longest remaining individual X_T suites were endpoint roundoff at 294.22s
+and finite-open Plane/Offset(NURBS) data at 236.18s. The unchanged v12
+seven-sample frontier passed in 166.46s.
 
 Before X_T test consolidation, this machine measured the representative
 seven-sample ratchet at 172.58 seconds of test time and 185.92 seconds of wall
@@ -97,19 +148,38 @@ cargo test -p kxt --test finite_open_seven_sample_dual_offset
 ```
 
 The manifest-driven observed-corpus-stage test was independently observed at
-approximately 169 seconds, which is why `corpus_manifest` is not in the fast
-lane despite lacking the embedded-fixture marker. These are diagnostic
-baselines, not pass/fail thresholds.
+approximately 169 seconds, which is why `corpus_manifest` is in the
+production-corpus group and excluded from `standard` despite lacking a direct
+fixture reference. These are diagnostic baselines, not pass/fail thresholds.
 
-## Remaining blocking work
+The first audit removed two historical full-exemplar replays whose accepted
+prefixes are subsumed by the retained v12 record-4230 frontier. Each suite keeps
+its exact aggregate profile values and accounting modes, source-payload pins,
+isolated certificate and N/N-1 resource crossings, malformed-input evidence,
+and rollback assertions:
 
-1. Consolidate historical v1-v12 production traversal assertions around one
-   current end-to-end corpus ratchet plus small certifier-level fixtures.
-2. Record before/after fast and full lane timings on the named development
-   host; use the measurements to find any remaining unexpected hot target.
-3. Measure the implemented parallel debug/release CI profiles and rolling
+| Integration target | Before | After | Saved |
+| --- | ---: | ---: | ---: |
+| `finite_open_cubic_dual_offset` | 145.25 s | 6.22 s | 139.03 s |
+| `zero_multiplicity_knot_padding` | 159.50 s | 3.79 s | 155.71 s |
+| **Combined cargo-reported test time** | **304.75 s** | **10.01 s** | **294.74 s** |
+
+The unchanged seven-sample suite remains the authoritative end-to-end v12
+production traversal and record-4230 frontier. Its 166.46s rerun passed in the
+integrated checkpoint gate; the consolidation did not replace it with profile
+arithmetic.
+
+## Follow-on measured work
+
+1. Audit endpoint-roundoff's remaining multi-profile replays first, because the
+   full-lane timing identifies it as the largest production-corpus target. Do
+   not remove distinct frontier or rollback evidence merely because it is
+   expensive.
+2. Measure the implemented parallel debug/release CI profiles and rolling
    caches, then consider target-level sharding only if corpus consolidation
    leaves a material critical-path imbalance.
+3. Use the recorded broad-lane stage timings to decide whether further
+   `standard` sharding or integration-binary consolidation is warranted.
 4. Investigate operation-scoped certificate caching only after target-level
    timing shows proof computation remains the dominant cost. Logical
    Work/Items/Depth accounting must remain unchanged by physical caching.
