@@ -373,6 +373,11 @@ pub struct ExtrudeProfileRequest {
     // and OperationSettings
 }
 
+pub struct ExtrudeProfileAlongRequest {
+    // private Frame, polygonal outer boundary, polygonal holes, positive-normal
+    // model-space translation, and OperationSettings
+}
+
 pub struct BodyCreated {
     body: BodyId,
     journal: ChangeJournal,
@@ -382,6 +387,8 @@ impl PartEdit<'_> {
     pub fn create_block(&mut self, request: BlockRequest<'_>)
         -> OperationOutcome<BodyCreated>;
     pub fn extrude_profile(&mut self, request: ExtrudeProfileRequest)
+        -> OperationOutcome<BodyCreated>;
+    pub fn extrude_profile_along(&mut self, request: ExtrudeProfileAlongRequest)
         -> OperationOutcome<BodyCreated>;
 }
 ```
@@ -902,6 +909,11 @@ owns exact cap and side topology, line pcurves on every use, shared vertical and
 perimeter edges, failure-atomic checked creation, and the exact prism shell
 proof consumed by Full checking. Facade-only tests pin a holed solid through
 construction and Full validity without importing a lower-layer crate.
+
+`PartEdit::extrude_profile_along` preserves that boundary while admitting a
+finite tangential translation component. The positive frame-normal component
+keeps the affine sweep injective; actual cap and side frames own the sheared
+pcurves and domains, and the same exact Full prism proof remains authoritative.
 
 Broader semantic edit surfaces resume after the K5 adoption pass. The
 interchange facade stays thin: `kxt` reconstruction and checked-commit Fast

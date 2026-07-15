@@ -295,10 +295,10 @@ pub use operation::{
     BlockRequest, BodyCheckReport, BodyCreated, BoundedCurve, ChangeJournal, CheckBodyRequest,
     CheckEntity, CheckFault, CheckGap, CheckReport, CopyBodyRequest, CurveContactKind,
     CurveCurveIntersections, CurveCurveOverlap, CurveCurvePoint, CurveOverlapOrientation,
-    ExtrudeProfileRequest, FaceTolerancePropagationView, IntersectCurvesRequest,
-    IntersectionCompletion, JournalEntities, JournalEntity, LineageView, MutationKind,
-    MutationView, OperationOutcome, OperationSettings, SurfaceEvaluation, SurfaceEvaluationRequest,
-    ToleranceBudgetId, ToleranceBudgetView, ToleranceEventView,
+    ExtrudeProfileAlongRequest, ExtrudeProfileRequest, FaceTolerancePropagationView,
+    IntersectCurvesRequest, IntersectionCompletion, JournalEntities, JournalEntity, LineageView,
+    MutationKind, MutationView, OperationOutcome, OperationSettings, SurfaceEvaluation,
+    SurfaceEvaluationRequest, ToleranceBudgetId, ToleranceBudgetView, ToleranceEventView,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use tessellation::{BodyMesh, EdgePolyline, FaceTriangleRange, TessellateBodyRequest};

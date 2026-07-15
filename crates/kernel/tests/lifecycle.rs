@@ -3,13 +3,13 @@
 use kernel::{
     BlockRequest, BodyTessellationBudgetProfile, BoundedCurve, BoundedPcurve, CheckBodyRequest,
     CheckLevel, CheckOutcome, CreateSeedBodyRequest, CreateStrutRequest, EntityKind, Error,
-    ExportXtRequest, ExtrudeProfileRequest, Frame, FullCommitRequirement, GrowTolerancesRequest,
-    ImportXtRequest, IntersectCurvesRequest, JoinRingRequest, Kernel, MergeFaceAsHoleRequest,
-    MutationKind, OperationSettings, ParamRange, PcurveChart, PcurveEndpointKind, PcurveMetadata,
-    PcurveSeam, PcurveSeamSide, Point2, Point3, RemoveBridgeRequest, RemoveSeedBodyRequest,
-    RemoveStrutRequest, SessionPolicy, SplitHoleAsFaceRequest, SurfaceDerivativeOrder,
-    SurfaceEvaluationRequest, SurfaceParameter, TessOptions, TessellateBodyRequest,
-    ToleranceGrowth, ToleranceGrowthTarget,
+    ExportXtRequest, ExtrudeProfileAlongRequest, ExtrudeProfileRequest, Frame,
+    FullCommitRequirement, GrowTolerancesRequest, ImportXtRequest, IntersectCurvesRequest,
+    JoinRingRequest, Kernel, MergeFaceAsHoleRequest, MutationKind, OperationSettings, ParamRange,
+    PcurveChart, PcurveEndpointKind, PcurveMetadata, PcurveSeam, PcurveSeamSide, Point2, Point3,
+    RemoveBridgeRequest, RemoveSeedBodyRequest, RemoveStrutRequest, SessionPolicy,
+    SplitHoleAsFaceRequest, SurfaceDerivativeOrder, SurfaceEvaluationRequest, SurfaceParameter,
+    TessOptions, TessellateBodyRequest, ToleranceGrowth, ToleranceGrowthTarget, Vec3,
 };
 
 #[test]
@@ -167,6 +167,53 @@ fn facade_only_client_can_extrude_a_holed_polygonal_profile() {
             .all(|mutation| mutation.kind() == MutationKind::Created)
     );
     assert_eq!(created.journal().lineage_count(), 0);
+
+    let part = session.part(part_id).unwrap();
+    assert_eq!(part.faces().len(), 10);
+    assert_eq!(part.edges().len(), 24);
+    let check = part
+        .check_body(CheckBodyRequest::new(created.body(), CheckLevel::Full))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(check.outcome(), CheckOutcome::Valid);
+}
+
+#[test]
+fn facade_only_client_can_extrude_a_holed_profile_obliquely() {
+    let outer = vec![
+        Point2::new(-2.0, -1.0),
+        Point2::new(2.0, -1.0),
+        Point2::new(2.0, 3.0),
+        Point2::new(-2.0, 3.0),
+    ];
+    let hole = vec![
+        Point2::new(-1.0, 0.0),
+        Point2::new(1.0, 0.0),
+        Point2::new(1.0, 2.0),
+        Point2::new(-1.0, 2.0),
+    ];
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let created = session
+        .edit_part(part_id.clone())
+        .unwrap()
+        .extrude_profile_along(ExtrudeProfileAlongRequest::new(
+            Frame::world(),
+            outer,
+            vec![hole],
+            Vec3::new(0.75, -0.5, 2.0),
+        ))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(created.journal().part(), part_id);
+    assert!(
+        created
+            .journal()
+            .mutations()
+            .all(|mutation| mutation.kind() == MutationKind::Created)
+    );
 
     let part = session.part(part_id).unwrap();
     assert_eq!(part.faces().len(), 10);

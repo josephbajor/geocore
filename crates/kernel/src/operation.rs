@@ -252,6 +252,69 @@ impl ExtrudeProfileRequest {
     }
 }
 
+/// Typed request to extrude one polygonal profile by an oblique translation.
+///
+/// The translation may contain an in-plane component but must have a finite,
+/// positive component along `frame.z()`. Boundary normalization and rejection
+/// rules match [`ExtrudeProfileRequest`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtrudeProfileAlongRequest {
+    frame: Frame,
+    outer: Vec<kgeom::vec::Point2>,
+    holes: Vec<Vec<kgeom::vec::Point2>>,
+    translation: Vec3,
+    settings: OperationSettings,
+}
+
+impl ExtrudeProfileAlongRequest {
+    /// Construct an oblique polygonal-profile extrusion with default settings.
+    pub fn new(
+        frame: Frame,
+        outer: Vec<kgeom::vec::Point2>,
+        holes: Vec<Vec<kgeom::vec::Point2>>,
+        translation: Vec3,
+    ) -> Self {
+        Self {
+            frame,
+            outer,
+            holes,
+            translation,
+            settings: OperationSettings::default(),
+        }
+    }
+
+    /// Replace contextual operation settings.
+    pub fn with_settings(mut self, settings: OperationSettings) -> Self {
+        self.settings = settings;
+        self
+    }
+
+    /// Positioned profile plane and positive normal orientation.
+    pub const fn frame(&self) -> Frame {
+        self.frame
+    }
+
+    /// Outer polygon without a repeated closing point.
+    pub fn outer(&self) -> &[kgeom::vec::Point2] {
+        &self.outer
+    }
+
+    /// Hole polygons in deterministic request order.
+    pub fn holes(&self) -> &[Vec<kgeom::vec::Point2>] {
+        &self.holes
+    }
+
+    /// Complete model-space translation from the base cap to the top cap.
+    pub const fn translation(&self) -> Vec3 {
+        self.translation
+    }
+
+    /// Contextual operation settings.
+    pub const fn settings(&self) -> &OperationSettings {
+        &self.settings
+    }
+}
+
 /// Facade-safe identity retained by a committed journal.
 ///
 /// Every variant is part-qualified. A deleted topology or geometry identity
@@ -1361,6 +1424,46 @@ impl PartEdit<'_> {
                 .map_err(Error::from);
         Ok(scope.finish_typed(result))
     }
+
+    /// Validate, construct, and checked-commit one oblique polygonal prism.
+    ///
+    /// The complete translation is retained by shared sweep edges and exact
+    /// side-plane pcurves. Failures are atomic and paired with the single
+    /// facade operation report once the scope starts.
+    pub fn extrude_profile_along(
+        &mut self,
+        request: ExtrudeProfileAlongRequest,
+    ) -> Result<OperationOutcome<BodyCreated>> {
+        let ExtrudeProfileAlongRequest {
+            frame,
+            outer,
+            holes,
+            translation,
+            settings,
+        } = request;
+        let context = settings.context(self.policy)?;
+        let scope = OperationScope::new(&context);
+        let part = self.id.clone();
+        let hole_slices = holes.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let result =
+            ktopo::profile::PlanarProfile::from_polygon_with_holes(frame, &outer, &hole_slices)
+                .and_then(|profile| {
+                    ktopo::make::extrude_profile_along_with_journal(
+                        &mut self.state.store,
+                        &profile,
+                        translation,
+                    )
+                })
+                .map(|creation| {
+                    let (raw_body, inner) = creation.into_parts();
+                    BodyCreated {
+                        body: BodyId::new(part.clone(), raw_body),
+                        journal: ChangeJournal::from_raw(part, inner),
+                    }
+                })
+                .map_err(Error::from);
+        Ok(scope.finish_typed(result))
+    }
 }
 
 impl Part<'_> {
@@ -1812,6 +1915,75 @@ mod tests {
         assert_eq!(part.edges().len(), 24);
         assert_eq!(part.vertices().len(), 16);
         let full = part
+            .check_body(CheckBodyRequest::new(created.body(), CheckLevel::Full))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(full.outcome(), CheckOutcome::Valid);
+    }
+
+    #[test]
+    fn oblique_profile_extrusion_is_full_valid_and_failure_atomic() {
+        let outer = vec![
+            Point2::new(-2.0, -1.0),
+            Point2::new(2.0, -1.0),
+            Point2::new(2.0, 3.0),
+            Point2::new(-2.0, 3.0),
+        ];
+        let hole = vec![
+            Point2::new(-1.0, 0.0),
+            Point2::new(1.0, 0.0),
+            Point2::new(1.0, 2.0),
+            Point2::new(-1.0, 2.0),
+        ];
+        let translation = Vec3::new(0.75, -0.5, 2.0);
+        let request = ExtrudeProfileAlongRequest::new(
+            Frame::world(),
+            outer.clone(),
+            vec![hole.clone()],
+            translation,
+        );
+        assert_eq!(request.frame(), Frame::world());
+        assert_eq!(request.outer(), outer);
+        assert_eq!(request.holes(), &[hole]);
+        assert_eq!(request.translation(), translation);
+
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let rejected = session
+            .edit_part(part_id.clone())
+            .unwrap()
+            .extrude_profile_along(ExtrudeProfileAlongRequest::new(
+                Frame::world(),
+                outer,
+                Vec::new(),
+                Vec3::new(1.0, 0.0, 0.0),
+            ))
+            .unwrap();
+        assert!(matches!(
+            rejected.into_result(),
+            Err(KernelError::Core {
+                source: kcore::error::Error::InvalidGeometry { .. }
+            })
+        ));
+        assert_eq!(session.part(part_id.clone()).unwrap().bodies().len(), 0);
+
+        let created = session
+            .edit_part(part_id.clone())
+            .unwrap()
+            .extrude_profile_along(request)
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert!(
+            created
+                .journal()
+                .mutations()
+                .all(|mutation| mutation.kind() == MutationKind::Created)
+        );
+        let full = session
+            .part(part_id)
+            .unwrap()
             .check_body(CheckBodyRequest::new(created.body(), CheckLevel::Full))
             .unwrap()
             .into_result()
