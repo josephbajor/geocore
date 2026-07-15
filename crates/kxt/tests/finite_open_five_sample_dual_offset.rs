@@ -12,15 +12,17 @@ use kxt::parse::{Value, read_xt};
 use kxt::schema::code;
 use kxt::{
     INTERSECTION_CHART_CERTIFICATE_WORK, INTERSECTION_CHART_DEPTH, INTERSECTION_CHART_ITEMS,
-    XtCapability, XtError, reconstruct, reconstruct_with_context,
+    IntersectionImportBudgetProfile, XtCapability, XtError, reconstruct, reconstruct_with_context,
 };
 
 const EXEMPLAR: &[u8] = include_bytes!("fixtures/exemplar.x_t");
 const RECORD_4230_WORK: u64 = 17_285_120;
 const RECORD_3609_WORK: u64 = 4_277_250;
 const RECORD_6044_WORK: u64 = 4_352_000;
+const RECORD_5921_WORK: u64 = 13_774_848;
 const V13_WORK: u64 = 431_854_695;
 const V14_WORK: u64 = 436_131_945;
+const V15_WORK: u64 = 440_483_945;
 
 fn field<'a>(file: &'a kxt::XtFile, index: u32, name: &str) -> &'a Value {
     file.field(&file.nodes[&index], name).unwrap()
@@ -35,6 +37,12 @@ fn set_field(file: &mut kxt::XtFile, index: u32, name: &str, value: Value) {
 fn transplant_4230(file: &mut kxt::XtFile) {
     for name in ["surface", "chart", "start", "end", "intersection_data"] {
         set_field(file, 1828, name, field(file, 4230, name).clone());
+    }
+}
+
+fn transplant_6044(file: &mut kxt::XtFile) {
+    for name in ["surface", "chart", "start", "end", "intersection_data"] {
+        set_field(file, 1828, name, field(file, 6044, name).clone());
     }
 }
 
@@ -291,6 +299,59 @@ fn malformed_record_4230_controls_limits_and_residuals_fail_typed_and_atomically
 }
 
 #[test]
+fn record_6044_transplant_has_exact_isolated_work_items_depth_and_n_minus_one_boundaries() {
+    let session = SessionPolicy::v1();
+    for (resource, mode, exact) in [
+        (
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            RECORD_6044_WORK,
+        ),
+        (ResourceKind::Items, AccountingMode::HighWater, 2),
+        (ResourceKind::Depth, AccountingMode::HighWater, 10),
+    ] {
+        for allowed in [exact - 1, exact] {
+            let mut file = read_xt(EXEMPLAR).unwrap();
+            transplant_6044(&mut file);
+            let stage = match resource {
+                ResourceKind::Work => INTERSECTION_CHART_CERTIFICATE_WORK,
+                ResourceKind::Items => INTERSECTION_CHART_ITEMS,
+                ResourceKind::Depth => INTERSECTION_CHART_DEPTH,
+                ResourceKind::Bytes => unreachable!(),
+                _ => unreachable!(),
+            };
+            let mut limits = vec![LimitSpec::new(stage, resource, mode, allowed)];
+            if resource != ResourceKind::Work {
+                limits.push(LimitSpec::new(
+                    INTERSECTION_CHART_CERTIFICATE_WORK,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    RECORD_6044_WORK,
+                ));
+            }
+            let mut store = Store::new();
+            let outcome = reconstruct_with_context(
+                &file,
+                &mut store,
+                &context_with_plan(&session, BudgetPlan::new(limits).unwrap()),
+            )
+            .unwrap();
+            if allowed + 1 == exact {
+                let crossing = outcome.result().as_ref().unwrap_err().limit().unwrap();
+                assert_eq!(crossing.stage, stage);
+                assert_eq!(crossing.resource, resource);
+                assert_eq!(crossing.allowed, allowed);
+                assert_eq!(crossing.consumed, exact);
+                assert_eq!(usage(outcome.report(), stage, resource), 0);
+            } else {
+                assert_eq!(usage(outcome.report(), stage, resource), exact);
+            }
+            assert_rollback(&store);
+        }
+    }
+}
+
+#[test]
 fn v13_certifies_4230_and_pins_the_next_plane_offset_frontier() {
     let file = read_xt(EXEMPLAR).unwrap();
     assert_eq!(file.nodes[&3609].code, code::INTERSECTION);
@@ -307,7 +368,7 @@ fn v13_certifies_4230_and_pins_the_next_plane_offset_frontier() {
     assert_eq!(field(&file, 3609, "intersection_data").as_ptr(), Some(3613));
     let session = SessionPolicy::v1();
     let mut store = Store::new();
-    let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+    let context = context_with_plan(&session, IntersectionImportBudgetProfile::v13_defaults());
     let outcome = reconstruct_with_context(&file, &mut store, &context).unwrap();
     let crossing = outcome.result().as_ref().unwrap_err().limit().unwrap();
     assert_eq!(crossing.stage, INTERSECTION_CHART_CERTIFICATE_WORK);
@@ -358,7 +419,7 @@ fn v14_certifies_3609_and_pins_the_next_two_sample_dual_offset_frontier() {
     assert_eq!(field(&file, 6044, "intersection_data").as_ptr(), Some(6050));
     let session = SessionPolicy::v1();
     let mut store = Store::new();
-    let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+    let context = context_with_plan(&session, IntersectionImportBudgetProfile::v14_defaults());
     let outcome = reconstruct_with_context(&file, &mut store, &context).unwrap();
     let crossing = outcome.result().as_ref().unwrap_err().limit().unwrap();
     assert_eq!(crossing.stage, INTERSECTION_CHART_CERTIFICATE_WORK);
@@ -372,6 +433,79 @@ fn v14_certifies_3609_and_pins_the_next_two_sample_dual_offset_frontier() {
             ResourceKind::Work,
         ),
         V14_WORK
+    );
+    assert_eq!(
+        usage(
+            outcome.report(),
+            INTERSECTION_CHART_ITEMS,
+            ResourceKind::Items,
+        ),
+        22
+    );
+    assert_eq!(
+        usage(
+            outcome.report(),
+            INTERSECTION_CHART_DEPTH,
+            ResourceKind::Depth,
+        ),
+        10
+    );
+    assert_rollback(&store);
+}
+
+#[test]
+fn v15_certifies_6044_and_pins_the_next_four_sample_dual_offset_frontier() {
+    let file = read_xt(EXEMPLAR).unwrap();
+    assert_eq!(file.nodes[&5921].code, code::INTERSECTION);
+    assert_eq!(
+        field(&file, 5921, "surface"),
+        &Value::Arr(vec![Value::Ptr(3300), Value::Ptr(773)])
+    );
+    for (root, basis, nurbs, distance) in [(3300, 2850, 4137, -0.0015), (773, 1186, 1208, 0.00017)]
+    {
+        assert_eq!(file.nodes[&root].code, code::OFFSET_SURF);
+        assert_eq!(field(&file, root, "surface").as_ptr(), Some(basis));
+        assert_eq!(field(&file, root, "offset").as_f64(), Some(distance));
+        assert_eq!(field(&file, root, "sense").as_char(), Some('+'));
+        assert_eq!(file.nodes[&basis].code, code::B_SURFACE);
+        assert_eq!(field(&file, basis, "nurbs").as_ptr(), Some(nurbs));
+    }
+    assert_eq!(field(&file, 5921, "chart").as_ptr(), Some(6027));
+    assert_eq!(field(&file, 6027, "base_parameter").as_f64(), Some(0.0));
+    assert_eq!(field(&file, 6027, "base_scale").as_f64(), Some(1.0));
+    assert_eq!(field(&file, 6027, "chart_count").as_int(), Some(4));
+    assert_eq!(field(&file, 5921, "start").as_ptr(), Some(6029));
+    assert_eq!(field(&file, 5921, "end").as_ptr(), Some(6031));
+    for limit in [6029, 6031] {
+        assert_eq!(field(&file, limit, "type").as_char(), Some('L'));
+        assert_eq!(field(&file, limit, "term_use").as_char(), Some('?'));
+    }
+    assert_eq!(field(&file, 5921, "intersection_data").as_ptr(), Some(6035));
+    assert_eq!(field(&file, 6035, "uv_type").as_int(), Some(4));
+    assert_eq!(
+        match field(&file, 6035, "values") {
+            Value::Arr(values) => values.len(),
+            _ => 0,
+        },
+        16
+    );
+
+    let session = SessionPolicy::v1();
+    let mut store = Store::new();
+    let context = OperationContext::new(&session, Tolerances::default()).unwrap();
+    let outcome = reconstruct_with_context(&file, &mut store, &context).unwrap();
+    let crossing = outcome.result().as_ref().unwrap_err().limit().unwrap();
+    assert_eq!(crossing.stage, INTERSECTION_CHART_CERTIFICATE_WORK);
+    assert_eq!(crossing.resource, ResourceKind::Work);
+    assert_eq!(crossing.allowed, V15_WORK);
+    assert_eq!(crossing.consumed, V15_WORK + RECORD_5921_WORK);
+    assert_eq!(
+        usage(
+            outcome.report(),
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+        ),
+        V15_WORK
     );
     assert_eq!(
         usage(

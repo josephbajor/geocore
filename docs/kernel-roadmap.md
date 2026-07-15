@@ -774,9 +774,11 @@ isolated `17285120/5/10`. Production v13 admits it at exact
 `431854695/22/10` with historical v1-v12 parity. Production v14 admits
 two-sample direct Plane/Offset(B-surface) record 3609, chart 3607, at isolated
 `4277250` Work and exact cumulative `436131945/22/10`, preserving historical
-v1-v13 parity. It then stops atomically before two-sample dual-offset record
-6044, chart 6043, whose isolated `4352000` Work would request cumulative
-`440483945`. The exemplar
+v1-v13 parity. Production v15 admits two-sample dual-offset record 6044, chart
+6043, at isolated `4352000/2/10` and exact cumulative `440483945/22/10`,
+preserving historical v1-v14 parity. It then stops atomically before
+four-sample dual-offset record 5921, chart 6027, whose isolated
+`13774848/4/10` proof would request cumulative `454258793` Work. The exemplar
 manifest row is therefore `reconstruct: fail` with no
 unsupported capability and remains
 the committed progress meter: `reconstruct: fail → pass`, then
@@ -875,10 +877,12 @@ plan:
    `4352000/2/10` with exact per-resource N/N-1 rollback evidence. The
    five-sample record 4230 independently certifies at `17285120/5/10` and is
    admitted by production v13 at exact `431854695/22/10`. Production v14
-   admits two-sample Plane/Offset record 3609 at isolated `4277250/2/10`,
-   reaches exact `436131945/22/10` with historical v1-v13 parity, and next
-   stops before two-sample dual-offset record 6044's cumulative
-   `440483945`-Work request; the store remains empty.
+   admits two-sample Plane/Offset record 3609 at isolated `4277250/2/10` and
+   reaches exact `436131945/22/10` with historical v1-v13 parity. Production
+   v15 admits two-sample dual-offset record 6044 at isolated `4352000/2/10`,
+   reaches exact `440483945/22/10` with historical v1-v14 parity, and next
+   stops before four-sample dual-offset record 5921's cumulative
+   `454258793`-Work request; the store remains empty.
    Both
    original B-surface identities and their paired pcurves are graph-protected
    in source order. Other parameter conventions, limits,
@@ -897,11 +901,12 @@ plan:
    11-sample Plane/Offset record 3745, seven-sample dual-offset record 3615, and
    the independently transplanted two-sample record 3595 and five-sample record
    4230 now certify. Production v14 additionally admits record 3609 at exact
-   `436131945/22/10` and stops before record 6044's `440483945`-Work request.
+   `436131945/22/10`; production v15 admits record 6044 at exact
+   `440483945/22/10` and stops before record 5921's `454258793`-Work request.
    Original-backed, tolerance-qualified, non-Plane, reversed-basis, periodic,
    closed, rational, or non-2D SP-curves, foreign curves, null/general
    closed-limit, endpoint or NURBS-trace omissions, other nullable
-   chart-data, production-profile admission past the v14 record-6044 frontier,
+   chart-data, production-profile admission past the v15 record-5921 frontier,
    non-endpoint-only periodic trace ranges, and noncanonical chart conventions
    remain. Re-deriving
    boolean scars through our own surface/surface intersector remains an M4

@@ -828,8 +828,10 @@ certifies as a canonical degree-1 open-clamped polyline at isolated
 `17285120/5/10`. Production v13 admits it at exact `431854695/22/10` with
 historical v1-v12 parity. V14 admits two-sample direct Plane/Offset record 3609,
 chart 3607, at isolated `4277250` Work and exact cumulative
-`436131945/22/10`, then stops before two-sample dual-offset record 6044, chart
-6043, whose isolated `4352000` Work would request cumulative `440483945`.
+`436131945/22/10`. V15 admits two-sample dual-offset record 6044, chart 6043,
+at isolated `4352000/2/10` and exact cumulative `440483945/22/10`, then stops
+before four-sample dual-offset record 5921, chart 6027, whose isolated
+`13774848/4/10` proof would request cumulative `454258793` Work.
 An end terminator contributes a
 tolerance-close, distinct singularity
 and one extra paired-UV tuple whose appended span is certified with the same
@@ -971,8 +973,8 @@ the graph ownership model.
   residuals, per-resource N/N-1 rollback, and malformed carrier/pcurve failure;
   the five-sample suite pins record 4230's canonical polyline, isolated
   `17285120/5/10`, per-resource N/N-1 rollback, and typed malformed failure.
-  Production v14 pins exact `436131945/22/10`, historical v1-v13 parity, and
-  the next atomic resource stop at record 6044's `440483945`-Work request.
+  Production v15 pins exact `440483945/22/10`, historical v1-v14 parity, and
+  the next atomic resource stop at record 5921's `454258793`-Work request.
 
 ### Offset evaluator tests
 

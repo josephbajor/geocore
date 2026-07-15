@@ -489,6 +489,34 @@ impl IntersectionImportBudgetProfile {
         .expect("built-in X_T Plane/Offset(B-surface) line profile is valid")
     }
 
+    /// Corpus-backed defaults through the next canonical finite-open
+    /// two-sample Offset(B-surface)/Offset(B-surface) line chart.
+    ///
+    /// Historical v1-v14 profiles retain their exact policy contracts.
+    pub fn v15_defaults() -> BudgetPlan {
+        BudgetPlan::new([
+            LimitSpec::new(
+                INTERSECTION_CHART_CERTIFICATE_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                440_483_945,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_ITEMS,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                65_536,
+            ),
+            LimitSpec::new(
+                INTERSECTION_CHART_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                TRANSMITTED_NURBS_TRACE_PROOF_DEPTH as u64,
+            ),
+        ])
+        .expect("built-in X_T two-sample dual-offset line profile is valid")
+    }
+
     fn validate(ledger: &WorkLedger) -> core::result::Result<(), OperationPolicyError> {
         ledger.require_limit(
             INTERSECTION_CHART_CERTIFICATE_WORK,
@@ -533,7 +561,7 @@ pub struct Reconstruction {
 pub fn reconstruction_budget_profile() -> BudgetPlan {
     let graph = EvalBudgetProfile::v1_defaults();
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v14_defaults();
+    let intersection = IntersectionImportBudgetProfile::v15_defaults();
     BudgetPlan::new(
         graph
             .limits()
@@ -549,7 +577,7 @@ fn reconstruction_compatibility_budget() -> BudgetPlan {
     let graph =
         EvalBudgetProfile::for_limits(EvalLimits::default().max_dependency_depth, usize::MAX);
     let projection = ProjectionBudgetProfile::curve_aggregate_compatibility();
-    let intersection = IntersectionImportBudgetProfile::v14_defaults();
+    let intersection = IntersectionImportBudgetProfile::v15_defaults();
     BudgetPlan::new(
         graph
             .limits()

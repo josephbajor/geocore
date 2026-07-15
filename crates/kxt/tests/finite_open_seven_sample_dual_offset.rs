@@ -13,6 +13,7 @@ use kxt::schema::code;
 use kxt::{
     INTERSECTION_CHART_CERTIFICATE_WORK, INTERSECTION_CHART_DEPTH, INTERSECTION_CHART_ITEMS,
     IntersectionImportBudgetProfile, XtCapability, XtError, reconstruct, reconstruct_with_context,
+    reconstruction_budget_profile,
 };
 
 const EXEMPLAR: &[u8] = include_bytes!("fixtures/exemplar.x_t");
@@ -22,6 +23,7 @@ const RECORD_4230_WORK: u64 = 17_285_120;
 const V12_WORK: u64 = 414_569_575;
 const V13_WORK: u64 = 431_854_695;
 const V14_WORK: u64 = 436_131_945;
+const V15_WORK: u64 = 440_483_945;
 
 fn field<'a>(file: &'a kxt::XtFile, index: u32, name: &str) -> &'a Value {
     file.field(&file.nodes[&index], name).unwrap()
@@ -372,7 +374,7 @@ fn malformed_record_3615_witnesses_and_limits_fail_typed_and_atomically() {
 }
 
 #[test]
-fn v1_through_v13_are_stable_and_v14_has_the_exact_aggregate_profile() {
+fn v1_through_v14_are_stable_and_v15_has_the_exact_aggregate_profile() {
     let expected = [
         131_072,
         81_267_732,
@@ -388,6 +390,7 @@ fn v1_through_v13_are_stable_and_v14_has_the_exact_aggregate_profile() {
         V12_WORK,
         V13_WORK,
         V14_WORK,
+        V15_WORK,
     ];
     let plans = [
         IntersectionImportBudgetProfile::v1_defaults(),
@@ -404,12 +407,17 @@ fn v1_through_v13_are_stable_and_v14_has_the_exact_aggregate_profile() {
         IntersectionImportBudgetProfile::v12_defaults(),
         IntersectionImportBudgetProfile::v13_defaults(),
         IntersectionImportBudgetProfile::v14_defaults(),
+        IntersectionImportBudgetProfile::v15_defaults(),
     ];
     for (plan, expected_work) in plans.iter().zip(expected) {
         assert_eq!(limit(plan, ResourceKind::Work).allowed, expected_work);
         assert_eq!(limit(plan, ResourceKind::Items).allowed, 65_536);
         assert_eq!(limit(plan, ResourceKind::Depth).allowed, 10);
     }
+    let production = reconstruction_budget_profile();
+    assert_eq!(limit(&production, ResourceKind::Work).allowed, V15_WORK);
+    assert_eq!(limit(&production, ResourceKind::Items).allowed, 65_536);
+    assert_eq!(limit(&production, ResourceKind::Depth).allowed, 10);
 }
 
 #[test]

@@ -546,8 +546,10 @@ Work/Items/Depth N/N-1 rollback evidence, without changing the production
 profile. Five-sample record 4230, roots `[3320, 773]`, chart 4231, independently
 certifies at isolated `17,285,120/5/10`; v13 admits it at exact
 `431,854,695/22/10`. V14 admits two-sample Plane/Offset record 3609 at isolated
-`4,277,250/2/10`, reaches `436,131,945/22/10` with historical v1-v13 parity,
-and stops atomically before record 6044's `440,483,945`-Work request. Material
+`4,277,250/2/10` and reaches `436,131,945/22/10` with historical v1-v13 parity.
+V15 admits two-sample dual-offset record 6044 at isolated `4,352,000/2/10`,
+reaches `440,483,945/22/10` with historical v1-v14 parity, and stops atomically
+before four-sample record 5921's `454,258,793`-Work request. Material
 and interior
 overhangs are never normalized, and every snapped endpoint remains subordinate to its original-
 source whole-carrier certificate.
