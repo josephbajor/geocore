@@ -23,6 +23,7 @@ const RECORD_5921_WORK: u64 = 13_774_848;
 const V13_WORK: u64 = 431_854_695;
 const V14_WORK: u64 = 436_131_945;
 const V15_WORK: u64 = 440_483_945;
+const RECORD_5921_ATTEMPTED_WORK: u64 = 454_258_793;
 
 fn field<'a>(file: &'a kxt::XtFile, index: u32, name: &str) -> &'a Value {
     file.field(&file.nodes[&index], name).unwrap()
@@ -499,6 +500,126 @@ fn v15_certifies_6044_and_pins_the_next_four_sample_dual_offset_frontier() {
     assert_eq!(crossing.resource, ResourceKind::Work);
     assert_eq!(crossing.allowed, V15_WORK);
     assert_eq!(crossing.consumed, V15_WORK + RECORD_5921_WORK);
+    assert_eq!(
+        usage(
+            outcome.report(),
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+        ),
+        V15_WORK
+    );
+    assert_eq!(
+        usage(
+            outcome.report(),
+            INTERSECTION_CHART_ITEMS,
+            ResourceKind::Items,
+        ),
+        22
+    );
+    assert_eq!(
+        usage(
+            outcome.report(),
+            INTERSECTION_CHART_DEPTH,
+            ResourceKind::Depth,
+        ),
+        10
+    );
+    assert_rollback(&store);
+}
+
+#[test]
+fn record_5921_cubic_candidate_exits_its_original_domain_and_fails_closed() {
+    let file = read_xt(EXEMPLAR).unwrap();
+    let first_root = match field(&file, 5921, "surface") {
+        Value::Arr(values) => values[0].as_ptr().unwrap(),
+        _ => unreachable!(),
+    };
+    let first_basis = field(&file, first_root, "surface").as_ptr().unwrap();
+    let first_nurbs = field(&file, first_basis, "nurbs").as_ptr().unwrap();
+    assert_eq!(
+        field(&file, first_nurbs, "u_periodic"),
+        &Value::Logical(false)
+    );
+    assert_eq!(
+        field(&file, first_nurbs, "u_closed"),
+        &Value::Logical(false)
+    );
+    let u_knots = field(&file, first_nurbs, "u_knots").as_ptr().unwrap();
+    let u_knots = match field(&file, u_knots, "knots") {
+        Value::Arr(values) => values
+            .iter()
+            .map(|value| value.as_f64().unwrap())
+            .collect::<Vec<_>>(),
+        _ => unreachable!(),
+    };
+    let source_domain = [u_knots[0], *u_knots.last().unwrap()];
+    assert_eq!(source_domain, [-0.01, 1.0]);
+
+    let data = field(&file, 5921, "intersection_data").as_ptr().unwrap();
+    let tuples = match field(&file, data, "values") {
+        Value::Arr(values) => values,
+        _ => unreachable!(),
+    };
+    let samples = core::array::from_fn::<_, 4, _>(|index| tuples[index * 4].as_f64().unwrap());
+    assert!(
+        samples
+            .into_iter()
+            .all(|value| source_domain[0] <= value && value <= source_domain[1])
+    );
+    let first = samples[1] * 27.0 - samples[0] * 8.0 - samples[3];
+    let second = samples[2] * 27.0 - samples[0] - samples[3] * 8.0;
+    let controls = [
+        samples[0],
+        (first * 2.0 - second) / 18.0,
+        (second * 2.0 - first) / 18.0,
+        samples[3],
+    ];
+    assert_eq!(controls[2], -0.37918315505078976);
+    let parameter = 5.0 / 6.0;
+    let complement = 1.0 - parameter;
+    let candidate = controls[0] * complement * complement * complement
+        + 3.0 * controls[1] * complement * complement * parameter
+        + 3.0 * controls[2] * complement * parameter * parameter
+        + controls[3] * parameter * parameter * parameter;
+    assert_eq!(candidate, -0.08141266222011943);
+    assert!(candidate < source_domain[0] - 0.07);
+    assert_eq!(RECORD_5921_ATTEMPTED_WORK, V15_WORK + RECORD_5921_WORK);
+
+    let session = SessionPolicy::v1();
+    let plan = BudgetPlan::new([
+        LimitSpec::new(
+            INTERSECTION_CHART_CERTIFICATE_WORK,
+            ResourceKind::Work,
+            AccountingMode::Cumulative,
+            RECORD_5921_ATTEMPTED_WORK,
+        ),
+        LimitSpec::new(
+            INTERSECTION_CHART_ITEMS,
+            ResourceKind::Items,
+            AccountingMode::HighWater,
+            65_536,
+        ),
+        LimitSpec::new(
+            INTERSECTION_CHART_DEPTH,
+            ResourceKind::Depth,
+            AccountingMode::HighWater,
+            10,
+        ),
+    ])
+    .unwrap();
+    let mut store = Store::new();
+    let outcome =
+        reconstruct_with_context(&file, &mut store, &context_with_plan(&session, plan)).unwrap();
+    assert!(matches!(
+        outcome.result(),
+        Err(XtError::IntersectionCertificate {
+            index: 5921,
+            source: IntersectionCertificateError::UnsupportedTraceParameterization {
+                trace: PairedTrace::First,
+                reason: "dual-offset cubic pcurve leaves the original source domain",
+            },
+        })
+    ));
     assert_eq!(
         usage(
             outcome.report(),

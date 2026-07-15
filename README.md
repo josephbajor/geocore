@@ -63,7 +63,10 @@ application boundary.
   `17285120/5/10`, v14 admits two-sample Plane/Offset record 3609 at isolated
   `4277250/2/10`, and v15 admits two-sample dual-offset record 6044 at isolated
   `4352000/2/10`. Production next stops atomically before four-sample dual-offset
-  record 5921 at its exact `454258793`-Work request. Broader cyclic
+  record 5921 at its exact `454258793`-Work request. At that attempted budget,
+  record 5921 still fails closed: its canonical cubic first pcurve materially
+  leaves the original open nonperiodic source domain, so the retained report
+  remains the exact v15 prefix with an empty rollback. Broader cyclic
   B-geometry, periodic/circular pcurves,
   remaining intersection/procedural families, assemblies, older schemas, neutral-binary
   writing, and broader external Parasolid certification remain.

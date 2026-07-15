@@ -778,7 +778,10 @@ v1-v13 parity. Production v15 admits two-sample dual-offset record 6044, chart
 6043, at isolated `4352000/2/10` and exact cumulative `440483945/22/10`,
 preserving historical v1-v14 parity. It then stops atomically before
 four-sample dual-offset record 5921, chart 6027, whose isolated
-`13774848/4/10` proof would request cumulative `454258793` Work. The exemplar
+`13774848/4/10` proof would request cumulative `454258793` Work. At that exact
+attempted budget, the canonical cubic first pcurve materially exits its
+original open nonperiodic source domain; certification fails atomically and
+retains the v15 report. The exemplar
 manifest row is therefore `reconstruct: fail` with no
 unsupported capability and remains
 the committed progress meter: `reconstruct: fail → pass`, then
@@ -882,7 +885,10 @@ plan:
    v15 admits two-sample dual-offset record 6044 at isolated `4352000/2/10`,
    reaches exact `440483945/22/10` with historical v1-v14 parity, and next
    stops before four-sample dual-offset record 5921's cumulative
-   `454258793`-Work request; the store remains empty.
+   `454258793`-Work request. With that exact budget admitted, record 5921's
+   canonical cubic first pcurve reaches `-0.08141266222011943` outside its
+   original `[-0.01, 1.0]` source domain; certification retains the v15 report
+   and the store remains empty.
    Both
    original B-surface identities and their paired pcurves are graph-protected
    in source order. Other parameter conventions, limits,
@@ -902,7 +908,9 @@ plan:
    the independently transplanted two-sample record 3595 and five-sample record
    4230 now certify. Production v14 additionally admits record 3609 at exact
    `436131945/22/10`; production v15 admits record 6044 at exact
-   `440483945/22/10` and stops before record 5921's `454258793`-Work request.
+   `440483945/22/10` and stops before record 5921's `454258793`-Work request;
+   an exact-budget regression pins the subsequent original-domain certificate
+   rejection and atomic v15-report rollback.
    Original-backed, tolerance-qualified, non-Plane, reversed-basis, periodic,
    closed, rational, or non-2D SP-curves, foreign curves, null/general
    closed-limit, endpoint or NURBS-trace omissions, other nullable

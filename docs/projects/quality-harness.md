@@ -686,7 +686,10 @@ historical replays from the cubic and zero-knot suites. Their exact aggregate
 budget-profile assertions, isolated record certificates, Work/Items/Depth
 boundaries, malformed-input atomicity, the historical v12/v13 record-4230,
 record-3609, and record-6044 boundaries, and the v15 record-5921 end-to-end
-frontier remain.
+frontier remain. The record-5921 frontier now includes an exact-budget
+original-domain rejection: all transmitted samples lie in range, but the
+canonical cubic first pcurve overshoots the open nonperiodic source domain, so
+the operation retains the v15 report and rolls back atomically.
 Timing evidence and the
 remaining consolidation policy live
 in `docs/projects/test-throughput.md`; elapsed time remains diagnostic rather

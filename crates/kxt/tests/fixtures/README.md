@@ -128,7 +128,10 @@ statement accompanied the individual files.
   dual-offset record 6044, chart 6043, at isolated `4352000/2/10` and exact
   cumulative `440483945/22/10`, then stops before four-sample dual-offset record
   5921, chart 6027, whose isolated `13774848/4/10` proof would request cumulative
-  `454258793` Work.
+  `454258793` Work. With that exact budget admitted, the canonical cubic first
+  pcurve reaches `-0.08141266222011943` outside its original `[-0.01, 1.0]`
+  open nonperiodic source domain, so certification still fails atomically and
+  the retained report remains `440483945/22/10`.
   The exemplar manifest therefore records a structured reconstruction failure
   with no unsupported capability. General closed limits, other nullable chart
   data, periodic-trace-range, broader carrier families, and noncanonical chart

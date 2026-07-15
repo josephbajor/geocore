@@ -549,7 +549,10 @@ certifies at isolated `17,285,120/5/10`; v13 admits it at exact
 `4,277,250/2/10` and reaches `436,131,945/22/10` with historical v1-v13 parity.
 V15 admits two-sample dual-offset record 6044 at isolated `4,352,000/2/10`,
 reaches `440,483,945/22/10` with historical v1-v14 parity, and stops atomically
-before four-sample record 5921's `454,258,793`-Work request. Material
+before four-sample record 5921's `454,258,793`-Work request. At that exact
+budget the preflight admits, but the canonical cubic first pcurve materially
+leaves its original open nonperiodic source domain; certification rolls back
+atomically and retains the v15 report. Material
 and interior
 overhangs are never normalized, and every snapped endpoint remains subordinate to its original-
 source whole-carrier certificate.
