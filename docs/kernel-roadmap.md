@@ -1216,7 +1216,9 @@ true only for an empty complete result.
   seven-cell 2×3-block-plus-tail layout satisfies the bounded complementary-
   chart seam proof with every other sibling certified empty, or when eight
   positive children form an exact connected shared-seam union and the sole
-  remaining sibling certifies empty. Multi-cell parents
+  remaining sibling certifies empty, or when all nine children are positive
+  and their exhaustive closed decomposition cancels every internal seam into
+  one unambiguous outer cycle. Multi-cell parents
   must remain below a full turn. Two or three pairwise non-edge-adjacent
   children stay as separate components after closed sibling ownership excludes
   every artificial seam, including diagonal corner contact through both
@@ -1227,7 +1229,7 @@ true only for an empty complete result.
   two consecutive, bit-identical endpoint records; each edge is removed and
   the complementary paths are spliced before parent correspondence is restored.
   Three- through six-cell paths recheck every remaining seam against the current
-  merged boundary after each earlier splice. Connected four- through eight-cell
+  merged boundary after each earlier splice. Connected four- through nine-cell
   non-path unions prove all internal seams together. Paired owners require
   reverse-oriented bit-exact edge records; one exact owner may canonicalize a
   unique reverse consecutive edge only when its endpoints are bit-identical in
@@ -1253,8 +1255,12 @@ true only for an empty complete result.
   empty `[2,1]` and returns one canonical 18-edge outer cycle. All nine occupied
   adjacencies own reverse-oriented bit-exact seam pairs; repeat and operand swap
   are bit-exact, while the general merger retains the bounded one-owner rule.
+  The reviewed nine-cell fixture needs no empty sibling because its closed 3×3
+  decomposition exhausts the parent. All twelve internal adjacencies certify
+  and cancel, leaving one canonical 17-edge outer cycle with exact repeat/swap;
+  no artificial seam edge survives.
   Exact 9/8 piece-pair, 252/251 boundary-pair, and 1,008/1,007 arc-witness
-  admission remain pinned. Other seven- or eight-positive and all nine-positive unions, disconnected five-cell
+  admission remain pinned. Other seven-, eight-, or nine-positive unions, disconnected five-cell
   layouts without exact sibling separation, non-exact or otherwise ambiguous
   multi-edge shared seams, full-turn
   aliases, polar, non-exact tangent, ambiguous multiple-cycle,

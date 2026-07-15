@@ -280,8 +280,8 @@ const GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT: usize =
     GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_PAIR_LIMIT;
 const GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT: usize =
     GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_ARC_LIMIT;
-const GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT: usize = 8;
-const GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON: &str = "general coincident sphere both-wide union supports at most eight positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, seven, and eight require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components";
+const GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT: usize = 9;
+const GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON: &str = "general coincident sphere both-wide union supports at most nine positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, seven, eight, and nine require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SphereWindowConstraint {
@@ -781,6 +781,27 @@ fn certify_double_wide_sphere_window_union(
                 resolved_regions.is_some()
             }
         }
+        [_, _, _, _, _, _, _, _, _] => {
+            // All nine closed cells are positive, so the Cartesian
+            // decomposition itself is exhaustive and no empty sibling is
+            // required. The non-path merger must still prove and cancel all
+            // twelve internal grid adjacencies before accepting exactly one
+            // unambiguous outer cycle.
+            let bounded_nine_cell_proof = certified_empty_pairs + 9
+                == GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT
+                && bounded_multi_cell_parents;
+            if !bounded_nine_cell_proof {
+                false
+            } else {
+                resolved_regions = merge_exact_sphere_region_non_path_union(
+                    &occupied_regions,
+                    &a_pieces,
+                    &b_pieces,
+                )
+                .map(|region| vec![region]);
+                resolved_regions.is_some()
+            }
+        }
         _ => false,
     };
     if !supported_positive_cells {
@@ -793,7 +814,7 @@ fn certify_double_wide_sphere_window_union(
     // an independent set or between a merged pair and its singleton; the
     // remaining empty siblings exclude every other artificial seam. Three-
     // through six-cell paths are merged in deterministic adjacency order.
-    // Four- through eight-cell non-path unions cancel every shared edge only
+    // Four- through nine-cell non-path unions cancel every shared edge only
     // after paired owners prove reverse-oriented bit-exact seam records or one
     // exact owner supplies the closed-cell/complementary-chart proof described
     // by `exact_sphere_region_shared_seam_edges`; the remaining edges must
@@ -3829,6 +3850,33 @@ mod tests {
         (a, b, a_range, b_range)
     }
 
+    fn nine_cell_fixture() -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+        let a = Sphere::new(Frame::world(), 1.0).unwrap();
+        let angle = 0.941731645814849;
+        let b = Sphere::new(
+            Frame::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(math::sin(angle), 0.0, math::cos(angle)),
+                Vec3::new(math::cos(angle), 0.0, -math::sin(angle)),
+            )
+            .unwrap(),
+            1.0,
+        )
+        .unwrap();
+        (
+            a,
+            b,
+            [
+                ParamRange::new(-0.6905707622863242, 2.7325627610063625),
+                ParamRange::new(-1.0093591690898873, 1.403712886650005),
+            ],
+            [
+                ParamRange::new(-0.5347960267606893, 4.295577322685924),
+                ParamRange::new(-1.0272317177041015, 1.3776408967251323),
+            ],
+        )
+    }
+
     #[test]
     fn general_window_proof_limits_are_exact_at_n_and_n_minus_one() {
         let a = Sphere::new(Frame::world(), 1.0).unwrap();
@@ -4072,7 +4120,7 @@ mod tests {
             arbitrary_sphere_octant_parameter_allowance(double_wide_a_range, double_wide_b_range)
                 .unwrap();
         assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT, 9);
-        assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT, 8);
+        assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT, 9);
         assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT, 252);
         assert_eq!(GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT, 1_008);
         let double_wide = certify_double_wide_sphere_window_union(
@@ -4185,6 +4233,64 @@ mod tests {
                 reason: "general coincident sphere wide-window union requires three sub-pi decomposition cells"
             }
         );
+    }
+
+    #[test]
+    fn nine_cell_exhaustive_union_and_limits_are_exact() {
+        let (a, b, a_range, b_range) = nine_cell_fixture();
+        let allowance = arbitrary_sphere_octant_parameter_allowance(a_range, b_range).unwrap();
+        let hit = certify_double_wide_sphere_window_union(
+            &a,
+            a_range,
+            &b,
+            b_range,
+            Tolerances::default(),
+            allowance,
+            GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+            GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+            GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+        )
+        .unwrap();
+        assert!(hit.is_complete());
+        assert_eq!(hit.regions.len(), 1);
+        assert_eq!(hit.regions[0].boundary.len(), 17);
+
+        for (piece_limit, pair_limit, arc_limit, reason) in [
+            (
+                GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT - 1,
+                GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+                "general coincident sphere both-wide union piece limit exhausted",
+            ),
+            (
+                GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT - 1,
+                GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+                "general coincident sphere both-wide union pair limit exhausted",
+            ),
+            (
+                GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT - 1,
+                "general coincident sphere both-wide union arc limit exhausted",
+            ),
+        ] {
+            assert_eq!(
+                certify_double_wide_sphere_window_union(
+                    &a,
+                    a_range,
+                    &b,
+                    b_range,
+                    Tolerances::default(),
+                    allowance,
+                    piece_limit,
+                    pair_limit,
+                    arc_limit,
+                )
+                .unwrap_err(),
+                Error::InvalidGeometry { reason }
+            );
+        }
     }
 
     #[test]
