@@ -1200,9 +1200,15 @@ true only for an empty complete result.
   connected six-cell fixture has one 14-edge boundary; bit-mismatched
   central seam records remain indeterminate even when their physical points
   differ by only a few machine epsilons.
+  Exactly five positive cells may also remain as multiple canonical components
+  when every cross-component pair has certified sibling emptiness, including
+  both orthogonal empty owners at each diagonal corner. The pinned singleton
+  plus four-cell fixture retains two regions with 3- and 8-edge boundaries;
+  removing either separator owner fails closed.
   Exact 9/8 piece-pair, 252/251 boundary-pair, and 1,008/1,007 arc-witness
   admission remain pinned. Seven-or-more-positive unions, disconnected five-cell
-  layouts, non-exact or otherwise ambiguous multi-edge shared seams, full-turn
+  layouts without exact sibling separation, non-exact or otherwise ambiguous
+  multi-edge shared seams, full-turn
   aliases, polar, non-exact tangent, ambiguous multiple-cycle,
   and near-coincident
   non-identical cases remain `Indeterminate` or on their existing typed
