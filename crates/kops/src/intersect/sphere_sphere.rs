@@ -308,7 +308,7 @@ const GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT: usize = GENERAL_SPHERE_WIDE_PI
     * (GENERAL_SPHERE_WINDOW_PAIR_LIMIT + GENERAL_SPHERE_POLAR_CELL_PAIR_LIMIT);
 const GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT: usize = GENERAL_SPHERE_WIDE_PIECE_LIMIT
     * (GENERAL_SPHERE_WINDOW_ARC_LIMIT + GENERAL_SPHERE_POLAR_CELL_ARC_LIMIT);
-const GENERAL_SPHERE_POLAR_WIDE_LAYOUT_REASON: &str = "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, or one exact full latitude-row path with every other sibling certified empty";
+const GENERAL_SPHERE_POLAR_WIDE_LAYOUT_REASON: &str = "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, or one exact full latitude-row path with every other sibling certified empty";
 const GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT: usize =
     GENERAL_SPHERE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WIDE_PIECE_LIMIT;
 const GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT: usize =
@@ -946,63 +946,117 @@ fn certify_polar_by_wide_sphere_window_union(
                 reason: GENERAL_SPHERE_POLAR_WIDE_LAYOUT_REASON,
             });
         }
-        let occupied_row = occupied[0].0[0];
-        for (wide_index, (cell, hit)) in occupied.iter().enumerate() {
-            if *cell != [occupied_row, wide_index]
-                || !hit.points.is_empty()
-                || !hit.curves.is_empty()
-                || hit.regions.len() != 1
-            {
-                return Err(Error::InvalidGeometry {
-                    reason: GENERAL_SPHERE_POLAR_WIDE_LAYOUT_REASON,
-                });
-            }
-        }
-
-        // The exact full-row indices make the other three closed children the
-        // complete sibling latitude row. Their certified emptiness excludes
-        // the artificial latitude seam on either side. The two regular
-        // wide-chart seams are still removed independently through the strict
-        // adjacent-region bit-exact reverse-owner gate before the parent map
-        // is restored.
-        let seam_on_first_operand = !first_is_polar;
-        let mut regions = occupied.into_iter().map(|(_, hit)| {
-            hit.regions
-                .into_iter()
-                .next()
-                .expect("one occupied full-row child region was required")
-        });
-        let mut merged = regions
-            .next()
-            .expect("the first occupied full-row child was required");
-        for wide_piece in wide_pieces.iter().skip(1) {
-            let next = regions
-                .next()
-                .expect("the next occupied full-row child was required");
-            merged = merge_exact_adjacent_sphere_regions(
-                &merged,
-                &next,
-                seam_on_first_operand,
-                wide_piece[0].lo,
-            )
-            .ok_or(Error::InvalidGeometry {
-                reason: GENERAL_SPHERE_POLAR_WIDE_LAYOUT_REASON,
-            })?;
-        }
-
-        let latitude_seam = polar_pieces[0][1].hi;
-        if merged.boundary.iter().any(|vertex| {
-            let polar_uv = if first_is_polar {
-                vertex.uv_a
-            } else {
-                vertex.uv_b
-            };
-            polar_uv[1].to_bits() == latitude_seam.to_bits()
+        if occupied.iter().any(|(_, hit)| {
+            !hit.points.is_empty() || !hit.curves.is_empty() || hit.regions.len() != 1
         }) {
             return Err(Error::InvalidGeometry {
                 reason: GENERAL_SPHERE_POLAR_WIDE_LAYOUT_REASON,
             });
         }
+
+        let occupied_row = occupied[0].0[0];
+        let is_full_row = occupied
+            .iter()
+            .enumerate()
+            .all(|(wide_index, (cell, _))| *cell == [occupied_row, wide_index]);
+        let latitude_seam = polar_pieces[0][1].hi;
+        let mut merged = if is_full_row {
+            // The exact full-row indices make the other three closed children
+            // the complete sibling latitude row. Their certified emptiness
+            // excludes the artificial latitude seam on either side. The two
+            // regular wide-chart seams are removed independently through the
+            // strict adjacent-region bit-exact reverse-owner gate.
+            let seam_on_first_operand = !first_is_polar;
+            let mut regions = occupied.into_iter().map(|(_, hit)| {
+                hit.regions
+                    .into_iter()
+                    .next()
+                    .expect("one occupied full-row child region was required")
+            });
+            let mut merged = regions
+                .next()
+                .expect("the first occupied full-row child was required");
+            for wide_piece in wide_pieces.iter().skip(1) {
+                let next = regions
+                    .next()
+                    .expect("the next occupied full-row child was required");
+                merged = merge_exact_adjacent_sphere_regions(
+                    &merged,
+                    &next,
+                    seam_on_first_operand,
+                    wide_piece[0].lo,
+                )
+                .ok_or(Error::InvalidGeometry {
+                    reason: GENERAL_SPHERE_POLAR_WIDE_LAYOUT_REASON,
+                })?;
+            }
+            if merged.boundary.iter().any(|vertex| {
+                let polar_uv = if first_is_polar {
+                    vertex.uv_a
+                } else {
+                    vertex.uv_b
+                };
+                polar_uv[1].to_bits() == latitude_seam.to_bits()
+            }) {
+                return Err(Error::InvalidGeometry {
+                    reason: GENERAL_SPHERE_POLAR_WIDE_LAYOUT_REASON,
+                });
+            }
+            merged
+        } else {
+            let regions = occupied
+                .into_iter()
+                .map(|(cell, hit)| {
+                    (
+                        cell,
+                        hit.regions
+                            .into_iter()
+                            .next()
+                            .expect("one occupied mixed-axis child region was required"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let (merged, used_longitude_seam) = merge_exact_polar_wide_sphere_region_path(
+                &regions,
+                first_is_polar,
+                &polar_pieces,
+                &wide_pieces,
+            )
+            .ok_or(Error::InvalidGeometry {
+                reason: GENERAL_SPHERE_POLAR_WIDE_LAYOUT_REASON,
+            })?;
+            let seam_on_polar_operand = first_is_polar;
+            let seam_on_wide_operand = !first_is_polar;
+            let longitude_seams = [wide_pieces[1][0].lo, wide_pieces[2][0].lo];
+            if exact_sphere_region_parameter_seam_edge(
+                &merged,
+                seam_on_polar_operand,
+                1,
+                latitude_seam,
+            )
+            .is_some()
+                || longitude_seams.iter().any(|seam| {
+                    exact_sphere_region_parameter_seam_edge(&merged, seam_on_wide_operand, 0, *seam)
+                        .is_some()
+                })
+                || merged.boundary.iter().any(|vertex| {
+                    let wide_uv = if first_is_polar {
+                        vertex.uv_b
+                    } else {
+                        vertex.uv_a
+                    };
+                    longitude_seams.iter().any(|seam| {
+                        seam.to_bits() != used_longitude_seam.to_bits()
+                            && wide_uv[0].to_bits() == seam.to_bits()
+                    })
+                })
+            {
+                return Err(Error::InvalidGeometry {
+                    reason: GENERAL_SPHERE_POLAR_WIDE_LAYOUT_REASON,
+                });
+            }
+            merged
+        };
         merged.correspondence = SurfaceRegionCorrespondence::GeneralSphereWindow(parent_map);
         merged.max_residual = merged.max_residual.max(parent_residual);
         return SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
@@ -1013,9 +1067,7 @@ fn certify_polar_by_wide_sphere_window_union(
     };
 
     // Every latitude and longitude cell is closed. Certified-empty siblings
-    // keep a single retained child off both artificial seam families. For the
-    // admitted adjacent cap-row pair, one regular wide-chart longitude edge
-    // is canceled only after its two owners are reverse-oriented and bit exact.
+    // keep this single retained child off both artificial seam families.
     for region in &mut hit.regions {
         region.correspondence = SurfaceRegionCorrespondence::GeneralSphereWindow(parent_map);
         region.max_residual = region.max_residual.max(parent_residual);
@@ -1025,6 +1077,86 @@ fn certify_polar_by_wide_sphere_window_union(
         hit.curves,
         hit.regions,
     )
+}
+
+fn merge_exact_polar_wide_sphere_region_path(
+    regions: &[([usize; 2], SurfaceSurfaceRegion)],
+    first_is_polar: bool,
+    polar_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_POLAR_UNION_PIECE_LIMIT],
+    wide_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+) -> Option<(SurfaceSurfaceRegion, f64)> {
+    if regions.len() != 3 {
+        return None;
+    }
+    let latitude_seam = polar_pieces[0][1].hi;
+    let mut adjacent = [[None; 3]; 3];
+    let mut degrees = [0_u8; 3];
+    let mut longitude_edges = 0;
+    let mut latitude_edges = 0;
+    let mut used_longitude_seam = None;
+    for first in 0..regions.len() {
+        for second in first + 1..regions.len() {
+            let first_cell = regions[first].0;
+            let second_cell = regions[second].0;
+            let polar_delta = first_cell[0].abs_diff(second_cell[0]);
+            let wide_delta = first_cell[1].abs_diff(second_cell[1]);
+            let seam = if polar_delta == 0 && wide_delta == 1 {
+                let seam = wide_pieces[first_cell[1].max(second_cell[1])][0].lo;
+                longitude_edges += 1;
+                used_longitude_seam = Some(seam);
+                Some((!first_is_polar, 0, seam))
+            } else if polar_delta == 1 && wide_delta == 0 {
+                latitude_edges += 1;
+                Some((first_is_polar, 1, latitude_seam))
+            } else {
+                None
+            };
+            if let Some(seam) = seam {
+                adjacent[first][second] = Some(seam);
+                adjacent[second][first] = Some(seam);
+                degrees[first] += 1;
+                degrees[second] += 1;
+            }
+        }
+    }
+    if longitude_edges != 1
+        || latitude_edges != 1
+        || degrees.iter().filter(|degree| **degree == 1).count() != 2
+        || degrees.iter().filter(|degree| **degree == 2).count() != 1
+    {
+        return None;
+    }
+
+    // A mixed-axis L has two possible endpoint-first merge orders. Either is
+    // safe only when both successive reverse-owned seam edges are bit exact;
+    // trying them in child-index order keeps the result deterministic while
+    // avoiding an orientation-specific association rule at the bend.
+    for start in (0..regions.len()).filter(|index| degrees[*index] == 1) {
+        let bend = (0..regions.len()).find(|index| adjacent[start][*index].is_some())?;
+        let finish = (0..regions.len())
+            .find(|index| *index != start && *index != bend && adjacent[bend][*index].is_some())?;
+        let (first_operand_seam, first_parameter, first_seam) = adjacent[start][bend]?;
+        let Some(first_merge) = merge_exact_adjacent_sphere_regions_on_parameter(
+            &regions[start].1,
+            &regions[bend].1,
+            first_operand_seam,
+            first_parameter,
+            first_seam,
+        ) else {
+            continue;
+        };
+        let (second_operand_seam, second_parameter, second_seam) = adjacent[bend][finish]?;
+        if let Some(merged) = merge_exact_adjacent_sphere_regions_on_parameter(
+            &first_merge,
+            &regions[finish].1,
+            second_operand_seam,
+            second_parameter,
+            second_seam,
+        ) {
+            return Some((merged, used_longitude_seam?));
+        }
+    }
+    None
 }
 
 fn decompose_general_sphere_polar_window(
@@ -4515,6 +4647,93 @@ mod tests {
         (a, b, a_range, b_range)
     }
 
+    fn exact_polar_by_wide_cap_right_l_fixture()
+    -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+        let (a, b, mut a_range, mut b_range) = exact_polar_window_fixture();
+        a_range[0] = ParamRange::new(-1.8, -0.8);
+        a_range[1] = ParamRange::new(-1.0, core::f64::consts::FRAC_PI_2);
+        b_range[0] = ParamRange::new(-4.8, -4.8 + 3.6);
+        b_range[1] = ParamRange::new(0.0, 1.0);
+        (a, b, a_range, b_range)
+    }
+
+    fn exact_polar_by_wide_lower_middle_l_fixture()
+    -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+        let (a, b, mut a_range, mut b_range) = exact_polar_window_fixture();
+        a_range[0] = ParamRange::new(-1.8, -0.8);
+        a_range[1] = ParamRange::new(
+            1.0 - core::f64::consts::FRAC_PI_2,
+            core::f64::consts::FRAC_PI_2,
+        );
+        b_range[0] = ParamRange::new(-3.8, -3.8 + 3.6);
+        b_range[1] = ParamRange::new(-0.4, 0.6);
+        (a, b, a_range, b_range)
+    }
+
+    type PolarWideChildRegions = (
+        [[ParamRange; 2]; GENERAL_SPHERE_POLAR_UNION_PIECE_LIMIT],
+        [[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+        Vec<([usize; 2], SurfaceSurfaceRegion)>,
+        Vec<[usize; 2]>,
+    );
+
+    fn exact_polar_by_wide_child_regions(
+        a: &Sphere,
+        a_range: [ParamRange; 2],
+        b: &Sphere,
+        b_range: [ParamRange; 2],
+    ) -> PolarWideChildRegions {
+        let allowance = arbitrary_sphere_octant_parameter_allowance(a_range, b_range).unwrap();
+        let polar_pieces = decompose_general_sphere_polar_window(a_range).unwrap();
+        let wide_pieces = decompose_general_sphere_wide_window(b_range, allowance).unwrap();
+        let mut occupied = Vec::new();
+        let mut empty = Vec::new();
+        for (polar_index, polar_piece) in polar_pieces.into_iter().enumerate() {
+            let (pair_limit, arc_limit) = if polar_index == 0 {
+                (
+                    GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
+                    GENERAL_SPHERE_WINDOW_ARC_LIMIT,
+                )
+            } else {
+                (
+                    GENERAL_SPHERE_POLAR_CELL_PAIR_LIMIT,
+                    GENERAL_SPHERE_POLAR_CELL_ARC_LIMIT,
+                )
+            };
+            for (wide_index, wide_piece) in wide_pieces.into_iter().enumerate() {
+                let piece_allowance =
+                    arbitrary_sphere_octant_parameter_allowance(polar_piece, wide_piece).unwrap();
+                let mut child = certify_general_sphere_window_arrangement(
+                    a,
+                    polar_piece,
+                    b,
+                    wide_piece,
+                    Tolerances::default(),
+                    pair_limit,
+                    arc_limit,
+                    piece_allowance,
+                )
+                .unwrap();
+                if child.is_proven_empty() {
+                    empty.push([polar_index, wide_index]);
+                } else {
+                    assert!(child.is_complete());
+                    assert!(child.points.is_empty());
+                    assert!(child.curves.is_empty());
+                    assert_eq!(child.regions.len(), 1);
+                    occupied.push((
+                        [polar_index, wide_index],
+                        child
+                            .regions
+                            .pop()
+                            .expect("one occupied polar-by-wide child was required"),
+                    ));
+                }
+            }
+        }
+        (polar_pieces, wide_pieces, occupied, empty)
+    }
+
     fn eight_cell_fixture() -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
         let (a, b, mut a_range, mut b_range) = seven_cell_fixture();
         a_range[1].lo = -1.0834779757705633;
@@ -5589,6 +5808,205 @@ mod tests {
                 .unwrap_err(),
                 Error::InvalidGeometry { reason }
             );
+        }
+    }
+
+    #[test]
+    fn exact_polar_by_wide_mixed_axis_paths_are_exact() {
+        let fixtures = [
+            (
+                exact_polar_by_wide_cap_right_l_fixture(),
+                [[0, 2], [1, 1], [1, 2]],
+                [[0, 0], [0, 1], [1, 0]],
+            ),
+            (
+                exact_polar_by_wide_lower_middle_l_fixture(),
+                [[0, 1], [0, 2], [1, 1]],
+                [[0, 0], [1, 0], [1, 2]],
+            ),
+        ];
+        for (fixture_index, ((a, b, a_range, b_range), expected, expected_empty)) in
+            fixtures.into_iter().enumerate()
+        {
+            let allowance = arbitrary_sphere_octant_parameter_allowance(a_range, b_range).unwrap();
+            let (polar_pieces, wide_pieces, occupied, empty) =
+                exact_polar_by_wide_child_regions(&a, a_range, &b, b_range);
+            assert_eq!(
+                occupied.iter().map(|(cell, _)| *cell).collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(empty, expected_empty);
+
+            let (merged, used_longitude_seam) = merge_exact_polar_wide_sphere_region_path(
+                &occupied,
+                true,
+                &polar_pieces,
+                &wide_pieces,
+            )
+            .expect("the mixed-row L must own one exact seam on each axis");
+            let latitude_seam = polar_pieces[0][1].hi;
+            let longitude_seams = [wide_pieces[1][0].lo, wide_pieces[2][0].lo];
+            assert!(
+                exact_sphere_region_parameter_seam_edge(&merged, true, 1, latitude_seam,).is_none()
+            );
+            assert!(longitude_seams.iter().all(|seam| {
+                exact_sphere_region_parameter_seam_edge(&merged, false, 0, *seam).is_none()
+            }));
+            let unused_longitude_seam = longitude_seams
+                .into_iter()
+                .find(|seam| seam.to_bits() != used_longitude_seam.to_bits())
+                .expect("one longitude seam is unused by an L path");
+            assert!(
+                merged
+                    .boundary
+                    .iter()
+                    .all(|vertex| { vertex.uv_b[0].to_bits() != unused_longitude_seam.to_bits() })
+            );
+
+            let hit = certify_polar_by_wide_sphere_window_union(
+                &a,
+                a_range,
+                &b,
+                b_range,
+                true,
+                Tolerances::default(),
+                allowance,
+                GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT,
+                GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT,
+                GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT,
+            )
+            .unwrap();
+            assert!(hit.is_complete());
+            assert!(hit.points.is_empty());
+            assert!(hit.curves.is_empty());
+            assert_eq!(hit.regions.len(), 1);
+            assert_eq!(hit.regions[0].boundary.len(), merged.boundary.len());
+            assert!(matches!(
+                hit.regions[0].correspondence,
+                SurfaceRegionCorrespondence::GeneralSphereWindow(_)
+            ));
+            assert!(hit.regions[0].boundary.iter().all(|vertex| {
+                a.eval(vertex.uv_a).dist(b.eval(vertex.uv_b)) <= hit.regions[0].max_residual
+            }));
+
+            if fixture_index == 0 {
+                let horizontal = (0..occupied.len())
+                    .flat_map(|first| {
+                        (first + 1..occupied.len()).map(move |second| (first, second))
+                    })
+                    .find(|(first, second)| {
+                        occupied[*first].0[0] == occupied[*second].0[0]
+                            && occupied[*first].0[1].abs_diff(occupied[*second].0[1]) == 1
+                    })
+                    .expect("one horizontal L edge was required");
+                let vertical = (0..occupied.len())
+                    .flat_map(|first| {
+                        (first + 1..occupied.len()).map(move |second| (first, second))
+                    })
+                    .find(|(first, second)| {
+                        occupied[*first].0[0].abs_diff(occupied[*second].0[0]) == 1
+                            && occupied[*first].0[1] == occupied[*second].0[1]
+                    })
+                    .expect("one vertical L edge was required");
+
+                let mut longitude_mismatch = occupied.clone();
+                let longitude_owner = horizontal.1;
+                let longitude_edge = exact_sphere_region_parameter_seam_edge(
+                    &longitude_mismatch[longitude_owner].1,
+                    false,
+                    0,
+                    used_longitude_seam,
+                )
+                .expect("the longitude sibling owns its exact seam edge");
+                let endpoint = longitude_edge[0];
+                longitude_mismatch[longitude_owner].1.boundary[endpoint].uv_b[0] = f64::from_bits(
+                    longitude_mismatch[longitude_owner].1.boundary[endpoint].uv_b[0].to_bits() + 1,
+                );
+                assert!(
+                    merge_exact_polar_wide_sphere_region_path(
+                        &longitude_mismatch,
+                        true,
+                        &polar_pieces,
+                        &wide_pieces,
+                    )
+                    .is_none()
+                );
+
+                let mut latitude_mismatch = occupied.clone();
+                let latitude_owner = vertical.1;
+                let latitude_edge = exact_sphere_region_parameter_seam_edge(
+                    &latitude_mismatch[latitude_owner].1,
+                    true,
+                    1,
+                    latitude_seam,
+                )
+                .expect("the latitude sibling owns its exact seam edge");
+                let endpoint = latitude_edge[0];
+                latitude_mismatch[latitude_owner].1.boundary[endpoint].uv_a[1] = f64::from_bits(
+                    latitude_mismatch[latitude_owner].1.boundary[endpoint].uv_a[1].to_bits() + 1,
+                );
+                assert!(
+                    merge_exact_polar_wide_sphere_region_path(
+                        &latitude_mismatch,
+                        true,
+                        &polar_pieces,
+                        &wide_pieces,
+                    )
+                    .is_none()
+                );
+
+                let mut opposite = occupied.clone();
+                opposite[0].0 = [0, 0];
+                opposite[1].0 = [0, 2];
+                opposite[2].0 = [1, 1];
+                assert!(
+                    merge_exact_polar_wide_sphere_region_path(
+                        &opposite,
+                        true,
+                        &polar_pieces,
+                        &wide_pieces,
+                    )
+                    .is_none()
+                );
+
+                for (piece_limit, pair_limit, arc_limit, reason) in [
+                    (
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT - 1,
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT,
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT,
+                        "general coincident sphere polar-by-wide union piece limit exhausted",
+                    ),
+                    (
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT,
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT - 1,
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT,
+                        "general coincident sphere polar-by-wide union pair limit exhausted",
+                    ),
+                    (
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT,
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT,
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT - 1,
+                        "general coincident sphere polar-by-wide union arc limit exhausted",
+                    ),
+                ] {
+                    assert_eq!(
+                        certify_polar_by_wide_sphere_window_union(
+                            &a,
+                            a_range,
+                            &b,
+                            b_range,
+                            true,
+                            Tolerances::default(),
+                            allowance,
+                            piece_limit,
+                            pair_limit,
+                            arc_limit,
+                        )
+                        .unwrap_err(),
+                        Error::InvalidGeometry { reason }
+                    );
+                }
+            }
         }
     }
 
