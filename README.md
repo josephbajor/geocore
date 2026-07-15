@@ -87,16 +87,24 @@ application boundary.
   safe-Offset(Plane) peers, and bounded coincident
   Plane/Cylinder/Sphere/Cone/Torus regions including exact polar-cap and
   same-row adjacent, exact same-column vertical (reviewed at
-  `[0,2]`/`[1,2]`), and either exact full latitude row in the polar-by-wide
-  family have landed; the non-cap row retains eight vertices. Polygonal
+  `[0,2]`/`[1,2]`), either exact full latitude row, and an exact mixed-axis
+  three-cell L path in two real orientations in the polar-by-wide family have
+  landed; the non-cap row retains eight vertices and every six-cell layout
+  keeps the exact 6/147/588 piece/pair/arc ceiling. Compatible intersecting
+  planar constant-normal dual Offset(NURBS) chains now cover the full 1–4×1–4
+  matrix with original-source proof at exact 14,336/1,024/depth-10 certificate
+  use and maximum 10 Work/depth-5 graph traversal; the strict-separated
+  complete-miss arm remains. Polygonal
   profiles with holes, checked complete-body rigid copy with direct Plane or
   safe finite Offset(Plane)-backed Plane/Plane lines, and Plane/Sphere latitude
   or oblique circles backed by direct Plane or safe finite Offset(Plane) sources
   plus direct Sphere or safe finite Offset(Sphere) sources whose effective
   Sphere radius is positive and finite, in either source order and through
   leaf-inclusive depth at most 64, and checked nonzero-normal oblique
-  polygonal-profile extrusion are the first M4 modeling consumers.
-  Rigid-copy NURBS/transmitted proofs, attributes, and non-rigid transforms remain.
+  polygonal-profile extrusion are the first M4 modeling consumers. Rigid copy
+  now reissues every current operation-generated verified-NURBS intersection
+  family, including one- through four-level nested dual offsets and oblique
+  frames. Transmitted proofs, attributes, and non-rigid transforms remain.
   General root discovery, complete verified residuals across every result family, and
   boolean-ready paired-pcurve branches remain gated.
 - M5-M8 are not started: there are no end-to-end booleans, general sweeps/sewing,

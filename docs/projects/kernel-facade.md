@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, deterministic checked complete-body rigid copy with direct Plane or safe finite Offset(Plane)-backed Plane/Plane line and Plane/Sphere latitude/oblique circle certificate reissuance from direct Plane or safe finite Offset(Plane) sources plus direct Sphere or safe finite Offset(Sphere) sources whose effective Sphere radius is positive and finite with leaf-inclusive proof depth at most 64, checked polygonal-profile extrusion, failure-atomic operation-owned facade tolerance batching, journaled MEF inheritance and KEF ordered-max face-tolerance propagation, an evidence-bearing opt-in Full-assurance commit gate, K5 adoption, and facade body tessellation implemented; broader K4 edits and partition history remain
+Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, deterministic checked complete-body rigid copy with direct/safe-offset PlaneLine and PlaneSphereCircle certificate reissuance plus every current operation-generated VerifiedNurbsIntersection family including one- through four-level compatible dual offsets, polynomial/rational traces, and oblique frames, checked polygonal-profile extrusion, failure-atomic operation-owned facade tolerance batching, journaled MEF inheritance and KEF ordered-max face-tolerance propagation, an evidence-bearing opt-in Full-assurance commit gate, K5 adoption, and facade body tessellation implemented; transmitted proof reissuance, broader K4 edits, and partition history remain
 
 ## Outcome
 
@@ -905,15 +905,25 @@ reissue the whole-range certificate before insertion. The circle path transforms
 carrier, copies aligned Plane and latitude pcurves into copied effective surface
 frames, or regenerates the oblique spherical pcurve against the copied effective
 Sphere and retained chart window. The proof closure is leaf-inclusive with
-depth at most 64. Facade preflight admits exactly those direct/safe-offset
-`PlaneLine` and `PlaneSphereCircle` certificates. Wrong-part, stale, NURBS,
-transmitted, nonpositive/nonfinite effective-sphere, and deeper proof families are rejected before
-scope creation, with unsupported proof families exposed as a stable Unsupported
-capability. Lower
+depth at most 64. Facade preflight admits those direct/safe-offset `PlaneLine`
+and `PlaneSphereCircle` certificates plus every current operation-generated
+`VerifiedNurbsIntersection` family. The latter includes Plane/NURBS,
+Sphere/NURBS, direct NURBS/NURBS, one- through four-descriptor
+Offset(NURBS)/NURBS, compatible one- through four by one- through four dual
+Offset(NURBS), and the retained Offset(NURBS)/Plane family in either supported
+operand order, with polynomial or rational traces and oblique frames. Copy
+transforms the carrier and both original analytic/NURBS trace fields, preserves
+range, degree, knots, weights, periodicity, paired NURBS pcurves, and tolerance,
+copies every ordered live root and transitive offset basis, and reruns the
+whole-range family certifier before insertion. Wrong-part, transmitted,
+nonpositive/nonfinite effective-sphere, and unsupported proof families are
+rejected before scope creation, with unsupported proof families exposed as a
+stable Unsupported capability. Altered, stale, or overdeep source bindings
+fail atomically during graph binding or persistence. Lower
 transaction tests pin Full validity, ownership disjointness, holed-sheet area,
 rollback cleanliness, and future-identity reuse.
-NURBS and transmitted proof reissuance, attributes, and non-rigid transform
-families remain explicit follow-on work.
+Transmitted proof reissuance, attributes, and non-rigid transform families
+remain explicit follow-on work.
 
 `PartEdit::extrude_profile` adds the first facade feature-creation operation.
 Its typed request accepts one validated polygonal outer boundary, zero or more

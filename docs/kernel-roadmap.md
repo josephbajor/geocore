@@ -1167,20 +1167,24 @@ true only for an empty complete result.
   normal fields, nested
   varying-normal roots, incompatible peers, and stale or altered sources fail
   closed and persist nothing.
-  Two independent one- through four-descriptor Offset(NURBS) roots also prove
-  a complete miss when both terminal bases use the exact constant-+Z-normal
-  unit chart and outward original basis-plus-accumulated-distance controls are
-  strictly separated. This no-branch arm pins the complete 4×4 chain matrix at
-  exact `A+B+2` Work and `max(A+1,B+1)` dependency depth, including maximum
-  10/9 Work and 5/4 Depth admission, zero certificate usage, no persistence
-  allocation, preserved operand order, and rejection of coincident effective
-  sheets and five-or-more-descriptor roots.
-  Planar or unaligned peers, disjoint or boundary-only ranges, unequal weights,
+  Two independent one- through four-descriptor Offset(NURBS) roots now share a
+  compatible planar constant-normal unit-chart arm. Intersecting pairs cover
+  the complete 4×4 chain matrix, retain both ordered live roots, both transitive
+  basis chains, accumulated distances, terminal original bases, and paired
+  pcurves, and certify one branch against both original sources; the normalized
+  effective charts remain discovery-only. Every pair pins exact
+  14,336/14,335 Work, 1,024/1,023 Items, and 10/9 certificate Depth. Graph
+  traversal is exactly `A+B+2` Work and `max(A+1,B+1)` dependency depth, with
+  the 4×4 maximum at 10/9 Work and 5/4 Depth admission. The strict-separated
+  complete-miss path remains at those graph ceilings with zero certificate use
+  or persistence allocation and preserved operand order.
+  Incompatible planar or unaligned peers, disjoint or boundary-only ranges,
+  unequal weights,
   collapsed or non-finite sphere-offset fields, positive
   Offset(NURBS)/direct-NURBS chains of five or more offset descriptors,
   other varying-normal Offset(NURBS) families, nested varying-normal roots,
-  nested intersecting/coincident
-  Offset(NURBS)/Offset(NURBS), broader NURBS/NURBS, and
+  incompatible, coincident, five-or-more-descriptor, altered, or stale dual
+  Offset(NURBS), broader NURBS/NURBS, and
   other procedural pairs remain typed unsupported.
   The compatibility magnitude-twelve rung runs the complete historical
   magnitude-eleven family first so all prior evidence remains stable, then
@@ -1278,7 +1282,10 @@ true only for an empty complete result.
   with four certified-empty siblings, an exact same-column vertical pair with
   the other four siblings certified empty, or the exact
   full three-child row in either latitude row with all three opposite-row
-  siblings certified empty.
+  siblings certified empty, or one exact mixed-axis three-cell L path with the
+  other three siblings certified empty. The two reviewed L orientations are
+  the cap-right `[0,2]`/`[1,1]`/`[1,2]` path and the lower-middle
+  `[0,1]`/`[0,2]`/`[1,1]` path.
   The single-child path excludes every
   artificial seam through sibling emptiness. The two-child path additionally
   requires one reverse-oriented, bit-exact shared edge on the applicable regular
@@ -1296,12 +1303,16 @@ true only for an empty complete result.
   cancels both strict regular-longitude seams and retains the pole alias in one
   11-anchor region after the empty lower row excludes the latitude seam. The
   exact opposite non-cap row instead retains one canonical eight-vertex region
-  after the empty cap row excludes the latitude seam. All six layouts pin exact
+  after the empty cap row excludes the latitude seam. Each mixed-axis L path
+  cancels exactly one reverse-oriented longitude seam and one
+  reverse-oriented latitude seam, rejects a surviving used seam or an unused
+  longitude seam, and restores one parent region. All eight layouts pin exact
   repeat/swap and outward residual evidence,
   while the arm retains exact 6/5 piece, 147/146 pair, and 588/587 arc
   admission. A one-ULP shared-edge mutation and broader or non-adjacent layouts
-  outside the admitted exact same-row, same-column, and full-row families remain
-  fail-closed. A first wide arm splits exactly one pole-clear wide operand into
+  outside the admitted exact same-row, same-column, full-row, and mixed-axis
+  three-cell-path families remain fail-closed. A first wide arm splits exactly
+  one pole-clear wide operand into
   three closed sub-π cells and returns `Complete` only for three certified-empty
   cells or one positive region with two certified-empty siblings; sibling
   emptiness cancels the artificial seams before parent correspondence is
@@ -1420,12 +1431,19 @@ true only for an empty complete result.
   the carrier, copy aligned Plane and latitude pcurves into the copied effective
   surface frames or regenerate the oblique spherical pcurve, and reissue the
   whole-range certificate before graph insertion. The copied proof closure is
-  leaf-inclusive with depth at most 64. Facade preflight admits exactly those
-  direct/safe-offset `PlaneLine` and `PlaneSphereCircle` families; NURBS,
-  nonpositive/nonfinite effective spheres, and
-  transmitted intersection descriptors remain typed unsupported before scope
-  creation. Extend this seam to those remaining certified curves, attributes,
-  and non-rigid transform families.
+  leaf-inclusive with depth at most 64. Facade preflight additionally admits
+  every current operation-generated `VerifiedNurbsIntersection` family:
+  Plane/NURBS, Sphere/NURBS, direct NURBS/NURBS, one- through four-descriptor
+  Offset(NURBS)/NURBS, compatible one- through four by one- through four dual
+  Offset(NURBS), and retained Offset(NURBS)/Plane variants in either supported
+  order, including polynomial/rational traces and oblique frames. Copy retains
+  ordered roots and every transitive basis, transforms the carrier and both
+  original analytic/NURBS proof fields, preserves range, degree, knots,
+  weights, periodicity, paired pcurves and tolerance, and reissues the
+  whole-range family certificate before insertion. Nonpositive/nonfinite
+  effective spheres, transmitted intersections, and unsupported proof families
+  remain typed unsupported before scope creation. Extend this seam to
+  transmitted certified curves, attributes, and non-rigid transform families.
 - The first checked extrusion slice is implemented for one validated polygonal
   profile with holes along any finite translation having a nonzero component
   on the profile-frame normal. A reverse translation reflects the profile chart

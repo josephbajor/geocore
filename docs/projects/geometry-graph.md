@@ -1,6 +1,6 @@
 # F1 procedural geometry graph
 
-Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, compatible direct-NURBS/NURBS, or single-descriptor varying-normal Offset(NURBS)/safe-Offset(Plane) descriptors, plus M3c transmitted-chart consumers through single-axis one-period equal-limit closure with one shared or two distinct same-point `H/?` limits and unique exact interior aliases, finite-open/end-terminated `T/F` singular closure, omitted Plane UV recovery, and bounded noncanonical affine direct B-surface/B-surface, direct constant-normal Offset(B-surface)/direct B-surface, or independent direct one-descriptor Offset(B-surface)/Offset(B-surface) charts, are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
+Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, compatible direct-NURBS/NURBS, one- through four-descriptor constant-normal Offset(NURBS)/NURBS and compatible dual Offset(NURBS), or single-descriptor varying-normal Offset(NURBS)/safe-Offset(Plane) descriptors, plus M3c transmitted-chart consumers through single-axis one-period equal-limit closure with one shared or two distinct same-point `H/?` limits and unique exact interior aliases, finite-open/end-terminated `T/F` singular closure, omitted Plane UV recovery, and bounded noncanonical affine direct B-surface/B-surface, direct constant-normal Offset(B-surface)/direct B-surface, or independent direct one-descriptor Offset(B-surface)/Offset(B-surface) charts, are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
 
 ## Outcome
 
@@ -733,21 +733,28 @@ quarter-circle chordal carrier with 41 controls, and every orientation retains
 10/9 certificate Depth. Direct peers pin 2/1 graph Work. Singular or
 inconclusive normal fields, nested varying-normal roots, and incompatible
 direct peers fail closed.
-Two independent one- through four-descriptor Offset(NURBS) roots now have a
-narrower complete-empty arm when both terminal bases use that same
-constant-+Z-normal unit chart and outward original basis-plus-accumulated-
-distance control intervals prove strict separation. For chain lengths `A` and
-`B`, graph Work is exactly `A+B+2` and dependency depth is
-`max(A+1,B+1)`; the 4×4 maximum pins exact 10/9 Work and 5/4 Depth admission. It
-emits no carrier or certificate, preserves ordered roots under swap, allocates
-nothing during empty persistence, and does not promote coincident effective
-sheets.
-Planar or unaligned peers, unequal ranges or weights, collapsed or non-finite
-sphere-offset fields, Offset(NURBS) chains of five or more descriptors,
-other varying-normal Offset(NURBS) families, nested varying-normal roots,
-Offset(NURBS)/Offset(NURBS), intersecting or coincident
-Offset(NURBS)/Offset(NURBS), and broader NURBS/NURBS or other procedural pairs
-remain unsupported.
+Two independent one- through four-descriptor Offset(NURBS) roots now share a
+compatible planar constant-normal unit-chart arm. Intersecting charts retain
+both ordered live roots, both complete transitive basis chains, accumulated
+signed distances, terminal original bases, paired pcurves, and one certified
+branch in either operand order. The normalized effective charts are
+discovery-only;
+the whole-range certificate is generated against both original basis fields.
+Every 1–4×1–4 combination pins exact 14,336/14,335 Work,
+1,024/1,023 Items, and 10/9 Depth for that certificate. For chain lengths `A`
+and `B`, graph Work is exactly `A+B+2` and dependency depth is
+`max(A+1,B+1)`; the 4×4 maximum pins exact 10/9 Work and 5/4 Depth admission.
+The same graph ceiling and preserved operand order apply to the retained
+complete-empty arm when outward original basis-plus-accumulated-distance
+control intervals prove strict separation; it emits no carrier or certificate,
+allocates nothing during empty persistence, and does not promote coincident
+effective sheets.
+Incompatible planar or unaligned peers, unequal ranges or weights, collapsed
+or non-finite sphere-offset fields, Offset(NURBS) chains of five or more
+descriptors, other varying-normal Offset(NURBS) families, nested varying-normal
+roots, coincident dual Offset(NURBS), and broader NURBS/NURBS or other
+procedural pairs remain unsupported. Altered or stale roots and bases fail the
+original-source proof and roll back atomically.
 Certified branches can be committed atomically as
 `CurveDescriptor::Intersection` or
 `CurveDescriptor::VerifiedNurbsIntersection` nodes with a stable class key,
@@ -997,12 +1004,15 @@ the graph ownership model.
   2/1 dependency Depth,
   while singular, nested, incompatible, altered, and stale cases fail
   atomically.
-- Strictly separated one- through four-descriptor constant-normal
-  Offset(NURBS) pairs return graph-owned complete misses for the complete 4×4
-  chain matrix at exact `A+B+2` Work and `max(A+1,B+1)` depth, with maximum
-  10/9 Work and 5/4 Depth admission, zero certificate usage, no persistence
-  allocation, and coincident, intersecting, five-or-more-descriptor, or
-  incompatible pairs rejected.
+- Compatible intersecting one- through four-descriptor constant-normal
+  Offset(NURBS) pairs retain both ordered roots and complete basis chains for
+  the full 4×4 matrix, certify both original sources at exact
+  14,336/14,335 Work, 1,024/1,023 Items, and 10/9 Depth, and pin graph traversal
+  at exact `A+B+2` Work and `max(A+1,B+1)` depth with maximum 10/9 Work and 5/4
+  Depth admission. Strictly separated pairs retain the graph-owned complete
+  miss at the same graph ceilings with zero certificate use or persistence
+  allocation; coincident, five-or-more-descriptor, incompatible, altered, and
+  stale pairs are rejected.
 - Direct constant-normal Offset(B-surface)/B-surface variants cover both operand
   orders and polynomial/rational bases, retain the live root, signed distance,
   basis, and paired pcurves, and reject singular or underflowed normal fields

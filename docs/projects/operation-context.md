@@ -490,6 +490,18 @@ Depth. Its one-span fixture pins exact 14,336/14,335 Work, 1,024/1,023 Items,
 and 10/9 Depth. The rounded scalar difference is discovery-only; outward
 original-control differences own the only complete-empty exit.
 
+The same profile now owns every compatible intersecting planar constant-normal
+dual Offset(NURBS) combination with one through four descriptors on each root.
+The generated branch certificate charges exact 14,336/14,335 Work,
+1,024/1,023 Items, and 10/9 Depth against the two terminal original sources;
+the normalized effective charts remain discovery-only. Graph evaluation separately
+charges exact `A+B+2` Work and `max(A+1,B+1)` dependency depth for chain
+lengths `A` and `B`, with the 4×4 maximum pinned at 10/9 Work and 5/4 Depth.
+Those graph ceilings also govern the retained strict-separated complete miss,
+which uses no certificate budget or persistence allocation. Positive results
+retain both ordered live roots and every transitive basis edge; incompatible,
+coincident, five-or-more-descriptor, altered, and stale inputs fail closed.
+
 Verified X_T intersection-chart import likewise owns its proof budget outside
 `EvalContext`. The historical `IntersectionImportBudgetProfile::v1_defaults()`
 retains its 131,072 cumulative-Work, 65,536 Items, and Depth-10 contract.

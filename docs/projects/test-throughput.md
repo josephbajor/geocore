@@ -65,7 +65,7 @@ It intentionally omits broad doc/tooling stages and the remaining integration
 binaries so ordinary edit/commit feedback stays bounded, while retaining its
 own lane-classification/command contract suite as a final stage.
 
-The `standard` lane adds every one of the 79 current non-corpus integration
+The `standard` lane adds every one of the 83 current non-corpus integration
 targets and the Python tooling contracts, but not documentation tests. It
 retains all seven current lightweight `kxt` integration binaries:
 
@@ -103,8 +103,12 @@ reconstruction work. All 14 remain mandatory in `full`. Cargo metadata is the
 authority for integration-target names and source paths; nonstandard explicit
 targets therefore cannot silently fall outside `standard`. The runner also
 validates workspace/package identity, smoke membership, direct fixture
-references, and the exact 93/79/14 total/standard/corpus counts before every
+references, and the exact 97/83/14 total/standard/corpus counts before every
 listing or run. Drift fails closed until the reviewed inventory is updated.
+The July 15 foundation tranche added four ordinary, non-corpus binaries—checked
+rigid body copy plus varying-normal Offset(NURBS) against NURBS, Plane, and
+OffsetPlane—and the reviewed inventory advanced from 93/79 to 97/83 without
+changing the 14-target production-corpus exclusion.
 
 The `docs` lane runs `cargo test --workspace --doc` explicitly. Its executable
 and `no_run` examples check documented use, while its compile-fail examples
@@ -140,9 +144,10 @@ contaminated-run diagnostic, not evidence that ordinary integration binaries
 normally require 23 minutes.
 
 A clean warm rerun of the same pre-split shape completed in 270.517 seconds:
-59.467 seconds for workspace library/binary and all 79 non-corpus integration
-tests, 207.720 seconds for documentation tests, and 3.327 seconds for Python
-tooling contracts. Documentation compilation therefore accounted for 76.8%
+59.467 seconds for workspace library/binary and all 79 then-current non-corpus
+integration tests, 207.720 seconds for documentation tests, and 3.327 seconds
+for Python tooling contracts. Documentation compilation therefore accounted
+for 76.8%
 of that reproducible broad lane. Moving it to the explicit `docs` lane leaves
 the new `standard` contract near one minute. Direct post-split runs passed in
 62.900 seconds for `standard` and 176.581 seconds for `docs`. The independent
