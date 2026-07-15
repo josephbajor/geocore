@@ -1216,6 +1216,12 @@ true only for an empty complete result.
   both orthogonal empty owners at each diagonal corner. The pinned singleton
   plus four-cell fixture retains two regions with 3- and 8-edge boundaries;
   removing either separator owner fails closed.
+  The reviewed seven-cell 2×3-block-plus-tail fixture remains fail-closed: seven
+  of eight grid adjacencies own reverse-oriented bit-exact seam pairs, but
+  `[1,0]/[1,1]` has a full seam edge on only one child. Treating that grid
+  adjacency as cancellable would invent an internal edge, so seven-cell support
+  requires a new exact proof for non-owning grid adjacency before outer-cycle
+  tracing can be extended.
   Exact 9/8 piece-pair, 252/251 boundary-pair, and 1,008/1,007 arc-witness
   admission remain pinned. Seven-or-more-positive unions, disconnected five-cell
   layouts without exact sibling separation, non-exact or otherwise ambiguous

@@ -451,6 +451,11 @@ remain ratcheted in `docs/oracle-results.tsv`.
    including both orthogonal empty owners at a diagonal corner. The pinned
    singleton-plus-four-cell fixture yields 3- and 8-edge boundaries; removing
    either separator owner fails closed.
+   The reviewed seven-cell 2×3-block-plus-tail fixture retains
+   `Indeterminate`: seven of eight grid adjacencies have paired bit-exact seam
+   edges, while `[1,0]/[1,1]` has an edge on only one child. Cancelling it would
+   invent an internal seam, so the next seven-cell arm needs a separate exact
+   non-owning-adjacency proof before reusing outer-cycle tracing.
    Exact 9/8 piece-pair, 252/251 boundary-pair, and 1,008/1,007 arc ceilings
    preserve fail-closed admission. Seven-or-more-positive two-wide,
    disconnected five-cell layouts without exact sibling separation, non-exact
