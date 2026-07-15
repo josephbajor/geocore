@@ -11,6 +11,7 @@ from scripts.test_lanes import (
     IntegrationTarget,
     LaneContractError,
     classify_targets,
+    docs_stages,
     fast_stages,
     focused_stage,
     format_inventory,
@@ -163,11 +164,18 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(selected, set(self.inventory.standard_targets))
         for target in PRODUCTION_CORPUS_RATCHETS:
             self.assertNotIn(target, selected)
-        self.assertIn("--doc", flattened)
+        self.assertNotIn("--doc", flattened)
         self.assertIn("unittest", flattened)
         self.assertEqual(
             commands[0],
             ("cargo", "test", "--workspace", "--lib", "--bins"),
+        )
+
+    def test_docs_commands_select_only_workspace_documentation(self) -> None:
+        commands = tuple(stage.command for stage in docs_stages())
+        self.assertEqual(
+            commands,
+            (("cargo", "test", "--workspace", "--doc"),),
         )
 
     def test_full_commands_preserve_all_targets_docs_and_tooling(self) -> None:
@@ -184,6 +192,7 @@ class CommandTests(unittest.TestCase):
         lane_stages = (
             fast_stages(self.inventory, release=True),
             standard_stages(self.inventory, release=True),
+            docs_stages(release=True),
             full_stages(release=True),
         )
         for stages in lane_stages:

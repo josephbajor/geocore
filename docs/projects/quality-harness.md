@@ -656,12 +656,23 @@ The developer test surface is now split by a fail-closed standard-library
 runner in `scripts/test_lanes.py`. `focused` selects one package library or
 integration target, `fast` combines workspace library/binary tests with 13
 reviewed integration smoke targets, `standard` retains all 79 non-corpus
-integration targets plus doc tests and tooling contracts, and `full` retains
-all 92 integration targets including the 13 production-corpus ratchets. The
+integration targets plus tooling contracts, `docs` runs the compiler-intensive
+workspace doctests explicitly, and `full` retains all 92 integration targets
+including the 13 production-corpus ratchets as well as docs and tooling. The
 runner validates workspace membership, package identity, the smoke inventory,
 and all 12 direct `exemplar.x_t` consumers before execution;
 `corpus_manifest` is the thirteenth slow target because it reaches the same
 exemplar through the manifest.
+
+The explicit docs stage preserves executable examples and compile-fail
+contracts that enforce facade opacity and checked mutation boundaries. It is
+separated only from the broad local-feedback lane; it remains mandatory in
+`full` and CI. A reproducible warm pre-split run took 270.517s, of which
+207.720s was documentation compilation, while ordinary Rust tests took
+59.467s and Python tooling took 3.327s. The earlier 1,432.237s precursor had
+about 1,322s of unexplained idle/wait time and is retained only as a
+contaminated-run diagnostic. Direct post-split runs passed in 62.900s for
+`standard` and 176.581s for `docs`.
 
 CI retains full debug and release workspace tests on Linux, macOS, and Windows,
 but schedules the profiles concurrently instead of serially per platform.
@@ -679,7 +690,7 @@ in `docs/projects/test-throughput.md`; elapsed time remains diagnostic rather
 than a correctness threshold.
 
 The initial blocking checkpoint is closed: the final warm `fast` lane passed in
-14.430s and the integrated `full` lane passed all targets, docs, and 87 Python
+14.231s and the integrated `full` lane passed all targets, docs, and 87 Python
 contracts in 1,726.501s on the named development host. The next measured
 candidate is the 294.22s endpoint-roundoff suite; no further consolidation is
 authorized until its distinct evidence is audited for actual subsumption.

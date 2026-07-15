@@ -40,12 +40,15 @@ convergence, adoption, and continuous enforcement over adding more parallel
 surface area:
 
 The blocking F7 test-throughput checkpoint is closed. The fail-closed
-`focused`/`fast`/`standard`/`full` developer lanes, exact 13-target
+`focused`/`fast`/`standard`/`docs`/`full` developer lanes, exact 13-target
 production-corpus classification, concurrent three-OS debug/release CI
 profiles, rolling Cargo caches, and first redundant v10/v11 full-exemplar
-replay removals have landed. Warm `fast` passed in 14.430s and the integrated
+replay removals have landed. Warm `fast` passed in 14.231s and the integrated
 `full` gate passed all targets, docs, and tooling in 1,726.501s on the named
-development host. `full` still owns every corpus ratchet; further optimization
+development host. The explicit `docs` lane preserves compile-fail architecture
+contracts while removing documentation compilation from `standard`; direct
+post-split runs passed in 62.900s for `standard` and 176.581s for `docs`.
+`full` still owns every corpus and doctest ratchet; further optimization
 remains evidence-driven and no longer blocks resuming item 3. See
 [`test-throughput.md`](test-throughput.md) for the contract and measurements.
 

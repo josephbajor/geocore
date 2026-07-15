@@ -26,8 +26,11 @@ python3 scripts/test_lanes.py list
 # Normal edit/commit gate: unit/binary tests plus a curated integration smoke set.
 python3 scripts/test_lanes.py fast
 
-# Broad local gate: all non-corpus integration targets, docs, and tooling.
+# Broad local gate: all non-corpus integration targets and tooling.
 python3 scripts/test_lanes.py standard
+
+# Workspace doctests, including compile-fail architectural boundaries.
+python3 scripts/test_lanes.py docs
 
 # Tight inner loop for one integration binary or one package library.
 python3 scripts/test_lanes.py focused -p kxt -t read
@@ -60,11 +63,11 @@ X_T read/write/charts, and the facade-only example. Its X_T smoke set is:
 
 It intentionally omits broad doc/tooling stages and the remaining integration
 binaries so ordinary edit/commit feedback stays bounded, while retaining its
-own 14-test lane-classification/command contract suite as a final stage.
+own lane-classification/command contract suite as a final stage.
 
 The `standard` lane adds every one of the 79 current non-corpus integration
-targets, documentation tests, and Python tooling contracts. It retains all
-seven current lightweight `kxt` integration binaries:
+targets and the Python tooling contracts, but not documentation tests. It
+retains all seven current lightweight `kxt` integration binaries:
 
 - `import_tess`;
 - `inspect_cli`;
@@ -102,6 +105,15 @@ validates workspace/package identity, smoke membership, direct fixture
 references, and the exact 92/79/13 total/standard/corpus counts before every
 listing or run. Drift fails closed until the reviewed inventory is updated.
 
+The `docs` lane runs `cargo test --workspace --doc` explicitly. Its executable
+and `no_run` examples check documented use, while its compile-fail examples
+enforce architectural boundaries such as facade opacity, topology mutation
+authority, and checked transaction use. Separating this compiler-intensive
+stage from `standard` shortens broad local feedback; it does not weaken or
+remove those contracts. `full` still runs every workspace target, every
+doctest, and the Python tooling contracts as the required pre-merge/handoff
+evidence.
+
 The contract tests live in `scripts/tests/test_test_lanes.py`. They run in
 `fast` directly, within the `standard` and `full` tooling stages, and can be
 invoked independently during runner work:
@@ -119,16 +131,30 @@ file. Build artifacts were incremental; the final `fast` run was warm after
 the integrated `full` run. Timing remains diagnostic and is not a test
 threshold.
 
-The first broad non-corpus implementation—now the `standard` command
-shape—passed but took 1,432.237 seconds (23m52s). Its largest stages were
-`kops` integration at 752.725s, documentation at 268.521s, and `ktopo`
-integration at 204.313s. That observation motivated the curated smoke tier;
-it was not used to remove tests.
+The first broad non-corpus precursor passed in 1,432.237 seconds (23m52s), but
+it is not a reproducible performance baseline. Cargo was warm, test harnesses
+reported only about 107 seconds of work, and about 1,322 seconds remained as
+unexplained idle/wait time. Host sleep was ruled out. The retained record is a
+contaminated-run diagnostic, not evidence that ordinary integration binaries
+normally require 23 minutes.
+
+A clean warm rerun of the same pre-split shape completed in 270.517 seconds:
+59.467 seconds for workspace library/binary and all 79 non-corpus integration
+tests, 207.720 seconds for documentation tests, and 3.327 seconds for Python
+tooling contracts. Documentation compilation therefore accounted for 76.8%
+of that reproducible broad lane. Moving it to the explicit `docs` lane leaves
+the new `standard` contract near one minute. Direct post-split runs passed in
+62.900 seconds for `standard` and 176.581 seconds for `docs`. The independent
+lane measurements do not sum to the pre-split total because rustdoc compilation
+and process-startup costs vary between runs.
 
 | Lane or observation | Total wall time | Role |
 | --- | ---: | --- |
-| broad non-corpus precursor (`standard` shape) | 1,432.237 s | units/binaries, all 79 non-corpus integration targets, docs, tooling |
-| final warm `fast` | 14.430 s | edit/commit gate with unit/binary tests, 13 integration targets, and self-contract |
+| contaminated broad precursor | 1,432.237 s | retained anomaly; about 1,322s was unexplained idle/wait time |
+| reproducible warm pre-split broad lane | 270.517 s | 59.467s ordinary Rust, 207.720s docs, 3.327s tooling |
+| post-split `standard` | 62.900 s | ordinary Rust plus tooling |
+| explicit `docs` | 176.581 s | workspace doctests and compile-fail boundaries |
+| final warm `fast` | 14.231 s | edit/commit gate with unit/binary tests, 13 integration targets, and self-contract |
 | integrated `full` | 1,726.501 s | every workspace target, docs, tooling |
 
 The post-documentation run that rebuilt the ledger-bearing `kcore` target took
@@ -178,8 +204,9 @@ arithmetic.
 2. Measure the implemented parallel debug/release CI profiles and rolling
    caches, then consider target-level sharding only if corpus consolidation
    leaves a material critical-path imbalance.
-3. Use the recorded broad-lane stage timings to decide whether further
-   `standard` sharding or integration-binary consolidation is warranted.
+3. Consolidate documentation compile-fail examples only if the explicit docs
+   lane becomes a material bottleneck; retain every facade and checked-mutation
+   boundary rather than optimizing compiler invocations by weakening evidence.
 4. Investigate operation-scoped certificate caching only after target-level
    timing shows proof computation remains the dominant cost. Logical
    Work/Items/Depth accounting must remain unchanged by physical caching.

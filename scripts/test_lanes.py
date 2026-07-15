@@ -424,24 +424,25 @@ def fast_stages(inventory: LaneInventory, release: bool = False) -> tuple[Stage,
 def standard_stages(
     inventory: LaneInventory, release: bool = False
 ) -> tuple[Stage, ...]:
-    """Build the broad local gate without production-corpus ratchets."""
-    base = _cargo_test_base(release)
+    """Build the broad code/tooling gate without production-corpus ratchets."""
     stages = _workspace_and_integration_stages(
         inventory.standard_targets,
         release,
         "standard",
     )
-
-    stages.extend(
-        (
-            Stage(
-                "workspace documentation tests",
-                tuple(base + ["--workspace", "--doc"]),
-            ),
-            _tooling_contract_stage(),
-        )
-    )
+    stages.append(_tooling_contract_stage())
     return tuple(stages)
+
+
+def docs_stages(release: bool = False) -> tuple[Stage, ...]:
+    """Build the explicit workspace documentation gate."""
+    base = _cargo_test_base(release)
+    return (
+        Stage(
+            "workspace documentation tests",
+            tuple(base + ["--workspace", "--doc"]),
+        ),
+    )
 
 
 def full_stages(release: bool = False) -> tuple[Stage, ...]:
@@ -452,10 +453,7 @@ def full_stages(release: bool = False) -> tuple[Stage, ...]:
             "all workspace targets",
             tuple(base + ["--workspace", "--all-targets"]),
         ),
-        Stage(
-            "workspace documentation tests",
-            tuple(base + ["--workspace", "--doc"]),
-        ),
+        *docs_stages(release),
         _tooling_contract_stage(),
     )
 
@@ -558,7 +556,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="lane", required=True)
 
     subparsers.add_parser(
-        "list", help="list the reviewed fast/standard/full target classification"
+        "list", help="list the reviewed integration-target classification"
     )
 
     fast = subparsers.add_parser(
@@ -568,9 +566,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     standard = subparsers.add_parser(
         "standard",
-        help="run every non-corpus target plus documentation and tooling contracts",
+        help="run every non-corpus target plus tooling contracts",
     )
     _add_execution_flags(standard)
+
+    docs = subparsers.add_parser(
+        "docs", help="run every workspace documentation test"
+    )
+    _add_execution_flags(docs)
 
     full = subparsers.add_parser(
         "full", help="run every workspace target, doc test, and tooling contract"
@@ -611,6 +614,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.lane == "standard":
             return run_stages(
                 standard_stages(inventory, release=arguments.release),
+                dry_run=arguments.dry_run,
+            )
+        if arguments.lane == "docs":
+            return run_stages(
+                docs_stages(release=arguments.release),
                 dry_run=arguments.dry_run,
             )
         if arguments.lane == "full":

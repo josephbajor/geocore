@@ -87,8 +87,11 @@ python3 scripts/test_lanes.py focused -p kxt -t read
 # coverage across determinism, topology, operations, interchange, and facade use.
 python3 scripts/test_lanes.py fast
 
-# Broad local gate: every non-corpus integration target plus docs and tooling.
+# Broad local gate: every non-corpus integration target plus tooling.
 python3 scripts/test_lanes.py standard
+
+# Architectural API-boundary examples and other workspace doctests.
+python3 scripts/test_lanes.py docs
 
 # Mandatory pre-merge/handoff gate, including every corpus ratchet.
 python3 scripts/test_lanes.py full
