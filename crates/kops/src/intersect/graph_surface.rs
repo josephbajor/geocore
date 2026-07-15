@@ -7,7 +7,7 @@
 //! constant-normal Offset(NURBS)/NURBS family capped at four offset
 //! descriptors. One exact rational quarter-cylinder family additionally
 //! supports a single varying-normal Offset(NURBS) root against a canonical
-//! direct planar NURBS peer normal to the global X or Y axis.
+//! direct planar NURBS peer normal to the global X, Y, or Z axis.
 //! Strictly separated pairs of compatible constant-normal Offset(NURBS) roots
 //! capped at four offset descriptors additionally own a graph-level
 //! complete-empty proof. The adapter
@@ -526,7 +526,7 @@ pub fn intersect_bounded_graph_surfaces_with_context(
 /// original-control separation; coincident or intersecting effective sheets
 /// and all other pairs remain explicitly unsupported. A single varying-normal
 /// rational quarter-cylinder offset additionally marches against one canonical
-/// X- or Y-normal direct planar NURBS peer after a whole-window original-
+/// X-, Y-, or Z-normal direct planar NURBS peer after a whole-window original-
 /// derivative normal proof; nested varying-normal roots remain unsupported.
 /// Owners must compose [`GraphSurfaceBudgetProfile::v1_defaults`] before
 /// creating `scope` when they may dispatch a scoped proof-bearing branch.

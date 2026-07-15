@@ -7,7 +7,7 @@
 //! overlap and clip discovery to that shared rectangle. A second bounded
 //! Offset(NURBS)/NURBS family uses an exact rational quarter-cylinder source,
 //! its true varying-normal parallel NURBS surface, and a canonical direct
-//! planar NURBS peer normal to either the global X or Y axis. In the
+//! planar NURBS peer normal to the global X, Y, or Z axis. In the
 //! shared-chart family, both sources therefore have
 //! the injective chart `(x,y) = (u,v)`, and their
 //! spatial difference is confined to `z`, so a zero contour of the scalar `z`
@@ -41,11 +41,12 @@ use kgeom::surface::{Dir, Plane, Surface};
 use kgeom::vec::{Point3, Vec3};
 
 const INCOMPATIBLE_REASON: &str = "direct NURBS/NURBS surface intersection requires the identical finite-open quadratic-linear unit chart, constant weights, and positive-area parameter-window overlap";
-const VARYING_OFFSET_NORMAL_REASON: &str = "varying-normal Offset(NURBS)/NURBS surface intersection requires a certified regular rational quarter-cylinder basis, one finite offset descriptor, a canonical axis-aligned direct planar NURBS peer, and positive-area parameter windows";
+const VARYING_OFFSET_NORMAL_REASON: &str = "varying-normal Offset(NURBS)/NURBS surface intersection requires a certified regular rational quarter-cylinder basis, one finite offset descriptor, a canonical global-X-, global-Y-, or global-Z-normal direct planar NURBS peer, and positive-area parameter windows";
 
 #[derive(Debug, Clone, Copy)]
 struct RationalQuarterCylinderSource {
     radius: f64,
+    z_range: ParamRange,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -53,14 +54,14 @@ struct CanonicalDirectNurbsPlane {
     plane: Plane,
     orientation: CanonicalPlaneOrientation,
     plane_coordinate: f64,
-    tangent_range: ParamRange,
-    z_range: ParamRange,
+    chart_ranges: [ParamRange; 2],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CanonicalPlaneOrientation {
     X,
     Y,
+    Z,
 }
 
 impl CanonicalPlaneOrientation {
@@ -68,20 +69,23 @@ impl CanonicalPlaneOrientation {
         match self {
             Self::X => point.x,
             Self::Y => point.y,
+            Self::Z => point.z,
         }
     }
 
-    fn tangent_coordinate(self, point: Point3) -> f64 {
+    fn chart_coordinates(self, point: Point3) -> [f64; 2] {
         match self {
-            Self::X => point.y,
-            Self::Y => point.x,
+            Self::X => [point.y, point.z],
+            Self::Y => [point.x, point.z],
+            Self::Z => [point.x, point.y],
         }
     }
 
-    fn point(self, normal: f64, tangent: f64, z: f64) -> Point3 {
+    fn point(self, normal: f64, chart: [f64; 2]) -> Point3 {
         match self {
-            Self::X => Point3::new(normal, tangent, z),
-            Self::Y => Point3::new(tangent, normal, z),
+            Self::X => Point3::new(normal, chart[0], chart[1]),
+            Self::Y => Point3::new(chart[0], normal, chart[1]),
+            Self::Z => Point3::new(chart[0], chart[1], normal),
         }
     }
 
@@ -97,8 +101,20 @@ impl CanonicalPlaneOrientation {
                 Vec3::new(0.0, 1.0, 0.0),
                 Vec3::new(1.0, 0.0, 0.0),
             ),
+            Self::Z => (
+                Point3::new(0.0, 0.0, coordinate),
+                Vec3::new(0.0, 0.0, 1.0),
+                Vec3::new(1.0, 0.0, 0.0),
+            ),
         };
         Frame::new(origin, normal, tangent).ok().map(Plane::new)
+    }
+
+    fn offset_normal_coordinate(self, point: Point3, radial_scale: Interval) -> Interval {
+        match self {
+            Self::X | Self::Y => Interval::point(self.normal_coordinate(point)) * radial_scale,
+            Self::Z => Interval::point(point.z),
+        }
     }
 }
 
@@ -392,7 +408,10 @@ fn rational_quarter_cylinder_source(
         && points[3] == Point3::new(radius, radius, z_hi)
         && points[4] == Point3::new(0.0, radius, z_lo)
         && points[5] == Point3::new(0.0, radius, z_hi))
-    .then_some(RationalQuarterCylinderSource { radius })
+    .then_some(RationalQuarterCylinderSource {
+        radius,
+        z_range: ParamRange::new(z_lo, z_hi),
+    })
 }
 
 fn canonical_direct_nurbs_plane(surface: &NurbsSurface) -> Option<CanonicalDirectNurbsPlane> {
@@ -407,9 +426,13 @@ fn canonical_direct_nurbs_plane(surface: &NurbsSurface) -> Option<CanonicalDirec
     {
         return None;
     }
-    [CanonicalPlaneOrientation::X, CanonicalPlaneOrientation::Y]
-        .into_iter()
-        .find_map(|orientation| canonical_direct_nurbs_plane_for_orientation(surface, orientation))
+    [
+        CanonicalPlaneOrientation::X,
+        CanonicalPlaneOrientation::Y,
+        CanonicalPlaneOrientation::Z,
+    ]
+    .into_iter()
+    .find_map(|orientation| canonical_direct_nurbs_plane_for_orientation(surface, orientation))
 }
 
 fn canonical_direct_nurbs_plane_for_orientation(
@@ -418,20 +441,29 @@ fn canonical_direct_nurbs_plane_for_orientation(
 ) -> Option<CanonicalDirectNurbsPlane> {
     let points = surface.points();
     let plane_coordinate = orientation.normal_coordinate(points[0]);
-    let tangent_range = ParamRange::new(
-        orientation.tangent_coordinate(points[0]),
-        orientation.tangent_coordinate(points[2]),
-    );
-    let z_range = ParamRange::new(points[0].z, points[1].z);
+    let point_0_chart = orientation.chart_coordinates(points[0]);
+    let chart_ranges = [
+        ParamRange::new(
+            point_0_chart[0],
+            orientation.chart_coordinates(points[2])[0],
+        ),
+        ParamRange::new(
+            point_0_chart[1],
+            orientation.chart_coordinates(points[1])[1],
+        ),
+    ];
     if !plane_coordinate.is_finite()
-        || !tangent_range.is_finite()
-        || tangent_range.width() <= 0.0
-        || !z_range.is_finite()
-        || z_range.width() <= 0.0
-        || points[0] != orientation.point(plane_coordinate, tangent_range.lo, z_range.lo)
-        || points[1] != orientation.point(plane_coordinate, tangent_range.lo, z_range.hi)
-        || points[2] != orientation.point(plane_coordinate, tangent_range.hi, z_range.lo)
-        || points[3] != orientation.point(plane_coordinate, tangent_range.hi, z_range.hi)
+        || chart_ranges
+            .iter()
+            .any(|range| !range.is_finite() || range.width() <= 0.0)
+        || points[0]
+            != orientation.point(plane_coordinate, [chart_ranges[0].lo, chart_ranges[1].lo])
+        || points[1]
+            != orientation.point(plane_coordinate, [chart_ranges[0].lo, chart_ranges[1].hi])
+        || points[2]
+            != orientation.point(plane_coordinate, [chart_ranges[0].hi, chart_ranges[1].lo])
+        || points[3]
+            != orientation.point(plane_coordinate, [chart_ranges[0].hi, chart_ranges[1].hi])
     {
         return None;
     }
@@ -439,8 +471,7 @@ fn canonical_direct_nurbs_plane_for_orientation(
         plane: orientation.plane(plane_coordinate)?,
         orientation,
         plane_coordinate,
-        tangent_range,
-        z_range,
+        chart_ranges,
     })
 }
 
@@ -512,7 +543,7 @@ pub(super) fn intersect_bounded_offset_nurbs_nurbs_surfaces_with_traces_in_scope
         direct_range,
     ) {
         return Err(ContextMarchError::Kernel(Error::InvalidGeometry {
-            reason: "Offset(NURBS)/NURBS surface intersection requires either a direct constant-positive-normal unit-chart basis and compatible peer or the bounded varying-normal rational-cylinder/axis-aligned-planar-NURBS family",
+            reason: "Offset(NURBS)/NURBS surface intersection requires either a direct constant-positive-normal unit-chart basis and compatible peer or the bounded varying-normal rational-cylinder/global-axis-planar-NURBS family",
         }));
     }
     intersect_varying_normal_offset_nurbs_nurbs_with_traces_in_scope(
@@ -598,8 +629,11 @@ fn intersect_varying_normal_offset_nurbs_nurbs_with_traces_in_scope(
     lift_varying_offset_output_to_original_sources(
         output,
         basis,
+        source,
         signed_distance,
         direct,
+        direct_plane,
+        direct_range,
         tolerances,
     )
 }
@@ -668,7 +702,7 @@ fn varying_offset_plane_control_difference_proves_empty(
     let mut lower = f64::INFINITY;
     let mut upper = f64::NEG_INFINITY;
     for point in basis.points() {
-        let lifted = Interval::point(direct.orientation.normal_coordinate(*point)) * scale;
+        let lifted = direct.orientation.offset_normal_coordinate(*point, scale);
         lower = lower.min(lifted.lo());
         upper = upper.max(lifted.hi());
     }
@@ -682,12 +716,22 @@ fn direct_nurbs_plane_uv_at(
     requested: [ParamRange; 2],
     tolerance: f64,
 ) -> Option<[f64; 2]> {
-    let u = (direct.orientation.tangent_coordinate(point) - direct.tangent_range.lo)
-        / direct.tangent_range.width();
-    let v = (point.z - direct.z_range.lo) / direct.z_range.width();
+    let coordinates = direct.orientation.chart_coordinates(point);
+    let uv = [
+        (coordinates[0] - direct.chart_ranges[0].lo) / direct.chart_ranges[0].width(),
+        (coordinates[1] - direct.chart_ranges[1].lo) / direct.chart_ranges[1].width(),
+    ];
     Some([
-        fit_normalized_parameter(u, requested[0], tolerance / direct.tangent_range.width())?,
-        fit_normalized_parameter(v, requested[1], tolerance / direct.z_range.width())?,
+        fit_normalized_parameter(
+            uv[0],
+            requested[0],
+            tolerance / direct.chart_ranges[0].width(),
+        )?,
+        fit_normalized_parameter(
+            uv[1],
+            requested[1],
+            tolerance / direct.chart_ranges[1].width(),
+        )?,
     ])
 }
 
@@ -715,11 +759,15 @@ fn varying_offset_plane_branch_kind(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lift_varying_offset_output_to_original_sources(
     mut output: MarchOutput,
     basis: &NurbsSurface,
+    source: RationalQuarterCylinderSource,
     signed_distance: f64,
     direct: &NurbsSurface,
+    direct_plane: CanonicalDirectNurbsPlane,
+    direct_range: [ParamRange; 2],
     tolerances: Tolerances,
 ) -> core::result::Result<MarchOutput, ContextMarchError> {
     if output.result.curves.len() != output.traces.len() {
@@ -728,10 +776,49 @@ fn lift_varying_offset_output_to_original_sources(
         }));
     }
     for (branch, trace) in output.result.curves.iter_mut().zip(&mut output.traces) {
-        let offset_pcurve =
-            simplify_varying_generator_pcurve(&trace.surface_pcurve, tolerances.linear())?;
-        let direct_pcurve =
-            simplify_varying_generator_pcurve(&trace.other_pcurve, tolerances.linear())?;
+        let (offset_pcurve, direct_pcurve) = match direct_plane.orientation {
+            CanonicalPlaneOrientation::X | CanonicalPlaneOrientation::Y => (
+                simplify_varying_generator_pcurve(&trace.surface_pcurve, tolerances.linear())?,
+                simplify_varying_generator_pcurve(&trace.other_pcurve, tolerances.linear())?,
+            ),
+            CanonicalPlaneOrientation::Z => {
+                let source_v =
+                    (direct_plane.plane_coordinate - source.z_range.lo) / source.z_range.width();
+                let offset_pcurve = condition_varying_horizontal_pcurve(
+                    &trace.surface_pcurve,
+                    source_v,
+                    tolerances.linear() / source.z_range.width(),
+                )?;
+                let direct_points = offset_pcurve
+                    .points()
+                    .iter()
+                    .map(|uv| {
+                        let point = true_varying_offset_point(
+                            basis,
+                            [uv.x, uv.y],
+                            signed_distance,
+                        )?;
+                        let direct_uv = direct_nurbs_plane_uv_at(
+                            point,
+                            direct_plane,
+                            direct_range,
+                            tolerances.linear(),
+                        )
+                        .ok_or(Error::InvalidGeometry {
+                            reason: "global-Z-normal varying Offset(NURBS) branch leaves the canonical direct NURBS chart",
+                        })?;
+                        Ok(kgeom::vec::Vec2::new(direct_uv[0], direct_uv[1]))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let direct_pcurve = NurbsCurve2d::new(
+                    1,
+                    offset_pcurve.knots().as_slice().to_vec(),
+                    direct_points,
+                    None,
+                )?;
+                (offset_pcurve, direct_pcurve)
+            }
+        };
         if offset_pcurve.knots() != direct_pcurve.knots()
             || offset_pcurve.points().len() != direct_pcurve.points().len()
         {
@@ -741,17 +828,8 @@ fn lift_varying_offset_output_to_original_sources(
         }
         let mut controls = Vec::with_capacity(offset_pcurve.points().len());
         for (&offset_uv, &direct_uv) in offset_pcurve.points().iter().zip(direct_pcurve.points()) {
-            let derivatives = basis.eval_derivs([offset_uv.x, offset_uv.y], 1);
-            let normal = derivatives
-                .du
-                .cross(derivatives.dv)
-                .normalized()
-                .ok_or({
-                    ContextMarchError::Kernel(Error::InvalidGeometry {
-                        reason: "varying-normal Offset(NURBS) discovery reached a singular source normal",
-                    })
-                })?;
-            let offset_point = derivatives.p + normal * signed_distance;
+            let offset_point =
+                true_varying_offset_point(basis, [offset_uv.x, offset_uv.y], signed_distance)?;
             let direct_point = direct.eval([direct_uv.x, direct_uv.y]);
             controls.push((offset_point + direct_point) * 0.5);
         }
@@ -774,6 +852,73 @@ fn lift_varying_offset_output_to_original_sources(
         trace.surface_pcurve = direct_pcurve;
     }
     Ok(output)
+}
+
+fn true_varying_offset_point(
+    basis: &NurbsSurface,
+    uv: [f64; 2],
+    signed_distance: f64,
+) -> Result<Point3> {
+    let derivatives = basis.eval_derivs(uv, 1);
+    let normal =
+        derivatives
+            .du
+            .cross(derivatives.dv)
+            .normalized()
+            .ok_or(Error::InvalidGeometry {
+                reason: "varying-normal Offset(NURBS) discovery reached a singular source normal",
+            })?;
+    Ok(derivatives.p + normal * signed_distance)
+}
+
+/// Condition the global-Z discovery candidate to its exact constant source-v
+/// chart. The retained piecewise-linear source-u sequence remains discovery
+/// data; the paired whole-range certificate proves every resulting chord.
+fn condition_varying_horizontal_pcurve(
+    pcurve: &NurbsCurve2d,
+    source_v: f64,
+    parameter_tolerance: f64,
+) -> Result<NurbsCurve2d> {
+    let points = pcurve.points();
+    if pcurve.degree() != 1
+        || pcurve.weights().is_some()
+        || !pcurve.knots().is_clamped()
+        || points.len() < 2
+        || !source_v.is_finite()
+        || !(0.0..=1.0).contains(&source_v)
+        || !parameter_tolerance.is_finite()
+        || parameter_tolerance < 0.0
+        || points.iter().any(|point| {
+            !point.x.is_finite()
+                || !point.y.is_finite()
+                || (point.y - source_v).abs() > parameter_tolerance
+        })
+    {
+        return Err(Error::InvalidGeometry {
+            reason: "global-Z-normal varying Offset(NURBS) discovery did not produce one bounded horizontal chart",
+        });
+    }
+    let first_u = points[0].x;
+    let last_u = points[points.len() - 1].x;
+    let direction = (last_u - first_u).signum();
+    if direction == 0.0
+        || points
+            .windows(2)
+            .any(|pair| direction * (pair[1].x - pair[0].x) < -parameter_tolerance)
+    {
+        return Err(Error::InvalidGeometry {
+            reason: "global-Z-normal varying Offset(NURBS) discovery chart is not monotone",
+        });
+    }
+    NurbsCurve2d::new(
+        1,
+        pcurve.knots().as_slice().to_vec(),
+        points
+            .iter()
+            .map(|point| kgeom::vec::Vec2::new(point.x, source_v))
+            .collect(),
+        None,
+    )
 }
 
 /// Collapse the bounded family's numerically discovered vertical generator to
