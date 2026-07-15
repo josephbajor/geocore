@@ -206,6 +206,15 @@ fn intersect_orthogonal_sphere_octants(
                 GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
                 GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
             ),
+            (true, false) | (false, true)
+                if exact_general_sphere_window_pole(a_range).is_some()
+                    ^ exact_general_sphere_window_pole(b_range).is_some() =>
+            {
+                (
+                    GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT,
+                    GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT,
+                )
+            }
             (true, false) | (false, true) => (
                 GENERAL_SPHERE_WIDE_PAIR_LIMIT,
                 GENERAL_SPHERE_WIDE_ARC_LIMIT,
@@ -293,6 +302,12 @@ const GENERAL_SPHERE_WIDE_PAIR_LIMIT: usize =
     GENERAL_SPHERE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_PAIR_LIMIT;
 const GENERAL_SPHERE_WIDE_ARC_LIMIT: usize =
     GENERAL_SPHERE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_ARC_LIMIT;
+const GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT: usize =
+    GENERAL_SPHERE_POLAR_UNION_PIECE_LIMIT * GENERAL_SPHERE_WIDE_PIECE_LIMIT;
+const GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT: usize = GENERAL_SPHERE_WIDE_PIECE_LIMIT
+    * (GENERAL_SPHERE_WINDOW_PAIR_LIMIT + GENERAL_SPHERE_POLAR_CELL_PAIR_LIMIT);
+const GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT: usize = GENERAL_SPHERE_WIDE_PIECE_LIMIT
+    * (GENERAL_SPHERE_WINDOW_ARC_LIMIT + GENERAL_SPHERE_POLAR_CELL_ARC_LIMIT);
 const GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT: usize =
     GENERAL_SPHERE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WIDE_PIECE_LIMIT;
 const GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT: usize =
@@ -383,22 +398,40 @@ fn certify_general_sphere_windows(
     validate_general_sphere_window_base(b_range, parameter_allowance)?;
     let polar_windows = usize::from(exact_general_sphere_window_pole(a_range).is_some())
         + usize::from(exact_general_sphere_window_pole(b_range).is_some());
-    if polar_windows > 0
-        && (polar_windows != 1
-            || a_range[0].width() >= core::f64::consts::PI
-            || b_range[0].width() >= core::f64::consts::PI)
-    {
+    if polar_windows > 0 && polar_windows != 1 {
         return Err(Error::InvalidGeometry {
-            reason: "general coincident sphere polar-window proof requires exactly one exact-pole sub-pi window and one pole-clear sub-pi window",
+            reason: "general coincident sphere polar-window proof requires exactly one exact-pole sub-pi window and one pole-clear window",
         });
     }
     if polar_windows == 1 {
+        let first_is_polar = exact_general_sphere_window_pole(a_range).is_some();
+        let polar_range = if first_is_polar { a_range } else { b_range };
+        let peer_range = if first_is_polar { b_range } else { a_range };
+        if polar_range[0].width() >= core::f64::consts::PI {
+            return Err(Error::InvalidGeometry {
+                reason: "general coincident sphere polar-window proof requires exactly one exact-pole sub-pi window and one pole-clear window",
+            });
+        }
+        if peer_range[0].width() >= core::f64::consts::PI {
+            return certify_polar_by_wide_sphere_window_union(
+                a,
+                a_range,
+                b,
+                b_range,
+                first_is_polar,
+                tolerances,
+                parameter_allowance,
+                GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT,
+                pair_limit,
+                arc_limit,
+            );
+        }
         return certify_single_polar_sphere_window_union(
             a,
             a_range,
             b,
             b_range,
-            exact_general_sphere_window_pole(a_range).is_some(),
+            first_is_polar,
             tolerances,
             parameter_allowance,
             GENERAL_SPHERE_POLAR_UNION_PIECE_LIMIT,
@@ -699,6 +732,114 @@ fn certify_single_polar_sphere_window_union(
     // evidence has only true parent boundaries. A retained singular pole is
     // represented once at the polar source range's lower longitude; the
     // nonlinear map applies the same canonical alias in both directions.
+    let parent_map = general_sphere_window_map(a, a_range, b, b_range, parent_parameter_allowance);
+    let parent_residual = arbitrary_sphere_octant_residual_bound(a, b, parent_parameter_allowance)?;
+    for region in &mut hit.regions {
+        region.correspondence = SurfaceRegionCorrespondence::GeneralSphereWindow(parent_map);
+        region.max_residual = region.max_residual.max(parent_residual);
+    }
+    SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
+        hit.points,
+        hit.curves,
+        hit.regions,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn certify_polar_by_wide_sphere_window_union(
+    a: &Sphere,
+    a_range: [ParamRange; 2],
+    b: &Sphere,
+    b_range: [ParamRange; 2],
+    first_is_polar: bool,
+    tolerances: Tolerances,
+    parent_parameter_allowance: f64,
+    piece_limit: usize,
+    pair_limit: usize,
+    arc_limit: usize,
+) -> Result<SurfaceSurfaceIntersections> {
+    if piece_limit < GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere polar-by-wide union piece limit exhausted",
+        });
+    }
+    if pair_limit < GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere polar-by-wide union pair limit exhausted",
+        });
+    }
+    if arc_limit < GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere polar-by-wide union arc limit exhausted",
+        });
+    }
+
+    let polar_range = if first_is_polar { a_range } else { b_range };
+    let wide_range = if first_is_polar { b_range } else { a_range };
+    let polar_pieces = decompose_general_sphere_polar_window(polar_range)?;
+    let wide_pieces = decompose_general_sphere_wide_window(wide_range, parent_parameter_allowance)?;
+    let mut occupied = None;
+    let mut empty_cells = 0;
+    for (polar_index, polar_piece) in polar_pieces.into_iter().enumerate() {
+        let (piece_pair_limit, piece_arc_limit) = if polar_index == 0 {
+            (
+                GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
+                GENERAL_SPHERE_WINDOW_ARC_LIMIT,
+            )
+        } else {
+            (
+                GENERAL_SPHERE_POLAR_CELL_PAIR_LIMIT,
+                GENERAL_SPHERE_POLAR_CELL_ARC_LIMIT,
+            )
+        };
+        for wide_piece in wide_pieces {
+            let (piece_a_range, piece_b_range) = if first_is_polar {
+                (polar_piece, wide_piece)
+            } else {
+                (wide_piece, polar_piece)
+            };
+            let piece_allowance =
+                arbitrary_sphere_octant_parameter_allowance(piece_a_range, piece_b_range)?;
+            validate_general_sphere_window_slice(piece_a_range, piece_allowance)?;
+            validate_general_sphere_window_slice(piece_b_range, piece_allowance)?;
+            let hit = certify_general_sphere_window_arrangement(
+                a,
+                piece_a_range,
+                b,
+                piece_b_range,
+                tolerances,
+                piece_pair_limit,
+                piece_arc_limit,
+                piece_allowance,
+            )?;
+            if hit.is_proven_empty() {
+                empty_cells += 1;
+            } else if !hit.is_complete() || occupied.replace(hit).is_some() {
+                return Err(Error::InvalidGeometry {
+                    reason: "general coincident sphere polar-by-wide union requires one occupied child and five certified-empty siblings",
+                });
+            }
+        }
+    }
+
+    let Some(mut hit) = occupied else {
+        if empty_cells == GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT {
+            return Ok(SurfaceSurfaceIntersections::complete_empty());
+        }
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere polar-by-wide union did not cover all six decomposition cells",
+        });
+    };
+    if empty_cells + 1 != GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT {
+        return Err(Error::InvalidGeometry {
+            reason: "general coincident sphere polar-by-wide union did not cancel every artificial seam",
+        });
+    }
+
+    // Every latitude and longitude cell is closed. Five certified-empty
+    // siblings prove that the retained child misses both kinds of artificial
+    // seam, so its evidence can borrow the complete polar-by-wide parent map
+    // without any polar multi-owner edge rule.
     let parent_map = general_sphere_window_map(a, a_range, b, b_range, parent_parameter_allowance);
     let parent_residual = arbitrary_sphere_octant_residual_bound(a, b, parent_parameter_allowance)?;
     for region in &mut hit.regions {
@@ -4111,6 +4252,12 @@ mod tests {
         )
     }
 
+    fn exact_polar_by_wide_fixture() -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+        let (a, b, a_range, mut b_range) = exact_polar_window_fixture();
+        b_range[0] = ParamRange::new(1.6, 4.9);
+        (a, b, a_range, b_range)
+    }
+
     fn eight_cell_fixture() -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
         let (a, b, mut a_range, mut b_range) = seven_cell_fixture();
         a_range[1].lo = -1.0834779757705633;
@@ -4642,6 +4789,113 @@ mod tests {
         ] {
             assert_eq!(
                 certify_single_polar_sphere_window_union(
+                    &a,
+                    a_range,
+                    &b,
+                    b_range,
+                    true,
+                    Tolerances::default(),
+                    allowance,
+                    piece_limit,
+                    pair_limit,
+                    arc_limit,
+                )
+                .unwrap_err(),
+                Error::InvalidGeometry { reason }
+            );
+        }
+    }
+
+    #[test]
+    fn exact_polar_by_wide_cells_and_limits_are_exact() {
+        let (a, b, a_range, b_range) = exact_polar_by_wide_fixture();
+        let allowance = arbitrary_sphere_octant_parameter_allowance(a_range, b_range).unwrap();
+        let hit = certify_polar_by_wide_sphere_window_union(
+            &a,
+            a_range,
+            &b,
+            b_range,
+            true,
+            Tolerances::default(),
+            allowance,
+            GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT,
+            GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT,
+            GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT,
+        )
+        .unwrap();
+        assert!(hit.is_complete());
+        assert_eq!(hit.regions.len(), 1);
+        assert_eq!(hit.regions[0].boundary.len(), 3);
+
+        let polar_pieces = decompose_general_sphere_polar_window(a_range).unwrap();
+        let wide_pieces = decompose_general_sphere_wide_window(b_range, allowance).unwrap();
+        let mut occupied = Vec::new();
+        for (polar_index, polar_piece) in polar_pieces.into_iter().enumerate() {
+            let (pair_limit, arc_limit) = if polar_index == 0 {
+                (
+                    GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
+                    GENERAL_SPHERE_WINDOW_ARC_LIMIT,
+                )
+            } else {
+                (
+                    GENERAL_SPHERE_POLAR_CELL_PAIR_LIMIT,
+                    GENERAL_SPHERE_POLAR_CELL_ARC_LIMIT,
+                )
+            };
+            for (wide_index, wide_piece) in wide_pieces.into_iter().enumerate() {
+                let piece_allowance =
+                    arbitrary_sphere_octant_parameter_allowance(polar_piece, wide_piece).unwrap();
+                let child = certify_general_sphere_window_arrangement(
+                    &a,
+                    polar_piece,
+                    &b,
+                    wide_piece,
+                    Tolerances::default(),
+                    pair_limit,
+                    arc_limit,
+                    piece_allowance,
+                )
+                .unwrap();
+                if child.is_proven_empty() {
+                    continue;
+                }
+                assert!(child.is_complete());
+                assert_eq!(child.regions.len(), 1);
+                occupied.push([polar_index, wide_index]);
+            }
+        }
+        assert_eq!(occupied, [[1, 1]]);
+        let latitude_seam = polar_pieces[0][1].hi;
+        let longitude_seams = [wide_pieces[0][0].hi, wide_pieces[1][0].hi];
+        assert!(hit.regions[0].boundary.iter().all(|vertex| {
+            vertex.uv_a[1].to_bits() != latitude_seam.to_bits()
+                && longitude_seams
+                    .iter()
+                    .all(|seam| vertex.uv_b[0].to_bits() != seam.to_bits())
+        }));
+
+        for (piece_limit, pair_limit, arc_limit, reason) in [
+            (
+                GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT - 1,
+                GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT,
+                GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT,
+                "general coincident sphere polar-by-wide union piece limit exhausted",
+            ),
+            (
+                GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT,
+                GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT - 1,
+                GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT,
+                "general coincident sphere polar-by-wide union pair limit exhausted",
+            ),
+            (
+                GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT,
+                GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT,
+                GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT - 1,
+                "general coincident sphere polar-by-wide union arc limit exhausted",
+            ),
+        ] {
+            assert_eq!(
+                certify_polar_by_wide_sphere_window_union(
                     &a,
                     a_range,
                     &b,

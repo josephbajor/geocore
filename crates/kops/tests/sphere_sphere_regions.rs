@@ -676,7 +676,7 @@ fn general_polar_window_near_pole_double_pole_wide_and_tangent_cases_fail_closed
         "general coincident sphere window proof supports only positive-area pole-clear windows or one exact natural-pole boundary",
     );
 
-    let family_reason = "general coincident sphere polar-window proof requires exactly one exact-pole sub-pi window and one pole-clear sub-pi window";
+    let family_reason = "general coincident sphere polar-window proof requires exactly one exact-pole sub-pi window and one pole-clear window";
     assert_indeterminate_sphere_window(
         &intersect_bounded_spheres(
             &a,
@@ -710,6 +710,124 @@ fn general_polar_window_near_pole_double_pole_wide_and_tangent_cases_fail_closed
         )
         .unwrap(),
         "general coincident sphere window boundary tangency is not certified by this fallback arm",
+    );
+}
+
+#[test]
+fn general_exact_polar_by_wide_2x3_union_cancels_five_empty_cells_and_swaps() {
+    let a = world_sphere();
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.4);
+    let half_pi = core::f64::consts::FRAC_PI_2;
+    let a_window = window(-0.5, 0.5, 0.3, half_pi);
+    let b_window = window(1.6, 4.9, 0.6, 1.3);
+    let latitude_seam = a_window[1].lo + 0.5 * a_window[1].width();
+    let a_pieces = [
+        window(-0.5, 0.5, 0.3, latitude_seam),
+        window(-0.5, 0.5, latitude_seam, half_pi),
+    ];
+    let longitude_width = b_window[0].width() / 3.0;
+    let longitude_seams = [
+        b_window[0].lo,
+        b_window[0].lo + longitude_width,
+        b_window[0].lo + 2.0 * longitude_width,
+        b_window[0].hi,
+    ];
+    for (a_index, a_piece) in a_pieces.into_iter().enumerate() {
+        for b_index in 0..3 {
+            let child = intersect_bounded_spheres(
+                &a,
+                a_piece,
+                &b,
+                window(
+                    longitude_seams[b_index],
+                    longitude_seams[b_index + 1],
+                    0.6,
+                    1.3,
+                ),
+                Tolerances::default(),
+            )
+            .unwrap();
+            if [a_index, b_index] == [1, 1] {
+                assert_general_sphere_window_region(&child, &a, &b);
+            } else {
+                assert!(
+                    child.is_proven_empty(),
+                    "unexpected child {a_index}/{b_index}: {child:?}"
+                );
+            }
+        }
+    }
+
+    let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_general_sphere_window_region(&hit, &a, &b);
+    assert_eq!(hit.regions[0].boundary.len(), 3);
+    let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = hit.regions[0].correspondence
+    else {
+        unreachable!()
+    };
+    assert_eq!(map.first_range(), a_window);
+    assert_eq!(map.second_range(), b_window);
+    let mapped_lo = map.map_first_to_second([-0.5, half_pi]).unwrap();
+    let mapped_hi = map.map_first_to_second([0.5, half_pi]).unwrap();
+    assert_eq!(mapped_lo, mapped_hi);
+    assert!(hit.regions[0].boundary.iter().all(|vertex| {
+        vertex.uv_a[1].to_bits() != latitude_seam.to_bits()
+            && longitude_seams[1..3]
+                .iter()
+                .all(|seam| vertex.uv_b[0].to_bits() != seam.to_bits())
+            && a.eval(vertex.uv_a).dist(b.eval(vertex.uv_b)) <= hit.regions[0].max_residual
+    }));
+
+    let repeated =
+        intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_eq!(hit, repeated);
+    let swapped =
+        intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
+    assert_eq!(hit.clone().swapped(), swapped);
+    assert_general_sphere_window_region(&swapped, &b, &a);
+
+    let disjoint_b_window = window(1.6, 4.9, -1.0, -0.5);
+    let disjoint =
+        intersect_bounded_spheres(&a, a_window, &b, disjoint_b_window, Tolerances::default())
+            .unwrap();
+    assert!(disjoint.is_proven_empty());
+    let disjoint_swapped =
+        intersect_bounded_spheres(&b, disjoint_b_window, &a, a_window, Tolerances::default())
+            .unwrap();
+    assert_eq!(disjoint.clone().swapped(), disjoint_swapped);
+}
+
+#[test]
+fn general_polar_by_wide_multi_occupied_and_near_pole_cases_fail_closed() {
+    let a = world_sphere();
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.4);
+    let half_pi = core::f64::consts::FRAC_PI_2;
+    let a_window = window(-0.5, 0.5, 0.3, half_pi);
+    let straddling = intersect_bounded_spheres(
+        &a,
+        a_window,
+        &b,
+        window(2.0, 5.6, 0.6, 1.3),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_indeterminate_sphere_window(
+        &straddling,
+        "general coincident sphere polar-by-wide union requires one occupied child and five certified-empty siblings",
+    );
+
+    let near_pole = f64::from_bits(half_pi.to_bits() - 1);
+    let near = intersect_bounded_spheres(
+        &a,
+        window(-0.5, 0.5, 0.3, near_pole),
+        &b,
+        window(1.6, 4.9, 0.6, 1.3),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_indeterminate_sphere_window(
+        &near,
+        "general coincident sphere window proof supports only positive-area pole-clear windows or one exact natural-pole boundary",
     );
 }
 
@@ -2314,7 +2432,7 @@ fn general_wide_window_union_fails_closed_across_artificial_seams_and_two_wide_i
     .unwrap();
     assert_indeterminate_sphere_window(
         &polar,
-        "general coincident sphere polar-window proof requires exactly one exact-pole sub-pi window and one pole-clear sub-pi window",
+        "general coincident sphere polar-window proof requires exactly one exact-pole sub-pi window and one pole-clear window",
     );
 }
 
