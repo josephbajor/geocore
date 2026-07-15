@@ -7,7 +7,7 @@ use crate::entity::{
 use crate::geom::{CurveGeom, SurfaceGeom};
 use crate::store::Store;
 use kcore::error::{Error, Result};
-use kcore::tolerance::{LINEAR_RESOLUTION, check_in_size_box};
+use kcore::tolerance::{LINEAR_RESOLUTION, Tolerances, check_in_size_box};
 use kgeom::curve::{Circle, Ellipse, Line};
 use kgeom::curve2d::{Curve2d, Line2d};
 use kgeom::frame::Frame;
@@ -15,9 +15,10 @@ use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::surface::{Cone, Cylinder, Dir, Plane, Sphere, Surface, Torus};
 use kgeom::vec::{Point3, Vec3};
 use kgraph::{
-    OffsetSurfaceDescriptor, PairedTrace, PlaneCircleTrace, PlaneSphereCircleTrace,
-    SphereLatitudeTrace, SphericalCirclePcurve, VerifiedIntersectionCertificate,
-    certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
+    EvalLimits, ExactSurfaceField, OffsetSurfaceDescriptor, PairedTrace, PlaneCircleTrace,
+    PlaneSphereCircleTrace, SphereLatitudeTrace, SphericalCirclePcurve,
+    VerifiedIntersectionCertificate, certify_paired_plane_line_residuals,
+    certify_paired_plane_sphere_circle_residuals,
     certify_paired_plane_sphere_oblique_circle_residuals,
 };
 use std::collections::HashMap;
@@ -292,22 +293,26 @@ impl Copier<'_> {
         source_pcurves: [Curve2dId; 2],
         certificate: kgraph::PairedPlaneLineResidualCertificate,
     ) -> Result<CurveId> {
+        let source_fields = [
+            self.exact_surface_field(source_surfaces[0])?,
+            self.exact_surface_field(source_surfaces[1])?,
+        ];
+        if !source_fields
+            .into_iter()
+            .zip(certificate.surfaces())
+            .all(|(field, certified)| field == ExactSurfaceField::Plane(certified))
+        {
+            return Err(Error::InvalidGeometry {
+                reason: "Plane/Plane certificate must retain safe exact Plane fields",
+            });
+        }
         let copied_surfaces = [
             self.copy_surface(source_surfaces[0])?,
             self.copy_surface(source_surfaces[1])?,
         ];
-        let copied_plane = |store: &Store, surface: SurfaceId| -> Result<Plane> {
-            store
-                .get(surface)?
-                .as_plane()
-                .copied()
-                .ok_or(Error::InvalidGeometry {
-                    reason: "Plane/Plane certificate must retain Plane sources",
-                })
-        };
         let surfaces = [
-            copied_plane(self.store, copied_surfaces[0])?,
-            copied_plane(self.store, copied_surfaces[1])?,
+            self.exact_plane(copied_surfaces[0])?,
+            self.exact_plane(copied_surfaces[1])?,
         ];
         let copied_pcurves = [
             self.copy_pcurve(source_pcurves[0])?,
@@ -358,6 +363,25 @@ impl Copier<'_> {
         source_pcurves: [Curve2dId; 2],
         certificate: kgraph::PairedPlaneSphereCircleResidualCertificate,
     ) -> Result<CurveId> {
+        for (surface, trace) in source_surfaces.into_iter().zip(certificate.traces()) {
+            let field = self.exact_surface_field(surface)?;
+            let matches = match trace {
+                PlaneSphereCircleTrace::Plane(trace) => {
+                    field == ExactSurfaceField::Plane(trace.surface())
+                }
+                PlaneSphereCircleTrace::Sphere(trace) => {
+                    field == ExactSurfaceField::Sphere(trace.surface())
+                }
+                PlaneSphereCircleTrace::SphereOblique(trace) => {
+                    field == ExactSurfaceField::Sphere(trace.surface())
+                }
+            };
+            if !matches {
+                return Err(Error::InvalidGeometry {
+                    reason: "Plane/Sphere certificate must retain safe exact Plane/Sphere fields",
+                });
+            }
+        }
         let copied_surfaces = [
             self.copy_surface(source_surfaces[0])?,
             self.copy_surface(source_surfaces[1])?,
@@ -413,8 +437,8 @@ impl Copier<'_> {
                 let plane_first = matches!(traces[0], PlaneSphereCircleTrace::Plane(_));
                 let plane_index = usize::from(!plane_first);
                 let sphere_index = usize::from(plane_first);
-                let copied_plane = self.direct_plane(copied_surfaces[plane_index])?;
-                let copied_sphere = self.direct_sphere(copied_surfaces[sphere_index])?;
+                let copied_plane = self.exact_plane(copied_surfaces[plane_index])?;
+                let copied_sphere = self.exact_sphere(copied_surfaces[sphere_index])?;
                 let copied_plane_pcurve = self.copy_pcurve(source_pcurves[plane_index])?;
                 let plane_pcurve = self
                     .store
@@ -481,7 +505,7 @@ impl Copier<'_> {
         match source {
             PlaneSphereCircleTrace::Plane(trace) => {
                 Ok(PlaneSphereCircleTrace::Plane(PlaneCircleTrace::new(
-                    self.direct_plane(copied_surface)?,
+                    self.exact_plane(copied_surface)?,
                     self.store.get(copied_pcurve)?.as_circle().copied().ok_or(
                         Error::InvalidGeometry {
                             reason: "Plane/Sphere certificate must retain a circle plane pcurve",
@@ -492,7 +516,7 @@ impl Copier<'_> {
             }
             PlaneSphereCircleTrace::Sphere(trace) => {
                 Ok(PlaneSphereCircleTrace::Sphere(SphereLatitudeTrace::new(
-                    self.direct_sphere(copied_surface)?,
+                    self.exact_sphere(copied_surface)?,
                     self.store.get(copied_pcurve)?.as_line().copied().ok_or(
                         Error::InvalidGeometry {
                             reason: "Plane/Sphere certificate must retain a line sphere pcurve",
@@ -507,24 +531,36 @@ impl Copier<'_> {
         }
     }
 
-    fn direct_plane(&self, surface: SurfaceId) -> Result<Plane> {
-        self.store
-            .get(surface)?
-            .as_plane()
-            .copied()
+    fn exact_surface_field(&self, surface: SurfaceId) -> Result<ExactSurfaceField> {
+        let mut evaluator = self
+            .store
+            .eval_context(EvalLimits::default(), Tolerances::default());
+        evaluator
+            .surface_exact_field(surface)
+            .map_err(|_| Error::InvalidGeometry {
+                reason: "verified intersection source exceeds the supported safe offset-field boundary",
+            })?
             .ok_or(Error::InvalidGeometry {
-                reason: "Plane/Sphere certificate must retain a direct Plane source",
+                reason: "verified intersection source is not a safe exact Plane/Sphere field",
             })
     }
 
-    fn direct_sphere(&self, surface: SurfaceId) -> Result<Sphere> {
-        self.store
-            .get(surface)?
-            .as_sphere()
-            .copied()
-            .ok_or(Error::InvalidGeometry {
-                reason: "Plane/Sphere certificate must retain a direct Sphere source",
-            })
+    fn exact_plane(&self, surface: SurfaceId) -> Result<Plane> {
+        match self.exact_surface_field(surface)? {
+            ExactSurfaceField::Plane(plane) => Ok(plane),
+            ExactSurfaceField::Sphere(_) => Err(Error::InvalidGeometry {
+                reason: "verified intersection source must retain an exact Plane field",
+            }),
+        }
+    }
+
+    fn exact_sphere(&self, surface: SurfaceId) -> Result<Sphere> {
+        match self.exact_surface_field(surface)? {
+            ExactSurfaceField::Sphere(sphere) => Ok(sphere),
+            ExactSurfaceField::Plane(_) => Err(Error::InvalidGeometry {
+                reason: "Plane/Sphere certificate must retain an exact Sphere field",
+            }),
+        }
     }
 
     fn copy_spherical_pcurve(

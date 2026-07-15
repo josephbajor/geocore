@@ -1340,10 +1340,11 @@ impl PartEdit<'_> {
     /// The result owns a disjoint topology and geometry closure and the
     /// journal records `DerivedFrom` lineage for every copied identity.
     /// Wrong-part, stale, and unsupported proof-bearing geometry are rejected
-    /// before an operation scope starts. Direct Plane/Plane line and direct
-    /// Plane/Sphere circle descriptors are admitted because the lower copy
-    /// transaction reissues their whole-range certificates; offset-backed,
-    /// NURBS, and transmitted proof families remain unsupported.
+    /// before an operation scope starts. Plane/Plane line and Plane/Sphere
+    /// circle descriptors backed by direct fields or safe finite constant-
+    /// normal offset chains are admitted because the lower copy transaction
+    /// reissues their whole-range certificates; NURBS and transmitted proof
+    /// families remain unsupported.
     pub fn copy_body_rigid(
         &mut self,
         request: CopyBodyRequest,
@@ -1479,15 +1480,26 @@ fn rigid_copy_curve_is_reissuable(
         return Ok(false);
     };
     let [first, second] = intersection.source_surfaces();
-    let first = store.surface(first)?;
-    let second = store.surface(second)?;
+    let exact_field = |surface| {
+        let mut evaluator = store.eval_context(EvalLimits::default(), Tolerances::default());
+        evaluator.surface_exact_field(surface).ok().flatten()
+    };
+    let fields = [exact_field(first), exact_field(second)];
     Ok(match intersection.certificate() {
-        kgraph::VerifiedIntersectionCertificate::PlaneLine(_) => {
-            first.as_plane().is_some() && second.as_plane().is_some()
-        }
+        kgraph::VerifiedIntersectionCertificate::PlaneLine(_) => fields
+            .into_iter()
+            .all(|field| matches!(field, Some(kgraph::ExactSurfaceField::Plane(_)))),
         kgraph::VerifiedIntersectionCertificate::PlaneSphereCircle(_) => {
-            (first.as_plane().is_some() && second.as_sphere().is_some())
-                || (first.as_sphere().is_some() && second.as_plane().is_some())
+            matches!(
+                fields,
+                [
+                    Some(kgraph::ExactSurfaceField::Plane(_)),
+                    Some(kgraph::ExactSurfaceField::Sphere(_))
+                ] | [
+                    Some(kgraph::ExactSurfaceField::Sphere(_)),
+                    Some(kgraph::ExactSurfaceField::Plane(_))
+                ]
+            )
         }
     })
 }
@@ -1762,17 +1774,22 @@ mod tests {
         SessionPrecision, TOTAL_WORK_STAGE,
     };
     use kgeom::curve::{Circle, Line};
-    use kgeom::curve2d::{Circle2d, Line2d};
+    use kgeom::curve2d::{Circle2d, Line2d, NurbsCurve2d};
+    use kgeom::nurbs::NurbsCurve;
     use kgeom::param::ParamRange;
     use kgeom::surface::{Plane, Sphere};
     use kgeom::vec::{Point2, Point3, Vec2, Vec3};
     use kgraph::{
         AffineParamMap1d, EvalBudgetProfile, EvalError, OffsetSurfaceDescriptor, PlaneCircleTrace,
-        PlaneSphereCircleTrace, SphereLatitudeTrace, certify_paired_plane_line_residuals,
-        certify_paired_plane_sphere_circle_residuals,
+        PlaneSphereCircleTrace, SphereLatitudeTrace, TransmittedIntersectionChartMetadata,
+        certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
+        certify_transmitted_plane_intersection_residuals,
     };
     use ktopo::check::VerificationGapCause;
-    use ktopo::entity::{Body as RawBody, Edge as RawEdge, Face as RawFace, Vertex as RawVertex};
+    use ktopo::entity::{
+        Body as RawBody, BodyKind, Edge as RawEdge, Face as RawFace, Region as RawRegion,
+        RegionKind, Shell as RawShell, Vertex as RawVertex,
+    };
     use ktopo::geom::{Curve2dGeom, SurfaceGeom};
     use ktopo::store::Store;
 
@@ -1787,6 +1804,97 @@ mod tests {
             FullCheckBudgetProfile::v1_defaults(),
             PolicyVersion::V1,
         )
+    }
+
+    fn transmitted_plane_curve(store: &mut Store) -> ktopo::entity::CurveId {
+        let plane = Plane::new(Frame::world());
+        let surfaces = [
+            store.insert_surface(SurfaceGeom::Plane(plane)).unwrap(),
+            store.insert_surface(SurfaceGeom::Plane(plane)).unwrap(),
+        ];
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let carrier = NurbsCurve::new(
+            1,
+            knots.clone(),
+            vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)],
+            None,
+        )
+        .unwrap();
+        let pcurves = [
+            NurbsCurve2d::new(
+                1,
+                knots.clone(),
+                vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0)],
+                None,
+            )
+            .unwrap(),
+            NurbsCurve2d::new(
+                1,
+                knots,
+                vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0)],
+                None,
+            )
+            .unwrap(),
+        ];
+        let certificate = certify_transmitted_plane_intersection_residuals(
+            carrier,
+            [plane; 2],
+            pcurves.clone(),
+            TransmittedIntersectionChartMetadata::new(0.0, 1.0, 0.0, 0.0, [None, None]).unwrap(),
+            1.0e-12,
+        )
+        .unwrap();
+        let pcurves =
+            pcurves.map(|pcurve| store.insert_pcurve(Curve2dGeom::Nurbs(pcurve)).unwrap());
+        store
+            .insert_verified_transmitted_plane_intersection_curve(surfaces, pcurves, certificate)
+            .unwrap()
+    }
+
+    fn transmitted_plane_wire(store: &mut Store) -> ktopo::entity::BodyId {
+        let curve = transmitted_plane_curve(store);
+        let mut transaction = store.transaction().unwrap();
+        let body = {
+            let mut assembly = transaction.assembly();
+            let body = assembly.add(RawBody {
+                kind: BodyKind::Wire,
+                regions: Vec::new(),
+            });
+            let region = assembly.add(RawRegion {
+                body,
+                kind: RegionKind::Void,
+                shells: Vec::new(),
+            });
+            let shell = assembly.add(RawShell {
+                region,
+                faces: Vec::new(),
+                edges: Vec::new(),
+                vertex: None,
+            });
+            let points = [
+                assembly.add(Point3::new(0.0, 0.0, 0.0)),
+                assembly.add(Point3::new(1.0, 0.0, 0.0)),
+            ];
+            let vertices = points.map(|point| {
+                assembly.add(RawVertex {
+                    point,
+                    tolerance: None,
+                })
+            });
+            let edge = assembly.add(RawEdge {
+                curve: Some(curve),
+                vertices: vertices.map(Some),
+                bounds: Some((0.0, 1.0)),
+                fins: Vec::new(),
+                tolerance: None,
+            });
+            assembly.get_mut(shell).unwrap().edges.push(edge);
+            assembly.get_mut(region).unwrap().shells.push(shell);
+            assembly.get_mut(body).unwrap().regions.push(region);
+            body
+        };
+        transaction.commit_checked_body(body).unwrap();
+        body
     }
 
     fn add_surface_chain(
@@ -2109,7 +2217,7 @@ mod tests {
     }
 
     #[test]
-    fn rigid_copy_preflight_admits_only_direct_reissuable_proof_families() {
+    fn rigid_copy_preflight_admits_safe_exact_offset_field_proof_families() {
         let mut store = Store::new();
         let planes = [
             Plane::new(Frame::world()),
@@ -2161,7 +2269,25 @@ mod tests {
                 plane_line_certificate,
             )
             .unwrap();
-        assert!(!rigid_copy_curve_is_reissuable(&store, offset_plane_line).unwrap());
+        assert!(rigid_copy_curve_is_reissuable(&store, offset_plane_line).unwrap());
+
+        let mut overdeep_plane = plane_handles[0];
+        for _ in 0..EvalLimits::default().max_dependency_depth {
+            overdeep_plane = store
+                .insert_surface(SurfaceGeom::Offset(OffsetSurfaceDescriptor::new(
+                    overdeep_plane,
+                    0.0,
+                )))
+                .unwrap();
+        }
+        let overdeep_plane_line = store
+            .insert_verified_plane_intersection_curve(
+                [overdeep_plane, plane_handles[1]],
+                line_pcurve_handles,
+                plane_line_certificate,
+            )
+            .unwrap();
+        assert!(!rigid_copy_curve_is_reissuable(&store, overdeep_plane_line).unwrap());
 
         let height = 0.5;
         let plane = Plane::new(Frame::world().with_origin(Point3::new(0.0, 0.0, height)));
@@ -2216,14 +2342,75 @@ mod tests {
                 plane, 0.0,
             )))
             .unwrap();
+        let sphere_basis = store
+            .insert_surface(SurfaceGeom::Sphere(
+                Sphere::new(Frame::world(), 1.5).unwrap(),
+            ))
+            .unwrap();
+        let offset_sphere = store
+            .insert_surface(SurfaceGeom::Offset(OffsetSurfaceDescriptor::new(
+                sphere_basis,
+                0.5,
+            )))
+            .unwrap();
         let offset_plane_sphere = store
             .insert_verified_plane_sphere_intersection_curve(
-                [offset_plane, sphere],
+                [offset_plane, offset_sphere],
                 [plane_pcurve, sphere_pcurve],
                 plane_sphere_certificate,
             )
             .unwrap();
-        assert!(!rigid_copy_curve_is_reissuable(&store, offset_plane_sphere).unwrap());
+        assert!(rigid_copy_curve_is_reissuable(&store, offset_plane_sphere).unwrap());
+
+        let collapsed_sphere_basis = store
+            .insert_surface(SurfaceGeom::Sphere(
+                Sphere::new(Frame::world(), 0.5).unwrap(),
+            ))
+            .unwrap();
+        let collapsed_sphere = store
+            .insert_surface(SurfaceGeom::Offset(OffsetSurfaceDescriptor::new(
+                collapsed_sphere_basis,
+                -0.5,
+            )))
+            .unwrap();
+        assert!(
+            store
+                .insert_verified_plane_sphere_intersection_curve(
+                    [plane, collapsed_sphere],
+                    [plane_pcurve, sphere_pcurve],
+                    plane_sphere_certificate,
+                )
+                .is_err(),
+            "the graph must reject a collapsed effective sphere before copy preflight"
+        );
+
+        let transmitted = transmitted_plane_curve(&mut store);
+        assert!(!rigid_copy_curve_is_reissuable(&store, transmitted).unwrap());
+    }
+
+    #[test]
+    fn rigid_body_copy_rejects_transmitted_proofs_before_starting_an_operation() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let mut edit = session.edit_part(part_id.clone()).unwrap();
+        let source = BodyId::new(part_id, transmitted_plane_wire(&mut edit.state.store));
+        let before = (
+            edit.state.store.count::<RawBody>(),
+            edit.state.store.count::<RawEdge>(),
+        );
+        assert!(matches!(
+            edit.copy_body_rigid(CopyBodyRequest::new(source, Frame::world())),
+            Err(KernelError::UnsupportedBodyCopyGeometry {
+                capability: crate::error::capability::RIGID_COPY_VERIFIED_INTERSECTION,
+            })
+        ));
+        assert_eq!(
+            before,
+            (
+                edit.state.store.count::<RawBody>(),
+                edit.state.store.count::<RawEdge>(),
+            )
+        );
     }
 
     #[test]
