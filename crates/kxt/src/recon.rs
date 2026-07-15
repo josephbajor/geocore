@@ -1039,7 +1039,8 @@ fn canonicalize_equal_limit_periodic_trace_range(
     for (trace_index, trace) in traces.iter().enumerate() {
         let surface = match trace {
             TransmittedNurbsIntersectionTrace::Plane(_)
-            | TransmittedNurbsIntersectionTrace::Sphere(_) => continue,
+            | TransmittedNurbsIntersectionTrace::Sphere(_)
+            | TransmittedNurbsIntersectionTrace::OffsetPlane(_) => continue,
             TransmittedNurbsIntersectionTrace::Nurbs(surface) => surface,
             TransmittedNurbsIntersectionTrace::OffsetNurbs(offset) => offset.basis(),
         };
@@ -1171,7 +1172,8 @@ fn canonicalize_trace_endpoint_roundoff(
     for (trace_index, trace) in traces.iter().enumerate() {
         let surface = match trace {
             TransmittedNurbsIntersectionTrace::Plane(_)
-            | TransmittedNurbsIntersectionTrace::Sphere(_) => continue,
+            | TransmittedNurbsIntersectionTrace::Sphere(_)
+            | TransmittedNurbsIntersectionTrace::OffsetPlane(_) => continue,
             TransmittedNurbsIntersectionTrace::Nurbs(surface) => surface,
             TransmittedNurbsIntersectionTrace::OffsetNurbs(offset) => offset.basis(),
         };

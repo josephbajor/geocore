@@ -62,9 +62,9 @@ use kgraph::{
     EvalBudgetProfile, EvalContext, EvalError, EvalLimits, EvalUsage, ExactSurfaceField,
     GeometryGraph, GeometryGraphError, GeometryRef, IntersectionCertificateError,
     NurbsIntersectionTrace, PairedTrace, PlaneCircleTrace, PlaneSphereCircleTrace,
-    SphereLatitudeTrace, SurfaceDescriptor, SurfaceHandle, VerifiedIntersectionCertificate,
-    VerifiedNurbsIntersectionCertificate, certify_paired_plane_line_residuals,
-    certify_paired_plane_sphere_circle_residuals,
+    SphereLatitudeTrace, SurfaceDescriptor, SurfaceHandle, TransmittedOffsetPlaneTrace,
+    VerifiedIntersectionCertificate, VerifiedNurbsIntersectionCertificate,
+    certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
     certify_paired_plane_sphere_oblique_circle_residuals,
     certify_verified_nurbs_nurbs_intersection_residuals,
     certify_verified_offset_nurbs_nurbs_intersection_residuals,
@@ -554,6 +554,10 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
             geometry: GeometryRef::Surface(surface_b),
         })
     })?;
+    let offset_plane_traces = [
+        direct_offset_plane_trace(graph, descriptor_a)?,
+        direct_offset_plane_trace(graph, descriptor_b)?,
+    ];
     let classes = [descriptor_a.class_key(), descriptor_b.class_key()];
     let field_a = resolve_exact_surface_field(graph, surface_a, descriptor_a, scope)?;
     let field_b = resolve_exact_surface_field(graph, surface_b, descriptor_b, scope)?;
@@ -690,6 +694,70 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 ResolvedGraphSurfaceField::Plane {
                     surface: plane,
                     direct: true,
+                },
+                ResolvedGraphSurfaceField::OffsetNurbs {
+                    signed_distance,
+                    basis,
+                    chain_length,
+                },
+            ]
+        }
+        (
+            Some(ResolvedGraphSurfaceField::OffsetNurbs {
+                signed_distance,
+                basis,
+                chain_length,
+            }),
+            Some(ResolvedGraphSurfaceField::Plane {
+                surface: plane,
+                direct: false,
+            }),
+        ) if chain_length == 1
+            && offset_plane_traces[1].is_some()
+            && supports_varying_normal_offset_nurbs_plane_surface_pair(
+                basis,
+                signed_distance,
+                range_a,
+                plane,
+                range_b,
+            ) =>
+        {
+            [
+                ResolvedGraphSurfaceField::OffsetNurbs {
+                    signed_distance,
+                    basis,
+                    chain_length,
+                },
+                ResolvedGraphSurfaceField::Plane {
+                    surface: plane,
+                    direct: false,
+                },
+            ]
+        }
+        (
+            Some(ResolvedGraphSurfaceField::Plane {
+                surface: plane,
+                direct: false,
+            }),
+            Some(ResolvedGraphSurfaceField::OffsetNurbs {
+                signed_distance,
+                basis,
+                chain_length,
+            }),
+        ) if chain_length == 1
+            && offset_plane_traces[0].is_some()
+            && supports_varying_normal_offset_nurbs_plane_surface_pair(
+                basis,
+                signed_distance,
+                range_b,
+                plane,
+                range_a,
+            ) =>
+        {
+            [
+                ResolvedGraphSurfaceField::Plane {
+                    surface: plane,
+                    direct: false,
                 },
                 ResolvedGraphSurfaceField::OffsetNurbs {
                     signed_distance,
@@ -989,7 +1057,10 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
     };
     let branch_graph = build_verified_branch_graph(
         [surface_a, surface_b],
-        fields,
+        ResolvedGraphProofSources {
+            fields,
+            offset_plane_traces,
+        },
         [range_a, range_b],
         &raw,
         march_traces.as_deref(),
@@ -1373,6 +1444,27 @@ fn resolve_exact_surface_field<'a>(
     resolve_offset_nurbs_field(graph, surface)
 }
 
+fn direct_offset_plane_trace(
+    graph: &GeometryGraph,
+    descriptor: &SurfaceDescriptor,
+) -> GraphSurfaceIntersectionResult<Option<TransmittedOffsetPlaneTrace>> {
+    let Some(offset) = descriptor.as_offset().copied() else {
+        return Ok(None);
+    };
+    let geometry = GeometryRef::Surface(offset.basis());
+    let basis_descriptor =
+        graph
+            .surface(offset.basis())
+            .ok_or(GraphSurfaceIntersectionError::GeometryEvaluation(
+                EvalError::StaleGeometryHandle { geometry },
+            ))?;
+    let Some(basis) = basis_descriptor.as_plane().copied() else {
+        return Ok(None);
+    };
+    let trace = TransmittedOffsetPlaneTrace::new(basis, offset.signed_distance());
+    Ok(trace.effective_plane().map(|_| trace))
+}
+
 fn resolve_offset_nurbs_field(
     graph: &GeometryGraph,
     root: SurfaceHandle,
@@ -1606,13 +1698,17 @@ fn account_graph_query(
 
 fn build_verified_branch_graph(
     source_surfaces: [SurfaceHandle; 2],
-    fields: [ResolvedGraphSurfaceField<'_>; 2],
+    proof_sources: ResolvedGraphProofSources<'_>,
     surface_ranges: [[ParamRange; 2]; 2],
     raw: &SurfaceSurfaceIntersections,
     march_traces: Option<&[MarchTrace]>,
     tolerance: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> GraphSurfaceIntersectionResult<IntersectionBranchGraph> {
+    let ResolvedGraphProofSources {
+        fields,
+        offset_plane_traces,
+    } = proof_sources;
     let mut vertices = raw
         .points
         .iter()
@@ -1692,6 +1788,7 @@ fn build_verified_branch_graph(
                 build_verified_analytic_nurbs_branch(
                     raw_carrier,
                     fields,
+                    offset_plane_traces,
                     march_traces
                         .and_then(|traces| traces.get(branch_index))
                         .ok_or(GraphSurfaceIntersectionError::BranchCertificate(
@@ -1769,6 +1866,12 @@ struct VerifiedBranchPayload {
     certificate: IntersectionBranchCertificate,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ResolvedGraphProofSources<'a> {
+    fields: [ResolvedGraphSurfaceField<'a>; 2],
+    offset_plane_traces: [Option<TransmittedOffsetPlaneTrace>; 2],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VerifiedNurbsProofFamily {
     Plane,
@@ -1781,6 +1884,7 @@ enum VerifiedNurbsProofFamily {
 fn build_verified_analytic_nurbs_branch(
     raw_carrier: &kgeom::nurbs::NurbsCurve,
     fields: [ResolvedGraphSurfaceField<'_>; 2],
+    offset_plane_traces: [Option<TransmittedOffsetPlaneTrace>; 2],
     march_trace: &MarchTrace,
     tolerance: f64,
     scope: &mut OperationScope<'_, '_>,
@@ -1910,20 +2014,26 @@ fn build_verified_analytic_nurbs_branch(
                 ..
             },
             ResolvedGraphSurfaceField::Plane { surface: plane, .. },
-        ] => (
-            [
-                NurbsIntersectionTrace::OffsetNurbs(kgraph::TransmittedOffsetNurbsTrace::new(
-                    basis.clone(),
-                    signed_distance,
-                )),
+        ] => {
+            let plane_trace = offset_plane_traces[1].map_or(
                 NurbsIntersectionTrace::Plane(plane),
-            ],
-            [
-                march_trace.other_pcurve.clone(),
-                march_trace.surface_pcurve.clone(),
-            ],
-            VerifiedNurbsProofFamily::OffsetPlane,
-        ),
+                NurbsIntersectionTrace::OffsetPlane,
+            );
+            (
+                [
+                    NurbsIntersectionTrace::OffsetNurbs(kgraph::TransmittedOffsetNurbsTrace::new(
+                        basis.clone(),
+                        signed_distance,
+                    )),
+                    plane_trace,
+                ],
+                [
+                    march_trace.other_pcurve.clone(),
+                    march_trace.surface_pcurve.clone(),
+                ],
+                VerifiedNurbsProofFamily::OffsetPlane,
+            )
+        }
         [
             ResolvedGraphSurfaceField::Plane { surface: plane, .. },
             ResolvedGraphSurfaceField::OffsetNurbs {
@@ -1931,20 +2041,26 @@ fn build_verified_analytic_nurbs_branch(
                 basis,
                 ..
             },
-        ] => (
-            [
+        ] => {
+            let plane_trace = offset_plane_traces[0].map_or(
                 NurbsIntersectionTrace::Plane(plane),
-                NurbsIntersectionTrace::OffsetNurbs(kgraph::TransmittedOffsetNurbsTrace::new(
-                    basis.clone(),
-                    signed_distance,
-                )),
-            ],
-            [
-                march_trace.surface_pcurve.clone(),
-                march_trace.other_pcurve.clone(),
-            ],
-            VerifiedNurbsProofFamily::OffsetPlane,
-        ),
+                NurbsIntersectionTrace::OffsetPlane,
+            );
+            (
+                [
+                    plane_trace,
+                    NurbsIntersectionTrace::OffsetNurbs(kgraph::TransmittedOffsetNurbsTrace::new(
+                        basis.clone(),
+                        signed_distance,
+                    )),
+                ],
+                [
+                    march_trace.surface_pcurve.clone(),
+                    march_trace.other_pcurve.clone(),
+                ],
+                VerifiedNurbsProofFamily::OffsetPlane,
+            )
+        }
         _ => {
             return Err(GraphSurfaceIntersectionError::BranchCertificate(
                 IntersectionCertificateError::InvalidTraceFamily,

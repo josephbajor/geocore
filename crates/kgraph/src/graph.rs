@@ -10,10 +10,10 @@ use crate::intersection::{
     PairedPlaneSphereCircleResidualCertificate, PlaneSphereCircleTrace,
     TransmittedIntersectionCurveDescriptor, TransmittedNurbsIntersectionCertificate,
     TransmittedNurbsIntersectionCurveDescriptor, TransmittedNurbsIntersectionTrace,
-    TransmittedOffsetNurbsTrace, TransmittedPlaneIntersectionCertificate,
-    VerifiedIntersectionCarrier, VerifiedIntersectionCertificate,
-    VerifiedIntersectionCurveDescriptor, VerifiedNurbsIntersectionCertificate,
-    VerifiedNurbsIntersectionCurveDescriptor,
+    TransmittedOffsetNurbsTrace, TransmittedOffsetPlaneTrace,
+    TransmittedPlaneIntersectionCertificate, VerifiedIntersectionCarrier,
+    VerifiedIntersectionCertificate, VerifiedIntersectionCurveDescriptor,
+    VerifiedNurbsIntersectionCertificate, VerifiedNurbsIntersectionCurveDescriptor,
 };
 use kcore::arena::{Arena, ArenaChange, Handle};
 use kcore::error::Result as CoreResult;
@@ -1074,10 +1074,10 @@ fn validate_curve_references(
             ] => MAX_VERIFIED_OFFSET_NURBS_DIRECT_NURBS_CHAIN_LENGTH,
             [
                 NurbsIntersectionTrace::OffsetNurbs(_),
-                NurbsIntersectionTrace::Plane(_),
+                NurbsIntersectionTrace::Plane(_) | NurbsIntersectionTrace::OffsetPlane(_),
             ]
             | [
-                NurbsIntersectionTrace::Plane(_),
+                NurbsIntersectionTrace::Plane(_) | NurbsIntersectionTrace::OffsetPlane(_),
                 NurbsIntersectionTrace::OffsetNurbs(_),
             ] => MAX_VERIFIED_VARYING_OFFSET_NURBS_CHAIN_LENGTH,
             _ => MAX_VERIFIED_OFFSET_NURBS_CHAIN_LENGTH,
@@ -1111,6 +1111,9 @@ fn validate_curve_references(
                         certified,
                         max_offset_nurbs_chain_length,
                     )?
+                }
+                NurbsIntersectionTrace::OffsetPlane(certified) => {
+                    verified_offset_plane_trace_matches(graph, source, *certified)?
                 }
             };
             if !matches {
@@ -1204,6 +1207,7 @@ fn validate_curve_references(
                             .as_nurbs()
                             == Some(certified.basis())
                 }
+                TransmittedNurbsIntersectionTrace::OffsetPlane(_) => false,
             };
             if !matches {
                 return Err(invalid_intersection_descriptor(
@@ -1346,6 +1350,39 @@ fn verified_offset_nurbs_trace_matches(
             _ => return Ok(false),
         }
     }
+}
+
+fn verified_offset_plane_trace_matches(
+    graph: &GeometryGraph,
+    root: SurfaceHandle,
+    certified: TransmittedOffsetPlaneTrace,
+) -> GeometryGraphResult<bool> {
+    let geometry = GeometryRef::Surface(root);
+    let Some(offset) = graph
+        .surface(root)
+        .ok_or_else(|| stale(geometry))?
+        .as_offset()
+        .copied()
+    else {
+        return Ok(false);
+    };
+    if offset.signed_distance() != certified.signed_distance() {
+        return Ok(false);
+    }
+    let basis_geometry = GeometryRef::Surface(offset.basis());
+    let basis_matches = graph
+        .surface(offset.basis())
+        .ok_or_else(|| stale(basis_geometry))?
+        .as_plane()
+        .copied()
+        == Some(certified.basis());
+    if !basis_matches {
+        return Ok(false);
+    }
+    let Some(effective) = certified.effective_plane() else {
+        return Ok(false);
+    };
+    Ok(exact_surface_field(graph, root)? == Some(ExactSurfaceField::Plane(effective)))
 }
 
 fn invalid_intersection_descriptor(reason: &'static str) -> GeometryGraphError {
