@@ -713,9 +713,10 @@ basis chain transitively, and preserves the same exact 14,336/14,335 Work,
 3/2 node-visit and dependency-depth admission, three pin exact 4/3, and four
 pin exact 5/4.
 A first varying-normal arm admits one offset descriptor over an exact rational
-quarter-cylinder extrusion and one canonical bilinear planar direct-NURBS
-peer. The source derivatives prove a nonzero normal over the complete positive
-operand window before discovery; a true rational parallel surface then guides
+quarter-cylinder extrusion and either canonical bilinear planar direct-NURBS
+peer normal to the global X or Y axis. The source derivatives prove a nonzero
+normal over the complete positive operand window before discovery; a true
+rational parallel surface then guides
 the march, while outward-scaled original control intervals alone own complete
 misses. Every positive branch retains the live offset root, original cylinder
 basis, direct peer, and paired pcurves under one certificate scope. The normal
@@ -817,7 +818,14 @@ sample 2 operand 0 has a paired-null interior Plane UV, through exact frame
 inversion plus the unchanged whole-carrier Plane/Offset-NURBS proof. Canonical
 Plane/Offset endpoints may now use the same recovery: a synthetic endpoint-null
 record-5089 variant preserves the exact v7 report and next crossing, while a
-displaced endpoint still fails the unchanged proof. V6 remains
+displaced endpoint still fails the unchanged proof. A separate bounded
+noncanonical affine slice
+accepts two- through five-sample direct-Plane/Offset(B-surface) charts, retains
+finite positive affine metadata on the canonical shared sample-index basis,
+and preserves the unchanged original-source proof and ordered dependencies.
+An exact record-5089 variant pins cumulative `139792442/4/10`; corpus records
+778 and 3620 remain typed original-domain failures, and the exemplar has no
+NURBS-side paired-null tuple. V6 remains
 exact at `208228426/22/10` and pins its next attempted 221,060,174 Work; v7 is
 exact at `272430166/22/10` and pins record 1984's attempted 285,283,414 Work.
 Historical v8 certifies record 1984 by snapping only its final first-trace `u`
@@ -870,8 +878,9 @@ payload transplants.
   with contextual accounting and paired trace evidence.
 - Broaden the M3c consumer to null, mixed/non-`H`, or broader closed limits,
   other nullable chart data, ambiguous or multi-period trace aliases,
-  noncanonical charts, and further terminator variants without recomputing
-  their transmitted scars.
+  noncanonical charts outside the bounded direct-Plane/Offset(B-surface)
+  affine slice, and further terminator variants without recomputing their
+  transmitted scars.
 - Add swept, spun, and blend descriptors only with their own evaluator,
   validity, bounds, interchange, and test contracts.
 
@@ -944,7 +953,8 @@ the graph ownership model.
   other varying-normal or nested offset/offset,
   unaligned, altered, and stale sources atomically.
 - The single-descriptor varying-normal rational-quarter-cylinder/direct-planar-
-  NURBS arm proves the original derivative normal field over the complete
+  NURBS arm covers canonical global-X- and global-Y-normal peers and proves the
+  original derivative normal field over the complete
   window, uses the true rational parallel surface only for discovery, and owns
   misses from outward-scaled original controls. Both operand orders retain the
   live root, original basis, direct peer, and paired pcurves; fixtures pin exact
@@ -989,7 +999,9 @@ the graph ownership model.
   omitted-data suite pins exact v7 `272430166/22/10`, per-resource N/N-1
   rollback, paired-null interior and endpoint Plane recovery for canonical
   Plane/Offset(B-surface), typed direct-Plane endpoint, half-null, and NURBS
-  omissions, whole-carrier residual rejection,
+  omissions, whole-carrier residual rejection, plus bounded noncanonical
+  affine metadata at structural `7170/2/10` and transplanted cumulative
+  `139792442/4/10` with typed record-778/3620 original-domain rollback,
   and the 285,283,414-Work next proof preflight.
   The endpoint-roundoff suite pins exact v8 `315245660/22/10`, historical-v7
   stability, per-resource N/N-1 rollback, endpoint-only source-boundary
