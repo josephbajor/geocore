@@ -51,9 +51,9 @@ charts, and the first finite-open direct B-surface/Plane chart with paired-null
 interior Plane UVs are now certified. Canonical finite-open
 Plane/Offset(B-surface) charts additionally recover paired-null Plane UVs at
 endpoints through the same exact frame inversion and whole-carrier proof. A
-bounded two- through five-sample direct-Plane/Offset(B-surface) slice retains
-finite positive noncanonical affine chart metadata on the canonical shared
-sample-index basis.
+bounded two- through five-sample direct-Plane/B-surface or direct-Plane/
+Offset(B-surface) slice retains finite positive noncanonical affine chart
+metadata on the canonical shared sample-index basis.
 General closed limits, omissions on a NURBS trace, endpoints outside that
 narrow Plane/Offset family, and other nullable chart-data forms remain unsupported.
 
@@ -148,12 +148,15 @@ statement accompanied the individual files.
   NURBS pcurves materially leave the original source domains. An exact
   record-5089 variant instead reuses record 778's affine metadata and pins the
   bounded noncanonical path at cumulative `139792442/4/10` with unchanged
-  original-source proof and rollback.
+  original-source proof and rollback. A five-sample record-1252-derived direct
+  Plane/B-surface variant pins cumulative `127115320` Work; the shared
+  structural family retains exact `7170/2/10` Work/Items/Depth boundaries.
   The exemplar manifest therefore records a structured reconstruction failure
   with no unsupported capability. Null, mixed/non-`H`, or broader closed
   limits, other nullable chart data, ambiguous or multi-period trace aliases,
   broader carrier families, and noncanonical chart forms outside the bounded
-  direct-Plane/Offset(B-surface) slice remain unsupported. Primary
+  direct-Plane/B-surface and direct-Plane/Offset(B-surface) slices remain
+  unsupported. Primary
   reference for modern writer conventions: TRIMMED_CURVE/GEOMETRIC_OWNER linkage,
   tolerant-edge fin curves, POINT ownership by vertex, and the resolved
   37102 node layouts (133/141 match base 13006 exactly).

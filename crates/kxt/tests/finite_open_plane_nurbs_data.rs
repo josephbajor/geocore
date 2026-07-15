@@ -17,6 +17,10 @@ use kxt::{
 const EXEMPLAR: &[u8] = include_bytes!("fixtures/exemplar.x_t");
 const V4_WORK: u64 = 116_396_069;
 const V5_WORK: u64 = 117_478_445;
+const NONCANONICAL_FIVE_SAMPLE_WORK: u64 = 127_115_320;
+const NONCANONICAL_FIVE_SAMPLE_PRIOR_WORK: u64 = 37_293_090;
+const NONCANONICAL_BASE_PARAMETER: f64 = 0.003_586_209_316_397_325;
+const NONCANONICAL_BASE_SCALE: f64 = 0.999_999_996_408_403;
 
 fn field<'a>(file: &'a kxt::XtFile, index: u32, name: &str) -> &'a Value {
     file.field(&file.nodes[&index], name).unwrap()
@@ -85,6 +89,49 @@ fn assert_v5_work_boundary(error: &XtError) {
             V5_WORK,
         ),
         "unexpected post-v5 boundary: {error:?}"
+    );
+}
+
+fn make_record_1252_five_sample_affine_noncanonical(file: &mut kxt::XtFile) {
+    for name in ["surface", "chart", "start", "end", "intersection_data"] {
+        let value = field(file, 1252, name).clone();
+        set_field(file, 1828, name, value);
+    }
+    let mut positions = match field(file, 2234, "hvec").clone() {
+        Value::Arr(values) => values,
+        _ => unreachable!(),
+    };
+    positions.truncate(5);
+    let endpoint = positions[4].as_vector().unwrap();
+    set_field(file, 2234, "chart_count", Value::Int(5));
+    set_field(file, 2234, "hvec", Value::Arr(positions));
+    set_field(
+        file,
+        2240,
+        "hvec",
+        Value::Arr(vec![Value::Vector(Some(endpoint))]),
+    );
+
+    let mut values = match field(file, 2237, "values").clone() {
+        Value::Arr(values) => values,
+        _ => unreachable!(),
+    };
+    values.truncate(20);
+    let origin = field(file, 1951, "pvec").as_vector().unwrap();
+    values[18] = Value::Double(-(endpoint[0] - origin[0]));
+    values[19] = Value::Double(endpoint[1] - origin[1]);
+    set_field(file, 2237, "values", Value::Arr(values));
+    set_field(
+        file,
+        2234,
+        "base_parameter",
+        Value::Double(NONCANONICAL_BASE_PARAMETER),
+    );
+    set_field(
+        file,
+        2234,
+        "base_scale",
+        Value::Double(NONCANONICAL_BASE_SCALE),
     );
 }
 
@@ -263,6 +310,95 @@ fn direct_plane_or_nurbs_endpoint_uv_omissions_remain_typed_and_atomic() {
                 what: "INTERSECTION_DATA contains null or non-finite UV values",
             }
         ));
+        assert_rollback(&store);
+    }
+}
+
+#[test]
+fn affine_noncanonical_five_sample_record_1252_has_exact_work_and_rollback() {
+    let mut file = read_xt(EXEMPLAR).unwrap();
+    make_record_1252_five_sample_affine_noncanonical(&mut file);
+    assert_eq!(
+        field(&file, 1828, "surface"),
+        &Value::Arr(vec![Value::Ptr(1206), Value::Ptr(1951)])
+    );
+    assert_eq!(field(&file, 2234, "chart_count").as_int(), Some(5));
+    assert_eq!(
+        field(&file, 2234, "base_parameter").as_f64(),
+        Some(NONCANONICAL_BASE_PARAMETER)
+    );
+    assert_eq!(
+        field(&file, 2234, "base_scale").as_f64(),
+        Some(NONCANONICAL_BASE_SCALE)
+    );
+    let endpoint = match field(&file, 2234, "hvec") {
+        Value::Arr(positions) => positions[4].as_vector().unwrap(),
+        value => panic!("unexpected chart: {value:?}"),
+    };
+    let values = match field(&file, 2237, "values") {
+        Value::Arr(values) if values.len() == 20 => values,
+        value => panic!("unexpected data: {value:?}"),
+    };
+    let plane_origin = field(&file, 1951, "pvec").as_vector().unwrap();
+    let exact_plane_uv = [
+        -(endpoint[0] - plane_origin[0]),
+        endpoint[1] - plane_origin[1],
+    ];
+    assert!((values[18].as_f64().unwrap() - exact_plane_uv[0]).abs() <= 1.0e-16);
+    assert!((values[19].as_f64().unwrap() - exact_plane_uv[1]).abs() <= 1.0e-16);
+
+    let session = SessionPolicy::v1();
+    for allowed in [
+        NONCANONICAL_FIVE_SAMPLE_WORK - 1,
+        NONCANONICAL_FIVE_SAMPLE_WORK,
+    ] {
+        let mut store = Store::new();
+        let outcome = reconstruct_with_context(
+            &file,
+            &mut store,
+            &context_with_limit(
+                &session,
+                INTERSECTION_CHART_CERTIFICATE_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                allowed,
+            ),
+        )
+        .unwrap();
+        if allowed + 1 == NONCANONICAL_FIVE_SAMPLE_WORK {
+            let crossing = outcome.result().as_ref().unwrap_err().limit().unwrap();
+            assert_eq!(
+                (
+                    crossing.stage,
+                    crossing.resource,
+                    crossing.consumed,
+                    crossing.allowed,
+                ),
+                (
+                    INTERSECTION_CHART_CERTIFICATE_WORK,
+                    ResourceKind::Work,
+                    NONCANONICAL_FIVE_SAMPLE_WORK,
+                    allowed,
+                )
+            );
+            assert_eq!(
+                usage(
+                    outcome.report(),
+                    INTERSECTION_CHART_CERTIFICATE_WORK,
+                    ResourceKind::Work,
+                ),
+                NONCANONICAL_FIVE_SAMPLE_PRIOR_WORK
+            );
+        } else {
+            assert_eq!(
+                usage(
+                    outcome.report(),
+                    INTERSECTION_CHART_CERTIFICATE_WORK,
+                    ResourceKind::Work,
+                ),
+                NONCANONICAL_FIVE_SAMPLE_WORK
+            );
+        }
         assert_rollback(&store);
     }
 }
