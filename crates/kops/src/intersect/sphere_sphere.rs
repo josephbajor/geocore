@@ -1417,9 +1417,9 @@ fn exact_complementary_chart_sphere_endpoint(
     // A non-exact reconstruction at the crossing of both decomposition seam
     // families would have up to four closed-cell owners. Two-cell evidence is
     // insufficient to choose one canonical multi-owner vertex, so retain the
-    // established fail-closed behavior there. The admitted seven-cell case
-    // differs at a true latitude boundary, while its grid-corner endpoint is
-    // already bit exact in both records.
+    // established fail-closed behavior there. The admitted one-owner
+    // seven-cell seam differs at a true latitude boundary, while its
+    // grid-corner endpoint is already bit exact in both records.
     let complementary_u = if seam_on_first_operand {
         exact_owner.uv_b[0]
     } else {
@@ -3843,6 +3843,34 @@ mod tests {
         )
     }
 
+    fn opposite_corner_empty_seven_cell_fixture()
+    -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+        let a = Sphere::new(Frame::world(), 1.0).unwrap();
+        let angle = 0.4122861498111098;
+        let b = Sphere::new(
+            Frame::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(math::sin(angle), 0.0, math::cos(angle)),
+                Vec3::new(math::cos(angle), 0.0, -math::sin(angle)),
+            )
+            .unwrap(),
+            1.0,
+        )
+        .unwrap();
+        (
+            a,
+            b,
+            [
+                ParamRange::new(-2.05071789320265, 2.7033606413045987),
+                ParamRange::new(-1.1927387289259745, 1.2989310446048354),
+            ],
+            [
+                ParamRange::new(-1.9242493983177624, 2.9793519615452766),
+                ParamRange::new(-0.8315857731105628, 1.446288841486333),
+            ],
+        )
+    }
+
     fn eight_cell_fixture() -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
         let (a, b, mut a_range, mut b_range) = seven_cell_fixture();
         a_range[1].lo = -1.0834779757705633;
@@ -4546,6 +4574,64 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn opposite_corner_empty_seven_cell_union_and_limits_are_exact() {
+        let (a, b, a_range, b_range) = opposite_corner_empty_seven_cell_fixture();
+        let allowance = arbitrary_sphere_octant_parameter_allowance(a_range, b_range).unwrap();
+        let hit = certify_double_wide_sphere_window_union(
+            &a,
+            a_range,
+            &b,
+            b_range,
+            Tolerances::default(),
+            allowance,
+            GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+            GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+            GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+        )
+        .unwrap();
+        assert!(hit.is_complete());
+        assert_eq!(hit.regions.len(), 1);
+        assert_eq!(hit.regions[0].boundary.len(), 17);
+
+        for (piece_limit, pair_limit, arc_limit, reason) in [
+            (
+                GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT - 1,
+                GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+                "general coincident sphere both-wide union piece limit exhausted",
+            ),
+            (
+                GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT - 1,
+                GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+                "general coincident sphere both-wide union pair limit exhausted",
+            ),
+            (
+                GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT - 1,
+                "general coincident sphere both-wide union arc limit exhausted",
+            ),
+        ] {
+            assert_eq!(
+                certify_double_wide_sphere_window_union(
+                    &a,
+                    a_range,
+                    &b,
+                    b_range,
+                    Tolerances::default(),
+                    allowance,
+                    piece_limit,
+                    pair_limit,
+                    arc_limit,
+                )
+                .unwrap_err(),
+                Error::InvalidGeometry { reason }
+            );
+        }
     }
 
     #[test]

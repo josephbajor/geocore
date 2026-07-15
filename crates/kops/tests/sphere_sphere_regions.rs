@@ -170,6 +170,26 @@ fn eight_cell_non_path_wide_fixture() -> (Sphere, Sphere, [ParamRange; 2], [Para
     (a, b, a_window, b_window)
 }
 
+fn opposite_corner_empty_seven_cell_wide_fixture()
+-> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+    (
+        world_sphere(),
+        y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.4122861498111098),
+        window(
+            -2.05071789320265,
+            2.7033606413045987,
+            -1.1927387289259745,
+            1.2989310446048354,
+        ),
+        window(
+            -1.9242493983177624,
+            2.9793519615452766,
+            -0.8315857731105628,
+            1.446288841486333,
+        ),
+    )
+}
+
 fn corner_empty_eight_cell_wide_fixture() -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
     (
         world_sphere(),
@@ -1747,6 +1767,57 @@ fn general_both_wide_corner_empty_eight_cells_certify_distinct_union_and_swap() 
             )
             .unwrap();
             if [a_index, b_index] == empty_cell {
+                assert!(child.is_proven_empty());
+            } else {
+                assert_general_sphere_window_region(&child, &a, &b);
+            }
+        }
+    }
+
+    let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_general_sphere_window_region(&hit, &a, &b);
+    assert_eq!(hit.regions[0].boundary.len(), 17);
+    let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = hit.regions[0].correspondence
+    else {
+        unreachable!()
+    };
+    assert_eq!(map.first_range(), a_window);
+    assert_eq!(map.second_range(), b_window);
+    for (first, second) in hit.regions[0]
+        .boundary
+        .iter()
+        .zip(hit.regions[0].boundary.iter().cycle().skip(1))
+    {
+        assert_ne!(first, second);
+        assert!(a.eval(first.uv_a).dist(b.eval(first.uv_b)) <= hit.regions[0].max_residual);
+    }
+
+    let repeated =
+        intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_eq!(hit, repeated);
+    let swapped =
+        intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
+    assert_eq!(hit.clone().swapped(), swapped);
+    assert_general_sphere_window_region(&swapped, &b, &a);
+}
+
+#[test]
+fn general_both_wide_opposite_corner_empty_seven_cells_certify_distinct_union_and_swap() {
+    let (a, b, a_window, b_window) = opposite_corner_empty_seven_cell_wide_fixture();
+    let empty_cells: [[usize; 2]; 2] = [[0, 2], [2, 0]];
+    assert_eq!(empty_cells[0][0].abs_diff(empty_cells[1][0]), 2);
+    assert_eq!(empty_cells[0][1].abs_diff(empty_cells[1][1]), 2);
+    for a_index in 0..3 {
+        for b_index in 0..3 {
+            let child = intersect_bounded_spheres(
+                &a,
+                wide_grid_piece(a_window, a_index),
+                &b,
+                wide_grid_piece(b_window, b_index),
+                Tolerances::default(),
+            )
+            .unwrap();
+            if empty_cells.contains(&[a_index, b_index]) {
                 assert!(child.is_proven_empty());
             } else {
                 assert_general_sphere_window_region(&child, &a, &b);
