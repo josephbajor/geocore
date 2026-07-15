@@ -1071,6 +1071,102 @@ fn offset_bsurface_intersection_file(rational: bool, nested: bool, swapped: bool
     file
 }
 
+fn noncanonical_offset_bsurface_intersection_file(
+    rational: bool,
+    nested: bool,
+    swapped: bool,
+    retained_count: usize,
+) -> XtFile {
+    assert!((2..=5).contains(&retained_count));
+    let mut file = offset_bsurface_intersection_file(rational, nested, swapped);
+    let intersection = file
+        .nodes
+        .iter()
+        .find_map(|(&index, node)| (node.code == code::INTERSECTION).then_some(index))
+        .unwrap();
+    let chart = ptr(&file, intersection, "chart");
+    let endpoints = match file.field(&file.nodes[&chart], "hvec").unwrap() {
+        Value::Arr(values) if values.len() == 2 => [
+            values[0].as_vector().unwrap(),
+            values[1].as_vector().unwrap(),
+        ],
+        value => panic!("unexpected chart positions: {value:?}"),
+    };
+    let data = ptr(&file, intersection, "intersection_data");
+    let endpoint_uv = match file.field(&file.nodes[&data], "values").unwrap() {
+        Value::Arr(values) if values.len() == 8 => [
+            values[..4]
+                .iter()
+                .map(|value| value.as_f64().unwrap())
+                .collect::<Vec<_>>(),
+            values[4..]
+                .iter()
+                .map(|value| value.as_f64().unwrap())
+                .collect::<Vec<_>>(),
+        ],
+        value => panic!("unexpected chart data: {value:?}"),
+    };
+    let denominator = (retained_count - 1) as f64;
+    let positions = (0..retained_count)
+        .map(|sample| {
+            let t = sample as f64 / denominator;
+            Value::Vector(Some(std::array::from_fn(|axis| {
+                endpoints[0][axis] * (1.0 - t) + endpoints[1][axis] * t
+            })))
+        })
+        .collect();
+    let values = (0..retained_count)
+        .flat_map(|sample| {
+            let t = sample as f64 / denominator;
+            let endpoint_uv = &endpoint_uv;
+            (0..4).map(move |component| {
+                Value::Double(endpoint_uv[0][component] * (1.0 - t) + endpoint_uv[1][component] * t)
+            })
+        })
+        .collect();
+    set_field(
+        &mut file,
+        chart,
+        "chart_count",
+        Value::Int(retained_count as i64),
+    );
+    set_field(&mut file, chart, "hvec", Value::Arr(positions));
+    set_field(&mut file, data, "values", Value::Arr(values));
+    let trim = file
+        .nodes
+        .iter()
+        .find_map(|(&index, node)| {
+            (node.code == code::TRIMMED_CURVE
+                && file.field(node, "basis_curve").and_then(Value::as_ptr) == Some(intersection))
+            .then_some(index)
+        })
+        .unwrap();
+    let end_parameter = (retained_count - 1) as f64;
+    if file
+        .field(&file.nodes[&trim], "parm_1")
+        .and_then(Value::as_f64)
+        .unwrap()
+        == 0.0
+    {
+        set_field(&mut file, trim, "parm_2", Value::Double(end_parameter));
+    } else {
+        set_field(&mut file, trim, "parm_1", Value::Double(end_parameter));
+    }
+    set_field(
+        &mut file,
+        chart,
+        "base_parameter",
+        Value::Double(0.003_586_209_316_397_325),
+    );
+    set_field(
+        &mut file,
+        chart,
+        "base_scale",
+        Value::Double(0.999_999_996_408_403),
+    );
+    file
+}
+
 /// Replace both ordered plane operands with independent offset chains whose
 /// effective fields remain the original distinct nonparallel planes.
 fn offset_offset_intersection_file(
@@ -1894,6 +1990,137 @@ fn noncanonical_plane_bsurface_retains_affine_metadata_sources_and_dependencies(
 }
 
 #[test]
+fn noncanonical_offset_plane_bsurface_retains_affine_metadata_roots_and_dependencies() {
+    const BASE_PARAMETER: f64 = 0.003_586_209_316_397_325;
+    const BASE_SCALE: f64 = 0.999_999_996_408_403;
+    let expected_knots = [0.0, 0.0, 1.0, 1.0];
+
+    for rational in [false, true] {
+        for nested in [false, true] {
+            for swapped in [false, true] {
+                let file =
+                    noncanonical_offset_bsurface_intersection_file(rational, nested, swapped, 2);
+                let mut store = Store::new();
+                let reconstruction = reconstruct(&file, &mut store).unwrap();
+                assert_eq!(reconstruction.bodies.len(), 1);
+                let (curve, descriptor) = store
+                    .geometry()
+                    .curves()
+                    .find(|(_, curve)| curve.as_transmitted_nurbs_intersection().is_some())
+                    .unwrap();
+                let intersection = descriptor.as_transmitted_nurbs_intersection().unwrap();
+                let certificate = intersection.certificate();
+                assert_eq!(certificate.metadata().base_parameter(), BASE_PARAMETER);
+                assert_eq!(certificate.metadata().base_scale(), BASE_SCALE);
+                assert_eq!(certificate.proof_depth(), 10);
+                assert_eq!(
+                    (
+                        certificate.carrier_range().lo,
+                        certificate.carrier_range().hi
+                    ),
+                    (0.0, 1.0)
+                );
+                assert_eq!(certificate.carrier().knots().as_slice(), expected_knots);
+                for pcurve in certificate.pcurves() {
+                    assert_eq!(pcurve.knots().as_slice(), expected_knots);
+                    assert_eq!(pcurve.param_range(), certificate.carrier_range());
+                }
+                assert!(
+                    certificate
+                        .residual_bounds()
+                        .into_iter()
+                        .all(|bound| bound <= certificate.tolerance())
+                );
+
+                let sources = intersection.source_surfaces();
+                let expected_classes = if swapped {
+                    [SurfaceClass::Nurbs, SurfaceClass::Offset]
+                } else {
+                    [SurfaceClass::Offset, SurfaceClass::Nurbs]
+                };
+                assert_eq!(
+                    sources.map(|source| store.get(source).unwrap().class()),
+                    expected_classes
+                );
+                let offset_index = usize::from(swapped);
+                let nurbs_index = usize::from(!swapped);
+                let root = sources[offset_index];
+                let certified_plane = certificate.traces()[offset_index].as_plane().unwrap();
+                let mut evaluator =
+                    store.eval_context(kgraph::EvalLimits::default(), Tolerances::default());
+                assert_eq!(
+                    evaluator.surface_exact_plane(root).unwrap(),
+                    Some(certified_plane)
+                );
+                assert_eq!(
+                    evaluator.last_query_usage().node_visits(),
+                    if nested { 3 } else { 2 }
+                );
+                assert_eq!(
+                    evaluator.last_query_usage().dependency_depth(),
+                    if nested { 3 } else { 2 }
+                );
+
+                let live_nurbs = store.get(sources[nurbs_index]).unwrap().as_nurbs().unwrap();
+                assert_eq!(live_nurbs.is_rational(), rational);
+                assert_eq!(
+                    certificate.traces()[nurbs_index].as_nurbs(),
+                    Some(live_nurbs)
+                );
+
+                let inner = store.get(root).unwrap().as_offset().unwrap().basis();
+                let basis = if nested {
+                    assert_eq!(store.get(inner).unwrap().class(), SurfaceClass::Offset);
+                    store.get(inner).unwrap().as_offset().unwrap().basis()
+                } else {
+                    inner
+                };
+                assert_eq!(store.get(basis).unwrap().class(), SurfaceClass::Plane);
+                assert!(
+                    store
+                        .geometry()
+                        .dependents(GeometryRef::Surface(root))
+                        .unwrap()
+                        .contains(&GeometryRef::Curve(curve)),
+                    "the transmitted chart must retain its actual offset root"
+                );
+                assert!(
+                    store
+                        .geometry()
+                        .dependents(GeometryRef::Surface(basis))
+                        .unwrap()
+                        .iter()
+                        .any(|dependent| matches!(dependent, GeometryRef::Surface(_))),
+                    "the offset chain must retain its terminal Plane basis"
+                );
+                assert_eq!(
+                    store
+                        .geometry()
+                        .direct_dependencies(GeometryRef::Curve(curve))
+                        .unwrap(),
+                    vec![
+                        GeometryRef::Surface(sources[0]),
+                        GeometryRef::Surface(sources[1]),
+                        GeometryRef::Curve2d(intersection.pcurves()[0]),
+                        GeometryRef::Curve2d(intersection.pcurves()[1]),
+                    ]
+                );
+                let edge = store
+                    .iter::<Edge>()
+                    .find_map(|(_, edge)| (edge.curve == Some(curve)).then_some(edge))
+                    .unwrap();
+                assert_eq!(edge.bounds, Some((0.0, 1.0)));
+                assert_eq!(
+                    descriptor.as_curve().eval(0.5),
+                    certificate.carrier().eval(0.5)
+                );
+                store.geometry().validate().unwrap();
+            }
+        }
+    }
+}
+
+#[test]
 fn noncanonical_plane_offset_nurbs_retains_affine_metadata_sources_and_dependencies() {
     const BASE_PARAMETER: f64 = 0.003_586_209_316_397_325;
     const BASE_SCALE: f64 = 0.999_999_996_408_403;
@@ -2105,6 +2332,8 @@ fn plane_bsurface_proof_has_exact_work_items_and_depth_boundaries() {
         noncanonical_plane_bsurface_intersection_file(true, true),
         offset_bsurface_intersection_file(true, false, false),
         offset_bsurface_intersection_file(true, true, true),
+        noncanonical_offset_bsurface_intersection_file(true, false, false, 2),
+        noncanonical_offset_bsurface_intersection_file(true, true, true, 2),
         noncanonical_plane_offset_nurbs_intersection_file(true, false),
     ] {
         for (stage, resource, mode, exact) in [
@@ -2130,6 +2359,94 @@ fn plane_bsurface_proof_has_exact_work_items_and_depth_boundaries() {
             let (store, outcome) =
                 contextual_with_limit(&file, LimitSpec::new(stage, resource, mode, exact));
             assert!(outcome.result().is_ok(), "exact {stage:?} limit must pass");
+            assert_eq!(store.count::<Body>(), 1);
+            let usage = outcome
+                .report()
+                .usage()
+                .iter()
+                .find(|entry| entry.stage == stage)
+                .unwrap();
+            assert_eq!((usage.consumed, usage.allowed), (exact, exact));
+
+            let (store, outcome) =
+                contextual_with_limit(&file, LimitSpec::new(stage, resource, mode, exact - 1));
+            let result = outcome.result();
+            let error = result.as_ref().unwrap_err();
+            let limit = error.limit().unwrap();
+            assert_eq!(limit.stage, stage);
+            assert_eq!((limit.consumed, limit.allowed), (exact, exact - 1));
+            assert_eq!(store_counts(&store), (0, 0, 0));
+        }
+    }
+}
+
+#[test]
+fn noncanonical_offset_plane_bsurface_two_through_five_samples_have_exact_boundaries() {
+    for (retained_count, exact_work) in [(2, 7_170), (3, 14_339), (4, 21_508), (5, 28_677)] {
+        let file = noncanonical_offset_bsurface_intersection_file(
+            true,
+            retained_count % 2 == 1,
+            retained_count % 2 == 0,
+            retained_count,
+        );
+        let mut store = Store::new();
+        reconstruct(&file, &mut store).unwrap();
+        let certificate = store
+            .geometry()
+            .curves()
+            .find_map(|(_, curve)| curve.as_transmitted_nurbs_intersection())
+            .unwrap()
+            .certificate();
+        let mut expected_knots = vec![0.0, 0.0];
+        expected_knots.extend((1..retained_count - 1).map(|sample| sample as f64));
+        expected_knots.extend([(retained_count - 1) as f64; 2]);
+        assert_eq!(certificate.carrier().knots().as_slice(), expected_knots);
+        assert_eq!(
+            (
+                certificate.carrier_range().lo,
+                certificate.carrier_range().hi
+            ),
+            (0.0, (retained_count - 1) as f64)
+        );
+        assert_eq!(
+            (
+                certificate.metadata().base_parameter(),
+                certificate.metadata().base_scale()
+            ),
+            (0.003_586_209_316_397_325, 0.999_999_996_408_403)
+        );
+        for pcurve in certificate.pcurves() {
+            assert_eq!(pcurve.knots().as_slice(), expected_knots.as_slice());
+            assert_eq!(pcurve.param_range(), certificate.carrier_range());
+        }
+
+        for (stage, resource, mode, exact) in [
+            (
+                INTERSECTION_CHART_CERTIFICATE_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                exact_work,
+            ),
+            (
+                INTERSECTION_CHART_ITEMS,
+                ResourceKind::Items,
+                AccountingMode::HighWater,
+                retained_count as u64,
+            ),
+            (
+                INTERSECTION_CHART_DEPTH,
+                ResourceKind::Depth,
+                AccountingMode::HighWater,
+                10,
+            ),
+        ] {
+            let (store, outcome) =
+                contextual_with_limit(&file, LimitSpec::new(stage, resource, mode, exact));
+            assert!(
+                outcome.result().is_ok(),
+                "{retained_count}-sample exact {stage:?} limit must pass: {:?}",
+                outcome.result()
+            );
             assert_eq!(store.count::<Body>(), 1);
             let usage = outcome
                 .report()
@@ -2748,6 +3065,84 @@ fn bsurface_bsurface_periodic_closed_altered_and_noncanonical_cases_fail_with_re
     let reconstruction = reconstruct(&valid, &mut store).unwrap();
     let mut fresh = Store::new();
     let fresh_reconstruction = reconstruct(&fixture(), &mut fresh).unwrap();
+    assert_eq!(reconstruction.bodies, fresh_reconstruction.bodies);
+    assert_eq!(reconstruction.journal, fresh_reconstruction.journal);
+    assert_eq!(store_counts(&store), store_counts(&fresh));
+}
+
+#[test]
+fn noncanonical_offset_plane_bsurface_unsafe_nonplane_and_out_of_family_fail_atomically() {
+    let valid = noncanonical_offset_bsurface_intersection_file(true, true, false, 5);
+    let mut store = Store::new();
+
+    let mut unsafe_offset = noncanonical_offset_bsurface_intersection_file(true, false, false, 2);
+    let unsafe_root = intersection_offset_source(&unsafe_offset);
+    set_field(&mut unsafe_offset, unsafe_root, "check", Value::Char('I'));
+    assert!(matches!(
+        reconstruct(&unsafe_offset, &mut store),
+        Err(XtError::BadField { index, .. }) if index == unsafe_root
+    ));
+    assert_eq!(store_counts(&store), (0, 0, 0));
+
+    let mut nonplane_chain = noncanonical_offset_bsurface_intersection_file(true, false, false, 2);
+    let nonplane_root = intersection_offset_source(&nonplane_chain);
+    let nonplane_bsurface = intersection_bsurface_source(&nonplane_chain);
+    let inner = nonplane_chain.nodes.keys().next_back().copied().unwrap() + 1;
+    nonplane_chain
+        .nodes
+        .insert(inner, nonplane_chain.nodes[&nonplane_root].clone());
+    set_field(
+        &mut nonplane_chain,
+        inner,
+        "node_id",
+        Value::Int(i64::from(inner)),
+    );
+    set_field(
+        &mut nonplane_chain,
+        inner,
+        "surface",
+        Value::Ptr(nonplane_bsurface),
+    );
+    set_field(
+        &mut nonplane_chain,
+        nonplane_root,
+        "surface",
+        Value::Ptr(inner),
+    );
+    assert!(matches!(
+        reconstruct(&nonplane_chain, &mut store),
+        Err(XtError::Unsupported {
+            capability: XtCapability::IntersectionSurfaceFamily,
+            what: "INTERSECTION offset source does not resolve to an exact plane field",
+        })
+    ));
+    assert_eq!(store_counts(&store), (0, 0, 0));
+
+    let mut out_of_family = bsurface_bsurface_intersection_file(true, true, false);
+    let intersection = out_of_family
+        .nodes
+        .iter()
+        .find_map(|(&index, node)| (node.code == code::INTERSECTION).then_some(index))
+        .unwrap();
+    let chart = ptr(&out_of_family, intersection, "chart");
+    set_field(
+        &mut out_of_family,
+        chart,
+        "base_parameter",
+        Value::Double(0.003_586_209_316_397_325),
+    );
+    assert!(matches!(
+        reconstruct(&out_of_family, &mut store),
+        Err(XtError::Unsupported {
+            capability: XtCapability::IntersectionChartConvention,
+            what: "noncanonical affine charts require the bounded finite-open two- through five-sample direct-Plane/B-surface, safe-Offset(Plane)/B-surface, or direct-Plane/Offset(B-surface) family",
+        })
+    ));
+    assert_eq!(store_counts(&store), (0, 0, 0));
+
+    let reconstruction = reconstruct(&valid, &mut store).unwrap();
+    let mut fresh = Store::new();
+    let fresh_reconstruction = reconstruct(&valid, &mut fresh).unwrap();
     assert_eq!(reconstruction.bodies, fresh_reconstruction.bodies);
     assert_eq!(reconstruction.journal, fresh_reconstruction.journal);
     assert_eq!(store_counts(&store), store_counts(&fresh));
