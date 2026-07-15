@@ -5,14 +5,18 @@
 
 //! Checked deterministic complete-body rigid-copy contracts.
 
-use kgeom::curve::Line;
-use kgeom::curve2d::Line2d;
+use kcore::error::Error;
+use kgeom::curve::{Circle, Curve, Line};
+use kgeom::curve2d::{Circle2d, Curve2d, Line2d};
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
-use kgeom::surface::Plane;
+use kgeom::surface::{Plane, Sphere, Surface};
 use kgeom::vec::{Point2, Point3, Vec2, Vec3};
 use kgraph::{
-    AffineParamMap1d, VerifiedIntersectionCertificate, certify_paired_plane_line_residuals,
+    AffineParamMap1d, OffsetSurfaceDescriptor, PairedTrace, PlaneCircleTrace,
+    PlaneSphereCircleTrace, SphereLatitudeTrace, VerifiedIntersectionCertificate,
+    certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
+    certify_paired_plane_sphere_oblique_circle_residuals,
 };
 use ktopo::btess::{TessOptions, tessellate_body};
 use ktopo::check::{CheckLevel, CheckOutcome, check_body_report};
@@ -129,6 +133,190 @@ fn verified_plane_line_wire(
     };
     transaction.commit_checked_body(body).unwrap();
     (body, curve, surfaces, pcurve_handles)
+}
+
+fn wire_body_for_curve(
+    store: &mut Store,
+    curve: ktopo::entity::CurveId,
+    carrier: Circle,
+    range: ParamRange,
+) -> ktopo::entity::BodyId {
+    let mut transaction = store.transaction().unwrap();
+    let body = {
+        let mut assembly = transaction.assembly();
+        let body = assembly.add(Body {
+            kind: BodyKind::Wire,
+            regions: Vec::new(),
+        });
+        let region = assembly.add(Region {
+            body,
+            kind: RegionKind::Void,
+            shells: Vec::new(),
+        });
+        let shell = assembly.add(Shell {
+            region,
+            faces: Vec::new(),
+            edges: Vec::new(),
+            vertex: None,
+        });
+        let vertices = [carrier.eval(range.lo), carrier.eval(range.hi)].map(|position| {
+            let point = assembly.add(position);
+            assembly.add(Vertex {
+                point,
+                tolerance: None,
+            })
+        });
+        let edge = assembly.add(Edge {
+            curve: Some(curve),
+            vertices: vertices.map(Some),
+            bounds: Some((range.lo, range.hi)),
+            fins: Vec::new(),
+            tolerance: None,
+        });
+        assembly.get_mut(shell).unwrap().edges.push(edge);
+        assembly.get_mut(region).unwrap().shells.push(shell);
+        assembly.get_mut(body).unwrap().regions.push(region);
+        body
+    };
+    transaction.commit_checked_body(body).unwrap();
+    body
+}
+
+fn verified_aligned_plane_sphere_wire(
+    store: &mut Store,
+    plane_first: bool,
+    offset_plane_source: bool,
+) -> (
+    ktopo::entity::BodyId,
+    ktopo::entity::CurveId,
+    [ktopo::entity::SurfaceId; 2],
+    [ktopo::entity::Curve2dId; 2],
+) {
+    let height = 0.5;
+    let plane = Plane::new(Frame::world().with_origin(Point3::new(0.0, 0.0, height)));
+    let sphere = Sphere::new(Frame::world(), 2.0).unwrap();
+    let radius = (sphere.radius() * sphere.radius() - height * height).sqrt();
+    let carrier = Circle::new(
+        Frame::world().with_origin(Point3::new(0.0, 0.0, height)),
+        radius,
+    )
+    .unwrap();
+    let plane_pcurve = Circle2d::new(Point2::new(0.0, 0.0), radius, Vec2::new(1.0, 0.0)).unwrap();
+    let latitude = kcore::math::atan2(height, radius);
+    let sphere_pcurve = Line2d::new(Point2::new(0.0, latitude), Vec2::new(1.0, 0.0)).unwrap();
+    let identity = AffineParamMap1d::new(1.0, 0.0).unwrap();
+    let plane_trace =
+        PlaneSphereCircleTrace::Plane(PlaneCircleTrace::new(plane, plane_pcurve, identity));
+    let sphere_trace =
+        PlaneSphereCircleTrace::Sphere(SphereLatitudeTrace::new(sphere, sphere_pcurve, identity));
+    let traces = if plane_first {
+        [plane_trace, sphere_trace]
+    } else {
+        [sphere_trace, plane_trace]
+    };
+    let range = ParamRange::new(0.25, 4.75);
+    let certificate =
+        certify_paired_plane_sphere_circle_residuals(carrier, range, traces, 1.0e-10).unwrap();
+
+    let plane_source = if offset_plane_source {
+        let basis = store.insert_surface(SurfaceGeom::Plane(plane)).unwrap();
+        store
+            .insert_surface(SurfaceGeom::Offset(OffsetSurfaceDescriptor::new(
+                basis, 0.0,
+            )))
+            .unwrap()
+    } else {
+        store.insert_surface(SurfaceGeom::Plane(plane)).unwrap()
+    };
+    let sphere_source = store.insert_surface(SurfaceGeom::Sphere(sphere)).unwrap();
+    let plane_pcurve = store
+        .insert_pcurve(Curve2dGeom::Circle(plane_pcurve))
+        .unwrap();
+    let sphere_pcurve = store
+        .insert_pcurve(Curve2dGeom::Line(sphere_pcurve))
+        .unwrap();
+    let surfaces = if plane_first {
+        [plane_source, sphere_source]
+    } else {
+        [sphere_source, plane_source]
+    };
+    let pcurves = if plane_first {
+        [plane_pcurve, sphere_pcurve]
+    } else {
+        [sphere_pcurve, plane_pcurve]
+    };
+    let curve = store
+        .insert_verified_plane_sphere_intersection_curve(surfaces, pcurves, certificate)
+        .unwrap();
+    let body = wire_body_for_curve(store, curve, carrier, range);
+    (body, curve, surfaces, pcurves)
+}
+
+fn verified_oblique_plane_sphere_wire(
+    store: &mut Store,
+    plane_first: bool,
+) -> (
+    ktopo::entity::BodyId,
+    ktopo::entity::CurveId,
+    [ktopo::entity::SurfaceId; 2],
+    [ktopo::entity::Curve2dId; 2],
+) {
+    let sphere = Sphere::new(Frame::world(), 2.5).unwrap();
+    let normal = Vec3::new(0.0, 0.6, 0.8);
+    let center = normal * 0.5;
+    let frame = Frame::new(center, normal, Vec3::new(1.0, 0.0, 0.0)).unwrap();
+    let plane = Plane::new(frame);
+    let carrier = Circle::new(frame, (sphere.radius() * sphere.radius() - 0.25).sqrt()).unwrap();
+    let plane_pcurve =
+        Circle2d::new(Point2::new(0.0, 0.0), carrier.radius(), Vec2::new(1.0, 0.0)).unwrap();
+    let range = ParamRange::new(0.2, 2.8);
+    let sphere_window = [
+        ParamRange::new(-core::f64::consts::PI, core::f64::consts::PI),
+        ParamRange::new(-core::f64::consts::FRAC_PI_2, core::f64::consts::FRAC_PI_2),
+    ];
+    let sphere_longitude = |parameter| {
+        let local = sphere.frame().to_local(carrier.eval(parameter));
+        kcore::math::atan2(local.y, local.x)
+    };
+    let (sphere_pcurve, certificate) = certify_paired_plane_sphere_oblique_circle_residuals(
+        carrier,
+        range,
+        plane,
+        plane_pcurve,
+        sphere,
+        sphere_window,
+        [sphere_longitude(range.lo), sphere_longitude(range.hi)],
+        if plane_first {
+            PairedTrace::First
+        } else {
+            PairedTrace::Second
+        },
+        1.0e-10,
+    )
+    .unwrap();
+    let plane_source = store.insert_surface(SurfaceGeom::Plane(plane)).unwrap();
+    let sphere_source = store.insert_surface(SurfaceGeom::Sphere(sphere)).unwrap();
+    let plane_pcurve = store
+        .insert_pcurve(Curve2dGeom::Circle(plane_pcurve))
+        .unwrap();
+    let sphere_pcurve = store
+        .insert_pcurve(Curve2dGeom::SphericalCircle(sphere_pcurve))
+        .unwrap();
+    let surfaces = if plane_first {
+        [plane_source, sphere_source]
+    } else {
+        [sphere_source, plane_source]
+    };
+    let pcurves = if plane_first {
+        [plane_pcurve, sphere_pcurve]
+    } else {
+        [sphere_pcurve, plane_pcurve]
+    };
+    let curve = store
+        .insert_verified_plane_sphere_intersection_curve(surfaces, pcurves, certificate)
+        .unwrap();
+    let body = wire_body_for_curve(store, curve, carrier, range);
+    (body, curve, surfaces, pcurves)
 }
 
 #[test]
@@ -336,6 +524,308 @@ fn rigid_copy_reissues_plane_line_intersection_certificate() {
             source: ktopo::entity::EntityRef::Curve(original),
         } if *derived == copied_curve && *original == source_curve
     )));
+}
+
+#[test]
+fn rigid_copy_reissues_ordered_aligned_plane_sphere_circle_certificate() {
+    for plane_first in [false, true] {
+        let mut store = Store::new();
+        let (source, source_curve, source_surfaces, source_pcurves) =
+            verified_aligned_plane_sphere_wire(&mut store, plane_first, false);
+
+        let (copied, journal) = copy_checked(&mut store, source, placement());
+        let copied_edge = store.edges_of_body(copied).unwrap()[0];
+        let copied_curve = store.get(copied_edge).unwrap().curve.unwrap();
+        assert_ne!(copied_curve, source_curve);
+        let copied_intersection = store
+            .get(copied_curve)
+            .unwrap()
+            .as_intersection()
+            .copied()
+            .unwrap();
+        assert!(
+            copied_intersection
+                .source_surfaces()
+                .into_iter()
+                .zip(source_surfaces)
+                .all(|(copied, source)| copied != source)
+        );
+        assert!(
+            copied_intersection
+                .pcurves()
+                .into_iter()
+                .zip(source_pcurves)
+                .all(|(copied, source)| copied != source)
+        );
+        let VerifiedIntersectionCertificate::PlaneSphereCircle(certificate) =
+            copied_intersection.certificate()
+        else {
+            panic!("copy changed the intersection certificate family");
+        };
+        assert_eq!(certificate.carrier_range(), ParamRange::new(0.25, 4.75));
+        let carrier = certificate.carrier();
+        assert_eq!(
+            carrier.frame().origin(),
+            map_point(placement(), Point3::new(0.0, 0.0, 0.5))
+        );
+        assert_eq!(carrier.frame().x(), placement().x());
+        assert_eq!(carrier.frame().y(), placement().y());
+        assert_eq!(
+            matches!(certificate.traces()[0], PlaneSphereCircleTrace::Plane(_)),
+            plane_first
+        );
+        assert!(matches!(
+            certificate.traces()[usize::from(plane_first)],
+            PlaneSphereCircleTrace::Sphere(_)
+        ));
+
+        for ((surface, pcurve), trace) in copied_intersection
+            .source_surfaces()
+            .into_iter()
+            .zip(copied_intersection.pcurves())
+            .zip(certificate.traces())
+        {
+            match trace {
+                PlaneSphereCircleTrace::Plane(trace) => {
+                    assert_eq!(
+                        store.get(surface).unwrap().as_plane(),
+                        Some(&trace.surface())
+                    );
+                    assert_eq!(
+                        store.get(pcurve).unwrap().as_circle(),
+                        Some(&trace.pcurve())
+                    );
+                }
+                PlaneSphereCircleTrace::Sphere(trace) => {
+                    assert_eq!(
+                        store.get(surface).unwrap().as_sphere(),
+                        Some(&trace.surface())
+                    );
+                    assert_eq!(store.get(pcurve).unwrap().as_line(), Some(&trace.pcurve()));
+                }
+                PlaneSphereCircleTrace::SphereOblique(_) => {
+                    panic!("aligned copy changed the sphere trace family");
+                }
+            }
+        }
+        for parameter in [
+            certificate.carrier_range().lo,
+            certificate.carrier_range().lerp(0.41),
+            certificate.carrier_range().hi,
+        ] {
+            let point = carrier.eval(parameter);
+            for ((surface, pcurve), map) in copied_intersection
+                .source_surfaces()
+                .into_iter()
+                .zip(copied_intersection.pcurves())
+                .zip(certificate.parameter_maps())
+            {
+                let uv = store
+                    .get(pcurve)
+                    .unwrap()
+                    .as_curve()
+                    .eval(map.map(parameter));
+                let lifted = store
+                    .get(surface)
+                    .unwrap()
+                    .as_leaf_surface()
+                    .unwrap()
+                    .eval([uv.x, uv.y]);
+                assert!(point.dist(lifted) <= certificate.tolerance());
+            }
+        }
+        assert!(journal.lineage().iter().any(|event| matches!(
+            event,
+            LineageEvent::DerivedFrom {
+                derived: ktopo::entity::EntityRef::Curve(derived),
+                source: ktopo::entity::EntityRef::Curve(original),
+            } if *derived == copied_curve && *original == source_curve
+        )));
+        store.geometry().validate().unwrap();
+    }
+}
+
+#[test]
+fn rigid_copy_regenerates_oblique_plane_sphere_pcurve_and_proof() {
+    for plane_first in [false, true] {
+        let mut store = Store::new();
+        let (source, source_curve, source_surfaces, source_pcurves) =
+            verified_oblique_plane_sphere_wire(&mut store, plane_first);
+        let source_intersection = store
+            .get(source_curve)
+            .unwrap()
+            .as_intersection()
+            .copied()
+            .unwrap();
+        let source_certificate = source_intersection
+            .certificate()
+            .as_plane_sphere_circle()
+            .unwrap();
+
+        let (copied, _) = copy_checked(&mut store, source, placement());
+        let copied_curve = store
+            .get(store.edges_of_body(copied).unwrap()[0])
+            .unwrap()
+            .curve
+            .unwrap();
+        let copied_intersection = store
+            .get(copied_curve)
+            .unwrap()
+            .as_intersection()
+            .copied()
+            .unwrap();
+        let certificate = copied_intersection
+            .certificate()
+            .as_plane_sphere_circle()
+            .unwrap();
+        assert_ne!(copied_curve, source_curve);
+        assert!(
+            copied_intersection
+                .source_surfaces()
+                .into_iter()
+                .zip(source_surfaces)
+                .all(|(copied, source)| copied != source)
+        );
+        assert!(
+            copied_intersection
+                .pcurves()
+                .into_iter()
+                .zip(source_pcurves)
+                .all(|(copied, source)| copied != source)
+        );
+        assert_eq!(
+            matches!(certificate.traces()[0], PlaneSphereCircleTrace::Plane(_)),
+            plane_first
+        );
+        let sphere_index = usize::from(plane_first);
+        let sphere_trace = match certificate.traces()[sphere_index] {
+            PlaneSphereCircleTrace::SphereOblique(trace) => trace,
+            _ => panic!("copy changed the oblique sphere trace family or order"),
+        };
+        let copied_sphere = store
+            .get(copied_intersection.source_surfaces()[sphere_index])
+            .unwrap()
+            .as_sphere()
+            .copied()
+            .unwrap();
+        assert_eq!(sphere_trace.surface(), copied_sphere);
+        assert_eq!(sphere_trace.pcurve().sphere(), copied_sphere);
+        assert_eq!(sphere_trace.pcurve().carrier(), certificate.carrier());
+        assert_eq!(
+            store
+                .get(copied_intersection.pcurves()[sphere_index])
+                .unwrap()
+                .as_spherical_circle()
+                .copied(),
+            Some(sphere_trace.pcurve())
+        );
+        let source_sphere_trace = match source_certificate.traces()[sphere_index] {
+            PlaneSphereCircleTrace::SphereOblique(trace) => trace,
+            _ => unreachable!(),
+        };
+        assert_ne!(sphere_trace.pcurve(), source_sphere_trace.pcurve());
+        assert_eq!(
+            sphere_trace.pcurve().chart_window(),
+            source_sphere_trace.pcurve().chart_window()
+        );
+        for parameter in [
+            certificate.carrier_range().lo,
+            certificate.carrier_range().lerp(0.53),
+            certificate.carrier_range().hi,
+        ] {
+            let uv = sphere_trace.pcurve().eval(parameter);
+            assert!(
+                certificate
+                    .carrier()
+                    .eval(parameter)
+                    .dist(copied_sphere.eval([uv.x, uv.y]))
+                    <= certificate.tolerance()
+            );
+        }
+        store.geometry().validate().unwrap();
+    }
+}
+
+#[test]
+fn offset_backed_plane_sphere_copy_fails_typed_atomic_and_deterministic() {
+    for plane_first in [false, true] {
+        let mut attempted = Store::new();
+        let (unsupported, _, _, _) =
+            verified_aligned_plane_sphere_wire(&mut attempted, plane_first, true);
+        let before = (
+            attempted.count::<Body>(),
+            attempted.count::<Region>(),
+            attempted.count::<Shell>(),
+            attempted.count::<Face>(),
+            attempted.count::<Loop>(),
+            attempted.count::<Fin>(),
+            attempted.count::<Edge>(),
+            attempted.count::<Vertex>(),
+            attempted.count::<CurveGeom>(),
+            attempted.count::<SurfaceGeom>(),
+            attempted.count::<Curve2dGeom>(),
+            attempted.count::<Point3>(),
+        );
+        {
+            let mut transaction = attempted.transaction().unwrap();
+            assert_eq!(
+                transaction.copy_body_rigid(unsupported, placement()),
+                Err(Error::InvalidGeometry {
+                    reason: "Plane/Sphere certificate must retain a direct Plane source",
+                })
+            );
+        }
+        assert_eq!(
+            before,
+            (
+                attempted.count::<Body>(),
+                attempted.count::<Region>(),
+                attempted.count::<Shell>(),
+                attempted.count::<Face>(),
+                attempted.count::<Loop>(),
+                attempted.count::<Fin>(),
+                attempted.count::<Edge>(),
+                attempted.count::<Vertex>(),
+                attempted.count::<CurveGeom>(),
+                attempted.count::<SurfaceGeom>(),
+                attempted.count::<Curve2dGeom>(),
+                attempted.count::<Point3>(),
+            )
+        );
+
+        let (valid_source, _, _, _) =
+            verified_aligned_plane_sphere_wire(&mut attempted, !plane_first, false);
+        let (copied_after, journal_after) = copy_checked(&mut attempted, valid_source, placement());
+
+        let mut control = Store::new();
+        let _ = verified_aligned_plane_sphere_wire(&mut control, plane_first, true);
+        let (control_source, _, _, _) =
+            verified_aligned_plane_sphere_wire(&mut control, !plane_first, false);
+        let (copied_control, journal_control) =
+            copy_checked(&mut control, control_source, placement());
+        assert_eq!(copied_after, copied_control);
+        assert_eq!(journal_after, journal_control);
+        assert_eq!(
+            attempted
+                .get(
+                    attempted
+                        .get(attempted.edges_of_body(copied_after).unwrap()[0])
+                        .unwrap()
+                        .curve
+                        .unwrap()
+                )
+                .unwrap(),
+            control
+                .get(
+                    control
+                        .get(control.edges_of_body(copied_control).unwrap()[0])
+                        .unwrap()
+                        .curve
+                        .unwrap()
+                )
+                .unwrap()
+        );
+    }
 }
 
 #[test]

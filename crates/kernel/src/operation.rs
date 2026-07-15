@@ -1340,9 +1340,10 @@ impl PartEdit<'_> {
     /// The result owns a disjoint topology and geometry closure and the
     /// journal records `DerivedFrom` lineage for every copied identity.
     /// Wrong-part, stale, and unsupported proof-bearing geometry are rejected
-    /// before an operation scope starts. Verified intersection descriptors
-    /// remain unsupported until their certificates can be reissued for the
-    /// transformed source surfaces.
+    /// before an operation scope starts. Direct Plane/Plane line and direct
+    /// Plane/Sphere circle descriptors are admitted because the lower copy
+    /// transaction reissues their whole-range certificates; offset-backed,
+    /// NURBS, and transmitted proof families remain unsupported.
     pub fn copy_body_rigid(
         &mut self,
         request: CopyBodyRequest,
@@ -1358,7 +1359,7 @@ impl PartEdit<'_> {
             let Some(curve) = self.state.store.get(edge)?.curve() else {
                 continue;
             };
-            if self.state.store.curve(curve)?.is_verified_intersection() {
+            if !rigid_copy_curve_is_reissuable(&self.state.store, curve)? {
                 return Err(Error::UnsupportedBodyCopyGeometry {
                     capability: crate::error::capability::RIGID_COPY_VERIFIED_INTERSECTION,
                 });
@@ -1464,6 +1465,31 @@ impl PartEdit<'_> {
                 .map_err(Error::from);
         Ok(scope.finish_typed(result))
     }
+}
+
+fn rigid_copy_curve_is_reissuable(
+    store: &ktopo::store::Store,
+    curve: ktopo::entity::CurveId,
+) -> kcore::error::Result<bool> {
+    let descriptor = store.curve(curve)?;
+    if !descriptor.is_verified_intersection() {
+        return Ok(true);
+    }
+    let Some(intersection) = descriptor.as_intersection() else {
+        return Ok(false);
+    };
+    let [first, second] = intersection.source_surfaces();
+    let first = store.surface(first)?;
+    let second = store.surface(second)?;
+    Ok(match intersection.certificate() {
+        kgraph::VerifiedIntersectionCertificate::PlaneLine(_) => {
+            first.as_plane().is_some() && second.as_plane().is_some()
+        }
+        kgraph::VerifiedIntersectionCertificate::PlaneSphereCircle(_) => {
+            (first.as_plane().is_some() && second.as_sphere().is_some())
+                || (first.as_sphere().is_some() && second.as_plane().is_some())
+        }
+    })
 }
 
 impl Part<'_> {
@@ -1735,12 +1761,19 @@ mod tests {
         AccountingMode, ExecutionPolicy, LimitSpec, NumericalPolicy, PolicyVersion, ResourceKind,
         SessionPrecision, TOTAL_WORK_STAGE,
     };
-    use kgeom::surface::Plane;
-    use kgeom::vec::{Point2, Vec3};
-    use kgraph::{EvalBudgetProfile, EvalError, OffsetSurfaceDescriptor};
+    use kgeom::curve::{Circle, Line};
+    use kgeom::curve2d::{Circle2d, Line2d};
+    use kgeom::param::ParamRange;
+    use kgeom::surface::{Plane, Sphere};
+    use kgeom::vec::{Point2, Point3, Vec2, Vec3};
+    use kgraph::{
+        AffineParamMap1d, EvalBudgetProfile, EvalError, OffsetSurfaceDescriptor, PlaneCircleTrace,
+        PlaneSphereCircleTrace, SphereLatitudeTrace, certify_paired_plane_line_residuals,
+        certify_paired_plane_sphere_circle_residuals,
+    };
     use ktopo::check::VerificationGapCause;
     use ktopo::entity::{Body as RawBody, Edge as RawEdge, Face as RawFace, Vertex as RawVertex};
-    use ktopo::geom::SurfaceGeom;
+    use ktopo::geom::{Curve2dGeom, SurfaceGeom};
     use ktopo::store::Store;
 
     use super::*;
@@ -2073,6 +2106,124 @@ mod tests {
             .into_result()
             .unwrap();
         assert_eq!(full.outcome(), CheckOutcome::Valid);
+    }
+
+    #[test]
+    fn rigid_copy_preflight_admits_only_direct_reissuable_proof_families() {
+        let mut store = Store::new();
+        let planes = [
+            Plane::new(Frame::world()),
+            Plane::new(
+                Frame::new(
+                    Point3::new(0.0, 0.0, 0.0),
+                    Vec3::new(0.0, 1.0, 0.0),
+                    Vec3::new(1.0, 0.0, 0.0),
+                )
+                .unwrap(),
+            ),
+        ];
+        let line_pcurves = [
+            Line2d::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap(),
+            Line2d::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap(),
+        ];
+        let plane_line_certificate = certify_paired_plane_line_residuals(
+            Line::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+            ParamRange::new(-1.0, 1.0),
+            planes,
+            line_pcurves,
+            [AffineParamMap1d::new(1.0, 0.0).unwrap(); 2],
+            1.0e-12,
+        )
+        .unwrap();
+        let plane_handles =
+            planes.map(|plane| store.insert_surface(SurfaceGeom::Plane(plane)).unwrap());
+        let line_pcurve_handles =
+            line_pcurves.map(|pcurve| store.insert_pcurve(Curve2dGeom::Line(pcurve)).unwrap());
+        let plane_line = store
+            .insert_verified_plane_intersection_curve(
+                plane_handles,
+                line_pcurve_handles,
+                plane_line_certificate,
+            )
+            .unwrap();
+        assert!(rigid_copy_curve_is_reissuable(&store, plane_line).unwrap());
+
+        let offset_plane = store
+            .insert_surface(SurfaceGeom::Offset(OffsetSurfaceDescriptor::new(
+                plane_handles[0],
+                0.0,
+            )))
+            .unwrap();
+        let offset_plane_line = store
+            .insert_verified_plane_intersection_curve(
+                [offset_plane, plane_handles[1]],
+                line_pcurve_handles,
+                plane_line_certificate,
+            )
+            .unwrap();
+        assert!(!rigid_copy_curve_is_reissuable(&store, offset_plane_line).unwrap());
+
+        let height = 0.5;
+        let plane = Plane::new(Frame::world().with_origin(Point3::new(0.0, 0.0, height)));
+        let sphere = Sphere::new(Frame::world(), 2.0).unwrap();
+        let radius = (sphere.radius() * sphere.radius() - height * height).sqrt();
+        let carrier = Circle::new(
+            Frame::world().with_origin(Point3::new(0.0, 0.0, height)),
+            radius,
+        )
+        .unwrap();
+        let plane_pcurve =
+            Circle2d::new(Point2::new(0.0, 0.0), radius, Vec2::new(1.0, 0.0)).unwrap();
+        let sphere_pcurve = Line2d::new(
+            Point2::new(0.0, kcore::math::atan2(height, radius)),
+            Vec2::new(1.0, 0.0),
+        )
+        .unwrap();
+        let identity = AffineParamMap1d::new(1.0, 0.0).unwrap();
+        let plane_sphere_certificate = certify_paired_plane_sphere_circle_residuals(
+            carrier,
+            ParamRange::new(0.25, 4.75),
+            [
+                PlaneSphereCircleTrace::Plane(PlaneCircleTrace::new(plane, plane_pcurve, identity)),
+                PlaneSphereCircleTrace::Sphere(SphereLatitudeTrace::new(
+                    sphere,
+                    sphere_pcurve,
+                    identity,
+                )),
+            ],
+            1.0e-10,
+        )
+        .unwrap();
+        let plane = store.insert_surface(SurfaceGeom::Plane(plane)).unwrap();
+        let sphere = store.insert_surface(SurfaceGeom::Sphere(sphere)).unwrap();
+        let plane_pcurve = store
+            .insert_pcurve(Curve2dGeom::Circle(plane_pcurve))
+            .unwrap();
+        let sphere_pcurve = store
+            .insert_pcurve(Curve2dGeom::Line(sphere_pcurve))
+            .unwrap();
+        let plane_sphere = store
+            .insert_verified_plane_sphere_intersection_curve(
+                [plane, sphere],
+                [plane_pcurve, sphere_pcurve],
+                plane_sphere_certificate,
+            )
+            .unwrap();
+        assert!(rigid_copy_curve_is_reissuable(&store, plane_sphere).unwrap());
+
+        let offset_plane = store
+            .insert_surface(SurfaceGeom::Offset(OffsetSurfaceDescriptor::new(
+                plane, 0.0,
+            )))
+            .unwrap();
+        let offset_plane_sphere = store
+            .insert_verified_plane_sphere_intersection_curve(
+                [offset_plane, sphere],
+                [plane_pcurve, sphere_pcurve],
+                plane_sphere_certificate,
+            )
+            .unwrap();
+        assert!(!rigid_copy_curve_is_reissuable(&store, offset_plane_sphere).unwrap());
     }
 
     #[test]

@@ -9,13 +9,16 @@ use crate::store::Store;
 use kcore::error::{Error, Result};
 use kcore::tolerance::{LINEAR_RESOLUTION, check_in_size_box};
 use kgeom::curve::{Circle, Ellipse, Line};
-use kgeom::curve2d::Line2d;
+use kgeom::curve2d::{Curve2d, Line2d};
 use kgeom::frame::Frame;
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::surface::{Cone, Cylinder, Dir, Plane, Sphere, Surface, Torus};
 use kgeom::vec::{Point3, Vec3};
 use kgraph::{
-    OffsetSurfaceDescriptor, VerifiedIntersectionCertificate, certify_paired_plane_line_residuals,
+    OffsetSurfaceDescriptor, PairedTrace, PlaneCircleTrace, PlaneSphereCircleTrace,
+    SphereLatitudeTrace, SphericalCirclePcurve, VerifiedIntersectionCertificate,
+    certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
+    certify_paired_plane_sphere_oblique_circle_residuals,
 };
 use std::collections::HashMap;
 
@@ -222,72 +225,22 @@ impl Copier<'_> {
         }
         let descriptor = self.store.get(source)?.clone();
         if let CurveGeom::Intersection(intersection) = &descriptor {
-            let certificate = intersection.certificate();
-            let VerifiedIntersectionCertificate::PlaneLine(certificate) = certificate else {
-                return Err(Error::InvalidGeometry {
-                    reason: "rigid body copy does not yet reissue this verified intersection certificate",
-                });
+            return match intersection.certificate() {
+                VerifiedIntersectionCertificate::PlaneLine(certificate) => self
+                    .copy_plane_line_intersection(
+                        source,
+                        intersection.source_surfaces(),
+                        intersection.pcurves(),
+                        certificate,
+                    ),
+                VerifiedIntersectionCertificate::PlaneSphereCircle(certificate) => self
+                    .copy_plane_sphere_intersection(
+                        source,
+                        intersection.source_surfaces(),
+                        intersection.pcurves(),
+                        certificate,
+                    ),
             };
-            let source_surfaces = intersection.source_surfaces();
-            let copied_surfaces = [
-                self.copy_surface(source_surfaces[0])?,
-                self.copy_surface(source_surfaces[1])?,
-            ];
-            let copied_plane = |surface: SurfaceId| -> Result<Plane> {
-                self.store
-                    .get(surface)?
-                    .as_plane()
-                    .copied()
-                    .ok_or(Error::InvalidGeometry {
-                        reason: "Plane/Plane certificate must retain Plane sources",
-                    })
-            };
-            let surfaces = [
-                copied_plane(copied_surfaces[0])?,
-                copied_plane(copied_surfaces[1])?,
-            ];
-            let source_pcurves = intersection.pcurves();
-            let copied_pcurves = [
-                self.copy_pcurve(source_pcurves[0])?,
-                self.copy_pcurve(source_pcurves[1])?,
-            ];
-            let copied_line = |pcurve: Curve2dId| -> Result<Line2d> {
-                self.store
-                    .get(pcurve)?
-                    .as_line()
-                    .copied()
-                    .ok_or(Error::InvalidGeometry {
-                        reason: "Plane/Plane certificate must retain line pcurves",
-                    })
-            };
-            let pcurves = [
-                copied_line(copied_pcurves[0])?,
-                copied_line(copied_pcurves[1])?,
-            ];
-            let carrier = certificate.carrier();
-            let carrier = Line::new(
-                self.checked_point(carrier.origin())?,
-                self.vector(carrier.dir()),
-            )?;
-            let certificate = certify_paired_plane_line_residuals(
-                carrier,
-                certificate.carrier_range(),
-                surfaces,
-                pcurves,
-                certificate.parameter_maps(),
-                certificate.tolerance(),
-            )
-            .map_err(|_| Error::InvalidGeometry {
-                reason: "rigid body copy could not reissue the Plane/Plane intersection certificate",
-            })?;
-            let curve = self.store.insert_verified_plane_intersection_curve(
-                copied_surfaces,
-                copied_pcurves,
-                certificate,
-            )?;
-            self.curves.insert(source, curve);
-            self.derived(EntityRef::Curve(curve), EntityRef::Curve(source));
-            return Ok(curve);
         }
         let transformed = match descriptor {
             CurveGeom::Line(line) => CurveGeom::Line(Line::new(
@@ -330,6 +283,274 @@ impl Copier<'_> {
         self.curves.insert(source, curve);
         self.derived(EntityRef::Curve(curve), EntityRef::Curve(source));
         Ok(curve)
+    }
+
+    fn copy_plane_line_intersection(
+        &mut self,
+        source: CurveId,
+        source_surfaces: [SurfaceId; 2],
+        source_pcurves: [Curve2dId; 2],
+        certificate: kgraph::PairedPlaneLineResidualCertificate,
+    ) -> Result<CurveId> {
+        let copied_surfaces = [
+            self.copy_surface(source_surfaces[0])?,
+            self.copy_surface(source_surfaces[1])?,
+        ];
+        let copied_plane = |store: &Store, surface: SurfaceId| -> Result<Plane> {
+            store
+                .get(surface)?
+                .as_plane()
+                .copied()
+                .ok_or(Error::InvalidGeometry {
+                    reason: "Plane/Plane certificate must retain Plane sources",
+                })
+        };
+        let surfaces = [
+            copied_plane(self.store, copied_surfaces[0])?,
+            copied_plane(self.store, copied_surfaces[1])?,
+        ];
+        let copied_pcurves = [
+            self.copy_pcurve(source_pcurves[0])?,
+            self.copy_pcurve(source_pcurves[1])?,
+        ];
+        let copied_line = |store: &Store, pcurve: Curve2dId| -> Result<Line2d> {
+            store
+                .get(pcurve)?
+                .as_line()
+                .copied()
+                .ok_or(Error::InvalidGeometry {
+                    reason: "Plane/Plane certificate must retain line pcurves",
+                })
+        };
+        let pcurves = [
+            copied_line(self.store, copied_pcurves[0])?,
+            copied_line(self.store, copied_pcurves[1])?,
+        ];
+        let carrier = certificate.carrier();
+        let carrier = Line::new(
+            self.checked_point(carrier.origin())?,
+            self.vector(carrier.dir()),
+        )?;
+        let certificate = certify_paired_plane_line_residuals(
+            carrier,
+            certificate.carrier_range(),
+            surfaces,
+            pcurves,
+            certificate.parameter_maps(),
+            certificate.tolerance(),
+        )
+        .map_err(|_| Error::InvalidGeometry {
+            reason: "rigid body copy could not reissue the Plane/Plane intersection certificate",
+        })?;
+        let curve = self.store.insert_verified_plane_intersection_curve(
+            copied_surfaces,
+            copied_pcurves,
+            certificate,
+        )?;
+        self.register_curve_copy(source, curve);
+        Ok(curve)
+    }
+
+    fn copy_plane_sphere_intersection(
+        &mut self,
+        source: CurveId,
+        source_surfaces: [SurfaceId; 2],
+        source_pcurves: [Curve2dId; 2],
+        certificate: kgraph::PairedPlaneSphereCircleResidualCertificate,
+    ) -> Result<CurveId> {
+        let copied_surfaces = [
+            self.copy_surface(source_surfaces[0])?,
+            self.copy_surface(source_surfaces[1])?,
+        ];
+        let carrier = certificate.carrier();
+        let carrier = Circle::new(self.frame(*carrier.frame())?, carrier.radius())?;
+        let traces = certificate.traces();
+
+        let (copied_pcurves, certificate) = match traces {
+            [
+                PlaneSphereCircleTrace::Plane(_),
+                PlaneSphereCircleTrace::Sphere(_),
+            ]
+            | [
+                PlaneSphereCircleTrace::Sphere(_),
+                PlaneSphereCircleTrace::Plane(_),
+            ] => {
+                let copied_pcurves = [
+                    self.copy_pcurve(source_pcurves[0])?,
+                    self.copy_pcurve(source_pcurves[1])?,
+                ];
+                let traces = [
+                    self.copied_plane_sphere_trace(
+                        traces[0],
+                        copied_surfaces[0],
+                        copied_pcurves[0],
+                    )?,
+                    self.copied_plane_sphere_trace(
+                        traces[1],
+                        copied_surfaces[1],
+                        copied_pcurves[1],
+                    )?,
+                ];
+                let certificate = certify_paired_plane_sphere_circle_residuals(
+                    carrier,
+                    certificate.carrier_range(),
+                    traces,
+                    certificate.tolerance(),
+                )
+                .map_err(|_| Error::InvalidGeometry {
+                    reason: "rigid body copy could not reissue the Plane/Sphere intersection certificate",
+                })?;
+                (copied_pcurves, certificate)
+            }
+            [
+                PlaneSphereCircleTrace::Plane(_),
+                PlaneSphereCircleTrace::SphereOblique(sphere),
+            ]
+            | [
+                PlaneSphereCircleTrace::SphereOblique(sphere),
+                PlaneSphereCircleTrace::Plane(_),
+            ] => {
+                let plane_first = matches!(traces[0], PlaneSphereCircleTrace::Plane(_));
+                let plane_index = usize::from(!plane_first);
+                let sphere_index = usize::from(plane_first);
+                let copied_plane = self.direct_plane(copied_surfaces[plane_index])?;
+                let copied_sphere = self.direct_sphere(copied_surfaces[sphere_index])?;
+                let copied_plane_pcurve = self.copy_pcurve(source_pcurves[plane_index])?;
+                let plane_pcurve = self
+                    .store
+                    .get(copied_plane_pcurve)?
+                    .as_circle()
+                    .copied()
+                    .ok_or(Error::InvalidGeometry {
+                        reason: "Plane/Sphere certificate must retain a circle plane pcurve",
+                    })?;
+                let source_sphere_pcurve = sphere.pcurve();
+                let range = certificate.carrier_range();
+                let endpoint_longitudes = [
+                    source_sphere_pcurve.eval(range.lo).x,
+                    source_sphere_pcurve.eval(range.hi).x,
+                ];
+                let (sphere_pcurve, certificate) =
+                    certify_paired_plane_sphere_oblique_circle_residuals(
+                        carrier,
+                        range,
+                        copied_plane,
+                        plane_pcurve,
+                        copied_sphere,
+                        source_sphere_pcurve.chart_window(),
+                        endpoint_longitudes,
+                        if plane_first {
+                            PairedTrace::First
+                        } else {
+                            PairedTrace::Second
+                        },
+                        certificate.tolerance(),
+                    )
+                    .map_err(|_| Error::InvalidGeometry {
+                        reason: "rigid body copy could not reissue the oblique Plane/Sphere intersection certificate",
+                    })?;
+                let copied_sphere_pcurve =
+                    self.copy_spherical_pcurve(source_pcurves[sphere_index], sphere_pcurve)?;
+                let mut copied_pcurves = [copied_plane_pcurve; 2];
+                copied_pcurves[sphere_index] = copied_sphere_pcurve;
+                copied_pcurves[plane_index] = copied_plane_pcurve;
+                (copied_pcurves, certificate)
+            }
+            _ => {
+                return Err(Error::InvalidGeometry {
+                    reason: "Plane/Sphere certificate must retain one Plane and one Sphere trace",
+                });
+            }
+        };
+
+        let curve = self.store.insert_verified_plane_sphere_intersection_curve(
+            copied_surfaces,
+            copied_pcurves,
+            certificate,
+        )?;
+        self.register_curve_copy(source, curve);
+        Ok(curve)
+    }
+
+    fn copied_plane_sphere_trace(
+        &self,
+        source: PlaneSphereCircleTrace,
+        copied_surface: SurfaceId,
+        copied_pcurve: Curve2dId,
+    ) -> Result<PlaneSphereCircleTrace> {
+        match source {
+            PlaneSphereCircleTrace::Plane(trace) => {
+                Ok(PlaneSphereCircleTrace::Plane(PlaneCircleTrace::new(
+                    self.direct_plane(copied_surface)?,
+                    self.store.get(copied_pcurve)?.as_circle().copied().ok_or(
+                        Error::InvalidGeometry {
+                            reason: "Plane/Sphere certificate must retain a circle plane pcurve",
+                        },
+                    )?,
+                    trace.parameter_map(),
+                )))
+            }
+            PlaneSphereCircleTrace::Sphere(trace) => {
+                Ok(PlaneSphereCircleTrace::Sphere(SphereLatitudeTrace::new(
+                    self.direct_sphere(copied_surface)?,
+                    self.store.get(copied_pcurve)?.as_line().copied().ok_or(
+                        Error::InvalidGeometry {
+                            reason: "Plane/Sphere certificate must retain a line sphere pcurve",
+                        },
+                    )?,
+                    trace.parameter_map(),
+                )))
+            }
+            PlaneSphereCircleTrace::SphereOblique(_) => Err(Error::InvalidGeometry {
+                reason: "oblique Plane/Sphere traces require a regenerated spherical pcurve",
+            }),
+        }
+    }
+
+    fn direct_plane(&self, surface: SurfaceId) -> Result<Plane> {
+        self.store
+            .get(surface)?
+            .as_plane()
+            .copied()
+            .ok_or(Error::InvalidGeometry {
+                reason: "Plane/Sphere certificate must retain a direct Plane source",
+            })
+    }
+
+    fn direct_sphere(&self, surface: SurfaceId) -> Result<Sphere> {
+        self.store
+            .get(surface)?
+            .as_sphere()
+            .copied()
+            .ok_or(Error::InvalidGeometry {
+                reason: "Plane/Sphere certificate must retain a direct Sphere source",
+            })
+    }
+
+    fn copy_spherical_pcurve(
+        &mut self,
+        source: Curve2dId,
+        pcurve: SphericalCirclePcurve,
+    ) -> Result<Curve2dId> {
+        if let Some(&copied) = self.pcurves.get(&source) {
+            if self.store.get(copied)?.as_spherical_circle().copied() == Some(pcurve) {
+                return Ok(copied);
+            }
+            return Err(Error::InvalidGeometry {
+                reason: "shared spherical pcurve copy does not match the reissued certificate",
+            });
+        }
+        let copied = self
+            .store
+            .insert_pcurve(crate::geom::Curve2dGeom::SphericalCircle(pcurve))?;
+        self.pcurves.insert(source, copied);
+        self.derived(EntityRef::Curve2d(copied), EntityRef::Curve2d(source));
+        Ok(copied)
+    }
+
+    fn register_curve_copy(&mut self, source: CurveId, copied: CurveId) {
+        self.curves.insert(source, copied);
+        self.derived(EntityRef::Curve(copied), EntityRef::Curve(source));
     }
 
     fn copy_surface(&mut self, source: SurfaceId) -> Result<SurfaceId> {

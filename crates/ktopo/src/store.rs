@@ -25,8 +25,8 @@ use kcore::tolerance::{Tolerances, check_in_size_box};
 use kgeom::vec::Point3;
 use kgraph::{
     Curve2dHandle, GeometryGraph, GeometryGraphError, GeometryRef,
-    PairedPlaneLineResidualCertificate, SurfaceHandle, TransmittedNurbsIntersectionCertificate,
-    TransmittedPlaneIntersectionCertificate,
+    PairedPlaneLineResidualCertificate, PairedPlaneSphereCircleResidualCertificate, SurfaceHandle,
+    TransmittedNurbsIntersectionCertificate, TransmittedPlaneIntersectionCertificate,
 };
 
 pub(crate) mod sealed {
@@ -398,6 +398,19 @@ impl Store {
     ) -> Result<CurveId> {
         self.geometry
             .insert_verified_plane_intersection_curve(source_surfaces, pcurves, certificate)
+            .map_err(map_graph_error)
+    }
+
+    /// Insert a certified finite Plane/Sphere intersection circle with
+    /// graph-owned exact-field source and pcurve proof bindings.
+    pub fn insert_verified_plane_sphere_intersection_curve(
+        &mut self,
+        source_surfaces: [SurfaceHandle; 2],
+        pcurves: [Curve2dHandle; 2],
+        certificate: PairedPlaneSphereCircleResidualCertificate,
+    ) -> Result<CurveId> {
+        self.geometry
+            .insert_verified_plane_sphere_intersection_curve(source_surfaces, pcurves, certificate)
             .map_err(map_graph_error)
     }
 
