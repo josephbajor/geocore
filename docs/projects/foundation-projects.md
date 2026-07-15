@@ -39,6 +39,16 @@ The foundation has enough vertical proof. The current phase prioritizes
 convergence, adoption, and continuous enforcement over adding more parallel
 surface area:
 
+The blocking F7 test-throughput checkpoint is closed. The fail-closed
+`focused`/`fast`/`standard`/`full` developer lanes, exact 13-target
+production-corpus classification, concurrent three-OS debug/release CI
+profiles, rolling Cargo caches, and first redundant v10/v11 full-exemplar
+replay removals have landed. Warm `fast` passed in 14.430s and the integrated
+`full` gate passed all targets, docs, and tooling in 1,726.501s on the named
+development host. `full` still owns every corpus ratchet; further optimization
+remains evidence-driven and no longer blocks resuming item 3. See
+[`test-throughput.md`](test-throughput.md) for the contract and measurements.
+
 Read the ordered queue below literally. At this handoff, item 1's facade-owned
 body-tessellation replacement and state-4 compatibility ratchet are closed,
 and item 2's evidence, finite-preset, matrix-admission, and client-adoption

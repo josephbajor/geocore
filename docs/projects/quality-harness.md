@@ -608,7 +608,7 @@ regression remains portable.
 
 Status: implemented. Existing benchmark targets and the two current fuzz
 targets run in bounded Linux jobs; more targets remain behind the post-Q8
-landing order. The benchmark manifest contains 156 registered cases.
+landing order. The benchmark manifest contains 163 registered cases.
 
 CI has three bounded jobs/surfaces for the existing Q1 and Q6 assets. The
 Python contract surface is load-bearing: CI runs
@@ -649,6 +649,40 @@ committed licensed-host identity. CI must reject a falsely “current” status,
 acknowledged stale status prominently, and reserve a failing stale-evidence
 gate for writer-conformance/release claims. It does not pretend to perform the
 licensed-host validation described in `docs/oracle-loop.md`.
+
+### Test-throughput checkpoint
+
+The developer test surface is now split by a fail-closed standard-library
+runner in `scripts/test_lanes.py`. `focused` selects one package library or
+integration target, `fast` combines workspace library/binary tests with 13
+reviewed integration smoke targets, `standard` retains all 79 non-corpus
+integration targets plus doc tests and tooling contracts, and `full` retains
+all 92 integration targets including the 13 production-corpus ratchets. The
+runner validates workspace membership, package identity, the smoke inventory,
+and all 12 direct `exemplar.x_t` consumers before execution;
+`corpus_manifest` is the thirteenth slow target because it reaches the same
+exemplar through the manifest.
+
+CI retains full debug and release workspace tests on Linux, macOS, and Windows,
+but schedules the profiles concurrently instead of serially per platform.
+Cargo download and build artifacts use toolchain/profile-separated rolling
+caches. Correctness coverage is unchanged; the scheduling change is expected
+to reduce the critical path rather than treating a subset as sufficient
+evidence. Actual CI wall-time improvement remains a CI-run measurement.
+
+The first corpus consolidation removes redundant full-exemplar v10 and v11
+historical replays from the cubic and zero-knot suites. Their exact aggregate
+budget-profile assertions, isolated record certificates, Work/Items/Depth
+boundaries, malformed-input atomicity, and the v12 record-4230 end-to-end
+frontier remain. Timing evidence and the remaining consolidation policy live
+in `docs/projects/test-throughput.md`; elapsed time remains diagnostic rather
+than a correctness threshold.
+
+The initial blocking checkpoint is closed: the final warm `fast` lane passed in
+14.430s and the integrated `full` lane passed all targets, docs, and 87 Python
+contracts in 1,726.501s on the named development host. The next measured
+candidate is the 294.22s endpoint-roundoff suite; no further consolidation is
+authorized until its distinct evidence is audited for actual subsumption.
 
 ## Revised landing sequence from the current state
 
