@@ -3474,6 +3474,107 @@ mod tests {
     }
 
     #[test]
+    fn rigid_body_copy_facade_reissues_nested_quadratic_dual_offset() {
+        let placement = Frame::new(
+            Point3::new(2.0, -1.0, 3.0),
+            Vec3::new(1.0, 2.0, 3.0).normalized().unwrap(),
+            Vec3::new(2.0, -1.0, 0.0).normalized().unwrap(),
+        )
+        .unwrap();
+        let first = [0.025, 0.05, 0.075, 0.1];
+        let second = [0.1, 0.15, 0.25];
+        let mut copied_certificates = Vec::new();
+        for swap_order in [false, true] {
+            let mut session = Kernel::new().create_session();
+            let part_id = session.create_part();
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let (raw_source, source_curve) = transmitted_dual_offset_wire(
+                &mut edit.state.store,
+                [&first, &second],
+                [&first, &second],
+                false,
+                false,
+                3,
+                swap_order,
+            );
+            let source_witnesses = edit
+                .state
+                .store
+                .get(source_curve)
+                .unwrap()
+                .as_transmitted_nurbs_intersection()
+                .unwrap()
+                .certificate()
+                .quadratic_interpolation_witnesses()
+                .unwrap();
+            let source = BodyId::new(part_id, raw_source);
+            let created = edit
+                .copy_body_rigid(CopyBodyRequest::new(source, placement))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            let copied_edge = edit
+                .state
+                .store
+                .edges_of_body(created.body().raw())
+                .unwrap()[0];
+            let copied_curve = edit.state.store.get(copied_edge).unwrap().curve.unwrap();
+            let copied = edit
+                .state
+                .store
+                .get(copied_curve)
+                .unwrap()
+                .as_transmitted_nurbs_intersection()
+                .unwrap();
+            let certificate = copied.certificate().clone();
+            let witnesses = certificate.quadratic_interpolation_witnesses().unwrap();
+            assert_eq!(
+                certificate.traces().each_ref().map(|trace| {
+                    trace
+                        .as_offset_nurbs()
+                        .unwrap()
+                        .descriptor_signed_distances()
+                        .len()
+                }),
+                if swap_order { [3, 4] } else { [4, 3] }
+            );
+            assert_eq!(
+                witnesses.positions(),
+                source_witnesses
+                    .positions()
+                    .map(|point| placement.point_at(point.x, point.y, point.z))
+            );
+            assert_eq!(
+                witnesses.canonicalized_pcurve_points(),
+                source_witnesses.canonicalized_pcurve_points()
+            );
+            assert_eq!(
+                certify_transmitted_quadratic_dual_offset_nurbs_intersection_residuals(
+                    certificate.carrier().clone(),
+                    certificate.traces().clone(),
+                    certificate.pcurves().clone(),
+                    witnesses.positions(),
+                    witnesses.canonicalized_pcurve_points(),
+                    certificate.metadata(),
+                    certificate.tolerance(),
+                )
+                .unwrap(),
+                certificate
+            );
+            edit.state.store.geometry().validate().unwrap();
+            copied_certificates.push(certificate);
+        }
+        assert_eq!(
+            copied_certificates[0].traces()[0],
+            copied_certificates[1].traces()[1]
+        );
+        assert_eq!(
+            copied_certificates[0].traces()[1],
+            copied_certificates[1].traces()[0]
+        );
+    }
+
+    #[test]
     fn rigid_body_copy_facade_reissues_witnessed_cubic_dual_offset() {
         let placement = Frame::new(
             Point3::new(2.0, -1.0, 3.0),
@@ -3783,13 +3884,6 @@ mod tests {
         // chains. Facade preflight covers graph-valid unsupported shapes and
         // source relationships before an operation scope is created.
         for (source_distances, trace_distances, shared_basis, periodic_first, sample_count) in [
-            (
-                (&first_split[..], &second[..]),
-                (&first_split[..], &second[..]),
-                false,
-                false,
-                3,
-            ),
             (
                 (&first_split[..], &second[..]),
                 (&first_split[..], &second[..]),

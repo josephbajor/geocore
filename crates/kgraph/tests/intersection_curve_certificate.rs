@@ -2354,6 +2354,51 @@ fn transmitted_quadratic_dual_offset_interpolant_binds_both_original_roots() {
     for (parameter, expected) in [0.0, 1.0, 2.0].into_iter().zip(positions) {
         assert!(carrier.eval(parameter).dist(expected) <= 8.0 * f64::EPSILON);
     }
+    let first_sequences = [
+        vec![0.25],
+        vec![0.1, 0.15],
+        vec![0.05, 0.075, 0.125],
+        vec![0.025, 0.05, 0.075, 0.1],
+    ];
+    let second_sequences = [
+        vec![0.5],
+        vec![0.2, 0.3],
+        vec![0.1, 0.15, 0.25],
+        vec![0.05, 0.1, 0.15, 0.2],
+    ];
+    for first in &first_sequences {
+        for second in &second_sequences {
+            let certificate =
+                certify_transmitted_quadratic_dual_offset_nurbs_intersection_residuals(
+                    carrier.clone(),
+                    [
+                        TransmittedPlaneNurbsTrace::OffsetNurbs(
+                            TransmittedOffsetNurbsTrace::from_descriptor_signed_distances(
+                                first_basis.clone(),
+                                first,
+                            )
+                            .unwrap(),
+                        ),
+                        TransmittedPlaneNurbsTrace::OffsetNurbs(
+                            TransmittedOffsetNurbsTrace::from_descriptor_signed_distances(
+                                second_basis.clone(),
+                                second,
+                            )
+                            .unwrap(),
+                        ),
+                    ],
+                    pcurves.clone(),
+                    positions,
+                    uv_samples,
+                    metadata,
+                    1.0e-8,
+                )
+                .unwrap();
+            assert!(transmitted_nurbs_intersection_has_rigid_copy_recertifier(
+                &certificate
+            ));
+        }
+    }
 
     let mut graph = GeometryGraph::new();
     let first_basis_handle = graph.insert_surface(first_basis.clone()).unwrap();

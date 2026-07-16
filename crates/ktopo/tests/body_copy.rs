@@ -2637,6 +2637,149 @@ fn rigid_copy_reissues_witnessed_quadratic_dual_offset_in_both_orders() {
 }
 
 #[test]
+fn rigid_copy_reissues_quadratic_dual_offset_descriptor_matrix() {
+    let first_sequences = [
+        vec![0.25],
+        vec![0.1, 0.15],
+        vec![0.05, 0.075, 0.125],
+        vec![0.025, 0.05, 0.075, 0.1],
+    ];
+    let second_sequences = [
+        vec![0.5],
+        vec![0.2, 0.3],
+        vec![0.1, 0.15, 0.25],
+        vec![0.05, 0.1, 0.15, 0.2],
+    ];
+    for first in &first_sequences {
+        for second in &second_sequences {
+            let mut copied_certificates = Vec::new();
+            for swap_order in [false, true] {
+                let mut store = Store::new();
+                let (source, source_curve, source_surfaces, source_pcurves) =
+                    transmitted_dual_offset_wire(
+                        &mut store,
+                        [first, second],
+                        [first, second],
+                        false,
+                        false,
+                        3,
+                        swap_order,
+                    );
+                let source_certificate = store
+                    .get(source_curve)
+                    .unwrap()
+                    .as_transmitted_nurbs_intersection()
+                    .unwrap()
+                    .certificate()
+                    .clone();
+                let source_witnesses = source_certificate
+                    .quadratic_interpolation_witnesses()
+                    .unwrap();
+                let expected_lengths = if swap_order {
+                    [second.len(), first.len()]
+                } else {
+                    [first.len(), second.len()]
+                };
+                assert_eq!(
+                    source_certificate.traces().each_ref().map(|trace| {
+                        trace
+                            .as_offset_nurbs()
+                            .unwrap()
+                            .descriptor_signed_distances()
+                            .len()
+                    }),
+                    expected_lengths
+                );
+                let (copied, journal) = copy_checked(&mut store, source, oblique_placement());
+                let copied_curve = store
+                    .get(store.edges_of_body(copied).unwrap()[0])
+                    .unwrap()
+                    .curve
+                    .unwrap();
+                let copied_descriptor = store
+                    .get(copied_curve)
+                    .unwrap()
+                    .as_transmitted_nurbs_intersection()
+                    .unwrap();
+                let copied_surfaces = copied_descriptor.source_surfaces();
+                let copied_certificate = copied_descriptor.certificate().clone();
+                let copied_witnesses = copied_certificate
+                    .quadratic_interpolation_witnesses()
+                    .unwrap();
+                assert_eq!(copied_certificate.metadata(), source_certificate.metadata());
+                assert_eq!(
+                    copied_certificate.tolerance(),
+                    source_certificate.tolerance()
+                );
+                assert_eq!(copied_certificate.pcurves(), source_certificate.pcurves());
+                assert_eq!(
+                    copied_witnesses.positions(),
+                    source_witnesses
+                        .positions()
+                        .map(|point| map_point(oblique_placement(), point))
+                );
+                assert_eq!(
+                    copied_witnesses.canonicalized_pcurve_points(),
+                    source_witnesses.canonicalized_pcurve_points()
+                );
+                for (source_trace, copied_trace) in source_certificate
+                    .traces()
+                    .iter()
+                    .zip(copied_certificate.traces())
+                {
+                    assert_transformed_nurbs_trace(source_trace, copied_trace, oblique_placement());
+                }
+                assert_eq!(
+                    certify_transmitted_quadratic_dual_offset_nurbs_intersection_residuals(
+                        copied_certificate.carrier().clone(),
+                        copied_certificate.traces().clone(),
+                        copied_certificate.pcurves().clone(),
+                        copied_witnesses.positions(),
+                        copied_witnesses.canonicalized_pcurve_points(),
+                        copied_certificate.metadata(),
+                        copied_certificate.tolerance(),
+                    )
+                    .unwrap(),
+                    copied_certificate
+                );
+                for (((copied_root, source_root), copied_pcurve), source_pcurve) in copied_surfaces
+                    .into_iter()
+                    .zip(source_surfaces)
+                    .zip(copied_descriptor.pcurves())
+                    .zip(source_pcurves)
+                {
+                    assert_copied_surface_chain(&store, &journal, copied_root, source_root);
+                    assert_ne!(copied_pcurve, source_pcurve);
+                }
+                let copied_chains =
+                    copied_surfaces.map(|root| surface_dependency_chain(&store, root));
+                assert_eq!(
+                    copied_chains.each_ref().map(|chain| chain.len()),
+                    expected_lengths.map(|length| length + 1)
+                );
+                assert_ne!(copied_chains[0].last(), copied_chains[1].last());
+                {
+                    let mut transaction = store.transaction().unwrap();
+                    for retained in copied_chains.into_iter().flatten() {
+                        assert!(transaction.assembly().remove_surface(retained).is_err());
+                    }
+                }
+                store.geometry().validate().unwrap();
+                copied_certificates.push(copied_certificate);
+            }
+            assert_eq!(
+                copied_certificates[0].traces()[0],
+                copied_certificates[1].traces()[1]
+            );
+            assert_eq!(
+                copied_certificates[0].traces()[1],
+                copied_certificates[1].traces()[0]
+            );
+        }
+    }
+}
+
+#[test]
 fn rigid_copy_reissues_witnessed_cubic_dual_offset_in_both_orders() {
     let mut copied_certificates = Vec::new();
     for swap_order in [false, true] {
@@ -3034,13 +3177,6 @@ fn unsupported_dual_offset_transmitted_families_roll_back_without_allocation() {
     // and stale chains. These copy-level cases remain graph-valid while the
     // family shape or live source relationship is intentionally unsupported.
     for (source_distances, trace_distances, shared_basis, periodic_first, sample_count) in [
-        (
-            (&first_split[..], &second[..]),
-            (&first_split[..], &second[..]),
-            false,
-            false,
-            3,
-        ),
         (
             (&first_split[..], &second[..]),
             (&first_split[..], &second[..]),
