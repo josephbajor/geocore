@@ -18,8 +18,17 @@ const ROOT_TOPOLOGY_INDETERMINATE: &str = "line/torus quartic root topology coul
 
 struct ExactLineTorusPolynomials {
     surface: ExactPolynomial,
-    distance_stationary: ExactPolynomial,
-    radial_axis: ExactPolynomial,
+    auxiliary: ExactLineTorusAuxiliary,
+}
+
+enum ExactLineTorusAuxiliary {
+    General {
+        distance_stationary: ExactPolynomial,
+        radial_axis: ExactPolynomial,
+    },
+    Axis {
+        center_plane: ExactPolynomial,
+    },
 }
 
 /// Intersect a line restricted to a finite range with a finite torus
@@ -102,17 +111,38 @@ pub fn intersect_bounded_line_torus(
                 RootIsolation::Ambiguous(_) => complete = false,
             }
 
-            for (critical_polynomial, requires_unsquared_stationarity) in [
-                (&polynomials.distance_stationary, true),
-                (&polynomials.radial_axis, false),
-            ] {
-                if !context.admit_tolerance_critical_points(
-                    &mut points,
-                    critical_polynomial,
-                    isolation_range,
-                    requires_unsquared_stationarity,
-                ) {
-                    complete = false;
+            match &polynomials.auxiliary {
+                ExactLineTorusAuxiliary::General {
+                    distance_stationary,
+                    radial_axis,
+                } => {
+                    for (critical_polynomial, requires_unsquared_stationarity) in
+                        [(distance_stationary, true), (radial_axis, false)]
+                    {
+                        if !context.admit_tolerance_critical_points(
+                            &mut points,
+                            critical_polynomial,
+                            isolation_range,
+                            requires_unsquared_stationarity,
+                        ) {
+                            complete = false;
+                        }
+                    }
+                }
+                ExactLineTorusAuxiliary::Axis { center_plane } => {
+                    // If the squared radial distance q(t) is identically zero,
+                    // the line lies on the torus axis and the generic squared
+                    // stationarity polynomial is also identically zero. Along
+                    // the axis, distance to an open torus has its sole interior
+                    // minimum at the center-plane crossing.
+                    if !context.admit_tolerance_critical_points(
+                        &mut points,
+                        center_plane,
+                        isolation_range,
+                        false,
+                    ) {
+                        complete = false;
+                    }
                 }
             }
             if !context.admit_tolerance_endpoints(&mut points) {
@@ -438,20 +468,28 @@ fn exact_line_torus_polynomials(
         .sub(&major_sq.mul(&q2.mul(&q2)?.scale(4.0)?)?)?;
     let stationary_3 = slope_square_1.mul(&q2)?.add(&slope_square_2.mul(&q1)?)?;
     let stationary_4 = slope_square_2.mul(&q2)?;
-    let distance_stationary = ExactPolynomial::new(vec![
+    let stationary_coefficients = vec![
         stationary_0,
         stationary_1,
         stationary_2,
         stationary_3,
         stationary_4,
-    ])?;
-    let radial_axis = ExactPolynomial::new(vec![q0, q1, q2])?;
+    ];
+    let radial_coefficients = vec![q0, q1, q2];
+    let stationary_is_identity = stationary_coefficients.iter().all(ExactScalar::is_zero);
+    let radial_is_identity = radial_coefficients.iter().all(ExactScalar::is_zero);
+    let auxiliary = match (stationary_is_identity, radial_is_identity) {
+        (false, false) => ExactLineTorusAuxiliary::General {
+            distance_stationary: ExactPolynomial::new(stationary_coefficients)?,
+            radial_axis: ExactPolynomial::new(radial_coefficients)?,
+        },
+        (true, true) => ExactLineTorusAuxiliary::Axis {
+            center_plane: ExactPolynomial::new(vec![axial_origin, axial_direction])?,
+        },
+        _ => return Err(RootIsolationFailure::ZeroPolynomial),
+    };
 
-    Ok(ExactLineTorusPolynomials {
-        surface,
-        distance_stationary,
-        radial_axis,
-    })
+    Ok(ExactLineTorusPolynomials { surface, auxiliary })
 }
 
 fn exact_dot_difference(
