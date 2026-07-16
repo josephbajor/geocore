@@ -964,10 +964,24 @@ The shared `kops` periodic harmonic adapter also no longer uses parameter
 tolerance to collapse distinct classified roots. Tolerance selects or
 endpoint-clamps a representative only, and an identical numeric parameter
 produced by distinct roots is incomplete evidence. Final world-point emission
-deliberately retains linear-resolution physical deduplication. Thus this slice
-protects root topology through `kops` parameter fitting without changing the
-kernel's contact coincidence admission policy. The independent `kgraph`
-seam-root helper still tolerance-deduplicates and remains open debt.
+deliberately retains linear-resolution physical deduplication. Its contained
+planar-conic and primitive-surface window partitions retain
+coefficient/root-index provenance, so distinct numeric cuts remain separate
+even below tolerance, exact same-equation root collisions are
+`Indeterminate`, and only exact zero-width source ranges collapse to points.
+Exact full-period periodic axes contribute one seam equation; near-full ranges
+retain both. Thus this slice protects root topology through `kops` parameter
+fitting and window partitioning without changing the kernel's contact
+coincidence admission policy.
+
+The `kgraph` oblique spherical seam helper now checks source-derived
+coefficient signs, carries per-root provenance and exact derivative direction,
+and uses bounded algebraic side proofs for crossings and tangencies. Strictly
+positive or negative evidence selects the side; evidence containing zero fails
+closed as a singular chart. Same-root periodic aliases may merge, distinct
+close roots remain separate, and numeric collisions fail typed. Exact and
+clamped representatives remain distinguished, but only exact endpoint roots
+create one-sided anchors. Ranges wider than one period are unsupported.
 
 The provisional NURBS/plane arm has now separated proof authority from numeric
 guidance. `kcore::predicates::affine_dot3` interval-certifies ordinary

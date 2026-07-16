@@ -231,11 +231,12 @@ touching, nested, and nonzero-gap behavior.
 Concrete next targets include generic curved-pcurve signed line integrals and
 curved or periodic containment, extreme coefficient spreads outside the
 harmonic normalization/expansion envelope, amplitude/containment policy in the
-remaining higher conic/primitive families, the still-tolerance-deduplicated
-`kgraph` seam-root adapter, affine-dot fallbacks outside the reviewed expansion
-envelope, complete NURBS/plane root isolation, contextual replacement of its
-static node/depth caps, proof-bearing finite-window boundary cells, general
-NURBS and generic higher-polynomial roots, and other raw topology-changing sign
+remaining higher conic/primitive families, full source-exact harmonic
+discriminant construction beyond coefficient sign/zero agreement, affine-dot
+fallbacks outside the reviewed expansion envelope, complete NURBS/plane root
+isolation, contextual replacement of its static node/depth caps,
+proof-bearing finite-window boundary cells, general NURBS and generic
+higher-polynomial root/window partitions, and other raw topology-changing sign
 branches.
 `incircle` remains without a production topology decision consumer, and
 `insphere` remains deferred until a 3D Delaunay or equivalent consumer exists.
@@ -1329,16 +1330,36 @@ re-prove an identity already owned by the construction.
 The `kops` periodic harmonic adapter no longer deduplicates roots whose exact
 harmonic classification is distinct. It only selects and clamps a
 representative inside the bounded chart; two distinct roots that become one
-numeric parameter fail closed. Later world-point emission still applies the
-kernel's linear-resolution physical-coincidence policy. The independent
-`kgraph` seam-root adapter still tolerance-deduplicates and remains open.
-Evidence includes sub-tolerance secants and complete misses, exact
-constant-only misses, a nontrivial 3-4-5 circle/sphere identity, identical and
-opposite arbitrary tilted-frame plane identity, two roots closer than the
-requested parameter tolerance, and public collision-to-`Indeterminate`
-propagation. This closes the named identity and `kops` parameter-root-collapse
-debts for these two pairs, not the remaining higher-polynomial
-conic/primitive containment shortcuts or graph adapter.
+numeric parameter fail closed. Its contained planar-conic, cylinder, cone,
+torus, and sphere window partitions retain canonical coefficient/root-index
+provenance. Distinct numeric roots remain separate even below parameter
+tolerance, different window equations may share an exact chart corner, and
+different roots of one harmonic at one numeric cut return `Indeterminate`.
+Only exact zero-width source ranges collapse to the point path. Bit-exact
+full-period periodic surface axes contribute one canonical seam equation;
+near-full windows retain both bounds. Later world-point emission still applies
+the kernel's linear-resolution physical-coincidence policy.
+
+The `kgraph` oblique spherical seam certifier now verifies source-derived
+coefficient signs against the finite harmonic, retains root provenance and
+exact derivative direction, and proves the x-side with bounded algebraic
+signs. Strictly positive or negative evidence selects the side; evidence that
+contains zero fails closed as a singular chart. Exact and clamped
+representatives remain distinct, and only exact endpoint roots create
+one-sided anchors. It merges only aliases of the same periodic root, keeps
+distinct close roots, fails typed on exact numeric collisions, and rejects
+carrier ranges wider than one period. Evidence includes
+sub-tolerance secants and complete misses, exact constant-only misses, a
+nontrivial 3-4-5 circle/sphere identity, identical and opposite arbitrary
+tilted-frame plane identity, two roots closer than the requested parameter
+tolerance, public collision-to-`Indeterminate` propagation, close seam roots
+that retain a continuous branch wider than π, exact start/end crossings,
+projective root directions, rotated poles, tangency anchors, and one-period
+admission. This closes the named identity, harmonic parameter-root-collapse,
+contained-window-cut, and graph seam-root debts for these bounded families. It
+does not close the remaining higher-polynomial conic/primitive containment and
+window-partition shortcuts or full source-exact harmonic discriminant
+construction beyond the landed coefficient agreement.
 
 `kcore::predicates::affine_dot3` now supplies exact affine side signs through an
 outward interval filter and a six-product exact expansion fallback with a

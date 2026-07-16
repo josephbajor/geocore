@@ -142,8 +142,20 @@ application boundary.
   remain `Indeterminate`. The `kops` periodic harmonic adapter uses parameter
   tolerance only to admit or clamp a representative: it no longer merges
   distinct exactly classified roots, and an exact numeric-parameter collision
-  fails closed. Final contacts can still merge within model-space linear
-  tolerance as the intentional physical coincidence policy. Analytic
+  fails closed. Its contained-conic window partition also retains
+  coefficient/root-index provenance at every cut. Distinct numeric roots remain
+  separate even below parameter tolerance, different equations may share an
+  exact chart corner, and two roots of one harmonic at the same numeric cut
+  return `Indeterminate`. Only an exactly zero-width curve range collapses to a
+  point; bit-exact full-period surface axes contribute one canonical seam
+  equation while near-full windows retain both bounds. Final contacts can still
+  merge within model-space linear tolerance as the intentional physical
+  coincidence policy. The `kgraph` oblique spherical seam certifier now checks
+  source-derived harmonic coefficient signs against the finite coefficients,
+  retains per-root provenance and exact derivative direction, proves seam side
+  with bounded algebraic signs, preserves distinct close roots, and fails with
+  typed evidence on unrepresentable collisions, singular charts, or ranges
+  wider than one period. Analytic
   surface/surface solvers that construct a circle already proved to lie on a
   sphere preserve that construction proof through a circle-only sphere-window
   clipping seam. Plane/Sphere likewise preserves its plane proof. These seams
@@ -174,8 +186,9 @@ application boundary.
   vertical-separation slice, the outer amplitude metric
   policy in the still-unmigrated higher conic/primitive families, affine,
   squared-distance, and harmonic fallback outside their reviewed exponent
-  envelopes, the still-tolerance-deduplicated `kgraph` seam-root adapter,
-  general NURBS and higher-polynomial root classification, and other raw
+  envelopes, full source-exact harmonic discriminant construction beyond the
+  landed coefficient sign/zero agreement, generic higher-polynomial root and
+  window-cut deduplication, general NURBS root classification, and other raw
   topological sign branches.
   `insphere`, an `incircle` production decision consumer when required, the
   broader topological-decision audit, and full conformance remain ahead.
