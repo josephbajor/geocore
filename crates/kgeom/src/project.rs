@@ -107,7 +107,7 @@ pub mod error_code {
 
 impl ProjectionError {
     /// Returns the broad semantic class of this failure.
-    pub fn class(&self) -> ErrorClass {
+    pub const fn class(&self) -> ErrorClass {
         match self {
             Self::InvalidQueryPoint | Self::InvalidWindow { .. } => ErrorClass::InvalidInput,
             Self::NoCandidate | Self::NonFiniteEvaluation => ErrorClass::InternalInvariant,
@@ -116,7 +116,7 @@ impl ProjectionError {
     }
 
     /// Returns the stable machine-readable identity of this failure.
-    pub fn code(&self) -> ErrorCode {
+    pub const fn code(&self) -> ErrorCode {
         match self {
             Self::InvalidQueryPoint => error_code::INVALID_QUERY_POINT,
             Self::InvalidWindow { .. } => error_code::INVALID_WINDOW,
@@ -127,7 +127,7 @@ impl ProjectionError {
     }
 
     /// Returns structured deterministic-limit data when accounting stopped the query.
-    pub fn limit(&self) -> Option<kcore::operation::LimitSnapshot> {
+    pub const fn limit(&self) -> Option<kcore::operation::LimitSnapshot> {
         match self {
             Self::Policy(error) => error.limit(),
             _ => None,

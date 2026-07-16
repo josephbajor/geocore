@@ -10,8 +10,9 @@ use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
-    ContactKind, CurveCurveIntersections, ParamOrientation, intersect_bounded_circle_ellipse,
-    intersect_bounded_circles, intersect_bounded_ellipses, intersect_bounded_ellipses_with_context,
+    ContactKind, CurveCurveIntersections, IntersectionError, ParamOrientation,
+    intersect_bounded_circle_ellipse, intersect_bounded_circles, intersect_bounded_ellipses,
+    intersect_bounded_ellipses_with_context,
 };
 
 const OFFSET: u64 = 0xcbf29ce484222325;
@@ -323,6 +324,16 @@ fn invalid_reason<T>(result: Result<T, Error>) -> &'static str {
     }
 }
 
+fn intersection_invalid_reason<T>(
+    result: core::result::Result<T, IntersectionError>,
+) -> &'static str {
+    match result {
+        Err(IntersectionError::Kernel(Error::InvalidGeometry { reason })) => reason,
+        Err(error) => panic!("unexpected error: {error:?}"),
+        Ok(_) => panic!("expected invalid geometry"),
+    }
+}
+
 #[test]
 fn conic_pair_validation_diagnostics_are_exact() {
     let circle = Circle::new(Frame::world(), 1.0).unwrap();
@@ -369,7 +380,7 @@ fn conic_pair_validation_diagnostics_are_exact() {
         "bounded circle and ellipse ranges cannot span more than one period"
     );
     assert_eq!(
-        invalid_reason(intersect_bounded_ellipses(
+        intersection_invalid_reason(intersect_bounded_ellipses(
             &ellipse,
             ParamRange::unbounded(),
             &ellipse,
@@ -379,7 +390,7 @@ fn conic_pair_validation_diagnostics_are_exact() {
         "ellipse/ellipse intersection requires finite non-reversed ranges"
     );
     assert_eq!(
-        invalid_reason(intersect_bounded_ellipses(
+        intersection_invalid_reason(intersect_bounded_ellipses(
             &ellipse,
             ParamRange::new(0.0, 2.0 * core::f64::consts::TAU),
             &ellipse,

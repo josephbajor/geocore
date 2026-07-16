@@ -6,7 +6,6 @@ use super::conic::{
 use super::error::{IntersectionError, IntersectionResult};
 use super::line_ellipse::intersect_bounded_line_ellipse;
 use super::result::{ContactKind, CurveCurveIntersections, CurveCurvePoint};
-use kcore::error::{Error, Result};
 use kcore::operation::{OperationContext, OperationOutcome, OperationScope, SessionPolicy};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
@@ -23,22 +22,12 @@ pub fn intersect_bounded_ellipses(
     b: &Ellipse,
     range_b: ParamRange,
     tolerances: Tolerances,
-) -> Result<CurveCurveIntersections> {
+) -> IntersectionResult<CurveCurveIntersections> {
     let session = SessionPolicy::v1();
     let context = OperationContext::new(&session, tolerances)
         .expect("validated Tolerances always satisfy v1 session precision")
         .with_family_budget_defaults(ProjectionBudgetProfile::curve_aggregate_compatibility());
-    match intersect_bounded_ellipses_with_context(a, range_a, b, range_b, &context).into_result() {
-        Ok(result) => Ok(result),
-        Err(IntersectionError::Kernel(error)) => Err(error),
-        Err(
-            IntersectionError::UnsupportedCurvePair { .. }
-            | IntersectionError::UnsupportedCurveSurfacePair { .. }
-            | IntersectionError::UnsupportedSurfacePair { .. },
-        ) => {
-            unreachable!("the concrete ellipse solver has no unsupported dispatch")
-        }
-    }
+    intersect_bounded_ellipses_with_context(a, range_a, b, range_b, &context).into_result()
 }
 
 /// Context-aware ellipse/ellipse intersection with shared projection accounting.
@@ -319,12 +308,7 @@ fn push_projected_from_a(
 }
 
 fn projection_error(error: ProjectionError) -> IntersectionError {
-    match error {
-        ProjectionError::Policy(error) => IntersectionError::Kernel(error.into()),
-        _ => IntersectionError::Kernel(Error::InvalidGeometry {
-            reason: "ellipse intersection projection failed",
-        }),
-    }
+    IntersectionError::Projection(error)
 }
 
 fn ellipses_are_coincident(a: &Ellipse, b: &Ellipse, tolerances: Tolerances) -> bool {

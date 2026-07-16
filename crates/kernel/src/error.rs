@@ -685,6 +685,58 @@ mod tests {
     }
 
     #[test]
+    fn projection_sources_survive_the_complete_intersection_facade_chain() {
+        let snapshot = LimitSnapshot {
+            stage: kcore::operation::TOTAL_WORK_STAGE,
+            resource: kcore::operation::ResourceKind::Work,
+            consumed: 2,
+            allowed: 1,
+        };
+        let policy = kcore::operation::OperationPolicyError::LimitReached(snapshot);
+        let projections = [
+            kgeom::project::ProjectionError::InvalidQueryPoint,
+            kgeom::project::ProjectionError::InvalidWindow { direction: 1 },
+            kgeom::project::ProjectionError::NoCandidate,
+            kgeom::project::ProjectionError::NonFiniteEvaluation,
+            kgeom::project::ProjectionError::Policy(policy.clone()),
+        ];
+
+        for projection in projections {
+            let source = kops::intersect::IntersectionError::Projection(projection.clone());
+            let error = KernelError::from_intersection(source.clone());
+            assert_eq!(error.class(), projection.class());
+            assert_eq!(error.code(), projection.code());
+            assert_eq!(error.capability(), None);
+            assert_eq!(error.limit(), projection.limit());
+
+            let facade = error
+                .source()
+                .and_then(|source| source.downcast_ref::<GeometryIntersectionError>())
+                .expect("kernel retains its classified intersection adapter");
+            let intersection = facade
+                .source()
+                .and_then(|source| source.downcast_ref::<kops::intersect::IntersectionError>())
+                .expect("facade adapter retains the exact intersection error");
+            assert_eq!(intersection, &source);
+            let retained = intersection
+                .source()
+                .and_then(|source| source.downcast_ref::<kgeom::project::ProjectionError>())
+                .expect("intersection error retains the exact projection failure");
+            assert_eq!(retained, &projection);
+            if let kgeom::project::ProjectionError::Policy(policy) = &projection {
+                assert!(matches!(
+                    retained.source().and_then(|source| {
+                        source.downcast_ref::<kcore::operation::OperationPolicyError>()
+                    }),
+                    Some(found) if found == policy
+                ));
+            } else {
+                assert!(retained.source().is_none());
+            }
+        }
+    }
+
+    #[test]
     fn tessellation_sources_delegate_every_shared_classification_accessor() {
         let snapshot = LimitSnapshot {
             stage: ktopo::btess::BODY_TESSELLATION_STRUCTURAL_ITEMS,

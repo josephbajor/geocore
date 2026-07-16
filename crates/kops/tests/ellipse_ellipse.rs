@@ -1,5 +1,7 @@
 //! Bounded analytic ellipse/ellipse intersection behavior.
 
+use std::error::Error as _;
+
 use kcore::operation::{
     AccountingMode, BudgetPlan, LimitSpec, OperationContext, ResourceKind, SessionPolicy,
 };
@@ -7,9 +9,10 @@ use kcore::tolerance::Tolerances;
 use kgeom::curve::Ellipse;
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
+use kgeom::project::ProjectionError;
 use kgeom::vec::{Point3, Vec3};
 use kops::intersect::{
-    ContactKind, ParamOrientation, intersect_bounded_ellipses,
+    ContactKind, IntersectionError, ParamOrientation, intersect_bounded_ellipses,
     intersect_bounded_ellipses_with_context,
 };
 
@@ -105,12 +108,18 @@ fn contextual_projection_is_exact_and_query_limit_is_the_smallest_crossing() {
         .unwrap()
         .with_budget_overrides(request);
     let limited = intersect_bounded_ellipses_with_context(&a, range, &b, range, &limited_context);
-    let limit = limited
-        .result()
-        .as_ref()
-        .unwrap_err()
-        .limit()
-        .expect("projection limit remains classified");
+    let result = limited.result();
+    let error = result.as_ref().unwrap_err();
+    assert!(matches!(
+        error,
+        IntersectionError::Projection(ProjectionError::Policy(_))
+    ));
+    let retained = error
+        .source()
+        .and_then(|source| source.downcast_ref::<ProjectionError>())
+        .expect("ellipse solver retains its exact projection failure");
+    assert!(matches!(retained, ProjectionError::Policy(_)));
+    let limit = error.limit().expect("projection limit remains classified");
     assert_eq!(limit.stage, kgeom::project::CURVE_PROJECTION_QUERIES);
     assert_eq!((limit.consumed, limit.allowed), (queries.consumed, allowed));
     let accepted = limited
