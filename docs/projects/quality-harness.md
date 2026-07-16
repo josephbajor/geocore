@@ -431,18 +431,24 @@ The magnitude-twelve rung pins 182 canonical primitive two-axis carriers per
 projection plane and 6,153 canonical residuals per omitted axis; its derivative
 certificate continues to bound the directly formed homogeneous scalar rather
 than independently bounding and recombining coordinate derivatives.
-The standalone and candidate-cell exact certifiers also expose a validated
-opt-in magnitude-thirteen ceiling. Unit evidence pins twelve as the unchanged
-default and exact enumeration prefix, followed by 230 carriers and 8,121
-residuals at thirteen, along with swap, reversal, rational, invalid-config, and
-fail-closed arithmetic cases. The production solve ladder intentionally remains
-v18/default-twelve until the higher-level contextual solver owns that option.
+The standalone and candidate-cell exact certifiers also expose validated opt-in
+magnitude-thirteen and magnitude-fourteen ceilings. Unit evidence pins twelve
+as the unchanged default and exact enumeration prefix and preserves every
+through-thirteen ordering and certificate golden. The fourteen ceiling owns 254
+carriers and 9,825 residuals, adding exactly 24 and 1,704 over thirteen. Its
+genuinely noncoplanar normalized-`1/3` fixture remains uncertifiable at every
+explicit ceiling through thirteen and certifies at fourteen, with polynomial/
+rational, standalone/candidate-cell, swap, and reversal parity plus invalid-
+config, broken-form, overflow, non-finite, and out-of-range rejection. The
+production solve ladder intentionally remains v18/default-twelve until the
+higher-level contextual solver owns that option; this opt-in proof extension
+does not add a benchmark case or change the manifest count.
 It records five stage identities and six stage-resource snapshots because the
 overlap stage owns both Work and Items, including both usages and allowances.
 Re-evaluated in-cell contacts, overlap endpoints, ordered extent/orientation
 digests, source-range root-certificate digests, and the seed/overlap limit
 crossings are semantic evidence. The
-broader degree, control-net, knot-span/patch-count, coefficient families beyond magnitude thirteen,
+broader degree, control-net, knot-span/patch-count, coefficient families beyond magnitude fourteen,
 and deeper subdivision matrix remain deferred.
 
 Exercise curve and surface subdivision/isolation independently from full

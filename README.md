@@ -163,7 +163,14 @@ application boundary.
   planar constant-normal dual Offset(NURBS) chains now cover the full 1–4×1–4
   matrix with original-source proof at exact 14,336/1,024/depth-10 certificate
   use and maximum 10 Work/depth-5 graph traversal; the strict-separated
-  complete-miss arm remains. Polygonal
+  complete-miss arm remains. Exact algebraic curve-pair search keeps magnitude
+  twelve as its compatibility default and stable prefix while explicit
+  configuration admits the reviewed thirteen and fourteen shells. Fourteen
+  owns exactly 254 carrier forms and 9,825 residual forms—24 and 1,704 more than
+  thirteen—and alone certifies the reviewed noncoplanar normalized-`1/3`
+  fixture after every ceiling through thirteen returns no certificate. Earlier
+  goldens remain unchanged; invalid ceilings and broken, overflowing, non-
+  finite, or out-of-range forms fail closed. Polygonal
   profiles with holes, checked complete-body rigid copy with direct Plane or
   safe finite Offset(Plane)-backed Plane/Plane lines, and Plane/Sphere latitude
   or oblique circles backed by direct Plane or safe finite Offset(Plane) sources

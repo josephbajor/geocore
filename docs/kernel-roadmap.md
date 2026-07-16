@@ -1212,14 +1212,19 @@ true only for an empty complete result.
   The compatibility magnitude-twelve rung runs the complete historical
   magnitude-eleven family first so all prior evidence remains stable, then
   admits only new carrier/residual pairs that reach twelve. An explicit
-  validated search configuration can add the magnitude-thirteen shell while
-  leaving twelve as the default and exact prefix. Direct correlated homogeneous
-  derivative bounds accept coefficients only through the reviewed
-  magnitude-thirteen corridor; 230 carrier forms and 8,121 residual forms pin
-  that finite ceiling, and invalid ceilings plus overflow/non-finite arithmetic
-  fail closed. Next, extend the adapter to further contextual non-plane fields
-  and verified carrier families; coefficients above thirteen remain
-  unsupported.
+  validated search configuration can add the magnitude-thirteen or magnitude-
+  fourteen shell while leaving twelve as the default and exact prefix. Every
+  through-thirteen enumeration and certificate golden remains unchanged. The
+  fourteen ceiling owns exactly 254 carrier forms and 9,825 residual forms,
+  adding 24 and 1,704 respectively over thirteen. Its genuinely noncoplanar
+  normalized-`1/3` fixture remains uncertifiable at every explicit ceiling
+  through thirteen and certifies at fourteen, with standalone/candidate-cell,
+  polynomial/rational, swap, and reversal parity. Direct correlated homogeneous
+  derivative bounds accept coefficients only through the reviewed magnitude-
+  fourteen corridor; invalid ceilings and broken, overflowing, non-finite, or
+  out-of-range forms fail closed. Next, extend the adapter to further contextual
+  non-plane fields and verified carrier families; coefficients above fourteen
+  remain unsupported.
 - Analytic special cases and the generic solver feed the same canonical result type.
 - Consolidate the per-pair analytic curve/surface and SSI boilerplate behind
   shared drivers with the same result contract. The complete-support-curve
