@@ -62,5 +62,8 @@ pub use patch_bvh::{
     NURBS_IMPLICIT_ISOLATION_SUBDIVISION_LIMIT, NURBS_IMPLICIT_ISOLATION_SUBDIVISIONS,
     NurbsSurfaceBvh, PlanePatchRelation,
 };
-pub use source_range_interval::{PlaneCurveRangeRelation, classify_curve_range_against_plane_slab};
+pub use source_range_interval::{
+    PlaneCurveRangeRelation, classify_curve_range_against_affine_band,
+    classify_curve_range_against_plane_slab,
+};
 pub use surface_range_interval::NurbsSurfaceSourceDifferentialEnclosure;

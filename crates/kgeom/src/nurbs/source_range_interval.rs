@@ -61,18 +61,49 @@ pub fn classify_curve_range_against_plane_slab(
     normal: Vec3,
     half_width: f64,
 ) -> PlaneCurveRangeRelation {
-    if !valid_plane_range_query(curve, range, origin, normal, half_width) {
+    if !half_width.is_finite() || half_width < 0.0 {
+        return PlaneCurveRangeRelation::Candidate;
+    }
+    classify_curve_range_against_affine_band(curve, range, origin, normal, -half_width, half_width)
+}
+
+/// Classify an original NURBS curve range against an asymmetric affine band.
+///
+/// For `value = normal · (point - origin)`, the closed represented band is
+/// `lower <= value <= upper`. [`PlaneCurveRangeRelation::Negative`] proves the
+/// complete source range is strictly below `lower`;
+/// [`PlaneCurveRangeRelation::Positive`] proves it is strictly above `upper`;
+/// and [`PlaneCurveRangeRelation::WithinSlab`] proves the complete source range
+/// is in the closed band.
+///
+/// The tuple `(normal, lower, upper)` directly defines affine units. Scaling it
+/// by positive `s` as `(s * normal, s * lower, s * upper)` preserves both the
+/// band and side labels. For negative `s`, the equivalent ordered bounds are
+/// `(s * upper, s * lower)` and the negative/positive labels swap.
+///
+/// Original homogeneous interval de Boor evaluation and exact active original
+/// controls are the only proof sources. Invalid input or inconclusive arithmetic
+/// returns [`PlaneCurveRangeRelation::Candidate`].
+pub fn classify_curve_range_against_affine_band(
+    curve: &NurbsCurve,
+    range: ParamRange,
+    origin: Point3,
+    normal: Vec3,
+    lower: f64,
+    upper: f64,
+) -> PlaneCurveRangeRelation {
+    if !valid_affine_range_query(curve, range, origin, normal, lower, upper) {
         return PlaneCurveRangeRelation::Candidate;
     }
 
-    if let Some(distance) = signed_plane_form_interval(curve, range, origin, normal) {
-        let relation = classify_plane_distance_interval(distance, half_width);
+    if let Some(value) = signed_plane_form_interval(curve, range, origin, normal) {
+        let relation = classify_affine_interval(value, lower, upper);
         if relation != PlaneCurveRangeRelation::Candidate {
             return relation;
         }
     }
 
-    exact_active_control_relation(curve, range, origin, normal, half_width)
+    exact_active_control_relation(curve, range, origin, normal, lower, upper)
         .unwrap_or(PlaneCurveRangeRelation::Candidate)
 }
 
@@ -237,12 +268,13 @@ pub(super) fn derivative_signed_linear_form_interval(
     derivative_homogeneous_coordinate_interval(curve, range, 0, &scalar_homogeneous)
 }
 
-fn valid_plane_range_query(
+fn valid_affine_range_query(
     curve: &NurbsCurve,
     range: ParamRange,
     origin: Point3,
     normal: Vec3,
-    half_width: f64,
+    lower: f64,
+    upper: f64,
 ) -> bool {
     let domain = curve.knots().domain();
     range.is_finite()
@@ -252,8 +284,9 @@ fn valid_plane_range_query(
         && finite_point(origin)
         && finite_point(normal)
         && (normal.x != 0.0 || normal.y != 0.0 || normal.z != 0.0)
-        && half_width.is_finite()
-        && half_width >= 0.0
+        && lower.is_finite()
+        && upper.is_finite()
+        && lower <= upper
 }
 
 fn signed_plane_form_interval(
@@ -318,15 +351,12 @@ fn signed_plane_form_interval(
     result
 }
 
-fn classify_plane_distance_interval(
-    distance: Interval,
-    half_width: f64,
-) -> PlaneCurveRangeRelation {
-    if distance.hi() < -half_width {
+fn classify_affine_interval(value: Interval, lower: f64, upper: f64) -> PlaneCurveRangeRelation {
+    if value.hi() < lower {
         PlaneCurveRangeRelation::Negative
-    } else if distance.lo() > half_width {
+    } else if value.lo() > upper {
         PlaneCurveRangeRelation::Positive
-    } else if distance.lo() >= -half_width && distance.hi() <= half_width {
+    } else if value.lo() >= lower && value.hi() <= upper {
         PlaneCurveRangeRelation::WithinSlab
     } else {
         PlaneCurveRangeRelation::Candidate
@@ -338,12 +368,13 @@ fn exact_active_control_relation(
     range: ParamRange,
     origin: Point3,
     normal: Vec3,
-    half_width: f64,
+    lower: f64,
+    upper: f64,
 ) -> Option<PlaneCurveRangeRelation> {
     let active = active_source_controls(curve, range)?;
     let mut common = None;
     for index in active {
-        let relation = exact_control_relation(curve.points()[index], origin, normal, half_width)?;
+        let relation = exact_control_relation(curve.points()[index], origin, normal, lower, upper)?;
         common = match common {
             None => Some(relation),
             Some(current) if current == relation => Some(current),
@@ -387,16 +418,17 @@ fn exact_control_relation(
     point: Point3,
     origin: Point3,
     normal: Vec3,
-    half_width: f64,
+    lower: f64,
+    upper: f64,
 ) -> Option<PlaneCurveRangeRelation> {
     let normal = normal.to_array();
     let point = point.to_array();
     let origin = origin.to_array();
-    let above_positive_boundary = affine_dot3(normal, point, origin, -half_width)?.sign();
+    let above_positive_boundary = affine_dot3(normal, point, origin, -upper)?.sign();
     if above_positive_boundary == Orientation::Positive {
         return Some(PlaneCurveRangeRelation::Positive);
     }
-    let below_negative_boundary = affine_dot3(normal, point, origin, half_width)?.sign();
+    let below_negative_boundary = affine_dot3(normal, point, origin, -lower)?.sign();
     if below_negative_boundary == Orientation::Negative {
         return Some(PlaneCurveRangeRelation::Negative);
     }
@@ -733,6 +765,168 @@ mod tests {
     }
 
     #[test]
+    fn asymmetric_affine_bands_classify_closed_interior_and_strict_sides() {
+        let origin = Point3::default();
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let lower = -2.0;
+        let upper = 4.0;
+        let within = line(
+            Point3::new(-1.0, 0.0, lower),
+            Point3::new(1.0, 0.0, upper),
+            Some(vec![0.5, 2.0]),
+        );
+        assert_eq!(
+            classify_curve_range_against_affine_band(
+                &within,
+                within.param_range(),
+                origin,
+                normal,
+                lower,
+                upper,
+            ),
+            PlaneCurveRangeRelation::WithinSlab,
+        );
+
+        let negative = line(
+            Point3::new(0.0, 0.0, lower.next_down()),
+            Point3::new(1.0, 0.0, lower.next_down()),
+            None,
+        );
+        assert_eq!(
+            classify_curve_range_against_affine_band(
+                &negative,
+                negative.param_range(),
+                origin,
+                normal,
+                lower,
+                upper,
+            ),
+            PlaneCurveRangeRelation::Negative,
+        );
+
+        let positive = line(
+            Point3::new(0.0, 0.0, upper.next_up()),
+            Point3::new(1.0, 0.0, upper.next_up()),
+            None,
+        );
+        assert_eq!(
+            classify_curve_range_against_affine_band(
+                &positive,
+                positive.param_range(),
+                origin,
+                normal,
+                lower,
+                upper,
+            ),
+            PlaneCurveRangeRelation::Positive,
+        );
+
+        let crossing = line(
+            Point3::new(0.0, 0.0, lower - 1.0),
+            Point3::new(1.0, 0.0, upper + 1.0),
+            None,
+        );
+        assert_eq!(
+            classify_curve_range_against_affine_band(
+                &crossing,
+                crossing.param_range(),
+                origin,
+                normal,
+                lower,
+                upper,
+            ),
+            PlaneCurveRangeRelation::Candidate,
+        );
+    }
+
+    #[test]
+    fn affine_band_scaling_preserves_geometry_and_tracks_side_reversal() {
+        let origin = Point3::default();
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let positive = line(Point3::new(0.0, 0.0, 5.0), Point3::new(1.0, 0.0, 5.0), None);
+        assert_eq!(
+            classify_curve_range_against_affine_band(
+                &positive,
+                positive.param_range(),
+                origin,
+                normal,
+                -2.0,
+                4.0,
+            ),
+            PlaneCurveRangeRelation::Positive,
+        );
+        assert_eq!(
+            classify_curve_range_against_affine_band(
+                &positive,
+                positive.param_range(),
+                origin,
+                normal * 2.0,
+                -4.0,
+                8.0,
+            ),
+            PlaneCurveRangeRelation::Positive,
+        );
+        assert_eq!(
+            classify_curve_range_against_affine_band(
+                &positive,
+                positive.param_range(),
+                origin,
+                normal * -2.0,
+                -8.0,
+                4.0,
+            ),
+            PlaneCurveRangeRelation::Negative,
+        );
+
+        let within = line(
+            Point3::new(0.0, 0.0, 1.0),
+            Point3::new(1.0, 0.0, 1.0),
+            Some(vec![0.75, 1.25]),
+        );
+        for (scaled_normal, lower, upper) in [
+            (normal, -2.0, 4.0),
+            (normal * 2.0, -4.0, 8.0),
+            (normal * -2.0, -8.0, 4.0),
+        ] {
+            assert_eq!(
+                classify_curve_range_against_affine_band(
+                    &within,
+                    within.param_range(),
+                    origin,
+                    scaled_normal,
+                    lower,
+                    upper,
+                ),
+                PlaneCurveRangeRelation::WithinSlab,
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_asymmetric_affine_bands_fail_open() {
+        let curve = line(Point3::new(0.0, 0.0, 1.0), Point3::new(1.0, 0.0, 2.0), None);
+        for (lower, upper) in [
+            (1.0, -1.0),
+            (f64::NEG_INFINITY, 1.0),
+            (-1.0, f64::INFINITY),
+            (f64::NAN, 1.0),
+            (-1.0, f64::NAN),
+        ] {
+            assert_eq!(
+                classify_curve_range_against_affine_band(
+                    &curve,
+                    curve.param_range(),
+                    Point3::default(),
+                    Vec3::new(0.0, 0.0, 1.0),
+                    lower,
+                    upper,
+                ),
+                PlaneCurveRangeRelation::Candidate,
+            );
+        }
+    }
+
+    #[test]
     fn nonunit_normals_use_scaled_affine_slab_units() {
         let origin = Point3::default();
         let scaled_normal = Vec3::new(0.0, 0.0, 2.0);
@@ -985,6 +1179,53 @@ mod tests {
         assert!(left.points().iter().all(|point| point.z < contact_z));
         assert!(right.points().iter().all(|point| point.z < contact_z));
         assert_eq!(source.eval(0.5).z, contact_z);
+    }
+
+    #[test]
+    fn affine_band_retains_window_excursion_lost_by_rounded_split_controls() {
+        let outside = 9_007_199_254_740_991.0;
+        let source = NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(9_007_199_254_740_360.0, 0.0, 0.0),
+                Point3::new(9_007_199_254_740_978.0, 0.0, 0.0),
+                Point3::new(9_007_199_254_741_648.0, 0.0, 0.0),
+                Point3::new(9_007_199_254_739_690.0, 0.0, 0.0),
+            ],
+            None,
+        )
+        .unwrap();
+        let lower = outside - 2_000.0;
+        let upper = outside - 1.0;
+        let (left, right) = source.split_at(0.5).unwrap();
+        for derived in [&left, &right] {
+            assert!(
+                derived
+                    .points()
+                    .iter()
+                    .all(|point| { lower <= point.x && point.x <= upper })
+            );
+        }
+        assert_eq!(source.eval(0.5).x, outside);
+        for range in [
+            source.param_range(),
+            ParamRange::new(0.0, 0.5),
+            ParamRange::new(0.5, 1.0),
+        ] {
+            assert_eq!(
+                classify_curve_range_against_affine_band(
+                    &source,
+                    range,
+                    Point3::default(),
+                    Vec3::new(1.0, 0.0, 0.0),
+                    lower,
+                    upper,
+                ),
+                PlaneCurveRangeRelation::Candidate,
+                "rounded split controls must not certify a source range that leaves the band",
+            );
+        }
     }
 
     #[test]
