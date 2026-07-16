@@ -12,7 +12,7 @@ use crate::incidence::{
 };
 use crate::store::Store;
 use kcore::error::Result;
-use kcore::predicates::{Orientation, orient2d};
+use kcore::predicates::{Orientation, orient2d, polygon_orientation2d_iter};
 use kcore::tolerance::LINEAR_RESOLUTION;
 use kgeom::curve::Curve;
 use kgeom::param::ParamRange;
@@ -40,6 +40,17 @@ pub(crate) enum LoopContainment {
     /// At least one loop representation is outside this proof slice or the
     /// supported strict-containment relation was not established.
     Indeterminate,
+}
+
+/// Exact planar straight-loop orientation and outer-loop evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PlanarLoopLayout {
+    /// Unique outer loop when every loop has an exact nonzero orientation and
+    /// the supported strict-containment relation is certified.
+    pub(crate) outer: Option<LoopId>,
+    /// Exact orientation for each input loop, or `None` when that loop is
+    /// outside this proof slice.
+    pub(crate) orientations: Vec<(LoopId, Option<Orientation>)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -95,6 +106,110 @@ pub(crate) fn certify_loop_containment(
         }
         rings.push(segments);
     }
+    Ok(if containment_outer_index(&rings).is_some() {
+        LoopContainment::Certified
+    } else {
+        LoopContainment::Indeterminate
+    })
+}
+
+/// Certify exact orientation and the unique outer identity for planar
+/// straight-loop representations.
+///
+/// Unlike the tolerance-aware simplicity proof, this authority requires every
+/// segment endpoint to equal the next segment start exactly. Sampled curves and
+/// tolerance-joined chords remain unsupported and therefore indeterminate.
+pub(crate) fn certify_planar_loop_layout(
+    store: &Store,
+    loop_ids: &[LoopId],
+) -> Result<PlanarLoopLayout> {
+    let mut orientations = Vec::with_capacity(loop_ids.len());
+    let mut rings = Vec::with_capacity(loop_ids.len());
+    let mut complete = !loop_ids.is_empty();
+    for &loop_id in loop_ids {
+        let certified = strict_planar_ring(store, loop_id)?;
+        match certified {
+            Some((segments, orientation)) => {
+                orientations.push((loop_id, Some(orientation)));
+                rings.push(segments);
+            }
+            None => {
+                orientations.push((loop_id, None));
+                complete = false;
+            }
+        }
+    }
+    let outer = complete
+        .then(|| containment_outer_index(&rings))
+        .flatten()
+        .map(|index| loop_ids[index]);
+    Ok(PlanarLoopLayout {
+        outer,
+        orientations,
+    })
+}
+
+fn strict_planar_ring(
+    store: &Store,
+    loop_id: LoopId,
+) -> Result<Option<(Vec<Segment2>, Orientation)>> {
+    let Some(segments) = planar_segment_ring(store, loop_id)? else {
+        return Ok(None);
+    };
+    let Some(orientation) = strict_ring_orientation(&segments) else {
+        return Ok(None);
+    };
+    Ok(Some((segments, orientation)))
+}
+
+fn strict_ring_orientation(segments: &[Segment2]) -> Option<Orientation> {
+    if !strict_segment_ring(segments) {
+        return None;
+    }
+    match polygon_orientation2d_iter(
+        segments
+            .iter()
+            .map(|segment| [segment.start.x, segment.start.y]),
+    ) {
+        Orientation::Zero => None,
+        orientation => Some(orientation),
+    }
+}
+
+fn strict_segment_ring(segments: &[Segment2]) -> bool {
+    if segments.len() < 3 {
+        return false;
+    }
+    for (index, segment) in segments.iter().enumerate() {
+        let next = segments[(index + 1) % segments.len()];
+        if !finite_point(segment.start)
+            || !finite_point(segment.end)
+            || segment.start == segment.end
+            || !points_bit_equal(segment.end, next.start)
+        {
+            return false;
+        }
+    }
+    for left in 0..segments.len() {
+        for right in left + 1..segments.len() {
+            let adjacent = right == left + 1 || left == 0 && right + 1 == segments.len();
+            if adjacent {
+                if adjacent_overlap(segments[left], segments[right], 0.0) {
+                    return false;
+                }
+            } else if segments_intersect(segments[left], segments[right]) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn points_bit_equal(first: Point2, second: Point2) -> bool {
+    first.x.to_bits() == second.x.to_bits() && first.y.to_bits() == second.y.to_bits()
+}
+
+fn containment_outer_index(rings: &[Vec<Segment2>]) -> Option<usize> {
     for first in 0..rings.len() {
         for second in first + 1..rings.len() {
             if rings[first].iter().any(|&left| {
@@ -102,7 +217,7 @@ pub(crate) fn certify_loop_containment(
                     .iter()
                     .any(|&right| segments_intersect(left, right))
             }) {
-                return Ok(LoopContainment::Indeterminate);
+                return None;
             }
         }
     }
@@ -122,16 +237,16 @@ pub(crate) fn certify_loop_containment(
         .filter_map(|(index, containers)| containers.is_empty().then_some(index))
         .collect();
     let [outer] = outers.as_slice() else {
-        return Ok(LoopContainment::Indeterminate);
+        return None;
     };
     if containers
         .iter()
         .enumerate()
         .all(|(index, containers)| index == *outer || containers.as_slice() == [*outer])
     {
-        Ok(LoopContainment::Certified)
+        Some(*outer)
     } else {
-        Ok(LoopContainment::Indeterminate)
+        None
     }
 }
 
@@ -401,6 +516,26 @@ mod tests {
         }
     }
 
+    fn ring(points: &[[f64; 2]]) -> Vec<Segment2> {
+        points
+            .iter()
+            .copied()
+            .zip(points.iter().copied().cycle().skip(1))
+            .take(points.len())
+            .map(|(start, end)| segment(start, end))
+            .collect()
+    }
+
+    fn rounded_twice_area(points: &[[f64; 2]]) -> f64 {
+        points
+            .iter()
+            .copied()
+            .zip(points.iter().copied().cycle().skip(1))
+            .take(points.len())
+            .map(|([x0, y0], [x1, y1])| x0 * y1 - x1 * y0)
+            .sum()
+    }
+
     #[test]
     fn robust_segment_ring_distinguishes_simple_crossing_and_overlap() {
         let square = [
@@ -432,5 +567,83 @@ mod tests {
             certify_segment_ring(&backtrack),
             LoopSimplicity::SelfIntersecting
         );
+    }
+
+    #[test]
+    fn strict_ring_orientation_resolves_cancellation_and_rejects_unsafe_input() {
+        const M: i64 = (1_i64 << 52) - 1;
+        let coordinates = [[M, M], [M + 16, M], [M + 16, M + 16], [M, M + 16]];
+        let points = coordinates.map(|[u, v]| [u as f64, v as f64]);
+        assert_eq!(rounded_twice_area(&points), 0.0);
+        assert_eq!(
+            strict_ring_orientation(&ring(&points)),
+            Some(Orientation::Positive)
+        );
+        assert_eq!(
+            strict_ring_orientation(&ring(&points)),
+            Some(Orientation::Positive)
+        );
+
+        let mut rotated = points;
+        rotated.rotate_left(2);
+        assert_eq!(
+            strict_ring_orientation(&ring(&rotated)),
+            Some(Orientation::Positive)
+        );
+
+        let mut reversed = points;
+        reversed.reverse();
+        assert_eq!(
+            strict_ring_orientation(&ring(&reversed)),
+            Some(Orientation::Negative)
+        );
+
+        let mut hole_points = [
+            [M + 4, M + 4],
+            [M + 4, M + 8],
+            [M + 8, M + 8],
+            [M + 8, M + 4],
+        ]
+        .map(|[u, v]| [u as f64, v as f64]);
+        assert_eq!(rounded_twice_area(&hole_points), 0.0);
+        let outer_ring = ring(&points);
+        let hole_ring = ring(&hole_points);
+        assert_eq!(
+            strict_ring_orientation(&hole_ring),
+            Some(Orientation::Negative)
+        );
+        assert_eq!(
+            containment_outer_index(&[outer_ring.clone(), hole_ring.clone()]),
+            Some(0)
+        );
+        assert_eq!(
+            containment_outer_index(&[hole_ring.clone(), outer_ring.clone()]),
+            Some(1)
+        );
+        hole_points.rotate_left(1);
+        assert_eq!(
+            containment_outer_index(&[ring(&hole_points), outer_ring]),
+            Some(1)
+        );
+
+        let exact_zero = ring(&[[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]]);
+        assert_eq!(strict_ring_orientation(&exact_zero), None);
+
+        let non_finite = ring(&[[0.0, 0.0], [f64::NAN, 0.0], [0.0, 1.0]]);
+        assert_eq!(strict_ring_orientation(&non_finite), None);
+        let infinite = ring(&[[0.0, 0.0], [f64::INFINITY, 0.0], [0.0, 1.0]]);
+        assert_eq!(strict_ring_orientation(&infinite), None);
+
+        let tolerance_joined = [
+            segment([0.0, 0.0], [1.0, 0.0]),
+            segment([1.0 + 0.5 * LINEAR_RESOLUTION, 0.0], [1.0, 1.0]),
+            segment([1.0, 1.0], [0.0, 1.0]),
+            segment([0.0, 1.0], [0.0, 0.0]),
+        ];
+        assert_eq!(
+            certify_segment_ring(&tolerance_joined),
+            LoopSimplicity::Certified
+        );
+        assert_eq!(strict_ring_orientation(&tolerance_joined), None);
     }
 }

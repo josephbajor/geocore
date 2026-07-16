@@ -42,9 +42,9 @@
 //!
 //! # Current Fast limits (reported as Full verification gaps)
 //!
-//! - Loop orientation is verified only on planes, cylinders, and cones
-//!   (analytic UV inversion), and only for loops that do not wind a
-//!   periodic direction (seam-wrapping loops are skipped).
+//! - Loop orientation is proven only for exact, strictly closed straight
+//!   segment loops on planes. Curved, tolerance-joined, nonlinear-chart, and
+//!   periodic loops remain Full verification gaps.
 //! - A zero-loop face on a NURBS surface is faulted: closed NURBS
 //!   surfaces land with periodic NURBS (M3).
 //! - Curve-less tolerant ring edges are not supported; vertex-bounded
@@ -66,6 +66,7 @@ use crate::incidence::{
 };
 use crate::loop_proof::{
     LoopContainment, LoopSimplicity, certify_loop_containment, certify_loop_simplicity,
+    certify_planar_loop_layout,
 };
 use crate::shell_proof::{ShellEmbedding, ShellOrientation, certify_shell};
 use crate::store::{Entity, Store};
@@ -78,7 +79,7 @@ use kcore::operation::{
 };
 use kcore::tolerance::{LINEAR_RESOLUTION, SIZE_BOX_HALF, Tolerances};
 use kgeom::param::ParamRange;
-use kgeom::surface_point::{distance_to_surface, invert_surface_point};
+use kgeom::surface_point::distance_to_surface;
 use kgraph::{EvalBudgetProfile, EvalError, EvalLimits, SurfaceDerivativeOrder};
 
 /// What is wrong, attached to the offending entity in a [`Fault`].
@@ -267,6 +268,8 @@ pub enum VerificationGapKind {
     LoopSelfIntersection,
     /// Relative containment of multiple loops has not been proven.
     LoopContainment,
+    /// A loop's orientation has not been proven from its represented boundary.
+    LoopOrientation,
     /// A shell has not been proven free of global self-intersection.
     ShellSelfIntersection,
     /// A solid shell's global outward orientation has not been proven.
@@ -518,7 +521,23 @@ fn collect_full_verification(
                 face_domain_gap_cause(containment),
             );
         }
+        let layout = certify_planar_loop_layout(store, &face.loops)?;
         for &loop_id in &face.loops {
+            if layout
+                .orientations
+                .iter()
+                .find_map(|(candidate, orientation)| {
+                    (*candidate == loop_id).then_some(*orientation)
+                })
+                .flatten()
+                .is_none()
+            {
+                push(
+                    EntityRef::Loop(loop_id),
+                    VerificationGapKind::LoopOrientation,
+                    None,
+                );
+            }
             match certify_loop_simplicity(store, loop_id)? {
                 LoopSimplicity::Certified => {}
                 LoopSimplicity::SelfIntersecting => faults.push(Fault {
@@ -619,8 +638,6 @@ fn face_domain_gap_cause(
 
 /// Number of interior samples when verifying an edge lies on its faces.
 const EDGE_SAMPLES: usize = 5;
-/// Sample points per fin when computing a loop's UV winding.
-const ORIENTATION_SAMPLES: usize = 8;
 
 struct Checker<'a, 'graph> {
     store: &'a Store,
@@ -1529,116 +1546,34 @@ impl<'a> Checker<'a, '_> {
         }
     }
 
-    /// Loop-orientation check for one face (v1: planes, cylinders, cones;
-    /// loops that wind a periodic direction are skipped).
+    /// Exact loop-orientation check for one face.
+    ///
+    /// Only strictly closed planar straight-loop layouts can emit faults.
+    /// Unsupported representations remain silent at Fast and become explicit
+    /// Full verification gaps.
     fn check_face_orientation(&mut self, fid: FaceId) {
         let Ok(face) = self.store.get(fid) else {
             return;
         };
-        let Ok(sg) = self.store.get(face.surface) else {
+        let Ok(layout) = certify_planar_loop_layout(self.store, &face.loops) else {
             return;
         };
-        let measured: Vec<_> = face
-            .loops
-            .iter()
-            .filter_map(|&lid| {
-                let area = self.loop_uv_area(lid, sg)?;
-                (area != 0.0).then_some((lid, area))
-            })
-            .collect();
-        let Some(&(outer, _)) = measured
-            .iter()
-            .max_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs()))
-        else {
+        let Some(outer) = layout.outer else {
             return;
         };
-        for &(lid, area) in &measured {
+        for (lid, orientation) in layout.orientations {
+            let Some(orientation) = orientation else {
+                return;
+            };
             // Counterclockwise in UV = counterclockwise around the
             // *surface* normal; the face normal flips with face.sense. XT
-            // does not require the outer loop to be first in the face's
-            // loop chain. Until checker v2 proves containment explicitly,
-            // the largest absolute UV area is the outer-loop proxy; a
-            // simple contained hole cannot have greater absolute area.
+            // does not require the outer loop to be first in the face's loop
+            // chain, so the exact containment proof supplies its identity.
             let expect_positive = (lid == outer) == face.sense.is_forward();
-            if (area > 0.0) != expect_positive {
+            if (orientation == kcore::predicates::Orientation::Positive) != expect_positive {
                 self.fault(EntityRef::Loop(lid), FaultKind::WrongLoopOrientation);
             }
         }
-    }
-
-    /// Signed UV area of a loop, or `None` when it cannot be computed
-    /// robustly (unsupported surface class, unusable edges, seam-winding
-    /// loop).
-    fn loop_uv_area(&mut self, lid: LoopId, sg: &SurfaceGeom) -> Option<f64> {
-        let period = match sg {
-            SurfaceGeom::Plane(_) => None,
-            SurfaceGeom::Cylinder(_) | SurfaceGeom::Cone(_) => Some(core::f64::consts::TAU),
-            _ => return None,
-        };
-        let lp = self.store.get(lid).ok()?;
-        let mut pts: Vec<(f64, f64)> = Vec::new();
-        for &fin_id in &lp.fins {
-            let fin = self.store.get(fin_id).ok()?;
-            let edge = self.store.get(fin.edge).ok()?;
-            let g = self.store.get(edge.curve?).ok()?;
-            let c = g.as_curve();
-            let (a, b) = match edge.bounds {
-                Some((t0, t1)) if t0 < t1 => (t0, t1),
-                Some(_) => return None,
-                None => {
-                    let r = c.param_range();
-                    if !r.is_finite() {
-                        return None;
-                    }
-                    (r.lo, r.hi)
-                }
-            };
-            for i in 0..ORIENTATION_SAMPLES {
-                let s = (i as f64) / (ORIENTATION_SAMPLES as f64);
-                let t = if fin.sense.is_forward() {
-                    a + (b - a) * s
-                } else {
-                    b - (b - a) * s
-                };
-                let (mut u, v) = match fin.pcurve {
-                    Some(pcurve_use) => {
-                        let curve = self.store.get(pcurve_use.curve()).ok()?.as_curve();
-                        let surface = sg.as_leaf_surface()?;
-                        let uv = pcurve_use
-                            .evaluate_uv(curve, t, surface.periodicity())
-                            .ok()?;
-                        (uv.x, uv.y)
-                    }
-                    None => {
-                        let mapped = invert_surface_point(sg.as_leaf_surface()?, c.eval(t)).ok()?;
-                        (mapped.uv[0], mapped.uv[1])
-                    }
-                };
-                if let (Some(p), Some(&(prev, _))) = (period, pts.last()) {
-                    u += p * ((prev - u) / p).round();
-                }
-                pts.push((u, v));
-            }
-        }
-        if pts.len() < 3 {
-            return None;
-        }
-        // A loop that winds the periodic direction cannot close in UV.
-        if let Some(p) = period {
-            let (first, _) = pts[0];
-            let (last, _) = pts[pts.len() - 1];
-            let closing = first + p * ((last - first) / p).round();
-            if (closing - first).abs() > p / 2.0 {
-                return None;
-            }
-        }
-        let mut area = 0.0;
-        for i in 0..pts.len() {
-            let (x0, y0) = pts[i];
-            let (x1, y1) = pts[(i + 1) % pts.len()];
-            area += x0 * y1 - x1 * y0;
-        }
-        Some(area / 2.0)
     }
 
     /// The Euler–Poincaré identity for one shell (see module docs).
@@ -1837,6 +1772,7 @@ mod tests {
     use crate::geom::{Curve2dGeom, CurveGeom};
     use crate::make::{
         block, cone, cylinder, cylindrical_sheet, planar_sheet, solid_body_scaffold,
+        sphere as make_sphere, torus as make_torus,
     };
     use kcore::operation::{AccountingMode, ResourceKind};
     use kgeom::curve::{Circle, Line};
@@ -2543,6 +2479,72 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_curved_loop_orientation_is_a_full_gap_not_a_fast_fault() {
+        let mut store = Store::new();
+        let body = cylinder(&mut store, &Frame::world(), 1.0, 2.0).unwrap();
+
+        let fast = check_body_report(&store, body, CheckLevel::Fast).unwrap();
+        assert_eq!(fast.outcome(), CheckOutcome::Valid, "{fast:?}");
+        assert!(
+            fast.faults
+                .iter()
+                .all(|fault| fault.kind != FaultKind::WrongLoopOrientation)
+        );
+
+        let full = check_body_report(&store, body, CheckLevel::Full).unwrap();
+        assert_eq!(full.outcome(), CheckOutcome::Indeterminate, "{full:?}");
+        assert!(full.faults.is_empty(), "{full:?}");
+        assert!(
+            full.gaps
+                .iter()
+                .any(|gap| gap.kind == VerificationGapKind::LoopOrientation),
+            "{full:?}"
+        );
+    }
+
+    #[test]
+    fn exact_and_zero_loop_primitives_keep_full_valid_orientation_evidence() {
+        let mut store = Store::new();
+        let sheet = planar_sheet(
+            &mut store,
+            &Frame::world(),
+            &[
+                Point2::new(-1.0, -1.0),
+                Point2::new(1.0, -1.0),
+                Point2::new(1.0, 1.0),
+                Point2::new(-1.0, 1.0),
+            ],
+        )
+        .unwrap();
+        for body in [clean_block(&mut store), sheet] {
+            let report = check_body_report(&store, body, CheckLevel::Full).unwrap();
+            assert_eq!(report.outcome(), CheckOutcome::Valid, "{report:?}");
+            assert!(
+                report
+                    .gaps
+                    .iter()
+                    .all(|gap| gap.kind != VerificationGapKind::LoopOrientation),
+                "{report:?}"
+            );
+        }
+        for body in [
+            make_sphere(&mut store, &Frame::world(), 1.0).unwrap(),
+            make_torus(&mut store, &Frame::world(), 2.0, 0.5).unwrap(),
+        ] {
+            let report = check_body_report(&store, body, CheckLevel::Full).unwrap();
+            assert_ne!(report.outcome(), CheckOutcome::Invalid, "{report:?}");
+            assert!(report.faults.is_empty(), "{report:?}");
+            assert!(
+                report
+                    .gaps
+                    .iter()
+                    .all(|gap| gap.kind != VerificationGapKind::LoopOrientation),
+                "{report:?}"
+            );
+        }
+    }
+
+    #[test]
     fn full_checker_proves_simple_loops_and_rejects_a_bow_tie() {
         let mut store = Store::new();
         let sheet = sheet_square(&mut store);
@@ -2709,10 +2711,63 @@ mod tests {
             store.get_mut(hole).unwrap().fins.push(fin);
             store.get_mut(edge).unwrap().fins.push(fin);
         }
-        assert_eq!(check_body(&store, body).unwrap(), Vec::new());
+        let expected = check_body_report(&store, body, CheckLevel::Fast).unwrap();
+        assert_eq!(expected.outcome(), CheckOutcome::Valid, "{expected:?}");
+        assert_eq!(
+            check_body_report(&store, body, CheckLevel::Fast).unwrap(),
+            expected
+        );
+        let full = check_body_report(&store, body, CheckLevel::Full).unwrap();
+        assert!(full.faults.is_empty(), "{full:?}");
+        assert!(full.gaps.iter().all(|gap| {
+            !matches!(
+                gap.kind,
+                VerificationGapKind::LoopOrientation | VerificationGapKind::LoopContainment
+            )
+        }));
+
+        let loops = store.get(face).unwrap().loops.clone();
+        for loop_id in &loops {
+            store.get_mut(*loop_id).unwrap().fins.rotate_left(1);
+        }
+        assert_eq!(
+            check_body_report(&store, body, CheckLevel::Fast).unwrap(),
+            expected
+        );
 
         store.get_mut(face).unwrap().loops.swap(0, 1);
-        assert_eq!(check_body(&store, body).unwrap(), Vec::new());
+        assert_eq!(
+            check_body_report(&store, body, CheckLevel::Fast).unwrap(),
+            expected
+        );
+
+        let mut reversed_hole = store.get(hole).unwrap().fins.clone();
+        reversed_hole.reverse();
+        for &fin in &reversed_hole {
+            let sense = store.get(fin).unwrap().sense;
+            store.get_mut(fin).unwrap().sense = sense.flipped();
+        }
+        store.get_mut(hole).unwrap().fins = reversed_hole;
+        let reversed = check_body_report(&store, body, CheckLevel::Fast).unwrap();
+        assert_eq!(reversed.outcome(), CheckOutcome::Invalid, "{reversed:?}");
+        let orientation_faults = reversed
+            .faults
+            .iter()
+            .filter(|fault| fault.kind == FaultKind::WrongLoopOrientation)
+            .collect::<Vec<_>>();
+        assert_eq!(orientation_faults.len(), 1, "{reversed:?}");
+        assert_eq!(orientation_faults[0].entity, EntityRef::Loop(hole));
+
+        store.get_mut(face).unwrap().loops.swap(0, 1);
+        let permuted = check_body_report(&store, body, CheckLevel::Fast).unwrap();
+        assert_eq!(
+            permuted
+                .faults
+                .iter()
+                .filter(|fault| fault.kind == FaultKind::WrongLoopOrientation)
+                .collect::<Vec<_>>(),
+            orientation_faults
+        );
     }
 
     #[test]
