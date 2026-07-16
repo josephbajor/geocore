@@ -266,11 +266,30 @@ semantic unit/orthonormal invariant failures caught by defensive solver checks,
 and distinct tolerance-only discoveries remain `Indeterminate`. The old
 rounded frame-local polynomial solver is discovery-only and cannot upgrade
 completion. Algebraic roots remain distinct inside the isolator, while final
-physical contacts retain world-space linear-resolution consolidation. This
-slice does not close general quartic/higher-degree isolation, the other
-conic/primitive families, arbitrary tilted semantic-axis relations that are
-not exact coefficient identities, stronger exact axis-distance exclusion under
-extreme cancellation, or contextual replacement of the fixed isolation caps.
+physical contacts retain world-space linear-resolution consolidation. A
+separate Frame-semantic authored-axis certificate now admits a tilted line only
+when its direction components equal `±frame.z`, its stored origin exactly
+replays `Frame::point_at(0, 0, w)`, all replaying coordinate quotients agree,
+and adjacent floating-point offsets do not replay the same point. Its exact
+center polynomial is `w ± t`. The bounded empty proof includes the exact
+replay displacement `e = line.origin - frame.origin - w frame.z` and uses
+radical-free exact inequalities equivalent to
+`sqrt(R² + min(h²)) > r + tolerance + ||e||`. Full-period misses below that
+strict bound are `Complete`; tolerance-only center witnesses and all partial
+windows remain `Indeterminate`. Evidence covers forward and reversed tilted
+axes, a center outside the requested range, partial-latitude exclusion, a
+helper-level replay-error boundary that defeats the ideal-axis margin,
+one-ULP stored-value direction/origin controls, repeat/direct/generic parity,
+and an in-model replay plateau. Ambiguous general replay fails closed without
+granting the General exact-quartic completion path authority, while an
+independently exact coefficient-axis identity remains a valid fallback. This
+is a narrow authorship identity under the existing semantic-orthonormal Frame
+contract, not a source-world exact affine-axis proof. This slice does not close
+general quartic/higher-degree isolation, the other conic/primitive families,
+tilted semantic-axis relations outside exact coefficient identity or unique
+stored-value Frame replay, ambiguous replay plateaus without an independent
+exact identity, a broader source-world exact affine-axis proof, or contextual
+replacement of the fixed isolation caps.
 
 Stable finite three-dimensional direction construction has also landed.
 `Vec3::normalized` rejects non-finite components, preserves ordinary

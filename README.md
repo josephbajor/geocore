@@ -210,9 +210,16 @@ application boundary.
   unrepresentable root separation, and tolerance-only discoveries also remain
   `Indeterminate`; rounded local roots are discovery-only. Distinct algebraic
   roots remain separate in the isolator, while the final physical-contact list
-  still uses world-space linear-resolution consolidation. The reviewed tilted
-  semantic-axis relation is not promoted to exact coefficient identity and
-  remains conservative `Indeterminate`.
+  still uses world-space linear-resolution consolidation. A separate
+  Frame-semantic authored-axis certificate now covers a tilted line whose
+  direction components equal `±frame.z` and whose stored origin uniquely
+  replays `Frame::point_at(0, 0, w)`. It uses the exact center polynomial
+  `w ± t` and an exact replay-displacement correction in the bounded clearance
+  proof. Reversed direction, a center outside the requested range, partial
+  latitude exclusion, one-ULP direction/origin controls, and in-model replay
+  plateaus pin the fail-closed boundary. Ambiguous general replay plateaus
+  remain `Indeterminate`; an independently exact coefficient-axis identity
+  remains authoritative.
   `Vec3::normalized` now rejects non-finite components, preserves the established
   ordinary finite-norm bits, and rescales only when squared-length overflow would
   otherwise collapse a finite direction. `Line::new` inherits that contract.
@@ -244,7 +251,9 @@ application boundary.
   root classification, raw extreme-scale `Vec3` and `Vec2`
   `norm`/`norm_sq`/dot/cross/distance/subtraction behavior, callers that derive
   UV spans before analytic-curve construction, contextual replacement of the
-  fixed line/Torus isolation caps, and other raw topological sign branches.
+  fixed line/Torus isolation caps, tilted semantic-axis relations outside exact
+  coefficient identity or the unique stored-value Frame replay contract,
+  and other raw topological sign branches.
   `insphere`, an `incircle` production decision consumer when required, the
   broader topological-decision audit, and full conformance remain ahead.
 - M2.5 is in progress and remains the architecture gate. Transaction-owned checked
