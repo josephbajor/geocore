@@ -31,14 +31,30 @@ enum ExactLineTorusAuxiliary {
     },
 }
 
+struct AuthoredAxis {
+    /// Exact center-plane polynomial in line parameter space: `w ± t`.
+    center_plane: ExactPolynomial,
+    /// The uniquely replayed local frame offset `w`.
+    offset: ExactScalar,
+    direction_sign: f64,
+    /// Exact squared displacement between the stored line origin and the
+    /// ideal affine point `frame.origin + w * frame.z`.
+    replay_error_squared: ExactScalar,
+}
+
 /// Intersect a line restricted to a finite range with a finite torus
 /// parameter window.
 ///
-/// The torus implicit equation reduces to a quartic in the line parameter. A
-/// bounded exact pseudo-Sturm classifier owns its distinct-root topology over
-/// the tolerance-expanded line range. A second exact quartic covers
-/// differentiable torus-distance extrema; its unsquared factor, the radial-axis
-/// quadratic, and both domain endpoints complete the tolerance-candidate proof.
+/// The general torus implicit equation reduces to a quartic in the line
+/// parameter. A bounded exact pseudo-Sturm classifier owns its distinct-root
+/// topology over the tolerance-expanded line range. A second exact quartic
+/// covers differentiable torus-distance extrema; its unsquared factor, the
+/// radial-axis quadratic, and both domain endpoints complete the
+/// tolerance-candidate proof. Lines authored by uniquely replaying
+/// `Frame::point_at(0, 0, w)` with direction `±frame.z` use a separate exact
+/// bounded-clearance certificate that includes the stored replay displacement.
+/// As with the general analytic reduction, this certificate consumes the
+/// kernel's semantic-orthonormal [`kgeom::frame::Frame`] contract.
 /// The legacy rounded roots remain discovery-only and can only downgrade
 /// completion.
 pub fn intersect_bounded_line_torus(
@@ -77,79 +93,57 @@ pub fn intersect_bounded_line_torus(
             ROOT_TOPOLOGY_INDETERMINATE,
         );
     };
-    match exact_line_torus_polynomials(line, torus) {
-        Ok(polynomials) => {
-            if matches!(
-                polynomials
-                    .surface
-                    .isolate_repeated_roots(isolation_range.lo, isolation_range.hi),
-                RootIsolation::Ambiguous(_)
-            ) {
-                complete = false;
-            }
-            match polynomials
-                .surface
-                .isolate(isolation_range.lo, isolation_range.hi)
+    match authored_axis_from_unique_replay(line, torus) {
+        Ok(Some(axis)) => {
+            if !authored_axis_segment_is_outside_tolerance(
+                &axis,
+                line_range,
+                torus,
+                tolerances.linear(),
+            )
+            .unwrap_or(false)
             {
-                RootIsolation::Complete(roots) => {
-                    for &root in &roots {
-                        let is_repeated_root = match polynomials.surface.root_is_repeated(root) {
-                            Ok(is_repeated) => is_repeated,
-                            Err(_) => {
-                                complete = false;
-                                false
-                            }
-                        };
-                        if context
-                            .add_root_bracket(&mut points, root, is_repeated_root)
-                            .is_none()
-                        {
-                            complete = false;
-                        }
-                    }
-                }
-                RootIsolation::Ambiguous(_) => complete = false,
-            }
-
-            match &polynomials.auxiliary {
-                ExactLineTorusAuxiliary::General {
-                    distance_stationary,
-                    radial_axis,
-                } => {
-                    for (critical_polynomial, requires_unsquared_stationarity) in
-                        [(distance_stationary, true), (radial_axis, false)]
-                    {
-                        if !context.admit_tolerance_critical_points(
-                            &mut points,
-                            critical_polynomial,
-                            isolation_range,
-                            requires_unsquared_stationarity,
-                        ) {
-                            complete = false;
-                        }
-                    }
-                }
-                ExactLineTorusAuxiliary::Axis { center_plane } => {
-                    // If the squared radial distance q(t) is identically zero,
-                    // the line lies on the torus axis and the generic squared
-                    // stationarity polynomial is also identically zero. Along
-                    // the axis, distance to an open torus has its sole interior
-                    // minimum at the center-plane crossing.
-                    if !context.admit_tolerance_critical_points(
-                        &mut points,
-                        center_plane,
-                        isolation_range,
-                        false,
-                    ) {
-                        complete = false;
-                    }
-                }
-            }
-            if !context.admit_tolerance_endpoints(&mut points) {
                 complete = false;
+                let _ = context.admit_tolerance_critical_points(
+                    &mut points,
+                    &axis.center_plane,
+                    isolation_range,
+                    false,
+                );
+                let _ = context.admit_tolerance_endpoints(&mut points);
             }
         }
-        Err(_) => complete = false,
+        Ok(None) => match exact_line_torus_polynomials(line, torus) {
+            Ok(polynomials) => {
+                if !admit_exact_line_torus_polynomials(
+                    &context,
+                    &mut points,
+                    isolation_range,
+                    &polynomials,
+                ) {
+                    complete = false;
+                }
+            }
+            Err(_) => complete = false,
+        },
+        Err(_) => match exact_line_torus_polynomials(line, torus) {
+            Ok(polynomials)
+                if matches!(&polynomials.auxiliary, ExactLineTorusAuxiliary::Axis { .. }) =>
+            {
+                if !admit_exact_line_torus_polynomials(
+                    &context,
+                    &mut points,
+                    isolation_range,
+                    &polynomials,
+                ) {
+                    complete = false;
+                }
+            }
+            Ok(_) | Err(_) => {
+                complete = false;
+                let _ = context.admit_tolerance_endpoints(&mut points);
+            }
+        },
     }
     let rounded_coefficients =
         rounded_implicit_line_coefficients(local_origin, local_direction, torus);
@@ -380,6 +374,84 @@ impl TorusLineContext<'_> {
     }
 }
 
+fn admit_exact_line_torus_polynomials(
+    context: &TorusLineContext<'_>,
+    points: &mut Vec<CurveSurfacePoint>,
+    isolation_range: ParamRange,
+    polynomials: &ExactLineTorusPolynomials,
+) -> bool {
+    let mut complete = true;
+    if matches!(
+        polynomials
+            .surface
+            .isolate_repeated_roots(isolation_range.lo, isolation_range.hi),
+        RootIsolation::Ambiguous(_)
+    ) {
+        complete = false;
+    }
+    match polynomials
+        .surface
+        .isolate(isolation_range.lo, isolation_range.hi)
+    {
+        RootIsolation::Complete(roots) => {
+            for &root in &roots {
+                let is_repeated_root = match polynomials.surface.root_is_repeated(root) {
+                    Ok(is_repeated) => is_repeated,
+                    Err(_) => {
+                        complete = false;
+                        false
+                    }
+                };
+                if context
+                    .add_root_bracket(points, root, is_repeated_root)
+                    .is_none()
+                {
+                    complete = false;
+                }
+            }
+        }
+        RootIsolation::Ambiguous(_) => complete = false,
+    }
+
+    match &polynomials.auxiliary {
+        ExactLineTorusAuxiliary::General {
+            distance_stationary,
+            radial_axis,
+        } => {
+            for (critical_polynomial, requires_unsquared_stationarity) in
+                [(distance_stationary, true), (radial_axis, false)]
+            {
+                if !context.admit_tolerance_critical_points(
+                    points,
+                    critical_polynomial,
+                    isolation_range,
+                    requires_unsquared_stationarity,
+                ) {
+                    complete = false;
+                }
+            }
+        }
+        ExactLineTorusAuxiliary::Axis { center_plane } => {
+            // If the squared radial distance q(t) is identically zero, the
+            // generic squared stationarity polynomial is also identically
+            // zero. The center-plane crossing is its sole interior
+            // distance-minimum candidate.
+            if !context.admit_tolerance_critical_points(
+                points,
+                center_plane,
+                isolation_range,
+                false,
+            ) {
+                complete = false;
+            }
+        }
+    }
+    if !context.admit_tolerance_endpoints(points) {
+        complete = false;
+    }
+    complete
+}
+
 fn rounded_implicit_line_coefficients(
     local_origin: Vec3,
     local_direction: Vec3,
@@ -405,15 +477,123 @@ fn rounded_implicit_line_coefficients(
     ]
 }
 
+/// Recover a narrow Frame-semantic authorship identity.
+///
+/// This is deliberately not a tolerance-parallel or source-world affine test.
+/// Direction components must equal `±frame.z`, the stored origin must replay
+/// through `Frame::point_at`, every replaying coordinate quotient must agree,
+/// and adjacent floating-point offsets must not replay the same stored point.
+fn authored_axis_from_unique_replay(
+    line: &Line,
+    torus: &Torus,
+) -> core::result::Result<Option<AuthoredAxis>, RootIsolationFailure> {
+    if !line_torus_contract_is_valid(line, torus) {
+        return Err(RootIsolationFailure::UnsafeArithmeticEnvelope);
+    }
+    let frame = torus.frame();
+    let direction_sign = if line.dir() == frame.z() {
+        1.0
+    } else if line.dir() == -frame.z() {
+        -1.0
+    } else {
+        return Ok(None);
+    };
+
+    let origin = line.origin().to_array();
+    let center = frame.origin().to_array();
+    let axis = frame.z().to_array();
+    let mut recovered_offset: Option<f64> = None;
+    for coordinate in 0..3 {
+        if axis[coordinate] == 0.0 {
+            continue;
+        }
+        let candidate = (origin[coordinate] - center[coordinate]) / axis[coordinate];
+        if !candidate.is_finite() || frame.point_at(0.0, 0.0, candidate) != line.origin() {
+            continue;
+        }
+        if recovered_offset.is_some_and(|offset| offset != candidate) {
+            return Err(RootIsolationFailure::ParameterResolution);
+        }
+        recovered_offset = Some(candidate);
+    }
+    let Some(recovered_offset) = recovered_offset else {
+        return Ok(None);
+    };
+    if frame.point_at(0.0, 0.0, recovered_offset.next_down()) == line.origin()
+        || frame.point_at(0.0, 0.0, recovered_offset.next_up()) == line.origin()
+    {
+        return Err(RootIsolationFailure::ParameterResolution);
+    }
+
+    let offset = ExactScalar::from_f64(recovered_offset)?;
+    let mut replay_error_squared = ExactScalar::zero();
+    for coordinate in 0..3 {
+        let error = ExactScalar::from_f64(origin[coordinate])?
+            .sub(&ExactScalar::from_f64(center[coordinate])?)?
+            .sub(&ExactScalar::from_f64(axis[coordinate])?.mul(&offset)?)?;
+        replay_error_squared = replay_error_squared.add(&error.mul(&error)?)?;
+    }
+    let center_plane =
+        ExactPolynomial::new(vec![offset.clone(), ExactScalar::from_f64(direction_sign)?])?;
+    Ok(Some(AuthoredAxis {
+        center_plane,
+        offset,
+        direction_sign,
+        replay_error_squared,
+    }))
+}
+
+fn authored_axis_segment_is_outside_tolerance(
+    axis: &AuthoredAxis,
+    line_range: ParamRange,
+    torus: &Torus,
+    tolerance: f64,
+) -> core::result::Result<bool, RootIsolationFailure> {
+    let endpoint_value = |parameter: f64| {
+        axis.offset
+            .add(&ExactScalar::from_f64(parameter)?.scale(axis.direction_sign)?)
+    };
+    let lo = endpoint_value(line_range.lo)?;
+    let hi = endpoint_value(line_range.hi)?;
+    let minimum_axial_squared = if lo.is_zero() || hi.is_zero() || lo.sign() != hi.sign() {
+        ExactScalar::zero()
+    } else {
+        let lo_squared = lo.mul(&lo)?;
+        let hi_squared = hi.mul(&hi)?;
+        if lo_squared.sub(&hi_squared)?.sign() <= 0 {
+            lo_squared
+        } else {
+            hi_squared
+        }
+    };
+
+    let major = ExactScalar::from_f64(torus.major_radius())?;
+    let clearance =
+        ExactScalar::from_f64(torus.minor_radius())?.add(&ExactScalar::from_f64(tolerance)?)?;
+    let clearance_squared = clearance.mul(&clearance)?;
+    let ideal_squared = minimum_axial_squared.add(&major.mul(&major)?)?;
+    // For A = R² + min(h²), B = r + tolerance, and E = |e|², prove
+    // sqrt(A) > B + sqrt(E). The two exact strict inequalities below are the
+    // radical-free form of that bound. By distance Lipschitz continuity this
+    // certifies the stored replayed line segment outside the tolerance tube.
+    let margin = ideal_squared
+        .sub(&clearance_squared)?
+        .sub(&axis.replay_error_squared)?;
+    if margin.sign() <= 0 {
+        return Ok(false);
+    }
+    let squared_margin = margin.mul(&margin)?;
+    let replay_cross_term = clearance_squared
+        .mul(&axis.replay_error_squared)?
+        .scale(4.0)?;
+    Ok(squared_margin.sub(&replay_cross_term)?.sign() > 0)
+}
+
 fn exact_line_torus_polynomials(
     line: &Line,
     torus: &Torus,
 ) -> core::result::Result<ExactLineTorusPolynomials, RootIsolationFailure> {
-    let direction_norm = line.dir().norm();
-    if !direction_norm.is_finite()
-        || (direction_norm - 1.0).abs() > 16.0 * ANGULAR_RESOLUTION
-        || !torus.frame().is_orthonormal()
-    {
+    if !line_torus_contract_is_valid(line, torus) {
         return Err(RootIsolationFailure::UnsafeArithmeticEnvelope);
     }
     let origin = line.origin().to_array();
@@ -490,6 +670,13 @@ fn exact_line_torus_polynomials(
     };
 
     Ok(ExactLineTorusPolynomials { surface, auxiliary })
+}
+
+fn line_torus_contract_is_valid(line: &Line, torus: &Torus) -> bool {
+    let direction_norm = line.dir().norm();
+    direction_norm.is_finite()
+        && (direction_norm - 1.0).abs() <= 16.0 * ANGULAR_RESOLUTION
+        && torus.frame().is_orthonormal()
 }
 
 fn exact_dot_difference(
@@ -631,6 +818,124 @@ mod tests {
     use super::*;
     use kgeom::frame::Frame;
     use kgeom::vec::Point3;
+
+    fn tilted_authored_axis_fixture() -> (Frame, Torus, Line) {
+        let frame = Frame::new(
+            Point3::new(1.0 / 1024.0, -1.0 / 2048.0, 1.0 / 4096.0),
+            Vec3::new(1.0, 2.0, 3.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let torus = Torus::new(frame, 1.0 + 2.0_f64.powi(-20), 1.0).unwrap();
+        let point = frame.point_at(0.0, 0.0, -1.0 / 128.0);
+        let line = Line::new(point, frame.z()).unwrap();
+        (frame, torus, line)
+    }
+
+    #[test]
+    fn tilted_frame_axis_requires_unique_component_exact_replay() {
+        let (frame, torus, line) = tilted_authored_axis_fixture();
+        let authored = authored_axis_from_unique_replay(&line, &torus).unwrap();
+        assert!(authored.is_some());
+        assert!(matches!(
+            exact_line_torus_polynomials(&line, &torus)
+                .unwrap()
+                .auxiliary,
+            ExactLineTorusAuxiliary::General { .. }
+        ));
+
+        let z = frame.z();
+        let direction_control =
+            Line::new(line.origin(), Vec3::new(z.x.next_up(), z.y, z.z)).unwrap();
+        assert!(
+            authored_axis_from_unique_replay(&direction_control, &torus)
+                .unwrap()
+                .is_none()
+        );
+
+        let point = line.origin();
+        let origin_control =
+            Line::new(Point3::new(point.x.next_up(), point.y, point.z), frame.z()).unwrap();
+        assert!(
+            authored_axis_from_unique_replay(&origin_control, &torus)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn tilted_frame_axis_rejects_replay_plateaus() {
+        let frame = Frame::new(
+            Point3::new(1.0, -2.0, 3.0),
+            Vec3::new(1.0, 2.0, 3.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let torus = Torus::new(frame, 2.0, 0.5).unwrap();
+        let line = Line::new(frame.origin(), frame.z()).unwrap();
+
+        assert!(matches!(
+            authored_axis_from_unique_replay(&line, &torus),
+            Err(RootIsolationFailure::ParameterResolution)
+        ));
+        assert!(matches!(
+            exact_line_torus_polynomials(&line, &torus)
+                .unwrap()
+                .auxiliary,
+            ExactLineTorusAuxiliary::General { .. }
+        ));
+    }
+
+    #[test]
+    fn replay_error_correction_can_reject_an_ideal_axis_clearance() {
+        let torus = Torus::new(Frame::world(), 2.0, 1.0).unwrap();
+        let offset = ExactScalar::zero();
+        let axis = AuthoredAxis {
+            center_plane: ExactPolynomial::new(vec![
+                offset.clone(),
+                ExactScalar::from_f64(1.0).unwrap(),
+            ])
+            .unwrap(),
+            offset,
+            direction_sign: 1.0,
+            // sqrt(E) = 1/4, so the ideal center clearance 2 - 1 is
+            // positive, but exactly equals tolerance + sqrt(E).
+            replay_error_squared: ExactScalar::from_f64(1.0 / 16.0).unwrap(),
+        };
+
+        assert!(
+            !authored_axis_segment_is_outside_tolerance(
+                &axis,
+                ParamRange::new(0.0, 0.0),
+                &torus,
+                3.0 / 4.0,
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn exact_coefficient_axis_survives_an_authored_replay_plateau() {
+        let frame = Frame::new(
+            Point3::new(1.0 / 8.0, -1.0 / 4.0, 1.0 / 2.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap();
+        let torus = Torus::new(frame, 1.0 + 2.0_f64.powi(-20), 1.0).unwrap();
+        let line = Line::new(frame.point_at(0.0, 0.0, -1.0 / 128.0), frame.z()).unwrap();
+
+        assert!(matches!(
+            authored_axis_from_unique_replay(&line, &torus),
+            Err(RootIsolationFailure::ParameterResolution)
+        ));
+        assert!(matches!(
+            exact_line_torus_polynomials(&line, &torus)
+                .unwrap()
+                .auxiliary,
+            ExactLineTorusAuxiliary::Axis { .. }
+        ));
+    }
 
     #[test]
     fn squared_stationarity_opposite_factor_is_certified_extraneous() {
