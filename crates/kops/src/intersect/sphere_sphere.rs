@@ -308,7 +308,7 @@ const GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT: usize = GENERAL_SPHERE_WIDE_PI
     * (GENERAL_SPHERE_WINDOW_PAIR_LIMIT + GENERAL_SPHERE_POLAR_CELL_PAIR_LIMIT);
 const GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT: usize = GENERAL_SPHERE_WIDE_PIECE_LIMIT
     * (GENERAL_SPHERE_WINDOW_ARC_LIMIT + GENERAL_SPHERE_POLAR_CELL_ARC_LIMIT);
-const GENERAL_SPHERE_POLAR_WIDE_LAYOUT_REASON: &str = "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, one exact four-cell shared-seam path or 2x2 cycle with two certified-empty siblings, one exact five-cell simultaneous shared-seam union with one certified-empty sibling, or the exact simultaneous six-cell union with no empty sibling";
+const GENERAL_SPHERE_POLAR_WIDE_LAYOUT_REASON: &str = "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, one exact four-cell shared-seam path, T-shaped tree, or 2x2 cycle with two certified-empty siblings, one exact five-cell simultaneous shared-seam union with one certified-empty sibling, or the exact simultaneous six-cell union with no empty sibling";
 type PolarWideParameterSeam = (bool, usize, f64);
 type PolarWideFourAdjacency = [[Option<PolarWideParameterSeam>; 4]; 4];
 const GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT: usize =
@@ -1090,9 +1090,10 @@ fn certify_polar_by_wide_sphere_window_union(
                 )
             })
             .collect::<Vec<_>>();
-        // The path merger remains the only route for three-adjacency layouts.
-        // A 2x2 cycle instead requires simultaneous ownership of all four
-        // reverse-oriented, bit-exact grid seams before any edge is removed.
+        // The path merger remains the only route for degree sequence 2,2,1,1.
+        // T-shaped trees and 2x2 cycles instead require simultaneous ownership
+        // of all three or four reverse-oriented, bit-exact grid seams before
+        // any edge is removed.
         let mut merged = merge_exact_polar_wide_four_sphere_region_path(
             &regions,
             first_is_polar,
@@ -1417,6 +1418,7 @@ fn merge_exact_polar_wide_simultaneous_sphere_region_union(
         .map(|(_, region)| vec![false; region.boundary.len()])
         .collect::<Vec<_>>();
     let mut internal_edges = 0;
+    let mut degrees = vec![0_u8; regions.len()];
     for first in 0..regions.len() {
         for second in first + 1..regions.len() {
             let Some((seam_on_first_operand, seam_parameter, seam)) =
@@ -1457,17 +1459,24 @@ fn merge_exact_polar_wide_simultaneous_sphere_region_union(
             }
             removed_edges[first][first_edge[0]] = true;
             removed_edges[second][second_edge[0]] = true;
+            degrees[first] += 1;
+            degrees[second] += 1;
             internal_edges += 1;
         }
     }
-    // A four-cell 2x2 cycle has exactly four grid adjacencies. A five-cell
-    // layout has four grid edges when the missing sibling is edge middle and
-    // five when it is a corner. The complete 2x3 grid has four longitude
-    // adjacencies and three latitude adjacencies, hence seven.
-    if !matches!(
-        (regions.len(), internal_edges),
-        (4, 4) | (5, 4 | 5) | (6, 7)
-    ) {
+    // A four-cell T has three grid adjacencies and degree sequence 3,1,1,1;
+    // a 2x2 cycle has four and degree sequence 2,2,2,2. The separate path arm
+    // retains sole ownership of degree sequence 2,2,1,1. A five-cell layout
+    // has four grid edges when the missing sibling is edge middle and five
+    // when it is a corner. The complete 2x3 grid has seven.
+    let is_supported_four_cell_layout = regions.len() == 4
+        && ((internal_edges == 3
+            && degrees.iter().filter(|degree| **degree == 1).count() == 3
+            && degrees.iter().filter(|degree| **degree == 3).count() == 1)
+            || (internal_edges == 4 && degrees.iter().all(|degree| *degree == 2)));
+    if !is_supported_four_cell_layout
+        && !matches!((regions.len(), internal_edges), (5, 4 | 5) | (6, 7))
+    {
         return None;
     }
 
@@ -5201,7 +5210,7 @@ mod tests {
         )
     }
 
-    fn exact_polar_by_wide_four_cell_cycle_fixture(
+    fn exact_polar_by_wide_four_cell_fixture(
         angle: f64,
         a_range: [ParamRange; 2],
         b_range: [ParamRange; 2],
@@ -5222,7 +5231,7 @@ mod tests {
 
     fn exact_polar_by_wide_left_four_cell_cycle_fixture()
     -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
-        exact_polar_by_wide_four_cell_cycle_fixture(
+        exact_polar_by_wide_four_cell_fixture(
             0.8094306659089616,
             [
                 ParamRange::new(0.10072528893857235, 2.636121125850239),
@@ -5237,7 +5246,7 @@ mod tests {
 
     fn exact_polar_by_wide_right_four_cell_cycle_fixture()
     -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
-        exact_polar_by_wide_four_cell_cycle_fixture(
+        exact_polar_by_wide_four_cell_fixture(
             0.3840978458329001,
             [
                 ParamRange::new(-0.7839294031122588, 0.907057870675744),
@@ -5246,6 +5255,36 @@ mod tests {
             [
                 ParamRange::new(2.9631102874774697, 8.194862608035262),
                 ParamRange::new(-0.11521651883525941, 0.9971690060375422),
+            ],
+        )
+    }
+
+    fn exact_polar_by_wide_lower_stem_four_cell_t_fixture()
+    -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+        exact_polar_by_wide_four_cell_fixture(
+            0.8390485119441324,
+            [
+                ParamRange::new(0.7546277362780804, 3.7939203965000243),
+                ParamRange::new(-0.2375268585430419, core::f64::consts::FRAC_PI_2),
+            ],
+            [
+                ParamRange::new(-0.027484612266702513, 6.062230214562831),
+                ParamRange::new(-1.1546508280435746, 0.47953555934550596),
+            ],
+        )
+    }
+
+    fn exact_polar_by_wide_upper_stem_four_cell_t_fixture()
+    -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+        exact_polar_by_wide_four_cell_fixture(
+            0.8675104737097041,
+            [
+                ParamRange::new(-0.8336879368685368, 0.2832840690395422),
+                ParamRange::new(-1.4950993192780773, core::f64::consts::FRAC_PI_2),
+            ],
+            [
+                ParamRange::new(3.148262199977504, 8.528650698835483),
+                ParamRange::new(-0.0029988539136878156, 1.299680704998795),
             ],
         )
     }
@@ -6830,6 +6869,184 @@ mod tests {
                 &wide_pieces,
             )
             .expect("the four-cell cycle must simultaneously own four exact shared seams");
+            let child_residual = occupied
+                .iter()
+                .map(|(_, region)| region.max_residual)
+                .fold(0.0, f64::max);
+            let artificial_seams = [
+                (true, 1, polar_pieces[0][1].hi),
+                (false, 0, wide_pieces[1][0].lo),
+                (false, 0, wide_pieces[2][0].lo),
+            ];
+            assert!(artificial_seams.iter().all(|(on_first, parameter, seam)| {
+                !sphere_region_has_parameter_seam_edge(&merged, *on_first, *parameter, *seam)
+            }));
+
+            let hit = certify_polar_by_wide_sphere_window_union(
+                &a,
+                a_range,
+                &b,
+                b_range,
+                true,
+                Tolerances::default(),
+                allowance,
+                GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT,
+                GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT,
+                GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT,
+            )
+            .unwrap();
+            assert!(hit.is_complete());
+            assert!(hit.points.is_empty());
+            assert!(hit.curves.is_empty());
+            assert_eq!(hit.regions.len(), 1);
+            assert_eq!(hit.regions[0].boundary.len(), merged.boundary.len());
+            assert_eq!(
+                hit.regions[0].max_residual,
+                child_residual.max(parent_residual)
+            );
+            let SurfaceRegionCorrespondence::GeneralSphereWindow(map) =
+                hit.regions[0].correspondence
+            else {
+                unreachable!()
+            };
+            assert_eq!(map.first_range(), a_range);
+            assert_eq!(map.second_range(), b_range);
+            assert!(hit.regions[0].boundary.iter().all(|vertex| {
+                vertex.residual <= hit.regions[0].max_residual
+                    && a.eval(vertex.uv_a).dist(b.eval(vertex.uv_b)) <= hit.regions[0].max_residual
+            }));
+
+            if fixture_index == 0 {
+                let longitude_seam = wide_pieces[1][0].lo;
+                let longitude_owner = occupied
+                    .iter()
+                    .position(|(cell, _)| *cell == [0, 1])
+                    .expect("the middle lower child was required");
+                let longitude_edge = exact_sphere_region_parameter_seam_edge(
+                    &occupied[longitude_owner].1,
+                    false,
+                    0,
+                    longitude_seam,
+                )
+                .expect("the middle lower child owns the exact longitude seam");
+
+                let mut one_ulp = occupied.clone();
+                let endpoint = longitude_edge[0];
+                one_ulp[longitude_owner].1.boundary[endpoint].uv_b[0] = f64::from_bits(
+                    one_ulp[longitude_owner].1.boundary[endpoint].uv_b[0].to_bits() + 1,
+                );
+                assert!(
+                    merge_exact_polar_wide_simultaneous_sphere_region_union(
+                        &one_ulp,
+                        true,
+                        &polar_pieces,
+                        &wide_pieces,
+                    )
+                    .is_none()
+                );
+
+                let mut ambiguous = occupied.clone();
+                let duplicate = ambiguous[longitude_owner].1.boundary[longitude_edge[0]];
+                ambiguous[longitude_owner]
+                    .1
+                    .boundary
+                    .insert(longitude_edge[0] + 1, duplicate);
+                assert!(
+                    merge_exact_polar_wide_simultaneous_sphere_region_union(
+                        &ambiguous,
+                        true,
+                        &polar_pieces,
+                        &wide_pieces,
+                    )
+                    .is_none()
+                );
+
+                for (piece_limit, pair_limit, arc_limit, reason) in [
+                    (
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT - 1,
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT,
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT,
+                        "general coincident sphere polar-by-wide union piece limit exhausted",
+                    ),
+                    (
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT,
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT - 1,
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT,
+                        "general coincident sphere polar-by-wide union pair limit exhausted",
+                    ),
+                    (
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT,
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT,
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT - 1,
+                        "general coincident sphere polar-by-wide union arc limit exhausted",
+                    ),
+                ] {
+                    assert_eq!(
+                        certify_polar_by_wide_sphere_window_union(
+                            &a,
+                            a_range,
+                            &b,
+                            b_range,
+                            true,
+                            Tolerances::default(),
+                            allowance,
+                            piece_limit,
+                            pair_limit,
+                            arc_limit,
+                        )
+                        .unwrap_err(),
+                        Error::InvalidGeometry { reason }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exact_polar_by_wide_four_cell_trees_are_exact() {
+        let fixtures = [
+            (
+                exact_polar_by_wide_lower_stem_four_cell_t_fixture(),
+                [[0, 0], [0, 1], [0, 2], [1, 1]],
+                [[1, 0], [1, 2]],
+            ),
+            (
+                exact_polar_by_wide_upper_stem_four_cell_t_fixture(),
+                [[0, 1], [1, 0], [1, 1], [1, 2]],
+                [[0, 0], [0, 2]],
+            ),
+        ];
+        for (fixture_index, ((a, b, a_range, b_range), expected, expected_empty)) in
+            fixtures.into_iter().enumerate()
+        {
+            let allowance = arbitrary_sphere_octant_parameter_allowance(a_range, b_range).unwrap();
+            let parent_residual =
+                arbitrary_sphere_octant_residual_bound(&a, &b, allowance).unwrap();
+            let (polar_pieces, wide_pieces, occupied, empty) =
+                exact_polar_by_wide_child_regions(&a, a_range, &b, b_range);
+            assert_eq!(
+                occupied.iter().map(|(cell, _)| *cell).collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(empty, expected_empty);
+            assert!(
+                merge_exact_polar_wide_four_sphere_region_path(
+                    &occupied,
+                    true,
+                    &polar_pieces,
+                    &wide_pieces,
+                )
+                .is_none(),
+                "a degree-three T must not enter the four-cell path arm"
+            );
+
+            let merged = merge_exact_polar_wide_simultaneous_sphere_region_union(
+                &occupied,
+                true,
+                &polar_pieces,
+                &wide_pieces,
+            )
+            .expect("the four-cell T must simultaneously own three exact shared seams");
             let child_residual = occupied
                 .iter()
                 .map(|(_, region)| region.max_residual)
