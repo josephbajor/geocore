@@ -165,10 +165,12 @@ application boundary.
   only the canonical finite-open two-sample degree-1, witnessed three-sample
   quadratic, witnessed four-sample cubic, canonical five-sample degree-1, or
   canonical seven-sample degree-1 dual Offset(NURBS) charts in either ordered-
-  root arrangement. These complete the existing canonical 2/3/4/5/7-sample set
-  at the current exactly-one-descriptor-per-root scope. All five require two
-  distinct ordered roots over
-  distinct direct nonperiodic NURBS basis handles and one descriptor per root.
+  root arrangement. These complete the existing canonical 2/3/4/5/7-sample set.
+  The two-sample line admits independent exact ordered chains of one through
+  four descriptors per root across the full 4×4 matrix and both trace orders;
+  the 3/4/5/7-sample families remain exactly one descriptor per root. All five
+  require distinct ordered roots with distinct direct nonperiodic terminal
+  NURBS basis handles.
   The line uses unweighted two-
   control carrier/pcurves on `[0,0,1,1]` over `[0,1]` without witnesses; the
   quadratic uses unweighted degree-2 three-control carrier/pcurves on
@@ -179,18 +181,23 @@ application boundary.
   carrier/pcurves on `[0,0,1,2,3,4,4]` over `[0,4]`; the seven-sample family
   uses unweighted degree-1 seven-control carrier/pcurves on
   `[0,0,1,2,3,4,5,6,6]` over `[0,6]`. Neither polyline family has interpolation
-  witnesses or a carrier period. Rigid copy transforms both bases and the line,
-  five-sample, or seven-sample carrier; for either witnessed higher-order family
-  it transforms exact positions and rebuilds carrier controls by the public
-  interpolation formula. It retains exact UV witnesses when present, paired
-  pcurves, metadata, tolerance, and ordered roots, and publicly recertifies.
+  witnesses or a carrier period. Each admitted two-sample chain binds its exact
+  outer-to-inner distance order bit-for-bit to its terminal NURBS source; graph
+  persistence atomically rejects reordered same-total, extra, missing, or stale
+  chains. Its trace representation currently caps at four descriptors per root,
+  so a live depth-five source paired to the maximum-depth trace fails atomically
+  at graph insertion; broader depth remains graph representation/binding work.
+  Rigid copy transforms both terminal bases and the line, five-sample,
+  or seven-sample carrier; for either witnessed higher-order family it transforms
+  exact positions and rebuilds carrier controls by the public interpolation
+  formula. It copies both ordered roots, complete offset/basis chains, and paired
+  pcurves, preserves exact distance order, terminal source binding, metadata,
+  tolerance, and exact UV witnesses when present, and publicly recertifies.
   Facade rejection happens before scope creation, while lower-copy rejection
   restores every Body/Region/Shell/Edge/Vertex and Curve/Surface/Pcurve/Point
-  count plus future point identity. Same-total multi-
-  distance metadata, nested Offset(NURBS) roots at every sample count including
-  two-sample, Offset(Plane) peers, shared dual bases, periodic source or carrier
-  charts, altered higher-order witnesses, and other sample counts remain
-  unsupported;
+  count plus future point identity. Graph-valid shared-basis or periodic charts,
+  nested 3/4/5/7-sample roots, Offset(Plane) peers, altered higher-order
+  witnesses, and other sample counts remain copy-unsupported;
   attributes are blocked on an authorable storage contract, and non-rigid
   transforms remain.
   General root discovery, complete verified residuals across every result family, and
