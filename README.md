@@ -196,11 +196,22 @@ application boundary.
   squared-stationarity quartic with an unsquared stationarity interval filter,
   the radial-axis quadratic, and both line endpoints cover tolerance-near
   extrema. Partial torus windows, auxiliary identity cases, unsafe arithmetic
-  envelopes, broken unit-frame contracts, unrepresentable root separation, and
-  tolerance-only discoveries remain `Indeterminate`; rounded local roots are
-  discovery-only. Distinct algebraic roots remain separate in the isolator,
-  while the final physical-contact list still uses world-space linear-resolution
-  consolidation.
+  envelopes, unit/orthonormal invariant failures caught by defensive solver
+  checks, unrepresentable root separation, and tolerance-only discoveries
+  remain `Indeterminate`; rounded local roots are discovery-only. Distinct
+  algebraic roots remain separate in the isolator, while the final
+  physical-contact list still uses world-space linear-resolution consolidation.
+  `Vec3::normalized` now rejects non-finite components, preserves the established
+  ordinary finite-norm bits, and rescales only when squared-length overflow would
+  otherwise collapse a finite direction. `Line::new` inherits that contract.
+  `Frame::new` and `Frame::from_z` preserve their ordinary valid construction
+  bits and use a homogeneous cross/cross projection only when the ordinary
+  candidate cannot satisfy the orthonormal-frame contract, with scale-aware
+  degeneracy rejection and a final orthonormality gate. The existing
+  linear-resolution floor is unchanged. Evidence covers power-of-two and
+  near-maximum directions, projection overflow, huge parallel and near-parallel
+  hints, the unchanged geometry determinism golden in debug and release,
+  line/line bit parity, and direct/generic line/Torus parity.
   Remaining
   concrete decision-audit debt includes generic curved-pcurve signed line
   integrals and broader curved or periodic containment beyond the landed
@@ -210,8 +221,11 @@ application boundary.
   envelopes, full source-exact harmonic discriminant construction beyond the
   landed coefficient sign/zero agreement, higher-polynomial root and window
   classification beyond the bounded line/Torus quartic slice, general NURBS
-  root classification, stable normalization for extreme finite Line/Frame
-  construction, and other raw topological sign branches.
+  root classification, raw extreme-scale `Vec3`
+  `norm`/`norm_sq`/dot/cross/distance/subtraction behavior, overflow-safe 2D
+  direction normalization for `Line2d` and `Circle2d` after choosing zero-only
+  versus linear-resolution-floor semantics, and other raw topological sign
+  branches.
   `insphere`, an `incircle` production decision consumer when required, the
   broader topological-decision audit, and full conformance remain ahead.
 - M2.5 is in progress and remains the architecture gate. Transaction-owned checked

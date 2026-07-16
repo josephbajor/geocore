@@ -250,15 +250,31 @@ nonidentity, an exact squared distance-stationary quartic, its unsquared-factor
 interval check, the radial-axis quadratic, and both requested endpoints cover
 every minimum/nondifferentiability candidate. Rejected brackets require a
 strict outward torus-distance exclusion; partial surface windows, auxiliary
-identity cases, numeric root-identity collapse, unsafe expansion work, broken
-semantic unit/orthonormal contracts, and distinct tolerance-only discoveries
-remain `Indeterminate`. The old rounded frame-local polynomial solver is
-discovery-only and cannot upgrade completion. Algebraic roots remain distinct
-inside the isolator, while final physical contacts retain world-space
-linear-resolution consolidation. This slice does not close general
-quartic/higher-degree isolation, the other conic/primitive families,
-auxiliary-identity handling, or the extreme-finite stable-normalization debt
-in `Line::new` and `Frame::new`.
+identity cases, numeric root-identity collapse, unsafe expansion work,
+semantic unit/orthonormal invariant failures caught by defensive solver checks, and
+distinct tolerance-only discoveries remain `Indeterminate`. The old rounded
+frame-local polynomial solver is discovery-only and cannot upgrade
+completion. Algebraic roots remain distinct inside the isolator, while final
+physical contacts retain world-space linear-resolution consolidation. This
+slice does not close general quartic/higher-degree isolation, the other
+conic/primitive families, or auxiliary-identity handling.
+
+Stable finite three-dimensional direction construction has also landed.
+`Vec3::normalized` rejects non-finite components, preserves ordinary
+finite-norm result bits, retains the existing linear-resolution floor, and
+rescales only the overflowed-norm path. `Line::new` inherits that behavior.
+`Frame::new` and `Frame::from_z` preserve their ordinary valid construction
+bits and retry only a failed finite x-hint projection candidate with homogeneous
+cross/cross projection, scale-aware physical/angular degeneracy rejection,
+direct unitization, and a final orthonormality gate. Evidence covers
+power-of-two and near-maximum vectors, projection overflow, huge parallel and
+near-parallel hints, the unchanged geometry determinism golden in debug and
+release, line/line and line/Torus public parity, and downstream
+rigid-copy/facade suites. Remaining arithmetic debt includes raw extreme-scale
+`Vec3::norm`/`norm_sq`, upstream dot/cross/distance/subtraction overflow, and
+overflow-safe 2D direction normalization for `Line2d` and `Circle2d` after
+choosing whether to retain zero-only semantics or adopt the model
+linear-resolution floor.
 
 ## Current direction and handoff order
 
