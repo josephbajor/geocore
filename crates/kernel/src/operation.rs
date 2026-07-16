@@ -3595,6 +3595,100 @@ mod tests {
     }
 
     #[test]
+    fn rigid_body_copy_facade_reissues_canonical_seven_sample_dual_offset() {
+        let placement = Frame::new(
+            Point3::new(2.0, -1.0, 3.0),
+            Vec3::new(1.0, 2.0, 3.0).normalized().unwrap(),
+            Vec3::new(2.0, -1.0, 0.0).normalized().unwrap(),
+        )
+        .unwrap();
+        let first = [0.25];
+        let second = [0.5];
+        let mut copied_certificates = Vec::new();
+        for swap_order in [false, true] {
+            let mut session = Kernel::new().create_session();
+            let part_id = session.create_part();
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let (raw_source, source_curve) = transmitted_dual_offset_wire(
+                &mut edit.state.store,
+                [&first, &second],
+                [&first, &second],
+                false,
+                false,
+                7,
+                swap_order,
+            );
+            let source_certificate = edit
+                .state
+                .store
+                .get(source_curve)
+                .unwrap()
+                .as_transmitted_nurbs_intersection()
+                .unwrap()
+                .certificate()
+                .clone();
+            let source = BodyId::new(part_id, raw_source);
+            let created = edit
+                .copy_body_rigid(CopyBodyRequest::new(source, placement))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            let copied_edge = edit
+                .state
+                .store
+                .edges_of_body(created.body().raw())
+                .unwrap()[0];
+            let copied_curve = edit.state.store.get(copied_edge).unwrap().curve.unwrap();
+            let copied = edit
+                .state
+                .store
+                .get(copied_curve)
+                .unwrap()
+                .as_transmitted_nurbs_intersection()
+                .unwrap();
+            let certificate = copied.certificate().clone();
+            assert_eq!(certificate.metadata(), transmitted_metadata());
+            assert_eq!(certificate.carrier().points().len(), 7);
+            assert_eq!(certificate.pcurves(), source_certificate.pcurves());
+            assert_eq!(
+                certificate.carrier().points(),
+                source_certificate
+                    .carrier()
+                    .points()
+                    .iter()
+                    .map(|point| placement.point_at(point.x, point.y, point.z))
+                    .collect::<Vec<_>>()
+            );
+            assert!(certificate.traces().iter().all(|trace| {
+                trace
+                    .as_offset_nurbs()
+                    .is_some_and(|offset| offset.descriptor_signed_distances().len() == 1)
+            }));
+            assert_eq!(
+                certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals(
+                    certificate.carrier().clone(),
+                    certificate.traces().clone(),
+                    certificate.pcurves().clone(),
+                    certificate.metadata(),
+                    certificate.tolerance(),
+                )
+                .unwrap(),
+                certificate
+            );
+            edit.state.store.geometry().validate().unwrap();
+            copied_certificates.push(certificate);
+        }
+        assert_eq!(
+            copied_certificates[0].traces()[0],
+            copied_certificates[1].traces()[1]
+        );
+        assert_eq!(
+            copied_certificates[0].traces()[1],
+            copied_certificates[1].traces()[0]
+        );
+    }
+
+    #[test]
     fn rigid_body_copy_facade_rejects_noncanonical_dual_offset_before_scope() {
         let first = [0.25];
         let first_split = [0.125, 0.125];
@@ -3610,7 +3704,9 @@ mod tests {
             ((&first_split[..], &second[..]), false, false, 5),
             ((&first[..], &shared_second[..]), true, false, 5),
             ((&first[..], &second[..]), false, true, 5),
-            ((&first[..], &second[..]), false, false, 7),
+            ((&first_split[..], &second[..]), false, false, 7),
+            ((&first[..], &shared_second[..]), true, false, 7),
+            ((&first[..], &second[..]), false, true, 7),
             ((&first[..], &second[..]), false, true, 2),
             ((&first[..], &second[..]), false, true, 3),
             ((&first[..], &second[..]), false, true, 4),

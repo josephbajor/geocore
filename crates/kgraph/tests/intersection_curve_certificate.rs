@@ -581,7 +581,7 @@ fn transmitted_seven_sample_dual_offset_polyline_is_narrow_sound_and_bound() {
         1.0e-8,
     )
     .unwrap();
-    assert!(!transmitted_nurbs_intersection_has_rigid_copy_recertifier(
+    assert!(transmitted_nurbs_intersection_has_rigid_copy_recertifier(
         &certificate
     ));
     assert_eq!(certificate.carrier(), &carrier);

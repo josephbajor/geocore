@@ -29,6 +29,7 @@ use kgraph::{
     certify_transmitted_plane_intersection_residuals,
     certify_transmitted_plane_nurbs_intersection_residuals,
     certify_transmitted_quadratic_dual_offset_nurbs_intersection_residuals,
+    certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals,
     certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals,
     reissue_verified_nurbs_intersection_residuals,
     transmitted_nurbs_intersection_has_rigid_copy_recertifier,
@@ -440,9 +441,9 @@ impl Copier<'_> {
         let pcurves = self.copied_nurbs_pcurves(copied_pcurves)?;
         let quadratic_witnesses = certificate.quadratic_interpolation_witnesses();
         let cubic_witnesses = certificate.cubic_interpolation_witnesses();
-        let five_sample = quadratic_witnesses.is_none()
-            && cubic_witnesses.is_none()
-            && certificate.carrier().points().len() == 5;
+        let witness_free_control_count = (quadratic_witnesses.is_none()
+            && cubic_witnesses.is_none())
+        .then(|| certificate.carrier().points().len());
         let transformed_quadratic_positions = match quadratic_witnesses {
             Some(witnesses) => Some(self.transform_points(witnesses.positions())?),
             None => None,
@@ -533,14 +534,18 @@ impl Copier<'_> {
                         metadata,
                         tolerance,
                     )
-                } else if five_sample {
-                    certify_transmitted_five_sample_dual_offset_nurbs_intersection_residuals(
-                        carrier, traces, pcurves, metadata, tolerance,
-                    )
                 } else {
-                    certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals(
-                        carrier, traces, pcurves, metadata, tolerance,
-                    )
+                    match witness_free_control_count {
+                        Some(5) => certify_transmitted_five_sample_dual_offset_nurbs_intersection_residuals(
+                            carrier, traces, pcurves, metadata, tolerance,
+                        ),
+                        Some(7) => certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals(
+                            carrier, traces, pcurves, metadata, tolerance,
+                        ),
+                        _ => certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals(
+                            carrier, traces, pcurves, metadata, tolerance,
+                        ),
+                    }
                 }
             }
             _ => return Err(Error::InvalidGeometry {
