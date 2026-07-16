@@ -97,7 +97,9 @@ application boundary.
   `[0,1]`/`[1,0]`/`[1,1]`/`[1,2]` T trees and the exact left
   `[0,0]`/`[0,1]`/`[1,0]`/`[1,1]` and right
   `[0,1]`/`[0,2]`/`[1,1]`/`[1,2]` four-positive 2×2 cycle family with two
-  certified-empty siblings, and exactly five positive cells with one certified-
+  certified-empty siblings, plus the exact disconnected outer-column vertical
+  pairs `[0,0]`/`[0,2]`/`[1,0]`/`[1,2]` with middle-column `[0,1]`/`[1,1]`
+  certified empty, and exactly five positive cells with one certified-
   empty sibling, in the polar-by-wide family have landed. The four-positive
   routes are disjoint by degree sequence: path `2,2,1,1`, T `3,1,1,1`, and
   cycle `2,2,2,2`. Each T certifies the other two siblings empty,
@@ -109,8 +111,11 @@ application boundary.
   oriented bit-exact adjacencies, requires one outer cycle with no artificial
   seam, and restores the parent map and maximum child/parent residual. Its real
   fixtures pin repeat/swap while one-ULP mutation and duplicate-edge ambiguity
-  fail closed. The five-positive arm simultaneously removes every internal
-  reverse-oriented
+  fail closed. The disconnected arm merges both exact latitude seams into
+  exactly two canonical regions, excludes both longitude separators, restores
+  parent maps and maximum child/parent residuals, and pins repeat/swap plus one-
+  ULP/ambiguity rejection. The five-positive arm simultaneously removes every
+  internal reverse-oriented
   bit-exact seam and requires one outer cycle; corner-empty cycle-plus-tail and
   edge-middle-empty tree fixtures pin repeat/swap, parent mapping, residuals,
   and one-ULP/ambiguity rejection. The all-six-positive arm now admits the
@@ -119,8 +124,8 @@ application boundary.
   unambiguous outer cycle and no artificial seam edge. Its real fixture pins
   parent mapping, residuals, repeat/swap, and one-ULP/ambiguity rejection. The
   non-cap row retains eight vertices and every six-cell decomposition keeps the
-  exact 6/5, 147/146, and 588/587 piece/pair/arc N/N-1 ceilings; disconnected
-  four-positive layouts remain unsupported.
+  exact 6/5, 147/146, and 588/587 piece/pair/arc N/N-1 ceilings; other
+  disconnected four-positive layouts remain unsupported.
   Varying-normal chains against a direct analytic Plane retain exact outer-to-
   inner metadata, prove every intermediate and final radius finite and positive
   from the original basis, use the derived sheet only for discovery, preserve
@@ -144,23 +149,26 @@ application boundary.
   nested exact-plane roots, direct Plane/NURBS in both orders, direct
   NURBS/NURBS, direct one-descriptor Offset(NURBS)/NURBS in both orders,
   exactly one-descriptor Offset(NURBS)/direct-Plane charts in both orders, and
-  only the canonical finite-open two-sample degree-1 or witnessed three-sample
-  quadratic dual Offset(NURBS) charts in either ordered-root arrangement. Both
-  require two distinct ordered roots over distinct direct nonperiodic NURBS
-  basis handles and one descriptor per root. The line uses unweighted two-
+  only the canonical finite-open two-sample degree-1, witnessed three-sample
+  quadratic, or witnessed four-sample cubic dual Offset(NURBS) charts in either
+  ordered-root arrangement. All three require two distinct ordered roots over
+  distinct direct nonperiodic NURBS basis handles and one descriptor per root.
+  The line uses unweighted two-
   control carrier/pcurves on `[0,0,1,1]` over `[0,1]` without witnesses; the
   quadratic uses unweighted degree-2 three-control carrier/pcurves on
-  `[0,0,0,2,2,2]` over `[0,2]` plus exact position and paired-UV interpolation
-  witnesses. Rigid copy transforms both bases and the line carrier; for the
-  quadratic it transforms the exact positions, rebuilds carrier controls from
-  them, retains exact UV witnesses, paired pcurves, metadata, and tolerance,
-  and reruns the public original-source recertifier.
+  `[0,0,0,2,2,2]` over `[0,2]`; and the cubic uses unweighted degree-3 four-
+  control carrier/pcurves on `[0,0,0,0,3,3,3,3]` over `[0,3]`. Both higher-
+  order families retain exact position and paired-UV interpolation witnesses.
+  Rigid copy transforms both bases and the line carrier; for either higher-
+  order family it transforms exact positions, rebuilds carrier controls by the
+  public interpolation formula, retains exact UV witnesses, paired pcurves,
+  metadata, tolerance, and ordered roots, and publicly recertifies.
   Facade rejection happens before scope creation, while lower-copy rejection
   restores every Body/Region/Shell/Edge/Vertex and Curve/Surface/Pcurve/Point
   count plus future point identity. Same-total multi-
   distance metadata, nested Offset(NURBS), Offset(Plane) peers, shared dual
-  bases, periodic source or carrier charts, altered quadratic witnesses, and
-  cubic, five-sample, seven-sample, or other dual families remain unsupported;
+  bases, periodic source or carrier charts, altered higher-order witnesses, and
+  five-sample, seven-sample, or other dual families remain unsupported;
   attributes are blocked on an authorable storage contract, and non-rigid
   transforms remain.
   General root discovery, complete verified residuals across every result family, and
