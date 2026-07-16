@@ -1532,6 +1532,26 @@ fn transmitted_nurbs_intersection_sources_are_rigid_copy_supported(
     {
         return Ok(true);
     }
+    if matches!(
+        certificate.traces(),
+        [
+            kgraph::NurbsIntersectionTrace::OffsetNurbs(_),
+            kgraph::NurbsIntersectionTrace::OffsetNurbs(_)
+        ]
+    ) {
+        if source_surfaces[0] == source_surfaces[1] {
+            return Ok(false);
+        }
+        let Some(first) = store.get(source_surfaces[0])?.as_offset().copied() else {
+            return Ok(false);
+        };
+        let Some(second) = store.get(source_surfaces[1])?.as_offset().copied() else {
+            return Ok(false);
+        };
+        if first.basis() == second.basis() {
+            return Ok(false);
+        }
+    }
     for (source, trace) in source_surfaces.into_iter().zip(certificate.traces()) {
         let source = store.get(source)?;
         let matches = match trace {
@@ -1831,7 +1851,7 @@ mod tests {
         AccountingMode, ExecutionPolicy, LimitSpec, NumericalPolicy, PolicyVersion, ResourceKind,
         SessionPrecision, TOTAL_WORK_STAGE,
     };
-    use kgeom::curve::{Circle, Line};
+    use kgeom::curve::{Circle, Curve, Line};
     use kgeom::curve2d::{Circle2d, Line2d, NurbsCurve2d};
     use kgeom::nurbs::{NurbsCurve, NurbsSurface};
     use kgeom::param::ParamRange;
@@ -1842,8 +1862,10 @@ mod tests {
         OffsetSurfaceDescriptor, PlaneCircleTrace, PlaneSphereCircleTrace, SphereLatitudeTrace,
         TransmittedIntersectionChartMetadata, TransmittedOffsetNurbsTrace,
         certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
+        certify_transmitted_five_sample_dual_offset_nurbs_intersection_residuals,
         certify_transmitted_offset_nurbs_intersection_residuals,
         certify_transmitted_plane_intersection_residuals,
+        certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals,
         certify_verified_plane_nurbs_intersection_residuals,
     };
     use ktopo::check::VerificationGapCause;
@@ -2088,6 +2110,224 @@ mod tests {
                 curve: Some(curve),
                 vertices: vertices.map(Some),
                 bounds: Some((0.0, 1.0)),
+                fins: Vec::new(),
+                tolerance: None,
+            });
+            assembly.get_mut(shell).unwrap().edges.push(edge);
+            assembly.get_mut(region).unwrap().shells.push(shell);
+            assembly.get_mut(body).unwrap().regions.push(region);
+            body
+        };
+        transaction.commit_checked_body(body).unwrap();
+        (body, curve)
+    }
+
+    fn transmitted_dual_offset_wire(
+        store: &mut Store,
+        source_distances: [&[f64]; 2],
+        trace_distances: [&[f64]; 2],
+        shared_basis: bool,
+        periodic_first: bool,
+        sample_count: usize,
+        swap_order: bool,
+    ) -> (ktopo::entity::BodyId, ktopo::entity::CurveId) {
+        let surface_knots = vec![0.0, 0.0, 1.0, 1.0];
+        let regular_first = NurbsSurface::new(
+            1,
+            1,
+            surface_knots.clone(),
+            surface_knots.clone(),
+            vec![
+                Point3::new(0.0, 0.0, -0.25),
+                Point3::new(0.0, 1.0, -0.25),
+                Point3::new(1.0, 0.0, -0.25),
+                Point3::new(1.0, 1.0, -0.25),
+            ],
+            None,
+        )
+        .unwrap();
+        let regular_second = NurbsSurface::new(
+            1,
+            1,
+            surface_knots.clone(),
+            surface_knots,
+            vec![
+                Point3::new(0.0, 0.5, 0.0),
+                Point3::new(0.0, 0.5, 1.0),
+                Point3::new(1.0, 0.5, 0.0),
+                Point3::new(1.0, 0.5, 1.0),
+            ],
+            None,
+        )
+        .unwrap();
+        let (first_basis, second_basis) = if periodic_first {
+            let mut points = Vec::new();
+            for point in [
+                Point3::new(0.0, 0.25, 0.0),
+                Point3::new(1.0, 0.25, 0.0),
+                Point3::new(-1.0, 0.25, 0.0),
+                Point3::new(0.0, 0.25, 0.0),
+            ] {
+                points.push(point);
+                points.push(point + Vec3::new(0.0, 0.0, 1.0));
+            }
+            let periodic = NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 2.0, 3.0, 3.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                points,
+                None,
+            )
+            .unwrap()
+            .with_certified_periodicity([true, false], 0.0)
+            .unwrap();
+            let horizontal = NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![
+                    Point3::new(0.0, 0.0, -0.5),
+                    Point3::new(0.0, 1.0, -0.5),
+                    Point3::new(1.0, 0.0, -0.5),
+                    Point3::new(1.0, 1.0, -0.5),
+                ],
+                None,
+            )
+            .unwrap();
+            (periodic, horizontal)
+        } else if shared_basis {
+            (regular_first.clone(), regular_first)
+        } else {
+            (regular_first, regular_second)
+        };
+        let first_basis_root = store
+            .insert_surface(SurfaceGeom::Nurbs(first_basis.clone()))
+            .unwrap();
+        let second_basis_root = if shared_basis {
+            first_basis_root
+        } else {
+            store
+                .insert_surface(SurfaceGeom::Nurbs(second_basis.clone()))
+                .unwrap()
+        };
+        let mut surfaces = [first_basis_root, second_basis_root];
+        for index in 0..2 {
+            for &distance in source_distances[index] {
+                surfaces[index] = store
+                    .insert_surface(SurfaceGeom::Offset(OffsetSurfaceDescriptor::new(
+                        surfaces[index],
+                        distance,
+                    )))
+                    .unwrap();
+            }
+        }
+        let mut traces = [
+            NurbsIntersectionTrace::OffsetNurbs(
+                TransmittedOffsetNurbsTrace::from_descriptor_signed_distances(
+                    first_basis,
+                    trace_distances[0],
+                )
+                .unwrap(),
+            ),
+            NurbsIntersectionTrace::OffsetNurbs(
+                TransmittedOffsetNurbsTrace::from_descriptor_signed_distances(
+                    second_basis,
+                    trace_distances[1],
+                )
+                .unwrap(),
+            ),
+        ];
+        if swap_order {
+            surfaces.swap(0, 1);
+            traces.swap(0, 1);
+        }
+        let (knots, coordinates) = match sample_count {
+            2 => (vec![0.0, 0.0, 1.0, 1.0], vec![0.1, 0.9]),
+            5 => (
+                vec![0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0],
+                vec![0.1, 0.3, 0.5, 0.7, 0.9],
+            ),
+            _ => unreachable!(),
+        };
+        let carrier = NurbsCurve::new(
+            1,
+            knots.clone(),
+            coordinates
+                .iter()
+                .map(|&coordinate| Point3::new(coordinate, 0.0, 0.0))
+                .collect(),
+            None,
+        )
+        .unwrap();
+        let common = NurbsCurve2d::new(
+            1,
+            knots,
+            coordinates
+                .iter()
+                .map(|&coordinate| Point2::new(coordinate, 0.0))
+                .collect(),
+            None,
+        )
+        .unwrap();
+        let pcurves = [common.clone(), common];
+        let certificate = match sample_count {
+            2 => certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals(
+                carrier.clone(),
+                traces,
+                pcurves.clone(),
+                transmitted_metadata(),
+                1.0e-8,
+            ),
+            5 => certify_transmitted_five_sample_dual_offset_nurbs_intersection_residuals(
+                carrier.clone(),
+                traces,
+                pcurves.clone(),
+                transmitted_metadata(),
+                1.0e-8,
+            ),
+            _ => unreachable!(),
+        }
+        .unwrap();
+        let pcurves =
+            pcurves.map(|pcurve| store.insert_pcurve(Curve2dGeom::Nurbs(pcurve)).unwrap());
+        let curve = store
+            .insert_verified_transmitted_nurbs_intersection_curve(surfaces, pcurves, certificate)
+            .unwrap();
+        let mut transaction = store.transaction().unwrap();
+        let body = {
+            let mut assembly = transaction.assembly();
+            let body = assembly.add(RawBody {
+                kind: BodyKind::Wire,
+                regions: Vec::new(),
+            });
+            let region = assembly.add(RawRegion {
+                body,
+                kind: RegionKind::Void,
+                shells: Vec::new(),
+            });
+            let shell = assembly.add(RawShell {
+                region,
+                faces: Vec::new(),
+                edges: Vec::new(),
+                vertex: None,
+            });
+            let vertices = [
+                *carrier.points().first().unwrap(),
+                *carrier.points().last().unwrap(),
+            ]
+            .map(|position| {
+                let point = assembly.add(position);
+                assembly.add(RawVertex {
+                    point,
+                    tolerance: None,
+                })
+            });
+            let edge = assembly.add(RawEdge {
+                curve: Some(curve),
+                vertices: vertices.map(Some),
+                bounds: Some((carrier.param_range().lo, carrier.param_range().hi)),
                 fins: Vec::new(),
                 tolerance: None,
             });
@@ -2836,6 +3076,147 @@ mod tests {
                     &source_distances,
                     &trace_distances,
                     plane_offset,
+                );
+                let source = BodyId::new(part_id, raw_source);
+                let before = (
+                    edit.state.store.count::<RawBody>(),
+                    edit.state.store.count::<RawRegion>(),
+                    edit.state.store.count::<RawShell>(),
+                    edit.state.store.count::<RawEdge>(),
+                    edit.state.store.count::<RawVertex>(),
+                    edit.state.store.count::<SurfaceGeom>(),
+                );
+                assert!(matches!(
+                    edit.copy_body_rigid(CopyBodyRequest::new(source, Frame::world())),
+                    Err(KernelError::UnsupportedBodyCopyGeometry { .. })
+                ));
+                assert_eq!(
+                    before,
+                    (
+                        edit.state.store.count::<RawBody>(),
+                        edit.state.store.count::<RawRegion>(),
+                        edit.state.store.count::<RawShell>(),
+                        edit.state.store.count::<RawEdge>(),
+                        edit.state.store.count::<RawVertex>(),
+                        edit.state.store.count::<SurfaceGeom>(),
+                    )
+                );
+                edit.state.store.geometry().validate().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn rigid_body_copy_facade_reissues_canonical_two_sample_dual_offset() {
+        let placement = Frame::new(
+            Point3::new(2.0, -1.0, 3.0),
+            Vec3::new(1.0, 2.0, 3.0).normalized().unwrap(),
+            Vec3::new(2.0, -1.0, 0.0).normalized().unwrap(),
+        )
+        .unwrap();
+        let first = [0.25];
+        let second = [0.5];
+        let mut copied_certificates = Vec::new();
+        for swap_order in [false, true] {
+            let mut session = Kernel::new().create_session();
+            let part_id = session.create_part();
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let (raw_source, _) = transmitted_dual_offset_wire(
+                &mut edit.state.store,
+                [&first, &second],
+                [&first, &second],
+                false,
+                false,
+                2,
+                swap_order,
+            );
+            let source = BodyId::new(part_id, raw_source);
+            let created = edit
+                .copy_body_rigid(CopyBodyRequest::new(source, placement))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            let copied_edge = edit
+                .state
+                .store
+                .edges_of_body(created.body().raw())
+                .unwrap()[0];
+            let copied_curve = edit.state.store.get(copied_edge).unwrap().curve.unwrap();
+            let copied = edit
+                .state
+                .store
+                .get(copied_curve)
+                .unwrap()
+                .as_transmitted_nurbs_intersection()
+                .unwrap();
+            let certificate = copied.certificate().clone();
+            assert_eq!(certificate.metadata(), transmitted_metadata());
+            assert_eq!(certificate.carrier().points().len(), 2);
+            assert_eq!(
+                certificate.carrier().points(),
+                &[
+                    placement.point_at(0.1, 0.0, 0.0),
+                    placement.point_at(0.9, 0.0, 0.0),
+                ]
+            );
+            assert!(certificate.traces().iter().all(|trace| {
+                trace
+                    .as_offset_nurbs()
+                    .is_some_and(|offset| offset.descriptor_signed_distances().len() == 1)
+            }));
+            assert_eq!(
+                certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals(
+                    certificate.carrier().clone(),
+                    certificate.traces().clone(),
+                    certificate.pcurves().clone(),
+                    certificate.metadata(),
+                    certificate.tolerance(),
+                )
+                .unwrap(),
+                certificate
+            );
+            edit.state.store.geometry().validate().unwrap();
+            copied_certificates.push(certificate);
+        }
+        assert_eq!(
+            copied_certificates[0].traces()[0],
+            copied_certificates[1].traces()[1]
+        );
+        assert_eq!(
+            copied_certificates[0].traces()[1],
+            copied_certificates[1].traces()[0]
+        );
+    }
+
+    #[test]
+    fn rigid_body_copy_facade_rejects_noncanonical_dual_offset_before_scope() {
+        let first = [0.25];
+        let first_split = [0.125, 0.125];
+        let second = [0.5];
+        let shared_second = [0.25];
+        for (trace_distances, shared_basis, periodic_first, sample_count) in [
+            ((&first_split[..], &second[..]), false, false, 2),
+            ((&first[..], &shared_second[..]), true, false, 2),
+            ((&first[..], &second[..]), false, false, 5),
+            ((&first[..], &second[..]), false, true, 2),
+        ] {
+            for swap_order in [false, true] {
+                let source_distances = if shared_basis {
+                    [&first[..], &shared_second[..]]
+                } else {
+                    [&first[..], &second[..]]
+                };
+                let mut session = Kernel::new().create_session();
+                let part_id = session.create_part();
+                let mut edit = session.edit_part(part_id.clone()).unwrap();
+                let (raw_source, _) = transmitted_dual_offset_wire(
+                    &mut edit.state.store,
+                    source_distances,
+                    [trace_distances.0, trace_distances.1],
+                    shared_basis,
+                    periodic_first,
+                    sample_count,
+                    swap_order,
                 );
                 let source = BodyId::new(part_id, raw_source);
                 let before = (

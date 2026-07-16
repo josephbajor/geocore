@@ -26,6 +26,7 @@ use kgraph::{
     certify_transmitted_offset_nurbs_intersection_residuals,
     certify_transmitted_plane_intersection_residuals,
     certify_transmitted_plane_nurbs_intersection_residuals,
+    certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals,
     reissue_verified_nurbs_intersection_residuals,
     transmitted_nurbs_intersection_has_rigid_copy_recertifier,
 };
@@ -458,6 +459,11 @@ impl Copier<'_> {
             | [kgraph::NurbsIntersectionTrace::OffsetNurbs(_), kgraph::NurbsIntersectionTrace::Plane(_)]
             | [kgraph::NurbsIntersectionTrace::Plane(_), kgraph::NurbsIntersectionTrace::OffsetNurbs(_)] => {
                 certify_transmitted_offset_nurbs_intersection_residuals(
+                    carrier, traces, pcurves, metadata, tolerance,
+                )
+            }
+            [kgraph::NurbsIntersectionTrace::OffsetNurbs(_), kgraph::NurbsIntersectionTrace::OffsetNurbs(_)] => {
+                certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals(
                     carrier, traces, pcurves, metadata, tolerance,
                 )
             }
@@ -1013,6 +1019,26 @@ fn transmitted_nurbs_intersection_sources_are_rigid_copy_supported(
         .any(|trace| matches!(trace, kgraph::NurbsIntersectionTrace::OffsetNurbs(_)))
     {
         return Ok(true);
+    }
+    if matches!(
+        certificate.traces(),
+        [
+            kgraph::NurbsIntersectionTrace::OffsetNurbs(_),
+            kgraph::NurbsIntersectionTrace::OffsetNurbs(_)
+        ]
+    ) {
+        if source_surfaces[0] == source_surfaces[1] {
+            return Ok(false);
+        }
+        let Some(first) = store.get(source_surfaces[0])?.as_offset().copied() else {
+            return Ok(false);
+        };
+        let Some(second) = store.get(source_surfaces[1])?.as_offset().copied() else {
+            return Ok(false);
+        };
+        if first.basis() == second.basis() {
+            return Ok(false);
+        }
     }
     for (source, trace) in source_surfaces.into_iter().zip(certificate.traces()) {
         let source = store.get(source)?;

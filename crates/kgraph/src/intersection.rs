@@ -1015,7 +1015,8 @@ impl TransmittedNurbsIntersectionCertificate {
 ///
 /// This is a structural capability query only. Reissuance must still rerun the
 /// selected certifier against transformed live sources and may fail its
-/// geometric or residual checks. Periodic and dual-offset transmitted charts
+/// geometric or residual checks. Only the canonical finite-open two-sample
+/// dual-offset chart is admitted; periodic and every other dual-offset family
 /// remain outside this copy tranche. Admitted Offset(NURBS) traces retain
 /// exactly one descriptor; nested roots remain unsupported.
 pub fn transmitted_nurbs_intersection_has_rigid_copy_recertifier(
@@ -1050,6 +1051,28 @@ pub fn transmitted_nurbs_intersection_has_rigid_copy_recertifier(
             | TransmittedNurbsIntersectionTrace::Plane(_),
             TransmittedNurbsIntersectionTrace::OffsetNurbs(offset),
         ] => offset.descriptor_signed_distances().len() == 1,
+        [
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(first),
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(second),
+        ] => {
+            let expected_knots = [0.0, 0.0, 1.0, 1.0];
+            first.descriptor_signed_distances().len() == 1
+                && second.descriptor_signed_distances().len() == 1
+                && first.basis().periodicity() == [None, None]
+                && second.basis().periodicity() == [None, None]
+                && certificate.carrier_range == ParamRange::new(0.0, 1.0)
+                && certificate.carrier.degree() == 1
+                && certificate.carrier.weights().is_none()
+                && certificate.carrier.points().len() == 2
+                && certificate.carrier.knots().as_slice() == expected_knots
+                && certificate.pcurves.iter().all(|pcurve| {
+                    pcurve.degree() == 1
+                        && pcurve.weights().is_none()
+                        && pcurve.points().len() == 2
+                        && pcurve.knots().as_slice() == expected_knots
+                        && pcurve.param_range() == certificate.carrier_range
+                })
+        }
         _ => false,
     }
 }
