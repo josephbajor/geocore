@@ -172,12 +172,13 @@ Q1 implementation:
 Owner: `ktopo`.
 
 Implemented as 43 registered cases in the isolated `benches/` package. The
-`benchmark-internals` feature adds only read-only commit counters, stable
-ordinal-based digests, store/index snapshots, and a full-rebuild audit; it is
-absent from normal `ktopo` builds. Fixture cloning, snapshots, and invariant
-verification are excluded from measured duration; the full-rebuild cases time
-the independent rebuild itself over one verified prepared fixture. Allocation
-counts remain deferred until allocation instrumentation exists.
+`benchmark-internals` feature adds only read-only commit and phase-boundary
+counters, stable ordinal-based digests, store/index snapshots, and a
+full-rebuild audit; it is absent from normal `ktopo` builds. Fixture cloning,
+snapshots, and invariant verification are excluded from measured duration; the
+full-rebuild cases time the independent rebuild itself over one verified
+prepared fixture. Allocation counts remain deferred until allocation
+instrumentation exists.
 
 Measure checked transaction cost through public transaction operations. Since
 Criterion lives in the isolated external package, a doc-hidden public seam may
@@ -205,7 +206,7 @@ Ladders:
 | mixed-store cohort | four affected roots across 4, 16, 64, 256 total bodies; 1, 4, 16, 64 affected roots across 64 total bodies | mutate one cohort-shared point and commit | affected = refreshed = checked cohort size; stable affected order and full result digests |
 | affected solid footprint | crossed seven-row production `primitive_mix` grid: 1, 4, 16, 64 affected roots at 64 total bodies; one affected root at 4, 16, 64, 256 total bodies | in one ordinary checked operation scope, grow the first face of each selected solid to `2e-8` under an exact `N × 1e-8` operation budget | fixed-total rows pin exactly N modified Face mutations and ordered tolerance events; total-size rows pin one face/mutation/event, exact `1e-8`, affected = refreshed = checked = mutations = 1, and a stable affected digest across totals; every row ratchets before/after store and full-output digests and installed-index equality |
 | affected block-cohort footprint | fixed 64-body `primitive_mix`; select block roots at body ordinals divisible by five, with 1, 4, 8, and 13 affected blocks (all 13 eligible blocks) | in one ordinary checked operation scope, grow each selected block's deterministic first Face, then first Edge, then first Vertex to `2e-8` under a deterministic `3N`-event budget charging `1e-8` per entity | N modified Face, N modified Edge, and N modified Vertex mutations; exact ordered `3N` tolerance events; affected = refreshed = checked = N; affected/store/output digest ratchets; installed-index equality; repeat parity |
-| production-clean ordinary commit | unchanged production `primitive_mix` at 4, 16, 64, and 256 total bodies | execute exactly one ordinary `commit_checked(&[])` scope with zero edits | committed; affected = refreshed = checked = mutations = 0; before store/index = after store/index; stable store/index/output ratchets; repeat equality |
+| production-clean ordinary commit v2 | unchanged production `primitive_mix` at 4, 16, 64, and 256 total bodies | execute exactly one ordinary `commit_checked(&[])` scope with zero edits | committed; affected = refreshed = selected checker obligations = mutations = 0; before store/index = after store/index; graph validation starts = 1 with 61/228/805/3,204 primary node starts; candidate clone starts = 1 with cloned footprints/body-order entries = body count; candidate refresh starts = body-order refresh entries = 0; affected-root selection starts = 2 with 0 mutation items; Fast starts = 0; tagged output digest and repeat equality |
 | batched refresh | 1, 10, 100 edited bodies | perform deterministic edits in one transaction | one atomic commit; refreshed-body count |
 | rejected commit | 1, 10, 100 bodies | commit one invalid mutation | identical pre/post store digest and index digest |
 | full rebuild reference | 1, 10, 100, 1,000 bodies | explicitly rebuild/audit index through crate-private seam | rebuilt index equals committed incremental index |
@@ -224,14 +225,28 @@ body ordinals divisible by five because the cylinder and cone ring solids have
 no vertices. It pins the exact per-block Face-to-Edge-to-Vertex mutation and
 event contract, scoped counters, digest ratchets, installed-index equality,
 and repeat parity at 1, 4, 8, and all 13 eligible blocks. Ordinary commit still
-performs full graph validation, committed-index cloning, and body-order
-refresh. The prior 39 Q2 rows remain unchanged, while the distinct
-production-clean ladder establishes the first production-solid global ordinary
-commit baseline over that combined current path at 4/16/64/256 bodies. Its
-zero-edit counters, equal before/after store and index snapshots, digest
-ratchets, and repeat equality do not isolate the three phases. Phase counters
-and optimization, broader heterogeneous production edit footprints, and
-production-assembly behavior remain separate performance boundaries.
+performs full graph validation and candidate-index construction. The prior 39
+Q2 rows, paths, and output digests remain unchanged. The distinct
+production-clean v2 ladder establishes exact boundary evidence at
+4/16/64/256 bodies: one graph-validation start with
+61/228/805/3,204 primary graph-node starts; one candidate clone with cloned
+footprint and body-order cardinalities equal to total bodies; zero candidate
+body refresh starts and zero body-order refresh entries; two affected-root
+selection starts examining zero mutation items; and zero Fast body-check
+starts. Equal before/after store and installed-index snapshots remain pinned.
+Only the four tagged output digests change, to `0676a31e87fffd44`,
+`d10f885afb5a01e3`, `637877c5a5b47403`, and `19bf2dd8c1154f80`.
+
+The counters measure invocation boundaries and exact collection/loop
+cardinalities, not elapsed work, and do not isolate every graph-validation
+subphase. Candidate clone/refresh counters exclude validate-all full rebuilds.
+`checked_bodies` counts selected/admitted checker obligations, while
+`fast_body_check_starts` counts actual invocation. `last_commit` returns the
+latest terminal decision that recorded benchmark evidence; early Full setup or
+execution errors may leave the prior observation installed. Phase optimization,
+full-rebuild phase instrumentation, broader heterogeneous production edit
+footprints, and production-assembly behavior remain separate performance
+boundaries.
 
 ## Stage Q2a — geometry graph construction and reverse-dependency ladder
 

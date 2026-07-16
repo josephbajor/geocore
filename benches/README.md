@@ -131,17 +131,32 @@ modified Edge mutations, and N modified Vertex mutations; the exact ordered
 `3N` tolerance events; affected = refreshed = checked = N; affected, store,
 and output digest ratchets; installed-index equality; and repeat parity.
 
-The prior 39 Q2 rows remain unchanged. A distinct four-row production-clean
-ladder holds an unchanged `primitive_mix` at 4, 16, 64, and 256 total bodies.
-Every timed sample executes exactly one ordinary `commit_checked(&[])` scope
-with zero edits, affected, refreshed, checked, or mutated entities and commits
-successfully. Each row pins equal before/after store and installed-index
-snapshots, stable store/index/output digest ratchets, and exact repeat equality.
-This is the first production-solid global ordinary-commit baseline for the
-combined current graph-validation, index-clone, and body-order path; it does
-not isolate those phases. Elapsed time remains advisory; phase counters and
-optimization, broader heterogeneous production edit footprints, and
-production-assembly behavior remain open.
+The prior 39 Q2 rows, paths, and output digests remain unchanged. The distinct
+four-row production-clean v2 ladder holds an unchanged `primitive_mix` at 4,
+16, 64, and 256 total bodies. Every timed sample executes exactly one ordinary
+`commit_checked(&[])` scope with zero edits, affected, refreshed, selected
+checker obligations, or mutations and commits successfully. Each row pins
+equal before/after store and installed-index snapshots plus exact repeat
+equality. Its boundary counters record one full graph-validation start with
+61/228/805/3,204 primary graph-node starts; one candidate-index clone with
+cloned body-footprint and body-order cardinalities equal to 4/16/64/256; zero
+candidate body refresh starts and zero body-order refresh entries; two
+affected-root selection starts examining zero mutation items; and zero Fast
+body-check starts. Only the four phase-tagged output digests change, to
+`0676a31e87fffd44`, `d10f885afb5a01e3`, `637877c5a5b47403`, and
+`19bf2dd8c1154f80`.
+
+These counters measure invocation boundaries and collection/loop
+cardinalities, not elapsed work, and they do not isolate every graph-validation
+subphase. Candidate clone/refresh counters exclude validate-all full rebuilds.
+`checked_bodies` counts selected/admitted obligations, while
+`fast_body_check_starts` counts actual checker invocation. `last_commit`
+returns the latest terminal decision that recorded benchmark evidence; an
+early Full setup or execution error may retain the prior observation. Elapsed
+time remains advisory. Phase optimization, full-rebuild phase instrumentation,
+broader heterogeneous production edit footprints, and production-assembly
+behavior remain open.
+
 Set `KERNEL_BENCH_SMOKE=1` and pass one full case path after `--` for a bounded
 local smoke run.
 

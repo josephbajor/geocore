@@ -98,9 +98,13 @@ application boundary.
   topology, pcurve-aware Euler edits, deterministic journals, tolerance provenance,
   bounded operation contexts, `Fast`/`Full` checking, adaptive face-domain proofs, and
   the immutable geometry graph with persistent verified intersection descriptors have
-  landed. General NURBS/mixed-parameter incidence, periodic and unsupported mixed-boundary
-  containment, curved-loop/shell proofs, operation-specific tolerance rules, and
-  production-scale ownership/dependency benchmarks remain.
+  landed. The Q2 production-clean v2 ladder now pins exact ordinary-commit phase
+  boundaries at 4/16/64/256 production solids while retaining equal store/index
+  snapshots and the prior 39 Q2 output digests. General NURBS/mixed-parameter
+  incidence, periodic and unsupported mixed-boundary containment, curved-loop/shell
+  proofs, operation-specific tolerance rules, phase optimization and full-rebuild
+  phase instrumentation, broader heterogeneous production edits, and production
+  assembly benchmarks remain.
 - M3 X_T interchange is in progress. Modern text and neutral-binary reading, atomic
   reconstruction, deterministic analytic text writing, bounded tolerant-edge SP-curves,
   safe offset surfaces, certified clamped periodic/closed B-surfaces, canonical
