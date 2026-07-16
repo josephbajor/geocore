@@ -16,7 +16,7 @@ Every case is registered in `cases.json` with a five-segment path:
 Fixture construction, seeds, expected counters, and invariant checks are
 deterministic. Criterion measures elapsed time, but timing never establishes
 correctness. The runner always marks measurements advisory.
-The manifest currently registers 170 cases, including the 35-row Q2 topology
+The manifest currently registers 174 cases, including the 39-row Q2 topology
 matrix and the 32-row Q3 `body-tessellation.v3` matrix.
 
 Criterion is pinned to `0.8.2`. Machine-readable measured runs use
@@ -87,7 +87,7 @@ axis-wise inflated-box test. Resource-limited controls remain zero-certificate
 cases.
 
 The Q1 target verifies the result digest before measurement and again in every
-timed iteration. The Q2 target provides 35 checked-commit, incremental
+timed iteration. The Q2 target provides 39 checked-commit, incremental
 index-refresh, rejection, and full-rebuild cases in the quality contract. It
 times only the transaction edit and ordinary `commit_checked`, except that the
 full-rebuild ladder times the independent reference-index rebuild itself.
@@ -107,7 +107,8 @@ committed index, and refreshing its store body order, so this baseline does not
 claim total-store-independent end-to-end latency. The affected cohort remains
 the minimal one-vertex body needed to isolate dependency-index scope.
 
-Seven affected-solid rows form a crossed production `primitive_mix` grid: one
+The existing seven affected-solid rows remain unchanged and form a crossed
+production `primitive_mix` grid: one
 axis holds 64 total solids while affected roots sweep 1, 4, 16, and 64; the
 other holds one affected root while total solids sweep 4, 16, 64, and 256,
 sharing the 64-total/1-affected row. On the total-size axis, one ordinary
@@ -117,11 +118,22 @@ mutation and one ordered tolerance event, affected = refreshed = checked =
 mutations = 1, a stable affected-order digest across totals, reviewed
 before/after store and full-output digest ratchets, and installed-index
 equality. The fixed-total axis retains the corresponding exact `N × 1e-8`
-budget, N-face/event, scope, digest, and index-equality evidence. Elapsed time
-remains advisory; broader production edit footprints, production-assembly
-behavior, and global ordinary-commit cost including graph validation, index
-cloning, and body-order refresh remain open. Set
-`KERNEL_BENCH_SMOKE=1` and pass one full case path after `--` for a bounded
+budget, N-face/event, scope, digest, and index-equality evidence.
+
+A distinct four-row fixed-total-64 block-cohort ladder selects primitive roots
+whose body ordinal is divisible by five, at 1, 4, 8, and 13 affected blocks
+(all 13 eligible blocks). The bounded selection is necessary because the
+cylinder and cone ring solids have no vertices. One ordinary checked operation
+scope grows each selected block's deterministic first Face, then first Edge,
+then first Vertex to `2e-8` under a deterministic `3N`-event operation-owned
+budget charging `1e-8` per entity. Each row pins N modified Face mutations, N
+modified Edge mutations, and N modified Vertex mutations; the exact ordered
+`3N` tolerance events; affected = refreshed = checked = N; affected, store,
+and output digest ratchets; installed-index equality; and repeat parity.
+Elapsed time remains advisory; broader heterogeneous production edit
+footprints, production-assembly behavior, and global ordinary-commit cost
+including graph validation, index cloning, and body-order refresh remain open.
+Set `KERNEL_BENCH_SMOKE=1` and pass one full case path after `--` for a bounded
 local smoke run.
 
 The Q2a v2 target registers 21 graph-construction cases: independent plane nodes
