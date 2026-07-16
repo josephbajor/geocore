@@ -1164,12 +1164,27 @@ land before any product cap is selected:
    current fuzz targets do not invoke tessellation, so there is no fuzz call
    site to migrate. No later policy version promotes these values implicitly.
 
-`TrimLoop::cleaned_point_count` now lets the body path validate and admit the
-exact cleaned copy before `TrimLoop::new` allocates it. The original input
-`Vec<_>` is already accounted at every body-owned builder site. A future public
-path that accepts caller-created raw trim vectors still needs an iterator or
-declared-count builder seam to govern that caller-side collection; accepting an
-already materialized `Vec<_>` can protect only later copies.
+`TrimLoop::cleaned_point_count` now validates both the retained count and exact
+nonzero cyclic orientation before `TrimLoop::new` allocates its cleaned copy.
+It and `TrimmedSurface` outer/hole winding consume the streaming
+`polygon_orientation2d_iter` sign without retaining or allocating a coordinate
+copy. Consecutive and closing duplicates remain allowed by cleanup, while exact
+zero and non-finite inputs fail closed. Rounded `TrimLoop::signed_area` is
+reporting and magnitude evidence only. The `2^52`-translated unit-square
+conformance case has a naive shoelace sum of zero yet remains rotation-invariant
+and flips sign under reversal, protecting outer and hole decisions. The
+original input `Vec<_>` is already accounted at every body-owned builder site.
+A future public path that accepts caller-created raw trim vectors still needs
+an iterator or declared-count builder seam to govern that caller-side
+collection; accepting an already materialized `Vec<_>` can protect only later
+copies.
+
+The ordinary-face `ktopo` body path now selects exactly one exact-positive
+outer loop before the existing periodic hole anchoring and outer-first loop
+order. Duplicate or missing positive outers, exact-zero loops, and non-finite
+loops fail closed. Its `2^52`-translated unit square has exact doubled area
+`+2` where the former naive shoelace sum is zero; rotation/reversal evidence and
+the public planar-sheet repeat fixture preserve deterministic tessellation.
 
 ### Stage 5 — Checker/make integration
 

@@ -19,8 +19,8 @@ boundary.
 
 | Crate | Layer | Contents |
 |---|---|---|
-| [`crates/kcore`](crates/kcore) | L0 foundations | Deterministic robust `orient2d`, `orient3d`, and positive-inside-CCW `incircle` predicates with conservative floating filters and exact expansion fallbacks, interval filters, tolerance policy (Parasolid numeric regime), typed errors, generational entity arenas with copy-on-write undo frames, deterministic parallel primitives, deterministic transcendental math (musl port — platform libm is banned in kernel code via clippy `disallowed-methods`) |
-| [`crates/kgeom`](crates/kgeom) | L1 geometry | Analytic curves (line/circle/ellipse), true 2D line/circle/NURBS pcurve evaluators, and analytic surfaces (plane/cylinder/cone/sphere/torus) with exact bounding boxes, NURBS engine (Piegl & Tiller) with homogeneous 2D/3D knot operations and conservative active-subrange control-hull boxes, closest-point projection, deterministic trimmed-face tessellation with explicit refinement-limit errors, evaluator conformance harness |
+| [`crates/kcore`](crates/kcore) | L0 foundations | Deterministic robust `orient2d`, `orient3d`, positive-inside-CCW `incircle`, and exact cyclic `polygon_orientation2d` predicates with conservative floating filters or exact expansion evaluation, interval filters, tolerance policy (Parasolid numeric regime), typed errors, generational entity arenas with copy-on-write undo frames, deterministic parallel primitives, deterministic transcendental math (musl port — platform libm is banned in kernel code via clippy `disallowed-methods`) |
+| [`crates/kgeom`](crates/kgeom) | L1 geometry | Analytic curves (line/circle/ellipse), true 2D line/circle/NURBS pcurve evaluators, and analytic surfaces (plane/cylinder/cone/sphere/torus) with exact bounding boxes, NURBS engine (Piegl & Tiller) with homogeneous 2D/3D knot operations and conservative active-subrange control-hull boxes, closest-point projection, deterministic trimmed-face tessellation with exact streaming trim-loop winding and explicit refinement-limit errors, evaluator conformance harness |
 | [`crates/kgraph`](crates/kgraph) | L1.5 geometry graph | Immutable analytic, NURBS, and procedural geometry nodes with typed dependencies, deterministic identity, and bounded evaluation |
 | [`crates/ktopo`](crates/ktopo) | L2 topology | Parasolid entity hierarchy (body→region→shell→face→loop→fin→edge→vertex), finite conservative face UV domains, typed entity-tolerance provenance and transaction-owned growth budgets, independent per-fin pcurves, bounded curve-less tolerant edges, reusable validated polygon-with-holes profiles and checked prism extrusion, transaction-owned pcurve-aware Euler edits, private generic Store mutation with transaction-scoped checked assembly, deterministic mutation/lineage/tolerance journals, journal-returning checked solid/sheet/wire/acorn constructors, shared incidence validation, and pcurve-driven watertight tessellation |
 | [`crates/kops`](crates/kops) | L3 operations | Provisional M4 intersection foundation: exact analytic special cases plus early sampled NURBS curve/curve, curve/surface, and surface/surface experiments; generic completeness and boolean-ready pcurve results remain gated |
@@ -46,7 +46,18 @@ application boundary.
 
 - M0 foundations now include deterministic exact-fallback `orient2d`, `orient3d`,
   and `incircle`; M1 geometry and M2 topology/primitives also have implemented
-  alpha slices. Strict first-chart SSI polygon convexity is the first audited
+  alpha slices. The public `polygon_orientation2d` slice and its non-copying
+  streaming companion, `polygon_orientation2d_iter`, compute the exact cyclic
+  shoelace expansion. Fewer than three vertices, any non-finite coordinate,
+  and an exactly zero expansion
+  return `Orientation::Zero`; cyclic rotation preserves the result, reversal
+  flips every nonzero result, and repeated vertices are allowed under algebraic
+  area semantics. Evidence includes 20,000 random integer polygons against an
+  `i128` oracle, a `2^52`-translated unit square whose naive shoelace sum is
+  zero, and the cross-platform determinism golden. `incircle` remains a public
+  predicate with conformance evidence but has no production topology decision
+  consumer yet. Strict first-chart SSI
+  polygon convexity is the first audited
   exact decision consumer: it accepts only at least three finite vertices with
   `orient2d(...) == Orientation::Positive` at every turn, so exact collinear
   and all other nonpositive turns fail closed. Oblique profile extrusion is the
@@ -56,10 +67,19 @@ application boundary.
   Its integer-source adversary has normal dot `+3` while the former normalized
   `translation.dot(frame.z())` rounds to zero; both directions now construct
   deterministically, while ordinary oblique extrusion remains Full-valid.
-  `insphere`, remaining polygon-shoelace sign consumers in `kops` and `ktopo`,
-  the separately tracked `kgeom` migration, the broader topological-decision
-  audit, and full conformance remain ahead; this is not a general
-  polygon-orientation primitive.
+  `kgeom` trim cleaning plus `TrimmedSurface` outer/hole winding now consume the
+  streaming exact sign without allocating a coordinate copy; rounded
+  `TrimLoop::signed_area` is reporting only. `kops` polygonal-region
+  canonicalization now compares exact winding in both parameter charts to
+  derive `Same` or `Reversed`, rejects zero or a contradictory declared chart
+  relation, and normalizes a negative first chart by reversal. Its
+  integer-source adversary has exact doubled area `+2` where the former
+  origin-relative floating sum is zero. `ktopo`
+  `face_case_a` now requires exactly one exact-positive outer loop; exact-zero
+  and non-finite loops fail closed before the existing periodic anchoring and
+  outer-first ordering. Its `2^52`-translated unit-square adversary also has
+  exact doubled area `+2` while naive shoelace summation is zero. `insphere`,
+  the broader topological-decision audit, and full conformance remain ahead.
 - M2.5 is in progress and remains the architecture gate. Transaction-owned checked
   topology, pcurve-aware Euler edits, deterministic journals, tolerance provenance,
   bounded operation contexts, `Fast`/`Full` checking, adaptive face-domain proofs, and

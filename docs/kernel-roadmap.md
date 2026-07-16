@@ -66,7 +66,7 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 
 | Milestone | Status | What the status means |
 |---|---|---|
-| M0 Foundations | IMPLEMENTED SLICE | Deterministic math, robust exact-fallback `orient2d`/`orient3d`/`incircle`, intervals, tolerances, arenas with copy-on-write undo frames, deterministic map primitives, exact-sign consumers in strict first-chart SSI polygon convexity and oblique-extrusion direction, and the first source-preserving solver-error path exist; `insphere`, remaining `kops`/`ktopo` polygon-shoelace sign migrations, the separately tracked `kgeom` migration, other solver-local error migrations, and broader conformance debt remain. |
+| M0 Foundations | IMPLEMENTED SLICE | Deterministic math, robust exact-fallback `orient2d`/`orient3d`/`incircle`, exact cyclic `polygon_orientation2d` plus its non-copying streaming companion `polygon_orientation2d_iter`, intervals, tolerances, arenas with copy-on-write undo frames, deterministic map primitives, exact-sign consumers in strict first-chart SSI polygon convexity and oblique-extrusion direction, exact streaming `kgeom` trim cleaning and outer/hole winding, exact paired-chart `kops` polygonal-region winding, exact `ktopo` ordinary-face outer-loop selection, and the first source-preserving solver-error path exist; rounded trim signed area is reporting only. `insphere`, an `incircle` production decision consumer when required, other solver-local error migrations, the broader topological-decision audit, and broader conformance debt remain. |
 | M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS evaluation plus exact curve/surface splitting, restriction, Bezier extraction and active-subrange bounds, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, topology-internal Euler operators, transaction-owned public Euler edits, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, checked transaction-scoped assembly, and deterministic journals exist; general bodies and several degenerate topology classes remain. |
 | M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance, transaction-owned aggregate budgets, one checked facade batch for operation-owned Face/Edge/Vertex tolerance growth, and descriptive MEF inheritance plus KEF ordered-max face-tolerance journals; shared incidence validation; a complete transaction-owned public Euler surface with position-owning transient MVFS/KVFS, mandatory pcurve creation, hidden-point cleanup, and derived/split/merge/delete lineage; private generic Store mutation; transaction-scoped low-level assembly whose only public persistence path uses deterministic mutation preview, incrementally replaced per-body ownership/shared-geometry dependency footprints, affected-root Fast checks, complete ownership closure, and an opt-in evidence-bearing Full-assurance commit gate; pcurve-driven tessellation; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; reusable validated polygonal planar profiles with strictly contained pairwise-disjoint holes, checked holed-sheet construction, and checked nonzero-normal oblique extrusion; checked X_T reconstruction; explicit face metadata; certified imported domains; adaptive full-active-interval analytic/clamped-NURBS face-domain containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring and strict outer/hole containment proofs; convex-planar, whole sphere/torus, sphere-cap, single-planar-face, and exact polygonal-prism shell embedding proofs; the unchanged seven-row crossed affected-production-solid `primitive_mix` grid and distinct four-row fixed-64 block-cohort ladder retain exact scoped edit evidence, and a distinct four-row production-clean ladder over unchanged `primitive_mix` totals 4/16/64/256 has landed with zero-edit commit, store/index/output ratchet, and repeat evidence for the combined current validation/index-clone/body-order path, not phase isolation. General NURBS/mixed-parameter incidence, periodic/unclamped and unsupported exact/mixed-boundary containment, curved or nested-island profiles, operation-specific tolerance combination/propagation rules beyond the landed MEF/KEF policy and generic batch, curved-loop/general curved-shell proofs, production seam/singularity interchange fixtures, broader higher-operation migration, and remaining global ordinary-commit phase counters and optimization, broader heterogeneous production-edit-footprint, and production-assembly performance baselines remain. |
@@ -128,6 +128,46 @@ force the fallback, degenerate/non-finite behavior, and the deterministic
 numeric golden. CI pins numeric golden hashes across debug/release and the
 supported operating-system matrix.
 
+`incircle` remains a public predicate with conformance evidence but has no
+production topology decision consumer yet. `insphere` remains deferred until a
+3D Delaunay or equivalent classification consumer needs it.
+
+The public `polygon_orientation2d` slice and its streaming companion
+`polygon_orientation2d_iter` evaluate the exact cyclic shoelace expansion. The
+streaming form does not retain or allocate a coordinate copy. Fewer than three
+vertices, any non-finite coordinate, and an exactly zero expansion return
+`Orientation::Zero`; cyclic
+rotation preserves the sign, reversal flips every nonzero result, and repeated
+vertices are accepted with algebraic-area semantics. Its evidence includes
+20,000 random integer polygons checked against an `i128` oracle, the
+`2^52`-translated unit square whose naive floating shoelace sum is zero, and
+the cross-platform numeric determinism golden.
+
+`kgeom` now routes `TrimLoop::cleaned_point_count` degeneracy and
+`TrimmedSurface` outer/hole winding through the streaming exact sign without a
+coordinate-copy allocation. Consecutive and closing duplicate cleanup retains
+the same exact decision, and rounded `TrimLoop::signed_area` remains available
+for reporting and magnitude estimates only. Public trim conformance rotates and
+reverses the large-cancellation square, accepts it as an outer loop or reversed
+hole as appropriate, and rejects exact-zero and non-finite inputs.
+
+`kops` polygonal-region canonicalization now evaluates the streaming exact
+polygon sign in both parameter charts. Equal signs derive
+`SurfaceRegionOrientation::Same`, opposite signs derive `Reversed`, either zero
+sign fails closed, a contradictory declared relation is rejected, and a
+negative first chart is reversed into the canonical positive winding. The
+focused integer-source boundary has exact
+`i128` doubled area `+2` where the former origin-relative floating sum is zero,
+and pins repeat, rotation, reversal, and both chart relations.
+
+`ktopo` ordinary-face body tessellation now selects exactly one
+`Orientation::Positive` outer loop with the streaming predicate. Duplicate
+positive outers, missing positive outers, exact-zero loops, and non-finite loops
+fail closed. The `2^52`-translated unit square has exact doubled area `+2` while
+the former naive shoelace sum is zero. Selection precedes and preserves the
+existing periodic hole anchoring and outer-first loop order; public planar-sheet
+tessellation pins deterministic output.
+
 The first audited exact-sign consumer is the strict first-chart polygon
 convexity gate used by SSI region consolidation. It rejects boundaries with
 fewer than three vertices or any non-finite first-chart coordinate, and
@@ -135,8 +175,9 @@ requires `orient2d(a, b, c) == Orientation::Positive` at every consecutive
 turn; exact collinearity and every nonpositive turn therefore fail closed. A
 public region-consolidation fixture supplies a determinant of exactly `+1` at
 approximately `2^52`, where the previous rounded cross product became zero,
-and pins repeat, rotation, and reversal canonicalization. This is a bounded
-consumer migration, not a general polygon-orientation primitive.
+and pins repeat, rotation, and reversal canonicalization. It remains a bounded
+consumer migration alongside the separately landed general polygon-orientation
+primitive.
 
 The oblique-profile extrusion direction gate is also migrated.
 `extrude_profile_along_in` evaluates the exact stored-frame scalar triple as
@@ -167,9 +208,11 @@ cannot be flattened back into `kcore::Error`.
 - Audit classification decisions so exact predicates or interval-certified signs govern
   topology, while metric tolerance governs proximity. Raw sign tests and scattered
   working epsilon literals must not silently decide topology. The first-chart SSI
-  convexity and oblique-extrusion direction gates are migrated; remaining
-  polygon-shoelace orientation signs in `kops` and `ktopo` remain named
-  decision-audit debt, while the `kgeom` migration is tracked separately.
+  convexity and oblique-extrusion direction gates are migrated. The `kgeom`
+  trim-loop, `kops` paired-chart polygonal-region, and `ktopo` ordinary-face
+  body-tessellation shoelace decisions are also migrated. Continue the broader
+  topological-decision audit without treating these bounded consumers as audit
+  completion.
 - Continue replacing catch-all `InvalidGeometry` mappings with stable categories
   for invalid input, unsupported capability, topology precondition, convergence
   failure, indeterminate result, tolerance exhaustion, and resource limit. The

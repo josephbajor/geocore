@@ -43,7 +43,43 @@ all six defining-point permutations, exact and one-unit near-cocircular
 fixtures proven to force the fallback, degenerate/non-finite behavior, and the
 cross-platform numeric golden pin the contract. This closes the named
 `incircle` debt. `insphere` remains deferred until a 3D Delaunay or equivalent
-consumer needs it.
+consumer needs it. `incircle` remains a public predicate with conformance
+evidence but has no production topology decision consumer yet.
+
+The public `polygon_orientation2d` slice and its non-copying streaming
+companion `polygon_orientation2d_iter` now evaluate the exact cyclic shoelace
+expansion. Fewer than three vertices, any non-finite coordinate, and an exactly
+zero expansion return
+`Orientation::Zero`; cyclic rotation is invariant, reversal flips every
+nonzero result, and repeated vertices retain algebraic-area semantics. A
+20,000-case random integer-polygon `i128` oracle, the `2^52`-translated unit
+square whose naive floating shoelace sum is zero, and the cross-platform
+numeric golden pin the contract.
+
+`kgeom` adopts the streaming sign for `TrimLoop::cleaned_point_count`
+degeneracy and `TrimmedSurface` outer/hole winding without allocating a
+coordinate copy. Consecutive and closing duplicate cleanup retains the same
+exact decision. Rounded `TrimLoop::signed_area` remains reporting and
+magnitude evidence only; it no longer decides degeneracy or winding. Public
+trim tests rotate and reverse the large-cancellation square and reject
+exact-zero or non-finite inputs.
+
+`kops` polygonal-region canonicalization now consumes the streaming exact sign
+in both parameter charts. Matching signs derive
+`SurfaceRegionOrientation::Same`, opposite signs derive `Reversed`, either zero
+sign and any contradictory declared relation fail closed, and a negative first
+chart is reversed into the canonical positive winding. Its integer-source
+adversary has exact `i128`
+doubled area `+2` where the former origin-relative floating sum is zero, and
+pins both chart relations plus repeat, rotation, and reversal.
+
+`ktopo` ordinary-face body tessellation now selects exactly one
+`Orientation::Positive` outer loop with the streaming sign. Duplicate or
+missing positive outers, exact-zero loops, and non-finite loops fail closed.
+The `2^52`-translated unit square has exact doubled area `+2` while the former
+naive shoelace sum is zero. Outer selection still precedes the existing
+periodic hole anchoring and outer-first loop order, and the public planar-sheet
+fixture pins deterministic output.
 
 The first bounded consumer migration in the repository-wide decision audit is
 also landed: SSI region consolidation now treats a polygon as strictly convex
@@ -53,17 +89,17 @@ first-chart coordinates are finite, and every consecutive
 or otherwise nonpositive turns fail closed. The public consolidation fixture
 uses integer coordinates near `2^52` whose first exact determinant is `+1`
 while the former floating cross product rounds to zero, then proves identical
-canonical output for repetition, rotation, and reversal. This does not expose
-or claim a general polygon-orientation primitive. Oblique-profile extrusion is
+canonical output for repetition, rotation, and reversal. This remains a
+bounded consumer alongside the separately landed general polygon-orientation
+primitive. Oblique-profile extrusion is
 the next bounded migration: `extrude_profile_along_in` classifies the exact
 stored-frame `(x, y, translation)` scalar triple with `orient3d`, rejects exact
 coplanarity before allocation, and reflects the profile chart and normal for a
 negative sign. Its integer-source normal dot is `+3` where the former normalized
 `translation.dot(frame.z())` rounds to zero; both directions construct
-deterministically and ordinary oblique fixtures remain Full-valid. The broader
-audit remains open, with remaining polygon-shoelace orientation signs in
-`kops` and `ktopo` still explicit debt while the `kgeom` migration proceeds
-separately.
+deterministically and ordinary oblique fixtures remain Full-valid. These
+bounded migrations do not close the repository-wide decision audit; the
+broader topological-decision audit remains open.
 
 ## Current direction and handoff order
 
