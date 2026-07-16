@@ -722,6 +722,18 @@ Rules:
   boundary additionally catches any forbidden unwind as a last-resort defect
   barrier.
 
+The first solver-local source-identity slice now exercises this adapter contract
+end to end. Ellipse/ellipse retains `ProjectionError::{InvalidQueryPoint,
+InvalidWindow, NoCandidate, NonFiniteEvaluation, Policy}` as
+`IntersectionError::Projection`. Class, code, limit, `capability() == None`,
+and the direct `ProjectionError` source survive the concrete solver, generic
+intersection adapter, `GeometryIntersectionError`, and `KernelError`; the
+policy arm additionally retains its `OperationPolicyError`. The direct
+`intersect_bounded_ellipses` API returns `IntersectionResult` rather than
+flattening these errors through a `kcore::Result` compatibility adapter. This
+does not close the owner-driven migration of other solver-local catch-all
+mappings.
+
 ## Future C ABI seam, without starting the ABI
 
 The later C API should live in a separate terminal crate such as `kcapi` that
@@ -836,7 +848,10 @@ and delegates to the contextual generic `kops` dispatcher through one scope.
 Facade-owned points, overlaps, contact/orientation values, operand identities,
 and `Complete`/`Indeterminate` evidence prevent raw result leakage. Direct
 ellipse/ellipse parity pins the exact report and smallest projection-limit
-crossing. The composed curve/curve profile also carries certified NURBS pair
+crossing. Its typed projection failures also retain the same class, code,
+limit, empty capability, and source chain through `GeometryIntersectionError`
+and `KernelError`, including the nested policy source. The composed curve/curve
+profile also carries certified NURBS pair
 isolation work without exposing its stages as facade configuration types; the
 facade preserves an adaptively proven empty result. An internal graph-owned
 facade-boundary test also pins checked-ancestor clipped reversed overlap,
@@ -1158,7 +1173,10 @@ Lower-layer tests also retain the existing compile-fail guarantees against
   views; no descriptor is copied into the facade.
 - Contextual graph evaluation is charged once to the parent operation report.
 - Contextual curve intersection preserves the direct lower-layer result and
-  exact projection report, including classified limit snapshots.
+  exact projection report, including classified limit snapshots. The
+  ellipse/ellipse projection path additionally preserves all five
+  `ProjectionError` variants as `IntersectionError::Projection` through the
+  complete facade source chain; `Policy` retains its `OperationPolicyError`.
 - X_T wrapped errors retain class, code, capability, node/offset context, and
   limit data.
 - Complete and indeterminate proof results survive facade mapping unchanged.

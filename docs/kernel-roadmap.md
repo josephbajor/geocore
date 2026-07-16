@@ -66,7 +66,7 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 
 | Milestone | Status | What the status means |
 |---|---|---|
-| M0 Foundations | IMPLEMENTED SLICE | Deterministic math, robust exact-fallback `orient2d`/`orient3d`/`incircle`, intervals, tolerances, arenas with copy-on-write undo frames, and deterministic map primitives exist; `insphere` and broader conformance debt remain. |
+| M0 Foundations | IMPLEMENTED SLICE | Deterministic math, robust exact-fallback `orient2d`/`orient3d`/`incircle`, intervals, tolerances, arenas with copy-on-write undo frames, deterministic map primitives, and the first source-preserving solver-error path exist; `insphere`, other solver-local error migrations, and broader conformance debt remain. |
 | M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS evaluation plus exact curve/surface splitting, restriction, Bezier extraction and active-subrange bounds, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, topology-internal Euler operators, transaction-owned public Euler edits, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, checked transaction-scoped assembly, and deterministic journals exist; general bodies and several degenerate topology classes remain. |
 | M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance, transaction-owned aggregate budgets, one checked facade batch for operation-owned Face/Edge/Vertex tolerance growth, and descriptive MEF inheritance plus KEF ordered-max face-tolerance journals; shared incidence validation; a complete transaction-owned public Euler surface with position-owning transient MVFS/KVFS, mandatory pcurve creation, hidden-point cleanup, and derived/split/merge/delete lineage; private generic Store mutation; transaction-scoped low-level assembly whose only public persistence path uses deterministic mutation preview, incrementally replaced per-body ownership/shared-geometry dependency footprints, affected-root Fast checks, complete ownership closure, and an opt-in evidence-bearing Full-assurance commit gate; pcurve-driven tessellation; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; reusable validated polygonal planar profiles with strictly contained pairwise-disjoint holes, checked holed-sheet construction, and checked nonzero-normal oblique extrusion; checked X_T reconstruction; explicit face metadata; certified imported domains; adaptive full-active-interval analytic/clamped-NURBS face-domain containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring and strict outer/hole containment proofs; convex-planar, whole sphere/torus, sphere-cap, single-planar-face, and exact polygonal-prism shell embedding proofs; and the seven-row crossed affected-production-solid `primitive_mix` grid covering 1/4/16/64 affected roots at 64 total bodies plus one affected root across 4/16/64/256 total bodies has landed. General NURBS/mixed-parameter incidence, periodic/unclamped and unsupported exact/mixed-boundary containment, curved or nested-island profiles, operation-specific tolerance combination/propagation rules beyond the landed MEF/KEF policy and generic batch, curved-loop/general curved-shell proofs, production seam/singularity interchange fixtures, broader higher-operation migration, and remaining global ordinary-commit, broader production-edit-footprint, and production-assembly performance baselines remain. |
@@ -128,6 +128,17 @@ force the fallback, degenerate/non-finite behavior, and the deterministic
 numeric golden. CI pins numeric golden hashes across debug/release and the
 supported operating-system matrix.
 
+The first solver-local F4 identity migration is also landed. Ellipse/ellipse
+closest-point failures retain all five `ProjectionError` variants as
+`IntersectionError::Projection`: `InvalidQueryPoint`, `InvalidWindow`,
+`NoCandidate`, `NonFiniteEvaluation`, and `Policy`. Their class, stable code,
+structured limit, `capability() == None`, and direct `std::error::Error` source
+survive the concrete solver, generic intersection adapter,
+`GeometryIntersectionError`, and `KernelError`; `Policy` additionally retains
+its exact `OperationPolicyError` source. The direct
+`intersect_bounded_ellipses` entry returns `IntersectionResult` so this path
+cannot be flattened back into `kcore::Error`.
+
 ### Conformance debt
 
 - Add `insphere` when a 3D Delaunay or equivalent classification consumer first
@@ -135,9 +146,11 @@ supported operating-system matrix.
 - Audit classification decisions so exact predicates or interval-certified signs govern
   topology, while metric tolerance governs proximity. Raw sign tests and scattered
   working epsilon literals must not silently decide topology.
-- Replace the catch-all use of `InvalidGeometry` with stable categories for invalid
-  input, unsupported capability, topology precondition, convergence failure,
-  indeterminate result, tolerance exhaustion, and resource limit.
+- Continue replacing catch-all `InvalidGeometry` mappings with stable categories
+  for invalid input, unsupported capability, topology precondition, convergence
+  failure, indeterminate result, tolerance exhaustion, and resource limit. The
+  ellipse/ellipse projection path is migrated; other solver-local collapses and
+  legacy wrappers remain explicit debt.
 - Remove panics from public kernel operations; invalid caller input returns typed errors.
 - Add deterministic reduction primitives when the first real parallel consumers land;
   the existing parallel map helper is infrastructure, not evidence of parallel kernel
@@ -1249,7 +1262,13 @@ true only for an empty complete result.
   contact classification, first-wins deduplication, and coincident periodic
   overlap construction. Their distinct quadratic/quartic root and projection
   arithmetic remains strategy-local, with pre-refactor debug/release result and
-  operation-report bit signatures pinned. Bounded coincident plane/plane,
+  operation-report bit signatures pinned. Ellipse/ellipse projection failures
+  retain every typed `ProjectionError` as `IntersectionError::Projection`
+  through generic dispatch and facade adaptation, including exact
+  class/code/limit/source delegation and the nested policy source; its direct
+  entry now returns `IntersectionResult` rather than performing a lossy core
+  error conversion. Other solver-local error collapses remain migration debt.
+  Bounded coincident plane/plane,
   exact coincident cylinder/cylinder, exact common-axis sphere/sphere windows,
   exact signed-coordinate-permutation sphere octants, and arbitrary-frame
   sphere octants now return dimensionally truthful complete evidence. Plane

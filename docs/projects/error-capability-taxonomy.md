@@ -1,6 +1,6 @@
 # F4 kernel error and capability taxonomy
 
-Status: Phase 1, representative Phase 2 slices, graph classification, and one structured-incompleteness pilot implemented
+Status: Phase 1, representative Phase 2 slices, graph classification, one structured-incompleteness pilot, and the first solver-local source-identity migration implemented
 
 ## Outcome
 
@@ -28,8 +28,12 @@ not yet consistent:
   `AlgorithmLimit` place control-flow distinctions in prose. `AlgorithmLimit`
   reports an operation name and allowed count, but not a stable stage, resource,
   or consumed count.
-- intersection dispatch returns `InvalidGeometry` for a valid but unsupported
-  curve or surface class pair;
+- intersection dispatch has typed unsupported curve/surface class-pair errors,
+  while remaining solver-local catch-all mappings are being migrated by owner;
+- ellipse/ellipse is the first solver-local source-identity slice: all five
+  `ProjectionError` variants survive as `IntersectionError::Projection` through
+  generic and facade adapters without changing class, code, limit, capability,
+  or source identity;
 - intersection result types correctly distinguish complete evidence from
   verified partial evidence, but `Completion::Indeterminate` identifies the
   missing proof only with a static message;
@@ -136,7 +140,7 @@ preconditions/state.
 | Layer | Owns | Examples |
 | --- | --- | --- |
 | `kcore` | Identifier wrappers, broad error classes, F2 limit structures, arena/session/transaction-neutral base errors. | `kcore.input.invalid-tolerance`, `kcore.handle.stale` |
-| `kgeom` | Leaf constructor, projection, tessellation, and numerical-stage codes/capabilities. | `kgeom.nurbs.invalid-knot-vector`, `kgeom.tess.triangle-output` |
+| `kgeom` | Leaf constructor, projection, tessellation, and numerical-stage codes/capabilities. | `kgeom.project.invalid-query-point`, `kgeom.project.no-candidate`, `kgeom.tess.triangle-output` |
 | `kgraph` | Geometry dependency, graph build, descriptor, and evaluation codes/capabilities. | `kgraph.eval.dependency-cycle`, `kgraph.eval.derivative-order` |
 | `ktopo` | Topology operation codes, checker fault/gap codes, model-invariant identities. | `ktopo.check.fault.open-loop`, `ktopo.check.gap.shell-self-intersection` |
 | `kops` | Modeling-operation and intersection dispatch/solver codes and capabilities. | `kops.intersect.unsupported-class-pair`, `kops.intersect.ssi-proof-candidates` |
@@ -203,6 +207,18 @@ classification/code accessors to existing variants and replaces
 the old shape. Existing specific payloads such as offending coordinates and
 tolerance growth remain available. Compatibility constructors can preserve old
 variant behavior until downstream callers migrate.
+
+The implemented ellipse/ellipse slice demonstrates the required wrapper shape.
+`ProjectionError::{InvalidQueryPoint, InvalidWindow, NoCandidate,
+NonFiniteEvaluation, Policy}` is retained as `IntersectionError::Projection`.
+The concrete solver, generic intersection adapter, `GeometryIntersectionError`,
+and `KernelError` delegate class, code, limit, and `capability() == None`, and
+each exposes the exact lower error through `std::error::Error::source`.
+`ProjectionError::Policy` additionally retains its `OperationPolicyError`
+source. The direct `intersect_bounded_ellipses` API now returns
+`IntersectionResult`; retaining the former `kcore::Result` shape would require a
+lossy conversion for the four non-policy variants. This is a bounded migration,
+not evidence that other solver-local `InvalidGeometry` collapses are closed.
 
 New public code must not add another prose-only `InvalidGeometry` or
 `AlgorithmLimit` site. During migration, old sites are catalogued and assigned
@@ -430,6 +446,11 @@ partial evidence with an indeterminate status in its result record.
 
 ### Phase 2 — Representative vertical migrations
 
+Status: typed unsupported class-pair dispatch and the ellipse/ellipse
+projection-source vertical slice are implemented. Remaining solver-local and
+legacy wrappers migrate only with owner tests that pin their exact public error
+contract.
+
 - Change unsupported curve/curve dispatch from `InvalidGeometry` to a typed
   unsupported error that carries the fixed pair capability and structured
   curve class keys from F3.
@@ -492,6 +513,10 @@ Classification tests:
 - malformed ranges remain invalid input;
 - a limit reports exact stage, resource, consumed, and allowed values;
 - layer wrappers preserve source classification and structured data;
+- all five ellipse/ellipse projection failures retain
+  `IntersectionError::Projection`, exact class/code/limit, no capability, and
+  the direct `ProjectionError` source through `GeometryIntersectionError` and
+  `KernelError`; the policy case also retains `OperationPolicyError`;
 - an internal invariant has no unsupported capability and is never reported as
   a model fault.
 

@@ -1,6 +1,6 @@
 # Operation context and numerical policy
 
-Status: Stage 1b composition, the NURBS contact/minimizer scale gate, and representative Stage 2-5 pilots implemented; whole-body tessellation has an adopted facade and state-4 wrapper ratchet, standalone-face internal-use ratcheting, the body allocation-accounting boundary, complete face/body evidence matrices, and adopted opt-in bounded presets, while projection adoption and broader ratchets remain
+Status: Stage 1b composition, the NURBS contact/minimizer scale gate, and representative Stage 2-5 pilots implemented; whole-body tessellation has an adopted facade and state-4 wrapper ratchet, standalone-face internal-use ratcheting, the body allocation-accounting boundary, complete face/body evidence matrices, and adopted opt-in bounded presets; curve and surface projection are contextually adopted with standalone-wrapper ratchets closed, ellipse/ellipse now preserves typed projection failures, and broader operation-family ratchets remain
 
 ## Purpose
 
@@ -31,7 +31,7 @@ for them:
 | Intersections | Public entry points take `Tolerances` directly. NURBS paths contain local sample, bisection, projection, minimization, proof-depth, and candidate caps. | Adding solver controls directly to these signatures would cause repeated churn; leaving them local prevents controlled robustness experiments and structured telemetry. |
 | Numerical guards | Intersection and projection code contains absolute values such as `1e-12`, `1e-18`, `1e-24`, and `1e-30`; several modules independently derive parameter tolerance as a fraction of range width. | Absolute thresholds are not consistently scale-aware and their semantic role is unclear. Some are legitimate arithmetic guards, but none should silently enlarge model tolerance or decide topology. |
 | Geometry proof/refinement | NURBS implicit isolation already reports candidate-budget and parameter-resolution stops in `ImplicitIsolationLimits`. | This is a useful local precedent, but it does not compose with a parent operation budget or a common diagnostic record. |
-| Projection | `kgeom::project` owns fixed sampling, candidate, Newton, and line-search caps and currently panics for a non-finite public window. | General solvers will call projection as a nested stage and need shared budgets, typed stops, and panic-free input handling. |
+| Projection | `kgeom::project` owns named sampling, candidate, Newton, and line-search budget profiles plus fallible contextual/shared-scope entries and typed input, evaluation, candidate, and policy failures. The standalone wrappers are ratcheted closed to new production callers. | Remaining owner operations must compose projection in one parent scope and preserve its typed errors rather than rebuilding budgets or flattening sources. |
 | Tessellation | `TessOptions` correctly represents requested output quality. Refinement passes, boundary depth, and triangle caps are module constants reported through `Error::AlgorithmLimit`. | Output quality and resource policy must remain separate, while limits become configurable and report stage, observed/consumed work, and allowed work. |
 | Checker | `check_body_report` constructs `Tolerances::default()` internally. Sampling counts and adaptive depth/segment caps are local constants. Full checking already represents missing proof as gaps. | A caller cannot budget a Full proof, and a stopped proof needs a structured gap rather than being confused with invalid topology or a clean result. |
 | Construction | `ktopo::make` wraps mutation in checked transactions and calls the checker through checked commit. | Construction needs one scope spanning validation, mutation, checking, and rollback so nested work is accounted once and cancellation/limits cannot leave committed partial state. |
@@ -745,8 +745,14 @@ accounting-only at `u64::MAX` until broader import evidence supports a finite
 cap, while request overrides can impose an exact lower ceiling. Ellipse
 intersection now owns one contextual scope for all of its candidate projections
 and preserves complete-result bits under compatibility defaults. Its exact
-query N/N+1 crossing is pinned. Both standalone projection wrappers are
-therefore at state 3 and closed to new production callers. The aggregate
+query N/N+1 crossing is pinned. Every `ProjectionError` variant now crosses the
+ellipse solver as `IntersectionError::Projection` with unchanged
+class/code/limit, no capability, and its direct source; `Policy` also retains
+the underlying `OperationPolicyError`. The direct
+`intersect_bounded_ellipses` entry returns `IntersectionResult` so the
+contextual source cannot be flattened by a legacy `kcore::Result` adapter.
+Both standalone projection wrappers are therefore at state 3 and closed to new
+production callers. The aggregate
 compatibility profile admits the algorithms' terminal Newton/backtracking
 sentinel observation; strict single-query defaults retain their existing stop.
 
@@ -1326,8 +1332,11 @@ modules contain no unexplained numerical or work-cap literals.
    bodies. Keep summaries bounded, deduplicate repeated events, and make detailed traces
    explicitly diagnostic-level controlled.
 5. **Legacy error mapping.** Contextual structured limits and current
-   `Error::AlgorithmLimit` differ in richness. Preserve legacy behavior until F4 chooses
-   the final variant and add mapping tests.
+   `Error::AlgorithmLimit` differ in richness. Preserve legacy behavior until F4
+   chooses the final variant and add mapping tests, except where preserving the
+   wrapper would necessarily erase a migrated source. Ellipse/ellipse is the
+   first such bounded exception: its direct entry returns `IntersectionResult`.
+   Other solver-local collapses remain migration debt.
 6. **Checker semantics.** The checker must not inherit a loose operation acceptance
    tolerance accidentally. Pilot APIs should make fixed session/entity tolerance use
    obvious in types and tests.
