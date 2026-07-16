@@ -1295,8 +1295,9 @@ true only for an empty complete result.
   full three-child row in either latitude row with all three opposite-row
   siblings certified empty, one exact mixed-axis three-cell L path with the
   other three siblings certified empty, any exact four-positive grid path with
-  the other two siblings certified empty, or exactly five positive cells with
-  the sole other sibling certified empty. The two reviewed L orientations are
+  the other two siblings certified empty, exactly five positive cells with the
+  sole other sibling certified empty, or all six cells positive with no empty
+  sibling. The two reviewed L orientations are
   the cap-right `[0,2]`/`[1,1]`/`[1,2]` path and the lower-middle
   `[0,1]`/`[0,2]`/`[1,1]` path.
   The single-child path excludes every
@@ -1331,11 +1332,17 @@ true only for an empty complete result.
   empty fixture is a 2×2 cycle plus tail; its `[1,1]` edge-middle-empty fixture
   is a tree. Both pin repeat/swap, restored parent correspondence, outward
   residuals, and complete seam removal; one-ULP and duplicate-edge ambiguity
-  mutations fail closed. All admitted layouts retain exact 6/5 piece, 147/146
-  pair, and 588/587 arc admission. The all-six-positive union and broader or
-  non-adjacent layouts outside the admitted exact same-row, same-column, full-
-  row, mixed-axis three-cell-path, four-positive-path, and exactly-five-positive
-  families remain fail-closed. A first wide
+  mutations fail closed. The all-six-positive arm admits the complete 2×3 grid
+  with no empty sibling only after all four longitude and three latitude
+  adjacencies prove reverse-oriented and bit-exact simultaneously. It removes
+  all seven internal edges, requires one unambiguous outer cycle with no
+  artificial seam, and restores the parent mapping and child/parent residual.
+  Its real `0.14716980102990423`-tilt fixture pins repeat/swap plus one-ULP and
+  duplicate-edge ambiguity rejection. All admitted layouts retain exact 6/5
+  piece, 147/146 pair, and 588/587 arc admission. Four-cell cycles and broader
+  or non-adjacent layouts outside the admitted exact same-row, same-column,
+  full-row, mixed-axis three-cell-path, four-positive-path, exactly-five-
+  positive, and all-six-positive families remain fail-closed. A first wide
   arm splits exactly
   one pole-clear wide operand into
   three closed sub-π cells and returns `Complete` only for three certified-empty
@@ -1467,12 +1474,17 @@ true only for an empty complete result.
   weights, periodicity, paired pcurves and tolerance, and reissues the
   whole-range family certificate before insertion. The transmitted tranche
   reissues Plane/Plane charts over direct or safe nested exact-plane roots,
-  direct Plane/NURBS in both orders, direct NURBS/NURBS, and direct one-
-  descriptor Offset(NURBS)/NURBS in both orders. It retains transformed
-  carriers/traces, copied paired pcurves, chart metadata, tolerance, ordered
-  roots, and their admitted transitive dependencies. Periodic, dual-offset,
-  and Offset(NURBS)/Plane transmitted families remain typed unsupported, as do
-  nonpositive/nonfinite effective spheres and other unsupported proofs.
+  direct Plane/NURBS in both orders, direct NURBS/NURBS, direct one-descriptor
+  Offset(NURBS)/NURBS in both orders, and exactly one-descriptor
+  Offset(NURBS)/direct-Plane charts in both orders through the public original-
+  source recertifier. It retains transformed carriers/traces, copied paired
+  pcurves, chart metadata, tolerance, ordered roots, the direct NURBS basis,
+  and the exact one-distance descriptor sequence. The facade validates this
+  proof/source contract before scope creation; same-total multi-distance
+  metadata, nested Offset(NURBS) roots, Offset(Plane) peer roots, periodic or
+  dual-offset charts, nonpositive/nonfinite effective spheres, and other
+  unsupported proofs remain typed unsupported. Lower transaction rejection
+  restores topology/geometry counts and future identity.
   Attributes remain blocked because no authorable storage contract exists;
   non-rigid transform families also remain. Extend this seam only after those
   explicit contracts land.

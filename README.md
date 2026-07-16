@@ -98,9 +98,14 @@ application boundary.
   five-positive arm simultaneously removes every internal reverse-oriented
   bit-exact seam and requires one outer cycle; corner-empty cycle-plus-tail and
   edge-middle-empty tree fixtures pin repeat/swap, parent mapping, residuals,
-  and one-ULP/ambiguity rejection. The non-cap row retains eight vertices and
-  every six-cell decomposition keeps the exact 6/5, 147/146, and 588/587
-  piece/pair/arc N/N-1 ceilings; the all-six-positive union remains pending.
+  and one-ULP/ambiguity rejection. The all-six-positive arm now admits the
+  complete 2×3 grid with no empty sibling only after all seven reverse bit-
+  exact internal adjacencies are removed simultaneously, leaving one
+  unambiguous outer cycle and no artificial seam edge. Its real fixture pins
+  parent mapping, residuals, repeat/swap, and one-ULP/ambiguity rejection. The
+  non-cap row retains eight vertices and every six-cell decomposition keeps the
+  exact 6/5, 147/146, and 588/587 piece/pair/arc N/N-1 ceilings; four-cell
+  cycles and broader layouts remain unsupported.
   Varying-normal chains against a direct analytic Plane retain exact outer-to-
   inner metadata, prove every intermediate and final radius finite and positive
   from the original basis, use the derived sheet only for discovery, preserve
@@ -122,10 +127,14 @@ application boundary.
   family, including one- through four-level nested dual offsets and oblique
   frames. Its first transmitted tranche covers Plane/Plane over direct or safe
   nested exact-plane roots, direct Plane/NURBS in both orders, direct
-  NURBS/NURBS, and direct one-descriptor Offset(NURBS)/NURBS in both orders,
-  retaining chart metadata, tolerance, copied pcurves, and ordered roots.
-  Periodic, dual-offset, and Offset(NURBS)/Plane transmitted proofs remain
-  unsupported;
+  NURBS/NURBS, direct one-descriptor Offset(NURBS)/NURBS in both orders, and
+  exactly one-descriptor Offset(NURBS)/direct-Plane charts in both orders. The
+  public original-source recertifier preserves ordered roots, the direct basis,
+  exact descriptor sequence, paired pcurves, chart metadata, and tolerance.
+  Facade rejection happens before scope creation, while lower-copy rejection
+  restores topology/geometry counts and future identity. Same-total multi-
+  distance metadata, nested Offset(NURBS), Offset(Plane) peers, periodic or
+  dual-offset charts remain unsupported;
   attributes are blocked on an authorable storage contract, and non-rigid
   transforms remain.
   General root discovery, complete verified residuals across every result family, and
