@@ -36,6 +36,9 @@ pub const PROCEDURAL_LEAF_ALGORITHM: CapabilityId =
 /// Offset loops that wind a periodic parameter direction.
 pub const OFFSET_PERIODIC_WINDING: CapabilityId =
     capability_id("ktopo.tessellation.offset-periodic-winding");
+/// Source-certified vertical separation of periodic side-face loops.
+pub const PERIODIC_LOOP_VERTICAL_SEPARATION: CapabilityId =
+    capability_id("ktopo.tessellation.periodic-loop-vertical-separation");
 /// Whole-cell surface regularity certification.
 pub const SURFACE_REGULARITY_PROOF: CapabilityId =
     capability_id("ktopo.tessellation.surface-regularity-proof");

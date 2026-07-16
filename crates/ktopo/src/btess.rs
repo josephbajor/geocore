@@ -48,8 +48,10 @@ use crate::entity::{
     BodyId, Edge, EdgeId, FaceDomain, FaceId, FinPcurve, Sense, SurfaceId, VertexId,
 };
 use crate::geom::{Curve2dGeom, SurfaceGeom};
+use crate::incidence::{PcurveIssue, check_pcurve_definition};
 use crate::store::Store;
 use kcore::error::Error;
+use kcore::interval::Interval;
 use kcore::operation::{
     AccountingMode, BudgetPlan, DiagnosticCode, DiagnosticKind, ExecutionPolicy, LimitSnapshot,
     LimitSpec, NumericalPolicy, OperationContext, OperationOutcome, OperationPolicyError,
@@ -78,9 +80,9 @@ mod offset;
 mod policy;
 
 pub use error::{
-    EVALUATION_FAILED, OFFSET_PERIODIC_WINDING, PROCEDURAL_LEAF_ALGORITHM,
-    REGULARITY_INDETERMINATE, SURFACE_REGULARITY_PROOF, TessellationError, TessellationResult,
-    UNSUPPORTED_TESSELLATION,
+    EVALUATION_FAILED, OFFSET_PERIODIC_WINDING, PERIODIC_LOOP_VERTICAL_SEPARATION,
+    PROCEDURAL_LEAF_ALGORITHM, REGULARITY_INDETERMINATE, SURFACE_REGULARITY_PROOF,
+    TessellationError, TessellationResult, UNSUPPORTED_TESSELLATION,
 };
 use offset::{eval_surface_point, face_case_planar_offset, surface_periodicity};
 use policy::validate_body_tessellation_budget;
@@ -1214,6 +1216,19 @@ struct UvChain {
     uvs: Vec<Vec2>,
     close_uv: Vec2,
     winding: [i64; 2],
+    source_v: LoopSourceVerticalRange,
+}
+
+/// Source-proof status for one loop's complete vertical coordinate range.
+///
+/// A sampled fallback is permitted only when the complete loop has no
+/// pcurves. Once any pcurve exists, an unavailable source enclosure remains
+/// unavailable rather than silently reverting to the tessellation samples.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum LoopSourceVerticalRange {
+    Pcurveless,
+    Certified(Interval),
+    Unavailable,
 }
 
 /// One retained point of a shared edge polyline. The edge parameter is kept
@@ -1474,12 +1489,14 @@ struct RawUvChain {
     samples: Vec<RawUvSample>,
     close: RawUvSample,
     declared_winding: Option<[i64; 2]>,
+    source_v: LoopSourceVerticalRange,
 }
 
 #[derive(Clone, Copy)]
 struct FaceChart<'a> {
     surface_id: SurfaceId,
     surface: &'a SurfaceGeom,
+    periods: [Option<f64>; 2],
 }
 
 fn fin_sample_uv(
@@ -1502,6 +1519,63 @@ fn fin_sample_uv(
         }
         None => invert_uv(sg, acc.pos(sample.vertex), work),
     }
+}
+
+fn loop_source_vertical_range(
+    store: &Store,
+    fins: &[crate::entity::FinId],
+    vertical_period: Option<f64>,
+) -> Result<LoopSourceVerticalRange> {
+    let mut pcurve_count = 0_usize;
+    for &fin in fins {
+        let Some(use_) = store.get(fin)?.pcurve else {
+            continue;
+        };
+        pcurve_count += 1;
+        if let Err(issue) = check_pcurve_definition(store, use_) {
+            return Err(match issue {
+                PcurveIssue::StaleReference => Error::StaleHandle,
+                _ => Error::InvalidGeometry {
+                    reason: "periodic loop pcurve has an invalid source definition",
+                },
+            }
+            .into());
+        }
+    }
+    if pcurve_count == 0 {
+        return Ok(LoopSourceVerticalRange::Pcurveless);
+    }
+    if pcurve_count != fins.len() || vertical_period.is_some() {
+        return Ok(LoopSourceVerticalRange::Unavailable);
+    }
+
+    let mut result: Option<Interval> = None;
+    for &fin in fins {
+        let use_ = store
+            .get(fin)?
+            .pcurve
+            .expect("all fins have pcurves after the complete count");
+        if use_.chart().period_shifts()[1] != 0 {
+            return Ok(LoopSourceVerticalRange::Unavailable);
+        }
+        let Some(range) = store.get(use_.curve())?.as_curve().source_affine_range(
+            use_.range(),
+            Vec2::new(0.0, 1.0),
+            0.0,
+        ) else {
+            return Ok(LoopSourceVerticalRange::Unavailable);
+        };
+        result = Some(match result {
+            Some(current) => {
+                Interval::new(current.lo().min(range.lo()), current.hi().max(range.hi()))
+            }
+            None => range,
+        });
+    }
+    Ok(result.map_or(
+        LoopSourceVerticalRange::Unavailable,
+        LoopSourceVerticalRange::Certified,
+    ))
 }
 
 /// Assemble the oriented `(global vertex, raw UV)` chain of one loop by
@@ -1541,6 +1615,7 @@ fn loop_chain(
     } else {
         None
     };
+    let source_v = loop_source_vertical_range(store, fins, chart.periods[1])?;
     let fin_at = |index: usize| {
         if reverse {
             fins[fins.len() - 1 - index]
@@ -1651,6 +1726,7 @@ fn loop_chain(
         samples: chain,
         close,
         declared_winding,
+        source_v,
     })
 }
 
@@ -1694,6 +1770,7 @@ fn chain_uv(
         uvs,
         close_uv,
         winding,
+        source_v: raw.source_v,
     })
 }
 
@@ -2150,6 +2227,41 @@ fn split_full_period_cylinder_rectangle(
     Ok(Some(triangles))
 }
 
+fn certify_periodic_loop_vertical_order(bottom: &UvChain, top: &UvChain) -> Result<()> {
+    match (bottom.source_v, top.source_v) {
+        (LoopSourceVerticalRange::Certified(bottom), LoopSourceVerticalRange::Certified(top)) => {
+            if top.lo() > bottom.hi() {
+                Ok(())
+            } else if top.hi() <= bottom.lo() {
+                Err(Error::InvalidGeometry {
+                    reason: "seam-cut face has its winding loops on the wrong sides",
+                }
+                .into())
+            } else {
+                Err(TessellationError::Unsupported {
+                    capability: PERIODIC_LOOP_VERTICAL_SEPARATION,
+                })
+            }
+        }
+        (LoopSourceVerticalRange::Pcurveless, LoopSourceVerticalRange::Pcurveless) => {
+            let mean_v = |chain: &UvChain| {
+                chain.uvs.iter().map(|point| point.y).sum::<f64>() / chain.uvs.len() as f64
+            };
+            if mean_v(top) > mean_v(bottom) {
+                Ok(())
+            } else {
+                Err(Error::InvalidGeometry {
+                    reason: "seam-cut face has its winding loops on the wrong sides",
+                }
+                .into())
+            }
+        }
+        _ => Err(TessellationError::Unsupported {
+            capability: PERIODIC_LOOP_VERTICAL_SEPARATION,
+        }),
+    }
+}
+
 /// Periodic side face (cylinder/cone-like): exactly one loop winds `+1`
 /// (bottom) and one winds `-1` (top) around the `u` period; the domain is
 /// seam-cut into one period-wide region whose left/right seam columns
@@ -2196,13 +2308,7 @@ fn face_case_b(
             .into());
         }
     };
-    let mean_v = |c: &UvChain| c.uvs.iter().map(|p| p.y).sum::<f64>() / c.uvs.len() as f64;
-    if mean_v(&top) <= mean_v(&bottom) {
-        return Err(Error::InvalidGeometry {
-            reason: "seam-cut face has its winding loops on the wrong sides",
-        }
-        .into());
-    }
+    certify_periodic_loop_vertical_order(&bottom, &top)?;
 
     // Anchor the top chain so its end (low-u side) sits on the bottom
     // chain's branch; the seams connect chain endpoints.
@@ -2870,6 +2976,7 @@ fn tess_face(
             FaceChart {
                 surface_id: face.surface,
                 surface: sg,
+                periods,
             },
             acc,
             lp,
@@ -3115,7 +3222,7 @@ mod tests {
     use crate::check::{
         CheckLevel, CheckOutcome, FaultKind, VerificationGapKind, check_body, check_body_report,
     };
-    use crate::entity::{Face, Fin, Loop, PcurveChart, ShellId};
+    use crate::entity::{Face, Fin, Loop, ParamMap1d, PcurveChart, ShellId};
     use crate::geom::CurveGeom;
     use crate::make::{block, cylinder, cylindrical_sheet, planar_sheet, solid_body_scaffold};
     use core::num::NonZeroUsize;
@@ -3123,6 +3230,7 @@ mod tests {
     use kcore::operation::DiagnosticLevel;
     use kgeom::aabb::Aabb3;
     use kgeom::curve::{Circle, CurveDerivs, Line};
+    use kgeom::curve2d::{Curve2d, Line2d, NurbsCurve2d};
     use kgeom::frame::Frame;
     use kgeom::nurbs::NurbsSurface;
     use kgeom::param::ParamRange;
@@ -4369,6 +4477,7 @@ mod tests {
                 uvs: points,
                 ids,
                 winding: [0, 0],
+                source_v: LoopSourceVerticalRange::Pcurveless,
             });
         }
 
@@ -4412,7 +4521,333 @@ mod tests {
             close_uv: points[0],
             uvs: points,
             winding: [0, 0],
+            source_v: LoopSourceVerticalRange::Pcurveless,
         }
+    }
+
+    #[test]
+    fn periodic_vertical_order_uses_samples_only_for_pcurveless_loops() {
+        let mut bottom = test_uv_chain(vec![Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0)]);
+        let mut top = test_uv_chain(vec![Vec2::new(0.0, 1.0), Vec2::new(1.0, 1.0)]);
+
+        assert!(certify_periodic_loop_vertical_order(&bottom, &top).is_ok());
+        top.source_v = LoopSourceVerticalRange::Unavailable;
+        assert_eq!(
+            certify_periodic_loop_vertical_order(&bottom, &top),
+            Err(TessellationError::Unsupported {
+                capability: PERIODIC_LOOP_VERTICAL_SEPARATION,
+            })
+        );
+
+        bottom.source_v = LoopSourceVerticalRange::Certified(Interval::point(0.0));
+        top.source_v = LoopSourceVerticalRange::Certified(Interval::point(1.0));
+        assert!(certify_periodic_loop_vertical_order(&bottom, &top).is_ok());
+        core::mem::swap(&mut bottom, &mut top);
+        assert!(matches!(
+            certify_periodic_loop_vertical_order(&bottom, &top),
+            Err(TessellationError::Kernel(Error::InvalidGeometry { .. }))
+        ));
+    }
+
+    #[test]
+    fn hostile_nurbs_vertical_excursion_cannot_be_hidden_by_seed_samples() {
+        let tau = core::f64::consts::TAU;
+        let controls_v = [1.0, -43.0 / 5.0, 109.0 / 5.0, -99.0 / 5.0, 53.0 / 5.0, 1.0];
+        let curve = NurbsCurve2d::new(
+            5,
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            (0..=5)
+                .map(|index| Vec2::new(tau * f64::from(index) / 5.0, controls_v[index as usize]))
+                .collect(),
+            None,
+        )
+        .unwrap();
+        let seed = [0.0, 0.25, 0.5, 0.75, 1.0];
+        let sampled_top = seed
+            .into_iter()
+            .map(|parameter| curve.eval(parameter))
+            .collect::<Vec<_>>();
+        assert!(
+            sampled_top
+                .iter()
+                .all(|point| (point.y - 1.0).abs() < 1.0e-13)
+        );
+        assert!((curve.eval(0.125).y + 41.0 / 64.0).abs() < 1.0e-13);
+
+        let mut bottom = test_uv_chain(
+            sampled_top
+                .iter()
+                .map(|point| Vec2::new(point.x, 0.0))
+                .collect(),
+        );
+        bottom.source_v = LoopSourceVerticalRange::Certified(Interval::point(0.0));
+        let mut top = test_uv_chain(sampled_top);
+        top.source_v = LoopSourceVerticalRange::Certified(
+            curve
+                .source_affine_range(curve.param_range(), Vec2::new(0.0, 1.0), 0.0)
+                .unwrap(),
+        );
+
+        let sampled_mean = |chain: &UvChain| {
+            chain.uvs.iter().map(|point| point.y).sum::<f64>() / chain.uvs.len() as f64
+        };
+        assert!(sampled_mean(&top) > sampled_mean(&bottom));
+        let expected = TessellationError::Unsupported {
+            capability: PERIODIC_LOOP_VERTICAL_SEPARATION,
+        };
+        assert_eq!(
+            certify_periodic_loop_vertical_order(&bottom, &top),
+            Err(expected.clone())
+        );
+        assert_eq!(
+            certify_periodic_loop_vertical_order(&bottom, &top),
+            Err(expected.clone()),
+            "source-range rejection must repeat deterministically"
+        );
+
+        bottom.winding = [1, 0];
+        top.winding = [-1, 0];
+        let surface = SurfaceGeom::Cylinder(Cylinder::new(Frame::world(), 1.0).unwrap());
+        let mut acc = MeshAcc {
+            positions: Vec::new(),
+        };
+        with_body_work!(work, {
+            let error = face_case_b(
+                &surface,
+                vec![bottom, top],
+                false,
+                &mut acc,
+                &opts(1.0e-3),
+                Ctx {
+                    tol: 9.0e-4,
+                    max_len: f64::INFINITY,
+                },
+                &mut work,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error, expected,
+                "the production periodic-face branch must preserve the source-proof gap",
+            );
+        });
+    }
+
+    #[test]
+    fn loop_source_range_reads_complete_original_pcurve_coverage() {
+        let tau = core::f64::consts::TAU;
+        let controls_v = [1.0, -43.0 / 5.0, 109.0 / 5.0, -99.0 / 5.0, 53.0 / 5.0, 1.0];
+        let curve = NurbsCurve2d::new(
+            5,
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            (0..=5)
+                .map(|index| Vec2::new(tau * f64::from(index) / 5.0, controls_v[index as usize]))
+                .collect(),
+            None,
+        )
+        .unwrap();
+        let mut store = Store::new();
+        let (_body, shell) = solid_body_scaffold(&mut store);
+        let face = add_face(
+            &mut store,
+            shell,
+            Cylinder::new(Frame::world(), 1.0).unwrap().into(),
+        );
+        let edge = ring_edge(&mut store, Circle::new(Frame::world(), 1.0).unwrap());
+        let lp = store.add(Loop {
+            face,
+            fins: Vec::new(),
+        });
+        let pcurve = store
+            .insert_pcurve(Curve2dGeom::Nurbs(curve.clone()))
+            .unwrap();
+        let fin = store.add(Fin {
+            parent: lp,
+            edge,
+            sense: Sense::Forward,
+            pcurve: Some(
+                FinPcurve::new(pcurve, curve.param_range(), ParamMap1d::identity()).unwrap(),
+            ),
+        });
+        let source = loop_source_vertical_range(&store, &[fin], None).unwrap();
+        let LoopSourceVerticalRange::Certified(source) = source else {
+            panic!("complete original pcurve coverage must be certified");
+        };
+        assert!(source.lo() <= -99.0 / 5.0);
+        assert!(source.hi() >= 109.0 / 5.0);
+
+        let pcurveless = store.add(Fin {
+            parent: lp,
+            edge,
+            sense: Sense::Forward,
+            pcurve: None,
+        });
+        assert_eq!(
+            loop_source_vertical_range(&store, &[fin, pcurveless], None).unwrap(),
+            LoopSourceVerticalRange::Unavailable,
+        );
+        assert_eq!(
+            loop_source_vertical_range(&store, &[fin], Some(tau)).unwrap(),
+            LoopSourceVerticalRange::Unavailable,
+        );
+
+        let invalid_range = store.add(Fin {
+            parent: lp,
+            edge,
+            sense: Sense::Forward,
+            pcurve: Some(
+                FinPcurve::new(pcurve, ParamRange::new(-1.0, 0.5), ParamMap1d::identity()).unwrap(),
+            ),
+        });
+        assert!(matches!(
+            loop_source_vertical_range(&store, &[invalid_range], None),
+            Err(TessellationError::Kernel(Error::InvalidGeometry { .. })),
+        ));
+        assert!(matches!(
+            loop_source_vertical_range(&store, &[invalid_range, pcurveless], None),
+            Err(TessellationError::Kernel(Error::InvalidGeometry { .. })),
+        ));
+        assert!(matches!(
+            loop_source_vertical_range(&store, &[invalid_range], Some(tau)),
+            Err(TessellationError::Kernel(Error::InvalidGeometry { .. })),
+        ));
+    }
+
+    #[test]
+    fn hostile_source_range_propagates_through_tess_face() {
+        let tau = core::f64::consts::TAU;
+        let parameters = [0.0, tau / 4.0, tau / 2.0, 3.0 * tau / 4.0, tau];
+        let controls_v = [1.0, -43.0 / 5.0, 109.0 / 5.0, -99.0 / 5.0, 53.0 / 5.0, 1.0];
+        let mut store = Store::new();
+        let (_body, shell) = solid_body_scaffold(&mut store);
+        let face = add_face(
+            &mut store,
+            shell,
+            Cylinder::new(Frame::world(), 1.0).unwrap().into(),
+        );
+        let bottom_circle = Circle::new(Frame::world(), 1.0).unwrap();
+        let top_frame = Frame::world().with_origin(Point3::new(0.0, 0.0, 1.0));
+        let top_circle = Circle::new(top_frame, 1.0).unwrap();
+        let bottom_edge = ring_edge(&mut store, bottom_circle);
+        let top_edge = ring_edge(&mut store, top_circle);
+        let bottom_curve = store
+            .insert_pcurve(Curve2dGeom::Line(
+                Line2d::new(Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap(),
+            ))
+            .unwrap();
+        let top_curve = NurbsCurve2d::new(
+            5,
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            (0..=5)
+                .map(|index| Vec2::new(tau * f64::from(index) / 5.0, controls_v[index as usize]))
+                .collect(),
+            None,
+        )
+        .unwrap();
+        let top_pcurve = store
+            .insert_pcurve(Curve2dGeom::Nurbs(top_curve.clone()))
+            .unwrap();
+
+        let bottom_loop = store.add(Loop {
+            face,
+            fins: Vec::new(),
+        });
+        let bottom_fin = store.add(Fin {
+            parent: bottom_loop,
+            edge: bottom_edge,
+            sense: Sense::Forward,
+            pcurve: Some(
+                FinPcurve::new(
+                    bottom_curve,
+                    ParamRange::new(0.0, tau),
+                    ParamMap1d::identity(),
+                )
+                .unwrap()
+                .with_closure_winding([1, 0]),
+            ),
+        });
+        store.get_mut(bottom_loop).unwrap().fins.push(bottom_fin);
+        store.get_mut(bottom_edge).unwrap().fins.push(bottom_fin);
+
+        let top_loop = store.add(Loop {
+            face,
+            fins: Vec::new(),
+        });
+        let top_fin = store.add(Fin {
+            parent: top_loop,
+            edge: top_edge,
+            sense: Sense::Reversed,
+            pcurve: Some(
+                FinPcurve::new(
+                    top_pcurve,
+                    top_curve.param_range(),
+                    ParamMap1d::affine(1.0 / tau, 0.0).unwrap(),
+                )
+                .unwrap()
+                .with_closure_winding([1, 0]),
+            ),
+        });
+        store.get_mut(top_loop).unwrap().fins.push(top_fin);
+        store.get_mut(top_edge).unwrap().fins.push(top_fin);
+        store.get_mut(face).unwrap().loops = vec![bottom_loop, top_loop];
+
+        let mut positions = Vec::new();
+        positions.extend(
+            parameters[..4]
+                .iter()
+                .map(|&parameter| bottom_circle.eval(parameter)),
+        );
+        positions.extend(
+            parameters[..4]
+                .iter()
+                .map(|&parameter| top_circle.eval(parameter)),
+        );
+        let samples = |offset: u32| {
+            parameters
+                .iter()
+                .enumerate()
+                .map(|(index, &parameter)| EdgeSample {
+                    parameter,
+                    vertex: if index == 4 {
+                        offset
+                    } else {
+                        offset + index as u32
+                    },
+                })
+                .collect()
+        };
+        let elines = vec![
+            EdgeLine {
+                edge: bottom_edge,
+                samples: samples(0),
+            },
+            EdgeLine {
+                edge: top_edge,
+                samples: samples(4),
+            },
+        ];
+        let mut acc = MeshAcc { positions };
+
+        with_body_work!(work, {
+            let error = tess_face(
+                &store,
+                &elines,
+                &mut acc,
+                face,
+                &opts(1.0e-3),
+                Ctx {
+                    tol: 9.0e-4,
+                    max_len: f64::INFINITY,
+                },
+                &mut work,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error,
+                TessellationError::Unsupported {
+                    capability: PERIODIC_LOOP_VERTICAL_SEPARATION,
+                },
+            );
+        });
     }
 
     fn invalid_face_case_a_outer_loop() -> TessellationError {
