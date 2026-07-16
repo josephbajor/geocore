@@ -1,6 +1,6 @@
 use kcore::error::{Error, Result};
 use kcore::math;
-use kcore::predicates::{Orientation, orient2d};
+use kcore::predicates::{Orientation, orient2d, polygon_orientation2d_iter};
 use kcore::proof::{Completion, IncompleteEvidence};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
@@ -1362,14 +1362,16 @@ fn canonicalize_region(region: &mut SurfaceSurfaceRegion) -> Result<()> {
         return Ok(());
     }
 
-    let mut area_a = signed_region_area(&region.boundary, |vertex| vertex.uv_a);
-    let area_b = signed_region_area(&region.boundary, |vertex| vertex.uv_b);
-    if !area_a.is_finite() || !area_b.is_finite() || area_a == 0.0 || area_b == 0.0 {
+    let orientation_a =
+        polygon_orientation2d_iter(region.boundary.iter().map(|vertex| vertex.uv_a));
+    let orientation_b =
+        polygon_orientation2d_iter(region.boundary.iter().map(|vertex| vertex.uv_b));
+    if orientation_a == Orientation::Zero || orientation_b == Orientation::Zero {
         return Err(Error::InvalidGeometry {
             reason: "surface/surface region boundaries must have positive area in both charts",
         });
     }
-    let expected_orientation = if area_a.is_sign_positive() == area_b.is_sign_positive() {
+    let expected_orientation = if orientation_a == orientation_b {
         SurfaceRegionOrientation::Same
     } else {
         SurfaceRegionOrientation::Reversed
@@ -1379,11 +1381,9 @@ fn canonicalize_region(region: &mut SurfaceSurfaceRegion) -> Result<()> {
             reason: "surface/surface region orientation disagrees with paired chart winding",
         });
     }
-    if area_a.is_sign_negative() {
+    if orientation_a == Orientation::Negative {
         region.boundary.reverse();
-        area_a = -area_a;
     }
-    debug_assert!(area_a > 0.0);
 
     if !is_strictly_convex_in_first_chart(&region.boundary) {
         return Err(Error::InvalidGeometry {
@@ -1399,25 +1399,6 @@ fn canonicalize_region(region: &mut SurfaceSurfaceRegion) -> Result<()> {
         .expect("region has at least three vertices");
     region.boundary.rotate_left(first);
     Ok(())
-}
-
-fn signed_region_area(
-    boundary: &[SurfaceSurfaceRegionVertex],
-    uv: impl Fn(&SurfaceSurfaceRegionVertex) -> [f64; 2],
-) -> f64 {
-    let origin = uv(&boundary[0]);
-    boundary
-        .iter()
-        .zip(boundary.iter().cycle().skip(1))
-        .map(|(a, b)| {
-            let a = uv(a);
-            let b = uv(b);
-            let a = [a[0] - origin[0], a[1] - origin[1]];
-            let b = [b[0] - origin[0], b[1] - origin[1]];
-            a[0] * b[1] - a[1] * b[0]
-        })
-        .sum::<f64>()
-        / 2.0
 }
 
 fn is_strictly_convex_in_first_chart(boundary: &[SurfaceSurfaceRegionVertex]) -> bool {

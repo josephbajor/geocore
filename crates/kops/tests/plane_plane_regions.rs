@@ -384,6 +384,60 @@ fn region_convexity_uses_exact_turns_and_canonicalizes_deterministically() {
 }
 
 #[test]
+fn region_winding_uses_exact_polygon_orientation_in_both_charts() {
+    const M: i64 = (1_i64 << 52) - 1;
+    let coordinates = vec![[0, 0], [M, M - 1], [2 * M + 1, 2 * M - 1], [M + 1, M]];
+
+    assert_eq!(exact_integer_polygon_twice_area(&coordinates), 2);
+    assert_eq!(rounded_origin_relative_twice_area(&coordinates), 0.0);
+    assert!((0..coordinates.len()).all(|index| {
+        exact_integer_turn(
+            coordinates[index],
+            coordinates[(index + 1) % coordinates.len()],
+            coordinates[(index + 2) % coordinates.len()],
+        ) == 1
+    }));
+
+    let canonicalize = |coordinates: &[[i64; 2]], orientation| {
+        SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
+            Vec::new(),
+            Vec::new(),
+            vec![integer_polygonal_region_with_orientation(
+                coordinates,
+                orientation,
+            )],
+        )
+    };
+    for orientation in [
+        SurfaceRegionOrientation::Same,
+        SurfaceRegionOrientation::Reversed,
+    ] {
+        let expected = canonicalize(&coordinates, orientation).unwrap();
+        assert!(expected.is_complete());
+        assert_eq!(expected.regions.len(), 1);
+        assert_eq!(expected.regions[0].orientation, orientation);
+        assert_eq!(canonicalize(&coordinates, orientation).unwrap(), expected);
+
+        let mut rotated = coordinates.clone();
+        rotated.rotate_left(2);
+        assert_eq!(canonicalize(&rotated, orientation).unwrap(), expected);
+
+        let mut reversed = coordinates.clone();
+        reversed.reverse();
+        assert_eq!(canonicalize(&reversed, orientation).unwrap(), expected);
+    }
+
+    let exact_zero = [[0, 0], [M, M - 1], [2 * M, 2 * M - 2]];
+    assert_eq!(exact_integer_polygon_twice_area(&exact_zero), 0);
+    assert_eq!(
+        canonicalize(&exact_zero, SurfaceRegionOrientation::Same).unwrap_err(),
+        Error::InvalidGeometry {
+            reason: "surface/surface region boundaries must have positive area in both charts"
+        }
+    );
+}
+
+#[test]
 fn region_residual_bound_covers_whole_affine_patch_and_bits_repeat() {
     let a = world_plane();
     let b = Plane::new(
@@ -438,6 +492,29 @@ fn integer_polygonal_region(coordinates: &[[i64; 2]]) -> SurfaceSurfaceRegion {
     }
 }
 
+fn integer_polygonal_region_with_orientation(
+    coordinates: &[[i64; 2]],
+    orientation: SurfaceRegionOrientation,
+) -> SurfaceSurfaceRegion {
+    SurfaceSurfaceRegion {
+        boundary: coordinates
+            .iter()
+            .copied()
+            .map(|coordinate| {
+                let uv_a = integer_uv(coordinate);
+                let uv_b = match orientation {
+                    SurfaceRegionOrientation::Same => uv_a,
+                    SurfaceRegionOrientation::Reversed => [uv_a[0], -uv_a[1]],
+                };
+                vertex(uv_a, uv_b, 0.0)
+            })
+            .collect(),
+        orientation,
+        correspondence: kops::intersect::SurfaceRegionCorrespondence::Polygonal,
+        max_residual: 0.0,
+    }
+}
+
 fn integer_uv([u, v]: [i64; 2]) -> [f64; 2] {
     [u as f64, v as f64]
 }
@@ -452,6 +529,31 @@ fn exact_integer_turn(a: [i64; 2], b: [i64; 2], c: [i64; 2]) -> i128 {
         i128::from(c[1]) - i128::from(b[1]),
     ];
     ab[0] * bc[1] - ab[1] * bc[0]
+}
+
+fn exact_integer_polygon_twice_area(coordinates: &[[i64; 2]]) -> i128 {
+    coordinates
+        .iter()
+        .zip(coordinates.iter().cycle().skip(1))
+        .map(|(point, next)| {
+            i128::from(point[0]) * i128::from(next[1]) - i128::from(point[1]) * i128::from(next[0])
+        })
+        .sum()
+}
+
+fn rounded_origin_relative_twice_area(coordinates: &[[i64; 2]]) -> f64 {
+    let origin = integer_uv(coordinates[0]);
+    coordinates
+        .iter()
+        .zip(coordinates.iter().cycle().skip(1))
+        .map(|(point, next)| {
+            let point = integer_uv(*point);
+            let next = integer_uv(*next);
+            let point = [point[0] - origin[0], point[1] - origin[1]];
+            let next = [next[0] - origin[0], next[1] - origin[1]];
+            point[0] * next[1] - point[1] * next[0]
+        })
+        .sum()
 }
 
 fn lerp2(a: [f64; 2], b: [f64; 2], weight: f64) -> [f64; 2] {
