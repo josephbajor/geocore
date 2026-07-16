@@ -81,6 +81,34 @@ naive shoelace sum is zero. Outer selection still precedes the existing
 periodic hole anchoring and outer-first loop order, and the public planar-sheet
 fixture pins deterministic output.
 
+The `ktopo` checker now has a stricter, separate planar straight-loop authority.
+Each fin must provide a whole-active-interval-certified line use on a plane.
+Finite nonzero UV segments must meet at bit-identical endpoints, avoid exact
+robust intersections and zero-tolerance adjacent overlap, and produce a nonzero
+`polygon_orientation2d_iter` sign. Robust strict containment, not loop order or
+signed-area magnitude, must identify exactly one outer containing every
+pairwise-disjoint, unnested hole. The fixed sampled shoelace, raw floating sign
+tests, largest-absolute-area outer proxy, and periodic sample unwrapping are no
+longer checker authority.
+
+Fast reports `WrongLoopOrientation` only when all loop signs and the unique
+outer are certified. Curved, periodic, nonlinear-chart, tolerance-joined,
+exact-zero, and non-finite loops remain silent in Fast; Full records a
+`LoopOrientation` gap for each unsupported loop, with unresolved outer/hole
+roles still represented separately by `LoopContainment`. Zero-loop sphere and
+torus faces have no orientation obligation. The private `2^52` adversary gives
+both the outer and reversed hole a raw shoelace sum of zero while exact signs
+and containment remain stable under repeat, cyclic rotation, reversal, and
+storage permutation. Exact-zero, NaN, infinity, and tolerance-joined cases stay
+unsupported. Public ordinary holed-sheet evidence pins loop/fin rotation,
+storage permutation, repeat, and a hole-only reversal fault. Block, planar and
+holed sheets, ordinary and oblique polygonal extrusions, and copied holed-sheet
+Full-valid evidence remains unchanged; all primitives remain Fast-clean and
+watertight. A curved cylinder remains Fast-valid without a false orientation
+fault and Full-indeterminate with a `LoopOrientation` gap. Generic
+curved-pcurve signed line-integral and curved/periodic containment proofs remain
+open.
+
 The first bounded consumer migration in the repository-wide decision audit is
 also landed: SSI region consolidation now treats a polygon as strictly convex
 in its first parameter chart only when it has at least three vertices, all
@@ -115,12 +143,12 @@ eight-vertex coincident overlap as a `Complete` Region with cyclic
 exact-positive turns, repeatability, operand-swap semantic parity, and
 non-finite range rejection.
 
-Concrete next targets include
-checker sampled-loop winding and outer-loop selection, conic discriminant
-root-count classification, NURBS-plane control-distance and bracketing sign
-certification, and other raw topology-changing sign branches. `incircle`
-remains without a production topology decision consumer, and `insphere`
-remains deferred until a 3D Delaunay or equivalent consumer exists.
+Concrete next targets include generic curved-pcurve signed line integrals and
+curved or periodic containment, conic discriminant root-count classification,
+NURBS-plane control-distance and bracketing sign certification, and other raw
+topology-changing sign branches. `incircle` remains without a production
+topology decision consumer, and `insphere` remains deferred until a 3D Delaunay
+or equivalent consumer exists.
 
 ## Current direction and handoff order
 

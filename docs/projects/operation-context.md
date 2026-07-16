@@ -634,6 +634,13 @@ NURBS UV remain numeric. It then advances the corpus boundary to procedural
   a caller's looser intersection tolerance must not make an invalid body pass.
 - Deterministic Fast samples may use a named profile but remain fault-detection only,
   never proof evidence.
+- Loop-orientation faults now bypass sampling entirely. Only whole-interval-certified
+  planar line uses forming finite, nonzero, bit-identically closed, exactly simple
+  rings with nonzero exact polygon signs and a containment-certified unique outer can
+  emit `WrongLoopOrientation`. Curved, periodic, nonlinear-chart, tolerance-joined,
+  exact-zero, and non-finite loops stay silent in Fast and become per-loop Full
+  `LoopOrientation` gaps; unresolved outer/hole roles remain a separate
+  `LoopContainment` gap.
 - Full adaptive checks charge subdivisions, segments, evaluations, and candidate pairs.
   Exhaustion adds a structured verification gap linked to a limit diagnostic, not a
   fault and not `Valid`.
@@ -1192,6 +1199,11 @@ Status: X_T reconstruction and checked-commit Fast validation are contextual.
 Facade import installs one graph family profile before parsing, owns one scope,
 and gives reconstruction plus checked commit one deterministic child spanning
 both phases.
+Checker loop orientation now uses no sampled or magnitude authority: strict
+planar straight-loop exact signs and robust containment alone can emit a Fast
+fault. Unsupported curved or periodic loops produce explicit Full
+`LoopOrientation` gaps without changing Fast fault ordering, and
+`LoopContainment` remains the separate outer/hole-role obligation.
 Face metadata, SP-curve validation, face-domain validation, and procedural
 checker samples share cumulative node visits and dependency-depth high-water,
 including canonical aggregate and root-total crossings. Policy stops roll back

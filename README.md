@@ -88,10 +88,21 @@ application boundary.
   `face_case_a` now requires exactly one exact-positive outer loop; exact-zero
   and non-finite loops fail closed before the existing periodic anchoring and
   outer-first ordering. Its `2^52`-translated unit-square adversary also has
-  exact doubled area `+2` while naive shoelace summation is zero. Remaining
-  concrete decision-audit debt includes checker sampled-loop winding and
-  outer-loop selection, conic discriminant root-count classification,
-  NURBS-plane sign certification, and other raw topological sign branches.
+  exact doubled area `+2` while naive shoelace summation is zero. The `ktopo`
+  checker now has a separate strict authority for planar straight-loop
+  orientation: whole-interval-certified line uses must form finite, nonzero,
+  bit-identically closed, exactly simple rings with nonzero
+  `polygon_orientation2d_iter` signs, and robust strict containment identifies
+  the unique outer without an area-magnitude proxy. The former sampled
+  shoelace, largest-absolute-area selection, and periodic sample unwrapping no
+  longer decide faults. Fast emits `WrongLoopOrientation` only when the complete
+  layout is certified; curved, periodic, nonlinear-chart, tolerance-joined,
+  exact-zero, and non-finite loops remain silent in Fast and receive per-loop
+  Full `LoopOrientation` gaps, while unresolved outer/hole roles remain the
+  separate `LoopContainment` obligation. Remaining concrete decision-audit debt
+  includes generic curved-pcurve signed line integrals and curved or periodic
+  containment, conic discriminant root-count classification, NURBS-plane sign
+  certification, and other raw topological sign branches.
   `insphere`, an `incircle` production decision consumer when required, the
   broader topological-decision audit, and full conformance remain ahead.
 - M2.5 is in progress and remains the architecture gate. Transaction-owned checked
