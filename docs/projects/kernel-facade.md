@@ -47,6 +47,19 @@ The remaining coupling is conceptual and representational:
 - F1 moves geometry ownership from topology arenas into `GeometryGraph`, which
   must not force application clients through a second identity migration.
 
+The lower-layer `kops` sphere/sphere contract now includes all four exact
+both-wide 3×3 disconnected seven-positive rotations: one occupied corner
+singleton, its two orthogonal neighbors certified empty, and one exact six-cell
+component. Connected-seven handling retains precedence; the disconnected proof
+requires zero occupied-boundary contact at both cuts, simultaneous cancellation
+of all six component seams, no surviving artificial seam or bit-exact
+inter-component contact, and exactly two canonical parent-mapped regions with
+maximum residual propagation. Repeat/swap, exact 9/8 piece, 252/251 pair, and
+1,008/1,007 arc N/N-1 admission, plus one-ULP and duplicate ambiguity rejection,
+are pinned; other seven-positive layouts remain indeterminate. F5 does not yet
+expose surface/surface intersection, so a future facade adapter must preserve
+this completion boundary and evidence rather than duplicate or widen it.
+
 The operation-owned tolerance batch closes one prior transaction coupling: an
 ordinary client supplies only ordered part-qualified Face/Edge/Vertex targets,
 final tolerance values, an operation name, and an aggregate limit. The facade

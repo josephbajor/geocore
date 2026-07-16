@@ -1406,7 +1406,10 @@ true only for an empty complete result.
   path and their four siblings certify empty, when four, five, or six positive
   children form an exact connected shared-seam union, when seven positive
   children form an exact connected shared-seam union and the other two
-  siblings certify empty, or when eight
+  siblings certify empty, when seven positive children instead comprise one
+  occupied corner singleton, its two orthogonal neighbor cells certified
+  empty, and one exact connected six-cell component in any of the four grid
+  rotations, or when eight
   positive children form an exact connected shared-seam union and the sole
   remaining sibling certifies empty, or when all nine children are positive
   and their exhaustive closed decomposition cancels every internal seam into
@@ -1437,6 +1440,19 @@ true only for an empty complete result.
   both orthogonal empty owners at each diagonal corner. The pinned singleton
   plus four-cell fixture retains two regions with 3- and 8-edge boundaries;
   removing either separator owner fails closed.
+  The exact disconnected seven-positive family covers all four rotations:
+  singleton `[0,0]` with cuts `[0,1]`/`[1,0]`, singleton `[0,2]` with cuts
+  `[0,1]`/`[1,2]`, singleton `[2,0]` with cuts `[1,0]`/`[2,1]`, and singleton
+  `[2,2]` with cuts `[1,2]`/`[2,1]`; every non-cut cell is occupied and the
+  other six cells form one component. The existing connected-seven merger has
+  precedence. The disconnected route requires both cuts certified empty and
+  zero occupied-boundary contact at their separators, proves and cancels all
+  six internal seams of the six-cell component simultaneously, and rejects any
+  surviving artificial seam edge or bit-exact contact between components. It
+  returns exactly two canonical parent-mapped regions with maximum child/parent
+  residual propagation. Real fixtures for all rotations pin repeat/swap, exact
+  9/8 piece, 252/251 pair, and 1,008/1,007 arc N/N-1 admission; one-ULP seam
+  mutation and duplicate-edge ambiguity fail closed.
   The reviewed seven-cell 2×3-block-plus-tail fixture now returns one canonical
   15-edge region: seven adjacencies own reverse-oriented bit-exact seam pairs,
   while `[1,0]/[1,1]` uses the one-owner proof above. Closed-cell containment
@@ -1462,7 +1478,9 @@ true only for an empty complete result.
   and cancel, leaving one canonical 17-edge outer cycle with exact repeat/swap;
   no artificial seam edge survives.
   Exact 9/8 piece-pair, 252/251 boundary-pair, and 1,008/1,007 arc-witness
-  admission remain pinned. Other seven-, eight-, or nine-positive unions, disconnected five-cell
+  admission remain pinned. Other seven-positive unions outside the exact
+  connected and four corner-singleton-plus-six-component families, other eight-
+  or nine-positive unions, disconnected five-cell
   layouts without exact sibling separation, non-exact or otherwise ambiguous
   multi-edge shared seams, full-turn
   aliases, other polar, non-exact tangent, ambiguous multiple-cycle,

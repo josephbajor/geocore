@@ -139,6 +139,19 @@ application boundary.
   non-cap row retains eight vertices and every six-cell decomposition keeps the
   exact 6/5, 147/146, and 588/587 piece/pair/arc N/N-1 ceilings; other polar
   layouts remain unsupported.
+  The both-wide Cartesian 3×3 arm now also admits all four exact disconnected
+  seven-positive rotations in which one occupied corner is a singleton, its
+  two orthogonal neighbor cells certify empty, and the other six occupied cells
+  form one exact component. The existing connected-seven merger keeps
+  precedence. The disconnected proof requires zero occupied-boundary contact
+  at both empty separators, cancels the six-cell component's six internal seams
+  simultaneously, and rejects any surviving artificial seam or bit-exact
+  contact between components. Success returns exactly two canonical parent-
+  mapped regions with maximum child/parent residual propagation. Real fixtures
+  pin all rotations, repeat/swap, exact 9/8 piece, 252/251 pair, and 1,008/1,007
+  arc N/N-1 admission; one-ULP seam and duplicate-edge ambiguity fail closed.
+  Other seven-positive 3×3 layouts outside the exact connected and corner-
+  singleton-plus-six-component families remain indeterminate.
   Varying-normal chains against a direct analytic Plane retain exact outer-to-
   inner metadata, prove every intermediate and final radius finite and positive
   from the original basis, use the derived sheet only for discovery, preserve
