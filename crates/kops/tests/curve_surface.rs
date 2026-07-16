@@ -1393,15 +1393,13 @@ fn line_on_cone_ruling_clips_to_surface_window_overlap() {
 fn line_torus_equatorial_secant_returns_four_contacts() {
     let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
     let secant = make_line([-3.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
-    let hit = intersect_bounded_line_torus(
-        &secant,
-        ParamRange::new(0.0, 6.0),
-        &torus,
-        torus_window(),
-        Tolerances::default(),
-    )
-    .unwrap();
+    let line_range = ParamRange::new(0.0, 6.0);
+    let surface_range = torus_window();
+    let tolerances = Tolerances::default();
+    let hit = intersect_bounded_line_torus(&secant, line_range, &torus, surface_range, tolerances)
+        .unwrap();
 
+    assert!(hit.is_complete());
     assert_eq!(hit.points.len(), 4);
     for (point, expected_t, expected_x) in [
         (&hit.points[0], 0.5, -2.5),
@@ -1420,31 +1418,44 @@ fn line_torus_equatorial_secant_returns_four_contacts() {
     assert_eq!(hit.points[2].uv_surface[0], 0.0);
     assert!((hit.points[2].uv_surface[1] - core::f64::consts::PI).abs() < 1e-9);
     assert_eq!(hit.points[3].uv_surface, [0.0, 0.0]);
+
+    let dispatched =
+        intersect_bounded_curve_surface(&secant, line_range, &torus, surface_range, tolerances)
+            .unwrap();
+    assert_eq!(dispatched, hit);
 }
 
 #[test]
 fn line_torus_tangent_and_near_tangent_contacts() {
     let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
-    for (height, tolerances) in [
-        (2.5, Tolerances::default()),
-        (2.5 + 5e-7, Tolerances::with_linear(1e-6).unwrap()),
+    for (height, tolerances, expected_complete) in [
+        (2.5, Tolerances::default(), true),
+        (2.5 + 5e-7, Tolerances::with_linear(1e-6).unwrap(), false),
     ] {
         let tangent = make_line([-3.0, height, 0.0], [1.0, 0.0, 0.0]);
-        let hit = intersect_bounded_line_torus(
-            &tangent,
-            ParamRange::new(0.0, 6.0),
-            &torus,
-            torus_window(),
-            tolerances,
-        )
-        .unwrap();
+        let line_range = ParamRange::new(0.0, 6.0);
+        let surface_range = torus_window();
+        let hit =
+            intersect_bounded_line_torus(&tangent, line_range, &torus, surface_range, tolerances)
+                .unwrap();
 
+        assert_eq!(hit.is_complete(), expected_complete);
         assert_eq!(hit.points.len(), 1);
         assert_eq!(hit.points[0].kind, ContactKind::Tangent);
         assert!((hit.points[0].t_curve - 3.0).abs() < 1e-9);
         assert!(hit.points[0].point.dist(Point3::new(0.0, 2.5, 0.0)) <= tolerances.linear());
         assert!((hit.points[0].uv_surface[0] - core::f64::consts::FRAC_PI_2).abs() < 1e-9);
         assert_eq!(hit.points[0].uv_surface[1], 0.0);
+
+        let dispatched = intersect_bounded_curve_surface(
+            &tangent,
+            line_range,
+            &torus,
+            surface_range,
+            tolerances,
+        )
+        .unwrap();
+        assert_eq!(dispatched, hit);
     }
 }
 
@@ -1452,22 +1463,271 @@ fn line_torus_tangent_and_near_tangent_contacts() {
 fn line_torus_surface_range_filters_contacts() {
     let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
     let line = make_line([-3.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    let line_range = ParamRange::new(0.0, 6.0);
+    let surface_range = [
+        ParamRange::new(0.0, core::f64::consts::FRAC_PI_2),
+        ParamRange::new(0.0, core::f64::consts::FRAC_PI_2),
+    ];
+    let tolerances = Tolerances::default();
+    let hit =
+        intersect_bounded_line_torus(&line, line_range, &torus, surface_range, tolerances).unwrap();
+
+    assert!(!hit.is_complete());
+    assert_eq!(hit.points.len(), 1);
+    assert!(hit.points[0].point.dist(Point3::new(2.5, 0.0, 0.0)) < 1e-9);
+    assert!((hit.points[0].t_curve - 5.5).abs() < 1e-9);
+    assert_eq!(hit.points[0].uv_surface, [0.0, 0.0]);
+
+    let dispatched =
+        intersect_bounded_curve_surface(&line, line_range, &torus, surface_range, tolerances)
+            .unwrap();
+    assert_eq!(dispatched, hit);
+}
+
+#[test]
+fn line_torus_rounded_full_period_width_remains_indeterminate() {
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let line = make_line([-3.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    let shifted_lo = 0.1_f64;
+    let shifted_hi = f64::from_bits(0x4019_8861_baaa_937e);
+    assert_eq!(shifted_hi - shifted_lo, core::f64::consts::TAU);
     let hit = intersect_bounded_line_torus(
         &line,
         ParamRange::new(0.0, 6.0),
         &torus,
         [
-            ParamRange::new(0.0, core::f64::consts::FRAC_PI_2),
-            ParamRange::new(0.0, core::f64::consts::FRAC_PI_2),
+            ParamRange::new(shifted_lo, shifted_hi),
+            ParamRange::new(0.0, core::f64::consts::TAU),
         ],
         Tolerances::default(),
     )
     .unwrap();
 
+    assert!(!hit.is_complete());
+}
+
+#[test]
+fn line_torus_small_binary_scale_secant_returns_four_complete_contacts() {
+    let major_radius = 3.0 / 256.0;
+    let minor_radius = 1.0 / 256.0;
+    let torus = Torus::new(Frame::world(), major_radius, minor_radius).unwrap();
+    let secant = make_line([-1.0 / 32.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    let line_range = ParamRange::new(0.0, 1.0 / 16.0);
+    let hit = intersect_bounded_line_torus(
+        &secant,
+        line_range,
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.is_complete());
+    assert_eq!(hit.points.len(), 4);
+    for (point, expected_t) in
+        hit.points
+            .iter()
+            .zip([1.0 / 64.0, 3.0 / 128.0, 5.0 / 128.0, 3.0 / 64.0])
+    {
+        assert_eq!(point.kind, ContactKind::Transverse);
+        assert!((point.t_curve - expected_t).abs() < 1e-12);
+    }
+
+    let dispatched = intersect_bounded_curve_surface(
+        &secant,
+        line_range,
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(dispatched, hit);
+}
+
+#[test]
+fn line_torus_source_rounding_adversary_is_not_false_empty() {
+    let major_radius: f64 = 3.0 / 256.0;
+    let minor_radius: f64 = 1.0 / 256.0;
+    let outer_radius: f64 = major_radius + minor_radius;
+    let height = outer_radius.next_down();
+    let torus = Torus::new(Frame::world(), major_radius, minor_radius).unwrap();
+    let secant = make_line([-outer_radius, height, 0.0], [1.0, 0.0, 0.0]);
+    let line_range = ParamRange::new(0.0, 2.0 * outer_radius);
+
+    let hit = intersect_bounded_line_torus(
+        &secant,
+        line_range,
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.is_complete());
     assert_eq!(hit.points.len(), 1);
-    assert!(hit.points[0].point.dist(Point3::new(2.5, 0.0, 0.0)) < 1e-9);
-    assert!((hit.points[0].t_curve - 5.5).abs() < 1e-9);
-    assert_eq!(hit.points[0].uv_surface, [0.0, 0.0]);
+    assert_eq!(hit.points[0].kind, ContactKind::Transverse);
+    assert!((hit.points[0].t_curve - outer_radius).abs() <= Tolerances::default().linear());
+    assert!(
+        hit.points[0].point.dist(Point3::new(0.0, height, 0.0)) <= Tolerances::default().linear()
+    );
+
+    let repeated = intersect_bounded_line_torus(
+        &secant,
+        line_range,
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(repeated, hit);
+
+    let dispatched = intersect_bounded_curve_surface(
+        &secant,
+        line_range,
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(dispatched, hit);
+}
+
+#[test]
+fn line_torus_transformed_source_cancellation_is_not_false_empty() {
+    let frame = Frame::new(
+        Point3::new(0.125, -0.25, 0.5),
+        Vec3::new(1.0, 1.0, 1.0),
+        Vec3::new(1.0, -1.0, 0.0),
+    )
+    .unwrap();
+    let major_radius: f64 = 3.0 / 256.0;
+    let minor_radius: f64 = 1.0 / 256.0;
+    let outer_radius: f64 = major_radius + minor_radius;
+    let height = outer_radius.next_down();
+    let torus = Torus::new(frame, major_radius, minor_radius).unwrap();
+    let origin = frame.point_at(-outer_radius, height, 0.0);
+    let secant = make_line(origin.to_array(), frame.x().to_array());
+    let line_range = ParamRange::new(0.0, 2.0 * outer_radius);
+
+    let hit = intersect_bounded_line_torus(
+        &secant,
+        line_range,
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(!hit.is_proven_empty(), "{hit:?}");
+    assert!(!hit.points.is_empty(), "{hit:?}");
+    assert!(
+        hit.points
+            .iter()
+            .all(|point| point.residual <= Tolerances::default().linear())
+    );
+
+    let repeated = intersect_bounded_line_torus(
+        &secant,
+        line_range,
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(repeated, hit);
+
+    let dispatched = intersect_bounded_curve_surface(
+        &secant,
+        line_range,
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(dispatched, hit);
+}
+
+#[test]
+fn line_torus_bounded_endpoint_near_contact_is_not_proven_empty() {
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let tolerances = Tolerances::default();
+    let endpoint_x = -1.0e-4;
+    let height = 2.5 + 0.5 * tolerances.linear();
+    let line = make_line([endpoint_x, height, 0.0], [1.0, 0.0, 0.0]);
+    let line_range = ParamRange::new(0.0, 0.0);
+
+    let hit = intersect_bounded_line_torus(&line, line_range, &torus, torus_window(), tolerances)
+        .unwrap();
+
+    assert!(!hit.is_proven_empty(), "{hit:?}");
+    assert!(!hit.is_complete(), "{hit:?}");
+    assert_eq!(hit.points.len(), 1, "{hit:?}");
+    assert_eq!(hit.points[0].t_curve, 0.0);
+    assert!(hit.points[0].residual <= tolerances.linear());
+
+    let dispatched =
+        intersect_bounded_curve_surface(&line, line_range, &torus, torus_window(), tolerances)
+            .unwrap();
+    assert_eq!(dispatched, hit);
+}
+
+#[test]
+fn line_torus_extreme_finite_scale_is_indeterminate_not_proven_empty() {
+    let scale = 2.0_f64.powi(500);
+    let torus = Torus::new(Frame::world(), scale, scale / 4.0).unwrap();
+    let secant = make_line([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    let line_range = ParamRange::new(-scale, scale);
+
+    let hit = intersect_bounded_line_torus(
+        &secant,
+        line_range,
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(!hit.is_complete());
+    assert!(!hit.is_proven_empty());
+
+    let repeated = intersect_bounded_line_torus(
+        &secant,
+        line_range,
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(repeated, hit);
+
+    let dispatched = intersect_bounded_curve_surface(
+        &secant,
+        line_range,
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(dispatched, hit);
+}
+
+#[test]
+fn line_torus_rejects_broken_unit_direction_contract_before_completion() {
+    let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
+    let collapsed = make_line([2.5, 0.0, 0.0], [1.0e308, 0.0, 0.0]);
+    assert_eq!(collapsed.dir(), Vec3::new(0.0, 0.0, 0.0));
+
+    let hit = intersect_bounded_line_torus(
+        &collapsed,
+        ParamRange::new(-1.0, 1.0),
+        &torus,
+        torus_window(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(!hit.is_complete());
+    assert!(!hit.is_proven_empty());
 }
 
 #[test]

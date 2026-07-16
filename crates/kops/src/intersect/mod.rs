@@ -1,5 +1,6 @@
 //! Geometric intersection algorithms and parameter-rich result contracts.
 
+mod bounded_polynomial;
 mod candidate;
 mod circle_circle;
 mod circle_cone;
