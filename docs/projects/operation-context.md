@@ -944,6 +944,31 @@ Finite curve/surface range validation and two-axis surface-window fitting now
 share one ordered contract across analytic plane families, NURBS/plane, and the
 general NURBS curve marcher while retaining each solver's public error reason.
 
+The analytic containment boundary now keeps metric tolerance out of harmonic
+identity decisions for planar circle/ellipse-by-plane and circle-by-sphere.
+Exact source signs first classify identity, nonzero constant, or a general
+harmonic. The plane path treats identical/opposite stored normals according to
+the semantic orthonormal `Frame` contract and otherwise uses exact affine
+signs. The sphere path combines exact center-axis affine signs with
+`squared_distance_difference3`, whose interval and expansion paths never make
+a rounded center difference authoritative. Exact identity emits the existing
+bounded overlap path; a nonzero constant is a complete miss; unavailable
+classification or a source-general relation erased to a rounded identity stays
+`Indeterminate`. Analytic surface/surface solvers that construct a circle
+already proved to lie on a sphere keep a circle-only proof-carrying
+sphere-window clipping entry. Plane/sphere additionally keeps the corresponding
+plane-window entry. These avoid re-establishing provenance from a re-normalized
+carrier frame or rounded derived radius.
+
+The shared `kops` periodic harmonic adapter also no longer uses parameter
+tolerance to collapse distinct classified roots. Tolerance selects or
+endpoint-clamps a representative only, and an identical numeric parameter
+produced by distinct roots is incomplete evidence. Final world-point emission
+deliberately retains linear-resolution physical deduplication. Thus this slice
+protects root topology through `kops` parameter fitting without changing the
+kernel's contact coincidence admission policy. The independent `kgraph`
+seam-root helper still tolerance-deduplicates and remains open debt.
+
 The provisional NURBS/plane arm has now separated proof authority from numeric
 guidance. `kcore::predicates::affine_dot3` interval-certifies ordinary
 `normal · (point - origin) + bias` signs and falls back to an exact expansion of

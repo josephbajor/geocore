@@ -19,7 +19,7 @@ boundary.
 
 | Crate | Layer | Contents |
 |---|---|---|
-| [`crates/kcore`](crates/kcore) | L0 foundations | Deterministic robust `orient2d`, `orient3d`, positive-inside-CCW `incircle`, exact cyclic `polygon_orientation2d`, and bounded exact quadratic/harmonic root classification with conservative floating filters or exact expansion evaluation, interval filters, tolerance policy (Parasolid numeric regime), typed errors, generational entity arenas with copy-on-write undo frames, deterministic parallel primitives, deterministic transcendental math (musl port — platform libm is banned in kernel code via clippy `disallowed-methods`) |
+| [`crates/kcore`](crates/kcore) | L0 foundations | Deterministic robust `orient2d`, `orient3d`, positive-inside-CCW `incircle`, exact cyclic `polygon_orientation2d`, bounded exact quadratic/harmonic root classification, and exact affine or squared-distance signs with conservative floating filters or exact expansion evaluation, interval filters, tolerance policy (Parasolid numeric regime), typed errors, generational entity arenas with copy-on-write undo frames, deterministic parallel primitives, deterministic transcendental math (musl port — platform libm is banned in kernel code via clippy `disallowed-methods`) |
 | [`crates/kgeom`](crates/kgeom) | L1 geometry | Analytic curves (line/circle/ellipse), true 2D line/circle/NURBS pcurve evaluators, and analytic surfaces (plane/cylinder/cone/sphere/torus) with exact bounding boxes, NURBS engine (Piegl & Tiller) with homogeneous 2D/3D knot operations and conservative active-subrange control-hull boxes, closest-point projection, deterministic trimmed-face tessellation with exact streaming trim-loop winding and explicit refinement-limit errors, evaluator conformance harness |
 | [`crates/kgraph`](crates/kgraph) | L1.5 geometry graph | Immutable analytic, NURBS, and procedural geometry nodes with typed dependencies, deterministic identity, and bounded evaluation |
 | [`crates/ktopo`](crates/ktopo) | L2 topology | Parasolid entity hierarchy (body→region→shell→face→loop→fin→edge→vertex), finite conservative face UV domains, typed entity-tolerance provenance and transaction-owned growth budgets, independent per-fin pcurves, bounded curve-less tolerant edges, reusable validated polygon-with-holes profiles and checked prism extrusion, transaction-owned pcurve-aware Euler edits, private generic Store mutation with transaction-scoped checked assembly, deterministic mutation/lineage/tolerance journals, journal-returning checked solid/sheet/wire/acorn constructors, shared incidence validation, and pcurve-driven watertight tessellation |
@@ -117,6 +117,25 @@ application boundary.
   cancellation, a transformed-sign-mismatch bit pattern, two transverse contacts for
   `cos(t) + 0.991 = 0` despite a `0.01` metric tolerance, `2^±700` scaling,
   ordinary repeat bits, and the debug/release numeric golden.
+  Planar circle/ellipse-by-plane and circle-by-sphere containment no longer
+  treats a sub-tolerance harmonic amplitude as identity. Exact source signs
+  distinguish identity, a nonzero constant complete miss, and a general
+  harmonic before overlap is emitted. Plane classification respects the
+  semantic orthonormal `Frame` contract for identical or opposite stored
+  normals and otherwise uses exact affine signs; circle/sphere uses exact
+  center-axis affine signs plus the exact squared-distance/radius predicate
+  below. General root locations still use the computed finite harmonic
+  coefficients, and source-general relations erased to a rounded identity
+  remain `Indeterminate`. The `kops` periodic harmonic adapter uses parameter
+  tolerance only to admit or clamp a representative: it no longer merges
+  distinct exactly classified roots, and an exact numeric-parameter collision
+  fails closed. Final contacts can still merge within model-space linear
+  tolerance as the intentional physical coincidence policy. Analytic
+  surface/surface solvers that construct a circle already proved to lie on a
+  sphere preserve that construction proof through a circle-only sphere-window
+  clipping seam. Plane/Sphere likewise preserves its plane proof. These seams
+  do not ask a re-normalized carrier frame or rounded square-root radius to
+  reproduce identities already owned by the construction.
   `affine_dot3(normal, point, origin, bias)` now interval-certifies
   `normal · (point - origin) + bias` without making rounded subtraction a
   decision authority. Cancellation falls back to an exact expansion sum of the
@@ -125,13 +144,25 @@ application boundary.
   exact-product/expansion envelope returns `None`. Evidence covers a 20,000-case `i128`
   oracle, ordinary approximation bits, exact zero, raw-zero oblique
   cancellation, threshold reversal, a subtraction residue lost by rounded
-  `point - origin`, and the reviewed debug/release golden
-  `0xC253_830A_E2CB_2D65`. Remaining
+  `point - origin`, and forced-fallback participation in the reviewed
+  debug/release golden.
+  `squared_distance_difference3(point, origin, first_radius, second_radius)`
+  similarly classifies
+  `|point - origin|² + first_radius² - second_radius²` without making a rounded
+  coordinate difference authoritative. Its interval filter expands each axis
+  as `point² - 2·point·origin + origin²`; cancellation falls back to exact
+  expansions of those nine products and the two squared radii. Evidence covers
+  a separate 20,000-case `i128` oracle, ordinary approximation bits, exact
+  3-4-5 zero, radius threshold/reversal signs, and an axial `5e-9` offset whose
+  legacy result is zero but exact sign is positive. The current cross-platform
+  debug/release numeric golden is `0xEED3_9864_73A4_C2D2`. Remaining
   concrete decision-audit debt includes generic curved-pcurve signed line
   integrals and curved or periodic containment, the outer amplitude metric
-  policy, affine and harmonic fallback outside their reviewed exponent
-  envelopes, general NURBS and higher-polynomial root classification, and other
-  raw topological sign branches.
+  policy in the still-unmigrated higher conic/primitive families, affine,
+  squared-distance, and harmonic fallback outside their reviewed exponent
+  envelopes, the still-tolerance-deduplicated `kgraph` seam-root adapter,
+  general NURBS and higher-polynomial root classification, and other raw
+  topological sign branches.
   `insphere`, an `incircle` production decision consumer when required, the
   broader topological-decision audit, and full conformance remain ahead.
 - M2.5 is in progress and remains the architecture gate. Transaction-owned checked

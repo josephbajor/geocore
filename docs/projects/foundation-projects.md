@@ -209,11 +209,13 @@ touching, nested, and nonzero-gap behavior.
 
 Concrete next targets include generic curved-pcurve signed line integrals and
 curved or periodic containment, extreme coefficient spreads outside the
-harmonic normalization/expansion envelope, the outer conic amplitude metric
-policy, affine-dot fallbacks outside the reviewed expansion envelope, complete
-NURBS/plane root isolation, contextual replacement of its static node/depth
-caps, proof-bearing finite-window boundary cells, general NURBS and generic
-higher-polynomial roots, and other raw topology-changing sign branches.
+harmonic normalization/expansion envelope, amplitude/containment policy in the
+remaining higher conic/primitive families, the still-tolerance-deduplicated
+`kgraph` seam-root adapter, affine-dot fallbacks outside the reviewed expansion
+envelope, complete NURBS/plane root isolation, contextual replacement of its
+static node/depth caps, proof-bearing finite-window boundary cells, general
+NURBS and generic higher-polynomial roots, and other raw topology-changing sign
+branches.
 `incircle` remains without a production topology decision consumer, and
 `insphere` remains deferred until a 3D Delaunay or equivalent consumer exists.
 
@@ -1286,6 +1288,36 @@ Unrepresentable bounded cases retain incomplete evidence through `kops`
 `Indeterminate` or the graph's typed `HarmonicRootClassification` error rather
 than being flattened into a miss. This removes the duplicated tolerance-based
 quadratic root-count helpers without claiming generic polynomial isolation.
+
+The planar circle/ellipse-by-plane and circle-by-sphere containment gates now
+separate exact source identity, exact nonzero constant, and general harmonic
+relations before emitting overlap. The plane path honors identical/opposite
+stored normals through the semantic orthonormal `Frame` contract and otherwise
+uses `affine_dot3` for its oscillating and constant signs. Circle/sphere adds
+`squared_distance_difference3`, whose interval filter expands
+`|point-origin|²` without rounded subtraction and whose exact fallback sums the
+nine coordinate products plus both radius squares. A source-general relation
+that rounds to the all-zero finite coefficient tuple remains
+`Indeterminate`; ordinary root locations still use that tuple.
+Analytic surface/surface solvers that construct a circle already proved to lie
+on a sphere preserve that evidence through a circle-only sphere-window clipping
+seam. Plane/Sphere additionally preserves its plane-window proof, so neither a
+re-normalized carrier frame nor the rounded square-root radius is asked to
+re-prove an identity already owned by the construction.
+
+The `kops` periodic harmonic adapter no longer deduplicates roots whose exact
+harmonic classification is distinct. It only selects and clamps a
+representative inside the bounded chart; two distinct roots that become one
+numeric parameter fail closed. Later world-point emission still applies the
+kernel's linear-resolution physical-coincidence policy. The independent
+`kgraph` seam-root adapter still tolerance-deduplicates and remains open.
+Evidence includes sub-tolerance secants and complete misses, exact
+constant-only misses, a nontrivial 3-4-5 circle/sphere identity, identical and
+opposite arbitrary tilted-frame plane identity, two roots closer than the
+requested parameter tolerance, and public collision-to-`Indeterminate`
+propagation. This closes the named identity and `kops` parameter-root-collapse
+debts for these two pairs, not the remaining higher-polynomial
+conic/primitive containment shortcuts or graph adapter.
 
 `kcore::predicates::affine_dot3` now supplies exact affine side signs through an
 outward interval filter and a six-product exact expansion fallback with a
