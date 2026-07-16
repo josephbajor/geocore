@@ -171,7 +171,7 @@ Q1 implementation:
 
 Owner: `ktopo`.
 
-Implemented as 28 registered cases in the isolated `benches/` package. The
+Implemented as 32 registered cases in the isolated `benches/` package. The
 `benchmark-internals` feature adds only read-only commit counters, stable
 ordinal-based digests, store/index snapshots, and a full-rebuild audit; it is
 absent from normal `ktopo` builds. Fixture cloning, snapshots, and invariant
@@ -203,6 +203,7 @@ Ladders:
 | local refresh | same store sizes | mutate one body's point/tolerance and commit | exactly expected body scope checked; index entries unchanged outside scope |
 | fanout refresh | 1, 10, 100 dependent bodies | mutate one referenced geometry and commit | deterministic affected-body set and order |
 | mixed-store cohort | four affected roots across 4, 16, 64, 256 total bodies; 1, 4, 16, 64 affected roots across 64 total bodies | mutate one cohort-shared point and commit | affected = refreshed = checked cohort size; stable affected order and full result digests |
+| affected solid footprint | 1, 4, 16, 64 affected production solids across 64 total `primitive_mix` bodies | in one ordinary checked transaction, grow the first face of each selected solid to `2e-8` under an exact `N × 1e-8` operation budget | exactly N modified Face mutations and ordered tolerance events; affected = refreshed = checked = mutations; stable affected order and full result digests; committed index unchanged |
 | batched refresh | 1, 10, 100 edited bodies | perform deterministic edits in one transaction | one atomic commit; refreshed-body count |
 | rejected commit | 1, 10, 100 bodies | commit one invalid mutation | identical pre/post store digest and index digest |
 | full rebuild reference | 1, 10, 100, 1,000 bodies | explicitly rebuild/audit index through crate-private seam | rebuilt index equals committed incremental index |
@@ -210,11 +211,13 @@ Ladders:
 Record entity counts, affected/refreshed body counts, checker obligations, and
 allocation counts when allocation instrumentation becomes available. The
 rejected-edit case protects failure atomicity, not merely throughput.
-The cohort matrix proves the scoped index/checker counters rather than a wall-
-clock threshold. Ordinary commit still performs full graph validation,
-committed-index cloning, and body-order refresh, and the affected roots remain
-minimal one-vertex bodies; total latency and affected solid-footprint scaling
-remain separate performance boundaries.
+The cohort matrix proves scoped index/checker counters rather than a wall-clock
+threshold. Its affected roots remain minimal one-vertex bodies so dependency
+scope stays isolated. The fixed-64-body `primitive_mix` matrix adds the first
+production-solid-footprint ladder while holding total bodies constant.
+Ordinary commit still performs full graph validation, committed-index cloning,
+and body-order refresh; global ordinary-commit cost, broader footprint scaling,
+and production-assembly behavior remain separate performance boundaries.
 
 ## Stage Q2a — geometry graph construction and reverse-dependency ladder
 
@@ -608,7 +611,7 @@ regression remains portable.
 
 Status: implemented. Existing benchmark targets and the two current fuzz
 targets run in bounded Linux jobs; more targets remain behind the post-Q8
-landing order. The benchmark manifest contains 163 registered cases.
+landing order. The benchmark manifest contains 167 registered cases.
 
 CI has three bounded jobs/surfaces for the existing Q1 and Q6 assets. The
 Python contract surface is load-bearing: CI runs

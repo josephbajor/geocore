@@ -16,8 +16,8 @@ Every case is registered in `cases.json` with a five-segment path:
 Fixture construction, seeds, expected counters, and invariant checks are
 deterministic. Criterion measures elapsed time, but timing never establishes
 correctness. The runner always marks measurements advisory.
-The manifest currently registers 163 cases, including the 32-row Q3
-`body-tessellation.v3` matrix.
+The manifest currently registers 167 cases, including the 32-row Q2 topology
+matrix and the 32-row Q3 `body-tessellation.v3` matrix.
 
 Criterion is pinned to `0.8.2`. Machine-readable measured runs use
 `cargo-criterion 1.1.0` because its JSON-lines output is a documented external
@@ -87,7 +87,7 @@ axis-wise inflated-box test. Resource-limited controls remain zero-certificate
 cases.
 
 The Q1 target verifies the result digest before measurement and again in every
-timed iteration. The Q2 target provides the 28 checked-commit, incremental
+timed iteration. The Q2 target provides 32 checked-commit, incremental
 index-refresh, rejection, and full-rebuild cases in the quality contract. It
 times only the transaction edit and ordinary `commit_checked`, except that the
 full-rebuild ladder times the independent reference-index rebuild itself.
@@ -105,8 +105,16 @@ These counters, not elapsed time, establish affected-root scope. The timed
 ordinary commit still includes full geometry-graph validation, cloning the
 committed index, and refreshing its store body order, so this baseline does not
 claim total-store-independent end-to-end latency. The affected cohort remains
-the minimal one-vertex body needed to isolate dependency-index scope; scaling
-the footprint of each affected solid is a separate boundary. Set
+the minimal one-vertex body needed to isolate dependency-index scope.
+
+Four additional rows hold `primitive_mix` at 64 production solids and sweep
+1, 4, 16, and 64 affected roots. One ordinary checked transaction grows the
+first face of each selected solid to `2e-8` under an exact `N × 1e-8`
+operation-owned budget. Every row pins exactly N modified Face mutations and
+ordered tolerance events, affected/refreshed/checked/mutation equality, stable
+affected-order and full-output digests, and committed-index equality. Elapsed
+time remains advisory; global ordinary-commit cost, broader footprint scaling,
+and production-assembly behavior remain open. Set
 `KERNEL_BENCH_SMOKE=1` and pass one full case path after `--` for a bounded
 local smoke run.
 
