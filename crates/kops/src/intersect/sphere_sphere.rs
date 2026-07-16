@@ -1,4 +1,4 @@
-use super::circle_sphere::intersect_bounded_circle_sphere;
+use super::circle_sphere::clip_bounded_circle_on_sphere;
 use super::conic::{fit_periodic_parameter, parameter_tolerance};
 use super::parameter::{
     PeriodicOverlapPiece, affine_preimage_overlap, fit_scalar_parameter,
@@ -92,9 +92,9 @@ pub fn intersect_bounded_spheres(
         circle_radius_sq.max(0.0).sqrt(),
     )?;
     let a_hit =
-        intersect_bounded_circle_sphere(&circle, circle.param_range(), a, a_range, tolerances)?;
+        clip_bounded_circle_on_sphere(&circle, circle.param_range(), a, a_range, tolerances)?;
     let b_hit =
-        intersect_bounded_circle_sphere(&circle, circle.param_range(), b, b_range, tolerances)?;
+        clip_bounded_circle_on_sphere(&circle, circle.param_range(), b, b_range, tolerances)?;
 
     let parameter_tolerance = parameter_tolerance(circle.radius(), tolerances);
     let mut points = Vec::new();

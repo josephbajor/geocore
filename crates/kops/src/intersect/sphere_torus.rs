@@ -1,4 +1,4 @@
-use super::circle_sphere::intersect_bounded_circle_sphere;
+use super::circle_sphere::clip_bounded_circle_on_sphere;
 use super::circle_torus::intersect_bounded_circle_torus;
 use super::conic::{fit_periodic_parameter, parameter_tolerance};
 use super::result::{
@@ -117,7 +117,7 @@ fn add_circle_branch(
         Frame::new(center, torus.frame().z(), torus.frame().x())?,
         radius,
     )?;
-    let sphere_hit = intersect_bounded_circle_sphere(
+    let sphere_hit = clip_bounded_circle_on_sphere(
         &circle,
         circle.param_range(),
         sphere,

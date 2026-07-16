@@ -1,5 +1,5 @@
 use super::circle_cone::intersect_bounded_circle_cone;
-use super::circle_sphere::intersect_bounded_circle_sphere;
+use super::circle_sphere::clip_bounded_circle_on_sphere;
 use super::conic::{fit_periodic_parameter, parameter_tolerance};
 use super::parameter::fit_scalar_parameter;
 use super::result::{
@@ -139,7 +139,7 @@ fn add_circle_branch(
     )?;
     let cone_hit =
         intersect_bounded_circle_cone(&circle, circle.param_range(), cone, cone_range, tolerances)?;
-    let sphere_hit = intersect_bounded_circle_sphere(
+    let sphere_hit = clip_bounded_circle_on_sphere(
         &circle,
         circle.param_range(),
         sphere,

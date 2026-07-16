@@ -5,7 +5,9 @@ use super::result::{
 };
 use kcore::error::{Error, Result};
 use kcore::math;
-use kcore::predicates::{Orientation, harmonic_half_angle_roots};
+use kcore::predicates::{
+    Orientation, affine_dot3, harmonic_half_angle_roots, squared_distance_difference3,
+};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::nurbs::NurbsCurve;
@@ -61,7 +63,52 @@ pub(super) fn trig_linear_roots(
     range: ParamRange,
     tolerance: f64,
 ) -> Option<Vec<(f64, bool)>> {
+    match trig_linear_solution(a, b, c, range, tolerance)? {
+        TrigLinearSolution::Identity => Some(Vec::new()),
+        TrigLinearSolution::Roots(roots) => Some(roots),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum TrigLinearSolution {
+    Identity,
+    Roots(Vec<(f64, bool)>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ExactTrigLinearKind {
+    Identity,
+    ConstantNonzero,
+    General,
+}
+
+pub(super) fn exact_trig_linear_kind(
+    cosine: Orientation,
+    sine: Orientation,
+    constant: Orientation,
+) -> ExactTrigLinearKind {
+    if cosine == Orientation::Zero && sine == Orientation::Zero {
+        if constant == Orientation::Zero {
+            ExactTrigLinearKind::Identity
+        } else {
+            ExactTrigLinearKind::ConstantNonzero
+        }
+    } else {
+        ExactTrigLinearKind::General
+    }
+}
+
+pub(super) fn trig_linear_solution(
+    a: f64,
+    b: f64,
+    c: f64,
+    range: ParamRange,
+    tolerance: f64,
+) -> Option<TrigLinearSolution> {
     let solution = harmonic_half_angle_roots(a, b, c)?;
+    if solution.is_identity() {
+        return Some(TrigLinearSolution::Identity);
+    }
     let mut roots = Vec::new();
     let discriminant = solution.discriminant();
     let tangent = discriminant == Orientation::Zero;
@@ -72,12 +119,12 @@ pub(super) fn trig_linear_roots(
             range,
             tolerance,
             tangent,
-        );
+        )?;
     }
     if solution.has_infinity_root() {
-        push_periodic_trig_root(&mut roots, core::f64::consts::PI, range, tolerance, tangent);
+        push_periodic_trig_root(&mut roots, core::f64::consts::PI, range, tolerance, tangent)?;
     }
-    Some(roots)
+    Some(TrigLinearSolution::Roots(roots))
 }
 
 fn angular_distance(a: f64, b: f64) -> f64 {
@@ -148,6 +195,36 @@ mod quadratic_root_tests {
             "unrepresentable exact normalization must not become a miss"
         );
     }
+
+    #[test]
+    fn trig_identity_and_distinct_nearby_roots_remain_separate() {
+        let range = ParamRange::new(0.0, core::f64::consts::TAU);
+        assert_eq!(
+            trig_linear_solution(0.0, 0.0, 0.0, range, 0.01),
+            Some(TrigLinearSolution::Identity),
+        );
+        assert_eq!(
+            trig_linear_roots(0.0, 0.0, 0.0, range, 0.01),
+            Some(Vec::new()),
+        );
+
+        let roots = trig_linear_roots(100.0, 0.0, 99.999_687_5, range, 0.01).unwrap();
+        assert_eq!(roots.len(), 2);
+        assert!(roots[1].0 - roots[0].0 < 0.01);
+        assert_ne!(roots[0].0.to_bits(), roots[1].0.to_bits());
+
+        assert_eq!(
+            trig_linear_solution(
+                1.0,
+                0.0,
+                0.0,
+                ParamRange::new(0.0, 0.0),
+                core::f64::consts::TAU,
+            ),
+            None,
+            "distinct classified roots that clamp to one parameter must stay indeterminate",
+        );
+    }
 }
 
 fn push_periodic_trig_root(
@@ -156,16 +233,15 @@ fn push_periodic_trig_root(
     range: ParamRange,
     tolerance: f64,
     tangent: bool,
-) {
+) -> Option<()> {
     let Some(candidate) = fit_periodic_parameter(candidate, range, tolerance) else {
-        return;
+        return Some(());
     };
-    if !roots
-        .iter()
-        .any(|(existing, _)| (*existing - candidate).abs() <= tolerance.max(1e-12))
-    {
-        roots.push((candidate, tangent));
+    if roots.iter().any(|(existing, _)| *existing == candidate) {
+        return None;
     }
+    roots.push((candidate, tangent));
+    Some(())
 }
 
 pub(super) fn real_polynomial_roots(coeffs: &[f64]) -> Vec<f64> {
@@ -2526,6 +2602,21 @@ pub(super) fn intersect_bounded_conic_sphere(
     }
 }
 
+/// Clip a circle whose caller already owns a construction proof that it lies
+/// on the sphere. This circle-only seam validates the public ranges, then
+/// performs only bounded sphere-window clipping.
+pub(super) fn clip_constructed_circle_on_sphere(
+    circle: &Circle,
+    circle_range: ParamRange,
+    sphere: &Sphere,
+    sphere_range: [ParamRange; 2],
+    tolerances: Tolerances,
+) -> Result<CurveSurfaceIntersections> {
+    let config = ConicSphereConfig::circle(circle, circle_range, sphere, sphere_range, tolerances);
+    config.validate()?;
+    contained_conic_sphere(&config)
+}
+
 fn intersect_circle_sphere_strategy(
     config: &ConicSphereConfig<'_>,
     circle: &Circle,
@@ -2543,27 +2634,30 @@ fn intersect_circle_sphere_strategy(
         config.sphere.radius(),
         config.tolerances,
     );
-    let amplitude_scale = a.abs().max(b.abs());
-    let amplitude = if amplitude_scale == 0.0 {
-        0.0
-    } else {
-        amplitude_scale
-            * ((a / amplitude_scale) * (a / amplitude_scale)
-                + (b / amplitude_scale) * (b / amplitude_scale))
-                .sqrt()
-    };
-
-    if amplitude <= tolerance {
-        if c.abs() > tolerance {
-            return Ok(CurveSurfaceIntersections::complete_empty());
-        }
-        return contained_conic_sphere(config);
-    }
-
-    let Some(roots) = trig_linear_roots(a, b, c, config.curve_range, tolerance) else {
+    let Some(exact_kind) = exact_circle_sphere_harmonic_kind(circle, config.sphere) else {
         return Ok(CurveSurfaceIntersections::indeterminate_empty(
             HARMONIC_ROOT_CLASSIFICATION_REASON,
         ));
+    };
+    match exact_kind {
+        ExactTrigLinearKind::Identity => return contained_conic_sphere(config),
+        ExactTrigLinearKind::ConstantNonzero => {
+            return Ok(CurveSurfaceIntersections::complete_empty());
+        }
+        ExactTrigLinearKind::General => {}
+    }
+    let Some(solution) = trig_linear_solution(a, b, c, config.curve_range, tolerance) else {
+        return Ok(CurveSurfaceIntersections::indeterminate_empty(
+            HARMONIC_ROOT_CLASSIFICATION_REASON,
+        ));
+    };
+    let roots = match solution {
+        TrigLinearSolution::Identity => {
+            return Ok(CurveSurfaceIntersections::indeterminate_empty(
+                HARMONIC_ROOT_CLASSIFICATION_REASON,
+            ));
+        }
+        TrigLinearSolution::Roots(roots) => roots,
     };
     let mut points = Vec::new();
     for (t_curve, tangent) in roots {
@@ -2571,6 +2665,36 @@ fn intersect_circle_sphere_strategy(
     }
 
     CurveSurfaceIntersections::canonicalized_complete(points, Vec::new())
+}
+
+fn exact_circle_sphere_harmonic_kind(
+    circle: &Circle,
+    sphere: &Sphere,
+) -> Option<ExactTrigLinearKind> {
+    let circle_origin = circle.frame().origin().to_array();
+    let sphere_origin = sphere.frame().origin().to_array();
+    let cosine = affine_dot3(
+        circle.frame().x().to_array(),
+        circle_origin,
+        sphere_origin,
+        0.0,
+    )?
+    .sign();
+    let sine = affine_dot3(
+        circle.frame().y().to_array(),
+        circle_origin,
+        sphere_origin,
+        0.0,
+    )?
+    .sign();
+    let constant = squared_distance_difference3(
+        circle_origin,
+        sphere_origin,
+        circle.radius(),
+        sphere.radius(),
+    )?
+    .sign();
+    Some(exact_trig_linear_kind(cosine, sine, constant))
 }
 
 fn intersect_ellipse_sphere_strategy(

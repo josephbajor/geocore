@@ -1,10 +1,10 @@
 use super::candidate::{emit_distinct_range, emit_distinct_spatial};
-use super::circle_sphere::intersect_bounded_circle_sphere;
+use super::circle_sphere::clip_bounded_circle_on_sphere;
 use super::parameter::{
     angular_parameter_tolerance, fit_periodic_parameter, fit_scalar_parameter,
     validate_finite_ranges,
 };
-use super::planar_curve_plane::intersect_bounded_circle_plane;
+use super::planar_curve_plane::clip_bounded_circle_on_plane;
 use super::result::{
     ContactKind, SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
     SurfaceSurfacePoint, accept_surface_surface_candidate,
@@ -56,14 +56,14 @@ pub fn intersect_bounded_plane_sphere(
         .sqrt();
     let frame = Frame::new(center, normal, plane.frame().x())?;
     let circle = Circle::new(frame, radius)?;
-    let plane_hit = intersect_bounded_circle_plane(
+    let plane_hit = clip_bounded_circle_on_plane(
         &circle,
         circle.param_range(),
         plane,
         plane_range,
         tolerances,
     )?;
-    let sphere_hit = intersect_bounded_circle_sphere(
+    let sphere_hit = clip_bounded_circle_on_sphere(
         &circle,
         circle.param_range(),
         sphere,

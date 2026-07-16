@@ -1,10 +1,14 @@
-use super::conic::{HARMONIC_ROOT_CLASSIFICATION_REASON, trig_linear_roots};
+use super::conic::{
+    ExactTrigLinearKind, HARMONIC_ROOT_CLASSIFICATION_REASON, TrigLinearSolution,
+    exact_trig_linear_kind, trig_linear_roots, trig_linear_solution,
+};
 use super::parameter::fit_parameter_pair;
 use super::result::{
     ContactKind, CurveSurfaceIntersections, CurveSurfaceOverlap, CurveSurfacePoint,
     accept_curve_surface_candidate,
 };
 use kcore::error::{Error, Result};
+use kcore::predicates::{Orientation, affine_dot3};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Ellipse};
 use kgeom::frame::Frame;
@@ -29,6 +33,32 @@ pub fn intersect_bounded_circle_plane(
         radius_y: circle.radius(),
     };
     intersect_planar_conic_plane(conic, circle_range, plane, plane_range, tolerances)
+}
+
+/// Clip a circle that its caller has already constructed in `plane`.
+///
+/// This internal seam preserves that construction proof instead of requiring a
+/// re-normalized derived frame to reproduce bit-identical plane normals.
+pub(super) fn clip_bounded_circle_on_plane(
+    circle: &Circle,
+    circle_range: ParamRange,
+    plane: &Plane,
+    plane_range: [ParamRange; 2],
+    tolerances: Tolerances,
+) -> Result<CurveSurfaceIntersections> {
+    validate_ranges(circle_range, circle.radius(), plane_range, tolerances)?;
+    contained_planar_conic(
+        PlanarConic {
+            curve: circle,
+            frame: circle.frame(),
+            radius_x: circle.radius(),
+            radius_y: circle.radius(),
+        },
+        circle_range,
+        plane,
+        plane_range,
+        tolerances,
+    )
 }
 
 /// Intersect an ellipse restricted to a finite range with a finite plane
@@ -75,27 +105,32 @@ fn intersect_planar_conic_plane(
     let c = offset.dot(normal);
     let a = conic.frame.x().dot(normal) * conic.radius_x;
     let b = conic.frame.y().dot(normal) * conic.radius_y;
-    let amplitude_scale = a.abs().max(b.abs());
-    let amplitude = if amplitude_scale == 0.0 {
-        0.0
-    } else {
-        amplitude_scale
-            * ((a / amplitude_scale) * (a / amplitude_scale)
-                + (b / amplitude_scale) * (b / amplitude_scale))
-                .sqrt()
-    };
-
-    if amplitude <= tolerances.linear() {
-        if c.abs() > tolerances.linear() {
-            return Ok(CurveSurfaceIntersections::complete_empty());
-        }
-        return contained_planar_conic(conic, curve_range, plane, plane_range, tolerances);
-    }
-
-    let Some(roots) = trig_linear_roots(a, b, c, curve_range, tolerances.linear()) else {
+    let Some(exact_kind) = exact_planar_harmonic_kind(conic, plane) else {
         return Ok(CurveSurfaceIntersections::indeterminate_empty(
             HARMONIC_ROOT_CLASSIFICATION_REASON,
         ));
+    };
+    match exact_kind {
+        ExactTrigLinearKind::Identity => {
+            return contained_planar_conic(conic, curve_range, plane, plane_range, tolerances);
+        }
+        ExactTrigLinearKind::ConstantNonzero => {
+            return Ok(CurveSurfaceIntersections::complete_empty());
+        }
+        ExactTrigLinearKind::General => {}
+    }
+    let Some(solution) = trig_linear_solution(a, b, c, curve_range, tolerances.linear()) else {
+        return Ok(CurveSurfaceIntersections::indeterminate_empty(
+            HARMONIC_ROOT_CLASSIFICATION_REASON,
+        ));
+    };
+    let roots = match solution {
+        TrigLinearSolution::Identity => {
+            return Ok(CurveSurfaceIntersections::indeterminate_empty(
+                HARMONIC_ROOT_CLASSIFICATION_REASON,
+            ));
+        }
+        TrigLinearSolution::Roots(roots) => roots,
     };
     let mut points = Vec::new();
     for (t_curve, tangent) in roots {
@@ -123,6 +158,35 @@ fn intersect_planar_conic_plane(
     }
 
     CurveSurfaceIntersections::canonicalized_complete(points, Vec::new())
+}
+
+fn exact_planar_harmonic_kind(
+    conic: PlanarConic<'_>,
+    plane: &Plane,
+) -> Option<ExactTrigLinearKind> {
+    let normal = plane.frame().z().to_array();
+    let conic_normal = conic.frame.z();
+    let plane_normal = plane.frame().z();
+    let frame_normals_match = plane_normal == conic_normal || plane_normal == -conic_normal;
+    let (cosine, sine) = if frame_normals_match {
+        // Frame's public contract is orthonormal even when normalization leaves
+        // the stored dyadic components with a tiny nonzero dot product.
+        (Orientation::Zero, Orientation::Zero)
+    } else {
+        let zero = [0.0; 3];
+        (
+            affine_dot3(normal, conic.frame.x().to_array(), zero, 0.0)?.sign(),
+            affine_dot3(normal, conic.frame.y().to_array(), zero, 0.0)?.sign(),
+        )
+    };
+    let constant = affine_dot3(
+        normal,
+        conic.frame.origin().to_array(),
+        plane.frame().origin().to_array(),
+        0.0,
+    )?
+    .sign();
+    Some(exact_trig_linear_kind(cosine, sine, constant))
 }
 
 fn contained_planar_conic(

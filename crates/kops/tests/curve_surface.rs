@@ -449,6 +449,96 @@ fn circle_sphere_secant_tangent_and_surface_window_filtering() {
 }
 
 #[test]
+fn near_concentric_circle_sphere_is_secant_not_tolerant_overlap() {
+    let sphere = Sphere::new(Frame::world(), 1.0).unwrap();
+    let circle = Circle::new(horizontal_frame([5.0e-9, 0.0, 0.0]), 1.0).unwrap();
+    let hit = intersect_bounded_circle_sphere(
+        &circle,
+        circle.param_range(),
+        &sphere,
+        sphere.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        intersect_bounded_circle_sphere(
+            &circle,
+            circle.param_range(),
+            &sphere,
+            sphere.param_range(),
+            Tolerances::default(),
+        )
+        .unwrap(),
+        hit
+    );
+
+    assert!(hit.is_complete());
+    assert!(hit.overlaps.is_empty());
+    assert_eq!(hit.points.len(), 2);
+    assert!(
+        hit.points
+            .iter()
+            .all(|point| point.kind == ContactKind::Transverse)
+    );
+    assert!(hit.points[0].point.dist(hit.points[1].point) > 1.9);
+    for point in &hit.points {
+        assert!(point.point.x.abs() < Tolerances::default().linear());
+        assert!((point.point.norm() - 1.0).abs() < Tolerances::default().linear());
+        assert!(point.residual < Tolerances::default().linear());
+    }
+
+    let opposite = Circle::new(horizontal_frame([-5.0e-9, 0.0, 0.0]), 1.0).unwrap();
+    let opposite_hit = intersect_bounded_circle_sphere(
+        &opposite,
+        opposite.param_range(),
+        &sphere,
+        sphere.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(opposite_hit.is_complete());
+    assert_eq!(opposite_hit.points.len(), 2);
+    assert!(opposite_hit.overlaps.is_empty());
+}
+
+#[test]
+fn axially_offset_circle_sphere_is_an_exact_constant_miss() {
+    let sphere = Sphere::new(Frame::world(), 1.0).unwrap();
+    let circle = Circle::new(horizontal_frame([0.0, 0.0, 5.0e-9]), 1.0).unwrap();
+    let hit = intersect_bounded_circle_sphere(
+        &circle,
+        circle.param_range(),
+        &sphere,
+        sphere.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.is_complete());
+    assert!(hit.is_empty());
+    assert!(hit.overlaps.is_empty());
+}
+
+#[test]
+fn offset_circle_sphere_uses_exact_pythagorean_identity() {
+    let sphere = Sphere::new(Frame::world(), 5.0).unwrap();
+    let circle = Circle::new(horizontal_frame([0.0, 0.0, 3.0]), 4.0).unwrap();
+    let hit = intersect_bounded_circle_sphere(
+        &circle,
+        circle.param_range(),
+        &sphere,
+        sphere.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.is_complete());
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.overlaps.len(), 1);
+    assert_eq!(hit.overlaps[0].curve, circle.param_range());
+}
+
+#[test]
 fn circle_on_sphere_clips_overlap_to_surface_window() {
     let sphere = Sphere::new(Frame::world(), 1.0).unwrap();
     let circle = Circle::new(Frame::world(), 1.0).unwrap();
@@ -1708,6 +1798,184 @@ fn circle_plane_crossing_and_surface_window_filtering() {
 }
 
 #[test]
+fn near_coplanar_circle_plane_is_secant_not_tolerant_overlap() {
+    let circle = Circle::new(
+        Frame::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 5.0e-9, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        1.0,
+    )
+    .unwrap();
+    let plane = Plane::new(Frame::world());
+    let plane_range = [ParamRange::new(-2.0, 2.0), ParamRange::new(-2.0, 2.0)];
+    let hit = intersect_bounded_circle_plane(
+        &circle,
+        circle.param_range(),
+        &plane,
+        plane_range,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        intersect_bounded_circle_plane(
+            &circle,
+            circle.param_range(),
+            &plane,
+            plane_range,
+            Tolerances::default(),
+        )
+        .unwrap(),
+        hit
+    );
+
+    assert!(hit.is_complete());
+    assert!(hit.overlaps.is_empty());
+    assert_eq!(hit.points.len(), 2);
+    assert!(
+        hit.points
+            .iter()
+            .all(|point| point.kind == ContactKind::Transverse)
+    );
+    assert!(hit.points[0].point.dist(Point3::new(1.0, 0.0, 0.0)) < 1.0e-12);
+    assert!(hit.points[0].t_curve.abs() < 1.0e-12);
+    assert!(hit.points[1].point.dist(Point3::new(-1.0, 0.0, 0.0)) < 1.0e-12);
+    assert!((hit.points[1].t_curve - core::f64::consts::PI).abs() < 1.0e-12);
+
+    let reversed = Circle::new(
+        Frame::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, -5.0e-9, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        1.0,
+    )
+    .unwrap();
+    let reversed_hit = intersect_bounded_circle_plane(
+        &reversed,
+        reversed.param_range(),
+        &plane,
+        plane_range,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(reversed_hit.is_complete());
+    assert_eq!(reversed_hit.points.len(), 2);
+    assert!(reversed_hit.overlaps.is_empty());
+}
+
+#[test]
+fn parallel_offset_circle_plane_is_an_exact_constant_miss() {
+    let circle = Circle::new(horizontal_frame([0.0, 0.0, 5.0e-9]), 1.0).unwrap();
+    let plane = Plane::new(Frame::world());
+    let hit = intersect_bounded_circle_plane(
+        &circle,
+        circle.param_range(),
+        &plane,
+        [ParamRange::new(-2.0, 2.0), ParamRange::new(-2.0, 2.0)],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.is_complete());
+    assert!(hit.is_empty());
+    assert!(hit.overlaps.is_empty());
+}
+
+#[test]
+fn shared_tilted_frame_retains_semantic_planar_identity() {
+    let frame = Frame::new(
+        Point3::new(2.0, -3.0, 5.0),
+        Vec3::new(1.0, 1.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .unwrap();
+    let circle = Circle::new(frame, 1.0).unwrap();
+    let plane = Plane::new(frame);
+    let plane_range = [ParamRange::new(-2.0, 2.0), ParamRange::new(-2.0, 2.0)];
+    let contained = intersect_bounded_circle_plane(
+        &circle,
+        circle.param_range(),
+        &plane,
+        plane_range,
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(contained.is_complete());
+    assert!(contained.points.is_empty());
+    assert_eq!(contained.overlaps.len(), 1);
+    assert_eq!(contained.overlaps[0].curve, circle.param_range());
+
+    let offset_circle =
+        Circle::new(frame.with_origin(frame.origin() + frame.z() * 5.0e-9), 1.0).unwrap();
+    let miss = intersect_bounded_circle_plane(
+        &offset_circle,
+        offset_circle.param_range(),
+        &plane,
+        plane_range,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(miss.is_complete());
+    assert!(miss.is_empty());
+
+    let reversed_plane = Plane::new(
+        Frame::new(frame.origin(), -frame.z(), frame.x())
+            .expect("the opposite normal retains the same semantic plane"),
+    );
+    let reversed_contained = intersect_bounded_circle_plane(
+        &circle,
+        circle.param_range(),
+        &reversed_plane,
+        plane_range,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(reversed_contained.is_complete());
+    assert!(reversed_contained.points.is_empty());
+    assert_eq!(reversed_contained.overlaps.len(), 1);
+    assert_eq!(reversed_contained.overlaps[0].curve, circle.param_range());
+    let reversed_miss = intersect_bounded_circle_plane(
+        &offset_circle,
+        offset_circle.param_range(),
+        &reversed_plane,
+        plane_range,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(reversed_miss.is_complete());
+    assert!(reversed_miss.is_empty());
+}
+
+#[test]
+fn public_harmonic_parameter_collision_is_indeterminate() {
+    let circle = Circle::new(Frame::world(), 1.0).unwrap();
+    let plane = Plane::new(
+        Frame::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap(),
+    );
+    let hit = intersect_bounded_circle_plane(
+        &circle,
+        ParamRange::new(0.0, 0.0),
+        &plane,
+        [ParamRange::new(-2.0, 2.0), ParamRange::new(-2.0, 2.0)],
+        Tolerances::with_linear(core::f64::consts::TAU).unwrap(),
+    )
+    .unwrap();
+
+    assert!(!hit.is_complete());
+    assert!(hit.is_empty());
+}
+
+#[test]
 fn circle_plane_near_tangent_keeps_two_exactly_transverse_roots() {
     let circle = Circle::new(Frame::world(), 1.0).unwrap();
     let plane = Plane::new(
@@ -1741,6 +2009,84 @@ fn circle_plane_near_tangent_keeps_two_exactly_transverse_roots() {
     for point in &hit.points {
         assert!((point.point.x + 0.991).abs() < 2.0e-15);
         assert!(point.residual < 2.0e-15);
+    }
+}
+
+#[test]
+fn near_coplanar_nonidentity_without_roots_is_a_complete_miss() {
+    let circle = Circle::new(
+        Frame::new(
+            Point3::new(0.0, 0.0, 7.5e-9),
+            Vec3::new(0.0, 5.0e-9, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap(),
+        1.0,
+    )
+    .unwrap();
+    let plane = Plane::new(Frame::world());
+    let hit = intersect_bounded_circle_plane(
+        &circle,
+        circle.param_range(),
+        &plane,
+        [ParamRange::new(-2.0, 2.0), ParamRange::new(-2.0, 2.0)],
+        Tolerances::default(),
+    )
+    .unwrap();
+
+    assert!(hit.is_complete());
+    assert!(hit.is_empty());
+    assert!(hit.overlaps.is_empty());
+}
+
+#[test]
+fn large_circle_near_tangent_roots_are_not_deduplicated_by_parameter_tolerance() {
+    let circle = Circle::new(Frame::world(), 100.0).unwrap();
+    let plane = Plane::new(
+        Frame::new(
+            Point3::new(-99.999_687_5, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap(),
+    );
+    let plane_range = [ParamRange::new(-101.0, 101.0), ParamRange::new(-1.0, 1.0)];
+    let tolerances = Tolerances::with_linear(0.01).unwrap();
+    let hit = intersect_bounded_circle_plane(
+        &circle,
+        circle.param_range(),
+        &plane,
+        plane_range,
+        tolerances,
+    )
+    .unwrap();
+    assert_eq!(
+        intersect_bounded_circle_plane(
+            &circle,
+            circle.param_range(),
+            &plane,
+            plane_range,
+            tolerances,
+        )
+        .unwrap(),
+        hit
+    );
+
+    assert!(hit.is_complete());
+    assert!(hit.overlaps.is_empty());
+    assert_eq!(hit.points.len(), 2);
+    assert!(
+        hit.points
+            .iter()
+            .all(|point| point.kind == ContactKind::Transverse)
+    );
+    let parameter_separation = hit.points[1].t_curve - hit.points[0].t_curve;
+    assert!(parameter_separation > 0.0);
+    assert!(parameter_separation < tolerances.linear());
+    assert!(hit.points[0].point.dist(hit.points[1].point) > 0.4);
+    for point in &hit.points {
+        assert!((point.point.x + 99.999_687_5).abs() < 2.0e-12);
+        assert!(point.residual < 2.0e-12);
     }
 }
 
