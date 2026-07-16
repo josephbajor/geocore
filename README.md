@@ -46,8 +46,13 @@ application boundary.
 
 - M0 foundations now include deterministic exact-fallback `orient2d`, `orient3d`,
   and `incircle`; M1 geometry and M2 topology/primitives also have implemented
-  alpha slices. `insphere`, the broader topological-decision audit, and full
-  conformance remain ahead.
+  alpha slices. Strict first-chart SSI polygon convexity is the first audited
+  exact decision consumer: it accepts only at least three finite vertices with
+  `orient2d(...) == Orientation::Positive` at every turn, so exact collinear
+  and all other nonpositive turns fail closed. `insphere`, oblique-extrusion
+  and polygon-shoelace sign migrations, the broader topological-decision audit,
+  and full conformance remain ahead; this is not a general polygon-orientation
+  primitive.
 - M2.5 is in progress and remains the architecture gate. Transaction-owned checked
   topology, pcurve-aware Euler edits, deterministic journals, tolerance provenance,
   bounded operation contexts, `Fast`/`Full` checking, adaptive face-domain proofs, and

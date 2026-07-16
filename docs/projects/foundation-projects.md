@@ -43,8 +43,20 @@ all six defining-point permutations, exact and one-unit near-cocircular
 fixtures proven to force the fallback, degenerate/non-finite behavior, and the
 cross-platform numeric golden pin the contract. This closes the named
 `incircle` debt. `insphere` remains deferred until a 3D Delaunay or equivalent
-consumer needs it, and the repository-wide audit for uncertified topological
-sign decisions remains open.
+consumer needs it.
+
+The first bounded consumer migration in the repository-wide decision audit is
+also landed: SSI region consolidation now treats a polygon as strictly convex
+in its first parameter chart only when it has at least three vertices, all
+first-chart coordinates are finite, and every consecutive
+`orient2d(a, b, c)` result is exactly `Orientation::Positive`. Exact collinear
+or otherwise nonpositive turns fail closed. The public consolidation fixture
+uses integer coordinates near `2^52` whose first exact determinant is `+1`
+while the former floating cross product rounds to zero, then proves identical
+canonical output for repetition, rotation, and reversal. This does not expose
+or claim a general polygon-orientation primitive. The broader audit remains
+open, with oblique-extrusion direction and polygon-shoelace orientation signs
+still explicit debt.
 
 ## Current direction and handoff order
 
