@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, deterministic checked complete-body rigid copy with direct/safe-offset PlaneLine and PlaneSphereCircle certificate reissuance plus every current operation-generated VerifiedNurbsIntersection family including one- through four-level compatible dual offsets, polynomial/rational traces, and oblique frames, checked polygonal-profile extrusion, failure-atomic operation-owned facade tolerance batching, journaled MEF inheritance and KEF ordered-max face-tolerance propagation, an evidence-bearing opt-in Full-assurance commit gate, K5 adoption, and facade body tessellation implemented; transmitted proof reissuance, broader K4 edits, and partition history remain
+Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, deterministic checked complete-body rigid copy with direct/safe-offset PlaneLine and PlaneSphereCircle certificate reissuance plus every current operation-generated VerifiedNurbsIntersection family including one- through four-level compatible dual offsets, polynomial/rational traces, and oblique frames, checked polygonal-profile extrusion, failure-atomic operation-owned facade tolerance batching, journaled MEF inheritance and KEF ordered-max face-tolerance propagation, an evidence-bearing opt-in Full-assurance commit gate, K5 adoption, and facade body tessellation implemented; rigid copy also reissues the bounded transmitted Plane/Plane, direct Plane/NURBS, direct NURBS/NURBS, and direct one-descriptor Offset(NURBS)/NURBS families named below; periodic, dual-offset, and Offset(NURBS)/Plane transmitted proofs, broader K4 edits, and partition history remain
 
 ## Outcome
 
@@ -915,15 +915,23 @@ operand order, with polynomial or rational traces and oblique frames. Copy
 transforms the carrier and both original analytic/NURBS trace fields, preserves
 range, degree, knots, weights, periodicity, paired NURBS pcurves, and tolerance,
 copies every ordered live root and transitive offset basis, and reruns the
-whole-range family certifier before insertion. Wrong-part, transmitted,
-nonpositive/nonfinite effective-sphere, and unsupported proof families are
-rejected before scope creation, with unsupported proof families exposed as a
-stable Unsupported capability. Altered, stale, or overdeep source bindings
-fail atomically during graph binding or persistence. Lower
+whole-range family certifier before insertion. Facade preflight now also admits
+transmitted Plane/Plane charts whose ordered roots are direct or safe nested
+exact-plane fields, direct Plane/NURBS in both orders, direct NURBS/NURBS, and
+direct one-descriptor Offset(NURBS)/NURBS in both orders. The lower copy
+transaction transforms the carrier and traces, copies paired pcurves and
+ordered roots, preserves chart metadata and tolerance, and reruns the public
+original-source certifier before insertion. Wrong-part, periodic, dual-offset,
+Offset(NURBS)/Plane transmitted, nonpositive/nonfinite effective-sphere, and
+other unsupported proof families are rejected before scope creation, with
+unsupported proof families exposed as a stable Unsupported capability.
+Altered, stale, or overdeep source bindings fail atomically during graph
+binding or persistence. Lower
 transaction tests pin Full validity, ownership disjointness, holed-sheet area,
 rollback cleanliness, and future-identity reuse.
-Transmitted proof reissuance, attributes, and non-rigid transform families
-remain explicit follow-on work.
+Broader transmitted proof reissuance remains explicit follow-on work.
+Attributes cannot join copy until an authorable storage contract exists;
+non-rigid transform families also remain explicit follow-on work.
 
 `PartEdit::extrude_profile` adds the first facade feature-creation operation.
 Its typed request accepts one validated polygonal outer boundary, zero or more

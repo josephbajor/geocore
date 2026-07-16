@@ -1144,11 +1144,14 @@ true only for an empty complete result.
   boundaries; one, two, three, or four offset descriptors use exact 2/depth-2,
   3/depth-3, 4/depth-4, or 5/depth-5 graph traversal with matching N/N-1
   admission.
-  The first varying-normal operation-generated arm accepts exactly one offset
+  The first varying-normal operation-generated arm accepts one offset
   descriptor over an exact rational quarter-cylinder extrusion and either a
   canonical bilinear planar direct-NURBS peer, direct analytic Plane, or one
   safe Offset(Plane) descriptor over a direct Plane basis normal to the global
-  X, Y, or Z axis. An original-derivative interval
+  X, Y, or Z axis. The direct analytic Plane arm alone also accepts exactly two
+  offset descriptors, retains their outer-to-inner signed distances, and
+  proves every intermediate cylinder radius positive. An original-derivative
+  interval
   enclosure proves a nonzero normal over the complete positive operand window
   before the true rational parallel surface guides discovery; orientation-
   selected original control intervals, radially scaled only for X/Y, alone own
@@ -1159,14 +1162,19 @@ true only for an empty complete result.
   41-control horizontal quarter-circle chordal carrier. Analytic-Plane X/Y
   peers instead pin combined 7,177/7,176 Work and 1,024/1,023 Items; their
   40-span Z-normal peer pins 286,768/286,767 Work and 40,960/40,959 Items. All
-  orientations retain 10/9 certificate Depth. Direct peers pin
-  2/1 graph Work; an Offset(Plane) peer pins 4/3 graph Work and 2/1 dependency
+  orientations retain 10/9 certificate Depth and the two-descriptor arm keeps
+  the same certificate Work/Items budgets. Direct one-descriptor peers pin
+  2/1 graph Work; the two-descriptor direct-Plane arm consumes exact graph
+  Work/depth 3 with 3/2 N/N-1 admission; an Offset(Plane) peer pins 4/3 graph
+  Work and 2/1 dependency
   Depth because both live roots traverse their direct bases. The paired trace
   retains the live NURBS root, original basis, peer root and direct Plane basis
-  when present, and both pcurves. Singular or inconclusive
-  normal fields, nested
-  varying-normal roots, incompatible peers, and stale or altered sources fail
-  closed and persist nothing.
+  when present, and both pcurves. The derived rational effective sheet is
+  discovery-only, and persistence rejects an altered two-distance sequence even when its
+  sum is unchanged. Singular or inconclusive normal fields, varying-normal
+  roots of depth three or more, two-descriptor peers other than direct analytic
+  Plane, incompatible peers, and stale or altered sources fail closed and
+  persist nothing.
   Two independent one- through four-descriptor Offset(NURBS) roots now share a
   compatible planar constant-normal unit-chart arm. Intersecting pairs cover
   the complete 4×4 chain matrix, retain both ordered live roots, both transitive
@@ -1182,7 +1190,8 @@ true only for an empty complete result.
   unequal weights,
   collapsed or non-finite sphere-offset fields, positive
   Offset(NURBS)/direct-NURBS chains of five or more offset descriptors,
-  other varying-normal Offset(NURBS) families, nested varying-normal roots,
+  other varying-normal Offset(NURBS) families, varying-normal roots of depth
+  three or more, two-descriptor peers outside direct analytic Plane,
   incompatible, coincident, five-or-more-descriptor, altered, or stale dual
   Offset(NURBS), broader NURBS/NURBS, and
   other procedural pairs remain typed unsupported.
@@ -1282,8 +1291,9 @@ true only for an empty complete result.
   with four certified-empty siblings, an exact same-column vertical pair with
   the other four siblings certified empty, or the exact
   full three-child row in either latitude row with all three opposite-row
-  siblings certified empty, or one exact mixed-axis three-cell L path with the
-  other three siblings certified empty. The two reviewed L orientations are
+  siblings certified empty, one exact mixed-axis three-cell L path with the
+  other three siblings certified empty, or any exact four-positive grid path
+  with the other two siblings certified empty. The two reviewed L orientations are
   the cap-right `[0,2]`/`[1,1]`/`[1,2]` path and the lower-middle
   `[0,1]`/`[0,2]`/`[1,1]` path.
   The single-child path excludes every
@@ -1306,12 +1316,19 @@ true only for an empty complete result.
   after the empty cap row excludes the latitude seam. Each mixed-axis L path
   cancels exactly one reverse-oriented longitude seam and one
   reverse-oriented latitude seam, rejects a surviving used seam or an unused
-  longitude seam, and restores one parent region. All eight layouts pin exact
-  repeat/swap and outward residual evidence,
+  longitude seam, and restores one parent region. The generic four-positive
+  arm admits a three-edge path with exactly two longitude and one latitude
+  adjacency, backtracks only across exact association orders, and cancels all
+  three artificial seams. Its real cap-row-right
+  `[0,2]`/`[1,0]`/`[1,1]`/`[1,2]` and zigzag
+  `[0,1]`/`[0,2]`/`[1,0]`/`[1,1]` fixtures pin repeat/swap; one-ULP seam
+  mutation, duplicate-edge ambiguity, and a four-cell cycle fail closed. All
+  admitted layouts pin exact repeat/swap and outward residual evidence,
   while the arm retains exact 6/5 piece, 147/146 pair, and 588/587 arc
   admission. A one-ULP shared-edge mutation and broader or non-adjacent layouts
-  outside the admitted exact same-row, same-column, full-row, and mixed-axis
-  three-cell-path families remain fail-closed. A first wide arm splits exactly
+  outside the admitted exact same-row, same-column, full-row, mixed-axis three-
+  cell-path, and four-positive path families remain fail-closed. A first wide
+  arm splits exactly
   one pole-clear wide operand into
   three closed sub-π cells and returns `Complete` only for three certified-empty
   cells or one positive region with two certified-empty siblings; sibling
@@ -1440,10 +1457,17 @@ true only for an empty complete result.
   ordered roots and every transitive basis, transforms the carrier and both
   original analytic/NURBS proof fields, preserves range, degree, knots,
   weights, periodicity, paired pcurves and tolerance, and reissues the
-  whole-range family certificate before insertion. Nonpositive/nonfinite
-  effective spheres, transmitted intersections, and unsupported proof families
-  remain typed unsupported before scope creation. Extend this seam to
-  transmitted certified curves, attributes, and non-rigid transform families.
+  whole-range family certificate before insertion. The transmitted tranche
+  reissues Plane/Plane charts over direct or safe nested exact-plane roots,
+  direct Plane/NURBS in both orders, direct NURBS/NURBS, and direct one-
+  descriptor Offset(NURBS)/NURBS in both orders. It retains transformed
+  carriers/traces, copied paired pcurves, chart metadata, tolerance, ordered
+  roots, and their admitted transitive dependencies. Periodic, dual-offset,
+  and Offset(NURBS)/Plane transmitted families remain typed unsupported, as do
+  nonpositive/nonfinite effective spheres and other unsupported proofs.
+  Attributes remain blocked because no authorable storage contract exists;
+  non-rigid transform families also remain. Extend this seam only after those
+  explicit contracts land.
 - The first checked extrusion slice is implemented for one validated polygonal
   profile with holes along any finite translation having a nonzero component
   on the profile-frame normal. A reverse translation reflects the profile chart

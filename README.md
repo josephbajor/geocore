@@ -84,13 +84,18 @@ application boundary.
   Work-bounded polishing, exact algebraic seed/overlap certificates, selected paired
   pcurves, a first exact varying-normal Offset(NURBS) arm with global-X-,
   global-Y-, and global-Z-normal planar-NURBS, analytic-Plane, or one-descriptor
-  safe-Offset(Plane) peers, and bounded coincident
+  safe-Offset(Plane) peers, plus exactly two rational-quarter-cylinder offset
+  descriptors against direct global-axis analytic Planes only, and bounded
+  coincident
   Plane/Cylinder/Sphere/Cone/Torus regions including exact polar-cap and
   same-row adjacent, exact same-column vertical (reviewed at
   `[0,2]`/`[1,2]`), either exact full latitude row, and an exact mixed-axis
-  three-cell L path in two real orientations in the polar-by-wide family have
-  landed; the non-cap row retains eight vertices and every six-cell layout
-  keeps the exact 6/147/588 piece/pair/arc ceiling. Compatible intersecting
+  three-cell L path in two real orientations and the generic exact four-
+  positive shared-seam path family in two real orientations in the polar-by-
+  wide family have landed. Four-positive paths cancel all three artificial
+  seams and retain repeat/swap plus one-ULP and ambiguity rejection evidence;
+  the non-cap row retains eight vertices and every six-cell layout keeps the
+  exact 6/147/588 piece/pair/arc ceiling. Compatible intersecting
   planar constant-normal dual Offset(NURBS) chains now cover the full 1–4×1–4
   matrix with original-source proof at exact 14,336/1,024/depth-10 certificate
   use and maximum 10 Work/depth-5 graph traversal; the strict-separated
@@ -104,7 +109,14 @@ application boundary.
   polygonal-profile extrusion are the first M4 modeling consumers. Rigid copy
   now reissues every current operation-generated verified-NURBS intersection
   family, including one- through four-level nested dual offsets and oblique
-  frames. Transmitted proofs, attributes, and non-rigid transforms remain.
+  frames. Its first transmitted tranche covers Plane/Plane over direct or safe
+  nested exact-plane roots, direct Plane/NURBS in both orders, direct
+  NURBS/NURBS, and direct one-descriptor Offset(NURBS)/NURBS in both orders,
+  retaining chart metadata, tolerance, copied pcurves, and ordered roots.
+  Periodic, dual-offset, and Offset(NURBS)/Plane transmitted proofs remain
+  unsupported;
+  attributes are blocked on an authorable storage contract, and non-rigid
+  transforms remain.
   General root discovery, complete verified residuals across every result family, and
   boolean-ready paired-pcurve branches remain gated.
 - M5-M8 are not started: there are no end-to-end booleans, general sweeps/sewing,
