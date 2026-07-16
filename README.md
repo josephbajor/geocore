@@ -67,6 +67,16 @@ application boundary.
   Its integer-source adversary has normal dot `+3` while the former normalized
   `translation.dot(frame.z())` rounds to zero; both directions now construct
   deterministically, while ordinary oblique extrusion remains Full-valid.
+  Coincident bounded Plane/Plane window construction now also uses exact
+  `orient2d` in both monotone hull chains: only exact `Positive` turns are
+  retained, while `Zero` and `Negative` turns pop. A private production-helper
+  fixture near `2^52` has exact `i128` determinant `+1` where the former rounded
+  turn is zero, and pins middle-vertex retention, repeat, input
+  rotation/reversal, and exact-collinear removal. Rectangle-overlap boundaries
+  draw consecutive directions from two axis pairs, so that cancellation triple
+  cannot be encoded as consecutive exact public window edges; the public seam
+  instead pins an eight-vertex `Complete` Region, cyclic exact-positive turns,
+  repeatability, operand-swap semantic parity, and non-finite range rejection.
   `kgeom` trim cleaning plus `TrimmedSurface` outer/hole winding now consume the
   streaming exact sign without allocating a coordinate copy; rounded
   `TrimLoop::signed_area` is reporting only. `kops` polygonal-region
@@ -78,8 +88,12 @@ application boundary.
   `face_case_a` now requires exactly one exact-positive outer loop; exact-zero
   and non-finite loops fail closed before the existing periodic anchoring and
   outer-first ordering. Its `2^52`-translated unit-square adversary also has
-  exact doubled area `+2` while naive shoelace summation is zero. `insphere`,
-  the broader topological-decision audit, and full conformance remain ahead.
+  exact doubled area `+2` while naive shoelace summation is zero. Remaining
+  concrete decision-audit debt includes checker sampled-loop winding and
+  outer-loop selection, conic discriminant root-count classification,
+  NURBS-plane sign certification, and other raw topological sign branches.
+  `insphere`, an `incircle` production decision consumer when required, the
+  broader topological-decision audit, and full conformance remain ahead.
 - M2.5 is in progress and remains the architecture gate. Transaction-owned checked
   topology, pcurve-aware Euler edits, deterministic journals, tolerance provenance,
   bounded operation contexts, `Fast`/`Full` checking, adaptive face-domain proofs, and

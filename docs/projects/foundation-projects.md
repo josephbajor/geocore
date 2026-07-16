@@ -101,6 +101,27 @@ deterministically and ordinary oblique fixtures remain Full-valid. These
 bounded migrations do not close the repository-wide decision audit; the
 broader topological-decision audit remains open.
 
+Coincident bounded Plane/Plane window construction is also migrated. Its lower
+and upper monotone hull chains retain only an exact
+`orient2d(...) == Orientation::Positive` turn; exact `Zero` and `Negative`
+turns pop. The direct private production-helper fixture uses integer coordinates
+near `2^52` with exact `i128` determinant `+1` where the legacy floating turn is
+zero, retains the middle vertex under repeat, input rotation, and reversal, and
+removes an exactly collinear middle vertex. The exact cancellation triple is
+structurally unavailable as consecutive public overlap edges because two
+rectangle boundaries contribute only two axis pairs, with same-frame
+directions perpendicular. The public seam instead pins an ordinary
+eight-vertex coincident overlap as a `Complete` Region with cyclic
+exact-positive turns, repeatability, operand-swap semantic parity, and
+non-finite range rejection.
+
+Concrete next targets include
+checker sampled-loop winding and outer-loop selection, conic discriminant
+root-count classification, NURBS-plane control-distance and bracketing sign
+certification, and other raw topology-changing sign branches. `incircle`
+remains without a production topology decision consumer, and `insphere`
+remains deferred until a 3D Delaunay or equivalent consumer exists.
+
 ## Current direction and handoff order
 
 The foundation has enough vertical proof. The current phase prioritizes
