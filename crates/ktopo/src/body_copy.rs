@@ -1108,40 +1108,22 @@ fn transmitted_nurbs_intersection_sources_are_rigid_copy_supported(
     {
         return Ok(true);
     }
-    if matches!(
-        certificate.traces(),
-        [
-            kgraph::NurbsIntersectionTrace::OffsetNurbs(_),
-            kgraph::NurbsIntersectionTrace::OffsetNurbs(_)
-        ]
-    ) {
-        if source_surfaces[0] == source_surfaces[1] {
-            return Ok(false);
-        }
-        let Some(first) = store.get(source_surfaces[0])?.as_offset().copied() else {
-            return Ok(false);
-        };
-        let Some(second) = store.get(source_surfaces[1])?.as_offset().copied() else {
-            return Ok(false);
-        };
-        if first.basis() == second.basis() {
-            return Ok(false);
-        }
-    }
-    for (source, trace) in source_surfaces.into_iter().zip(certificate.traces()) {
+    let mut terminal_offset_bases = [None; 2];
+    for (index, (source, trace)) in source_surfaces
+        .into_iter()
+        .zip(certificate.traces())
+        .enumerate()
+    {
         let source = store.get(source)?;
         let matches = match trace {
             kgraph::NurbsIntersectionTrace::OffsetNurbs(offset) => {
-                let distances = offset.descriptor_signed_distances();
-                let Some(descriptor) = source.as_offset().copied() else {
+                let Some(terminal) =
+                    matched_offset_nurbs_terminal(store, source_surfaces[index], offset)?
+                else {
                     return Ok(false);
                 };
-                distances.len() == 1
-                    && descriptor.signed_distance() == distances[0]
-                    && store
-                        .get(descriptor.basis())?
-                        .as_nurbs()
-                        .is_some_and(|basis| basis == offset.basis())
+                terminal_offset_bases[index] = Some(terminal);
+                true
             }
             kgraph::NurbsIntersectionTrace::Plane(plane) => {
                 source.as_plane().is_some_and(|actual| actual == plane)
@@ -1155,5 +1137,30 @@ fn transmitted_nurbs_intersection_sources_are_rigid_copy_supported(
             return Ok(false);
         }
     }
-    Ok(true)
+    Ok(match terminal_offset_bases {
+        [Some(first), Some(second)] => source_surfaces[0] != source_surfaces[1] && first != second,
+        _ => true,
+    })
+}
+
+fn matched_offset_nurbs_terminal(
+    store: &Store,
+    source: SurfaceId,
+    trace: &TransmittedOffsetNurbsTrace,
+) -> Result<Option<SurfaceId>> {
+    let mut current = source;
+    for &expected in trace.descriptor_signed_distances() {
+        let Some(descriptor) = store.get(current)?.as_offset().copied() else {
+            return Ok(None);
+        };
+        if descriptor.signed_distance().to_bits() != expected.to_bits() {
+            return Ok(None);
+        }
+        current = descriptor.basis();
+    }
+    Ok(store
+        .get(current)?
+        .as_nurbs()
+        .is_some_and(|basis| basis == trace.basis())
+        .then_some(current))
 }

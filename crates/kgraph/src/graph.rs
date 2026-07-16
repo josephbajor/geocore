@@ -1196,6 +1196,13 @@ fn validate_curve_references(
     }
     if let Some(intersection) = descriptor.as_transmitted_nurbs_intersection() {
         let certificate = intersection.certificate();
+        let binds_exact_dual_offset_chain = matches!(
+            certificate.traces(),
+            [
+                TransmittedNurbsIntersectionTrace::OffsetNurbs(_),
+                TransmittedNurbsIntersectionTrace::OffsetNurbs(_)
+            ]
+        );
         for (source, certified) in intersection
             .source_surfaces()
             .into_iter()
@@ -1226,12 +1233,16 @@ fn validate_curve_references(
                             "transmitted offset-NURBS source is not an offset descriptor",
                         ));
                     };
-                    offset.signed_distance() == certified.signed_distance()
-                        && graph
-                            .surface(offset.basis())
-                            .ok_or_else(|| stale(GeometryRef::Surface(offset.basis())))?
-                            .as_nurbs()
-                            == Some(certified.basis())
+                    if binds_exact_dual_offset_chain {
+                        transmitted_offset_nurbs_trace_matches(graph, source, certified)?
+                    } else {
+                        offset.signed_distance() == certified.signed_distance()
+                            && graph
+                                .surface(offset.basis())
+                                .ok_or_else(|| stale(GeometryRef::Surface(offset.basis())))?
+                                .as_nurbs()
+                                == Some(certified.basis())
+                    }
                 }
                 TransmittedNurbsIntersectionTrace::OffsetPlane(_) => false,
             };
@@ -1256,6 +1267,35 @@ fn validate_curve_references(
         }
     }
     Ok(())
+}
+
+fn transmitted_offset_nurbs_trace_matches(
+    graph: &GeometryGraph,
+    root: SurfaceHandle,
+    certified: &TransmittedOffsetNurbsTrace,
+) -> GeometryGraphResult<bool> {
+    let mut current = root;
+    for &expected in certified.descriptor_signed_distances() {
+        let geometry = GeometryRef::Surface(current);
+        let Some(offset) = graph
+            .surface(current)
+            .ok_or_else(|| stale(geometry))?
+            .as_offset()
+            .copied()
+        else {
+            return Ok(false);
+        };
+        if offset.signed_distance().to_bits() != expected.to_bits() {
+            return Ok(false);
+        }
+        current = offset.basis();
+    }
+    let geometry = GeometryRef::Surface(current);
+    Ok(graph
+        .surface(current)
+        .ok_or_else(|| stale(geometry))?
+        .as_nurbs()
+        == Some(certified.basis()))
 }
 
 fn exact_surface_field(

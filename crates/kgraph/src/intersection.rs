@@ -1020,7 +1020,8 @@ impl TransmittedNurbsIntersectionCertificate {
 /// witnessed three-sample quadratic and four-sample cubic dual-offset charts,
 /// are admitted; periodic and every other dual-offset family remain outside
 /// this copy tranche. Admitted Offset(NURBS) traces retain exactly one
-/// descriptor; nested roots remain unsupported.
+/// descriptor except that the two-sample family admits one through four exact
+/// ordered descriptors per root.
 pub fn transmitted_nurbs_intersection_has_rigid_copy_recertifier(
     certificate: &TransmittedNurbsIntersectionCertificate,
 ) -> bool {
@@ -1072,6 +1073,8 @@ pub fn transmitted_nurbs_intersection_has_rigid_copy_recertifier(
                             && pcurve.param_range() == certificate.carrier_range
                     })
             };
+            let two_sample_shape =
+                canonical_shape(1, 2, ParamRange::new(0.0, 1.0), &[0.0, 0.0, 1.0, 1.0]);
             let supported_shape =
                 match (certificate.quadratic_witnesses, certificate.cubic_witnesses) {
                     (Some(_), None) => canonical_shape(
@@ -1087,7 +1090,7 @@ pub fn transmitted_nurbs_intersection_has_rigid_copy_recertifier(
                         &[0.0, 0.0, 0.0, 0.0, 3.0, 3.0, 3.0, 3.0],
                     ),
                     (None, None) => {
-                        canonical_shape(1, 2, ParamRange::new(0.0, 1.0), &[0.0, 0.0, 1.0, 1.0])
+                        two_sample_shape
                             || canonical_shape(
                                 1,
                                 5,
@@ -1103,8 +1106,14 @@ pub fn transmitted_nurbs_intersection_has_rigid_copy_recertifier(
                     }
                     (Some(_), Some(_)) => false,
                 };
-            first.descriptor_signed_distances().len() == 1
-                && second.descriptor_signed_distances().len() == 1
+            let descriptor_counts_supported = if two_sample_shape {
+                (1..=4).contains(&first.descriptor_signed_distances().len())
+                    && (1..=4).contains(&second.descriptor_signed_distances().len())
+            } else {
+                first.descriptor_signed_distances().len() == 1
+                    && second.descriptor_signed_distances().len() == 1
+            };
+            descriptor_counts_supported
                 && first.basis().periodicity() == [None, None]
                 && second.basis().periodicity() == [None, None]
                 && supported_shape

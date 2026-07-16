@@ -437,11 +437,11 @@ fn transmitted_two_sample_dual_offset_line_is_narrow_and_original_source_backed(
     .unwrap();
     let traces = [
         TransmittedPlaneNurbsTrace::OffsetNurbs(TransmittedOffsetNurbsTrace::new(
-            first_basis,
+            first_basis.clone(),
             0.25,
         )),
         TransmittedPlaneNurbsTrace::OffsetNurbs(TransmittedOffsetNurbsTrace::new(
-            second_basis,
+            second_basis.clone(),
             0.5,
         )),
     ];
@@ -463,6 +463,141 @@ fn transmitted_two_sample_dual_offset_line_is_narrow_and_original_source_backed(
             .residual_bounds()
             .into_iter()
             .all(|bound| bound <= 1.0e-8)
+    );
+    let first_sequences = [
+        vec![0.25],
+        vec![0.1, 0.15],
+        vec![0.05, 0.075, 0.125],
+        vec![0.025, 0.05, 0.075, 0.1],
+    ];
+    let second_sequences = [
+        vec![0.5],
+        vec![0.2, 0.3],
+        vec![0.1, 0.15, 0.25],
+        vec![0.05, 0.1, 0.15, 0.2],
+    ];
+    for first in &first_sequences {
+        for second in &second_sequences {
+            let certificate =
+                certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals(
+                    carrier.clone(),
+                    [
+                        TransmittedPlaneNurbsTrace::OffsetNurbs(
+                            TransmittedOffsetNurbsTrace::from_descriptor_signed_distances(
+                                first_basis.clone(),
+                                first,
+                            )
+                            .unwrap(),
+                        ),
+                        TransmittedPlaneNurbsTrace::OffsetNurbs(
+                            TransmittedOffsetNurbsTrace::from_descriptor_signed_distances(
+                                second_basis.clone(),
+                                second,
+                            )
+                            .unwrap(),
+                        ),
+                    ],
+                    pcurves.clone(),
+                    metadata,
+                    1.0e-8,
+                )
+                .unwrap();
+            assert!(transmitted_nurbs_intersection_has_rigid_copy_recertifier(
+                &certificate
+            ));
+        }
+    }
+
+    let retained_first = &first_sequences[3];
+    let retained_second = &second_sequences[2];
+    let nested_certificate =
+        certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals(
+            carrier.clone(),
+            [
+                TransmittedPlaneNurbsTrace::OffsetNurbs(
+                    TransmittedOffsetNurbsTrace::from_descriptor_signed_distances(
+                        first_basis.clone(),
+                        retained_first,
+                    )
+                    .unwrap(),
+                ),
+                TransmittedPlaneNurbsTrace::OffsetNurbs(
+                    TransmittedOffsetNurbsTrace::from_descriptor_signed_distances(
+                        second_basis.clone(),
+                        retained_second,
+                    )
+                    .unwrap(),
+                ),
+            ],
+            pcurves.clone(),
+            metadata,
+            1.0e-8,
+        )
+        .unwrap();
+    let mut graph = GeometryGraph::new();
+    let first_basis_handle = graph.insert_surface(first_basis.clone()).unwrap();
+    let second_basis_handle = graph.insert_surface(second_basis.clone()).unwrap();
+    let insert_chain = |graph: &mut GeometryGraph, basis, distances: &[f64]| {
+        distances.iter().rev().fold(basis, |basis, &distance| {
+            graph
+                .insert_surface(OffsetSurfaceDescriptor::new(basis, distance))
+                .unwrap()
+        })
+    };
+    let first_root = insert_chain(&mut graph, first_basis_handle, retained_first);
+    let second_root = insert_chain(&mut graph, second_basis_handle, retained_second);
+    let altered_root = insert_chain(&mut graph, first_basis_handle, &[0.05, 0.025, 0.075, 0.1]);
+    let extra_root = insert_chain(
+        &mut graph,
+        first_basis_handle,
+        &[0.025, 0.05, 0.075, 0.1, 0.0],
+    );
+    let missing_root = insert_chain(&mut graph, first_basis_handle, &[0.025, 0.05, 0.075]);
+    let stale_root = insert_chain(&mut graph, first_basis_handle, retained_first);
+    graph.remove_surface(stale_root).unwrap();
+    let pcurve_handles = [
+        graph.insert_curve2d(pcurves[0].clone()).unwrap(),
+        graph.insert_curve2d(pcurves[1].clone()).unwrap(),
+    ];
+    let curve_count = graph.curve_count();
+    // Exact dual-chain persistence rejects same-total reordered, extra,
+    // missing, and stale roots before topology or the facade can observe an
+    // invalid graph. Copy-preflight rollback tests therefore cover only
+    // graph-valid unsupported families and source relationships.
+    for roots in [
+        [altered_root, second_root],
+        [extra_root, second_root],
+        [missing_root, second_root],
+        [stale_root, second_root],
+    ] {
+        assert!(
+            graph
+                .insert_verified_transmitted_nurbs_intersection_curve(
+                    roots,
+                    pcurve_handles,
+                    nested_certificate.clone(),
+                )
+                .is_err()
+        );
+        assert_eq!(graph.curve_count(), curve_count);
+    }
+    let nested_curve = graph
+        .insert_verified_transmitted_nurbs_intersection_curve(
+            [first_root, second_root],
+            pcurve_handles,
+            nested_certificate,
+        )
+        .unwrap();
+    assert_eq!(
+        graph
+            .direct_dependencies(GeometryRef::Curve(nested_curve))
+            .unwrap(),
+        vec![
+            GeometryRef::Surface(first_root),
+            GeometryRef::Surface(second_root),
+            GeometryRef::Curve2d(pcurve_handles[0]),
+            GeometryRef::Curve2d(pcurve_handles[1]),
+        ]
     );
 
     let duplicate_carrier =

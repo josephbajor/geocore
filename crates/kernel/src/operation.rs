@@ -1532,40 +1532,22 @@ fn transmitted_nurbs_intersection_sources_are_rigid_copy_supported(
     {
         return Ok(true);
     }
-    if matches!(
-        certificate.traces(),
-        [
-            kgraph::NurbsIntersectionTrace::OffsetNurbs(_),
-            kgraph::NurbsIntersectionTrace::OffsetNurbs(_)
-        ]
-    ) {
-        if source_surfaces[0] == source_surfaces[1] {
-            return Ok(false);
-        }
-        let Some(first) = store.get(source_surfaces[0])?.as_offset().copied() else {
-            return Ok(false);
-        };
-        let Some(second) = store.get(source_surfaces[1])?.as_offset().copied() else {
-            return Ok(false);
-        };
-        if first.basis() == second.basis() {
-            return Ok(false);
-        }
-    }
-    for (source, trace) in source_surfaces.into_iter().zip(certificate.traces()) {
+    let mut terminal_offset_bases = [None; 2];
+    for (index, (source, trace)) in source_surfaces
+        .into_iter()
+        .zip(certificate.traces())
+        .enumerate()
+    {
         let source = store.get(source)?;
         let matches = match trace {
             kgraph::NurbsIntersectionTrace::OffsetNurbs(offset) => {
-                let distances = offset.descriptor_signed_distances();
-                let Some(descriptor) = source.as_offset().copied() else {
+                let Some(terminal) =
+                    matched_offset_nurbs_terminal(store, source_surfaces[index], offset)?
+                else {
                     return Ok(false);
                 };
-                distances.len() == 1
-                    && descriptor.signed_distance() == distances[0]
-                    && store
-                        .get(descriptor.basis())?
-                        .as_nurbs()
-                        .is_some_and(|basis| basis == offset.basis())
+                terminal_offset_bases[index] = Some(terminal);
+                true
             }
             kgraph::NurbsIntersectionTrace::Plane(plane) => {
                 source.as_plane().is_some_and(|actual| actual == plane)
@@ -1579,7 +1561,32 @@ fn transmitted_nurbs_intersection_sources_are_rigid_copy_supported(
             return Ok(false);
         }
     }
-    Ok(true)
+    Ok(match terminal_offset_bases {
+        [Some(first), Some(second)] => source_surfaces[0] != source_surfaces[1] && first != second,
+        _ => true,
+    })
+}
+
+fn matched_offset_nurbs_terminal(
+    store: &ktopo::store::Store,
+    source: ktopo::entity::SurfaceId,
+    trace: &kgraph::TransmittedOffsetNurbsTrace,
+) -> kcore::error::Result<Option<ktopo::entity::SurfaceId>> {
+    let mut current = source;
+    for &expected in trace.descriptor_signed_distances() {
+        let Some(descriptor) = store.get(current)?.as_offset().copied() else {
+            return Ok(None);
+        };
+        if descriptor.signed_distance().to_bits() != expected.to_bits() {
+            return Ok(None);
+        }
+        current = descriptor.basis();
+    }
+    Ok(store
+        .get(current)?
+        .as_nurbs()
+        .is_some_and(|basis| basis == trace.basis())
+        .then_some(current))
 }
 
 impl Part<'_> {
@@ -2217,7 +2224,7 @@ mod tests {
         };
         let mut surfaces = [first_basis_root, second_basis_root];
         for index in 0..2 {
-            for &distance in source_distances[index] {
+            for &distance in source_distances[index].iter().rev() {
                 surfaces[index] = store
                     .insert_surface(SurfaceGeom::Offset(OffsetSurfaceDescriptor::new(
                         surfaces[index],
@@ -3291,6 +3298,84 @@ mod tests {
     }
 
     #[test]
+    fn rigid_body_copy_facade_reissues_nested_two_sample_dual_offset() {
+        let placement = Frame::new(
+            Point3::new(2.0, -1.0, 3.0),
+            Vec3::new(1.0, 2.0, 3.0).normalized().unwrap(),
+            Vec3::new(2.0, -1.0, 0.0).normalized().unwrap(),
+        )
+        .unwrap();
+        let first = [0.025, 0.05, 0.075, 0.1];
+        let second = [0.1, 0.15, 0.25];
+        let mut copied_certificates = Vec::new();
+        for swap_order in [false, true] {
+            let mut session = Kernel::new().create_session();
+            let part_id = session.create_part();
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let (raw_source, _) = transmitted_dual_offset_wire(
+                &mut edit.state.store,
+                [&first, &second],
+                [&first, &second],
+                false,
+                false,
+                2,
+                swap_order,
+            );
+            let source = BodyId::new(part_id, raw_source);
+            let created = edit
+                .copy_body_rigid(CopyBodyRequest::new(source, placement))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            let copied_edge = edit
+                .state
+                .store
+                .edges_of_body(created.body().raw())
+                .unwrap()[0];
+            let copied_curve = edit.state.store.get(copied_edge).unwrap().curve.unwrap();
+            let copied = edit
+                .state
+                .store
+                .get(copied_curve)
+                .unwrap()
+                .as_transmitted_nurbs_intersection()
+                .unwrap();
+            let certificate = copied.certificate().clone();
+            assert_eq!(
+                certificate.traces().each_ref().map(|trace| {
+                    trace
+                        .as_offset_nurbs()
+                        .unwrap()
+                        .descriptor_signed_distances()
+                        .len()
+                }),
+                if swap_order { [3, 4] } else { [4, 3] }
+            );
+            assert_eq!(
+                certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals(
+                    certificate.carrier().clone(),
+                    certificate.traces().clone(),
+                    certificate.pcurves().clone(),
+                    certificate.metadata(),
+                    certificate.tolerance(),
+                )
+                .unwrap(),
+                certificate
+            );
+            edit.state.store.geometry().validate().unwrap();
+            copied_certificates.push(certificate);
+        }
+        assert_eq!(
+            copied_certificates[0].traces()[0],
+            copied_certificates[1].traces()[1]
+        );
+        assert_eq!(
+            copied_certificates[0].traces()[1],
+            copied_certificates[1].traces()[0]
+        );
+    }
+
+    #[test]
     fn rigid_body_copy_facade_reissues_witnessed_quadratic_dual_offset() {
         let placement = Frame::new(
             Point3::new(2.0, -1.0, 3.0),
@@ -3694,35 +3779,116 @@ mod tests {
         let first_split = [0.125, 0.125];
         let second = [0.5];
         let shared_second = [0.25];
-        for (trace_distances, shared_basis, periodic_first, sample_count) in [
-            ((&first_split[..], &second[..]), false, false, 2),
-            ((&first_split[..], &second[..]), false, false, 3),
-            ((&first_split[..], &second[..]), false, false, 4),
-            ((&first[..], &shared_second[..]), true, false, 2),
-            ((&first[..], &shared_second[..]), true, false, 3),
-            ((&first[..], &shared_second[..]), true, false, 4),
-            ((&first_split[..], &second[..]), false, false, 5),
-            ((&first[..], &shared_second[..]), true, false, 5),
-            ((&first[..], &second[..]), false, true, 5),
-            ((&first_split[..], &second[..]), false, false, 7),
-            ((&first[..], &shared_second[..]), true, false, 7),
-            ((&first[..], &second[..]), false, true, 7),
-            ((&first[..], &second[..]), false, true, 2),
-            ((&first[..], &second[..]), false, true, 3),
-            ((&first[..], &second[..]), false, true, 4),
+        // Exact dual-chain persistence rejects altered/missing/extra/stale
+        // chains. Facade preflight covers graph-valid unsupported shapes and
+        // source relationships before an operation scope is created.
+        for (source_distances, trace_distances, shared_basis, periodic_first, sample_count) in [
+            (
+                (&first_split[..], &second[..]),
+                (&first_split[..], &second[..]),
+                false,
+                false,
+                3,
+            ),
+            (
+                (&first_split[..], &second[..]),
+                (&first_split[..], &second[..]),
+                false,
+                false,
+                4,
+            ),
+            (
+                (&first[..], &shared_second[..]),
+                (&first[..], &shared_second[..]),
+                true,
+                false,
+                2,
+            ),
+            (
+                (&first[..], &shared_second[..]),
+                (&first[..], &shared_second[..]),
+                true,
+                false,
+                3,
+            ),
+            (
+                (&first[..], &shared_second[..]),
+                (&first[..], &shared_second[..]),
+                true,
+                false,
+                4,
+            ),
+            (
+                (&first_split[..], &second[..]),
+                (&first_split[..], &second[..]),
+                false,
+                false,
+                5,
+            ),
+            (
+                (&first[..], &shared_second[..]),
+                (&first[..], &shared_second[..]),
+                true,
+                false,
+                5,
+            ),
+            (
+                (&first[..], &second[..]),
+                (&first[..], &second[..]),
+                false,
+                true,
+                5,
+            ),
+            (
+                (&first_split[..], &second[..]),
+                (&first_split[..], &second[..]),
+                false,
+                false,
+                7,
+            ),
+            (
+                (&first[..], &shared_second[..]),
+                (&first[..], &shared_second[..]),
+                true,
+                false,
+                7,
+            ),
+            (
+                (&first[..], &second[..]),
+                (&first[..], &second[..]),
+                false,
+                true,
+                7,
+            ),
+            (
+                (&first[..], &second[..]),
+                (&first[..], &second[..]),
+                false,
+                true,
+                2,
+            ),
+            (
+                (&first[..], &second[..]),
+                (&first[..], &second[..]),
+                false,
+                true,
+                3,
+            ),
+            (
+                (&first[..], &second[..]),
+                (&first[..], &second[..]),
+                false,
+                true,
+                4,
+            ),
         ] {
             for swap_order in [false, true] {
-                let source_distances = if shared_basis {
-                    [&first[..], &shared_second[..]]
-                } else {
-                    [&first[..], &second[..]]
-                };
                 let mut session = Kernel::new().create_session();
                 let part_id = session.create_part();
                 let mut edit = session.edit_part(part_id.clone()).unwrap();
                 let (raw_source, _) = transmitted_dual_offset_wire(
                     &mut edit.state.store,
-                    source_distances,
+                    [source_distances.0, source_distances.1],
                     [trace_distances.0, trace_distances.1],
                     shared_basis,
                     periodic_first,
