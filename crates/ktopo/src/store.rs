@@ -573,8 +573,17 @@ impl Store {
         }
     }
 
+    #[cfg(not(feature = "benchmark-internals"))]
     pub(crate) fn validate_geometry(&self) -> Result<()> {
         self.geometry.validate().map_err(map_graph_error)
+    }
+
+    #[cfg(feature = "benchmark-internals")]
+    pub(crate) fn validate_geometry_with_observation(
+        &self,
+    ) -> (Result<()>, kgraph::GraphValidationObservation) {
+        let (result, observation) = self.geometry.validate_with_observation();
+        (result.map_err(map_graph_error), observation)
     }
 
     /// Borrow an entity; [`Error::StaleHandle`] if removed or unknown.

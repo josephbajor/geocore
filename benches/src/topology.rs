@@ -21,7 +21,7 @@ pub const AFFECTED_SOLID_FIXTURE_VERSION: &str = "topology-commit-affected-solid
 pub const AFFECTED_BLOCK_COHORT_FIXTURE_VERSION: &str =
     "topology-commit-affected-block-cohort-footprint.v1";
 /// Fixture identity for the production-solid no-op ordinary-commit ladder.
-pub const PRODUCTION_CLEAN_FIXTURE_VERSION: &str = "topology-commit-production-clean.v1";
+pub const PRODUCTION_CLEAN_FIXTURE_VERSION: &str = "topology-commit-production-clean.v2";
 /// Deterministic fixture seed (construction itself is not randomized).
 pub const FIXTURE_SEED: u64 = 0x5154_4f50_4f00_0002;
 
@@ -62,6 +62,31 @@ pub enum Ladder {
     FullRebuild,
 }
 
+/// Exact phase-boundary work expected from one benchmark-observed commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommitPhaseExpectation {
+    /// Complete geometry-graph validation invocations started.
+    pub geometry_graph_validation_starts: usize,
+    /// Geometry nodes entering the primary full-validation loop.
+    pub geometry_graph_validation_primary_node_starts: usize,
+    /// Candidate-index clone invocations started.
+    pub candidate_index_clone_starts: usize,
+    /// Body footprints present at the candidate clone boundary.
+    pub candidate_index_cloned_body_footprints: usize,
+    /// Body-order entries present at the candidate clone boundary.
+    pub candidate_index_cloned_body_order_entries: usize,
+    /// Candidate body-footprint rebuild invocations started.
+    pub candidate_index_refresh_body_starts: usize,
+    /// Body-order entries visited by candidate body-order refresh.
+    pub candidate_index_body_order_refresh_entries: usize,
+    /// Affected-root selection invocations started.
+    pub affected_root_selection_starts: usize,
+    /// Mutation items examined across affected-root selections.
+    pub affected_root_selection_mutation_items: usize,
+    /// Fast body-check invocations started.
+    pub fast_body_check_starts: usize,
+}
+
 /// Stable Q2 case definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TopologyCase {
@@ -83,6 +108,8 @@ pub struct TopologyCase {
     pub expected_before_index_digest: u64,
     /// Reviewed installed-index digest after a production-clean commit, or zero.
     pub expected_after_index_digest: u64,
+    /// Reviewed phase-boundary counters when this case extends the digest contract.
+    pub expected_phase: Option<CommitPhaseExpectation>,
     /// Reviewed digest of complete semantic result evidence.
     pub expected_output_digest: u64,
 }
@@ -343,28 +370,32 @@ pub const CASES: [TopologyCase; 43] = [
         4,
         0x94a7_8b9a_2c4e_e0b3,
         0x940a_2fb1_7674_ba69,
-        0xb597_82ce_63d0_ce2f,
+        61,
+        0x0676_a31e_87ff_fd44,
     ),
     production_clean_case(
         "topology/production-clean/primitive-mix-v1/total-16/ordinary-noop-v1",
         16,
         0x5fc1_edc7_4231_81f4,
         0x76c1_174d_73fb_5880,
-        0x1f88_5469_ef31_5b53,
+        228,
+        0xd10f_885a_fb5a_01e3,
     ),
     production_clean_case(
         "topology/production-clean/primitive-mix-v1/total-64/ordinary-noop-v1",
         64,
         0x4bbf_07cb_a16f_69f6,
         0xdc20_0696_664d_93ad,
-        0xd153_e833_70f7_4247,
+        805,
+        0x6378_77c5_a5b4_7403,
     ),
     production_clean_case(
         "topology/production-clean/primitive-mix-v1/total-256/ordinary-noop-v1",
         256,
         0x55b8_ac42_b1da_1110,
         0x3755_ea7b_5497_afed,
-        0x160c_2bf6_7635_e5ee,
+        3_204,
+        0x19bf_2dd8_c115_4f80,
     ),
 ];
 
@@ -418,6 +449,7 @@ const fn case(path: &'static str, ladder: Ladder, bodies: usize) -> TopologyCase
         expected_after_store_digest: 0,
         expected_before_index_digest: 0,
         expected_after_index_digest: 0,
+        expected_phase: None,
         expected_output_digest,
     }
 }
@@ -427,6 +459,7 @@ const fn production_clean_case(
     bodies: usize,
     expected_store_digest: u64,
     expected_index_digest: u64,
+    expected_graph_nodes: usize,
     expected_output_digest: u64,
 ) -> TopologyCase {
     TopologyCase {
@@ -439,6 +472,18 @@ const fn production_clean_case(
         expected_after_store_digest: expected_store_digest,
         expected_before_index_digest: expected_index_digest,
         expected_after_index_digest: expected_index_digest,
+        expected_phase: Some(CommitPhaseExpectation {
+            geometry_graph_validation_starts: 1,
+            geometry_graph_validation_primary_node_starts: expected_graph_nodes,
+            candidate_index_clone_starts: 1,
+            candidate_index_cloned_body_footprints: bodies,
+            candidate_index_cloned_body_order_entries: bodies,
+            candidate_index_refresh_body_starts: 0,
+            candidate_index_body_order_refresh_entries: 0,
+            affected_root_selection_starts: 2,
+            affected_root_selection_mutation_items: 0,
+            fast_body_check_starts: 0,
+        }),
         expected_output_digest,
     }
 }
@@ -461,6 +506,7 @@ const fn affected_block_cohort_case(
         expected_after_store_digest,
         expected_before_index_digest: 0,
         expected_after_index_digest: 0,
+        expected_phase: None,
         expected_output_digest,
     }
 }
@@ -484,6 +530,7 @@ const fn affected_solid_case(
         expected_after_store_digest,
         expected_before_index_digest: 0,
         expected_after_index_digest: 0,
+        expected_phase: None,
         expected_output_digest,
     }
 }
@@ -505,6 +552,7 @@ const fn cohort_case(
         expected_after_store_digest: 0,
         expected_before_index_digest: 0,
         expected_after_index_digest: 0,
+        expected_phase: None,
         expected_output_digest,
     }
 }
@@ -800,6 +848,7 @@ impl TopologyFixture {
                 audit: None,
                 rejected,
                 future_behavior_equal,
+                phase_digest_contract: ladder == Ladder::ProductionClean,
             },
         )
     }
@@ -826,6 +875,7 @@ impl TopologyFixture {
             // The timed operation accepts only `&Store`; mutation and allocator
             // drift are excluded by the type boundary.
             future_behavior_equal: true,
+            phase_digest_contract: false,
         }
     }
 
@@ -1056,6 +1106,8 @@ pub struct TopologyResult {
     pub rejected: bool,
     /// Whether rollback restored the allocator and next checked insertion.
     pub future_behavior_equal: bool,
+    /// Whether the output digest includes the tagged phase-counter extension.
+    phase_digest_contract: bool,
 }
 
 impl TopologyResult {
@@ -1093,6 +1145,22 @@ impl TopologyResult {
         digest.count(self.observation.checked_bodies);
         digest.count(self.observation.mutations);
         digest.u64(self.observation.affected_order_digest);
+        if self.phase_digest_contract {
+            digest.tag(0x72);
+            digest.count(self.observation.geometry_graph_validation_starts);
+            digest.count(
+                self.observation
+                    .geometry_graph_validation_primary_node_starts,
+            );
+            digest.count(self.observation.candidate_index_clone_starts);
+            digest.count(self.observation.candidate_index_cloned_body_footprints);
+            digest.count(self.observation.candidate_index_cloned_body_order_entries);
+            digest.count(self.observation.candidate_index_refresh_body_starts);
+            digest.count(self.observation.candidate_index_body_order_refresh_entries);
+            digest.count(self.observation.affected_root_selection_starts);
+            digest.count(self.observation.affected_root_selection_mutation_items);
+            digest.count(self.observation.fast_body_check_starts);
+        }
         store(&mut digest, self.before_store);
         store(&mut digest, self.after_store);
         index(&mut digest, self.before_index);
@@ -1198,6 +1266,38 @@ pub fn verify(case: TopologyCase, result: &TopologyResult) {
         assert_eq!(result.after_store.digest, case.expected_after_store_digest);
     }
     if case.ladder == Ladder::ProductionClean {
+        let expected_phase = case
+            .expected_phase
+            .expect("production-clean cases ratchet phase counters");
+        assert_eq!(
+            CommitPhaseExpectation {
+                geometry_graph_validation_starts: result
+                    .observation
+                    .geometry_graph_validation_starts,
+                geometry_graph_validation_primary_node_starts: result
+                    .observation
+                    .geometry_graph_validation_primary_node_starts,
+                candidate_index_clone_starts: result.observation.candidate_index_clone_starts,
+                candidate_index_cloned_body_footprints: result
+                    .observation
+                    .candidate_index_cloned_body_footprints,
+                candidate_index_cloned_body_order_entries: result
+                    .observation
+                    .candidate_index_cloned_body_order_entries,
+                candidate_index_refresh_body_starts: result
+                    .observation
+                    .candidate_index_refresh_body_starts,
+                candidate_index_body_order_refresh_entries: result
+                    .observation
+                    .candidate_index_body_order_refresh_entries,
+                affected_root_selection_starts: result.observation.affected_root_selection_starts,
+                affected_root_selection_mutation_items: result
+                    .observation
+                    .affected_root_selection_mutation_items,
+                fast_body_check_starts: result.observation.fast_body_check_starts,
+            },
+            expected_phase
+        );
         assert_ne!(case.expected_before_index_digest, 0);
         assert_ne!(case.expected_after_index_digest, 0);
         assert_eq!(
@@ -1409,6 +1509,7 @@ mod tests {
                 );
             }
             if case.ladder == Ladder::ProductionClean {
+                let phase = case.expected_phase.unwrap();
                 assert_eq!(entry["tolerances"], serde_json::json!({}));
                 assert_eq!(entry["policy_values"]["ladder"], "production-clean");
                 assert_eq!(entry["policy_values"]["checked_commit"], "ordinary");
@@ -1424,6 +1525,51 @@ mod tests {
                 assert_eq!(
                     entry["policy_values"]["covered_path"],
                     "global-validation-index-clone-body-order"
+                );
+                assert_eq!(
+                    entry["policy_values"]["phase_observation"],
+                    "exact-boundary-counters-v1"
+                );
+                let counters = &entry["expected_result_counters"];
+                assert_eq!(
+                    counters["geometry_graph_validation_starts"].as_u64(),
+                    Some(phase.geometry_graph_validation_starts as u64)
+                );
+                assert_eq!(
+                    counters["geometry_graph_validation_primary_node_starts"].as_u64(),
+                    Some(phase.geometry_graph_validation_primary_node_starts as u64)
+                );
+                assert_eq!(
+                    counters["candidate_index_clone_starts"].as_u64(),
+                    Some(phase.candidate_index_clone_starts as u64)
+                );
+                assert_eq!(
+                    counters["candidate_index_cloned_body_footprints"].as_u64(),
+                    Some(phase.candidate_index_cloned_body_footprints as u64)
+                );
+                assert_eq!(
+                    counters["candidate_index_cloned_body_order_entries"].as_u64(),
+                    Some(phase.candidate_index_cloned_body_order_entries as u64)
+                );
+                assert_eq!(
+                    counters["candidate_index_refresh_body_starts"].as_u64(),
+                    Some(phase.candidate_index_refresh_body_starts as u64)
+                );
+                assert_eq!(
+                    counters["candidate_index_body_order_refresh_entries"].as_u64(),
+                    Some(phase.candidate_index_body_order_refresh_entries as u64)
+                );
+                assert_eq!(
+                    counters["affected_root_selection_starts"].as_u64(),
+                    Some(phase.affected_root_selection_starts as u64)
+                );
+                assert_eq!(
+                    counters["affected_root_selection_mutation_items"].as_u64(),
+                    Some(phase.affected_root_selection_mutation_items as u64)
+                );
+                assert_eq!(
+                    counters["fast_body_check_starts"].as_u64(),
+                    Some(phase.fast_body_check_starts as u64)
                 );
                 assert_eq!(
                     entry["expected_result_counters"]["before_store_digest"].as_str(),
@@ -1673,6 +1819,34 @@ mod tests {
             assert_eq!(repeat, result);
             assert_eq!(repeat.output_digest(), result.output_digest());
         }
+    }
+
+    #[test]
+    fn phase_digest_extension_is_limited_to_production_clean_cases() {
+        let clean_case = CASES
+            .iter()
+            .copied()
+            .find(|case| case.ladder == Ladder::Clean)
+            .unwrap();
+        let clean = fixture(clean_case).execute(clean_case.ladder);
+        let mut altered_clean = clean;
+        altered_clean.observation.geometry_graph_validation_starts += 1;
+        assert_eq!(altered_clean.output_digest(), clean.output_digest());
+
+        let production_case = CASES
+            .iter()
+            .copied()
+            .find(|case| case.ladder == Ladder::ProductionClean)
+            .unwrap();
+        let production = fixture(production_case).execute(production_case.ladder);
+        let mut altered_production = production;
+        altered_production
+            .observation
+            .geometry_graph_validation_starts += 1;
+        assert_ne!(
+            altered_production.output_digest(),
+            production.output_digest()
+        );
     }
 
     #[cfg(not(debug_assertions))]

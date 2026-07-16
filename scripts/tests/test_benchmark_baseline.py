@@ -238,27 +238,31 @@ class BenchmarkBaselineTests(unittest.TestCase):
             4: (
                 "94a78b9a2c4ee0b3",
                 "940a2fb17674ba69",
-                "b59782ce63d0ce2f",
+                61,
+                "0676a31e87fffd44",
             ),
             16: (
                 "5fc1edc7423181f4",
                 "76c1174d73fb5880",
-                "1f885469ef315b53",
+                228,
+                "d10f885afb5a01e3",
             ),
             64: (
                 "4bbf07cba16f69f6",
                 "dc200696664d93ad",
-                "d153e83370f74247",
+                805,
+                "637877c5a5b47403",
             ),
             256: (
                 "55b8ac42b1da1110",
                 "3755ea7b5497afed",
-                "160c2bf67635e5ee",
+                3204,
+                "19bf2dd8c1154f80",
             ),
         }
         self.assertTrue(
             all(
-                case["fixture_version"] == "topology-commit-production-clean.v1"
+                case["fixture_version"] == "topology-commit-production-clean.v2"
                 and case["size_parameters"]["elements"]
                 == case["size_parameters"]["bodies"]
                 == case["expected_result_counters"]["body_count"]
@@ -272,13 +276,15 @@ class BenchmarkBaselineTests(unittest.TestCase):
                 == "unchanged-primitive-mix"
                 and case["policy_values"]["covered_path"]
                 == "global-validation-index-clone-body-order"
+                and case["policy_values"]["phase_observation"]
+                == "exact-boundary-counters-v1"
                 for case in production_clean
             )
         )
         for case in production_clean:
             counters = case["expected_result_counters"]
             bodies = case["size_parameters"]["bodies"]
-            store_digest, index_digest, output_digest = (
+            store_digest, index_digest, graph_nodes, output_digest = (
                 expected_production_clean_digests[bodies]
             )
             self.assertEqual(counters["operation_scopes"], 1)
@@ -286,6 +292,27 @@ class BenchmarkBaselineTests(unittest.TestCase):
             self.assertEqual(counters["refreshed_bodies"], 0)
             self.assertEqual(counters["checked_bodies"], 0)
             self.assertEqual(counters["mutations"], 0)
+            self.assertEqual(counters["geometry_graph_validation_starts"], 1)
+            self.assertEqual(
+                counters["geometry_graph_validation_primary_node_starts"],
+                graph_nodes,
+            )
+            self.assertEqual(counters["candidate_index_clone_starts"], 1)
+            self.assertEqual(
+                counters["candidate_index_cloned_body_footprints"], bodies
+            )
+            self.assertEqual(
+                counters["candidate_index_cloned_body_order_entries"], bodies
+            )
+            self.assertEqual(counters["candidate_index_refresh_body_starts"], 0)
+            self.assertEqual(
+                counters["candidate_index_body_order_refresh_entries"], 0
+            )
+            self.assertEqual(counters["affected_root_selection_starts"], 2)
+            self.assertEqual(
+                counters["affected_root_selection_mutation_items"], 0
+            )
+            self.assertEqual(counters["fast_body_check_starts"], 0)
             self.assertTrue(counters["committed"])
             self.assertEqual(
                 counters["affected_order_digest"], "8aa984d6299805c2"

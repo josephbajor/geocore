@@ -24,13 +24,13 @@ pub use eval::{
     EvalBudgetProfile, EvalContext, EvalLimits, EvalUsage, ExactSurfaceField,
     SurfaceDerivativeOrder, SurfaceValidity, ValidityGap,
 };
-#[cfg(feature = "benchmark-internals")]
-#[doc(hidden)]
-pub use graph::GraphBuildObservation;
 pub use graph::{
     Curve2dHandle, Curve2dNode, CurveHandle, CurveNode, GeometryChanges, GeometryGraph,
     GeometryRef, SurfaceHandle, SurfaceNode,
 };
+#[cfg(feature = "benchmark-internals")]
+#[doc(hidden)]
+pub use graph::{GraphBuildObservation, GraphValidationObservation};
 pub use intersection::{
     AffineParamMap1d, IntersectionCertificateError, NurbsIntersectionTrace,
     ObliqueSphereCircleTrace, PairedPlaneLineResidualCertificate,

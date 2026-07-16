@@ -85,6 +85,31 @@ pub struct GraphBuildObservation {
     full_order_rebuilds: usize,
 }
 
+/// Read-only counters for one complete geometry-graph validation attempt.
+///
+/// This is not a stable kernel API. It is available only with the
+/// `benchmark-internals` feature and exposes phase work without graph storage.
+#[cfg(feature = "benchmark-internals")]
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GraphValidationObservation {
+    validation_starts: usize,
+    primary_node_starts: usize,
+}
+
+#[cfg(feature = "benchmark-internals")]
+impl GraphValidationObservation {
+    /// Complete graph-validation invocations started.
+    pub const fn validation_starts(self) -> usize {
+        self.validation_starts
+    }
+
+    /// Live nodes entering the primary descriptor/dependency validation loop.
+    pub const fn primary_node_starts(self) -> usize {
+        self.primary_node_starts
+    }
+}
+
 #[cfg(feature = "benchmark-internals")]
 impl GraphBuildObservation {
     /// Nodes registered in the reverse-dependency index.
@@ -678,10 +703,34 @@ impl GeometryGraph {
 
     /// Check descriptor invariants, dependency liveness/cycles, and reverse-index agreement.
     pub fn validate(&self) -> GeometryGraphResult<()> {
+        self.validate_with_primary_node_observer(&mut || {})
+    }
+
+    /// Validate while returning exact phase starts for benchmark ratchets.
+    #[cfg(feature = "benchmark-internals")]
+    #[doc(hidden)]
+    pub fn validate_with_observation(
+        &self,
+    ) -> (GeometryGraphResult<()>, GraphValidationObservation) {
+        let mut observation = GraphValidationObservation {
+            validation_starts: 1,
+            primary_node_starts: 0,
+        };
+        let result = self.validate_with_primary_node_observer(&mut || {
+            observation.primary_node_starts += 1;
+        });
+        (result, observation)
+    }
+
+    fn validate_with_primary_node_observer(
+        &self,
+        observe_primary_node_start: &mut impl FnMut(),
+    ) -> GeometryGraphResult<()> {
         if let Some(geometry) = self.reverse_dependencies.structure_mismatch() {
             return Err(GeometryGraphError::ReverseDependencyMismatch { geometry });
         }
         for geometry in self.geometry() {
+            observe_primary_node_start();
             if self.reverse_dependencies.key_count(geometry) != 1 {
                 return Err(GeometryGraphError::ReverseDependencyMismatch { geometry });
             }

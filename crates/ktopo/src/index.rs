@@ -53,6 +53,26 @@ pub(crate) struct StoreIndex {
     ownership_fault_count: usize,
 }
 
+#[cfg(feature = "benchmark-internals")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct CandidateIndexObservation {
+    pub(crate) clone_starts: usize,
+    pub(crate) cloned_body_footprints: usize,
+    pub(crate) cloned_body_order_entries: usize,
+    pub(crate) refresh_body_starts: usize,
+    pub(crate) body_order_refresh_entries: usize,
+    pub(crate) affected_selection_starts: usize,
+    pub(crate) affected_selection_mutation_items: usize,
+}
+
+#[cfg(feature = "benchmark-internals")]
+impl CandidateIndexObservation {
+    pub(crate) fn observe_affected_selection(&mut self, mutations: &[Mutation]) {
+        self.affected_selection_starts += 1;
+        self.affected_selection_mutation_items += mutations.len();
+    }
+}
+
 impl StoreIndex {
     /// Build an index for the Store's current state and audit ownership
     /// closure. Stale geometry references are indexed so the affected body is
@@ -142,22 +162,62 @@ impl StoreIndex {
         Self::candidate_with_stats(store, previous, mutations).0
     }
 
+    #[cfg(any(not(feature = "benchmark-internals"), test))]
     pub(crate) fn candidate_with_stats(
         store: &Store,
         previous: &Self,
         mutations: &[Mutation],
     ) -> (Self, usize) {
+        #[cfg(feature = "benchmark-internals")]
+        {
+            Self::candidate_impl(store, previous, mutations, None)
+        }
+        #[cfg(not(feature = "benchmark-internals"))]
+        {
+            Self::candidate_impl(store, previous, mutations)
+        }
+    }
+
+    #[cfg(feature = "benchmark-internals")]
+    pub(crate) fn candidate_with_benchmark_observation(
+        store: &Store,
+        previous: &Self,
+        mutations: &[Mutation],
+    ) -> (Self, usize, CandidateIndexObservation) {
+        let mut observation = CandidateIndexObservation::default();
+        let (candidate, refreshed_bodies) =
+            Self::candidate_impl(store, previous, mutations, Some(&mut observation));
+        (candidate, refreshed_bodies, observation)
+    }
+
+    fn candidate_impl(
+        store: &Store,
+        previous: &Self,
+        mutations: &[Mutation],
+        #[cfg(feature = "benchmark-internals")] mut observation: Option<
+            &mut CandidateIndexObservation,
+        >,
+    ) -> (Self, usize) {
+        #[cfg(feature = "benchmark-internals")]
+        if let Some(observation) = observation.as_deref_mut() {
+            observation.observe_affected_selection(mutations);
+            observation.clone_starts += 1;
+            observation.cloned_body_footprints += previous.footprints.len();
+            observation.cloned_body_order_entries += previous.body_order.len();
+        }
         let affected = previous.affected_bodies(previous, mutations);
+        let mut candidate = previous.clone();
+        candidate.ownership_fault_count = 0;
         if affected.is_empty() {
-            let mut candidate = previous.clone();
-            candidate.ownership_fault_count = 0;
             candidate.audit_mutated_topology(store, mutations, &[]);
             return (candidate, 0);
         }
 
-        let mut candidate = previous.clone();
-        candidate.ownership_fault_count = 0;
         candidate.set_body_order(store);
+        #[cfg(feature = "benchmark-internals")]
+        if let Some(observation) = observation.as_deref_mut() {
+            observation.body_order_refresh_entries += candidate.body_order.len();
+        }
 
         let mut removed = Vec::new();
         for &body in &affected {
@@ -171,6 +231,10 @@ impl StoreIndex {
             if affected.contains(&body_id)
                 && let Ok(body) = store.get(body_id)
             {
+                #[cfg(feature = "benchmark-internals")]
+                if let Some(observation) = observation.as_deref_mut() {
+                    observation.refresh_body_starts += 1;
+                }
                 candidate.rebuild_body(store, body_id, body);
                 rebuilt_bodies += 1;
             }

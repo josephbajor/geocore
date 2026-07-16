@@ -1172,7 +1172,7 @@
     {
       "path": "topology/production-clean/primitive-mix-v1/total-4/ordinary-noop-v1",
       "benchmark_target": "topology_commit",
-      "fixture_version": "topology-commit-production-clean.v1",
+      "fixture_version": "topology-commit-production-clean.v2",
       "deterministic_seed": 5860396221457235970,
       "size_parameters": {
         "elements": 4,
@@ -1187,6 +1187,7 @@
         "mutation": "none",
         "production_fixture": "unchanged-primitive-mix",
         "covered_path": "global-validation-index-clone-body-order",
+        "phase_observation": "exact-boundary-counters-v1",
         "scope_oracle": "affected-refreshed-checked"
       },
       "expected_result_counters": {
@@ -1196,6 +1197,16 @@
         "refreshed_bodies": 0,
         "checked_bodies": 0,
         "mutations": 0,
+        "geometry_graph_validation_starts": 1,
+        "geometry_graph_validation_primary_node_starts": 61,
+        "candidate_index_clone_starts": 1,
+        "candidate_index_cloned_body_footprints": 4,
+        "candidate_index_cloned_body_order_entries": 4,
+        "candidate_index_refresh_body_starts": 0,
+        "candidate_index_body_order_refresh_entries": 0,
+        "affected_root_selection_starts": 2,
+        "affected_root_selection_mutation_items": 0,
+        "fast_body_check_starts": 0,
         "committed": true,
         "affected_order_digest": "8aa984d6299805c2",
         "before_store_digest": "94a78b9a2c4ee0b3",
@@ -1205,13 +1216,13 @@
         "store_unchanged": true,
         "index_unchanged": true,
         "repeat_deterministic": true,
-        "output_digest": "b59782ce63d0ce2f"
+        "output_digest": "0676a31e87fffd44"
       }
     },
     {
       "path": "topology/production-clean/primitive-mix-v1/total-16/ordinary-noop-v1",
       "benchmark_target": "topology_commit",
-      "fixture_version": "topology-commit-production-clean.v1",
+      "fixture_version": "topology-commit-production-clean.v2",
       "deterministic_seed": 5860396221457235970,
       "size_parameters": {
         "elements": 16,
@@ -1226,6 +1237,7 @@
         "mutation": "none",
         "production_fixture": "unchanged-primitive-mix",
         "covered_path": "global-validation-index-clone-body-order",
+        "phase_observation": "exact-boundary-counters-v1",
         "scope_oracle": "affected-refreshed-checked"
       },
       "expected_result_counters": {
@@ -1235,6 +1247,16 @@
         "refreshed_bodies": 0,
         "checked_bodies": 0,
         "mutations": 0,
+        "geometry_graph_validation_starts": 1,
+        "geometry_graph_validation_primary_node_starts": 228,
+        "candidate_index_clone_starts": 1,
+        "candidate_index_cloned_body_footprints": 16,
+        "candidate_index_cloned_body_order_entries": 16,
+        "candidate_index_refresh_body_starts": 0,
+        "candidate_index_body_order_refresh_entries": 0,
+        "affected_root_selection_starts": 2,
+        "affected_root_selection_mutation_items": 0,
+        "fast_body_check_starts": 0,
         "committed": true,
         "affected_order_digest": "8aa984d6299805c2",
         "before_store_digest": "5fc1edc7423181f4",
@@ -1244,13 +1266,13 @@
         "store_unchanged": true,
         "index_unchanged": true,
         "repeat_deterministic": true,
-        "output_digest": "1f885469ef315b53"
+        "output_digest": "d10f885afb5a01e3"
       }
     },
     {
       "path": "topology/production-clean/primitive-mix-v1/total-64/ordinary-noop-v1",
       "benchmark_target": "topology_commit",
-      "fixture_version": "topology-commit-production-clean.v1",
+      "fixture_version": "topology-commit-production-clean.v2",
       "deterministic_seed": 5860396221457235970,
       "size_parameters": {
         "elements": 64,
@@ -1265,6 +1287,7 @@
         "mutation": "none",
         "production_fixture": "unchanged-primitive-mix",
         "covered_path": "global-validation-index-clone-body-order",
+        "phase_observation": "exact-boundary-counters-v1",
         "scope_oracle": "affected-refreshed-checked"
       },
       "expected_result_counters": {
@@ -1274,6 +1297,16 @@
         "refreshed_bodies": 0,
         "checked_bodies": 0,
         "mutations": 0,
+        "geometry_graph_validation_starts": 1,
+        "geometry_graph_validation_primary_node_starts": 805,
+        "candidate_index_clone_starts": 1,
+        "candidate_index_cloned_body_footprints": 64,
+        "candidate_index_cloned_body_order_entries": 64,
+        "candidate_index_refresh_body_starts": 0,
+        "candidate_index_body_order_refresh_entries": 0,
+        "affected_root_selection_starts": 2,
+        "affected_root_selection_mutation_items": 0,
+        "fast_body_check_starts": 0,
         "committed": true,
         "affected_order_digest": "8aa984d6299805c2",
         "before_store_digest": "4bbf07cba16f69f6",
@@ -1283,13 +1316,13 @@
         "store_unchanged": true,
         "index_unchanged": true,
         "repeat_deterministic": true,
-        "output_digest": "d153e83370f74247"
+        "output_digest": "637877c5a5b47403"
       }
     },
     {
       "path": "topology/production-clean/primitive-mix-v1/total-256/ordinary-noop-v1",
       "benchmark_target": "topology_commit",
-      "fixture_version": "topology-commit-production-clean.v1",
+      "fixture_version": "topology-commit-production-clean.v2",
       "deterministic_seed": 5860396221457235970,
       "size_parameters": {
         "elements": 256,
@@ -1304,6 +1337,7 @@
         "mutation": "none",
         "production_fixture": "unchanged-primitive-mix",
         "covered_path": "global-validation-index-clone-body-order",
+        "phase_observation": "exact-boundary-counters-v1",
         "scope_oracle": "affected-refreshed-checked"
       },
       "expected_result_counters": {
@@ -1313,6 +1347,16 @@
         "refreshed_bodies": 0,
         "checked_bodies": 0,
         "mutations": 0,
+        "geometry_graph_validation_starts": 1,
+        "geometry_graph_validation_primary_node_starts": 3204,
+        "candidate_index_clone_starts": 1,
+        "candidate_index_cloned_body_footprints": 256,
+        "candidate_index_cloned_body_order_entries": 256,
+        "candidate_index_refresh_body_starts": 0,
+        "candidate_index_body_order_refresh_entries": 0,
+        "affected_root_selection_starts": 2,
+        "affected_root_selection_mutation_items": 0,
+        "fast_body_check_starts": 0,
         "committed": true,
         "affected_order_digest": "8aa984d6299805c2",
         "before_store_digest": "55b8ac42b1da1110",
@@ -1322,7 +1366,7 @@
         "store_unchanged": true,
         "index_unchanged": true,
         "repeat_deterministic": true,
-        "output_digest": "160c2bf67635e5ee"
+        "output_digest": "19bf2dd8c1154f80"
       }
     },
     {

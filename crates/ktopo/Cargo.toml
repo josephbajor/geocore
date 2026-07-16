@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-benchmark-internals = []
+benchmark-internals = ["kgraph/benchmark-internals"]
 
 [dependencies]
 kcore = { path = "../kcore" }

@@ -538,6 +538,54 @@ impl Journal {
     }
 }
 
+#[cfg(feature = "benchmark-internals")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct CommitPhaseObservation {
+    index: crate::index::CandidateIndexObservation,
+    geometry_graph_validation_starts: usize,
+    geometry_graph_validation_primary_node_starts: usize,
+    fast_body_check_starts: usize,
+}
+
+#[cfg(feature = "benchmark-internals")]
+impl CommitPhaseObservation {
+    fn finish(
+        self,
+        store: &Store,
+        committed: bool,
+        affected: &[BodyId],
+        refreshed_bodies: usize,
+        checked_bodies: usize,
+        mutations: usize,
+    ) -> crate::benchmark::CommitObservation {
+        crate::benchmark::CommitObservation {
+            committed,
+            body_count: store.count::<crate::entity::Body>(),
+            affected_bodies: affected.len(),
+            refreshed_bodies,
+            checked_bodies,
+            mutations,
+            affected_order_digest: crate::benchmark::affected_digest(store, affected),
+            geometry_graph_validation_starts: self.geometry_graph_validation_starts,
+            geometry_graph_validation_primary_node_starts: self
+                .geometry_graph_validation_primary_node_starts,
+            candidate_index_clone_starts: self.index.clone_starts,
+            candidate_index_cloned_body_footprints: self.index.cloned_body_footprints,
+            candidate_index_cloned_body_order_entries: self.index.cloned_body_order_entries,
+            candidate_index_refresh_body_starts: self.index.refresh_body_starts,
+            candidate_index_body_order_refresh_entries: self.index.body_order_refresh_entries,
+            affected_root_selection_starts: self.index.affected_selection_starts,
+            affected_root_selection_mutation_items: self.index.affected_selection_mutation_items,
+            fast_body_check_starts: self.fast_body_check_starts,
+        }
+    }
+
+    fn observe_geometry_validation(&mut self, observation: kgraph::GraphValidationObservation) {
+        self.geometry_graph_validation_starts += observation.validation_starts();
+        self.geometry_graph_validation_primary_node_starts += observation.primary_node_starts();
+    }
+}
+
 /// Scoped failure-atomic mutation of one [`Store`].
 ///
 /// Transactions are rollback-on-drop. Call [`Self::commit_checked`] exactly
@@ -1216,17 +1264,22 @@ impl<'a> Transaction<'a> {
         let pending = self.store.pending_transaction_mutations()?;
         let validate_all = self.store.full_validation_required();
         #[cfg(feature = "benchmark-internals")]
+        let mut phase_observation = CommitPhaseObservation::default();
+        #[cfg(feature = "benchmark-internals")]
         let (candidate_index, refreshed_bodies) = if validate_all {
             (
                 crate::index::StoreIndex::build(self.store),
                 self.store.count::<crate::entity::Body>(),
             )
         } else {
-            crate::index::StoreIndex::candidate_with_stats(
-                self.store,
-                self.store.committed_index(),
-                &pending,
-            )
+            let (candidate, refreshed, observation) =
+                crate::index::StoreIndex::candidate_with_benchmark_observation(
+                    self.store,
+                    self.store.committed_index(),
+                    &pending,
+                );
+            phase_observation.index = observation;
+            (candidate, refreshed)
         };
         #[cfg(not(feature = "benchmark-internals"))]
         let candidate_index = if validate_all {
@@ -1235,8 +1288,17 @@ impl<'a> Transaction<'a> {
             crate::index::StoreIndex::candidate(self.store, self.store.committed_index(), &pending)
         };
         candidate_index.debug_assert_full_rebuild_parity(self.store);
+        #[cfg(feature = "benchmark-internals")]
+        phase_observation.index.observe_affected_selection(&pending);
         let affected = candidate_index.affected_bodies(self.store.committed_index(), &pending);
 
+        #[cfg(feature = "benchmark-internals")]
+        {
+            let (validation, observation) = self.store.validate_geometry_with_observation();
+            phase_observation.observe_geometry_validation(observation);
+            validation?;
+        }
+        #[cfg(not(feature = "benchmark-internals"))]
         self.store.validate_geometry()?;
         if candidate_index.ownership_fault_count() != 0 {
             return Err(Error::TopologyCheckFailed {
@@ -1269,6 +1331,10 @@ impl<'a> Transaction<'a> {
         let fast_result: Result<()> = (|| {
             for &body in &checked {
                 let body_value = self.store.get(body)?;
+                #[cfg(feature = "benchmark-internals")]
+                {
+                    phase_observation.fast_body_check_starts += 1;
+                }
                 let report = crate::check::check_body_fast_report_with_graph(
                     self.store, body, body_value, &mut graph,
                 )?;
@@ -1306,15 +1372,14 @@ impl<'a> Transaction<'a> {
             self.store.rollback_transaction()?;
             #[cfg(feature = "benchmark-internals")]
             self.store
-                .set_benchmark_observation(crate::benchmark::CommitObservation {
-                    committed: false,
-                    body_count: self.store.count::<crate::entity::Body>(),
-                    affected_bodies: affected.len(),
+                .set_benchmark_observation(phase_observation.finish(
+                    self.store,
+                    false,
+                    &affected,
                     refreshed_bodies,
-                    checked_bodies: checked.len(),
-                    mutations: pending.len(),
-                    affected_order_digest: crate::benchmark::affected_digest(self.store, &affected),
-                });
+                    checked.len(),
+                    pending.len(),
+                ));
             self.finished = true;
             return Ok(FullCommitDecision::rejected(checks));
         }
@@ -1324,15 +1389,14 @@ impl<'a> Transaction<'a> {
         self.store.install_committed_index(candidate_index);
         #[cfg(feature = "benchmark-internals")]
         self.store
-            .set_benchmark_observation(crate::benchmark::CommitObservation {
-                committed: true,
-                body_count: self.store.count::<crate::entity::Body>(),
-                affected_bodies: affected.len(),
+            .set_benchmark_observation(phase_observation.finish(
+                self.store,
+                true,
+                &affected,
                 refreshed_bodies,
-                checked_bodies: checked.len(),
-                mutations: pending.len(),
-                affected_order_digest: crate::benchmark::affected_digest(self.store, &affected),
-            });
+                checked.len(),
+                pending.len(),
+            ));
         self.finished = true;
         let journal = Journal::new(
             mutations,
@@ -1423,17 +1487,22 @@ impl<'a> Transaction<'a> {
         };
         let validate_all = self.store.full_validation_required();
         #[cfg(feature = "benchmark-internals")]
+        let mut phase_observation = CommitPhaseObservation::default();
+        #[cfg(feature = "benchmark-internals")]
         let (candidate_index, refreshed_bodies) = if validate_all {
             (
                 crate::index::StoreIndex::build(self.store),
                 self.store.count::<crate::entity::Body>(),
             )
         } else {
-            crate::index::StoreIndex::candidate_with_stats(
-                self.store,
-                self.store.committed_index(),
-                &pending,
-            )
+            let (candidate, refreshed, observation) =
+                crate::index::StoreIndex::candidate_with_benchmark_observation(
+                    self.store,
+                    self.store.committed_index(),
+                    &pending,
+                );
+            phase_observation.index = observation;
+            (candidate, refreshed)
         };
         #[cfg(not(feature = "benchmark-internals"))]
         let candidate_index = if validate_all {
@@ -1442,9 +1511,18 @@ impl<'a> Transaction<'a> {
             crate::index::StoreIndex::candidate(self.store, self.store.committed_index(), &pending)
         };
         candidate_index.debug_assert_full_rebuild_parity(self.store);
+        #[cfg(feature = "benchmark-internals")]
+        phase_observation.index.observe_affected_selection(&pending);
         let affected = candidate_index.affected_bodies(self.store.committed_index(), &pending);
         let mut checked = Vec::new();
         let validation = (|| {
+            #[cfg(feature = "benchmark-internals")]
+            {
+                let (validation, observation) = self.store.validate_geometry_with_observation();
+                phase_observation.observe_geometry_validation(observation);
+                validation?;
+            }
+            #[cfg(not(feature = "benchmark-internals"))]
             self.store.validate_geometry()?;
             let mut fault_count = candidate_index.ownership_fault_count();
             for &body in bodies {
@@ -1453,6 +1531,10 @@ impl<'a> Transaction<'a> {
                 }
                 checked.push(body);
                 let body_value = self.store.get(body)?;
+                #[cfg(feature = "benchmark-internals")]
+                {
+                    phase_observation.fast_body_check_starts += 1;
+                }
                 fault_count += crate::check::check_body_fast_report_with_graph(
                     self.store, body, body_value, graph,
                 )?
@@ -1465,6 +1547,10 @@ impl<'a> Transaction<'a> {
                 }
                 checked.push(body);
                 let body_value = self.store.get(body)?;
+                #[cfg(feature = "benchmark-internals")]
+                {
+                    phase_observation.fast_body_check_starts += 1;
+                }
                 fault_count += crate::check::check_body_fast_report_with_graph(
                     self.store, body, body_value, graph,
                 )?
@@ -1477,6 +1563,10 @@ impl<'a> Transaction<'a> {
                         continue;
                     }
                     checked.push(body);
+                    #[cfg(feature = "benchmark-internals")]
+                    {
+                        phase_observation.fast_body_check_starts += 1;
+                    }
                     fault_count += crate::check::check_body_fast_report_with_graph(
                         self.store,
                         body,
@@ -1497,15 +1587,14 @@ impl<'a> Transaction<'a> {
             self.store.rollback_transaction()?;
             #[cfg(feature = "benchmark-internals")]
             self.store
-                .set_benchmark_observation(crate::benchmark::CommitObservation {
-                    committed: false,
-                    body_count: self.store.count::<crate::entity::Body>(),
-                    affected_bodies: affected.len(),
+                .set_benchmark_observation(phase_observation.finish(
+                    self.store,
+                    false,
+                    &affected,
                     refreshed_bodies,
-                    checked_bodies: checked.len(),
-                    mutations: pending.len(),
-                    affected_order_digest: crate::benchmark::affected_digest(self.store, &affected),
-                });
+                    checked.len(),
+                    pending.len(),
+                ));
             self.finished = true;
             return Err(error);
         }
@@ -1514,15 +1603,14 @@ impl<'a> Transaction<'a> {
         self.store.install_committed_index(candidate_index);
         #[cfg(feature = "benchmark-internals")]
         self.store
-            .set_benchmark_observation(crate::benchmark::CommitObservation {
-                committed: true,
-                body_count: self.store.count::<crate::entity::Body>(),
-                affected_bodies: affected.len(),
+            .set_benchmark_observation(phase_observation.finish(
+                self.store,
+                true,
+                &affected,
                 refreshed_bodies,
-                checked_bodies: checked.len(),
-                mutations: pending.len(),
-                affected_order_digest: crate::benchmark::affected_digest(self.store, &affected),
-            });
+                checked.len(),
+                pending.len(),
+            ));
         self.finished = true;
         Ok(Journal::new(
             mutations,

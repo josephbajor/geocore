@@ -16,7 +16,11 @@ use kcore::arena::Handle;
 use kgeom::vec::Point3;
 use std::collections::HashMap;
 
-/// Immutable counters captured from the most recent checked-commit attempt.
+/// Immutable counters from the most recent terminal checked-commit decision
+/// that recorded benchmark evidence.
+///
+/// Early setup or execution errors can leave the prior observation installed;
+/// those exits are outside the ordinary checked-commit measurement slice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommitObservation {
     /// Whether validation succeeded and the mutation was installed.
@@ -27,12 +31,33 @@ pub struct CommitObservation {
     pub affected_bodies: usize,
     /// Body footprints refreshed in the candidate index.
     pub refreshed_bodies: usize,
-    /// Body checker obligations actually started.
+    /// Body checker obligations selected and admitted before entity lookup.
+    /// This can exceed `fast_body_check_starts` when lookup fails first.
     pub checked_bodies: usize,
     /// Deterministic net mutations presented to checked commit.
     pub mutations: usize,
     /// Stable digest of the ordered affected-body sequence.
     pub affected_order_digest: u64,
+    /// Complete geometry-graph validation invocations started.
+    pub geometry_graph_validation_starts: usize,
+    /// Live geometry nodes entering the primary full-validation loop.
+    pub geometry_graph_validation_primary_node_starts: usize,
+    /// Candidate-index clone invocations started; validate-all rebuilds are excluded.
+    pub candidate_index_clone_starts: usize,
+    /// Body-footprint map entries at candidate clone boundaries; validate-all rebuilds are excluded.
+    pub candidate_index_cloned_body_footprints: usize,
+    /// Body-order entries at candidate clone boundaries; validate-all rebuilds are excluded.
+    pub candidate_index_cloned_body_order_entries: usize,
+    /// Candidate body-footprint rebuilds started; validate-all rebuilds are excluded.
+    pub candidate_index_refresh_body_starts: usize,
+    /// Candidate body-order refresh entries; validate-all rebuilds are excluded.
+    pub candidate_index_body_order_refresh_entries: usize,
+    /// Affected-root selection invocations started, including both candidate and final passes.
+    pub affected_root_selection_starts: usize,
+    /// Mutation items examined across all affected-root selection invocations.
+    pub affected_root_selection_mutation_items: usize,
+    /// Fast body-check invocations actually started.
+    pub fast_body_check_starts: usize,
 }
 
 /// Immutable structural summary of an ownership/dependency index.
@@ -92,7 +117,10 @@ pub struct IndexAudit {
     pub structurally_equal: bool,
 }
 
-/// Return the latest checked-commit observation, if any commit was attempted.
+/// Return the most recent terminal checked-commit decision that recorded
+/// benchmark evidence.
+///
+/// Early setup or execution errors may leave the prior observation installed.
 pub fn last_commit(store: &Store) -> Option<CommitObservation> {
     store.benchmark_observation()
 }
