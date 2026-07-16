@@ -55,6 +55,7 @@ use kcore::operation::{
     LimitSpec, NumericalPolicy, OperationContext, OperationOutcome, OperationPolicyError,
     OperationScope, PolicyVersion, ResourceKind, SessionPolicy, SessionPrecision, StageId,
 };
+use kcore::predicates::{Orientation, polygon_orientation2d_iter};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
 use kgeom::surface::Surface;
@@ -1872,8 +1873,8 @@ fn run_kgeom(
     Ok(out)
 }
 
-/// Ordinary face: every loop closes in UV. Outer loop first (positive
-/// area), holes anchored onto the outer loop's periodic branch.
+/// Ordinary face: every loop closes in UV. Outer loop first (exact positive
+/// orientation), holes anchored onto the outer loop's periodic branch.
 fn face_case_a(
     s: &dyn Surface,
     chains: Vec<UvChain>,
@@ -1883,28 +1884,7 @@ fn face_case_a(
     work: &mut BodyTessellationWork<'_, '_, '_>,
 ) -> Result<Vec<[u32; 3]>> {
     let per = s.periodicity();
-    let area = |pts: &[Vec2]| -> f64 {
-        let n = pts.len();
-        (0..n).map(|i| pts[i].cross(pts[(i + 1) % n])).sum::<f64>() / 2.0
-    };
-    let outer_idx = {
-        let mut positive = None;
-        for (index, chain) in chains.iter().enumerate() {
-            if area(&chain.uvs) > 0.0 && positive.replace(index).is_some() {
-                return Err(Error::InvalidGeometry {
-                    reason: "face must have exactly one counterclockwise (outer) loop",
-                }
-                .into());
-            }
-        }
-        let Some(outer) = positive else {
-            return Err(Error::InvalidGeometry {
-                reason: "face must have exactly one counterclockwise (outer) loop",
-            }
-            .into());
-        };
-        outer
-    };
+    let outer_idx = face_case_a_outer_index(&chains)?;
     let mean_u = |c: &UvChain| c.uvs.iter().map(|p| p.x).sum::<f64>() / c.uvs.len() as f64;
     let mean_v = |c: &UvChain| c.uvs.iter().map(|p| p.y).sum::<f64>() / c.uvs.len() as f64;
     let (ou, ov) = (mean_u(&chains[outer_idx]), mean_v(&chains[outer_idx]));
@@ -1937,6 +1917,34 @@ fn face_case_a(
         loops_ids.push(ids);
     }
     run_kgeom(s, loops_pts, &loops_ids, flip, acc, opts, work)
+}
+
+fn face_case_a_outer_index(chains: &[UvChain]) -> Result<usize> {
+    let mut positive = None;
+    for (index, chain) in chains.iter().enumerate() {
+        match polygon_orientation2d_iter(chain.uvs.iter().map(|uv| [uv.x, uv.y])) {
+            Orientation::Positive if positive.replace(index).is_some() => {
+                return Err(Error::InvalidGeometry {
+                    reason: "face must have exactly one counterclockwise (outer) loop",
+                }
+                .into());
+            }
+            Orientation::Positive | Orientation::Negative => {}
+            Orientation::Zero => {
+                // Zero includes exact algebraic cancellation, too few points,
+                // and non-finite coordinates. None can define a face loop.
+                return Err(Error::InvalidGeometry {
+                    reason: "face must have exactly one counterclockwise (outer) loop",
+                }
+                .into());
+            }
+        }
+    }
+    positive.ok_or_else(|| {
+        TessellationError::from(Error::InvalidGeometry {
+            reason: "face must have exactly one counterclockwise (outer) loop",
+        })
+    })
 }
 
 /// Copy one side of an axis-aligned UV rectangle from a frozen trim chain.
@@ -4394,6 +4402,116 @@ mod tests {
             9,
             "three loops each own a point holder, id holder, and TrimLoop holder"
         );
+    }
+
+    fn test_uv_chain(points: Vec<Vec2>) -> UvChain {
+        UvChain {
+            ids: (0..points.len())
+                .map(|index| u32::try_from(index).unwrap())
+                .collect(),
+            close_uv: points[0],
+            uvs: points,
+            winding: [0, 0],
+        }
+    }
+
+    fn invalid_face_case_a_outer_loop() -> TessellationError {
+        Error::InvalidGeometry {
+            reason: "face must have exactly one counterclockwise (outer) loop",
+        }
+        .into()
+    }
+
+    #[test]
+    fn face_case_a_outer_selection_uses_exact_shoelace_signs() {
+        const M: i64 = 1_i64 << 52;
+        let integer_points = [[M, M], [M + 1, M], [M + 1, M + 1], [M, M + 1]];
+        let exact_twice_area = integer_points
+            .iter()
+            .zip(integer_points.iter().cycle().skip(1))
+            .map(|(point, next)| {
+                i128::from(point[0]) * i128::from(next[1])
+                    - i128::from(point[1]) * i128::from(next[0])
+            })
+            .sum::<i128>();
+        assert_eq!(exact_twice_area, 2);
+
+        let points = integer_points
+            .map(|[u, v]| Vec2::new(u as f64, v as f64))
+            .to_vec();
+        let naive_twice_area = points
+            .iter()
+            .zip(points.iter().cycle().skip(1))
+            .map(|(point, next)| point.cross(*next))
+            .sum::<f64>();
+        assert_eq!(naive_twice_area, 0.0);
+
+        for rotation in 0..points.len() {
+            let mut positive = points.clone();
+            positive.rotate_left(rotation);
+            let mut negative = positive.clone();
+            negative.reverse();
+            for _ in 0..32 {
+                assert_eq!(
+                    face_case_a_outer_index(&[
+                        test_uv_chain(negative.clone()),
+                        test_uv_chain(positive.clone()),
+                    ]),
+                    Ok(1)
+                );
+            }
+            assert_eq!(
+                face_case_a_outer_index(&[test_uv_chain(negative)]),
+                Err(invalid_face_case_a_outer_loop())
+            );
+        }
+    }
+
+    #[test]
+    fn face_case_a_outer_selection_rejects_exact_zero_and_nonfinite_loops() {
+        let positive = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1.0, 0.0),
+            Vec2::new(0.0, 1.0),
+        ];
+        let exact_zero = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1.0, 1.0),
+            Vec2::new(2.0, 2.0),
+        ];
+        let nonfinite = vec![
+            Vec2::new(0.0, 0.0),
+            Vec2::new(f64::NAN, 1.0),
+            Vec2::new(1.0, 0.0),
+        ];
+        for invalid in [exact_zero, nonfinite] {
+            assert_eq!(
+                face_case_a_outer_index(
+                    &[test_uv_chain(positive.clone()), test_uv_chain(invalid),]
+                ),
+                Err(invalid_face_case_a_outer_loop())
+            );
+        }
+    }
+
+    #[test]
+    fn face_case_a_exact_orientation_preserves_public_planar_sheet_tessellation() {
+        let mut store = Store::new();
+        let body = planar_sheet(
+            &mut store,
+            &Frame::world(),
+            &[
+                Vec2::new(-1.0, -1.0),
+                Vec2::new(1.0, -1.0),
+                Vec2::new(1.0, 1.0),
+                Vec2::new(-1.0, 1.0),
+            ],
+        )
+        .unwrap();
+        let first = tessellate_body(&store, body, &opts(10.0)).unwrap();
+        let second = tessellate_body(&store, body, &opts(10.0)).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.triangles.len(), 2);
     }
 
     #[test]
