@@ -1016,10 +1016,11 @@ impl TransmittedNurbsIntersectionCertificate {
 /// This is a structural capability query only. Reissuance must still rerun the
 /// selected certifier against transformed live sources and may fail its
 /// geometric or residual checks. Only the canonical finite-open two-sample
-/// and witnessed three-sample quadratic and four-sample cubic dual-offset
-/// charts are admitted; periodic and every other dual-offset family remain
-/// outside this copy tranche. Admitted Offset(NURBS) traces retain exactly one
-/// descriptor; nested roots remain unsupported.
+/// and the canonical finite-open five-sample chart, plus witnessed
+/// three-sample quadratic and four-sample cubic dual-offset charts, are
+/// admitted; periodic and every other dual-offset family remain outside this
+/// copy tranche. Admitted Offset(NURBS) traces retain exactly one descriptor;
+/// nested roots remain unsupported.
 pub fn transmitted_nurbs_intersection_has_rigid_copy_recertifier(
     certificate: &TransmittedNurbsIntersectionCertificate,
 ) -> bool {
@@ -1087,6 +1088,12 @@ pub fn transmitted_nurbs_intersection_has_rigid_copy_recertifier(
                     ),
                     (None, None) => {
                         canonical_shape(1, 2, ParamRange::new(0.0, 1.0), &[0.0, 0.0, 1.0, 1.0])
+                            || canonical_shape(
+                                1,
+                                5,
+                                ParamRange::new(0.0, 4.0),
+                                &[0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0],
+                            )
                     }
                     (Some(_), Some(_)) => false,
                 };

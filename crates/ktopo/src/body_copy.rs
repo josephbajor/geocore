@@ -23,6 +23,7 @@ use kgraph::{
     certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
     certify_paired_plane_sphere_oblique_circle_residuals,
     certify_transmitted_cubic_dual_offset_nurbs_intersection_residuals,
+    certify_transmitted_five_sample_dual_offset_nurbs_intersection_residuals,
     certify_transmitted_nurbs_nurbs_intersection_residuals,
     certify_transmitted_offset_nurbs_intersection_residuals,
     certify_transmitted_plane_intersection_residuals,
@@ -439,6 +440,9 @@ impl Copier<'_> {
         let pcurves = self.copied_nurbs_pcurves(copied_pcurves)?;
         let quadratic_witnesses = certificate.quadratic_interpolation_witnesses();
         let cubic_witnesses = certificate.cubic_interpolation_witnesses();
+        let five_sample = quadratic_witnesses.is_none()
+            && cubic_witnesses.is_none()
+            && certificate.carrier().points().len() == 5;
         let transformed_quadratic_positions = match quadratic_witnesses {
             Some(witnesses) => Some(self.transform_points(witnesses.positions())?),
             None => None,
@@ -528,6 +532,10 @@ impl Copier<'_> {
                         witnesses.canonicalized_pcurve_points(),
                         metadata,
                         tolerance,
+                    )
+                } else if five_sample {
+                    certify_transmitted_five_sample_dual_offset_nurbs_intersection_residuals(
+                        carrier, traces, pcurves, metadata, tolerance,
                     )
                 } else {
                     certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals(

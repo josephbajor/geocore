@@ -18,6 +18,7 @@ use kgraph::{
     certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
     certify_paired_plane_sphere_oblique_circle_residuals,
     certify_transmitted_cubic_dual_offset_nurbs_intersection_residuals,
+    certify_transmitted_five_sample_dual_offset_nurbs_intersection_residuals,
     certify_transmitted_nurbs_nurbs_intersection_residuals,
     certify_transmitted_offset_nurbs_intersection_residuals,
     certify_transmitted_plane_intersection_residuals,
@@ -554,6 +555,24 @@ fn transmitted_seven_sample_dual_offset_polyline_is_narrow_sound_and_bound() {
     ];
     let metadata =
         TransmittedIntersectionChartMetadata::new(0.0, 1.0, 1.0e-8, 0.0, [None, None]).unwrap();
+    let five_knots = vec![0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0];
+    let five_positions = positions[..5].to_vec();
+    let five_uv = uv[..5].to_vec();
+    let five_certificate =
+        certify_transmitted_five_sample_dual_offset_nurbs_intersection_residuals(
+            NurbsCurve::new(1, five_knots.clone(), five_positions, None).unwrap(),
+            traces.clone(),
+            [
+                NurbsCurve2d::new(1, five_knots.clone(), five_uv.clone(), None).unwrap(),
+                NurbsCurve2d::new(1, five_knots, five_uv, None).unwrap(),
+            ],
+            metadata,
+            1.0e-8,
+        )
+        .unwrap();
+    assert!(transmitted_nurbs_intersection_has_rigid_copy_recertifier(
+        &five_certificate
+    ));
     let certificate = certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals(
         carrier.clone(),
         traces.clone(),

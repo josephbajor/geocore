@@ -2670,6 +2670,121 @@ fn rigid_copy_reissues_witnessed_cubic_dual_offset_in_both_orders() {
 }
 
 #[test]
+fn rigid_copy_reissues_canonical_five_sample_dual_offset_in_both_orders() {
+    let mut copied_certificates = Vec::new();
+    for swap_order in [false, true] {
+        let mut store = Store::new();
+        let first = [0.25];
+        let second = [0.5];
+        let (source, source_curve, source_surfaces, source_pcurves) = transmitted_dual_offset_wire(
+            &mut store,
+            [&first, &second],
+            [&first, &second],
+            false,
+            false,
+            5,
+            swap_order,
+        );
+        let source_certificate = store
+            .get(source_curve)
+            .unwrap()
+            .as_transmitted_nurbs_intersection()
+            .unwrap()
+            .certificate()
+            .clone();
+        assert!(
+            source_certificate
+                .quadratic_interpolation_witnesses()
+                .is_none()
+        );
+        assert!(source_certificate.cubic_interpolation_witnesses().is_none());
+        let source_basis_roots =
+            source_surfaces.map(|root| *surface_dependency_chain(&store, root).last().unwrap());
+        assert_ne!(source_basis_roots[0], source_basis_roots[1]);
+
+        let (copied, journal) = copy_checked(&mut store, source, oblique_placement());
+        let copied_curve = store
+            .get(store.edges_of_body(copied).unwrap()[0])
+            .unwrap()
+            .curve
+            .unwrap();
+        let copied_descriptor = store
+            .get(copied_curve)
+            .unwrap()
+            .as_transmitted_nurbs_intersection()
+            .unwrap();
+        let copied_surfaces = copied_descriptor.source_surfaces();
+        let copied_pcurves = copied_descriptor.pcurves();
+        let copied_certificate = copied_descriptor.certificate().clone();
+        assert_eq!(copied_certificate.metadata(), source_certificate.metadata());
+        assert_eq!(
+            copied_certificate.tolerance(),
+            source_certificate.tolerance()
+        );
+        assert_eq!(copied_certificate.pcurves(), source_certificate.pcurves());
+        assert_eq!(
+            copied_certificate.carrier().points(),
+            source_certificate
+                .carrier()
+                .points()
+                .iter()
+                .map(|&point| map_point(oblique_placement(), point))
+                .collect::<Vec<_>>()
+        );
+        for (source_trace, copied_trace) in source_certificate
+            .traces()
+            .iter()
+            .zip(copied_certificate.traces())
+        {
+            assert_transformed_nurbs_trace(source_trace, copied_trace, oblique_placement());
+        }
+        assert_eq!(
+            certify_transmitted_five_sample_dual_offset_nurbs_intersection_residuals(
+                copied_certificate.carrier().clone(),
+                copied_certificate.traces().clone(),
+                copied_certificate.pcurves().clone(),
+                copied_certificate.metadata(),
+                copied_certificate.tolerance(),
+            )
+            .unwrap(),
+            copied_certificate
+        );
+        for ((copied_root, source_root), (copied_pcurve, source_pcurve)) in copied_surfaces
+            .into_iter()
+            .zip(source_surfaces)
+            .zip(copied_pcurves.into_iter().zip(source_pcurves))
+        {
+            assert_ne!(copied_root, source_root);
+            assert_ne!(copied_pcurve, source_pcurve);
+            assert_copied_surface_chain(&store, &journal, copied_root, source_root);
+        }
+        let copied_basis_roots =
+            copied_surfaces.map(|root| *surface_dependency_chain(&store, root).last().unwrap());
+        assert_ne!(copied_basis_roots[0], copied_basis_roots[1]);
+        let retained = copied_surfaces
+            .into_iter()
+            .flat_map(|root| surface_dependency_chain(&store, root))
+            .collect::<Vec<_>>();
+        {
+            let mut transaction = store.transaction().unwrap();
+            for retained in retained {
+                assert!(transaction.assembly().remove_surface(retained).is_err());
+            }
+        }
+        store.geometry().validate().unwrap();
+        copied_certificates.push(copied_certificate);
+    }
+    assert_eq!(
+        copied_certificates[0].traces()[0],
+        copied_certificates[1].traces()[1]
+    );
+    assert_eq!(
+        copied_certificates[0].traces()[1],
+        copied_certificates[1].traces()[0]
+    );
+}
+
+#[test]
 fn unsupported_dual_offset_transmitted_families_roll_back_without_allocation() {
     let first = [0.25];
     let first_split = [0.125, 0.125];
@@ -2682,7 +2797,9 @@ fn unsupported_dual_offset_transmitted_families_roll_back_without_allocation() {
         ((&first[..], &shared_second[..]), true, false, 2),
         ((&first[..], &shared_second[..]), true, false, 3),
         ((&first[..], &shared_second[..]), true, false, 4),
-        ((&first[..], &second[..]), false, false, 5),
+        ((&first_split[..], &second[..]), false, false, 5),
+        ((&first[..], &shared_second[..]), true, false, 5),
+        ((&first[..], &second[..]), false, true, 5),
         ((&first[..], &second[..]), false, false, 7),
         ((&first[..], &second[..]), false, true, 2),
         ((&first[..], &second[..]), false, true, 3),
