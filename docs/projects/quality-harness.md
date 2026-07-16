@@ -171,7 +171,7 @@ Q1 implementation:
 
 Owner: `ktopo`.
 
-Implemented as 32 registered cases in the isolated `benches/` package. The
+Implemented as 35 registered cases in the isolated `benches/` package. The
 `benchmark-internals` feature adds only read-only commit counters, stable
 ordinal-based digests, store/index snapshots, and a full-rebuild audit; it is
 absent from normal `ktopo` builds. Fixture cloning, snapshots, and invariant
@@ -203,7 +203,7 @@ Ladders:
 | local refresh | same store sizes | mutate one body's point/tolerance and commit | exactly expected body scope checked; index entries unchanged outside scope |
 | fanout refresh | 1, 10, 100 dependent bodies | mutate one referenced geometry and commit | deterministic affected-body set and order |
 | mixed-store cohort | four affected roots across 4, 16, 64, 256 total bodies; 1, 4, 16, 64 affected roots across 64 total bodies | mutate one cohort-shared point and commit | affected = refreshed = checked cohort size; stable affected order and full result digests |
-| affected solid footprint | 1, 4, 16, 64 affected production solids across 64 total `primitive_mix` bodies | in one ordinary checked transaction, grow the first face of each selected solid to `2e-8` under an exact `N × 1e-8` operation budget | exactly N modified Face mutations and ordered tolerance events; affected = refreshed = checked = mutations; stable affected order and full result digests; committed index unchanged |
+| affected solid footprint | crossed seven-row production `primitive_mix` grid: 1, 4, 16, 64 affected roots at 64 total bodies; one affected root at 4, 16, 64, 256 total bodies | in one ordinary checked operation scope, grow the first face of each selected solid to `2e-8` under an exact `N × 1e-8` operation budget | fixed-total rows pin exactly N modified Face mutations and ordered tolerance events; total-size rows pin one face/mutation/event, exact `1e-8`, affected = refreshed = checked = mutations = 1, and a stable affected digest across totals; every row ratchets before/after store and full-output digests and installed-index equality |
 | batched refresh | 1, 10, 100 edited bodies | perform deterministic edits in one transaction | one atomic commit; refreshed-body count |
 | rejected commit | 1, 10, 100 bodies | commit one invalid mutation | identical pre/post store digest and index digest |
 | full rebuild reference | 1, 10, 100, 1,000 bodies | explicitly rebuild/audit index through crate-private seam | rebuilt index equals committed incremental index |
@@ -213,11 +213,13 @@ allocation counts when allocation instrumentation becomes available. The
 rejected-edit case protects failure atomicity, not merely throughput.
 The cohort matrix proves scoped index/checker counters rather than a wall-clock
 threshold. Its affected roots remain minimal one-vertex bodies so dependency
-scope stays isolated. The fixed-64-body `primitive_mix` matrix adds the first
-production-solid-footprint ladder while holding total bodies constant.
-Ordinary commit still performs full graph validation, committed-index cloning,
-and body-order refresh; global ordinary-commit cost, broader footprint scaling,
-and production-assembly behavior remain separate performance boundaries.
+scope stays isolated. The seven-row crossed `primitive_mix` matrix now protects
+both affected-count scaling at 64 total production solids and total-size
+scaling with exactly one affected first face through 256 solids, sharing the
+64-total/1-affected row. Ordinary commit still performs full graph validation,
+committed-index cloning, and body-order refresh; global ordinary-commit cost,
+broader production edit footprints, and production-assembly behavior remain
+separate performance boundaries.
 
 ## Stage Q2a — geometry graph construction and reverse-dependency ladder
 
@@ -617,7 +619,7 @@ regression remains portable.
 
 Status: implemented. Existing benchmark targets and the two current fuzz
 targets run in bounded Linux jobs; more targets remain behind the post-Q8
-landing order. The benchmark manifest contains 167 registered cases.
+landing order. The benchmark manifest contains 170 registered cases.
 
 CI has three bounded jobs/surfaces for the existing Q1 and Q6 assets. The
 Python contract surface is load-bearing: CI runs

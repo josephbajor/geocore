@@ -16,7 +16,7 @@ Every case is registered in `cases.json` with a five-segment path:
 Fixture construction, seeds, expected counters, and invariant checks are
 deterministic. Criterion measures elapsed time, but timing never establishes
 correctness. The runner always marks measurements advisory.
-The manifest currently registers 167 cases, including the 32-row Q2 topology
+The manifest currently registers 170 cases, including the 35-row Q2 topology
 matrix and the 32-row Q3 `body-tessellation.v3` matrix.
 
 Criterion is pinned to `0.8.2`. Machine-readable measured runs use
@@ -87,7 +87,7 @@ axis-wise inflated-box test. Resource-limited controls remain zero-certificate
 cases.
 
 The Q1 target verifies the result digest before measurement and again in every
-timed iteration. The Q2 target provides 32 checked-commit, incremental
+timed iteration. The Q2 target provides 35 checked-commit, incremental
 index-refresh, rejection, and full-rebuild cases in the quality contract. It
 times only the transaction edit and ordinary `commit_checked`, except that the
 full-rebuild ladder times the independent reference-index rebuild itself.
@@ -107,14 +107,20 @@ committed index, and refreshing its store body order, so this baseline does not
 claim total-store-independent end-to-end latency. The affected cohort remains
 the minimal one-vertex body needed to isolate dependency-index scope.
 
-Four additional rows hold `primitive_mix` at 64 production solids and sweep
-1, 4, 16, and 64 affected roots. One ordinary checked transaction grows the
-first face of each selected solid to `2e-8` under an exact `N × 1e-8`
-operation-owned budget. Every row pins exactly N modified Face mutations and
-ordered tolerance events, affected/refreshed/checked/mutation equality, stable
-affected-order and full-output digests, and committed-index equality. Elapsed
-time remains advisory; global ordinary-commit cost, broader footprint scaling,
-and production-assembly behavior remain open. Set
+Seven affected-solid rows form a crossed production `primitive_mix` grid: one
+axis holds 64 total solids while affected roots sweep 1, 4, 16, and 64; the
+other holds one affected root while total solids sweep 4, 16, 64, and 256,
+sharing the 64-total/1-affected row. On the total-size axis, one ordinary
+checked operation scope grows exactly the first face to `2e-8` under an exact
+`1e-8` operation-owned budget. Every total-size row pins one modified Face net
+mutation and one ordered tolerance event, affected = refreshed = checked =
+mutations = 1, a stable affected-order digest across totals, reviewed
+before/after store and full-output digest ratchets, and installed-index
+equality. The fixed-total axis retains the corresponding exact `N × 1e-8`
+budget, N-face/event, scope, digest, and index-equality evidence. Elapsed time
+remains advisory; broader production edit footprints, production-assembly
+behavior, and global ordinary-commit cost including graph validation, index
+cloning, and body-order refresh remain open. Set
 `KERNEL_BENCH_SMOKE=1` and pass one full case path after `--` for a bounded
 local smoke run.
 
