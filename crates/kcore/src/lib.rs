@@ -4,7 +4,8 @@
 //!
 //! - [`expansion`]: exact multi-component floating-point arithmetic
 //!   (Shewchuk expansions), the substrate for exact predicate fallbacks.
-//! - [`predicates`]: robust geometric predicates (`orient2d`, `orient3d`)
+//! - [`predicates`]: robust geometric predicates (`orient2d`, `orient3d`,
+//!   `incircle`)
 //!   with a fast floating-point filter and an exact fallback. All sign
 //!   decisions in the kernel must route through these — never through raw
 //!   float comparisons.
