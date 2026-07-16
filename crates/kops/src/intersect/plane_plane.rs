@@ -7,6 +7,7 @@ use super::result::{
 };
 use kcore::error::{Error, Result};
 use kcore::interval::Interval;
+use kcore::predicates::{Orientation, orient2d};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Curve, Line};
 use kgeom::param::ParamRange;
@@ -567,10 +568,8 @@ fn convex_hull(mut points: Vec<[f64; 2]>, tolerance: f64) -> Vec<[f64; 2]> {
     let mut lower = Vec::new();
     for &point in &unique {
         while lower.len() >= 2
-            && cross2(
-                sub2(lower[lower.len() - 1], lower[lower.len() - 2]),
-                sub2(point, lower[lower.len() - 1]),
-            ) <= 0.0
+            && orient2d(lower[lower.len() - 2], lower[lower.len() - 1], point)
+                != Orientation::Positive
         {
             lower.pop();
         }
@@ -579,10 +578,8 @@ fn convex_hull(mut points: Vec<[f64; 2]>, tolerance: f64) -> Vec<[f64; 2]> {
     let mut upper = Vec::new();
     for &point in unique.iter().rev() {
         while upper.len() >= 2
-            && cross2(
-                sub2(upper[upper.len() - 1], upper[upper.len() - 2]),
-                sub2(point, upper[upper.len() - 1]),
-            ) <= 0.0
+            && orient2d(upper[upper.len() - 2], upper[upper.len() - 1], point)
+                != Orientation::Positive
         {
             upper.pop();
         }
@@ -731,4 +728,93 @@ fn validate_ranges(a_range: [ParamRange; 2], b_range: [ParamRange; 2]) -> Result
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn integer_uv([u, v]: [i64; 2]) -> [f64; 2] {
+        [u as f64, v as f64]
+    }
+
+    fn exact_integer_turn(a: [i64; 2], b: [i64; 2], c: [i64; 2]) -> i128 {
+        let ab = [
+            i128::from(b[0]) - i128::from(a[0]),
+            i128::from(b[1]) - i128::from(a[1]),
+        ];
+        let bc = [
+            i128::from(c[0]) - i128::from(b[0]),
+            i128::from(c[1]) - i128::from(b[1]),
+        ];
+        ab[0] * bc[1] - ab[1] * bc[0]
+    }
+
+    #[test]
+    fn convex_hull_retains_exact_positive_turns_and_removes_exact_zero_turns() {
+        const M: i64 = (1_i64 << 52) - 1;
+        let coordinates = [[0, 0], [M, M - 1], [2 * M + 1, 2 * M - 1], [0, 2 * M + 1]];
+        let points = coordinates.map(integer_uv);
+
+        assert_eq!(
+            exact_integer_turn(coordinates[0], coordinates[1], coordinates[2]),
+            1
+        );
+        let rounded_turn = cross2(sub2(points[1], points[0]), sub2(points[2], points[1]));
+        assert_eq!(rounded_turn, 0.0);
+
+        // A public coincident-plane overlap is the intersection of two rectangles. Its
+        // consecutive boundary directions come from two axis pairs, with same-frame
+        // directions perpendicular, so this three-integer cancellation cannot be encoded
+        // as consecutive exact public window edges. Exercise the private production helper
+        // directly here; the integration suite separately covers the public rectangle path.
+        let expected = points.to_vec();
+        let hull = convex_hull(points.to_vec(), Tolerances::default().linear());
+        assert_eq!(hull, expected);
+        assert_eq!(hull[1], integer_uv(coordinates[1]));
+        assert!(
+            hull.iter()
+                .flatten()
+                .all(|coordinate| coordinate.is_finite())
+        );
+        assert_eq!(
+            convex_hull(points.to_vec(), Tolerances::default().linear()),
+            expected
+        );
+
+        let mut rotated = points.to_vec();
+        rotated.rotate_left(2);
+        assert_eq!(
+            convex_hull(rotated, Tolerances::default().linear()),
+            expected
+        );
+
+        let mut reversed = points.to_vec();
+        reversed.reverse();
+        assert_eq!(
+            convex_hull(reversed, Tolerances::default().linear()),
+            expected
+        );
+
+        let collinear_coordinates = [[0, 0], [M, M - 1], [2 * M, 2 * M - 2], [0, 2 * M + 1]];
+        assert_eq!(
+            exact_integer_turn(
+                collinear_coordinates[0],
+                collinear_coordinates[1],
+                collinear_coordinates[2],
+            ),
+            0
+        );
+        assert_eq!(
+            convex_hull(
+                collinear_coordinates.map(integer_uv).to_vec(),
+                Tolerances::default().linear(),
+            ),
+            vec![
+                integer_uv(collinear_coordinates[0]),
+                integer_uv(collinear_coordinates[2]),
+                integer_uv(collinear_coordinates[3]),
+            ]
+        );
+    }
 }

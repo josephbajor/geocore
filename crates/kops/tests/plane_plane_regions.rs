@@ -2,6 +2,7 @@
 
 use kcore::error::Error;
 use kcore::math;
+use kcore::predicates::{Orientation, orient2d};
 use kcore::tolerance::Tolerances;
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
@@ -252,6 +253,90 @@ fn swapped_regions_restore_first_chart_canonical_winding() {
     assert_eq!(
         swapped.regions[0].orientation,
         SurfaceRegionOrientation::Reversed
+    );
+}
+
+#[test]
+fn public_coincident_window_hull_is_repeatable_and_swap_stable() {
+    let a = world_plane();
+    let angle = core::f64::consts::FRAC_PI_4;
+    let b = Plane::new(
+        Frame::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(math::cos(angle), math::sin(angle), 0.0),
+        )
+        .unwrap(),
+    );
+    let a_range = window(-1.0, 1.0, -1.0, 1.0);
+    let b_range = window(-1.0, 1.0, -1.0, 1.0);
+
+    // Every coincident-window result passes its accumulated public candidates through the
+    // private production convex hull before the dimensional classification below.
+    let hit = intersect_bounded_planes(&a, a_range, &b, b_range, Tolerances::default()).unwrap();
+    assert_region_lifts(&hit, &a, &b);
+    assert_eq!(hit.regions[0].boundary.len(), 8);
+    let boundary_a = hit.regions[0]
+        .boundary
+        .iter()
+        .map(|vertex| vertex.uv_a)
+        .collect::<Vec<_>>();
+    assert!((0..boundary_a.len()).all(|index| {
+        orient2d(
+            boundary_a[index],
+            boundary_a[(index + 1) % boundary_a.len()],
+            boundary_a[(index + 2) % boundary_a.len()],
+        ) == Orientation::Positive
+    }));
+
+    let repeated =
+        intersect_bounded_planes(&a, a_range, &b, b_range, Tolerances::default()).unwrap();
+    assert_eq!(repeated, hit);
+
+    let direct_swapped =
+        intersect_bounded_planes(&b, b_range, &a, a_range, Tolerances::default()).unwrap();
+    assert_region_lifts(&direct_swapped, &b, &a);
+    assert_eq!(
+        direct_swapped.regions[0].orientation,
+        hit.regions[0].orientation
+    );
+    assert_eq!(direct_swapped.regions[0].boundary.len(), 8);
+    for vertex in &hit.regions[0].boundary {
+        assert!(
+            direct_swapped.regions[0].boundary.iter().any(|swapped| {
+                vertex.point.dist(swapped.point) <= Tolerances::default().linear()
+            })
+        );
+    }
+
+    let invalid_first = intersect_bounded_planes(
+        &a,
+        [ParamRange::unbounded(), range(-1.0, 1.0)],
+        &b,
+        b_range,
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        invalid_first,
+        Error::InvalidGeometry {
+            reason: "plane/plane intersection requires finite non-reversed first-plane ranges"
+        }
+    );
+
+    let invalid_second = intersect_bounded_planes(
+        &a,
+        a_range,
+        &b,
+        [range(-1.0, 1.0), ParamRange::unbounded()],
+        Tolerances::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        invalid_second,
+        Error::InvalidGeometry {
+            reason: "plane/plane intersection requires finite non-reversed second-plane ranges"
+        }
     );
 }
 
