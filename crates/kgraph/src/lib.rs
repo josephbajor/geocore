@@ -65,6 +65,7 @@ pub use intersection::{
     certify_verified_plane_nurbs_intersection_residuals,
     certify_verified_sphere_nurbs_intersection_residuals,
     reissue_verified_nurbs_intersection_residuals,
+    transmitted_nurbs_intersection_has_rigid_copy_recertifier,
     verified_dual_offset_nurbs_intersection_certificate_cost,
     verified_nurbs_nurbs_intersection_certificate_cost,
     verified_offset_nurbs_nurbs_intersection_certificate_cost,

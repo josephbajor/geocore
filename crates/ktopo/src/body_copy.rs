@@ -17,11 +17,17 @@ use kgeom::vec::{Point3, Vec3};
 use kgraph::{
     EvalLimits, ExactSurfaceField, OffsetSurfaceDescriptor, PairedTrace, PlaneCircleTrace,
     PlaneSphereCircleTrace, SphereLatitudeTrace, SphericalCirclePcurve,
-    TransmittedOffsetNurbsTrace, TransmittedOffsetPlaneTrace, VerifiedIntersectionCertificate,
-    VerifiedNurbsIntersectionCertificate, certify_paired_plane_line_residuals,
-    certify_paired_plane_sphere_circle_residuals,
+    TransmittedNurbsIntersectionCertificate, TransmittedOffsetNurbsTrace,
+    TransmittedOffsetPlaneTrace, TransmittedPlaneIntersectionCertificate,
+    VerifiedIntersectionCertificate, VerifiedNurbsIntersectionCertificate,
+    certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
     certify_paired_plane_sphere_oblique_circle_residuals,
+    certify_transmitted_nurbs_nurbs_intersection_residuals,
+    certify_transmitted_offset_nurbs_intersection_residuals,
+    certify_transmitted_plane_intersection_residuals,
+    certify_transmitted_plane_nurbs_intersection_residuals,
     reissue_verified_nurbs_intersection_residuals,
+    transmitted_nurbs_intersection_has_rigid_copy_recertifier,
 };
 use std::collections::HashMap;
 
@@ -253,6 +259,22 @@ impl Copier<'_> {
                 intersection.certificate(),
             );
         }
+        if let CurveGeom::TransmittedIntersection(intersection) = &descriptor {
+            return self.copy_transmitted_plane_intersection(
+                source,
+                intersection.source_surfaces(),
+                intersection.pcurves(),
+                intersection.certificate(),
+            );
+        }
+        if let CurveGeom::TransmittedNurbsIntersection(intersection) = &descriptor {
+            return self.copy_transmitted_nurbs_intersection(
+                source,
+                intersection.source_surfaces(),
+                intersection.pcurves(),
+                intersection.certificate(),
+            );
+        }
         let transformed = match descriptor {
             CurveGeom::Line(line) => CurveGeom::Line(Line::new(
                 self.checked_point(line.origin())?,
@@ -279,9 +301,7 @@ impl Copier<'_> {
             CurveGeom::Intersection(_) => unreachable!("handled above"),
             CurveGeom::VerifiedNurbsIntersection(_) => unreachable!("handled above"),
             CurveGeom::TransmittedIntersection(_) | CurveGeom::TransmittedNurbsIntersection(_) => {
-                return Err(Error::InvalidGeometry {
-                    reason: "rigid body copy does not reissue transmitted intersection certificates",
-                });
+                unreachable!("handled above")
             }
             _ => {
                 return Err(Error::InvalidGeometry {
@@ -344,6 +364,133 @@ impl Copier<'_> {
         )?;
         self.register_curve_copy(source, curve);
         Ok(curve)
+    }
+
+    fn copy_transmitted_plane_intersection(
+        &mut self,
+        source: CurveId,
+        source_surfaces: [SurfaceId; 2],
+        source_pcurves: [Curve2dId; 2],
+        certificate: &TransmittedPlaneIntersectionCertificate,
+    ) -> Result<CurveId> {
+        let copied_surfaces = [
+            self.copy_surface(source_surfaces[0])?,
+            self.copy_surface(source_surfaces[1])?,
+        ];
+        let copied_pcurves = [
+            self.copy_pcurve(source_pcurves[0])?,
+            self.copy_pcurve(source_pcurves[1])?,
+        ];
+        let pcurves = self.copied_nurbs_pcurves(copied_pcurves)?;
+        let surfaces = [
+            self.exact_plane(copied_surfaces[0])?,
+            self.exact_plane(copied_surfaces[1])?,
+        ];
+        let certificate = certify_transmitted_plane_intersection_residuals(
+            self.transform_nurbs_curve(certificate.carrier())?,
+            surfaces,
+            pcurves,
+            certificate.metadata(),
+            certificate.tolerance(),
+        )
+        .map_err(|_| Error::InvalidGeometry {
+            reason: "rigid body copy could not reissue the transmitted Plane intersection certificate",
+        })?;
+        let curve = self
+            .store
+            .insert_verified_transmitted_plane_intersection_curve(
+                copied_surfaces,
+                copied_pcurves,
+                certificate,
+            )?;
+        self.register_curve_copy(source, curve);
+        Ok(curve)
+    }
+
+    fn copy_transmitted_nurbs_intersection(
+        &mut self,
+        source: CurveId,
+        source_surfaces: [SurfaceId; 2],
+        source_pcurves: [Curve2dId; 2],
+        certificate: &TransmittedNurbsIntersectionCertificate,
+    ) -> Result<CurveId> {
+        if !transmitted_nurbs_intersection_has_rigid_copy_recertifier(certificate) {
+            return Err(Error::InvalidGeometry {
+                reason: "rigid body copy cannot rerun this transmitted NURBS certificate family",
+            });
+        }
+        let copied_surfaces = [
+            self.copy_surface(source_surfaces[0])?,
+            self.copy_surface(source_surfaces[1])?,
+        ];
+        let copied_pcurves = [
+            self.copy_pcurve(source_pcurves[0])?,
+            self.copy_pcurve(source_pcurves[1])?,
+        ];
+        let pcurves = self.copied_nurbs_pcurves(copied_pcurves)?;
+        let carrier = self.transform_nurbs_curve(certificate.carrier())?;
+        let traces = [
+            self.copied_nurbs_trace(&certificate.traces()[0], copied_surfaces[0])?,
+            self.copied_nurbs_trace(&certificate.traces()[1], copied_surfaces[1])?,
+        ];
+        let metadata = certificate.metadata();
+        let tolerance = certificate.tolerance();
+        let reissued = match &traces {
+            [kgraph::NurbsIntersectionTrace::Plane(_), kgraph::NurbsIntersectionTrace::Nurbs(_)]
+            | [kgraph::NurbsIntersectionTrace::Nurbs(_), kgraph::NurbsIntersectionTrace::Plane(_)] => {
+                certify_transmitted_plane_nurbs_intersection_residuals(
+                    carrier, traces, pcurves, metadata, tolerance,
+                )
+            }
+            [kgraph::NurbsIntersectionTrace::Nurbs(_), kgraph::NurbsIntersectionTrace::Nurbs(_)] => {
+                certify_transmitted_nurbs_nurbs_intersection_residuals(
+                    carrier, traces, pcurves, metadata, tolerance,
+                )
+            }
+            [kgraph::NurbsIntersectionTrace::OffsetNurbs(_), kgraph::NurbsIntersectionTrace::Nurbs(_)]
+            | [kgraph::NurbsIntersectionTrace::Nurbs(_), kgraph::NurbsIntersectionTrace::OffsetNurbs(_)] => {
+                certify_transmitted_offset_nurbs_intersection_residuals(
+                    carrier, traces, pcurves, metadata, tolerance,
+                )
+            }
+            _ => return Err(Error::InvalidGeometry {
+                reason: "rigid body copy cannot rerun this transmitted NURBS certificate family",
+            }),
+        }
+        .map_err(|_| Error::InvalidGeometry {
+            reason: "rigid body copy could not reissue the transmitted NURBS intersection certificate",
+        })?;
+        let curve = self
+            .store
+            .insert_verified_transmitted_nurbs_intersection_curve(
+                copied_surfaces,
+                copied_pcurves,
+                reissued,
+            )?;
+        self.register_curve_copy(source, curve);
+        Ok(curve)
+    }
+
+    fn copied_nurbs_pcurves(
+        &self,
+        copied: [Curve2dId; 2],
+    ) -> Result<[kgeom::curve2d::NurbsCurve2d; 2]> {
+        copied
+            .map(|pcurve| {
+                self.store
+                    .get(pcurve)?
+                    .as_nurbs()
+                    .cloned()
+                    .ok_or(Error::InvalidGeometry {
+                        reason: "transmitted intersection must retain paired NURBS pcurves",
+                    })
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?
+            .try_into()
+            .map_err(|_| Error::InvalidGeometry {
+                reason: "paired transmitted pcurves must contain two curves",
+            })
     }
 
     fn transform_nurbs_curve(&self, curve: &NurbsCurve) -> Result<NurbsCurve> {

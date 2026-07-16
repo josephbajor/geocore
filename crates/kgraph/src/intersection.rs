@@ -1010,6 +1010,43 @@ impl TransmittedNurbsIntersectionCertificate {
     }
 }
 
+/// Whether a transmitted NURBS certificate belongs to the bounded families
+/// whose public original-source certifier is admitted by rigid copy.
+///
+/// This is a structural capability query only. Reissuance must still rerun the
+/// selected certifier against transformed live sources and may fail its
+/// geometric or residual checks. Periodic and dual-offset transmitted charts,
+/// plus Offset(NURBS)/Plane, remain outside this first copy tranche.
+pub fn transmitted_nurbs_intersection_has_rigid_copy_recertifier(
+    certificate: &TransmittedNurbsIntersectionCertificate,
+) -> bool {
+    if certificate.carrier_period.is_some()
+        || certificate.quadratic_witnesses.is_some()
+        || certificate.cubic_witnesses.is_some()
+    {
+        return false;
+    }
+    matches!(
+        &certificate.traces,
+        [
+            TransmittedNurbsIntersectionTrace::Plane(_),
+            TransmittedNurbsIntersectionTrace::Nurbs(_),
+        ] | [
+            TransmittedNurbsIntersectionTrace::Nurbs(_),
+            TransmittedNurbsIntersectionTrace::Plane(_),
+        ] | [
+            TransmittedNurbsIntersectionTrace::Nurbs(_),
+            TransmittedNurbsIntersectionTrace::Nurbs(_),
+        ] | [
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(_),
+            TransmittedNurbsIntersectionTrace::Nurbs(_),
+        ] | [
+            TransmittedNurbsIntersectionTrace::Nurbs(_),
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(_),
+        ]
+    )
+}
+
 /// Source chart declaration retained alongside a transmitted intersection
 /// proof. These values describe the published affine parameter convention and
 /// its declared approximation/error metadata; they are not recomputed.

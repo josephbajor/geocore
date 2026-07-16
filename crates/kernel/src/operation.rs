@@ -1344,9 +1344,9 @@ impl PartEdit<'_> {
     /// circle descriptors backed by direct fields or safe finite constant-
     /// normal offset chains are admitted because the lower copy transaction
     /// reissues their whole-range certificates. Operation-generated verified
-    /// analytic/NURBS descriptors are admitted under their graph-validated
-    /// direct and bounded offset-source contracts; transmitted proof families
-    /// remain unsupported.
+    /// analytic/NURBS and transmitted descriptors are admitted under their
+    /// graph-validated direct and bounded offset-source contracts when the
+    /// lower layer can rerun their public original-source certifier.
     pub fn copy_body_rigid(
         &mut self,
         request: CopyBodyRequest,
@@ -1479,7 +1479,15 @@ fn rigid_copy_curve_is_reissuable(
         return Ok(true);
     }
     let Some(intersection) = descriptor.as_intersection() else {
-        return Ok(descriptor.as_verified_nurbs_intersection().is_some());
+        return Ok(descriptor.as_verified_nurbs_intersection().is_some()
+            || descriptor.as_transmitted_intersection().is_some()
+            || descriptor
+                .as_transmitted_nurbs_intersection()
+                .is_some_and(|intersection| {
+                    kgraph::transmitted_nurbs_intersection_has_rigid_copy_recertifier(
+                        intersection.certificate(),
+                    )
+                }));
     };
     let [first, second] = intersection.source_surfaces();
     let exact_field = |surface| {
@@ -1810,6 +1818,10 @@ mod tests {
         )
     }
 
+    fn transmitted_metadata() -> TransmittedIntersectionChartMetadata {
+        TransmittedIntersectionChartMetadata::new(0.0, 1.0, 0.0, 0.0, [None, None]).unwrap()
+    }
+
     fn transmitted_plane_curve(store: &mut Store) -> ktopo::entity::CurveId {
         let plane = Plane::new(Frame::world());
         let surfaces = [
@@ -1844,7 +1856,7 @@ mod tests {
             carrier,
             [plane; 2],
             pcurves.clone(),
-            TransmittedIntersectionChartMetadata::new(0.0, 1.0, 0.0, 0.0, [None, None]).unwrap(),
+            transmitted_metadata(),
             1.0e-12,
         )
         .unwrap();
@@ -2493,32 +2505,47 @@ mod tests {
         );
 
         let transmitted = transmitted_plane_curve(&mut store);
-        assert!(!rigid_copy_curve_is_reissuable(&store, transmitted).unwrap());
+        assert!(rigid_copy_curve_is_reissuable(&store, transmitted).unwrap());
     }
 
     #[test]
-    fn rigid_body_copy_rejects_transmitted_proofs_before_starting_an_operation() {
+    fn rigid_body_copy_facade_admits_and_reissues_transmitted_plane_proofs() {
         let mut session = Kernel::new().create_session();
         let part_id = session.create_part();
         let mut edit = session.edit_part(part_id.clone()).unwrap();
         let source = BodyId::new(part_id, transmitted_plane_wire(&mut edit.state.store));
-        let before = (
-            edit.state.store.count::<RawBody>(),
-            edit.state.store.count::<RawEdge>(),
-        );
-        assert!(matches!(
-            edit.copy_body_rigid(CopyBodyRequest::new(source, Frame::world())),
-            Err(KernelError::UnsupportedBodyCopyGeometry {
-                capability: crate::error::capability::RIGID_COPY_VERIFIED_INTERSECTION,
-            })
-        ));
+        let placement = Frame::new(
+            Point3::new(2.0, -1.0, 3.0),
+            Vec3::new(1.0, 2.0, 3.0).normalized().unwrap(),
+            Vec3::new(2.0, -1.0, 0.0).normalized().unwrap(),
+        )
+        .unwrap();
+        let created = edit
+            .copy_body_rigid(CopyBodyRequest::new(source, placement))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        let copied_edge = edit
+            .state
+            .store
+            .edges_of_body(created.body().raw())
+            .unwrap()[0];
+        let copied_curve = edit.state.store.get(copied_edge).unwrap().curve.unwrap();
+        let copied = edit
+            .state
+            .store
+            .get(copied_curve)
+            .unwrap()
+            .as_transmitted_intersection()
+            .unwrap();
         assert_eq!(
-            before,
-            (
-                edit.state.store.count::<RawBody>(),
-                edit.state.store.count::<RawEdge>(),
-            )
+            copied.certificate().carrier().points(),
+            &[
+                placement.point_at(0.0, 0.0, 0.0),
+                placement.point_at(1.0, 0.0, 0.0),
+            ]
         );
+        assert_eq!(copied.certificate().metadata(), transmitted_metadata());
     }
 
     #[test]
