@@ -29,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 170)
+        self.assertEqual(len(cases), 174)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -38,7 +38,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
         topology = [
             case for case in cases if case["benchmark_target"] == "topology_commit"
         ]
-        self.assertEqual(len(topology), 35)
+        self.assertEqual(len(topology), 39)
         self.assertTrue(
             all(case["deterministic_seed"] == 0x51544F504F000002 for case in topology)
         )
@@ -149,6 +149,81 @@ class BenchmarkBaselineTests(unittest.TestCase):
                 for case in fixed_affected_solids
             )
         )
+        block_cohort = [
+            case
+            for case in topology
+            if case["policy_values"]["ladder"]
+            == "affected-block-cohort-footprint"
+        ]
+        self.assertEqual(len(block_cohort), 4)
+        self.assertEqual(
+            {case["size_parameters"]["affected_bodies"] for case in block_cohort},
+            {1, 4, 8, 13},
+        )
+        expected_block_cohort_digests = {
+            1: "030000b9a2c219c6",
+            4: "629cebb973620ee6",
+            8: "35eef1d61786234a",
+            13: "76003dd52e0a7ea2",
+        }
+        expected_block_cohort_budgets = {
+            1: 3.0000000000000004e-8,
+            4: 1.2e-7,
+            8: 2.400000000000001e-7,
+            13: 0.0000003900000000000002364616477884,
+        }
+        self.assertTrue(
+            all(
+                case["fixture_version"]
+                == "topology-commit-affected-block-cohort-footprint.v1"
+                and case["size_parameters"]["elements"]
+                == case["size_parameters"]["bodies"]
+                == case["expected_result_counters"]["body_count"]
+                == 64
+                and case["policy_values"]["checked_commit"] == "ordinary"
+                and case["policy_values"]["operation_scope"]
+                == "single-ordinary-checked-commit"
+                and case["policy_values"]["mutation"]
+                == "operation-owned-face-edge-vertex-tolerance-growth"
+                and case["policy_values"]["target_order"]
+                == "body-ordinal-then-face-edge-vertex"
+                and case["policy_values"]["root_selection"]
+                == "primitive-ordinal-mod-5-equals-0"
+                and case["policy_values"]["distractor_store"]
+                == "unchanged-64-body-primitive-mix"
+                for case in block_cohort
+            )
+        )
+        for case in block_cohort:
+            affected = case["size_parameters"]["affected_bodies"]
+            counters = case["expected_result_counters"]
+            self.assertEqual(case["tolerances"]["requested_face_tolerance"], 2e-8)
+            self.assertEqual(case["tolerances"]["requested_edge_tolerance"], 2e-8)
+            self.assertEqual(case["tolerances"]["requested_vertex_tolerance"], 2e-8)
+            self.assertEqual(
+                case["tolerances"]["aggregate_growth_budget"],
+                expected_block_cohort_budgets[affected],
+            )
+            self.assertEqual(counters["operation_scopes"], 1)
+            self.assertEqual(counters["affected_bodies"], affected)
+            self.assertEqual(counters["refreshed_bodies"], affected)
+            self.assertEqual(counters["checked_bodies"], affected)
+            self.assertEqual(counters["mutations"], 3 * affected)
+            self.assertEqual(counters["modified_faces"], affected)
+            self.assertEqual(counters["modified_edges"], affected)
+            self.assertEqual(counters["modified_vertices"], affected)
+            self.assertEqual(counters["tolerance_events"], 3 * affected)
+            self.assertEqual(
+                counters["affected_order_digest"],
+                expected_block_cohort_digests[affected],
+            )
+            self.assertTrue(counters["committed"])
+            for digest in (
+                "before_store_digest",
+                "after_store_digest",
+                "output_digest",
+            ):
+                self.assertEqual(len(counters[digest]), 16)
         graph_build = [
             case for case in cases if case["benchmark_target"] == "graph_build"
         ]

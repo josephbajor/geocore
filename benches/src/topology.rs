@@ -7,7 +7,7 @@ use ktopo::benchmark::{
     CommitObservation, IndexAudit, IndexSnapshot, StoreSnapshot, audit_full_rebuild,
     index_snapshot, last_commit, store_snapshot,
 };
-use ktopo::entity::{BodyId, FaceId, PointId};
+use ktopo::entity::{BodyId, EdgeId, FaceId, PointId, VertexId};
 use ktopo::make;
 use ktopo::store::Store;
 
@@ -17,14 +17,25 @@ pub const FIXTURE_VERSION: &str = "topology-commit.v1";
 pub const COHORT_FIXTURE_VERSION: &str = "topology-commit-cohort.v2";
 /// Fixture identity for the production-solid affected-footprint matrix.
 pub const AFFECTED_SOLID_FIXTURE_VERSION: &str = "topology-commit-affected-solid-footprint.v1";
+/// Fixture identity for the block-cohort production-edit footprint matrix.
+pub const AFFECTED_BLOCK_COHORT_FIXTURE_VERSION: &str =
+    "topology-commit-affected-block-cohort-footprint.v1";
 /// Deterministic fixture seed (construction itself is not randomized).
 pub const FIXTURE_SEED: u64 = 0x5154_4f50_4f00_0002;
 
 const AFFECTED_SOLID_OPERATION: &str = "q2-affected-solid-footprint";
 const AFFECTED_SOLID_FACE_TOLERANCE: f64 = 2.0 * LINEAR_RESOLUTION;
 const AFFECTED_SOLID_GROWTH_PER_FACE: f64 = AFFECTED_SOLID_FACE_TOLERANCE - LINEAR_RESOLUTION;
+const AFFECTED_BLOCK_COHORT_OPERATION: &str = "q2-affected-block-cohort-footprint";
+const AFFECTED_BLOCK_COHORT_TOLERANCE: f64 = 2.0 * LINEAR_RESOLUTION;
+const AFFECTED_BLOCK_COHORT_GROWTH_PER_ENTITY: f64 =
+    AFFECTED_BLOCK_COHORT_TOLERANCE - LINEAR_RESOLUTION;
 
-/// One of the eight Q2 benchmark ladders.
+fn affected_block_cohort_growth_budget(affected_bodies: usize) -> f64 {
+    (0..3 * affected_bodies).fold(0.0, |sum, _| sum + AFFECTED_BLOCK_COHORT_GROWTH_PER_ENTITY)
+}
+
+/// One of the nine Q2 benchmark ladders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ladder {
     /// Begin and commit a transaction with no edits.
@@ -37,6 +48,8 @@ pub enum Ladder {
     Cohort,
     /// Grow one face tolerance on each selected production solid.
     AffectedSolidFootprint,
+    /// Grow one face, edge, and vertex tolerance per selected block root.
+    AffectedBlockCohortFootprint,
     /// Edit every independent body's point in one transaction.
     Batched,
     /// Attempt one invalid body mutation and verify rollback.
@@ -66,8 +79,8 @@ pub struct TopologyCase {
     pub expected_output_digest: u64,
 }
 
-/// Exactly the 35 Q2 cases specified by the quality contract.
-pub const CASES: [TopologyCase; 35] = [
+/// Exactly the 39 Q2 cases specified by the quality contract.
+pub const CASES: [TopologyCase; 39] = [
     case(
         "topology/checked-commit/isolated-acorns-v1/1/clean-v1",
         Ladder::Clean,
@@ -285,6 +298,38 @@ pub const CASES: [TopologyCase; 35] = [
         0x0076_7ca8_95fc_280a,
         0x18e3_f6db_49e4_dce0,
     ),
+    affected_block_cohort_case(
+        "topology/affected-block-cohort/primitive-mix-blocks-v1/total-64/affected-1-v1",
+        1,
+        0x0300_00b9_a2c2_19c6,
+        0x4bbf_07cb_a16f_69f6,
+        0xf321_73bd_c29e_d2a5,
+        0xdcc3_867d_ead5_72d5,
+    ),
+    affected_block_cohort_case(
+        "topology/affected-block-cohort/primitive-mix-blocks-v1/total-64/affected-4-v1",
+        4,
+        0x629c_ebb9_7362_0ee6,
+        0x4bbf_07cb_a16f_69f6,
+        0x906e_8305_50aa_9016,
+        0x4cea_0f83_69a3_8358,
+    ),
+    affected_block_cohort_case(
+        "topology/affected-block-cohort/primitive-mix-blocks-v1/total-64/affected-8-v1",
+        8,
+        0x35ee_f1d6_1786_234a,
+        0x4bbf_07cb_a16f_69f6,
+        0x1a00_c485_06bf_a116,
+        0x4ba5_d8a7_55d7_7654,
+    ),
+    affected_block_cohort_case(
+        "topology/affected-block-cohort/primitive-mix-blocks-v1/total-64/affected-13-v1",
+        13,
+        0x7600_3dd5_2e0a_7ea2,
+        0x4bbf_07cb_a16f_69f6,
+        0xf236_4103_47e5_5af1,
+        0x74af_6f11_72cb_c20a,
+    ),
 ];
 
 const fn case(path: &'static str, ladder: Ladder, bodies: usize) -> TopologyCase {
@@ -328,11 +373,33 @@ const fn case(path: &'static str, ladder: Ladder, bodies: usize) -> TopologyCase
             Ladder::Clean | Ladder::FullRebuild => 0,
             Ladder::Local | Ladder::Rejected => 1,
             Ladder::Fanout | Ladder::Batched => bodies,
-            Ladder::Cohort | Ladder::AffectedSolidFootprint => 0,
+            Ladder::Cohort
+            | Ladder::AffectedSolidFootprint
+            | Ladder::AffectedBlockCohortFootprint => 0,
         },
         expected_affected_digest,
         expected_before_store_digest: 0,
         expected_after_store_digest: 0,
+        expected_output_digest,
+    }
+}
+
+const fn affected_block_cohort_case(
+    path: &'static str,
+    affected_bodies: usize,
+    expected_affected_digest: u64,
+    expected_before_store_digest: u64,
+    expected_after_store_digest: u64,
+    expected_output_digest: u64,
+) -> TopologyCase {
+    TopologyCase {
+        path,
+        ladder: Ladder::AffectedBlockCohortFootprint,
+        bodies: 64,
+        affected_bodies,
+        expected_affected_digest,
+        expected_before_store_digest,
+        expected_after_store_digest,
         expected_output_digest,
     }
 }
@@ -384,6 +451,8 @@ pub struct TopologyFixture {
     bodies: Box<[BodyId]>,
     points: Box<[PointId]>,
     affected_faces: Box<[FaceId]>,
+    affected_edges: Box<[EdgeId]>,
+    affected_vertices: Box<[VertexId]>,
 }
 
 impl TopologyFixture {
@@ -405,6 +474,8 @@ impl TopologyFixture {
             bodies: bodies.into_boxed_slice(),
             points: points.into_boxed_slice(),
             affected_faces: Box::new([]),
+            affected_edges: Box::new([]),
+            affected_vertices: Box::new([]),
         }
     }
 
@@ -479,6 +550,8 @@ impl TopologyFixture {
             bodies: bodies.into_boxed_slice(),
             points: vec![shared].into_boxed_slice(),
             affected_faces: Box::new([]),
+            affected_edges: Box::new([]),
+            affected_vertices: Box::new([]),
         }
     }
 
@@ -494,6 +567,8 @@ impl TopologyFixture {
             bodies: bodies.into_boxed_slice(),
             points: Box::new([]),
             affected_faces: Box::new([]),
+            affected_edges: Box::new([]),
+            affected_vertices: Box::new([]),
         }
     }
 
@@ -519,6 +594,49 @@ impl TopologyFixture {
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
+        fixture
+    }
+
+    /// Build the unchanged 64-body production mix and select only block roots
+    /// at primitive ordinals divisible by five.
+    pub fn primitive_mix_affected_block_cohort(affected_bodies: usize) -> Self {
+        assert!(matches!(affected_bodies, 1 | 4 | 8 | 13));
+        let mut fixture = Self::primitive_mix(64);
+        let block_roots = fixture
+            .bodies
+            .iter()
+            .copied()
+            .enumerate()
+            .filter_map(|(ordinal, body)| (ordinal % 5 == 0).then_some(body))
+            .collect::<Vec<_>>();
+        assert_eq!(block_roots.len(), 13);
+
+        let mut faces = Vec::with_capacity(affected_bodies);
+        let mut edges = Vec::with_capacity(affected_bodies);
+        let mut vertices = Vec::with_capacity(affected_bodies);
+        for body in block_roots.into_iter().take(affected_bodies) {
+            let body_faces = fixture
+                .store
+                .faces_of_body(body)
+                .expect("valid Q2 block cohort body");
+            let body_edges = fixture
+                .store
+                .edges_of_body(body)
+                .expect("valid Q2 block cohort body");
+            let body_vertices = fixture
+                .store
+                .vertices_of_body(body)
+                .expect("valid Q2 block cohort body");
+            assert_eq!(body_faces.len(), 6);
+            assert_eq!(body_edges.len(), 12);
+            assert_eq!(body_vertices.len(), 8);
+            faces.push(body_faces[0]);
+            edges.push(body_edges[0]);
+            vertices.push(body_vertices[0]);
+        }
+        fixture.affected_faces = faces.into_boxed_slice();
+        fixture.affected_edges = edges.into_boxed_slice();
+        fixture.affected_vertices = vertices.into_boxed_slice();
         fixture
     }
 
@@ -559,6 +677,9 @@ impl TopologyFixture {
             Ladder::AffectedSolidFootprint => {
                 affected_solid_journal = Some(fixture.grow_affected_face_tolerances());
             }
+            Ladder::AffectedBlockCohortFootprint => {
+                affected_solid_journal = Some(fixture.grow_affected_block_cohort_tolerances());
+            }
             Ladder::Batched => fixture.edit_points(fixture.bodies.len()),
             Ladder::Rejected => {
                 let mut transaction = fixture.store.transaction().expect("rejected transaction");
@@ -574,7 +695,13 @@ impl TopologyFixture {
         }
         let elapsed = started.elapsed();
         if let Some(journal) = affected_solid_journal.as_ref() {
-            fixture.verify_affected_solid_journal(journal);
+            match ladder {
+                Ladder::AffectedSolidFootprint => fixture.verify_affected_solid_journal(journal),
+                Ladder::AffectedBlockCohortFootprint => {
+                    fixture.verify_affected_block_cohort_journal(journal);
+                }
+                _ => unreachable!("only tolerance ladders retain journals"),
+            }
         }
         let observation =
             last_commit(&fixture.store).expect("checked commit records an observation");
@@ -727,6 +854,122 @@ impl TopologyFixture {
             assert_eq!(self.store.get(face).unwrap().tolerance, Some(tolerance));
         }
     }
+
+    fn grow_affected_block_cohort_tolerances(&mut self) -> ktopo::transaction::Journal {
+        let mut transaction = self
+            .store
+            .transaction()
+            .expect("affected block-cohort transaction");
+        let expected_growth = affected_block_cohort_growth_budget(self.affected_faces.len());
+        let budget = transaction
+            .declare_tolerance_budget(AFFECTED_BLOCK_COHORT_OPERATION, expected_growth)
+            .expect("fixed Q2 block-cohort tolerance-growth budget");
+        for ((&face, &edge), &vertex) in self
+            .affected_faces
+            .iter()
+            .zip(self.affected_edges.iter())
+            .zip(self.affected_vertices.iter())
+        {
+            transaction
+                .grow_face_tolerance(budget, face, AFFECTED_BLOCK_COHORT_TOLERANCE)
+                .expect("Q2 block-cohort face tolerance growth");
+            transaction
+                .grow_edge_tolerance(budget, edge, AFFECTED_BLOCK_COHORT_TOLERANCE)
+                .expect("Q2 block-cohort edge tolerance growth");
+            transaction
+                .grow_vertex_tolerance(budget, vertex, AFFECTED_BLOCK_COHORT_TOLERANCE)
+                .expect("Q2 block-cohort vertex tolerance growth");
+        }
+        transaction
+            .commit_checked(&[])
+            .expect("affected block-cohort solids remain valid")
+    }
+
+    fn verify_affected_block_cohort_journal(&self, journal: &ktopo::transaction::Journal) {
+        use ktopo::entity::EntityRef;
+        use ktopo::tolerance::ToleranceOrigin;
+        use ktopo::transaction::MutationKind;
+
+        let expected_entities = self
+            .affected_faces
+            .iter()
+            .zip(self.affected_edges.iter())
+            .zip(self.affected_vertices.iter())
+            .flat_map(|((&face, &edge), &vertex)| {
+                [
+                    EntityRef::Face(face),
+                    EntityRef::Edge(edge),
+                    EntityRef::Vertex(vertex),
+                ]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(expected_entities.len(), 3 * self.affected_faces.len());
+        assert_eq!(journal.mutations().len(), expected_entities.len());
+        assert!(journal.mutations().iter().all(|mutation| {
+            mutation.kind == MutationKind::Modified && expected_entities.contains(&mutation.entity)
+        }));
+        assert_eq!(
+            journal
+                .mutations()
+                .iter()
+                .filter(|mutation| matches!(mutation.entity, EntityRef::Face(_)))
+                .count(),
+            self.affected_faces.len()
+        );
+        assert_eq!(
+            journal
+                .mutations()
+                .iter()
+                .filter(|mutation| matches!(mutation.entity, EntityRef::Edge(_)))
+                .count(),
+            self.affected_faces.len()
+        );
+        assert_eq!(
+            journal
+                .mutations()
+                .iter()
+                .filter(|mutation| matches!(mutation.entity, EntityRef::Vertex(_)))
+                .count(),
+            self.affected_faces.len()
+        );
+
+        let budgets = journal.tolerance_budgets();
+        assert_eq!(budgets.len(), 1);
+        let expected_growth = affected_block_cohort_growth_budget(self.affected_faces.len());
+        assert_eq!(budgets[0].operation(), AFFECTED_BLOCK_COHORT_OPERATION);
+        assert_eq!(budgets[0].limit(), expected_growth);
+        assert_eq!(budgets[0].consumed(), expected_growth);
+        assert_eq!(budgets[0].remaining(), 0.0);
+
+        assert_eq!(journal.tolerance_events().len(), expected_entities.len());
+        for (event, expected_entity) in journal
+            .tolerance_events()
+            .iter()
+            .zip(expected_entities.into_iter())
+        {
+            assert_eq!(event.entity(), expected_entity);
+            assert_eq!(event.previous(), None);
+            let tolerance = event.current();
+            assert_eq!(tolerance.value(), AFFECTED_BLOCK_COHORT_TOLERANCE);
+            assert_eq!(
+                tolerance.origin(),
+                ToleranceOrigin::Operation(AFFECTED_BLOCK_COHORT_OPERATION)
+            );
+            assert_eq!(tolerance.origin_value(), AFFECTED_BLOCK_COHORT_TOLERANCE);
+            assert_eq!(tolerance.accumulated_growth(), 0.0);
+            assert_eq!(
+                tolerance.last_operation(),
+                Some(AFFECTED_BLOCK_COHORT_OPERATION)
+            );
+            let installed = match expected_entity {
+                EntityRef::Face(face) => self.store.get(face).unwrap().tolerance,
+                EntityRef::Edge(edge) => self.store.get(edge).unwrap().tolerance,
+                EntityRef::Vertex(vertex) => self.store.get(vertex).unwrap().tolerance,
+                _ => unreachable!("block-cohort targets are Face, Edge, or Vertex"),
+            };
+            assert_eq!(installed, Some(tolerance));
+        }
+    }
 }
 
 /// Semantic counters and rollback/audit evidence from one iteration.
@@ -848,6 +1091,9 @@ pub fn fixture(case: TopologyCase) -> TopologyFixture {
             case.bodies,
             case.affected_bodies,
         ),
+        Ladder::AffectedBlockCohortFootprint => {
+            TopologyFixture::primitive_mix_affected_block_cohort(case.affected_bodies)
+        }
         Ladder::FullRebuild => TopologyFixture::primitive_mix(case.bodies),
         _ => TopologyFixture::isolated_acorns(case.bodies),
     }
@@ -870,7 +1116,10 @@ pub fn verify(case: TopologyCase, result: &TopologyResult) {
         result.observation.affected_order_digest,
         case.expected_affected_digest
     );
-    if case.ladder == Ladder::AffectedSolidFootprint {
+    if matches!(
+        case.ladder,
+        Ladder::AffectedSolidFootprint | Ladder::AffectedBlockCohortFootprint
+    ) {
         assert_ne!(case.expected_before_store_digest, 0);
         assert_ne!(case.expected_after_store_digest, 0);
         assert_eq!(
@@ -915,6 +1164,7 @@ const fn expected_mutations(case: TopologyCase) -> usize {
         Ladder::Clean | Ladder::FullRebuild => 0,
         Ladder::Local | Ladder::Fanout | Ladder::Cohort | Ladder::Rejected => 1,
         Ladder::AffectedSolidFootprint => case.affected_bodies,
+        Ladder::AffectedBlockCohortFootprint => 3 * case.affected_bodies,
         Ladder::Batched => case.bodies,
     }
 }
@@ -944,8 +1194,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn registry_contains_exactly_35_unique_canonical_cases() {
-        assert_eq!(CASES.len(), 35);
+    fn registry_contains_exactly_39_unique_canonical_cases() {
+        assert_eq!(CASES.len(), 39);
         let unique: BTreeSet<_> = CASES.iter().map(|case| case.path).collect();
         assert_eq!(unique.len(), CASES.len());
         for case in CASES {
@@ -956,7 +1206,7 @@ mod tests {
             include_str!("../cases.json")
                 .matches("\"benchmark_target\": \"topology_commit\"")
                 .count(),
-            35
+            39
         );
     }
 
@@ -976,6 +1226,7 @@ mod tests {
             let fixture_version = match case.ladder {
                 Ladder::Cohort => COHORT_FIXTURE_VERSION,
                 Ladder::AffectedSolidFootprint => AFFECTED_SOLID_FIXTURE_VERSION,
+                Ladder::AffectedBlockCohortFootprint => AFFECTED_BLOCK_COHORT_FIXTURE_VERSION,
                 _ => FIXTURE_VERSION,
             };
             assert_eq!(entry["fixture_version"], fixture_version);
@@ -988,7 +1239,12 @@ mod tests {
                 entry["size_parameters"]["bodies"].as_u64(),
                 Some(case.bodies as u64)
             );
-            if matches!(case.ladder, Ladder::Cohort | Ladder::AffectedSolidFootprint) {
+            if matches!(
+                case.ladder,
+                Ladder::Cohort
+                    | Ladder::AffectedSolidFootprint
+                    | Ladder::AffectedBlockCohortFootprint
+            ) {
                 assert_eq!(
                     entry["size_parameters"]["affected_bodies"].as_u64(),
                     Some(case.affected_bodies as u64)
@@ -1025,9 +1281,75 @@ mod tests {
                     Some(format!("{:016x}", case.expected_after_store_digest).as_str())
                 );
             }
+            if case.ladder == Ladder::AffectedBlockCohortFootprint {
+                for key in [
+                    "requested_face_tolerance",
+                    "requested_edge_tolerance",
+                    "requested_vertex_tolerance",
+                ] {
+                    assert_eq!(
+                        entry["tolerances"][key].as_f64(),
+                        Some(AFFECTED_BLOCK_COHORT_TOLERANCE)
+                    );
+                }
+                assert_eq!(
+                    entry["tolerances"]["aggregate_growth_budget"].as_f64(),
+                    Some(affected_block_cohort_growth_budget(case.affected_bodies))
+                );
+                assert_eq!(entry["policy_values"]["checked_commit"], "ordinary");
+                assert_eq!(
+                    entry["policy_values"]["operation_scope"],
+                    "single-ordinary-checked-commit"
+                );
+                assert_eq!(
+                    entry["policy_values"]["mutation"],
+                    "operation-owned-face-edge-vertex-tolerance-growth"
+                );
+                assert_eq!(
+                    entry["policy_values"]["target_order"],
+                    "body-ordinal-then-face-edge-vertex"
+                );
+                assert_eq!(
+                    entry["policy_values"]["root_selection"],
+                    "primitive-ordinal-mod-5-equals-0"
+                );
+                assert_eq!(
+                    entry["policy_values"]["distractor_store"],
+                    "unchanged-64-body-primitive-mix"
+                );
+                assert_eq!(
+                    entry["expected_result_counters"]["before_store_digest"].as_str(),
+                    Some(format!("{:016x}", case.expected_before_store_digest).as_str())
+                );
+                assert_eq!(
+                    entry["expected_result_counters"]["after_store_digest"].as_str(),
+                    Some(format!("{:016x}", case.expected_after_store_digest).as_str())
+                );
+            }
             let counters = &entry["expected_result_counters"];
-            if case.ladder == Ladder::AffectedSolidFootprint {
+            if matches!(
+                case.ladder,
+                Ladder::AffectedSolidFootprint | Ladder::AffectedBlockCohortFootprint
+            ) {
                 assert_eq!(counters["operation_scopes"].as_u64(), Some(1));
+            }
+            if case.ladder == Ladder::AffectedBlockCohortFootprint {
+                assert_eq!(
+                    counters["modified_faces"].as_u64(),
+                    Some(case.affected_bodies as u64)
+                );
+                assert_eq!(
+                    counters["modified_edges"].as_u64(),
+                    Some(case.affected_bodies as u64)
+                );
+                assert_eq!(
+                    counters["modified_vertices"].as_u64(),
+                    Some(case.affected_bodies as u64)
+                );
+                assert_eq!(
+                    counters["tolerance_events"].as_u64(),
+                    Some((3 * case.affected_bodies) as u64)
+                );
             }
             assert_eq!(counters["body_count"].as_u64(), Some(case.bodies as u64));
             assert_eq!(
@@ -1062,9 +1384,10 @@ mod tests {
     }
 
     #[test]
-    fn all_eight_smallest_ladders_match_reviewed_result_evidence() {
+    fn all_nine_smallest_ladders_match_reviewed_result_evidence() {
         for case in [
             CASES[0], CASES[4], CASES[8], CASES[11], CASES[14], CASES[17], CASES[21], CASES[28],
+            CASES[35],
         ] {
             let result = fixture(case).execute(case.ladder);
             verify(case, &result);
@@ -1152,6 +1475,39 @@ mod tests {
                 assert_eq!(result.observation.checked_bodies, 1);
                 assert_eq!(result.observation.mutations, 1);
             }
+        }
+    }
+
+    #[test]
+    fn affected_block_cohort_footprint_pins_mixed_entity_scope_and_digests() {
+        let cases = CASES
+            .iter()
+            .copied()
+            .filter(|case| case.ladder == Ladder::AffectedBlockCohortFootprint)
+            .collect::<Vec<_>>();
+        assert_eq!(cases.len(), 4);
+        assert!(cases.iter().all(|case| case.bodies == 64));
+        assert_eq!(
+            cases
+                .iter()
+                .map(|case| case.affected_bodies)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([1, 4, 8, 13])
+        );
+        for case in cases {
+            let result = fixture(case).execute(case.ladder);
+            verify(case, &result);
+            assert_eq!(result.observation.affected_bodies, case.affected_bodies);
+            assert_eq!(result.observation.refreshed_bodies, case.affected_bodies);
+            assert_eq!(result.observation.checked_bodies, case.affected_bodies);
+            assert_eq!(result.observation.mutations, 3 * case.affected_bodies);
+
+            let repeat = fixture(case).execute(case.ladder);
+            verify(case, &repeat);
+            assert_eq!(repeat.before_store.digest, result.before_store.digest);
+            assert_eq!(repeat.after_store.digest, result.after_store.digest);
+            assert_eq!(repeat.observation, result.observation);
+            assert_eq!(repeat.output_digest(), result.output_digest());
         }
     }
 

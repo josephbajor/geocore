@@ -994,6 +994,182 @@
       }
     },
     {
+      "path": "topology/affected-block-cohort/primitive-mix-blocks-v1/total-64/affected-1-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit-affected-block-cohort-footprint.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 64,
+        "bodies": 64,
+        "affected_bodies": 1
+      },
+      "tolerances": {
+        "requested_face_tolerance": 2e-8,
+        "requested_edge_tolerance": 2e-8,
+        "requested_vertex_tolerance": 2e-8,
+        "aggregate_growth_budget": 3.0000000000000004e-8
+      },
+      "policy_values": {
+        "ladder": "affected-block-cohort-footprint",
+        "checked_commit": "ordinary",
+        "operation_scope": "single-ordinary-checked-commit",
+        "mutation": "operation-owned-face-edge-vertex-tolerance-growth",
+        "target_order": "body-ordinal-then-face-edge-vertex",
+        "root_selection": "primitive-ordinal-mod-5-equals-0",
+        "distractor_store": "unchanged-64-body-primitive-mix",
+        "scope_oracle": "affected-refreshed-checked"
+      },
+      "expected_result_counters": {
+        "body_count": 64,
+        "operation_scopes": 1,
+        "affected_bodies": 1,
+        "refreshed_bodies": 1,
+        "checked_bodies": 1,
+        "mutations": 3,
+        "modified_faces": 1,
+        "modified_edges": 1,
+        "modified_vertices": 1,
+        "tolerance_events": 3,
+        "committed": true,
+        "affected_order_digest": "030000b9a2c219c6",
+        "before_store_digest": "4bbf07cba16f69f6",
+        "after_store_digest": "f32173bdc29ed2a5",
+        "output_digest": "dcc3867dead572d5"
+      }
+    },
+    {
+      "path": "topology/affected-block-cohort/primitive-mix-blocks-v1/total-64/affected-4-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit-affected-block-cohort-footprint.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 64,
+        "bodies": 64,
+        "affected_bodies": 4
+      },
+      "tolerances": {
+        "requested_face_tolerance": 2e-8,
+        "requested_edge_tolerance": 2e-8,
+        "requested_vertex_tolerance": 2e-8,
+        "aggregate_growth_budget": 1.2e-7
+      },
+      "policy_values": {
+        "ladder": "affected-block-cohort-footprint",
+        "checked_commit": "ordinary",
+        "operation_scope": "single-ordinary-checked-commit",
+        "mutation": "operation-owned-face-edge-vertex-tolerance-growth",
+        "target_order": "body-ordinal-then-face-edge-vertex",
+        "root_selection": "primitive-ordinal-mod-5-equals-0",
+        "distractor_store": "unchanged-64-body-primitive-mix",
+        "scope_oracle": "affected-refreshed-checked"
+      },
+      "expected_result_counters": {
+        "body_count": 64,
+        "operation_scopes": 1,
+        "affected_bodies": 4,
+        "refreshed_bodies": 4,
+        "checked_bodies": 4,
+        "mutations": 12,
+        "modified_faces": 4,
+        "modified_edges": 4,
+        "modified_vertices": 4,
+        "tolerance_events": 12,
+        "committed": true,
+        "affected_order_digest": "629cebb973620ee6",
+        "before_store_digest": "4bbf07cba16f69f6",
+        "after_store_digest": "906e830550aa9016",
+        "output_digest": "4cea0f8369a38358"
+      }
+    },
+    {
+      "path": "topology/affected-block-cohort/primitive-mix-blocks-v1/total-64/affected-8-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit-affected-block-cohort-footprint.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 64,
+        "bodies": 64,
+        "affected_bodies": 8
+      },
+      "tolerances": {
+        "requested_face_tolerance": 2e-8,
+        "requested_edge_tolerance": 2e-8,
+        "requested_vertex_tolerance": 2e-8,
+        "aggregate_growth_budget": 2.400000000000001e-7
+      },
+      "policy_values": {
+        "ladder": "affected-block-cohort-footprint",
+        "checked_commit": "ordinary",
+        "operation_scope": "single-ordinary-checked-commit",
+        "mutation": "operation-owned-face-edge-vertex-tolerance-growth",
+        "target_order": "body-ordinal-then-face-edge-vertex",
+        "root_selection": "primitive-ordinal-mod-5-equals-0",
+        "distractor_store": "unchanged-64-body-primitive-mix",
+        "scope_oracle": "affected-refreshed-checked"
+      },
+      "expected_result_counters": {
+        "body_count": 64,
+        "operation_scopes": 1,
+        "affected_bodies": 8,
+        "refreshed_bodies": 8,
+        "checked_bodies": 8,
+        "mutations": 24,
+        "modified_faces": 8,
+        "modified_edges": 8,
+        "modified_vertices": 8,
+        "tolerance_events": 24,
+        "committed": true,
+        "affected_order_digest": "35eef1d61786234a",
+        "before_store_digest": "4bbf07cba16f69f6",
+        "after_store_digest": "1a00c48506bfa116",
+        "output_digest": "4ba5d8a755d77654"
+      }
+    },
+    {
+      "path": "topology/affected-block-cohort/primitive-mix-blocks-v1/total-64/affected-13-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit-affected-block-cohort-footprint.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 64,
+        "bodies": 64,
+        "affected_bodies": 13
+      },
+      "tolerances": {
+        "requested_face_tolerance": 2e-8,
+        "requested_edge_tolerance": 2e-8,
+        "requested_vertex_tolerance": 2e-8,
+        "aggregate_growth_budget": 0.0000003900000000000002364616477884
+      },
+      "policy_values": {
+        "ladder": "affected-block-cohort-footprint",
+        "checked_commit": "ordinary",
+        "operation_scope": "single-ordinary-checked-commit",
+        "mutation": "operation-owned-face-edge-vertex-tolerance-growth",
+        "target_order": "body-ordinal-then-face-edge-vertex",
+        "root_selection": "primitive-ordinal-mod-5-equals-0",
+        "distractor_store": "unchanged-64-body-primitive-mix",
+        "scope_oracle": "affected-refreshed-checked"
+      },
+      "expected_result_counters": {
+        "body_count": 64,
+        "operation_scopes": 1,
+        "affected_bodies": 13,
+        "refreshed_bodies": 13,
+        "checked_bodies": 13,
+        "mutations": 39,
+        "modified_faces": 13,
+        "modified_edges": 13,
+        "modified_vertices": 13,
+        "tolerance_events": 39,
+        "committed": true,
+        "affected_order_digest": "76003dd52e0a7ea2",
+        "before_store_digest": "4bbf07cba16f69f6",
+        "after_store_digest": "f236410347e55af1",
+        "output_digest": "74af6f1172cbc20a"
+      }
+    },
+    {
       "path": "graph/build/independent-planes-v1/1/default-v1",
       "benchmark_target": "graph_build",
       "fixture_version": "graph-build.v2",
