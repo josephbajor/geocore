@@ -16,7 +16,7 @@ Every case is registered in `cases.json` with a five-segment path:
 Fixture construction, seeds, expected counters, and invariant checks are
 deterministic. Criterion measures elapsed time, but timing never establishes
 correctness. The runner always marks measurements advisory.
-The manifest currently registers 174 cases, including the 39-row Q2 topology
+The manifest currently registers 178 cases, including the 43-row Q2 topology
 matrix and the 32-row Q3 `body-tessellation.v3` matrix.
 
 Criterion is pinned to `0.8.2`. Machine-readable measured runs use
@@ -87,7 +87,7 @@ axis-wise inflated-box test. Resource-limited controls remain zero-certificate
 cases.
 
 The Q1 target verifies the result digest before measurement and again in every
-timed iteration. The Q2 target provides 39 checked-commit, incremental
+timed iteration. The Q2 target provides 43 checked-commit, incremental
 index-refresh, rejection, and full-rebuild cases in the quality contract. It
 times only the transaction edit and ordinary `commit_checked`, except that the
 full-rebuild ladder times the independent reference-index rebuild itself.
@@ -130,9 +130,18 @@ budget charging `1e-8` per entity. Each row pins N modified Face mutations, N
 modified Edge mutations, and N modified Vertex mutations; the exact ordered
 `3N` tolerance events; affected = refreshed = checked = N; affected, store,
 and output digest ratchets; installed-index equality; and repeat parity.
-Elapsed time remains advisory; broader heterogeneous production edit
-footprints, production-assembly behavior, and global ordinary-commit cost
-including graph validation, index cloning, and body-order refresh remain open.
+
+The prior 39 Q2 rows remain unchanged. A distinct four-row production-clean
+ladder holds an unchanged `primitive_mix` at 4, 16, 64, and 256 total bodies.
+Every timed sample executes exactly one ordinary `commit_checked(&[])` scope
+with zero edits, affected, refreshed, checked, or mutated entities and commits
+successfully. Each row pins equal before/after store and installed-index
+snapshots, stable store/index/output digest ratchets, and exact repeat equality.
+This is the first production-solid global ordinary-commit baseline for the
+combined current graph-validation, index-clone, and body-order path; it does
+not isolate those phases. Elapsed time remains advisory; phase counters and
+optimization, broader heterogeneous production edit footprints, and
+production-assembly behavior remain open.
 Set `KERNEL_BENCH_SMOKE=1` and pass one full case path after `--` for a bounded
 local smoke run.
 
