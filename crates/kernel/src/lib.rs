@@ -277,8 +277,8 @@ pub use edit::{
     ToleranceGrowthTarget,
 };
 pub use error::{
-    BodyTessellationError, EntityKind, Error, GeometryEvaluationError, GeometryIntersectionError,
-    KernelError, Result, XtInterchangeError, code as error_code,
+    BodyCopyError, BodyTessellationError, EntityKind, Error, GeometryEvaluationError,
+    GeometryIntersectionError, KernelError, Result, XtInterchangeError, code as error_code,
 };
 pub use id::{
     BodyId, CurveId, EdgeId, FaceId, FinId, JournalPointId, LoopId, PartId, PcurveId, RegionId,

@@ -1,12 +1,15 @@
 //! Deterministic complete-body rigid copy inside one checked transaction.
 
+use core::fmt;
+
 use crate::entity::{
     Body, BodyId, Curve2dId, CurveId, Edge, EdgeId, EntityRef, Face, Fin, FinId, FinPcurve, Loop,
     LoopId, PointId, Region, Shell, ShellId, SurfaceId, Vertex, VertexId,
 };
 use crate::geom::{CurveGeom, SurfaceGeom};
 use crate::store::Store;
-use kcore::error::{Error, Result};
+use kcore::error::{CapabilityId, ClassifiedError, Error, ErrorClass, ErrorCode};
+use kcore::operation::LimitSnapshot;
 use kcore::tolerance::{LINEAR_RESOLUTION, Tolerances, check_in_size_box};
 use kgeom::curve::{Circle, Ellipse, Line};
 use kgeom::curve2d::{Curve2d, Line2d};
@@ -15,9 +18,9 @@ use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::surface::{Cone, Cylinder, Dir, Plane, Sphere, Surface, Torus};
 use kgeom::vec::{Point3, Vec3};
 use kgraph::{
-    EvalLimits, ExactSurfaceField, OffsetSurfaceDescriptor, PairedTrace, PlaneCircleTrace,
-    PlaneSphereCircleTrace, SphereLatitudeTrace, SphericalCirclePcurve,
-    TransmittedNurbsIntersectionCertificate, TransmittedOffsetNurbsTrace,
+    EvalLimits, ExactSurfaceField, IntersectionCertificateError, OffsetSurfaceDescriptor,
+    PairedTrace, PlaneCircleTrace, PlaneSphereCircleTrace, SphereLatitudeTrace,
+    SphericalCirclePcurve, TransmittedNurbsIntersectionCertificate, TransmittedOffsetNurbsTrace,
     TransmittedOffsetPlaneTrace, TransmittedPlaneIntersectionCertificate,
     VerifiedIntersectionCertificate, VerifiedNurbsIntersectionCertificate,
     certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
@@ -35,6 +38,114 @@ use kgraph::{
     transmitted_nurbs_intersection_has_rigid_copy_recertifier,
 };
 use std::collections::HashMap;
+
+/// Failure to copy a complete body under a rigid placement.
+///
+/// Existing topology, input, and store failures remain kernel errors. Graph
+/// certificate reissuance failures retain their exact typed source so callers
+/// can distinguish unsupported proof boundaries from rejected geometry.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum BodyCopyError {
+    /// Existing topology, input, geometry-construction, or store failure.
+    Kernel(Error),
+    /// A retained intersection certificate could not be reissued.
+    Certificate(IntersectionCertificateError),
+}
+
+impl BodyCopyError {
+    /// Broad semantic class without erasing the concrete source.
+    pub fn class(&self) -> ErrorClass {
+        match self {
+            Self::Kernel(error) => error.class(),
+            Self::Certificate(error) => error.class(),
+        }
+    }
+
+    /// Stable failure identity delegated from the concrete source.
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            Self::Kernel(error) => error.code(),
+            Self::Certificate(error) => error.code(),
+        }
+    }
+
+    /// Finite capability whose absence caused the failure, when applicable.
+    pub fn capability(&self) -> Option<CapabilityId> {
+        match self {
+            Self::Kernel(error) => error.capability(),
+            Self::Certificate(error) => error.capability(),
+        }
+    }
+
+    /// Structured deterministic limit data delegated from the source.
+    pub fn limit(&self) -> Option<LimitSnapshot> {
+        match self {
+            Self::Kernel(error) => error.limit(),
+            Self::Certificate(error) => error.limit(),
+        }
+    }
+
+    pub(crate) fn into_legacy(self) -> Error {
+        match self {
+            Self::Kernel(error) => error,
+            Self::Certificate(_) => Error::InvalidGeometry {
+                reason: "rigid body copy could not reissue an intersection certificate",
+            },
+        }
+    }
+}
+
+impl fmt::Display for BodyCopyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Kernel(error) => error.fmt(formatter),
+            Self::Certificate(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for BodyCopyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Kernel(error) => Some(error),
+            Self::Certificate(error) => Some(error),
+        }
+    }
+}
+
+impl ClassifiedError for BodyCopyError {
+    fn class(&self) -> ErrorClass {
+        self.class()
+    }
+
+    fn code(&self) -> ErrorCode {
+        self.code()
+    }
+
+    fn capability(&self) -> Option<CapabilityId> {
+        self.capability()
+    }
+
+    fn limit(&self) -> Option<LimitSnapshot> {
+        self.limit()
+    }
+}
+
+impl From<Error> for BodyCopyError {
+    fn from(error: Error) -> Self {
+        Self::Kernel(error)
+    }
+}
+
+impl From<IntersectionCertificateError> for BodyCopyError {
+    fn from(error: IntersectionCertificateError) -> Self {
+        Self::Certificate(error)
+    }
+}
+
+/// Result returned by rigid whole-body copy operations.
+pub type BodyCopyResult<T> = core::result::Result<T, BodyCopyError>;
 
 pub(crate) struct BodyCopy {
     pub(crate) body: BodyId,
@@ -63,7 +174,7 @@ pub(crate) fn copy_body_rigid(
     store: &mut Store,
     source: BodyId,
     placement: Frame,
-) -> Result<BodyCopy> {
+) -> BodyCopyResult<BodyCopy> {
     let mut copier = Copier {
         store,
         placement,
@@ -85,7 +196,7 @@ pub(crate) fn copy_body_rigid(
 }
 
 impl Copier<'_> {
-    fn copy(&mut self, source: BodyId) -> Result<BodyCopy> {
+    fn copy(&mut self, source: BodyId) -> BodyCopyResult<BodyCopy> {
         let source_body = self.store.get(source)?.clone();
         let body = self.store.add(Body {
             kind: source_body.kind,
@@ -222,7 +333,7 @@ impl Copier<'_> {
         })
     }
 
-    fn copy_point(&mut self, source: PointId) -> Result<PointId> {
+    fn copy_point(&mut self, source: PointId) -> BodyCopyResult<PointId> {
         if let Some(&point) = self.points.get(&source) {
             return Ok(point);
         }
@@ -233,7 +344,7 @@ impl Copier<'_> {
         Ok(point)
     }
 
-    fn copy_curve(&mut self, source: CurveId) -> Result<CurveId> {
+    fn copy_curve(&mut self, source: CurveId) -> BodyCopyResult<CurveId> {
         if let Some(&curve) = self.curves.get(&source) {
             return Ok(curve);
         }
@@ -300,7 +411,7 @@ impl Copier<'_> {
                     .points()
                     .iter()
                     .map(|&point| self.checked_point(point))
-                    .collect::<Result<Vec<_>>>()?,
+                    .collect::<BodyCopyResult<Vec<_>>>()?,
                 nurbs.weights().map(<[f64]>::to_vec),
             )?),
             CurveGeom::Intersection(_) => unreachable!("handled above"),
@@ -309,9 +420,9 @@ impl Copier<'_> {
                 unreachable!("handled above")
             }
             _ => {
-                return Err(Error::InvalidGeometry {
+                return Err(BodyCopyError::Kernel(Error::InvalidGeometry {
                     reason: "rigid body copy does not support this curve descriptor",
-                });
+                }));
             }
         };
         let curve = self.store.insert_curve(transformed)?;
@@ -326,7 +437,7 @@ impl Copier<'_> {
         source_surfaces: [SurfaceId; 2],
         source_pcurves: [Curve2dId; 2],
         certificate: &VerifiedNurbsIntersectionCertificate,
-    ) -> Result<CurveId> {
+    ) -> BodyCopyResult<CurveId> {
         let copied_surfaces = [
             self.copy_surface(source_surfaces[0])?,
             self.copy_surface(source_surfaces[1])?,
@@ -359,9 +470,7 @@ impl Copier<'_> {
             pcurves,
             certificate.tolerance(),
         )
-        .map_err(|_| Error::InvalidGeometry {
-            reason: "rigid body copy could not reissue the verified NURBS intersection certificate",
-        })?;
+        .map_err(BodyCopyError::Certificate)?;
         let curve = self.store.insert_verified_nurbs_intersection_curve(
             copied_surfaces,
             copied_pcurves,
@@ -377,7 +486,7 @@ impl Copier<'_> {
         source_surfaces: [SurfaceId; 2],
         source_pcurves: [Curve2dId; 2],
         certificate: &TransmittedPlaneIntersectionCertificate,
-    ) -> Result<CurveId> {
+    ) -> BodyCopyResult<CurveId> {
         let copied_surfaces = [
             self.copy_surface(source_surfaces[0])?,
             self.copy_surface(source_surfaces[1])?,
@@ -398,9 +507,7 @@ impl Copier<'_> {
             certificate.metadata(),
             certificate.tolerance(),
         )
-        .map_err(|_| Error::InvalidGeometry {
-            reason: "rigid body copy could not reissue the transmitted Plane intersection certificate",
-        })?;
+        .map_err(BodyCopyError::Certificate)?;
         let curve = self
             .store
             .insert_verified_transmitted_plane_intersection_curve(
@@ -418,7 +525,7 @@ impl Copier<'_> {
         source_surfaces: [SurfaceId; 2],
         source_pcurves: [Curve2dId; 2],
         certificate: &TransmittedNurbsIntersectionCertificate,
-    ) -> Result<CurveId> {
+    ) -> BodyCopyResult<CurveId> {
         if !transmitted_nurbs_intersection_has_rigid_copy_recertifier(certificate)
             || !transmitted_nurbs_intersection_sources_are_rigid_copy_supported(
                 self.store,
@@ -426,9 +533,9 @@ impl Copier<'_> {
                 certificate,
             )?
         {
-            return Err(Error::InvalidGeometry {
+            return Err(BodyCopyError::Kernel(Error::InvalidGeometry {
                 reason: "rigid body copy cannot rerun this transmitted NURBS certificate family",
-            });
+            }));
         }
         let copied_surfaces = [
             self.copy_surface(source_surfaces[0])?,
@@ -548,13 +655,11 @@ impl Copier<'_> {
                     }
                 }
             }
-            _ => return Err(Error::InvalidGeometry {
+            _ => return Err(BodyCopyError::Kernel(Error::InvalidGeometry {
                 reason: "rigid body copy cannot rerun this transmitted NURBS certificate family",
-            }),
+            })),
         }
-        .map_err(|_| Error::InvalidGeometry {
-            reason: "rigid body copy could not reissue the transmitted NURBS intersection certificate",
-        })?;
+        .map_err(BodyCopyError::Certificate)?;
         let curve = self
             .store
             .insert_verified_transmitted_nurbs_intersection_curve(
@@ -569,46 +674,52 @@ impl Copier<'_> {
     fn copied_nurbs_pcurves(
         &self,
         copied: [Curve2dId; 2],
-    ) -> Result<[kgeom::curve2d::NurbsCurve2d; 2]> {
+    ) -> BodyCopyResult<[kgeom::curve2d::NurbsCurve2d; 2]> {
         copied
             .map(|pcurve| {
                 self.store
-                    .get(pcurve)?
+                    .get(pcurve)
+                    .map_err(BodyCopyError::Kernel)?
                     .as_nurbs()
                     .cloned()
-                    .ok_or(Error::InvalidGeometry {
+                    .ok_or(BodyCopyError::Kernel(Error::InvalidGeometry {
                         reason: "transmitted intersection must retain paired NURBS pcurves",
-                    })
+                    }))
             })
             .into_iter()
-            .collect::<Result<Vec<_>>>()?
+            .collect::<BodyCopyResult<Vec<_>>>()?
             .try_into()
-            .map_err(|_| Error::InvalidGeometry {
-                reason: "paired transmitted pcurves must contain two curves",
+            .map_err(|_| {
+                BodyCopyError::Kernel(Error::InvalidGeometry {
+                    reason: "paired transmitted pcurves must contain two curves",
+                })
             })
     }
 
-    fn transform_nurbs_curve(&self, curve: &NurbsCurve) -> Result<NurbsCurve> {
-        NurbsCurve::new(
+    fn transform_nurbs_curve(&self, curve: &NurbsCurve) -> BodyCopyResult<NurbsCurve> {
+        Ok(NurbsCurve::new(
             curve.degree(),
             curve.knots().as_slice().to_vec(),
             curve
                 .points()
                 .iter()
                 .map(|&point| self.checked_point(point))
-                .collect::<Result<Vec<_>>>()?,
+                .collect::<BodyCopyResult<Vec<_>>>()?,
             curve.weights().map(<[f64]>::to_vec),
-        )
+        )?)
     }
 
-    fn transform_points<const N: usize>(&self, mut points: [Point3; N]) -> Result<[Point3; N]> {
+    fn transform_points<const N: usize>(
+        &self,
+        mut points: [Point3; N],
+    ) -> BodyCopyResult<[Point3; N]> {
         for point in &mut points {
             *point = self.checked_point(*point)?;
         }
         Ok(points)
     }
 
-    fn transform_nurbs_surface(&self, surface: &NurbsSurface) -> Result<NurbsSurface> {
+    fn transform_nurbs_surface(&self, surface: &NurbsSurface) -> BodyCopyResult<NurbsSurface> {
         let periodic = surface.periodicity().map(|period| period.is_some());
         let transformed = NurbsSurface::new(
             surface.degree_u(),
@@ -619,17 +730,17 @@ impl Copier<'_> {
                 .points()
                 .iter()
                 .map(|&point| self.checked_point(point))
-                .collect::<Result<Vec<_>>>()?,
+                .collect::<BodyCopyResult<Vec<_>>>()?,
             surface.weights().map(<[f64]>::to_vec),
         )?;
-        transformed.with_certified_periodicity(periodic, LINEAR_RESOLUTION)
+        Ok(transformed.with_certified_periodicity(periodic, LINEAR_RESOLUTION)?)
     }
 
     fn copied_nurbs_trace(
         &self,
         trace: &kgraph::NurbsIntersectionTrace,
         copied_root: SurfaceId,
-    ) -> Result<kgraph::NurbsIntersectionTrace> {
+    ) -> BodyCopyResult<kgraph::NurbsIntersectionTrace> {
         Ok(match trace {
             kgraph::NurbsIntersectionTrace::Plane(_) => {
                 kgraph::NurbsIntersectionTrace::Plane(self.exact_plane(copied_root)?)
@@ -653,9 +764,9 @@ impl Copier<'_> {
                         SurfaceGeom::Offset(descriptor) => basis = descriptor.basis(),
                         SurfaceGeom::Nurbs(surface) => break surface.clone(),
                         _ => {
-                            return Err(Error::InvalidGeometry {
+                            return Err(BodyCopyError::Kernel(Error::InvalidGeometry {
                                 reason: "verified offset-NURBS trace must retain a complete NURBS basis chain",
-                            });
+                            }));
                         }
                     }
                 };
@@ -697,7 +808,7 @@ impl Copier<'_> {
         source_surfaces: [SurfaceId; 2],
         source_pcurves: [Curve2dId; 2],
         certificate: kgraph::PairedPlaneLineResidualCertificate,
-    ) -> Result<CurveId> {
+    ) -> BodyCopyResult<CurveId> {
         let source_fields = [
             self.exact_surface_field(source_surfaces[0])?,
             self.exact_surface_field(source_surfaces[1])?,
@@ -707,9 +818,9 @@ impl Copier<'_> {
             .zip(certificate.surfaces())
             .all(|(field, certified)| field == ExactSurfaceField::Plane(certified))
         {
-            return Err(Error::InvalidGeometry {
+            return Err(BodyCopyError::Kernel(Error::InvalidGeometry {
                 reason: "Plane/Plane certificate must retain safe exact Plane fields",
-            });
+            }));
         }
         let copied_surfaces = [
             self.copy_surface(source_surfaces[0])?,
@@ -723,14 +834,15 @@ impl Copier<'_> {
             self.copy_pcurve(source_pcurves[0])?,
             self.copy_pcurve(source_pcurves[1])?,
         ];
-        let copied_line = |store: &Store, pcurve: Curve2dId| -> Result<Line2d> {
+        let copied_line = |store: &Store, pcurve: Curve2dId| -> BodyCopyResult<Line2d> {
             store
-                .get(pcurve)?
+                .get(pcurve)
+                .map_err(BodyCopyError::Kernel)?
                 .as_line()
                 .copied()
-                .ok_or(Error::InvalidGeometry {
+                .ok_or(BodyCopyError::Kernel(Error::InvalidGeometry {
                     reason: "Plane/Plane certificate must retain line pcurves",
-                })
+                }))
         };
         let pcurves = [
             copied_line(self.store, copied_pcurves[0])?,
@@ -749,9 +861,7 @@ impl Copier<'_> {
             certificate.parameter_maps(),
             certificate.tolerance(),
         )
-        .map_err(|_| Error::InvalidGeometry {
-            reason: "rigid body copy could not reissue the Plane/Plane intersection certificate",
-        })?;
+        .map_err(BodyCopyError::Certificate)?;
         let curve = self.store.insert_verified_plane_intersection_curve(
             copied_surfaces,
             copied_pcurves,
@@ -767,7 +877,7 @@ impl Copier<'_> {
         source_surfaces: [SurfaceId; 2],
         source_pcurves: [Curve2dId; 2],
         certificate: kgraph::PairedPlaneSphereCircleResidualCertificate,
-    ) -> Result<CurveId> {
+    ) -> BodyCopyResult<CurveId> {
         for (surface, trace) in source_surfaces.into_iter().zip(certificate.traces()) {
             let field = self.exact_surface_field(surface)?;
             let matches = match trace {
@@ -782,9 +892,9 @@ impl Copier<'_> {
                 }
             };
             if !matches {
-                return Err(Error::InvalidGeometry {
+                return Err(BodyCopyError::Kernel(Error::InvalidGeometry {
                     reason: "Plane/Sphere certificate must retain safe exact Plane/Sphere fields",
-                });
+                }));
             }
         }
         let copied_surfaces = [
@@ -826,9 +936,7 @@ impl Copier<'_> {
                     traces,
                     certificate.tolerance(),
                 )
-                .map_err(|_| Error::InvalidGeometry {
-                    reason: "rigid body copy could not reissue the Plane/Sphere intersection certificate",
-                })?;
+                .map_err(BodyCopyError::Certificate)?;
                 (copied_pcurves, certificate)
             }
             [
@@ -875,9 +983,7 @@ impl Copier<'_> {
                         },
                         certificate.tolerance(),
                     )
-                    .map_err(|_| Error::InvalidGeometry {
-                        reason: "rigid body copy could not reissue the oblique Plane/Sphere intersection certificate",
-                    })?;
+                    .map_err(BodyCopyError::Certificate)?;
                 let copied_sphere_pcurve =
                     self.copy_spherical_pcurve(source_pcurves[sphere_index], sphere_pcurve)?;
                 let mut copied_pcurves = [copied_plane_pcurve; 2];
@@ -886,9 +992,9 @@ impl Copier<'_> {
                 (copied_pcurves, certificate)
             }
             _ => {
-                return Err(Error::InvalidGeometry {
+                return Err(BodyCopyError::Kernel(Error::InvalidGeometry {
                     reason: "Plane/Sphere certificate must retain one Plane and one Sphere trace",
-                });
+                }));
             }
         };
 
@@ -906,7 +1012,7 @@ impl Copier<'_> {
         source: PlaneSphereCircleTrace,
         copied_surface: SurfaceId,
         copied_pcurve: Curve2dId,
-    ) -> Result<PlaneSphereCircleTrace> {
+    ) -> BodyCopyResult<PlaneSphereCircleTrace> {
         match source {
             PlaneSphereCircleTrace::Plane(trace) => {
                 Ok(PlaneSphereCircleTrace::Plane(PlaneCircleTrace::new(
@@ -930,13 +1036,15 @@ impl Copier<'_> {
                     trace.parameter_map(),
                 )))
             }
-            PlaneSphereCircleTrace::SphereOblique(_) => Err(Error::InvalidGeometry {
-                reason: "oblique Plane/Sphere traces require a regenerated spherical pcurve",
-            }),
+            PlaneSphereCircleTrace::SphereOblique(_) => {
+                Err(BodyCopyError::Kernel(Error::InvalidGeometry {
+                    reason: "oblique Plane/Sphere traces require a regenerated spherical pcurve",
+                }))
+            }
         }
     }
 
-    fn exact_surface_field(&self, surface: SurfaceId) -> Result<ExactSurfaceField> {
+    fn exact_surface_field(&self, surface: SurfaceId) -> BodyCopyResult<ExactSurfaceField> {
         let mut evaluator = self
             .store
             .eval_context(EvalLimits::default(), Tolerances::default());
@@ -945,26 +1053,26 @@ impl Copier<'_> {
             .map_err(|_| Error::InvalidGeometry {
                 reason: "verified intersection source exceeds the supported safe offset-field boundary",
             })?
-            .ok_or(Error::InvalidGeometry {
+            .ok_or(BodyCopyError::Kernel(Error::InvalidGeometry {
                 reason: "verified intersection source is not a safe exact Plane/Sphere field",
-            })
+            }))
     }
 
-    fn exact_plane(&self, surface: SurfaceId) -> Result<Plane> {
+    fn exact_plane(&self, surface: SurfaceId) -> BodyCopyResult<Plane> {
         match self.exact_surface_field(surface)? {
             ExactSurfaceField::Plane(plane) => Ok(plane),
-            ExactSurfaceField::Sphere(_) => Err(Error::InvalidGeometry {
+            ExactSurfaceField::Sphere(_) => Err(BodyCopyError::Kernel(Error::InvalidGeometry {
                 reason: "verified intersection source must retain an exact Plane field",
-            }),
+            })),
         }
     }
 
-    fn exact_sphere(&self, surface: SurfaceId) -> Result<Sphere> {
+    fn exact_sphere(&self, surface: SurfaceId) -> BodyCopyResult<Sphere> {
         match self.exact_surface_field(surface)? {
             ExactSurfaceField::Sphere(sphere) => Ok(sphere),
-            ExactSurfaceField::Plane(_) => Err(Error::InvalidGeometry {
+            ExactSurfaceField::Plane(_) => Err(BodyCopyError::Kernel(Error::InvalidGeometry {
                 reason: "Plane/Sphere certificate must retain an exact Sphere field",
-            }),
+            })),
         }
     }
 
@@ -972,14 +1080,14 @@ impl Copier<'_> {
         &mut self,
         source: Curve2dId,
         pcurve: SphericalCirclePcurve,
-    ) -> Result<Curve2dId> {
+    ) -> BodyCopyResult<Curve2dId> {
         if let Some(&copied) = self.pcurves.get(&source) {
             if self.store.get(copied)?.as_spherical_circle().copied() == Some(pcurve) {
                 return Ok(copied);
             }
-            return Err(Error::InvalidGeometry {
+            return Err(BodyCopyError::Kernel(Error::InvalidGeometry {
                 reason: "shared spherical pcurve copy does not match the reissued certificate",
-            });
+            }));
         }
         let copied = self
             .store
@@ -994,7 +1102,7 @@ impl Copier<'_> {
         self.derived(EntityRef::Curve(copied), EntityRef::Curve(source));
     }
 
-    fn copy_surface(&mut self, source: SurfaceId) -> Result<SurfaceId> {
+    fn copy_surface(&mut self, source: SurfaceId) -> BodyCopyResult<SurfaceId> {
         if let Some(&surface) = self.surfaces.get(&source) {
             return Ok(surface);
         }
@@ -1032,9 +1140,9 @@ impl Copier<'_> {
                 ))
             }
             _ => {
-                return Err(Error::InvalidGeometry {
+                return Err(BodyCopyError::Kernel(Error::InvalidGeometry {
                     reason: "rigid body copy does not support this surface descriptor",
-                });
+                }));
             }
         };
         let surface = self.store.insert_surface(transformed)?;
@@ -1043,7 +1151,7 @@ impl Copier<'_> {
         Ok(surface)
     }
 
-    fn copy_pcurve_use(&mut self, source: FinPcurve) -> Result<FinPcurve> {
+    fn copy_pcurve_use(&mut self, source: FinPcurve) -> BodyCopyResult<FinPcurve> {
         let curve = self.copy_pcurve(source.curve())?;
         let mut copy = FinPcurve::new(curve, source.range(), source.edge_to_pcurve())?
             .with_chart(source.chart())
@@ -1057,7 +1165,7 @@ impl Copier<'_> {
         Ok(copy)
     }
 
-    fn copy_pcurve(&mut self, source: Curve2dId) -> Result<Curve2dId> {
+    fn copy_pcurve(&mut self, source: Curve2dId) -> BodyCopyResult<Curve2dId> {
         if let Some(&curve) = self.pcurves.get(&source) {
             return Ok(curve);
         }
@@ -1071,7 +1179,7 @@ impl Copier<'_> {
         self.placement.point_at(point.x, point.y, point.z)
     }
 
-    fn checked_point(&self, point: Point3) -> Result<Point3> {
+    fn checked_point(&self, point: Point3) -> BodyCopyResult<Point3> {
         let transformed = self.point(point);
         check_in_size_box(transformed.to_array())?;
         Ok(transformed)
@@ -1083,10 +1191,14 @@ impl Copier<'_> {
             + self.placement.z() * vector.z
     }
 
-    fn frame(&self, frame: Frame) -> Result<Frame> {
+    fn frame(&self, frame: Frame) -> BodyCopyResult<Frame> {
         let origin = self.point(frame.origin());
         check_in_size_box(origin.to_array())?;
-        Frame::new(origin, self.vector(frame.z()), self.vector(frame.x()))
+        Ok(Frame::new(
+            origin,
+            self.vector(frame.z()),
+            self.vector(frame.x()),
+        )?)
     }
 
     fn derived(&mut self, derived: EntityRef, source: EntityRef) {
@@ -1100,7 +1212,7 @@ fn transmitted_nurbs_intersection_sources_are_rigid_copy_supported(
     store: &Store,
     source_surfaces: [SurfaceId; 2],
     certificate: &TransmittedNurbsIntersectionCertificate,
-) -> Result<bool> {
+) -> BodyCopyResult<bool> {
     if !certificate
         .traces()
         .iter()
@@ -1147,7 +1259,7 @@ fn matched_offset_nurbs_terminal(
     store: &Store,
     source: SurfaceId,
     trace: &TransmittedOffsetNurbsTrace,
-) -> Result<Option<SurfaceId>> {
+) -> BodyCopyResult<Option<SurfaceId>> {
     let mut current = source;
     for &expected in trace.descriptor_signed_distances() {
         let Some(descriptor) = store.get(current)?.as_offset().copied() else {
@@ -1163,4 +1275,64 @@ fn matched_offset_nurbs_terminal(
         .as_nurbs()
         .is_some_and(|basis| basis == trace.basis())
         .then_some(current))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error as _;
+
+    #[test]
+    fn certificate_failures_delegate_classification_and_source() {
+        let cases = [
+            (
+                IntersectionCertificateError::HarmonicRootClassification,
+                ErrorClass::Unsupported,
+                "kgraph.intersection-certificate.harmonic-root-classification",
+                Some("kgraph.intersection-certificate.harmonic-root-classification"),
+            ),
+            (
+                IntersectionCertificateError::SingularSphereChart {
+                    squared_pole_clearance: 0.0,
+                },
+                ErrorClass::Unsupported,
+                "kgraph.intersection-certificate.singular-sphere-chart",
+                Some("kgraph.intersection-certificate.regular-sphere-chart"),
+            ),
+        ];
+
+        for (certificate, class, code, capability) in cases {
+            let error = BodyCopyError::from(certificate.clone());
+            assert_eq!(error, BodyCopyError::Certificate(certificate.clone()));
+            assert_eq!(ClassifiedError::class(&error), class);
+            assert_eq!(ClassifiedError::code(&error).as_str(), code);
+            assert_eq!(
+                ClassifiedError::capability(&error).map(CapabilityId::as_str),
+                capability
+            );
+            assert_eq!(ClassifiedError::limit(&error), None);
+            assert_eq!(
+                error
+                    .source()
+                    .and_then(|source| source.downcast_ref::<IntersectionCertificateError>()),
+                Some(&certificate)
+            );
+        }
+    }
+
+    #[test]
+    fn kernel_failures_retain_their_variant_and_source() {
+        let source = Error::StaleHandle;
+        let error = BodyCopyError::from(source.clone());
+        assert_eq!(error, BodyCopyError::Kernel(source.clone()));
+        assert_eq!(ClassifiedError::class(&error), source.class());
+        assert_eq!(ClassifiedError::code(&error), source.code());
+        assert_eq!(ClassifiedError::capability(&error), source.capability());
+        assert_eq!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<Error>()),
+            Some(&source)
+        );
+    }
 }

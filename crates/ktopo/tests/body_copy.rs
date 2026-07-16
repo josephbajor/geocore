@@ -38,6 +38,7 @@ use kgraph::{
     certify_verified_plane_nurbs_intersection_residuals,
     certify_verified_sphere_nurbs_intersection_residuals,
 };
+use ktopo::BodyCopyError;
 use ktopo::btess::{TessOptions, tessellate_body};
 use ktopo::check::{CheckLevel, CheckOutcome, check_body_report};
 use ktopo::entity::{Body, BodyKind, Edge, Face, Fin, Loop, Region, RegionKind, Shell, Vertex};
@@ -3883,10 +3884,10 @@ fn overdeep_offset_backed_plane_sphere_copy_fails_typed_atomic_and_deterministic
         {
             let mut transaction = attempted.transaction().unwrap();
             assert_eq!(
-                transaction.copy_body_rigid(unsupported, placement()),
-                Err(Error::InvalidGeometry {
+                transaction.copy_body_rigid_with_source(unsupported, placement()),
+                Err(BodyCopyError::Kernel(Error::InvalidGeometry {
                     reason: "verified intersection source exceeds the supported safe offset-field boundary",
-                })
+                }))
             );
         }
         assert_eq!(
@@ -3991,13 +3992,19 @@ fn rejected_out_of_box_copy_is_atomic_and_reuses_future_identity() {
     );
     {
         let mut transaction = attempted.transaction().unwrap();
+        let error = transaction
+            .copy_body_rigid(
+                source,
+                Frame::world().with_origin(Point3::new(600.0, 0.0, 0.0)),
+            )
+            .unwrap_err();
         assert!(
-            transaction
-                .copy_body_rigid(
-                    source,
-                    Frame::world().with_origin(Point3::new(600.0, 0.0, 0.0)),
-                )
-                .is_err()
+            matches!(
+                error,
+                Error::OutsideSizeBox { coordinate }
+                    if coordinate.abs() > kcore::tolerance::SIZE_BOX_HALF
+            ),
+            "the legacy entry must retain its shared kernel error contract"
         );
     }
     assert_eq!(

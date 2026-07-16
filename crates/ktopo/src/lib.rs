@@ -64,4 +64,5 @@ pub mod store;
 pub mod tolerance;
 pub mod transaction;
 
+pub use body_copy::{BodyCopyError, BodyCopyResult};
 pub use transaction::{FullBodyCheck, FullCommitDecision, FullCommitRequirement};

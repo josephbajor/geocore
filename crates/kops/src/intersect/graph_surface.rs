@@ -159,8 +159,11 @@ const fn error_code(value: &'static str) -> ErrorCode {
     }
 }
 
-/// Stable failure identity when a solver discovery cannot be promoted to a
-/// verified whole-interval branch.
+/// Legacy aggregate identity for graph branch-certificate failures.
+///
+/// `GraphSurfaceIntersectionError::code` retains this published adapter
+/// identity. The exact graph-owned certificate code remains available through
+/// the preserved [`std::error::Error::source`] chain.
 pub const BRANCH_CERTIFICATE_FAILURE: ErrorCode =
     error_code("kops.intersect.branch-certificate-failure");
 
@@ -192,8 +195,13 @@ impl GraphSurfaceIntersectionError {
             Self::Intersection(error) => error.class(),
             Self::BranchCertificate(
                 IntersectionCertificateError::SingularSphereChart { .. }
-                | IntersectionCertificateError::SphereTraceOutsideWindow { .. },
+                | IntersectionCertificateError::SphereTraceOutsideWindow { .. }
+                | IntersectionCertificateError::HarmonicRootClassification,
             ) => ErrorClass::Unsupported,
+            // The remaining variants are constructed from solver-owned
+            // carriers, traces, maps, and ranges. Preserve the exact leaf
+            // source below, but do not reclassify an adapter invariant as bad
+            // caller input or a rejected source model.
             Self::BranchCertificate(_) => ErrorClass::InternalInvariant,
             Self::OperationPolicy(error) => error.class(),
             Self::GeometryPersistence(error) => match error {
@@ -272,6 +280,11 @@ impl ClassifiedError for GraphSurfaceIntersectionError {
         match self {
             Self::GeometryEvaluation(error) => error.capability(),
             Self::Intersection(error) => error.capability(),
+            Self::BranchCertificate(
+                error @ (IntersectionCertificateError::SingularSphereChart { .. }
+                | IntersectionCertificateError::SphereTraceOutsideWindow { .. }
+                | IntersectionCertificateError::HarmonicRootClassification),
+            ) => error.capability(),
             Self::BranchCertificate(_) => None,
             Self::OperationPolicy(error) => error.capability(),
             Self::GeometryPersistence(_) => None,

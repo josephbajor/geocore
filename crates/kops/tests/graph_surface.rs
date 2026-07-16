@@ -15,15 +15,15 @@ use kgeom::vec::{Point3, Vec3};
 use kgraph::{
     Curve2dDescriptor, CurveClass, CurveDescriptor, EvalContext, EvalError, EvalLimits,
     GeometryGraph, GeometryGraphError, GeometryRef, IntersectionCertificateError,
-    OffsetSurfaceDescriptor, PlaneSphereCircleTrace, SurfaceClass,
+    OffsetSurfaceDescriptor, PairedTrace, PlaneSphereCircleTrace, SurfaceClass,
 };
 use kops::intersect::{
-    CURVE_CURVE_CLASS_PAIR, ContactKind, GraphSurfaceBudgetProfile, GraphSurfaceIntersectionError,
-    IntersectionBranchVertexEvent, IntersectionError, SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS,
-    SURFACE_SURFACE_CLASS_PAIR, intersect_bounded_curves, intersect_bounded_graph_surfaces,
-    intersect_bounded_graph_surfaces_in_scope, intersect_bounded_graph_surfaces_with_context,
-    intersect_bounded_plane_sphere, intersect_bounded_planes,
-    persist_verified_graph_surface_intersections,
+    BRANCH_CERTIFICATE_FAILURE, CURVE_CURVE_CLASS_PAIR, ContactKind, GraphSurfaceBudgetProfile,
+    GraphSurfaceIntersectionError, IntersectionBranchVertexEvent, IntersectionError,
+    SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS, SURFACE_SURFACE_CLASS_PAIR, intersect_bounded_curves,
+    intersect_bounded_graph_surfaces, intersect_bounded_graph_surfaces_in_scope,
+    intersect_bounded_graph_surfaces_with_context, intersect_bounded_plane_sphere,
+    intersect_bounded_planes, persist_verified_graph_surface_intersections,
 };
 
 fn horizontal_plane(z: f64) -> Plane {
@@ -1297,6 +1297,24 @@ fn oblique_pole_crossing_fails_typed_while_tangent_and_miss_preserve_raw_parity(
     )
     .unwrap_err();
     assert_eq!(pole_error.class(), ErrorClass::Unsupported);
+    assert_eq!(pole_error.code(), BRANCH_CERTIFICATE_FAILURE);
+    assert_eq!(
+        pole_error.capability(),
+        Some(kgraph::intersection_certificate_capability::REGULAR_SPHERE_CHART)
+    );
+    assert_eq!(pole_error.limit(), None);
+    let pole_source = std::error::Error::source(&pole_error)
+        .unwrap()
+        .downcast_ref::<IntersectionCertificateError>()
+        .unwrap();
+    assert!(matches!(
+        pole_source,
+        IntersectionCertificateError::SingularSphereChart { .. }
+    ));
+    assert_eq!(
+        pole_source.code(),
+        kgraph::intersection_certificate_error_code::SINGULAR_SPHERE_CHART
+    );
     assert!(matches!(
         pole_error,
         GraphSurfaceIntersectionError::BranchCertificate(
@@ -1358,6 +1376,136 @@ fn oblique_pole_crossing_fails_typed_while_tangent_and_miss_preserve_raw_parity(
     assert!(miss.raw.is_proven_empty());
     assert!(miss.branch_graph.vertices.is_empty());
     assert!(miss.branch_graph.edges.is_empty());
+}
+
+#[test]
+fn harmonic_certificate_failure_preserves_owner_metadata_and_source() {
+    let error = GraphSurfaceIntersectionError::BranchCertificate(
+        IntersectionCertificateError::HarmonicRootClassification,
+    );
+    assert_eq!(error.class(), ErrorClass::Unsupported);
+    assert_eq!(error.code(), BRANCH_CERTIFICATE_FAILURE);
+    assert_eq!(
+        error.capability(),
+        Some(kgraph::intersection_certificate_capability::HARMONIC_ROOT_CLASSIFICATION)
+    );
+    assert_eq!(error.limit(), None);
+    let source = std::error::Error::source(&error)
+        .unwrap()
+        .downcast_ref::<IntersectionCertificateError>()
+        .unwrap();
+    assert_eq!(
+        source,
+        &IntersectionCertificateError::HarmonicRootClassification
+    );
+    assert_eq!(
+        source.code(),
+        kgraph::intersection_certificate_error_code::HARMONIC_ROOT_CLASSIFICATION
+    );
+}
+
+#[test]
+fn branch_certificate_adapter_preserves_legacy_classes_and_exact_leaf_sources() {
+    use kgraph::intersection_certificate_capability as capability;
+
+    let cases = vec![
+        (
+            IntersectionCertificateError::InvalidParameterMap { reason: "test" },
+            ErrorClass::InternalInvariant,
+            None,
+        ),
+        (
+            IntersectionCertificateError::InvalidTraceFamily,
+            ErrorClass::InternalInvariant,
+            None,
+        ),
+        (
+            IntersectionCertificateError::UnsupportedTraceParameterization {
+                trace: PairedTrace::First,
+                reason: "test",
+            },
+            ErrorClass::InternalInvariant,
+            None,
+        ),
+        (
+            IntersectionCertificateError::UnsupportedCarrierParameterization { reason: "test" },
+            ErrorClass::InternalInvariant,
+            None,
+        ),
+        (
+            IntersectionCertificateError::SingularSphereChart {
+                squared_pole_clearance: 0.0,
+            },
+            ErrorClass::Unsupported,
+            Some(capability::REGULAR_SPHERE_CHART),
+        ),
+        (
+            IntersectionCertificateError::SphereTraceOutsideWindow {
+                coordinate: "longitude",
+            },
+            ErrorClass::Unsupported,
+            Some(capability::SPHERE_CHART_WINDOW),
+        ),
+        (
+            IntersectionCertificateError::InvalidCarrierRange,
+            ErrorClass::InternalInvariant,
+            None,
+        ),
+        (
+            IntersectionCertificateError::InvalidTolerance,
+            ErrorClass::InternalInvariant,
+            None,
+        ),
+        (
+            IntersectionCertificateError::NonFiniteGeometry,
+            ErrorClass::InternalInvariant,
+            None,
+        ),
+        (
+            IntersectionCertificateError::HarmonicRootClassification,
+            ErrorClass::Unsupported,
+            Some(capability::HARMONIC_ROOT_CLASSIFICATION),
+        ),
+        (
+            IntersectionCertificateError::NonFiniteResidualBound {
+                trace: PairedTrace::Second,
+            },
+            ErrorClass::InternalInvariant,
+            None,
+        ),
+        (
+            IntersectionCertificateError::SingularOffsetNormal {
+                trace: PairedTrace::First,
+                squared_norm_lower_bound: 0.0,
+            },
+            ErrorClass::InternalInvariant,
+            None,
+        ),
+        (
+            IntersectionCertificateError::ResidualExceedsTolerance {
+                trace: PairedTrace::Second,
+                residual_bound: 2.0,
+                tolerance: 1.0,
+            },
+            ErrorClass::InternalInvariant,
+            None,
+        ),
+    ];
+
+    for (source, class, expected_capability) in cases {
+        let expected_leaf_code = source.code();
+        let error = GraphSurfaceIntersectionError::BranchCertificate(source.clone());
+        assert_eq!(error.class(), class);
+        assert_eq!(error.code(), BRANCH_CERTIFICATE_FAILURE);
+        assert_eq!(error.capability(), expected_capability);
+        assert_eq!(error.limit(), None);
+        let retained = std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<IntersectionCertificateError>()
+            .unwrap();
+        assert_eq!(retained, &source);
+        assert_eq!(retained.code(), expected_leaf_code);
+    }
 }
 
 #[test]

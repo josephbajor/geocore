@@ -638,14 +638,31 @@ impl<'a> Transaction<'a> {
     /// Every owned topology identity, point, curve, surface, offset basis,
     /// and pcurve is newly allocated. Surface/curve parameterization,
     /// pcurve maps, charts, tolerances, domains, and ownership order are
-    /// preserved exactly. Verified intersection descriptors remain an
-    /// explicit unsupported boundary until their certificates can be
-    /// reissued over transformed source geometry.
+    /// preserved exactly. Supported verified intersection descriptors are
+    /// recertified over transformed source geometry.
+    ///
+    /// This compatibility entry retains the historical [`kcore::error::Result`]
+    /// boundary. Use [`Self::copy_body_rigid_with_source`] when the exact graph
+    /// certificate failure must remain available.
     pub fn copy_body_rigid(
         &mut self,
         source: BodyId,
         placement: kgeom::frame::Frame,
     ) -> Result<BodyId> {
+        self.copy_body_rigid_with_source(source, placement)
+            .map_err(crate::BodyCopyError::into_legacy)
+    }
+
+    /// Duplicate a body while retaining typed certificate-reissuance errors.
+    ///
+    /// This has the same copy, lineage, allocation, and rollback semantics as
+    /// [`Self::copy_body_rigid`], but returns [`crate::BodyCopyError`] instead
+    /// of flattening certificate failures into the legacy shared error.
+    pub fn copy_body_rigid_with_source(
+        &mut self,
+        source: BodyId,
+        placement: kgeom::frame::Frame,
+    ) -> crate::BodyCopyResult<BodyId> {
         let copied = crate::body_copy::copy_body_rigid(self.store, source, placement)?;
         self.lineage.extend(
             copied

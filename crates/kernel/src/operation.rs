@@ -1375,16 +1375,16 @@ impl PartEdit<'_> {
         EvalLimits::from_budget_plan(&context.effective_budget())?;
         let mut scope = OperationScope::new(&context);
         let part = self.id.clone();
-        let result = (|| -> core::result::Result<BodyCreated, kcore::error::Error> {
+        let result = (|| -> ktopo::BodyCopyResult<BodyCreated> {
             let mut transaction = self.state.store.transaction()?;
-            let copied = transaction.copy_body_rigid(body.raw(), placement)?;
+            let copied = transaction.copy_body_rigid_with_source(body.raw(), placement)?;
             let raw_journal = transaction.commit_checked_body_in_scope(copied, &mut scope, 0)?;
             Ok(BodyCreated {
                 body: BodyId::new(part.clone(), copied),
                 journal: ChangeJournal::from_raw(part, raw_journal),
             })
         })()
-        .map_err(Error::from);
+        .map_err(Error::from_body_copy);
         Ok(scope.finish_typed(result))
     }
 

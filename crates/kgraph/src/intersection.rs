@@ -10,8 +10,10 @@
 
 use core::fmt;
 
+use kcore::error::{CapabilityId, ClassifiedError, ErrorClass, ErrorCode};
 use kcore::interval::Interval;
 use kcore::math;
+use kcore::operation::LimitSnapshot;
 use kcore::predicates::{Orientation, affine_dot3, harmonic_half_angle_roots};
 use kgeom::aabb::{Aabb2, Aabb3};
 use kgeom::curve::{Circle, Curve, CurveDerivs, Line};
@@ -90,6 +92,138 @@ pub enum PairedTrace {
     First,
     /// Second surface trace.
     Second,
+}
+
+const fn known_intersection_certificate_error_code(value: &'static str) -> ErrorCode {
+    match ErrorCode::new(value) {
+        Ok(code) => code,
+        Err(_) => panic!("invalid built-in kgraph intersection-certificate error code"),
+    }
+}
+
+const fn known_intersection_certificate_capability(value: &'static str) -> CapabilityId {
+    match CapabilityId::new(value) {
+        Ok(capability) => capability,
+        Err(_) => panic!("invalid built-in kgraph intersection-certificate capability"),
+    }
+}
+
+/// Stable identities for graph-owned intersection-certificate failures.
+pub mod intersection_certificate_error_code {
+    use super::{ErrorCode, known_intersection_certificate_error_code};
+
+    /// An affine carrier/trace parameter map is invalid.
+    pub const INVALID_PARAMETER_MAP: ErrorCode = known_intersection_certificate_error_code(
+        "kgraph.intersection-certificate.invalid-parameter-map",
+    );
+    /// The supplied trace families do not form a supported certificate pair.
+    pub const INVALID_TRACE_FAMILY: ErrorCode = known_intersection_certificate_error_code(
+        "kgraph.intersection-certificate.invalid-trace-family",
+    );
+    /// A trace parameterization lies outside the certified finite subfamily.
+    pub const UNSUPPORTED_TRACE_PARAMETERIZATION: ErrorCode =
+        known_intersection_certificate_error_code(
+            "kgraph.intersection-certificate.unsupported-trace-parameterization",
+        );
+    /// A carrier parameterization lies outside the certified finite subfamily.
+    pub const UNSUPPORTED_CARRIER_PARAMETERIZATION: ErrorCode =
+        known_intersection_certificate_error_code(
+            "kgraph.intersection-certificate.unsupported-carrier-parameterization",
+        );
+    /// The complete inverse-sphere chart lacks positive pole clearance.
+    pub const SINGULAR_SPHERE_CHART: ErrorCode = known_intersection_certificate_error_code(
+        "kgraph.intersection-certificate.singular-sphere-chart",
+    );
+    /// The certified inverse-sphere trace escapes its requested chart window.
+    pub const SPHERE_TRACE_OUTSIDE_WINDOW: ErrorCode = known_intersection_certificate_error_code(
+        "kgraph.intersection-certificate.sphere-trace-outside-window",
+    );
+    /// The retained carrier range is invalid.
+    pub const INVALID_CARRIER_RANGE: ErrorCode = known_intersection_certificate_error_code(
+        "kgraph.intersection-certificate.invalid-carrier-range",
+    );
+    /// The requested residual tolerance is invalid.
+    pub const INVALID_TOLERANCE: ErrorCode = known_intersection_certificate_error_code(
+        "kgraph.intersection-certificate.invalid-tolerance",
+    );
+    /// Certificate input geometry is non-finite.
+    pub const NON_FINITE_GEOMETRY: ErrorCode = known_intersection_certificate_error_code(
+        "kgraph.intersection-certificate.non-finite-geometry",
+    );
+    /// Exact harmonic root evidence cannot be represented conservatively.
+    pub const HARMONIC_ROOT_CLASSIFICATION: ErrorCode = known_intersection_certificate_error_code(
+        "kgraph.intersection-certificate.harmonic-root-classification",
+    );
+    /// Conservative residual evaluation overflowed its finite envelope.
+    pub const NON_FINITE_RESIDUAL_BOUND: ErrorCode = known_intersection_certificate_error_code(
+        "kgraph.intersection-certificate.non-finite-residual-bound",
+    );
+    /// An offset trace lacks a regular whole-range normal.
+    pub const SINGULAR_OFFSET_NORMAL: ErrorCode = known_intersection_certificate_error_code(
+        "kgraph.intersection-certificate.singular-offset-normal",
+    );
+    /// A whole-range trace residual exceeds the requested tolerance.
+    pub const RESIDUAL_EXCEEDS_TOLERANCE: ErrorCode = known_intersection_certificate_error_code(
+        "kgraph.intersection-certificate.residual-exceeds-tolerance",
+    );
+
+    /// Every stable intersection-certificate error code in deterministic order.
+    pub const ALL: &[ErrorCode] = &[
+        INVALID_PARAMETER_MAP,
+        INVALID_TRACE_FAMILY,
+        UNSUPPORTED_TRACE_PARAMETERIZATION,
+        UNSUPPORTED_CARRIER_PARAMETERIZATION,
+        SINGULAR_SPHERE_CHART,
+        SPHERE_TRACE_OUTSIDE_WINDOW,
+        INVALID_CARRIER_RANGE,
+        INVALID_TOLERANCE,
+        NON_FINITE_GEOMETRY,
+        HARMONIC_ROOT_CLASSIFICATION,
+        NON_FINITE_RESIDUAL_BOUND,
+        SINGULAR_OFFSET_NORMAL,
+        RESIDUAL_EXCEEDS_TOLERANCE,
+    ];
+}
+
+/// Stable finite support-matrix features owned by intersection certification.
+pub mod intersection_certificate_capability {
+    use super::{CapabilityId, known_intersection_certificate_capability};
+
+    /// Exact trace parameterizations admitted by whole-range certification.
+    pub const TRACE_PARAMETERIZATION: CapabilityId = known_intersection_certificate_capability(
+        "kgraph.intersection-certificate.trace-parameterization",
+    );
+    /// Exact carrier parameterizations admitted by whole-range certification.
+    pub const CARRIER_PARAMETERIZATION: CapabilityId = known_intersection_certificate_capability(
+        "kgraph.intersection-certificate.carrier-parameterization",
+    );
+    /// Regular pole-free inverse-sphere charts.
+    pub const REGULAR_SPHERE_CHART: CapabilityId = known_intersection_certificate_capability(
+        "kgraph.intersection-certificate.regular-sphere-chart",
+    );
+    /// Finite inverse-sphere chart-window enclosure.
+    pub const SPHERE_CHART_WINDOW: CapabilityId = known_intersection_certificate_capability(
+        "kgraph.intersection-certificate.sphere-chart-window",
+    );
+    /// Exact harmonic root classification and numeric representation.
+    pub const HARMONIC_ROOT_CLASSIFICATION: CapabilityId =
+        known_intersection_certificate_capability(
+            "kgraph.intersection-certificate.harmonic-root-classification",
+        );
+    /// Finite conservative residual-bound evaluation.
+    pub const FINITE_RESIDUAL_BOUND: CapabilityId = known_intersection_certificate_capability(
+        "kgraph.intersection-certificate.finite-residual-bound",
+    );
+
+    /// Every intersection-certificate capability in deterministic order.
+    pub const ALL: &[CapabilityId] = &[
+        TRACE_PARAMETERIZATION,
+        CARRIER_PARAMETERIZATION,
+        REGULAR_SPHERE_CHART,
+        SPHERE_CHART_WINDOW,
+        HARMONIC_ROOT_CLASSIFICATION,
+        FINITE_RESIDUAL_BOUND,
+    ];
 }
 
 /// Failure to construct an affine parameter map or certify paired traces.
@@ -216,6 +350,280 @@ impl fmt::Display for IntersectionCertificateError {
 }
 
 impl std::error::Error for IntersectionCertificateError {}
+
+impl IntersectionCertificateError {
+    /// Broad semantic class owned by graph intersection certification.
+    pub const fn class(&self) -> ErrorClass {
+        match self {
+            Self::InvalidParameterMap { .. }
+            | Self::InvalidTraceFamily
+            | Self::InvalidCarrierRange
+            | Self::InvalidTolerance
+            | Self::NonFiniteGeometry => ErrorClass::InvalidInput,
+            Self::UnsupportedTraceParameterization { .. }
+            | Self::UnsupportedCarrierParameterization { .. }
+            | Self::SingularSphereChart { .. }
+            | Self::SphereTraceOutsideWindow { .. }
+            | Self::HarmonicRootClassification
+            | Self::NonFiniteResidualBound { .. } => ErrorClass::Unsupported,
+            Self::SingularOffsetNormal { .. } | Self::ResidualExceedsTolerance { .. } => {
+                ErrorClass::ModelRejected
+            }
+        }
+    }
+
+    /// Stable machine-readable certificate failure identity.
+    pub const fn code(&self) -> ErrorCode {
+        use intersection_certificate_error_code as code;
+
+        match self {
+            Self::InvalidParameterMap { .. } => code::INVALID_PARAMETER_MAP,
+            Self::InvalidTraceFamily => code::INVALID_TRACE_FAMILY,
+            Self::UnsupportedTraceParameterization { .. } => {
+                code::UNSUPPORTED_TRACE_PARAMETERIZATION
+            }
+            Self::UnsupportedCarrierParameterization { .. } => {
+                code::UNSUPPORTED_CARRIER_PARAMETERIZATION
+            }
+            Self::SingularSphereChart { .. } => code::SINGULAR_SPHERE_CHART,
+            Self::SphereTraceOutsideWindow { .. } => code::SPHERE_TRACE_OUTSIDE_WINDOW,
+            Self::InvalidCarrierRange => code::INVALID_CARRIER_RANGE,
+            Self::InvalidTolerance => code::INVALID_TOLERANCE,
+            Self::NonFiniteGeometry => code::NON_FINITE_GEOMETRY,
+            Self::HarmonicRootClassification => code::HARMONIC_ROOT_CLASSIFICATION,
+            Self::NonFiniteResidualBound { .. } => code::NON_FINITE_RESIDUAL_BOUND,
+            Self::SingularOffsetNormal { .. } => code::SINGULAR_OFFSET_NORMAL,
+            Self::ResidualExceedsTolerance { .. } => code::RESIDUAL_EXCEEDS_TOLERANCE,
+        }
+    }
+
+    /// Unavailable finite certificate feature, when applicable.
+    pub const fn capability(&self) -> Option<CapabilityId> {
+        use intersection_certificate_capability as capability;
+
+        match self {
+            Self::UnsupportedTraceParameterization { .. } => {
+                Some(capability::TRACE_PARAMETERIZATION)
+            }
+            Self::UnsupportedCarrierParameterization { .. } => {
+                Some(capability::CARRIER_PARAMETERIZATION)
+            }
+            Self::SingularSphereChart { .. } => Some(capability::REGULAR_SPHERE_CHART),
+            Self::SphereTraceOutsideWindow { .. } => Some(capability::SPHERE_CHART_WINDOW),
+            Self::HarmonicRootClassification => Some(capability::HARMONIC_ROOT_CLASSIFICATION),
+            Self::NonFiniteResidualBound { .. } => Some(capability::FINITE_RESIDUAL_BOUND),
+            Self::InvalidParameterMap { .. }
+            | Self::InvalidTraceFamily
+            | Self::InvalidCarrierRange
+            | Self::InvalidTolerance
+            | Self::NonFiniteGeometry
+            | Self::SingularOffsetNormal { .. }
+            | Self::ResidualExceedsTolerance { .. } => None,
+        }
+    }
+
+    /// Certificate failures do not own operation-budget limit snapshots.
+    pub const fn limit(&self) -> Option<LimitSnapshot> {
+        None
+    }
+}
+
+impl ClassifiedError for IntersectionCertificateError {
+    fn class(&self) -> ErrorClass {
+        self.class()
+    }
+
+    fn code(&self) -> ErrorCode {
+        self.code()
+    }
+
+    fn capability(&self) -> Option<CapabilityId> {
+        self.capability()
+    }
+
+    fn limit(&self) -> Option<LimitSnapshot> {
+        self.limit()
+    }
+}
+
+#[cfg(test)]
+mod certificate_error_tests {
+    use std::collections::BTreeSet;
+    use std::error::Error as _;
+
+    use super::*;
+
+    fn samples() -> Vec<IntersectionCertificateError> {
+        vec![
+            IntersectionCertificateError::InvalidParameterMap { reason: "test" },
+            IntersectionCertificateError::InvalidTraceFamily,
+            IntersectionCertificateError::UnsupportedTraceParameterization {
+                trace: PairedTrace::First,
+                reason: "test",
+            },
+            IntersectionCertificateError::UnsupportedCarrierParameterization { reason: "test" },
+            IntersectionCertificateError::SingularSphereChart {
+                squared_pole_clearance: 0.0,
+            },
+            IntersectionCertificateError::SphereTraceOutsideWindow {
+                coordinate: "longitude",
+            },
+            IntersectionCertificateError::InvalidCarrierRange,
+            IntersectionCertificateError::InvalidTolerance,
+            IntersectionCertificateError::NonFiniteGeometry,
+            IntersectionCertificateError::HarmonicRootClassification,
+            IntersectionCertificateError::NonFiniteResidualBound {
+                trace: PairedTrace::Second,
+            },
+            IntersectionCertificateError::SingularOffsetNormal {
+                trace: PairedTrace::First,
+                squared_norm_lower_bound: 0.0,
+            },
+            IntersectionCertificateError::ResidualExceedsTolerance {
+                trace: PairedTrace::Second,
+                residual_bound: 2.0,
+                tolerance: 1.0,
+            },
+        ]
+    }
+
+    #[test]
+    fn certificate_error_identifiers_are_unique_and_stably_namespaced() {
+        const FROZEN_CODES: &[&str] = &[
+            "kgraph.intersection-certificate.invalid-parameter-map",
+            "kgraph.intersection-certificate.invalid-trace-family",
+            "kgraph.intersection-certificate.unsupported-trace-parameterization",
+            "kgraph.intersection-certificate.unsupported-carrier-parameterization",
+            "kgraph.intersection-certificate.singular-sphere-chart",
+            "kgraph.intersection-certificate.sphere-trace-outside-window",
+            "kgraph.intersection-certificate.invalid-carrier-range",
+            "kgraph.intersection-certificate.invalid-tolerance",
+            "kgraph.intersection-certificate.non-finite-geometry",
+            "kgraph.intersection-certificate.harmonic-root-classification",
+            "kgraph.intersection-certificate.non-finite-residual-bound",
+            "kgraph.intersection-certificate.singular-offset-normal",
+            "kgraph.intersection-certificate.residual-exceeds-tolerance",
+        ];
+        const FROZEN_CAPABILITIES: &[&str] = &[
+            "kgraph.intersection-certificate.trace-parameterization",
+            "kgraph.intersection-certificate.carrier-parameterization",
+            "kgraph.intersection-certificate.regular-sphere-chart",
+            "kgraph.intersection-certificate.sphere-chart-window",
+            "kgraph.intersection-certificate.harmonic-root-classification",
+            "kgraph.intersection-certificate.finite-residual-bound",
+        ];
+        let codes: BTreeSet<_> = intersection_certificate_error_code::ALL
+            .iter()
+            .map(|code| code.as_str())
+            .collect();
+        assert_eq!(codes.len(), intersection_certificate_error_code::ALL.len());
+        assert_eq!(
+            intersection_certificate_error_code::ALL
+                .iter()
+                .map(|code| code.as_str())
+                .collect::<Vec<_>>(),
+            FROZEN_CODES
+        );
+        let capabilities: BTreeSet<_> = intersection_certificate_capability::ALL
+            .iter()
+            .map(|capability| capability.as_str())
+            .collect();
+        assert_eq!(
+            capabilities.len(),
+            intersection_certificate_capability::ALL.len()
+        );
+        assert_eq!(
+            intersection_certificate_capability::ALL
+                .iter()
+                .map(|capability| capability.as_str())
+                .collect::<Vec<_>>(),
+            FROZEN_CAPABILITIES
+        );
+    }
+
+    #[test]
+    fn certificate_errors_classify_at_their_graph_owner() {
+        use intersection_certificate_capability as capability;
+        use intersection_certificate_error_code as code;
+
+        let expected = [
+            (ErrorClass::InvalidInput, code::INVALID_PARAMETER_MAP, None),
+            (ErrorClass::InvalidInput, code::INVALID_TRACE_FAMILY, None),
+            (
+                ErrorClass::Unsupported,
+                code::UNSUPPORTED_TRACE_PARAMETERIZATION,
+                Some(capability::TRACE_PARAMETERIZATION),
+            ),
+            (
+                ErrorClass::Unsupported,
+                code::UNSUPPORTED_CARRIER_PARAMETERIZATION,
+                Some(capability::CARRIER_PARAMETERIZATION),
+            ),
+            (
+                ErrorClass::Unsupported,
+                code::SINGULAR_SPHERE_CHART,
+                Some(capability::REGULAR_SPHERE_CHART),
+            ),
+            (
+                ErrorClass::Unsupported,
+                code::SPHERE_TRACE_OUTSIDE_WINDOW,
+                Some(capability::SPHERE_CHART_WINDOW),
+            ),
+            (ErrorClass::InvalidInput, code::INVALID_CARRIER_RANGE, None),
+            (ErrorClass::InvalidInput, code::INVALID_TOLERANCE, None),
+            (ErrorClass::InvalidInput, code::NON_FINITE_GEOMETRY, None),
+            (
+                ErrorClass::Unsupported,
+                code::HARMONIC_ROOT_CLASSIFICATION,
+                Some(capability::HARMONIC_ROOT_CLASSIFICATION),
+            ),
+            (
+                ErrorClass::Unsupported,
+                code::NON_FINITE_RESIDUAL_BOUND,
+                Some(capability::FINITE_RESIDUAL_BOUND),
+            ),
+            (
+                ErrorClass::ModelRejected,
+                code::SINGULAR_OFFSET_NORMAL,
+                None,
+            ),
+            (
+                ErrorClass::ModelRejected,
+                code::RESIDUAL_EXCEEDS_TOLERANCE,
+                None,
+            ),
+        ];
+        for (error, (class, code, capability)) in samples().iter().zip(expected) {
+            assert_eq!(error.class(), class);
+            assert_eq!(error.code(), code);
+            assert_eq!(error.capability(), capability);
+            assert_eq!(error.limit(), None);
+            let classified: &dyn ClassifiedError = error;
+            assert_eq!(classified.class(), class);
+            assert_eq!(classified.code(), code);
+            assert_eq!(classified.capability(), capability);
+            assert_eq!(classified.limit(), None);
+        }
+        assert_ne!(
+            IntersectionCertificateError::SingularSphereChart {
+                squared_pole_clearance: 0.0,
+            }
+            .code(),
+            IntersectionCertificateError::HarmonicRootClassification.code()
+        );
+        assert_ne!(
+            capability::REGULAR_SPHERE_CHART,
+            capability::HARMONIC_ROOT_CLASSIFICATION
+        );
+    }
+
+    #[test]
+    fn certificate_errors_are_leaf_sources() {
+        for error in samples() {
+            assert!(error.source().is_none());
+        }
+    }
+}
 
 /// Proof that a finite line carrier and two lifted line pcurves agree over a
 /// complete carrier interval within a supplied model-space tolerance.
