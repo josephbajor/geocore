@@ -3575,15 +3575,15 @@ mod tests {
     }
 
     #[test]
-    fn rigid_body_copy_facade_reissues_witnessed_cubic_dual_offset() {
+    fn rigid_body_copy_facade_reissues_nested_witnessed_cubic_dual_offset() {
         let placement = Frame::new(
             Point3::new(2.0, -1.0, 3.0),
             Vec3::new(1.0, 2.0, 3.0).normalized().unwrap(),
             Vec3::new(2.0, -1.0, 0.0).normalized().unwrap(),
         )
         .unwrap();
-        let first = [0.25];
-        let second = [0.5];
+        let first = [0.025, 0.05, 0.075, 0.1];
+        let second = [0.1, 0.15, 0.25];
         let mut copied_certificates = Vec::new();
         for swap_order in [false, true] {
             let mut session = Kernel::new().create_session();
@@ -3641,11 +3641,16 @@ mod tests {
                 witnesses.canonicalized_pcurve_points(),
                 source_witnesses.canonicalized_pcurve_points()
             );
-            assert!(certificate.traces().iter().all(|trace| {
-                trace
-                    .as_offset_nurbs()
-                    .is_some_and(|offset| offset.descriptor_signed_distances().len() == 1)
-            }));
+            assert_eq!(
+                certificate.traces().each_ref().map(|trace| {
+                    trace
+                        .as_offset_nurbs()
+                        .unwrap()
+                        .descriptor_signed_distances()
+                        .len()
+                }),
+                if swap_order { [3, 4] } else { [4, 3] }
+            );
             assert_eq!(
                 certify_transmitted_cubic_dual_offset_nurbs_intersection_residuals(
                     certificate.carrier().clone(),
@@ -3884,13 +3889,6 @@ mod tests {
         // chains. Facade preflight covers graph-valid unsupported shapes and
         // source relationships before an operation scope is created.
         for (source_distances, trace_distances, shared_basis, periodic_first, sample_count) in [
-            (
-                (&first_split[..], &second[..]),
-                (&first_split[..], &second[..]),
-                false,
-                false,
-                4,
-            ),
             (
                 (&first[..], &shared_second[..]),
                 (&first[..], &shared_second[..]),

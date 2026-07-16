@@ -1020,8 +1020,8 @@ impl TransmittedNurbsIntersectionCertificate {
 /// witnessed three-sample quadratic and four-sample cubic dual-offset charts,
 /// are admitted; periodic and every other dual-offset family remain outside
 /// this copy tranche. Admitted Offset(NURBS) traces retain exactly one
-/// descriptor except that the two-sample and witnessed quadratic families
-/// admit one through four exact ordered descriptors per root.
+/// descriptor except that the two-sample, witnessed quadratic, and witnessed
+/// cubic families admit one through four exact ordered descriptors per root.
 pub fn transmitted_nurbs_intersection_has_rigid_copy_recertifier(
     certificate: &TransmittedNurbsIntersectionCertificate,
 ) -> bool {
@@ -1081,15 +1081,16 @@ pub fn transmitted_nurbs_intersection_has_rigid_copy_recertifier(
                 ParamRange::new(0.0, 2.0),
                 &[0.0, 0.0, 0.0, 2.0, 2.0, 2.0],
             );
+            let cubic_shape = canonical_shape(
+                3,
+                4,
+                ParamRange::new(0.0, 3.0),
+                &[0.0, 0.0, 0.0, 0.0, 3.0, 3.0, 3.0, 3.0],
+            );
             let supported_shape =
                 match (certificate.quadratic_witnesses, certificate.cubic_witnesses) {
                     (Some(_), None) => quadratic_shape,
-                    (None, Some(_)) => canonical_shape(
-                        3,
-                        4,
-                        ParamRange::new(0.0, 3.0),
-                        &[0.0, 0.0, 0.0, 0.0, 3.0, 3.0, 3.0, 3.0],
-                    ),
+                    (None, Some(_)) => cubic_shape,
                     (None, None) => {
                         two_sample_shape
                             || canonical_shape(
@@ -1107,7 +1108,8 @@ pub fn transmitted_nurbs_intersection_has_rigid_copy_recertifier(
                     }
                     (Some(_), Some(_)) => false,
                 };
-            let descriptor_counts_supported = if two_sample_shape || quadratic_shape {
+            let descriptor_counts_supported = if two_sample_shape || quadratic_shape || cubic_shape
+            {
                 (1..=4).contains(&first.descriptor_signed_distances().len())
                     && (1..=4).contains(&second.descriptor_signed_distances().len())
             } else {

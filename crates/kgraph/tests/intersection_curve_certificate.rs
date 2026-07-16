@@ -153,6 +153,80 @@ fn transmitted_cubic_dual_offset_interpolant_binds_witnesses_sources_and_pcurves
             .into_iter()
             .all(|bound| bound <= 1.0e-8)
     );
+    let first_sequences = [
+        vec![0.25],
+        vec![0.1, 0.15],
+        vec![0.05, 0.075, 0.125],
+        vec![0.025, 0.05, 0.075, 0.1],
+    ];
+    let second_sequences = [
+        vec![0.5],
+        vec![0.2, 0.3],
+        vec![0.1, 0.15, 0.25],
+        vec![0.05, 0.1, 0.15, 0.2],
+    ];
+    for first in &first_sequences {
+        for second in &second_sequences {
+            for swap_order in [false, true] {
+                let ordered = if swap_order {
+                    [
+                        TransmittedPlaneNurbsTrace::OffsetNurbs(
+                            TransmittedOffsetNurbsTrace::from_descriptor_signed_distances(
+                                second_basis.clone(),
+                                second,
+                            )
+                            .unwrap(),
+                        ),
+                        TransmittedPlaneNurbsTrace::OffsetNurbs(
+                            TransmittedOffsetNurbsTrace::from_descriptor_signed_distances(
+                                first_basis.clone(),
+                                first,
+                            )
+                            .unwrap(),
+                        ),
+                    ]
+                } else {
+                    [
+                        TransmittedPlaneNurbsTrace::OffsetNurbs(
+                            TransmittedOffsetNurbsTrace::from_descriptor_signed_distances(
+                                first_basis.clone(),
+                                first,
+                            )
+                            .unwrap(),
+                        ),
+                        TransmittedPlaneNurbsTrace::OffsetNurbs(
+                            TransmittedOffsetNurbsTrace::from_descriptor_signed_distances(
+                                second_basis.clone(),
+                                second,
+                            )
+                            .unwrap(),
+                        ),
+                    ]
+                };
+                let certificate =
+                    certify_transmitted_cubic_dual_offset_nurbs_intersection_residuals(
+                        carrier.clone(),
+                        ordered,
+                        pcurves.clone(),
+                        positions,
+                        uv_samples,
+                        metadata,
+                        1.0e-8,
+                    )
+                    .unwrap();
+                assert!(transmitted_nurbs_intersection_has_rigid_copy_recertifier(
+                    &certificate
+                ));
+            }
+        }
+    }
+    assert!(
+        TransmittedOffsetNurbsTrace::from_descriptor_signed_distances(
+            first_basis.clone(),
+            &[0.05; 5],
+        )
+        .is_none()
+    );
 
     let mut graph = GeometryGraph::new();
     let basis_handles = [
