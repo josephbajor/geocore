@@ -3044,6 +3044,24 @@ fn oblique_spherical_pcurve_certifies_derivatives_persistence_and_source_binding
         1.0e-10,
     )
     .unwrap();
+    assert_eq!(
+        certify_paired_plane_sphere_oblique_circle_residuals(
+            carrier,
+            range,
+            plane,
+            plane_pcurve,
+            sphere,
+            sphere_window,
+            [
+                sphere_longitude(carrier, sphere, range.lo),
+                sphere_longitude(carrier, sphere, range.hi),
+            ],
+            PairedTrace::First,
+            1.0e-10,
+        )
+        .unwrap(),
+        (sphere_pcurve, certificate)
+    );
     assert_eq!(sphere_pcurve.carrier(), carrier);
     assert_eq!(sphere_pcurve.sphere(), sphere);
     assert_eq!(sphere_pcurve.carrier_range(), range);

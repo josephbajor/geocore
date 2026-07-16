@@ -383,6 +383,17 @@ fn circle_sphere_secant_tangent_and_surface_window_filtering() {
         Tolerances::default(),
     )
     .unwrap();
+    assert_eq!(
+        intersect_bounded_circle_sphere(
+            &secant,
+            secant.param_range(),
+            &sphere,
+            sphere.param_range(),
+            Tolerances::default(),
+        )
+        .unwrap(),
+        hit
+    );
 
     let y = 15.0_f64.sqrt() / 4.0;
     let t = math::atan2(y, -0.25);
@@ -405,6 +416,20 @@ fn circle_sphere_secant_tangent_and_surface_window_filtering() {
         Tolerances::default(),
     )
     .unwrap();
+    assert_eq!(
+        intersect_bounded_circle_sphere(
+            &secant,
+            secant.param_range(),
+            &sphere,
+            [
+                ParamRange::new(0.0, core::f64::consts::PI),
+                ParamRange::new(-core::f64::consts::FRAC_PI_2, core::f64::consts::FRAC_PI_2,),
+            ],
+            Tolerances::default(),
+        )
+        .unwrap(),
+        filtered
+    );
     assert_eq!(filtered.points.len(), 1);
     assert!(filtered.points[0].point.dist(Point3::new(0.25, y, 0.0)) < 1e-12);
 
@@ -1637,6 +1662,17 @@ fn circle_plane_crossing_and_surface_window_filtering() {
         Tolerances::default(),
     )
     .unwrap();
+    assert_eq!(
+        intersect_bounded_circle_plane(
+            &circle,
+            circle.param_range(),
+            &plane,
+            [ParamRange::new(-2.0, 2.0), ParamRange::new(-0.25, 0.25)],
+            Tolerances::default(),
+        )
+        .unwrap(),
+        hit
+    );
 
     assert_eq!(hit.points.len(), 2);
     assert_eq!(hit.points[0].kind, ContactKind::Transverse);
@@ -1656,8 +1692,56 @@ fn circle_plane_crossing_and_surface_window_filtering() {
         Tolerances::default(),
     )
     .unwrap();
+    assert_eq!(
+        intersect_bounded_circle_plane(
+            &circle,
+            circle.param_range(),
+            &plane,
+            [ParamRange::new(0.0, 2.0), ParamRange::new(-0.25, 0.25)],
+            Tolerances::default(),
+        )
+        .unwrap(),
+        filtered
+    );
     assert_eq!(filtered.points.len(), 1);
     assert_eq!(filtered.points[0].uv_surface, [1.0, 0.0]);
+}
+
+#[test]
+fn circle_plane_near_tangent_keeps_two_exactly_transverse_roots() {
+    let circle = Circle::new(Frame::world(), 1.0).unwrap();
+    let plane = Plane::new(
+        Frame::new(
+            Point3::new(-0.991, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap(),
+    );
+    let hit = intersect_bounded_circle_plane(
+        &circle,
+        circle.param_range(),
+        &plane,
+        [ParamRange::new(-2.0, 2.0), ParamRange::new(-2.0, 2.0)],
+        Tolerances::with_linear(0.01).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        hit.points.len(),
+        2,
+        "near-tangent secant must not collapse to pi"
+    );
+    assert!(
+        hit.points
+            .iter()
+            .all(|point| point.kind == ContactKind::Transverse)
+    );
+    assert!(hit.points[1].point.dist(hit.points[0].point) > 0.25);
+    for point in &hit.points {
+        assert!((point.point.x + 0.991).abs() < 2.0e-15);
+        assert!(point.residual < 2.0e-15);
+    }
 }
 
 #[test]

@@ -11,6 +11,7 @@
 //! is a planned optimization (roadmap M8) once profiling justifies it.
 
 use crate::expansion;
+use crate::interval::Interval;
 
 /// Sign of a predicate's underlying determinant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -53,6 +54,433 @@ impl Orientation {
             Orientation::Positive => 1,
         }
     }
+}
+
+/// Exact sign and a finite floating approximation of `b² - 4ac`.
+///
+/// The approximation is evidence for subsequent numeric work such as a square
+/// root; it must never replace [`Self::sign`] for classification.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct QuadraticDiscriminant {
+    sign: Orientation,
+    approximation: f64,
+    used_exact_fallback: bool,
+}
+
+impl QuadraticDiscriminant {
+    /// Exact sign of `b² - 4ac`.
+    pub const fn sign(self) -> Orientation {
+        self.sign
+    }
+
+    /// Finite, sign-consistent approximation of the exact discriminant.
+    pub const fn approximation(self) -> f64 {
+        self.approximation
+    }
+
+    /// Whether outward interval arithmetic was inconclusive and exact
+    /// expansion arithmetic supplied the result.
+    pub const fn used_exact_fallback(self) -> bool {
+        self.used_exact_fallback
+    }
+}
+
+/// Real roots of the homogeneous half-angle quadratic for
+/// `cosine*cos(t) + sine*sin(t) + constant == 0`.
+///
+/// Finite entries are roots in `y = tan(t/2)`. [`Self::has_infinity_root`]
+/// represents the projective root `y = infinity`, i.e. `t = pi`. An
+/// identically-zero harmonic has no discrete roots and is reported through
+/// [`Self::is_identity`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HarmonicHalfAngleRoots {
+    finite_roots: [f64; 2],
+    finite_root_count: u8,
+    has_infinity_root: bool,
+    discriminant: Orientation,
+    used_exact_fallback: bool,
+    identity: bool,
+}
+
+impl HarmonicHalfAngleRoots {
+    /// Finite half-angle roots in the deterministic quadratic-formula order.
+    pub fn finite_roots(&self) -> &[f64] {
+        &self.finite_roots[..usize::from(self.finite_root_count)]
+    }
+
+    /// Whether the homogeneous quadratic has a root at `y = infinity`.
+    pub const fn has_infinity_root(self) -> bool {
+        self.has_infinity_root
+    }
+
+    /// Exact sign of the half-angle quadratic discriminant.
+    pub const fn discriminant(self) -> Orientation {
+        self.discriminant
+    }
+
+    /// Whether exact expansion arithmetic classified the discriminant.
+    pub const fn used_exact_fallback(self) -> bool {
+        self.used_exact_fallback
+    }
+
+    /// Whether every parameter satisfies the harmonic equation.
+    pub const fn is_identity(self) -> bool {
+        self.identity
+    }
+}
+
+const HARMONIC_SAFE_MIN: f64 = f64::from_bits(((1023 - 170) as u64) << 52);
+const HARMONIC_SAFE_MAX: f64 = f64::from_bits(((1023 + 170) as u64) << 52);
+
+fn floor_binary_exponent(value: f64) -> i32 {
+    debug_assert!(value.is_finite() && value != 0.0);
+    let bits = value.abs().to_bits();
+    let stored = ((bits >> 52) & 0x7ff) as i32;
+    if stored != 0 {
+        stored - 1023
+    } else {
+        let fraction = bits & ((1_u64 << 52) - 1);
+        let highest = 63 - fraction.leading_zeros() as i32;
+        highest - 1074
+    }
+}
+
+fn normal_power_of_two(exponent: i32) -> f64 {
+    debug_assert!((-1022..=1023).contains(&exponent));
+    f64::from_bits(((1023 + exponent) as u64) << 52)
+}
+
+fn scale_power_of_two(mut value: f64, mut exponent: i32) -> Option<f64> {
+    while exponent > 1023 {
+        value *= normal_power_of_two(1023);
+        exponent -= 1023;
+    }
+    while exponent < -1022 {
+        value *= normal_power_of_two(-1022);
+        exponent += 1022;
+    }
+    value *= normal_power_of_two(exponent);
+    value.is_finite().then_some(value)
+}
+
+fn normalize_harmonic_coefficients(coefficients: [f64; 3]) -> Option<[f64; 3]> {
+    if coefficients
+        .iter()
+        .any(|coefficient| !coefficient.is_finite())
+    {
+        return None;
+    }
+    let max = coefficients
+        .iter()
+        .map(|coefficient| coefficient.abs())
+        .fold(0.0, f64::max);
+    if max == 0.0 || (HARMONIC_SAFE_MIN..=HARMONIC_SAFE_MAX).contains(&max) {
+        return Some(coefficients);
+    }
+
+    let exponent = -floor_binary_exponent(max);
+    let mut normalized = [0.0; 3];
+    for (index, coefficient) in coefficients.into_iter().enumerate() {
+        let scaled = scale_power_of_two(coefficient, exponent)?;
+        if coefficient != 0.0
+            && (scaled == 0.0
+                || scale_power_of_two(scaled, -exponent)?.to_bits() != coefficient.to_bits())
+        {
+            return None;
+        }
+        normalized[index] = scaled;
+    }
+    Some(normalized)
+}
+
+// `split` multiplies each operand by less than 2^28, so component exponents
+// in [-500, 500] keep every split intermediate finite and normal. A nonzero
+// residual of two 53-bit significands is no smaller than roughly 2^-105 times
+// their product. Restricting product exponents to [-400, 400] therefore keeps
+// residues above 2^-506; multiplying the `ac` expansion by four then stays in
+// the normal, finite exponent range [-504, 402].
+const EXACT_COMPONENT_MIN: f64 = f64::from_bits(((1023 - 500) as u64) << 52);
+const EXACT_COMPONENT_MAX: f64 = f64::from_bits(((1023 + 500) as u64) << 52);
+const EXACT_PRODUCT_MIN: f64 = f64::from_bits(((1023 - 400) as u64) << 52);
+const EXACT_PRODUCT_MAX: f64 = f64::from_bits(((1023 + 400) as u64) << 52);
+
+fn exact_components_are_normal(expansion: &[f64]) -> bool {
+    expansion
+        .iter()
+        .all(|component| *component == 0.0 || component.is_normal())
+}
+
+fn exact_product_for_discriminant(a: f64, b: f64) -> Option<Vec<f64>> {
+    if a == 0.0 || b == 0.0 {
+        return Some(vec![0.0]);
+    }
+    if !(EXACT_COMPONENT_MIN..=EXACT_COMPONENT_MAX).contains(&a.abs())
+        || !(EXACT_COMPONENT_MIN..=EXACT_COMPONENT_MAX).contains(&b.abs())
+    {
+        return None;
+    }
+    let product = a.abs() * b.abs();
+    if !(EXACT_PRODUCT_MIN..=EXACT_PRODUCT_MAX).contains(&product) {
+        return None;
+    }
+    let (rounded, residue) = expansion::two_product(a, b);
+    let expansion = expansion::from_two(rounded, residue);
+    exact_components_are_normal(&expansion).then_some(expansion)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ExactSignedApproximation {
+    sign: Orientation,
+    approximation: f64,
+    used_exact_fallback: bool,
+}
+
+fn harmonic_norm_difference(
+    cosine: f64,
+    sine: f64,
+    constant: f64,
+) -> Option<ExactSignedApproximation> {
+    let rounded = cosine * cosine + sine * sine - constant * constant;
+    let interval = Interval::point(cosine).square() + Interval::point(sine).square()
+        - Interval::point(constant).square();
+    if interval.lo().is_finite()
+        && interval.hi().is_finite()
+        && rounded.is_finite()
+        && let Some(sign) = interval.sign()
+    {
+        let sign = Orientation::from_sign(sign);
+        if sign == Orientation::from_scalar(rounded) {
+            return Some(ExactSignedApproximation {
+                sign,
+                approximation: if sign == Orientation::Zero {
+                    0.0
+                } else {
+                    rounded
+                },
+                used_exact_fallback: false,
+            });
+        }
+    }
+
+    let cosine_square = exact_product_for_discriminant(cosine, cosine)?;
+    let sine_square = exact_product_for_discriminant(sine, sine)?;
+    let constant_square = exact_product_for_discriminant(constant, constant)?;
+    let sum = expansion::sum(&cosine_square, &sine_square);
+    let difference = expansion::sum(&sum, &expansion::negate(&constant_square));
+    if !exact_components_are_normal(&difference) {
+        return None;
+    }
+    let sign = Orientation::from_sign(expansion::sign(&difference));
+    let approximation = if sign == Orientation::Zero {
+        0.0
+    } else {
+        let approximation = expansion::approx(&difference);
+        if Orientation::from_scalar(approximation) == sign {
+            approximation
+        } else {
+            *difference.last()?
+        }
+    };
+    if !approximation.is_finite() || Orientation::from_scalar(approximation) != sign {
+        return None;
+    }
+    Some(ExactSignedApproximation {
+        sign,
+        approximation,
+        used_exact_fallback: true,
+    })
+}
+
+/// Classify the quadratic discriminant `b² - 4ac` without tolerance.
+///
+/// Every returned [`QuadraticDiscriminant`] is an exact classification of the
+/// supplied finite `f64` coefficients as dyadic rationals. Outward interval
+/// arithmetic certifies ordinary cases; cancellation routes to exact expansion
+/// arithmetic.
+///
+/// Non-finite inputs or a fallback path outside the conservative
+/// exact-expansion exponent envelope return `None` rather than an uncertain
+/// classification; exact algebraic zero returns [`Orientation::Zero`] with
+/// approximation `0.0`. In particular, fallback refuses nonzero product,
+/// residue, and scale-by-four paths that could enter the subnormal range or
+/// overflow.
+///
+/// This helper does not decide whether `a` is numerically usable as a quadratic
+/// coefficient; callers retain their metric coefficient policy.
+pub fn quadratic_discriminant(a: f64, b: f64, c: f64) -> Option<QuadraticDiscriminant> {
+    if !a.is_finite() || !b.is_finite() || !c.is_finite() {
+        return None;
+    }
+
+    let rounded = b * b - 4.0 * a * c;
+    let interval = Interval::point(b).square()
+        - (Interval::point(a) * Interval::point(c)) * Interval::point(4.0);
+    if interval.lo().is_finite()
+        && interval.hi().is_finite()
+        && rounded.is_finite()
+        && let Some(sign) = interval.sign()
+    {
+        let sign = Orientation::from_sign(sign);
+        let rounded_sign = Orientation::from_scalar(rounded);
+        if sign == rounded_sign {
+            return Some(QuadraticDiscriminant {
+                sign,
+                approximation: if sign == Orientation::Zero {
+                    0.0
+                } else {
+                    rounded
+                },
+                used_exact_fallback: false,
+            });
+        }
+    }
+
+    let square = exact_product_for_discriminant(b, b)?;
+    let product = exact_product_for_discriminant(a, c)?;
+    let four_ac = expansion::scale(&product, 4.0);
+    if !exact_components_are_normal(&four_ac) {
+        return None;
+    }
+    let discriminant = expansion::sum(&square, &expansion::negate(&four_ac));
+    if !exact_components_are_normal(&discriminant) {
+        return None;
+    }
+
+    let sign = Orientation::from_sign(expansion::sign(&discriminant));
+    let approximation = if sign == Orientation::Zero {
+        0.0
+    } else {
+        let approximation = expansion::approx(&discriminant);
+        let approximation_sign = Orientation::from_scalar(approximation);
+        if approximation_sign == sign {
+            approximation
+        } else {
+            *discriminant.last()?
+        }
+    };
+    if !approximation.is_finite() || Orientation::from_scalar(approximation) != sign {
+        return None;
+    }
+    Some(QuadraticDiscriminant {
+        sign,
+        approximation,
+        used_exact_fallback: true,
+    })
+}
+
+/// Solve `cosine*cos(t) + sine*sin(t) + constant == 0` through the
+/// homogeneous half-angle chart.
+///
+/// Power-of-two normalization preserves the original harmonic exactly while
+/// keeping ordinary products inside the exact-expansion envelope. Root count
+/// is classified from the exact sign of
+/// `cosine² + sine² - constant²`. The rounded half-angle coefficients
+/// `(constant - cosine)y² + 2*sine*y + (cosine + constant)` are used only for
+/// numeric root construction and the ordinary bit-compatible path. Polynomial
+/// degree remains algebraic: only an exactly zero rounded leading coefficient
+/// creates the projective `t = pi` root. No caller tolerance is used for these
+/// decisions.
+///
+/// Returns `None` for non-finite input, an exact normalization that cannot be
+/// represented without losing a coefficient, an unclassifiable discriminant,
+/// or a finite half-angle root outside `f64` range. Callers must treat `None`
+/// as incomplete numeric evidence, never as a certified miss.
+pub fn harmonic_half_angle_roots(
+    cosine: f64,
+    sine: f64,
+    constant: f64,
+) -> Option<HarmonicHalfAngleRoots> {
+    let [cosine, sine, constant] = normalize_harmonic_coefficients([cosine, sine, constant])?;
+    if cosine == 0.0 && sine == 0.0 && constant == 0.0 {
+        return Some(HarmonicHalfAngleRoots {
+            finite_roots: [0.0; 2],
+            finite_root_count: 0,
+            has_infinity_root: false,
+            discriminant: Orientation::Zero,
+            used_exact_fallback: false,
+            identity: true,
+        });
+    }
+
+    let a = constant - cosine;
+    let b = 2.0 * sine;
+    let c = cosine + constant;
+    if !a.is_finite() || !b.is_finite() || !c.is_finite() {
+        return None;
+    }
+    if a == 0.0 {
+        if b == 0.0 {
+            return Some(HarmonicHalfAngleRoots {
+                finite_roots: [0.0; 2],
+                finite_root_count: 0,
+                has_infinity_root: true,
+                discriminant: Orientation::Zero,
+                used_exact_fallback: false,
+                identity: false,
+            });
+        }
+        let root = -c / b;
+        if !root.is_finite() {
+            return None;
+        }
+        return Some(HarmonicHalfAngleRoots {
+            finite_roots: [root, 0.0],
+            finite_root_count: 1,
+            has_infinity_root: true,
+            discriminant: Orientation::Positive,
+            used_exact_fallback: false,
+            identity: false,
+        });
+    }
+
+    let discriminant = harmonic_norm_difference(cosine, sine, constant)?;
+    let sign = discriminant.sign;
+    let rounded_half_angle_discriminant = b * b - 4.0 * a * c;
+    let mut finite_roots = [0.0; 2];
+    let finite_root_count = match sign {
+        Orientation::Negative => 0,
+        Orientation::Zero => {
+            finite_roots[0] = -b / (2.0 * a);
+            1
+        }
+        Orientation::Positive
+            if !discriminant.used_exact_fallback
+                && Orientation::from_scalar(rounded_half_angle_discriminant)
+                    == Orientation::Positive =>
+        {
+            let root = rounded_half_angle_discriminant.sqrt();
+            finite_roots = [(-b - root) / (2.0 * a), (-b + root) / (2.0 * a)];
+            2
+        }
+        Orientation::Positive => {
+            let root = (4.0 * discriminant.approximation).sqrt();
+            let q = -0.5 * (b + root.copysign(b));
+            if q == 0.0 || !q.is_finite() {
+                return None;
+            }
+            finite_roots = [q / a, c / q];
+            if (a > 0.0 && finite_roots[0] > finite_roots[1])
+                || (a < 0.0 && finite_roots[0] < finite_roots[1])
+            {
+                finite_roots.swap(0, 1);
+            }
+            2
+        }
+    };
+    if finite_roots[..finite_root_count]
+        .iter()
+        .any(|root| !root.is_finite())
+    {
+        return None;
+    }
+    Some(HarmonicHalfAngleRoots {
+        finite_roots,
+        finite_root_count: finite_root_count as u8,
+        has_infinity_root: false,
+        discriminant: sign,
+        used_exact_fallback: discriminant.used_exact_fallback,
+        identity: false,
+    })
 }
 
 /// Machine epsilon in Shewchuk's convention: 2^-53, half a ulp of 1.0.
@@ -378,6 +806,237 @@ mod tests {
             })
             .sum::<i128>()
             .signum() as i8
+    }
+
+    fn quadratic_discriminant_oracle(a: i128, b: i128, c: i128) -> i8 {
+        (b * b - 4 * a * c).signum() as i8
+    }
+
+    #[test]
+    fn quadratic_discriminant_exactly_classifies_large_cancellation() {
+        const M: i128 = 1_i128 << 52;
+        let cases = [
+            (1_i128 << 51, M + 1, (1_i128 << 51) + 1, 1),
+            (1, M, 1_i128 << 102, 0),
+            (1, M, (1_i128 << 102) + (1_i128 << 50), -1),
+        ];
+        for (a, b, c, expected) in cases {
+            assert_eq!(quadratic_discriminant_oracle(a, b, c), expected);
+            let rounded = (b as f64) * (b as f64) - 4.0 * (a as f64) * (c as f64);
+            if expected == 1 {
+                assert_eq!(rounded, 0.0);
+            }
+            let classified = quadratic_discriminant(a as f64, b as f64, c as f64).unwrap();
+            assert_eq!(classified.sign().as_i8(), expected);
+            assert!(classified.used_exact_fallback());
+            assert_eq!(
+                Orientation::from_scalar(classified.approximation()).as_i8(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn quadratic_discriminant_retains_stable_root_magnitude_and_scale_sign() {
+        const M: i128 = 1_i128 << 52;
+        const C: i128 = (1_i128 << 102) + (1_i128 << 51);
+        assert_eq!(quadratic_discriminant_oracle(1, M + 1, C), 1);
+        let classified = quadratic_discriminant(1.0, (M + 1) as f64, C as f64).unwrap();
+        assert_eq!(classified.sign(), Orientation::Positive);
+        assert_eq!(classified.approximation(), 1.0);
+        assert!(classified.used_exact_fallback());
+
+        for scale in [2.0_f64.powi(-20), 2.0_f64.powi(20), -1.0] {
+            let scaled =
+                quadratic_discriminant(scale, scale * (M + 1) as f64, scale * C as f64).unwrap();
+            assert_eq!(scaled.sign(), Orientation::Positive);
+            assert!(scaled.used_exact_fallback());
+            assert!(scaled.approximation() > 0.0);
+        }
+    }
+
+    #[test]
+    fn quadratic_discriminant_filter_and_failure_contracts() {
+        let ordinary = quadratic_discriminant(1.0, -3.0, 2.0).unwrap();
+        assert_eq!(ordinary.sign(), Orientation::Positive);
+        assert_eq!(ordinary.approximation().to_bits(), 1.0_f64.to_bits());
+        assert!(!ordinary.used_exact_fallback());
+
+        for coefficients in [
+            [f64::NAN, 1.0, 1.0],
+            [1.0, f64::INFINITY, 1.0],
+            [1.0, 1.0, f64::NEG_INFINITY],
+            [f64::MAX, f64::MAX, f64::MAX],
+            [0.0, f64::from_bits(1), 0.0],
+            [2.0_f64.powi(-600), 0.0, 2.0_f64.powi(-600)],
+        ] {
+            assert_eq!(
+                quadratic_discriminant(coefficients[0], coefficients[1], coefficients[2]),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn quadratic_discriminant_exact_product_envelope_stays_normal() {
+        let low_a = 2.0_f64.powi(-250) * (1.0 + f64::EPSILON);
+        let low_b = 2.0_f64.powi(-150) * (1.0 + f64::EPSILON);
+        let high_a = 2.0_f64.powi(249) * (1.0 + f64::EPSILON);
+        let high_b = 2.0_f64.powi(150) * (1.0 + f64::EPSILON);
+
+        for (a, b) in [
+            (EXACT_COMPONENT_MIN, 2.0_f64.powi(100)),
+            (EXACT_COMPONENT_MAX, 2.0_f64.powi(-100)),
+            (low_a, low_b),
+            (high_a, high_b),
+        ] {
+            let product = exact_product_for_discriminant(a, b).unwrap();
+            assert!(exact_components_are_normal(&product));
+            let four_product = expansion::scale(&product, 4.0);
+            assert!(exact_components_are_normal(&four_product));
+        }
+
+        let low_residue = exact_product_for_discriminant(low_a, low_b).unwrap();
+        let high_residue = exact_product_for_discriminant(high_a, high_b).unwrap();
+        assert_eq!(low_residue.len(), 2);
+        assert_eq!(high_residue.len(), 2);
+        assert!(low_residue[0].is_normal());
+        assert!(high_residue[0].is_normal());
+
+        for (a, b) in [
+            (2.0_f64.powi(-501), 2.0_f64.powi(101)),
+            (2.0_f64.powi(501), 2.0_f64.powi(-101)),
+            (2.0_f64.powi(-200), 2.0_f64.powi(-201)),
+            (2.0_f64.powi(200), 2.0_f64.powi(201)),
+        ] {
+            assert_eq!(exact_product_for_discriminant(a, b), None);
+        }
+    }
+
+    #[test]
+    fn harmonic_half_angle_degree_and_root_count_are_exact() {
+        let secant = harmonic_half_angle_roots(1.0, 0.0, 0.991).unwrap();
+        assert_eq!(secant.discriminant(), Orientation::Positive);
+        assert_eq!(secant.finite_roots().len(), 2);
+        assert!(!secant.has_infinity_root());
+        for &root in secant.finite_roots() {
+            let angle = 2.0 * crate::math::atan2(root, 1.0);
+            assert!((crate::math::cos(angle) + 0.991).abs() < 2.0e-15);
+        }
+        let first = 2.0 * crate::math::atan2(secant.finite_roots()[0], 1.0);
+        let second = 2.0 * crate::math::atan2(secant.finite_roots()[1], 1.0);
+        assert!((first - second).abs() > 0.25);
+
+        let tangent = harmonic_half_angle_roots(1.0, 0.0, 1.0).unwrap();
+        assert_eq!(tangent.discriminant(), Orientation::Zero);
+        assert!(tangent.finite_roots().is_empty());
+        assert!(tangent.has_infinity_root());
+
+        let projective_linear = harmonic_half_angle_roots(1.0, 0.5, 1.0).unwrap();
+        assert_eq!(projective_linear.discriminant(), Orientation::Positive);
+        assert_eq!(projective_linear.finite_roots(), &[-2.0]);
+        assert!(projective_linear.has_infinity_root());
+
+        let miss = harmonic_half_angle_roots(1.0, 0.0, 1.001).unwrap();
+        assert_eq!(miss.discriminant(), Orientation::Negative);
+        assert!(miss.finite_roots().is_empty());
+        assert!(!miss.has_infinity_root());
+    }
+
+    #[test]
+    fn harmonic_half_angle_normalization_preserves_ordinary_bits() {
+        let expected = [1.0_f64.to_bits(), 2.0_f64.to_bits()];
+        for scale in [1.0, 2.0_f64.powi(700), 2.0_f64.powi(-700)] {
+            let roots = harmonic_half_angle_roots(0.5 * scale, -1.5 * scale, 1.5 * scale).unwrap();
+            assert_eq!(roots.discriminant(), Orientation::Positive);
+            assert_eq!(
+                roots
+                    .finite_roots()
+                    .iter()
+                    .map(|root| root.to_bits())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+
+        let reversed = harmonic_half_angle_roots(-0.5, 1.5, -1.5).unwrap();
+        assert_eq!(reversed.finite_roots(), &[2.0, 1.0]);
+
+        let identity = harmonic_half_angle_roots(0.0, 0.0, 0.0).unwrap();
+        assert!(identity.is_identity());
+        assert!(identity.finite_roots().is_empty());
+        assert!(!identity.has_infinity_root());
+
+        assert_eq!(
+            harmonic_half_angle_roots(f64::MAX, f64::from_bits(1), 0.0),
+            None
+        );
+    }
+
+    #[test]
+    fn harmonic_half_angle_routes_large_cancellation_to_exact_discriminant() {
+        const M: i128 = 1_i128 << 52;
+        let q2 = (M - 1) as f64;
+        let q1 = (2 * M) as f64;
+        let q0 = (M + 1) as f64;
+        assert_eq!((2 * M) * (2 * M) - 4 * (M - 1) * (M + 1), 4);
+        assert_eq!(q1 * q1 - 4.0 * q2 * q0, 0.0);
+
+        let roots = harmonic_half_angle_roots(1.0, M as f64, M as f64).unwrap();
+        assert_eq!(roots.discriminant(), Orientation::Positive);
+        assert!(roots.used_exact_fallback());
+        assert_eq!(roots.finite_roots().len(), 2);
+        assert_ne!(
+            roots.finite_roots()[0].to_bits(),
+            roots.finite_roots()[1].to_bits()
+        );
+        assert_eq!(roots.finite_roots()[1], -1.0);
+        let expected = roots
+            .finite_roots()
+            .iter()
+            .map(|root| root.to_bits())
+            .collect::<Vec<_>>();
+        for scale in [2.0_f64.powi(700), 2.0_f64.powi(-700)] {
+            let scaled =
+                harmonic_half_angle_roots(scale, (M as f64) * scale, (M as f64) * scale).unwrap();
+            assert!(scaled.used_exact_fallback());
+            assert_eq!(
+                scaled
+                    .finite_roots()
+                    .iter()
+                    .map(|root| root.to_bits())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn harmonic_sign_precedes_rounded_half_angle_coefficient_sign() {
+        let cosine = f64::from_bits(0x3fe4_babb_6e9f_fd16);
+        let sine = f64::from_bits(0x3f94_45bb_238f_5480);
+        let constant = f64::from_bits(0x3fe4_bd35_b29f_bd7d);
+        let q2 = constant - cosine;
+        let q1 = 2.0 * sine;
+        let q0 = cosine + constant;
+        assert_eq!(
+            quadratic_discriminant(q2, q1, q0).unwrap().sign(),
+            Orientation::Negative,
+            "rounded half-angle coefficients exhibit the wrong exact sign"
+        );
+
+        let exact = harmonic_norm_difference(cosine, sine, constant).unwrap();
+        assert_eq!(exact.sign, Orientation::Positive);
+        assert!(exact.used_exact_fallback);
+        let roots = harmonic_half_angle_roots(cosine, sine, constant).unwrap();
+        assert_eq!(roots.discriminant(), Orientation::Positive);
+        assert_eq!(roots.finite_roots().len(), 2);
+        for &root in roots.finite_roots() {
+            let angle = 2.0 * crate::math::atan2(root, 1.0);
+            let residual =
+                cosine * crate::math::cos(angle) + sine * crate::math::sin(angle) + constant;
+            assert!(residual.abs() < 2.0e-15, "residual {residual:e}");
+        }
     }
 
     fn to2(p: [i64; 2]) -> [f64; 2] {

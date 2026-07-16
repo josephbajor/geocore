@@ -1,4 +1,4 @@
-use super::conic::trig_linear_roots;
+use super::conic::{HARMONIC_ROOT_CLASSIFICATION_REASON, trig_linear_roots};
 use super::parameter::fit_parameter_pair;
 use super::result::{
     ContactKind, CurveSurfaceIntersections, CurveSurfaceOverlap, CurveSurfacePoint,
@@ -75,7 +75,15 @@ fn intersect_planar_conic_plane(
     let c = offset.dot(normal);
     let a = conic.frame.x().dot(normal) * conic.radius_x;
     let b = conic.frame.y().dot(normal) * conic.radius_y;
-    let amplitude = (a * a + b * b).sqrt();
+    let amplitude_scale = a.abs().max(b.abs());
+    let amplitude = if amplitude_scale == 0.0 {
+        0.0
+    } else {
+        amplitude_scale
+            * ((a / amplitude_scale) * (a / amplitude_scale)
+                + (b / amplitude_scale) * (b / amplitude_scale))
+                .sqrt()
+    };
 
     if amplitude <= tolerances.linear() {
         if c.abs() > tolerances.linear() {
@@ -84,8 +92,13 @@ fn intersect_planar_conic_plane(
         return contained_planar_conic(conic, curve_range, plane, plane_range, tolerances);
     }
 
+    let Some(roots) = trig_linear_roots(a, b, c, curve_range, tolerances.linear()) else {
+        return Ok(CurveSurfaceIntersections::indeterminate_empty(
+            HARMONIC_ROOT_CLASSIFICATION_REASON,
+        ));
+    };
     let mut points = Vec::new();
-    for (t_curve, tangent) in trig_linear_roots(a, b, c, curve_range, tolerances.linear()) {
+    for (t_curve, tangent) in roots {
         let Some(uv) = fit_parameter_pair(
             plane_uv(conic.curve.eval(t_curve), plane),
             plane_range,
@@ -145,7 +158,13 @@ fn contained_planar_conic(
     for (axis, axis_range) in plane_range.iter().enumerate() {
         let (c0, a, b) = plane_axis_coefficients(conic, plane, axis);
         for bound in [axis_range.lo, axis_range.hi] {
-            for (root, _) in trig_linear_roots(a, b, c0 - bound, curve_range, tolerances.linear()) {
+            let Some(roots) = trig_linear_roots(a, b, c0 - bound, curve_range, tolerances.linear())
+            else {
+                return Ok(CurveSurfaceIntersections::indeterminate_empty(
+                    HARMONIC_ROOT_CLASSIFICATION_REASON,
+                ));
+            };
+            for (root, _) in roots {
                 push_scalar(&mut cuts, root, tolerances);
             }
         }

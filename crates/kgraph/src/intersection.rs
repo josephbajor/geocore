@@ -12,6 +12,7 @@ use core::fmt;
 
 use kcore::interval::Interval;
 use kcore::math;
+use kcore::predicates::harmonic_half_angle_roots;
 use kgeom::aabb::{Aabb2, Aabb3};
 use kgeom::curve::{Circle, Curve, CurveDerivs, Line};
 use kgeom::curve2d::{Circle2d, Curve2d, Curve2dDerivs, Line2d, NurbsCurve2d};
@@ -135,6 +136,9 @@ pub enum IntersectionCertificateError {
     InvalidTolerance,
     /// Input geometry contains a non-finite coordinate.
     NonFiniteGeometry,
+    /// Exact harmonic root classification could not be represented without
+    /// losing coefficient or root evidence.
+    HarmonicRootClassification,
     /// A finite input overflowed during conservative interval evaluation.
     NonFiniteResidualBound {
         /// Trace whose interval evaluation overflowed.
@@ -186,6 +190,9 @@ impl fmt::Display for IntersectionCertificateError {
                 f.write_str("residual tolerance must be finite and nonnegative")
             }
             Self::NonFiniteGeometry => f.write_str("certified geometry must be finite"),
+            Self::HarmonicRootClassification => {
+                f.write_str("exact harmonic root classification could not be represented")
+            }
             Self::NonFiniteResidualBound { trace } => {
                 write!(f, "{trace:?} trace produced a non-finite residual bound")
             }
@@ -1725,7 +1732,7 @@ fn build_spherical_circle_pcurve(
     let mut seams = [SphericalLongitudeSeam::default(); 2];
     let mut seam_count = 0_usize;
     let mut current_turn = initial_turn;
-    for root in trig_linear_roots(sine.y, cosine.y, center.y, carrier_range, angular_tolerance) {
+    for root in trig_linear_roots(sine.y, cosine.y, center.y, carrier_range, angular_tolerance)? {
         if root <= carrier_range.lo + angular_tolerance
             || root >= carrier_range.hi - angular_tolerance
         {
@@ -1813,12 +1820,11 @@ fn trig_linear_roots(
     constant: f64,
     range: ParamRange,
     tolerance: f64,
-) -> Vec<f64> {
-    let q2 = constant - cosine;
-    let q1 = 2.0 * sine;
-    let q0 = cosine + constant;
+) -> Result<Vec<f64>, IntersectionCertificateError> {
+    let solution = harmonic_half_angle_roots(cosine, sine, constant)
+        .ok_or(IntersectionCertificateError::HarmonicRootClassification)?;
     let mut roots = Vec::new();
-    for half_tangent in quadratic_roots(q2, q1, q0, tolerance) {
+    for &half_tangent in solution.finite_roots() {
         push_periodic_root(
             &mut roots,
             2.0 * math::atan2(half_tangent, 1.0),
@@ -1826,31 +1832,57 @@ fn trig_linear_roots(
             tolerance,
         );
     }
-    if q2.abs() <= tolerance {
+    if solution.has_infinity_root() {
         push_periodic_root(&mut roots, core::f64::consts::PI, range, tolerance);
     }
     roots.sort_by(f64::total_cmp);
     roots.dedup_by(|first, second| (*first - *second).abs() <= tolerance);
-    roots
+    Ok(roots)
 }
 
-fn quadratic_roots(a: f64, b: f64, c: f64, tolerance: f64) -> Vec<f64> {
-    if a.abs() <= tolerance {
-        if b.abs() <= tolerance {
-            Vec::new()
-        } else {
-            vec![-c / b]
+#[cfg(test)]
+mod quadratic_root_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_bits_scaling_and_half_angle_chart_root_remain_deterministic() {
+        let range = ParamRange::new(0.0, core::f64::consts::TAU);
+        assert_eq!(
+            trig_linear_roots(0.0, 1.0, 1.0, range, 1e-2).unwrap(),
+            vec![core::f64::consts::PI]
+        );
+        assert!(
+            trig_linear_roots(0.0, 1.0, 1.0 + 1e-6, range, 1e-2)
+                .unwrap()
+                .is_empty(),
+            "exact-negative discriminant must not become a tolerance tangent"
+        );
+        let secant = trig_linear_roots(0.0, 1.0, 0.991, range, 1e-2).unwrap();
+        assert_eq!(secant.len(), 2);
+        assert!(secant[1] - secant[0] > 0.25);
+        for &root in &secant {
+            assert!((math::cos(root) + 0.991).abs() < 2.0e-15);
         }
-    } else {
-        let discriminant = b * b - 4.0 * a * c;
-        if discriminant < -tolerance {
-            Vec::new()
-        } else if discriminant.abs() <= tolerance {
-            vec![-b / (2.0 * a)]
-        } else {
-            let root = discriminant.max(0.0).sqrt();
-            vec![(-b - root) / (2.0 * a), (-b + root) / (2.0 * a)]
+
+        let ordinary_range = ParamRange::new(-core::f64::consts::PI, core::f64::consts::PI);
+        let ordinary = trig_linear_roots(-1.5, 0.5, 1.5, ordinary_range, 1e-14).unwrap();
+        for scale in [2.0_f64.powi(700), 2.0_f64.powi(-700)] {
+            assert_eq!(
+                trig_linear_roots(
+                    -1.5 * scale,
+                    0.5 * scale,
+                    1.5 * scale,
+                    ordinary_range,
+                    1e-14,
+                )
+                .unwrap(),
+                ordinary
+            );
         }
+        assert_eq!(
+            trig_linear_roots(f64::from_bits(1), f64::MAX, 0.0, range, 1e-2,),
+            Err(IntersectionCertificateError::HarmonicRootClassification)
+        );
     }
 }
 

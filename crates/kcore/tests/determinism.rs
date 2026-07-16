@@ -9,7 +9,10 @@
 //! event: update the golden value in the same commit and say why.
 
 use kcore::interval::Interval;
-use kcore::predicates::{incircle, orient2d, orient3d, polygon_orientation2d};
+use kcore::predicates::{
+    harmonic_half_angle_roots, incircle, orient2d, orient3d, polygon_orientation2d,
+    quadratic_discriminant,
+};
 
 struct Rng(u64);
 
@@ -66,6 +69,20 @@ fn golden_hash_of_numeric_results() {
         let (a3, b3, c3, d3) = (p3(&mut rng), p3(&mut rng), p3(&mut rng), p3(&mut rng));
         hash.write_u64(orient3d(a3, b3, c3, d3).as_i8() as u64);
 
+        let discriminant = quadratic_discriminant(a2[0], a2[1], b2[0]).unwrap();
+        hash.write_u64(discriminant.sign().as_i8() as u64);
+        hash.write_f64(discriminant.approximation());
+        hash.write_u64(discriminant.used_exact_fallback() as u64);
+        let harmonic = harmonic_half_angle_roots(a2[0], a2[1], b2[0]).unwrap();
+        hash.write_u64(harmonic.discriminant().as_i8() as u64);
+        hash.write_u64(harmonic.has_infinity_root() as u64);
+        hash.write_u64(harmonic.is_identity() as u64);
+        hash.write_u64(harmonic.used_exact_fallback() as u64);
+        hash.write_u64(harmonic.finite_roots().len() as u64);
+        for &root in harmonic.finite_roots() {
+            hash.write_f64(root);
+        }
+
         let x = Interval::new(a2[0].min(b2[0]), a2[0].max(b2[0]));
         let y = Interval::new(a2[1].min(b2[1]), a2[1].max(b2[1]));
         for iv in [x + y, x - y, x * y, x.square()] {
@@ -86,6 +103,6 @@ fn golden_hash_of_numeric_results() {
     }
 
     // Golden value. Changing it is a reviewed, intentional event.
-    // (Re-pinned when exact polygon-orientation results were added to the batch.)
-    assert_eq!(hash.0, 0x15E3_B48C_422C_3620, "numeric results drifted");
+    // (Re-pinned when exact quadratic/harmonic classification was added.)
+    assert_eq!(hash.0, 0x1A60_F066_C2DA_8498, "numeric results drifted");
 }
