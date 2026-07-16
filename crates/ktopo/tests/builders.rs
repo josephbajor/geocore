@@ -5,6 +5,7 @@
 
 //! Checked builders for non-solid topology used by profiles and interchange.
 
+use kcore::predicates::{Orientation, orient3d};
 use kgeom::frame::Frame;
 use kgeom::vec::{Point2, Point3, Vec3};
 use ktopo::btess::{TessOptions, check_watertight, signed_volume, tessellate_body};
@@ -236,6 +237,90 @@ fn oblique_polygonal_profile_extrusion_is_full_valid_watertight_and_volume_prese
 }
 
 #[test]
+fn extrusion_normal_sign_uses_exact_scalar_triples_in_both_directions() {
+    let integer_normal = [
+        281_474_976_710_666_i64,
+        281_474_976_710_672,
+        281_474_976_710_675,
+    ];
+    let integer_translation = [127_i64, -382, 255];
+    assert_eq!(exact_integer_dot(integer_normal, integer_translation), 3);
+
+    let frame = Frame::new(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(
+            integer_normal[0] as f64,
+            integer_normal[1] as f64,
+            integer_normal[2] as f64,
+        ),
+        Vec3::new(0.0, 1.0, 0.0),
+    )
+    .unwrap();
+    let polygon = [
+        Point2::new(-1.0, -1.0),
+        Point2::new(1.0, -1.0),
+        Point2::new(1.0, 1.0),
+        Point2::new(-1.0, 1.0),
+    ];
+    let profile = PlanarProfile::from_polygon(frame, &polygon).unwrap();
+
+    for (integer_translation, expected_orientation) in [
+        (integer_translation, Orientation::Positive),
+        (
+            integer_translation.map(|component| -component),
+            Orientation::Negative,
+        ),
+    ] {
+        let translation = Vec3::new(
+            integer_translation[0] as f64,
+            integer_translation[1] as f64,
+            integer_translation[2] as f64,
+        );
+        assert_eq!(translation.dot(frame.z()), 0.0);
+        assert_eq!(
+            exact_integer_dot(integer_normal, integer_translation).signum(),
+            i128::from(expected_orientation.as_i8())
+        );
+        assert_eq!(
+            orient3d(
+                frame.x().to_array(),
+                frame.y().to_array(),
+                translation.to_array(),
+                [0.0; 3],
+            ),
+            expected_orientation
+        );
+
+        let mut store = Store::new();
+        let made =
+            make::extrude_profile_along_with_journal(&mut store, &profile, translation).unwrap();
+        let body = made.body();
+        assert_eq!(store.get(body).unwrap().kind, BodyKind::Solid);
+        assert_eq!(store.count::<Face>(), 6);
+        assert_eq!(store.count::<Edge>(), 12);
+        assert_eq!(store.count::<Vertex>(), 8);
+        for edge in store.edges_of_body(body).unwrap() {
+            assert_eq!(store.get(edge).unwrap().fins.len(), 2);
+        }
+        let fast = check_body_report(&store, body, CheckLevel::Fast).unwrap();
+        assert_eq!(fast.outcome(), CheckOutcome::Valid, "{fast:?}");
+        let full = check_body_report(&store, body, CheckLevel::Full).unwrap();
+        assert!(full.faults.is_empty(), "{full:?}");
+
+        let mut repeated_store = Store::new();
+        let repeated =
+            make::extrude_profile_along_with_journal(&mut repeated_store, &profile, translation)
+                .unwrap();
+        assert_eq!(repeated.body(), body);
+        assert_eq!(repeated.journal(), made.journal());
+    }
+
+    let mut coplanar_store = Store::new();
+    assert!(make::extrude_profile_along(&mut coplanar_store, &profile, frame.x()).is_err());
+    assert_eq!(coplanar_store.count::<Region>(), 0);
+}
+
+#[test]
 fn rejected_profile_extrusions_are_atomic_and_reuse_future_identity() {
     let polygon = [
         Point2::new(-1.0, -1.0),
@@ -254,6 +339,12 @@ fn rejected_profile_extrusions_are_atomic_and_reuse_future_identity() {
     let made_control = make::extrude_profile_with_journal(&mut control, &profile, 2.0).unwrap();
     assert_eq!(made_after.body(), made_control.body());
     assert_eq!(made_after.journal(), made_control.journal());
+}
+
+fn exact_integer_dot(a: [i64; 3], b: [i64; 3]) -> i128 {
+    i128::from(a[0]) * i128::from(b[0])
+        + i128::from(a[1]) * i128::from(b[1])
+        + i128::from(a[2]) * i128::from(b[2])
 }
 
 #[test]

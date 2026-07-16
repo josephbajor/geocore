@@ -39,6 +39,7 @@ use crate::store::Store;
 use crate::transaction::Journal;
 use kcore::error::{Error, Result};
 use kcore::math;
+use kcore::predicates::{Orientation, orient3d};
 use kcore::tolerance::{LINEAR_RESOLUTION, check_in_size_box};
 use kgeom::curve::{Circle, Line};
 use kgeom::curve2d::{Circle2d, Line2d};
@@ -357,13 +358,18 @@ fn extrude_profile_along_in(
 ) -> Result<BodyId> {
     let frame = profile.frame();
     check_in_size_box(translation.to_array())?;
-    let normal_component = translation.dot(frame.z());
-    if normal_component == 0.0 {
+    let normal_orientation = orient3d(
+        frame.x().to_array(),
+        frame.y().to_array(),
+        translation.to_array(),
+        [0.0; 3],
+    );
+    if normal_orientation == Orientation::Zero {
         return Err(Error::InvalidGeometry {
             reason: "profile extrusion translation must have a nonzero normal component",
         });
     }
-    if normal_component < 0.0 {
+    if normal_orientation == Orientation::Negative {
         let reflected_frame = Frame::new(frame.origin(), -frame.z(), frame.x())?;
         let reflected_outer = profile
             .outer()
