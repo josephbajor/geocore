@@ -56,6 +56,36 @@ impl Orientation {
     }
 }
 
+/// Exact sign and a finite floating approximation of
+/// `normal · (point - origin) + bias`.
+///
+/// The approximation is evidence for subsequent numeric work; it must never
+/// replace [`Self::sign`] for classification.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AffineDot3 {
+    sign: Orientation,
+    approximation: f64,
+    used_exact_fallback: bool,
+}
+
+impl AffineDot3 {
+    /// Exact sign of `normal · (point - origin) + bias`.
+    pub const fn sign(self) -> Orientation {
+        self.sign
+    }
+
+    /// Finite, sign-consistent approximation of the exact affine form.
+    pub const fn approximation(self) -> f64 {
+        self.approximation
+    }
+
+    /// Whether outward interval arithmetic was inconclusive and exact
+    /// expansion arithmetic supplied the result.
+    pub const fn used_exact_fallback(self) -> bool {
+        self.used_exact_fallback
+    }
+}
+
 /// Exact sign and a finite floating approximation of `b² - 4ac`.
 ///
 /// The approximation is evidence for subsequent numeric work such as a square
@@ -197,8 +227,9 @@ fn normalize_harmonic_coefficients(coefficients: [f64; 3]) -> Option<[f64; 3]> {
 // in [-500, 500] keep every split intermediate finite and normal. A nonzero
 // residual of two 53-bit significands is no smaller than roughly 2^-105 times
 // their product. Restricting product exponents to [-400, 400] therefore keeps
-// residues above 2^-506; multiplying the `ac` expansion by four then stays in
-// the normal, finite exponent range [-504, 402].
+// residues above 2^-506 and leaves headroom for the affine form's six-product
+// accumulation as well as the discriminant's scale by four. Every accumulated
+// expansion is checked again before its sign is trusted.
 const EXACT_COMPONENT_MIN: f64 = f64::from_bits(((1023 - 500) as u64) << 52);
 const EXACT_COMPONENT_MAX: f64 = f64::from_bits(((1023 + 500) as u64) << 52);
 const EXACT_PRODUCT_MIN: f64 = f64::from_bits(((1023 - 400) as u64) << 52);
@@ -210,7 +241,7 @@ fn exact_components_are_normal(expansion: &[f64]) -> bool {
         .all(|component| *component == 0.0 || component.is_normal())
 }
 
-fn exact_product_for_discriminant(a: f64, b: f64) -> Option<Vec<f64>> {
+fn exact_product(a: f64, b: f64) -> Option<Vec<f64>> {
     if a == 0.0 || b == 0.0 {
         return Some(vec![0.0]);
     }
@@ -226,6 +257,104 @@ fn exact_product_for_discriminant(a: f64, b: f64) -> Option<Vec<f64>> {
     let (rounded, residue) = expansion::two_product(a, b);
     let expansion = expansion::from_two(rounded, residue);
     exact_components_are_normal(&expansion).then_some(expansion)
+}
+
+/// Classify `normal · (point - origin) + bias` without making rounded
+/// subtraction the decision authority.
+///
+/// Every returned [`AffineDot3`] is an exact classification of the supplied
+/// finite `f64` values as dyadic rationals. Outward interval arithmetic
+/// certifies ordinary cases. Cancellation routes to an expansion of the six
+/// products `normal[i] * point[i]` and `-normal[i] * origin[i]`, followed by
+/// the exact bias, so the fallback never treats a rounded `point - origin` as
+/// decision authority.
+///
+/// Non-finite inputs or a fallback path outside the conservative
+/// exact-expansion exponent envelope return `None` rather than an uncertain
+/// classification. In particular, fallback refuses products or intermediate
+/// expansion components that could be subnormal or overflow.
+pub fn affine_dot3(
+    normal: [f64; 3],
+    point: [f64; 3],
+    origin: [f64; 3],
+    bias: f64,
+) -> Option<AffineDot3> {
+    if !bias.is_finite()
+        || normal
+            .into_iter()
+            .chain(point)
+            .chain(origin)
+            .any(|value| !value.is_finite())
+    {
+        return None;
+    }
+
+    let delta = [
+        point[0] - origin[0],
+        point[1] - origin[1],
+        point[2] - origin[2],
+    ];
+    let rounded = normal[0] * delta[0] + normal[1] * delta[1] + normal[2] * delta[2] + bias;
+    let mut interval = Interval::point(bias);
+    for axis in 0..3 {
+        interval = interval + Interval::point(normal[axis]) * Interval::point(point[axis]);
+        interval = interval - Interval::point(normal[axis]) * Interval::point(origin[axis]);
+    }
+    if interval.lo().is_finite()
+        && interval.hi().is_finite()
+        && rounded.is_finite()
+        && let Some(sign) = interval.sign()
+    {
+        let sign = Orientation::from_sign(sign);
+        if sign == Orientation::from_scalar(rounded) {
+            return Some(AffineDot3 {
+                sign,
+                approximation: if sign == Orientation::Zero {
+                    0.0
+                } else {
+                    rounded
+                },
+                used_exact_fallback: false,
+            });
+        }
+    }
+
+    if bias != 0.0 && !bias.is_normal() {
+        return None;
+    }
+    let mut exact = vec![bias];
+    for axis in 0..3 {
+        let point_product = exact_product(normal[axis], point[axis])?;
+        exact = expansion::sum(&exact, &point_product);
+        if !exact_components_are_normal(&exact) {
+            return None;
+        }
+        let origin_product = exact_product(normal[axis], origin[axis])?;
+        exact = expansion::sum(&exact, &expansion::negate(&origin_product));
+        if !exact_components_are_normal(&exact) {
+            return None;
+        }
+    }
+
+    let sign = Orientation::from_sign(expansion::sign(&exact));
+    let approximation = if sign == Orientation::Zero {
+        0.0
+    } else {
+        let approximation = expansion::approx(&exact);
+        if Orientation::from_scalar(approximation) == sign {
+            approximation
+        } else {
+            *exact.last()?
+        }
+    };
+    if !approximation.is_finite() || Orientation::from_scalar(approximation) != sign {
+        return None;
+    }
+    Some(AffineDot3 {
+        sign,
+        approximation,
+        used_exact_fallback: true,
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -262,9 +391,9 @@ fn harmonic_norm_difference(
         }
     }
 
-    let cosine_square = exact_product_for_discriminant(cosine, cosine)?;
-    let sine_square = exact_product_for_discriminant(sine, sine)?;
-    let constant_square = exact_product_for_discriminant(constant, constant)?;
+    let cosine_square = exact_product(cosine, cosine)?;
+    let sine_square = exact_product(sine, sine)?;
+    let constant_square = exact_product(constant, constant)?;
     let sum = expansion::sum(&cosine_square, &sine_square);
     let difference = expansion::sum(&sum, &expansion::negate(&constant_square));
     if !exact_components_are_normal(&difference) {
@@ -335,8 +464,8 @@ pub fn quadratic_discriminant(a: f64, b: f64, c: f64) -> Option<QuadraticDiscrim
         }
     }
 
-    let square = exact_product_for_discriminant(b, b)?;
-    let product = exact_product_for_discriminant(a, c)?;
+    let square = exact_product(b, b)?;
+    let product = exact_product(a, c)?;
     let four_ac = expansion::scale(&product, 4.0);
     if !exact_components_are_normal(&four_ac) {
         return None;
@@ -812,6 +941,165 @@ mod tests {
         (b * b - 4 * a * c).signum() as i8
     }
 
+    fn affine_dot3_oracle(normal: [i64; 3], point: [i64; 3], origin: [i64; 3], bias: i64) -> i8 {
+        let value = i128::from(bias)
+            + (0..3)
+                .map(|axis| {
+                    i128::from(normal[axis]) * (i128::from(point[axis]) - i128::from(origin[axis]))
+                })
+                .sum::<i128>();
+        value.signum() as i8
+    }
+
+    #[test]
+    fn affine_dot3_matches_integer_oracle() {
+        let mut rng = Rng::new(0xA076_1D64_78BD_642F);
+        for _ in 0..20_000 {
+            let normal = [rng.int(1 << 20), rng.int(1 << 20), rng.int(1 << 20)];
+            let point = [rng.int(1 << 20), rng.int(1 << 20), rng.int(1 << 20)];
+            let origin = [rng.int(1 << 20), rng.int(1 << 20), rng.int(1 << 20)];
+            let bias = rng.int(1 << 20);
+            let classified = affine_dot3(
+                normal.map(|value| value as f64),
+                point.map(|value| value as f64),
+                origin.map(|value| value as f64),
+                bias as f64,
+            )
+            .unwrap();
+            assert_eq!(
+                classified.sign().as_i8(),
+                affine_dot3_oracle(normal, point, origin, bias),
+                "normal={normal:?} point={point:?} origin={origin:?} bias={bias}"
+            );
+        }
+    }
+
+    #[test]
+    fn affine_dot3_preserves_ordinary_bits_and_exact_zero() {
+        let normal = [1.0, 2.0, 3.0];
+        let point = [4.0, 5.0, 6.0];
+        let origin = [1.0, 1.0, 1.0];
+        let bias = -2.0;
+        let delta = [
+            point[0] - origin[0],
+            point[1] - origin[1],
+            point[2] - origin[2],
+        ];
+        let legacy = normal[0] * delta[0] + normal[1] * delta[1] + normal[2] * delta[2] + bias;
+        let ordinary = affine_dot3(normal, point, origin, bias).unwrap();
+        assert_eq!(ordinary.sign(), Orientation::Positive);
+        assert_eq!(ordinary.approximation().to_bits(), legacy.to_bits());
+        assert!(!ordinary.used_exact_fallback());
+
+        let zero = affine_dot3([1.0, 2.0, 0.0], [3.0, 4.0, 0.0], [1.0; 3], -8.0).unwrap();
+        assert_eq!(zero.sign(), Orientation::Zero);
+        assert_eq!(zero.approximation(), 0.0);
+        assert!(zero.used_exact_fallback());
+    }
+
+    #[test]
+    fn affine_dot3_recovers_raw_zero_cancellation_and_thresholds() {
+        const NORMAL_X_NUMERATOR: i128 = 5_404_319_552_844_595;
+        const NORMAL_Y_NUMERATOR: i128 = 7_205_759_403_792_794;
+        const DX: i128 = 5_667_193_987_184_073;
+        const DY: i128 = -4_250_395_490_388_054;
+        const EXACT_NUMERATOR: i128 = 2_570_722_559_252_559;
+        const TRANSLATION: i64 = 1_i64 << 51;
+
+        let normal = [0.6, 0.8, 0.0];
+        let origin = [-(TRANSLATION as f64), TRANSLATION as f64, 0.0];
+        let point = [3_415_394_173_498_825.0, -1_998_595_676_702_806.0, 0.0];
+        let delta = [
+            point[0] - origin[0],
+            point[1] - origin[1],
+            point[2] - origin[2],
+        ];
+        assert_eq!(delta, [DX as f64, DY as f64, 0.0]);
+        assert_eq!(normal[0] * delta[0] + normal[1] * delta[1], 0.0);
+        assert_eq!(
+            NORMAL_X_NUMERATOR * DX + NORMAL_Y_NUMERATOR * DY,
+            EXACT_NUMERATOR
+        );
+
+        let positive = affine_dot3(normal, point, origin, 0.0).unwrap();
+        assert_eq!(positive.sign(), Orientation::Positive);
+        assert!(positive.approximation() > 0.0);
+        assert!(positive.used_exact_fallback());
+
+        let reversed_normal =
+            affine_dot3(normal.map(|component| -component), point, origin, 0.0).unwrap();
+        assert_eq!(reversed_normal.sign(), Orientation::Negative);
+        assert!(reversed_normal.approximation() < 0.0);
+        assert!(reversed_normal.used_exact_fallback());
+
+        let reversed_points = affine_dot3(normal, origin, point, 0.0).unwrap();
+        assert_eq!(reversed_points.sign(), Orientation::Negative);
+        assert!(reversed_points.used_exact_fallback());
+
+        let above_quarter = affine_dot3(normal, point, origin, -0.25).unwrap();
+        assert_eq!(above_quarter.sign(), Orientation::Positive);
+        assert!(above_quarter.used_exact_fallback());
+        let below_half = affine_dot3(normal, point, origin, -0.5).unwrap();
+        assert_eq!(below_half.sign(), Orientation::Negative);
+        assert!(below_half.used_exact_fallback());
+
+        let lost_subtraction_residue = f64::EPSILON / 2.0;
+        let subtraction_point = [1.0, -1.0, 0.0];
+        let subtraction_origin = [-lost_subtraction_residue, 0.0, 0.0];
+        let rounded_delta = [
+            subtraction_point[0] - subtraction_origin[0],
+            subtraction_point[1] - subtraction_origin[1],
+            0.0,
+        ];
+        assert_eq!(rounded_delta, [1.0, -1.0, 0.0]);
+        assert_eq!(rounded_delta[0] + rounded_delta[1], 0.0);
+        let exact_subtraction =
+            affine_dot3([1.0, 1.0, 0.0], subtraction_point, subtraction_origin, 0.0).unwrap();
+        assert_eq!(exact_subtraction.sign(), Orientation::Positive);
+        assert_eq!(
+            exact_subtraction.approximation().to_bits(),
+            lost_subtraction_residue.to_bits()
+        );
+        assert!(exact_subtraction.used_exact_fallback());
+    }
+
+    #[test]
+    fn affine_dot3_failure_contract_is_conservative() {
+        for (normal, point, origin, bias) in [
+            ([f64::NAN, 0.0, 0.0], [0.0; 3], [0.0; 3], 0.0),
+            ([1.0, 0.0, 0.0], [f64::INFINITY, 0.0, 0.0], [0.0; 3], 0.0),
+            (
+                [1.0, 0.0, 0.0],
+                [0.0; 3],
+                [f64::NEG_INFINITY, 0.0, 0.0],
+                0.0,
+            ),
+            ([1.0, 0.0, 0.0], [0.0; 3], [0.0; 3], f64::NAN),
+        ] {
+            assert_eq!(affine_dot3(normal, point, origin, bias), None);
+        }
+
+        let outside_envelope = 2.0_f64.powi(501);
+        assert_eq!(
+            affine_dot3(
+                [outside_envelope, outside_envelope, 0.0],
+                [1.0, -1.0, 0.0],
+                [0.0; 3],
+                0.0,
+            ),
+            None
+        );
+        assert_eq!(
+            affine_dot3(
+                [1.0, 1.0, 0.0],
+                [1.0, -1.0, 0.0],
+                [0.0; 3],
+                f64::from_bits(1),
+            ),
+            None
+        );
+    }
+
     #[test]
     fn quadratic_discriminant_exactly_classifies_large_cancellation() {
         const M: i128 = 1_i128 << 52;
@@ -890,14 +1178,14 @@ mod tests {
             (low_a, low_b),
             (high_a, high_b),
         ] {
-            let product = exact_product_for_discriminant(a, b).unwrap();
+            let product = exact_product(a, b).unwrap();
             assert!(exact_components_are_normal(&product));
             let four_product = expansion::scale(&product, 4.0);
             assert!(exact_components_are_normal(&four_product));
         }
 
-        let low_residue = exact_product_for_discriminant(low_a, low_b).unwrap();
-        let high_residue = exact_product_for_discriminant(high_a, high_b).unwrap();
+        let low_residue = exact_product(low_a, low_b).unwrap();
+        let high_residue = exact_product(high_a, high_b).unwrap();
         assert_eq!(low_residue.len(), 2);
         assert_eq!(high_residue.len(), 2);
         assert!(low_residue[0].is_normal());
@@ -909,7 +1197,7 @@ mod tests {
             (2.0_f64.powi(-200), 2.0_f64.powi(-201)),
             (2.0_f64.powi(200), 2.0_f64.powi(201)),
         ] {
-            assert_eq!(exact_product_for_discriminant(a, b), None);
+            assert_eq!(exact_product(a, b), None);
         }
     }
 

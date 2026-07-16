@@ -10,7 +10,7 @@
 
 use kcore::interval::Interval;
 use kcore::predicates::{
-    harmonic_half_angle_roots, incircle, orient2d, orient3d, polygon_orientation2d,
+    affine_dot3, harmonic_half_angle_roots, incircle, orient2d, orient3d, polygon_orientation2d,
     quadratic_discriminant,
 };
 
@@ -69,6 +69,11 @@ fn golden_hash_of_numeric_results() {
         let (a3, b3, c3, d3) = (p3(&mut rng), p3(&mut rng), p3(&mut rng), p3(&mut rng));
         hash.write_u64(orient3d(a3, b3, c3, d3).as_i8() as u64);
 
+        let affine = affine_dot3(a3, b3, c3, a2[0]).unwrap();
+        hash.write_u64(affine.sign().as_i8() as u64);
+        hash.write_f64(affine.approximation());
+        hash.write_u64(affine.used_exact_fallback() as u64);
+
         let discriminant = quadratic_discriminant(a2[0], a2[1], b2[0]).unwrap();
         hash.write_u64(discriminant.sign().as_i8() as u64);
         hash.write_f64(discriminant.approximation());
@@ -102,7 +107,19 @@ fn golden_hash_of_numeric_results() {
         hash.write_f64(kcore::math::atan(a2[0] * 1e3));
     }
 
+    let subtraction_fallback = affine_dot3(
+        [1.0, 1.0, 0.0],
+        [1.0, -1.0, 0.0],
+        [-(f64::EPSILON / 2.0), 0.0, 0.0],
+        0.0,
+    )
+    .unwrap();
+    assert!(subtraction_fallback.used_exact_fallback());
+    hash.write_u64(subtraction_fallback.sign().as_i8() as u64);
+    hash.write_f64(subtraction_fallback.approximation());
+    hash.write_u64(subtraction_fallback.used_exact_fallback() as u64);
+
     // Golden value. Changing it is a reviewed, intentional event.
-    // (Re-pinned when exact quadratic/harmonic classification was added.)
-    assert_eq!(hash.0, 0x1A60_F066_C2DA_8498, "numeric results drifted");
+    // (Re-pinned when exact affine-dot classification was added.)
+    assert_eq!(hash.0, 0xC253_830A_E2CB_2D65, "numeric results drifted");
 }
