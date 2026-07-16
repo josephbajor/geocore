@@ -24,7 +24,7 @@ use std::collections::{HashMap, HashSet};
 const MAX_VERIFIED_OFFSET_NURBS_CHAIN_LENGTH: usize = 2;
 const MAX_VERIFIED_OFFSET_NURBS_DIRECT_NURBS_CHAIN_LENGTH: usize = 4;
 const MAX_VERIFIED_DUAL_OFFSET_NURBS_CHAIN_LENGTH: usize = 4;
-const MAX_VERIFIED_VARYING_OFFSET_NURBS_DIRECT_PLANE_CHAIN_LENGTH: usize = 2;
+const MAX_VERIFIED_VARYING_OFFSET_NURBS_DIRECT_PLANE_CHAIN_LENGTH: usize = 4;
 const MAX_VERIFIED_VARYING_OFFSET_NURBS_OFFSET_PLANE_CHAIN_LENGTH: usize = 1;
 
 /// Immutable 3D curve node. The descriptor is the node payload itself so
@@ -1338,9 +1338,9 @@ fn verified_offset_nurbs_trace_matches(
 ) -> GeometryGraphResult<bool> {
     // Operation-generated constant-normal Offset(NURBS)/direct-NURBS
     // certificates admit the verified nested cap. Varying-normal proofs admit
-    // exactly one descriptor. Walk every retained descriptor so validation
-    // reaches the live terminal basis and recomputes the effective distance
-    // from the source.
+    // a narrowly bounded descriptor chain. Walk every retained descriptor so
+    // validation reaches the live terminal basis and recomputes the effective
+    // distance from the source.
     let mut current = root;
     let mut distances = Vec::new();
     loop {
