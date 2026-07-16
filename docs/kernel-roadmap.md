@@ -66,7 +66,7 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 
 | Milestone | Status | What the status means |
 |---|---|---|
-| M0 Foundations | IMPLEMENTED SLICE | Deterministic math, current predicates, intervals, tolerances, arenas with copy-on-write undo frames, and deterministic map primitives exist; conformance debt remains. |
+| M0 Foundations | IMPLEMENTED SLICE | Deterministic math, robust exact-fallback `orient2d`/`orient3d`/`incircle`, intervals, tolerances, arenas with copy-on-write undo frames, and deterministic map primitives exist; `insphere` and broader conformance debt remain. |
 | M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS evaluation plus exact curve/surface splitting, restriction, Bezier extraction and active-subrange bounds, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, topology-internal Euler operators, transaction-owned public Euler edits, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, checked transaction-scoped assembly, and deterministic journals exist; general bodies and several degenerate topology classes remain. |
 | M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance, transaction-owned aggregate budgets, one checked facade batch for operation-owned Face/Edge/Vertex tolerance growth, and descriptive MEF inheritance plus KEF ordered-max face-tolerance journals; shared incidence validation; a complete transaction-owned public Euler surface with position-owning transient MVFS/KVFS, mandatory pcurve creation, hidden-point cleanup, and derived/split/merge/delete lineage; private generic Store mutation; transaction-scoped low-level assembly whose only public persistence path uses deterministic mutation preview, incrementally replaced per-body ownership/shared-geometry dependency footprints, affected-root Fast checks, complete ownership closure, and an opt-in evidence-bearing Full-assurance commit gate; pcurve-driven tessellation; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; reusable validated polygonal planar profiles with strictly contained pairwise-disjoint holes, checked holed-sheet construction, and checked nonzero-normal oblique extrusion; checked X_T reconstruction; explicit face metadata; certified imported domains; adaptive full-active-interval analytic/clamped-NURBS face-domain containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring and strict outer/hole containment proofs; and convex-planar, whole sphere/torus, sphere-cap, single-planar-face, and exact polygonal-prism shell embedding proofs have landed. General NURBS/mixed-parameter incidence, periodic/unclamped and unsupported exact/mixed-boundary containment, curved or nested-island profiles, operation-specific tolerance combination/propagation rules beyond the landed MEF/KEF policy and generic batch, curved-loop/general curved-shell proofs, production seam/singularity interchange fixtures, broader higher-operation migration, and affected solid-footprint plus remaining global commit-cost performance baselines remain. |
@@ -114,17 +114,24 @@ on their own:
 
 ### Implemented evidence
 
-`crates/kcore` contains adaptive expansion arithmetic, robust `orient2d`/`orient3d`,
-interval arithmetic, the session tolerance regime, typed generational arenas with
-copy-on-write undo frames,
-deterministic index-ordered parallel map primitives, and kernel-owned deterministic
-sin/cos/sincos/atan/atan2. CI pins numeric golden hashes across debug/release and the
+`crates/kcore` contains adaptive expansion arithmetic; robust deterministic
+`orient2d`, `orient3d`, and `incircle`; interval arithmetic; the session
+tolerance regime; typed generational arenas with copy-on-write undo frames;
+deterministic index-ordered parallel map primitives; and kernel-owned deterministic
+sin/cos/sincos/atan/atan2. `incircle` uses Shewchuk's conservative stage-A
+filter and an exact expansion fallback without tolerance: for counterclockwise
+`a,b,c` it is positive inside, negative outside, exactly zero for cocircular
+inputs, and orientation reversal flips the sign. Its evidence includes 20,000
+random integer cases against an `i128` oracle, all six defining-point
+permutations, exact and one-unit near-cocircular fixtures that demonstrably
+force the fallback, degenerate/non-finite behavior, and the deterministic
+numeric golden. CI pins numeric golden hashes across debug/release and the
 supported operating-system matrix.
 
 ### Conformance debt
 
-- Add and adversarially verify `incircle`; add `insphere` when 3D Delaunay or equivalent
-  classification first needs it.
+- Add `insphere` when a 3D Delaunay or equivalent classification consumer first
+  needs it.
 - Audit classification decisions so exact predicates or interval-certified signs govern
   topology, while metric tolerance governs proximity. Raw sign tests and scattered
   working epsilon literals must not silently decide topology.

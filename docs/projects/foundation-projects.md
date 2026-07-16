@@ -33,6 +33,19 @@ section and link the reason from the affected project file in the same change.
 | F6 | First slice implemented: shared surface inversion, chart normalization, and distance services consumed by checker and tessellation. Module splits remain. |
 | F7 | Q0-Q2b, Q8, and the first Q3-Q6 slices are implemented: CI now enforces Python/oracle freshness, compiles and smoke-runs the excluded benchmark package including graph construction/traversal, contextual body/face tessellation, and curve-pair isolation/solve, and runs both pinned fuzz targets within fixed limits. Q2 now has 28 rows including a seven-row mixed-store affected-root cohort matrix with exact scope/order/result digests through 256 total and 64 affected bodies. Q2a drove the reverse-index replacement and its v2 ladder now pins zero full-order rebuilds across 21 rows, including four real verified-intersection diamonds whose dependency-first closure visits a shared basis exactly once. Q2b v2 has ten deterministic closure/path rows through 1,000 edges plus real verified-intersection diamond closure and missing-path cases; the timed closure visits the shared basis exactly once after traversal membership indexing. Q3 `body-tessellation.v3` has 32 rows and pins all 21 composed counters: twenty generalized legacy solids plus four tiers each for a locally verified genuinely curved NURBS block and historically host-certified plane and full-period cylinder sheets. Its 24 solids and eight sheets pin exact directed incidence, topological boundary, face-sense orientation, and the applicable signed-volume or faceted-area measure. Q3 face v2 crosses three representations, three trim topologies, and two tolerances with lift, orientation, boundary, area, mesh, and report evidence. Both matrices pass finite `bounded_v1` profiles and pin root Work N/N-1. Q4 implicit isolation v3 has eight cases including the surface roundoff adversary and multi-span Work N-1; curve-pair isolation v4 has nine span-accounted cases; solve v18 has twenty-eight cases including coordinate, unit-form, and primitive magnitude-two through magnitude-twelve algebraic `1/3` certificates, common-refinement and inverse-history success, altered-history rejection, and exact per-path overlap Work/Items denial. The benchmark manifest now contains 163 total cases. Q3-Q5 expansion, exact coefficient forms beyond twelve, more Q6 targets/corpora, and Q7 remain. |
 
+The M0 predicate-hardening ratchet now includes deterministic robust `incircle`.
+Its conservative Shewchuk stage-A filter falls back to exact expansion
+arithmetic whenever the floating determinant cannot certify its sign. The
+oriented convention is positive for a point inside a counterclockwise defining
+circle, negative outside, exactly zero for cocircular inputs, and sign-reversing
+when the defining orientation reverses. A 20,000-case random `i128` oracle,
+all six defining-point permutations, exact and one-unit near-cocircular
+fixtures proven to force the fallback, degenerate/non-finite behavior, and the
+cross-platform numeric golden pin the contract. This closes the named
+`incircle` debt. `insphere` remains deferred until a 3D Delaunay or equivalent
+consumer needs it, and the repository-wide audit for uncertified topological
+sign decisions remains open.
+
 ## Current direction and handoff order
 
 The foundation has enough vertical proof. The current phase prioritizes

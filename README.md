@@ -19,7 +19,7 @@ boundary.
 
 | Crate | Layer | Contents |
 |---|---|---|
-| [`crates/kcore`](crates/kcore) | L0 foundations | Robust predicates, exact expansion arithmetic, interval filters, tolerance policy (Parasolid numeric regime), typed errors, generational entity arenas with copy-on-write undo frames, deterministic parallel primitives, deterministic transcendental math (musl port — platform libm is banned in kernel code via clippy `disallowed-methods`) |
+| [`crates/kcore`](crates/kcore) | L0 foundations | Deterministic robust `orient2d`, `orient3d`, and positive-inside-CCW `incircle` predicates with conservative floating filters and exact expansion fallbacks, interval filters, tolerance policy (Parasolid numeric regime), typed errors, generational entity arenas with copy-on-write undo frames, deterministic parallel primitives, deterministic transcendental math (musl port — platform libm is banned in kernel code via clippy `disallowed-methods`) |
 | [`crates/kgeom`](crates/kgeom) | L1 geometry | Analytic curves (line/circle/ellipse), true 2D line/circle/NURBS pcurve evaluators, and analytic surfaces (plane/cylinder/cone/sphere/torus) with exact bounding boxes, NURBS engine (Piegl & Tiller) with homogeneous 2D/3D knot operations and conservative active-subrange control-hull boxes, closest-point projection, deterministic trimmed-face tessellation with explicit refinement-limit errors, evaluator conformance harness |
 | [`crates/kgraph`](crates/kgraph) | L1.5 geometry graph | Immutable analytic, NURBS, and procedural geometry nodes with typed dependencies, deterministic identity, and bounded evaluation |
 | [`crates/ktopo`](crates/ktopo) | L2 topology | Parasolid entity hierarchy (body→region→shell→face→loop→fin→edge→vertex), finite conservative face UV domains, typed entity-tolerance provenance and transaction-owned growth budgets, independent per-fin pcurves, bounded curve-less tolerant edges, reusable validated polygon-with-holes profiles and checked prism extrusion, transaction-owned pcurve-aware Euler edits, private generic Store mutation with transaction-scoped checked assembly, deterministic mutation/lineage/tolerance journals, journal-returning checked solid/sheet/wire/acorn constructors, shared incidence validation, and pcurve-driven watertight tessellation |
@@ -44,8 +44,10 @@ application boundary.
 
 ## Current Status
 
-- M0 foundations, M1 geometry, and M2 topology/primitives have implemented alpha
-  slices; full conformance remains ahead.
+- M0 foundations now include deterministic exact-fallback `orient2d`, `orient3d`,
+  and `incircle`; M1 geometry and M2 topology/primitives also have implemented
+  alpha slices. `insphere`, the broader topological-decision audit, and full
+  conformance remain ahead.
 - M2.5 is in progress and remains the architecture gate. Transaction-owned checked
   topology, pcurve-aware Euler edits, deterministic journals, tolerance provenance,
   bounded operation contexts, `Fast`/`Full` checking, adaptive face-domain proofs, and
