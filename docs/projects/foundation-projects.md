@@ -241,6 +241,25 @@ branches.
 `incircle` remains without a production topology decision consumer, and
 `insphere` remains deferred until a 3D Delaunay or equivalent consumer exists.
 
+One bounded higher-polynomial slice has landed for line/Torus only.
+`kops` constructs the semantic source-world surface quartic with checked exact
+expansions and uses a degree-at-most-four signed pseudo-Sturm chain for distinct
+roots and `gcd(P,P')` repeated-root evidence. Tolerance-near completeness is
+separate from the implicit-root proof: when the auxiliary polynomials are
+nonidentity, an exact squared distance-stationary quartic, its unsquared-factor
+interval check, the radial-axis quadratic, and both requested endpoints cover
+every minimum/nondifferentiability candidate. Rejected brackets require a
+strict outward torus-distance exclusion; partial surface windows, auxiliary
+identity cases, numeric root-identity collapse, unsafe expansion work, broken
+semantic unit/orthonormal contracts, and distinct tolerance-only discoveries
+remain `Indeterminate`. The old rounded frame-local polynomial solver is
+discovery-only and cannot upgrade completion. Algebraic roots remain distinct
+inside the isolator, while final physical contacts retain world-space
+linear-resolution consolidation. This slice does not close general
+quartic/higher-degree isolation, the other conic/primitive families,
+auxiliary-identity handling, or the extreme-finite stable-normalization debt
+in `Line::new` and `Frame::new`.
+
 ## Current direction and handoff order
 
 The foundation has enough vertical proof. The current phase prioritizes
@@ -1358,8 +1377,9 @@ projective root directions, rotated poles, tangency anchors, and one-period
 admission. This closes the named identity, harmonic parameter-root-collapse,
 contained-window-cut, and graph seam-root debts for these bounded families. It
 does not close the remaining higher-polynomial conic/primitive containment and
-window-partition shortcuts or full source-exact harmonic discriminant
-construction beyond the landed coefficient agreement.
+window-partition shortcuts beyond the separately landed line/Torus quartic
+slice, or full source-exact harmonic discriminant construction beyond the
+landed coefficient agreement.
 
 `kcore::predicates::affine_dot3` now supplies exact affine side signs through an
 outward interval filter and a six-product exact expansion fallback with a

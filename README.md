@@ -189,16 +189,29 @@ application boundary.
   a separate 20,000-case `i128` oracle, ordinary approximation bits, exact
   3-4-5 zero, radius threshold/reversal signs, and an axial `5e-9` offset whose
   legacy result is zero but exact sign is positive. The current cross-platform
-  debug/release numeric golden is `0xEED3_9864_73A4_C2D2`. Remaining
+  debug/release numeric golden is `0xEED3_9864_73A4_C2D2`.
+  Bounded line/Torus intersection now constructs its source-world quartic with
+  checked exact expansions and isolates distinct roots with a bounded signed
+  pseudo-Sturm chain. For nonidentity auxiliary polynomials, a second exact
+  squared-stationarity quartic with an unsquared stationarity interval filter,
+  the radial-axis quadratic, and both line endpoints cover tolerance-near
+  extrema. Partial torus windows, auxiliary identity cases, unsafe arithmetic
+  envelopes, broken unit-frame contracts, unrepresentable root separation, and
+  tolerance-only discoveries remain `Indeterminate`; rounded local roots are
+  discovery-only. Distinct algebraic roots remain separate in the isolator,
+  while the final physical-contact list still uses world-space linear-resolution
+  consolidation.
+  Remaining
   concrete decision-audit debt includes generic curved-pcurve signed line
   integrals and broader curved or periodic containment beyond the landed
   vertical-separation slice, the outer amplitude metric
   policy in the still-unmigrated higher conic/primitive families, affine,
   squared-distance, and harmonic fallback outside their reviewed exponent
   envelopes, full source-exact harmonic discriminant construction beyond the
-  landed coefficient sign/zero agreement, generic higher-polynomial root and
-  window-cut deduplication, general NURBS root classification, and other raw
-  topological sign branches.
+  landed coefficient sign/zero agreement, higher-polynomial root and window
+  classification beyond the bounded line/Torus quartic slice, general NURBS
+  root classification, stable normalization for extreme finite Line/Frame
+  construction, and other raw topological sign branches.
   `insphere`, an `incircle` production decision consumer when required, the
   broader topological-decision audit, and full conformance remain ahead.
 - M2.5 is in progress and remains the architecture gate. Transaction-owned checked
@@ -258,8 +271,9 @@ application boundary.
   rounded split controls hiding a plane-window excursion—and separated,
   touching, and nested overlap-merge behavior.
   Complete root isolation, contextual rather than static node/depth budgets,
-  proof of unresolved UV-boundary cells, broader NURBS/higher-polynomial roots,
-  and affine fallback outside the reviewed exponent envelope remain open.
+  proof of unresolved UV-boundary cells, broader NURBS/higher-polynomial roots
+  beyond the bounded line/Torus quartic, and affine fallback outside the
+  reviewed exponent envelope remain open.
   A first exact varying-normal Offset(NURBS) arm with global-X-,
   global-Y-, and global-Z-normal planar-NURBS, analytic-Plane, or one-descriptor
   safe-Offset(Plane) peers, plus the complete one- through four-descriptor
