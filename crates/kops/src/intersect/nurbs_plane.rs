@@ -4,18 +4,24 @@ use super::result::{
     accept_curve_surface_candidate,
 };
 use kcore::error::{Error, Result};
+use kcore::predicates::{Orientation, affine_dot3};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::Curve;
-use kgeom::nurbs::NurbsCurve;
+use kgeom::nurbs::{
+    NurbsCurve, PlaneCurveRangeRelation, classify_curve_range_against_affine_band,
+    classify_curve_range_against_plane_slab,
+};
 use kgeom::param::ParamRange;
 use kgeom::surface::Plane;
 use kgeom::vec::Point3;
 
 const MAX_ROOT_DEPTH: usize = 72;
+const MAX_ROOT_NODES: usize = 65_536;
 const MAX_CLIP_DEPTH: usize = 72;
+const MAX_CLIP_NODES: usize = 65_536;
 const LEAF_SAMPLES: usize = 16;
 const COMPLETION_REASON: &str =
-    "NURBS/plane Bezier clipping leaf fallbacks do not yet report complete coverage";
+    "NURBS/plane source-range depth, node, and leaf limits leave coverage incomplete";
 
 fn provisional_result(
     points: Vec<CurveSurfacePoint>,
@@ -24,12 +30,24 @@ fn provisional_result(
     CurveSurfaceIntersections::canonicalized_indeterminate(points, overlaps, COMPLETION_REASON)
 }
 
+#[derive(Clone, Copy)]
+struct NurbsPlaneProblem<'a> {
+    source: &'a NurbsCurve,
+    plane: &'a Plane,
+    plane_range: [ParamRange; 2],
+    tolerances: Tolerances,
+    global_range: ParamRange,
+}
+
 /// Intersect a clamped NURBS curve restricted to a finite range with a finite
 /// plane parameter window.
 ///
-/// Isolated contacts are found by Bezier-span convex-hull clipping against the
-/// plane. Spans whose control points lie in the plane become contained
-/// overlaps clipped against the plane's `(u, v)` box.
+/// Original-source homogeneous affine range proofs are the only authority for
+/// excluding a plane side, declaring a tolerance-slab overlap, or accepting a
+/// complete source subrange inside the plane's `(u, v)` window. Rounded
+/// restricted, Bezier, and split controls guide parameter subdivision and
+/// numeric sign variation only. Provisional isolated contacts are evaluated on
+/// the original source and admitted with exact affine slab signs.
 pub fn intersect_bounded_nurbs_plane(
     curve: &NurbsCurve,
     curve_range: ParamRange,
@@ -54,149 +72,214 @@ pub fn intersect_bounded_nurbs_plane(
     let bounded = restrict_curve_to_range(curve, curve_range, parameter_tol)?;
     let mut points = Vec::new();
     let mut overlaps = Vec::new();
+    let mut remaining_root_nodes = MAX_ROOT_NODES;
+    let mut remaining_clip_nodes = MAX_CLIP_NODES;
+    let problem = NurbsPlaneProblem {
+        source: curve,
+        plane,
+        plane_range,
+        tolerances,
+        global_range: curve_range,
+    };
     for bezier in bounded.to_beziers()? {
-        let distances = signed_control_distances(&bezier, plane);
-        let (min_distance, max_distance) = min_max(&distances);
-        if min_distance > tolerances.linear() || max_distance < -tolerances.linear() {
-            continue;
-        }
-        if distances
-            .iter()
-            .all(|distance| distance.abs() <= tolerances.linear())
-        {
-            collect_contained_intervals(
-                &bezier,
-                plane,
-                plane_range,
-                tolerances,
-                curve_range,
-                &mut overlaps,
-                0,
-            )?;
-        } else {
-            collect_isolated_roots(
-                &bezier,
-                plane,
-                plane_range,
-                tolerances,
-                curve_range,
-                &mut points,
-                0,
-            )?;
+        match source_plane_relation(curve, bezier.param_range(), plane, tolerances) {
+            PlaneCurveRangeRelation::Negative | PlaneCurveRangeRelation::Positive => {}
+            PlaneCurveRangeRelation::WithinSlab => {
+                collect_contained_intervals(
+                    &bezier,
+                    problem,
+                    &mut overlaps,
+                    &mut remaining_clip_nodes,
+                    0,
+                )?;
+            }
+            PlaneCurveRangeRelation::Candidate => {
+                collect_isolated_roots(
+                    &bezier,
+                    problem,
+                    &mut points,
+                    &mut remaining_root_nodes,
+                    0,
+                )?;
+            }
         }
     }
 
-    merge_overlaps(&mut overlaps, curve_range, tolerances);
+    merge_overlaps(&mut overlaps);
     provisional_result(points, overlaps)
 }
 
 fn collect_isolated_roots(
-    bezier: &NurbsCurve,
-    plane: &Plane,
-    plane_range: [ParamRange; 2],
-    tolerances: Tolerances,
-    global_range: ParamRange,
+    numeric: &NurbsCurve,
+    problem: NurbsPlaneProblem<'_>,
     points: &mut Vec<CurveSurfacePoint>,
+    remaining_nodes: &mut usize,
     depth: usize,
 ) -> Result<()> {
-    let distances = signed_control_distances(bezier, plane);
-    let (min_distance, max_distance) = min_max(&distances);
-    if min_distance > tolerances.linear() || max_distance < -tolerances.linear() {
+    if *remaining_nodes == 0 {
+        return Ok(());
+    }
+    *remaining_nodes -= 1;
+
+    let range = numeric.param_range();
+    let endpoint_hit = push_root_candidate(
+        problem.source,
+        range.lo,
+        problem.plane,
+        problem.plane_range,
+        problem.tolerances,
+        points,
+    ) | push_root_candidate(
+        problem.source,
+        range.hi,
+        problem.plane,
+        problem.plane_range,
+        problem.tolerances,
+        points,
+    );
+    let variations = sign_variations(numeric, problem.plane);
+    if endpoint_hit && variations == Some(0) {
         return Ok(());
     }
 
-    let range = bezier.param_range();
-    let f_lo = signed_distance(bezier.eval(range.lo), plane);
-    let f_hi = signed_distance(bezier.eval(range.hi), plane);
-    push_root_candidate(bezier, range.lo, plane, plane_range, tolerances, points);
-    push_root_candidate(bezier, range.hi, plane, plane_range, tolerances, points);
+    match source_plane_relation(problem.source, range, problem.plane, problem.tolerances) {
+        PlaneCurveRangeRelation::Negative | PlaneCurveRangeRelation::Positive => return Ok(()),
+        PlaneCurveRangeRelation::WithinSlab => {
+            if points.iter().any(|point| range.contains(point.t_curve)) {
+                return Ok(());
+            }
+            let lo_sign = exact_sample_sign(problem.source.eval(range.lo), problem.plane);
+            let hi_sign = exact_sample_sign(problem.source.eval(range.hi), problem.plane);
+            if let (Some(lo_sign), Some(hi_sign)) = (lo_sign, hi_sign)
+                && opposite_strict_signs(lo_sign, hi_sign)
+                && let Some(t) = bisect_root(
+                    problem.source,
+                    problem.plane,
+                    range.lo,
+                    range.hi,
+                    lo_sign,
+                    hi_sign,
+                    problem.tolerances,
+                )
+            {
+                push_root_candidate(
+                    problem.source,
+                    t,
+                    problem.plane,
+                    problem.plane_range,
+                    problem.tolerances,
+                    points,
+                );
+            } else if let Some(t) =
+                best_leaf_root(problem.source, problem.plane, range, problem.tolerances)
+            {
+                push_root_candidate(
+                    problem.source,
+                    t,
+                    problem.plane,
+                    problem.plane_range,
+                    problem.tolerances,
+                    points,
+                );
+            }
+            return Ok(());
+        }
+        PlaneCurveRangeRelation::Candidate => {}
+    }
 
-    let variations = sign_variations(&distances, tolerances.linear());
-    if variations == 0 {
+    let lo_sign = exact_sample_sign(problem.source.eval(range.lo), problem.plane);
+    let hi_sign = exact_sample_sign(problem.source.eval(range.hi), problem.plane);
+    if variations == Some(1)
+        && let (Some(lo_sign), Some(hi_sign)) = (lo_sign, hi_sign)
+        && opposite_strict_signs(lo_sign, hi_sign)
+        && let Some(t) = bisect_root(
+            problem.source,
+            problem.plane,
+            range.lo,
+            range.hi,
+            lo_sign,
+            hi_sign,
+            problem.tolerances,
+        )
+    {
+        push_root_candidate(
+            problem.source,
+            t,
+            problem.plane,
+            problem.plane_range,
+            problem.tolerances,
+            points,
+        );
         return Ok(());
     }
-    if variations == 1 && f_lo * f_hi < 0.0 {
-        let t = bisect_root(bezier, plane, range.lo, range.hi, f_lo, f_hi, tolerances);
-        push_root_candidate(bezier, t, plane, plane_range, tolerances, points);
-        return Ok(());
-    }
 
-    if range.width() <= parameter_tolerance(global_range, tolerances) || depth >= MAX_ROOT_DEPTH {
-        if let Some(t) = best_leaf_root(bezier, plane, range, tolerances) {
-            push_root_candidate(bezier, t, plane, plane_range, tolerances, points);
+    if range.width() <= parameter_tolerance(problem.global_range, problem.tolerances)
+        || depth >= MAX_ROOT_DEPTH
+    {
+        if let Some(t) = best_leaf_root(problem.source, problem.plane, range, problem.tolerances) {
+            push_root_candidate(
+                problem.source,
+                t,
+                problem.plane,
+                problem.plane_range,
+                problem.tolerances,
+                points,
+            );
         }
         return Ok(());
     }
 
     let mid = range.lerp(0.5);
-    let (left, right) = bezier.split_at(mid)?;
-    collect_isolated_roots(
-        &left,
-        plane,
-        plane_range,
-        tolerances,
-        global_range,
-        points,
-        depth + 1,
-    )?;
-    collect_isolated_roots(
-        &right,
-        plane,
-        plane_range,
-        tolerances,
-        global_range,
-        points,
-        depth + 1,
-    )
+    let (left, right) = numeric.split_at(mid)?;
+    collect_isolated_roots(&left, problem, points, remaining_nodes, depth + 1)?;
+    collect_isolated_roots(&right, problem, points, remaining_nodes, depth + 1)
 }
 
 fn collect_contained_intervals(
-    bezier: &NurbsCurve,
-    plane: &Plane,
-    plane_range: [ParamRange; 2],
-    tolerances: Tolerances,
-    global_range: ParamRange,
+    numeric: &NurbsCurve,
+    problem: NurbsPlaneProblem<'_>,
     overlaps: &mut Vec<CurveSurfaceOverlap>,
+    remaining_nodes: &mut usize,
     depth: usize,
 ) -> Result<()> {
-    let uv_bounds = control_uv_bounds(bezier, plane);
-    if outside_window(uv_bounds, plane_range, tolerances) {
+    if *remaining_nodes == 0 {
         return Ok(());
     }
-    let range = bezier.param_range();
-    if inside_window(uv_bounds, plane_range, tolerances) {
-        push_contained_overlap(bezier, plane, plane_range, tolerances, overlaps);
-        return Ok(());
+    *remaining_nodes -= 1;
+
+    let range = numeric.param_range();
+    match source_window_relation(
+        problem.source,
+        range,
+        problem.plane,
+        problem.plane_range,
+        problem.tolerances,
+    ) {
+        SourceWindowRelation::Outside => return Ok(()),
+        SourceWindowRelation::Inside => {
+            push_contained_overlap(
+                problem.source,
+                range,
+                problem.plane,
+                problem.plane_range,
+                problem.tolerances,
+                overlaps,
+            );
+            return Ok(());
+        }
+        SourceWindowRelation::Candidate => {}
     }
 
-    if range.width() <= parameter_tolerance(global_range, tolerances) || depth >= MAX_CLIP_DEPTH {
-        let mid_uv = plane_uv(bezier.eval(range.lerp(0.5)), plane);
-        if fit_parameter_pair(mid_uv, plane_range, tolerances.linear()).is_some() {
-            push_contained_overlap(bezier, plane, plane_range, tolerances, overlaps);
-        }
+    if range.width() <= parameter_tolerance(problem.global_range, problem.tolerances)
+        || depth >= MAX_CLIP_DEPTH
+    {
         return Ok(());
     }
 
     let mid = range.lerp(0.5);
-    let (left, right) = bezier.split_at(mid)?;
-    collect_contained_intervals(
-        &left,
-        plane,
-        plane_range,
-        tolerances,
-        global_range,
-        overlaps,
-        depth + 1,
-    )?;
-    collect_contained_intervals(
-        &right,
-        plane,
-        plane_range,
-        tolerances,
-        global_range,
-        overlaps,
-        depth + 1,
-    )
+    let (left, right) = numeric.split_at(mid)?;
+    collect_contained_intervals(&left, problem, overlaps, remaining_nodes, depth + 1)?;
+    collect_contained_intervals(&right, problem, overlaps, remaining_nodes, depth + 1)
 }
 
 fn single_parameter_intersection(
@@ -206,16 +289,14 @@ fn single_parameter_intersection(
     plane_range: [ParamRange; 2],
     tolerances: Tolerances,
 ) -> Result<CurveSurfaceIntersections> {
-    if signed_distance(curve.eval(t_curve), plane).abs() > tolerances.linear() {
+    let point = curve.eval(t_curve);
+    if exact_sample_relation(point, plane, tolerances) != Some(SamplePlaneRelation::WithinSlab) {
         return Ok(CurveSurfaceIntersections::indeterminate_empty(
             COMPLETION_REASON,
         ));
     }
-    let Some(uv) = fit_parameter_pair(
-        plane_uv(curve.eval(t_curve), plane),
-        plane_range,
-        tolerances.linear(),
-    ) else {
+    let Some(uv) = fit_parameter_pair(plane_uv(point, plane), plane_range, tolerances.linear())
+    else {
         return Ok(CurveSurfaceIntersections::indeterminate_empty(
             COMPLETION_REASON,
         ));
@@ -257,16 +338,14 @@ fn push_root_candidate(
     plane_range: [ParamRange; 2],
     tolerances: Tolerances,
     points: &mut Vec<CurveSurfacePoint>,
-) {
-    if signed_distance(curve.eval(t_curve), plane).abs() > tolerances.linear() {
-        return;
+) -> bool {
+    let point = curve.eval(t_curve);
+    if exact_sample_relation(point, plane, tolerances) != Some(SamplePlaneRelation::WithinSlab) {
+        return false;
     }
-    let Some(uv) = fit_parameter_pair(
-        plane_uv(curve.eval(t_curve), plane),
-        plane_range,
-        tolerances.linear(),
-    ) else {
-        return;
+    let Some(uv) = fit_parameter_pair(plane_uv(point, plane), plane_range, tolerances.linear())
+    else {
+        return false;
     };
     let Some(point) = accept_curve_surface_candidate(
         curve,
@@ -276,31 +355,32 @@ fn push_root_candidate(
         contact_kind(curve, t_curve, plane, tolerances),
         tolerances,
     ) else {
-        return;
+        return false;
     };
     push_distinct_point(points, point, curve.param_range(), tolerances);
+    true
 }
 
 fn push_contained_overlap(
-    curve: &NurbsCurve,
+    source: &NurbsCurve,
+    range: ParamRange,
     plane: &Plane,
     plane_range: [ParamRange; 2],
     tolerances: Tolerances,
     overlaps: &mut Vec<CurveSurfaceOverlap>,
 ) {
-    let range = curve.param_range();
     if range.width() <= parameter_tolerance(range, tolerances) {
         return;
     }
     let Some(uv_start) = fit_parameter_pair(
-        plane_uv(curve.eval(range.lo), plane),
+        plane_uv(source.eval(range.lo), plane),
         plane_range,
         tolerances.linear(),
     ) else {
         return;
     };
     let Some(uv_end) = fit_parameter_pair(
-        plane_uv(curve.eval(range.hi), plane),
+        plane_uv(source.eval(range.hi), plane),
         plane_range,
         tolerances.linear(),
     ) else {
@@ -318,29 +398,36 @@ fn bisect_root(
     plane: &Plane,
     mut lo: f64,
     mut hi: f64,
-    mut f_lo: f64,
-    mut f_hi: f64,
+    mut lo_sign: Orientation,
+    mut hi_sign: Orientation,
     tolerances: Tolerances,
-) -> f64 {
+) -> Option<f64> {
     let parameter_tol = parameter_tolerance(curve.param_range(), tolerances);
     for _ in 0..80 {
         let mid = (lo + hi) / 2.0;
-        let f_mid = signed_distance(curve.eval(mid), plane);
-        if f_mid.abs() <= tolerances.linear() || hi - lo <= parameter_tol {
-            return mid;
+        let point = curve.eval(mid);
+        if exact_sample_relation(point, plane, tolerances) == Some(SamplePlaneRelation::WithinSlab)
+        {
+            return Some(mid);
         }
-        if same_sign(f_lo, f_mid) {
+        if hi - lo <= parameter_tol {
+            return best_leaf_root(curve, plane, ParamRange::new(lo, hi), tolerances);
+        }
+        let mid_sign = exact_sample_sign(point, plane)?;
+        if mid_sign == Orientation::Zero {
+            return Some(mid);
+        }
+        if mid_sign == lo_sign {
             lo = mid;
-            f_lo = f_mid;
-        } else {
+            lo_sign = mid_sign;
+        } else if mid_sign == hi_sign {
             hi = mid;
-            f_hi = f_mid;
-        }
-        if f_hi.abs() <= tolerances.linear() {
-            return hi;
+            hi_sign = mid_sign;
+        } else {
+            return None;
         }
     }
-    (lo + hi) / 2.0
+    best_leaf_root(curve, plane, ParamRange::new(lo, hi), tolerances)
 }
 
 fn best_leaf_root(
@@ -352,20 +439,106 @@ fn best_leaf_root(
     let mut best = (f64::INFINITY, range.lo);
     for i in 0..=LEAF_SAMPLES {
         let t = range.lerp(i as f64 / LEAF_SAMPLES as f64);
-        let distance = signed_distance(curve.eval(t), plane).abs();
-        if distance < best.0 {
-            best = (distance, t);
+        let point = curve.eval(t);
+        if exact_sample_relation(point, plane, tolerances) == Some(SamplePlaneRelation::WithinSlab)
+        {
+            let distance = signed_distance(point, plane).abs();
+            if distance < best.0 {
+                best = (distance, t);
+            }
         }
     }
-    (best.0 <= tolerances.linear()).then_some(best.1)
+    best.0.is_finite().then_some(best.1)
 }
 
-fn signed_control_distances(curve: &NurbsCurve, plane: &Plane) -> Vec<f64> {
-    curve
-        .points()
-        .iter()
-        .map(|&point| signed_distance(point, plane))
-        .collect()
+fn source_plane_relation(
+    source: &NurbsCurve,
+    range: ParamRange,
+    plane: &Plane,
+    tolerances: Tolerances,
+) -> PlaneCurveRangeRelation {
+    classify_curve_range_against_plane_slab(
+        source,
+        range,
+        plane.frame().origin(),
+        plane.frame().z(),
+        tolerances.linear(),
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SourceWindowRelation {
+    Outside,
+    Candidate,
+    Inside,
+}
+
+fn source_window_relation(
+    source: &NurbsCurve,
+    range: ParamRange,
+    plane: &Plane,
+    plane_range: [ParamRange; 2],
+    tolerances: Tolerances,
+) -> SourceWindowRelation {
+    let axes = [plane.frame().x(), plane.frame().y()];
+    let mut candidate = false;
+    for axis in 0..2 {
+        let lower = plane_range[axis].lo - tolerances.linear();
+        let upper = plane_range[axis].hi + tolerances.linear();
+        match classify_curve_range_against_affine_band(
+            source,
+            range,
+            plane.frame().origin(),
+            axes[axis],
+            lower,
+            upper,
+        ) {
+            PlaneCurveRangeRelation::Negative | PlaneCurveRangeRelation::Positive => {
+                return SourceWindowRelation::Outside;
+            }
+            PlaneCurveRangeRelation::Candidate => candidate = true,
+            PlaneCurveRangeRelation::WithinSlab => {}
+        }
+    }
+    if candidate {
+        SourceWindowRelation::Candidate
+    } else {
+        SourceWindowRelation::Inside
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SamplePlaneRelation {
+    Negative,
+    WithinSlab,
+    Positive,
+}
+
+fn exact_sample_relation(
+    point: Point3,
+    plane: &Plane,
+    tolerances: Tolerances,
+) -> Option<SamplePlaneRelation> {
+    let normal = plane.frame().z().to_array();
+    let point = point.to_array();
+    let origin = plane.frame().origin().to_array();
+    if affine_dot3(normal, point, origin, -tolerances.linear())?.sign() == Orientation::Positive {
+        return Some(SamplePlaneRelation::Positive);
+    }
+    if affine_dot3(normal, point, origin, tolerances.linear())?.sign() == Orientation::Negative {
+        return Some(SamplePlaneRelation::Negative);
+    }
+    Some(SamplePlaneRelation::WithinSlab)
+}
+
+fn exact_sample_sign(point: Point3, plane: &Plane) -> Option<Orientation> {
+    affine_dot3(
+        plane.frame().z().to_array(),
+        point.to_array(),
+        plane.frame().origin().to_array(),
+        0.0,
+    )
+    .map(|classified| classified.sign())
 }
 
 fn signed_distance(point: Point3, plane: &Plane) -> f64 {
@@ -394,67 +567,28 @@ fn plane_uv(point: Point3, plane: &Plane) -> [f64; 2] {
     [local.x, local.y]
 }
 
-fn control_uv_bounds(curve: &NurbsCurve, plane: &Plane) -> [[f64; 2]; 2] {
-    let mut bounds = [[f64::INFINITY, f64::NEG_INFINITY]; 2];
-    for point in curve.points() {
-        let uv = plane_uv(*point, plane);
-        for axis in 0..2 {
-            bounds[axis][0] = bounds[axis][0].min(uv[axis]);
-            bounds[axis][1] = bounds[axis][1].max(uv[axis]);
-        }
-    }
-    bounds
-}
-
-fn outside_window(
-    uv_bounds: [[f64; 2]; 2],
-    plane_range: [ParamRange; 2],
-    tolerances: Tolerances,
-) -> bool {
-    (0..2).any(|axis| {
-        uv_bounds[axis][1] < plane_range[axis].lo - tolerances.linear()
-            || uv_bounds[axis][0] > plane_range[axis].hi + tolerances.linear()
-    })
-}
-
-fn inside_window(
-    uv_bounds: [[f64; 2]; 2],
-    plane_range: [ParamRange; 2],
-    tolerances: Tolerances,
-) -> bool {
-    (0..2).all(|axis| {
-        uv_bounds[axis][0] >= plane_range[axis].lo - tolerances.linear()
-            && uv_bounds[axis][1] <= plane_range[axis].hi + tolerances.linear()
-    })
-}
-
-fn min_max(values: &[f64]) -> (f64, f64) {
-    values
-        .iter()
-        .copied()
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), value| {
-            (min.min(value), max.max(value))
-        })
-}
-
-fn sign_variations(values: &[f64], tolerance: f64) -> usize {
+fn sign_variations(curve: &NurbsCurve, plane: &Plane) -> Option<usize> {
     let mut previous = None;
     let mut variations = 0;
-    for &value in values {
-        if value.abs() <= tolerance {
+    for &point in curve.points() {
+        let sign = exact_sample_sign(point, plane)?;
+        if sign == Orientation::Zero {
             continue;
         }
-        let sign = value.is_sign_positive();
         if previous.is_some_and(|prev| prev != sign) {
             variations += 1;
         }
         previous = Some(sign);
     }
-    variations
+    Some(variations)
 }
 
-fn same_sign(a: f64, b: f64) -> bool {
-    (a < 0.0 && b < 0.0) || (a > 0.0 && b > 0.0)
+fn opposite_strict_signs(first: Orientation, second: Orientation) -> bool {
+    matches!(
+        (first, second),
+        (Orientation::Negative, Orientation::Positive)
+            | (Orientation::Positive, Orientation::Negative)
+    )
 }
 
 fn push_distinct_point(
@@ -472,20 +606,17 @@ fn push_distinct_point(
     }
 }
 
-fn merge_overlaps(
-    overlaps: &mut Vec<CurveSurfaceOverlap>,
-    global_range: ParamRange,
-    tolerances: Tolerances,
-) {
+fn merge_overlaps(overlaps: &mut Vec<CurveSurfaceOverlap>) {
     overlaps.sort_by(|a, b| a.curve.lo.total_cmp(&b.curve.lo));
-    let parameter_tol = parameter_tolerance(global_range, tolerances);
     let mut merged: Vec<CurveSurfaceOverlap> = Vec::new();
     for overlap in overlaps.drain(..) {
         if let Some(last) = merged.last_mut()
-            && overlap.curve.lo <= last.curve.hi + parameter_tol
+            && overlap.curve.lo <= last.curve.hi
         {
-            last.curve = ParamRange::new(last.curve.lo, last.curve.hi.max(overlap.curve.hi));
-            last.uv_end = overlap.uv_end;
+            if overlap.curve.hi > last.curve.hi {
+                last.curve = ParamRange::new(last.curve.lo, overlap.curve.hi);
+                last.uv_end = overlap.uv_end;
+            }
             continue;
         }
         merged.push(overlap);
@@ -531,4 +662,32 @@ fn validate_ranges(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn overlap(lo: f64, hi: f64) -> CurveSurfaceOverlap {
+        CurveSurfaceOverlap {
+            curve: ParamRange::new(lo, hi),
+            uv_start: [lo, 0.0],
+            uv_end: [hi, 0.0],
+        }
+    }
+
+    #[test]
+    fn overlap_merge_requires_actual_parameter_contact() {
+        let mut separated = vec![overlap(0.0, 0.4), overlap(0.4 + 5.0e-11, 1.0)];
+        merge_overlaps(&mut separated);
+        assert_eq!(separated.len(), 2);
+
+        let mut touching = vec![overlap(0.0, 0.4), overlap(0.4, 1.0)];
+        merge_overlaps(&mut touching);
+        assert_eq!(touching, vec![overlap(0.0, 1.0)]);
+
+        let mut nested = vec![overlap(0.0, 1.0), overlap(0.25, 0.75)];
+        merge_overlaps(&mut nested);
+        assert_eq!(nested, vec![overlap(0.0, 1.0)]);
+    }
 }

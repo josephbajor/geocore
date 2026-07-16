@@ -1835,9 +1835,21 @@ fn nurbs_plane_crossing_tangent_and_range_filtering() {
     .unwrap();
     assert_eq!(hit.points.len(), 1);
     assert_eq!(hit.points[0].kind, ContactKind::Transverse);
+    assert_eq!(hit.points[0].t_curve.to_bits(), 0.5_f64.to_bits());
     assert!((hit.points[0].t_curve - 0.5).abs() < 1e-8);
     assert!(hit.points[0].point.dist(Point3::new(0.0, 0.0, 0.0)) < 1e-8);
     assert_eq!(hit.points[0].uv_surface, [0.0, 0.0]);
+    assert_eq!(
+        intersect_bounded_nurbs_plane(
+            &crossing,
+            crossing.param_range(),
+            &plane,
+            wide_plane,
+            Tolerances::default(),
+        )
+        .unwrap(),
+        hit,
+    );
 
     let range_miss = intersect_bounded_nurbs_plane(
         &crossing,
@@ -1872,6 +1884,199 @@ fn nurbs_plane_crossing_tangent_and_range_filtering() {
     assert_eq!(hit.points[0].kind, ContactKind::Tangent);
     assert!((hit.points[0].t_curve - 0.5).abs() < 1e-8);
     assert!(hit.points[0].point.dist(Point3::new(0.0, 0.0, 0.0)) < 1e-8);
+}
+
+#[test]
+fn nurbs_plane_exact_source_signs_prevent_oblique_false_overlap() {
+    let normal = Vec3::new(0.6, 0.8, 0.0);
+    let positive = Point3::new(-2_863_298_200.0, 2_147_473_650.0, 0.0);
+    assert_eq!(normal.dot(positive), 0.0);
+
+    let make_curve = |first, second| {
+        NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![first, second], None).unwrap()
+    };
+    let curve = make_curve(positive, -positive);
+    let plane =
+        Plane::new(Frame::new(Point3::default(), normal, Vec3::new(0.0, 0.0, 1.0)).unwrap());
+    let window = [
+        ParamRange::new(-5.0e9, 5.0e9),
+        ParamRange::new(-5.0e9, 5.0e9),
+    ];
+
+    let hit = intersect_bounded_nurbs_plane(
+        &curve,
+        curve.param_range(),
+        &plane,
+        window,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.points.len(), 1);
+    assert!(hit.overlaps.is_empty());
+    assert_eq!(hit.points[0].t_curve.to_bits(), 0.5_f64.to_bits());
+    assert_eq!(hit.points[0].point, Point3::default());
+    assert!(!hit.is_complete());
+    assert_eq!(
+        intersect_bounded_nurbs_plane(
+            &curve,
+            curve.param_range(),
+            &plane,
+            window,
+            Tolerances::default(),
+        )
+        .unwrap(),
+        hit,
+    );
+
+    let point_query = intersect_bounded_nurbs_plane(
+        &curve,
+        ParamRange::new(0.0, 0.0),
+        &plane,
+        window,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(point_query.is_empty());
+    assert!(point_query.overlaps.is_empty());
+    assert!(!point_query.is_complete());
+
+    let reversed = make_curve(-positive, positive);
+    let reversed_hit = intersect_bounded_nurbs_plane(
+        &reversed,
+        reversed.param_range(),
+        &plane,
+        window,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(reversed_hit.points.len(), 1);
+    assert!(reversed_hit.overlaps.is_empty());
+    assert_eq!(reversed_hit.points[0].t_curve.to_bits(), 0.5_f64.to_bits());
+    assert_eq!(reversed_hit.points[0].point, Point3::default());
+
+    let reversed_normal_plane =
+        Plane::new(Frame::new(Point3::default(), -normal, Vec3::new(0.0, 0.0, 1.0)).unwrap());
+    let reversed_normal_hit = intersect_bounded_nurbs_plane(
+        &curve,
+        curve.param_range(),
+        &reversed_normal_plane,
+        window,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(reversed_normal_hit.points.len(), 1);
+    assert!(reversed_normal_hit.overlaps.is_empty());
+    assert_eq!(
+        reversed_normal_hit.points[0].t_curve.to_bits(),
+        0.5_f64.to_bits()
+    );
+    assert_eq!(reversed_normal_hit.points[0].point, Point3::default());
+}
+
+#[test]
+fn nurbs_plane_uses_source_range_when_split_controls_lose_midpoint_contact() {
+    let contact_z = 9_007_199_254_740_991.0;
+    let curve = NurbsCurve::new(
+        3,
+        vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(-1.0, 0.0, 9_007_199_254_740_360.0),
+            Point3::new(-1.0 / 3.0, 0.0, 9_007_199_254_740_978.0),
+            Point3::new(1.0 / 3.0, 0.0, 9_007_199_254_741_648.0),
+            Point3::new(1.0, 0.0, 9_007_199_254_739_690.0),
+        ],
+        None,
+    )
+    .unwrap();
+    let (left, right) = curve.split_at(0.5).unwrap();
+    assert!(left.points().iter().all(|point| point.z < contact_z));
+    assert!(right.points().iter().all(|point| point.z < contact_z));
+    assert_eq!(curve.eval(0.5).z.to_bits(), contact_z.to_bits());
+
+    let plane = Plane::new(Frame::world().with_origin(Point3::new(0.0, 0.0, contact_z)));
+    let window = [ParamRange::new(-2.0, 2.0), ParamRange::new(-1.0, 1.0)];
+    let hit = intersect_bounded_nurbs_plane(
+        &curve,
+        curve.param_range(),
+        &plane,
+        window,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.points.len(), 1);
+    assert!(hit.overlaps.is_empty());
+    assert_eq!(hit.points[0].t_curve.to_bits(), 0.5_f64.to_bits());
+    assert_eq!(hit.points[0].point.z.to_bits(), contact_z.to_bits());
+    assert_eq!(
+        intersect_bounded_nurbs_plane(
+            &curve,
+            curve.param_range(),
+            &plane,
+            window,
+            Tolerances::default(),
+        )
+        .unwrap(),
+        hit,
+    );
+}
+
+#[test]
+fn nurbs_plane_window_overlap_extents_require_source_band_proof() {
+    let outside = 9_007_199_254_740_991.0;
+    let lower = outside - 2_000.0;
+    let upper = outside - 1.0;
+    let curve = NurbsCurve::new(
+        3,
+        vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(9_007_199_254_740_360.0, 0.0, 0.0),
+            Point3::new(9_007_199_254_740_978.0, 0.0, 0.0),
+            Point3::new(9_007_199_254_741_648.0, 0.0, 0.0),
+            Point3::new(9_007_199_254_739_690.0, 0.0, 0.0),
+        ],
+        None,
+    )
+    .unwrap();
+    let (left, right) = curve.split_at(0.5).unwrap();
+    for derived in [&left, &right] {
+        assert!(
+            derived
+                .points()
+                .iter()
+                .all(|point| lower <= point.x && point.x <= upper)
+        );
+    }
+    assert_eq!(curve.eval(0.5).x.to_bits(), outside.to_bits());
+
+    let plane = Plane::new(Frame::world());
+    let window = [ParamRange::new(lower, upper), ParamRange::new(-1.0, 1.0)];
+    let hit = intersect_bounded_nurbs_plane(
+        &curve,
+        curve.param_range(),
+        &plane,
+        window,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert!(hit.points.is_empty());
+    assert!(
+        hit.overlaps
+            .iter()
+            .all(|overlap| !overlap.curve.contains(0.5)),
+        "an overlap range must not include the source midpoint outside the plane window",
+    );
+    assert!(!hit.is_complete());
+    assert_eq!(
+        intersect_bounded_nurbs_plane(
+            &curve,
+            curve.param_range(),
+            &plane,
+            window,
+            Tolerances::default(),
+        )
+        .unwrap(),
+        hit,
+    );
 }
 
 #[test]
