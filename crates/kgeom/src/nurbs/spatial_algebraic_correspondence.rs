@@ -21,7 +21,7 @@ const SAFE_COMPONENT_MAX: f64 = f64::from_bits(((1023 + 500) as u64) << 52);
 const SAFE_PRODUCT_MIN: f64 = f64::from_bits(((1023 - 400) as u64) << 52);
 const SAFE_PRODUCT_MAX: f64 = f64::from_bits(((1023 + 400) as u64) << 52);
 const STABLE_PRIMITIVE_FORM_PREFIX_COEFFICIENT: i8 = 6;
-const MAX_SUPPORTED_PRIMITIVE_FORM_COEFFICIENT: i8 = 13;
+const MAX_SUPPORTED_PRIMITIVE_FORM_COEFFICIENT: i8 = 14;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ParameterOrientation {
@@ -129,7 +129,7 @@ pub(super) fn certify_algebraic_spatial_root(
 /// with a positive omitted-coordinate coefficient. These rules enumerate
 /// every form in the bounded family once, modulo a nonzero integer scale and
 /// global sign. The compatibility magnitude-twelve family remains the exact
-/// prefix of the optional magnitude-thirteen shell.
+/// prefix of the optional magnitude-thirteen and magnitude-fourteen shells.
 ///
 /// A shared projected carrier is equal at every projected zero even when no
 /// coordinate scalar or unit-coefficient form corresponds. Injectivity fixes
@@ -310,7 +310,7 @@ fn exact_linear_form(curve: &NurbsCurve, index: usize, coefficients: [i8; 3]) ->
     for (axis, coefficient) in coefficients.into_iter().enumerate() {
         let value = component(curve, index, axis);
         let term = match coefficient {
-            -13..=-2 | 2..=13 => {
+            -14..=-2 | 2..=14 => {
                 if !safe_expansion(&[value]) {
                     return None;
                 }
@@ -751,7 +751,7 @@ mod tests {
     use crate::vec::Point3;
 
     #[test]
-    fn magnitude_thirteen_form_arithmetic_outside_the_exact_corridor_fails_closed() {
+    fn magnitude_fourteen_form_arithmetic_outside_the_exact_corridor_fails_closed() {
         let curve = NurbsCurve::new(
             1,
             vec![0.0, 0.0, 1.0, 1.0],
@@ -765,10 +765,16 @@ mod tests {
         assert!(exact_linear_form(&curve, 0, [12, 1, 0]).is_none());
         assert!(exact_linear_form(&curve, 0, [13, 0, 0]).is_none());
         assert!(exact_linear_form(&curve, 0, [-13, 0, 0]).is_none());
+        assert!(exact_linear_form(&curve, 0, [14, 0, 0]).is_none());
+        assert!(exact_linear_form(&curve, 0, [-14, 0, 0]).is_none());
         assert!(linear_form_derivative_interval(&curve, curve.param_range(), [12, 1, 0]).is_none());
         assert!(linear_form_derivative_interval(&curve, curve.param_range(), [13, 0, 0]).is_none());
         assert!(
             linear_form_derivative_interval(&curve, curve.param_range(), [-13, 0, 0]).is_none()
+        );
+        assert!(linear_form_derivative_interval(&curve, curve.param_range(), [14, 0, 0]).is_none());
+        assert!(
+            linear_form_derivative_interval(&curve, curve.param_range(), [-14, 0, 0]).is_none()
         );
 
         let finite = NurbsCurve::new(
@@ -780,23 +786,31 @@ mod tests {
         .unwrap();
         assert!(exact_linear_form(&finite, 0, [13, -1, 0]).is_some());
         assert!(exact_linear_form(&finite, 0, [-13, 1, 0]).is_some());
-        assert!(exact_linear_form(&finite, 0, [14, 0, 0]).is_none());
-        assert!(exact_linear_form(&finite, 0, [-14, 0, 0]).is_none());
+        assert!(exact_linear_form(&finite, 0, [14, -1, 0]).is_some());
+        assert!(exact_linear_form(&finite, 0, [-14, 1, 0]).is_some());
+        assert!(exact_linear_form(&finite, 0, [15, 0, 0]).is_none());
+        assert!(exact_linear_form(&finite, 0, [-15, 0, 0]).is_none());
         assert!(
             linear_form_derivative_interval(&finite, finite.param_range(), [13, -1, 0]).is_some()
         );
         assert!(
-            linear_form_derivative_interval(&finite, finite.param_range(), [14, 0, 0]).is_none()
+            linear_form_derivative_interval(&finite, finite.param_range(), [14, -1, 0]).is_some()
+        );
+        assert!(
+            linear_form_derivative_interval(&finite, finite.param_range(), [15, 0, 0]).is_none()
         );
     }
 
     #[test]
-    fn magnitude_thirteen_extends_the_compatibility_search_order_by_one_shell() {
+    fn configured_shells_extend_the_compatibility_search_order_by_stable_prefixes() {
         let compatibility =
             configured_primitive_form_bounds(CurvePairAlgebraicSearchConfig::default())
                 .collect::<Vec<_>>();
         let magnitude_thirteen =
             configured_primitive_form_bounds(CurvePairAlgebraicSearchConfig::new(13).unwrap())
+                .collect::<Vec<_>>();
+        let magnitude_fourteen =
+            configured_primitive_form_bounds(CurvePairAlgebraicSearchConfig::new(14).unwrap())
                 .collect::<Vec<_>>();
 
         assert_eq!(compatibility, vec![6, 7, 8, 9, 10, 11, 12]);
@@ -805,6 +819,11 @@ mod tests {
             compatibility.as_slice()
         );
         assert_eq!(magnitude_thirteen.last(), Some(&13));
+        assert_eq!(
+            &magnitude_fourteen[..magnitude_thirteen.len()],
+            magnitude_thirteen.as_slice()
+        );
+        assert_eq!(magnitude_fourteen.last(), Some(&14));
     }
 
     #[test]
@@ -849,6 +868,28 @@ mod tests {
             .count();
         assert_eq!(residual_count, 6_153);
 
+        let magnitude_thirteen = 13;
+        let magnitude_thirteen_carrier_count = (1..=magnitude_thirteen)
+            .flat_map(|first| {
+                (-magnitude_thirteen..=magnitude_thirteen).map(move |second| [first, second, 0])
+            })
+            .filter(|coefficients| coefficients[1] != 0)
+            .filter(|&coefficients| coefficients_are_primitive(coefficients))
+            .count();
+        let magnitude_thirteen_residual_count = (1..=magnitude_thirteen)
+            .flat_map(|omitted| {
+                (-magnitude_thirteen..=magnitude_thirteen).flat_map(move |first| {
+                    (-magnitude_thirteen..=magnitude_thirteen)
+                        .map(move |second| [first, second, omitted])
+                })
+            })
+            .filter(|&coefficients| coefficients_are_primitive(coefficients))
+            .count();
+        assert_eq!(magnitude_thirteen_carrier_count, 230);
+        assert_eq!(magnitude_thirteen_residual_count, 8_121);
+        assert_eq!(magnitude_thirteen_carrier_count - carrier_count, 48);
+        assert_eq!(magnitude_thirteen_residual_count - residual_count, 1_968);
+
         let supported_maximum = MAX_SUPPORTED_PRIMITIVE_FORM_COEFFICIENT;
         let supported_carrier_count = (1..=supported_maximum)
             .flat_map(|first| {
@@ -866,9 +907,15 @@ mod tests {
             })
             .filter(|&coefficients| coefficients_are_primitive(coefficients))
             .count();
-        assert_eq!(supported_carrier_count, 230);
-        assert_eq!(supported_residual_count, 8_121);
-        assert_eq!(supported_carrier_count - carrier_count, 48);
-        assert_eq!(supported_residual_count - residual_count, 1_968);
+        assert_eq!(supported_carrier_count, 254);
+        assert_eq!(supported_residual_count, 9_825);
+        assert_eq!(
+            supported_carrier_count - magnitude_thirteen_carrier_count,
+            24
+        );
+        assert_eq!(
+            supported_residual_count - magnitude_thirteen_residual_count,
+            1_704
+        );
     }
 }

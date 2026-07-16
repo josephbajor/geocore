@@ -1,4 +1,4 @@
-//! Configured coverage for magnitude-thirteen primitive-integer spatial lifts.
+//! Opt-in coverage for the magnitude-fourteen primitive-integer spatial shell.
 
 use kcore::operation::{OperationContext, OperationScope, SessionPolicy};
 use kcore::predicates::{Orientation, orient3d};
@@ -39,12 +39,12 @@ fn second_curve(coefficient: f64, weights: Option<[f64; 3]>) -> NurbsCurve {
     )
 }
 
-fn magnitude_thirteen_pair(weights: Option<([f64; 3], [f64; 3])>) -> (NurbsCurve, NurbsCurve) {
+fn magnitude_fourteen_pair(weights: Option<([f64; 3], [f64; 3])>) -> (NurbsCurve, NurbsCurve) {
     let (first_weights, second_weights) =
         weights.map_or((None, None), |(first, second)| (Some(first), Some(second)));
     (
         first_curve(first_weights),
-        second_curve(13.0, second_weights),
+        second_curve(14.0, second_weights),
     )
 }
 
@@ -56,8 +56,8 @@ fn partial_range() -> ParamRange {
     ParamRange::new(0.25, 0.5)
 }
 
-fn magnitude_thirteen_config() -> CurvePairAlgebraicSearchConfig {
-    CurvePairAlgebraicSearchConfig::new(13).unwrap()
+fn magnitude_fourteen_config() -> CurvePairAlgebraicSearchConfig {
+    CurvePairAlgebraicSearchConfig::new(14).unwrap()
 }
 
 fn linear_form(point: Point3, coefficients: [i8; 3]) -> f64 {
@@ -129,11 +129,22 @@ fn assert_genuinely_noncoplanar(first: &NurbsCurve, second: &NurbsCurve) {
 }
 
 #[test]
-fn configured_magnitude_thirteen_certifies_the_new_normalized_third_family() {
-    let (first, second) = magnitude_thirteen_pair(None);
-    assert_no_projected_carrier_through(&first, &second, 12);
+fn magnitude_fourteen_is_the_first_shell_to_certify_the_normalized_third_root() {
+    assert_eq!(
+        CurvePairAlgebraicSearchConfig::default().maximum_primitive_form_coefficient(),
+        12
+    );
+    assert_eq!(
+        CurvePairAlgebraicSearchConfig::supported_maximum_primitive_form_coefficient(),
+        14
+    );
+    let unsupported = CurvePairAlgebraicSearchConfig::new(15).unwrap_err();
+    assert_eq!(unsupported.supported_range(), 6..=14);
+
+    let (first, second) = magnitude_fourteen_pair(None);
+    assert_no_projected_carrier_through(&first, &second, 13);
     assert_genuinely_noncoplanar(&first, &second);
-    assert!(controls_correspond(&first, &second, [13, -1, 0], false));
+    assert!(controls_correspond(&first, &second, [14, -1, 0], false));
     assert!(controls_correspond(&first, &second, [-1, -2, 1], false));
 
     let root = 1.0 / 3.0;
@@ -147,32 +158,35 @@ fn configured_magnitude_thirteen_certifies_the_new_normalized_third_family() {
         certify_curve_pair_unique_root(&first, full_range(), &second, partial_range())
             .unwrap()
             .is_none(),
-        "the compatibility entry must retain its magnitude-twelve ceiling"
+        "the compatibility entry retains its magnitude-twelve ceiling"
     );
-    assert!(
-        certify_curve_pair_unique_root_with_config(
-            &first,
-            full_range(),
-            &second,
-            partial_range(),
-            CurvePairAlgebraicSearchConfig::new(12).unwrap(),
-        )
-        .unwrap()
-        .is_none()
-    );
+    for ceiling in 6..=13 {
+        assert!(
+            certify_curve_pair_unique_root_with_config(
+                &first,
+                full_range(),
+                &second,
+                partial_range(),
+                CurvePairAlgebraicSearchConfig::new(ceiling).unwrap(),
+            )
+            .unwrap()
+            .is_none(),
+            "ceiling {ceiling} must stop before the magnitude-fourteen shell"
+        );
+    }
 
-    // Corresponding control differences are `(1,13,27)*(1-3t)`.
-    // The smallest projected carrier is `13x-y`; the residual `-x-2y+z`
+    // Second-minus-first control differences are `(1,14,29)*(1-3t)`.
+    // The smallest projected carrier is `14x-y`; the residual `-x-2y+z`
     // completes the exact spatial lift.
     let certificate = certify_curve_pair_unique_root_with_config(
         &first,
         full_range(),
         &second,
         partial_range(),
-        magnitude_thirteen_config(),
+        magnitude_fourteen_config(),
     )
     .unwrap()
-    .expect("the explicit magnitude-thirteen shell lifts the normalized one-third root");
+    .expect("the explicit magnitude-fourteen shell lifts the normalized one-third root");
     assert_eq!(certificate.projection_plane(), CurvePairProjectionPlane::Xy);
     assert_eq!(certificate.first_range(), full_range());
     assert_eq!(certificate.second_range(), partial_range());
@@ -199,63 +213,22 @@ fn configured_magnitude_thirteen_certifies_the_new_normalized_third_family() {
     assert!(candidate.certify_unique_root().is_none());
     assert_eq!(
         candidate
-            .certify_unique_root_with_config(magnitude_thirteen_config())
+            .certify_unique_root_with_config(magnitude_fourteen_config())
             .expect("candidate-cell opt-in uses the same exact source proof"),
         certificate,
     );
 }
 
 #[test]
-fn coefficient_ceiling_is_validated_and_enforced_as_a_finite_search_limit() {
-    let compatibility = CurvePairAlgebraicSearchConfig::default();
-    assert_eq!(
-        compatibility.maximum_primitive_form_coefficient(),
-        CurvePairAlgebraicSearchConfig::compatibility_maximum_primitive_form_coefficient()
-    );
-    assert_eq!(compatibility.maximum_primitive_form_coefficient(), 12);
-    assert_eq!(
-        CurvePairAlgebraicSearchConfig::supported_maximum_primitive_form_coefficient(),
-        14
-    );
-    assert_eq!(
-        CurvePairAlgebraicSearchConfig::new(6)
-            .unwrap()
-            .maximum_primitive_form_coefficient(),
-        6
-    );
-
-    for requested in [0, 5, 15, u8::MAX] {
-        let error = CurvePairAlgebraicSearchConfig::new(requested).unwrap_err();
-        assert_eq!(error.requested(), requested);
-        assert_eq!(error.supported_range(), 6..=14);
-        assert!(error.to_string().contains(&requested.to_string()));
-    }
-
-    let (first, second) = magnitude_thirteen_pair(None);
-    assert!(
-        certify_curve_pair_unique_root_with_config(
-            &first,
-            full_range(),
-            &second,
-            partial_range(),
-            CurvePairAlgebraicSearchConfig::new(6).unwrap(),
-        )
-        .unwrap()
-        .is_none(),
-        "a lower configured ceiling must stop before the magnitude-thirteen shell"
-    );
-}
-
-#[test]
-fn magnitude_thirteen_search_is_repeatable_and_symmetric() {
-    let (first, second) = magnitude_thirteen_pair(None);
+fn magnitude_fourteen_search_is_repeatable_symmetric_and_reversible() {
+    let (first, second) = magnitude_fourteen_pair(None);
     let certify = || {
         certify_curve_pair_unique_root_with_config(
             &first,
             full_range(),
             &second,
             partial_range(),
-            magnitude_thirteen_config(),
+            magnitude_fourteen_config(),
         )
         .unwrap()
         .unwrap()
@@ -270,7 +243,7 @@ fn magnitude_thirteen_search_is_repeatable_and_symmetric() {
         partial_range(),
         &first,
         full_range(),
-        magnitude_thirteen_config(),
+        magnitude_fourteen_config(),
     )
     .unwrap()
     .expect("configured enumeration is stable under operand swap");
@@ -288,7 +261,7 @@ fn magnitude_thirteen_search_is_repeatable_and_symmetric() {
         full_range(),
         &reversed_second,
         ParamRange::new(13.0, 14.5),
-        magnitude_thirteen_config(),
+        magnitude_fourteen_config(),
     )
     .unwrap()
     .expect("configured normalized reversal lifts the t=1/3, s=14 root");
@@ -296,39 +269,83 @@ fn magnitude_thirteen_search_is_repeatable_and_symmetric() {
 }
 
 #[test]
-fn compatibility_results_are_unchanged_when_the_later_shell_is_enabled() {
+fn magnitude_fourteen_extension_preserves_earlier_certificate_goldens() {
     let first = first_curve(None);
-    let second = second_curve(12.0, None);
+
+    let twelve = second_curve(12.0, None);
     let compatibility =
-        certify_curve_pair_unique_root(&first, full_range(), &second, partial_range())
+        certify_curve_pair_unique_root(&first, full_range(), &twelve, partial_range())
             .unwrap()
             .unwrap();
     let explicit_twelve = certify_curve_pair_unique_root_with_config(
         &first,
         full_range(),
-        &second,
+        &twelve,
         partial_range(),
         CurvePairAlgebraicSearchConfig::new(12).unwrap(),
     )
     .unwrap()
     .unwrap();
-    let extended = certify_curve_pair_unique_root_with_config(
+    let fourteen_over_twelve = certify_curve_pair_unique_root_with_config(
         &first,
         full_range(),
-        &second,
+        &twelve,
         partial_range(),
-        magnitude_thirteen_config(),
+        magnitude_fourteen_config(),
     )
     .unwrap()
     .unwrap();
-
     assert_eq!(compatibility, explicit_twelve);
-    assert_eq!(compatibility, extended);
+    assert_eq!(compatibility, fourteen_over_twelve);
+
+    let thirteen = second_curve(13.0, None);
+    assert!(
+        certify_curve_pair_unique_root(&first, full_range(), &thirteen, partial_range())
+            .unwrap()
+            .is_none()
+    );
+    let explicit_thirteen = certify_curve_pair_unique_root_with_config(
+        &first,
+        full_range(),
+        &thirteen,
+        partial_range(),
+        CurvePairAlgebraicSearchConfig::new(13).unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    let fourteen_over_thirteen = certify_curve_pair_unique_root_with_config(
+        &first,
+        full_range(),
+        &thirteen,
+        partial_range(),
+        magnitude_fourteen_config(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(explicit_thirteen, fourteen_over_thirteen);
 }
 
 #[test]
-fn configured_thirteen_preserves_broken_weight_and_arithmetic_fail_closed_gates() {
-    let (first, second) = magnitude_thirteen_pair(None);
+fn proportional_positive_rational_weights_preserve_magnitude_fourteen_forms() {
+    let (first, second) = magnitude_fourteen_pair(Some(([1.0, 1.0, 1.0], [2.0, 2.0, 2.0])));
+    assert_no_projected_carrier_through(&first, &second, 13);
+
+    let certificate = certify_curve_pair_unique_root_with_config(
+        &first,
+        partial_range(),
+        &second,
+        partial_range(),
+        magnitude_fourteen_config(),
+    )
+    .unwrap()
+    .expect("globally proportional rational weights preserve configured forms");
+    assert_eq!(certificate.projection_plane(), CurvePairProjectionPlane::Xy);
+    assert!(certificate.determinant_lower_bound() > 0.0);
+}
+
+#[test]
+fn magnitude_fourteen_forms_fail_closed_for_broken_or_unsafe_inputs() {
+    let (first, second) = magnitude_fourteen_pair(None);
 
     let mut carrier_points = second.points().to_vec();
     carrier_points[1].y += 0.25;
@@ -340,7 +357,7 @@ fn configured_thirteen_preserves_broken_weight_and_arithmetic_fail_closed_gates(
             full_range(),
             &broken_carrier,
             partial_range(),
-            magnitude_thirteen_config(),
+            magnitude_fourteen_config(),
         )
         .unwrap()
         .is_none()
@@ -355,21 +372,21 @@ fn configured_thirteen_preserves_broken_weight_and_arithmetic_fail_closed_gates(
             full_range(),
             &broken_residual,
             partial_range(),
-            magnitude_thirteen_config(),
+            magnitude_fourteen_config(),
         )
         .unwrap()
         .is_none()
     );
 
     let (rational_first, nonproportional) =
-        magnitude_thirteen_pair(Some(([1.0, 1.0, 1.0], [2.0, 2.5, 2.0])));
+        magnitude_fourteen_pair(Some(([1.0, 1.0, 1.0], [2.0, 2.5, 2.0])));
     assert!(
         certify_curve_pair_unique_root_with_config(
             &rational_first,
             partial_range(),
             &nonproportional,
             partial_range(),
-            magnitude_thirteen_config(),
+            magnitude_fourteen_config(),
         )
         .unwrap()
         .is_none()
@@ -385,9 +402,9 @@ fn configured_thirteen_preserves_broken_weight_and_arithmetic_fail_closed_gates(
     );
     let overflow_second = curve(
         [
-            Point3::new(f64::MAX, 13.0, 27.0),
-            Point3::new(f64::MAX, -6.5, -12.5),
-            Point3::new(f64::MAX, -26.0, -54.0),
+            Point3::new(f64::MAX, 14.0, 29.0),
+            Point3::new(f64::MAX, -7.0, -13.5),
+            Point3::new(f64::MAX, -28.0, -58.0),
         ],
         None,
     );
@@ -397,12 +414,23 @@ fn configured_thirteen_preserves_broken_weight_and_arithmetic_fail_closed_gates(
             full_range(),
             &overflow_second,
             partial_range(),
-            magnitude_thirteen_config(),
+            magnitude_fourteen_config(),
         )
         .unwrap()
         .is_none()
     );
 
+    assert!(
+        certify_curve_pair_unique_root_with_config(
+            &first,
+            ParamRange::new(-0.25, 0.5),
+            &second,
+            partial_range(),
+            magnitude_fourteen_config(),
+        )
+        .is_err(),
+        "ranges outside the original source domain remain invalid"
+    );
     assert!(
         NurbsCurve::new(
             2,
@@ -416,22 +444,4 @@ fn configured_thirteen_preserves_broken_weight_and_arithmetic_fail_closed_gates(
         )
         .is_err()
     );
-}
-
-#[test]
-fn proportional_positive_rational_weights_preserve_configured_thirteen_forms() {
-    let (first, second) = magnitude_thirteen_pair(Some(([1.0, 1.0, 1.0], [2.0, 2.0, 2.0])));
-    assert_no_projected_carrier_through(&first, &second, 12);
-
-    let certificate = certify_curve_pair_unique_root_with_config(
-        &first,
-        partial_range(),
-        &second,
-        partial_range(),
-        magnitude_thirteen_config(),
-    )
-    .unwrap()
-    .expect("globally proportional rational weights preserve configured forms");
-    assert_eq!(certificate.projection_plane(), CurvePairProjectionPlane::Xy);
-    assert!(certificate.determinant_lower_bound() > 0.0);
 }

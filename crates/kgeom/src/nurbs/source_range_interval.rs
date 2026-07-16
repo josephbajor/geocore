@@ -6,7 +6,7 @@ use crate::param::ParamRange;
 use crate::vec::Vec3;
 use kcore::interval::Interval;
 
-const MAX_LINEAR_FORM_COEFFICIENT: i8 = 13;
+const MAX_LINEAR_FORM_COEFFICIENT: i8 = 14;
 
 /// Exact number of source knot-span slots inspected by one position-range
 /// enclosure.
@@ -135,7 +135,7 @@ pub(super) fn derivative_component_interval(
 /// The scalar numerator is formed in homogeneous source-control space before
 /// interval de Boor evaluation. This preserves correlations such as `x+y`
 /// that independent component bounds lose. Coefficients outside the reviewed
-/// `[-13,13]` corridor and inconclusive arithmetic fail closed.
+/// `[-14,14]` corridor and inconclusive arithmetic fail closed.
 pub(super) fn derivative_signed_linear_form_interval(
     curve: &NurbsCurve,
     range: ParamRange,
@@ -404,8 +404,10 @@ mod tests {
             derivative_signed_linear_form_interval(&curve, range, [12, -11, 0]).unwrap();
         let magnitude_thirteen =
             derivative_signed_linear_form_interval(&curve, range, [13, -12, 0]).unwrap();
-        assert!(derivative_signed_linear_form_interval(&curve, range, [14, 0, 0]).is_none());
-        assert!(derivative_signed_linear_form_interval(&curve, range, [-14, 0, 0]).is_none());
+        let magnitude_fourteen =
+            derivative_signed_linear_form_interval(&curve, range, [14, -13, 0]).unwrap();
+        assert!(derivative_signed_linear_form_interval(&curve, range, [15, 0, 0]).is_none());
+        assert!(derivative_signed_linear_form_interval(&curve, range, [-15, 0, 0]).is_none());
         for sample in 0..=512 {
             let derivative = curve
                 .eval_derivs(range.lerp(f64::from(sample) / 512.0), 1)
@@ -413,6 +415,7 @@ mod tests {
             assert!(signed.contains(derivative.x - derivative.y + derivative.z));
             assert!(magnitude_twelve.contains(12.0 * derivative.x - 11.0 * derivative.y));
             assert!(magnitude_thirteen.contains(13.0 * derivative.x - 12.0 * derivative.y));
+            assert!(magnitude_fourteen.contains(14.0 * derivative.x - 13.0 * derivative.y));
         }
     }
 

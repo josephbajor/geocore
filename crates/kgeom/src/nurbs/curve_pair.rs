@@ -19,7 +19,7 @@ const DEFAULT_CANDIDATES: u64 = 4_096;
 const DEFAULT_SUBDIVISIONS: u64 = 6_828;
 const MIN_ALGEBRAIC_FORM_COEFFICIENT: u8 = 6;
 const DEFAULT_ALGEBRAIC_FORM_COEFFICIENT: u8 = 12;
-const MAX_ALGEBRAIC_FORM_COEFFICIENT: u8 = 13;
+const MAX_ALGEBRAIC_FORM_COEFFICIENT: u8 = 14;
 
 const fn stage(value: &'static str) -> StageId {
     match StageId::new(value) {
@@ -123,10 +123,10 @@ pub enum CurvePairProjectionPlane {
 ///
 /// The compatibility default searches the complete canonical primitive-
 /// integer carrier/residual family through coefficient magnitude twelve. A
-/// caller may explicitly opt into the magnitude-thirteen shell. The supported
-/// interval is deliberately narrow: it makes the additional exact search a
-/// reviewed, deterministic finite limit rather than an unbounded integer-form
-/// enumeration.
+/// caller may explicitly opt into the magnitude-thirteen or magnitude-fourteen
+/// shell. The supported interval is deliberately narrow: it makes each
+/// additional exact search a reviewed, deterministic finite limit rather than
+/// an unbounded integer-form enumeration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CurvePairAlgebraicSearchConfig {
     maximum_primitive_form_coefficient: u8,
@@ -135,7 +135,7 @@ pub struct CurvePairAlgebraicSearchConfig {
 impl CurvePairAlgebraicSearchConfig {
     /// Construct a validated primitive-integer coefficient ceiling.
     ///
-    /// Magnitudes six through thirteen are accepted. The magnitude-six tier
+    /// Magnitudes six through fourteen are accepted. The magnitude-six tier
     /// contains the complete smaller-form prefix; larger values add one
     /// canonical exact-magnitude shell at a time.
     pub const fn new(
