@@ -84,18 +84,29 @@ application boundary.
   Work-bounded polishing, exact algebraic seed/overlap certificates, selected paired
   pcurves, a first exact varying-normal Offset(NURBS) arm with global-X-,
   global-Y-, and global-Z-normal planar-NURBS, analytic-Plane, or one-descriptor
-  safe-Offset(Plane) peers, plus exactly two rational-quarter-cylinder offset
-  descriptors against direct global-axis analytic Planes only, and bounded
+  safe-Offset(Plane) peers, plus the complete one- through four-descriptor
+  rational-quarter-cylinder family against direct global-axis analytic Planes
+  only, and bounded
   coincident
   Plane/Cylinder/Sphere/Cone/Torus regions including exact polar-cap and
   same-row adjacent, exact same-column vertical (reviewed at
   `[0,2]`/`[1,2]`), either exact full latitude row, and an exact mixed-axis
   three-cell L path in two real orientations and the generic exact four-
-  positive shared-seam path family in two real orientations in the polar-by-
-  wide family have landed. Four-positive paths cancel all three artificial
-  seams and retain repeat/swap plus one-ULP and ambiguity rejection evidence;
-  the non-cap row retains eight vertices and every six-cell layout keeps the
-  exact 6/147/588 piece/pair/arc ceiling. Compatible intersecting
+  positive shared-seam path family in two real orientations, plus exactly five
+  positive cells with one certified-empty sibling, in the polar-by-wide family
+  have landed. Four-positive paths cancel all three artificial seams. The
+  five-positive arm simultaneously removes every internal reverse-oriented
+  bit-exact seam and requires one outer cycle; corner-empty cycle-plus-tail and
+  edge-middle-empty tree fixtures pin repeat/swap, parent mapping, residuals,
+  and one-ULP/ambiguity rejection. The non-cap row retains eight vertices and
+  every six-cell decomposition keeps the exact 6/5, 147/146, and 588/587
+  piece/pair/arc N/N-1 ceilings; the all-six-positive union remains pending.
+  Varying-normal chains against a direct analytic Plane retain exact outer-to-
+  inner metadata, prove every intermediate and final radius finite and positive
+  from the original basis, use the derived sheet only for discovery, preserve
+  certificate budgets, and pin exact 2–5 graph Work/depth with N/N-1 evidence;
+  other peers remain one descriptor and chain depth five or greater remains
+  unsupported. Compatible intersecting
   planar constant-normal dual Offset(NURBS) chains now cover the full 1–4×1–4
   matrix with original-source proof at exact 14,336/1,024/depth-10 certificate
   use and maximum 10 Work/depth-5 graph traversal; the strict-separated

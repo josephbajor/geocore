@@ -1148,9 +1148,10 @@ true only for an empty complete result.
   descriptor over an exact rational quarter-cylinder extrusion and either a
   canonical bilinear planar direct-NURBS peer, direct analytic Plane, or one
   safe Offset(Plane) descriptor over a direct Plane basis normal to the global
-  X, Y, or Z axis. The direct analytic Plane arm alone also accepts exactly two
-  offset descriptors, retains their outer-to-inner signed distances, and
-  proves every intermediate cylinder radius positive. An original-derivative
+  X, Y, or Z axis. The direct analytic Plane arm alone accepts the complete
+  one- through four-descriptor family, retains every outer-to-inner signed
+  distance, and proves every intermediate and final cylinder radius finite and
+  positive. An original-derivative
   interval
   enclosure proves a nonzero normal over the complete positive operand window
   before the true rational parallel surface guides discovery; orientation-
@@ -1162,19 +1163,20 @@ true only for an empty complete result.
   41-control horizontal quarter-circle chordal carrier. Analytic-Plane X/Y
   peers instead pin combined 7,177/7,176 Work and 1,024/1,023 Items; their
   40-span Z-normal peer pins 286,768/286,767 Work and 40,960/40,959 Items. All
-  orientations retain 10/9 certificate Depth and the two-descriptor arm keeps
-  the same certificate Work/Items budgets. Direct one-descriptor peers pin
-  2/1 graph Work; the two-descriptor direct-Plane arm consumes exact graph
-  Work/depth 3 with 3/2 N/N-1 admission; an Offset(Plane) peer pins 4/3 graph
-  Work and 2/1 dependency
+  orientations and chain lengths retain 10/9 certificate Depth and unchanged
+  certificate Work/Items budgets. One through four direct-Plane descriptors
+  consume exact graph Work/depth 2, 3, 4, and 5 with N/N-1 admission; an
+  Offset(Plane) peer pins 4/3 graph Work and 2/1 dependency
   Depth because both live roots traverse their direct bases. The paired trace
   retains the live NURBS root, original basis, peer root and direct Plane basis
-  when present, and both pcurves. The derived rational effective sheet is
-  discovery-only, and persistence rejects an altered two-distance sequence even when its
-  sum is unchanged. Singular or inconclusive normal fields, varying-normal
-  roots of depth three or more, two-descriptor peers other than direct analytic
-  Plane, incompatible peers, and stale or altered sources fail closed and
-  persist nothing.
+  when present, and both pcurves. The original rational-quarter-cylinder basis
+  remains proof authority; the derived rational effective sheet is discovery-
+  only. Swap, persistence, and complete misses cover every admitted chain.
+  Persistence rejects each altered descriptor, including a same-sum mutation,
+  and stale roots or peers atomically. Singular or inconclusive normal fields,
+  descriptor-chain depth five or greater, multi-descriptor planar-NURBS or
+  Offset(Plane) peers, and incompatible sources fail closed and persist
+  nothing.
   Two independent one- through four-descriptor Offset(NURBS) roots now share a
   compatible planar constant-normal unit-chart arm. Intersecting pairs cover
   the complete 4×4 chain matrix, retain both ordered live roots, both transitive
@@ -1190,8 +1192,8 @@ true only for an empty complete result.
   unequal weights,
   collapsed or non-finite sphere-offset fields, positive
   Offset(NURBS)/direct-NURBS chains of five or more offset descriptors,
-  other varying-normal Offset(NURBS) families, varying-normal roots of depth
-  three or more, two-descriptor peers outside direct analytic Plane,
+  other varying-normal Offset(NURBS) families, descriptor-chain depth five or
+  greater, multi-descriptor peers outside direct analytic Plane,
   incompatible, coincident, five-or-more-descriptor, altered, or stale dual
   Offset(NURBS), broader NURBS/NURBS, and
   other procedural pairs remain typed unsupported.
@@ -1292,8 +1294,9 @@ true only for an empty complete result.
   the other four siblings certified empty, or the exact
   full three-child row in either latitude row with all three opposite-row
   siblings certified empty, one exact mixed-axis three-cell L path with the
-  other three siblings certified empty, or any exact four-positive grid path
-  with the other two siblings certified empty. The two reviewed L orientations are
+  other three siblings certified empty, any exact four-positive grid path with
+  the other two siblings certified empty, or exactly five positive cells with
+  the sole other sibling certified empty. The two reviewed L orientations are
   the cap-right `[0,2]`/`[1,1]`/`[1,2]` path and the lower-middle
   `[0,1]`/`[0,2]`/`[1,1]` path.
   The single-child path excludes every
@@ -1322,12 +1325,17 @@ true only for an empty complete result.
   three artificial seams. Its real cap-row-right
   `[0,2]`/`[1,0]`/`[1,1]`/`[1,2]` and zigzag
   `[0,1]`/`[0,2]`/`[1,0]`/`[1,1]` fixtures pin repeat/swap; one-ULP seam
-  mutation, duplicate-edge ambiguity, and a four-cell cycle fail closed. All
-  admitted layouts pin exact repeat/swap and outward residual evidence,
-  while the arm retains exact 6/5 piece, 147/146 pair, and 588/587 arc
-  admission. A one-ULP shared-edge mutation and broader or non-adjacent layouts
-  outside the admitted exact same-row, same-column, full-row, mixed-axis three-
-  cell-path, and four-positive path families remain fail-closed. A first wide
+  mutation, duplicate-edge ambiguity, and a four-cell cycle fail closed. The
+  five-positive arm simultaneously removes all internal reverse-oriented bit-
+  exact seams and requires one unambiguous outer cycle. Its `[0,0]` corner-
+  empty fixture is a 2×2 cycle plus tail; its `[1,1]` edge-middle-empty fixture
+  is a tree. Both pin repeat/swap, restored parent correspondence, outward
+  residuals, and complete seam removal; one-ULP and duplicate-edge ambiguity
+  mutations fail closed. All admitted layouts retain exact 6/5 piece, 147/146
+  pair, and 588/587 arc admission. The all-six-positive union and broader or
+  non-adjacent layouts outside the admitted exact same-row, same-column, full-
+  row, mixed-axis three-cell-path, four-positive-path, and exactly-five-positive
+  families remain fail-closed. A first wide
   arm splits exactly
   one pole-clear wide operand into
   three closed sub-π cells and returns `Complete` only for three certified-empty

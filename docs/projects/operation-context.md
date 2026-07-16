@@ -495,15 +495,18 @@ and Depth 1 for its original-derivative regularity proof before the unchanged
 family certificate charge. One descriptor remains available against the
 landed global-X-, global-Y-, or global-Z-normal planar-NURBS, direct analytic
 Plane, and one-descriptor safe-Offset(Plane) peers. Only the direct analytic
-Plane peer admits exactly two offset descriptors: the operation proves every
-intermediate radius positive, retains the exact distance sequence, and uses
-the derived rational effective sheet for discovery only. The two-descriptor
-arm keeps
+Plane peer admits the complete one- through four-descriptor family: the
+operation proves every intermediate and final radius finite and positive,
+retains the exact outer-to-inner distance sequence, keeps the original basis as
+proof authority, and uses the derived rational effective sheet for discovery
+only. Every chain length keeps
 the existing 7,177/7,176 Work and 1,024/1,023 Items X/Y certificate boundary,
 the 286,768/286,767 Work and 40,960/40,959 Items Z boundary, and 10/9 Depth.
-Graph evaluation consumes exact Work/depth 3 with 3/2 N/N-1 admission. Limit
-denial and same-sum descriptor alteration remain allocation-clean; depth-three
-chains and two-descriptor planar-NURBS or Offset(Plane) peers stay unsupported.
+Graph evaluation consumes exact Work/depth 2, 3, 4, or 5 for one through four
+descriptors with N/N-1 admission. Limit denial plus per-descriptor, same-sum,
+and stale-source mutations remain allocation-clean; descriptor-chain depth
+five or greater and multi-descriptor planar-NURBS or Offset(Plane) peers stay
+unsupported.
 
 The same profile now owns every compatible intersecting planar constant-normal
 dual Offset(NURBS) combination with one through four descriptors on each root.

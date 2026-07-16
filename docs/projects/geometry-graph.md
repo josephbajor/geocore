@@ -1,6 +1,6 @@
 # F1 procedural geometry graph
 
-Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, compatible direct-NURBS/NURBS, one- through four-descriptor constant-normal Offset(NURBS)/NURBS and compatible dual Offset(NURBS), or single-descriptor varying-normal Offset(NURBS) descriptors across the landed planar peers plus exactly-two-descriptor rational-quarter-cylinder Offset(NURBS)/direct analytic Plane descriptors, plus M3c transmitted-chart consumers through single-axis one-period equal-limit closure with one shared or two distinct same-point `H/?` limits and unique exact interior aliases, finite-open/end-terminated `T/F` singular closure, omitted Plane UV recovery, and bounded noncanonical affine direct B-surface/B-surface, direct constant-normal Offset(B-surface)/direct B-surface, or independent direct one-descriptor Offset(B-surface)/Offset(B-surface) charts, are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
+Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, compatible direct-NURBS/NURBS, one- through four-descriptor constant-normal Offset(NURBS)/NURBS and compatible dual Offset(NURBS), or single-descriptor varying-normal Offset(NURBS) descriptors across the landed planar peers plus the complete one- through four-descriptor rational-quarter-cylinder Offset(NURBS)/direct analytic Plane family, plus M3c transmitted-chart consumers through single-axis one-period equal-limit closure with one shared or two distinct same-point `H/?` limits and unique exact interior aliases, finite-open/end-terminated `T/F` singular closure, omitted Plane UV recovery, and bounded noncanonical affine direct B-surface/B-surface, direct constant-normal Offset(B-surface)/direct B-surface, or independent direct one-descriptor Offset(B-surface)/Offset(B-surface) charts, are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
 
 ## Outcome
 
@@ -716,9 +716,9 @@ A first varying-normal arm admits one offset descriptor over an exact rational
 quarter-cylinder extrusion and either a canonical bilinear planar direct-NURBS
 peer, direct analytic Plane, or one safe Offset(Plane) descriptor over a direct
 Plane basis normal to the global X, Y, or Z axis. The direct analytic Plane arm
-alone additionally admits exactly two offset descriptors; graph resolution
-retains their outer-to-inner signed distances and proves every intermediate
-cylinder radius positive. The source derivatives prove
+alone admits the complete one- through four-descriptor family; graph resolution
+retains every outer-to-inner signed distance and proves every intermediate and
+final cylinder radius finite and positive. The source derivatives prove
 a nonzero normal over the complete positive operand window before discovery;
 a true rational parallel surface then guides the march, while orientation-
 selected original control intervals, radially scaled only for X/Y, alone own complete
@@ -733,14 +733,16 @@ boundaries and additionally pins 4/3 graph Work plus 2/1 dependency Depth,
 while its live root, direct basis, and signed distance remain proof identity.
 All Z cases retain a certified 40-span horizontal
 quarter-circle chordal carrier with 41 controls, and every orientation retains
-10/9 certificate Depth. The exactly-two-descriptor direct-Plane arm reuses the
-same certificate budgets and consumes exact graph Work/depth 3 with 3/2 N/N-1
-admission; one-descriptor direct peers pin 2/1 graph Work. Its derived rational
-effective sheet is discovery-only, and persistent validation binds the exact
-descriptor sequence, so same-sum distance alteration is rejected atomically.
-Singular or inconclusive normal fields, varying-normal roots of depth three or
-more, two-descriptor peers outside direct analytic Plane, and incompatible
-direct peers fail closed.
+10/9 certificate Depth. One through four direct-Plane descriptors reuse the
+same certificate budgets and consume exact graph Work/depth 2, 3, 4, and 5 with
+N/N-1 admission. The original rational-quarter-cylinder basis remains proof
+authority; its derived effective sheet is discovery-only. Swap, persistence,
+and complete misses cover every admitted chain length, while exact per-
+descriptor validation rejects altered distances, including a four-descriptor
+same-sum mutation, and stale roots or peers atomically. Singular or
+inconclusive normal fields, descriptor-chain depth five or greater, multi-
+descriptor planar-NURBS or Offset(Plane) peers, and incompatible direct peers
+fail closed.
 Two independent one- through four-descriptor Offset(NURBS) roots now share a
 compatible planar constant-normal unit-chart arm. Intersecting charts retain
 both ordered live roots, both complete transitive basis chains, accumulated
@@ -759,8 +761,8 @@ allocates nothing during empty persistence, and does not promote coincident
 effective sheets.
 Incompatible planar or unaligned peers, unequal ranges or weights, collapsed
 or non-finite sphere-offset fields, Offset(NURBS) chains of five or more
-descriptors, other varying-normal Offset(NURBS) families, varying-normal roots
-of depth three or more, two-descriptor peers outside direct analytic Plane,
+descriptors, other varying-normal Offset(NURBS) families, descriptor-chain
+depth five or greater, multi-descriptor peers outside direct analytic Plane,
 coincident dual Offset(NURBS), and broader NURBS/NURBS or other
 procedural pairs remain unsupported. Altered or stale roots and bases fail the
 original-source proof and roll back atomically.
@@ -1011,12 +1013,14 @@ the graph ownership model.
   all retain 10/9 certificate Depth. Direct one-descriptor peers retain 2/1
   graph Work;
   Offset(Plane) peers retain their live root/basis/distance with 4/3 Work and
-  2/1 dependency Depth. The direct analytic Plane arm alone also covers exactly
-  two offset descriptors with exact outer-to-inner distance metadata,
-  intermediate/final positive-radius proof, unchanged certificate budgets, and
-  exact graph Work/depth 3 with 3/2 N/N-1 admission. Its derived sheet is
-  discovery-only; same-sum descriptor alteration, depth-three chains, broader
-  two-descriptor peers, singular, incompatible, altered, and stale cases fail
+  2/1 dependency Depth. The direct analytic Plane arm alone covers the complete
+  one- through four-descriptor family with exact outer-to-inner distance
+  metadata, finite positive intermediate/final radius proof, unchanged
+  certificate budgets, and exact graph Work/depth 2–5 with N/N-1 admission.
+  The original basis owns proof and its derived sheet is discovery-only; swap,
+  persistence, and complete misses cover every admitted length. Per-descriptor,
+  same-sum, and stale-source mutations, descriptor depth five or greater,
+  broader multi-descriptor peers, singular fields, and incompatible cases fail
   atomically.
 - Compatible intersecting one- through four-descriptor constant-normal
   Offset(NURBS) pairs retain both ordered roots and complete basis chains for
