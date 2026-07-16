@@ -944,6 +944,43 @@ Finite curve/surface range validation and two-axis surface-window fitting now
 share one ordered contract across analytic plane families, NURBS/plane, and the
 general NURBS curve marcher while retaining each solver's public error reason.
 
+The provisional NURBS/plane arm has now separated proof authority from numeric
+guidance. `kcore::predicates::affine_dot3` interval-certifies ordinary
+`normal · (point - origin) + bias` signs and falls back to an exact expansion of
+the six point/origin products plus bias; non-finite input or a fallback outside
+the conservative normal-component/exponent envelope returns `None`. Its
+ordinary approximation bits, exact-zero and cancellation behavior, 20,000-case
+integer oracle, lost-subtraction residue, and cross-platform numeric golden are
+pinned.
+
+Over a finite source parameter range, original homogeneous interval de Boor and
+exact affine signs of the active original controls are the only authorities for
+plane-slab exclusion/containment and the asymmetric affine bands representing
+the finite plane `u`/`v` window. Rounded restriction, Bezier extraction, and
+recursive split controls only choose numeric subdivision and sign-variation
+guidance. Candidate points are re-evaluated on the original source; exact slab
+signs own acceptance and bisection brackets before surface-window fitting and
+residual validation. A `Candidate` range at a leaf, the static depth-72 stop, or
+either static 65,536-node root/window cap emits no certified miss or overlap,
+and the result remains `Indeterminate`.
+
+Overlap ranges require source proof in the plane slab and both window bands.
+Candidate UV boundary cells fail open. Canonical merging fills only actual
+parameter contact: it does not bridge a tolerance-sized gap, and a nested range
+does not replace the longer range's endpoint. Ordinary crossings pin exact
+`t = 0.5` bits and repeat equality. Legacy-failing evidence covers the oblique
+raw-zero false-overlap case together with zero-range rejection and curve/normal
+reversal, a midpoint plane contact erased from both rounded split control nets,
+and a finite-window excursion erased by the same split rounding; the merge
+unit additionally pins touching, nested, and nonzero-gap behavior.
+
+This closes the NURBS/plane sign-authority debt, not the operation-policy or
+completion gate. Root isolation remains incomplete, root and window node/depth
+caps remain static and non-contextual, unresolved UV boundary cells remain
+indeterminate, and affine exact fallback outside the reviewed envelope plus
+general NURBS, generic higher-polynomial, and broader topology-decision audits
+remain open.
+
 ## Rollout stages
 
 ### Stage 0 — Audit and vocabulary lock

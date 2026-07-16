@@ -66,12 +66,12 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 
 | Milestone | Status | What the status means |
 |---|---|---|
-| M0 Foundations | IMPLEMENTED SLICE | Deterministic math, robust exact-fallback `orient2d`/`orient3d`/`incircle`, exact cyclic `polygon_orientation2d` plus its non-copying streaming companion `polygon_orientation2d_iter`, bounded exact `quadratic_discriminant` and shared power-of-two-normalized harmonic half-angle roots, intervals, tolerances, arenas with copy-on-write undo frames, deterministic map primitives, exact-sign consumers in strict first-chart SSI polygon convexity, coincident Plane/Plane monotone-hull construction, oblique-extrusion direction, exact streaming `kgeom` trim cleaning and outer/hole winding, exact paired-chart `kops` polygonal-region winding, exact `ktopo` ordinary-face outer-loop selection, strict exact planar straight-loop checker orientation with containment-derived outer identity, and the first source-preserving solver-error path exist; rounded trim signed area, checker sampled/magnitude areas, and rounded transformed-quadratic signs are not decision authority. `insphere`, an `incircle` production decision consumer when required, generic curved-pcurve signed line integrals and curved or periodic containment, extreme harmonic coefficient spreads, outer amplitude metric policy, NURBS-plane sign certification, generic higher-polynomial roots, other solver-local error migrations, the broader topological-decision audit, and broader conformance debt remain. |
-| M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS evaluation plus exact curve/surface splitting, restriction, Bezier extraction and active-subrange bounds, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
+| M0 Foundations | IMPLEMENTED SLICE | Deterministic math, robust exact-fallback `orient2d`/`orient3d`/`incircle`, exact cyclic `polygon_orientation2d` plus its non-copying streaming companion `polygon_orientation2d_iter`, bounded exact `quadratic_discriminant`, shared power-of-two-normalized harmonic half-angle roots, and interval-first exact `affine_dot3` with a six-product expansion fallback, intervals, tolerances, arenas with copy-on-write undo frames, deterministic map primitives, exact-sign consumers in strict first-chart SSI polygon convexity, coincident Plane/Plane monotone-hull construction, oblique-extrusion direction, exact streaming `kgeom` trim cleaning and outer/hole winding, exact paired-chart `kops` polygonal-region winding, exact `ktopo` ordinary-face outer-loop selection, strict exact planar straight-loop checker orientation with containment-derived outer identity, and the first source-preserving solver-error path exist; rounded trim signed area, checker sampled/magnitude areas, rounded transformed-quadratic signs, and rounded affine point subtraction are not decision authority. `insphere`, an `incircle` production decision consumer when required, generic curved-pcurve signed line integrals and curved or periodic containment, affine/harmonic fallbacks outside their reviewed exponent envelopes, outer amplitude metric policy, general NURBS and higher-polynomial root classification, other solver-local error migrations, the broader topological-decision audit, and broader conformance debt remain. |
+| M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS evaluation plus exact curve/surface splitting, restriction, Bezier extraction and active-subrange bounds, original-homogeneous plane-slab and asymmetric affine-band range classifiers with exact active-original-control fallback, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, topology-internal Euler operators, transaction-owned public Euler edits, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, checked transaction-scoped assembly, and deterministic journals exist; general bodies and several degenerate topology classes remain. |
 | M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance, transaction-owned aggregate budgets, one checked facade batch for operation-owned Face/Edge/Vertex tolerance growth, and descriptive MEF inheritance plus KEF ordered-max face-tolerance journals; shared incidence validation; a complete transaction-owned public Euler surface with position-owning transient MVFS/KVFS, mandatory pcurve creation, hidden-point cleanup, and derived/split/merge/delete lineage; private generic Store mutation; transaction-scoped low-level assembly whose only public persistence path uses deterministic mutation preview, incrementally replaced per-body ownership/shared-geometry dependency footprints, affected-root Fast checks, complete ownership closure, and an opt-in evidence-bearing Full-assurance commit gate; pcurve-driven tessellation; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; reusable validated polygonal planar profiles with strictly contained pairwise-disjoint holes, checked holed-sheet construction, and checked nonzero-normal oblique extrusion; checked X_T reconstruction; explicit face metadata; certified imported domains; adaptive full-active-interval analytic/clamped-NURBS face-domain containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring and strict outer/hole containment proofs; convex-planar, whole sphere/torus, sphere-cap, single-planar-face, and exact polygonal-prism shell embedding proofs; the unchanged seven-row crossed affected-production-solid `primitive_mix` grid and distinct four-row fixed-64 block-cohort ladder retain exact scoped edit evidence, and the four-row production-clean v2 ladder over unchanged `primitive_mix` totals 4/16/64/256 now pins exact ordinary-commit boundary/cardinality evidence: graph validation 1 with 61/228/805/3,204 primary nodes, candidate clone 1 with cloned footprints/body order equal to bodies, zero candidate/body-order refresh, two zero-item affected selections, and zero Fast starts, while equal store/index snapshots and the prior 39 output digests remain unchanged. These counters do not measure elapsed work or every validation subphase. General NURBS/mixed-parameter incidence, periodic/unclamped and unsupported exact/mixed-boundary containment, curved or nested-island profiles, operation-specific tolerance combination/propagation rules beyond the landed MEF/KEF policy and generic batch, curved-loop/general curved-shell proofs, production seam/singularity interchange fixtures, broader higher-operation migration, phase optimization and full-rebuild phase instrumentation, broader heterogeneous production-edit-footprint, and production-assembly performance baselines remain. |
 | M3 X_T | IN PROGRESS | The modern-schema subset reads both wire encodings and writes text, including bounded tolerant edges as trimmed SP-curves over finite 2D B-curves; production coverage and external certification remain. |
-| M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases, explicit `Complete`/`Indeterminate` result evidence, exact NURBS patch subdivision/BVH, analytic implicit-surface exclusion, deterministic recursive candidate covers with structured limits and proof-bearing miss exits, source-range-certified curve-pair exclusion bounds, bounded cell-local curve-pair polishing, several exact-cell interval-certified root/overlap slices, rigid complete-body copy, and the first checked polygonal-profile extrusion exist; general root discovery and boolean-ready paired-pcurve branches do not. |
+| M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases, explicit `Complete`/`Indeterminate` result evidence, exact NURBS patch subdivision/BVH, analytic implicit-surface exclusion, deterministic recursive candidate covers with structured limits and proof-bearing miss exits, source-range-certified curve-pair exclusion bounds, bounded cell-local curve-pair polishing, several exact-cell interval-certified root/overlap slices, and a bounded NURBS/Plane migration whose original source owns slab/window proofs while derived controls are numeric-only exist; its exact-source contacts and overlaps remain `Indeterminate` under static node/depth caps. Rigid complete-body copy and the first checked polygonal-profile extrusion also exist; general root discovery and boolean-ready paired-pcurve branches do not. |
 | M5–M8 | NOT STARTED | No end-to-end booleans, general modeling, blends, stable API, or production hardening. |
 
 The machine-readable companion [kernel-support.tsv](kernel-support.tsv) is the capability
@@ -271,7 +271,31 @@ ordinary public conic results and graph certification; and the cross-profile
 debug/release numeric golden. The normal-range fallback and reversible scaling
 are intentional bounded contracts: extreme coefficient spreads remain
 indeterminate, the outer conic amplitude/containment choice remains a metric
-policy, and generic higher-polynomial and NURBS-plane root signs remain open.
+policy, and generic higher-polynomial root signs remain open.
+
+`affine_dot3(normal, point, origin, bias)` now supplies the shared exact affine
+sign substrate. Outward interval arithmetic first classifies the supplied
+finite dyadic `f64` values directly as
+`normal · point - normal · origin + bias`, while preserving the legacy rounded
+approximation bits on ordinary certified cases. Cancellation builds an exact
+expansion from all six coordinate products
+`normal[i] * point[i]` and `-normal[i] * origin[i]`, then adds the exact bias;
+rounded `point - origin` never becomes decision authority. Non-finite input,
+subnormal/overflowing products or expansion components, and fallback outside
+the conservative exact-product envelope return `None`. The evidence includes
+a 20,000-case `i128` oracle, ordinary-bit and exact-zero checks, raw-zero
+oblique cancellation with threshold and reversal checks, a residue erased by
+rounded subtraction, and the reviewed cross-profile determinism golden
+`0xC253_830A_E2CB_2D65`.
+
+That substrate closes the bounded NURBS/Plane sign migration, but not general
+NURBS root isolation. The source-range classifiers evaluate the original
+homogeneous curve over the requested range and, when interval cancellation is
+inconclusive, use exact affine signs over only the active original Euclidean
+controls. The symmetric plane slab and asymmetric plane-`u`/plane-`v` affine
+bands are therefore source-provenanced; controls produced by restriction,
+Bezier extraction, or splitting are numeric subdivision and sign-variation
+guidance only. Invalid or unavailable proof remains `Candidate`.
 
 The first solver-local F4 identity migration is also landed. Ellipse/ellipse
 closest-point failures retain all five `ProjectionError` variants as
@@ -297,12 +321,13 @@ cannot be flattened back into `kcore::Error`.
   decisions are also migrated. The checker sampled-loop sign and
   magnitude-selected outer decisions are replaced by strict exact planar
   straight-loop signs plus containment-derived outer identity. Bounded
-  harmonic/conic root-count decisions are also migrated. Concrete
+  harmonic/conic root-count decisions and the bounded NURBS/Plane slab,
+  window-band, sampled-contact, and bisection signs are also migrated. Concrete
   remaining targets include generic curved-pcurve signed line integrals and
   curved or periodic containment, the outer conic amplitude metric policy,
-  extreme coefficient spreads outside the exact harmonic normalization
-  envelope, NURBS-plane control-distance and bracketing signs, generic
-  higher-polynomial roots, and other raw classification branches. Continue the
+  affine and harmonic fallbacks outside their reviewed exponent envelopes,
+  general NURBS and higher-polynomial roots, and other raw classification
+  branches. Continue the
   broader topological-decision audit without treating these bounded consumers
   as audit completion.
 - Continue replacing catch-all `InvalidGeometry` mappings with stable categories
@@ -1232,6 +1257,31 @@ true only for an empty complete result.
   parameter-resolution, invalid-objective, and iteration-bound termination.
   Ordered incomplete proof obligations survive canonicalization, swapping,
   generic dispatch, and facade adaptation, and Q4 pins their semantic digest.
+  The bounded clamped NURBS/Plane path now uses the original curve as the only
+  geometric proof authority. Original homogeneous range evaluation plus exact
+  affine signs over the active original Euclidean controls classify the
+  tolerance slab and both asymmetric plane-window affine bands; rounded
+  restricted curves, Bezier extraction, and recursive split controls guide
+  subdivision and numeric sign variation only. Endpoint, leaf, and
+  single-parameter candidates are re-evaluated on the original source and must
+  pass exact `affine_dot3` slab signs plus the shared residual admission.
+  Bisection maintains strict exact source-sample signs and fails open when a
+  sign is unavailable. `Candidate` clipping leaves emit no claimed overlap, and
+  the static depth-72 and node-65,536 root/clipping caps never certify
+  completion: the solver always returns diagnostic `Indeterminate`. Contained
+  overlap ranges merge only for actual interval overlap or bit-exact endpoint
+  contact, so a tolerance-sized gap remains separate while a nested range
+  canonicalizes into its owner. The ordinary crossing pins exact `t = 0.5`
+  and repeat bits. Three legacy-failing fixtures cover an oblique raw dot that
+  rounds to zero and formerly became a false overlap together with zero-range
+  rejection and curve/normal reversal, rounded split controls that lose a real
+  exact midpoint plane contact, and rounded split controls that hide an
+  original-source excursion outside a finite UV window; a private
+  separated/touching/nested merge regression pins exact-contact ownership.
+  Complete root isolation, context-accounted rather than static node/depth
+  limits, proof of unresolved UV-boundary cells, affine fallback outside the
+  reviewed exponent envelope, and broader NURBS/higher-polynomial roots remain
+  open.
   Exact retained regions can now certify unique transverse roots for
   polynomial and positive-weight rational subcurves in arbitrary exact affine
   planes using robust coplanarity, Poincaré–Miranda face signs, and interval

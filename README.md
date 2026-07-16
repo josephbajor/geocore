@@ -116,12 +116,22 @@ application boundary.
   exact positive/zero/negative quadratic cancellation, a `2^52` harmonic
   cancellation, a transformed-sign-mismatch bit pattern, two transverse contacts for
   `cos(t) + 0.991 = 0` despite a `0.01` metric tolerance, `2^±700` scaling,
-  ordinary repeat bits, and the debug/release numeric golden. Remaining
+  ordinary repeat bits, and the debug/release numeric golden.
+  `affine_dot3(normal, point, origin, bias)` now interval-certifies
+  `normal · (point - origin) + bias` without making rounded subtraction a
+  decision authority. Cancellation falls back to an exact expansion sum of the
+  six products `normal[i] * point[i]` and `-normal[i] * origin[i]`, followed by
+  the exact bias; non-finite input or fallback outside the conservative
+  exact-product/expansion envelope returns `None`. Evidence covers a 20,000-case `i128`
+  oracle, ordinary approximation bits, exact zero, raw-zero oblique
+  cancellation, threshold reversal, a subtraction residue lost by rounded
+  `point - origin`, and the reviewed debug/release golden
+  `0xC253_830A_E2CB_2D65`. Remaining
   concrete decision-audit debt includes generic curved-pcurve signed line
   integrals and curved or periodic containment, the outer amplitude metric
-  policy, extreme coefficient spreads outside the exact normalization
-  envelope, NURBS-plane sign certification, generic higher-polynomial roots,
-  and other raw topological sign branches.
+  policy, affine and harmonic fallback outside their reviewed exponent
+  envelopes, general NURBS and higher-polynomial root classification, and other
+  raw topological sign branches.
   `insphere`, an `incircle` production decision consumer when required, the
   broader topological-decision audit, and full conformance remain ahead.
 - M2.5 is in progress and remains the architecture gate. Transaction-owned checked
@@ -164,7 +174,26 @@ application boundary.
 - M4 intersections are useful but provisional. Shared `Complete`/`Indeterminate`
   evidence, source-provenanced adaptive NURBS covers, interval implicit exclusion,
   Work-bounded polishing, exact algebraic seed/overlap certificates, selected paired
-  pcurves, a first exact varying-normal Offset(NURBS) arm with global-X-,
+  pcurves, and a bounded clamped NURBS/Plane sign migration have landed. For
+  NURBS/Plane, homogeneous range evaluation and exact affine signs over the
+  active original Euclidean controls are the only authority for plane-slab
+  sides/containment and asymmetric plane-`u`/plane-`v` window bands. Rounded
+  restricted, Bezier-extracted, and split controls guide subdivision and sign
+  variation only; original-source samples and bisection use `affine_dot3`, and
+  emitted points still pass the shared residual admission. Inconclusive
+  `Candidate` leaves and the static depth-72/node-65,536 root and clipping caps
+  cannot upgrade completion: every result remains diagnostic `Indeterminate`.
+  Overlaps merge only across actual overlap or bit-exact parameter contact, not
+  across a tolerance-sized gap. Evidence pins the ordinary crossing at exact
+  `t = 0.5` with repeat-bit parity, three legacy-failing adversaries—oblique
+  rounded-dot false overlap with zero-range rejection and curve/normal
+  reversal, rounded split controls losing an exact midpoint plane contact, and
+  rounded split controls hiding a plane-window excursion—and separated,
+  touching, and nested overlap-merge behavior.
+  Complete root isolation, contextual rather than static node/depth budgets,
+  proof of unresolved UV-boundary cells, broader NURBS/higher-polynomial roots,
+  and affine fallback outside the reviewed exponent envelope remain open.
+  A first exact varying-normal Offset(NURBS) arm with global-X-,
   global-Y-, and global-Z-normal planar-NURBS, analytic-Plane, or one-descriptor
   safe-Offset(Plane) peers, plus the complete one- through four-descriptor
   rational-quarter-cylinder family against direct global-axis analytic Planes

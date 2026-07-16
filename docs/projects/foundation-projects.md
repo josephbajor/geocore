@@ -167,10 +167,52 @@ transformed-sign mismatch bit pattern, two distinct transverse contacts for
 normalization, repeat parity for ordinary public conic and graph results, and
 the debug/release numeric golden.
 
+Exact affine-dot classification is now a second shared M0 substrate.
+`affine_dot3` first evaluates
+`normal · (point - origin) + bias` with outward interval arithmetic. If that
+filter cannot certify the sign, the fallback expands the six products
+`normal[i] * point[i]` and `-normal[i] * origin[i]` plus the bias without making
+the rounded subtraction authoritative. Every returned sign is exact for the
+supplied finite `f64` dyadics and carries a finite sign-consistent
+approximation; non-finite input, subnormal or overflowing exact components, or
+any fallback outside the conservative exponent envelope returns `None`.
+Evidence includes a 20,000-case integer oracle, ordinary approximation-bit
+preservation, exact zero, raw-zero cancellation and lost-subtraction-residue
+adversaries, sign/bias/reversal checks, failure-envelope checks, and the
+repinned cross-platform determinism golden.
+
+The bounded NURBS/plane bridge now consumes that substrate without granting
+rounded derived controls proof authority. Original homogeneous interval de
+Boor evaluation classifies each original-source parameter range against the
+closed plane slab and the asymmetric affine bands for the plane's finite
+`u`/`v` window. When interval arithmetic is inconclusive at a boundary, exact
+affine signs over the active original Euclidean controls provide the second
+positive-weight convex-hull proof. Invalid or inconclusive queries remain
+`Candidate`. Restricted, Bezier-extracted, and recursively split controls guide
+partitioning and numeric sign variation only; exact source-evaluated slab
+signs own sample acceptance and bisection brackets, followed by the existing
+surface-window fit and residual filter.
+
+The solver still returns provisional `Indeterminate` evidence. A `Candidate`
+range at a parameter leaf, the static depth-72 stop, or either static
+65,536-node root/window cap is not converted into a miss or overlap, and those
+caps are not yet contextual policy. Overlap extents are emitted only for
+source-proven plane and window ranges. Canonicalization merges only ranges with
+actual parameter contact; an unproved tolerance-sized gap remains separate,
+while a nested interval cannot shrink the retained endpoint. Ordinary crossing
+output pins exact `t = 0.5` bits and full repeat equality. Three public
+legacy-failing adversaries cover an oblique raw-zero false overlap with
+zero-range rejection and curve/normal reversal, a source midpoint contact
+erased from both rounded split control nets, and a finite-window excursion
+erased from those split controls. The private merge regression separately pins
+touching, nested, and nonzero-gap behavior.
+
 Concrete next targets include generic curved-pcurve signed line integrals and
 curved or periodic containment, extreme coefficient spreads outside the
 harmonic normalization/expansion envelope, the outer conic amplitude metric
-policy, NURBS-plane control-distance and bracketing sign certification, generic
+policy, affine-dot fallbacks outside the reviewed expansion envelope, complete
+NURBS/plane root isolation, contextual replacement of its static node/depth
+caps, proof-bearing finite-window boundary cells, general NURBS and generic
 higher-polynomial roots, and other raw topology-changing sign branches.
 `incircle` remains without a production topology decision consumer, and
 `insphere` remains deferred until a 3D Delaunay or equivalent consumer exists.
@@ -1235,7 +1277,7 @@ composition remain.
 **Purpose:** keep analytic special cases while preventing quadratic dispatch and
 helper duplication from becoming the architecture.
 
-**Implemented root-classification slice:** analytic conic/plane and
+**Implemented root- and affine-classification slice:** analytic conic/plane and
 conic/primitive-surface paths plus the graph spherical-pcurve seam certifier now
 share `kcore::predicates::harmonic_half_angle_roots`. Exact root count comes from
 the original harmonic identity, projective infinity is explicit, ordinary root
@@ -1244,6 +1286,19 @@ Unrepresentable bounded cases retain incomplete evidence through `kops`
 `Indeterminate` or the graph's typed `HarmonicRootClassification` error rather
 than being flattened into a miss. This removes the duplicated tolerance-based
 quadratic root-count helpers without claiming generic polynomial isolation.
+
+`kcore::predicates::affine_dot3` now supplies exact affine side signs through an
+outward interval filter and a six-product exact expansion fallback with a
+conservative `None` envelope. The NURBS/plane curve/surface bridge uses
+original-source homogeneous plane-slab and asymmetric `u`/`v` affine-band
+classifiers, with exact active original controls as the boundary fallback.
+Derived restricted, Bezier, and split controls are numeric partition and
+sign-variation guidance only. Exact source samples own candidate and bisection
+signs; source-proven bands own overlap extents; only exact parameter contact
+can merge overlaps. Candidate leaves and the still-static depth-72 and
+65,536-node caps preserve `Indeterminate`, so this closes the named NURBS/plane
+sign-authority debt without claiming complete root isolation, contextual limit
+ownership, or proof-bearing finite-window boundary cells.
 
 **Scope:** introduce stable geometry-class inspection, centralized pair
 normalization/swapping, shared range and periodic-parameter utilities, shared
