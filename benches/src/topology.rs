@@ -58,12 +58,16 @@ pub struct TopologyCase {
     pub affected_bodies: usize,
     /// Reviewed digest of affected bodies encoded as store ordinals.
     pub expected_affected_digest: u64,
+    /// Reviewed semantic store digest before an affected-solid edit, or zero.
+    pub expected_before_store_digest: u64,
+    /// Reviewed semantic store digest after an affected-solid edit, or zero.
+    pub expected_after_store_digest: u64,
     /// Reviewed digest of complete semantic result evidence.
     pub expected_output_digest: u64,
 }
 
-/// Exactly the 32 Q2 cases specified by the quality contract.
-pub const CASES: [TopologyCase; 32] = [
+/// Exactly the 35 Q2 cases specified by the quality contract.
+pub const CASES: [TopologyCase; 35] = [
     case(
         "topology/checked-commit/isolated-acorns-v1/1/clean-v1",
         Ladder::Clean,
@@ -219,27 +223,66 @@ pub const CASES: [TopologyCase; 32] = [
         0xecc4_d042_f79f_8a7a,
     ),
     affected_solid_case(
-        "topology/affected-solid-footprint/primitive-mix-v1/total-64/affected-1-v1",
+        "topology/affected-solid-footprint/primitive-mix-v1/total-4/affected-1-v1",
+        4,
         1,
         0x0300_00b9_a2c2_19c6,
+        0x94a7_8b9a_2c4e_e0b3,
+        0x4c0e_9e1e_bb7f_c5b0,
+        0x500a_aa06_4584_bd77,
+    ),
+    affected_solid_case(
+        "topology/affected-solid-footprint/primitive-mix-v1/total-16/affected-1-v1",
+        16,
+        1,
+        0x0300_00b9_a2c2_19c6,
+        0x5fc1_edc7_4231_81f4,
+        0x749d_d9b2_6445_a1d1,
+        0x8bb3_c70c_4457_d9d8,
+    ),
+    affected_solid_case(
+        "topology/affected-solid-footprint/primitive-mix-v1/total-64/affected-1-v1",
+        64,
+        1,
+        0x0300_00b9_a2c2_19c6,
+        0x4bbf_07cb_a16f_69f6,
+        0x4a1b_2ee5_e725_2b29,
         0x01e4_b75d_9cef_4bd4,
     ),
     affected_solid_case(
+        "topology/affected-solid-footprint/primitive-mix-v1/total-256/affected-1-v1",
+        256,
+        1,
+        0x0300_00b9_a2c2_19c6,
+        0x55b8_ac42_b1da_1110,
+        0xcc8f_a6e2_35df_51b9,
+        0x8273_88cd_a355_f89a,
+    ),
+    affected_solid_case(
         "topology/affected-solid-footprint/primitive-mix-v1/total-64/affected-4-v1",
+        64,
         4,
         0xd8de_f909_5c13_1d26,
+        0x4bbf_07cb_a16f_69f6,
+        0x0564_f99e_7777_2452,
         0x4a2a_2291_e64f_7ff5,
     ),
     affected_solid_case(
         "topology/affected-solid-footprint/primitive-mix-v1/total-64/affected-16-v1",
+        64,
         16,
         0x121b_7067_4cb3_6c32,
+        0x4bbf_07cb_a16f_69f6,
+        0x4e0f_0626_fb12_df52,
         0xc115_dc5c_8f14_48b7,
     ),
     affected_solid_case(
         "topology/affected-solid-footprint/primitive-mix-v1/total-64/affected-64-v1",
         64,
+        64,
         0xac06_c657_a252_9702,
+        0x4bbf_07cb_a16f_69f6,
+        0x0076_7ca8_95fc_280a,
         0x18e3_f6db_49e4_dce0,
     ),
 ];
@@ -288,22 +331,29 @@ const fn case(path: &'static str, ladder: Ladder, bodies: usize) -> TopologyCase
             Ladder::Cohort | Ladder::AffectedSolidFootprint => 0,
         },
         expected_affected_digest,
+        expected_before_store_digest: 0,
+        expected_after_store_digest: 0,
         expected_output_digest,
     }
 }
 
 const fn affected_solid_case(
     path: &'static str,
+    bodies: usize,
     affected_bodies: usize,
     expected_affected_digest: u64,
+    expected_before_store_digest: u64,
+    expected_after_store_digest: u64,
     expected_output_digest: u64,
 ) -> TopologyCase {
     TopologyCase {
         path,
         ladder: Ladder::AffectedSolidFootprint,
-        bodies: 64,
+        bodies,
         affected_bodies,
         expected_affected_digest,
+        expected_before_store_digest,
+        expected_after_store_digest,
         expected_output_digest,
     }
 }
@@ -321,6 +371,8 @@ const fn cohort_case(
         bodies,
         affected_bodies,
         expected_affected_digest,
+        expected_before_store_digest: 0,
+        expected_after_store_digest: 0,
         expected_output_digest,
     }
 }
@@ -445,11 +497,16 @@ impl TopologyFixture {
         }
     }
 
-    /// Build 64 production solids and select one deterministic face per
-    /// affected root without changing the ordinary primitive construction.
-    pub fn primitive_mix_affected_solid_footprint(affected_bodies: usize) -> Self {
+    /// Build a reviewed production-solid total and select one deterministic
+    /// face per affected root without changing ordinary primitive construction.
+    pub fn primitive_mix_affected_solid_footprint(
+        body_count: usize,
+        affected_bodies: usize,
+    ) -> Self {
+        assert!(matches!(body_count, 4 | 16 | 64 | 256));
         assert!(matches!(affected_bodies, 1 | 4 | 16 | 64));
-        let mut fixture = Self::primitive_mix(64);
+        assert!(affected_bodies <= body_count);
+        let mut fixture = Self::primitive_mix(body_count);
         fixture.affected_faces = fixture
             .bodies
             .iter()
@@ -787,9 +844,10 @@ pub fn fixture(case: TopologyCase) -> TopologyFixture {
         Ladder::Cohort => {
             TopologyFixture::mixed_store_shared_point_cohort(case.bodies, case.affected_bodies)
         }
-        Ladder::AffectedSolidFootprint => {
-            TopologyFixture::primitive_mix_affected_solid_footprint(case.affected_bodies)
-        }
+        Ladder::AffectedSolidFootprint => TopologyFixture::primitive_mix_affected_solid_footprint(
+            case.bodies,
+            case.affected_bodies,
+        ),
         Ladder::FullRebuild => TopologyFixture::primitive_mix(case.bodies),
         _ => TopologyFixture::isolated_acorns(case.bodies),
     }
@@ -812,6 +870,15 @@ pub fn verify(case: TopologyCase, result: &TopologyResult) {
         result.observation.affected_order_digest,
         case.expected_affected_digest
     );
+    if case.ladder == Ladder::AffectedSolidFootprint {
+        assert_ne!(case.expected_before_store_digest, 0);
+        assert_ne!(case.expected_after_store_digest, 0);
+        assert_eq!(
+            result.before_store.digest,
+            case.expected_before_store_digest
+        );
+        assert_eq!(result.after_store.digest, case.expected_after_store_digest);
+    }
     assert_ne!(case.expected_output_digest, 0);
     assert_eq!(result.output_digest(), case.expected_output_digest);
     assert_eq!(result.rejected, case.ladder == Ladder::Rejected);
@@ -877,8 +944,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn registry_contains_exactly_32_unique_canonical_cases() {
-        assert_eq!(CASES.len(), 32);
+    fn registry_contains_exactly_35_unique_canonical_cases() {
+        assert_eq!(CASES.len(), 35);
         let unique: BTreeSet<_> = CASES.iter().map(|case| case.path).collect();
         assert_eq!(unique.len(), CASES.len());
         for case in CASES {
@@ -889,7 +956,7 @@ mod tests {
             include_str!("../cases.json")
                 .matches("\"benchmark_target\": \"topology_commit\"")
                 .count(),
-            32
+            35
         );
     }
 
@@ -938,6 +1005,10 @@ mod tests {
                 );
                 assert_eq!(entry["policy_values"]["checked_commit"], "ordinary");
                 assert_eq!(
+                    entry["policy_values"]["operation_scope"],
+                    "single-ordinary-checked-commit"
+                );
+                assert_eq!(
                     entry["policy_values"]["mutation"],
                     "operation-owned-face-tolerance-growth"
                 );
@@ -945,8 +1016,19 @@ mod tests {
                     entry["policy_values"]["target_order"],
                     "first-body-first-face"
                 );
+                assert_eq!(
+                    entry["expected_result_counters"]["before_store_digest"].as_str(),
+                    Some(format!("{:016x}", case.expected_before_store_digest).as_str())
+                );
+                assert_eq!(
+                    entry["expected_result_counters"]["after_store_digest"].as_str(),
+                    Some(format!("{:016x}", case.expected_after_store_digest).as_str())
+                );
             }
             let counters = &entry["expected_result_counters"];
+            if case.ladder == Ladder::AffectedSolidFootprint {
+                assert_eq!(counters["operation_scopes"].as_u64(), Some(1));
+            }
             assert_eq!(counters["body_count"].as_u64(), Some(case.bodies as u64));
             assert_eq!(
                 counters["affected_bodies"].as_u64(),
@@ -1023,22 +1105,53 @@ mod tests {
     }
 
     #[test]
-    fn affected_solid_footprint_matrix_pins_scope_mutations_and_digests() {
+    fn affected_solid_footprint_crossed_ladders_pin_scope_mutations_and_digests() {
         let cases = CASES
             .iter()
             .copied()
             .filter(|case| case.ladder == Ladder::AffectedSolidFootprint)
             .collect::<Vec<_>>();
+        assert_eq!(cases.len(), 7);
         assert_eq!(
             cases
                 .iter()
+                .filter(|case| case.bodies == 64)
                 .map(|case| case.affected_bodies)
                 .collect::<BTreeSet<_>>(),
             BTreeSet::from([1, 4, 16, 64])
         );
+        let fixed_affected = cases
+            .iter()
+            .filter(|case| case.affected_bodies == 1)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fixed_affected
+                .iter()
+                .map(|case| case.bodies)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([4, 16, 64, 256])
+        );
+        assert_eq!(
+            fixed_affected
+                .iter()
+                .map(|case| case.expected_affected_digest)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([0x0300_00b9_a2c2_19c6])
+        );
         for case in cases {
             let result = fixture(case).execute(case.ladder);
             verify(case, &result);
+            let repeat = fixture(case).execute(case.ladder);
+            verify(case, &repeat);
+            assert_eq!(repeat.before_store.digest, result.before_store.digest);
+            assert_eq!(repeat.after_store.digest, result.after_store.digest);
+            assert_eq!(repeat.output_digest(), result.output_digest());
+            if case.affected_bodies == 1 {
+                assert_eq!(result.observation.affected_bodies, 1);
+                assert_eq!(result.observation.refreshed_bodies, 1);
+                assert_eq!(result.observation.checked_bodies, 1);
+                assert_eq!(result.observation.mutations, 1);
+            }
         }
     }
 

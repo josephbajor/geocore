@@ -742,6 +742,78 @@
       }
     },
     {
+      "path": "topology/affected-solid-footprint/primitive-mix-v1/total-4/affected-1-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit-affected-solid-footprint.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 4,
+        "bodies": 4,
+        "affected_bodies": 1
+      },
+      "tolerances": {
+        "requested_face_tolerance": 2e-8,
+        "aggregate_growth_budget": 1e-8
+      },
+      "policy_values": {
+        "ladder": "affected-solid-footprint",
+        "checked_commit": "ordinary",
+        "operation_scope": "single-ordinary-checked-commit",
+        "mutation": "operation-owned-face-tolerance-growth",
+        "target_order": "first-body-first-face",
+        "scope_oracle": "affected-refreshed-checked"
+      },
+      "expected_result_counters": {
+        "body_count": 4,
+        "operation_scopes": 1,
+        "affected_bodies": 1,
+        "refreshed_bodies": 1,
+        "checked_bodies": 1,
+        "mutations": 1,
+        "committed": true,
+        "affected_order_digest": "030000b9a2c219c6",
+        "before_store_digest": "94a78b9a2c4ee0b3",
+        "after_store_digest": "4c0e9e1ebb7fc5b0",
+        "output_digest": "500aaa064584bd77"
+      }
+    },
+    {
+      "path": "topology/affected-solid-footprint/primitive-mix-v1/total-16/affected-1-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit-affected-solid-footprint.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 16,
+        "bodies": 16,
+        "affected_bodies": 1
+      },
+      "tolerances": {
+        "requested_face_tolerance": 2e-8,
+        "aggregate_growth_budget": 1e-8
+      },
+      "policy_values": {
+        "ladder": "affected-solid-footprint",
+        "checked_commit": "ordinary",
+        "operation_scope": "single-ordinary-checked-commit",
+        "mutation": "operation-owned-face-tolerance-growth",
+        "target_order": "first-body-first-face",
+        "scope_oracle": "affected-refreshed-checked"
+      },
+      "expected_result_counters": {
+        "body_count": 16,
+        "operation_scopes": 1,
+        "affected_bodies": 1,
+        "refreshed_bodies": 1,
+        "checked_bodies": 1,
+        "mutations": 1,
+        "committed": true,
+        "affected_order_digest": "030000b9a2c219c6",
+        "before_store_digest": "5fc1edc7423181f4",
+        "after_store_digest": "749dd9b26445a1d1",
+        "output_digest": "8bb3c70c4457d9d8"
+      }
+    },
+    {
       "path": "topology/affected-solid-footprint/primitive-mix-v1/total-64/affected-1-v1",
       "benchmark_target": "topology_commit",
       "fixture_version": "topology-commit-affected-solid-footprint.v1",
@@ -758,19 +830,59 @@
       "policy_values": {
         "ladder": "affected-solid-footprint",
         "checked_commit": "ordinary",
+        "operation_scope": "single-ordinary-checked-commit",
         "mutation": "operation-owned-face-tolerance-growth",
         "target_order": "first-body-first-face",
         "scope_oracle": "affected-refreshed-checked"
       },
       "expected_result_counters": {
         "body_count": 64,
+        "operation_scopes": 1,
         "affected_bodies": 1,
         "refreshed_bodies": 1,
         "checked_bodies": 1,
         "mutations": 1,
         "committed": true,
         "affected_order_digest": "030000b9a2c219c6",
+        "before_store_digest": "4bbf07cba16f69f6",
+        "after_store_digest": "4a1b2ee5e7252b29",
         "output_digest": "01e4b75d9cef4bd4"
+      }
+    },
+    {
+      "path": "topology/affected-solid-footprint/primitive-mix-v1/total-256/affected-1-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit-affected-solid-footprint.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 256,
+        "bodies": 256,
+        "affected_bodies": 1
+      },
+      "tolerances": {
+        "requested_face_tolerance": 2e-8,
+        "aggregate_growth_budget": 1e-8
+      },
+      "policy_values": {
+        "ladder": "affected-solid-footprint",
+        "checked_commit": "ordinary",
+        "operation_scope": "single-ordinary-checked-commit",
+        "mutation": "operation-owned-face-tolerance-growth",
+        "target_order": "first-body-first-face",
+        "scope_oracle": "affected-refreshed-checked"
+      },
+      "expected_result_counters": {
+        "body_count": 256,
+        "operation_scopes": 1,
+        "affected_bodies": 1,
+        "refreshed_bodies": 1,
+        "checked_bodies": 1,
+        "mutations": 1,
+        "committed": true,
+        "affected_order_digest": "030000b9a2c219c6",
+        "before_store_digest": "55b8ac42b1da1110",
+        "after_store_digest": "cc8fa6e235df51b9",
+        "output_digest": "827388cda355f89a"
       }
     },
     {
@@ -790,18 +902,22 @@
       "policy_values": {
         "ladder": "affected-solid-footprint",
         "checked_commit": "ordinary",
+        "operation_scope": "single-ordinary-checked-commit",
         "mutation": "operation-owned-face-tolerance-growth",
         "target_order": "first-body-first-face",
         "scope_oracle": "affected-refreshed-checked"
       },
       "expected_result_counters": {
         "body_count": 64,
+        "operation_scopes": 1,
         "affected_bodies": 4,
         "refreshed_bodies": 4,
         "checked_bodies": 4,
         "mutations": 4,
         "committed": true,
         "affected_order_digest": "d8def9095c131d26",
+        "before_store_digest": "4bbf07cba16f69f6",
+        "after_store_digest": "0564f99e77772452",
         "output_digest": "4a2a2291e64f7ff5"
       }
     },
@@ -822,18 +938,22 @@
       "policy_values": {
         "ladder": "affected-solid-footprint",
         "checked_commit": "ordinary",
+        "operation_scope": "single-ordinary-checked-commit",
         "mutation": "operation-owned-face-tolerance-growth",
         "target_order": "first-body-first-face",
         "scope_oracle": "affected-refreshed-checked"
       },
       "expected_result_counters": {
         "body_count": 64,
+        "operation_scopes": 1,
         "affected_bodies": 16,
         "refreshed_bodies": 16,
         "checked_bodies": 16,
         "mutations": 16,
         "committed": true,
         "affected_order_digest": "121b70674cb36c32",
+        "before_store_digest": "4bbf07cba16f69f6",
+        "after_store_digest": "4e0f0626fb12df52",
         "output_digest": "c115dc5c8f1448b7"
       }
     },
@@ -854,18 +974,22 @@
       "policy_values": {
         "ladder": "affected-solid-footprint",
         "checked_commit": "ordinary",
+        "operation_scope": "single-ordinary-checked-commit",
         "mutation": "operation-owned-face-tolerance-growth",
         "target_order": "first-body-first-face",
         "scope_oracle": "affected-refreshed-checked"
       },
       "expected_result_counters": {
         "body_count": 64,
+        "operation_scopes": 1,
         "affected_bodies": 64,
         "refreshed_bodies": 64,
         "checked_bodies": 64,
         "mutations": 64,
         "committed": true,
         "affected_order_digest": "ac06c657a2529702",
+        "before_store_digest": "4bbf07cba16f69f6",
+        "after_store_digest": "00767ca895fc280a",
         "output_digest": "18e3f6db49e4dce0"
       }
     },

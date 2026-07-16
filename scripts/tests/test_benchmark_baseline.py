@@ -29,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 167)
+        self.assertEqual(len(cases), 170)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -38,7 +38,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
         topology = [
             case for case in cases if case["benchmark_target"] == "topology_commit"
         ]
-        self.assertEqual(len(topology), 32)
+        self.assertEqual(len(topology), 35)
         self.assertTrue(
             all(case["deterministic_seed"] == 0x51544F504F000002 for case in topology)
         )
@@ -97,23 +97,56 @@ class BenchmarkBaselineTests(unittest.TestCase):
             for case in topology
             if case["policy_values"]["ladder"] == "affected-solid-footprint"
         ]
-        self.assertEqual(len(affected_solids), 4)
+        self.assertEqual(len(affected_solids), 7)
         self.assertEqual(
-            {case["size_parameters"]["affected_bodies"] for case in affected_solids},
+            {
+                case["size_parameters"]["affected_bodies"]
+                for case in affected_solids
+                if case["size_parameters"]["bodies"] == 64
+            },
             {1, 4, 16, 64},
+        )
+        fixed_affected_solids = [
+            case
+            for case in affected_solids
+            if case["size_parameters"]["affected_bodies"] == 1
+        ]
+        self.assertEqual(
+            {case["size_parameters"]["bodies"] for case in fixed_affected_solids},
+            {4, 16, 64, 256},
         )
         self.assertTrue(
             all(
-                case["size_parameters"]["bodies"] == 64
-                and case["expected_result_counters"]["affected_bodies"]
+                case["expected_result_counters"]["affected_bodies"]
                 == case["expected_result_counters"]["refreshed_bodies"]
                 == case["expected_result_counters"]["checked_bodies"]
                 == case["expected_result_counters"]["mutations"]
                 == case["size_parameters"]["affected_bodies"]
                 and case["policy_values"]["checked_commit"] == "ordinary"
+                and case["policy_values"]["operation_scope"]
+                == "single-ordinary-checked-commit"
                 and case["policy_values"]["mutation"]
                 == "operation-owned-face-tolerance-growth"
+                and case["expected_result_counters"]["operation_scopes"] == 1
+                and len(case["expected_result_counters"]["before_store_digest"])
+                == 16
+                and len(case["expected_result_counters"]["after_store_digest"])
+                == 16
                 for case in affected_solids
+            )
+        )
+        self.assertTrue(
+            all(
+                case["tolerances"]["requested_face_tolerance"] == 2e-8
+                and case["tolerances"]["aggregate_growth_budget"] == 1e-8
+                and case["expected_result_counters"]["affected_bodies"]
+                == case["expected_result_counters"]["refreshed_bodies"]
+                == case["expected_result_counters"]["checked_bodies"]
+                == case["expected_result_counters"]["mutations"]
+                == 1
+                and case["expected_result_counters"]["affected_order_digest"]
+                == "030000b9a2c219c6"
+                for case in fixed_affected_solids
             )
         )
         graph_build = [
