@@ -49,10 +49,17 @@ application boundary.
   alpha slices. Strict first-chart SSI polygon convexity is the first audited
   exact decision consumer: it accepts only at least three finite vertices with
   `orient2d(...) == Orientation::Positive` at every turn, so exact collinear
-  and all other nonpositive turns fail closed. `insphere`, oblique-extrusion
-  and polygon-shoelace sign migrations, the broader topological-decision audit,
-  and full conformance remain ahead; this is not a general polygon-orientation
-  primitive.
+  and all other nonpositive turns fail closed. Oblique profile extrusion is the
+  next migrated consumer: `extrude_profile_along_in` classifies the stored-frame
+  `(x, y, translation)` scalar triple with exact `orient3d`, rejects exact
+  coplanarity before allocation, and reflects the chart for a negative result.
+  Its integer-source adversary has normal dot `+3` while the former normalized
+  `translation.dot(frame.z())` rounds to zero; both directions now construct
+  deterministically, while ordinary oblique extrusion remains Full-valid.
+  `insphere`, remaining polygon-shoelace sign consumers in `kops` and `ktopo`,
+  the separately tracked `kgeom` migration, the broader topological-decision
+  audit, and full conformance remain ahead; this is not a general
+  polygon-orientation primitive.
 - M2.5 is in progress and remains the architecture gate. Transaction-owned checked
   topology, pcurve-aware Euler edits, deterministic journals, tolerance provenance,
   bounded operation contexts, `Fast`/`Full` checking, adaptive face-domain proofs, and

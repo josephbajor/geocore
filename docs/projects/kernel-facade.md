@@ -1009,11 +1009,16 @@ construction and Full validity without importing a lower-layer crate.
 
 `PartEdit::extrude_profile_along` preserves that boundary while admitting a
 finite tangential translation component and either nonzero frame-normal sign.
-The reverse path reflects the profile chart and reference normal together
-before using the same certified builder, so model-space points and translation
-stay unchanged while cap/fin orientation remains canonical. Actual cap and side
-frames own the sheared pcurves and domains, and the same exact Full prism proof
-remains authoritative.
+The lower builder classifies the exact stored-frame `(x, y, translation)`
+scalar triple with `orient3d`, preserving the ordinary positive/negative
+convention. Exact coplanarity rejects before allocation; the negative path
+reflects the profile chart and reference normal together before using the same
+certified builder, so model-space points and translation stay unchanged while
+cap/fin orientation remains canonical. The integer-source sign adversary has
+normal dot `+3` where the former normalized dot rounds to zero, and both
+directions produce deterministic closed topology; ordinary oblique fixtures
+remain Full-valid. Actual cap and side frames own the sheared pcurves and
+domains, and the same exact Full prism proof remains authoritative.
 
 Broader semantic edit surfaces resume after the K5 adoption pass. The
 interchange facade stays thin: `kxt` reconstruction and checked-commit Fast

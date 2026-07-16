@@ -54,9 +54,16 @@ or otherwise nonpositive turns fail closed. The public consolidation fixture
 uses integer coordinates near `2^52` whose first exact determinant is `+1`
 while the former floating cross product rounds to zero, then proves identical
 canonical output for repetition, rotation, and reversal. This does not expose
-or claim a general polygon-orientation primitive. The broader audit remains
-open, with oblique-extrusion direction and polygon-shoelace orientation signs
-still explicit debt.
+or claim a general polygon-orientation primitive. Oblique-profile extrusion is
+the next bounded migration: `extrude_profile_along_in` classifies the exact
+stored-frame `(x, y, translation)` scalar triple with `orient3d`, rejects exact
+coplanarity before allocation, and reflects the profile chart and normal for a
+negative sign. Its integer-source normal dot is `+3` where the former normalized
+`translation.dot(frame.z())` rounds to zero; both directions construct
+deterministically and ordinary oblique fixtures remain Full-valid. The broader
+audit remains open, with remaining polygon-shoelace orientation signs in
+`kops` and `ktopo` still explicit debt while the `kgeom` migration proceeds
+separately.
 
 ## Current direction and handoff order
 
@@ -158,8 +165,14 @@ consumer is also complete: one validated polygonal profile with holes extrudes
 along any finite translation with a
 nonzero profile-normal component into exact planar caps and side
 parallelograms with shared perimeter/sweep edges and per-fin pcurves in the
-actual face frames. The builder commits atomically, the typed facade returns
-opaque body/journal values, Full checking is `Valid`, and the oblique holed
+actual face frames. Its direction gate uses exact `orient3d` over the stored
+frame `x`, `y`, and translation vectors, rejects an exact zero before
+allocation, and reflects the chart for the negative direction while preserving
+the ordinary sign convention. The exact adversary's integer-source normal dot
+is `+3` while the old normalized dot rounds to zero; either direction produces
+the same deterministic closed-topology contract. The builder commits
+atomically, the typed facade returns opaque body/journal values, Full checking
+is `Valid`, and the oblique holed
 fixture is watertight with signed volume 24 within `1e-9`; reverse translations
 use a reflected equivalent profile chart without changing model-space geometry.
 Curved profiles, zero-normal degenerate sweeps, revolve, and external X_T validation remain.
@@ -870,7 +883,12 @@ remain ratcheted in `docs/oracle-results.tsv`.
    extrudes that same polygon-with-holes profile along any finite translation
    with a nonzero frame-normal component, with exact planar caps, one planar
    parallelogram per boundary segment, shared perimeter/sweep edges, and line
-   pcurves on every use in the actual face frames. A builder-owned affine-prism
+   pcurves on every use in the actual face frames. The exact stored-frame
+   `(x, y, translation)` scalar-triple sign controls direction: exact zero
+   rejects allocation-cleanly, and a negative sign takes the reflected branch.
+   An integer-source normal dot of `+3` that the former normalized dot rounded
+   to zero now constructs in both directions with deterministic closed
+   topology. A builder-owned affine-prism
    proof makes Full checking `Valid`; the oblique holed fixture is watertight
    with signed volume 24 within `1e-9`, failed translations are allocation-clean,
    and the typed facade returns only opaque body and journal values. Reverse

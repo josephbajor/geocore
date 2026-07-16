@@ -66,7 +66,7 @@ that cannot carry pcurves, tolerances, completion evidence, and journals.
 
 | Milestone | Status | What the status means |
 |---|---|---|
-| M0 Foundations | IMPLEMENTED SLICE | Deterministic math, robust exact-fallback `orient2d`/`orient3d`/`incircle`, intervals, tolerances, arenas with copy-on-write undo frames, deterministic map primitives, the first exact-sign decision consumer in strict first-chart SSI polygon convexity, and the first source-preserving solver-error path exist; `insphere`, oblique-extrusion and polygon-shoelace sign migrations, other solver-local error migrations, and broader conformance debt remain. |
+| M0 Foundations | IMPLEMENTED SLICE | Deterministic math, robust exact-fallback `orient2d`/`orient3d`/`incircle`, intervals, tolerances, arenas with copy-on-write undo frames, deterministic map primitives, exact-sign consumers in strict first-chart SSI polygon convexity and oblique-extrusion direction, and the first source-preserving solver-error path exist; `insphere`, remaining `kops`/`ktopo` polygon-shoelace sign migrations, the separately tracked `kgeom` migration, other solver-local error migrations, and broader conformance debt remain. |
 | M1 Geometry | IMPLEMENTED SLICE | Analytic geometry, clamped NURBS evaluation plus exact curve/surface splitting, restriction, Bezier extraction and active-subrange bounds, projection, and tessellation exist; periodic/procedural and several full NURBS capabilities remain. |
 | M2 Topology | IMPLEMENTED SLICE | Core hierarchy, topology-internal Euler operators, transaction-owned public Euler edits, primitives, the structural/sampled Fast checker, checker-v2 Full reporting, watertight body tessellation, checked transaction-scoped assembly, and deterministic journals exist; general bodies and several degenerate topology classes remain. |
 | M2.5 Architecture gate | IN PROGRESS / REQUIRED | Per-fin pcurves with integer-period chart shifts, paired seam-edge roles, closed-use winding, and singular endpoint markers; bounded curve-less tolerant edges; typed entity-tolerance origin/growth provenance, transaction-owned aggregate budgets, one checked facade batch for operation-owned Face/Edge/Vertex tolerance growth, and descriptive MEF inheritance plus KEF ordered-max face-tolerance journals; shared incidence validation; a complete transaction-owned public Euler surface with position-owning transient MVFS/KVFS, mandatory pcurve creation, hidden-point cleanup, and derived/split/merge/delete lineage; private generic Store mutation; transaction-scoped low-level assembly whose only public persistence path uses deterministic mutation preview, incrementally replaced per-body ownership/shared-geometry dependency footprints, affected-root Fast checks, complete ownership closure, and an opt-in evidence-bearing Full-assurance commit gate; pcurve-driven tessellation; deterministic mutation/lineage/tolerance journals; failure-atomic journaled solid/sheet/wire/acorn constructors; reusable validated polygonal planar profiles with strictly contained pairwise-disjoint holes, checked holed-sheet construction, and checked nonzero-normal oblique extrusion; checked X_T reconstruction; explicit face metadata; certified imported domains; adaptive full-active-interval analytic/clamped-NURBS face-domain containment; explicit `Fast`/`Full` checker reports with `Valid`/`Invalid`/`Indeterminate` outcomes; whole-interval affine/harmonic incidence certificates; robust planar-segment/simple-ring and strict outer/hole containment proofs; convex-planar, whole sphere/torus, sphere-cap, single-planar-face, and exact polygonal-prism shell embedding proofs; and both the unchanged seven-row crossed affected-production-solid `primitive_mix` grid and the distinct four-row fixed-64 block-cohort ladder have landed; the latter selects body ordinals divisible by five at 1/4/8/13 affected blocks and pins exact Face-to-Edge-to-Vertex mutation, `3N`-event budget, scoped-counter, digest, installed-index, and repeat evidence. General NURBS/mixed-parameter incidence, periodic/unclamped and unsupported exact/mixed-boundary containment, curved or nested-island profiles, operation-specific tolerance combination/propagation rules beyond the landed MEF/KEF policy and generic batch, curved-loop/general curved-shell proofs, production seam/singularity interchange fixtures, broader higher-operation migration, and remaining global ordinary-commit, broader heterogeneous production-edit-footprint, and production-assembly performance baselines remain. |
@@ -138,6 +138,17 @@ approximately `2^52`, where the previous rounded cross product became zero,
 and pins repeat, rotation, and reversal canonicalization. This is a bounded
 consumer migration, not a general polygon-orientation primitive.
 
+The oblique-profile extrusion direction gate is also migrated.
+`extrude_profile_along_in` evaluates the exact stored-frame scalar triple as
+`orient3d(frame.x(), frame.y(), translation, 0)`, preserving the ordinary
+positive/negative convention because the frame is right-handed. Exact zero is
+rejected before topology allocation; an exact negative result reflects the
+profile chart and reference normal before reusing the positive branch. The
+focused integer-source adversary has normal dot `+3` while the former
+normalized `translation.dot(frame.z())` rounds to zero. Both translation
+directions construct deterministic closed topology, and ordinary oblique
+fixtures remain Full-valid.
+
 The first solver-local F4 identity migration is also landed. Ellipse/ellipse
 closest-point failures retain all five `ProjectionError` variants as
 `IntersectionError::Projection`: `InvalidQueryPoint`, `InvalidWindow`,
@@ -156,8 +167,9 @@ cannot be flattened back into `kcore::Error`.
 - Audit classification decisions so exact predicates or interval-certified signs govern
   topology, while metric tolerance governs proximity. Raw sign tests and scattered
   working epsilon literals must not silently decide topology. The first-chart SSI
-  convexity gate is migrated; oblique-extrusion direction and polygon-shoelace
-  orientation signs remain named decision-audit debt.
+  convexity and oblique-extrusion direction gates are migrated; remaining
+  polygon-shoelace orientation signs in `kops` and `ktopo` remain named
+  decision-audit debt, while the `kgeom` migration is tracked separately.
 - Continue replacing catch-all `InvalidGeometry` mappings with stable categories
   for invalid input, unsupported capability, topology precondition, convergence
   failure, indeterminate result, tolerance exhaustion, and resource limit. The
@@ -1649,12 +1661,17 @@ true only for an empty complete result.
   explicit contracts land.
 - The first checked extrusion slice is implemented for one validated polygonal
   profile with holes along any finite translation having a nonzero component
-  on the profile-frame normal. A reverse translation reflects the profile chart
-  and reference normal together before using the same certified branch, without
-  changing model-space points or translation. It builds exact planar cap regions plus one
-  planar parallelogram per boundary segment, shares every perimeter and sweep
-  edge, authors a line pcurve on every fin from the actual cap/side frames, and
-  commits atomically with a deterministic creation journal. Full checking
+  on the profile-frame normal. `extrude_profile_along_in` classifies the exact
+  stored-frame `(x, y, translation)` scalar triple with `orient3d`: exact
+  coplanarity fails before allocation, while a negative sign reflects the
+  profile chart and reference normal together before using the same certified
+  branch without changing model-space points or translation. The exact-sign
+  fixture has integer-source normal dot `+3` although the old normalized dot
+  rounds to zero; both directions construct deterministically, and the ordinary
+  oblique fixture remains Full-valid. The builder creates exact planar cap
+  regions plus one planar parallelogram per boundary segment, shares every
+  perimeter and sweep edge, authors a line pcurve on every fin from the actual
+  cap/side frames, and commits atomically with a deterministic creation journal. Full checking
   proves the translated cap bijection and affine side-ring embedding; the
   oblique holed fixture is watertight and has signed volume 24 within `1e-9`.
   The typed facade exposes both the height wrapper and translation request
