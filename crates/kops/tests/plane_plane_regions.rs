@@ -317,6 +317,73 @@ fn region_validation_rejects_bad_residual_orientation_and_degeneracy() {
 }
 
 #[test]
+fn region_convexity_uses_exact_turns_and_canonicalizes_deterministically() {
+    const M: i64 = (1_i64 << 52) - 1;
+    let coordinates = vec![[0, 0], [M, M - 1], [2 * M + 1, 2 * M - 1], [0, 2 * M + 1]];
+
+    assert!((0..coordinates.len()).all(|index| {
+        exact_integer_turn(
+            coordinates[index],
+            coordinates[(index + 1) % coordinates.len()],
+            coordinates[(index + 2) % coordinates.len()],
+        ) > 0
+    }));
+    let [a, b, c] = [coordinates[0], coordinates[1], coordinates[2]].map(integer_uv);
+    let rounded_turn = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+    assert_eq!(
+        exact_integer_turn(coordinates[0], coordinates[1], coordinates[2]),
+        1
+    );
+    assert_eq!(rounded_turn, 0.0);
+
+    let canonicalize = |coordinates: &[[i64; 2]]| {
+        SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
+            Vec::new(),
+            Vec::new(),
+            vec![integer_polygonal_region(coordinates)],
+        )
+    };
+    let expected = canonicalize(&coordinates).unwrap();
+    assert!(expected.is_complete());
+    assert_eq!(expected.regions.len(), 1);
+    assert_eq!(canonicalize(&coordinates).unwrap(), expected);
+
+    let mut rotated = coordinates.clone();
+    rotated.rotate_left(2);
+    assert_eq!(canonicalize(&rotated).unwrap(), expected);
+
+    let mut reversed = coordinates.clone();
+    reversed.reverse();
+    assert_eq!(canonicalize(&reversed).unwrap(), expected);
+
+    let mut collinear = coordinates.clone();
+    collinear[2] = [2 * M, 2 * M - 2];
+    assert_eq!(
+        exact_integer_turn(collinear[0], collinear[1], collinear[2]),
+        0
+    );
+    assert!(matches!(
+        canonicalize(&collinear),
+        Err(Error::InvalidGeometry { .. })
+    ));
+
+    assert!(matches!(
+        canonicalize(&coordinates[..2]),
+        Err(Error::InvalidGeometry { .. })
+    ));
+    let mut non_finite = integer_polygonal_region(&coordinates);
+    non_finite.boundary[1].uv_a[0] = f64::NAN;
+    assert!(matches!(
+        SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
+            Vec::new(),
+            Vec::new(),
+            vec![non_finite],
+        ),
+        Err(Error::InvalidGeometry { .. })
+    ));
+}
+
+#[test]
 fn region_residual_bound_covers_whole_affine_patch_and_bits_repeat() {
     let a = world_plane();
     let b = Plane::new(
@@ -355,6 +422,36 @@ fn vertex(uv_a: [f64; 2], uv_b: [f64; 2], residual: f64) -> SurfaceSurfaceRegion
         uv_b,
         residual,
     }
+}
+
+fn integer_polygonal_region(coordinates: &[[i64; 2]]) -> SurfaceSurfaceRegion {
+    SurfaceSurfaceRegion {
+        boundary: coordinates
+            .iter()
+            .copied()
+            .map(integer_uv)
+            .map(|uv| vertex(uv, uv, 0.0))
+            .collect(),
+        orientation: SurfaceRegionOrientation::Same,
+        correspondence: kops::intersect::SurfaceRegionCorrespondence::Polygonal,
+        max_residual: 0.0,
+    }
+}
+
+fn integer_uv([u, v]: [i64; 2]) -> [f64; 2] {
+    [u as f64, v as f64]
+}
+
+fn exact_integer_turn(a: [i64; 2], b: [i64; 2], c: [i64; 2]) -> i128 {
+    let ab = [
+        i128::from(b[0]) - i128::from(a[0]),
+        i128::from(b[1]) - i128::from(a[1]),
+    ];
+    let bc = [
+        i128::from(c[0]) - i128::from(b[0]),
+        i128::from(c[1]) - i128::from(b[1]),
+    ];
+    ab[0] * bc[1] - ab[1] * bc[0]
 }
 
 fn lerp2(a: [f64; 2], b: [f64; 2], weight: f64) -> [f64; 2] {

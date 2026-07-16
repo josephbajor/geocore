@@ -1,5 +1,6 @@
 use kcore::error::{Error, Result};
 use kcore::math;
+use kcore::predicates::{Orientation, orient2d};
 use kcore::proof::{Completion, IncompleteEvidence};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
@@ -1420,13 +1421,16 @@ fn signed_region_area(
 }
 
 fn is_strictly_convex_in_first_chart(boundary: &[SurfaceSurfaceRegionVertex]) -> bool {
-    (0..boundary.len()).all(|index| {
-        let a = boundary[index].uv_a;
-        let b = boundary[(index + 1) % boundary.len()].uv_a;
-        let c = boundary[(index + 2) % boundary.len()].uv_a;
-        let cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
-        cross.is_finite() && cross > 0.0
-    })
+    boundary.len() >= 3
+        && boundary
+            .iter()
+            .all(|vertex| vertex.uv_a.iter().all(|value| value.is_finite()))
+        && (0..boundary.len()).all(|index| {
+            let a = boundary[index].uv_a;
+            let b = boundary[(index + 1) % boundary.len()].uv_a;
+            let c = boundary[(index + 2) % boundary.len()].uv_a;
+            orient2d(a, b, c) == Orientation::Positive
+        })
 }
 
 fn compare_region_vertices(
