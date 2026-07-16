@@ -1170,6 +1170,162 @@
       }
     },
     {
+      "path": "topology/production-clean/primitive-mix-v1/total-4/ordinary-noop-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit-production-clean.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 4,
+        "bodies": 4,
+        "affected_bodies": 0
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "production-clean",
+        "checked_commit": "ordinary",
+        "operation_scope": "single-ordinary-checked-commit",
+        "mutation": "none",
+        "production_fixture": "unchanged-primitive-mix",
+        "covered_path": "global-validation-index-clone-body-order",
+        "scope_oracle": "affected-refreshed-checked"
+      },
+      "expected_result_counters": {
+        "body_count": 4,
+        "operation_scopes": 1,
+        "affected_bodies": 0,
+        "refreshed_bodies": 0,
+        "checked_bodies": 0,
+        "mutations": 0,
+        "committed": true,
+        "affected_order_digest": "8aa984d6299805c2",
+        "before_store_digest": "94a78b9a2c4ee0b3",
+        "after_store_digest": "94a78b9a2c4ee0b3",
+        "before_index_digest": "940a2fb17674ba69",
+        "after_index_digest": "940a2fb17674ba69",
+        "store_unchanged": true,
+        "index_unchanged": true,
+        "repeat_deterministic": true,
+        "output_digest": "b59782ce63d0ce2f"
+      }
+    },
+    {
+      "path": "topology/production-clean/primitive-mix-v1/total-16/ordinary-noop-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit-production-clean.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 16,
+        "bodies": 16,
+        "affected_bodies": 0
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "production-clean",
+        "checked_commit": "ordinary",
+        "operation_scope": "single-ordinary-checked-commit",
+        "mutation": "none",
+        "production_fixture": "unchanged-primitive-mix",
+        "covered_path": "global-validation-index-clone-body-order",
+        "scope_oracle": "affected-refreshed-checked"
+      },
+      "expected_result_counters": {
+        "body_count": 16,
+        "operation_scopes": 1,
+        "affected_bodies": 0,
+        "refreshed_bodies": 0,
+        "checked_bodies": 0,
+        "mutations": 0,
+        "committed": true,
+        "affected_order_digest": "8aa984d6299805c2",
+        "before_store_digest": "5fc1edc7423181f4",
+        "after_store_digest": "5fc1edc7423181f4",
+        "before_index_digest": "76c1174d73fb5880",
+        "after_index_digest": "76c1174d73fb5880",
+        "store_unchanged": true,
+        "index_unchanged": true,
+        "repeat_deterministic": true,
+        "output_digest": "1f885469ef315b53"
+      }
+    },
+    {
+      "path": "topology/production-clean/primitive-mix-v1/total-64/ordinary-noop-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit-production-clean.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 64,
+        "bodies": 64,
+        "affected_bodies": 0
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "production-clean",
+        "checked_commit": "ordinary",
+        "operation_scope": "single-ordinary-checked-commit",
+        "mutation": "none",
+        "production_fixture": "unchanged-primitive-mix",
+        "covered_path": "global-validation-index-clone-body-order",
+        "scope_oracle": "affected-refreshed-checked"
+      },
+      "expected_result_counters": {
+        "body_count": 64,
+        "operation_scopes": 1,
+        "affected_bodies": 0,
+        "refreshed_bodies": 0,
+        "checked_bodies": 0,
+        "mutations": 0,
+        "committed": true,
+        "affected_order_digest": "8aa984d6299805c2",
+        "before_store_digest": "4bbf07cba16f69f6",
+        "after_store_digest": "4bbf07cba16f69f6",
+        "before_index_digest": "dc200696664d93ad",
+        "after_index_digest": "dc200696664d93ad",
+        "store_unchanged": true,
+        "index_unchanged": true,
+        "repeat_deterministic": true,
+        "output_digest": "d153e83370f74247"
+      }
+    },
+    {
+      "path": "topology/production-clean/primitive-mix-v1/total-256/ordinary-noop-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit-production-clean.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 256,
+        "bodies": 256,
+        "affected_bodies": 0
+      },
+      "tolerances": {},
+      "policy_values": {
+        "ladder": "production-clean",
+        "checked_commit": "ordinary",
+        "operation_scope": "single-ordinary-checked-commit",
+        "mutation": "none",
+        "production_fixture": "unchanged-primitive-mix",
+        "covered_path": "global-validation-index-clone-body-order",
+        "scope_oracle": "affected-refreshed-checked"
+      },
+      "expected_result_counters": {
+        "body_count": 256,
+        "operation_scopes": 1,
+        "affected_bodies": 0,
+        "refreshed_bodies": 0,
+        "checked_bodies": 0,
+        "mutations": 0,
+        "committed": true,
+        "affected_order_digest": "8aa984d6299805c2",
+        "before_store_digest": "55b8ac42b1da1110",
+        "after_store_digest": "55b8ac42b1da1110",
+        "before_index_digest": "3755ea7b5497afed",
+        "after_index_digest": "3755ea7b5497afed",
+        "store_unchanged": true,
+        "index_unchanged": true,
+        "repeat_deterministic": true,
+        "output_digest": "160c2bf67635e5ee"
+      }
+    },
+    {
       "path": "graph/build/independent-planes-v1/1/default-v1",
       "benchmark_target": "graph_build",
       "fixture_version": "graph-build.v2",

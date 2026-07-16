@@ -29,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 174)
+        self.assertEqual(len(cases), 178)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -38,7 +38,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
         topology = [
             case for case in cases if case["benchmark_target"] == "topology_commit"
         ]
-        self.assertEqual(len(topology), 39)
+        self.assertEqual(len(topology), 43)
         self.assertTrue(
             all(case["deterministic_seed"] == 0x51544F504F000002 for case in topology)
         )
@@ -221,6 +221,92 @@ class BenchmarkBaselineTests(unittest.TestCase):
             for digest in (
                 "before_store_digest",
                 "after_store_digest",
+                "output_digest",
+            ):
+                self.assertEqual(len(counters[digest]), 16)
+        production_clean = [
+            case
+            for case in topology
+            if case["policy_values"]["ladder"] == "production-clean"
+        ]
+        self.assertEqual(len(production_clean), 4)
+        self.assertEqual(
+            {case["size_parameters"]["bodies"] for case in production_clean},
+            {4, 16, 64, 256},
+        )
+        expected_production_clean_digests = {
+            4: (
+                "94a78b9a2c4ee0b3",
+                "940a2fb17674ba69",
+                "b59782ce63d0ce2f",
+            ),
+            16: (
+                "5fc1edc7423181f4",
+                "76c1174d73fb5880",
+                "1f885469ef315b53",
+            ),
+            64: (
+                "4bbf07cba16f69f6",
+                "dc200696664d93ad",
+                "d153e83370f74247",
+            ),
+            256: (
+                "55b8ac42b1da1110",
+                "3755ea7b5497afed",
+                "160c2bf67635e5ee",
+            ),
+        }
+        self.assertTrue(
+            all(
+                case["fixture_version"] == "topology-commit-production-clean.v1"
+                and case["size_parameters"]["elements"]
+                == case["size_parameters"]["bodies"]
+                == case["expected_result_counters"]["body_count"]
+                and case["size_parameters"]["affected_bodies"] == 0
+                and case["tolerances"] == {}
+                and case["policy_values"]["checked_commit"] == "ordinary"
+                and case["policy_values"]["operation_scope"]
+                == "single-ordinary-checked-commit"
+                and case["policy_values"]["mutation"] == "none"
+                and case["policy_values"]["production_fixture"]
+                == "unchanged-primitive-mix"
+                and case["policy_values"]["covered_path"]
+                == "global-validation-index-clone-body-order"
+                for case in production_clean
+            )
+        )
+        for case in production_clean:
+            counters = case["expected_result_counters"]
+            bodies = case["size_parameters"]["bodies"]
+            store_digest, index_digest, output_digest = (
+                expected_production_clean_digests[bodies]
+            )
+            self.assertEqual(counters["operation_scopes"], 1)
+            self.assertEqual(counters["affected_bodies"], 0)
+            self.assertEqual(counters["refreshed_bodies"], 0)
+            self.assertEqual(counters["checked_bodies"], 0)
+            self.assertEqual(counters["mutations"], 0)
+            self.assertTrue(counters["committed"])
+            self.assertEqual(
+                counters["affected_order_digest"], "8aa984d6299805c2"
+            )
+            self.assertEqual(
+                counters["before_store_digest"], counters["after_store_digest"]
+            )
+            self.assertEqual(counters["before_store_digest"], store_digest)
+            self.assertEqual(
+                counters["before_index_digest"], counters["after_index_digest"]
+            )
+            self.assertEqual(counters["before_index_digest"], index_digest)
+            self.assertTrue(counters["store_unchanged"])
+            self.assertTrue(counters["index_unchanged"])
+            self.assertTrue(counters["repeat_deterministic"])
+            self.assertEqual(counters["output_digest"], output_digest)
+            for digest in (
+                "before_store_digest",
+                "after_store_digest",
+                "before_index_digest",
+                "after_index_digest",
                 "output_digest",
             ):
                 self.assertEqual(len(counters[digest]), 16)
