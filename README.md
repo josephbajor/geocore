@@ -92,10 +92,19 @@ application boundary.
   same-row adjacent, exact same-column vertical (reviewed at
   `[0,2]`/`[1,2]`), either exact full latitude row, and an exact mixed-axis
   three-cell L path in two real orientations and the generic exact four-
-  positive shared-seam path family in two real orientations, plus exactly five
-  positive cells with one certified-empty sibling, in the polar-by-wide family
-  have landed. Four-positive paths cancel all three artificial seams. The
-  five-positive arm simultaneously removes every internal reverse-oriented
+  positive shared-seam path family in two real orientations, plus the disjoint
+  exact left `[0,0]`/`[0,1]`/`[1,0]`/`[1,1]` and right
+  `[0,1]`/`[0,2]`/`[1,1]`/`[1,2]` four-positive 2×2 cycle family with two
+  certified-empty siblings, and exactly five positive cells with one certified-
+  empty sibling, in the polar-by-wide family have landed. Four-positive path
+  routing stays exclusive to three-adjacency layouts and cancels all three
+  artificial seams.
+  The cycle route simultaneously proves and removes exactly four reverse-
+  oriented bit-exact adjacencies, requires one outer cycle with no artificial
+  seam, and restores the parent map and maximum child/parent residual. Its real
+  fixtures pin repeat/swap while one-ULP mutation and duplicate-edge ambiguity
+  fail closed. The five-positive arm simultaneously removes every internal
+  reverse-oriented
   bit-exact seam and requires one outer cycle; corner-empty cycle-plus-tail and
   edge-middle-empty tree fixtures pin repeat/swap, parent mapping, residuals,
   and one-ULP/ambiguity rejection. The all-six-positive arm now admits the
@@ -104,8 +113,9 @@ application boundary.
   unambiguous outer cycle and no artificial seam edge. Its real fixture pins
   parent mapping, residuals, repeat/swap, and one-ULP/ambiguity rejection. The
   non-cap row retains eight vertices and every six-cell decomposition keeps the
-  exact 6/5, 147/146, and 588/587 piece/pair/arc N/N-1 ceilings; four-cell
-  cycles and broader layouts remain unsupported.
+  exact 6/5, 147/146, and 588/587 piece/pair/arc N/N-1 ceilings; T-shaped and
+  broader four-cell layouts outside the disjoint exact path/cycle routes remain
+  unsupported.
   Varying-normal chains against a direct analytic Plane retain exact outer-to-
   inner metadata, prove every intermediate and final radius finite and positive
   from the original basis, use the derived sheet only for discovery, preserve
@@ -127,14 +137,22 @@ application boundary.
   family, including one- through four-level nested dual offsets and oblique
   frames. Its first transmitted tranche covers Plane/Plane over direct or safe
   nested exact-plane roots, direct Plane/NURBS in both orders, direct
-  NURBS/NURBS, direct one-descriptor Offset(NURBS)/NURBS in both orders, and
-  exactly one-descriptor Offset(NURBS)/direct-Plane charts in both orders. The
-  public original-source recertifier preserves ordered roots, the direct basis,
-  exact descriptor sequence, paired pcurves, chart metadata, and tolerance.
+  NURBS/NURBS, direct one-descriptor Offset(NURBS)/NURBS in both orders,
+  exactly one-descriptor Offset(NURBS)/direct-Plane charts in both orders, and
+  only the canonical finite-open two-sample degree-1 dual Offset(NURBS) chart
+  in either ordered-root arrangement. The dual arm requires two distinct
+  ordered roots over distinct direct nonperiodic NURBS basis handles, one
+  descriptor per root, and matching unweighted two-control carrier and pcurves
+  on knots `[0,0,1,1]` over `[0,1]`, with no carrier period or quadratic/cubic
+  interpolation witnesses. The public original-source recertifier transforms
+  every admitted basis and the carrier while retaining ordered roots, paired pcurves,
+  chart metadata, and tolerance.
   Facade rejection happens before scope creation, while lower-copy rejection
-  restores topology/geometry counts and future identity. Same-total multi-
-  distance metadata, nested Offset(NURBS), Offset(Plane) peers, periodic or
-  dual-offset charts remain unsupported;
+  restores every Body/Region/Shell/Edge/Vertex and Curve/Surface/Pcurve/Point
+  count plus future point identity. Same-total multi-
+  distance metadata, nested Offset(NURBS), Offset(Plane) peers, shared dual
+  bases, periodic source or carrier charts, and five-sample, other-sample, or
+  witness-bearing dual families remain unsupported;
   attributes are blocked on an authorable storage contract, and non-rigid
   transforms remain.
   General root discovery, complete verified residuals across every result family, and

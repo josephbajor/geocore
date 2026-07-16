@@ -1326,7 +1326,15 @@ true only for an empty complete result.
   three artificial seams. Its real cap-row-right
   `[0,2]`/`[1,0]`/`[1,1]`/`[1,2]` and zigzag
   `[0,1]`/`[0,2]`/`[1,0]`/`[1,1]` fixtures pin repeat/swap; one-ULP seam
-  mutation, duplicate-edge ambiguity, and a four-cell cycle fail closed. The
+  mutation and duplicate-edge ambiguity fail closed. The path route stays
+  exclusive to three-adjacency layouts. A disjoint cycle route admits only the
+  exact left `[0,0]`/`[0,1]`/`[1,0]`/`[1,1]` and right
+  `[0,1]`/`[0,2]`/`[1,1]`/`[1,2]` 2x2 cycles with the other two siblings
+  certified empty. It proves all four reverse-oriented bit-exact internal
+  adjacencies simultaneously before removing them, requires one unambiguous
+  outer cycle with no artificial seam, and restores the parent mapping and
+  maximum child/parent residual. Both real fixtures pin repeat/swap; one-ULP
+  seam mutation and duplicate-edge ambiguity fail closed. The
   five-positive arm simultaneously removes all internal reverse-oriented bit-
   exact seams and requires one unambiguous outer cycle. Its `[0,0]` corner-
   empty fixture is a 2×2 cycle plus tail; its `[1,1]` edge-middle-empty fixture
@@ -1339,10 +1347,11 @@ true only for an empty complete result.
   artificial seam, and restores the parent mapping and child/parent residual.
   Its real `0.14716980102990423`-tilt fixture pins repeat/swap plus one-ULP and
   duplicate-edge ambiguity rejection. All admitted layouts retain exact 6/5
-  piece, 147/146 pair, and 588/587 arc admission. Four-cell cycles and broader
-  or non-adjacent layouts outside the admitted exact same-row, same-column,
-  full-row, mixed-axis three-cell-path, four-positive-path, exactly-five-
-  positive, and all-six-positive families remain fail-closed. A first wide
+  piece, 147/146 pair, and 588/587 arc admission. T-shaped and broader four-
+  positive layouts outside the disjoint exact path/cycle routes, and other non-
+  adjacent layouts outside the admitted exact same-row, same-column, full-row,
+  mixed-axis three-cell-path, four-positive-path/cycle, exactly-five-positive,
+  and all-six-positive families remain fail-closed. A first wide
   arm splits exactly
   one pole-clear wide operand into
   three closed sub-π cells and returns `Complete` only for three certified-empty
@@ -1476,15 +1485,22 @@ true only for an empty complete result.
   reissues Plane/Plane charts over direct or safe nested exact-plane roots,
   direct Plane/NURBS in both orders, direct NURBS/NURBS, direct one-descriptor
   Offset(NURBS)/NURBS in both orders, and exactly one-descriptor
-  Offset(NURBS)/direct-Plane charts in both orders through the public original-
-  source recertifier. It retains transformed carriers/traces, copied paired
-  pcurves, chart metadata, tolerance, ordered roots, the direct NURBS basis,
-  and the exact one-distance descriptor sequence. The facade validates this
+  Offset(NURBS)/direct-Plane charts in both orders, plus only the canonical
+  finite-open two-sample degree-1 dual Offset(NURBS) chart in either ordered-
+  root arrangement, through the public original-source recertifier. That dual
+  family requires two distinct ordered roots over distinct direct nonperiodic
+  NURBS basis handles, exactly one descriptor per root, and matching unweighted
+  two-control carrier and pcurves on knots `[0,0,1,1]` over `[0,1]`, with no
+  carrier period or quadratic/cubic interpolation witnesses. Copy transforms
+  both bases and the carrier while retaining ordered roots, paired pcurves,
+  chart metadata, and tolerance. The facade validates the live roots and this
   proof/source contract before scope creation; same-total multi-distance
-  metadata, nested Offset(NURBS) roots, Offset(Plane) peer roots, periodic or
-  dual-offset charts, nonpositive/nonfinite effective spheres, and other
-  unsupported proofs remain typed unsupported. Lower transaction rejection
-  restores topology/geometry counts and future identity.
+  metadata, nested Offset(NURBS) roots, shared bases, Offset(Plane) peer roots,
+  periodic source or carrier charts, five-sample, other-sample, or witness-
+  bearing dual families, nonpositive/nonfinite effective spheres, and other
+  unsupported proofs remain typed unsupported. Lower transaction rejection restores every
+  Body/Region/Shell/Edge/Vertex and Curve/Surface/Pcurve/Point count plus future
+  point identity reuse.
   Attributes remain blocked because no authorable storage contract exists;
   non-rigid transform families also remain. Extend this seam only after those
   explicit contracts land.
