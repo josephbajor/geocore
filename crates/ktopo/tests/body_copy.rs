@@ -113,6 +113,10 @@ fn assert_transformed_nurbs_trace(
         ) => {
             transformed_surface(source.basis(), copied.basis());
             assert_eq!(copied.signed_distance(), source.signed_distance());
+            assert_eq!(
+                copied.descriptor_signed_distances(),
+                source.descriptor_signed_distances()
+            );
         }
         (
             NurbsIntersectionTrace::OffsetPlane(source),

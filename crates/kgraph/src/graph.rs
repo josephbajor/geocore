@@ -18,12 +18,14 @@ use crate::intersection::{
 use kcore::arena::{Arena, ArenaChange, Handle};
 use kcore::error::Result as CoreResult;
 use kcore::interval::Interval;
+use kgeom::surface::Surface;
 use std::collections::{HashMap, HashSet};
 
 const MAX_VERIFIED_OFFSET_NURBS_CHAIN_LENGTH: usize = 2;
 const MAX_VERIFIED_OFFSET_NURBS_DIRECT_NURBS_CHAIN_LENGTH: usize = 4;
 const MAX_VERIFIED_DUAL_OFFSET_NURBS_CHAIN_LENGTH: usize = 4;
-const MAX_VERIFIED_VARYING_OFFSET_NURBS_CHAIN_LENGTH: usize = 1;
+const MAX_VERIFIED_VARYING_OFFSET_NURBS_DIRECT_PLANE_CHAIN_LENGTH: usize = 2;
+const MAX_VERIFIED_VARYING_OFFSET_NURBS_OFFSET_PLANE_CHAIN_LENGTH: usize = 1;
 
 /// Immutable 3D curve node. The descriptor is the node payload itself so
 /// topology's historical geometry-enum names can remain source compatible.
@@ -1079,14 +1081,32 @@ fn validate_curve_references(
             ] => MAX_VERIFIED_DUAL_OFFSET_NURBS_CHAIN_LENGTH,
             [
                 NurbsIntersectionTrace::OffsetNurbs(_),
-                NurbsIntersectionTrace::Plane(_) | NurbsIntersectionTrace::OffsetPlane(_),
+                NurbsIntersectionTrace::Plane(_),
             ]
             | [
-                NurbsIntersectionTrace::Plane(_) | NurbsIntersectionTrace::OffsetPlane(_),
+                NurbsIntersectionTrace::Plane(_),
                 NurbsIntersectionTrace::OffsetNurbs(_),
-            ] => MAX_VERIFIED_VARYING_OFFSET_NURBS_CHAIN_LENGTH,
+            ] => MAX_VERIFIED_VARYING_OFFSET_NURBS_DIRECT_PLANE_CHAIN_LENGTH,
+            [
+                NurbsIntersectionTrace::OffsetNurbs(_),
+                NurbsIntersectionTrace::OffsetPlane(_),
+            ]
+            | [
+                NurbsIntersectionTrace::OffsetPlane(_),
+                NurbsIntersectionTrace::OffsetNurbs(_),
+            ] => MAX_VERIFIED_VARYING_OFFSET_NURBS_OFFSET_PLANE_CHAIN_LENGTH,
             _ => MAX_VERIFIED_OFFSET_NURBS_CHAIN_LENGTH,
         };
+        let binds_exact_offset_nurbs_chain = matches!(
+            certificate.traces(),
+            [
+                NurbsIntersectionTrace::OffsetNurbs(_),
+                NurbsIntersectionTrace::Plane(_) | NurbsIntersectionTrace::OffsetPlane(_),
+            ] | [
+                NurbsIntersectionTrace::Plane(_) | NurbsIntersectionTrace::OffsetPlane(_),
+                NurbsIntersectionTrace::OffsetNurbs(_),
+            ]
+        );
         for (source, certified) in intersection
             .source_surfaces()
             .into_iter()
@@ -1115,6 +1135,7 @@ fn validate_curve_references(
                         source,
                         certified,
                         max_offset_nurbs_chain_length,
+                        binds_exact_offset_nurbs_chain,
                     )?
                 }
                 NurbsIntersectionTrace::OffsetPlane(certified) => {
@@ -1313,6 +1334,7 @@ fn verified_offset_nurbs_trace_matches(
     root: SurfaceHandle,
     certified: &TransmittedOffsetNurbsTrace,
     max_chain_length: usize,
+    binds_exact_chain: bool,
 ) -> GeometryGraphResult<bool> {
     // Operation-generated constant-normal Offset(NURBS)/direct-NURBS
     // certificates admit the verified nested cap. Varying-normal proofs admit
@@ -1332,7 +1354,14 @@ fn verified_offset_nurbs_trace_matches(
                 current = offset.basis();
             }
             SurfaceDescriptor::Nurbs(basis) => {
-                if distances.len() > 1 && !constant_normal_nurbs_basis(basis) {
+                if binds_exact_chain && distances != certified.descriptor_signed_distances() {
+                    return Ok(false);
+                }
+                if distances.len() > 1
+                    && !constant_normal_nurbs_basis(basis)
+                    && !(binds_exact_chain
+                        && regular_rational_quarter_cylinder_chain(basis, &distances))
+                {
                     return Ok(false);
                 }
                 let distance = distances.iter().rev().try_fold(0.0, |sum, &value| {
@@ -1358,6 +1387,51 @@ fn verified_offset_nurbs_trace_matches(
             _ => return Ok(false),
         }
     }
+}
+
+fn regular_rational_quarter_cylinder_chain(
+    basis: &kgeom::nurbs::NurbsSurface,
+    distances: &[f64],
+) -> bool {
+    let Some(mut radius) = rational_quarter_cylinder_radius(basis) else {
+        return false;
+    };
+    for &distance in distances.iter().rev() {
+        radius += distance;
+        if !radius.is_finite() || radius <= 0.0 {
+            return false;
+        }
+    }
+    true
+}
+
+fn rational_quarter_cylinder_radius(basis: &kgeom::nurbs::NurbsSurface) -> Option<f64> {
+    if basis.periodicity() != [None, None]
+        || basis.degree_u() != 2
+        || basis.degree_v() != 1
+        || basis.knots(kgeom::surface::Dir::U).as_slice() != [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]
+        || basis.knots(kgeom::surface::Dir::V).as_slice() != [0.0, 0.0, 1.0, 1.0]
+        || basis.weights() != Some(&[1.0, 1.0, 1.0, 1.0, 2.0, 2.0][..])
+        || basis.points().len() != 6
+    {
+        return None;
+    }
+    let points = basis.points();
+    let radius = points[0].x;
+    let z_lo = points[0].z;
+    let z_hi = points[1].z;
+    (radius.is_finite()
+        && radius > 0.0
+        && z_lo.is_finite()
+        && z_hi.is_finite()
+        && z_hi > z_lo
+        && points[0] == kgeom::vec::Point3::new(radius, 0.0, z_lo)
+        && points[1] == kgeom::vec::Point3::new(radius, 0.0, z_hi)
+        && points[2] == kgeom::vec::Point3::new(radius, radius, z_lo)
+        && points[3] == kgeom::vec::Point3::new(radius, radius, z_hi)
+        && points[4] == kgeom::vec::Point3::new(0.0, radius, z_lo)
+        && points[5] == kgeom::vec::Point3::new(0.0, radius, z_hi))
+    .then_some(radius)
 }
 
 /// Rigid-invariant constant-normal test for nested verified Offset(NURBS)

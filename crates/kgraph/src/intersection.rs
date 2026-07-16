@@ -621,12 +621,14 @@ pub struct TransmittedPlaneIntersectionCertificate {
 /// degree-1 carrier span.
 pub const TRANSMITTED_NURBS_TRACE_PROOF_DEPTH: usize = 10;
 
-/// One constant signed normal offset of an original NURBS basis retained by
-/// a transmitted whole-range trace proof.
+/// One bounded chain of constant signed normal offsets over an original NURBS
+/// basis retained by a whole-range trace proof.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TransmittedOffsetNurbsTrace {
     basis: NurbsSurface,
     signed_distance: f64,
+    descriptor_signed_distances: [f64; 4],
+    descriptor_count: u8,
 }
 
 /// One constant signed normal offset of an original direct Plane retained by
@@ -674,7 +676,36 @@ impl TransmittedOffsetNurbsTrace {
         Self {
             basis,
             signed_distance,
+            descriptor_signed_distances: [signed_distance, 0.0, 0.0, 0.0],
+            descriptor_count: 1,
         }
+    }
+
+    /// Construct a trace that binds an outermost-to-innermost descriptor
+    /// chain. Finiteness and geometric regularity remain certifier concerns.
+    pub fn from_descriptor_signed_distances(
+        basis: NurbsSurface,
+        descriptor_signed_distances: &[f64],
+    ) -> Option<Self> {
+        if descriptor_signed_distances.is_empty() || descriptor_signed_distances.len() > 4 {
+            return None;
+        }
+        let signed_distance =
+            descriptor_signed_distances
+                .iter()
+                .rev()
+                .try_fold(0.0, |sum, &distance| {
+                    let next = sum + distance;
+                    next.is_finite().then_some(next)
+                })?;
+        let mut retained = [0.0; 4];
+        retained[..descriptor_signed_distances.len()].copy_from_slice(descriptor_signed_distances);
+        Some(Self {
+            basis,
+            signed_distance,
+            descriptor_signed_distances: retained,
+            descriptor_count: descriptor_signed_distances.len() as u8,
+        })
     }
 
     /// Original NURBS basis descriptor.
@@ -685,6 +716,12 @@ impl TransmittedOffsetNurbsTrace {
     /// Signed displacement along the basis natural unit normal.
     pub const fn signed_distance(&self) -> f64 {
         self.signed_distance
+    }
+
+    /// Ordered signed distances of the retained live descriptor chain,
+    /// outermost first.
+    pub fn descriptor_signed_distances(&self) -> &[f64] {
+        &self.descriptor_signed_distances[..usize::from(self.descriptor_count)]
     }
 }
 

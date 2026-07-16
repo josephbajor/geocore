@@ -7,8 +7,9 @@
 //! constant-normal Offset(NURBS)/NURBS family capped at four offset
 //! descriptors. One exact rational quarter-cylinder family additionally
 //! supports a single varying-normal Offset(NURBS) root against a canonical
-//! direct planar NURBS or analytic Plane peer normal to the global X, Y, or Z
-//! axis.
+//! direct planar NURBS, analytic Plane, or safe Offset(Plane) peer normal to
+//! the global X, Y, or Z axis; exactly two regular offset descriptors are also
+//! admitted against the direct analytic Plane peer.
 //! Pairs of compatible planar constant-normal Offset(NURBS) roots capped at
 //! four descriptors additionally march strict interior crossings in a shared
 //! physical chart, while strictly separated vertical-chart pairs retain their
@@ -31,7 +32,7 @@ use super::nurbs_nurbs_surface::{
     supports_strictly_separated_constant_normal_offset_nurbs_pair,
     supports_varying_normal_offset_nurbs_nurbs_surface_pair,
     supports_varying_normal_offset_nurbs_plane_surface_pair,
-    varying_normal_offset_window_proof_work,
+    varying_normal_offset_chain_is_regular, varying_normal_offset_window_proof_work,
 };
 use super::nurbs_surface_march::{
     ContextMarchError, MarchOutput, MarchTrace, NURBS_SURFACE_MARCH_SAMPLE_LIMIT,
@@ -454,6 +455,7 @@ enum ResolvedGraphSurfaceField<'a> {
         signed_distance: f64,
         basis: &'a NurbsSurface,
         chain_length: usize,
+        nested_varying_distances: Option<[f64; 2]>,
     },
 }
 
@@ -536,11 +538,12 @@ pub fn intersect_bounded_graph_surfaces_with_context(
 /// physical window, while the existing vertical-chart family returns a
 /// complete miss only from strict outward original-control separation.
 /// Coincident, boundary-only, warped, or otherwise ambiguous pairs remain
-/// explicitly unsupported. A single varying-normal
-/// rational quarter-cylinder offset additionally marches against one canonical
-/// X-, Y-, or Z-normal direct planar NURBS or analytic Plane peer after a
-/// whole-window original-derivative normal proof; nested varying-normal roots
-/// remain unsupported.
+/// explicitly unsupported. A varying-normal rational quarter-cylinder offset
+/// additionally marches against one canonical X-, Y-, or Z-normal direct
+/// planar NURBS or analytic Plane peer after a whole-window original-derivative
+/// normal proof. The direct analytic Plane arm alone admits exactly two offset
+/// descriptors after proving every intermediate cylinder radius positive;
+/// deeper and other nested varying-normal roots remain unsupported.
 /// Owners must compose [`GraphSurfaceBudgetProfile::v1_defaults`] before
 /// creating `scope` when they may dispatch a scoped proof-bearing branch.
 pub fn intersect_bounded_graph_surfaces_in_scope(
@@ -652,12 +655,13 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 signed_distance,
                 basis,
                 chain_length,
+                nested_varying_distances,
             }),
             Some(ResolvedGraphSurfaceField::Plane {
                 surface: plane,
                 direct: true,
             }),
-        ) if chain_length == 1
+        ) if (1..=2).contains(&chain_length)
             && supports_varying_normal_offset_nurbs_plane_surface_pair(
                 basis,
                 signed_distance,
@@ -671,6 +675,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                     signed_distance,
                     basis,
                     chain_length,
+                    nested_varying_distances,
                 },
                 ResolvedGraphSurfaceField::Plane {
                     surface: plane,
@@ -687,8 +692,9 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 signed_distance,
                 basis,
                 chain_length,
+                nested_varying_distances,
             }),
-        ) if chain_length == 1
+        ) if (1..=2).contains(&chain_length)
             && supports_varying_normal_offset_nurbs_plane_surface_pair(
                 basis,
                 signed_distance,
@@ -706,6 +712,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                     signed_distance,
                     basis,
                     chain_length,
+                    nested_varying_distances,
                 },
             ]
         }
@@ -714,6 +721,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 signed_distance,
                 basis,
                 chain_length,
+                nested_varying_distances,
             }),
             Some(ResolvedGraphSurfaceField::Plane {
                 surface: plane,
@@ -734,6 +742,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                     signed_distance,
                     basis,
                     chain_length,
+                    nested_varying_distances,
                 },
                 ResolvedGraphSurfaceField::Plane {
                     surface: plane,
@@ -750,6 +759,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 signed_distance,
                 basis,
                 chain_length,
+                nested_varying_distances,
             }),
         ) if chain_length == 1
             && offset_plane_traces[0].is_some()
@@ -770,6 +780,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                     signed_distance,
                     basis,
                     chain_length,
+                    nested_varying_distances,
                 },
             ]
         }
@@ -804,6 +815,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 signed_distance,
                 basis,
                 chain_length,
+                nested_varying_distances,
             }),
             Some(ResolvedGraphSurfaceField::Nurbs(surface)),
         ) if (nurbs_control_net_is_nonplanar(surface, tolerances.linear())
@@ -828,6 +840,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                     signed_distance,
                     basis,
                     chain_length,
+                    nested_varying_distances,
                 },
                 ResolvedGraphSurfaceField::Nurbs(surface),
             ]
@@ -838,6 +851,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 signed_distance,
                 basis,
                 chain_length,
+                nested_varying_distances,
             }),
         ) if (nurbs_control_net_is_nonplanar(surface, tolerances.linear())
             && supports_constant_normal_offset_nurbs_nurbs_surface_pair(
@@ -862,6 +876,7 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                     signed_distance,
                     basis,
                     chain_length,
+                    nested_varying_distances,
                 },
             ]
         }
@@ -870,11 +885,13 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 signed_distance: signed_distance_a,
                 basis: basis_a,
                 chain_length: chain_length_a,
+                nested_varying_distances: nested_varying_distances_a,
             }),
             Some(ResolvedGraphSurfaceField::OffsetNurbs {
                 signed_distance: signed_distance_b,
                 basis: basis_b,
                 chain_length: chain_length_b,
+                nested_varying_distances: nested_varying_distances_b,
             }),
         ) if chain_length_a <= MAX_DUAL_OFFSET_NURBS_CHAIN_LENGTH
             && chain_length_b <= MAX_DUAL_OFFSET_NURBS_CHAIN_LENGTH
@@ -892,11 +909,13 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                     signed_distance: signed_distance_a,
                     basis: basis_a,
                     chain_length: chain_length_a,
+                    nested_varying_distances: nested_varying_distances_a,
                 },
                 ResolvedGraphSurfaceField::OffsetNurbs {
                     signed_distance: signed_distance_b,
                     basis: basis_b,
                     chain_length: chain_length_b,
+                    nested_varying_distances: nested_varying_distances_b,
                 },
             ]
         }
@@ -905,11 +924,13 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                 signed_distance: signed_distance_a,
                 basis: basis_a,
                 chain_length: chain_length_a,
+                nested_varying_distances: nested_varying_distances_a,
             }),
             Some(ResolvedGraphSurfaceField::OffsetNurbs {
                 signed_distance: signed_distance_b,
                 basis: basis_b,
                 chain_length: chain_length_b,
+                nested_varying_distances: nested_varying_distances_b,
             }),
         ) if chain_length_a <= MAX_DUAL_OFFSET_NURBS_CHAIN_LENGTH
             && chain_length_b <= MAX_DUAL_OFFSET_NURBS_CHAIN_LENGTH
@@ -927,11 +948,13 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
                     signed_distance: signed_distance_a,
                     basis: basis_a,
                     chain_length: chain_length_a,
+                    nested_varying_distances: nested_varying_distances_a,
                 },
                 ResolvedGraphSurfaceField::OffsetNurbs {
                     signed_distance: signed_distance_b,
                     basis: basis_b,
                     chain_length: chain_length_b,
+                    nested_varying_distances: nested_varying_distances_b,
                 },
             ]
         }
@@ -1603,6 +1626,9 @@ fn resolve_offset_nurbs_field(
                 current = offset.basis();
             }
             SurfaceDescriptor::Nurbs(basis) => {
+                if varying_normal_offset_chain_is_regular(basis, &distances) == Some(false) {
+                    return Ok(None);
+                }
                 let Some(signed_distance) = accumulated_regular_offset_distance(basis, &distances)
                 else {
                     return Ok(None);
@@ -1611,6 +1637,9 @@ fn resolve_offset_nurbs_field(
                     signed_distance,
                     basis,
                     chain_length: distances.len(),
+                    nested_varying_distances: (distances.len() == 2
+                        && varying_normal_offset_chain_is_regular(basis, &distances) == Some(true))
+                    .then(|| [distances[0], distances[1]]),
                 }));
             }
             _ => return Ok(None),
@@ -2155,20 +2184,28 @@ fn build_verified_analytic_nurbs_branch(
             ResolvedGraphSurfaceField::OffsetNurbs {
                 signed_distance,
                 basis,
+                nested_varying_distances,
                 ..
             },
             ResolvedGraphSurfaceField::Plane { surface: plane, .. },
         ] => {
+            let offset_trace = nested_varying_distances.map_or_else(
+                || kgraph::TransmittedOffsetNurbsTrace::new(basis.clone(), signed_distance),
+                |distances| {
+                    kgraph::TransmittedOffsetNurbsTrace::from_descriptor_signed_distances(
+                        basis.clone(),
+                        &distances,
+                    )
+                    .expect("resolved nested varying-offset trace has two finite descriptors")
+                },
+            );
             let plane_trace = offset_plane_traces[1].map_or(
                 NurbsIntersectionTrace::Plane(plane),
                 NurbsIntersectionTrace::OffsetPlane,
             );
             (
                 [
-                    NurbsIntersectionTrace::OffsetNurbs(kgraph::TransmittedOffsetNurbsTrace::new(
-                        basis.clone(),
-                        signed_distance,
-                    )),
+                    NurbsIntersectionTrace::OffsetNurbs(offset_trace),
                     plane_trace,
                 ],
                 [
@@ -2183,9 +2220,20 @@ fn build_verified_analytic_nurbs_branch(
             ResolvedGraphSurfaceField::OffsetNurbs {
                 signed_distance,
                 basis,
+                nested_varying_distances,
                 ..
             },
         ] => {
+            let offset_trace = nested_varying_distances.map_or_else(
+                || kgraph::TransmittedOffsetNurbsTrace::new(basis.clone(), signed_distance),
+                |distances| {
+                    kgraph::TransmittedOffsetNurbsTrace::from_descriptor_signed_distances(
+                        basis.clone(),
+                        &distances,
+                    )
+                    .expect("resolved nested varying-offset trace has two finite descriptors")
+                },
+            );
             let plane_trace = offset_plane_traces[0].map_or(
                 NurbsIntersectionTrace::Plane(plane),
                 NurbsIntersectionTrace::OffsetPlane,
@@ -2193,10 +2241,7 @@ fn build_verified_analytic_nurbs_branch(
             (
                 [
                     plane_trace,
-                    NurbsIntersectionTrace::OffsetNurbs(kgraph::TransmittedOffsetNurbsTrace::new(
-                        basis.clone(),
-                        signed_distance,
-                    )),
+                    NurbsIntersectionTrace::OffsetNurbs(offset_trace),
                 ],
                 [
                     march_trace.surface_pcurve.clone(),

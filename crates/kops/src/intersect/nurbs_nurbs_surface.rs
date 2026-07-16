@@ -381,6 +381,28 @@ pub(super) fn varying_normal_offset_window_proof_work(basis: &NurbsSurface) -> O
     u64::try_from(basis.source_differential_enclosure_work_units()?).ok()
 }
 
+/// Whether every nested parallel sheet over the exact rational-quarter-
+/// cylinder source remains regular and orientation preserving.
+///
+/// `distances` are ordered outermost-to-innermost, matching graph traversal;
+/// evaluation applies them in reverse. A positive radius after every applied
+/// descriptor proves that the nested chain composes exactly to one parallel
+/// cylinder at the accumulated signed distance.
+pub(super) fn varying_normal_offset_chain_is_regular(
+    basis: &NurbsSurface,
+    distances: &[f64],
+) -> Option<bool> {
+    let source = rational_quarter_cylinder_source(basis)?;
+    let mut radius = source.radius;
+    for &distance in distances.iter().rev() {
+        radius += distance;
+        if !radius.is_finite() || radius <= 0.0 {
+            return Some(false);
+        }
+    }
+    Some(true)
+}
+
 pub(super) fn supports_strictly_separated_constant_normal_offset_nurbs_pair(
     basis_a: &NurbsSurface,
     signed_distance_a: f64,

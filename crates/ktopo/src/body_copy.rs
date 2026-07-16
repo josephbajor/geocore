@@ -410,10 +410,15 @@ impl Copier<'_> {
                         }
                     }
                 };
-                kgraph::NurbsIntersectionTrace::OffsetNurbs(TransmittedOffsetNurbsTrace::new(
-                    copied_basis,
-                    offset.signed_distance(),
-                ))
+                kgraph::NurbsIntersectionTrace::OffsetNurbs(
+                    TransmittedOffsetNurbsTrace::from_descriptor_signed_distances(
+                        copied_basis,
+                        offset.descriptor_signed_distances(),
+                    )
+                    .ok_or(Error::InvalidGeometry {
+                        reason: "verified offset-NURBS trace has an invalid retained descriptor chain",
+                    })?,
+                )
             }
             kgraph::NurbsIntersectionTrace::OffsetPlane(offset) => {
                 let descriptor = self.store.get(copied_root)?.as_offset().copied().ok_or(
