@@ -3207,7 +3207,7 @@ fn oblique_spherical_pcurve_fails_closed_at_poles_and_outside_chart_windows() {
             sphere,
             [
                 ParamRange::new(-core::f64::consts::PI, core::f64::consts::PI),
-                ParamRange::new(-core::f64::consts::FRAC_PI_2, core::f64::consts::FRAC_PI_2,),
+                ParamRange::new(-core::f64::consts::FRAC_PI_2, core::f64::consts::FRAC_PI_2),
             ],
             [
                 sphere_longitude(pole_carrier, sphere, pole_range.lo),

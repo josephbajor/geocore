@@ -12,7 +12,7 @@ use core::fmt;
 
 use kcore::interval::Interval;
 use kcore::math;
-use kcore::predicates::harmonic_half_angle_roots;
+use kcore::predicates::{Orientation, affine_dot3, harmonic_half_angle_roots};
 use kgeom::aabb::{Aabb2, Aabb3};
 use kgeom::curve::{Circle, Curve, CurveDerivs, Line};
 use kgeom::curve2d::{Circle2d, Curve2d, Curve2dDerivs, Line2d, NurbsCurve2d};
@@ -1681,6 +1681,10 @@ pub fn certify_paired_plane_sphere_oblique_circle_residuals(
     {
         return Err(IntersectionCertificateError::NonFiniteGeometry);
     }
+    let sphere_position = match plane_position {
+        PairedTrace::First => PairedTrace::Second,
+        PairedTrace::Second => PairedTrace::First,
+    };
     let identity = AffineParamMap1d::new(1.0, 0.0)?;
     let pcurve = build_spherical_circle_pcurve(
         carrier,
@@ -1688,6 +1692,7 @@ pub fn certify_paired_plane_sphere_oblique_circle_residuals(
         sphere,
         sphere_window,
         sphere_longitudes,
+        sphere_position,
         tolerance,
     )?;
     let plane_trace =
@@ -1712,8 +1717,20 @@ fn build_spherical_circle_pcurve(
     sphere: Sphere,
     chart_window: [ParamRange; 2],
     endpoint_longitudes: [f64; 2],
+    sphere_position: PairedTrace,
     tolerance: f64,
 ) -> Result<SphericalCirclePcurve, IntersectionCertificateError> {
+    // The seam record has capacity for the complete crossing set of one
+    // circle period. Wider ranges can contain omitted intermediate periodic
+    // representatives, so they must fail closed instead of using only the
+    // first and last fitted aliases.
+    if carrier_range.width() > core::f64::consts::TAU {
+        return Err(
+            IntersectionCertificateError::UnsupportedCarrierParameterization {
+                reason: "inverse sphere chart carrier range may span at most one period",
+            },
+        );
+    }
     let frame = sphere.frame();
     let center = frame.to_local(carrier.frame().origin());
     let x = carrier.frame().x() * carrier.radius();
@@ -1721,66 +1738,159 @@ fn build_spherical_circle_pcurve(
     let cosine = Vec3::new(x.dot(frame.x()), x.dot(frame.y()), x.dot(frame.z()));
     let sine = Vec3::new(y.dot(frame.x()), y.dot(frame.y()), y.dot(frame.z()));
     let angular_tolerance = (tolerance / sphere.radius()).max(64.0 * f64::EPSILON);
-    let probe = carrier_range.lerp(1.0e-6);
+
+    let mut seams = [SphericalLongitudeSeam::default(); 2];
+    let mut seam_count = 0_usize;
+    let exact_y = exact_source_harmonic_signs(
+        frame.y(),
+        carrier.frame().origin(),
+        frame.origin(),
+        carrier.frame().x(),
+        carrier.frame().y(),
+    )
+    .ok_or(IntersectionCertificateError::HarmonicRootClassification)?;
+    certify_rounded_harmonic_matches_exact(exact_y, cosine.y, sine.y, center.y)?;
+    let seam_roots = match exact_y.kind() {
+        ExactSourceHarmonicKind::Identity | ExactSourceHarmonicKind::ConstantNonzero => Vec::new(),
+        ExactSourceHarmonicKind::General => {
+            trig_linear_roots(sine.y, cosine.y, center.y, carrier_range, angular_tolerance)?
+        }
+    };
+    let exact_x = if seam_roots.is_empty() {
+        None
+    } else {
+        let signs = exact_source_harmonic_signs(
+            frame.x(),
+            carrier.frame().origin(),
+            frame.origin(),
+            carrier.frame().x(),
+            carrier.frame().y(),
+        )
+        .ok_or(IntersectionCertificateError::HarmonicRootClassification)?;
+        certify_rounded_harmonic_matches_exact(signs, cosine.x, sine.x, center.x)?;
+        Some(signs)
+    };
+    let first_interior_root = seam_roots
+        .iter()
+        .find(|root| root.location == PeriodicRootLocation::Interior)
+        .map(|root| root.parameter);
+    let probe_cap = midpoint_parameter(
+        carrier_range.lo,
+        first_interior_root.unwrap_or(carrier_range.hi),
+    )?;
+    let probe_candidate = carrier_range.lerp(1.0e-6);
+    let probe = if probe_candidate > carrier_range.lo && probe_candidate < probe_cap {
+        probe_candidate
+    } else {
+        probe_cap
+    };
+    if !(probe > carrier_range.lo
+        && probe < carrier_range.hi
+        && first_interior_root.is_none_or(|first_root| probe < first_root))
+    {
+        return Err(IntersectionCertificateError::HarmonicRootClassification);
+    }
+    let mut exact_start_root = None;
+    let mut exact_end_root = None;
+    for root in seam_roots.iter().copied() {
+        if matches!(
+            root.location,
+            PeriodicRootLocation::ClampedStart | PeriodicRootLocation::ClampedEnd
+        ) {
+            continue;
+        }
+        let x_signs = exact_x.ok_or(IntersectionCertificateError::HarmonicRootClassification)?;
+        let x_side = match x_signs.kind() {
+            ExactSourceHarmonicKind::Identity => Orientation::Zero,
+            ExactSourceHarmonicKind::ConstantNonzero => x_signs.constant,
+            ExactSourceHarmonicKind::General => {
+                certify_harmonic_x_side_at_y_root(center, cosine, sine, root.derivative_sign)?
+            }
+        };
+        match x_side {
+            Orientation::Positive => continue,
+            Orientation::Negative => {}
+            Orientation::Zero => {
+                return Err(IntersectionCertificateError::SingularSphereChart {
+                    squared_pole_clearance: 0.0,
+                });
+            }
+        }
+        match root.location {
+            PeriodicRootLocation::ExactStart => {
+                exact_start_root = Some(root);
+                continue;
+            }
+            PeriodicRootLocation::ExactEnd => {
+                exact_end_root = Some(root);
+                continue;
+            }
+            PeriodicRootLocation::Interior => {}
+            PeriodicRootLocation::ClampedStart | PeriodicRootLocation::ClampedEnd => {
+                continue;
+            }
+        }
+        let turn_delta = match root.derivative_sign {
+            Orientation::Negative => 1.0,
+            Orientation::Positive => -1.0,
+            Orientation::Zero => 0.0,
+        };
+        if seam_count == seams.len() {
+            return Err(
+                IntersectionCertificateError::UnsupportedTraceParameterization {
+                    trace: sphere_position,
+                    reason: "inverse sphere chart exceeded its finite seam-crossing capacity",
+                },
+            );
+        }
+        seams[seam_count] = SphericalLongitudeSeam {
+            parameter: root.parameter,
+            turn_delta,
+            longitude: 0.0,
+        };
+        seam_count += 1;
+    }
+    seams[..seam_count].sort_by(|first, second| first.parameter.total_cmp(&second.parameter));
+
+    // The capped probe lies in the first classified root-free interval. An
+    // uncapped fixed fractional probe could sit after a close crossing and
+    // incorrectly apply the post-crossing turn to the range start.
     let probe_local = harmonic_local_point(center, cosine, sine, probe);
     let raw_probe = math::atan2(probe_local.y, probe_local.x);
     let initial_turn = ((endpoint_longitudes[0] - raw_probe) / core::f64::consts::TAU).round();
     if !initial_turn.is_finite() {
         return Err(IntersectionCertificateError::NonFiniteGeometry);
     }
+    let start_endpoint_anchor = exact_start_root
+        .map(|root| negative_x_endpoint_anchor(root, center.y, true, initial_turn))
+        .transpose()?;
 
-    let mut seams = [SphericalLongitudeSeam::default(); 2];
-    let mut seam_count = 0_usize;
     let mut current_turn = initial_turn;
-    for root in trig_linear_roots(sine.y, cosine.y, center.y, carrier_range, angular_tolerance)? {
-        if root <= carrier_range.lo + angular_tolerance
-            || root >= carrier_range.hi - angular_tolerance
-        {
-            continue;
-        }
-        let local = harmonic_local_point(center, cosine, sine, root);
-        if local.x >= 0.0 {
-            continue;
-        }
-        let (sin, cos) = math::sincos(root);
-        let y_derivative = -cosine.y * sin + sine.y * cos;
-        if y_derivative.abs() <= angular_tolerance {
-            continue;
-        }
-        if seam_count == seams.len() {
-            return Err(
-                IntersectionCertificateError::UnsupportedTraceParameterization {
-                    trace: PairedTrace::Second,
-                    reason: "inverse sphere chart exceeded its finite seam-crossing capacity",
-                },
-            );
-        }
-        let turn_delta = if y_derivative < 0.0 { 1.0 } else { -1.0 };
-        let longitude = if turn_delta > 0.0 {
-            core::f64::consts::PI + current_turn * core::f64::consts::TAU
+    for seam in seams.iter_mut().take(seam_count) {
+        let tangent_positive_branch = if seam.turn_delta == 0.0 {
+            nonzero_scalar_orientation(center.y)? == Orientation::Positive
         } else {
-            -core::f64::consts::PI + current_turn * core::f64::consts::TAU
+            false
         };
-        seams[seam_count] = SphericalLongitudeSeam {
-            parameter: root,
-            turn_delta,
-            longitude,
-        };
-        seam_count += 1;
-        current_turn += turn_delta;
-    }
-    seams[..seam_count].sort_by(|first, second| first.parameter.total_cmp(&second.parameter));
-
-    current_turn = initial_turn;
-    for seam in seams.iter().take(seam_count) {
+        seam.longitude =
+            if seam.turn_delta > 0.0 || (seam.turn_delta == 0.0 && tangent_positive_branch) {
+                core::f64::consts::PI + current_turn * core::f64::consts::TAU
+            } else {
+                -core::f64::consts::PI + current_turn * core::f64::consts::TAU
+            };
         current_turn += seam.turn_delta;
     }
+    let end_endpoint_anchor = exact_end_root
+        .map(|root| negative_x_endpoint_anchor(root, center.y, false, current_turn))
+        .transpose()?;
     let end_local = harmonic_local_point(center, cosine, sine, carrier_range.hi);
-    let continuous_end =
-        math::atan2(end_local.y, end_local.x) + current_turn * core::f64::consts::TAU;
+    let continuous_end = end_endpoint_anchor.unwrap_or_else(|| {
+        math::atan2(end_local.y, end_local.x) + current_turn * core::f64::consts::TAU
+    });
     let start_local = harmonic_local_point(center, cosine, sine, carrier_range.lo);
-    let continuous_start =
-        math::atan2(start_local.y, start_local.x) + initial_turn * core::f64::consts::TAU;
+    let continuous_start = start_endpoint_anchor.unwrap_or_else(|| {
+        math::atan2(start_local.y, start_local.x) + initial_turn * core::f64::consts::TAU
+    });
     let fitted_start = periodic_representative_near(
         endpoint_longitudes[0],
         continuous_start,
@@ -1814,42 +1924,304 @@ fn harmonic_local_point(center: Vec3, cosine: Vec3, sine: Vec3, parameter: f64) 
     center + cosine * cos + sine * sin
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExactSourceHarmonicKind {
+    Identity,
+    ConstantNonzero,
+    General,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ExactSourceHarmonicSigns {
+    cosine: Orientation,
+    sine: Orientation,
+    constant: Orientation,
+}
+
+impl ExactSourceHarmonicSigns {
+    const fn kind(self) -> ExactSourceHarmonicKind {
+        match (self.cosine, self.sine, self.constant) {
+            (Orientation::Zero, Orientation::Zero, Orientation::Zero) => {
+                ExactSourceHarmonicKind::Identity
+            }
+            (Orientation::Zero, Orientation::Zero, _) => ExactSourceHarmonicKind::ConstantNonzero,
+            _ => ExactSourceHarmonicKind::General,
+        }
+    }
+}
+
+fn exact_source_harmonic_signs(
+    normal: Vec3,
+    center_point: Vec3,
+    center_origin: Vec3,
+    cosine_axis: Vec3,
+    sine_axis: Vec3,
+) -> Option<ExactSourceHarmonicSigns> {
+    let zero = [0.0; 3];
+    let cosine = affine_dot3(normal.to_array(), cosine_axis.to_array(), zero, 0.0)?.sign();
+    let sine = affine_dot3(normal.to_array(), sine_axis.to_array(), zero, 0.0)?.sign();
+    let constant = affine_dot3(
+        normal.to_array(),
+        center_point.to_array(),
+        center_origin.to_array(),
+        0.0,
+    )?
+    .sign();
+    Some(ExactSourceHarmonicSigns {
+        cosine,
+        sine,
+        constant,
+    })
+}
+
+fn rounded_harmonic_matches_exact(
+    exact: ExactSourceHarmonicSigns,
+    cosine: f64,
+    sine: f64,
+    constant: f64,
+) -> bool {
+    scalar_orientation(cosine) == exact.cosine
+        && scalar_orientation(sine) == exact.sine
+        && scalar_orientation(constant) == exact.constant
+}
+
+fn certify_rounded_harmonic_matches_exact(
+    exact: ExactSourceHarmonicSigns,
+    cosine: f64,
+    sine: f64,
+    constant: f64,
+) -> Result<(), IntersectionCertificateError> {
+    if rounded_harmonic_matches_exact(exact, cosine, sine, constant) {
+        Ok(())
+    } else {
+        Err(IntersectionCertificateError::HarmonicRootClassification)
+    }
+}
+
+#[cfg(test)]
+fn exact_source_harmonic_kind(
+    normal: Vec3,
+    center_point: Vec3,
+    center_origin: Vec3,
+    cosine_axis: Vec3,
+    sine_axis: Vec3,
+) -> Option<ExactSourceHarmonicKind> {
+    Some(
+        exact_source_harmonic_signs(normal, center_point, center_origin, cosine_axis, sine_axis)?
+            .kind(),
+    )
+}
+
+fn certify_harmonic_x_side_at_y_root(
+    center: Vec3,
+    cosine: Vec3,
+    sine: Vec3,
+    derivative_sign: Orientation,
+) -> Result<Orientation, IntersectionCertificateError> {
+    let radial_squared =
+        finite_interval(Interval::point(cosine.y).square() + Interval::point(sine.y).square())
+            .ok_or(IntersectionCertificateError::HarmonicRootClassification)?;
+    if radial_squared.lo() <= 0.0 {
+        return Err(IntersectionCertificateError::HarmonicRootClassification);
+    }
+    let correlation = finite_interval(
+        Interval::point(cosine.x) * Interval::point(cosine.y)
+            + Interval::point(sine.x) * Interval::point(sine.y),
+    )
+    .ok_or(IntersectionCertificateError::HarmonicRootClassification)?;
+    let base = finite_interval(
+        Interval::point(center.x) * radial_squared - Interval::point(center.y) * correlation,
+    )
+    .ok_or(IntersectionCertificateError::HarmonicRootClassification)?;
+    let numerator = match derivative_sign {
+        Orientation::Zero => base,
+        Orientation::Negative | Orientation::Positive => {
+            let discriminant = finite_interval(radial_squared - Interval::point(center.y).square())
+                .ok_or(IntersectionCertificateError::HarmonicRootClassification)?;
+            if discriminant.lo() <= 0.0 {
+                return Err(IntersectionCertificateError::HarmonicRootClassification);
+            }
+            let discriminant_root = discriminant
+                .sqrt()
+                .and_then(finite_interval)
+                .ok_or(IntersectionCertificateError::HarmonicRootClassification)?;
+            let cross = finite_interval(
+                Interval::point(cosine.x) * Interval::point(sine.y)
+                    - Interval::point(sine.x) * Interval::point(cosine.y),
+            )
+            .ok_or(IntersectionCertificateError::HarmonicRootClassification)?;
+            let root_term = finite_interval(cross * discriminant_root)
+                .ok_or(IntersectionCertificateError::HarmonicRootClassification)?;
+            match derivative_sign {
+                Orientation::Negative => finite_interval(base - root_term),
+                Orientation::Positive => finite_interval(base + root_term),
+                Orientation::Zero => None,
+            }
+            .ok_or(IntersectionCertificateError::HarmonicRootClassification)?
+        }
+    };
+    if numerator.lo() > 0.0 {
+        Ok(Orientation::Positive)
+    } else if numerator.hi() < 0.0 {
+        Ok(Orientation::Negative)
+    } else {
+        Ok(Orientation::Zero)
+    }
+}
+
+fn negative_x_endpoint_anchor(
+    root: ClassifiedPeriodicRoot,
+    constant: f64,
+    is_start: bool,
+    turn: f64,
+) -> Result<f64, IntersectionCertificateError> {
+    let branch = match (root.derivative_sign, is_start) {
+        (Orientation::Negative, true) | (Orientation::Positive, false) => Orientation::Negative,
+        (Orientation::Positive, true) | (Orientation::Negative, false) => Orientation::Positive,
+        (Orientation::Zero, _) => nonzero_scalar_orientation(constant)?,
+    };
+    Ok(if branch == Orientation::Positive {
+        core::f64::consts::PI + turn * core::f64::consts::TAU
+    } else {
+        -core::f64::consts::PI + turn * core::f64::consts::TAU
+    })
+}
+
+fn midpoint_parameter(first: f64, second: f64) -> Result<f64, IntersectionCertificateError> {
+    let midpoint = first + 0.5 * (second - first);
+    midpoint
+        .is_finite()
+        .then_some(midpoint)
+        .ok_or(IntersectionCertificateError::HarmonicRootClassification)
+}
+
 fn trig_linear_roots(
     sine: f64,
     cosine: f64,
     constant: f64,
     range: ParamRange,
     tolerance: f64,
-) -> Result<Vec<f64>, IntersectionCertificateError> {
+) -> Result<Vec<ClassifiedPeriodicRoot>, IntersectionCertificateError> {
     let solution = harmonic_half_angle_roots(cosine, sine, constant)
         .ok_or(IntersectionCertificateError::HarmonicRootClassification)?;
     let mut roots = Vec::new();
-    for &half_tangent in solution.finite_roots() {
+    for (provenance, &half_tangent) in solution.finite_roots().iter().enumerate() {
+        let derivative_sign = finite_harmonic_root_derivative_sign(
+            solution.discriminant(),
+            solution.finite_roots().len(),
+            solution.has_infinity_root(),
+            provenance,
+            sine,
+        )?;
         push_periodic_root(
             &mut roots,
             2.0 * math::atan2(half_tangent, 1.0),
+            provenance,
+            derivative_sign,
             range,
             tolerance,
-        );
+        )?;
     }
     if solution.has_infinity_root() {
-        push_periodic_root(&mut roots, core::f64::consts::PI, range, tolerance);
+        let derivative_sign = infinity_harmonic_root_derivative_sign(
+            solution.discriminant(),
+            solution.finite_roots().len(),
+            sine,
+        )?;
+        push_periodic_root(
+            &mut roots,
+            core::f64::consts::PI,
+            solution.finite_roots().len(),
+            derivative_sign,
+            range,
+            tolerance,
+        )?;
     }
-    roots.sort_by(f64::total_cmp);
-    roots.dedup_by(|first, second| (*first - *second).abs() <= tolerance);
+    roots.sort_by(|first, second| first.parameter.total_cmp(&second.parameter));
     Ok(roots)
+}
+
+fn finite_harmonic_root_derivative_sign(
+    discriminant: Orientation,
+    finite_root_count: usize,
+    has_infinity_root: bool,
+    root_index: usize,
+    sine: f64,
+) -> Result<Orientation, IntersectionCertificateError> {
+    match discriminant {
+        Orientation::Zero if root_index < finite_root_count => Ok(Orientation::Zero),
+        Orientation::Positive if !has_infinity_root && finite_root_count == 2 => match root_index {
+            0 => Ok(Orientation::Negative),
+            1 => Ok(Orientation::Positive),
+            _ => Err(IntersectionCertificateError::HarmonicRootClassification),
+        },
+        Orientation::Positive if has_infinity_root && finite_root_count == 1 && root_index == 0 => {
+            nonzero_scalar_orientation(sine)
+        }
+        Orientation::Negative | Orientation::Zero | Orientation::Positive => {
+            Err(IntersectionCertificateError::HarmonicRootClassification)
+        }
+    }
+}
+
+fn infinity_harmonic_root_derivative_sign(
+    discriminant: Orientation,
+    finite_root_count: usize,
+    sine: f64,
+) -> Result<Orientation, IntersectionCertificateError> {
+    match discriminant {
+        Orientation::Zero if finite_root_count == 0 => Ok(Orientation::Zero),
+        Orientation::Positive if finite_root_count == 1 => {
+            Ok(reverse_orientation(nonzero_scalar_orientation(sine)?))
+        }
+        Orientation::Negative | Orientation::Zero | Orientation::Positive => {
+            Err(IntersectionCertificateError::HarmonicRootClassification)
+        }
+    }
+}
+
+fn nonzero_scalar_orientation(value: f64) -> Result<Orientation, IntersectionCertificateError> {
+    let orientation = scalar_orientation(value);
+    if orientation == Orientation::Zero {
+        Err(IntersectionCertificateError::HarmonicRootClassification)
+    } else {
+        Ok(orientation)
+    }
+}
+
+const fn scalar_orientation(value: f64) -> Orientation {
+    if value > 0.0 {
+        Orientation::Positive
+    } else if value < 0.0 {
+        Orientation::Negative
+    } else {
+        Orientation::Zero
+    }
+}
+
+const fn reverse_orientation(orientation: Orientation) -> Orientation {
+    match orientation {
+        Orientation::Negative => Orientation::Positive,
+        Orientation::Zero => Orientation::Zero,
+        Orientation::Positive => Orientation::Negative,
+    }
 }
 
 #[cfg(test)]
 mod quadratic_root_tests {
     use super::*;
+    use kgeom::frame::Frame;
 
     #[test]
     fn ordinary_bits_scaling_and_half_angle_chart_root_remain_deterministic() {
         let range = ParamRange::new(0.0, core::f64::consts::TAU);
         assert_eq!(
-            trig_linear_roots(0.0, 1.0, 1.0, range, 1e-2).unwrap(),
+            root_parameters(&trig_linear_roots(0.0, 1.0, 1.0, range, 1e-2).unwrap()),
             vec![core::f64::consts::PI]
+        );
+        assert_eq!(
+            trig_linear_roots(0.0, 1.0, 1.0, range, 1e-2).unwrap()[0].derivative_sign,
+            Orientation::Zero
         );
         assert!(
             trig_linear_roots(0.0, 1.0, 1.0 + 1e-6, range, 1e-2)
@@ -1859,10 +2231,34 @@ mod quadratic_root_tests {
         );
         let secant = trig_linear_roots(0.0, 1.0, 0.991, range, 1e-2).unwrap();
         assert_eq!(secant.len(), 2);
-        assert!(secant[1] - secant[0] > 0.25);
-        for &root in &secant {
-            assert!((math::cos(root) + 0.991).abs() < 2.0e-15);
+        assert!(secant[1].parameter - secant[0].parameter > 0.25);
+        assert_eq!(secant[0].derivative_sign, Orientation::Negative);
+        assert_eq!(secant[1].derivative_sign, Orientation::Positive);
+        for root in &secant {
+            assert!((math::cos(root.parameter) + 0.991).abs() < 2.0e-15);
         }
+        let close_secant = trig_linear_roots(0.0, 100.0, 99.999_687_5, range, 1e-2).unwrap();
+        assert_eq!(close_secant.len(), 2);
+        assert!(close_secant[1].parameter - close_secant[0].parameter < 1e-2);
+        for root in &close_secant {
+            assert!((100.0 * math::cos(root.parameter) + 99.999_687_5).abs() < 2.0e-12);
+        }
+        assert!(
+            trig_linear_roots(0.0, 0.0, 0.0, range, 1e-2)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            trig_linear_roots(0.0, 0.0, 1.0, range, 1e-2)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            trig_linear_roots(0.0, 1.0, 0.0, ParamRange::new(0.2, 0.3), 1e-2,)
+                .unwrap()
+                .is_empty(),
+            "a root outside the tolerance-expanded range must not clamp to an endpoint"
+        );
 
         let ordinary_range = ParamRange::new(-core::f64::consts::PI, core::f64::consts::PI);
         let ordinary = trig_linear_roots(-1.5, 0.5, 1.5, ordinary_range, 1e-14).unwrap();
@@ -1880,27 +2276,557 @@ mod quadratic_root_tests {
             );
         }
         assert_eq!(
+            ordinary
+                .iter()
+                .map(|root| root.derivative_sign)
+                .collect::<Vec<_>>(),
+            vec![Orientation::Negative, Orientation::Positive]
+        );
+        let projective_linear = trig_linear_roots(0.5, 1.0, 1.0, range, 1e-14).unwrap();
+        assert_eq!(projective_linear.len(), 2);
+        assert_eq!(projective_linear[0].parameter, core::f64::consts::PI);
+        assert_eq!(projective_linear[0].derivative_sign, Orientation::Negative);
+        assert!(projective_linear[1].parameter > core::f64::consts::PI);
+        assert_eq!(projective_linear[1].derivative_sign, Orientation::Positive);
+        let reversed_projective_linear = trig_linear_roots(-0.5, 1.0, 1.0, range, 1e-14).unwrap();
+        assert_eq!(reversed_projective_linear.len(), 2);
+        assert!(reversed_projective_linear[0].parameter < core::f64::consts::PI);
+        assert_eq!(
+            reversed_projective_linear[0].derivative_sign,
+            Orientation::Negative
+        );
+        assert_eq!(
+            reversed_projective_linear[1].parameter,
+            core::f64::consts::PI
+        );
+        assert_eq!(
+            reversed_projective_linear[1].derivative_sign,
+            Orientation::Positive
+        );
+        assert_eq!(
             trig_linear_roots(f64::from_bits(1), f64::MAX, 0.0, range, 1e-2,),
             Err(IntersectionCertificateError::HarmonicRootClassification)
         );
     }
+
+    #[test]
+    fn distinct_classified_roots_that_clamp_to_one_parameter_fail_closed() {
+        let range = ParamRange::new(0.0, core::f64::consts::PI - 3.0e-3);
+        assert_eq!(
+            trig_linear_roots(0.0, 100.0, 99.999_687_5, range, 1e-2),
+            Err(IntersectionCertificateError::HarmonicRootClassification)
+        );
+    }
+
+    #[test]
+    fn exact_source_harmonic_kind_detects_identity_constant_and_erased_general_relations() {
+        let zero = Vec3::new(0.0, 0.0, 0.0);
+        assert_eq!(
+            exact_source_harmonic_kind(
+                Vec3::new(0.0, 0.0, 1.0),
+                zero,
+                zero,
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ),
+            Some(ExactSourceHarmonicKind::Identity)
+        );
+        assert_eq!(
+            exact_source_harmonic_kind(
+                Vec3::new(0.0, 0.0, 1.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                zero,
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ),
+            Some(ExactSourceHarmonicKind::ConstantNonzero)
+        );
+
+        let normal = Vec3::new(0.6, 0.8, 0.0);
+        let erased_axis = Vec3::new(5_667_193_987_184_073.0, -4_250_395_490_388_054.0, 0.0);
+        assert_eq!(normal.dot(erased_axis), 0.0);
+        assert_eq!(normal.dot(Vec3::new(0.0, 0.0, 1.0)), 0.0);
+        assert_eq!(
+            exact_source_harmonic_kind(normal, zero, zero, erased_axis, Vec3::new(0.0, 0.0, 1.0),),
+            Some(ExactSourceHarmonicKind::General)
+        );
+        let partially_erased =
+            exact_source_harmonic_signs(normal, zero, zero, erased_axis, normal).unwrap();
+        assert_eq!(normal.dot(erased_axis), 0.0);
+        assert_eq!(normal.dot(normal), 1.0);
+        assert_eq!(partially_erased.cosine, Orientation::Positive);
+        assert_eq!(partially_erased.sine, Orientation::Positive);
+        assert!(!rounded_harmonic_matches_exact(
+            partially_erased,
+            normal.dot(erased_axis),
+            normal.dot(normal),
+            0.0,
+        ));
+        assert_eq!(
+            certify_rounded_harmonic_matches_exact(
+                partially_erased,
+                normal.dot(erased_axis),
+                normal.dot(normal),
+                0.0,
+            ),
+            Err(IntersectionCertificateError::HarmonicRootClassification)
+        );
+
+        let translation = (1_i64 << 51) as f64;
+        let translated_origin = Vec3::new(-translation, translation, 0.0);
+        let translated_point = Vec3::new(3_415_394_173_498_825.0, -1_998_595_676_702_806.0, 0.0);
+        assert_eq!(normal.dot(translated_point - translated_origin), 0.0);
+        assert_eq!(
+            exact_source_harmonic_kind(
+                normal,
+                translated_point,
+                translated_origin,
+                Vec3::new(0.8, -0.6, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ),
+            Some(ExactSourceHarmonicKind::ConstantNonzero)
+        );
+        let erased_constant = exact_source_harmonic_signs(
+            normal,
+            translated_point,
+            translated_origin,
+            Vec3::new(0.8, -0.6, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        )
+        .unwrap();
+        assert_eq!(erased_constant.constant, Orientation::Positive);
+        assert!(!rounded_harmonic_matches_exact(
+            erased_constant,
+            0.0,
+            0.0,
+            normal.dot(translated_point - translated_origin),
+        ));
+        assert_eq!(
+            certify_rounded_harmonic_matches_exact(
+                erased_constant,
+                0.0,
+                0.0,
+                normal.dot(translated_point - translated_origin),
+            ),
+            Err(IntersectionCertificateError::HarmonicRootClassification)
+        );
+    }
+
+    #[test]
+    fn oblique_sphere_chart_propagates_harmonic_root_collisions() {
+        let sphere = Sphere::new(Frame::world(), 100.0).unwrap();
+        let normal = Vec3::new(0.0, 0.8, 0.6);
+        let ratio = 0.999_996_875_f64;
+        let distance = (3_600.0 * ratio * ratio / (0.64 + 0.36 * ratio * ratio)).sqrt();
+        let radius = (sphere.radius() * sphere.radius() - distance * distance).sqrt();
+        let center = normal * distance;
+        let frame = Frame::new(center, normal, Vec3::new(1.0, 0.0, 0.0)).unwrap();
+        let plane = Plane::new(frame);
+        let carrier = Circle::new(frame, radius).unwrap();
+        let plane_pcurve = Circle2d::new(Vec2::new(0.0, 0.0), radius, Vec2::new(1.0, 0.0)).unwrap();
+        let range = ParamRange::new(0.2, 1.5 * core::f64::consts::PI - 3.0e-3);
+        let endpoint_longitudes = [
+            math::atan2(
+                sphere.frame().to_local(carrier.eval(range.lo)).y,
+                sphere.frame().to_local(carrier.eval(range.lo)).x,
+            ),
+            math::atan2(
+                sphere.frame().to_local(carrier.eval(range.hi)).y,
+                sphere.frame().to_local(carrier.eval(range.hi)).x,
+            ),
+        ];
+        assert_eq!(
+            certify_paired_plane_sphere_oblique_circle_residuals(
+                carrier,
+                range,
+                plane,
+                plane_pcurve,
+                sphere,
+                [
+                    ParamRange::new(-core::f64::consts::PI, core::f64::consts::PI),
+                    ParamRange::new(-core::f64::consts::FRAC_PI_2, core::f64::consts::FRAC_PI_2,),
+                ],
+                endpoint_longitudes,
+                PairedTrace::First,
+                1.0,
+            ),
+            Err(IntersectionCertificateError::HarmonicRootClassification)
+        );
+    }
+
+    #[test]
+    fn close_transverse_seams_survive_angular_tolerance() {
+        let sphere = Sphere::new(Frame::world(), 1.0).unwrap();
+        let ratio = 0.999_996_875_f64;
+        let distance = (0.36 * ratio * ratio / (0.64 + 0.36 * ratio * ratio)).sqrt();
+        let radius = (1.0 - distance * distance).sqrt();
+        let normal = Vec3::new(-0.6, 0.8, 0.0);
+        let center = normal * distance;
+        let frame = Frame::new(center, normal, Vec3::new(0.8, 0.6, 0.0)).unwrap();
+        let plane = Plane::new(frame);
+        let carrier = Circle::new(frame, radius).unwrap();
+        let plane_pcurve = Circle2d::new(Vec2::new(0.0, 0.0), radius, Vec2::new(1.0, 0.0)).unwrap();
+        let range = ParamRange::new(core::f64::consts::PI - 0.1, core::f64::consts::PI + 0.1);
+        let endpoint_longitudes = [
+            math::atan2(
+                sphere.frame().to_local(carrier.eval(range.lo)).y,
+                sphere.frame().to_local(carrier.eval(range.lo)).x,
+            ),
+            math::atan2(
+                sphere.frame().to_local(carrier.eval(range.hi)).y,
+                sphere.frame().to_local(carrier.eval(range.hi)).x,
+            ),
+        ];
+        let (pcurve, certificate) = certify_paired_plane_sphere_oblique_circle_residuals(
+            carrier,
+            range,
+            plane,
+            plane_pcurve,
+            sphere,
+            [
+                ParamRange::new(-core::f64::consts::PI, 3.0 * core::f64::consts::PI),
+                ParamRange::new(-core::f64::consts::FRAC_PI_2, core::f64::consts::FRAC_PI_2),
+            ],
+            endpoint_longitudes,
+            PairedTrace::First,
+            1e-2,
+        )
+        .unwrap();
+        assert_eq!(pcurve.seam_count, 2);
+        assert!(pcurve.seams[1].parameter - pcurve.seams[0].parameter < 1e-2);
+        assert_eq!(pcurve.seams[0].turn_delta, 1.0);
+        assert_eq!(pcurve.seams[1].turn_delta, -1.0);
+        assert!(
+            pcurve.eval(core::f64::consts::PI).x > core::f64::consts::PI,
+            "the longitude must remain continuously unwrapped between close seams"
+        );
+        assert!(
+            certificate
+                .residual_bounds()
+                .into_iter()
+                .all(|bound| bound <= certificate.tolerance())
+        );
+        let (reversed_pcurve, reversed_certificate) =
+            certify_paired_plane_sphere_oblique_circle_residuals(
+                carrier,
+                range,
+                plane,
+                plane_pcurve,
+                sphere,
+                [
+                    ParamRange::new(-core::f64::consts::PI, 3.0 * core::f64::consts::PI),
+                    ParamRange::new(-core::f64::consts::FRAC_PI_2, core::f64::consts::FRAC_PI_2),
+                ],
+                endpoint_longitudes,
+                PairedTrace::Second,
+                1e-2,
+            )
+            .unwrap();
+        assert_eq!(reversed_pcurve, pcurve);
+        assert!(matches!(
+            reversed_certificate.traces(),
+            [
+                PlaneSphereCircleTrace::SphereOblique(_),
+                PlaneSphereCircleTrace::Plane(_)
+            ]
+        ));
+
+        let first_seam = pcurve.seams[0].parameter;
+        let near_start_range = ParamRange::new(first_seam - 1e-8, first_seam + 0.02);
+        let near_start_longitudes = [
+            math::atan2(
+                sphere.frame().to_local(carrier.eval(near_start_range.lo)).y,
+                sphere.frame().to_local(carrier.eval(near_start_range.lo)).x,
+            ),
+            math::atan2(
+                sphere.frame().to_local(carrier.eval(near_start_range.hi)).y,
+                sphere.frame().to_local(carrier.eval(near_start_range.hi)).x,
+            ),
+        ];
+        let (near_start_pcurve, _) = certify_paired_plane_sphere_oblique_circle_residuals(
+            carrier,
+            near_start_range,
+            plane,
+            plane_pcurve,
+            sphere,
+            [
+                ParamRange::new(-core::f64::consts::PI, 3.0 * core::f64::consts::PI),
+                ParamRange::new(-core::f64::consts::FRAC_PI_2, core::f64::consts::FRAC_PI_2),
+            ],
+            near_start_longitudes,
+            PairedTrace::First,
+            1e-2,
+        )
+        .unwrap();
+        assert_eq!(near_start_pcurve.seam_count, 2);
+        assert!(
+            (near_start_pcurve.eval(near_start_range.lo).x
+                - near_start_pcurve.eval(near_start_range.lo + 2e-9).x)
+                .abs()
+                < 1e-3,
+            "the initial turn probe must remain before a strict-interior near-start seam"
+        );
+
+        for (endpoint_range, endpoint, interior) in [
+            (
+                ParamRange::new(first_seam, first_seam + 0.02),
+                first_seam,
+                first_seam + 1e-8,
+            ),
+            (
+                ParamRange::new(pcurve.seams[1].parameter - 0.02, pcurve.seams[1].parameter),
+                pcurve.seams[1].parameter,
+                pcurve.seams[1].parameter - 1e-8,
+            ),
+        ] {
+            let endpoint_solver_longitudes = [
+                math::atan2(
+                    sphere.frame().to_local(carrier.eval(endpoint_range.lo)).y,
+                    sphere.frame().to_local(carrier.eval(endpoint_range.lo)).x,
+                ),
+                math::atan2(
+                    sphere.frame().to_local(carrier.eval(endpoint_range.hi)).y,
+                    sphere.frame().to_local(carrier.eval(endpoint_range.hi)).x,
+                ),
+            ];
+            let (endpoint_pcurve, _) = certify_paired_plane_sphere_oblique_circle_residuals(
+                carrier,
+                endpoint_range,
+                plane,
+                plane_pcurve,
+                sphere,
+                [
+                    ParamRange::new(-core::f64::consts::PI, 3.0 * core::f64::consts::PI),
+                    ParamRange::new(-core::f64::consts::FRAC_PI_2, core::f64::consts::FRAC_PI_2),
+                ],
+                endpoint_solver_longitudes,
+                PairedTrace::First,
+                1e-2,
+            )
+            .unwrap();
+            assert_eq!(endpoint_pcurve.seam_count, 1);
+            assert!(
+                (endpoint_pcurve.eval(endpoint).x - endpoint_pcurve.eval(interior).x).abs() < 1e-3,
+                "an exact transverse endpoint root must retain its one-sided longitude branch"
+            );
+        }
+
+        let wide_range = ParamRange::new(0.0, core::f64::consts::TAU + 1e-3);
+        let wide_endpoint_longitudes = [
+            math::atan2(
+                sphere.frame().to_local(carrier.eval(wide_range.lo)).y,
+                sphere.frame().to_local(carrier.eval(wide_range.lo)).x,
+            ),
+            math::atan2(
+                sphere.frame().to_local(carrier.eval(wide_range.hi)).y,
+                sphere.frame().to_local(carrier.eval(wide_range.hi)).x,
+            ),
+        ];
+        assert_eq!(
+            certify_paired_plane_sphere_oblique_circle_residuals(
+                carrier,
+                wide_range,
+                plane,
+                plane_pcurve,
+                sphere,
+                [
+                    ParamRange::new(-core::f64::consts::PI, 3.0 * core::f64::consts::PI),
+                    ParamRange::new(-core::f64::consts::FRAC_PI_2, core::f64::consts::FRAC_PI_2,),
+                ],
+                wide_endpoint_longitudes,
+                PairedTrace::First,
+                1e-2,
+            ),
+            Err(
+                IntersectionCertificateError::UnsupportedCarrierParameterization {
+                    reason: "inverse sphere chart carrier range may span at most one period",
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn negative_x_tangencies_retain_zero_turn_longitude_anchors() {
+        for (normal, x_axis, expected_longitude) in [
+            (
+                Vec3::new(-0.6, 0.8, 0.0),
+                Vec3::new(0.8, 0.6, 0.0),
+                core::f64::consts::PI,
+            ),
+            (
+                Vec3::new(-0.6, -0.8, 0.0),
+                Vec3::new(0.8, -0.6, 0.0),
+                -core::f64::consts::PI,
+            ),
+        ] {
+            let sphere = Sphere::new(Frame::world(), 1.0).unwrap();
+            let center = normal * 0.6;
+            let frame = Frame::new(center, normal, x_axis).unwrap();
+            let plane = Plane::new(frame);
+            let carrier = Circle::new(frame, 0.8).unwrap();
+            let plane_pcurve =
+                Circle2d::new(Vec2::new(0.0, 0.0), 0.8, Vec2::new(1.0, 0.0)).unwrap();
+            let range = ParamRange::new(core::f64::consts::PI - 0.1, core::f64::consts::PI + 0.1);
+            let endpoint_longitudes = [
+                math::atan2(
+                    sphere.frame().to_local(carrier.eval(range.lo)).y,
+                    sphere.frame().to_local(carrier.eval(range.lo)).x,
+                ),
+                math::atan2(
+                    sphere.frame().to_local(carrier.eval(range.hi)).y,
+                    sphere.frame().to_local(carrier.eval(range.hi)).x,
+                ),
+            ];
+            let (pcurve, certificate) = certify_paired_plane_sphere_oblique_circle_residuals(
+                carrier,
+                range,
+                plane,
+                plane_pcurve,
+                sphere,
+                [
+                    ParamRange::new(-2.0 * core::f64::consts::PI, 2.0 * core::f64::consts::PI),
+                    ParamRange::new(-core::f64::consts::FRAC_PI_2, core::f64::consts::FRAC_PI_2),
+                ],
+                endpoint_longitudes,
+                PairedTrace::First,
+                1e-10,
+            )
+            .unwrap();
+            assert_eq!(pcurve.seam_count, 1);
+            assert_eq!(pcurve.seams[0].turn_delta, 0.0);
+            assert_eq!(pcurve.eval(core::f64::consts::PI).x, expected_longitude);
+            for parameter in [core::f64::consts::PI - 1e-3, core::f64::consts::PI + 1e-3] {
+                assert!(
+                    (pcurve.eval(parameter).x - expected_longitude).abs() < 1e-2,
+                    "the tangent anchor must agree with both neighboring longitude branches"
+                );
+            }
+            assert!(
+                certificate
+                    .residual_bounds()
+                    .into_iter()
+                    .all(|bound| bound <= certificate.tolerance())
+            );
+        }
+    }
+
+    #[test]
+    fn rotated_general_coordinate_pole_fails_with_singular_chart_taxonomy() {
+        let sphere = Sphere::new(Frame::world(), 1.0).unwrap();
+        let normal = Vec3::new(0.6, 0.8, 0.0);
+        let frame = Frame::new(Vec3::new(0.0, 0.0, 0.0), normal, Vec3::new(0.0, 0.0, 1.0)).unwrap();
+        let plane = Plane::new(frame);
+        let carrier = Circle::new(frame, 1.0).unwrap();
+        let plane_pcurve = Circle2d::new(Vec2::new(0.0, 0.0), 1.0, Vec2::new(1.0, 0.0)).unwrap();
+        let range = ParamRange::new(-0.2, 0.2);
+        let endpoint_longitudes = [
+            math::atan2(
+                sphere.frame().to_local(carrier.eval(range.lo)).y,
+                sphere.frame().to_local(carrier.eval(range.lo)).x,
+            ),
+            math::atan2(
+                sphere.frame().to_local(carrier.eval(range.hi)).y,
+                sphere.frame().to_local(carrier.eval(range.hi)).x,
+            ),
+        ];
+        assert!(matches!(
+            certify_paired_plane_sphere_oblique_circle_residuals(
+                carrier,
+                range,
+                plane,
+                plane_pcurve,
+                sphere,
+                [
+                    ParamRange::new(-core::f64::consts::PI, core::f64::consts::PI),
+                    ParamRange::new(-core::f64::consts::FRAC_PI_2, core::f64::consts::FRAC_PI_2,),
+                ],
+                endpoint_longitudes,
+                PairedTrace::First,
+                1e-10,
+            ),
+            Err(IntersectionCertificateError::SingularSphereChart {
+                squared_pole_clearance: 0.0
+            })
+        ));
+    }
+
+    fn root_parameters(roots: &[ClassifiedPeriodicRoot]) -> Vec<f64> {
+        roots.iter().map(|root| root.parameter).collect()
+    }
 }
 
-fn push_periodic_root(roots: &mut Vec<f64>, candidate: f64, range: ParamRange, tolerance: f64) {
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ClassifiedPeriodicRoot {
+    parameter: f64,
+    // Tolerance may merge periodic representatives only when they came from
+    // the same exact classified root. Distinct provenances must remain
+    // separate, and an exact numeric collision between them fails closed.
+    provenance: usize,
+    derivative_sign: Orientation,
+    location: PeriodicRootLocation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PeriodicRootLocation {
+    Interior,
+    ExactStart,
+    ExactEnd,
+    ClampedStart,
+    ClampedEnd,
+}
+
+fn push_periodic_root(
+    roots: &mut Vec<ClassifiedPeriodicRoot>,
+    candidate: f64,
+    provenance: usize,
+    derivative_sign: Orientation,
+    range: ParamRange,
+    tolerance: f64,
+) -> Result<(), IntersectionCertificateError> {
     let tau = core::f64::consts::TAU;
     let first = ((range.lo - tolerance - candidate) / tau).ceil();
     let last = ((range.hi + tolerance - candidate) / tau).floor();
+    if first > last {
+        return Ok(());
+    }
     for turn in [first, last] {
         if turn.is_finite() {
-            let root = (candidate + turn * tau).clamp(range.lo, range.hi);
-            if !roots
-                .iter()
-                .any(|existing| (existing - root).abs() <= tolerance)
-            {
-                roots.push(root);
+            let representative = candidate + turn * tau;
+            if !representative.is_finite() {
+                return Err(IntersectionCertificateError::HarmonicRootClassification);
             }
+            let parameter = representative.clamp(range.lo, range.hi);
+            let location = if representative < range.lo {
+                PeriodicRootLocation::ClampedStart
+            } else if representative > range.hi {
+                PeriodicRootLocation::ClampedEnd
+            } else if representative == range.lo {
+                PeriodicRootLocation::ExactStart
+            } else if representative == range.hi {
+                PeriodicRootLocation::ExactEnd
+            } else {
+                PeriodicRootLocation::Interior
+            };
+            if roots.iter().any(|existing| {
+                existing.provenance != provenance && existing.parameter == parameter
+            }) {
+                return Err(IntersectionCertificateError::HarmonicRootClassification);
+            }
+            if roots.iter().any(|existing| {
+                existing.provenance == provenance
+                    && (existing.parameter - parameter).abs() <= tolerance
+            }) {
+                continue;
+            }
+            roots.push(ClassifiedPeriodicRoot {
+                parameter,
+                provenance,
+                derivative_sign,
+                location,
+            });
         }
     }
+    Ok(())
 }
 
 fn periodic_representative_near(
