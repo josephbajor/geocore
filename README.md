@@ -19,7 +19,7 @@ boundary.
 
 | Crate | Layer | Contents |
 |---|---|---|
-| [`crates/kcore`](crates/kcore) | L0 foundations | Deterministic robust `orient2d`, `orient3d`, positive-inside-CCW `incircle`, and exact cyclic `polygon_orientation2d` predicates with conservative floating filters or exact expansion evaluation, interval filters, tolerance policy (Parasolid numeric regime), typed errors, generational entity arenas with copy-on-write undo frames, deterministic parallel primitives, deterministic transcendental math (musl port — platform libm is banned in kernel code via clippy `disallowed-methods`) |
+| [`crates/kcore`](crates/kcore) | L0 foundations | Deterministic robust `orient2d`, `orient3d`, positive-inside-CCW `incircle`, exact cyclic `polygon_orientation2d`, and bounded exact quadratic/harmonic root classification with conservative floating filters or exact expansion evaluation, interval filters, tolerance policy (Parasolid numeric regime), typed errors, generational entity arenas with copy-on-write undo frames, deterministic parallel primitives, deterministic transcendental math (musl port — platform libm is banned in kernel code via clippy `disallowed-methods`) |
 | [`crates/kgeom`](crates/kgeom) | L1 geometry | Analytic curves (line/circle/ellipse), true 2D line/circle/NURBS pcurve evaluators, and analytic surfaces (plane/cylinder/cone/sphere/torus) with exact bounding boxes, NURBS engine (Piegl & Tiller) with homogeneous 2D/3D knot operations and conservative active-subrange control-hull boxes, closest-point projection, deterministic trimmed-face tessellation with exact streaming trim-loop winding and explicit refinement-limit errors, evaluator conformance harness |
 | [`crates/kgraph`](crates/kgraph) | L1.5 geometry graph | Immutable analytic, NURBS, and procedural geometry nodes with typed dependencies, deterministic identity, and bounded evaluation |
 | [`crates/ktopo`](crates/ktopo) | L2 topology | Parasolid entity hierarchy (body→region→shell→face→loop→fin→edge→vertex), finite conservative face UV domains, typed entity-tolerance provenance and transaction-owned growth budgets, independent per-fin pcurves, bounded curve-less tolerant edges, reusable validated polygon-with-holes profiles and checked prism extrusion, transaction-owned pcurve-aware Euler edits, private generic Store mutation with transaction-scoped checked assembly, deterministic mutation/lineage/tolerance journals, journal-returning checked solid/sheet/wire/acorn constructors, shared incidence validation, and pcurve-driven watertight tessellation |
@@ -99,10 +99,29 @@ application boundary.
   layout is certified; curved, periodic, nonlinear-chart, tolerance-joined,
   exact-zero, and non-finite loops remain silent in Fast and receive per-loop
   Full `LoopOrientation` gaps, while unresolved outer/hole roles remain the
-  separate `LoopContainment` obligation. Remaining concrete decision-audit debt
-  includes generic curved-pcurve signed line integrals and curved or periodic
-  containment, conic discriminant root-count classification, NURBS-plane sign
-  certification, and other raw topological sign branches.
+  separate `LoopContainment` obligation. Bounded exact conic root-count
+  classification is also landed. `quadratic_discriminant` interval-certifies
+  ordinary `b² - 4ac` signs and uses normal-range expansions when cancellation
+  defeats the filter; non-finite or out-of-envelope fallback cases return
+  `None`, never a guessed miss. Shared `harmonic_half_angle_roots` applies an
+  exactly reversible power-of-two normalization, classifies the number of
+  roots from the original
+  `cosine² + sine² - constant²` identity rather than the rounded transformed
+  quadratic, and represents the exact projective `t = π` root separately. The
+  ordinary positive path retains the prior quadratic-formula bits and ordering;
+  exact-positive fallback uses stable `q` construction. Every `kops` conic and
+  planar-conic consumer turns classification failure into `Indeterminate`,
+  while `kgraph` exposes the typed
+  `IntersectionCertificateError::HarmonicRootClassification`. Evidence pins
+  exact positive/zero/negative quadratic cancellation, a `2^52` harmonic
+  cancellation, a transformed-sign-mismatch bit pattern, two transverse contacts for
+  `cos(t) + 0.991 = 0` despite a `0.01` metric tolerance, `2^±700` scaling,
+  ordinary repeat bits, and the debug/release numeric golden. Remaining
+  concrete decision-audit debt includes generic curved-pcurve signed line
+  integrals and curved or periodic containment, the outer amplitude metric
+  policy, extreme coefficient spreads outside the exact normalization
+  envelope, NURBS-plane sign certification, generic higher-polynomial roots,
+  and other raw topological sign branches.
   `insphere`, an `incircle` production decision consumer when required, the
   broader topological-decision audit, and full conformance remain ahead.
 - M2.5 is in progress and remains the architecture gate. Transaction-owned checked

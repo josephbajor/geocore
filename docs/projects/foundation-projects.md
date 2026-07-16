@@ -143,12 +143,37 @@ eight-vertex coincident overlap as a `Complete` Region with cyclic
 exact-positive turns, repeatability, operand-swap semantic parity, and
 non-finite range rejection.
 
+Bounded conic root-count classification is now another shared M0 consumer.
+`quadratic_discriminant` uses an outward interval filter for ordinary
+`b² - 4ac` signs and a normal-range expansion fallback for cancellation. It
+returns an exact sign plus a finite sign-consistent approximation, but returns
+`None` for non-finite input or a fallback outside the conservative
+finite/normal envelope. `harmonic_half_angle_roots` applies exactly reversible
+power-of-two normalization and decides root count from the original
+`cosine² + sine² - constant²` identity rather than the rounded transformed
+quadratic. Exact homogeneous degree owns the separate projective
+`y = infinity`, `t = π` root; ordinary interval-certified secants preserve the
+previous quadratic-formula bits, and exact-positive fallback uses stable-`q`
+root construction.
+
+All `kops` conic and planar-conic root consumers map an unrepresentable
+classification to shared `Indeterminate` evidence instead of a miss.
+`kgraph` surfaces the corresponding typed
+`IntersectionCertificateError::HarmonicRootClassification`. The committed
+evidence includes exact positive/zero/negative quadratic cancellation, the
+`2^52` harmonic whose rounded transformed discriminant is zero, a fixed
+transformed-sign mismatch bit pattern, two distinct transverse contacts for
+`cos(t) + 0.991 = 0` under `0.01` metric tolerance, exact `2^±700`
+normalization, repeat parity for ordinary public conic and graph results, and
+the debug/release numeric golden.
+
 Concrete next targets include generic curved-pcurve signed line integrals and
-curved or periodic containment, conic discriminant root-count classification,
-NURBS-plane control-distance and bracketing sign certification, and other raw
-topology-changing sign branches. `incircle` remains without a production
-topology decision consumer, and `insphere` remains deferred until a 3D Delaunay
-or equivalent consumer exists.
+curved or periodic containment, extreme coefficient spreads outside the
+harmonic normalization/expansion envelope, the outer conic amplitude metric
+policy, NURBS-plane control-distance and bracketing sign certification, generic
+higher-polynomial roots, and other raw topology-changing sign branches.
+`incircle` remains without a production topology decision consumer, and
+`insphere` remains deferred until a 3D Delaunay or equivalent consumer exists.
 
 ## Current direction and handoff order
 
@@ -1209,6 +1234,16 @@ composition remain.
 
 **Purpose:** keep analytic special cases while preventing quadratic dispatch and
 helper duplication from becoming the architecture.
+
+**Implemented root-classification slice:** analytic conic/plane and
+conic/primitive-surface paths plus the graph spherical-pcurve seam certifier now
+share `kcore::predicates::harmonic_half_angle_roots`. Exact root count comes from
+the original harmonic identity, projective infinity is explicit, ordinary root
+bits remain stable, and exact-cancellation fallback uses stable-`q` arithmetic.
+Unrepresentable bounded cases retain incomplete evidence through `kops`
+`Indeterminate` or the graph's typed `HarmonicRootClassification` error rather
+than being flattened into a miss. This removes the duplicated tolerance-based
+quadratic root-count helpers without claiming generic polynomial isolation.
 
 **Scope:** introduce stable geometry-class inspection, centralized pair
 normalization/swapping, shared range and periodic-parameter utilities, shared

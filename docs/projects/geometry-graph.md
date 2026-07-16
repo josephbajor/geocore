@@ -659,7 +659,20 @@ crossing. Pole-touching, pole-crossing, or insufficient-clearance branches fail
 with `SingularSphereChart`; unenclosable finite charts fail with
 `SphereTraceOutsideWindow`. Invalid maps/ranges/tolerances, non-finite
 arithmetic, wrong trace families, and residual violations also fail
-explicitly. A graph-aware `kops`
+explicitly. Longitude-seam events now use the shared
+`kcore::predicates::harmonic_half_angle_roots` classifier. Power-of-two
+normalization preserves the original harmonic exactly, root count comes from
+the exact sign of `cosine² + sine² - constant²`, and an exact homogeneous
+leading zero represents the projective `t = π` root. Ordinary
+interval-certified cases retain their prior root bits, while cancellation uses
+the normal-range expansion and stable-`q` fallback. Inputs or coefficient
+spreads outside that bounded exact envelope fail with the typed
+`IntersectionCertificateError::HarmonicRootClassification`; they do not
+silently erase a seam. Fixtures pin the `2^52` cancellation, the transformed
+half-angle-sign mismatch, `2^±700` scaling, ordinary repeat parity, and the
+debug/release numeric golden.
+
+A graph-aware `kops`
 exact-field compat/context/in-scope adapter preserves the analytic result,
 source handles, typed stale/unsupported failures, and canonical operand-swap
 behavior while building deterministic endpoint vertices and certified edges.
