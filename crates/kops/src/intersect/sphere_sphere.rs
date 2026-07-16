@@ -308,7 +308,7 @@ const GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT: usize = GENERAL_SPHERE_WIDE_PI
     * (GENERAL_SPHERE_WINDOW_PAIR_LIMIT + GENERAL_SPHERE_POLAR_CELL_PAIR_LIMIT);
 const GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT: usize = GENERAL_SPHERE_WIDE_PIECE_LIMIT
     * (GENERAL_SPHERE_WINDOW_ARC_LIMIT + GENERAL_SPHERE_POLAR_CELL_ARC_LIMIT);
-const GENERAL_SPHERE_POLAR_WIDE_LAYOUT_REASON: &str = "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, one exact connected four-cell shared-seam path, T-shaped tree, or 2x2 cycle with two certified-empty siblings, one exact disconnected pair of outer-column vertical pairs with a certified-empty middle column, one exact five-cell simultaneous shared-seam union with one certified-empty sibling, or the exact simultaneous six-cell union with no empty sibling";
+const GENERAL_SPHERE_POLAR_WIDE_LAYOUT_REASON: &str = "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, one exact connected four-cell shared-seam path, T-shaped tree, or 2x2 cycle with two certified-empty siblings, one exact disconnected outer-column vertical-pair layout or singleton-plus-three-cell path separated by two certified-empty cut siblings, one exact five-cell simultaneous shared-seam union with one certified-empty sibling, or the exact simultaneous six-cell union with no empty sibling";
 type PolarWideParameterSeam = (bool, usize, f64);
 type PolarWideFourAdjacency = [[Option<PolarWideParameterSeam>; 4]; 4];
 const GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT: usize =
@@ -1109,6 +1109,23 @@ fn certify_polar_by_wide_sphere_window_union(
                 components,
             );
         }
+        if let Some(mut components) = merge_exact_polar_wide_singleton_and_three_cell_sphere_regions(
+            &regions,
+            first_is_polar,
+            &polar_pieces,
+            &wide_pieces,
+        ) {
+            for component in &mut components {
+                component.correspondence =
+                    SurfaceRegionCorrespondence::GeneralSphereWindow(parent_map);
+                component.max_residual = component.max_residual.max(parent_residual);
+            }
+            return SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
+                Vec::new(),
+                Vec::new(),
+                components,
+            );
+        }
         // The path merger remains the only route for degree sequence 2,2,1,1.
         // T-shaped trees and 2x2 cycles instead require simultaneous ownership
         // of all three or four reverse-oriented, bit-exact grid seams before
@@ -1340,6 +1357,116 @@ fn merge_exact_polar_wide_disconnected_vertical_sphere_region_pairs(
         components.push(merged);
     }
     Some(components)
+}
+
+fn merge_exact_polar_wide_singleton_and_three_cell_sphere_regions(
+    regions: &[([usize; 2], SurfaceSurfaceRegion)],
+    first_is_polar: bool,
+    polar_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_POLAR_UNION_PIECE_LIMIT],
+    wide_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+) -> Option<Vec<SurfaceSurfaceRegion>> {
+    const SUPPORTED_LAYOUTS: [[[usize; 2]; 4]; 4] = [
+        [[0, 0], [0, 2], [1, 1], [1, 2]],
+        [[0, 0], [0, 1], [1, 0], [1, 2]],
+        [[0, 1], [0, 2], [1, 0], [1, 2]],
+        [[0, 0], [0, 2], [1, 0], [1, 1]],
+    ];
+    if regions.len() != 4 {
+        return None;
+    }
+    let mut cells = regions.iter().map(|(cell, _)| *cell).collect::<Vec<_>>();
+    cells.sort_unstable();
+    if !SUPPORTED_LAYOUTS
+        .iter()
+        .any(|supported| cells.as_slice() == supported)
+    {
+        return None;
+    }
+
+    let all_cells = [[0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [1, 2]];
+    let empty_cells = all_cells
+        .into_iter()
+        .filter(|cell| !cells.contains(cell))
+        .collect::<Vec<_>>();
+    let mut degrees = vec![0_u8; regions.len()];
+    for first in 0..regions.len() {
+        for second in first + 1..regions.len() {
+            if polar_wide_grid_shared_parameter_seam(
+                regions[first].0,
+                regions[second].0,
+                first_is_polar,
+                polar_pieces,
+                wide_pieces,
+            )
+            .is_some()
+            {
+                degrees[first] += 1;
+                degrees[second] += 1;
+            }
+        }
+    }
+    if degrees.iter().filter(|degree| **degree == 0).count() != 1
+        || degrees.iter().filter(|degree| **degree == 1).count() != 2
+        || degrees.iter().filter(|degree| **degree == 2).count() != 1
+    {
+        return None;
+    }
+
+    // Both omitted siblings are a graph cut around the singleton. Exact
+    // emptiness is useful only when every occupied neighbor stays strictly off
+    // the corresponding artificial separator, including corner-only contact.
+    if regions.iter().any(|(occupied_cell, region)| {
+        empty_cells.iter().any(|empty_cell| {
+            polar_wide_grid_shared_parameter_seam(
+                *occupied_cell,
+                *empty_cell,
+                first_is_polar,
+                polar_pieces,
+                wide_pieces,
+            )
+            .is_some_and(|(on_first, parameter, seam)| {
+                region.boundary.iter().any(|vertex| {
+                    let uv = if on_first { vertex.uv_a } else { vertex.uv_b };
+                    uv[parameter].to_bits() == seam.to_bits()
+                })
+            })
+        })
+    }) {
+        return None;
+    }
+
+    let singleton_index = degrees.iter().position(|degree| *degree == 0)?;
+    let singleton = regions[singleton_index].1.clone();
+    let component = regions
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != singleton_index)
+        .map(|(_, entry)| entry.clone())
+        .collect::<Vec<_>>();
+    let (merged, _) = merge_exact_polar_wide_sphere_region_path(
+        &component,
+        first_is_polar,
+        polar_pieces,
+        wide_pieces,
+    )?;
+    let artificial_seams = [
+        (first_is_polar, 1, polar_pieces[0][1].hi),
+        (!first_is_polar, 0, wide_pieces[1][0].lo),
+        (!first_is_polar, 0, wide_pieces[2][0].lo),
+    ];
+    if [&singleton, &merged].iter().any(|region| {
+        artificial_seams.iter().any(|(on_first, parameter, seam)| {
+            sphere_region_has_parameter_seam_edge(region, *on_first, *parameter, *seam)
+        })
+    }) || singleton.boundary.iter().any(|first| {
+        merged
+            .boundary
+            .iter()
+            .any(|second| sphere_region_vertices_are_bit_exact(*first, *second))
+    }) {
+        return None;
+    }
+    Some(vec![singleton, merged])
 }
 
 fn merge_exact_polar_wide_four_sphere_region_path(
@@ -5367,6 +5494,66 @@ mod tests {
         )
     }
 
+    fn exact_polar_by_wide_zero_zero_singleton_fixture()
+    -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+        exact_polar_by_wide_four_cell_fixture(
+            1.2641733116298481,
+            [
+                ParamRange::new(-2.1792714803605975, 0.23159622415365666),
+                ParamRange::new(-0.8443620544103326, core::f64::consts::FRAC_PI_2),
+            ],
+            [
+                ParamRange::new(0.2770343914821476, 4.458851031712419),
+                ParamRange::new(0.35108647851526786, 1.263262146312806),
+            ],
+        )
+    }
+
+    fn exact_polar_by_wide_one_two_singleton_fixture()
+    -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+        exact_polar_by_wide_four_cell_fixture(
+            1.0421460686226904,
+            [
+                ParamRange::new(-1.6960087068831846, -0.17663691928352354),
+                ParamRange::new(-0.5068962186083287, core::f64::consts::FRAC_PI_2),
+            ],
+            [
+                ParamRange::new(3.446220149698494, 9.601890541153121),
+                ParamRange::new(-0.20048894581341026, 0.6664998186963655),
+            ],
+        )
+    }
+
+    fn exact_polar_by_wide_one_zero_singleton_fixture()
+    -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+        exact_polar_by_wide_four_cell_fixture(
+            0.7689495924455754,
+            [
+                ParamRange::new(-0.6725341301611243, 0.8021638258595267),
+                ParamRange::new(-0.8110127562233151, core::f64::consts::FRAC_PI_2),
+            ],
+            [
+                ParamRange::new(1.555315994398029, 7.6047049454535),
+                ParamRange::new(-1.048198669914953, 0.8057776574051865),
+            ],
+        )
+    }
+
+    fn exact_polar_by_wide_zero_two_singleton_fixture()
+    -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+        exact_polar_by_wide_four_cell_fixture(
+            0.8862379569121048,
+            [
+                ParamRange::new(-0.3684687150823871, 0.8669729245355371),
+                ParamRange::new(-0.22128242474864823, core::f64::consts::FRAC_PI_2),
+            ],
+            [
+                ParamRange::new(-5.545040393598143, -0.41537863217402204),
+                ParamRange::new(-0.4077140983624745, 1.1640971788151662),
+            ],
+        )
+    }
+
     type PolarWideChildRegions = (
         [[ParamRange; 2]; GENERAL_SPHERE_POLAR_UNION_PIECE_LIMIT],
         [[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
@@ -7435,6 +7622,239 @@ mod tests {
                 .unwrap_err(),
                 Error::InvalidGeometry { reason }
             );
+        }
+    }
+
+    #[test]
+    fn exact_polar_by_wide_singleton_plus_three_cell_components_are_exact() {
+        let fixtures = [
+            (
+                exact_polar_by_wide_zero_zero_singleton_fixture(),
+                [[0, 0], [0, 2], [1, 1], [1, 2]],
+                [[0, 1], [1, 0]],
+                [0, 0],
+            ),
+            (
+                exact_polar_by_wide_one_two_singleton_fixture(),
+                [[0, 0], [0, 1], [1, 0], [1, 2]],
+                [[0, 2], [1, 1]],
+                [1, 2],
+            ),
+            (
+                exact_polar_by_wide_one_zero_singleton_fixture(),
+                [[0, 1], [0, 2], [1, 0], [1, 2]],
+                [[0, 0], [1, 1]],
+                [1, 0],
+            ),
+            (
+                exact_polar_by_wide_zero_two_singleton_fixture(),
+                [[0, 0], [0, 2], [1, 0], [1, 1]],
+                [[0, 1], [1, 2]],
+                [0, 2],
+            ),
+        ];
+        for (fixture_index, ((a, b, a_range, b_range), expected, expected_empty, singleton_cell)) in
+            fixtures.into_iter().enumerate()
+        {
+            let allowance = arbitrary_sphere_octant_parameter_allowance(a_range, b_range).unwrap();
+            let parent_residual =
+                arbitrary_sphere_octant_residual_bound(&a, &b, allowance).unwrap();
+            let (polar_pieces, wide_pieces, occupied, empty) =
+                exact_polar_by_wide_child_regions(&a, a_range, &b, b_range);
+            assert_eq!(
+                occupied.iter().map(|(cell, _)| *cell).collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(empty, expected_empty);
+            assert!(
+                merge_exact_polar_wide_disconnected_vertical_sphere_region_pairs(
+                    &occupied,
+                    true,
+                    &polar_pieces,
+                    &wide_pieces,
+                )
+                .is_none()
+            );
+            assert!(
+                merge_exact_polar_wide_four_sphere_region_path(
+                    &occupied,
+                    true,
+                    &polar_pieces,
+                    &wide_pieces,
+                )
+                .is_none()
+            );
+            assert!(
+                merge_exact_polar_wide_simultaneous_sphere_region_union(
+                    &occupied,
+                    true,
+                    &polar_pieces,
+                    &wide_pieces,
+                )
+                .is_none()
+            );
+
+            let components = merge_exact_polar_wide_singleton_and_three_cell_sphere_regions(
+                &occupied,
+                true,
+                &polar_pieces,
+                &wide_pieces,
+            )
+            .expect("the isolated corner and exact three-cell path must remain two components");
+            assert_eq!(components.len(), 2);
+            let singleton_residual = occupied
+                .iter()
+                .find(|(cell, _)| *cell == singleton_cell)
+                .expect("the singleton cell was required")
+                .1
+                .max_residual;
+            let path_residual = occupied
+                .iter()
+                .filter(|(cell, _)| *cell != singleton_cell)
+                .map(|(_, region)| region.max_residual)
+                .fold(0.0, f64::max);
+            assert_eq!(components[0].max_residual, singleton_residual);
+            assert_eq!(components[1].max_residual, path_residual);
+            let artificial_seams = [
+                (true, 1, polar_pieces[0][1].hi),
+                (false, 0, wide_pieces[1][0].lo),
+                (false, 0, wide_pieces[2][0].lo),
+            ];
+            assert!(components.iter().all(|component| {
+                artificial_seams.iter().all(|(on_first, parameter, seam)| {
+                    !sphere_region_has_parameter_seam_edge(component, *on_first, *parameter, *seam)
+                })
+            }));
+            assert!(components[0].boundary.iter().all(|first| {
+                components[1]
+                    .boundary
+                    .iter()
+                    .all(|second| !sphere_region_vertices_are_bit_exact(*first, *second))
+            }));
+
+            let hit = certify_polar_by_wide_sphere_window_union(
+                &a,
+                a_range,
+                &b,
+                b_range,
+                true,
+                Tolerances::default(),
+                allowance,
+                GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT,
+                GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT,
+                GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT,
+            )
+            .unwrap();
+            assert!(hit.is_complete());
+            assert!(hit.points.is_empty());
+            assert!(hit.curves.is_empty());
+            assert_eq!(hit.regions.len(), 2);
+            let mut expected_residuals = [
+                singleton_residual.max(parent_residual),
+                path_residual.max(parent_residual),
+            ];
+            expected_residuals.sort_by(f64::total_cmp);
+            let mut actual_residuals = hit
+                .regions
+                .iter()
+                .map(|region| region.max_residual)
+                .collect::<Vec<_>>();
+            actual_residuals.sort_by(f64::total_cmp);
+            assert_eq!(actual_residuals, expected_residuals);
+            for region in &hit.regions {
+                let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = region.correspondence
+                else {
+                    unreachable!()
+                };
+                assert_eq!(map.first_range(), a_range);
+                assert_eq!(map.second_range(), b_range);
+                assert!(region.boundary.iter().all(|vertex| {
+                    vertex.residual <= region.max_residual
+                        && a.eval(vertex.uv_a).dist(b.eval(vertex.uv_b)) <= region.max_residual
+                }));
+            }
+
+            if fixture_index == 0 {
+                let longitude_seam = wide_pieces[2][0].lo;
+                let seam_owner = occupied
+                    .iter()
+                    .position(|(cell, _)| *cell == [1, 2])
+                    .expect("the right upper path child was required");
+                let seam_edge = exact_sphere_region_parameter_seam_edge(
+                    &occupied[seam_owner].1,
+                    false,
+                    0,
+                    longitude_seam,
+                )
+                .expect("the right upper path child owns the exact longitude seam");
+                let mut one_ulp = occupied.clone();
+                let endpoint = seam_edge[0];
+                one_ulp[seam_owner].1.boundary[endpoint].uv_b[0] =
+                    f64::from_bits(one_ulp[seam_owner].1.boundary[endpoint].uv_b[0].to_bits() + 1);
+                assert!(
+                    merge_exact_polar_wide_singleton_and_three_cell_sphere_regions(
+                        &one_ulp,
+                        true,
+                        &polar_pieces,
+                        &wide_pieces,
+                    )
+                    .is_none()
+                );
+
+                let mut ambiguous = occupied.clone();
+                let duplicate = ambiguous[seam_owner].1.boundary[seam_edge[0]];
+                ambiguous[seam_owner]
+                    .1
+                    .boundary
+                    .insert(seam_edge[0] + 1, duplicate);
+                assert!(
+                    merge_exact_polar_wide_singleton_and_three_cell_sphere_regions(
+                        &ambiguous,
+                        true,
+                        &polar_pieces,
+                        &wide_pieces,
+                    )
+                    .is_none()
+                );
+
+                for (piece_limit, pair_limit, arc_limit, reason) in [
+                    (
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT - 1,
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT,
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT,
+                        "general coincident sphere polar-by-wide union piece limit exhausted",
+                    ),
+                    (
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT,
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT - 1,
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT,
+                        "general coincident sphere polar-by-wide union pair limit exhausted",
+                    ),
+                    (
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_PIECE_LIMIT,
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_PAIR_LIMIT,
+                        GENERAL_SPHERE_POLAR_WIDE_UNION_ARC_LIMIT - 1,
+                        "general coincident sphere polar-by-wide union arc limit exhausted",
+                    ),
+                ] {
+                    assert_eq!(
+                        certify_polar_by_wide_sphere_window_union(
+                            &a,
+                            a_range,
+                            &b,
+                            b_range,
+                            true,
+                            Tolerances::default(),
+                            allowance,
+                            piece_limit,
+                            pair_limit,
+                            arc_limit,
+                        )
+                        .unwrap_err(),
+                        Error::InvalidGeometry { reason }
+                    );
+                }
+            }
         }
     }
 

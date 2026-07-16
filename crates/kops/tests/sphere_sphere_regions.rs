@@ -543,6 +543,75 @@ fn assert_general_polar_by_wide_shared_seam_path(
     assert_general_sphere_window_region(&swapped, &b, &a);
 }
 
+fn assert_general_polar_by_wide_singleton_plus_path(
+    b_angle: f64,
+    a_window: [ParamRange; 2],
+    b_window: [ParamRange; 2],
+    expected_occupied: &[[usize; 2]],
+    expected_empty: &[[usize; 2]],
+) {
+    let a = world_sphere();
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, b_angle);
+    let latitude_seam = a_window[1].lo + 0.5 * a_window[1].width();
+    let longitude_width = b_window[0].width() / 3.0;
+    let longitude_seams = [
+        b_window[0].lo,
+        b_window[0].lo + longitude_width,
+        b_window[0].lo + 2.0 * longitude_width,
+        b_window[0].hi,
+    ];
+    let mut covered = expected_occupied
+        .iter()
+        .copied()
+        .chain(expected_empty.iter().copied())
+        .collect::<Vec<_>>();
+    covered.sort_unstable();
+    assert_eq!(covered, [[0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [1, 2]]);
+
+    let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_general_sphere_window_regions(&hit, &a, &b, 2);
+    for region in &hit.regions {
+        let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = region.correspondence else {
+            unreachable!()
+        };
+        assert_eq!(map.first_range(), a_window);
+        assert_eq!(map.second_range(), b_window);
+        for (index, vertex) in region.boundary.iter().enumerate() {
+            let next = region.boundary[(index + 1) % region.boundary.len()];
+            assert!(
+                vertex.uv_a[1].to_bits() != latitude_seam.to_bits()
+                    || next.uv_a[1].to_bits() != latitude_seam.to_bits()
+            );
+            for seam in &longitude_seams[1..3] {
+                assert!(
+                    vertex.uv_b[0].to_bits() != seam.to_bits()
+                        || next.uv_b[0].to_bits() != seam.to_bits()
+                );
+            }
+            assert!(a.eval(vertex.uv_a).dist(b.eval(vertex.uv_b)) <= region.max_residual);
+        }
+    }
+    assert!(hit.regions[0].boundary.iter().all(|first| {
+        hit.regions[1].boundary.iter().all(|second| {
+            first.point.x.to_bits() != second.point.x.to_bits()
+                || first.point.y.to_bits() != second.point.y.to_bits()
+                || first.point.z.to_bits() != second.point.z.to_bits()
+                || first.uv_a[0].to_bits() != second.uv_a[0].to_bits()
+                || first.uv_a[1].to_bits() != second.uv_a[1].to_bits()
+                || first.uv_b[0].to_bits() != second.uv_b[0].to_bits()
+                || first.uv_b[1].to_bits() != second.uv_b[1].to_bits()
+        })
+    }));
+
+    let repeated =
+        intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_eq!(hit, repeated);
+    let swapped =
+        intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
+    assert_eq!(hit.clone().swapped(), swapped);
+    assert_general_sphere_window_regions(&swapped, &b, &a, 2);
+}
+
 #[test]
 fn general_non_octant_arbitrary_axis_windows_emit_certified_region_and_swap() {
     let a = world_sphere();
@@ -897,7 +966,7 @@ fn general_polar_by_wide_multi_occupied_and_near_pole_cases_fail_closed() {
     .unwrap();
     assert_indeterminate_sphere_window(
         &straddling,
-        "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, one exact connected four-cell shared-seam path, T-shaped tree, or 2x2 cycle with two certified-empty siblings, one exact disconnected pair of outer-column vertical pairs with a certified-empty middle column, one exact five-cell simultaneous shared-seam union with one certified-empty sibling, or the exact simultaneous six-cell union with no empty sibling",
+        "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, one exact connected four-cell shared-seam path, T-shaped tree, or 2x2 cycle with two certified-empty siblings, one exact disconnected outer-column vertical-pair layout or singleton-plus-three-cell path separated by two certified-empty cut siblings, one exact five-cell simultaneous shared-seam union with one certified-empty sibling, or the exact simultaneous six-cell union with no empty sibling",
     );
 
     let near_pole = f64::from_bits(half_pi.to_bits() - 1);
@@ -1218,7 +1287,7 @@ fn general_polar_by_wide_two_nonadjacent_lower_cells_fail_closed() {
     let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
     assert_indeterminate_sphere_window(
         &hit,
-        "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, one exact connected four-cell shared-seam path, T-shaped tree, or 2x2 cycle with two certified-empty siblings, one exact disconnected pair of outer-column vertical pairs with a certified-empty middle column, one exact five-cell simultaneous shared-seam union with one certified-empty sibling, or the exact simultaneous six-cell union with no empty sibling",
+        "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, one exact connected four-cell shared-seam path, T-shaped tree, or 2x2 cycle with two certified-empty siblings, one exact disconnected outer-column vertical-pair layout or singleton-plus-three-cell path separated by two certified-empty cut siblings, one exact five-cell simultaneous shared-seam union with one certified-empty sibling, or the exact simultaneous six-cell union with no empty sibling",
     );
 }
 
@@ -1437,6 +1506,90 @@ fn general_polar_by_wide_disconnected_vertical_pairs_merge_exactly_and_swap() {
         intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
     assert_eq!(hit.clone().swapped(), swapped);
     assert_general_sphere_window_regions(&swapped, &b, &a, 2);
+}
+
+#[test]
+fn general_polar_by_wide_zero_zero_singleton_plus_path_merges_and_swaps() {
+    assert_general_polar_by_wide_singleton_plus_path(
+        1.2641733116298481,
+        window(
+            -2.1792714803605975,
+            0.23159622415365666,
+            -0.8443620544103326,
+            core::f64::consts::FRAC_PI_2,
+        ),
+        window(
+            0.2770343914821476,
+            4.458851031712419,
+            0.35108647851526786,
+            1.263262146312806,
+        ),
+        &[[0, 0], [0, 2], [1, 1], [1, 2]],
+        &[[0, 1], [1, 0]],
+    );
+}
+
+#[test]
+fn general_polar_by_wide_one_two_singleton_plus_path_merges_and_swaps() {
+    assert_general_polar_by_wide_singleton_plus_path(
+        1.0421460686226904,
+        window(
+            -1.6960087068831846,
+            -0.17663691928352354,
+            -0.5068962186083287,
+            core::f64::consts::FRAC_PI_2,
+        ),
+        window(
+            3.446220149698494,
+            9.601890541153121,
+            -0.20048894581341026,
+            0.6664998186963655,
+        ),
+        &[[0, 0], [0, 1], [1, 0], [1, 2]],
+        &[[0, 2], [1, 1]],
+    );
+}
+
+#[test]
+fn general_polar_by_wide_one_zero_singleton_plus_path_merges_and_swaps() {
+    assert_general_polar_by_wide_singleton_plus_path(
+        0.7689495924455754,
+        window(
+            -0.6725341301611243,
+            0.8021638258595267,
+            -0.8110127562233151,
+            core::f64::consts::FRAC_PI_2,
+        ),
+        window(
+            1.555315994398029,
+            7.6047049454535,
+            -1.048198669914953,
+            0.8057776574051865,
+        ),
+        &[[0, 1], [0, 2], [1, 0], [1, 2]],
+        &[[0, 0], [1, 1]],
+    );
+}
+
+#[test]
+fn general_polar_by_wide_zero_two_singleton_plus_path_merges_and_swaps() {
+    assert_general_polar_by_wide_singleton_plus_path(
+        0.8862379569121048,
+        window(
+            -0.3684687150823871,
+            0.8669729245355371,
+            -0.22128242474864823,
+            core::f64::consts::FRAC_PI_2,
+        ),
+        window(
+            -5.545040393598143,
+            -0.41537863217402204,
+            -0.4077140983624745,
+            1.1640971788151662,
+        ),
+        &[[0, 0], [0, 2], [1, 0], [1, 1]],
+        &[[0, 1], [1, 2]],
+    );
 }
 
 #[test]
@@ -1706,7 +1859,7 @@ fn general_polar_by_wide_three_cell_non_cap_row_path_merges_exactly_and_swaps() 
             .unwrap();
     assert_indeterminate_sphere_window(
         &opposite_row_occupied,
-        "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, one exact connected four-cell shared-seam path, T-shaped tree, or 2x2 cycle with two certified-empty siblings, one exact disconnected pair of outer-column vertical pairs with a certified-empty middle column, one exact five-cell simultaneous shared-seam union with one certified-empty sibling, or the exact simultaneous six-cell union with no empty sibling",
+        "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, one exact connected four-cell shared-seam path, T-shaped tree, or 2x2 cycle with two certified-empty siblings, one exact disconnected outer-column vertical-pair layout or singleton-plus-three-cell path separated by two certified-empty cut siblings, one exact five-cell simultaneous shared-seam union with one certified-empty sibling, or the exact simultaneous six-cell union with no empty sibling",
     );
 }
 
