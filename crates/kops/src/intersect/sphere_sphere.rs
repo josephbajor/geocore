@@ -318,7 +318,7 @@ const GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT: usize =
 const GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT: usize =
     GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT * GENERAL_SPHERE_WINDOW_ARC_LIMIT;
 const GENERAL_SPHERE_DOUBLE_WIDE_POSITIVE_CELL_LIMIT: usize = 9;
-const GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON: &str = "general coincident sphere both-wide union supports at most nine positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, seven, eight, and nine require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components";
+const GENERAL_SPHERE_DOUBLE_WIDE_LAYOUT_REASON: &str = "general coincident sphere both-wide union supports at most nine positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, eight, and nine require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components; seven require an exact connected union or an exact corner singleton separated from an exact six-cell component";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SphereWindowConstraint {
@@ -2021,7 +2021,15 @@ fn certify_double_wide_sphere_window_union(
                     &a_pieces,
                     &b_pieces,
                 )
-                .map(|region| vec![region]);
+                .map(|region| vec![region])
+                .or_else(|| {
+                    merge_exact_sphere_region_corner_singleton_and_six_cell_component(
+                        &occupied_regions,
+                        &a_pieces,
+                        &b_pieces,
+                        &certified_empty_cells,
+                    )
+                });
                 resolved_regions.is_some()
             }
         }
@@ -2082,7 +2090,11 @@ fn certify_double_wide_sphere_window_union(
     // five-cell layouts partition in canonical grid order, merge each component
     // under the same seam rules, and require certified-empty sibling owners to
     // separate every pair of components, including both owners of a diagonal
-    // grid corner.
+    // grid corner. The admitted disconnected seven-cell layouts use the same
+    // exact-empty separation at the two grid neighbors of one corner
+    // singleton, then cancel all internal seams of the remaining six-cell
+    // component simultaneously and reject any exact contact between the two
+    // resulting cycles.
     // Pole-clear sub-full-turn parent charts are injective, so the resulting
     // cycles have only true parent boundaries and may use the parent map.
     let parent_residual = arbitrary_sphere_octant_residual_bound(a, b, parent_parameter_allowance)?;
@@ -2270,6 +2282,98 @@ fn merge_exact_sphere_region_components(
         merged.push(region);
     }
     Some(merged)
+}
+
+fn merge_exact_sphere_region_corner_singleton_and_six_cell_component(
+    regions: &[([usize; 2], SurfaceSurfaceRegion)],
+    a_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+    b_pieces: &[[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+    certified_empty_cells: &[[bool; GENERAL_SPHERE_WIDE_PIECE_LIMIT];
+         GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+) -> Option<Vec<SurfaceSurfaceRegion>> {
+    if regions.len() != 7 {
+        return None;
+    }
+
+    // These are exactly the four grid rotations in which the two empty cells
+    // are the orthogonal siblings of one occupied corner. Their removal
+    // isolates that corner and leaves the other six occupied cells connected.
+    let cells = regions.iter().map(|(cell, _)| *cell).collect::<Vec<_>>();
+    let (singleton_cell, cut_cells) = match cells.as_slice() {
+        [[0, 0], [0, 2], [1, 1], [1, 2], [2, 0], [2, 1], [2, 2]] => ([0, 0], [[0, 1], [1, 0]]),
+        [[0, 0], [0, 2], [1, 0], [1, 1], [2, 0], [2, 1], [2, 2]] => ([0, 2], [[0, 1], [1, 2]]),
+        [[0, 0], [0, 1], [0, 2], [1, 1], [1, 2], [2, 0], [2, 2]] => ([2, 0], [[1, 0], [2, 1]]),
+        [[0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [2, 0], [2, 2]] => ([2, 2], [[1, 2], [2, 1]]),
+        _ => return None,
+    };
+    if cut_cells
+        .iter()
+        .any(|cell| !certified_empty_cells[cell[0]][cell[1]])
+    {
+        return None;
+    }
+
+    // Closed child cells meet at their decomposition separators. A merely
+    // empty sibling is not enough to separate output components if an
+    // occupied boundary still reaches that separator, so require zero exact
+    // vertex contact on every occupied side of both cuts.
+    for (occupied_cell, region) in regions {
+        for cut_cell in cut_cells {
+            let Some((seam_on_first_operand, seam)) =
+                sphere_grid_shared_seam(*occupied_cell, cut_cell, a_pieces, b_pieces)
+            else {
+                continue;
+            };
+            if region.boundary.iter().any(|vertex| {
+                let uv = if seam_on_first_operand {
+                    vertex.uv_a
+                } else {
+                    vertex.uv_b
+                };
+                uv[0].to_bits() == seam.to_bits()
+            }) {
+                return None;
+            }
+        }
+    }
+
+    let singleton_index = regions
+        .iter()
+        .position(|(cell, _)| *cell == singleton_cell)?;
+    let component = regions
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != singleton_index)
+        .map(|(_, region)| region.clone())
+        .collect::<Vec<_>>();
+    let merged = merge_exact_sphere_region_non_path_union(&component, a_pieces, b_pieces)?;
+    let singleton = regions[singleton_index].1.clone();
+
+    let artificial_seams = [
+        (true, a_pieces[1][0].lo),
+        (true, a_pieces[2][0].lo),
+        (false, b_pieces[1][0].lo),
+        (false, b_pieces[2][0].lo),
+    ];
+    if [&singleton, &merged].into_iter().any(|region| {
+        artificial_seams.iter().any(|(on_first, seam)| {
+            sphere_region_has_parameter_seam_edge(region, *on_first, 0, *seam)
+        })
+    }) || singleton.boundary.iter().any(|singleton_vertex| {
+        merged.boundary.iter().any(|merged_vertex| {
+            sphere_region_vertices_are_bit_exact(*singleton_vertex, *merged_vertex)
+        })
+    }) {
+        return None;
+    }
+
+    // Canonical grid traversal places the component containing [0, 0] first,
+    // except when [0, 0] itself is the isolated corner.
+    Some(if singleton_cell == [0, 0] {
+        vec![singleton, merged]
+    } else {
+        vec![merged, singleton]
+    })
 }
 
 fn sphere_grid_shared_seam(
@@ -5208,6 +5312,383 @@ mod tests {
                 ParamRange::new(-0.8315857731105628, 1.446288841486333),
             ],
         )
+    }
+
+    type DoubleWideChildRegions = (
+        [[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+        [[ParamRange; 2]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+        Vec<([usize; 2], SurfaceSurfaceRegion)>,
+        [[bool; GENERAL_SPHERE_WIDE_PIECE_LIMIT]; GENERAL_SPHERE_WIDE_PIECE_LIMIT],
+    );
+
+    fn try_double_wide_child_regions(
+        a: &Sphere,
+        a_range: [ParamRange; 2],
+        b: &Sphere,
+        b_range: [ParamRange; 2],
+    ) -> Option<DoubleWideChildRegions> {
+        let allowance = arbitrary_sphere_octant_parameter_allowance(a_range, b_range).ok()?;
+        let a_pieces = decompose_general_sphere_wide_window(a_range, allowance).ok()?;
+        let b_pieces = decompose_general_sphere_wide_window(b_range, allowance).ok()?;
+        let mut occupied = Vec::new();
+        let mut empty = [[false; GENERAL_SPHERE_WIDE_PIECE_LIMIT]; GENERAL_SPHERE_WIDE_PIECE_LIMIT];
+        for (a_index, a_piece) in a_pieces.into_iter().enumerate() {
+            for (b_index, b_piece) in b_pieces.into_iter().enumerate() {
+                let child_allowance =
+                    arbitrary_sphere_octant_parameter_allowance(a_piece, b_piece).ok()?;
+                let mut child = certify_general_sphere_windows(
+                    a,
+                    a_piece,
+                    b,
+                    b_piece,
+                    Tolerances::default(),
+                    GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
+                    GENERAL_SPHERE_WINDOW_ARC_LIMIT,
+                    child_allowance,
+                )
+                .ok()?;
+                if child.is_proven_empty() {
+                    empty[a_index][b_index] = true;
+                } else {
+                    if !child.is_complete()
+                        || !child.points.is_empty()
+                        || !child.curves.is_empty()
+                        || child.regions.len() != 1
+                    {
+                        return None;
+                    }
+                    occupied.push((
+                        [a_index, b_index],
+                        child
+                            .regions
+                            .pop()
+                            .expect("one occupied both-wide child was required"),
+                    ));
+                }
+            }
+        }
+        Some((a_pieces, b_pieces, occupied, empty))
+    }
+
+    fn corner_singleton_zero_two_fixture() -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+        let a = Sphere::new(Frame::world(), 1.0).unwrap();
+        let angle = 0.47197060919404477;
+        let b = Sphere::new(
+            Frame::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(math::sin(angle), 0.0, math::cos(angle)),
+                Vec3::new(math::cos(angle), 0.0, -math::sin(angle)),
+            )
+            .unwrap(),
+            1.0,
+        )
+        .unwrap();
+        (
+            a,
+            b,
+            [
+                ParamRange::new(-1.1071699835935478, 3.7524679961388854),
+                ParamRange::new(-0.812546994077337, -0.4506272057124837),
+            ],
+            [
+                ParamRange::new(-0.2654663126111094, 5.702959581681124),
+                ParamRange::new(-1.3269566811714808, 0.2624880899400377),
+            ],
+        )
+    }
+
+    fn corner_singleton_two_zero_fixture() -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
+        let a = Sphere::new(Frame::world(), 1.0).unwrap();
+        let angle = 0.4173034070683893;
+        let b = Sphere::new(
+            Frame::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(math::sin(angle), 0.0, math::cos(angle)),
+                Vec3::new(math::cos(angle), 0.0, -math::sin(angle)),
+            )
+            .unwrap(),
+            1.0,
+        )
+        .unwrap();
+        (
+            a,
+            b,
+            [
+                ParamRange::new(-1.5777593238922092, 4.4578890813870835),
+                ParamRange::new(0.023048779152054832, 0.6173066748560352),
+            ],
+            [
+                ParamRange::new(2.9579219778608135, 8.91874402763871),
+                ParamRange::new(-0.8861588472869676, 1.3719230587326727),
+            ],
+        )
+    }
+
+    fn reverse_sphere_parameterization(
+        sphere: Sphere,
+        range: [ParamRange; 2],
+    ) -> (Sphere, [ParamRange; 2]) {
+        let frame = sphere.frame();
+        let reversed = Sphere::new(
+            Frame::new(frame.origin(), -frame.z(), frame.x()).unwrap(),
+            sphere.radius(),
+        )
+        .unwrap();
+        (
+            reversed,
+            [
+                ParamRange::new(-range[0].hi, -range[0].lo),
+                ParamRange::new(-range[1].hi, -range[1].lo),
+            ],
+        )
+    }
+
+    #[test]
+    fn corner_singleton_seven_cell_components_and_limits_are_exact() {
+        let expected = [
+            [[0, 0], [0, 2], [1, 1], [1, 2], [2, 0], [2, 1], [2, 2]],
+            [[0, 0], [0, 2], [1, 0], [1, 1], [2, 0], [2, 1], [2, 2]],
+            [[0, 0], [0, 1], [0, 2], [1, 1], [1, 2], [2, 0], [2, 2]],
+            [[0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [2, 0], [2, 2]],
+        ];
+        let expected_singletons = [[0, 0], [0, 2], [2, 0], [2, 2]];
+        let expected_cuts = [
+            [[0, 1], [1, 0]],
+            [[0, 1], [1, 2]],
+            [[1, 0], [2, 1]],
+            [[1, 2], [2, 1]],
+        ];
+        let (a, b, a_range, b_range) = corner_singleton_zero_two_fixture();
+        let (b_reversed, b_reversed_range) = reverse_sphere_parameterization(b, b_range);
+        let (c, d, c_range, d_range) = corner_singleton_two_zero_fixture();
+        let (d_reversed, d_reversed_range) = reverse_sphere_parameterization(d, d_range);
+        let fixtures = [
+            (a, b_reversed, a_range, b_reversed_range),
+            (a, b, a_range, b_range),
+            (c, d, c_range, d_range),
+            (c, d_reversed, c_range, d_reversed_range),
+        ];
+        for (fixture_index, ((a, b, a_range, b_range), expected)) in
+            fixtures.into_iter().zip(expected).enumerate()
+        {
+            let (a_pieces, b_pieces, occupied, empty) =
+                try_double_wide_child_regions(&a, a_range, &b, b_range).unwrap();
+            assert_eq!(
+                occupied.iter().map(|(cell, _)| *cell).collect::<Vec<_>>(),
+                expected
+            );
+            let empty_cells = (0..3)
+                .flat_map(|a_index| (0..3).map(move |b_index| [a_index, b_index]))
+                .filter(|cell| empty[cell[0]][cell[1]])
+                .collect::<Vec<_>>();
+            assert_eq!(empty_cells, expected_cuts[fixture_index]);
+            for (occupied_cell, region) in &occupied {
+                for cut_cell in expected_cuts[fixture_index] {
+                    if let Some((seam_on_first_operand, seam)) =
+                        sphere_grid_shared_seam(*occupied_cell, cut_cell, &a_pieces, &b_pieces)
+                    {
+                        assert!(region.boundary.iter().all(|vertex| {
+                            let uv = if seam_on_first_operand {
+                                vertex.uv_a
+                            } else {
+                                vertex.uv_b
+                            };
+                            uv[0].to_bits() != seam.to_bits()
+                        }));
+                    }
+                }
+            }
+
+            let singleton = expected_singletons[fixture_index];
+            let component = occupied
+                .iter()
+                .filter(|(cell, _)| *cell != singleton)
+                .cloned()
+                .collect::<Vec<_>>();
+            let merged_component =
+                merge_exact_sphere_region_non_path_union(&component, &a_pieces, &b_pieces)
+                    .expect("the six-cell component must have one exact outer cycle");
+            assert!(
+                merge_exact_sphere_region_non_path_union(&occupied, &a_pieces, &b_pieces).is_none()
+            );
+            let resolved = merge_exact_sphere_region_corner_singleton_and_six_cell_component(
+                &occupied, &a_pieces, &b_pieces, &empty,
+            )
+            .expect("the corner singleton and six-cell component must be separated exactly");
+            assert_eq!(resolved.len(), 2);
+            let artificial_seams = [
+                (true, a_pieces[1][0].lo),
+                (true, a_pieces[2][0].lo),
+                (false, b_pieces[1][0].lo),
+                (false, b_pieces[2][0].lo),
+            ];
+            assert!(resolved.iter().all(|region| {
+                artificial_seams.iter().all(|(on_first, seam)| {
+                    !sphere_region_has_parameter_seam_edge(region, *on_first, 0, *seam)
+                })
+            }));
+            let singleton_region = &occupied
+                .iter()
+                .find(|(cell, _)| *cell == singleton)
+                .expect("the isolated corner was required")
+                .1;
+            assert!(singleton_region.boundary.iter().all(|singleton_vertex| {
+                merged_component.boundary.iter().all(|merged_vertex| {
+                    !sphere_region_vertices_are_bit_exact(*singleton_vertex, *merged_vertex)
+                })
+            }));
+
+            let allowance = arbitrary_sphere_octant_parameter_allowance(a_range, b_range).unwrap();
+            let parent_residual =
+                arbitrary_sphere_octant_residual_bound(&a, &b, allowance).unwrap();
+            let hit = certify_double_wide_sphere_window_union(
+                &a,
+                a_range,
+                &b,
+                b_range,
+                Tolerances::default(),
+                allowance,
+                GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+                GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+            )
+            .unwrap();
+            assert!(hit.is_complete());
+            assert!(hit.points.is_empty());
+            assert!(hit.curves.is_empty());
+            assert_eq!(hit.regions.len(), 2);
+            let mut expected_residuals = resolved
+                .iter()
+                .map(|region| region.max_residual.max(parent_residual))
+                .collect::<Vec<_>>();
+            expected_residuals.sort_by(f64::total_cmp);
+            let mut actual_residuals = hit
+                .regions
+                .iter()
+                .map(|region| region.max_residual)
+                .collect::<Vec<_>>();
+            actual_residuals.sort_by(f64::total_cmp);
+            assert_eq!(actual_residuals, expected_residuals);
+            for region in &hit.regions {
+                let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = region.correspondence
+                else {
+                    unreachable!()
+                };
+                assert_eq!(map.first_range(), a_range);
+                assert_eq!(map.second_range(), b_range);
+                assert!(region.boundary.iter().all(|vertex| {
+                    vertex.residual <= region.max_residual
+                        && a.eval(vertex.uv_a).dist(b.eval(vertex.uv_b)) <= region.max_residual
+                }));
+            }
+
+            if fixture_index == 0 {
+                let (first, second, seam_on_first_operand, _seam, shared) = (0..component.len())
+                    .find_map(|first| {
+                        (first + 1..component.len()).find_map(|second| {
+                            let (seam_on_first_operand, seam) = sphere_grid_shared_seam(
+                                component[first].0,
+                                component[second].0,
+                                &a_pieces,
+                                &b_pieces,
+                            )?;
+                            let shared = exact_sphere_region_shared_seam_edges(
+                                &component[first].1,
+                                &component[second].1,
+                                seam_on_first_operand,
+                                seam,
+                                &a_pieces,
+                                &b_pieces,
+                            )?;
+                            Some((first, second, seam_on_first_operand, seam, shared))
+                        })
+                    })
+                    .expect("the six-cell component must contain an exact internal seam");
+                let (mismatch_owner, mismatch_endpoint) = match shared.exact_owner {
+                    ExactSphereSeamOwner::First | ExactSphereSeamOwner::Both => {
+                        (second, shared.second_edge[0])
+                    }
+                    ExactSphereSeamOwner::Second => (first, shared.first_edge[0]),
+                };
+                let mut one_ulp = occupied.clone();
+                let occupied_mismatch_owner = one_ulp
+                    .iter()
+                    .position(|(cell, _)| *cell == component[mismatch_owner].0)
+                    .unwrap();
+                let uv = if seam_on_first_operand {
+                    &mut one_ulp[occupied_mismatch_owner].1.boundary[mismatch_endpoint].uv_b
+                } else {
+                    &mut one_ulp[occupied_mismatch_owner].1.boundary[mismatch_endpoint].uv_a
+                };
+                uv[0] = f64::from_bits(uv[0].to_bits() + 1);
+                assert!(
+                    merge_exact_sphere_region_corner_singleton_and_six_cell_component(
+                        &one_ulp, &a_pieces, &b_pieces, &empty,
+                    )
+                    .is_none()
+                );
+
+                let (exact_owner, exact_edge) = match shared.exact_owner {
+                    ExactSphereSeamOwner::First | ExactSphereSeamOwner::Both => {
+                        (first, shared.first_edge)
+                    }
+                    ExactSphereSeamOwner::Second => (second, shared.second_edge),
+                };
+                let mut ambiguous = occupied.clone();
+                let occupied_exact_owner = ambiguous
+                    .iter()
+                    .position(|(cell, _)| *cell == component[exact_owner].0)
+                    .unwrap();
+                let duplicate = ambiguous[occupied_exact_owner].1.boundary[exact_edge[0]];
+                ambiguous[occupied_exact_owner]
+                    .1
+                    .boundary
+                    .insert(exact_edge[0] + 1, duplicate);
+                assert!(
+                    merge_exact_sphere_region_corner_singleton_and_six_cell_component(
+                        &ambiguous, &a_pieces, &b_pieces, &empty,
+                    )
+                    .is_none()
+                );
+
+                for (piece_limit, pair_limit, arc_limit, reason) in [
+                    (
+                        GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT - 1,
+                        GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+                        GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+                        "general coincident sphere both-wide union piece limit exhausted",
+                    ),
+                    (
+                        GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+                        GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT - 1,
+                        GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT,
+                        "general coincident sphere both-wide union pair limit exhausted",
+                    ),
+                    (
+                        GENERAL_SPHERE_DOUBLE_WIDE_PIECE_LIMIT,
+                        GENERAL_SPHERE_DOUBLE_WIDE_PAIR_LIMIT,
+                        GENERAL_SPHERE_DOUBLE_WIDE_ARC_LIMIT - 1,
+                        "general coincident sphere both-wide union arc limit exhausted",
+                    ),
+                ] {
+                    assert_eq!(
+                        certify_double_wide_sphere_window_union(
+                            &a,
+                            a_range,
+                            &b,
+                            b_range,
+                            Tolerances::default(),
+                            allowance,
+                            piece_limit,
+                            pair_limit,
+                            arc_limit,
+                        )
+                        .unwrap_err(),
+                        Error::InvalidGeometry { reason }
+                    );
+                }
+            }
+        }
     }
 
     fn exact_polar_window_fixture() -> (Sphere, Sphere, [ParamRange; 2], [ParamRange; 2]) {
