@@ -330,6 +330,18 @@ mod tests {
     }
 
     #[test]
+    fn line_normalizes_extreme_finite_directions_and_rejects_nonfinite_ones() {
+        let origin = Point3::new(1.0, 2.0, 3.0);
+        let ordinary = Line::new(origin, Vec3::new(1.0, 0.0, 0.0)).unwrap();
+        let huge = Line::new(origin, Vec3::new(1.0e308, 0.0, 0.0)).unwrap();
+        assert_eq!(huge, ordinary);
+        assert_eq!(huge.dir(), Vec3::new(1.0, 0.0, 0.0));
+
+        assert!(Line::new(origin, Vec3::new(f64::INFINITY, 0.0, 0.0)).is_err());
+        assert!(Line::new(origin, Vec3::new(1.0e-9, 0.0, 0.0)).is_err());
+    }
+
+    #[test]
     fn circle_bounding_box_is_exact_for_full_turn() {
         // Unit circle in the world xy plane: box must be exactly ±r in x, y
         // and flat in z.

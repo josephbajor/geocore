@@ -1712,22 +1712,29 @@ fn line_torus_extreme_finite_scale_is_indeterminate_not_proven_empty() {
 }
 
 #[test]
-fn line_torus_rejects_broken_unit_direction_contract_before_completion() {
+fn line_torus_extreme_finite_direction_matches_unit_direction() {
     let torus = Torus::new(Frame::world(), 2.0, 0.5).unwrap();
-    let collapsed = make_line([2.5, 0.0, 0.0], [1.0e308, 0.0, 0.0]);
-    assert_eq!(collapsed.dir(), Vec3::new(0.0, 0.0, 0.0));
+    let extreme = make_line([2.5, 0.0, 0.0], [1.0e308, 0.0, 0.0]);
+    let ordinary = make_line([2.5, 0.0, 0.0], [1.0, 0.0, 0.0]);
+    assert_eq!(extreme.dir(), ordinary.dir());
 
-    let hit = intersect_bounded_line_torus(
-        &collapsed,
-        ParamRange::new(-1.0, 1.0),
-        &torus,
-        torus_window(),
-        Tolerances::default(),
-    )
-    .unwrap();
+    let line_range = ParamRange::new(-1.0, 1.0);
+    let surface_range = torus_window();
+    let tolerances = Tolerances::default();
+    let extreme_hit =
+        intersect_bounded_line_torus(&extreme, line_range, &torus, surface_range, tolerances)
+            .unwrap();
+    let ordinary_hit =
+        intersect_bounded_line_torus(&ordinary, line_range, &torus, surface_range, tolerances)
+            .unwrap();
 
-    assert!(!hit.is_complete());
-    assert!(!hit.is_proven_empty());
+    assert!(extreme_hit.is_complete());
+    assert_eq!(extreme_hit, ordinary_hit);
+
+    let dispatched =
+        intersect_bounded_curve_surface(&extreme, line_range, &torus, surface_range, tolerances)
+            .unwrap();
+    assert_eq!(dispatched, extreme_hit);
 }
 
 #[test]

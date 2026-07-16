@@ -7,7 +7,7 @@
 
 use crate::vec::{Point3, Vec3};
 use kcore::error::{Error, Result};
-use kcore::tolerance::ANGULAR_RESOLUTION;
+use kcore::tolerance::{ANGULAR_RESOLUTION, LINEAR_RESOLUTION};
 
 /// An origin with a right-handed orthonormal basis `(x, y, z)`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -39,13 +39,53 @@ impl Frame {
         let z = z.normalized().ok_or(Error::InvalidGeometry {
             reason: "frame z axis has zero length",
         })?;
-        let x = (x_hint - z * x_hint.dot(z))
-            .normalized()
+        let projected = x_hint - z * x_hint.dot(z);
+        if projected.x.is_finite()
+            && projected.y.is_finite()
+            && projected.z.is_finite()
+            && let Some(x) = projected.normalized()
+        {
+            let frame = Frame {
+                origin,
+                x,
+                y: z.cross(x),
+                z,
+            };
+            if frame.is_orthonormal() {
+                return Ok(frame);
+            }
+        }
+
+        let x = if x_hint.x.is_finite() && x_hint.y.is_finite() && x_hint.z.is_finite() {
+            // The ordinary path either overflowed or was too ill-conditioned
+            // to satisfy the stored orthonormal-frame contract. Homogeneous
+            // scaling plus the cross/cross projection keeps every
+            // intermediate bounded and avoids near-parallel subtraction.
+            let scale = x_hint.x.abs().max(x_hint.y.abs()).max(x_hint.z.abs());
+            let scaled_hint = x_hint / scale;
+            let scaled_projected = z.cross(scaled_hint).cross(z);
+            let scaled_length = scaled_projected.norm();
+            let degeneracy_floor =
+                (LINEAR_RESOLUTION / scale).max(ANGULAR_RESOLUTION * scaled_hint.norm());
+            (scaled_length > degeneracy_floor).then(|| scaled_projected / scaled_length)
+        } else {
+            None
+        }
+        .ok_or(Error::InvalidGeometry {
+            reason: "frame x hint is parallel to z axis",
+        })?;
+        let frame = Frame {
+            origin,
+            x,
+            y: z.cross(x),
+            z,
+        };
+        frame
+            .is_orthonormal()
+            .then_some(frame)
             .ok_or(Error::InvalidGeometry {
                 reason: "frame x hint is parallel to z axis",
-            })?;
-        let y = z.cross(x);
-        Ok(Frame { origin, x, y, z })
+            })
     }
 
     /// Frame from an origin and a `z` direction, with `x` chosen
@@ -139,6 +179,14 @@ mod tests {
         let o = Point3::new(0.0, 0.0, 0.0);
         assert!(Frame::new(o, Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).is_err());
         assert!(Frame::new(o, Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, 3.0)).is_err());
+        assert!(
+            Frame::new(
+                o,
+                Vec3::new(f64::INFINITY, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0)
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -165,5 +213,62 @@ mod tests {
         let p = f.point_at(0.5, -2.0, 3.5);
         let l = f.to_local(p);
         assert!((l - Vec3::new(0.5, -2.0, 3.5)).norm() < 1e-12);
+    }
+
+    #[test]
+    fn extreme_finite_axes_preserve_valid_frame_construction() {
+        let origin = Point3::new(1.0, -2.0, 3.0);
+        let base = Frame::new(origin, Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0)).unwrap();
+        let huge = Frame::new(
+            origin,
+            Vec3::new(1.0e308, 0.0, 0.0),
+            Vec3::new(0.0, f64::MAX, 0.0),
+        )
+        .unwrap();
+        assert_eq!(huge, base);
+        assert!(huge.is_orthonormal());
+
+        assert_eq!(
+            Frame::from_z(origin, Vec3::new(1.0e308, 0.0, 0.0)).unwrap(),
+            Frame::from_z(origin, Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+        );
+    }
+
+    #[test]
+    fn projection_overflow_retries_homogeneously_without_accepting_parallel_hints() {
+        let origin = Point3::default();
+        let z = Vec3::new(1.0, 1.0, 1.0);
+        let frame = Frame::new(origin, z, Vec3::new(f64::MAX, f64::MAX, 0.0)).unwrap();
+        assert!(frame.is_orthonormal());
+
+        assert!(Frame::new(origin, z, Vec3::new(f64::MAX, f64::MAX, f64::MAX),).is_err());
+    }
+
+    #[test]
+    fn projection_overflow_preserves_scale_aware_near_parallel_hints() {
+        let origin = Point3::default();
+        let z = Vec3::new(1.0, 1.0, 1.0);
+        let epsilon = 1.0e-9;
+        let moderate_scale = 1.0e4;
+        let moderate = Frame::new(
+            origin,
+            z,
+            Vec3::new(
+                moderate_scale,
+                moderate_scale,
+                (1.0 - epsilon) * moderate_scale,
+            ),
+        )
+        .unwrap();
+        let huge = Frame::new(
+            origin,
+            z,
+            Vec3::new(f64::MAX, f64::MAX, (1.0 - epsilon) * f64::MAX),
+        )
+        .unwrap();
+
+        assert!(moderate.is_orthonormal());
+        assert!(huge.is_orthonormal());
+        assert!(moderate.x().dot(huge.x()) > 1.0 - 1.0e-10);
     }
 }

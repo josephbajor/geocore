@@ -66,11 +66,23 @@ impl Vec3 {
     /// Unit vector in this direction, or `None` if the length is
     /// indistinguishable from zero at session resolution.
     pub fn normalized(self) -> Option<Vec3> {
+        if !self.x.is_finite() || !self.y.is_finite() || !self.z.is_finite() {
+            return None;
+        }
         let n = self.norm();
         if n <= kcore::tolerance::LINEAR_RESOLUTION {
             None
-        } else {
+        } else if n.is_finite() {
+            // Preserve the established ordinary-input bits.
             Some(self / n)
+        } else {
+            // The components are finite, so an infinite norm can only come
+            // from squared-length overflow. Scale first; the resulting norm
+            // is in [1, sqrt(3)] and cannot overflow or underflow.
+            let scale = self.x.abs().max(self.y.abs()).max(self.z.abs());
+            let scaled = self / scale;
+            let scaled_norm = scaled.norm();
+            (scaled_norm.is_finite() && scaled_norm > 0.0).then_some(scaled / scaled_norm)
         }
     }
 
@@ -245,5 +257,43 @@ mod tests {
         assert!(Vec3::new(1e-9, 0.0, 0.0).normalized().is_none());
         let n = Vec3::new(3.0, 4.0, 0.0).normalized().unwrap();
         assert!((n.norm() - 1.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn normalization_preserves_ordinary_bits_and_accepts_finite_overflow_scales() {
+        let ordinary = Vec3::new(1.0, -0.5, 0.25);
+        assert_eq!(ordinary.normalized(), Some(ordinary / ordinary.norm()));
+
+        let scaled = Vec3::new(2.0_f64.powi(700), -2.0_f64.powi(699), 2.0_f64.powi(698));
+        assert_eq!(scaled.normalized(), ordinary.normalized());
+
+        let maximum = Vec3::new(f64::MAX, f64::MAX, 0.0).normalized().unwrap();
+        assert_eq!(maximum.x, maximum.y);
+        assert_eq!(maximum.z, 0.0);
+        assert!((maximum.norm() - 1.0).abs() < 2.0 * f64::EPSILON);
+    }
+
+    #[test]
+    fn normalization_rejects_nonfinite_and_respects_the_euclidean_floor() {
+        assert!(Vec3::new(f64::NAN, 1.0, 0.0).normalized().is_none());
+        assert!(Vec3::new(f64::INFINITY, 0.0, 0.0).normalized().is_none());
+        assert!(
+            Vec3::new(f64::MIN_POSITIVE, 0.0, 0.0)
+                .normalized()
+                .is_none()
+        );
+
+        let floor = kcore::tolerance::LINEAR_RESOLUTION;
+        assert!(
+            Vec3::new(floor.next_down(), 0.0, 0.0)
+                .normalized()
+                .is_none()
+        );
+        assert!(Vec3::new(floor.next_up(), 0.0, 0.0).normalized().is_some());
+        assert!(
+            Vec3::new(0.8 * floor, 0.8 * floor, 0.0)
+                .normalized()
+                .is_some()
+        );
     }
 }
