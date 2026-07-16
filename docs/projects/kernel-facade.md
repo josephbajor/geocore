@@ -671,6 +671,7 @@ The facade error is an adapter that retains its source:
 pub enum ErrorSource {
     Core(kcore::error::Error),
     Graph(kgraph::EvalError),
+    BodyCopy(ktopo::BodyCopyError),
     Interchange(kxt::XtError),
     // Add a topology/operation source only when that layer owns a distinct
     // public error type under F4.
@@ -733,6 +734,17 @@ policy arm additionally retains its `OperationPolicyError`. The direct
 flattening these errors through a `kcore::Result` compatibility adapter. This
 does not close the owner-driven migration of other solver-local catch-all
 mappings.
+
+Rigid copy now exercises the same source-retaining facade contract.
+`ktopo::BodyCopyError::{Kernel, Certificate}` preserves ordinary shared errors
+or the exact `IntersectionCertificateError` from every certificate reissuer.
+The facade-safe `kernel::BodyCopyError` caches the lower class, code,
+capability, and limit, exposes `ktopo::BodyCopyError` as its source, and is
+retained by `KernelError::BodyCopy`. The operation continues to finish through
+the caller's single `OperationScope`, so the typed failure and its report remain
+paired. The raw transaction's historical `copy_body_rigid` method remains a
+`kcore::Result` compatibility wrapper; the facade uses
+`copy_body_rigid_with_source`.
 
 ## Future C ABI seam, without starting the ABI
 
@@ -924,7 +936,10 @@ request maps source model coordinates through one orientation-preserving
 `Frame`, duplicates the complete topology and geometry ownership closure, and
 checked-commits inside the caller's single operation scope. Pcurves, bounds,
 tolerances, offset bases, and periodic chart metadata remain exact; every new
-identity has deterministic `DerivedFrom` evidence. Plane/Plane verified line
+identity has deterministic `DerivedFrom` evidence. Certificate-reissuance
+failures remain typed through `BodyCopyError` and `KernelError::BodyCopy` rather
+than becoming `Core(InvalidGeometry)`, while facade preflight capability
+rejections remain separate. Plane/Plane verified line
 curves copy direct Plane sources or safe finite Offset(Plane) chains.
 Plane/Sphere latitude or oblique circles copy direct Plane or safe finite
 Offset(Plane) sources plus direct Sphere or safe finite Offset(Sphere) sources
@@ -1182,6 +1197,10 @@ Lower-layer tests also retain the existing compile-fail guarantees against
   ellipse/ellipse projection path additionally preserves all five
   `ProjectionError` variants as `IntersectionError::Projection` through the
   complete facade source chain; `Policy` retains its `OperationPolicyError`.
+- Rigid-copy certificate failure retains the facade `BodyCopyError`, lower
+  `ktopo::BodyCopyError`, exact `IntersectionCertificateError`, class, code,
+  capability, and limit; the typed failure remains paired with the same scoped
+  operation report.
 - X_T wrapped errors retain class, code, capability, node/offset context, and
   limit data.
 - Complete and indeterminate proof results survive facade mapping unchanged.

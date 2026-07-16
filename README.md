@@ -155,7 +155,16 @@ application boundary.
   retains per-root provenance and exact derivative direction, proves seam side
   with bounded algebraic signs, preserves distinct close roots, and fails with
   typed evidence on unrepresentable collisions, singular charts, or ranges
-  wider than one period. Analytic
+  wider than one period. `IntersectionCertificateError` now owns stable
+  class/code/capability metadata for every certificate failure. The graph
+  surface adapter preserves its published aggregate branch-certificate code
+  and adapter-owned class while retaining the exact leaf error through
+  `source()`. Rigid body copy exposes a typed
+  `copy_body_rigid_with_source` path whose `BodyCopyError` survives all six
+  certificate reissuers and `KernelError::BodyCopy`, remains paired with the
+  operation report, and rolls the transaction back atomically; the historical
+  `copy_body_rigid` entry remains a compatibility `kcore::Result` wrapper.
+  Analytic
   surface/surface solvers that construct a circle already proved to lie on a
   sphere preserve that construction proof through a circle-only sphere-window
   clipping seam. Plane/Sphere likewise preserves its plane proof. These seams

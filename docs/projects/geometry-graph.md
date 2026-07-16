@@ -672,6 +672,17 @@ silently erase a seam. Fixtures pin the `2^52` cancellation, the transformed
 half-angle-sign mismatch, `2^±700` scaling, ordinary repeat parity, and the
 debug/release numeric golden.
 
+Every `IntersectionCertificateError` variant now owns a stable code and broad
+class. Unsupported certificate capabilities name trace/carrier
+parameterization, regular inverse-sphere charts, sphere chart-window enclosure,
+lossless harmonic-root representation, and finite residual-bound evaluation.
+`kops` retains its historical aggregate graph branch-certificate code and
+adapter-owned class semantics, while `source()` preserves the exact graph leaf
+and its distinct metadata. Typed rigid-copy recertification carries that same
+leaf through `ktopo::BodyCopyError` and `KernelError::BodyCopy`, remains paired
+with the operation report, and rolls the transaction back atomically; the
+legacy raw transaction entry remains a lossy compatibility wrapper.
+
 A graph-aware `kops`
 exact-field compat/context/in-scope adapter preserves the analytic result,
 source handles, typed stale/unsupported failures, and canonical operand-swap

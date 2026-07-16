@@ -1,6 +1,6 @@
 # F4 kernel error and capability taxonomy
 
-Status: Phase 1, representative Phase 2 slices, graph classification, one structured-incompleteness pilot, and the first solver-local source-identity migration implemented
+Status: Phase 1, representative Phase 2 slices, graph evaluation and intersection-certificate classification, one structured-incompleteness pilot, and projection plus rigid-copy source-identity migrations implemented
 
 ## Outcome
 
@@ -34,6 +34,10 @@ not yet consistent:
   `ProjectionError` variants survive as `IntersectionError::Projection` through
   generic and facade adapters without changing class, code, limit, capability,
   or source identity;
+- graph intersection certificates own stable leaf class/code/capability
+  metadata, and the typed rigid-copy path preserves those leaves through
+  `BodyCopyError` and `KernelError::BodyCopy`; the graph-surface adapter and
+  legacy transaction wrapper retain their established boundary semantics;
 - intersection result types correctly distinguish complete evidence from
   verified partial evidence, but `Completion::Indeterminate` identifies the
   missing proof only with a static message;
@@ -446,10 +450,10 @@ partial evidence with an indeterminate status in its result record.
 
 ### Phase 2 — Representative vertical migrations
 
-Status: typed unsupported class-pair dispatch and the ellipse/ellipse
-projection-source vertical slice are implemented. Remaining solver-local and
-legacy wrappers migrate only with owner tests that pin their exact public error
-contract.
+Status: typed unsupported class-pair dispatch, the ellipse/ellipse
+projection-source vertical slice, and the graph-certificate/rigid-copy vertical
+slice are implemented. Remaining solver-local and legacy wrappers migrate only
+with owner tests that pin their exact public error contract.
 
 - Change unsupported curve/curve dispatch from `InvalidGeometry` to a typed
   unsupported error that carries the fixed pair capability and structured
@@ -474,6 +478,22 @@ invalid-objective, and iteration-bound termination. Diagnostics remain bounded
 and opt-in, while parameter-resolution stages remain always-on report evidence.
 Other provisional result families still need the same migration before prose
 completion reasons can retire.
+
+`IntersectionCertificateError` now owns thirteen stable codes plus the finite
+capability inventory for unsupported trace/carrier parameterization, regular
+sphere charts, chart-window enclosure, harmonic-root representation, and finite
+residual bounds. The graph-surface adapter deliberately preserves its older
+aggregate code and adapter-owned class matrix, but retains the exact leaf
+certificate and leaf metadata through `source()`. This distinguishes source
+ownership from wrapper semantics instead of forcing one classification onto
+both layers.
+
+Rigid copy supplies the first topology-operation source chain for these graph
+errors. `BodyCopyError::{Kernel, Certificate}` retains certificate failures at
+every reissuer; `copy_body_rigid_with_source` exposes the typed path while the
+legacy `copy_body_rigid` entry remains a compatibility wrapper. The kernel
+facade caches and delegates the exact metadata in its own `BodyCopyError` and
+retains the lower topology and graph errors beneath `KernelError::BodyCopy`.
 
 - Add structured incomplete evidence to intersection result types and verify
   it survives swapping, canonicalization, and fallback routing.
@@ -517,6 +537,10 @@ Classification tests:
   `IntersectionError::Projection`, exact class/code/limit, no capability, and
   the direct `ProjectionError` source through `GeometryIntersectionError` and
   `KernelError`; the policy case also retains `OperationPolicyError`;
+- graph certificate identifiers are unique and owner-classified; graph-surface
+  preserves its aggregate adapter code and exact leaf source; typed rigid copy
+  preserves the nested certificate through topology and facade adapters while
+  the legacy transaction entry retains its `kcore::Result` contract;
 - an internal invariant has no unsupported capability and is never reported as
   a model fault.
 
