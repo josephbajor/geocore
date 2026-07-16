@@ -25,6 +25,7 @@ use kgraph::{
     certify_transmitted_quadratic_dual_offset_nurbs_intersection_residuals,
     certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals,
     certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals,
+    transmitted_nurbs_intersection_has_rigid_copy_recertifier,
 };
 
 fn nonplanar_trace_surface(rational: bool) -> NurbsSurface {
@@ -137,6 +138,9 @@ fn transmitted_cubic_dual_offset_interpolant_binds_witnesses_sources_and_pcurves
         1.0e-8,
     )
     .unwrap();
+    assert!(!transmitted_nurbs_intersection_has_rigid_copy_recertifier(
+        &certificate
+    ));
     assert_eq!(certificate.proof_depth(), 10);
     assert!(certificate.quadratic_interpolation_witnesses().is_none());
     let witnesses = certificate.cubic_interpolation_witnesses().unwrap();
@@ -558,6 +562,9 @@ fn transmitted_seven_sample_dual_offset_polyline_is_narrow_sound_and_bound() {
         1.0e-8,
     )
     .unwrap();
+    assert!(!transmitted_nurbs_intersection_has_rigid_copy_recertifier(
+        &certificate
+    ));
     assert_eq!(certificate.carrier(), &carrier);
     assert_eq!(certificate.pcurves(), &pcurves);
     assert_eq!(certificate.proof_depth(), 10);
@@ -2177,6 +2184,9 @@ fn transmitted_quadratic_dual_offset_interpolant_binds_both_original_roots() {
         1.0e-8,
     )
     .unwrap();
+    assert!(transmitted_nurbs_intersection_has_rigid_copy_recertifier(
+        &certificate
+    ));
     assert_eq!(certificate.proof_depth(), 10);
     assert!(
         certificate

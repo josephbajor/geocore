@@ -26,6 +26,7 @@ use kgraph::{
     certify_transmitted_offset_nurbs_intersection_residuals,
     certify_transmitted_plane_intersection_residuals,
     certify_transmitted_plane_nurbs_intersection_residuals,
+    certify_transmitted_quadratic_dual_offset_nurbs_intersection_residuals,
     certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals,
     reissue_verified_nurbs_intersection_residuals,
     transmitted_nurbs_intersection_has_rigid_copy_recertifier,
@@ -435,7 +436,25 @@ impl Copier<'_> {
             self.copy_pcurve(source_pcurves[1])?,
         ];
         let pcurves = self.copied_nurbs_pcurves(copied_pcurves)?;
-        let carrier = self.transform_nurbs_curve(certificate.carrier())?;
+        let quadratic_witnesses = certificate.quadratic_interpolation_witnesses();
+        let transformed_quadratic_positions = match quadratic_witnesses {
+            Some(witnesses) => Some(self.transform_points(witnesses.positions())?),
+            None => None,
+        };
+        let carrier = if let Some(positions) = transformed_quadratic_positions {
+            NurbsCurve::new(
+                certificate.carrier().degree(),
+                certificate.carrier().knots().as_slice().to_vec(),
+                vec![
+                    positions[0],
+                    positions[1] * 2.0 - (positions[0] + positions[2]) * 0.5,
+                    positions[2],
+                ],
+                None,
+            )?
+        } else {
+            self.transform_nurbs_curve(certificate.carrier())?
+        };
         let traces = [
             self.copied_nurbs_trace(&certificate.traces()[0], copied_surfaces[0])?,
             self.copied_nurbs_trace(&certificate.traces()[1], copied_surfaces[1])?,
@@ -463,9 +482,23 @@ impl Copier<'_> {
                 )
             }
             [kgraph::NurbsIntersectionTrace::OffsetNurbs(_), kgraph::NurbsIntersectionTrace::OffsetNurbs(_)] => {
-                certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals(
-                    carrier, traces, pcurves, metadata, tolerance,
-                )
+                if let Some(witnesses) = quadratic_witnesses {
+                    certify_transmitted_quadratic_dual_offset_nurbs_intersection_residuals(
+                        carrier,
+                        traces,
+                        pcurves,
+                        transformed_quadratic_positions.expect(
+                            "quadratic witness positions were transformed with the carrier",
+                        ),
+                        witnesses.canonicalized_pcurve_points(),
+                        metadata,
+                        tolerance,
+                    )
+                } else {
+                    certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals(
+                        carrier, traces, pcurves, metadata, tolerance,
+                    )
+                }
             }
             _ => return Err(Error::InvalidGeometry {
                 reason: "rigid body copy cannot rerun this transmitted NURBS certificate family",
@@ -518,6 +551,13 @@ impl Copier<'_> {
                 .collect::<Result<Vec<_>>>()?,
             curve.weights().map(<[f64]>::to_vec),
         )
+    }
+
+    fn transform_points<const N: usize>(&self, mut points: [Point3; N]) -> Result<[Point3; N]> {
+        for point in &mut points {
+            *point = self.checked_point(*point)?;
+        }
+        Ok(points)
     }
 
     fn transform_nurbs_surface(&self, surface: &NurbsSurface) -> Result<NurbsSurface> {
