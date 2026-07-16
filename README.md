@@ -163,9 +163,11 @@ application boundary.
   NURBS/NURBS, direct one-descriptor Offset(NURBS)/NURBS in both orders,
   exactly one-descriptor Offset(NURBS)/direct-Plane charts in both orders, and
   only the canonical finite-open two-sample degree-1, witnessed three-sample
-  quadratic, witnessed four-sample cubic, or canonical five-sample degree-1
-  dual Offset(NURBS) charts in either ordered-root arrangement. All four require
-  two distinct ordered roots over
+  quadratic, witnessed four-sample cubic, canonical five-sample degree-1, or
+  canonical seven-sample degree-1 dual Offset(NURBS) charts in either ordered-
+  root arrangement. These complete the existing canonical 2/3/4/5/7-sample set
+  at the current exactly-one-descriptor-per-root scope. All five require two
+  distinct ordered roots over
   distinct direct nonperiodic NURBS basis handles and one descriptor per root.
   The line uses unweighted two-
   control carrier/pcurves on `[0,0,1,1]` over `[0,1]` without witnesses; the
@@ -174,18 +176,21 @@ application boundary.
   control carrier/pcurves on `[0,0,0,0,3,3,3,3]` over `[0,3]`. Both witnessed
   higher-order families retain exact position and paired-UV interpolation
   witnesses. The five-sample family uses unweighted degree-1 five-control
-  carrier/pcurves on `[0,0,1,2,3,4,4]` over `[0,4]` without interpolation
-  witnesses or a carrier period. Rigid copy transforms both bases and the line
-  or five-sample carrier; for either witnessed higher-order family it transforms
-  exact positions and rebuilds carrier controls by the public interpolation
-  formula. It retains exact UV witnesses when present, paired pcurves, metadata,
-  tolerance, and ordered roots, and publicly recertifies.
+  carrier/pcurves on `[0,0,1,2,3,4,4]` over `[0,4]`; the seven-sample family
+  uses unweighted degree-1 seven-control carrier/pcurves on
+  `[0,0,1,2,3,4,5,6,6]` over `[0,6]`. Neither polyline family has interpolation
+  witnesses or a carrier period. Rigid copy transforms both bases and the line,
+  five-sample, or seven-sample carrier; for either witnessed higher-order family
+  it transforms exact positions and rebuilds carrier controls by the public
+  interpolation formula. It retains exact UV witnesses when present, paired
+  pcurves, metadata, tolerance, and ordered roots, and publicly recertifies.
   Facade rejection happens before scope creation, while lower-copy rejection
   restores every Body/Region/Shell/Edge/Vertex and Curve/Surface/Pcurve/Point
   count plus future point identity. Same-total multi-
-  distance metadata, nested Offset(NURBS), Offset(Plane) peers, shared dual
-  bases, periodic source or carrier charts, altered higher-order witnesses, and
-  seven-sample or other dual families remain unsupported;
+  distance metadata, nested Offset(NURBS) roots at every sample count including
+  two-sample, Offset(Plane) peers, shared dual bases, periodic source or carrier
+  charts, altered higher-order witnesses, and other sample counts remain
+  unsupported;
   attributes are blocked on an authorable storage contract, and non-rigid
   transforms remain.
   General root discovery, complete verified residuals across every result family, and
