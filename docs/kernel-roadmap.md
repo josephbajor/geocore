@@ -1298,9 +1298,11 @@ true only for an empty complete result.
   exact lower/upper-stem T tree, or exact left/right 2×2 cycle with the other
   two siblings certified empty, or the exact disconnected outer-column
   vertical pairs `[0,0]`/`[0,2]`/`[1,0]`/`[1,2]` with middle-column
-  `[0,1]`/`[1,1]` certified empty, or exactly five positive cells with the
+  `[0,1]`/`[1,1]` certified empty, or any of the four exact disconnected
+  isolated-corner plus three-cell mixed-axis L layouts with the two omitted
+  graph-cut siblings certified empty, or exactly five positive cells with the
   sole other sibling certified empty, or all six cells positive with no empty
-  sibling. The two reviewed L orientations are
+  sibling. The two reviewed connected L orientations are
   the cap-right `[0,2]`/`[1,1]`/`[1,2]` path and the lower-middle
   `[0,1]`/`[0,2]`/`[1,1]` path.
   The single-child path excludes every
@@ -1350,7 +1352,22 @@ true only for an empty complete result.
   exactly two canonical regions, excludes both longitude separators, restores
   the parent maps and maximum child/parent residuals, and pins repeat/swap,
   exact 6/5 piece, 147/146 pair, and 588/587 arc N/N-1 admission plus one-ULP
-  and duplicate-edge ambiguity rejection. The
+  and duplicate-edge ambiguity rejection. A second disconnected route admits
+  all four isolated-corner plus three-cell mixed-axis L layouts:
+  `[0,0]` + `[0,2]`/`[1,1]`/`[1,2]`, `[1,2]` +
+  `[0,0]`/`[0,1]`/`[1,0]`, `[1,0]` + `[0,1]`/`[0,2]`/`[1,2]`, and
+  `[0,2]` + `[0,0]`/`[1,0]`/`[1,1]`; respectively the omitted graph-cut
+  sibling pairs `[0,1]`/`[1,0]`, `[0,2]`/`[1,1]`, `[0,0]`/`[1,1]`, and
+  `[0,1]`/`[1,2]` must certify empty. It proves and removes both reverse-
+  oriented bit-exact L seams, requires zero occupied-boundary contact with every
+  empty cut separator and no bit-exact contact between the singleton and merged
+  component, and returns exactly two canonical regions with restored parent
+  maps and maximum child/parent residuals. The four real fixtures pin
+  repeat/swap, the same exact 6/5 piece, 147/146 pair, and 588/587 arc N/N-1
+  admission, plus one-ULP and duplicate-edge ambiguity rejection. Together
+  with the outer-column vertical-pair route, these exhaust the exact
+  disconnected four-positive graph layouts in the polar-by-wide 2×3
+  decomposition. The
   five-positive arm simultaneously removes all internal reverse-oriented bit-
   exact seams and requires one unambiguous outer cycle. Its `[0,0]` corner-
   empty fixture is a 2×2 cycle plus tail; its `[1,1]` edge-middle-empty fixture
@@ -1364,11 +1381,10 @@ true only for an empty complete result.
   Its real `0.14716980102990423`-tilt fixture pins repeat/swap plus one-ULP and
   duplicate-edge ambiguity rejection. All admitted layouts retain exact 6/5
   piece, 147/146 pair, and 588/587 arc admission. The path (`2,2,1,1`), T
-  (`3,1,1,1`), and cycle (`2,2,2,2`) routes remain disjoint. Other disconnected
-  four-positive layouts and other non-
-  adjacent layouts outside the admitted exact same-row, same-column, full-row,
-  mixed-axis three-cell-path, four-positive-path/T/cycle, exact disconnected
-  outer-column vertical-pair, exactly-five-positive, and all-six-positive
+  (`3,1,1,1`), and cycle (`2,2,2,2`) routes remain disjoint. Other polar
+  layouts outside the admitted exact same-row, same-column, full-row,
+  mixed-axis three-cell-path, connected four-positive path/T/cycle,
+  disconnected four-positive graph, exactly-five-positive, and all-six-positive
   families remain fail-closed. A first wide
   arm splits exactly
   one pole-clear wide operand into

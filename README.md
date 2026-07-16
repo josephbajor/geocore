@@ -99,10 +99,15 @@ application boundary.
   `[0,1]`/`[0,2]`/`[1,1]`/`[1,2]` four-positive 2×2 cycle family with two
   certified-empty siblings, plus the exact disconnected outer-column vertical
   pairs `[0,0]`/`[0,2]`/`[1,0]`/`[1,2]` with middle-column `[0,1]`/`[1,1]`
-  certified empty, and exactly five positive cells with one certified-
-  empty sibling, in the polar-by-wide family have landed. The four-positive
-  routes are disjoint by degree sequence: path `2,2,1,1`, T `3,1,1,1`, and
-  cycle `2,2,2,2`. Each T certifies the other two siblings empty,
+  certified empty, all four exact disconnected isolated-corner plus three-cell
+  mixed-axis L layouts—`[0,0]` + `[0,2]`/`[1,1]`/`[1,2]`, `[1,2]` +
+  `[0,0]`/`[0,1]`/`[1,0]`, `[1,0]` + `[0,1]`/`[0,2]`/`[1,2]`, and
+  `[0,2]` + `[0,0]`/`[1,0]`/`[1,1]`—with their respective two omitted
+  graph-cut siblings certified empty, and exactly five positive cells with one
+  certified-empty sibling, in the polar-by-wide family have landed. The
+  connected four-positive routes are disjoint by degree sequence: path
+  `2,2,1,1`, T `3,1,1,1`, and cycle `2,2,2,2`. Each T certifies the other two
+  siblings empty,
   simultaneously proves and removes exactly three reverse-oriented bit-exact
   seams, requires one outer cycle with no artificial seam, and restores the
   parent map and maximum child/parent residual. Its real fixtures pin
@@ -111,10 +116,18 @@ application boundary.
   oriented bit-exact adjacencies, requires one outer cycle with no artificial
   seam, and restores the parent map and maximum child/parent residual. Its real
   fixtures pin repeat/swap while one-ULP mutation and duplicate-edge ambiguity
-  fail closed. The disconnected arm merges both exact latitude seams into
-  exactly two canonical regions, excludes both longitude separators, restores
-  parent maps and maximum child/parent residuals, and pins repeat/swap plus one-
-  ULP/ambiguity rejection. The five-positive arm simultaneously removes every
+  fail closed. The outer-column disconnected arm merges both exact latitude
+  seams into exactly two canonical regions, excludes both longitude separators,
+  restores parent maps and maximum child/parent residuals, and pins repeat/swap
+  plus one-ULP/ambiguity rejection. Each singleton-plus-L arm proves and removes
+  both reverse-oriented bit-exact L seams, requires zero occupied-boundary contact
+  with either empty cut separator and no bit-exact contact between the singleton
+  and merged component, and likewise returns exactly two canonical regions with
+  restored parent maps and maximum child/parent residuals. Together these
+  routes exhaust the exact disconnected four-positive graph layouts in the 2×3
+  decomposition, with repeat/swap, exact 6/5 piece, 147/146 pair, and 588/587
+  arc N/N-1 evidence plus one-ULP/ambiguity rejection. The five-positive arm
+  simultaneously removes every
   internal reverse-oriented
   bit-exact seam and requires one outer cycle; corner-empty cycle-plus-tail and
   edge-middle-empty tree fixtures pin repeat/swap, parent mapping, residuals,
@@ -124,8 +137,8 @@ application boundary.
   unambiguous outer cycle and no artificial seam edge. Its real fixture pins
   parent mapping, residuals, repeat/swap, and one-ULP/ambiguity rejection. The
   non-cap row retains eight vertices and every six-cell decomposition keeps the
-  exact 6/5, 147/146, and 588/587 piece/pair/arc N/N-1 ceilings; other
-  disconnected four-positive layouts remain unsupported.
+  exact 6/5, 147/146, and 588/587 piece/pair/arc N/N-1 ceilings; other polar
+  layouts remain unsupported.
   Varying-normal chains against a direct analytic Plane retain exact outer-to-
   inner metadata, prove every intermediate and final radius finite and positive
   from the original basis, use the derived sheet only for discovery, preserve
