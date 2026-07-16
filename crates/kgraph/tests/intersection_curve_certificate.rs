@@ -138,7 +138,7 @@ fn transmitted_cubic_dual_offset_interpolant_binds_witnesses_sources_and_pcurves
         1.0e-8,
     )
     .unwrap();
-    assert!(!transmitted_nurbs_intersection_has_rigid_copy_recertifier(
+    assert!(transmitted_nurbs_intersection_has_rigid_copy_recertifier(
         &certificate
     ));
     assert_eq!(certificate.proof_depth(), 10);

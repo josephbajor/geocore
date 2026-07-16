@@ -1016,14 +1016,14 @@ impl TransmittedNurbsIntersectionCertificate {
 /// This is a structural capability query only. Reissuance must still rerun the
 /// selected certifier against transformed live sources and may fail its
 /// geometric or residual checks. Only the canonical finite-open two-sample
-/// and witnessed three-sample quadratic dual-offset charts are admitted;
-/// periodic and every other dual-offset family remain outside this copy
-/// tranche. Admitted Offset(NURBS) traces retain exactly one descriptor;
-/// nested roots remain unsupported.
+/// and witnessed three-sample quadratic and four-sample cubic dual-offset
+/// charts are admitted; periodic and every other dual-offset family remain
+/// outside this copy tranche. Admitted Offset(NURBS) traces retain exactly one
+/// descriptor; nested roots remain unsupported.
 pub fn transmitted_nurbs_intersection_has_rigid_copy_recertifier(
     certificate: &TransmittedNurbsIntersectionCertificate,
 ) -> bool {
-    if certificate.carrier_period.is_some() || certificate.cubic_witnesses.is_some() {
+    if certificate.carrier_period.is_some() {
         return false;
     }
     match &certificate.traces {
@@ -1038,7 +1038,7 @@ pub fn transmitted_nurbs_intersection_has_rigid_copy_recertifier(
         | [
             TransmittedNurbsIntersectionTrace::Nurbs(_),
             TransmittedNurbsIntersectionTrace::Nurbs(_),
-        ] => certificate.quadratic_witnesses.is_none(),
+        ] => certificate.quadratic_witnesses.is_none() && certificate.cubic_witnesses.is_none(),
         [
             TransmittedNurbsIntersectionTrace::OffsetNurbs(offset),
             TransmittedNurbsIntersectionTrace::Nurbs(_)
@@ -1050,41 +1050,46 @@ pub fn transmitted_nurbs_intersection_has_rigid_copy_recertifier(
             TransmittedNurbsIntersectionTrace::OffsetNurbs(offset),
         ] => {
             certificate.quadratic_witnesses.is_none()
+                && certificate.cubic_witnesses.is_none()
                 && offset.descriptor_signed_distances().len() == 1
         }
         [
             TransmittedNurbsIntersectionTrace::OffsetNurbs(first),
             TransmittedNurbsIntersectionTrace::OffsetNurbs(second),
         ] => {
-            let supported_shape = if certificate.quadratic_witnesses.is_some() {
-                let expected_knots = [0.0, 0.0, 0.0, 2.0, 2.0, 2.0];
-                certificate.carrier_range == ParamRange::new(0.0, 2.0)
-                    && certificate.carrier.degree() == 2
+            let canonical_shape = |degree, point_count, carrier_range, expected_knots: &[f64]| {
+                certificate.carrier_range == carrier_range
+                    && certificate.carrier.degree() == degree
                     && certificate.carrier.weights().is_none()
-                    && certificate.carrier.points().len() == 3
+                    && certificate.carrier.points().len() == point_count
                     && certificate.carrier.knots().as_slice() == expected_knots
                     && certificate.pcurves.iter().all(|pcurve| {
-                        pcurve.degree() == 2
+                        pcurve.degree() == degree
                             && pcurve.weights().is_none()
-                            && pcurve.points().len() == 3
-                            && pcurve.knots().as_slice() == expected_knots
-                            && pcurve.param_range() == certificate.carrier_range
-                    })
-            } else {
-                let expected_knots = [0.0, 0.0, 1.0, 1.0];
-                certificate.carrier_range == ParamRange::new(0.0, 1.0)
-                    && certificate.carrier.degree() == 1
-                    && certificate.carrier.weights().is_none()
-                    && certificate.carrier.points().len() == 2
-                    && certificate.carrier.knots().as_slice() == expected_knots
-                    && certificate.pcurves.iter().all(|pcurve| {
-                        pcurve.degree() == 1
-                            && pcurve.weights().is_none()
-                            && pcurve.points().len() == 2
+                            && pcurve.points().len() == point_count
                             && pcurve.knots().as_slice() == expected_knots
                             && pcurve.param_range() == certificate.carrier_range
                     })
             };
+            let supported_shape =
+                match (certificate.quadratic_witnesses, certificate.cubic_witnesses) {
+                    (Some(_), None) => canonical_shape(
+                        2,
+                        3,
+                        ParamRange::new(0.0, 2.0),
+                        &[0.0, 0.0, 0.0, 2.0, 2.0, 2.0],
+                    ),
+                    (None, Some(_)) => canonical_shape(
+                        3,
+                        4,
+                        ParamRange::new(0.0, 3.0),
+                        &[0.0, 0.0, 0.0, 0.0, 3.0, 3.0, 3.0, 3.0],
+                    ),
+                    (None, None) => {
+                        canonical_shape(1, 2, ParamRange::new(0.0, 1.0), &[0.0, 0.0, 1.0, 1.0])
+                    }
+                    (Some(_), Some(_)) => false,
+                };
             first.descriptor_signed_distances().len() == 1
                 && second.descriptor_signed_distances().len() == 1
                 && first.basis().periodicity() == [None, None]

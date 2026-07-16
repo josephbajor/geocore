@@ -22,12 +22,14 @@ use kgraph::{
     VerifiedNurbsIntersectionCertificate, certify_paired_plane_line_residuals,
     certify_paired_plane_sphere_circle_residuals,
     certify_paired_plane_sphere_oblique_circle_residuals,
+    certify_transmitted_cubic_dual_offset_nurbs_intersection_residuals,
     certify_transmitted_five_sample_dual_offset_nurbs_intersection_residuals,
     certify_transmitted_nurbs_nurbs_intersection_residuals,
     certify_transmitted_offset_nurbs_intersection_residuals,
     certify_transmitted_plane_intersection_residuals,
     certify_transmitted_plane_nurbs_intersection_residuals,
     certify_transmitted_quadratic_dual_offset_nurbs_intersection_residuals,
+    certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals,
     certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals,
     certify_verified_dual_offset_nurbs_intersection_residuals,
     certify_verified_nurbs_nurbs_intersection_residuals,
@@ -670,15 +672,26 @@ fn transmitted_dual_offset_wire(
         Point2::new(0.4, 0.0),
         Point2::new(0.9, 0.0),
     ]; 2];
+    let cubic_positions = [
+        Point3::new(0.1, 0.0, 0.0),
+        Point3::new(0.3, 0.0, 0.0),
+        Point3::new(0.6, 0.0, 0.0),
+        Point3::new(0.9, 0.0, 0.0),
+    ];
+    let cubic_uv_samples = [cubic_positions.map(|point| Point2::new(point.x, 0.0)); 2];
     let (carrier, common) = match sample_count {
-        2 | 5 => {
-            let (knots, coordinates) = if sample_count == 2 {
-                (vec![0.0, 0.0, 1.0, 1.0], vec![0.1, 0.9])
-            } else {
-                (
+        2 | 5 | 7 => {
+            let (knots, coordinates) = match sample_count {
+                2 => (vec![0.0, 0.0, 1.0, 1.0], vec![0.1, 0.9]),
+                5 => (
                     vec![0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0],
                     vec![0.1, 0.3, 0.5, 0.7, 0.9],
-                )
+                ),
+                7 => (
+                    vec![0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 6.0],
+                    vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.7, 0.9],
+                ),
+                _ => unreachable!(),
             };
             (
                 NurbsCurve::new(
@@ -722,6 +735,33 @@ fn transmitted_dual_offset_wire(
                 NurbsCurve2d::new(2, knots, controls2, None).unwrap(),
             )
         }
+        4 => {
+            let knots = vec![0.0, 0.0, 0.0, 0.0, 3.0, 3.0, 3.0, 3.0];
+            let controls3 = |samples: [Point3; 4]| {
+                let first = samples[1] * 27.0 - samples[0] * 8.0 - samples[3];
+                let second = samples[2] * 27.0 - samples[0] - samples[3] * 8.0;
+                vec![
+                    samples[0],
+                    (first * 2.0 - second) / 18.0,
+                    (second * 2.0 - first) / 18.0,
+                    samples[3],
+                ]
+            };
+            let controls2 = |samples: [Point2; 4]| {
+                let first = samples[1] * 27.0 - samples[0] * 8.0 - samples[3];
+                let second = samples[2] * 27.0 - samples[0] - samples[3] * 8.0;
+                vec![
+                    samples[0],
+                    (first * 2.0 - second) / 18.0,
+                    (second * 2.0 - first) / 18.0,
+                    samples[3],
+                ]
+            };
+            (
+                NurbsCurve::new(3, knots.clone(), controls3(cubic_positions), None).unwrap(),
+                NurbsCurve2d::new(3, knots, controls2(cubic_uv_samples[0]), None).unwrap(),
+            )
+        }
         _ => unreachable!(),
     };
     let pcurves = [common.clone(), common];
@@ -746,6 +786,22 @@ fn transmitted_dual_offset_wire(
             pcurves.clone(),
             quadratic_positions,
             quadratic_uv_samples,
+            transmitted_metadata(),
+            1.0e-8,
+        ),
+        4 => certify_transmitted_cubic_dual_offset_nurbs_intersection_residuals(
+            carrier.clone(),
+            traces,
+            pcurves.clone(),
+            cubic_positions,
+            cubic_uv_samples,
+            transmitted_metadata(),
+            1.0e-8,
+        ),
+        7 => certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals(
+            carrier.clone(),
+            traces,
+            pcurves.clone(),
             transmitted_metadata(),
             1.0e-8,
         ),
@@ -2456,6 +2512,164 @@ fn rigid_copy_reissues_witnessed_quadratic_dual_offset_in_both_orders() {
 }
 
 #[test]
+fn rigid_copy_reissues_witnessed_cubic_dual_offset_in_both_orders() {
+    let mut copied_certificates = Vec::new();
+    for swap_order in [false, true] {
+        let mut store = Store::new();
+        let first = [0.25];
+        let second = [0.5];
+        let (source, source_curve, source_surfaces, source_pcurves) = transmitted_dual_offset_wire(
+            &mut store,
+            [&first, &second],
+            [&first, &second],
+            false,
+            false,
+            4,
+            swap_order,
+        );
+        let source_certificate = store
+            .get(source_curve)
+            .unwrap()
+            .as_transmitted_nurbs_intersection()
+            .unwrap()
+            .certificate()
+            .clone();
+        let source_witnesses = source_certificate.cubic_interpolation_witnesses().unwrap();
+        let source_basis_roots =
+            source_surfaces.map(|root| *surface_dependency_chain(&store, root).last().unwrap());
+        assert_ne!(source_basis_roots[0], source_basis_roots[1]);
+        {
+            let mut transaction = store.transaction().unwrap();
+            assert!(
+                transaction
+                    .assembly()
+                    .remove_surface(source_surfaces[0])
+                    .is_err()
+            );
+            assert!(
+                transaction
+                    .assembly()
+                    .replace_surface(
+                        source_basis_roots[1],
+                        SurfaceGeom::Nurbs(horizontal_nurbs_surface(-0.75, false)),
+                    )
+                    .is_err()
+            );
+        }
+
+        let (copied, journal) = copy_checked(&mut store, source, oblique_placement());
+        let copied_curve = store
+            .get(store.edges_of_body(copied).unwrap()[0])
+            .unwrap()
+            .curve
+            .unwrap();
+        let copied_descriptor = store
+            .get(copied_curve)
+            .unwrap()
+            .as_transmitted_nurbs_intersection()
+            .unwrap();
+        let copied_surfaces = copied_descriptor.source_surfaces();
+        let copied_pcurves = copied_descriptor.pcurves();
+        let copied_certificate = copied_descriptor.certificate().clone();
+        let copied_witnesses = copied_certificate.cubic_interpolation_witnesses().unwrap();
+        assert_eq!(copied_certificate.metadata(), source_certificate.metadata());
+        assert_eq!(
+            copied_certificate.tolerance(),
+            source_certificate.tolerance()
+        );
+        assert_eq!(copied_certificate.pcurves(), source_certificate.pcurves());
+        assert_eq!(
+            copied_witnesses.positions(),
+            source_witnesses
+                .positions()
+                .map(|point| map_point(oblique_placement(), point))
+        );
+        assert_eq!(
+            copied_witnesses.canonicalized_pcurve_points(),
+            source_witnesses.canonicalized_pcurve_points()
+        );
+        let positions = copied_witnesses.positions();
+        let first_control = positions[1] * 27.0 - positions[0] * 8.0 - positions[3];
+        let second_control = positions[2] * 27.0 - positions[0] - positions[3] * 8.0;
+        assert_eq!(
+            copied_certificate.carrier().points(),
+            &[
+                positions[0],
+                (first_control * 2.0 - second_control) / 18.0,
+                (second_control * 2.0 - first_control) / 18.0,
+                positions[3],
+            ]
+        );
+        assert!(
+            copied_certificate
+                .carrier()
+                .points()
+                .iter()
+                .zip(source_certificate.carrier().points())
+                .all(|(&copied, &source)| {
+                    copied.dist(map_point(oblique_placement(), source)) <= 64.0 * f64::EPSILON
+                })
+        );
+        for (source_trace, copied_trace) in source_certificate
+            .traces()
+            .iter()
+            .zip(copied_certificate.traces())
+        {
+            assert_transformed_nurbs_trace(source_trace, copied_trace, oblique_placement());
+        }
+        assert_eq!(
+            certify_transmitted_cubic_dual_offset_nurbs_intersection_residuals(
+                copied_certificate.carrier().clone(),
+                copied_certificate.traces().clone(),
+                copied_certificate.pcurves().clone(),
+                copied_witnesses.positions(),
+                copied_witnesses.canonicalized_pcurve_points(),
+                copied_certificate.metadata(),
+                copied_certificate.tolerance(),
+            )
+            .unwrap(),
+            copied_certificate
+        );
+        let mut altered_positions = copied_witnesses.positions();
+        altered_positions[2] += Vec3::new(0.0, 0.0, 1.0e-4);
+        assert!(
+            certify_transmitted_cubic_dual_offset_nurbs_intersection_residuals(
+                copied_certificate.carrier().clone(),
+                copied_certificate.traces().clone(),
+                copied_certificate.pcurves().clone(),
+                altered_positions,
+                copied_witnesses.canonicalized_pcurve_points(),
+                copied_certificate.metadata(),
+                copied_certificate.tolerance(),
+            )
+            .is_err()
+        );
+        for ((copied_root, source_root), (copied_pcurve, source_pcurve)) in copied_surfaces
+            .into_iter()
+            .zip(source_surfaces)
+            .zip(copied_pcurves.into_iter().zip(source_pcurves))
+        {
+            assert_ne!(copied_root, source_root);
+            assert_ne!(copied_pcurve, source_pcurve);
+            assert_copied_surface_chain(&store, &journal, copied_root, source_root);
+        }
+        let copied_basis_roots =
+            copied_surfaces.map(|root| *surface_dependency_chain(&store, root).last().unwrap());
+        assert_ne!(copied_basis_roots[0], copied_basis_roots[1]);
+        store.geometry().validate().unwrap();
+        copied_certificates.push(copied_certificate);
+    }
+    assert_eq!(
+        copied_certificates[0].traces()[0],
+        copied_certificates[1].traces()[1]
+    );
+    assert_eq!(
+        copied_certificates[0].traces()[1],
+        copied_certificates[1].traces()[0]
+    );
+}
+
+#[test]
 fn unsupported_dual_offset_transmitted_families_roll_back_without_allocation() {
     let first = [0.25];
     let first_split = [0.125, 0.125];
@@ -2464,11 +2678,15 @@ fn unsupported_dual_offset_transmitted_families_roll_back_without_allocation() {
     for (trace_distances, shared_basis, periodic_first, sample_count) in [
         ((&first_split[..], &second[..]), false, false, 2),
         ((&first_split[..], &second[..]), false, false, 3),
+        ((&first_split[..], &second[..]), false, false, 4),
         ((&first[..], &shared_second[..]), true, false, 2),
         ((&first[..], &shared_second[..]), true, false, 3),
+        ((&first[..], &shared_second[..]), true, false, 4),
         ((&first[..], &second[..]), false, false, 5),
+        ((&first[..], &second[..]), false, false, 7),
         ((&first[..], &second[..]), false, true, 2),
         ((&first[..], &second[..]), false, true, 3),
+        ((&first[..], &second[..]), false, true, 4),
     ] {
         for swap_order in [false, true] {
             let source_distances = if shared_basis {

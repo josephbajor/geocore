@@ -22,6 +22,7 @@ use kgraph::{
     VerifiedIntersectionCertificate, VerifiedNurbsIntersectionCertificate,
     certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
     certify_paired_plane_sphere_oblique_circle_residuals,
+    certify_transmitted_cubic_dual_offset_nurbs_intersection_residuals,
     certify_transmitted_nurbs_nurbs_intersection_residuals,
     certify_transmitted_offset_nurbs_intersection_residuals,
     certify_transmitted_plane_intersection_residuals,
@@ -437,12 +438,17 @@ impl Copier<'_> {
         ];
         let pcurves = self.copied_nurbs_pcurves(copied_pcurves)?;
         let quadratic_witnesses = certificate.quadratic_interpolation_witnesses();
+        let cubic_witnesses = certificate.cubic_interpolation_witnesses();
         let transformed_quadratic_positions = match quadratic_witnesses {
             Some(witnesses) => Some(self.transform_points(witnesses.positions())?),
             None => None,
         };
-        let carrier = if let Some(positions) = transformed_quadratic_positions {
-            NurbsCurve::new(
+        let transformed_cubic_positions = match cubic_witnesses {
+            Some(witnesses) => Some(self.transform_points(witnesses.positions())?),
+            None => None,
+        };
+        let carrier = match (transformed_quadratic_positions, transformed_cubic_positions) {
+            (Some(positions), None) => NurbsCurve::new(
                 certificate.carrier().degree(),
                 certificate.carrier().knots().as_slice().to_vec(),
                 vec![
@@ -451,9 +457,26 @@ impl Copier<'_> {
                     positions[2],
                 ],
                 None,
-            )?
-        } else {
-            self.transform_nurbs_curve(certificate.carrier())?
+            )?,
+            (None, Some(positions)) => {
+                let first = positions[1] * 27.0 - positions[0] * 8.0 - positions[3];
+                let second = positions[2] * 27.0 - positions[0] - positions[3] * 8.0;
+                NurbsCurve::new(
+                    certificate.carrier().degree(),
+                    certificate.carrier().knots().as_slice().to_vec(),
+                    vec![
+                        positions[0],
+                        (first * 2.0 - second) / 18.0,
+                        (second * 2.0 - first) / 18.0,
+                        positions[3],
+                    ],
+                    None,
+                )?
+            }
+            (None, None) => self.transform_nurbs_curve(certificate.carrier())?,
+            (Some(_), Some(_)) => unreachable!(
+                "rigid-copy structural preflight excludes overlapping interpolation witnesses"
+            ),
         };
         let traces = [
             self.copied_nurbs_trace(&certificate.traces()[0], copied_surfaces[0])?,
@@ -489,6 +512,18 @@ impl Copier<'_> {
                         pcurves,
                         transformed_quadratic_positions.expect(
                             "quadratic witness positions were transformed with the carrier",
+                        ),
+                        witnesses.canonicalized_pcurve_points(),
+                        metadata,
+                        tolerance,
+                    )
+                } else if let Some(witnesses) = cubic_witnesses {
+                    certify_transmitted_cubic_dual_offset_nurbs_intersection_residuals(
+                        carrier,
+                        traces,
+                        pcurves,
+                        transformed_cubic_positions.expect(
+                            "cubic witness positions were transformed with the carrier",
                         ),
                         witnesses.canonicalized_pcurve_points(),
                         metadata,

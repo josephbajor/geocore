@@ -1862,10 +1862,12 @@ mod tests {
         OffsetSurfaceDescriptor, PlaneCircleTrace, PlaneSphereCircleTrace, SphereLatitudeTrace,
         TransmittedIntersectionChartMetadata, TransmittedOffsetNurbsTrace,
         certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
+        certify_transmitted_cubic_dual_offset_nurbs_intersection_residuals,
         certify_transmitted_five_sample_dual_offset_nurbs_intersection_residuals,
         certify_transmitted_offset_nurbs_intersection_residuals,
         certify_transmitted_plane_intersection_residuals,
         certify_transmitted_quadratic_dual_offset_nurbs_intersection_residuals,
+        certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals,
         certify_transmitted_two_sample_dual_offset_nurbs_intersection_residuals,
         certify_verified_plane_nurbs_intersection_residuals,
     };
@@ -2254,15 +2256,26 @@ mod tests {
             Point2::new(0.4, 0.0),
             Point2::new(0.9, 0.0),
         ]; 2];
+        let cubic_positions = [
+            Point3::new(0.1, 0.0, 0.0),
+            Point3::new(0.3, 0.0, 0.0),
+            Point3::new(0.6, 0.0, 0.0),
+            Point3::new(0.9, 0.0, 0.0),
+        ];
+        let cubic_uv_samples = [cubic_positions.map(|point| Point2::new(point.x, 0.0)); 2];
         let (carrier, common) = match sample_count {
-            2 | 5 => {
-                let (knots, coordinates) = if sample_count == 2 {
-                    (vec![0.0, 0.0, 1.0, 1.0], vec![0.1, 0.9])
-                } else {
-                    (
+            2 | 5 | 7 => {
+                let (knots, coordinates) = match sample_count {
+                    2 => (vec![0.0, 0.0, 1.0, 1.0], vec![0.1, 0.9]),
+                    5 => (
                         vec![0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0],
                         vec![0.1, 0.3, 0.5, 0.7, 0.9],
-                    )
+                    ),
+                    7 => (
+                        vec![0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 6.0],
+                        vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.7, 0.9],
+                    ),
+                    _ => unreachable!(),
                 };
                 (
                     NurbsCurve::new(
@@ -2306,6 +2319,33 @@ mod tests {
                     NurbsCurve2d::new(2, knots, controls2, None).unwrap(),
                 )
             }
+            4 => {
+                let knots = vec![0.0, 0.0, 0.0, 0.0, 3.0, 3.0, 3.0, 3.0];
+                let controls3 = |samples: [Point3; 4]| {
+                    let first = samples[1] * 27.0 - samples[0] * 8.0 - samples[3];
+                    let second = samples[2] * 27.0 - samples[0] - samples[3] * 8.0;
+                    vec![
+                        samples[0],
+                        (first * 2.0 - second) / 18.0,
+                        (second * 2.0 - first) / 18.0,
+                        samples[3],
+                    ]
+                };
+                let controls2 = |samples: [Point2; 4]| {
+                    let first = samples[1] * 27.0 - samples[0] * 8.0 - samples[3];
+                    let second = samples[2] * 27.0 - samples[0] - samples[3] * 8.0;
+                    vec![
+                        samples[0],
+                        (first * 2.0 - second) / 18.0,
+                        (second * 2.0 - first) / 18.0,
+                        samples[3],
+                    ]
+                };
+                (
+                    NurbsCurve::new(3, knots.clone(), controls3(cubic_positions), None).unwrap(),
+                    NurbsCurve2d::new(3, knots, controls2(cubic_uv_samples[0]), None).unwrap(),
+                )
+            }
             _ => unreachable!(),
         };
         let pcurves = [common.clone(), common];
@@ -2330,6 +2370,22 @@ mod tests {
                 pcurves.clone(),
                 quadratic_positions,
                 quadratic_uv_samples,
+                transmitted_metadata(),
+                1.0e-8,
+            ),
+            4 => certify_transmitted_cubic_dual_offset_nurbs_intersection_residuals(
+                carrier.clone(),
+                traces,
+                pcurves.clone(),
+                cubic_positions,
+                cubic_uv_samples,
+                transmitted_metadata(),
+                1.0e-8,
+            ),
+            7 => certify_transmitted_seven_sample_dual_offset_nurbs_intersection_residuals(
+                carrier.clone(),
+                traces,
+                pcurves.clone(),
                 transmitted_metadata(),
                 1.0e-8,
             ),
@@ -3333,6 +3389,118 @@ mod tests {
     }
 
     #[test]
+    fn rigid_body_copy_facade_reissues_witnessed_cubic_dual_offset() {
+        let placement = Frame::new(
+            Point3::new(2.0, -1.0, 3.0),
+            Vec3::new(1.0, 2.0, 3.0).normalized().unwrap(),
+            Vec3::new(2.0, -1.0, 0.0).normalized().unwrap(),
+        )
+        .unwrap();
+        let first = [0.25];
+        let second = [0.5];
+        let mut copied_certificates = Vec::new();
+        for swap_order in [false, true] {
+            let mut session = Kernel::new().create_session();
+            let part_id = session.create_part();
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let (raw_source, source_curve) = transmitted_dual_offset_wire(
+                &mut edit.state.store,
+                [&first, &second],
+                [&first, &second],
+                false,
+                false,
+                4,
+                swap_order,
+            );
+            let source_witnesses = edit
+                .state
+                .store
+                .get(source_curve)
+                .unwrap()
+                .as_transmitted_nurbs_intersection()
+                .unwrap()
+                .certificate()
+                .cubic_interpolation_witnesses()
+                .unwrap();
+            let source = BodyId::new(part_id, raw_source);
+            let created = edit
+                .copy_body_rigid(CopyBodyRequest::new(source, placement))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            let copied_edge = edit
+                .state
+                .store
+                .edges_of_body(created.body().raw())
+                .unwrap()[0];
+            let copied_curve = edit.state.store.get(copied_edge).unwrap().curve.unwrap();
+            let copied = edit
+                .state
+                .store
+                .get(copied_curve)
+                .unwrap()
+                .as_transmitted_nurbs_intersection()
+                .unwrap();
+            let certificate = copied.certificate().clone();
+            let witnesses = certificate.cubic_interpolation_witnesses().unwrap();
+            assert_eq!(certificate.metadata(), transmitted_metadata());
+            assert_eq!(certificate.carrier().points().len(), 4);
+            assert_eq!(
+                witnesses.positions(),
+                source_witnesses
+                    .positions()
+                    .map(|point| placement.point_at(point.x, point.y, point.z))
+            );
+            assert_eq!(
+                witnesses.canonicalized_pcurve_points(),
+                source_witnesses.canonicalized_pcurve_points()
+            );
+            assert!(certificate.traces().iter().all(|trace| {
+                trace
+                    .as_offset_nurbs()
+                    .is_some_and(|offset| offset.descriptor_signed_distances().len() == 1)
+            }));
+            assert_eq!(
+                certify_transmitted_cubic_dual_offset_nurbs_intersection_residuals(
+                    certificate.carrier().clone(),
+                    certificate.traces().clone(),
+                    certificate.pcurves().clone(),
+                    witnesses.positions(),
+                    witnesses.canonicalized_pcurve_points(),
+                    certificate.metadata(),
+                    certificate.tolerance(),
+                )
+                .unwrap(),
+                certificate
+            );
+            let mut altered_positions = witnesses.positions();
+            altered_positions[1] += Vec3::new(0.0, 0.0, 1.0e-4);
+            assert!(
+                certify_transmitted_cubic_dual_offset_nurbs_intersection_residuals(
+                    certificate.carrier().clone(),
+                    certificate.traces().clone(),
+                    certificate.pcurves().clone(),
+                    altered_positions,
+                    witnesses.canonicalized_pcurve_points(),
+                    certificate.metadata(),
+                    certificate.tolerance(),
+                )
+                .is_err()
+            );
+            edit.state.store.geometry().validate().unwrap();
+            copied_certificates.push(certificate);
+        }
+        assert_eq!(
+            copied_certificates[0].traces()[0],
+            copied_certificates[1].traces()[1]
+        );
+        assert_eq!(
+            copied_certificates[0].traces()[1],
+            copied_certificates[1].traces()[0]
+        );
+    }
+
+    #[test]
     fn rigid_body_copy_facade_rejects_noncanonical_dual_offset_before_scope() {
         let first = [0.25];
         let first_split = [0.125, 0.125];
@@ -3341,11 +3509,15 @@ mod tests {
         for (trace_distances, shared_basis, periodic_first, sample_count) in [
             ((&first_split[..], &second[..]), false, false, 2),
             ((&first_split[..], &second[..]), false, false, 3),
+            ((&first_split[..], &second[..]), false, false, 4),
             ((&first[..], &shared_second[..]), true, false, 2),
             ((&first[..], &shared_second[..]), true, false, 3),
+            ((&first[..], &shared_second[..]), true, false, 4),
             ((&first[..], &second[..]), false, false, 5),
+            ((&first[..], &second[..]), false, false, 7),
             ((&first[..], &second[..]), false, true, 2),
             ((&first[..], &second[..]), false, true, 3),
+            ((&first[..], &second[..]), false, true, 4),
         ] {
             for swap_order in [false, true] {
                 let source_distances = if shared_basis {
