@@ -1478,16 +1478,20 @@ fn rigid_copy_curve_is_reissuable(
     if !descriptor.is_verified_intersection() {
         return Ok(true);
     }
+    if let Some(intersection) = descriptor.as_transmitted_nurbs_intersection() {
+        return Ok(
+            kgraph::transmitted_nurbs_intersection_has_rigid_copy_recertifier(
+                intersection.certificate(),
+            ) && transmitted_nurbs_intersection_sources_are_rigid_copy_supported(
+                store,
+                intersection.source_surfaces(),
+                intersection.certificate(),
+            )?,
+        );
+    }
     let Some(intersection) = descriptor.as_intersection() else {
         return Ok(descriptor.as_verified_nurbs_intersection().is_some()
-            || descriptor.as_transmitted_intersection().is_some()
-            || descriptor
-                .as_transmitted_nurbs_intersection()
-                .is_some_and(|intersection| {
-                    kgraph::transmitted_nurbs_intersection_has_rigid_copy_recertifier(
-                        intersection.certificate(),
-                    )
-                }));
+            || descriptor.as_transmitted_intersection().is_some());
     };
     let [first, second] = intersection.source_surfaces();
     let exact_field = |surface| {
@@ -1512,6 +1516,50 @@ fn rigid_copy_curve_is_reissuable(
             )
         }
     })
+}
+
+// Keep this facade preflight synchronized with ktopo's private body-copy
+// predicate; sharing it would widen the raw Store/body-copy API.
+fn transmitted_nurbs_intersection_sources_are_rigid_copy_supported(
+    store: &ktopo::store::Store,
+    source_surfaces: [ktopo::entity::SurfaceId; 2],
+    certificate: &kgraph::TransmittedNurbsIntersectionCertificate,
+) -> kcore::error::Result<bool> {
+    if !certificate
+        .traces()
+        .iter()
+        .any(|trace| matches!(trace, kgraph::NurbsIntersectionTrace::OffsetNurbs(_)))
+    {
+        return Ok(true);
+    }
+    for (source, trace) in source_surfaces.into_iter().zip(certificate.traces()) {
+        let source = store.get(source)?;
+        let matches = match trace {
+            kgraph::NurbsIntersectionTrace::OffsetNurbs(offset) => {
+                let distances = offset.descriptor_signed_distances();
+                let Some(descriptor) = source.as_offset().copied() else {
+                    return Ok(false);
+                };
+                distances.len() == 1
+                    && descriptor.signed_distance() == distances[0]
+                    && store
+                        .get(descriptor.basis())?
+                        .as_nurbs()
+                        .is_some_and(|basis| basis == offset.basis())
+            }
+            kgraph::NurbsIntersectionTrace::Plane(plane) => {
+                source.as_plane().is_some_and(|actual| actual == plane)
+            }
+            kgraph::NurbsIntersectionTrace::Nurbs(nurbs) => {
+                source.as_nurbs().is_some_and(|actual| actual == nurbs)
+            }
+            _ => false,
+        };
+        if !matches {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 impl Part<'_> {
@@ -1792,8 +1840,9 @@ mod tests {
     use kgraph::{
         AffineParamMap1d, EvalBudgetProfile, EvalError, NurbsIntersectionTrace,
         OffsetSurfaceDescriptor, PlaneCircleTrace, PlaneSphereCircleTrace, SphereLatitudeTrace,
-        TransmittedIntersectionChartMetadata, certify_paired_plane_line_residuals,
-        certify_paired_plane_sphere_circle_residuals,
+        TransmittedIntersectionChartMetadata, TransmittedOffsetNurbsTrace,
+        certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
+        certify_transmitted_offset_nurbs_intersection_residuals,
         certify_transmitted_plane_intersection_residuals,
         certify_verified_plane_nurbs_intersection_residuals,
     };
@@ -1911,6 +1960,144 @@ mod tests {
         };
         transaction.commit_checked_body(body).unwrap();
         body
+    }
+
+    fn transmitted_offset_nurbs_plane_wire(
+        store: &mut Store,
+        offset_first: bool,
+        source_offset_distances: &[f64],
+        trace_descriptor_distances: &[f64],
+        plane_offset: Option<f64>,
+    ) -> (ktopo::entity::BodyId, ktopo::entity::CurveId) {
+        let basis = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, -0.25),
+                Point3::new(0.0, 1.0, -0.25),
+                Point3::new(1.0, 0.0, -0.25),
+                Point3::new(1.0, 1.0, -0.25),
+            ],
+            Some(vec![2.0; 4]),
+        )
+        .unwrap();
+        let mut offset_root = store
+            .insert_surface(SurfaceGeom::Nurbs(basis.clone()))
+            .unwrap();
+        for &distance in source_offset_distances {
+            offset_root = store
+                .insert_surface(SurfaceGeom::Offset(OffsetSurfaceDescriptor::new(
+                    offset_root,
+                    distance,
+                )))
+                .unwrap();
+        }
+        let plane = Plane::new(
+            Frame::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap(),
+        );
+        let plane_root = if let Some(distance) = plane_offset {
+            let frame = plane.frame();
+            let plane_basis = Plane::new(frame.with_origin(frame.origin() - frame.z() * distance));
+            let plane_basis = store
+                .insert_surface(SurfaceGeom::Plane(plane_basis))
+                .unwrap();
+            store
+                .insert_surface(SurfaceGeom::Offset(OffsetSurfaceDescriptor::new(
+                    plane_basis,
+                    distance,
+                )))
+                .unwrap()
+        } else {
+            store.insert_surface(SurfaceGeom::Plane(plane)).unwrap()
+        };
+        let offset_trace = NurbsIntersectionTrace::OffsetNurbs(
+            TransmittedOffsetNurbsTrace::from_descriptor_signed_distances(
+                basis,
+                trace_descriptor_distances,
+            )
+            .unwrap(),
+        );
+        let plane_trace = NurbsIntersectionTrace::Plane(plane);
+        let (surfaces, traces) = if offset_first {
+            ([offset_root, plane_root], [offset_trace, plane_trace])
+        } else {
+            ([plane_root, offset_root], [plane_trace, offset_trace])
+        };
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let carrier = NurbsCurve::new(
+            1,
+            knots.clone(),
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
+            None,
+        )
+        .unwrap();
+        let pcurve = NurbsCurve2d::new(
+            1,
+            knots,
+            vec![Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)],
+            None,
+        )
+        .unwrap();
+        let certificate = certify_transmitted_offset_nurbs_intersection_residuals(
+            carrier.clone(),
+            traces,
+            [pcurve.clone(), pcurve.clone()],
+            transmitted_metadata(),
+            1.0e-8,
+        )
+        .unwrap();
+        let pcurves = [pcurve.clone(), pcurve]
+            .map(|pcurve| store.insert_pcurve(Curve2dGeom::Nurbs(pcurve)).unwrap());
+        let curve = store
+            .insert_verified_transmitted_nurbs_intersection_curve(surfaces, pcurves, certificate)
+            .unwrap();
+        let mut transaction = store.transaction().unwrap();
+        let body = {
+            let mut assembly = transaction.assembly();
+            let body = assembly.add(RawBody {
+                kind: BodyKind::Wire,
+                regions: Vec::new(),
+            });
+            let region = assembly.add(RawRegion {
+                body,
+                kind: RegionKind::Void,
+                shells: Vec::new(),
+            });
+            let shell = assembly.add(RawShell {
+                region,
+                faces: Vec::new(),
+                edges: Vec::new(),
+                vertex: None,
+            });
+            let vertices =
+                [Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)].map(|position| {
+                    let point = assembly.add(position);
+                    assembly.add(RawVertex {
+                        point,
+                        tolerance: None,
+                    })
+                });
+            let edge = assembly.add(RawEdge {
+                curve: Some(curve),
+                vertices: vertices.map(Some),
+                bounds: Some((0.0, 1.0)),
+                fins: Vec::new(),
+                tolerance: None,
+            });
+            assembly.get_mut(shell).unwrap().edges.push(edge);
+            assembly.get_mut(region).unwrap().shells.push(shell);
+            assembly.get_mut(body).unwrap().regions.push(region);
+            body
+        };
+        transaction.commit_checked_body(body).unwrap();
+        (body, curve)
     }
 
     fn verified_nurbs_wire(store: &mut Store) -> ktopo::entity::BodyId {
@@ -2546,6 +2733,137 @@ mod tests {
             ]
         );
         assert_eq!(copied.certificate().metadata(), transmitted_metadata());
+    }
+
+    #[test]
+    fn rigid_body_copy_facade_reissues_offset_nurbs_direct_plane_in_both_orders() {
+        let placement = Frame::new(
+            Point3::new(2.0, -1.0, 3.0),
+            Vec3::new(1.0, 2.0, 3.0).normalized().unwrap(),
+            Vec3::new(2.0, -1.0, 0.0).normalized().unwrap(),
+        )
+        .unwrap();
+        let mut copied_certificates = Vec::new();
+        for offset_first in [false, true] {
+            let mut session = Kernel::new().create_session();
+            let part_id = session.create_part();
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let (raw_source, _) = transmitted_offset_nurbs_plane_wire(
+                &mut edit.state.store,
+                offset_first,
+                &[0.25],
+                &[0.25],
+                None,
+            );
+            let source = BodyId::new(part_id, raw_source);
+            let created = edit
+                .copy_body_rigid(CopyBodyRequest::new(source, placement))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            let copied_edge = edit
+                .state
+                .store
+                .edges_of_body(created.body().raw())
+                .unwrap()[0];
+            let copied_curve = edit.state.store.get(copied_edge).unwrap().curve.unwrap();
+            let copied = edit
+                .state
+                .store
+                .get(copied_curve)
+                .unwrap()
+                .as_transmitted_nurbs_intersection()
+                .unwrap();
+            let certificate = copied.certificate().clone();
+            assert_eq!(certificate.metadata(), transmitted_metadata());
+            assert_eq!(
+                certificate.carrier().points(),
+                &[
+                    placement.point_at(0.0, 0.0, 0.0),
+                    placement.point_at(1.0, 0.0, 0.0),
+                ]
+            );
+            assert_eq!(
+                matches!(
+                    certificate.traces()[0],
+                    NurbsIntersectionTrace::OffsetNurbs(_)
+                ),
+                offset_first
+            );
+            let offset = certificate
+                .traces()
+                .iter()
+                .find_map(NurbsIntersectionTrace::as_offset_nurbs)
+                .unwrap();
+            assert_eq!(offset.descriptor_signed_distances(), &[0.25]);
+            assert_eq!(
+                certify_transmitted_offset_nurbs_intersection_residuals(
+                    certificate.carrier().clone(),
+                    certificate.traces().clone(),
+                    certificate.pcurves().clone(),
+                    certificate.metadata(),
+                    certificate.tolerance(),
+                )
+                .unwrap(),
+                certificate
+            );
+            edit.state.store.geometry().validate().unwrap();
+            copied_certificates.push(certificate);
+        }
+        assert_eq!(
+            copied_certificates[0].traces()[0],
+            copied_certificates[1].traces()[1]
+        );
+        assert_eq!(
+            copied_certificates[0].traces()[1],
+            copied_certificates[1].traces()[0]
+        );
+    }
+
+    #[test]
+    fn rigid_body_copy_facade_rejects_multi_distance_metadata_or_offset_plane_before_scope() {
+        for (source_distances, trace_distances, plane_offset) in [
+            (vec![0.25], vec![0.125, 0.125], None),
+            (vec![0.25], vec![0.25], Some(0.05)),
+        ] {
+            for offset_first in [false, true] {
+                let mut session = Kernel::new().create_session();
+                let part_id = session.create_part();
+                let mut edit = session.edit_part(part_id.clone()).unwrap();
+                let (raw_source, _) = transmitted_offset_nurbs_plane_wire(
+                    &mut edit.state.store,
+                    offset_first,
+                    &source_distances,
+                    &trace_distances,
+                    plane_offset,
+                );
+                let source = BodyId::new(part_id, raw_source);
+                let before = (
+                    edit.state.store.count::<RawBody>(),
+                    edit.state.store.count::<RawRegion>(),
+                    edit.state.store.count::<RawShell>(),
+                    edit.state.store.count::<RawEdge>(),
+                    edit.state.store.count::<RawVertex>(),
+                    edit.state.store.count::<SurfaceGeom>(),
+                );
+                assert!(matches!(
+                    edit.copy_body_rigid(CopyBodyRequest::new(source, Frame::world())),
+                    Err(KernelError::UnsupportedBodyCopyGeometry { .. })
+                ));
+                assert_eq!(
+                    before,
+                    (
+                        edit.state.store.count::<RawBody>(),
+                        edit.state.store.count::<RawRegion>(),
+                        edit.state.store.count::<RawShell>(),
+                        edit.state.store.count::<RawEdge>(),
+                        edit.state.store.count::<RawVertex>(),
+                        edit.state.store.count::<SurfaceGeom>(),
+                    )
+                );
+                edit.state.store.geometry().validate().unwrap();
+            }
+        }
     }
 
     #[test]

@@ -1015,8 +1015,9 @@ impl TransmittedNurbsIntersectionCertificate {
 ///
 /// This is a structural capability query only. Reissuance must still rerun the
 /// selected certifier against transformed live sources and may fail its
-/// geometric or residual checks. Periodic and dual-offset transmitted charts,
-/// plus Offset(NURBS)/Plane, remain outside this first copy tranche.
+/// geometric or residual checks. Periodic and dual-offset transmitted charts
+/// remain outside this copy tranche. Admitted Offset(NURBS) traces retain
+/// exactly one descriptor; nested roots remain unsupported.
 pub fn transmitted_nurbs_intersection_has_rigid_copy_recertifier(
     certificate: &TransmittedNurbsIntersectionCertificate,
 ) -> bool {
@@ -1026,25 +1027,31 @@ pub fn transmitted_nurbs_intersection_has_rigid_copy_recertifier(
     {
         return false;
     }
-    matches!(
-        &certificate.traces,
+    match &certificate.traces {
         [
             TransmittedNurbsIntersectionTrace::Plane(_),
             TransmittedNurbsIntersectionTrace::Nurbs(_),
-        ] | [
+        ]
+        | [
             TransmittedNurbsIntersectionTrace::Nurbs(_),
             TransmittedNurbsIntersectionTrace::Plane(_),
-        ] | [
-            TransmittedNurbsIntersectionTrace::Nurbs(_),
-            TransmittedNurbsIntersectionTrace::Nurbs(_),
-        ] | [
-            TransmittedNurbsIntersectionTrace::OffsetNurbs(_),
-            TransmittedNurbsIntersectionTrace::Nurbs(_),
-        ] | [
-            TransmittedNurbsIntersectionTrace::Nurbs(_),
-            TransmittedNurbsIntersectionTrace::OffsetNurbs(_),
         ]
-    )
+        | [
+            TransmittedNurbsIntersectionTrace::Nurbs(_),
+            TransmittedNurbsIntersectionTrace::Nurbs(_),
+        ] => true,
+        [
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(offset),
+            TransmittedNurbsIntersectionTrace::Nurbs(_)
+            | TransmittedNurbsIntersectionTrace::Plane(_),
+        ]
+        | [
+            TransmittedNurbsIntersectionTrace::Nurbs(_)
+            | TransmittedNurbsIntersectionTrace::Plane(_),
+            TransmittedNurbsIntersectionTrace::OffsetNurbs(offset),
+        ] => offset.descriptor_signed_distances().len() == 1,
+        _ => false,
+    }
 }
 
 /// Source chart declaration retained alongside a transmitted intersection

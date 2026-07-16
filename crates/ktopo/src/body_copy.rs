@@ -414,7 +414,13 @@ impl Copier<'_> {
         source_pcurves: [Curve2dId; 2],
         certificate: &TransmittedNurbsIntersectionCertificate,
     ) -> Result<CurveId> {
-        if !transmitted_nurbs_intersection_has_rigid_copy_recertifier(certificate) {
+        if !transmitted_nurbs_intersection_has_rigid_copy_recertifier(certificate)
+            || !transmitted_nurbs_intersection_sources_are_rigid_copy_supported(
+                self.store,
+                source_surfaces,
+                certificate,
+            )?
+        {
             return Err(Error::InvalidGeometry {
                 reason: "rigid body copy cannot rerun this transmitted NURBS certificate family",
             });
@@ -448,7 +454,9 @@ impl Copier<'_> {
                 )
             }
             [kgraph::NurbsIntersectionTrace::OffsetNurbs(_), kgraph::NurbsIntersectionTrace::Nurbs(_)]
-            | [kgraph::NurbsIntersectionTrace::Nurbs(_), kgraph::NurbsIntersectionTrace::OffsetNurbs(_)] => {
+            | [kgraph::NurbsIntersectionTrace::Nurbs(_), kgraph::NurbsIntersectionTrace::OffsetNurbs(_)]
+            | [kgraph::NurbsIntersectionTrace::OffsetNurbs(_), kgraph::NurbsIntersectionTrace::Plane(_)]
+            | [kgraph::NurbsIntersectionTrace::Plane(_), kgraph::NurbsIntersectionTrace::OffsetNurbs(_)] => {
                 certify_transmitted_offset_nurbs_intersection_residuals(
                     carrier, traces, pcurves, metadata, tolerance,
                 )
@@ -990,4 +998,48 @@ impl Copier<'_> {
     fn derived(&mut self, derived: EntityRef, source: EntityRef) {
         self.lineage.push((derived, source));
     }
+}
+
+// Keep this live-root predicate synchronized with the kernel facade preflight.
+// Sharing it would expose ktopo's private raw Store/body-copy seam publicly.
+fn transmitted_nurbs_intersection_sources_are_rigid_copy_supported(
+    store: &Store,
+    source_surfaces: [SurfaceId; 2],
+    certificate: &TransmittedNurbsIntersectionCertificate,
+) -> Result<bool> {
+    if !certificate
+        .traces()
+        .iter()
+        .any(|trace| matches!(trace, kgraph::NurbsIntersectionTrace::OffsetNurbs(_)))
+    {
+        return Ok(true);
+    }
+    for (source, trace) in source_surfaces.into_iter().zip(certificate.traces()) {
+        let source = store.get(source)?;
+        let matches = match trace {
+            kgraph::NurbsIntersectionTrace::OffsetNurbs(offset) => {
+                let distances = offset.descriptor_signed_distances();
+                let Some(descriptor) = source.as_offset().copied() else {
+                    return Ok(false);
+                };
+                distances.len() == 1
+                    && descriptor.signed_distance() == distances[0]
+                    && store
+                        .get(descriptor.basis())?
+                        .as_nurbs()
+                        .is_some_and(|basis| basis == offset.basis())
+            }
+            kgraph::NurbsIntersectionTrace::Plane(plane) => {
+                source.as_plane().is_some_and(|actual| actual == plane)
+            }
+            kgraph::NurbsIntersectionTrace::Nurbs(nurbs) => {
+                source.as_nurbs().is_some_and(|actual| actual == nurbs)
+            }
+            _ => false,
+        };
+        if !matches {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
