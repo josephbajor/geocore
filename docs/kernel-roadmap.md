@@ -1559,11 +1559,11 @@ true only for an empty complete result.
   four-sample cubic, canonical five-sample degree-1, and canonical seven-sample
   degree-1 dual Offset(NURBS) charts in either ordered-root arrangement, through
   the public original-source recertifier. These complete the existing canonical
-  2/3/4/5/7-sample set. The two-sample line and witnessed three-sample quadratic
-  each admit independent exact ordered chains of one through four descriptors
-  per root across a full 4×4 matrix and both trace orders; the witnessed cubic
-  and the five- and seven-sample families remain exactly one descriptor per
-  root. All five require distinct ordered roots with distinct
+  2/3/4/5/7-sample set. The two-sample line, witnessed three-sample quadratic,
+  and witnessed four-sample cubic each admit independent exact ordered chains
+  of one through four descriptors per root across a full 4×4 matrix and both
+  trace orders; the five- and seven-sample families remain exactly one
+  descriptor per root. All five require distinct ordered roots with distinct
   direct nonperiodic terminal NURBS basis handles. The line uses unweighted
   two-control carrier/pcurves on
   `[0,0,1,1]` over `[0,1]` without witnesses; the quadratic uses unweighted
@@ -1578,21 +1578,21 @@ true only for an empty complete result.
   period. Generic graph persistence walks each dual root to its direct NURBS
   terminal and binds its complete outer-to-inner distance order bit-for-bit; it
   atomically rejects reordered same-total, extra, missing, or stale chains. The
-  admitted two-sample and quadratic trace representations currently cap at four
-  descriptors per root, so a live depth-five source paired to the maximum-depth
-  trace fails atomically at graph insertion; extending beyond four remains graph
-  representation/binding work, not facade-copy preflight. Copy transforms both
-  distinct terminal bases and the line,
-  five-sample, or seven-sample carrier; for
-  either witnessed higher-order family it transforms the exact positions and
+  graph trace constructor retains at most four exact ordered descriptors per
+  trace and rejects a fifth; a live depth-five source paired to the maximum-
+  depth trace therefore fails atomically at graph insertion. Extending beyond
+  four remains graph representation/binding work, not facade-copy preflight.
+  Copy transforms both distinct terminal bases and the line, five-sample, or
+  seven-sample carrier; for either witnessed higher-order family it transforms
+  the exact positions and
   rebuilds carrier controls by the public interpolation formula. It copies both
   ordered roots and full offset/basis and pcurve chains; preserves the exact
   distance order, terminal source binding, chart metadata, tolerance, and exact
-  UV witnesses; publicly recertifies—including every quadratic 4×4 pair—and
-  protects copied roots and complete basis closures transitively. The
-  facade validates the live roots and this
-  proof/source contract before scope creation; graph-valid shared-basis or
-  periodic charts, nested cubic/five/seven-sample roots, Offset(Plane) peer roots,
+  UV witnesses; publicly recertifies—including every witnessed quadratic and
+  cubic 4×4 pair—and protects copied roots and complete basis closures
+  transitively. The facade validates the live roots and this proof/source
+  contract before scope creation; graph-valid shared-basis or
+  periodic charts, nested five-/seven-sample roots, Offset(Plane) peer roots,
   altered higher-order witnesses, other sample counts, nonpositive or nonfinite
   effective spheres, and other unsupported proofs remain typed unsupported. Lower
   transaction rejection restores every Body/Region/Shell/Edge/Vertex and
