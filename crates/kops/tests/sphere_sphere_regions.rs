@@ -460,13 +460,14 @@ fn assert_indeterminate_sphere_window(hit: &SurfaceSurfaceIntersections, reason:
 }
 
 fn assert_general_polar_by_wide_shared_seam_path(
+    b_angle: f64,
     a_window: [ParamRange; 2],
     b_window: [ParamRange; 2],
     expected_occupied: &[[usize; 2]],
     expected_empty: &[[usize; 2]],
 ) {
     let a = world_sphere();
-    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.4);
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, b_angle);
     let latitude_seam = a_window[1].lo + 0.5 * a_window[1].width();
     let longitude_width = b_window[0].width() / 3.0;
     let longitude_seams = [
@@ -896,7 +897,7 @@ fn general_polar_by_wide_multi_occupied_and_near_pole_cases_fail_closed() {
     .unwrap();
     assert_indeterminate_sphere_window(
         &straddling,
-        "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, or one exact four-cell shared-seam path with every other sibling certified empty",
+        "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, one exact four-cell shared-seam path, or one exact five-cell simultaneous shared-seam union with every other sibling certified empty",
     );
 
     let near_pole = f64::from_bits(half_pi.to_bits() - 1);
@@ -1217,13 +1218,14 @@ fn general_polar_by_wide_two_nonadjacent_lower_cells_fail_closed() {
     let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
     assert_indeterminate_sphere_window(
         &hit,
-        "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, or one exact four-cell shared-seam path with every other sibling certified empty",
+        "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, one exact four-cell shared-seam path, or one exact five-cell simultaneous shared-seam union with every other sibling certified empty",
     );
 }
 
 #[test]
 fn general_polar_by_wide_cap_right_l_path_merges_exactly_and_swaps() {
     assert_general_polar_by_wide_shared_seam_path(
+        0.4,
         window(-1.8, -0.8, -1.0, core::f64::consts::FRAC_PI_2),
         window(-4.8, -4.8 + 3.6, 0.0, 1.0),
         &[[0, 2], [1, 1], [1, 2]],
@@ -1234,6 +1236,7 @@ fn general_polar_by_wide_cap_right_l_path_merges_exactly_and_swaps() {
 #[test]
 fn general_polar_by_wide_lower_middle_l_path_merges_exactly_and_swaps() {
     assert_general_polar_by_wide_shared_seam_path(
+        0.4,
         window(
             -1.8,
             -0.8,
@@ -1249,6 +1252,7 @@ fn general_polar_by_wide_lower_middle_l_path_merges_exactly_and_swaps() {
 #[test]
 fn general_polar_by_wide_cap_row_right_four_path_merges_exactly_and_swaps() {
     assert_general_polar_by_wide_shared_seam_path(
+        0.4,
         window(-2.4, -0.8, -1.0, core::f64::consts::FRAC_PI_2),
         window(-4.6, -4.6 + 4.5, 0.4, 1.4),
         &[[0, 2], [1, 0], [1, 1], [1, 2]],
@@ -1259,6 +1263,7 @@ fn general_polar_by_wide_cap_row_right_four_path_merges_exactly_and_swaps() {
 #[test]
 fn general_polar_by_wide_zigzag_four_path_merges_exactly_and_swaps() {
     assert_general_polar_by_wide_shared_seam_path(
+        0.4,
         window(
             -2.4,
             -0.8,
@@ -1268,6 +1273,38 @@ fn general_polar_by_wide_zigzag_four_path_merges_exactly_and_swaps() {
         window(-4.0, -4.0 + 4.5, -0.2, 1.0),
         &[[0, 1], [0, 2], [1, 0], [1, 1]],
         &[[0, 0], [1, 2]],
+    );
+}
+
+#[test]
+fn general_polar_by_wide_corner_empty_five_cell_union_merges_exactly_and_swaps() {
+    assert_general_polar_by_wide_shared_seam_path(
+        0.4,
+        window(-2.8, -0.8, -1.0, core::f64::consts::FRAC_PI_2),
+        window(-4.8, 0.2999999999999998, 0.2, 1.4),
+        &[[0, 1], [0, 2], [1, 0], [1, 1], [1, 2]],
+        &[[0, 0]],
+    );
+}
+
+#[test]
+fn general_polar_by_wide_edge_empty_five_cell_union_merges_exactly_and_swaps() {
+    assert_general_polar_by_wide_shared_seam_path(
+        0.8246411620561659,
+        window(
+            -1.4619434836661054,
+            1.39366191877374,
+            0.017611340128706576,
+            core::f64::consts::FRAC_PI_2,
+        ),
+        window(
+            4.3262436700502995,
+            9.432940315058415,
+            0.6920611792777787,
+            1.0961109123453459,
+        ),
+        &[[0, 0], [0, 1], [0, 2], [1, 0], [1, 2]],
+        &[[1, 1]],
     );
 }
 
@@ -1485,7 +1522,7 @@ fn general_polar_by_wide_three_cell_non_cap_row_path_merges_exactly_and_swaps() 
             .unwrap();
     assert_indeterminate_sphere_window(
         &opposite_row_occupied,
-        "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, or one exact four-cell shared-seam path with every other sibling certified empty",
+        "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, one exact four-cell shared-seam path, or one exact five-cell simultaneous shared-seam union with every other sibling certified empty",
     );
 }
 
