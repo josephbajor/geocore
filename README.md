@@ -195,12 +195,24 @@ application boundary.
   pseudo-Sturm chain. For nonidentity auxiliary polynomials, a second exact
   squared-stationarity quartic with an unsquared stationarity interval filter,
   the radial-axis quadratic, and both line endpoints cover tolerance-near
-  extrema. Partial torus windows, auxiliary identity cases, unsafe arithmetic
-  envelopes, unit/orthonormal invariant failures caught by defensive solver
-  checks, unrepresentable root separation, and tolerance-only discoveries
-  remain `Indeterminate`; rounded local roots are discovery-only. Distinct
-  algebraic roots remain separate in the isolator, while the final
-  physical-contact list still uses world-space linear-resolution consolidation.
+  extrema. When both auxiliary coefficient sets are exact identities, a
+  dedicated axis branch uses the center-plane linear polynomial over the
+  tolerance-expanded line range plus both requested endpoints; world and exact
+  signed-permutation frames pin that admission. A strict distance lower bound
+  greater than tolerance proves a full-window empty miss. When the requested
+  line and surface windows admit the center-plane candidate and its residual is
+  at or below tolerance, one tolerance-only tangent witness is retained and the
+  result remains `Indeterminate`. The admitted partial-longitude fixture
+  containing the center-plane latitude anchors its arbitrary longitude at the
+  requested lower bound; all partial windows remain `Indeterminate`. Unsafe
+  arithmetic envelopes, fixed isolation cell/depth exhaustion,
+  unit/orthonormal invariant failures caught by defensive solver checks,
+  unrepresentable root separation, and tolerance-only discoveries also remain
+  `Indeterminate`; rounded local roots are discovery-only. Distinct algebraic
+  roots remain separate in the isolator, while the final physical-contact list
+  still uses world-space linear-resolution consolidation. The reviewed tilted
+  semantic-axis relation is not promoted to exact coefficient identity and
+  remains conservative `Indeterminate`.
   `Vec3::normalized` now rejects non-finite components, preserves the established
   ordinary finite-norm bits, and rescales only when squared-length overflow would
   otherwise collapse a finite direction. `Line::new` inherits that contract.
@@ -231,8 +243,8 @@ application boundary.
   classification beyond the bounded line/Torus quartic slice, general NURBS
   root classification, raw extreme-scale `Vec3` and `Vec2`
   `norm`/`norm_sq`/dot/cross/distance/subtraction behavior, callers that derive
-  UV spans before analytic-curve construction, and other raw topological sign
-  branches.
+  UV spans before analytic-curve construction, contextual replacement of the
+  fixed line/Torus isolation caps, and other raw topological sign branches.
   `insphere`, an `incircle` production decision consumer when required, the
   broader topological-decision audit, and full conformance remain ahead.
 - M2.5 is in progress and remains the architecture gate. Transaction-owned checked

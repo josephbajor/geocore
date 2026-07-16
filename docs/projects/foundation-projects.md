@@ -249,15 +249,28 @@ separate from the implicit-root proof: when the auxiliary polynomials are
 nonidentity, an exact squared distance-stationary quartic, its unsquared-factor
 interval check, the radial-axis quadratic, and both requested endpoints cover
 every minimum/nondifferentiability candidate. Rejected brackets require a
-strict outward torus-distance exclusion; partial surface windows, auxiliary
-identity cases, numeric root-identity collapse, unsafe expansion work,
-semantic unit/orthonormal invariant failures caught by defensive solver checks, and
-distinct tolerance-only discoveries remain `Indeterminate`. The old rounded
-frame-local polynomial solver is discovery-only and cannot upgrade
+strict outward torus-distance exclusion. When both auxiliary coefficient sets
+are exact identities, a dedicated axis branch uses the center-plane linear
+polynomial over the tolerance-expanded line range plus both requested
+endpoints; world and exact signed-permutation frames pin that admission. A
+strict distance lower bound greater than tolerance returns a full-window
+Complete empty result. When the requested range admits the center-plane
+crossing, the requested surface window admits the resulting candidate, and its
+residual is at or below tolerance, one tolerance-only tangent witness is
+retained and the result remains `Indeterminate`. The admitted
+partial-longitude window containing the center-plane latitude anchors the
+arbitrary longitude at its requested lower bound; every partial window remains
+`Indeterminate`. Numeric root-identity collapse, a one-sided auxiliary
+mismatch, unsafe expansion work, fixed isolation cell/depth exhaustion,
+semantic unit/orthonormal invariant failures caught by defensive solver checks,
+and distinct tolerance-only discoveries remain `Indeterminate`. The old
+rounded frame-local polynomial solver is discovery-only and cannot upgrade
 completion. Algebraic roots remain distinct inside the isolator, while final
 physical contacts retain world-space linear-resolution consolidation. This
 slice does not close general quartic/higher-degree isolation, the other
-conic/primitive families, or auxiliary-identity handling.
+conic/primitive families, arbitrary tilted semantic-axis relations that are
+not exact coefficient identities, stronger exact axis-distance exclusion under
+extreme cancellation, or contextual replacement of the fixed isolation caps.
 
 Stable finite three-dimensional direction construction has also landed.
 `Vec3::normalized` rejects non-finite components, preserves ordinary
