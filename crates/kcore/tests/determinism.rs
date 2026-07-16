@@ -9,7 +9,7 @@
 //! event: update the golden value in the same commit and say why.
 
 use kcore::interval::Interval;
-use kcore::predicates::{incircle, orient2d, orient3d};
+use kcore::predicates::{incircle, orient2d, orient3d, polygon_orientation2d};
 
 struct Rng(u64);
 
@@ -58,6 +58,7 @@ fn golden_hash_of_numeric_results() {
         let d2 = [b2[0], c2[1]];
         hash.write_u64(orient2d(a2, b2, c2).as_i8() as u64);
         hash.write_u64(incircle(a2, b2, c2, d2).as_i8() as u64);
+        hash.write_u64(polygon_orientation2d(&[a2, b2, c2, d2]).as_i8() as u64);
         // Degenerate-by-construction: c collinear with a and b.
         let mid = [(a2[0] + b2[0]) / 2.0, (a2[1] + b2[1]) / 2.0];
         hash.write_u64(orient2d(a2, b2, mid).as_i8() as u64);
@@ -85,6 +86,6 @@ fn golden_hash_of_numeric_results() {
     }
 
     // Golden value. Changing it is a reviewed, intentional event.
-    // (Re-pinned when robust incircle results were added to the batch.)
-    assert_eq!(hash.0, 0xB941_F18A_063E_2918, "numeric results drifted");
+    // (Re-pinned when exact polygon-orientation results were added to the batch.)
+    assert_eq!(hash.0, 0x15E3_B48C_422C_3620, "numeric results drifted");
 }

@@ -33,7 +33,7 @@ use kcore::operation::{
     NumericalPolicy, OperationContext, OperationOutcome, OperationPolicyError, OperationScope,
     PolicyVersion, ResourceKind, SequentialWorkLedger, SessionPolicy, SessionPrecision,
 };
-use kcore::predicates::{Orientation, orient2d};
+use kcore::predicates::{Orientation, orient2d, polygon_orientation2d_iter};
 use kcore::tolerance::Tolerances;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -65,13 +65,12 @@ impl TrimLoop {
     /// allocating its cleaned copy.
     ///
     /// Higher-level accounted builders use this inspection seam to admit the
-    /// exact cleaned-copy length before construction. Validation and floating-
-    /// point accumulation deliberately match [`TrimLoop::new`].
+    /// exact cleaned-copy length before construction. Validation and exact
+    /// orientation decisions deliberately match [`TrimLoop::new`].
     pub fn cleaned_point_count(points: &[Vec2]) -> Result<usize> {
         let mut first = None;
         let mut previous = None;
         let mut count = 0_usize;
-        let mut twice_area = 0.0;
         for &point in points {
             if !point.x.is_finite() || !point.y.is_finite() {
                 return Err(Error::InvalidGeometry {
@@ -81,9 +80,7 @@ impl TrimLoop {
             if previous == Some(point) {
                 continue;
             }
-            if let Some(previous) = previous {
-                twice_area += previous.cross(point);
-            } else {
+            if previous.is_none() {
                 first = Some(point);
             }
             previous = Some(point);
@@ -93,15 +90,15 @@ impl TrimLoop {
         }
         if count > 1 && first == previous {
             count -= 1;
-        } else if let (Some(previous), Some(first)) = (previous, first) {
-            twice_area += previous.cross(first);
         }
         if count < 3 {
             return Err(Error::InvalidGeometry {
                 reason: "trim loop needs at least 3 distinct vertices",
             });
         }
-        if twice_area / 2.0 == 0.0 {
+        if polygon_orientation2d_iter(points.iter().map(|point| [point.x, point.y]))
+            == Orientation::Zero
+        {
             return Err(Error::InvalidGeometry {
                 reason: "trim loop has zero area",
             });
@@ -122,11 +119,14 @@ impl TrimLoop {
         }
         debug_assert_eq!(cleaned.len(), cleaned_count);
         let l = TrimLoop { points: cleaned };
-        debug_assert_ne!(l.signed_area(), 0.0);
+        debug_assert_ne!(trim_loop_orientation(&l), Orientation::Zero);
         Ok(l)
     }
 
-    /// Shoelace signed area: positive for counterclockwise loops.
+    /// Rounded shoelace signed area for reporting and magnitude estimates.
+    ///
+    /// Its rounded sign must not decide winding or degeneracy; those decisions
+    /// use [`polygon_orientation2d_iter`].
     pub fn signed_area(&self) -> f64 {
         let n = self.points.len();
         let mut a = 0.0;
@@ -156,14 +156,14 @@ impl<'a> TrimmedSurface<'a> {
                 reason: "trimmed surface needs at least one loop",
             });
         };
-        if outer.signed_area() <= 0.0 {
+        if trim_loop_orientation(outer) != Orientation::Positive {
             return Err(Error::InvalidGeometry {
                 reason: "outer trim loop must wind counterclockwise",
             });
         }
         let outer_bb = crate::aabb::Aabb2::from_points(&outer.points);
         for hole in &loops[1..] {
-            if hole.signed_area() >= 0.0 {
+            if trim_loop_orientation(hole) != Orientation::Negative {
                 return Err(Error::InvalidGeometry {
                     reason: "hole trim loops must wind clockwise",
                 });
@@ -206,6 +206,10 @@ impl<'a> TrimmedSurface<'a> {
     pub fn loops(&self) -> &[TrimLoop] {
         &self.loops
     }
+}
+
+fn trim_loop_orientation(loop_: &TrimLoop) -> Orientation {
+    polygon_orientation2d_iter(loop_.points.iter().map(|point| [point.x, point.y]))
 }
 
 /// Tessellation controls.

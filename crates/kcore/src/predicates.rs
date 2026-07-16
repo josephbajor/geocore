@@ -95,6 +95,63 @@ pub fn orient2d(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> Orientation {
     orient2d_exact(a, b, c)
 }
 
+/// Exact orientation of a closed 2D polygon.
+///
+/// Returns the sign of the exact cyclic shoelace sum
+/// `sum_i(x_i * y_(i+1) - y_i * x_(i+1))`: positive for counterclockwise
+/// winding and negative for clockwise winding. The result is invariant under
+/// cyclic rotation of the vertices, and reversing their order reverses every
+/// nonzero result.
+///
+/// Fewer than three vertices, any non-finite coordinate, or an exactly zero
+/// shoelace sum returns [`Orientation::Zero`]. Repeated vertices are allowed;
+/// self-intersecting polygons retain the sign of their algebraic area.
+pub fn polygon_orientation2d(points: &[[f64; 2]]) -> Orientation {
+    polygon_orientation2d_iter(points.iter().copied())
+}
+
+/// Streaming form of [`polygon_orientation2d`].
+///
+/// This evaluates the same exact cyclic shoelace expansion without retaining
+/// or allocating a copy of the input. It has the same winding convention and
+/// returns [`Orientation::Zero`] for fewer than three vertices, any non-finite
+/// coordinate, or an exactly zero shoelace sum.
+pub fn polygon_orientation2d_iter(points: impl IntoIterator<Item = [f64; 2]>) -> Orientation {
+    let mut twice_area = vec![0.0];
+    let mut first = None;
+    let mut previous = None;
+    let mut count = 0_usize;
+    for point in points {
+        if point.iter().any(|coordinate| !coordinate.is_finite()) {
+            return Orientation::Zero;
+        }
+        if let Some(previous) = previous {
+            accumulate_shoelace_cross(&mut twice_area, previous, point);
+        } else {
+            first = Some(point);
+        }
+        previous = Some(point);
+        count = count.saturating_add(1);
+    }
+    if count < 3 {
+        return Orientation::Zero;
+    }
+    let (Some(previous), Some(first)) = (previous, first) else {
+        return Orientation::Zero;
+    };
+    accumulate_shoelace_cross(&mut twice_area, previous, first);
+    Orientation::from_sign(expansion::sign(&twice_area))
+}
+
+fn accumulate_shoelace_cross(twice_area: &mut Vec<f64>, point: [f64; 2], next: [f64; 2]) {
+    let (product, error) = expansion::two_product(point[0], next[1]);
+    let positive = expansion::from_two(product, error);
+    let (product, error) = expansion::two_product(point[1], next[0]);
+    let negative = expansion::from_two(product, error);
+    let cross = expansion::sum(&positive, &expansion::negate(&negative));
+    *twice_area = expansion::sum(twice_area, &cross);
+}
+
 /// Exact 2D orientation via the identity
 /// `det = ax(by - cy) + bx(cy - ay) + cx(ay - by)`.
 fn orient2d_exact(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> Orientation {
@@ -308,6 +365,21 @@ mod tests {
         det.signum() as i8
     }
 
+    fn polygon_orientation2d_oracle(points: &[[i64; 2]]) -> i8 {
+        if points.len() < 3 {
+            return 0;
+        }
+        points
+            .iter()
+            .zip(points.iter().cycle().skip(1))
+            .map(|(point, next)| {
+                i128::from(point[0]) * i128::from(next[1])
+                    - i128::from(point[1]) * i128::from(next[0])
+            })
+            .sum::<i128>()
+            .signum() as i8
+    }
+
     fn to2(p: [i64; 2]) -> [f64; 2] {
         [p[0] as f64, p[1] as f64]
     }
@@ -349,6 +421,76 @@ mod tests {
                 "a={a:?} b={b:?} c={c:?}"
             );
         }
+    }
+
+    #[test]
+    fn polygon_orientation2d_matches_random_integer_oracle() {
+        let mut rng = Rng::new(0xA11C_E5E7_0ACE_2D00);
+        for _ in 0..20_000 {
+            let len = 3 + (rng.next() % 10) as usize;
+            let points = (0..len)
+                .map(|_| [rng.int(1 << 20), rng.int(1 << 20)])
+                .collect::<Vec<_>>();
+            let coordinates = points.iter().copied().map(to2).collect::<Vec<_>>();
+            assert_eq!(
+                polygon_orientation2d(&coordinates).as_i8(),
+                polygon_orientation2d_oracle(&points),
+                "points={points:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn polygon_orientation2d_resolves_large_cancellation_deterministically() {
+        let magnitude = 2f64.powi(52);
+        let points = vec![
+            [magnitude, magnitude],
+            [magnitude + 1.0, magnitude],
+            [magnitude + 1.0, magnitude + 1.0],
+            [magnitude, magnitude + 1.0],
+        ];
+        let naive_twice_area = points
+            .iter()
+            .zip(points.iter().cycle().skip(1))
+            .map(|(point, next)| point[0] * next[1] - point[1] * next[0])
+            .sum::<f64>();
+        assert_eq!(naive_twice_area, 0.0);
+
+        for rotation in 0..points.len() {
+            let mut rotated = points.clone();
+            rotated.rotate_left(rotation);
+            for _ in 0..32 {
+                assert_eq!(polygon_orientation2d(&rotated), Orientation::Positive);
+                assert_eq!(
+                    polygon_orientation2d_iter(rotated.iter().copied()),
+                    Orientation::Positive
+                );
+            }
+
+            rotated.reverse();
+            assert_eq!(polygon_orientation2d(&rotated), Orientation::Negative);
+        }
+    }
+
+    #[test]
+    fn polygon_orientation2d_fails_closed_on_invalid_or_exact_zero_input() {
+        assert_eq!(polygon_orientation2d(&[]), Orientation::Zero);
+        assert_eq!(
+            polygon_orientation2d(&[[0.0, 0.0], [1.0, 0.0]]),
+            Orientation::Zero
+        );
+        assert_eq!(
+            polygon_orientation2d(&[[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]]),
+            Orientation::Zero
+        );
+        assert_eq!(
+            polygon_orientation2d(&[[0.0, 0.0], [f64::NAN, 1.0], [1.0, 0.0]]),
+            Orientation::Zero
+        );
+        assert_eq!(
+            polygon_orientation2d(&[[0.0, 0.0], [f64::INFINITY, 1.0], [1.0, 0.0]]),
+            Orientation::Zero
+        );
     }
 
     #[test]
