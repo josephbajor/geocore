@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, deterministic checked complete-body rigid copy with direct/safe-offset PlaneLine and PlaneSphereCircle certificate reissuance plus every current operation-generated VerifiedNurbsIntersection family including one- through four-level compatible dual offsets, polynomial/rational traces, and oblique frames, checked polygonal-profile extrusion, failure-atomic operation-owned facade tolerance batching, journaled MEF inheritance and KEF ordered-max face-tolerance propagation, an evidence-bearing opt-in Full-assurance commit gate, K5 adoption, and facade body tessellation implemented; rigid copy also reissues the bounded transmitted Plane/Plane, direct Plane/NURBS, direct NURBS/NURBS, direct one-descriptor Offset(NURBS)/NURBS, exactly one-descriptor Offset(NURBS)/direct-Plane, and canonical finite-open two-sample degree-1, witnessed three-sample quadratic, witnessed four-sample cubic, canonical five-sample degree-1, and canonical seven-sample degree-1 dual Offset(NURBS) families named below, with the two-sample line covering independent one- through four-descriptor chains per root across the full 4x4 matrix and both trace orders while 3/4/5/7 remain one descriptor per root; altered-witness, graph-valid shared-basis or periodic-source/carrier, other-sample dual-offset, nested 3/4/5/7, and Offset(Plane)-peer transmitted proofs remain copy-preflight gaps; graph trace representation/binding beyond four-descriptor two-sample chains, broader K4 edits, and partition history also remain
+Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, deterministic checked complete-body rigid copy with direct/safe-offset PlaneLine and PlaneSphereCircle certificate reissuance plus every current operation-generated VerifiedNurbsIntersection family including one- through four-level compatible dual offsets, polynomial/rational traces, and oblique frames, checked polygonal-profile extrusion, failure-atomic operation-owned facade tolerance batching, journaled MEF inheritance and KEF ordered-max face-tolerance propagation, an evidence-bearing opt-in Full-assurance commit gate, K5 adoption, and facade body tessellation implemented; rigid copy also reissues the bounded transmitted Plane/Plane, direct Plane/NURBS, direct NURBS/NURBS, direct one-descriptor Offset(NURBS)/NURBS, exactly one-descriptor Offset(NURBS)/direct-Plane, and canonical finite-open two-sample degree-1, witnessed three-sample quadratic, witnessed four-sample cubic, canonical five-sample degree-1, and canonical seven-sample degree-1 dual Offset(NURBS) families named below, with both the two-sample line and witnessed quadratic covering independent exact ordered one- through four-descriptor chains per root across a full 4x4 matrix and both trace orders while the witnessed cubic and five-/seven-sample families remain one descriptor per root; altered-witness, graph-valid shared-basis or periodic-source/carrier, other-sample dual-offset, nested cubic/five/seven, and Offset(Plane)-peer transmitted proofs remain copy-preflight gaps; graph trace representation/binding beyond four-descriptor two-sample or quadratic chains, broader K4 edits, and partition history also remain
 
 ## Outcome
 
@@ -937,10 +937,11 @@ canonical finite-open two-sample degree-1, witnessed three-sample quadratic,
 witnessed four-sample cubic, canonical five-sample degree-1, or canonical seven-
 sample degree-1 dual Offset(NURBS) chart in either ordered-root arrangement.
 These complete the existing canonical 2/3/4/5/7-sample set at the current
-scope: the two-sample line admits independent exact ordered chains of one
-through four descriptors per root across the full 4×4 matrix and both trace
-orders, while the 3/4/5/7-sample families remain exactly one descriptor per
-root. All five require distinct ordered roots with distinct direct nonperiodic
+scope: the two-sample line and witnessed three-sample quadratic each admit
+independent exact ordered chains of one through four descriptors per root
+across a full 4×4 matrix and both trace orders, while the witnessed cubic and
+the five- and seven-sample families remain exactly one descriptor per root.
+All five require distinct ordered roots with distinct direct nonperiodic
 terminal NURBS basis handles. The line uses unweighted two-
 control carrier/pcurves on `[0,0,1,1]` over `[0,1]` without witnesses; the
 quadratic uses unweighted degree-2 three-control carrier/pcurves on
@@ -951,23 +952,26 @@ witnesses. The five-sample family uses unweighted degree-1 five-control
 carrier/pcurves on `[0,0,1,2,3,4,4]` over `[0,4]`; the seven-sample family uses
 unweighted degree-1 seven-control carrier/pcurves on
 `[0,0,1,2,3,4,5,6,6]` over `[0,6]`. Neither polyline family has interpolation
-witnesses or a carrier period. Each admitted two-sample chain binds its exact
-outer-to-inner distance order bit-for-bit to its terminal NURBS source; graph
-persistence atomically rejects reordered same-total, extra, missing, or stale
-chains. The graph trace representation currently caps at four descriptors per
-root, so a live depth-five source paired to the maximum-depth trace fails
-atomically at graph insertion; broader depth remains graph representation and
-binding work rather than facade-copy preflight. The lower copy transaction
-transforms both terminal bases and the line, five-sample, or seven-sample
+witnesses or a carrier period. Generic graph persistence walks each dual root
+to its direct NURBS terminal and binds its complete outer-to-inner distance
+order bit-for-bit; it atomically rejects reordered same-total, extra, missing,
+or stale chains. The admitted two-sample and quadratic trace representations
+currently cap at four descriptors per root, so a live depth-five source paired
+to the maximum-depth trace fails atomically at graph insertion; broader depth
+remains graph representation and binding work rather than facade-copy
+preflight. The lower copy transaction transforms both distinct terminal bases
+and the line, five-sample, or seven-sample
 carrier; for either witnessed higher-order family
 it transforms exact position witnesses and rebuilds carrier controls by the
-public interpolation formula. It copies ordered roots, complete offset/basis
-chains, and paired pcurves; preserves exact distance order, terminal source
-binding, exact UV witnesses when present, chart metadata, and tolerance; and
-reruns the corresponding public original-source recertifier before insertion.
+public interpolation formula. It copies ordered roots and full offset/basis and
+pcurve chains; preserves exact distance order, terminal source binding, exact
+UV witnesses, chart metadata, and tolerance; reruns the corresponding public
+original-source recertifier—including every quadratic 4×4 chain pair—before
+insertion; and protects copied roots and complete basis closures from removal
+transitively.
 Wrong-part,
 altered higher-order witnesses, graph-valid shared-basis or periodic charts,
-nested 3/4/5/7-sample roots, Offset(Plane) peer roots, other sample counts,
+nested cubic/five/seven-sample roots, Offset(Plane) peer roots, other sample counts,
 nonpositive/nonfinite effective-sphere, and other unsupported proof families
 are rejected by facade preflight before scope creation, with unsupported proof
 families exposed as a stable Unsupported capability.
