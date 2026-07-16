@@ -86,6 +86,36 @@ impl AffineDot3 {
     }
 }
 
+/// Exact sign and a finite floating approximation of
+/// `|point - origin|² + first_radius² - second_radius²`.
+///
+/// The approximation is evidence for subsequent numeric work; it must never
+/// replace [`Self::sign`] for classification.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SquaredDistanceDifference3 {
+    sign: Orientation,
+    approximation: f64,
+    used_exact_fallback: bool,
+}
+
+impl SquaredDistanceDifference3 {
+    /// Exact sign of `|point - origin|² + first_radius² - second_radius²`.
+    pub const fn sign(self) -> Orientation {
+        self.sign
+    }
+
+    /// Finite, sign-consistent approximation of the exact expression.
+    pub const fn approximation(self) -> f64 {
+        self.approximation
+    }
+
+    /// Whether outward interval arithmetic was inconclusive and exact
+    /// expansion arithmetic supplied the result.
+    pub const fn used_exact_fallback(self) -> bool {
+        self.used_exact_fallback
+    }
+}
+
 /// Exact sign and a finite floating approximation of `b² - 4ac`.
 ///
 /// The approximation is evidence for subsequent numeric work such as a square
@@ -228,8 +258,9 @@ fn normalize_harmonic_coefficients(coefficients: [f64; 3]) -> Option<[f64; 3]> {
 // residual of two 53-bit significands is no smaller than roughly 2^-105 times
 // their product. Restricting product exponents to [-400, 400] therefore keeps
 // residues above 2^-506 and leaves headroom for the affine form's six-product
-// accumulation as well as the discriminant's scale by four. Every accumulated
-// expansion is checked again before its sign is trusted.
+// accumulation, the squared-distance form's eleven products and scale by two,
+// as well as the discriminant's scale by four. Every accumulated expansion is
+// checked again before its sign is trusted.
 const EXACT_COMPONENT_MIN: f64 = f64::from_bits(((1023 - 500) as u64) << 52);
 const EXACT_COMPONENT_MAX: f64 = f64::from_bits(((1023 + 500) as u64) << 52);
 const EXACT_PRODUCT_MIN: f64 = f64::from_bits(((1023 - 400) as u64) << 52);
@@ -351,6 +382,131 @@ pub fn affine_dot3(
         return None;
     }
     Some(AffineDot3 {
+        sign,
+        approximation,
+        used_exact_fallback: true,
+    })
+}
+
+/// Classify `|point - origin|² + first_radius² - second_radius²` without
+/// making rounded coordinate differences the decision authority.
+///
+/// Every returned [`SquaredDistanceDifference3`] is an exact classification
+/// of the supplied finite `f64` values as dyadic rationals. Outward interval
+/// arithmetic certifies ordinary cases through
+/// `point² - 2*point*origin + origin²` on each axis. Cancellation routes to
+/// exact expansions of those nine products plus the two squared radii, so the
+/// fallback never forms a rounded `point - origin`.
+///
+/// Non-finite inputs or a fallback path outside the conservative
+/// exact-expansion exponent envelope return `None` rather than an uncertain
+/// classification. In particular, fallback refuses products or intermediate
+/// expansion components that could be subnormal or overflow.
+pub fn squared_distance_difference3(
+    point: [f64; 3],
+    origin: [f64; 3],
+    first_radius: f64,
+    second_radius: f64,
+) -> Option<SquaredDistanceDifference3> {
+    if !first_radius.is_finite()
+        || !second_radius.is_finite()
+        || point
+            .into_iter()
+            .chain(origin)
+            .any(|value| !value.is_finite())
+    {
+        return None;
+    }
+
+    let delta = [
+        point[0] - origin[0],
+        point[1] - origin[1],
+        point[2] - origin[2],
+    ];
+    let rounded = delta[0] * delta[0]
+        + delta[1] * delta[1]
+        + delta[2] * delta[2]
+        + first_radius * first_radius
+        - second_radius * second_radius;
+    let mut interval =
+        Interval::point(first_radius).square() - Interval::point(second_radius).square();
+    for axis in 0..3 {
+        let point = Interval::point(point[axis]);
+        let origin = Interval::point(origin[axis]);
+        interval = interval + point.square();
+        interval = interval - (point * origin) * Interval::point(2.0);
+        interval = interval + origin.square();
+    }
+    if interval.lo().is_finite()
+        && interval.hi().is_finite()
+        && rounded.is_finite()
+        && let Some(sign) = interval.sign()
+    {
+        let sign = Orientation::from_sign(sign);
+        if sign == Orientation::from_scalar(rounded) {
+            return Some(SquaredDistanceDifference3 {
+                sign,
+                approximation: if sign == Orientation::Zero {
+                    0.0
+                } else {
+                    rounded
+                },
+                used_exact_fallback: false,
+            });
+        }
+    }
+
+    let mut exact = vec![0.0];
+    for axis in 0..3 {
+        let point_square = exact_product(point[axis], point[axis])?;
+        exact = expansion::sum(&exact, &point_square);
+        if !exact_components_are_normal(&exact) {
+            return None;
+        }
+
+        let point_origin = exact_product(point[axis], origin[axis])?;
+        let negative_twice_point_origin = expansion::scale(&point_origin, -2.0);
+        if !exact_components_are_normal(&negative_twice_point_origin) {
+            return None;
+        }
+        exact = expansion::sum(&exact, &negative_twice_point_origin);
+        if !exact_components_are_normal(&exact) {
+            return None;
+        }
+
+        let origin_square = exact_product(origin[axis], origin[axis])?;
+        exact = expansion::sum(&exact, &origin_square);
+        if !exact_components_are_normal(&exact) {
+            return None;
+        }
+    }
+
+    let first_radius_square = exact_product(first_radius, first_radius)?;
+    exact = expansion::sum(&exact, &first_radius_square);
+    if !exact_components_are_normal(&exact) {
+        return None;
+    }
+    let second_radius_square = exact_product(second_radius, second_radius)?;
+    exact = expansion::sum(&exact, &expansion::negate(&second_radius_square));
+    if !exact_components_are_normal(&exact) {
+        return None;
+    }
+
+    let sign = Orientation::from_sign(expansion::sign(&exact));
+    let approximation = if sign == Orientation::Zero {
+        0.0
+    } else {
+        let approximation = expansion::approx(&exact);
+        if Orientation::from_scalar(approximation) == sign {
+            approximation
+        } else {
+            *exact.last()?
+        }
+    };
+    if !approximation.is_finite() || Orientation::from_scalar(approximation) != sign {
+        return None;
+    }
+    Some(SquaredDistanceDifference3 {
         sign,
         approximation,
         used_exact_fallback: true,
@@ -1096,6 +1252,137 @@ mod tests {
                 [0.0; 3],
                 f64::from_bits(1),
             ),
+            None
+        );
+    }
+
+    fn squared_distance_difference3_oracle(
+        point: [i64; 3],
+        origin: [i64; 3],
+        first_radius: i64,
+        second_radius: i64,
+    ) -> i8 {
+        let squared_distance = (0..3)
+            .map(|axis| {
+                let delta = i128::from(point[axis]) - i128::from(origin[axis]);
+                delta * delta
+            })
+            .sum::<i128>();
+        let value =
+            squared_distance + i128::from(first_radius).pow(2) - i128::from(second_radius).pow(2);
+        value.signum() as i8
+    }
+
+    #[test]
+    fn squared_distance_difference3_matches_integer_oracle() {
+        let mut rng = Rng::new(0xE703_7ED1_A0B4_28DB);
+        for _ in 0..20_000 {
+            let point = [rng.int(1 << 20), rng.int(1 << 20), rng.int(1 << 20)];
+            let origin = [rng.int(1 << 20), rng.int(1 << 20), rng.int(1 << 20)];
+            let first_radius = rng.int(1 << 20);
+            let second_radius = rng.int(1 << 20);
+            let classified = squared_distance_difference3(
+                point.map(|value| value as f64),
+                origin.map(|value| value as f64),
+                first_radius as f64,
+                second_radius as f64,
+            )
+            .unwrap();
+            assert_eq!(
+                classified.sign().as_i8(),
+                squared_distance_difference3_oracle(point, origin, first_radius, second_radius,),
+                "point={point:?} origin={origin:?} first_radius={first_radius} second_radius={second_radius}"
+            );
+        }
+    }
+
+    #[test]
+    fn squared_distance_difference3_preserves_ordinary_bits_and_exact_zero() {
+        let point = [4.0, 5.0, 6.0];
+        let origin = [1.0, 1.0, 1.0];
+        let first_radius = 2.0;
+        let second_radius = 3.0;
+        let delta = [
+            point[0] - origin[0],
+            point[1] - origin[1],
+            point[2] - origin[2],
+        ];
+        let legacy = delta[0] * delta[0]
+            + delta[1] * delta[1]
+            + delta[2] * delta[2]
+            + first_radius * first_radius
+            - second_radius * second_radius;
+        let ordinary =
+            squared_distance_difference3(point, origin, first_radius, second_radius).unwrap();
+        assert_eq!(ordinary.sign(), Orientation::Positive);
+        assert_eq!(ordinary.approximation().to_bits(), legacy.to_bits());
+        assert!(!ordinary.used_exact_fallback());
+
+        let zero = squared_distance_difference3([3.0, 4.0, 0.0], [0.0; 3], 0.0, 5.0).unwrap();
+        assert_eq!(zero.sign(), Orientation::Zero);
+        assert_eq!(zero.approximation(), 0.0);
+        assert!(zero.used_exact_fallback());
+    }
+
+    #[test]
+    fn squared_distance_difference3_recovers_axial_radius_cancellation() {
+        let point = [5.0e-9, 0.0, 0.0];
+        let origin = [0.0; 3];
+        let delta = [
+            point[0] - origin[0],
+            point[1] - origin[1],
+            point[2] - origin[2],
+        ];
+        let legacy = delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2] + 1.0 - 1.0;
+        assert_eq!(legacy, 0.0);
+
+        let classified = squared_distance_difference3(point, origin, 1.0, 1.0).unwrap();
+        assert_eq!(classified.sign(), Orientation::Positive);
+        assert!(classified.approximation() > 0.0);
+        assert!(classified.used_exact_fallback());
+
+        let below = squared_distance_difference3([3.0, 0.0, 0.0], origin, 4.0, 5.0_f64.next_down())
+            .unwrap();
+        assert_eq!(below.sign(), Orientation::Positive);
+        let exact = squared_distance_difference3([3.0, 0.0, 0.0], origin, 4.0, 5.0).unwrap();
+        assert_eq!(exact.sign(), Orientation::Zero);
+        let above =
+            squared_distance_difference3([3.0, 0.0, 0.0], origin, 4.0, 5.0_f64.next_up()).unwrap();
+        assert_eq!(above.sign(), Orientation::Negative);
+
+        let radius = 1.0_f64.next_up();
+        let negative = squared_distance_difference3(origin, origin, 1.0, radius).unwrap();
+        let positive = squared_distance_difference3(origin, origin, radius, 1.0).unwrap();
+        assert_eq!(negative.sign(), Orientation::Negative);
+        assert_eq!(positive.sign(), Orientation::Positive);
+    }
+
+    #[test]
+    fn squared_distance_difference3_failure_contract_is_conservative() {
+        for (point, origin, first_radius, second_radius) in [
+            ([f64::NAN, 0.0, 0.0], [0.0; 3], 1.0, 1.0),
+            ([0.0; 3], [f64::INFINITY, 0.0, 0.0], 1.0, 1.0),
+            ([0.0; 3], [0.0; 3], f64::NEG_INFINITY, 1.0),
+            ([0.0; 3], [0.0; 3], 1.0, f64::NAN),
+        ] {
+            assert_eq!(
+                squared_distance_difference3(point, origin, first_radius, second_radius),
+                None
+            );
+        }
+
+        let outside_envelope = 2.0_f64.powi(501);
+        assert_eq!(
+            squared_distance_difference3(
+                [outside_envelope, 0.0, 0.0],
+                [outside_envelope, 0.0, 0.0],
+                0.0,
+                0.0,
+            ),
+            None
+        );
+        assert_eq!(
+            squared_distance_difference3([f64::from_bits(1), 0.0, 0.0], [0.0; 3], 0.0, 0.0),
             None
         );
     }

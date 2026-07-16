@@ -11,7 +11,7 @@
 use kcore::interval::Interval;
 use kcore::predicates::{
     affine_dot3, harmonic_half_angle_roots, incircle, orient2d, orient3d, polygon_orientation2d,
-    quadratic_discriminant,
+    quadratic_discriminant, squared_distance_difference3,
 };
 
 struct Rng(u64);
@@ -74,6 +74,11 @@ fn golden_hash_of_numeric_results() {
         hash.write_f64(affine.approximation());
         hash.write_u64(affine.used_exact_fallback() as u64);
 
+        let squared_distance = squared_distance_difference3(b3, c3, a2[0], b2[0]).unwrap();
+        hash.write_u64(squared_distance.sign().as_i8() as u64);
+        hash.write_f64(squared_distance.approximation());
+        hash.write_u64(squared_distance.used_exact_fallback() as u64);
+
         let discriminant = quadratic_discriminant(a2[0], a2[1], b2[0]).unwrap();
         hash.write_u64(discriminant.sign().as_i8() as u64);
         hash.write_f64(discriminant.approximation());
@@ -119,7 +124,14 @@ fn golden_hash_of_numeric_results() {
     hash.write_f64(subtraction_fallback.approximation());
     hash.write_u64(subtraction_fallback.used_exact_fallback() as u64);
 
+    let squared_distance_fallback =
+        squared_distance_difference3([5.0e-9, 0.0, 0.0], [0.0; 3], 1.0, 1.0).unwrap();
+    assert!(squared_distance_fallback.used_exact_fallback());
+    hash.write_u64(squared_distance_fallback.sign().as_i8() as u64);
+    hash.write_f64(squared_distance_fallback.approximation());
+    hash.write_u64(squared_distance_fallback.used_exact_fallback() as u64);
+
     // Golden value. Changing it is a reviewed, intentional event.
-    // (Re-pinned when exact affine-dot classification was added.)
-    assert_eq!(hash.0, 0xC253_830A_E2CB_2D65, "numeric results drifted");
+    // (Re-pinned when exact squared-distance classification was added.)
+    assert_eq!(hash.0, 0xEED3_9864_73A4_C2D2, "numeric results drifted");
 }
