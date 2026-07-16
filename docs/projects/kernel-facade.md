@@ -1,6 +1,6 @@
 # F5 kernel facade and topology encapsulation
 
-Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, deterministic checked complete-body rigid copy with direct/safe-offset PlaneLine and PlaneSphereCircle certificate reissuance plus every current operation-generated VerifiedNurbsIntersection family including one- through four-level compatible dual offsets, polynomial/rational traces, and oblique frames, checked polygonal-profile extrusion, failure-atomic operation-owned facade tolerance batching, journaled MEF inheritance and KEF ordered-max face-tolerance propagation, an evidence-bearing opt-in Full-assurance commit gate, K5 adoption, and facade body tessellation implemented; rigid copy also reissues the bounded transmitted Plane/Plane, direct Plane/NURBS, direct NURBS/NURBS, direct one-descriptor Offset(NURBS)/NURBS, exactly one-descriptor Offset(NURBS)/direct-Plane, and canonical finite-open two-sample degree-1, witnessed three-sample quadratic, and witnessed four-sample cubic dual Offset(NURBS) families named below; altered-witness, shared-basis, periodic-source/carrier, five-/seven-/other-sample dual-offset, nested-offset, multi-distance, and Offset(Plane)-peer transmitted proofs, broader K4 edits, and partition history remain
+Status: K1-K3, typed K4 interchange and journal views, checked semantic K4 edits through MVFS/KVFS, MEV/KEV, and KFMRH/MFKRH, deterministic checked complete-body rigid copy with direct/safe-offset PlaneLine and PlaneSphereCircle certificate reissuance plus every current operation-generated VerifiedNurbsIntersection family including one- through four-level compatible dual offsets, polynomial/rational traces, and oblique frames, checked polygonal-profile extrusion, failure-atomic operation-owned facade tolerance batching, journaled MEF inheritance and KEF ordered-max face-tolerance propagation, an evidence-bearing opt-in Full-assurance commit gate, K5 adoption, and facade body tessellation implemented; rigid copy also reissues the bounded transmitted Plane/Plane, direct Plane/NURBS, direct NURBS/NURBS, direct one-descriptor Offset(NURBS)/NURBS, exactly one-descriptor Offset(NURBS)/direct-Plane, and canonical finite-open two-sample degree-1, witnessed three-sample quadratic, witnessed four-sample cubic, and canonical five-sample degree-1 dual Offset(NURBS) families named below; altered-witness, shared-basis, periodic-source/carrier, seven-/other-sample dual-offset, nested-offset, multi-distance, and Offset(Plane)-peer transmitted proofs, broader K4 edits, and partition history remain
 
 ## Outcome
 
@@ -920,25 +920,29 @@ transmitted Plane/Plane charts whose ordered roots are direct or safe nested
 exact-plane fields, direct Plane/NURBS in both orders, direct NURBS/NURBS,
 direct one-descriptor Offset(NURBS)/NURBS in both orders, and exactly one-
 descriptor Offset(NURBS)/direct-Plane charts in both orders, plus only the
-canonical finite-open two-sample degree-1, witnessed three-sample quadratic, or
-witnessed four-sample cubic dual Offset(NURBS) chart in either ordered-root
-arrangement. All three families require two distinct ordered roots over
+canonical finite-open two-sample degree-1, witnessed three-sample quadratic,
+witnessed four-sample cubic, or canonical five-sample degree-1 dual
+Offset(NURBS) chart in either ordered-root arrangement. All four families
+require two distinct ordered roots over
 distinct direct nonperiodic NURBS basis handles and exactly one descriptor per
 root. The line uses unweighted two-
 control carrier/pcurves on `[0,0,1,1]` over `[0,1]` without witnesses; the
 quadratic uses unweighted degree-2 three-control carrier/pcurves on
 `[0,0,0,2,2,2]` over `[0,2]`; and the cubic uses unweighted degree-3 four-
-control carrier/pcurves on `[0,0,0,0,3,3,3,3]` over `[0,3]`. Both higher-
-order families retain exact position and paired-UV interpolation witnesses. The
-lower copy transaction transforms both dual bases and the line carrier; for
-either higher-order family it transforms exact position witnesses, rebuilds
-carrier controls by the public interpolation formula, copies paired pcurves and
-ordered roots, retains exact UV witnesses, chart metadata, and tolerance, and
-reruns the public original-source recertifier before insertion. Wrong-part,
+control carrier/pcurves on `[0,0,0,0,3,3,3,3]` over `[0,3]`. Both witnessed
+higher-order families retain exact position and paired-UV interpolation
+witnesses. The five-sample family uses unweighted degree-1 five-control
+carrier/pcurves on `[0,0,1,2,3,4,4]` over `[0,4]` without interpolation
+witnesses or a carrier period. The lower copy transaction transforms both dual
+bases and the line or five-sample carrier; for either witnessed higher-order
+family it transforms exact position witnesses and rebuilds carrier controls by
+the public interpolation formula. It copies paired pcurves and ordered roots,
+retains exact UV witnesses when present, chart metadata, and tolerance, and
+reruns the corresponding public original-source recertifier before insertion.
+Wrong-part,
 altered higher-order witnesses, same-total multi-distance metadata, nested
 Offset(NURBS) roots, shared dual bases, Offset(Plane) peer roots, periodic source
-or carrier charts,
-five-sample, seven-sample, or other dual families,
+or carrier charts, seven-sample or other dual families,
 nonpositive/nonfinite effective-sphere, and other unsupported proof families
 are rejected by facade preflight before scope creation, with unsupported proof
 families exposed as a stable Unsupported capability.
