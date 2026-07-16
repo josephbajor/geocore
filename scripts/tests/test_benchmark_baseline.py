@@ -29,7 +29,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
     def test_committed_contract_is_valid_offline(self):
         benchmark.validate_schema_document()
         cases = benchmark.load_cases()
-        self.assertEqual(len(cases), 163)
+        self.assertEqual(len(cases), 167)
         self.assertEqual(cases[0]["deterministic_seed"], 0x4B45524E454C0001)
         self.assertEqual(
             cases[0]["expected_result_counters"]["output_digest"],
@@ -38,7 +38,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
         topology = [
             case for case in cases if case["benchmark_target"] == "topology_commit"
         ]
-        self.assertEqual(len(topology), 28)
+        self.assertEqual(len(topology), 32)
         self.assertTrue(
             all(case["deterministic_seed"] == 0x51544F504F000002 for case in topology)
         )
@@ -90,6 +90,30 @@ class BenchmarkBaselineTests(unittest.TestCase):
                 == case["expected_result_counters"]["checked_bodies"]
                 == case["size_parameters"]["affected_bodies"]
                 for case in cohort
+            )
+        )
+        affected_solids = [
+            case
+            for case in topology
+            if case["policy_values"]["ladder"] == "affected-solid-footprint"
+        ]
+        self.assertEqual(len(affected_solids), 4)
+        self.assertEqual(
+            {case["size_parameters"]["affected_bodies"] for case in affected_solids},
+            {1, 4, 16, 64},
+        )
+        self.assertTrue(
+            all(
+                case["size_parameters"]["bodies"] == 64
+                and case["expected_result_counters"]["affected_bodies"]
+                == case["expected_result_counters"]["refreshed_bodies"]
+                == case["expected_result_counters"]["checked_bodies"]
+                == case["expected_result_counters"]["mutations"]
+                == case["size_parameters"]["affected_bodies"]
+                and case["policy_values"]["checked_commit"] == "ordinary"
+                and case["policy_values"]["mutation"]
+                == "operation-owned-face-tolerance-growth"
+                for case in affected_solids
             )
         )
         graph_build = [

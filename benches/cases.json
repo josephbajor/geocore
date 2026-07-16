@@ -742,6 +742,134 @@
       }
     },
     {
+      "path": "topology/affected-solid-footprint/primitive-mix-v1/total-64/affected-1-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit-affected-solid-footprint.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 64,
+        "bodies": 64,
+        "affected_bodies": 1
+      },
+      "tolerances": {
+        "requested_face_tolerance": 2e-8,
+        "aggregate_growth_budget": 1e-8
+      },
+      "policy_values": {
+        "ladder": "affected-solid-footprint",
+        "checked_commit": "ordinary",
+        "mutation": "operation-owned-face-tolerance-growth",
+        "target_order": "first-body-first-face",
+        "scope_oracle": "affected-refreshed-checked"
+      },
+      "expected_result_counters": {
+        "body_count": 64,
+        "affected_bodies": 1,
+        "refreshed_bodies": 1,
+        "checked_bodies": 1,
+        "mutations": 1,
+        "committed": true,
+        "affected_order_digest": "030000b9a2c219c6",
+        "output_digest": "01e4b75d9cef4bd4"
+      }
+    },
+    {
+      "path": "topology/affected-solid-footprint/primitive-mix-v1/total-64/affected-4-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit-affected-solid-footprint.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 64,
+        "bodies": 64,
+        "affected_bodies": 4
+      },
+      "tolerances": {
+        "requested_face_tolerance": 2e-8,
+        "aggregate_growth_budget": 4e-8
+      },
+      "policy_values": {
+        "ladder": "affected-solid-footprint",
+        "checked_commit": "ordinary",
+        "mutation": "operation-owned-face-tolerance-growth",
+        "target_order": "first-body-first-face",
+        "scope_oracle": "affected-refreshed-checked"
+      },
+      "expected_result_counters": {
+        "body_count": 64,
+        "affected_bodies": 4,
+        "refreshed_bodies": 4,
+        "checked_bodies": 4,
+        "mutations": 4,
+        "committed": true,
+        "affected_order_digest": "d8def9095c131d26",
+        "output_digest": "4a2a2291e64f7ff5"
+      }
+    },
+    {
+      "path": "topology/affected-solid-footprint/primitive-mix-v1/total-64/affected-16-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit-affected-solid-footprint.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 64,
+        "bodies": 64,
+        "affected_bodies": 16
+      },
+      "tolerances": {
+        "requested_face_tolerance": 2e-8,
+        "aggregate_growth_budget": 1.6e-7
+      },
+      "policy_values": {
+        "ladder": "affected-solid-footprint",
+        "checked_commit": "ordinary",
+        "mutation": "operation-owned-face-tolerance-growth",
+        "target_order": "first-body-first-face",
+        "scope_oracle": "affected-refreshed-checked"
+      },
+      "expected_result_counters": {
+        "body_count": 64,
+        "affected_bodies": 16,
+        "refreshed_bodies": 16,
+        "checked_bodies": 16,
+        "mutations": 16,
+        "committed": true,
+        "affected_order_digest": "121b70674cb36c32",
+        "output_digest": "c115dc5c8f1448b7"
+      }
+    },
+    {
+      "path": "topology/affected-solid-footprint/primitive-mix-v1/total-64/affected-64-v1",
+      "benchmark_target": "topology_commit",
+      "fixture_version": "topology-commit-affected-solid-footprint.v1",
+      "deterministic_seed": 5860396221457235970,
+      "size_parameters": {
+        "elements": 64,
+        "bodies": 64,
+        "affected_bodies": 64
+      },
+      "tolerances": {
+        "requested_face_tolerance": 2e-8,
+        "aggregate_growth_budget": 6.4e-7
+      },
+      "policy_values": {
+        "ladder": "affected-solid-footprint",
+        "checked_commit": "ordinary",
+        "mutation": "operation-owned-face-tolerance-growth",
+        "target_order": "first-body-first-face",
+        "scope_oracle": "affected-refreshed-checked"
+      },
+      "expected_result_counters": {
+        "body_count": 64,
+        "affected_bodies": 64,
+        "refreshed_bodies": 64,
+        "checked_bodies": 64,
+        "mutations": 64,
+        "committed": true,
+        "affected_order_digest": "ac06c657a2529702",
+        "output_digest": "18e3f6db49e4dce0"
+      }
+    },
+    {
       "path": "graph/build/independent-planes-v1/1/default-v1",
       "benchmark_target": "graph_build",
       "fixture_version": "graph-build.v2",
