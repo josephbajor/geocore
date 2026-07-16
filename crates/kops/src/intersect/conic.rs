@@ -127,6 +127,123 @@ pub(super) fn trig_linear_solution(
     Some(TrigLinearSolution::Roots(roots))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HarmonicRootProvenance {
+    coefficients: [u64; 3],
+    root_index: usize,
+}
+
+#[derive(Debug, Clone)]
+struct HarmonicCut {
+    parameter: f64,
+    root_provenances: Vec<HarmonicRootProvenance>,
+}
+
+/// Ordered partition cuts whose harmonic-root identity survives chart fitting.
+///
+/// Parameter tolerance belongs to the preceding periodic fitting step. Once
+/// two classified roots have distinct numeric representatives, both remain
+/// partition boundaries regardless of their separation. Repeated aliases of
+/// the same coefficient/root pair may merge. Different window equations may
+/// share one exact chart-corner cut, while different roots of the same
+/// harmonic cannot share a numeric parameter without losing evidence.
+pub(super) struct HarmonicCutAccumulator {
+    cuts: Vec<HarmonicCut>,
+}
+
+impl HarmonicCutAccumulator {
+    pub(super) fn new(range: ParamRange) -> Self {
+        let mut cuts = vec![HarmonicCut {
+            parameter: range.lo,
+            root_provenances: Vec::new(),
+        }];
+        if range.hi != range.lo {
+            cuts.push(HarmonicCut {
+                parameter: range.hi,
+                root_provenances: Vec::new(),
+            });
+        }
+        Self { cuts }
+    }
+
+    pub(super) fn push_harmonic_roots(
+        &mut self,
+        coefficients: [f64; 3],
+        roots: &[(f64, bool)],
+        mut retain: impl FnMut(f64) -> bool,
+    ) -> Option<()> {
+        let coefficients = coefficients.map(canonical_coefficient_bits);
+        for (root_index, &(parameter, _)) in roots.iter().enumerate() {
+            if !retain(parameter) {
+                continue;
+            }
+            self.push(
+                parameter,
+                HarmonicRootProvenance {
+                    coefficients,
+                    root_index,
+                },
+            )?;
+        }
+        Some(())
+    }
+
+    fn push(&mut self, parameter: f64, provenance: HarmonicRootProvenance) -> Option<()> {
+        if !parameter.is_finite() {
+            return None;
+        }
+        for existing in &mut self.cuts {
+            if existing.parameter != parameter {
+                continue;
+            }
+            if existing.root_provenances.iter().any(|stored| {
+                stored.coefficients == provenance.coefficients
+                    && stored.root_index != provenance.root_index
+            }) {
+                return None;
+            }
+            if !existing.root_provenances.contains(&provenance) {
+                // Different window equations may meet at a legitimate chart
+                // corner. Retain every contributing equation so later roots
+                // are checked against all prior identities at this parameter.
+                existing.root_provenances.push(provenance);
+            }
+            return Some(());
+        }
+        self.cuts.push(HarmonicCut {
+            parameter,
+            root_provenances: vec![provenance],
+        });
+        Some(())
+    }
+
+    pub(super) fn into_parameters(mut self) -> Vec<f64> {
+        self.cuts
+            .sort_by(|first, second| first.parameter.total_cmp(&second.parameter));
+        self.cuts.into_iter().map(|cut| cut.parameter).collect()
+    }
+}
+
+fn canonical_coefficient_bits(value: f64) -> u64 {
+    if value == 0.0 { 0 } else { value.to_bits() }
+}
+
+pub(super) fn strict_cut_midpoint(lo: f64, hi: f64) -> Option<f64> {
+    let midpoint = lo + 0.5 * (hi - lo);
+    (lo < midpoint && midpoint < hi).then_some(midpoint)
+}
+
+fn periodic_window_bounds(range: ParamRange) -> ([f64; 2], usize) {
+    (
+        [range.lo, range.hi],
+        if range.width() == core::f64::consts::TAU {
+            1
+        } else {
+            2
+        },
+    )
+}
+
 fn angular_distance(a: f64, b: f64) -> f64 {
     let period = core::f64::consts::TAU;
     let d = (a - b).abs();
@@ -224,6 +341,60 @@ mod quadratic_root_tests {
             None,
             "distinct classified roots that clamp to one parameter must stay indeterminate",
         );
+    }
+
+    #[test]
+    fn harmonic_cut_provenance_preserves_close_roots_and_chart_corners() {
+        let close_roots = [(0.4, false), (0.400_1, false)];
+        let mut cuts = HarmonicCutAccumulator::new(ParamRange::new(0.0, 1.0));
+        cuts.push_harmonic_roots([1.0, 0.0, 0.0], &close_roots, |_| true)
+            .unwrap();
+        cuts.push_harmonic_roots([0.0, 1.0, 0.0], &[(0.4, false)], |_| true)
+            .unwrap();
+        assert_eq!(cuts.into_parameters(), vec![0.0, 0.4, 0.400_1, 1.0]);
+
+        let mut collision = HarmonicCutAccumulator::new(ParamRange::new(0.0, 1.0));
+        assert_eq!(
+            collision
+                .push_harmonic_roots([1.0, 0.0, 0.0], &[(0.5, false), (0.5, false)], |_| true,),
+            None
+        );
+
+        let mut three_step = HarmonicCutAccumulator::new(ParamRange::new(0.0, 1.0));
+        three_step
+            .push_harmonic_roots([1.0, 0.0, 0.0], &[(0.5, false)], |_| true)
+            .unwrap();
+        assert_eq!(
+            three_step
+                .push_harmonic_roots([0.0, 1.0, 0.0], &[(0.5, false), (0.5, false)], |_| true,),
+            None,
+            "B.root1 must collide with retained B.root0 after A established the chart corner",
+        );
+
+        let mut endpoint_three_step = HarmonicCutAccumulator::new(ParamRange::new(0.0, 1.0));
+        endpoint_three_step
+            .push_harmonic_roots([1.0, 0.0, 0.0], &[(0.0, false)], |_| true)
+            .unwrap();
+        assert_eq!(
+            endpoint_three_step.push_harmonic_roots(
+                [0.0, 1.0, 0.0],
+                &[(0.0, false), (0.0, false)],
+                |_| true,
+            ),
+            None,
+            "endpoint cuts must retain every contributing root provenance too",
+        );
+    }
+
+    #[test]
+    fn only_exact_full_period_windows_share_one_seam_bound() {
+        let exact = ParamRange::new(0.0, core::f64::consts::TAU);
+        let (bounds, count) = periodic_window_bounds(exact);
+        assert_eq!(&bounds[..count], &[0.0]);
+
+        let near = ParamRange::new(0.0, core::f64::consts::TAU.next_down());
+        let (bounds, count) = periodic_window_bounds(near);
+        assert_eq!(&bounds[..count], &[near.lo, near.hi]);
     }
 }
 
@@ -1035,30 +1206,30 @@ pub(super) fn intersect_bounded_conic_cylinder(
 
 fn contained_conic_cylinder(config: &ConicCylinderConfig<'_>) -> Result<CurveSurfaceIntersections> {
     let t_tol = config.curve_parameter_tolerance();
-    if config.curve_range.width() <= t_tol {
+    if config.curve_range.width() == 0.0 {
         let mut points = Vec::new();
         config.add_contact(&mut points, config.curve_range.lo, true);
         return CurveSurfaceIntersections::canonicalized_complete(points, Vec::new());
     }
 
-    let mut cuts = vec![config.curve_range.lo, config.curve_range.hi];
+    let mut cuts = HarmonicCutAccumulator::new(config.curve_range);
     if !push_cylinder_window_cuts(config, &mut cuts) {
         return Ok(CurveSurfaceIntersections::indeterminate_empty(
             HARMONIC_ROOT_CLASSIFICATION_REASON,
         ));
     }
-    cuts.sort_by(f64::total_cmp);
-    dedup_sorted(&mut cuts, t_tol);
+    let cuts = cuts.into_parameters();
 
     let mut points = Vec::new();
     let mut overlaps = Vec::new();
     for interval in cuts.windows(2) {
         let lo = interval[0];
         let hi = interval[1];
-        if hi - lo <= t_tol {
-            continue;
-        }
-        let mid = (lo + hi) / 2.0;
+        let Some(mid) = strict_cut_midpoint(lo, hi) else {
+            return Ok(CurveSurfaceIntersections::indeterminate_empty(
+                HARMONIC_ROOT_CLASSIFICATION_REASON,
+            ));
+        };
         if cylinder_uv(
             config.local_point(mid),
             config.cylinder_range,
@@ -1109,38 +1280,53 @@ fn contained_conic_cylinder(config: &ConicCylinderConfig<'_>) -> Result<CurveSur
     CurveSurfaceIntersections::canonicalized_complete(points, overlaps)
 }
 
-fn push_cylinder_window_cuts(config: &ConicCylinderConfig<'_>, cuts: &mut Vec<f64>) -> bool {
+fn push_cylinder_window_cuts(
+    config: &ConicCylinderConfig<'_>,
+    cuts: &mut HarmonicCutAccumulator,
+) -> bool {
     let z_c = config.local_center.z;
     let (z_a, z_b) = config.window_z_coefficients();
     for v_bound in [config.cylinder_range[1].lo, config.cylinder_range[1].hi] {
+        let coefficients = [z_a, z_b, z_c - v_bound];
         let Some(roots) = trig_linear_roots(
-            z_a,
-            z_b,
-            z_c - v_bound,
+            coefficients[0],
+            coefficients[1],
+            coefficients[2],
             config.curve_range,
             config.tolerances.linear(),
         ) else {
             return false;
         };
-        for (root, _) in roots {
-            push_scalar(cuts, root, config.curve_parameter_tolerance());
+        if cuts
+            .push_harmonic_roots(coefficients, &roots, |_| true)
+            .is_none()
+        {
+            return false;
         }
     }
 
-    for u_bound in [config.cylinder_range[0].lo, config.cylinder_range[0].hi] {
+    let (u_bounds, u_bound_count) = periodic_window_bounds(config.cylinder_range[0]);
+    for &u_bound in &u_bounds[..u_bound_count] {
         let (sin_u, cos_u) = math::sincos(u_bound);
         let c = -sin_u * config.local_center.x + cos_u * config.local_center.y;
         let (a, b) = config.window_longitude_coefficients(sin_u, cos_u);
-        let Some(roots) =
-            trig_linear_roots(a, b, c, config.curve_range, config.tolerances.linear())
-        else {
+        let coefficients = [a, b, c];
+        let Some(roots) = trig_linear_roots(
+            coefficients[0],
+            coefficients[1],
+            coefficients[2],
+            config.curve_range,
+            config.tolerances.linear(),
+        ) else {
             return false;
         };
-        for (root, _) in roots {
-            if !longitude_matches_bound(config.local_point(root), u_bound, config.tolerances) {
-                continue;
-            }
-            push_scalar(cuts, root, config.curve_parameter_tolerance());
+        if cuts
+            .push_harmonic_roots(coefficients, &roots, |root| {
+                longitude_matches_bound(config.local_point(root), u_bound, config.tolerances)
+            })
+            .is_none()
+        {
+            return false;
         }
     }
     true
@@ -1229,19 +1415,6 @@ fn push_scalar(values: &mut Vec<f64>, candidate: f64, tolerance: f64) {
     {
         values.push(candidate);
     }
-}
-
-fn dedup_sorted(values: &mut Vec<f64>, tolerance: f64) {
-    let mut deduped = Vec::with_capacity(values.len());
-    for value in values.drain(..) {
-        if !deduped
-            .iter()
-            .any(|existing: &f64| (*existing - value).abs() <= tolerance.max(1e-12))
-        {
-            deduped.push(value);
-        }
-    }
-    *values = deduped;
 }
 
 fn implicit_tolerance(config: &ConicCylinderConfig<'_>) -> f64 {
@@ -1585,30 +1758,30 @@ pub(super) fn intersect_bounded_conic_cone(
 
 fn contained_conic_cone(config: &ConicConeConfig<'_>) -> Result<CurveSurfaceIntersections> {
     let t_tol = config.curve_parameter_tolerance();
-    if config.curve_range.width() <= t_tol {
+    if config.curve_range.width() == 0.0 {
         let mut points = Vec::new();
         config.add_contact(&mut points, config.curve_range.lo, true);
         return CurveSurfaceIntersections::canonicalized_complete(points, Vec::new());
     }
 
-    let mut cuts = vec![config.curve_range.lo, config.curve_range.hi];
+    let mut cuts = HarmonicCutAccumulator::new(config.curve_range);
     if !push_cone_window_cuts(config, &mut cuts) {
         return Ok(CurveSurfaceIntersections::indeterminate_empty(
             HARMONIC_ROOT_CLASSIFICATION_REASON,
         ));
     }
-    cuts.sort_by(f64::total_cmp);
-    dedup_sorted(&mut cuts, t_tol);
+    let cuts = cuts.into_parameters();
 
     let mut points = Vec::new();
     let mut overlaps = Vec::new();
     for interval in cuts.windows(2) {
         let lo = interval[0];
         let hi = interval[1];
-        if hi - lo <= t_tol {
-            continue;
-        }
-        let mid = (lo + hi) / 2.0;
+        let Some(mid) = strict_cut_midpoint(lo, hi) else {
+            return Ok(CurveSurfaceIntersections::indeterminate_empty(
+                HARMONIC_ROOT_CLASSIFICATION_REASON,
+            ));
+        };
         if cone_uv(
             config.local_point(mid),
             config.cone,
@@ -1659,39 +1832,51 @@ fn contained_conic_cone(config: &ConicConeConfig<'_>) -> Result<CurveSurfaceInte
     CurveSurfaceIntersections::canonicalized_complete(points, overlaps)
 }
 
-fn push_cone_window_cuts(config: &ConicConeConfig<'_>, cuts: &mut Vec<f64>) -> bool {
+fn push_cone_window_cuts(config: &ConicConeConfig<'_>, cuts: &mut HarmonicCutAccumulator) -> bool {
     let z_c = config.local_center.z;
     let (z_a, z_b) = config.window_z_coefficients();
     for v_bound in [config.cone_range[1].lo, config.cone_range[1].hi] {
         let z_bound = v_bound * config.cos_a;
+        let coefficients = [z_a, z_b, z_c - z_bound];
         let Some(roots) = trig_linear_roots(
-            z_a,
-            z_b,
-            z_c - z_bound,
+            coefficients[0],
+            coefficients[1],
+            coefficients[2],
             config.curve_range,
             config.tolerances.linear(),
         ) else {
             return false;
         };
-        for (root, _) in roots {
-            push_scalar(cuts, root, config.curve_parameter_tolerance());
+        if cuts
+            .push_harmonic_roots(coefficients, &roots, |_| true)
+            .is_none()
+        {
+            return false;
         }
     }
 
-    for u_bound in [config.cone_range[0].lo, config.cone_range[0].hi] {
+    let (u_bounds, u_bound_count) = periodic_window_bounds(config.cone_range[0]);
+    for &u_bound in &u_bounds[..u_bound_count] {
         let (sin_u, cos_u) = math::sincos(u_bound);
         let c = -sin_u * config.local_center.x + cos_u * config.local_center.y;
         let (a, b) = config.window_longitude_coefficients(sin_u, cos_u);
-        let Some(roots) =
-            trig_linear_roots(a, b, c, config.curve_range, config.tolerances.linear())
-        else {
+        let coefficients = [a, b, c];
+        let Some(roots) = trig_linear_roots(
+            coefficients[0],
+            coefficients[1],
+            coefficients[2],
+            config.curve_range,
+            config.tolerances.linear(),
+        ) else {
             return false;
         };
-        for (root, _) in roots {
-            if !cone_longitude_matches_bound(config, config.local_point(root), u_bound) {
-                continue;
-            }
-            push_scalar(cuts, root, config.curve_parameter_tolerance());
+        if cuts
+            .push_harmonic_roots(coefficients, &roots, |root| {
+                cone_longitude_matches_bound(config, config.local_point(root), u_bound)
+            })
+            .is_none()
+        {
+            return false;
         }
     }
     true
@@ -2095,30 +2280,30 @@ pub(super) fn intersect_bounded_conic_torus(
 
 fn contained_conic_torus(config: &ConicTorusConfig<'_>) -> Result<CurveSurfaceIntersections> {
     let t_tol = config.curve_parameter_tolerance();
-    if config.curve_range.width() <= t_tol {
+    if config.curve_range.width() == 0.0 {
         let mut points = Vec::new();
         config.add_contact(&mut points, config.curve_range.lo, true);
         return CurveSurfaceIntersections::canonicalized_complete(points, Vec::new());
     }
 
-    let mut cuts = vec![config.curve_range.lo, config.curve_range.hi];
+    let mut cuts = HarmonicCutAccumulator::new(config.curve_range);
     if !push_torus_window_cuts(config, &mut cuts) {
         return Ok(CurveSurfaceIntersections::indeterminate_empty(
             HARMONIC_ROOT_CLASSIFICATION_REASON,
         ));
     }
-    cuts.sort_by(f64::total_cmp);
-    dedup_sorted(&mut cuts, t_tol);
+    let cuts = cuts.into_parameters();
 
     let mut points = Vec::new();
     let mut overlaps = Vec::new();
     for interval in cuts.windows(2) {
         let lo = interval[0];
         let hi = interval[1];
-        if hi - lo <= t_tol {
-            continue;
-        }
-        let mid = (lo + hi) / 2.0;
+        let Some(mid) = strict_cut_midpoint(lo, hi) else {
+            return Ok(CurveSurfaceIntersections::indeterminate_empty(
+                HARMONIC_ROOT_CLASSIFICATION_REASON,
+            ));
+        };
         if torus_uv(
             config.local_point(mid),
             config.torus,
@@ -2169,42 +2354,57 @@ fn contained_conic_torus(config: &ConicTorusConfig<'_>) -> Result<CurveSurfaceIn
     CurveSurfaceIntersections::canonicalized_complete(points, overlaps)
 }
 
-fn push_torus_window_cuts(config: &ConicTorusConfig<'_>, cuts: &mut Vec<f64>) -> bool {
+fn push_torus_window_cuts(
+    config: &ConicTorusConfig<'_>,
+    cuts: &mut HarmonicCutAccumulator,
+) -> bool {
     let z_c = config.local_center.z;
     let (z_a, z_b) = config.window_z_coefficients();
-    for v_bound in [config.torus_range[1].lo, config.torus_range[1].hi] {
+    let (v_bounds, v_bound_count) = periodic_window_bounds(config.torus_range[1]);
+    for &v_bound in &v_bounds[..v_bound_count] {
         let z_bound = config.torus.minor_radius() * math::sin(v_bound);
+        let coefficients = [z_a, z_b, z_c - z_bound];
         let Some(roots) = trig_linear_roots(
-            z_a,
-            z_b,
-            z_c - z_bound,
+            coefficients[0],
+            coefficients[1],
+            coefficients[2],
             config.curve_range,
             config.tolerances.linear(),
         ) else {
             return false;
         };
-        for (root, _) in roots {
-            if !torus_tube_angle_matches_bound(config, config.local_point(root), v_bound) {
-                continue;
-            }
-            push_scalar(cuts, root, config.curve_parameter_tolerance());
+        if cuts
+            .push_harmonic_roots(coefficients, &roots, |root| {
+                torus_tube_angle_matches_bound(config, config.local_point(root), v_bound)
+            })
+            .is_none()
+        {
+            return false;
         }
     }
 
-    for u_bound in [config.torus_range[0].lo, config.torus_range[0].hi] {
+    let (u_bounds, u_bound_count) = periodic_window_bounds(config.torus_range[0]);
+    for &u_bound in &u_bounds[..u_bound_count] {
         let (sin_u, cos_u) = math::sincos(u_bound);
         let c = -sin_u * config.local_center.x + cos_u * config.local_center.y;
         let (a, b) = config.window_longitude_coefficients(sin_u, cos_u);
-        let Some(roots) =
-            trig_linear_roots(a, b, c, config.curve_range, config.tolerances.linear())
-        else {
+        let coefficients = [a, b, c];
+        let Some(roots) = trig_linear_roots(
+            coefficients[0],
+            coefficients[1],
+            coefficients[2],
+            config.curve_range,
+            config.tolerances.linear(),
+        ) else {
             return false;
         };
-        for (root, _) in roots {
-            if !torus_longitude_matches_bound(config, config.local_point(root), u_bound) {
-                continue;
-            }
-            push_scalar(cuts, root, config.curve_parameter_tolerance());
+        if cuts
+            .push_harmonic_roots(coefficients, &roots, |root| {
+                torus_longitude_matches_bound(config, config.local_point(root), u_bound)
+            })
+            .is_none()
+        {
+            return false;
         }
     }
     true
@@ -2727,30 +2927,30 @@ fn intersect_ellipse_sphere_strategy(
 
 fn contained_conic_sphere(config: &ConicSphereConfig<'_>) -> Result<CurveSurfaceIntersections> {
     let t_tol = config.curve_parameter_tolerance();
-    if config.curve_range.width() <= t_tol {
+    if config.curve_range.width() == 0.0 {
         let mut points = Vec::new();
         config.add_contact(&mut points, config.curve_range.lo, true);
         return CurveSurfaceIntersections::canonicalized_complete(points, Vec::new());
     }
 
-    let mut cuts = vec![config.curve_range.lo, config.curve_range.hi];
+    let mut cuts = HarmonicCutAccumulator::new(config.curve_range);
     if !push_sphere_window_cuts(config, &mut cuts) {
         return Ok(CurveSurfaceIntersections::indeterminate_empty(
             HARMONIC_ROOT_CLASSIFICATION_REASON,
         ));
     }
-    cuts.sort_by(f64::total_cmp);
-    dedup_sorted(&mut cuts, t_tol);
+    let cuts = cuts.into_parameters();
 
     let mut points = Vec::new();
     let mut overlaps = Vec::new();
     for interval in cuts.windows(2) {
         let lo = interval[0];
         let hi = interval[1];
-        if hi - lo <= t_tol {
-            continue;
-        }
-        let mid = (lo + hi) / 2.0;
+        let Some(mid) = strict_cut_midpoint(lo, hi) else {
+            return Ok(CurveSurfaceIntersections::indeterminate_empty(
+                HARMONIC_ROOT_CLASSIFICATION_REASON,
+            ));
+        };
         if sphere_uv(
             config.local_point(mid),
             config.sphere_range,
@@ -2801,40 +3001,54 @@ fn contained_conic_sphere(config: &ConicSphereConfig<'_>) -> Result<CurveSurface
     CurveSurfaceIntersections::canonicalized_complete(points, overlaps)
 }
 
-fn push_sphere_window_cuts(config: &ConicSphereConfig<'_>, cuts: &mut Vec<f64>) -> bool {
+fn push_sphere_window_cuts(
+    config: &ConicSphereConfig<'_>,
+    cuts: &mut HarmonicCutAccumulator,
+) -> bool {
     let z_c = config.local_center.z;
     let (z_a, z_b) = config.window_z_coefficients();
     for v_bound in [config.sphere_range[1].lo, config.sphere_range[1].hi] {
         let z_bound = config.sphere.radius() * math::sin(v_bound);
+        let coefficients = [z_a, z_b, z_c - z_bound];
         let Some(roots) = trig_linear_roots(
-            z_a,
-            z_b,
-            z_c - z_bound,
+            coefficients[0],
+            coefficients[1],
+            coefficients[2],
             config.curve_range,
             config.tolerances.linear(),
         ) else {
             return false;
         };
-        for (root, _) in roots {
-            push_scalar(cuts, root, config.curve_parameter_tolerance());
+        if cuts
+            .push_harmonic_roots(coefficients, &roots, |_| true)
+            .is_none()
+        {
+            return false;
         }
     }
 
-    for u_bound in [config.sphere_range[0].lo, config.sphere_range[0].hi] {
+    let (u_bounds, u_bound_count) = periodic_window_bounds(config.sphere_range[0]);
+    for &u_bound in &u_bounds[..u_bound_count] {
         let (sin_u, cos_u) = math::sincos(u_bound);
         let c = -sin_u * config.local_center.x + cos_u * config.local_center.y;
         let (a, b) = config.window_longitude_coefficients(sin_u, cos_u);
-        let Some(roots) =
-            trig_linear_roots(a, b, c, config.curve_range, config.tolerances.linear())
-        else {
+        let coefficients = [a, b, c];
+        let Some(roots) = trig_linear_roots(
+            coefficients[0],
+            coefficients[1],
+            coefficients[2],
+            config.curve_range,
+            config.tolerances.linear(),
+        ) else {
             return false;
         };
-        for (root, _) in roots {
-            if !sphere_longitude_matches_bound(config.local_point(root), u_bound, config.tolerances)
-            {
-                continue;
-            }
-            push_scalar(cuts, root, config.curve_parameter_tolerance());
+        if cuts
+            .push_harmonic_roots(coefficients, &roots, |root| {
+                sphere_longitude_matches_bound(config.local_point(root), u_bound, config.tolerances)
+            })
+            .is_none()
+        {
+            return false;
         }
     }
     true

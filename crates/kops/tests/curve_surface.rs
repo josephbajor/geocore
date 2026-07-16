@@ -1976,6 +1976,90 @@ fn public_harmonic_parameter_collision_is_indeterminate() {
 }
 
 #[test]
+fn planar_window_retains_sub_tolerance_overlap_between_distinct_roots() {
+    let circle = Circle::new(Frame::world(), 1.0).unwrap();
+    let plane = Plane::new(Frame::world());
+    let upper_x = -0.999_996_875;
+    let tolerances = Tolerances::with_linear(0.01).unwrap();
+    let plane_range = [ParamRange::new(-2.0, upper_x), ParamRange::new(-2.0, 2.0)];
+
+    let hit = intersect_bounded_circle_plane(
+        &circle,
+        circle.param_range(),
+        &plane,
+        plane_range,
+        tolerances,
+    )
+    .unwrap();
+    assert_eq!(
+        intersect_bounded_circle_plane(
+            &circle,
+            circle.param_range(),
+            &plane,
+            plane_range,
+            tolerances,
+        )
+        .unwrap(),
+        hit
+    );
+
+    assert!(hit.is_complete());
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.overlaps.len(), 1);
+    let overlap = hit.overlaps[0].curve;
+    assert!(overlap.width() > 0.0);
+    assert!(
+        overlap.width() < tolerances.linear(),
+        "the retained chart interval must stay narrower than the requested parameter tolerance"
+    );
+    assert!(overlap.lo < core::f64::consts::PI);
+    assert!(overlap.hi > core::f64::consts::PI);
+}
+
+#[test]
+fn planar_window_retains_positive_input_range_below_parameter_tolerance() {
+    let circle = Circle::new(Frame::world(), 1.0).unwrap();
+    let plane = Plane::new(Frame::world());
+    let tolerances = Tolerances::with_linear(0.01).unwrap();
+    let curve_range = ParamRange::new(1.0, 1.005);
+    let plane_range = [ParamRange::new(-2.0, 2.0), ParamRange::new(-2.0, 2.0)];
+
+    let hit = intersect_bounded_circle_plane(&circle, curve_range, &plane, plane_range, tolerances)
+        .unwrap();
+    assert_eq!(
+        intersect_bounded_circle_plane(&circle, curve_range, &plane, plane_range, tolerances)
+            .unwrap(),
+        hit
+    );
+
+    assert!(hit.is_complete());
+    assert!(hit.points.is_empty());
+    assert_eq!(hit.overlaps.len(), 1);
+    assert_eq!(hit.overlaps[0].curve, curve_range);
+    assert!(hit.overlaps[0].curve.width() < tolerances.linear());
+}
+
+#[test]
+fn planar_window_distinct_root_parameter_collision_is_indeterminate() {
+    let circle = Circle::new(Frame::world(), 1.0).unwrap();
+    let plane = Plane::new(Frame::world());
+    let upper_x = -0.999_996_875;
+    let tolerances = Tolerances::with_linear(0.01).unwrap();
+    let curve_range = ParamRange::new(0.0, core::f64::consts::PI - 3.0e-3);
+    let plane_range = [ParamRange::new(-2.0, upper_x), ParamRange::new(-2.0, 2.0)];
+
+    let hit = intersect_bounded_circle_plane(&circle, curve_range, &plane, plane_range, tolerances)
+        .unwrap();
+    assert_eq!(
+        intersect_bounded_circle_plane(&circle, curve_range, &plane, plane_range, tolerances)
+            .unwrap(),
+        hit
+    );
+    assert!(!hit.is_complete());
+    assert!(hit.is_empty());
+}
+
+#[test]
 fn circle_plane_near_tangent_keeps_two_exactly_transverse_roots() {
     let circle = Circle::new(Frame::world(), 1.0).unwrap();
     let plane = Plane::new(

@@ -1,6 +1,7 @@
 use super::conic::{
-    ExactTrigLinearKind, HARMONIC_ROOT_CLASSIFICATION_REASON, TrigLinearSolution,
-    exact_trig_linear_kind, trig_linear_roots, trig_linear_solution,
+    ExactTrigLinearKind, HARMONIC_ROOT_CLASSIFICATION_REASON, HarmonicCutAccumulator,
+    TrigLinearSolution, exact_trig_linear_kind, strict_cut_midpoint, trig_linear_roots,
+    trig_linear_solution,
 };
 use super::parameter::fit_parameter_pair;
 use super::result::{
@@ -196,7 +197,7 @@ fn contained_planar_conic(
     plane_range: [ParamRange; 2],
     tolerances: Tolerances,
 ) -> Result<CurveSurfaceIntersections> {
-    if curve_range.width() <= tolerances.linear() {
+    if curve_range.width() == 0.0 {
         let t_curve = curve_range.lo;
         let Some(uv) = fit_parameter_pair(
             plane_uv(conic.curve.eval(t_curve), plane),
@@ -218,7 +219,7 @@ fn contained_planar_conic(
         return CurveSurfaceIntersections::canonicalized_complete(points, Vec::new());
     }
 
-    let mut cuts = vec![curve_range.lo, curve_range.hi];
+    let mut cuts = HarmonicCutAccumulator::new(curve_range);
     for (axis, axis_range) in plane_range.iter().enumerate() {
         let (c0, a, b) = plane_axis_coefficients(conic, plane, axis);
         for bound in [axis_range.lo, axis_range.hi] {
@@ -228,23 +229,28 @@ fn contained_planar_conic(
                     HARMONIC_ROOT_CLASSIFICATION_REASON,
                 ));
             };
-            for (root, _) in roots {
-                push_scalar(&mut cuts, root, tolerances);
+            if cuts
+                .push_harmonic_roots([a, b, c0 - bound], &roots, |_| true)
+                .is_none()
+            {
+                return Ok(CurveSurfaceIntersections::indeterminate_empty(
+                    HARMONIC_ROOT_CLASSIFICATION_REASON,
+                ));
             }
         }
     }
-    cuts.sort_by(f64::total_cmp);
-    dedup_sorted(&mut cuts, tolerances);
+    let cuts = cuts.into_parameters();
 
     let mut points = Vec::new();
     let mut overlaps = Vec::new();
     for interval in cuts.windows(2) {
         let lo = interval[0];
         let hi = interval[1];
-        if hi - lo <= tolerances.linear() {
-            continue;
-        }
-        let mid = (lo + hi) / 2.0;
+        let Some(mid) = strict_cut_midpoint(lo, hi) else {
+            return Ok(CurveSurfaceIntersections::indeterminate_empty(
+                HARMONIC_ROOT_CLASSIFICATION_REASON,
+            ));
+        };
         if fit_parameter_pair(
             plane_uv(conic.curve.eval(mid), plane),
             plane_range,
@@ -317,28 +323,6 @@ fn plane_axis_coefficients(conic: PlanarConic<'_>, plane: &Plane, axis: usize) -
         conic.frame.x().dot(plane_axis) * conic.radius_x,
         conic.frame.y().dot(plane_axis) * conic.radius_y,
     )
-}
-
-fn push_scalar(values: &mut Vec<f64>, candidate: f64, tolerances: Tolerances) {
-    if !values
-        .iter()
-        .any(|existing| (*existing - candidate).abs() <= tolerances.linear().max(1e-12))
-    {
-        values.push(candidate);
-    }
-}
-
-fn dedup_sorted(values: &mut Vec<f64>, tolerances: Tolerances) {
-    let mut deduped = Vec::with_capacity(values.len());
-    for value in values.drain(..) {
-        if !deduped
-            .iter()
-            .any(|existing: &f64| (*existing - value).abs() <= tolerances.linear().max(1e-12))
-        {
-            deduped.push(value);
-        }
-    }
-    *values = deduped;
 }
 
 fn plane_uv(point: Point3, plane: &Plane) -> [f64; 2] {
