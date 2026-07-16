@@ -20,9 +20,9 @@ boundary.
 | Crate | Layer | Contents |
 |---|---|---|
 | [`crates/kcore`](crates/kcore) | L0 foundations | Deterministic robust `orient2d`, `orient3d`, positive-inside-CCW `incircle`, exact cyclic `polygon_orientation2d`, bounded exact quadratic/harmonic root classification, and exact affine or squared-distance signs with conservative floating filters or exact expansion evaluation, interval filters, tolerance policy (Parasolid numeric regime), typed errors, generational entity arenas with copy-on-write undo frames, deterministic parallel primitives, deterministic transcendental math (musl port — platform libm is banned in kernel code via clippy `disallowed-methods`) |
-| [`crates/kgeom`](crates/kgeom) | L1 geometry | Analytic curves (line/circle/ellipse), true 2D line/circle/NURBS pcurve evaluators, and analytic surfaces (plane/cylinder/cone/sphere/torus) with exact bounding boxes, NURBS engine (Piegl & Tiller) with homogeneous 2D/3D knot operations and conservative active-subrange control-hull boxes, closest-point projection, deterministic trimmed-face tessellation with exact streaming trim-loop winding and explicit refinement-limit errors, evaluator conformance harness |
+| [`crates/kgeom`](crates/kgeom) | L1 geometry | Analytic curves (line/circle/ellipse), true 2D line/circle/NURBS pcurve evaluators with fail-open original-source affine ranges, and analytic surfaces (plane/cylinder/cone/sphere/torus) with exact bounding boxes, NURBS engine (Piegl & Tiller) with homogeneous 2D/3D knot operations and conservative active-subrange control-hull boxes, closest-point projection, deterministic trimmed-face tessellation with exact streaming trim-loop winding and explicit refinement-limit errors, evaluator conformance harness |
 | [`crates/kgraph`](crates/kgraph) | L1.5 geometry graph | Immutable analytic, NURBS, and procedural geometry nodes with typed dependencies, deterministic identity, and bounded evaluation |
-| [`crates/ktopo`](crates/ktopo) | L2 topology | Parasolid entity hierarchy (body→region→shell→face→loop→fin→edge→vertex), finite conservative face UV domains, typed entity-tolerance provenance and transaction-owned growth budgets, independent per-fin pcurves, bounded curve-less tolerant edges, reusable validated polygon-with-holes profiles and checked prism extrusion, transaction-owned pcurve-aware Euler edits, private generic Store mutation with transaction-scoped checked assembly, deterministic mutation/lineage/tolerance journals, journal-returning checked solid/sheet/wire/acorn constructors, shared incidence validation, and pcurve-driven watertight tessellation |
+| [`crates/ktopo`](crates/ktopo) | L2 topology | Parasolid entity hierarchy (body→region→shell→face→loop→fin→edge→vertex), finite conservative face UV domains, typed entity-tolerance provenance and transaction-owned growth budgets, independent per-fin pcurves, bounded curve-less tolerant edges, reusable validated polygon-with-holes profiles and checked prism extrusion, transaction-owned pcurve-aware Euler edits, private generic Store mutation with transaction-scoped checked assembly, deterministic mutation/lineage/tolerance journals, journal-returning checked solid/sheet/wire/acorn constructors, shared incidence validation, and pcurve-driven watertight tessellation with source-certified periodic side-loop ordering |
 | [`crates/kops`](crates/kops) | L3 operations | Provisional M4 intersection foundation: exact analytic special cases plus early sampled NURBS curve/curve, curve/surface, and surface/surface experiments; generic completeness and boolean-ready pcurve results remain gated |
 | [`crates/kxt`](crates/kxt) | L5 interchange | Atomic modern-schema Parasolid XT (`.x_t`/`.x_b`) import for the supported geometry subset, including zero-multiplicity null-knot normalization and proof-bearing transmitted intersection charts through bounded two-sample line, three-sample quadratic, four-sample cubic, five-sample polyline, and seven-sample polyline dual-offset NURBS slices, plus a deterministic schema-13006 text writer for self-authored analytic solids, sheets, wires, acorns, and bounded tolerant edges encoded as trimmed SP-curves over 2D B-curves (clean-room from the published XT Format Reference) |
 | [`crates/kernel`](crates/kernel) | Supported native facade | Session/part lifecycle, opaque semantic IDs and views, contextual block/profile-extrusion construction, deterministic rigid body copy, checking/evaluation/tessellation, and typed X_T import/export without raw topology or graph leakage |
@@ -89,7 +89,20 @@ application boundary.
   and non-finite loops fail closed before the existing periodic anchoring and
   outer-first ordering. Its `2^52`-translated unit-square adversary also has
   exact doubled area `+2` while naive shoelace summation is zero. The `ktopo`
-  checker now has a separate strict authority for planar straight-loop
+  periodic side-face path no longer orders its `+u` and `-u` winding loops by
+  sampled mean `v` when pcurves exist. `Curve2d::source_affine_range` supplies
+  conservative authored-data ranges for Line2d, Circle2d, and active original
+  positive-weight NurbsCurve2d controls. After pcurve-definition validation,
+  complete all-pcurve loops on non-`v`-periodic charts union those ranges and
+  require strict `top.lo > bottom.hi`. Certified reversal is invalid geometry;
+  overlapping or unavailable proof returns capability
+  `ktopo.tessellation.periodic-loop-vertical-separation`. The sampled mean
+  remains only when both complete loops are truly pcurve-less. Mixed coverage,
+  vertical periodicity, nonzero vertical chart shifts, and unsupported pcurve
+  classes fail open. A degree-five NURBS whose five seed samples all have
+  `v = 1` but whose original source reaches `v = -41/64` now stops
+  deterministically instead of being accepted above a `v = 0` loop. The
+  `ktopo` checker now has a separate strict authority for planar straight-loop
   orientation: whole-interval-certified line uses must form finite, nonzero,
   bit-identically closed, exactly simple rings with nonzero
   `polygon_orientation2d_iter` signs, and robust strict containment identifies
@@ -157,7 +170,8 @@ application boundary.
   legacy result is zero but exact sign is positive. The current cross-platform
   debug/release numeric golden is `0xEED3_9864_73A4_C2D2`. Remaining
   concrete decision-audit debt includes generic curved-pcurve signed line
-  integrals and curved or periodic containment, the outer amplitude metric
+  integrals and broader curved or periodic containment beyond the landed
+  vertical-separation slice, the outer amplitude metric
   policy in the still-unmigrated higher conic/primitive families, affine,
   squared-distance, and harmonic fallback outside their reviewed exponent
   envelopes, the still-tolerance-deduplicated `kgraph` seam-root adapter,

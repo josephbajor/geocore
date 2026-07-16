@@ -1255,6 +1255,21 @@ loops fail closed. Its `2^52`-translated unit square has exact doubled area
 `+2` where the former naive shoelace sum is zero; rotation/reversal evidence and
 the public planar-sheet repeat fixture preserve deterministic tessellation.
 
+Periodic side-face ordering now has a separate source-proof seam.
+Line2d/Circle2d authored bounds and active original positive-weight
+NurbsCurve2d control hulls enclose each fin's complete vertical coordinate.
+After shared pcurve-definition validation, complete all-pcurve loops on a
+non-vertical-periodic chart with zero vertical shift must prove strict
+`top.lo > bottom.hi`. Certified reversed order remains invalid geometry;
+overlapping, mixed, vertical-periodic, shifted, or unsupported evidence returns
+the stable `ktopo.tessellation.periodic-loop-vertical-separation` capability.
+The former sampled mean is retained only for two wholly pcurve-less loops.
+
+This source scan is allocation-free but currently uncharged, matching the
+ordering scan it replaced. A future policy slice may add an explicit stage if
+profiling or hostile-input accounting requires one; the current bounded
+tessellation profiles and result bits remain unchanged for admitted cases.
+
 ### Stage 5 — Checker/make integration
 
 Status: X_T reconstruction and checked-commit Fast validation are contextual.

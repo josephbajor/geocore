@@ -81,6 +81,27 @@ naive shoelace sum is zero. Outer selection still precedes the existing
 periodic hole anchoring and outer-first loop order, and the public planar-sheet
 fixture pins deterministic output.
 
+The periodic side-face `face_case_b` path now replaces sampled mean-`v`
+ordering with source-certified vertical separation whenever either loop owns a
+pcurve. `kgeom::Curve2d::source_affine_range` provides fail-open authored-data
+intervals for Line2d, Circle2d, and active original positive-weight
+NurbsCurve2d controls. Topology validates every present pcurve definition
+before capability fallback, unions complete all-pcurve loop ranges only on
+non-`v`-periodic charts with zero vertical shift, and accepts only strict
+`top.lo > bottom.hi`. Certified reversal is InvalidGeometry; overlapping,
+mixed, vertically periodic, shifted, or unsupported evidence returns
+`ktopo.tessellation.periodic-loop-vertical-separation`. Sampled means survive
+only for two wholly pcurve-less loops.
+
+The hostile degree-five pcurve has `u` controls `0,τ/5,…,τ`, `v` controls
+`[1,-43/5,109/5,-99/5,53/5,1]`, all five former seed values equal to one, and
+`v(1/8) = -41/64`. Original-source ranges carry that hidden excursion through
+`loop_chain`, `chain_uv`, and the production periodic-face branch, which fails
+open above a bottom `v = 0` loop. Positive-weight rational hulls, invalid
+complete/mixed/vertical-period ranges, pcurve-less compatibility, and shifted
+cylinder behavior are pinned. The allocation-free scan is not yet charged to a
+new operation stage; it replaces the prior uncharged mean scan.
+
 The `ktopo` checker now has a stricter, separate planar straight-loop authority.
 Each fin must provide a whole-active-interval-certified line use on a plane.
 Finite nonzero UV segments must meet at bit-identical endpoints, avoid exact
