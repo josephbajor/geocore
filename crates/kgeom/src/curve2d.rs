@@ -75,6 +75,27 @@ fn finite_point(p: Point2) -> bool {
     p.x.is_finite() && p.y.is_finite()
 }
 
+fn normalized_nonzero_direction(direction: Vec2) -> Option<Vec2> {
+    if !finite_point(direction) {
+        return None;
+    }
+    let norm = direction.norm();
+    if norm == 0.0 {
+        None
+    } else if norm.is_finite() {
+        // Preserve the established ordinary-input bits and computed-zero
+        // rejection, including norms that underflow to zero.
+        Some(direction / norm)
+    } else {
+        // Finite components can produce an infinite norm only through
+        // squared-length overflow. Scaling first keeps the retry bounded.
+        let scale = direction.x.abs().max(direction.y.abs());
+        let scaled = direction / scale;
+        let scaled_norm = scaled.norm();
+        (scaled_norm.is_finite() && scaled_norm > 0.0).then_some(scaled / scaled_norm)
+    }
+}
+
 fn finite_interval(interval: Interval) -> Option<Interval> {
     (interval.lo().is_finite() && interval.hi().is_finite()).then_some(interval)
 }
@@ -132,16 +153,17 @@ pub struct Line2d {
 impl Line2d {
     /// Construct a line through `origin` in `dir`, normalizing `dir`.
     pub fn new(origin: Point2, dir: Vec2) -> Result<Self> {
-        let n = dir.norm();
-        if !finite_point(origin) || !finite_point(dir) || !n.is_finite() || n == 0.0 {
+        let Some(dir) = normalized_nonzero_direction(dir) else {
+            return Err(Error::InvalidGeometry {
+                reason: "2D line requires a finite origin and nonzero finite direction",
+            });
+        };
+        if !finite_point(origin) {
             return Err(Error::InvalidGeometry {
                 reason: "2D line requires a finite origin and nonzero finite direction",
             });
         }
-        Ok(Self {
-            origin,
-            dir: dir / n,
-        })
+        Ok(Self { origin, dir })
     }
 
     /// Point at parameter zero.
@@ -203,23 +225,15 @@ pub struct Circle2d {
 impl Circle2d {
     /// Construct a circle with parameter zero along `x`; `x` is normalized.
     pub fn new(center: Point2, radius: f64, x: Vec2) -> Result<Self> {
-        let n = x.norm();
-        if !finite_point(center)
-            || !finite_point(x)
-            || !radius.is_finite()
-            || radius <= 0.0
-            || !n.is_finite()
-            || n == 0.0
-        {
+        if !finite_point(center) || !radius.is_finite() || radius <= 0.0 {
             return Err(Error::InvalidGeometry {
                 reason: "2D circle requires finite center/axis and positive finite radius",
             });
         }
-        Ok(Self {
-            center,
-            x: x / n,
-            radius,
-        })
+        let x = normalized_nonzero_direction(x).ok_or(Error::InvalidGeometry {
+            reason: "2D circle requires finite center/axis and positive finite radius",
+        })?;
+        Ok(Self { center, x, radius })
     }
 
     /// Circle center.
@@ -621,6 +635,67 @@ mod tests {
         assert!(d.d[0].dist(Point2::new(1.0, 5.0)) < 1e-14);
         assert!(d.d[1].dist(Vec2::new(-3.0, 0.0)) < 1e-14);
         assert!(d.d[2].dist(Vec2::new(0.0, -3.0)) < 1e-14);
+    }
+
+    #[test]
+    fn analytic_directions_accept_finite_overflow_scales_without_changing_ordinary_bits() {
+        let origin = Point2::new(1.0, -2.0);
+        let ordinary_direction = Vec2::new(1.0, -0.5);
+        let ordinary_line = Line2d::new(origin, ordinary_direction).unwrap();
+        assert_eq!(
+            ordinary_line.dir(),
+            ordinary_direction / ordinary_direction.norm()
+        );
+        let scaled_line =
+            Line2d::new(origin, Vec2::new(2.0_f64.powi(700), -2.0_f64.powi(699))).unwrap();
+        assert_eq!(scaled_line, ordinary_line);
+
+        let diagonal_line = Line2d::new(origin, Vec2::new(f64::MAX, f64::MAX)).unwrap();
+        assert_eq!(
+            diagonal_line,
+            Line2d::new(origin, Vec2::new(1.0, 1.0)).unwrap()
+        );
+
+        let center = Point2::new(-3.0, 4.0);
+        let ordinary_axis = Vec2::new(1.0, 1.0);
+        let ordinary_circle = Circle2d::new(center, 2.5, ordinary_axis).unwrap();
+        assert_eq!(
+            ordinary_circle.x_dir(),
+            ordinary_axis / ordinary_axis.norm()
+        );
+        let extreme_circle = Circle2d::new(center, 2.5, Vec2::new(f64::MAX, f64::MAX)).unwrap();
+        assert_eq!(extreme_circle, ordinary_circle);
+        assert_eq!(
+            extreme_circle.eval_derivs(0.25, 3),
+            ordinary_circle.eval_derivs(0.25, 3)
+        );
+    }
+
+    #[test]
+    fn analytic_directions_preserve_nonfinite_zero_and_underflow_rejection() {
+        let origin = Point2::default();
+        for direction in [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(f64::MIN_POSITIVE, 0.0),
+            Vec2::new(2.0_f64.powi(-700), 0.0),
+            Vec2::new(f64::INFINITY, 0.0),
+            Vec2::new(f64::NAN, 1.0),
+        ] {
+            assert!(Line2d::new(origin, direction).is_err());
+            assert!(Circle2d::new(origin, 1.0, direction).is_err());
+        }
+
+        let below_model_floor = Vec2::new(1.0e-9, 0.0);
+        assert_eq!(
+            Line2d::new(origin, below_model_floor).unwrap().dir(),
+            Vec2::new(1.0, 0.0)
+        );
+        assert_eq!(
+            Circle2d::new(origin, 1.0, below_model_floor)
+                .unwrap()
+                .x_dir(),
+            Vec2::new(1.0, 0.0)
+        );
     }
 
     #[test]

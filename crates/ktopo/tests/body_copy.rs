@@ -1134,6 +1134,29 @@ fn verified_aligned_plane_sphere_wire(
     [ktopo::entity::SurfaceId; 2],
     [ktopo::entity::Curve2dId; 2],
 ) {
+    verified_aligned_plane_sphere_wire_with_pcurve_directions(
+        store,
+        plane_first,
+        plane_offsets,
+        sphere_offsets,
+        Vec2::new(1.0, 0.0),
+        Vec2::new(1.0, 0.0),
+    )
+}
+
+fn verified_aligned_plane_sphere_wire_with_pcurve_directions(
+    store: &mut Store,
+    plane_first: bool,
+    plane_offsets: &[f64],
+    sphere_offsets: &[f64],
+    plane_pcurve_x: Vec2,
+    sphere_pcurve_dir: Vec2,
+) -> (
+    ktopo::entity::BodyId,
+    ktopo::entity::CurveId,
+    [ktopo::entity::SurfaceId; 2],
+    [ktopo::entity::Curve2dId; 2],
+) {
     let height = 0.5;
     let plane = Plane::new(Frame::world().with_origin(Point3::new(0.0, 0.0, height)));
     let sphere = Sphere::new(Frame::world(), 2.0).unwrap();
@@ -1143,9 +1166,9 @@ fn verified_aligned_plane_sphere_wire(
         radius,
     )
     .unwrap();
-    let plane_pcurve = Circle2d::new(Point2::new(0.0, 0.0), radius, Vec2::new(1.0, 0.0)).unwrap();
+    let plane_pcurve = Circle2d::new(Point2::new(0.0, 0.0), radius, plane_pcurve_x).unwrap();
     let latitude = kcore::math::atan2(height, radius);
-    let sphere_pcurve = Line2d::new(Point2::new(0.0, latitude), Vec2::new(1.0, 0.0)).unwrap();
+    let sphere_pcurve = Line2d::new(Point2::new(0.0, latitude), sphere_pcurve_dir).unwrap();
     let identity = AffineParamMap1d::new(1.0, 0.0).unwrap();
     let plane_trace =
         PlaneSphereCircleTrace::Plane(PlaneCircleTrace::new(plane, plane_pcurve, identity));
@@ -3738,6 +3761,69 @@ fn rigid_copy_reissues_ordered_aligned_plane_sphere_circle_certificate() {
             }
             store.geometry().validate().unwrap();
         }
+    }
+}
+
+#[test]
+fn rigid_copy_preserves_proofs_from_extreme_finite_plane_sphere_pcurve_directions() {
+    for plane_first in [false, true] {
+        let mut ordinary_store = Store::new();
+        let (ordinary_source, _, _, ordinary_source_pcurves) =
+            verified_aligned_plane_sphere_wire(&mut ordinary_store, plane_first, &[], &[]);
+        let ordinary_source_pcurves =
+            ordinary_source_pcurves.map(|pcurve| ordinary_store.get(pcurve).unwrap().clone());
+        let (ordinary_copy, _) = copy_checked(&mut ordinary_store, ordinary_source, placement());
+        let ordinary_copy_edge = ordinary_store.edges_of_body(ordinary_copy).unwrap()[0];
+        let ordinary_copy_curve = ordinary_store
+            .get(ordinary_copy_edge)
+            .unwrap()
+            .curve
+            .unwrap();
+        let ordinary_copy_intersection = ordinary_store
+            .get(ordinary_copy_curve)
+            .unwrap()
+            .as_intersection()
+            .copied()
+            .unwrap();
+        let ordinary_copy_pcurves = ordinary_copy_intersection
+            .pcurves()
+            .map(|pcurve| ordinary_store.get(pcurve).unwrap().clone());
+        let ordinary_copy_certificate = ordinary_copy_intersection.certificate();
+
+        let mut extreme_store = Store::new();
+        let (extreme_source, _, _, extreme_source_pcurves) =
+            verified_aligned_plane_sphere_wire_with_pcurve_directions(
+                &mut extreme_store,
+                plane_first,
+                &[],
+                &[],
+                Vec2::new(f64::MAX, 0.0),
+                Vec2::new(2.0_f64.powi(700), 0.0),
+            );
+        let extreme_source_pcurves =
+            extreme_source_pcurves.map(|pcurve| extreme_store.get(pcurve).unwrap().clone());
+        assert_eq!(extreme_source_pcurves, ordinary_source_pcurves);
+
+        let (extreme_copy, _) = copy_checked(&mut extreme_store, extreme_source, placement());
+        let extreme_copy_edge = extreme_store.edges_of_body(extreme_copy).unwrap()[0];
+        let extreme_copy_curve = extreme_store.get(extreme_copy_edge).unwrap().curve.unwrap();
+        let extreme_copy_intersection = extreme_store
+            .get(extreme_copy_curve)
+            .unwrap()
+            .as_intersection()
+            .copied()
+            .unwrap();
+        let extreme_copy_pcurves = extreme_copy_intersection
+            .pcurves()
+            .map(|pcurve| extreme_store.get(pcurve).unwrap().clone());
+
+        assert_eq!(
+            extreme_copy_intersection.certificate(),
+            ordinary_copy_certificate
+        );
+        assert_eq!(extreme_copy_pcurves, ordinary_copy_pcurves);
+        ordinary_store.geometry().validate().unwrap();
+        extreme_store.geometry().validate().unwrap();
     }
 }
 
