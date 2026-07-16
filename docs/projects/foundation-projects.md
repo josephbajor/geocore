@@ -271,10 +271,19 @@ power-of-two and near-maximum vectors, projection overflow, huge parallel and
 near-parallel hints, the unchanged geometry determinism golden in debug and
 release, line/line and line/Torus public parity, and downstream
 rigid-copy/facade suites. Remaining arithmetic debt includes raw extreme-scale
-`Vec3::norm`/`norm_sq`, upstream dot/cross/distance/subtraction overflow, and
-overflow-safe 2D direction normalization for `Line2d` and `Circle2d` after
-choosing whether to retain zero-only semantics or adopt the model
-linear-resolution floor.
+`Vec3::norm`/`norm_sq` and upstream dot/cross/distance/subtraction overflow.
+
+Stable finite UV direction construction is now separately landed.
+`Line2d::new` and `Circle2d::new` share a private helper that preserves the
+ordinary finite-norm division bits, retries only finite squared-norm overflow
+through maximum-component scaling, and retains rejection for non-finite,
+zero, and computed-zero-underflow inputs. The parameter-space contract does
+not adopt the 3D model-resolution floor: a representable `1e-9` direction
+remains valid. Evidence covers `2^700` and `f64::MAX` axes, ordinary graph and
+Plane/Sphere proof parity, and verified aligned Plane/Sphere pcurves through
+rigid copy in both operand orders. Raw `Vec2` `norm`/`norm_sq`/dot/cross/
+distance/subtraction and callers that compute UV spans before construction
+remain separate arithmetic debt.
 
 ## Current direction and handoff order
 

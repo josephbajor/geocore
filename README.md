@@ -212,6 +212,14 @@ application boundary.
   near-maximum directions, projection overflow, huge parallel and near-parallel
   hints, the unchanged geometry determinism golden in debug and release,
   line/line bit parity, and direct/generic line/Torus parity.
+  `Line2d::new` and `Circle2d::new` now share a private overflow-safe direction
+  canonicalizer. Ordinary finite norms retain their exact division bits;
+  finite directions whose squared norm overflows are scaled and retried.
+  Non-finite, zero, and computed-zero-underflow directions remain rejected.
+  Parameter space deliberately does not inherit the 3D model-resolution floor:
+  a representable `1e-9` UV direction remains valid. Evidence covers
+  power-of-two and `f64::MAX` axes, graph/certificate ordinary parity, and an
+  aligned Plane/Sphere proof that survives rigid copy in both operand orders.
   Remaining
   concrete decision-audit debt includes generic curved-pcurve signed line
   integrals and broader curved or periodic containment beyond the landed
@@ -221,10 +229,9 @@ application boundary.
   envelopes, full source-exact harmonic discriminant construction beyond the
   landed coefficient sign/zero agreement, higher-polynomial root and window
   classification beyond the bounded line/Torus quartic slice, general NURBS
-  root classification, raw extreme-scale `Vec3`
-  `norm`/`norm_sq`/dot/cross/distance/subtraction behavior, overflow-safe 2D
-  direction normalization for `Line2d` and `Circle2d` after choosing zero-only
-  versus linear-resolution-floor semantics, and other raw topological sign
+  root classification, raw extreme-scale `Vec3` and `Vec2`
+  `norm`/`norm_sq`/dot/cross/distance/subtraction behavior, callers that derive
+  UV spans before analytic-curve construction, and other raw topological sign
   branches.
   `insphere`, an `incircle` production decision consumer when required, the
   broader topological-decision audit, and full conformance remain ahead.
