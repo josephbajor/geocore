@@ -15,6 +15,7 @@ use crate::nurbs::ops::{Comb, insert_knot, refine_knots};
 use crate::param::ParamRange;
 use crate::vec::{Point2, Vec2};
 use kcore::error::{Error, Result};
+use kcore::interval::Interval;
 use kcore::math;
 
 /// Position and derivatives of a parameter-space curve.
@@ -48,10 +49,45 @@ pub trait Curve2d: Any {
 
     /// Bounding box over a finite range.
     fn bounding_box(&self, range: ParamRange) -> Aabb2;
+
+    /// Conservative range of an affine coordinate form over the original
+    /// source representation.
+    ///
+    /// The returned interval encloses
+    /// `bias + linear.x * point.x + linear.y * point.y` for every point whose
+    /// parameter lies in `range`. Implementations must derive the enclosure
+    /// directly from their authored analytic data or original control net;
+    /// sampled or rounded restricted representations are not proof sources.
+    ///
+    /// Unsupported representations, invalid ranges, and non-finite or
+    /// inconclusive arithmetic return `None` so callers fail open.
+    fn source_affine_range(
+        &self,
+        _range: ParamRange,
+        _linear: Vec2,
+        _bias: f64,
+    ) -> Option<Interval> {
+        None
+    }
 }
 
 fn finite_point(p: Point2) -> bool {
     p.x.is_finite() && p.y.is_finite()
+}
+
+fn finite_interval(interval: Interval) -> Option<Interval> {
+    (interval.lo().is_finite() && interval.hi().is_finite()).then_some(interval)
+}
+
+fn affine_point_interval(point: Point2, linear: Vec2, bias: f64) -> Option<Interval> {
+    if !finite_point(point) || !finite_point(linear) || !bias.is_finite() {
+        return None;
+    }
+    finite_interval(
+        Interval::point(bias)
+            + Interval::point(linear.x) * Interval::point(point.x)
+            + Interval::point(linear.y) * Interval::point(point.y),
+    )
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -144,6 +180,15 @@ impl Curve2d for Line2d {
     fn bounding_box(&self, range: ParamRange) -> Aabb2 {
         debug_assert!(range.is_finite());
         Aabb2::from_points(&[self.eval(range.lo), self.eval(range.hi)])
+    }
+
+    fn source_affine_range(&self, range: ParamRange, linear: Vec2, bias: f64) -> Option<Interval> {
+        if !range.is_finite() || range.width() < 0.0 {
+            return None;
+        }
+        let origin = affine_point_interval(self.origin, linear, bias)?;
+        let slope = affine_point_interval(self.dir, linear, 0.0)?;
+        finite_interval(origin + slope * Interval::new(range.lo, range.hi))
     }
 }
 
@@ -239,6 +284,18 @@ impl Curve2d for Circle2d {
             }
         }
         out
+    }
+
+    fn source_affine_range(&self, range: ParamRange, linear: Vec2, bias: f64) -> Option<Interval> {
+        if !range.is_finite() || range.width() < 0.0 {
+            return None;
+        }
+        let center = affine_point_interval(self.center, linear, bias)?;
+        let cosine = affine_point_interval(self.x, linear, 0.0)?;
+        let sine = affine_point_interval(self.x.perp(), linear, 0.0)?;
+        let norm = (cosine.square() + sine.square()).sqrt()?;
+        let amplitude = finite_interval(Interval::point(self.radius) * norm)?.hi();
+        finite_interval(center + Interval::new(-amplitude, amplitude))
     }
 }
 
@@ -434,6 +491,39 @@ impl NurbsCurve2d {
             |curve| Aabb2::from_points(&curve.points),
         )
     }
+
+    fn active_source_controls(
+        &self,
+        range: ParamRange,
+    ) -> Option<core::ops::RangeInclusive<usize>> {
+        if !range.is_finite() || range.width() < 0.0 {
+            return None;
+        }
+        let domain = self.knots.domain();
+        if range.lo < domain.lo || range.hi > domain.hi {
+            return None;
+        }
+
+        let degree = self.degree();
+        let knots = self.knots.as_slice();
+        let last_span = self.points.len().checked_sub(1)?;
+        let mut first = None;
+        let mut last = None;
+        for span in degree..=last_span {
+            if knots[span] >= knots[span + 1] {
+                continue;
+            }
+            let local_lo = range.lo.max(knots[span]);
+            let local_hi = range.hi.min(knots[span + 1]);
+            if local_lo > local_hi {
+                continue;
+            }
+            let span_first = span.checked_sub(degree)?;
+            first = Some(first.map_or(span_first, |current: usize| current.min(span_first)));
+            last = Some(last.map_or(span, |current: usize| current.max(span)));
+        }
+        Some(first?..=last?)
+    }
 }
 
 impl Curve2d for NurbsCurve2d {
@@ -500,6 +590,20 @@ impl Curve2d for NurbsCurve2d {
     fn bounding_box(&self, range: ParamRange) -> Aabb2 {
         debug_assert!(range.is_finite());
         self.subrange_control_box(range)
+    }
+
+    fn source_affine_range(&self, range: ParamRange, linear: Vec2, bias: f64) -> Option<Interval> {
+        let mut result: Option<Interval> = None;
+        for index in self.active_source_controls(range)? {
+            let value = affine_point_interval(self.points[index], linear, bias)?;
+            result = Some(match result {
+                Some(current) => {
+                    Interval::new(current.lo().min(value.lo()), current.hi().max(value.hi()))
+                }
+                None => value,
+            });
+        }
+        result
     }
 }
 
@@ -602,6 +706,105 @@ mod tests {
                     && point.y >= subrange.min.y
                     && point.y <= subrange.max.y
             );
+        }
+    }
+
+    #[test]
+    fn analytic_source_affine_ranges_enclose_line_and_circle_coordinates() {
+        let line = Line2d::new(Point2::new(2.0, -1.0), Vec2::new(3.0, 4.0)).unwrap();
+        let line_range = ParamRange::new(-2.0, 5.0);
+        let line_bound = line
+            .source_affine_range(line_range, Vec2::new(0.0, 1.0), 0.0)
+            .unwrap();
+        for index in 0..=100 {
+            let point = line.eval(line_range.lerp(f64::from(index) / 100.0));
+            assert!(line_bound.contains(point.y));
+        }
+
+        let circle = Circle2d::new(Point2::new(3.0, -2.0), 4.0, Vec2::new(0.6, 0.8)).unwrap();
+        let circle_range = ParamRange::new(0.2, 0.6);
+        let circle_bound = circle
+            .source_affine_range(circle_range, Vec2::new(-3.0, 2.0), 7.0)
+            .unwrap();
+        for index in 0..=100 {
+            let point = circle.eval(circle_range.lerp(f64::from(index) / 100.0));
+            assert!(circle_bound.contains(7.0 - 3.0 * point.x + 2.0 * point.y));
+        }
+    }
+
+    #[test]
+    fn source_affine_range_rejects_invalid_or_unrepresentable_queries() {
+        let line = Line2d::new(Point2::default(), Vec2::new(1.0, 0.0)).unwrap();
+        assert!(
+            line.source_affine_range(
+                ParamRange::new(0.0, f64::INFINITY),
+                Vec2::new(0.0, 1.0),
+                0.0,
+            )
+            .is_none()
+        );
+
+        let curve = NurbsCurve2d::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point2::new(0.0, 0.0), Point2::new(1.0, 1.0)],
+            None,
+        )
+        .unwrap();
+        assert!(
+            curve
+                .source_affine_range(ParamRange::new(-1.0, 0.5), Vec2::new(0.0, 1.0), 0.0,)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn hostile_degree_five_source_range_exposes_hidden_vertical_excursion() {
+        let tau = core::f64::consts::TAU;
+        let v = [1.0, -43.0 / 5.0, 109.0 / 5.0, -99.0 / 5.0, 53.0 / 5.0, 1.0];
+        let curve = NurbsCurve2d::new(
+            5,
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            (0..=5)
+                .map(|index| Point2::new(tau * f64::from(index) / 5.0, v[index as usize]))
+                .collect(),
+            None,
+        )
+        .unwrap();
+        for parameter in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            assert!((curve.eval(parameter).y - 1.0).abs() < 1.0e-13);
+        }
+        assert!((curve.eval(0.125).y + 41.0 / 64.0).abs() < 1.0e-13);
+
+        let source = curve
+            .source_affine_range(curve.param_range(), Vec2::new(0.0, 1.0), 0.0)
+            .unwrap();
+        assert!(source.lo() <= -99.0 / 5.0);
+        assert!(source.hi() >= 109.0 / 5.0);
+        assert!(source.contains(curve.eval(0.125).y));
+    }
+
+    #[test]
+    fn rational_source_affine_range_uses_positive_weight_control_hull() {
+        let curve = NurbsCurve2d::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point2::new(1.0, 0.0),
+                Point2::new(1.0, 1.0),
+                Point2::new(0.0, 1.0),
+            ],
+            Some(vec![1.0, core::f64::consts::FRAC_1_SQRT_2, 1.0]),
+        )
+        .unwrap();
+        let linear = Vec2::new(-2.0, 3.0);
+        let bias = 5.0;
+        let source = curve
+            .source_affine_range(curve.param_range(), linear, bias)
+            .unwrap();
+        for index in 0..=256 {
+            let point = curve.eval(f64::from(index) / 256.0);
+            assert!(source.contains(bias + linear.dot(point)));
         }
     }
 
