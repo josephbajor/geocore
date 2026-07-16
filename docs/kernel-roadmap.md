@@ -1294,8 +1294,9 @@ true only for an empty complete result.
   the other four siblings certified empty, or the exact
   full three-child row in either latitude row with all three opposite-row
   siblings certified empty, one exact mixed-axis three-cell L path with the
-  other three siblings certified empty, any exact four-positive grid path with
-  the other two siblings certified empty, exactly five positive cells with the
+  other three siblings certified empty, any exact four-positive grid path,
+  exact lower/upper-stem T tree, or exact left/right 2×2 cycle with the other
+  two siblings certified empty, exactly five positive cells with the
   sole other sibling certified empty, or all six cells positive with no empty
   sibling. The two reviewed L orientations are
   the cap-right `[0,2]`/`[1,1]`/`[1,2]` path and the lower-middle
@@ -1327,7 +1328,15 @@ true only for an empty complete result.
   `[0,2]`/`[1,0]`/`[1,1]`/`[1,2]` and zigzag
   `[0,1]`/`[0,2]`/`[1,0]`/`[1,1]` fixtures pin repeat/swap; one-ULP seam
   mutation and duplicate-edge ambiguity fail closed. The path route stays
-  exclusive to three-adjacency layouts. A disjoint cycle route admits only the
+  exclusive to degree sequence `2,2,1,1`. A disjoint T route admits only the
+  exact lower-stem `[0,0]`/`[0,1]`/`[0,2]`/`[1,1]` and upper-stem
+  `[0,1]`/`[1,0]`/`[1,1]`/`[1,2]` trees with the other two siblings certified
+  empty. Each has degree sequence `3,1,1,1`, proves all three reverse-oriented
+  bit-exact internal adjacencies simultaneously before removing them, requires
+  one unambiguous outer cycle with no artificial seam, and restores the parent
+  mapping and maximum child/parent residual. Both real fixtures pin repeat/swap;
+  one-ULP seam mutation and duplicate-edge ambiguity fail closed. The third
+  disjoint route admits only the
   exact left `[0,0]`/`[0,1]`/`[1,0]`/`[1,1]` and right
   `[0,1]`/`[0,2]`/`[1,1]`/`[1,2]` 2x2 cycles with the other two siblings
   certified empty. It proves all four reverse-oriented bit-exact internal
@@ -1347,10 +1356,11 @@ true only for an empty complete result.
   artificial seam, and restores the parent mapping and child/parent residual.
   Its real `0.14716980102990423`-tilt fixture pins repeat/swap plus one-ULP and
   duplicate-edge ambiguity rejection. All admitted layouts retain exact 6/5
-  piece, 147/146 pair, and 588/587 arc admission. T-shaped and broader four-
-  positive layouts outside the disjoint exact path/cycle routes, and other non-
+  piece, 147/146 pair, and 588/587 arc admission. The path (`2,2,1,1`), T
+  (`3,1,1,1`), and cycle (`2,2,2,2`) routes remain disjoint. Disconnected four-
+  positive layouts and other non-
   adjacent layouts outside the admitted exact same-row, same-column, full-row,
-  mixed-axis three-cell-path, four-positive-path/cycle, exactly-five-positive,
+  mixed-axis three-cell-path, four-positive-path/T/cycle, exactly-five-positive,
   and all-six-positive families remain fail-closed. A first wide
   arm splits exactly
   one pole-clear wide operand into
@@ -1486,21 +1496,25 @@ true only for an empty complete result.
   direct Plane/NURBS in both orders, direct NURBS/NURBS, direct one-descriptor
   Offset(NURBS)/NURBS in both orders, and exactly one-descriptor
   Offset(NURBS)/direct-Plane charts in both orders, plus only the canonical
-  finite-open two-sample degree-1 dual Offset(NURBS) chart in either ordered-
-  root arrangement, through the public original-source recertifier. That dual
-  family requires two distinct ordered roots over distinct direct nonperiodic
-  NURBS basis handles, exactly one descriptor per root, and matching unweighted
-  two-control carrier and pcurves on knots `[0,0,1,1]` over `[0,1]`, with no
-  carrier period or quadratic/cubic interpolation witnesses. Copy transforms
-  both bases and the carrier while retaining ordered roots, paired pcurves,
-  chart metadata, and tolerance. The facade validates the live roots and this
+  finite-open two-sample degree-1 and witnessed three-sample quadratic dual
+  Offset(NURBS) charts in either ordered-root arrangement, through the public
+  original-source recertifier. Both require two distinct ordered roots over
+  distinct direct nonperiodic NURBS basis handles and exactly one descriptor
+  per root. The line uses unweighted two-control carrier/pcurves on
+  `[0,0,1,1]` over `[0,1]` without witnesses; the quadratic uses unweighted
+  degree-2 three-control carrier/pcurves on `[0,0,0,2,2,2]` over `[0,2]` plus
+  exact position and paired-UV interpolation witnesses. Copy transforms both
+  bases and the line carrier; for the quadratic it transforms the exact
+  positions, rebuilds carrier controls from them, retains exact UV witnesses,
+  paired pcurves, chart metadata, and tolerance, and publicly recertifies. The
+  facade validates the live roots and this
   proof/source contract before scope creation; same-total multi-distance
   metadata, nested Offset(NURBS) roots, shared bases, Offset(Plane) peer roots,
-  periodic source or carrier charts, five-sample, other-sample, or witness-
-  bearing dual families, nonpositive/nonfinite effective spheres, and other
-  unsupported proofs remain typed unsupported. Lower transaction rejection restores every
-  Body/Region/Shell/Edge/Vertex and Curve/Surface/Pcurve/Point count plus future
-  point identity reuse.
+  periodic source or carrier charts, altered quadratic witnesses, cubic, five-
+  sample, seven-sample, or other dual families, nonpositive/nonfinite effective
+  spheres, and other unsupported proofs remain typed unsupported. Lower
+  transaction rejection restores every Body/Region/Shell/Edge/Vertex and
+  Curve/Surface/Pcurve/Point count plus future point identity reuse.
   Attributes remain blocked because no authorable storage contract exists;
   non-rigid transform families also remain. Extend this seam only after those
   explicit contracts land.
