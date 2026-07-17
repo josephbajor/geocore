@@ -1,1 +1,7 @@
-benches/testdata/*.x_t binary
+# Byte-exact fixture formats: never CRLF-convert on checkout. The corpus
+# manifest ratchets exact byte counts, and certified snapshots pin SHA-256
+# identities; text conversion on Windows breaks both.
+*.x_t binary
+*.x_b binary
+*.xtseed binary
+*.nurbsseed binary
