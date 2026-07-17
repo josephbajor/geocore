@@ -400,11 +400,11 @@ discharge:
   periodic/mixed boundaries, multi-loop containment, curved shells; tolerance
   policies beyond MEF/KEF.
 - **M4:** adopt the common branch contract across analytic families; extend
-  region/contact evidence to the remaining coincident and singular families
-  (including the single-polar multi-occupied sphere case the general merger does not
-  yet route); generalize exact-cell certificates to complete solver-integrated
-  coverage; curved profiles, revolve, external X_T validation of operation outputs;
-  merge the duplicated legacy/scoped projection polishers in `kgeom::project`.
+  region/contact evidence to the remaining coincident and singular families;
+  generalize exact-cell certificates to complete solver-integrated coverage;
+  curved profiles, revolve, external X_T validation of operation outputs.
+  (Done 2026-07-17: single-polar multi-occupied routed through the general
+  merger; `kgeom::project` polisher twins merged.)
 - **M5:** grow planar profiles and booleans only behind the checker, rollback,
   lineage, tolerance, determinism, corpus, performance, and independent-oracle
   gates.

@@ -518,10 +518,7 @@ fn polish_curve_core(
 
 /// A non-finite evaluation fails closed when metered, or keeps the best
 /// finite candidate seen so far when unmetered (the curve legacy behavior).
-fn nonfinite_or_keep(
-    strict: bool,
-    keep: (f64, f64),
-) -> core::result::Result<(f64, f64), ProjectionError> {
+fn nonfinite_or_keep<T>(strict: bool, keep: T) -> core::result::Result<T, ProjectionError> {
     if strict {
         Err(ProjectionError::NonFiniteEvaluation)
     } else {
@@ -774,27 +771,21 @@ fn polish_surface_core(
             (iteration + 1) as u64,
         )?;
         let d = surface.eval_derivs(uv, 2);
-        // Metered polishes fail closed on a non-finite evaluation. The legacy
-        // (unmetered) surface polisher predates the curve NaN guard of
-        // 0a4649e and instead carries the raw evaluation forward; the
-        // `strict &&` short-circuit preserves that exact behavior so finite
-        // and pathological inputs alike stay output-identical to the legacy
-        // `polish_surface`. (Porting this guard to the legacy path — closing
-        // the surface analogue of the 0a4649e curve NaN gap — is deferred as
-        // a behavior change, out of scope for this deduplication.)
-        if strict
-            && ![d.p, d.du, d.dv, d.duu, d.duv, d.dvv]
-                .into_iter()
-                .all(finite_point)
+        // Overflowed or indeterminate evaluation cannot certify improvement:
+        // metered polishes fail closed, unmetered polishes keep the best
+        // finite candidate (the surface analogue of the 0a4649e curve guard).
+        if ![d.p, d.du, d.dv, d.duu, d.duv, d.dvv]
+            .into_iter()
+            .all(finite_point)
         {
-            return Err(ProjectionError::NonFiniteEvaluation);
+            return nonfinite_or_keep(strict, (uv, f_curr));
         }
         let diff = d.p - p;
         let g0 = 2.0 * d.du.dot(diff);
         let g1 = 2.0 * d.dv.dot(diff);
         let g_scale = 2.0 * (d.du.norm() + d.dv.norm()) * diff.norm();
-        if strict && (!g0.is_finite() || !g1.is_finite() || !g_scale.is_finite()) {
-            return Err(ProjectionError::NonFiniteEvaluation);
+        if !g0.is_finite() || !g1.is_finite() || !g_scale.is_finite() {
+            return nonfinite_or_keep(strict, (uv, f_curr));
         }
         if g0.abs().max(g1.abs()) <= 1e-15 * (1.0 + g_scale) {
             return Ok((uv, f_curr));
@@ -803,9 +794,8 @@ fn polish_surface_core(
         let h01 = 2.0 * (d.duv.dot(diff) + d.du.dot(d.dv));
         let h11 = 2.0 * (d.dvv.dot(diff) + d.dv.norm_sq());
         let det = h00 * h11 - h01 * h01;
-        if strict && (!h00.is_finite() || !h01.is_finite() || !h11.is_finite() || !det.is_finite())
-        {
-            return Err(ProjectionError::NonFiniteEvaluation);
+        if !h00.is_finite() || !h01.is_finite() || !h11.is_finite() || !det.is_finite() {
+            return nonfinite_or_keep(strict, (uv, f_curr));
         }
         let (mut su, mut sv) = if h00 > 0.0 && det > 0.0 && det.is_finite() {
             (-(h11 * g0 - h01 * g1) / det, -(h00 * g1 - h01 * g0) / det)
@@ -1545,6 +1535,34 @@ mod tests {
         );
         if let Some(projection) = result {
             assert!(projection.t.is_finite());
+        }
+    }
+
+    #[test]
+    fn overflowing_surface_gradient_keeps_projection_finite() {
+        let surface = crate::nurbs::NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                Point3::new(-1e200, -1e200, 0.0),
+                Point3::new(-1e200, -1e200, 1.0),
+                Point3::new(0.0, -2e200, 0.0),
+                Point3::new(0.0, -2e200, 1.0),
+                Point3::new(1e200, 0.0, 0.0),
+                Point3::new(1e200, 0.0, 1.0),
+            ],
+            None,
+        )
+        .unwrap();
+        let result = project_to_surface(
+            &surface,
+            Point3::new(0.0, 0.0, 0.0),
+            [ParamRange::new(0.0, 1.0), ParamRange::new(0.0, 1.0)],
+        );
+        if let Some(projection) = result {
+            assert!(projection.uv[0].is_finite() && projection.uv[1].is_finite());
         }
     }
 }
