@@ -1,145 +1,87 @@
 # F4 kernel error and capability taxonomy
 
-Status: Phase 1, representative Phase 2 slices, graph evaluation and intersection-certificate classification, one structured-incompleteness pilot, and projection plus rigid-copy source-identity migrations implemented
-
-## Outcome
-
 Give every public failure, unsupported feature, incomplete proof, and checker
 finding a stable machine-readable identity without making human-readable text an
-API. Preserve the distinctions already present in X_T capability codes and
-checker reports, and make the distinctions missing from `kcore::Error` and
-`Completion` explicit.
+API. Preserve the distinctions already present in X_T capability codes and checker
+reports, and make the ones missing from `kcore::Error` and `Completion` explicit.
+This project defines contracts and a staged migration; it does not require a
+flag-day conversion of every `InvalidGeometry { reason }` site, and it does not
+flatten the layer-local enums into one giant enum. The central rule:
 
-This project defines contracts and a staged migration. It does not require a
-flag-day conversion of every existing `InvalidGeometry { reason }` call site.
+> An error says the requested call did not produce a usable value. An outcome says
+> what was proven. A diagnostic explains how that outcome was reached. These are
+> related but not interchangeable.
 
-The central rule is:
+Status: Phase 1, representative Phase 2 slices, graph-evaluation and
+intersection-certificate classification, one structured-incompleteness pilot, and
+the projection and rigid-copy source-identity migrations are implemented;
+remaining solver-local/legacy wrappers and proof-bearing families migrate only
+with owner tests pinning their exact public error contract.
 
-> An error says that the requested call did not produce a usable value. An
-> outcome says what was proven. A diagnostic explains how that outcome was
-> reached. These are related, but they are not interchangeable.
+## Contract — normative classification
 
-## Current evidence
-
-The repository already contains useful pieces, but their classifications are
-not yet consistent:
-
-- `kcore::Error` is typed at the variant level, but `InvalidGeometry` and
-  `AlgorithmLimit` place control-flow distinctions in prose. `AlgorithmLimit`
-  reports an operation name and allowed count, but not a stable stage, resource,
-  or consumed count.
-- intersection dispatch has typed unsupported curve/surface class-pair errors,
-  while remaining solver-local catch-all mappings are being migrated by owner;
-- ellipse/ellipse is the first solver-local source-identity slice: all five
-  `ProjectionError` variants survive as `IntersectionError::Projection` through
-  generic and facade adapters without changing class, code, limit, capability,
-  or source identity;
-- graph intersection certificates own stable leaf class/code/capability
-  metadata, and the typed rigid-copy path preserves those leaves through
-  `BodyCopyError` and `KernelError::BodyCopy`; the graph-surface adapter and
-  legacy transaction wrapper retain their established boundary semantics;
-- intersection result types correctly distinguish complete evidence from
-  verified partial evidence, but `Completion::Indeterminate` identifies the
-  missing proof only with a static message;
-- the topology checker correctly keeps proven `Fault`s separate from
-  `VerificationGap`s and reports `Valid`, `Invalid`, or `Indeterminate`;
-- `XtCapability` already provides unique stable dotted codes and `XtError`
-  exposes valid-but-unsupported content without parsing display text; and
-- F1 requires a detailed local `kgraph::EvalError`, while F2 defines
-  deterministic `StageId`, `ResourceKind`, and `LimitSnapshot` data.
-
-F4 standardizes how these pieces meet. It does not flatten them into one giant
-enum.
-
-## Normative classification
-
-Every public non-success condition belongs to exactly one of the following
-semantic classes. The same underlying numerical observation can have different
-classes at different API boundaries, so classification is made by the owner of
-the public contract, not by matching its message.
+Every public non-success condition belongs to exactly one semantic class.
+Classification is made by the owner of the public contract, not by matching a
+message; the same numerical observation can have different classes at different
+boundaries.
 
 | Class | Meaning | Normal representation |
 | --- | --- | --- |
-| Invalid input | The caller supplied a value or request that violates a documented precondition: non-finite parameter, invalid range, degenerate constructor input, or stale handle where a live handle is required. | `Err`, with a stable error code and structured subject data where useful. |
-| Unsupported capability | The request and model are valid, but this kernel version does not implement the requested representation, class pair, derivative order, schema feature, or proof method. | `Err` when no useful result contract exists; otherwise verified partial evidence with an indeterminate cause naming the capability. |
-| Indeterminate outcome | No contradiction was proven, but one or more required proof obligations remain unresolved. This is neither success nor invalid input. | A successful result/report carrying partial evidence and structured incomplete-proof data. |
-| Resource limit | A deterministic configured work, item, byte, output, or depth allowance was reached. | `LimitSnapshot`; it causes either an indeterminate partial outcome or `Err` according to the API's partial-result contract. |
-| Model invariant violation | A checker proved that topology or geometry in a model violates a declared modeling invariant. | A checker `Fault` and `CheckOutcome::Invalid`; a checked transaction may surface a model-rejected error that points to the retained report. |
-| Invalid operation state | The request is meaningful in general but illegal in the current session/transaction state, such as nested or inactive transactions. | `Err`, distinct from invalid model data. |
-| Internal invariant violation | Kernel-owned state or an algorithm-produced value violates an invariant that callers could not have been required to establish. This indicates a defect or corrupt persisted state, not unsupported input. | Typed `Err` at safe Rust boundaries; never a panic across the facade or C ABI. |
+| Invalid input | Caller supplied a value/request violating a documented precondition: non-finite parameter, invalid range, degenerate constructor input, or a stale handle where a live one is required. | `Err` with a stable error code and structured subject data where useful. |
+| Unsupported capability | Request and model are valid, but this version does not implement the requested representation, class pair, derivative order, schema feature, or proof method. | `Err` when no useful result contract exists; otherwise verified partial evidence with an indeterminate cause naming the capability. |
+| Indeterminate outcome | No contradiction was proven, but required proof obligations remain unresolved. Neither success nor invalid input. | A successful result/report carrying partial evidence and structured incomplete-proof data. |
+| Resource limit | A deterministic configured work, item, byte, output, or depth allowance was reached. | `LimitSnapshot`; causes either an indeterminate partial outcome or `Err` per the API's partial-result contract. |
+| Model invariant violation | A checker proved topology/geometry in a model violates a declared modeling invariant. | A checker `Fault` and `CheckOutcome::Invalid`; a checked transaction may surface a model-rejected error pointing to the retained report. |
+| Invalid operation state | Request is meaningful in general but illegal in the current session/transaction state (nested or inactive transactions). | `Err`, distinct from invalid model data. |
+| Internal invariant violation | Kernel-owned state or an algorithm-produced value violates an invariant callers could not be required to establish — a defect or corrupt persisted state. | Typed `Err` at safe Rust boundaries; never a panic across the facade or C ABI. |
 
 Cancellation is an operation stop, not invalid input or a resource limit. F2 may
-represent deterministic cancellation in diagnostics and the public facade may
-add a `Cancelled` error class. It must not be used to claim a complete result.
+represent deterministic cancellation in diagnostics and the facade may add a
+`Cancelled` class; it must never claim a complete result. Boundary examples: a
+public `Line::new` with a zero direction is invalid input, but a solver
+internally deriving a zero direction from supposedly regular data is an internal
+invariant failure or an explicitly handled singular outcome; a valid class pair
+with no registered solver is unsupported, not `InvalidGeometry`; a solver that
+found verified contacts before exhausting candidate work returns them as
+indeterminate with a `LimitSnapshot` (or a limit `Err` if it cannot expose partial
+state); an open loop from `check_body_report` is a model fault, while inability to
+certify a loop simple is a verification gap; a singular offset evaluation is an
+evaluation failure with graph-local subject data, not proof the descriptor is
+invalid everywhere.
 
-### Boundary examples
+## Contract — stable identifiers
 
-- A public `Line::new` call with a zero direction is invalid input. A solver
-  internally constructing that same zero direction from supposedly regular
-  intermediate data is an internal invariant failure or an explicitly handled
-  singular numerical outcome.
-- A valid curve/curve class pair with no registered solver is unsupported, not
-  `InvalidGeometry`.
-- A solver that found verified contacts before exhausting candidate work
-  returns those contacts as indeterminate with a `LimitSnapshot`. A solver whose
-  API cannot safely expose partial state returns a limit error with the same
-  snapshot.
-- An open loop discovered by `check_body_report` is a model fault. Inability to
-  certify that a loop is simple is a verification gap. Neither is an internal
-  kernel failure.
-- Failure to evaluate an offset at a singular basis point is an evaluation
-  failure with graph-local subject data. It is not proof that the offset
-  descriptor itself is invalid everywhere.
-
-## Stable identifiers
-
-F2's `StageId` remains the canonical stage identity and `DiagnosticCode` remains
-the identity for observational diagnostics. F4 adds two equally small shared
-identifier wrappers in `kcore`:
+F2's `StageId` remains the canonical stage identity and `DiagnosticCode` the
+identity for observational diagnostics. F4 adds two payload-agnostic wrappers in
+`kcore`, `const`-constructed and validated in tests, carrying no registry:
 
 ```rust
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ErrorCode(&'static str);
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CapabilityId(&'static str);
 ```
 
-Construction is `const` and validates literals in tests. These wrappers carry
-no registry and no knowledge of higher-layer enums. They let an owning crate
-define constants without adding an upward dependency to `kcore`.
+Rules: (1) lower-case ASCII dotted paths with digits/hyphens within a segment;
+(2) first segment is the owning crate/layer (`kcore`, `kgeom`, `kgraph`, `ktopo`,
+`kops`, `xt`); (3) an identifier is permanent once shipped — its message and Rust
+variant name may change, its meaning may only narrow compatibly; (4) a
+behaviorally incompatible replacement gets a new identifier (version suffix only
+when two semantic versions must coexist, not for ordinary releases); (5) codes
+identify a branch callers may act on and must not encode arena slots, handles,
+parameter values, or source text; (6) display messages are not stable and must
+never be parsed. The three namespaces answer different questions: `ErrorCode` —
+why did this call fail; `CapabilityId` — which valid feature is unavailable;
+`StageId` — where was work consumed or stopped. One error may carry all three
+(e.g. code `kops.intersect.unsupported-class-pair`, capability
+`kops.intersect.curve-curve.class-pair`, stage `kops.intersect.curve-curve.dispatch`).
 
-Identifiers obey these rules:
-
-1. They are lower-case ASCII dotted paths using digits and hyphens within a
-   segment.
-2. The first segment is the owning crate/layer: `kcore`, `kgeom`, `kgraph`,
-   `ktopo`, `kops`, or `xt`.
-3. An identifier is permanent once shipped. Its message and Rust variant name
-   may change; its meaning may only be narrowed compatibly.
-4. A behaviorally incompatible replacement gets a new identifier. A version
-   suffix is used only when two semantic versions must coexist, not for ordinary
-   releases.
-5. Codes identify a branch callers may act on. They must not encode arena slot
-   numbers, geometry handles, parameter values, or arbitrary source text.
-6. Display messages are not stable and must never be parsed.
-
-The three namespaces have different jobs:
-
-- `ErrorCode` answers **why did this call fail?**
-- `CapabilityId` answers **which valid feature is unavailable?**
-- `StageId` answers **where was work consumed or stopped?**
-
-One error may have all three. For example, an intersection may have error code
-`kops.intersect.unsupported-class-pair`, capability
-`kops.intersect.curve-curve.class-pair`, and stage
-`kops.intersect.curve-curve.dispatch`.
-
-## Ownership by layer
+## Contract — ownership by layer
 
 Identifier constants live with the implementation and contract that owns their
-meaning. `kcore` owns only wrappers, broad classes, and identifiers for its own
-preconditions/state.
+meaning. `kcore` owns only wrappers, broad classes, and its own precondition/state
+identifiers. Higher layers may delegate a lower-layer classification unchanged and
+add a code only when their public contract adds meaning (wrapping an invalid
+tolerance during X_T reconstruction keeps the `kcore` code; malformed node fields
+are owned by `kxt`).
 
 | Layer | Owns | Examples |
 | --- | --- | --- |
@@ -148,49 +90,30 @@ preconditions/state.
 | `kgraph` | Geometry dependency, graph build, descriptor, and evaluation codes/capabilities. | `kgraph.eval.dependency-cycle`, `kgraph.eval.derivative-order` |
 | `ktopo` | Topology operation codes, checker fault/gap codes, model-invariant identities. | `ktopo.check.fault.open-loop`, `ktopo.check.gap.shell-self-intersection` |
 | `kops` | Modeling-operation and intersection dispatch/solver codes and capabilities. | `kops.intersect.unsupported-class-pair`, `kops.intersect.ssi-proof-candidates` |
-| `kxt` | X_T parsing, schema, reconstruction, and emission codes and support-matrix capabilities. Existing external capability strings keep the `xt.` prefix. | `xt.read.general-bodies`, `xt.parse.bad-field` |
+| `kxt` | X_T parsing, schema, reconstruction, emission codes and support-matrix capabilities; external capability strings keep the `xt.` prefix. | `xt.read.general-bodies`, `xt.parse.bad-field` |
 
-Higher layers may delegate a lower-layer classification unchanged. They add a
-new code only when their public contract adds meaning. Wrapping an invalid
-tolerance during X_T reconstruction does not turn it into `xt.read.invalid-*`;
-the X_T error delegates the `kcore` code and retains reconstruction context for
-display. Conversely, malformed node fields are owned by `kxt`, even when the
-bad field would eventually have been passed to a geometry constructor.
+**Capability granularity.** A capability is the smallest stable support-matrix
+unit useful for feature queries, retry/fallback selection, or corpus metrics — not
+one per error occurrence and not one catch-all per crate. Class-pair capabilities
+use stable geometry class keys from F1/F3 as structured subject data (fixed
+capability `kops.intersect.curve-curve.class-pair`; requested keys are separate
+fields), keeping the inventory finite. Each crate exposes its capabilities in
+deterministic code order (`XtCapability::ALL` is the precedent); enum discriminants
+and debug strings are never persistence or ABI contracts.
 
-### Capability granularity
+## Contract — public Rust failure contract
 
-A capability is the smallest stable support-matrix unit useful for feature
-queries, retry/fallback selection, or corpus metrics. It is not one capability
-per error occurrence and not one catch-all per crate.
-
-Class-pair capabilities should use stable geometry class keys from F1/F3 as
-structured subject data rather than dynamically manufacturing identifiers.
-For example, the fixed capability is
-`kops.intersect.curve-curve.class-pair`; the requested class keys are separate
-fields. This keeps the capability inventory finite and enumerable.
-
-Each owning crate exposes its known capabilities in deterministic code order.
-`XtCapability::ALL` is the precedent. Enum discriminants and Rust debug strings
-are never persistence or ABI contracts.
-
-## Public Rust failure contract
-
-Do not replace every layer-local error with a monolithic `kcore::Error`.
-Instead, expose a small common classification view:
+Do not replace layer-local errors with a monolithic `kcore::Error`. Expose a small
+common classification view; layer enums keep their payloads, source variants, and
+subject types, and implement `std::error::Error::source` when wrapping another
+layer.
 
 ```rust
-#[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ErrorClass {
-    InvalidInput,
-    Unsupported,
-    ResourceLimit,
-    InvalidState,
-    ModelRejected,
-    InternalInvariant,
-    Cancelled,
+    InvalidInput, Unsupported, ResourceLimit, InvalidState, ModelRejected,
+    InternalInvariant, Cancelled,
 }
-
 pub trait ClassifiedError {
     fn class(&self) -> ErrorClass;
     fn code(&self) -> ErrorCode;
@@ -199,43 +122,19 @@ pub trait ClassifiedError {
 }
 ```
 
-`ClassifiedError` is intended for in-repository generic reporting and ABI
-mapping; object safety is desirable but not required for the first migration.
-Layer-local enums retain their useful payloads, source variants, and subject
-types. `std::error::Error::source` is implemented when an error wraps another
-layer.
+`kcore::Error` stays `#[non_exhaustive]`; the migration adds classification/code
+accessors to existing variants and replaces `AlgorithmLimit` additively with a
+structured limit variant before deprecating the old shape, preserving specific
+payloads (offending coordinates, tolerance growth). New public code must not add
+another prose-only `InvalidGeometry` or `AlgorithmLimit` site; during migration,
+old sites are catalogued and assigned a class before their representation changes.
 
-`kcore::Error` remains `#[non_exhaustive]`. The first implementation adds
-classification/code accessors to existing variants and replaces
-`AlgorithmLimit` additively with a structured limit variant before deprecating
-the old shape. Existing specific payloads such as offending coordinates and
-tolerance growth remain available. Compatibility constructors can preserve old
-variant behavior until downstream callers migrate.
+## Contract — outcomes, incompleteness, and limits
 
-The implemented ellipse/ellipse slice demonstrates the required wrapper shape.
-`ProjectionError::{InvalidQueryPoint, InvalidWindow, NoCandidate,
-NonFiniteEvaluation, Policy}` is retained as `IntersectionError::Projection`.
-The concrete solver, generic intersection adapter, `GeometryIntersectionError`,
-and `KernelError` delegate class, code, limit, and `capability() == None`, and
-each exposes the exact lower error through `std::error::Error::source`.
-`ProjectionError::Policy` additionally retains its `OperationPolicyError`
-source. The direct `intersect_bounded_ellipses` API now returns
-`IntersectionResult`; retaining the former `kcore::Result` shape would require a
-lossy conversion for the four non-policy variants. This is a bounded migration,
-not evidence that other solver-local `InvalidGeometry` collapses are closed.
-
-New public code must not add another prose-only `InvalidGeometry` or
-`AlgorithmLimit` site. During migration, old sites are catalogued and assigned
-to a class before their representation changes.
-
-## Outcomes, incompleteness, and limits
-
-An indeterminate result is not an error merely because it is not complete.
-Result types that can retain verified evidence expose structured incomplete
-evidence:
+An indeterminate result is not an error merely because it is incomplete. Result
+types that retain verified evidence expose structured incomplete evidence:
 
 ```rust
-#[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum IncompleteCause {
     Unsupported { capability: CapabilityId },
@@ -244,388 +143,158 @@ pub enum IncompleteCause {
     Cancelled,
     ProofMethodUnavailable { capability: CapabilityId },
 }
-
-pub struct IncompleteEvidence {
-    pub code: DiagnosticCode,
-    pub stage: StageId,
-    pub cause: IncompleteCause,
-    pub message: &'static str,
-}
+pub struct IncompleteEvidence { pub code: DiagnosticCode, pub stage: StageId, pub cause: IncompleteCause, pub message: &'static str }
 ```
 
-`Completion` remains the compact complete/indeterminate summary. Migration is
-additive: intersection and other proof-bearing results gain
-`incomplete_evidence()`, while `Completion::indeterminate_reason()` remains a
-compatibility display accessor. Once all result owners carry evidence, the
-prose field in `Completion::Indeterminate` can be deprecated in a major API
-change. Operand swapping and canonicalization must preserve incomplete evidence
-exactly, just as F0 now preserves completion.
+`Completion` remains the compact complete/indeterminate summary; migration is
+additive (`incomplete_evidence()` added, `indeterminate_reason()` kept as a
+compatibility display accessor until all owners carry evidence). Operand swapping
+and canonicalization must preserve incomplete evidence exactly. F2's
+`LimitSnapshot { stage, resource, consumed, allowed }` is reused without a parallel
+limit enum: a limit error contains the snapshot, an indeterminate result's evidence
+refers to the same value, and `OperationReport` holds the complete usage ledger.
+`consumed` is the attempted/observed value that crossed the contract and may exceed
+`allowed` by the documented atomic charge size. Unsupported and limit are causes;
+indeterminate is an outcome — so both `Err(Unsupported)` (no applicable solver) and
+`Ok(partial evidence, Indeterminate(Unsupported))` (some branches verified, no
+proof method for the rest) are valid. No path may return `Completion::Complete`
+after silently dropping work for unsupported capability, cancellation, numerical
+resolution, or a limit.
 
-F2's `LimitSnapshot` is used without duplication:
+## Contract — checker and checked transactions
+
+The checker keeps its report-first design: `FaultKind` identifies a proven
+invariant violation, `VerificationGapKind` the proof obligation and why it is
+unresolved, and `CheckOutcome` remains `Valid`/`Invalid`/`Indeterminate`. Add
+stable accessors rather than replacing enums:
 
 ```rust
-pub struct LimitSnapshot {
-    pub stage: StageId,
-    pub resource: ResourceKind,
-    pub consumed: u64,
-    pub allowed: u64,
-}
+impl FaultKind { pub const fn code(self) -> ErrorCode; }            // e.g. ktopo.check.fault.open-loop
+impl VerificationGapKind { pub const fn code(self) -> DiagnosticCode; }
+pub enum VerificationGapCause { Capability(CapabilityId), Limit(LimitSnapshot), NumericResolution { stage: StageId } }
 ```
 
-F4 does not add another limit enum. A limit error contains the snapshot; an
-indeterminate result's evidence refers to the same value; `OperationReport`
-retains the complete deterministic usage ledger and diagnostics. The owning
-stage documentation defines what one unit means. `consumed` is the attempted or
-observed value that crossed the contract and may be greater than `allowed` by
-the documented atomic charge size.
+Fault codes use `ErrorCode` (they identify proven violations) even though a `Fault`
+is report data, not an immediate `Err`. Checked commit stays failure-atomic: a
+rejected candidate returns `ErrorClass::ModelRejected` with code
+`ktopo.transaction.check-failed`, and the operation report or a transaction error
+payload exposes deterministic findings; `fault_count` is a compatibility summary,
+not the only machine-readable evidence. A stale root handle is invalid input; a
+stale reference stored inside the body is a model fault; corruption of a
+checker-owned index that disagrees after validated commit is an internal invariant
+failure.
 
-Unsupported and limit are therefore causes, while indeterminate is an outcome.
-This distinction permits both of these valid APIs:
+## Contract — kgraph::EvalError reconciliation
 
-- dispatch with no applicable solver: `Err(Unsupported { ... })`;
-- a fallback that verifies some branches but lacks a proof method for the rest:
-  `Ok(partial evidence, Indeterminate(Unsupported { ... }))`.
-
-No path may return `Completion::Complete` after silently dropping work because
-of unsupported capability, cancellation, numerical resolution, or a limit.
-
-## Checker and checked-transaction contract
-
-The checker keeps its current report-first design:
-
-- `FaultKind` identifies a proven model invariant violation;
-- `VerificationGapKind` identifies the proof obligation;
-- the gap additionally identifies why it remains unresolved; and
-- `CheckOutcome` remains `Valid`, `Invalid`, or `Indeterminate`.
-
-Add stable accessors rather than replacing the existing enums:
-
-```rust
-impl FaultKind {
-    pub const fn code(self) -> ErrorCode;
-}
-
-impl VerificationGapKind {
-    pub const fn code(self) -> DiagnosticCode;
-}
-
-pub enum VerificationGapCause {
-    Capability(CapabilityId),
-    Limit(LimitSnapshot),
-    NumericResolution { stage: StageId },
-}
-```
-
-`FaultKind::OpenLoop`, for example, maps to
-`ktopo.check.fault.open-loop`. Fault codes use `ErrorCode` because they identify
-proven violations, although a `Fault` is report data rather than an immediate
-Rust `Err`.
-
-Checked commit remains failure-atomic. A rejected candidate returns
-`ErrorClass::ModelRejected` with code `ktopo.transaction.check-failed`; the
-context-aware operation report or a transaction-specific error payload exposes
-the deterministic checker findings. `fault_count` remains a compatibility
-summary, not the only machine-readable evidence. Ordinary checking does not
-turn every fault into a separate call failure.
-
-An internal checker traversal error is not a model fault. For example, the root
-body handle being stale is invalid input; a stale reference stored inside the
-body is a model fault under the current checker contract; corruption of a
-checker-owned index that disagrees after validated commit is an internal
-invariant failure.
-
-## Reconciliation with `kgraph::EvalError`
-
-F1's `kgraph::EvalError` remains in `kgraph`. It may contain graph-only types
-such as `GeometryRef`, `SurfaceHandle`, UV coordinates, class keys, and a cycle
-path. None of those types move into `kcore`.
-
-`EvalError` implements the common classification view:
+`kgraph::EvalError` stays in `kgraph` with graph-only types (`GeometryRef`,
+`SurfaceHandle`, UV, class keys, cycle path); none move into `kcore`. It implements
+the common classification view:
 
 | `EvalError` case | Class/cause | Shared data |
 | --- | --- | --- |
-| `StaleGeometryHandle`, `InvalidParameter`, `ParameterOutsideDomain` | Invalid input | graph-owned `ErrorCode`; subject remains local |
-| `DependencyCycle` found in supplied/persisted graph | Invalid input or model-rejected at the graph-build boundary | graph-owned code; path remains local |
-| `DependencyCycle` found after validated insertion | Internal invariant | same local detail, different boundary code |
+| `StaleGeometryHandle`, `InvalidParameter`, `ParameterOutsideDomain` | Invalid input | graph-owned `ErrorCode`; subject local |
+| `DependencyCycle` in supplied/persisted graph | Invalid input or model-rejected at the graph-build boundary | graph-owned code; path local |
+| `DependencyCycle` after validated insertion | Internal invariant | same detail, different boundary code |
 | `DependencyDepthExceeded`, `NodeVisitLimitExceeded` | Resource limit | F2 `LimitSnapshot` with graph-owned `StageId` |
-| `SingularSurface`, `IllConditionedSurface`, `NonFiniteResult` | Evaluation failure; usually an indeterminate numerical cause in a proof-bearing caller | graph-owned code/stage; surface/UV remain local |
-| `DerivativeUnavailable` | Unsupported capability | `CapabilityId` plus local class and requested-order fields |
+| `SingularSurface`, `IllConditionedSurface`, `NonFiniteResult` | Evaluation failure; usually an indeterminate numerical cause in a proof-bearing caller | graph-owned code/stage; surface/UV local |
+| `DerivativeUnavailable` | Unsupported capability | `CapabilityId` plus local class/requested-order fields |
 
-The two graph recursion limits use the shared resources and stable stages, for
-example `kgraph.eval.dependency-depth` with `ResourceKind::Depth` and
-`kgraph.eval.node-visits` with `ResourceKind::Work`. `EvalLimits` remains the
-query-local reservation described by F1; the values are charged/reserved from
-F2's operation scope. F4 standardizes the snapshot, not ownership of the graph
-ledger or evaluator.
+The two recursion limits use shared resources and stable stages
+(`kgraph.eval.dependency-depth` with `ResourceKind::Depth`,
+`kgraph.eval.node-visits` with `ResourceKind::Work`). When `kops`/`ktopo`/`kxt`
+wraps an `EvalError` it retains the source and delegates class/code/capability/limit
+unless the boundary changes semantics; a proof-bearing op may convert a singular
+local evaluation into indeterminate evidence but must retain the graph code/stage
+in the report. No mapping may collapse `EvalError` into `InvalidGeometry { reason }`.
 
-When `kops`, `ktopo`, or `kxt` wraps an `EvalError`, it retains the source and
-delegates class, code, capability, and limit unless the higher-level boundary
-changes the semantics. A proof-bearing operation may convert a singular local
-evaluation into structured indeterminate evidence, but must retain its graph
-code/stage in the operation report. No mapping is allowed to collapse
-`EvalError` into `InvalidGeometry { reason }`.
+## Contract — X_T and C ABI mapping
 
-## X_T mapping
+`XtError` stays a layer-local enum (parse offsets, node indexes, schema strings,
+writer context do not belong in `kcore`). Rules: `XtCapability::code()` strings are
+frozen and gain a conversion to `CapabilityId` while keeping `ALL` as the
+deterministic inventory; `BadHeader`/`Parse`/`MissingNode`/`BadField` are invalid
+interchange input with stable `xt.*` codes and retain offsets/node indexes;
+`UnsupportedSchema`/`UnknownNodeType`/`Unsupported` are unsupported and expose their
+capability codes; `InvalidModel` is model-rejected for export with a stable code;
+`Kernel(kcore::Error)` delegates all classification accessors to the source (add
+explicit graph/topology source variants when needed, never stringify or remap to
+`InvalidModel`); reconstruction stays failure-atomic. Corpus manifests record
+capability ID, error code, and stage/limit — never a display message.
 
-`XtError` remains a layer-local enum because parse offsets, node indexes,
-schema strings, and writer context do not belong in `kcore`.
-
-Migration rules:
-
-1. Existing `XtCapability::code()` strings are frozen. `XtCapability` gains a
-   conversion to the shared `CapabilityId` and keeps `ALL` as the deterministic
-   support inventory.
-2. `BadHeader`, `Parse`, `MissingNode`, and `BadField` classify as invalid
-   interchange input with stable `xt.*` error codes and retain their offsets or
-   node indexes.
-3. `UnsupportedSchema`, `UnknownNodeType`, and `Unsupported` classify as
-   unsupported and expose their existing capability codes.
-4. `InvalidModel` classifies as model-rejected for export and receives a stable
-   code; its future detailed writer findings remain X_T-owned.
-5. `Kernel(kcore::Error)` delegates all common classification accessors to the
-   source. Add explicit source variants for graph/topology errors when needed;
-   do not stringify or remap them to `InvalidModel`.
-6. X_T reconstruction remains failure-atomic. Parse/reconstruction context may
-   be attached to display and diagnostics without replacing the source code.
-
-Corpus manifests record capability ID, error code, and stage/limit when
-present. They do not record a display message as an expected classification.
-
-## Eventual C ABI mapping
-
-The C ABI uses a small fixed status enum for broad control flow and string IDs
-for extensible detail. It must not assign one ABI enum member to every Rust
-error or capability.
+The eventual C ABI uses a small fixed status enum for broad control flow plus
+string IDs for extensible detail; it must not assign one ABI member per Rust error:
 
 ```c
 typedef enum kernel_status_t {
-    KERNEL_STATUS_OK = 0,
-    KERNEL_STATUS_INVALID_INPUT,
-    KERNEL_STATUS_UNSUPPORTED,
-    KERNEL_STATUS_LIMIT_REACHED,
-    KERNEL_STATUS_INVALID_STATE,
-    KERNEL_STATUS_MODEL_REJECTED,
-    KERNEL_STATUS_INTERNAL_ERROR,
-    KERNEL_STATUS_CANCELLED
+    KERNEL_STATUS_OK = 0, KERNEL_STATUS_INVALID_INPUT, KERNEL_STATUS_UNSUPPORTED,
+    KERNEL_STATUS_LIMIT_REACHED, KERNEL_STATUS_INVALID_STATE,
+    KERNEL_STATUS_MODEL_REJECTED, KERNEL_STATUS_INTERNAL_ERROR, KERNEL_STATUS_CANCELLED
 } kernel_status_t;
 ```
 
-An operation-owned error/result record exposes:
-
-- stable error-code UTF-8 string;
-- optional capability-ID string;
-- optional stage-ID string;
-- optional resource kind, consumed, and allowed values;
-- a non-stable human message;
-- operation-specific subject data through typed result/report queries, not a
-  generic pointer; and
-- the full checker report or incomplete-evidence list when applicable.
-
-Adding a new `ErrorCode` or `CapabilityId` does not change the ABI enum. Unknown
-IDs remain safely classifiable by the broad status. Rust enum discriminants are
-never cast into C values. The record's ownership/lifetime is explicit; the
-design must not rely on parsing a process-global last-error string.
-
-`KERNEL_STATUS_OK` does not imply proof completeness. Result APIs expose
-completion/check outcome separately, so a successful call may return verified
-partial evidence with an indeterminate status in its result record.
-
-## Migration plan
-
-### Phase 0 — Inventory and freeze
-
-- Freeze current `XtCapability` strings and add uniqueness/prefix tests.
-- Inventory every `InvalidGeometry` and `AlgorithmLimit` site by owning layer.
-- Classify each site before changing representation. Ambiguous internal/public
-  helpers are split or given boundary-specific adapters.
-- Reserve initial code, capability, and stage constants in owner modules.
-
-### Phase 1 — Shared identity and classification
-
-- Land `ErrorCode`, `CapabilityId`, `ErrorClass`, and the classification view in
-  `kcore` alongside F2's `StageId`/`LimitSnapshot` types.
-- Add `class()` and `code()` to every existing `kcore::Error` variant without
-  removing variants or payloads.
-- Adapt `XtCapability`/`XtError` and add source delegation tests.
-
-### Phase 2 — Representative vertical migrations
-
-Status: typed unsupported class-pair dispatch, the ellipse/ellipse
-projection-source vertical slice, and the graph-certificate/rigid-copy vertical
-slice are implemented. Remaining solver-local and legacy wrappers migrate only
-with owner tests that pin their exact public error contract.
-
-- Change unsupported curve/curve dispatch from `InvalidGeometry` to a typed
-  unsupported error that carries the fixed pair capability and structured
-  curve class keys from F3.
-- Migrate one tessellation or refinement `AlgorithmLimit` path to a structured
-  `LimitSnapshot` using the F2 stage constant.
-- Give checker fault/gap kinds stable codes and migrate one bounded Full-check
-  stop to `VerificationGapCause::Limit`.
-- Preserve legacy wrappers and golden result bits.
-
-### Phase 3 — Proof-bearing results and graph integration
-
-Status: SSI and NURBS curve/curve solving carry structured incomplete evidence
-through canonicalization, swapping, generic dispatch, and the kernel facade.
-Curve-pair evidence retains exact isolation/seed limit snapshots, numeric and
-method stops, and the stable complete-coverage capability in proof-pipeline
-order. NURBS curve-pair polishing owns a stable six-code diagnostic
-inventory for stationary, ill-conditioned, no-descent, parameter-resolution,
-iteration-bound, and fallback observations. Its nested fallback minimizers own
-a separate stable three-code inventory for parameter-resolution,
-invalid-objective, and iteration-bound termination. Diagnostics remain bounded
-and opt-in, while parameter-resolution stages remain always-on report evidence.
-Other provisional result families still need the same migration before prose
-completion reasons can retire.
-
-`IntersectionCertificateError` now owns thirteen stable codes plus the finite
-capability inventory for unsupported trace/carrier parameterization, regular
-sphere charts, chart-window enclosure, harmonic-root representation, and finite
-residual bounds. The graph-surface adapter deliberately preserves its older
-aggregate code and adapter-owned class matrix, but retains the exact leaf
-certificate and leaf metadata through `source()`. This distinguishes source
-ownership from wrapper semantics instead of forcing one classification onto
-both layers.
-
-Rigid copy supplies the first topology-operation source chain for these graph
-errors. `BodyCopyError::{Kernel, Certificate}` retains certificate failures at
-every reissuer; `copy_body_rigid_with_source` exposes the typed path while the
-legacy `copy_body_rigid` entry remains a compatibility wrapper. The kernel
-facade caches and delegates the exact metadata in its own `BodyCopyError` and
-retains the lower topology and graph errors beneath `KernelError::BodyCopy`.
-
-- Add structured incomplete evidence to intersection result types and verify
-  it survives swapping, canonicalization, and fallback routing.
-- Implement classification for `kgraph::EvalError`; retain it as an error
-  source through `kops`, `ktopo`, and `kxt`.
-- Make context-aware operation reports the source of complete limit usage and
-  deterministic diagnostics.
-
-### Phase 4 — Owner-driven cleanup and facade enforcement
-
-- Require all new production paths to use the stable taxonomy and migrate
-  remaining prose-only invalid/limit call sites only with bounded owner-sized
-  behavior changes.
-- Deprecate legacy `AlgorithmLimit { operation, limit }` and prose-only
-  completion reasons after all public consumers have structured accessors.
-- Keep the implemented F5 facade error as an adapter over classified source
-  errors; do not duplicate layer payloads.
-- Defer the C record and ABI project until K5 adoption validates the native
-  facade and a separately approved ABI contract exists.
-
-Phase 4 is not a repository-wide cleanup campaign. Stable identifiers are
-enforced for new work; legacy migrations are opportunistic and owner-driven.
-
-## Required tests
-
-Identifier tests:
-
-- all known identifiers validate, are unique within their namespace, and are
-  emitted in deterministic order;
-- existing `xt.*` capability strings remain byte-for-byte unchanged;
-- display-message changes do not affect code/class/capability accessors.
-
-Classification tests:
-
-- unsupported intersection class pairs are `Unsupported`, never
-  `InvalidInput`;
-- malformed ranges remain invalid input;
-- a limit reports exact stage, resource, consumed, and allowed values;
-- layer wrappers preserve source classification and structured data;
-- all five ellipse/ellipse projection failures retain
-  `IntersectionError::Projection`, exact class/code/limit, no capability, and
-  the direct `ProjectionError` source through `GeometryIntersectionError` and
-  `KernelError`; the policy case also retains `OperationPolicyError`;
-- graph certificate identifiers are unique and owner-classified; graph-surface
-  preserves its aggregate adapter code and exact leaf source; typed rigid copy
-  preserves the nested certificate through topology and facade adapters while
-  the legacy transaction entry retains its `kcore::Result` contract;
-- an internal invariant has no unsupported capability and is never reported as
-  a model fault.
-
-Outcome tests:
-
-- complete empty remains distinct from indeterminate empty;
-- swapping/canonicalization preserves structured incomplete evidence;
-- budget exhaustion with verified partial evidence returns `Ok` plus
-  indeterminate evidence, while an API without a partial contract returns a
-  limit error;
-- no limited, cancelled, unsupported, or numerically unresolved path reports
-  `Completion::Complete`.
-
-Checker/transaction tests:
-
-- proven faults take precedence over gaps in `CheckOutcome` without deleting
-  gap evidence already collected;
-- capability, numerical, and limit causes can refer to the same gap kind;
-- checked-commit rejection rolls back all mutations and exposes stable fault
-  identities;
-- stale root input and stale internal model reference retain their deliberately
-  different classifications.
-
-X_T and ABI adapter tests:
-
-- unsupported schema and general-body content preserve existing capabilities;
-- wrapped kernel and graph errors retain code/class/capability/limit data;
-- every Rust class maps to the fixed C status, and unknown future codes map
-  without ABI failure;
-- a successful indeterminate result maps to `KERNEL_STATUS_OK` while exposing
-  incomplete evidence separately.
+An operation-owned error/result record exposes a stable error-code string, optional
+capability/stage-ID strings, optional resource kind/consumed/allowed, a non-stable
+human message, operation-specific subject data through typed queries (not a generic
+pointer), and the full checker report or incomplete-evidence list when applicable.
+Adding a new `ErrorCode`/`CapabilityId` never changes the enum; unknown IDs stay
+classifiable by broad status; Rust discriminants are never cast into C values; and
+`KERNEL_STATUS_OK` does not imply proof completeness (a successful call may return
+verified partial evidence with an indeterminate status in its record).
 
 ## Non-goals
 
-- One global enum containing every graph, topology, operation, and interchange
-  failure.
+- One global enum for every graph/topology/operation/interchange failure.
 - Stable display strings, localization, stack traces, or general logging.
-- Encoding handles, UV values, node indexes, or other subject data into dotted
-  identifiers.
+- Encoding handles, UV values, node indexes, or other subject data into identifiers.
 - Treating unsupported work, missing proof, or deterministic limits as invalid
-  geometry.
-- Replacing checker reports with exceptions or returning one error per model
-  fault.
+  geometry; replacing checker reports with exceptions or one error per model fault.
 - Moving `GeometryRef`, graph handles, checker entities, or X_T positions into
   `kcore`.
-- Defining the final F5 facade or C memory-management API in this project.
-- Changing numerical policy, default budgets, solver selection, or result bits.
+- Defining the final F5 facade or C memory-management API here; changing numerical
+  policy, default budgets, solver selection, or result bits.
 
-## Acceptance criteria
+## Acceptance
 
-The contract is ready to implement when all of the following are true:
+Every public failure has a broad class and stable owner-defined code without text
+parsing; valid-but-unsupported input has a capability identity and is never mapped
+to invalid geometry; F2's `StageId`/`ResourceKind`/`LimitSnapshot` are the only
+shared limit vocabulary; proof-bearing APIs keep verified partial evidence as
+indeterminate outcomes while APIs without a sound partial contract return typed
+errors; checker faults, verification gaps, operation errors, and internal
+invariants remain four distinct concepts; `kgraph::EvalError` keeps graph payloads
+in `kgraph` while exposing common classification through wrappers/source chains;
+X_T preserves its capability strings and delegates wrapped kernel classifications
+without loss; and the C mapping needs no message parsing and accepts future codes
+without changing its status enum.
 
-1. Every public failure can be assigned a broad class and stable owner-defined
-   code without parsing text.
-2. Valid-but-unsupported input has a capability identity and is never mapped to
-   invalid geometry.
-3. F2's `StageId`, `ResourceKind`, and `LimitSnapshot` are the only shared limit
-   vocabulary; reports and errors do not invent parallel structures.
-4. Proof-bearing APIs keep verified partial evidence as indeterminate outcomes,
-   and APIs without a sound partial contract return typed errors.
-5. Checker faults, verification gaps, operation errors, and internal invariants
-   remain four distinct concepts.
-6. `kgraph::EvalError` retains graph-specific payloads in `kgraph` while
-   exposing stable common classification through wrappers and source chains.
-7. X_T preserves its current capability strings and delegates wrapped kernel
-   classifications without loss.
-8. The proposed C mapping needs no message parsing and can accept future codes
-   without changing its broad status enum.
-9. Representative intersection, limit, checker, X_T, and graph mapping tests
-   cover the vertical contract before broad migration begins.
+## Evidence
 
-## Principal risks
+- `crates/kops/tests/ellipse_ellipse.rs` (projection source-identity slice),
+  `completion.rs`, `curve_curve.rs`, `nurbs_nurbs.rs`, `surface_surface.rs`
+- `crates/kgraph/tests/intersection_curve_certificate.rs` (graph certificate leaf
+  class/code/capability)
+- `crates/ktopo/tests/body_copy.rs`, `transactions.rs`; `crates/kernel/tests/lifecycle.rs`
+  (rigid-copy source chain through `BodyCopyError`/`KernelError::BodyCopy`)
+- `crates/kxt/tests/read.rs`, `write.rs`, `corpus_manifest.rs`, `inspect_cli.rs`
+  (frozen `xt.*` capabilities, wrapped-kernel delegation)
+- `crates/kcore/tests/operation_context.rs`, `determinism.rs` (limit snapshots,
+  identifier validation)
 
-- **Over-granular identifiers.** Generating a code for every pair or message
-  creates an unmaintainable public registry. Fixed capabilities plus structured
-  class keys keep the inventory bounded.
-- **Double classification in wrappers.** Higher layers may accidentally replace
-  a useful source classification with a generic local error. Delegation is the
-  default; semantic translation must be explicit and tested.
-- **Confusing stop cause with outcome.** Unsupported work and limits can cause
-  either an error or an indeterminate result. The API's partial-evidence
-  contract, not the cause alone, chooses the representation.
-- **`kcore` dependency creep.** Shared wrappers must remain payload-agnostic.
-  Graph paths, topology entities, class keys, and interchange locations stay in
-  their owner crates.
-- **Premature ABI freezing.** Only broad status values and dotted identifier
-  semantics are fixed here. Operation-specific record layouts wait for F5 and
-  the C API project.
+## Open items
+
+- Migrate remaining solver-local `InvalidGeometry`/`AlgorithmLimit` sites (Phase 2)
+  and add structured incomplete evidence to the remaining provisional result
+  families (Phase 3) only with owner tests pinning the exact public contract and
+  preserving legacy wrappers and golden bits.
+- Phase 4 (owner-driven, not a repo-wide campaign): require new production paths to
+  use the taxonomy; deprecate legacy `AlgorithmLimit { operation, limit }` and
+  prose-only completion reasons only after all public consumers have structured
+  accessors; keep the F5 facade error as an adapter over classified sources.
+- Defer the C record and ABI project until K5 adoption validates the native facade
+  and a separately approved ABI contract exists.
+- **Risks:** over-granular identifiers (bound with fixed capabilities + class
+  keys); double classification in wrappers (delegation is default; translation must
+  be explicit and tested); confusing stop cause with outcome (the API's
+  partial-evidence contract chooses the representation); `kcore` dependency creep
+  (wrappers stay payload-agnostic); premature ABI freezing (only broad status and
+  dotted-identifier semantics are fixed here).

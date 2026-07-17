@@ -1,1257 +1,300 @@
 # F1 procedural geometry graph
 
-Status: G1-G4a, the F2 evaluation-budget adapter, persistent G5a plane-line, common-axis and oblique plane/sphere-circle, and exact direct/safe-Offset(Plane)-field, direct/safe-Offset(Sphere)-field/NURBS, compatible direct-NURBS/NURBS, one- through four-descriptor constant-normal Offset(NURBS)/NURBS and compatible dual Offset(NURBS), or single-descriptor varying-normal Offset(NURBS) descriptors across the landed planar peers plus the complete one- through four-descriptor rational-quarter-cylinder Offset(NURBS)/direct analytic Plane family, plus M3c transmitted-chart consumers through single-axis one-period equal-limit closure with one shared or two distinct same-point `H/?` limits and unique exact interior aliases, finite-open/end-terminated `T/F` singular closure, omitted Plane UV recovery, and bounded noncanonical affine direct B-surface/B-surface, direct constant-normal Offset(B-surface)/direct B-surface, or independent direct one-descriptor Offset(B-surface)/Offset(B-surface) charts, are implemented; broader corpus coverage, further contextual procedural intersection families, and further descriptor families remain
+Add a layer-1.5 geometry graph (`kgraph`) representing leaf and procedural
+geometry as immutable, dependency-bearing nodes. Topology stores typed handles,
+not copies of basis geometry. Evaluation of a graph handle is fallible, bounded,
+deterministic, and independent of topology. The reference vertical slice is an X_T
+`OFFSET_SURF`: import a constant signed offset over a surface node, attach to a
+face, evaluate through the basis, and tessellate through pcurves — preserving
+`OFFSET_SURF` class identity and failing explicitly at singular/unresolved regions.
+This project owns the geometry dependency boundary only; it does not implement
+every procedural class or become a second operation-policy project.
 
-## Outcome
+Status: G1–G4a plus the G5a operations-adapter slices landed (topology
+geometry-ownership migration; offset descriptor/evaluator; X_T `OFFSET_SURF` slice;
+F2 evaluation-budget adapter; certified intersection-curve and transmitted-chart/
+M3c consumers across the planar and rational-quarter-cylinder families); broader
+corpus coverage and further procedural-intersection/descriptor families remain.
 
-Add a layer-1.5 geometry graph that represents leaf and procedural geometry as
-immutable, dependency-bearing nodes. Topology stores typed handles to those
-nodes; it does not own copies of basis geometry. Evaluation of a graph handle is
-fallible, bounded, deterministic, and independent of topology.
+## Contract — layer and crate placement
 
-The first vertical slice is an X_T `OFFSET_SURF`: import one constant signed
-offset whose basis is an existing surface node, attach it to a face, evaluate it
-through the basis surface, and tessellate the face through its pcurves. The slice
-must preserve `OFFSET_SURF` class identity and must fail explicitly at singular
-or numerically unresolved regions.
-
-This project implements the geometry dependency boundary. It does not try to
-implement every procedural class or become a second operation-policy project.
-
-## Why this boundary is needed now
-
-Today `kgeom::Curve` and `kgeom::Surface` are exact, context-free, infallible
-leaf evaluators. `ktopo::geom::{CurveGeom, SurfaceGeom}` are closed owned enums,
-and `ktopo::Store` keeps those values in topology-owned arenas. This is a good
-shape for analytics and NURBS, but an offset surface must refer to a basis
-surface, and an intersection curve ultimately refers to two surfaces plus its
-paired parameter-space geometry. Storing those dependencies by value would:
-
-- duplicate potentially large NURBS objects;
-- make shared identity and X_T class-preserving output ambiguous;
-- permit accidental recursive ownership;
-- force procedural failure modes into the currently infallible leaf traits;
-- hide transitive geometry dependencies from checked topology commits.
-
-The graph makes dependency and identity explicit without weakening the existing
-leaf math contracts.
-
-## Layer and crate placement
-
-Create a workspace crate named `kgraph` between pure geometry and topology:
+`kgraph` is a workspace crate at L1.5 between geometry and topology:
 
 ```text
-kcore       L0 deterministic math, arenas, tolerance primitives, base errors
-  |
-kgeom       L1 independent analytic/NURBS/2D geometry values and leaf evaluators
-  |
-kgraph      L1.5 immutable geometry nodes, handles, dependencies, evaluation
-  | \
-  |  kops   L3 graph-aware dispatch and procedural/generic algorithms
-  |
-ktopo       L2 topology holding graph handles; checked ownership integration
-  |
-kxt         L5 X_T graph reconstruction and class-preserving emission
+kcore   L0    deterministic math, arenas, tolerances, base errors
+kgeom   L1    independent analytic/NURBS/2D geometry values, leaf evaluators
+kgraph  L1.5  immutable geometry nodes, handles, dependencies, evaluation
+kops    L3    graph-aware dispatch and procedural/generic algorithms
+ktopo   L2    topology holding graph handles; checked ownership integration
+kxt     L5    X_T graph reconstruction and class-preserving emission
 ```
 
-Dependency rules:
+`kgraph` depends only on `kcore`/`kgeom`, never on `ktopo`/`kops`/`kxt`. `ktopo`
+depends on `kgraph` (may still use `kgeom` value types); `kops` depends on
+`kgraph` for entry points, not `ktopo`; `kxt` may import `kgraph` for
+descriptors/class inspection. Procedural descriptors never contain topology
+handles, so geometry is shared by many faces/bodies without a geometry→topology
+cycle. The graph is not in `kgeom`, which stays pure value math with no session,
+arena, handle, recursion guard, or work budget.
 
-- `kgraph` depends only on `kcore` and `kgeom`.
-- `kgraph` must not depend on `ktopo`, `kops`, or `kxt`.
-- `ktopo` depends on `kgraph` and may continue to use `kgeom` value types such
-  as points, parameter ranges, and vectors.
-- `kops` depends on `kgraph` for graph-aware entry points but not on `ktopo`.
-- `kxt` depends on `kgraph` through its existing `ktopo`/reconstruction role
-  and may import `kgraph` directly for descriptors and class inspection.
-- Procedural descriptors never contain topology handles. Geometry can therefore
-  be shared by many faces/bodies without a geometry-to-topology cycle.
+## Contract — kgraph types, evaluation, and offsets
 
-Do not put the graph in `kgeom`. `kgeom` remains pure value math that can be
-tested and reused without a session, arena, handle, recursion guard, or work
-budget.
-
-## Ownership and public types
-
-`kgraph` owns three typed arenas. Points remain in `ktopo::Store` for this
-project because they have no procedural dependencies. Moving points later is a
-storage/API decision, not a prerequisite for procedural geometry.
+**Ownership and public types.** `kgraph` owns three typed arenas (`curves`,
+`surfaces`, `curves_2d`) plus a `ReverseDependencyIndex` in one `GeometryGraph`;
+points stay in `ktopo::Store` (no procedural dependencies). Node fields are
+private; descriptors are immutable after insertion (replace by inserting a new
+node and transactionally retargeting consumers — no in-place mutation).
 
 ```rust
-pub type CurveHandle = Handle<CurveNode>;
-pub type SurfaceHandle = Handle<SurfaceNode>;
-pub type Curve2dHandle = Handle<Curve2dNode>;
+pub type CurveHandle = Handle<CurveNode>;   // also SurfaceHandle, Curve2dHandle
 
-pub struct GeometryGraph {
-    curves: Arena<CurveNode>,
-    surfaces: Arena<SurfaceNode>,
-    curves_2d: Arena<Curve2dNode>,
-    reverse_dependencies: ReverseDependencyIndex,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct CurveNode {
-    descriptor: CurveDescriptor,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct SurfaceNode {
-    descriptor: SurfaceDescriptor,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Curve2dNode {
-    descriptor: Curve2dDescriptor,
-}
-```
-
-Node fields are private. Descriptors are immutable after insertion. Replacing
-geometry means inserting a new node and transactionally retargeting consumers;
-there is no public in-place descriptor mutation.
-
-The initial descriptors are:
-
-```rust
 #[non_exhaustive]
 pub enum CurveDescriptor {
-    Line(Line),
-    Circle(Circle),
-    Ellipse(Ellipse),
-    Nurbs(NurbsCurve),
-    // Added after the offset slice:
-    Intersection(IntersectionCurveDescriptor),
+    Line(Line), Circle(Circle), Ellipse(Ellipse), Nurbs(NurbsCurve),
+    Intersection(IntersectionCurveDescriptor), // added after the offset slice
 }
-
 #[non_exhaustive]
 pub enum SurfaceDescriptor {
-    Plane(Plane),
-    Cylinder(Cylinder),
-    Cone(Cone),
-    Sphere(Sphere),
-    Torus(Torus),
-    Nurbs(NurbsSurface),
-    Offset(OffsetSurfaceDescriptor),
+    Plane(Plane), Cylinder(Cylinder), Cone(Cone), Sphere(Sphere),
+    Torus(Torus), Nurbs(NurbsSurface), Offset(OffsetSurfaceDescriptor),
 }
-
 #[non_exhaustive]
-pub enum Curve2dDescriptor {
-    Line(Line2d),
-    Circle(Circle2d),
-    Nurbs(NurbsCurve2d),
-}
+pub enum Curve2dDescriptor { Line(Line2d), Circle(Circle2d), Nurbs(NurbsCurve2d) }
 
-pub struct OffsetSurfaceDescriptor {
-    basis: SurfaceHandle,
-    signed_distance: f64,
-}
+pub struct OffsetSurfaceDescriptor { basis: SurfaceHandle, signed_distance: f64 }
 ```
 
-`signed_distance` is finite, expressed in model meters, and measured along the
-basis evaluator's natural unit normal. A zero distance remains an offset node;
-it is not canonicalized to its basis because class identity must survive
-round-trip. The published April 2008 X_T reference defines `true_offset` as
-unused and `scale` as internal-only and nullable. `kxt` therefore ignores those
-two fields, converts the transmitted signed `offset` through the common surface
-sense to this canonical definition on read, and emits an equivalent canonical
-form on write.
+`signed_distance` is finite, in model meters, measured along the basis
+evaluator's natural unit normal. A zero distance stays an offset node (class
+identity must survive round-trip). The published X_T reference marks
+`true_offset` unused and `scale` internal-only/nullable, so `kxt` ignores both,
+converts the transmitted signed `offset` through the common surface sense to this
+canonical definition on read, and emits an equivalent canonical form on write.
+`IntersectionCurveDescriptor` is declared only once its verification contract is
+implemented (shape: 3D carrier handle, two surface handles, two pcurve handles,
+parameter maps, whole-interval residual certificate); uncertified descriptors are
+not part of F1.
 
-`IntersectionCurveDescriptor` is declared only when its verification contract
-is implemented. Its intended shape is a handle to the transmitted/generated 3D
-carrier curve, two surface handles, two pcurve handles, parameter maps, and a
-whole-interval residual certificate. Declaring that dependency shape early is
-useful; accepting uncertified intersection descriptors is not part of F1.
+Topology keeps its vocabulary: `ktopo::entity::{CurveId, SurfaceId, Curve2dId}`
+alias/re-export the `kgraph` handles; `ktopo::geom` may temporarily re-export
+descriptor names but keeps no second owned enums. `ktopo::Store` embeds one
+`GeometryGraph` with explicit access (`store.geometry().surface(id)?`, `.curve(id)?`,
+`store.insert_surface(desc)?`, `store.eval_context(limits, tols)`); generic
+`Store::get` remains for topology entities and points.
 
-### Compatibility names in topology
-
-`ktopo::entity::{CurveId, SurfaceId, Curve2dId}` become aliases or re-exports of
-the `kgraph` handles so topology call sites keep their conceptual vocabulary.
-`ktopo::geom` temporarily re-exports descriptor names for source migration, but
-must not retain a second set of owned enums.
-
-`ktopo::Store` embeds one `GeometryGraph`. Geometry access is explicit:
-
-```rust
-store.geometry().surface(id)?
-store.geometry().curve(id)?
-store.eval_context(limits, tolerances)
-store.insert_surface(descriptor)?
-```
-
-The generic topology `Store::get` remains for topology entities and points.
-Geometry-specific accessors replace relying on the topology `Entity` trait to
-reach an arena owned by another crate.
-
-## Class identity
-
-Class inspection must not rely on `Any`, Rust discriminant values, or debug
-strings. Provide a closed internal dispatch enum and a stable external key:
+**Class identity.** Inspection must not rely on `Any`, Rust discriminants, or
+debug strings. Provide a closed dispatch enum and stable external key:
 
 ```rust
 #[non_exhaustive]
-pub enum SurfaceClass {
-    Plane,
-    Cylinder,
-    Cone,
-    Sphere,
-    Torus,
-    Nurbs,
-    Offset,
-}
-
+pub enum SurfaceClass { Plane, Cylinder, Cone, Sphere, Torus, Nurbs, Offset }
 pub struct GeometryClassKey(&'static str);
-
-impl SurfaceClass {
-    pub const fn key(self) -> GeometryClassKey;
-}
+impl SurfaceClass { pub const fn key(self) -> GeometryClassKey; }
 ```
 
-Initial stable keys use namespaced, versioned strings such as
-`kernel.surface.offset.v1` and `kernel.curve.nurbs.v1`. Rust enum layout is not
-a serialization contract. A descriptor provides `class()` and `class_key()`;
-leaf accessors such as `as_plane()` and `as_nurbs()` are explicit and do not
-expose `Any`.
+Keys are namespaced, versioned strings (`kernel.surface.offset.v1`,
+`kernel.curve.nurbs.v1`); enum layout is never a serialization contract. A
+descriptor exposes `class()`/`class_key()`; leaf accessors (`as_plane()`,
+`as_nurbs()`) are explicit and never expose `Any`. X_T emission switches on
+`SurfaceClass`; unsupported class versions fail with a machine-readable
+unsupported-capability result.
 
-X_T emission switches on `SurfaceClass`/the descriptor and must write an offset
-as `OFFSET_SURF`, never as a sampled or fitted B-surface. Unsupported class
-versions fail with a machine-readable unsupported-capability result.
-
-## Dependency contract
-
-Every descriptor reports direct dependencies in deterministic field order:
+**Dependencies.** Every descriptor reports direct dependencies in deterministic
+field order:
 
 ```rust
-pub enum GeometryRef {
-    Curve(CurveHandle),
-    Surface(SurfaceHandle),
-    Curve2d(Curve2dHandle),
-}
-
-pub trait GeometryDependencies {
-    fn visit_dependencies(&self, visit: &mut dyn FnMut(GeometryRef));
-}
+pub enum GeometryRef { Curve(CurveHandle), Surface(SurfaceHandle), Curve2d(Curve2dHandle) }
+pub trait GeometryDependencies { fn visit_dependencies(&self, visit: &mut dyn FnMut(GeometryRef)); }
 ```
 
-For an offset the only dependency is `Surface(basis)`. Leaves have none.
-Intersection curves later visit carrier, surfaces A/B, then pcurves A/B in that
-documented order.
+An offset's only dependency is `Surface(basis)`; leaves have none; intersection
+curves visit carrier, surfaces A/B, then pcurves A/B in that order. Insertion
+rules: (1) every referenced handle must already be live in the same graph;
+(2) descriptors are immutable after insertion; (3) therefore ordinary insertion
+is dependency-before-dependent and acyclic by construction; (4) a deterministic
+reverse-dependency index updates atomically with each insertion/rollback, its
+values in arena slot order never hash order; (5) public removal is deferred, and
+internal removal/GC must reject a node with graph dependents or topology
+consumers.
 
-Insertion has these rules:
+Native deserialization and X_T can carry forward references or corrupt cycles.
+Builders build a transport-ID table then resolve with tri-color DFS; re-entering a
+`Visiting` node returns `GeometryBuildError::DependencyCycle` with a deterministic
+transport-ID path. The evaluator also keeps an active stack (defense in depth);
+malformed data must never recurse to stack overflow. Deterministic utilities
+expose direct deps, dependency-first transitive traversal (dupes removed),
+dependents, reachability, and graph validation over live handles, cycles,
+descriptor invariants, and reverse-index agreement.
 
-1. Every referenced handle must already be live in the same graph.
-2. Descriptors are immutable after insertion.
-3. Therefore ordinary insertion is dependency-before-dependent and acyclic by
-   construction.
-4. A deterministic reverse-dependency index is updated atomically with each
-   insertion/rollback. Its values are kept in arena slot order, not hash order.
-5. Public removal is deferred. Internal removal/GC must reject a node with graph
-   dependents or topology consumers.
-
-Native deserialization and X_T can contain forward references or corrupt
-cycles. Their builders first construct a transport-ID table, then resolve with
-tri-color DFS (`Unvisited`, `Visiting`, `Complete`). Re-entering a `Visiting`
-node returns `GeometryBuildError::DependencyCycle` with the deterministic path
-of transport IDs. The evaluator also keeps an active stack and rejects a cycle
-as defense in depth; malformed persisted data must never recurse until stack
-overflow.
-
-Expose deterministic utilities needed by writers, checkers, and indexes:
-
-- direct dependencies;
-- dependency-first transitive traversal with duplicates removed;
-- dependents of a node;
-- reachability query;
-- graph validation that checks live handles, cycles, descriptor invariants, and
-  reverse-index agreement.
-
-## Fallible evaluation
-
-Do not change `kgeom::Curve`, `Surface`, or `Curve2d` into graph-aware traits.
-They remain infallible leaf protocols. `kgraph::EvalContext` is the only entry
-point for resolving handles and evaluating procedural nodes:
+**Fallible evaluation.** `kgeom` leaf protocols stay infallible; do not make them
+graph-aware. `kgraph::EvalContext` is the only entry point for resolving handles
+and evaluating nodes — `eval_curve`, `eval_surface` (with `SurfaceDerivativeOrder
+{Position, First, Second}`), and `surface_bounds`, each returning an `EvalResult`.
+Limits are query-local:
 
 ```rust
-pub struct EvalLimits {
-    pub max_dependency_depth: usize,
-    pub max_node_visits_per_query: usize,
-}
+pub struct EvalLimits { pub max_dependency_depth: usize, pub max_node_visits_per_query: usize }
 
-pub struct EvalContext<'g> {
-    graph: &'g GeometryGraph,
-    limits: EvalLimits,
-    tolerances: Tolerances,
-    active: Vec<GeometryRef>,
-    node_visits: usize,
-}
-
-pub enum SurfaceDerivativeOrder {
-    Position,
-    First,
-    Second,
-}
-
-impl EvalContext<'_> {
-    pub fn eval_curve(
-        &mut self,
-        curve: CurveHandle,
-        t: f64,
-        order: usize,
-    ) -> EvalResult<CurveDerivs>;
-
-    pub fn eval_surface(
-        &mut self,
-        surface: SurfaceHandle,
-        uv: [f64; 2],
-        order: SurfaceDerivativeOrder,
-    ) -> EvalResult<SurfaceDerivs>;
-
-    pub fn surface_bounds(
-        &mut self,
-        surface: SurfaceHandle,
-        range: [ParamRange; 2],
-    ) -> EvalResult<Aabb3>;
-}
-```
-
-Each public query resets per-query work accounting even when the context is
-reused. Contexts are cheap, per-thread values. The graph is read-only during an
-evaluation. F1 does not add a shared mutable cache; bounded memoization can be
-added after profiling without changing descriptors or handles.
-
-Evaluation validates finite parameters and finite bounded ranges, accounts one
-visit before descending, checks the active stack, and checks returned values for
-finiteness and the model size box where applicable. It never clamps invalid
-procedural input silently.
-
-Use a typed `kgraph::EvalError` during this project:
-
-```rust
 #[non_exhaustive]
 pub enum EvalError {
-    StaleGeometryHandle { geometry: GeometryRef },
-    InvalidParameter,
-    ParameterOutsideDomain,
+    StaleGeometryHandle { geometry: GeometryRef }, InvalidParameter, ParameterOutsideDomain,
     DependencyCycle { path: Vec<GeometryRef> },
     DependencyDepthExceeded { consumed: usize, limit: usize },
     NodeVisitLimitExceeded { consumed: usize, limit: usize },
-    SingularSurface { surface: SurfaceHandle, uv: [f64; 2] },
-    IllConditionedSurface { surface: SurfaceHandle, uv: [f64; 2] },
-    DerivativeUnavailable { class: GeometryClassKey, requested: usize },
-    NonFiniteResult { class: GeometryClassKey },
+    SingularSurface { .. }, IllConditionedSurface { .. }, // both { surface, uv }
+    DerivativeUnavailable { class: GeometryClassKey, requested: usize }, NonFiniteResult { class },
 }
 ```
 
-Higher layers retain the distinction when mapping to their public errors.
-F4 may later move shared capability/stage identifiers into `kcore`; F1 must not
-collapse evaluation failures into `InvalidGeometry { reason }`.
+Each public query resets per-query work accounting; the graph is read-only during
+evaluation (F1 adds no shared mutable cache). Evaluation validates finite
+parameters/ranges, accounts one visit before descending, checks the active stack,
+and checks results for finiteness and the model size box; it never silently clamps
+invalid input and never collapses failures into `InvalidGeometry { reason }`.
 
-### Boundary with F2 OperationContext
+**Boundary with F2.** `EvalLimits` owns only graph-recursion work (depth, node
+visits) — never solver policy, cancellation, trace sink, proof budget, or session
+facade; `EvalContext` takes the existing `Tolerances`. F2's `OperationContext`
+owns broader solver limits and constructs a graph `EvalContext` per operation (F1
+borrows a small policy view rather than duplicating fields).
 
-`EvalLimits` owns only graph-recursion work: dependency depth and node visits.
-It is not a solver policy, cancellation token, trace sink, proof budget, or
-session facade. `EvalContext` accepts the existing `Tolerances` value.
-
-F2's `OperationContext` should own the broader precision/conditioning/solver
-limits and construct or contain a graph `EvalContext` for each operation. If F2
-lands first, F1 should accept a small borrowed policy view from it rather than
-duplicate those fields. The class/descriptor/handle API does not depend on that
-choice.
-
-## Offset evaluation
-
-Let the basis surface be `s(u,v)`, with first and second derivatives supplied
-by the leaf or recursively evaluated basis. Define:
+**Offset evaluation.** For basis `s(u,v)`:
 
 ```text
-w   = s_u x s_v
-q   = |w|
-n   = w / q
-w_u = s_uu x s_v + s_u x s_uv
-w_v = s_uv x s_v + s_u x s_vv
-n_u = (w_u - n (n dot w_u)) / q
-n_v = (w_v - n (n dot w_v)) / q
-
-offset position = s + d n
-offset u        = s_u + d n_u
-offset v        = s_v + d n_v
+w = s_u x s_v ;  q = |w| ;  n = w / q
+w_u = s_uu x s_v + s_u x s_uv ;  w_v = s_uv x s_v + s_u x s_vv
+n_u = (w_u - n (n·w_u)) / q ;  n_v = (w_v - n (n·w_v)) / q
+offset position = s + d n ;  offset u = s_u + d n_u ;  offset v = s_v + d n_v
 ```
 
-This supplies exact position and first derivatives from basis derivatives
-through second order. The offset inherits the basis parameter range and
-periodicity. Basis degeneracies remain degeneracies; additional offset
-singularities occur when the offset Jacobian loses rank, equivalently when an
-offset factor reaches a principal radius of curvature under the chosen sign
-convention.
+This gives exact position and first derivatives through second-order basis
+derivatives; the offset inherits basis parameter range and periodicity. Basis
+degeneracies remain degeneracies; extra offset singularities occur when the offset
+Jacobian loses rank (an offset factor reaching a principal radius of curvature).
+The node supports `Position` and `First`; `Second` returns `DerivativeUnavailable`
+(exact second derivatives need third basis derivatives, beyond `SurfaceDerivs`) —
+never zero or finite-difference values.
 
-The initial offset node supports `Position` and `First`. A request for `Second`
-returns `DerivativeUnavailable`, because exact second offset derivatives need
-third basis derivatives and the current `kgeom::SurfaceDerivs` protocol stops at
-second order. It must not return zero or finite-difference derivatives. A later
-surface-jet extension can add the missing exact order without changing the
-descriptor.
+**Validity.** `surface_validity(surface, uv) -> EvalResult<SurfaceValidity>` with
+`SurfaceValidity::{Regular { normalized_jacobian }, Singular, Indeterminate {
+reason }}`. Exact-zero/non-finite basis or offset Jacobians are singular; a
+normalized Jacobian at or below angular tolerance is ill-conditioned, never
+guessed regular; a point is regular only after the offset Jacobian is checked; an
+interval/region is certified regular only when a class-specific curvature/Jacobian
+bound excludes zero over the whole region; unsupported global certification stays
+indeterminate — samples are never global proof.
 
-### Validity and singularity
+**Work boxes.** The unit-normal displacement over a finite basis rectangle has
+length `abs(d)`, so `offset_box(range) = outward_inflate(basis_box(range),
+abs(d))` via the existing outward-rounded AABB machinery. A stale basis,
+non-finite distance/range, or unavailable basis bound is an error, not an empty
+box.
 
-Provide a fallible validity query:
+## Contract — topology, operations, and serialization
 
-```rust
-pub enum SurfaceValidity {
-    Regular { normalized_jacobian: f64 },
-    Singular,
-    Indeterminate { reason: ValidityGap },
-}
+**Topology.** `ktopo::Store` owns the `GeometryGraph` alongside topology/point
+arenas. A transaction opens graph undo frames; commit/rollback covers all three
+geometry arenas and the reverse-index, and a failed checked commit leaves graph
+counts, handle validity, free-list order, and traversal exactly as at entry. Body
+footprints are transitive (topology-used handles plus their full closure); a
+mutation selects bodies whose footprints contain the node; deletion is rejected
+while any footprint or graph node reaches it. Faces/edges/fins keep typed IDs;
+`FaceDomain::natural` asks the graph for parameter metadata; incidence, checking,
+and boundary tessellation evaluate through one borrowed `EvalContext`, not
+`SurfaceGeom::as_surface()`; analytic proof accelerators inspect `SurfaceClass` and
+borrow the exact leaf, returning an explicit proof gap for unknown/procedural
+classes. Pcurve-driven tessellation evaluates every UV vertex through the graph,
+checks validity, and returns `Indeterminate`/an error rather than silently
+sampling across a singularity.
 
-pub fn surface_validity(
-    &mut self,
-    surface: SurfaceHandle,
-    uv: [f64; 2],
-) -> EvalResult<SurfaceValidity>;
-```
+**Operations.** Keep leaf-specialized `kops` functions during migration; add
+graph-aware entry points (e.g. `intersect_graph_surfaces(graph, a, a_range, b,
+b_range, context)`). The dispatcher uses `SurfaceClass`: two supported leaf
+classes borrow leaf values and call analytic accelerators; leaf/procedural and
+procedural/procedural pairs use a generic evaluator path when it lands; lack of a
+certified path is unsupported/indeterminate per the common intersection contract
+— never `InvalidGeometry` and never a proven empty result. F1 only proves `kops`
+can inspect/evaluate an offset, obtain its dependency closure, and preserve its
+handle; implementing offset intersections belongs to F3/M4.
 
-For the vertical slice:
-
-- exact zero or non-finite basis/offset Jacobians are singular;
-- a normalized Jacobian at or below the angular tolerance is
-  `IllConditioned`/`Indeterminate`, not guessed regular;
-- regular evaluated points are accepted only after the offset Jacobian is
-  checked;
-- an interval or face region is certified regular only when its class-specific
-  curvature/Jacobian bound excludes zero over the complete region;
-- unsupported global certification remains explicitly indeterminate.
-
-This is enough to import and tessellate regular offset faces while refusing to
-bridge a singularity. General global curvature certification is a later proof
-extension, not permission to treat samples as proof.
-
-### Conservative work boxes
-
-For any finite basis parameter rectangle, the unit-normal displacement has
-length `abs(d)`. Therefore:
-
-```text
-offset_box(range) = outward_inflate(basis_box(range), abs(d))
-```
-
-This bound is conservative even when curvature is high. It is not necessarily
-tight. Inflation must use the existing outward-rounded AABB machinery. A stale
-basis, non-finite distance/range, or unavailable basis bound is an error, not an
-empty box.
-
-## Topology integration
-
-`ktopo::Store` owns a `GeometryGraph` alongside topology and point arenas.
-Starting a topology transaction starts graph undo frames; commit and rollback
-include all three geometry arenas and the reverse-dependency index. A failed
-checked commit must leave graph counts, handle validity, free-list order, and
-dependency traversal exactly as they were at transaction entry.
-
-The existing shared-geometry body index becomes transitive:
-
-- a body's footprint contains the curve/surface/pcurve handles directly used
-  by its topology and their complete graph dependency closure;
-- a geometry mutation selects bodies whose footprints contain that node;
-- checked commit validates every live dependency and reverse-index edge;
-- geometry deletion is rejected while any topology footprint or graph node
-  reaches it.
-
-Because descriptors are immutable, normal modeling operations do not mutate a
-basis under an offset. They create a replacement and retarget affected faces.
-The transitive index is nevertheless required for import rollback, future
-native loading/GC, diagnostics, and any controlled internal reconstruction.
-
-Update topology consumers as follows:
-
-- `Face`, `Edge`, and `FinPcurve` keep typed IDs with no layout change beyond
-  the aliased handle target.
-- `FaceDomain::natural` asks the graph for parameter metadata.
-- incidence, checking, and boundary tessellation evaluate through one borrowed
-  `EvalContext`, rather than calling `SurfaceGeom::as_surface()`.
-- analytic proof accelerators inspect `SurfaceClass` and borrow the exact leaf
-  descriptor. Unknown/procedural classes return an explicit proof gap and may
-  use graph-generic evaluation where their contract permits it.
-- pcurve-driven tessellation evaluates every UV vertex through the graph,
-  checks surface validity, and returns `Indeterminate`/an evaluation error if a
-  cell cannot exclude a singularity. It never silently samples across one.
-
-The offset slice does not require broad checker proof for curved offset faces.
-It does require endpoint/incidence checks and tessellation to consume the graph
-correctly, while unsupported full proofs remain named `Indeterminate` gaps.
-
-## Operations integration
-
-Keep current leaf-specialized `kops` functions intact during migration. Add
-graph-aware entry points alongside them:
-
-```rust
-pub fn intersect_graph_surfaces(
-    graph: &GeometryGraph,
-    a: SurfaceHandle,
-    a_range: [ParamRange; 2],
-    b: SurfaceHandle,
-    b_range: [ParamRange; 2],
-    context: &mut OperationContext,
-) -> Result<SurfaceSurfaceIntersections>;
-```
-
-The graph-aware dispatcher uses `SurfaceClass`:
-
-- two supported leaf classes borrow leaf values and call existing analytic
-  accelerators;
-- leaf/procedural and procedural/procedural pairs use a generic evaluator-based
-  path when that solver lands;
-- lack of a certified path is unsupported or indeterminate according to the
-  common intersection contract, never `InvalidGeometry` and never a proven
-  empty result.
-
-F1 only needs to prove that `kops` can inspect an offset, evaluate it, obtain its
-dependency closure, and preserve its handle in a result/request. Implementing
-offset intersections belongs to F3/M4. This keeps F1 independent of the
-intersection consolidation project.
-
-## X_T and native serialization
-
-### X_T reconstruction
-
-`kxt::recon::surface` becomes dependency-aware. For `OFFSET_SURF` it:
-
-1. marks the X_T node `Visiting`;
-2. resolves the referenced basis surface recursively;
-3. accepts `check` values `U` and `V`, rejects `I`, ignores the published-unused
-   `true_offset` field and internal nullable `scale`, validates a nonzero finite
-   `offset`, and requires the offset and basis surface senses to agree;
-4. converts the transmitted signed displacement to model meters along the
-   graph basis's natural normal: use `offset` for basis sense `+` and `-offset`
-   for basis sense `-`;
-5. inserts `SurfaceDescriptor::Offset` referencing the basis handle;
-6. marks the X_T node `Complete` and caches its graph handle.
-
-Only the constant normal-offset form enters the first slice. Invalid check
-status, mismatched senses, a zero-resolution displacement, or malformed field
-types return typed reconstruction errors; the unused flag and scale do not
-change geometry. These rules follow the published
+**X_T reconstruction** (`kxt::recon::surface`, dependency-aware). For
+`OFFSET_SURF`: mark `Visiting`; resolve the basis recursively; accept `check` in
+`{U,V}`, reject `I`, ignore `true_offset`/`scale`, validate a nonzero finite
+`offset`, require offset and basis senses to agree; convert the signed
+displacement to model meters along the basis natural normal (`offset` for basis
+sense `+`, `-offset` for `-`); insert `SurfaceDescriptor::Offset`; mark `Complete`
+and cache the handle. Only the constant normal-offset form enters the first slice;
+invalid check status, mismatched senses, zero-resolution displacement, or
+malformed fields return typed errors. Rules follow the published
 [*Parasolid XT Format Reference, April 2008*](https://ww3.cad.de/foren/ubb/uploads/Rainer%2BSchulze/XT_Format_April_2008_tcm73-62642.pdf),
-`OFFSET_SURF` section. A modern external Parasolid
-round-trip fixture still gates claims about emitting multiple offset nodes that
-share one basis, because the older reference forbids that sharing while the
-graph intentionally supports it internally.
+`OFFSET_SURF` section. A modern external Parasolid round-trip fixture still gates
+any claim of emitting multiple offsets sharing one basis (the older reference
+forbids it while the graph supports it internally). An X_T dependency cycle fails
+with its deterministic node-index path and rolls back the import.
 
-Recursive reconstruction means a basis node is interned once even if it is
-used by multiple offsets or directly by another face. An X_T dependency cycle
-fails with its deterministic node-index path and rolls back the whole import.
+**X_T writing.** Walk the dependency closure from topology-attached handles and
+assign X_T node IDs in stable dependency-first order; shared nodes emit once.
+`SurfaceDescriptor::Offset` emits `OFFSET_SURF` referencing the planned basis.
+Canonical field values are acceptable; semantic class-preserving round-trip is
+required, byte-for-byte retention is not. Planning must not depend on `HashMap`
+iteration; duplicate suppression uses handles but never determines output order.
 
-### X_T writing
+**Native format.** Do not serialize arena indexes/generations as durable identity.
+A future native format uses document-local IDs (document id, class key, descriptor
+schema version, dependency document ids, class payload), written dependency-first
+and rebuilt through the same cycle-checking builder as X_T; unknown class keys or
+unsupported schema versions are typed capability failures.
 
-The writer starts from topology-attached handles, walks the dependency closure,
-and assigns X_T node IDs in stable dependency-first order. Shared nodes are
-emitted once. `SurfaceDescriptor::Offset` emits `OFFSET_SURF` referencing the
-already-planned basis node. The canonical first-slice form uses common sense
-`+`, check `U` (the Full regularity proof is still open), `true_offset=F`, null
-`scale`, and the graph distance directly. Canonical field values are
-acceptable; semantic and class-preserving round-trip is required,
-byte-for-byte retention is not. Shared-basis emission remains oracle-gated as
-described above.
-
-Writer planning must not depend on `HashMap` iteration. Root bodies retain
-their existing deterministic order; direct dependencies retain descriptor
-field order; duplicate suppression uses handles but never determines output
-order.
-
-### Native graph format
-
-Do not serialize arena indexes/generations as durable identity. A future native
-format uses document-local IDs and records:
-
-```text
-document id
-class key
-descriptor schema version
-dependency document ids
-class payload
-```
-
-Nodes are written dependency-first and rebuilt through the same cycle-checking
-builder used by X_T. Unknown class keys or unsupported schema versions are
-typed capability failures. No trait-object or plugin ABI is implied.
-
-## Migration plan
-
-Each stage is a reviewable commit/PR and keeps the workspace green.
-
-### G1 — Graph contract and leaf parity
-
-- Add `kgraph` to the workspace with node, handle, class, descriptor,
-  dependency, error, and `EvalContext` types.
-- Store leaf analytic/NURBS/2D descriptors in standalone graph tests.
-- Delegate leaf evaluation and metadata to current `kgeom` traits.
-- Add insertion validation, traversal, reverse indexing, cycle-safe transport
-  builder, and deterministic graph validation.
-
-Exit: every existing geometry class has graph evaluation parity tests, and no
-topology source has changed yet.
-
-### G2 — Move topology geometry ownership
-
-- Embed `GeometryGraph` in `ktopo::Store`.
-- Re-export handle/descriptor compatibility names.
-- Move curve, surface, and pcurve arenas plus transaction undo into the graph.
-- Migrate store, assembly, journal, checker, incidence, tessellation, and
-  constructors to explicit geometry access/evaluation.
-- Extend body footprints through transitive graph dependencies.
-
-Exit: existing topology, transaction, primitive, tessellation, determinism, and
-X_T Tier-1 tests pass with leaf geometry stored only in `GeometryGraph`.
-
-### G3 — Offset descriptor and evaluator
-
-- Implement `OffsetSurfaceDescriptor`, first-order exact evaluation, inherited
-  metadata, validity query, and conservative inflated bounds.
-- Add singular/ill-conditioned errors and limit accounting.
-- Teach pcurve-driven topology tessellation to evaluate a regular offset face.
-
-Exit: analytic and NURBS basis unit tests pass; a checked topology face can
-share its basis with an offset without geometry duplication.
-
-### G4 — X_T offset vertical slice
-
-- Add tri-color surface reconstruction and `OFFSET_SURF` field handling.
-- Add dependency-first writer planning and offset emission.
-- Add a small committed synthetic offset X_T fixture; update capability codes.
-- Ratchet the production exemplar manifest from reconstruction-blocked only
-  when the available fixture actually reconstructs and tessellates.
-
-Exit: synthetic read/evaluate/tessellate/write/read is deterministic and
-class-preserving; the external oracle accepts the output. The import rollback
-test covers malformed cyclic and singular cases.
-
-### G5 — Operations adapter and follow-on descriptors
-
-Priority gate: F2 owns operation-family profile composition and the NURBS
-scale guards required by the generic fallback are complete. X_T
-reconstruction-owned graph evaluation now consumes one caller-owned child
-reservation across face-domain metadata and SP-curve validation, including
-aggregate and root-total limit reconciliation. The same child spans every
-Fast-reachable checked-commit graph query, so import reports cover both phases
-without resetting the aggregate allowance. The shared topology graph-work
-adapter is now the accounting contract used by both phases.
-
-Landed G5a slice: `kgraph` owns an invertible affine carrier-to-pcurve
-parameter map and private-field certificates minted only after
-outward-rounded interval arithmetic bounds a finite carrier against both
-pcurve lifts over the complete carrier range. Plane/plane uses a line carrier
-with two plane-line traces; exact, reversed, and nonidentity maps are covered.
-The plane/sphere family uses a circle carrier and plane-circle pcurve. Its
-common-axis fast path retains a sphere longitude line at constant latitude: the
-sphere trace owns the canonical longitude parameter exactly and the plane map
-is `t` or `-t`, with any phase encoded in the plane-circle axis. Plane normals
-may equal either orientation of the sphere axis and the plane frame may rotate
-arbitrarily about that axis. Shifted, seam-crossing, full-turn, and
-wider-than-one-turn finite longitude windows unwrap into a continuous carrier
-range.
-
-Genuinely oblique finite secants use the stable
-`kernel.curve2d.spherical-circle.v1` descriptor. Its private certifier-minted
-payload evaluates the inverse sphere chart with continuous seam unwrapping,
-analytic derivatives through order three, a finite nonperiodic carrier range,
-and conservative chart bounds. Whole-branch interval evidence proves the
-carrier's radial residual, positive pole clearance, and enclosure by the
-requested longitude/latitude windows. The `kops` owner pre-admits exactly 128
-`kops.intersect.spherical-circle-proof-subdivisions` Work units per retained
-oblique branch through `GraphSurfaceBudgetProfile`; exact N/N-1 tests pin the
-crossing. Pole-touching, pole-crossing, or insufficient-clearance branches fail
-with `SingularSphereChart`; unenclosable finite charts fail with
-`SphereTraceOutsideWindow`. Invalid maps/ranges/tolerances, non-finite
-arithmetic, wrong trace families, and residual violations also fail
-explicitly. Longitude-seam events now use the shared
-`kcore::predicates::harmonic_half_angle_roots` classifier. Power-of-two
-normalization preserves the original harmonic exactly, root count comes from
-the exact sign of `cosine² + sine² - constant²`, and an exact homogeneous
-leading zero represents the projective `t = π` root. Ordinary
-interval-certified cases retain their prior root bits, while cancellation uses
-the normal-range expansion and stable-`q` fallback. Inputs or coefficient
-spreads outside that bounded exact envelope fail with the typed
-`IntersectionCertificateError::HarmonicRootClassification`; they do not
-silently erase a seam. Fixtures pin the `2^52` cancellation, the transformed
-half-angle-sign mismatch, `2^±700` scaling, ordinary repeat parity, and the
-debug/release numeric golden.
-
-Every `IntersectionCertificateError` variant now owns a stable code and broad
-class. Unsupported certificate capabilities name trace/carrier
-parameterization, regular inverse-sphere charts, sphere chart-window enclosure,
-lossless harmonic-root representation, and finite residual-bound evaluation.
-`kops` retains its historical aggregate graph branch-certificate code and
-adapter-owned class semantics, while `source()` preserves the exact graph leaf
-and its distinct metadata. Typed rigid-copy recertification carries that same
-leaf through `ktopo::BodyCopyError` and `KernelError::BodyCopy`, remains paired
-with the operation report, and rolls the transaction back atomically; the
-legacy raw transaction entry remains a lossy compatibility wrapper.
-
-A graph-aware `kops`
-exact-field compat/context/in-scope adapter preserves the analytic result,
-source handles, typed stale/unsupported failures, and canonical operand-swap
-behavior while building deterministic endpoint vertices and certified edges.
-Direct planes and bounded, context-accounted constant-offset chains terminating
-at a plane resolve to exact plane fields. Direct spheres and offset chains whose
-effective radius stays positive and finite resolve to exact sphere fields.
-Common-axis and oblique plane/sphere secants and clipped arcs produce certified
-circle edges; tangencies remain vertex-only and misses preserve complete empty
-evidence. Exact direct/safe-Offset(Plane) and direct/safe-Offset(Sphere) fields against
-genuinely non-planar direct NURBS now share the same owner scope with the lower fixed-grid marcher. Every retained polyline keeps a
-degree-1 carrier and paired degree-1 pcurves on one exact knot basis; a separate
-non-transmitted `VerifiedNurbsIntersectionCertificate` proves both lifts over
-the whole range at fixed depth 10 before atomic persistence. Certificate Work
-is `C + S*2^10*(6T+1)` for `C` carrier controls, `S` carrier spans, and `T`
-source tensor-span slots. The curved one-segment fixture pins exact 7,170/7,169
-Work, while failed residual proofs report attempted Work. An exact Sphere lift
-uses an outward centered mean-value interval on every depth-10 carrier cell;
-paired original-source NURBS evidence yields exact one-segment
-8,192/8,191 Work, 1,024/1,023 Items, and 10/9 Depth boundaries. Raw lower evidence,
-complete misses, indeterminate completion, operand swap, and branch/trace
-ordering remain authoritative. Sphere-offset certificates bind the effective
-sphere trace while retaining the actual ordered root handle; persistent graph
-validation recomputes that exact field, and dependency edges protect direct or
-nested basis chains. The direct-root fixture pins exact 2/1 node visits and
-dependency depth, while a two-offset chain observes 3/depth 3. A first direct NURBS/NURBS arm accepts only two
-genuinely non-planar finite-open quadratic-linear unit charts with identical
-constant weights. Their finite requested unit-chart windows may differ, but
-must have a positive-area axiswise overlap; discovery is clipped to that exact
-shared rectangle. The exact shared `(x,y)=(u,v)` chart reduces discovery to a
-scalar control difference, but that rounded derived
-surface cannot complete an empty result. Only outward subtraction of both
-original `z` control nets may prove a miss; every positive branch is separately
-certified against both originals. Its paired cost is
-`S*2^10*((6R_a+1)+(6R_b+1))` Work with `S*2^10` Items and Depth 10; the
-one-span clipped fixture pins `14336/14335` Work, `1024/1023` Items, and `10/9`
-Depth. Equal windows remain supported; disjoint or boundary-only windows fail
-closed.
-A narrow Offset(NURBS)/direct-NURBS arm reuses that paired proof only when the
-terminal basis is the exact constant-+Z-normal unit chart and the direct peer
-is genuinely non-planar with matching constant weights. At most four offset
-descriptors are walked inner-to-outer; every partial
-distance and outward basis lift must remain finite. Their finite requested
-unit-chart windows may differ, but must have a positive-area overlap; discovery
-is clipped to that exact shared rectangle. Outward
-original basis-plus-distance versus direct-source control intervals own
-complete misses; the rounded effective surface remains discovery-only. The
-certificate retains the live outer offset root, accumulated signed distance,
-terminal original basis, direct peer, and both pcurves, protects the entire
-basis chain transitively, and preserves the same exact 14,336/14,335 Work,
-1,024/1,023 Items, and 10/9 Depth boundaries. Two offset descriptors pin exact
-3/2 node-visit and dependency-depth admission, three pin exact 4/3, and four
-pin exact 5/4.
-A first varying-normal arm admits one offset descriptor over an exact rational
-quarter-cylinder extrusion and either a canonical bilinear planar direct-NURBS
-peer, direct analytic Plane, or one safe Offset(Plane) descriptor over a direct
-Plane basis normal to the global X, Y, or Z axis. The direct analytic Plane arm
-alone admits the complete one- through four-descriptor family; graph resolution
-retains every outer-to-inner signed distance and proves every intermediate and
-final cylinder radius finite and positive. The source derivatives prove
-a nonzero normal over the complete positive operand window before discovery;
-a true rational parallel surface then guides the march, while orientation-
-selected original control intervals, radially scaled only for X/Y, alone own complete
-misses. Every positive branch retains the live offset root, original cylinder
-basis, direct peer, and paired pcurves under one certificate scope. The normal
-proof costs exactly 7 Work, 1 Item, and Depth 1. Planar-NURBS X/Y generators
-pin combined 14,343/14,342 Work and 1,024/1,023 Items, while their Z peer pins
-573,447/573,446 Work and 40,960/40,959 Items. Analytic-Plane X/Y peers pin
-7,177/7,176 Work and 1,024/1,023 Items; their Z peer pins 286,768/286,767 Work
-and 40,960/40,959 Items. A safe Offset(Plane) peer retains those certificate
-boundaries and additionally pins 4/3 graph Work plus 2/1 dependency Depth,
-while its live root, direct basis, and signed distance remain proof identity.
-All Z cases retain a certified 40-span horizontal
-quarter-circle chordal carrier with 41 controls, and every orientation retains
-10/9 certificate Depth. One through four direct-Plane descriptors reuse the
-same certificate budgets and consume exact graph Work/depth 2, 3, 4, and 5 with
-N/N-1 admission. The original rational-quarter-cylinder basis remains proof
-authority; its derived effective sheet is discovery-only. Swap, persistence,
-and complete misses cover every admitted chain length, while exact per-
-descriptor validation rejects altered distances, including a four-descriptor
-same-sum mutation, and stale roots or peers atomically. Singular or
-inconclusive normal fields, descriptor-chain depth five or greater, multi-
-descriptor planar-NURBS or Offset(Plane) peers, and incompatible direct peers
-fail closed.
-Two independent one- through four-descriptor Offset(NURBS) roots now share a
-compatible planar constant-normal unit-chart arm. Intersecting charts retain
-both ordered live roots, both complete transitive basis chains, accumulated
-signed distances, terminal original bases, paired pcurves, and one certified
-branch in either operand order. The normalized effective charts are
-discovery-only;
-the whole-range certificate is generated against both original basis fields.
-Every 1–4×1–4 combination pins exact 14,336/14,335 Work,
-1,024/1,023 Items, and 10/9 Depth for that certificate. For chain lengths `A`
-and `B`, graph Work is exactly `A+B+2` and dependency depth is
-`max(A+1,B+1)`; the 4×4 maximum pins exact 10/9 Work and 5/4 Depth admission.
-The same graph ceiling and preserved operand order apply to the retained
-complete-empty arm when outward original basis-plus-accumulated-distance
-control intervals prove strict separation; it emits no carrier or certificate,
-allocates nothing during empty persistence, and does not promote coincident
-effective sheets.
-Incompatible planar or unaligned peers, unequal ranges or weights, collapsed
-or non-finite sphere-offset fields, Offset(NURBS) chains of five or more
-descriptors, other varying-normal Offset(NURBS) families, descriptor-chain
-depth five or greater, multi-descriptor peers outside direct analytic Plane,
-coincident dual Offset(NURBS), and broader NURBS/NURBS or other
-procedural pairs remain unsupported. Altered or stale roots and bases fail the
-original-source proof and roll back atomically.
-Certified branches can be committed atomically as
-`CurveDescriptor::Intersection` or
-`CurveDescriptor::VerifiedNurbsIntersection` nodes with a stable class key,
-ordered source-surface and pcurve dependencies, a finite carrier interval, and
-the paired whole-interval certificate. Stale or altered proof sources fail
-before allocation or roll the complete persistence batch back.
-
-The first M3c consumers now commit
-`CurveDescriptor::TransmittedIntersection` through the same protected seam.
-For the canonical finite-open X_T subset whose ordered sources are direct
-planes or finite constant-offset chains terminating at planes, transmitted
-`CHART` positions and modern paired UV tuples become polynomial degree-1
-carrier/pcurves on one exact knot basis. A private whole-span certificate binds
-both effective plane fields, both pcurves, outward-rounded control residuals,
-the declared proof tolerance, and the affine/error metadata. The descriptor
-still retains the actual source handles, including each offset root, in
-transmitted operand order. Graph validation resolves those handles through
-safe finite offset chains and rejects any mismatch before allocation; reverse
-dependencies protect every transitive offset basis while the proof is live.
-X_T reconstruction accepts Plane/Offset, Offset/Plane, and Offset/Offset
-orderings, applies the published sense rule to the oriented effective normals,
-preserves the trim bounds, and never recomputes the spatial intersection. Two
-offset roots must have independent basis chains; cross-linked or shared chains
-fail closed. Both actual roots remain ordered descriptor dependencies, and each
-complete transitive basis chain is protected while the chart is live. Import
-Work/Items/Depth are pre-admitted and any parse, convention, certificate,
-graph, or topology failure rolls back atomically. The direct Plane/Plane path
-keeps its existing allocation order and avoids the additional exact-field
-graph queries used only by offset operands. Direct two-offset fixtures account
-exactly 34 graph node visits at depth 2; two nested two-link roots account 36
-visits at depth 3, including checked topology commit work.
-
-Canonical finite-open Plane/B-surface, Offset/B-surface, B-surface/B-surface,
-and reversed-operand charts use a separate `TransmittedNurbsIntersection`
-payload, leaving the established exact-plane certificate API unchanged. A
-plane trace may bind a direct plane or a safe finite constant-offset chain
-terminating at a plane. The descriptor retains the actual ordered offset root
-handle, while graph validation resolves its exact effective plane and reverse
-dependencies protect every transitive basis. Every NURBS trace owns and
-validates its original ordered polynomial or rational source exactly. All
-traces retain the degree-1 pcurves, carrier, metadata, and residual bounds.
-Every carrier span is split to binary depth 10. Original-source homogeneous
-interval de Boor evaluation encloses a center point and both first partials
-over each affine pcurve box; a centered mean-value residual preserves the
-shared carrier/pcurve parameter correlation. This is a whole-range subdivision
-proof, not point sampling, and it never recomputes the spatial intersection.
-For `C` chart positions, `P` plane traces, and NURBS source tensor-span slot
-counts `R_i`, import pre-admits
-`P*C + (C-1)*2^10*sum_i(6R_i+1)` Work, retains `C` Items, and reports Depth 10.
-The canonical two-source B/B fixture therefore consumes exactly 14,336 Work,
-2 Items, and Depth 10; its checked import uses 30 graph visits at depth 1.
-Direct planes avoid an exact-field graph query; one- and two-offset fixtures
-account exactly 32/2 and 33/3 aggregate graph node-visits/depth respectively,
-including checked topology commit work.
-
-A direct constant-normal `Offset(B-surface)` trace stays on the same persistent
-NURBS-intersection descriptor but uses a `TransmittedOffsetNurbsTrace` payload.
-It retains the live offset root, signed distance, and original NURBS basis.
-Each proof box encloses `du x dv`, establishes a positive normal-length lower
-bound, divides to the complete unit-normal field, and applies the signed
-displacement before checking the transmitted carrier residual. The six shared
-position/partial scans also pay for that normal proof, so the canonical
-one-span Offset(B)/B fixture remains exactly 14,336 Work, 2 Items, and Depth 10
-in both operand orders. The bounded noncanonical direct Offset(B)/B slice keeps
-that same descriptor and unchanged original-source proof for two through five
-finite-open samples in either order and with polynomial or rational bases. Its
-exact Work/Items/Depth costs are `14336/2/10`, `28672/3/10`, `43008/4/10`, and
-`57344/5/10`; affine metadata remains separate from the canonical sample-index
-carrier/pcurves, and the live root, signed distance, original direct basis, and
-ordered peer remain graph-protected. An independent direct one-descriptor
-Offset(B)/Offset(B) arm retains both ordered roots, signed distances, direct
-polynomial or rational bases, and paired UVs under operand swap with the same
-exact costs and two-source proof. Nested, shared-basis, multi-offset, null/mixed,
-and out-of-range noncanonical forms remain typed unsupported. The production
-exemplar now passes its first shared-
-`H/?` equal-limit chart and its first finite-open/end-terminated `T/F` chart,
-then certifies finite-open direct B-surface/Plane record 1252 by exactly
-inverting its paired-null interior Plane UVs. Production v6 then lifts native
-direct-Plane `SP_CURVE` node 30 exactly by applying the affine Plane frame to
-the open, nonperiodic, nonrational 2D B-curve controls. Exactly one certified
-periodic NURBS axis may close an equal-limit chart; only its endpoints are
-unwrapped by one exact period before the whole-range interval proof, and that
-proof alone promotes the closed transmitted carrier to periodic evaluation and
-bounds. FACE 1195 can therefore derive its vertex-less ring domain. Production
-v7 certifies later `INTERSECTION` 5089 / `INTERSECTION_DATA` 5092, where
-sample 2 operand 0 has a paired-null interior Plane UV, through exact frame
-inversion plus the unchanged whole-carrier Plane/Offset-NURBS proof. Canonical
-Plane/Offset endpoints may now use the same recovery: a synthetic endpoint-null
-record-5089 variant preserves the exact v7 report and next crossing, while a
-displaced endpoint still fails the unchanged proof. A separate bounded
-noncanonical affine slice accepts two- through five-sample direct-Plane/B-
-surface, safe-Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), direct
-constant-normal Offset(B-surface)/direct B-surface, independent direct
-one-descriptor Offset(B-surface)/Offset(B-surface), or direct-B-surface/B-surface
-charts, retains finite positive affine metadata on the
-canonical shared sample-index basis,
-and preserves the unchanged original-source proof and ordered dependencies;
-safe offset roots additionally protect every nested Plane basis. Direct B/B
-charts retain both ordered original NURBS sources and pin structural 2–5 sample
-costs of `14336/2/10`, `28672/3/10`, `43008/4/10`, and `57344/5/10`.
-An exact record-5089 variant pins cumulative `139792442/4/10`; corpus records
-778 and 3620 remain typed original-domain failures, and the exemplar has no
-NURBS-side paired-null tuple. V6 remains
-exact at `208228426/22/10` and pins its next attempted 221,060,174 Work; v7 is
-exact at `272430166/22/10` and pins record 1984's attempted 285,283,414 Work.
-Historical v8 certifies record 1984 by snapping only its final first-trace `u`
-from `-2.02217766823431e-15` to the exact nonperiodic source-domain lower bound,
-then rerunning the unchanged original-source whole-carrier proof. V8 is exact at
-`315245660/22/10` and preserves its stop before record 5945's attempted 323,814,492
-Work. V9 admits that record at exact `323814492/22/10`. Its ordered Offset roots
-`[3338, 773]` bind a common degree-2 clamped carrier/pcurve basis through three
-transmitted samples; the samples define the candidate, while two independent
-depth-10 original-source offset-NURBS residual certificates prove it. V10
-admits record 3819 at exact `336759900/22/10`; roots `[3370, 773]` bind the
-unique common degree-3 clamped carrier/pcurve interpolants through four samples,
-again proved against both original offset-NURBS sources. The isolated chart
-pins `12945408/4/10` and historical v1-v9 parity. V11 accepts a
-zero-multiplicity nonperiodic source knot only when its padding value is null or
-finite numeric, certifies quadratic record 3790 at isolated `8593408/3/10`,
-then exposes and certifies 11-sample Plane/Offset record 3745 at isolated
-`42772491/11/10`. The corpus reaches `388125799/22/10` with historical v1-v10
-parity. V12 admits seven-sample dual-offset record 3615 at isolated
-`26443776/7/10`: roots `[3374, 773]` retain bases `[3730, 1186]`, and the exact
-transmitted controls form one common degree-1 open-clamped carrier/pcurve
-polyline while both original sources retain whole-range proofs. The corpus
-reaches `414569575/22/10` with historical v1-v11 parity. Two-sample dual-offset
-record 3595 independently certifies as a canonical open-clamped line at
-isolated `4352000/2/10`, with two original-source proofs and exact
-per-resource N/N-1 rollback evidence. Production does not reach it. Five-sample
-record 4230, roots `[3320, 773]`, chart 4231, independently
-certifies as a canonical degree-1 open-clamped polyline at isolated
-`17285120/5/10`. Production v13 admits it at exact `431854695/22/10` with
-historical v1-v12 parity. V14 admits two-sample direct Plane/Offset record 3609,
-chart 3607, at isolated `4277250` Work and exact cumulative
-`436131945/22/10`. V15 admits two-sample dual-offset record 6044, chart 6043,
-at isolated `4352000/2/10` and exact cumulative `440483945/22/10`, then stops
-before four-sample dual-offset record 5921, chart 6027, whose isolated
-`13774848/4/10` proof would request cumulative `454258793` Work. Admitting that
-exact request exposes the next proof boundary: the canonical cubic first
-pcurve materially exits its original open nonperiodic source domain, so the
-certificate fails closed and retains the v15 report with atomic rollback.
-An end terminator contributes a
-tolerance-close, distinct singularity
-and one extra paired-UV tuple whose appended span is certified with the same
-whole-range proof. Records 1828 and 1671 are admitted in place, while the
-traversal-masked records 2008 and 1678 are independently certified by focused
-payload transplants.
-
-- Broaden the capped four-descriptor constant-normal Offset(NURBS)/NURBS
-  unit-chart arm beyond positive-area finite-window overlap, then add broader
-  NURBS/NURBS
-  charts and other exact/procedural families only
-  with contextual accounting and paired trace evidence.
-- Broaden the M3c consumer to null, mixed/non-`H`, or broader closed limits,
-  other nullable chart data, ambiguous or multi-period trace aliases,
-  noncanonical charts outside the bounded direct-Plane/B-surface, safe-
-  Offset(Plane)/B-surface, direct-Plane/Offset(B-surface), direct
-  Offset(B-surface)/direct B-surface, independent direct one-descriptor
-  Offset(B-surface)/Offset(B-surface), and direct-B-surface/B-surface affine
-  slices,
-  and further terminator variants
-  without recomputing their
-  transmitted scars.
-- Add swept, spun, and blend descriptors only with their own evaluator,
-  validity, bounds, interchange, and test contracts.
-
-Exit: F3/M4 can add a procedural fallback without changing topology handles or
-the graph ownership model.
-
-## Test matrix
-
-### Graph and dependency tests
-
-- leaf nodes have no dependencies; offsets report exactly one basis dependency;
-- two offsets share one basis handle and graph node count proves no copy;
-- dependency-first traversal is stable and deduplicates a diamond graph;
-- stale dependency insertion is rejected;
-- transport self-cycle and multi-node cycle report stable paths;
-- evaluation's defensive recursion guard rejects a forged cycle;
-- depth and node-visit limits report consumed and allowed values;
-- graph clone preserves values but has independent undo state;
-- graph validation catches reverse-index disagreement in a test-only corruptor.
-- exact direct/safe-Offset(Plane)-field/genuinely curved direct-NURBS queries
-  preserve lower raw/report evidence, pin exact 7,170/7,169 proof Work and 2/1
-  offset graph visits, retain ordered paired pcurves and original root identity,
-  persist atomically in both operand orders, and reject planar encodings,
-  Offset(NURBS), other surface pairs, stale sources, and altered sources;
-- direct or safe-Offset(Sphere)-field/genuinely curved direct-NURBS queries preserve lower raw/report
-  evidence, prove the analytic lift with outward midpoint and derivative
-  intervals, pin exact 8,192/8,191 Work, 1,024/1,023 Items, and 10/9 Depth,
-  pin direct offset roots at 2/1 graph visits and dependency depth, retain and
-  protect nested roots/bases, persist ordered sources atomically across
-  swap/miss/stale/altered cases, and reject poles, collapsed sphere offsets,
-  Offset(NURBS), and planar encodings;
-- compatible direct-NURBS/direct-NURBS queries preserve lower raw/report
-  evidence, use their rounded scalar difference only for discovery, prove
-  complete misses from outward original-control differences, certify both
-  original lifts, pin exact 14,336/14,335 Work, 1,024/1,023 Items, and 10/9
-  Depth, preserve ordered identity through swap and persistence, and reject
-  offsets, planar or unaligned charts, unequal ranges, and incompatible weights;
-- transmitted chart descriptors retain ordered plane/pcurve dependencies,
-  reject mismatched or mutated proof inputs, and evaluate the certified carrier;
-- transmitted charts whose actual source is a safe nested plane-offset chain
-  bind its effective plane while protecting the complete basis chain;
-- the X_T wire-layout test pins the modern appended intersection-data pointer,
-  `L/?` limits, `CHART` positions, and `INTERSECTION_DATA(204)` UV payload;
-- the structural import fixture pins exact Work/Items/Depth N/N-1 crossings,
-  typed null/malformed/convention/residual failures, and reusable rollback state.
-- Plane/Offset, Offset/Plane, and Offset/Offset structural variants pin actual
-  ordered source identity, positive and negative signed-offset accumulation,
-  direct and nested roots, both source senses, preserved trim bounds, both-chain
-  dependency protection, exact chart/graph accounting, and typed altered,
-  unsafe, cross-linked, cyclic, non-plane, parallel, and noncanonical exits.
-- Plane/B-surface, Offset/B-surface, and reversed-operand variants cover
-  polynomial and rational non-planar sources, direct and nested offset roots,
-  exact chart and graph-query Work/Items/Depth boundaries, metadata and trim
-  retention, ordered identity, perturbed carrier/UV/source/offset rejection,
-  periodic-source rejection, transitive dependency protection, rollback reuse,
-  and deterministic validation.
-- B-surface/B-surface variants cover two distinct original non-planar sources,
-  polynomial/rational combinations in both orders, exact summed proof and
-  graph-accounting boundaries, source/pcurve/carrier identity, dependency
-  protection, and typed periodic, closed, altered, stale, mismatched,
-  noncanonical, and null-limit rollback paths.
-- Operation-generated one- through four-descriptor Offset(NURBS)/NURBS variants
-  cover both operand orders, polynomial/rational constant-normal unit-chart
-  bases, and distinct finite operand windows with a positive-area shared
-  rectangle; they retain the live outer root, terminal basis, accumulated
-  signed distance, direct peer, and paired pcurves, pin exact 14,336/1,024/10
-  certificate accounting plus exact 2/depth-2, 3/depth-3, 4/depth-4, and
-  5/depth-5 graph traversal with exact N/N-1 evidence, and reject disjoint or
-  boundary-only windows, five-or-more-descriptor positive chains,
-  other varying-normal or nested offset/offset,
-  unaligned, altered, and stale sources atomically.
-- The varying-normal rational-quarter-cylinder/direct-planar-NURBS, analytic-
-  Plane, or one-descriptor safe-Offset(Plane) arm covers
-  canonical global-X-, global-Y-, and global-Z-normal peers
-  and proves the original derivative normal field over the complete
-  window, uses the true rational parallel surface only for discovery, and owns
-  misses from orientation-selected original controls. Both operand orders retain the
-  live root, original basis, direct peer, and paired pcurves. Planar-NURBS X/Y
-  fixtures pin 14,343/14,342 Work and the Z fixture 573,447/573,446; analytic-
-  Plane or Offset(Plane) X/Y fixtures pin 7,177/7,176 and their Z fixtures
-  286,768/286,767. X/Y retain 1,024/1,023 Items and Z retains 40,960/40,959;
-  all retain 10/9 certificate Depth. Direct one-descriptor peers retain 2/1
-  graph Work;
-  Offset(Plane) peers retain their live root/basis/distance with 4/3 Work and
-  2/1 dependency Depth. The direct analytic Plane arm alone covers the complete
-  one- through four-descriptor family with exact outer-to-inner distance
-  metadata, finite positive intermediate/final radius proof, unchanged
-  certificate budgets, and exact graph Work/depth 2–5 with N/N-1 admission.
-  The original basis owns proof and its derived sheet is discovery-only; swap,
-  persistence, and complete misses cover every admitted length. Per-descriptor,
-  same-sum, and stale-source mutations, descriptor depth five or greater,
-  broader multi-descriptor peers, singular fields, and incompatible cases fail
-  atomically.
-- Compatible intersecting one- through four-descriptor constant-normal
-  Offset(NURBS) pairs retain both ordered roots and complete basis chains for
-  the full 4×4 matrix, certify both original sources at exact
-  14,336/14,335 Work, 1,024/1,023 Items, and 10/9 Depth, and pin graph traversal
-  at exact `A+B+2` Work and `max(A+1,B+1)` depth with maximum 10/9 Work and 5/4
-  Depth admission. Strictly separated pairs retain the graph-owned complete
-  miss at the same graph ceilings with zero certificate use or persistence
-  allocation; coincident, five-or-more-descriptor, incompatible, altered, and
-  stale pairs are rejected.
-- Direct constant-normal Offset(B-surface)/B-surface variants cover both operand
-  orders and polynomial/rational bases, retain the live root, signed distance,
-  basis, and paired pcurves, and reject singular or underflowed normal fields
-  and altered dependencies. Their bounded noncanonical two- through five-sample
-  forms additionally retain affine metadata on canonical sample-index
-  carrier/pcurves and pin exact `14336/2/10`, `28672/3/10`, `43008/4/10`, and
-  `57344/5/10` proof accounting with N/N-1 rollback; stale distances or bases,
-  malformed peers, nested roots, and six-sample forms fail atomically. They
-  share those exact boundaries with the independent direct one-descriptor
-  Offset(B-surface)/Offset(B-surface) noncanonical arm, which retains both
-  ordered roots, distances, direct polynomial/rational bases, paired UVs, and
-  swap identity while rejecting nested/shared/multi-offset, null/mixed, and
-  out-of-range forms. Together they advance
-  the production corpus through record 1828, end-terminated record 1671, and
-  finite-open records 1252 and 5089 and native direct-Plane `SP_CURVE` node 30
-  through FACE 1195's vertex-less ring domain, nonperiodic endpoint-roundoff
-  `INTERSECTION` 1984, the canonical finite-open three-sample dual-offset
-  `INTERSECTION` 5945, the canonical four-sample cubic dual-offset
-  `INTERSECTION` 3819, zero-padded quadratic dual-offset `INTERSECTION` 3790,
-  exposed 11-sample Plane/Offset `INTERSECTION` 3745, seven-sample dual-offset
-  polyline `INTERSECTION` 3615, independently certified five-sample polyline
-  `INTERSECTION` 4230, and independently transplanted two-sample
-  dual-offset line `INTERSECTION` 3595. The equal-limit
-  suite separately pins both records, exact v3
-  `115485725/20/10`, record-2008 transplant `124040223/22/10`, unique exact
-  one-period endpoint or interior alias lifting, the unchanged whole-range
-  proof, exact synthetic Work/Items/Depth N/N-1 rollback, and typed null,
-  material, ambiguous, multi-period, nonperiodic-axis, mixed-limit, mismatched-
-  point, multi-position-closed, or off-seam rollback. The
-  terminator suite pins exact v4 `116396069/20/10`, record-1678 transplant
-  `116413476` Work, the appended final span, analytic Plane UV recovery,
-  endpoint-only NURBS roundoff snapping, and typed malformed rollback. The
-  finite-open omitted-data suite pins exact v5 `117478445/20/10`, 20/10
-  Items/Depth, interior-only paired Plane omissions, historical-v4 stability,
-  exact N/N-1 rollback, and the preserved v5 chart crossing. The SP-curve
-  suite pins exact v6 `208228426/22/10`, per-resource N/N-1 rollback, the
-  affine control lift, typed approximation rejection, certificate-derived
-  periodic carrier semantics, and the 221,060,174-Work next attempt. The next
-  omitted-data suite pins exact v7 `272430166/22/10`, per-resource N/N-1
-  rollback, paired-null interior and endpoint Plane recovery for canonical
-  Plane/Offset(B-surface), typed direct-Plane endpoint, half-null, and NURBS
-  omissions, whole-carrier residual rejection, plus bounded noncanonical
-  affine metadata for direct Plane/B-surface, safe-Offset(Plane)/B-surface,
-  Plane/Offset(B-surface), direct Offset(B-surface)/direct B-surface, and direct
-  B-surface/B-surface. The safe-offset 2–5 sample boundaries are
-  `7170/2/10`, `14339/3/10`, `21508/4/10`, and `28677/5/10`; direct B/B pins
-  `14336/2/10`, `28672/3/10`, `43008/4/10`, and `57344/5/10`; direct Offset(B)/B
-  pins the same four boundaries in both orders and both basis forms;
-  transplanted cumulative `127115320` Work and
-  `139792442/4/10`, with typed record-778/3620 original-domain rollback,
-  and the 285,283,414-Work next proof preflight.
-  The endpoint-roundoff suite pins exact v8 `315245660/22/10`, historical-v7
-  stability, per-resource N/N-1 rollback, endpoint-only source-boundary
-  normalization, material/interior overhang rejection, whole-carrier residual
-  rejection, and record 5945's 323,814,492-Work next proof preflight. The
-  quadratic dual-offset suite pins exact v9 `323814492/22/10`, historical
-  v1-v8 stability, per-resource N/N-1 rollback, canonical degree/range/knots,
-  pairwise-distinct witnesses, root/pcurve dependency identity, and altered or
-  stale rejection. The cubic suite pins exact v10 `336759900/22/10`, isolated
-  `12945408/4/10`, historical v1-v9 stability, unique degree-3 interpolation,
-  polynomial-control-hull/Taylor enclosure agreement, dependency identity,
-  and typed malformed or altered rejection. The zero-multiplicity padding suite
-  pins strict null/finite validation, positive-multiplicity numeric validation,
-  isolated record-3790 `8593408/3/10`, record-3745 `42772491/11/10`, exact v11
-  `388125799/22/10` and historical v1-v10 parity. The seven-sample suite pins
-  the degree-1 open-clamped family, isolated `26443776/7/10`, exact v12
-  `414569575/22/10`, and historical v1-v11 parity. The two-sample suite pins
-  record 3595's canonical line, isolated `4352000/2/10`, original-source
-  residuals, per-resource N/N-1 rollback, and malformed carrier/pcurve failure;
-  the five-sample suite pins record 4230's canonical polyline, isolated
-  `17285120/5/10`, per-resource N/N-1 rollback, and typed malformed failure.
-  Production v15 pins exact `440483945/22/10`, historical v1-v14 parity, and
-  the next atomic resource stop at record 5921's `454258793`-Work request. A
-  dedicated exact-budget regression then pins record 5921's original-domain
-  certificate rejection and unchanged retained v15 report.
-
-### Offset evaluator tests
-
-- world plane offset: exact position, first derivatives, normal, range, and
-  inflated box for positive, negative, and zero distances;
-- cylinder offset: expected radius and derivatives for both signed directions;
-- sphere inward offset at its radius reports a singular surface;
-- nested regular offsets evaluate deterministically and share their base chain;
-- finite-difference checks validate implemented analytic first derivatives, but
-  finite differences are test oracles only, never production derivatives;
-- second derivative requests return `DerivativeUnavailable`;
-- non-finite parameter/distance and out-of-domain parameter are rejected;
-- repeated runs and debug/release produce the existing deterministic golden
-  representation.
-
-### Topology and transaction tests
-
-- a face references an offset handle and its pcurve tessellation vertices lie
-  on the expected offset within declared tolerance;
-- checker incidence uses graph evaluation and identifies a deliberately
-  displaced pcurve/edge;
-- unsupported full offset proof returns a named indeterminate obligation;
-- a failed checked transaction that inserted a basis and offset rolls both
-  back, including free-list behavior and reverse dependencies;
-- a shared basis is retained while any direct face or offset dependency uses
-  it;
-- a basis dependency is included in every consuming body's footprint.
-
-### Interchange tests
-
-- synthetic X_T offset fixture imports one basis and one offset node;
-- multiple offset faces referencing one basis do not duplicate it;
-- X_T offset/basis pointer cycle fails deterministically and atomically;
-- imported class key is `kernel.surface.offset.v1` before and after write/read;
-- writer emits dependency before dependent and produces byte-identical output
-  on repeated writes of the same store;
-- external Parasolid oracle accepts the canonical output and sampled points and
-  normals agree with host evaluation;
-- production exemplar reconstruction/tessellation becomes a ratcheted test only
-  when its licensed fixture is available in the expected corpus workflow.
+**Committed intersection carriers.** Certified intersection branches may be
+committed atomically as `CurveDescriptor::{Intersection, VerifiedNurbsIntersection,
+TransmittedIntersection, TransmittedNurbsIntersection}` nodes, each with a stable
+class key, ordered source-surface and pcurve dependencies, a finite carrier
+interval, and a paired whole-interval residual certificate. Graph validation
+recomputes the certified field and rejects any mismatch before allocation; reverse
+dependencies protect every transitive basis (including offset chains) while the
+proof is live, and stale/altered sources roll the persistence batch back
+atomically.
 
 ## Explicit non-goals
 
-- Changing the leaf `kgeom` evaluator traits to return `Result`.
-- Implementing general surface third derivatives in the offset slice.
-- Certifying every offset face globally free of singularities.
-- General graph memoization, eviction policy, parallel scheduling, or GPU
-  evaluation.
-- A plugin/custom-geometry ABI or dynamic class registry.
-- A durable native file format implementation; only its identity rules are
-  fixed here.
-- Recomputing general operational Offset/Offset or Offset/NURBS intersections;
-  verified import of supported transmitted scars is in scope above.
-- Recomputing imported intersection curves.
-- Sweeps, spun surfaces, rolling-ball blends, blend bounds, or foreign geometry.
-- Moving topological points into the graph.
-- Freezing the public `Kernel`/`Session` facade.
-- Duplicating F2's solver policy, cancellation, diagnostics, or work budgets.
+- Making leaf `kgeom` traits return `Result`; general surface third derivatives in
+  the offset slice; certifying every offset face globally singularity-free.
+- Graph memoization/eviction, parallel scheduling, or GPU evaluation; a
+  plugin/custom-geometry ABI or dynamic class registry; a durable native file
+  format implementation (only its identity rules are fixed).
+- Recomputing general operational Offset/Offset or Offset/NURBS intersections, or
+  imported intersection curves (verified import of supported transmitted scars is
+  in scope); sweeps, spun surfaces, rolling-ball blends/bounds, or foreign
+  geometry; moving topological points into the graph.
+- Freezing the public `Kernel`/`Session` facade; duplicating F2's solver policy,
+  cancellation, diagnostics, or work budgets.
 
-## Acceptance criteria
+## Evidence
 
-F1 is complete only when all of the following are true:
+- `crates/kgraph/tests/*.rs`: graph_contract, leaf_parity, offset_surface,
+  intersection_curve_certificate, transmitted_plane_offset_nurbs
+- `crates/kxt/tests/*.rs`: offset_surface, import_tess, write, read,
+  corpus_manifest, intersection_chart, offset_nurbs_intersection,
+  equal_limit_intersection, terminated_intersection, periodic_nurbs,
+  plane_sp_curve, zero_multiplicity_knot_padding, finite_open_*
+- `crates/kops/tests/graph_surface*.rs` (plane/sphere/NURBS, varying-offset arms)
+- `crates/ktopo/tests/`: assembly_boundary, transactions, body_copy
 
-1. `kgraph` exists at L1.5 with enforced one-way Cargo dependencies.
-2. All existing curves, surfaces, and pcurves have one graph-owned node and
-   retain exact leaf class identity and evaluator behavior.
-3. `ktopo` faces/edges/fins hold graph handles; no basis surface is stored by
-   value inside a procedural descriptor or duplicated in topology.
-4. Descriptors are immutable, dependencies are inspectable and deterministic,
-   ordinary insertion is acyclic by construction, and transport cycles fail
-   with a typed deterministic path.
-5. Evaluation is fallible, bounded by dependency depth/node visits, and reports
-   stale handles, cycles, unavailable derivatives, singularities, and
-   ill-conditioning distinctly.
-6. Constant signed offsets evaluate exact positions and first derivatives,
-   inherit parameter metadata, and return conservative outward-rounded work
-   boxes.
-7. Offset validity is never inferred from clean sampling; singular or
-   unresolved regions stop tessellation with a typed outcome.
-8. Graph insertions participate in topology transaction rollback, checked
-   commits, journals, and transitive affected-body indexing.
-9. `kxt` reconstructs and writes the supported `OFFSET_SURF` form with shared
-   basis identity and class-preserving, deterministic dependency-first output.
-10. A committed synthetic fixture passes read/evaluate/tessellate/write/read and
-    external-oracle validation; malformed cycle and rollback tests pass.
-11. Existing workspace formatting, Clippy, debug/release tests, determinism
-    tests, Tier-1 X_T fixtures, and primitive tessellation tests do not regress.
-12. `kops` can inspect and evaluate graph surfaces without depending on
-    topology; unsupported procedural intersection paths remain explicitly
-    unsupported/indeterminate rather than returning a false complete miss.
+## Open items
 
-## Open risks and decisions requiring evidence
-
-- **X_T shared offset bases.** Sign, unused-flag, and nullable-scale semantics
-  are resolved by the published reference. The remaining format risk is the
-  older restriction against multiple offset nodes sharing one basis. Keep the
-  graph representation permissive, but require a modern Parasolid oracle before
-  claiming shared-basis writer conformance.
-- **Third derivatives.** Exact second derivatives of an offset require a larger
-  surface jet. M4 SSI marching and curvature-driven tessellation are the known
-  future consumers and must treat `DerivativeUnavailable` as an explicit gate,
-  not rediscover it as a numerical failure. Defer the jet API until one of
-  those consumers owns the end-to-end contract; never substitute production
-  finite differences or zeros.
-- **Assembly-scale reverse indexing.** The reverse-dependency index now keeps
-  insertion-ordered adjacency vectors plus hash-backed key/membership lookup;
-  hash storage is never iterated for observable output. The F7/Q2a ladder
-  preserves graph and reverse-index digests, rollback, stale-handle behavior,
-  bounded entry-slot reuse, and full-index audit equality while pinning zero
-  full-order rebuilds. The separate F7/Q2b ladder now protects indexed active/
-  completed traversal membership through 1,000-edge closure and missing-path
-  cases. Ordered vectors remain the sole source of closure output and exact
-  cycle paths; hash storage is never iterated for observable results.
-- **Global regularity proof.** Bounding principal curvature over arbitrary
-  NURBS regions is nontrivial. The first slice is useful with local evaluation
-  and explicit indeterminate region proof; it must not overclaim certification.
-- **Topology migration size.** Moving three arenas touches many consumers. The
-  leaf-parity stage and compatibility re-exports are deliberately separate so
-  the storage move remains mechanical and reviewable.
-- **Error taxonomy coordination.** F1 needs typed evaluation failures now; F4
-  should later standardize shared capability and stage IDs without erasing the
-  distinctions or forcing graph types into `kcore`.
-- **Operation-context coordination.** F2 owns numerical/solver policy. F1 owns
-  only graph recursion limits and consumes existing tolerances, preventing two
-  competing context abstractions.
+- Broaden the capped four-descriptor Offset(NURBS)/NURBS unit-chart arm beyond
+  positive-area finite-window overlap; add broader NURBS/NURBS and other
+  exact/procedural families only with contextual accounting and paired trace
+  evidence. Add swept, spun, and blend descriptors only with their own evaluator,
+  validity, bounds, interchange, and test contracts.
+- Broaden the M3c consumer to null/mixed/non-`H`/broader closed limits, other
+  nullable chart data, ambiguous/multi-period aliases, noncanonical charts outside
+  the bounded affine slices, and further terminator variants — without recomputing
+  transmitted scars.
+- Exit: F3/M4 can add a procedural fallback without changing topology handles or
+  the graph ownership model.
+- **X_T shared offset bases.** Require a modern Parasolid oracle before claiming
+  shared-basis writer conformance.
+- **Third derivatives.** Defer the surface-jet API until an M4 SSI/curvature
+  consumer owns the contract. **Global regularity proof.** Bounding principal
+  curvature over arbitrary NURBS regions is a later proof extension.

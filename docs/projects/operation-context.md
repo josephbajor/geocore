@@ -1,1490 +1,297 @@
 # Operation context and numerical policy
 
-Status: Stage 1b composition, the NURBS contact/minimizer scale gate, and representative Stage 2-5 pilots implemented; whole-body tessellation has an adopted facade and state-4 wrapper ratchet, standalone-face internal-use ratcheting, the body allocation-accounting boundary, complete face/body evidence matrices, and adopted opt-in bounded presets; curve and surface projection are contextually adopted with standalone-wrapper ratchets closed, ellipse/ellipse now preserves typed projection failures, and broader operation-family ratchets remain
+Status: Stage 1b composition, the Stage 3 NURBS contact/minimizer scale gate, and representative Stage 2–5 pilots implemented; projection and whole-body tessellation are contextually adopted with their standalone-wrapper ratchets closed and ellipse/ellipse preserves typed projection failures; broader operation-family migration (Stage 6) remains.
 
 ## Purpose
 
-Introduce one explicit, deterministic policy boundary for kernel operations before
-general intersections, procedural geometry, booleans, and healing multiply the current
-set of local numerical constants and work caps.
+Introduce one explicit, deterministic policy boundary for kernel operations before general
+intersections, procedural geometry, booleans, and healing multiply local numerical constants and
+work caps. It separates five concerns that are easy to conflate: (1) the fixed Parasolid-compatible
+session precision regime; (2) model-space acceptance tolerances requested by an operation;
+(3) scale-aware parameter/rounding/conditioning guards used by algorithms; (4) deterministic
+proof/work/memory/depth/output limits; and (5) execution controls and structured diagnostics. The
+design preserves the existing bit-determinism, completion-evidence, failure-atomicity, and
+tolerance-provenance contracts, and lets the kernel add policy without adding an argument to every
+public function.
 
-This project separates five concerns that are currently easy to conflate:
+## Contract
 
-1. the fixed Parasolid-compatible session precision regime;
-2. model-space acceptance tolerances requested by an operation;
-3. scale-aware parameter, rounding, and conditioning guards used by algorithms;
-4. deterministic proof, work, memory, depth, and output limits; and
-5. execution controls and structured diagnostics.
+### Four distinct tolerance concepts
 
-The design must preserve the existing bit-determinism, completion-evidence,
-failure-atomicity, and tolerance-provenance contracts. It must also let the kernel add
-new policy without adding another argument to every public function each time.
+These values remain different types/fields with different rules:
 
-## Current evidence and pressure
-
-The current foundation has the right individual ideas, but no common ownership model
-for them:
-
-| Area | Current state | Pressure created by growth |
-| --- | --- | --- |
-| Session/model tolerance | `kcore::tolerance::Tolerances` carries linear and angular values; `LINEAR_RESOLUTION`, `ANGULAR_RESOLUTION`, and `SIZE_BOX_HALF` define the fixed numeric regime. | The same `Tolerances` value is also used to derive solver stopping and parameter thresholds, obscuring whether a comparison is a model acceptance decision or an implementation guard. |
-| Intersections | Public entry points take `Tolerances` directly. NURBS paths contain local sample, bisection, projection, minimization, proof-depth, and candidate caps. | Adding solver controls directly to these signatures would cause repeated churn; leaving them local prevents controlled robustness experiments and structured telemetry. |
-| Numerical guards | Intersection and projection code contains absolute values such as `1e-12`, `1e-18`, `1e-24`, and `1e-30`; several modules independently derive parameter tolerance as a fraction of range width. | Absolute thresholds are not consistently scale-aware and their semantic role is unclear. Some are legitimate arithmetic guards, but none should silently enlarge model tolerance or decide topology. |
-| Geometry proof/refinement | NURBS implicit isolation already reports candidate-budget and parameter-resolution stops in `ImplicitIsolationLimits`. | This is a useful local precedent, but it does not compose with a parent operation budget or a common diagnostic record. |
-| Projection | `kgeom::project` owns named sampling, candidate, Newton, and line-search budget profiles plus fallible contextual/shared-scope entries and typed input, evaluation, candidate, and policy failures. The standalone wrappers are ratcheted closed to new production callers. | Remaining owner operations must compose projection in one parent scope and preserve its typed errors rather than rebuilding budgets or flattening sources. |
-| Tessellation | `TessOptions` correctly represents requested output quality. Refinement passes, boundary depth, and triangle caps are module constants reported through `Error::AlgorithmLimit`. | Output quality and resource policy must remain separate, while limits become configurable and report stage, observed/consumed work, and allowed work. |
-| Checker | `check_body_report` constructs `Tolerances::default()` internally. Sampling counts and adaptive depth/segment caps are local constants. Full checking already represents missing proof as gaps. | A caller cannot budget a Full proof, and a stopped proof needs a structured gap rather than being confused with invalid topology or a clean result. |
-| Construction | `ktopo::make` wraps mutation in checked transactions and calls the checker through checked commit. | Construction needs one scope spanning validation, mutation, checking, and rollback so nested work is accounted once and cancellation/limits cannot leave committed partial state. |
-| Tolerance growth | Transactions own explicit aggregate tolerance-growth budgets and journal their use. | This stateful model-edit budget is correct and must not be replaced by an ephemeral algorithm work budget. The two need a clear relationship. |
-| Parallelism | `kcore::parallel` deterministically assembles index-ordered results, but chooses hardware parallelism globally. | Callers need serial/fixed/available execution controls for testing and deployment without making result selection or budget exhaustion schedule-dependent. |
-| Limits and diagnostics | `Error::AlgorithmLimit` carries an operation string and configured limit; completion reasons are static prose; some result types carry richer local limit state. | Metrics and callers need stable stage/resource identifiers and consumed/allowed values without parsing messages. F4 may later refine the shared error taxonomy, but F2 must define the underlying data. |
-
-Representative constants to migrate include:
-
-- `kgeom::project`: curve/surface samples, candidate counts, Newton iterations,
-  and backtracking halvings;
-- `kgeom::tess`: refinement passes, triangle count, and boundary depth;
-- `kgeom::nurbs::patch_bvh`: candidate cells and requested subdivision depth;
-- `ktopo::domain`: containment depth and segment count;
-- `ktopo::check` and `ktopo::incidence`: deterministic sample counts;
-- `ktopo::btess`: edge-refinement depth;
-- `kops::intersect`: repeated grid/sample, bisection, polishing, minimization,
-  proof-depth, and proof-candidate caps.
-
-Test-only assertion tolerances and schema/security limits such as X_T maximum input node
-counts are not automatically operation-policy candidates. The migration audit must
-classify each constant by semantics rather than moving every numeric literal.
-
-## Architectural decisions
-
-### 1. Preserve four distinct tolerance concepts
-
-The following values must remain different types or fields with different rules:
-
-| Concept | Meaning | May be caller-loosened? | May prove model acceptance? | Owner |
+| Concept | Meaning | Caller-loosened? | May prove model acceptance? | Owner |
 | --- | --- | --- | --- | --- |
-| `SessionPrecision` | Linear/angular resolution and size box of the file/model regime. | No in v1. | Yes, where the kernel specification names session resolution. | Immutable session policy. |
-| `Tolerances` | Requested model-space acceptance for an operation, validated at or above session resolution. | Linear tolerance already may be loosened. Angular customization can be added only with validated semantics. | Yes, for that operation's documented residual/proximity contract. | Operation context. |
-| Entity tolerance | Persisted per-face/edge/vertex model allowance with provenance. | Only through checked operation rules. | Yes, for obligations involving that entity. | Topology plus transaction journal. |
-| Numerical guard | Parameter progress, rounding slack, scaled-zero, or conditioning threshold. | Only through a validated numerical profile, initially kernel-owned. | No. It may stop refinement or classify a solve as ill-conditioned, but it cannot certify incidence, coincidence, containment, or a topological sign. | Session numerical policy, applied with local scale data. |
-
-`TessOptions::chord_tol`, future angular faceting tolerance, approximation error bounds,
-and similar requested output quality remain operation request data. They are neither
-session resolution nor work limits.
-
-The existing `Tolerances` type and constructors remain source-compatible. Its
-documentation should be narrowed to "model acceptance tolerances" during rollout; it
-must not grow fields for iterations, sampling, or solver conditioning.
-
-### 2. Use immutable session policy and a fresh per-operation scope
-
-`kcore` should add an `operation` module with these conceptual types:
-
-```rust
-pub struct SessionPolicy {
-    precision: SessionPrecision,
-    numerical: NumericalPolicy,
-    execution: ExecutionPolicy,
-    default_budget: BudgetPlan,
-    policy_version: PolicyVersion,
-}
-
-pub struct OperationContext<'session> {
-    session: &'session SessionPolicy,
-    tolerances: Tolerances,
-    budget_overrides: BudgetPlan,
-    diagnostic_level: DiagnosticLevel,
-    cancellation: Option<&'session dyn CancellationToken>,
-}
-
-pub struct OperationScope<'context, 'session> {
-    context: &'context OperationContext<'session>,
-    ledger: WorkLedger,
-    diagnostics: Vec<OperationDiagnostic>,
-    next_diagnostic_ordinal: u64,
-}
-```
-
-Names may be adjusted to Rust lifetime constraints during implementation, but the
-ownership boundary is normative:
-
-- `SessionPolicy` is validated, immutable, cheap to share, and owns no model, graph, or
-  topology state. A future `Kernel`/`Session` facade may own an `Arc<SessionPolicy>`;
-  F2 does not depend on that facade.
-- `OperationContext` is a cheap borrowed configuration snapshot. It does not contain
-  mutable counters and can be shared when planning deterministic parallel work.
-- `OperationScope` is created once for a top-level call and owns all mutable work usage
-  and diagnostic buffers. Nested algorithms borrow the same scope or deterministic
-  child scopes; they do not create fresh default budgets.
-- A context is never stored in geometry or topology entities. Persisted entities retain
-  only their existing exact data, entity tolerances, and provenance.
-- There are no process-global mutable defaults. Changing policy means creating a new
-  validated `SessionPolicy` or a new operation context.
-
-`SessionPrecision::parasolid()` is the only production v1 precision regime and exposes
-the current `1e-8 m`, `1e-11 rad`, and `500 m` half-size values. Keeping this as data
-rather than scattered constants makes dependencies explicit without promising that
-arbitrary regimes are supported.
-
-### 3. Make numerical policy scale-aware and proof-ineligible
-
-`NumericalPolicy` centralizes recipes, not unqualified epsilon constants. Its public
-surface should accept the scale information needed by the decision:
-
-```rust
-pub enum NumericGuardKind {
-    ParameterProgress,
-    CoefficientCancellation,
-    LinearSolve,
-    PeriodicNormalization,
-    BudgetAccounting,
-}
-
-pub struct ParameterScale {
-    pub coordinate_magnitude: f64,
-    pub span: f64,
-    pub output_rate_upper: Option<f64>,
-}
-
-pub struct ParameterTolerance {
-    pub termination_step: f64,
-    pub rounding_floor: f64,
-    pub metric_driven_step: Option<f64>,
-}
-
-impl NumericalPolicy {
-    pub fn rounding_guard(&self, kind: NumericGuardKind, scale: f64) -> f64;
-    pub fn parameter_tolerance(
-        &self,
-        scale: ParameterScale,
-        output_tolerance: f64,
-    ) -> Result<ParameterTolerance>;
-    pub fn reciprocal_condition_is_usable(&self, rcond: f64) -> bool;
-}
-```
-
-The first implementation should use named, documented factors over `f64::EPSILON` and
-the magnitude of the actual coefficients, parameter window, Jacobian, or accounting
-values. Absolute floors may remain only where the represented quantity has a fixed,
-documented normalization; otherwise they are bugs to classify, not defaults to copy.
-
-Rules for consuming these values:
-
-- A parameter-progress threshold can terminate an iteration. The candidate still needs
-  an independent model-space residual check before it is accepted.
-- If the rounding floor is larger than the metric-driven step and the residual is not
-  independently certified, the result is numerically stopped/indeterminate rather than
-  silently accepted.
-- An ill-conditioned Jacobian selects a safeguarded fallback, subdivision, or an
-  explicit conditioning diagnostic. It does not convert a near-contact into contact.
-- Exact predicates and interval-certified signs continue to decide topology. A numeric
-  guard must never replace them.
-- Call sites name the semantic `NumericGuardKind`; raw `EPSILON` multipliers should be
-  limited to `kcore` policy implementations and narrowly justified exact-arithmetic
-  modules.
-
-The default numerical profile is versioned (`PolicyVersion::V1`) because changing a
-factor can change output bits or completion. Policy versions belong in corpus and
-benchmark metadata, not in persisted B-rep entities.
-
-### 4. Represent budgets as a deterministic plan and ledger
-
-One monolithic struct with a field for every future algorithm would make `kcore` depend
-on higher layers. An untyped map of prose strings would lose compile-time discipline.
-Use stable stage constants defined by the owning crate and generic resource accounting:
-
-```rust
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct StageId(&'static str); // validated namespaced identifier
-
-pub enum ResourceKind {
-    Work,
-    Items,
-    Bytes,
-    Depth,
-}
-
-pub enum AccountingMode {
-    Cumulative,
-    HighWater,
-}
-
-pub struct LimitSpec {
-    pub stage: StageId,
-    pub resource: ResourceKind,
-    pub mode: AccountingMode,
-    pub allowed: u64,
-}
-
-pub struct LimitSnapshot {
-    pub stage: StageId,
-    pub resource: ResourceKind,
-    pub consumed: u64,
-    pub allowed: u64,
-}
-```
-
-Every stage identifier is a public constant at the layer that defines the operation,
-for example `kgeom.tess.boundary-depth`, `kgeom.project.curve-newton`,
-`ktopo.check.domain-segments`, or `kops.intersect.ssi-proof-candidates`. Prose messages
-are attached separately and may change; identifiers may not.
-
-Higher-layer crates define typed default profile constructors that produce a
-`BudgetPlan`. This avoids a dependency from `kcore` to intersection or tessellation
-types while grouping related caps coherently:
-
-```rust
-impl IntersectionBudgetProfile {
-    pub fn v1_defaults() -> BudgetPlan;
-}
-
-impl TessellationBudgetProfile {
-    pub fn v1_defaults() -> BudgetPlan;
-}
-```
-
-The ledger supports:
-
-- `charge(stage, amount)` for evaluations, samples, iterations, subdivisions, and other
-  cumulative work;
-- `observe(stage, value)` for recursion depth, retained candidates, triangle/output
-  count, and scratch-memory high-water marks;
-- deterministic child reservation by stable work-item ordinal;
-- a root total-work ceiling in addition to stage-specific limits; and
-- accepted-usage snapshots plus first-crossing and numeric-resolution evidence on
-  both success and failure.
-
-When a parent has a root total-work ceiling, every child reserves root capacity
-as well as stage capacity. If a child plan omits an explicit root ceiling, the
-ledger infers the checked sum of its cumulative Work allowances; an explicit
-stricter child ceiling is preserved. This makes a valid completed child
-mergeable instead of allowing parent work to consume capacity already promised
-implicitly to the child.
-
-Strictly sequential nested algorithms use `SequentialWorkLedger` instead of a
-capacity reservation. Each invocation retains its local v1 cap while accepted
-units stream into the parent stage and root totals immediately; local limits
-win ties, parent failures keep aggregate coordinates, and a rejected unit
-mutates neither view. Whole-body tessellation uses this seam for each face
-patch and graph query, so local 24-pass and 4,096-visit caps restart without
-resetting operation-wide usage.
-
-The unit charged at each stage is part of that stage's documentation and tests. A
-"work" unit is not a time unit. Wall-clock deadlines are deliberately excluded because
-they make the amount of explored geometry machine- and scheduling-dependent.
-
-Budget exhaustion follows the existing proof contract:
-
-- If the API can retain individually verified partial evidence, return it with
-  `Completion::Indeterminate` (or the checker's corresponding verification gap) and a
-  structured `LimitSnapshot`.
-- If no sound partial-result contract exists, return `Error::AlgorithmLimit` during the
-  compatibility period and include the structured limit in the operation report.
-- Never discard candidates merely to fit a budget and then report a complete result.
-- Never turn a configured work limit into `InvalidGeometry`.
-
-F4 may replace `Error::AlgorithmLimit` with a richer shared error variant. F2 owns the
-stable `StageId`, resource, usage, and limit data so that migration does not duplicate
-concepts.
-
-### 5. Return a report without breaking existing `Result<T>` APIs
-
-Context-aware entry points return an outcome that preserves diagnostics even when the
-operation fails:
-
-```rust
-pub struct OperationOutcome<T, E = kcore::error::Error> {
-    result: core::result::Result<T, E>,
-    report: OperationReport,
-}
-
-pub struct OperationReport {
-    policy_version: PolicyVersion,
-    usage: Vec<LimitSnapshot>,
-    limit_events: Vec<LimitSnapshot>,
-    numeric_resolution_stages: Vec<StageId>,
-    diagnostics: Vec<OperationDiagnostic>,
-}
-
-impl<T, E> OperationOutcome<T, E> {
-    pub fn result(&self) -> core::result::Result<&T, &E>;
-    pub fn report(&self) -> &OperationReport;
-    pub fn into_result(self) -> core::result::Result<T, E>;
-    pub fn into_parts(self) -> (core::result::Result<T, E>, OperationReport);
-    pub fn map<U>(self, op: impl FnOnce(T) -> U) -> OperationOutcome<U, E>;
-    pub fn map_err<F>(self, op: impl FnOnce(E) -> F) -> OperationOutcome<T, F>;
-}
-```
-
-This shape avoids putting mutable output sinks in the context, preserves reports after
-errors, and lets each layer retain its classified error without copying report machinery.
-`OperationScope::finish` remains fixed to `kcore::Error` so legacy
-`finish(Ok(value))` calls stay inference-safe; `finish_typed` constructs an outcome for a
-layer-owned error. Reports are assembled only after child work is merged in deterministic
-ordinal order.
-
-`usage` records accepted accounting. `limit_events` separately retains the first
-attempted crossing for each configured stage/resource pair, and
-`numeric_resolution_stages` retains arithmetic-resolution stops. These two semantic
-records are independent of diagnostic level; optional diagnostics add bounded human
-context but are never the only machine-readable explanation for incomplete work.
-
-Existing public functions remain and become compatibility wrappers:
-
-```rust
-pub fn intersect_bounded_curves(/* current args */, tolerances: Tolerances)
-    -> Result<CurveCurveIntersections>
-{
-    let context = OperationContext::legacy(tolerances);
-    intersect_bounded_curves_with_context(/* inputs */, &context).into_result()
-}
-```
-
-The contextual form is additive:
-
-```rust
-pub fn intersect_bounded_curves_with_context(
-    /* geometry and ranges */,
-    context: &OperationContext<'_>,
-) -> OperationOutcome<CurveCurveIntersections>;
-```
-
-Internal helpers take `&mut OperationScope`, not another `OperationContext`, so nested
-work cannot accidentally reset usage. The legacy adapter uses the exact v1 defaults and
-discards only the new report. Existing result contents, completion status, error variant,
-and golden bits must remain unchanged during the compatibility rollout.
-
-### 6. Keep diagnostics structured, bounded, and observational
-
-```rust
-pub struct DiagnosticCode(&'static str); // stable namespaced identifier
-
-pub enum DiagnosticKind {
-    LimitReached(LimitSnapshot),
-    NumericResolution,
-    IllConditioned,
-    FallbackSelected,
-    ProofIncomplete,
-    Cancelled,
-}
-
-pub struct OperationDiagnostic {
-    pub ordinal: u64,
-    pub stage: StageId,
-    pub code: DiagnosticCode,
-    pub kind: DiagnosticKind,
-    pub message: &'static str,
-}
-```
-
-Diagnostics are semantic summaries, not arbitrary logging:
-
-- codes and stage identifiers are stable and machine-readable;
-- messages provide human context but are not control-flow contracts;
-- repeated diagnostics are deduplicated or capped by a documented diagnostic budget;
-- subject-specific details remain in the owning result type when they require topology
-  handles or geometry classes, avoiding a dependency from `kcore` upward;
-- enabling diagnostics cannot change branch selection, work accounting, output order,
-  or model mutation; and
-- callbacks are not invoked from parallel workers. Child buffers are merged by stable
-  work ordinal and only then exposed in the report.
-
-Low-level performance tracing, wall time, thread count, and OS telemetry are explicitly
-non-semantic instrumentation and must not be mixed into the deterministic
-`OperationReport`. They may be collected by benchmark tooling outside the kernel.
-
-### 7. Execution policy controls concurrency, never ordering
-
-`ExecutionPolicy` supports `Serial`, `AtMost(NonZeroUsize)`, and `Available` modes.
-`kcore::parallel` gains context-aware map/reduce primitives while retaining its existing
-wrappers for compatibility.
-
-Normative rules:
-
-- work items receive stable ordinals before parallel execution;
-- result and diagnostic merging is ordinal-ordered;
-- limit and numeric-resolution evidence from child ledgers is merged in that same
-  ordinal order;
-- floating reductions use a prescribed index order or a prescribed deterministic tree,
-  never completion order;
-- budget allocation cannot be an atomic race. A frontier is planned serially or each
-  child receives a deterministic reservation before it runs;
-- unused child reservation is returned only at a deterministic join point and cannot be
-  stolen based on completion timing; and
-- serial and every permitted thread count produce bit-identical results, completion,
-  semantic diagnostics, and budget usage for an uncancelled operation.
-
-External cancellation is allowed only through a read-only token checked at documented
-safe points. Timing determines when cancellation is observed, so a cancelled operation
-does not promise the same usage report across runs. It must return no successful partial
-model mutation, must roll back any active transaction, and must not expose timing-based
-partial geometry as a complete result. Uncancelled runs retain the full determinism
-contract. Cancellation can land after F4 supplies its stable error category; the types
-reserve the boundary now, but the initial F2 slice need not enable it.
-
-## Relationship to procedural geometry `EvalContext`
-
-The procedural geometry graph project owns a narrow per-query `EvalContext` and
-`EvalLimits` for handle resolution, dependency traversal, cache use, cycle detection,
-node visits, and dependency depth. F2 must not create a second graph context.
-
-The ownership relationship is:
-
-```text
-SessionPolicy
-    └── OperationContext
-          └── OperationScope / global deterministic ledger
-                └── child reservation for one geometry query
-                      └── graph EvalContext + EvalLimits
-```
-
-The operation layer constructs an `EvalContext` with exactly the inputs F1 owns:
-
-- a borrow of the graph and the graph project's query-local cache/cycle state;
-- a copy of the operation's existing `Tolerances` value;
-- a deterministically reserved node-visit/depth allowance represented as `EvalLimits`;
-  and
-- an operation-side stable child work ordinal used only to merge the query outcome.
-
-F2 maps F1's typed `DependencyDepthExceeded` and `NodeVisitLimitExceeded` errors into
-the parent ledger/diagnostics without changing the graph error. If exact successful-query
-usage is needed, F1 may expose a small `last_node_visits()`/query-usage accessor; that
-does not move the ledger into the graph. `EvalContext` does not own `SessionPolicy`,
-`NumericalPolicy`, a parallel executor, cancellation semantics, topology, or the
-operation's diagnostic buffer. Conversely, `OperationContext` does not know graph
-descriptors, handle resolution, caches, or cycle stacks.
-
-Direct low-level `kgraph` clients may construct an `EvalContext` with standalone
-`EvalLimits` and default validated `Tolerances`. Higher-level `ktopo`, `kops`, and `kxt`
-clients must derive it from their active operation scope so nested evaluation is charged
-to the caller's operation rather than an independent default budget.
-
-The graph-owned plane/sphere adapter also performs a bounded `kops` proof after
-field resolution when a retained circle needs a nonlinear inverse sphere chart.
-That proof remains outside `EvalContext`: the owner composes
-`GraphSurfaceBudgetProfile`, then pre-admits exactly 128 cumulative Work units
-per retained oblique branch at
-`kops.intersect.spherical-circle-proof-subdivisions`. Exact N/N-1 tests pin the
-crossing independently of the graph node-visit and dependency-depth stages.
-
-The same graph-surface profile composes the scoped NURBS marcher and the
-operation-generated exact-Plane-field/NURBS, exact-Sphere-field/NURBS, or compatible
-direct-NURBS/NURBS proof stage. Compatible direct pairs may use distinct finite
-unit-chart windows only when their axiswise overlap has positive area; discovery
-is clipped to that rectangle while original-control intervals remain the sole
-complete-miss authority. A retained degree-1 Plane branch charges
-`kops.intersect.nurbs-trace-certificate-work` before certification using
-`C + S*2^10*(6T+1)`, where `C` is carrier controls, `S` carrier spans, and `T`
-original-source tensor-span slots. The genuinely curved one-segment fixture
-pins exact 7,170/7,169 Work; residual failure retains the attempted charge.
-Graph evaluation, implicit isolation, grid sampling, and certification all
-remain in one owner scope. A Sphere branch charges
-`S*2^10*(6T+2)` Work and observes `S*2^10` Items plus Depth 10 before proof;
-the one-segment fixture pins exact 8,192/8,191 Work, 1,024/1,023 Items, and
-10/9 Depth, including failed whole-range proof accounting. Direct and nested
-safe sphere-offset chains use that same effective-field proof while graph
-node visits and dependency depth account every retained root-to-basis edge.
-A compatible paired-NURBS branch charges
-`S*2^10*((6R_a+1)+(6R_b+1))` Work and observes the same paired-cell Items and
-Depth. Its one-span fixture pins exact 14,336/14,335 Work, 1,024/1,023 Items,
-and 10/9 Depth. The rounded scalar difference is discovery-only; outward
-original-control differences own the only complete-empty exit.
-
-The varying-normal rational-quarter-cylinder arm adds exactly 7 Work, 1 Item,
-and Depth 1 for its original-derivative regularity proof before the unchanged
-family certificate charge. One descriptor remains available against the
-landed global-X-, global-Y-, or global-Z-normal planar-NURBS, direct analytic
-Plane, and one-descriptor safe-Offset(Plane) peers. Only the direct analytic
-Plane peer admits the complete one- through four-descriptor family: the
-operation proves every intermediate and final radius finite and positive,
-retains the exact outer-to-inner distance sequence, keeps the original basis as
-proof authority, and uses the derived rational effective sheet for discovery
-only. Every chain length keeps
-the existing 7,177/7,176 Work and 1,024/1,023 Items X/Y certificate boundary,
-the 286,768/286,767 Work and 40,960/40,959 Items Z boundary, and 10/9 Depth.
-Graph evaluation consumes exact Work/depth 2, 3, 4, or 5 for one through four
-descriptors with N/N-1 admission. Limit denial plus per-descriptor, same-sum,
-and stale-source mutations remain allocation-clean; descriptor-chain depth
-five or greater and multi-descriptor planar-NURBS or Offset(Plane) peers stay
-unsupported.
-
-The same profile now owns every compatible intersecting planar constant-normal
-dual Offset(NURBS) combination with one through four descriptors on each root.
-The generated branch certificate charges exact 14,336/14,335 Work,
-1,024/1,023 Items, and 10/9 Depth against the two terminal original sources;
-the normalized effective charts remain discovery-only. Graph evaluation separately
-charges exact `A+B+2` Work and `max(A+1,B+1)` dependency depth for chain
-lengths `A` and `B`, with the 4×4 maximum pinned at 10/9 Work and 5/4 Depth.
-Those graph ceilings also govern the retained strict-separated complete miss,
-which uses no certificate budget or persistence allocation. Positive results
-retain both ordered live roots and every transitive basis edge; incompatible,
-coincident, five-or-more-descriptor, altered, and stale inputs fail closed.
-
-Verified X_T intersection-chart import likewise owns its proof budget outside
-`EvalContext`. The historical `IntersectionImportBudgetProfile::v1_defaults()`
-retains its 131,072 cumulative-Work, 65,536 Items, and Depth-10 contract.
-The v2 profile remains the pre-equal-limit compatibility contract at
-81,267,732 Work, and v3 remains the equal-limit contract at 115,485,725 Work.
-Current reconstruction owners explicitly compose
-`IntersectionImportBudgetProfile::v5_defaults()`: it retains the v1 Items and
-Depth ceilings and raises cumulative Work to the corpus-backed 117,478,445
-needed to certify the exemplar's first finite-open direct B-surface/Plane chart
-with paired-null interior Plane UVs and every earlier admitted chart. Historical
-v4 remains fixed at 116,396,069 Work through the first end-terminated `T/F`
-trace. A plane trace
-costs one Work unit per retained chart position. Each NURBS or direct
-`Offset(B-surface)` trace instead costs, per chart span and each of 1,024
-fixed-depth proof boxes, `6 * u_span_slots * v_span_slots + 1`: the six shared
-point/partial-derivative enclosure scans also supply the outward unit-normal
-field for offset lifting. Only seam-safe clamped periodic proof rectangles are
-admitted; no proof box wraps the seam.
-
-The importer observes Items and Depth and preflights Work before retaining
-position/UV arrays or graph geometry, charges Work only after both whole-range
-lifts certify, and relies on the enclosing reconstruction transaction for
-complete topology/geometry rollback. Exact tests pin the canonical plane
-fixture at `4/2/1`, the synthetic two-NURBS-trace proof at `14,336/2/10`, and
-the bounded noncanonical finite-open independent direct one-descriptor
-Offset(B-surface)/Offset(B-surface) family at `14,336/2/10`, `28,672/3/10`,
-`43,008/4/10`, and `57,344/5/10` under polynomial/rational basis combinations
-and operand swap. It retains both roots, signed distances, independent bases,
-and paired UVs; nested, shared-basis, multi-offset, null/mixed, and out-of-range
-forms fail atomically. Exact tests also pin
-the exemplar's v3 equal-limit, v4 terminator, and v5 omitted-Plane-data
-Work/Items/Depth boundaries at `115,485,725/20/10`, `116,396,069/20/10`, and
-`117,478,445/20/10`, including historical-profile rejection, exact N/N-1
-admission, deterministic reports, and rollback. The
-v2 allowance is exactly the cumulative preflight through record 1828; once
-that record is admitted, 34,217,993 later Work units produce the v3 boundary.
-Records 2008 and 1678 are independently pinned at `124,040,223/22/10` and
-`116,413,476` Work through focused payload transplants because earlier
-traversal boundaries mask them in normal file order. Terminated charts append
-one singularity sample and certify its final span; exact Plane null UV pairs
-are inverted analytically, while NURBS endpoint roundoff may snap only within
-`16,384 * EPSILON * domain-scale` before the same whole-range proof.
-Corpus-backed v8 applies that existing endpoint-only rule to finite-open
-nonperiodic record 1984, pins exact `315,245,660/22/10` Work/Items/Depth and
-per-resource N/N-1 denial, and stops before record 5945's attempted 323,814,492
-Work. Corpus-backed v9 admits that exact three-sample finite-open dual-offset
-chart at `323,814,492/22/10`; its common degree-2 interpolants determine the
-candidate, while two original-source offset-NURBS interval residuals determine
-acceptance. Historical v1-v8 budgets remain exact, and v9 has isolated Work,
-Items, and Depth N/N-1 denial. Corpus-backed v10 admits four-sample cubic
-dual-offset record 3819 at exact `336,759,900/22/10`; the chart itself pins
-`12,945,408/4/10`, and its unique degree-3 clamped interpolants remain
-subordinate to two independent original-source proofs. Historical v1-v9
-budgets remain exact. V11 accepts only null or finite-numeric
-zero-multiplicity source-knot padding, admits quadratic record 3790 at isolated
-`8,593,408/3/10`, then exposes and certifies 11-sample Plane/Offset record 3745
-at isolated `42,772,491/11/10`; the corpus reaches
-`388,125,799/22/10` with historical v1-v10 parity. V12 admits seven-sample
-dual-offset polyline record 3615 at isolated `26,443,776/7/10`, reaching
-`414,569,575/22/10` with historical v1-v11 parity. Two-sample dual-offset
-record 3595 separately certifies at isolated `4,352,000/2/10` with exact
-Work/Items/Depth N/N-1 rollback evidence, without changing the production
-profile. Five-sample record 4230, roots `[3320, 773]`, chart 4231, independently
-certifies at isolated `17,285,120/5/10`; v13 admits it at exact
-`431,854,695/22/10`. V14 admits two-sample Plane/Offset record 3609 at isolated
-`4,277,250/2/10` and reaches `436,131,945/22/10` with historical v1-v13 parity.
-V15 admits two-sample dual-offset record 6044 at isolated `4,352,000/2/10`,
-reaches `440,483,945/22/10` with historical v1-v14 parity, and stops atomically
-before four-sample record 5921's `454,258,793`-Work request. At that exact
-budget the preflight admits, but the canonical cubic first pcurve materially
-leaves its original open nonperiodic source domain; certification rolls back
-atomically and retains the v15 report. Material
-and interior
-overhangs are never normalized, and every snapped endpoint remains subordinate to its original-
-source whole-carrier certificate.
-The v5 extension permits paired-null Plane UVs only at interior samples of an
-unterminated finite-open direct Plane/B-surface chart; both endpoints and every
-NURBS UV remain numeric. It then advances the corpus boundary to procedural
-`SP_CURVE` node 30.
-
-## Layer consumption
-
-### `kcore`
-
-- Add `operation` types, policy validation, stable IDs, budget plans/ledgers, reports,
-  and deterministic child reservation.
-- Extend deterministic parallel primitives to accept `ExecutionPolicy`.
-- Keep the current constants and `Tolerances` compatibility API; add
-  `SessionPrecision` and scale-aware numerical helpers alongside them.
-- Do not add geometry-, topology-, intersection-, checker-, or tessellation-specific
-  fields to `kcore`.
-
-### `kgeom`
-
-- Projection gains contextual, fallible entry points. Fixed samples, candidates,
-  iterations, and halvings move to a named projection budget profile.
-- NURBS isolation accepts a child scope/reservation. Its existing
-  `ImplicitIsolationLimits` becomes an algorithm-specific view over common limit and
-  numeric-resolution events; candidate covers remain conservative.
-- Tessellation keeps `TessOptions` for requested quality. Resource caps move to a named
-  tessellation budget profile and limit failures include stage/usage data.
-- Parameter and conditioning checks call `NumericalPolicy` with local range, derivative,
-  coefficient, and Jacobian scales.
-- Pure evaluator methods that are total, bounded, and allocation-free do not need a
-  context solely for uniformity.
-
-### `ktopo` checker
-
-- Add `check_body_report_with_context(store, body, level, context)` and retain current
-  wrappers.
-- Structural Fast checks use fixed session precision and applicable entity tolerance;
-  a caller's looser intersection tolerance must not make an invalid body pass.
-- Deterministic Fast samples may use a named profile but remain fault-detection only,
-  never proof evidence.
-- Loop-orientation faults now bypass sampling entirely. Only whole-interval-certified
-  planar line uses forming finite, nonzero, bit-identically closed, exactly simple
-  rings with nonzero exact polygon signs and a containment-certified unique outer can
-  emit `WrongLoopOrientation`. Curved, periodic, nonlinear-chart, tolerance-joined,
-  exact-zero, and non-finite loops stay silent in Fast and become per-loop Full
-  `LoopOrientation` gaps; unresolved outer/hole roles remain a separate
-  `LoopContainment` gap.
-- Full adaptive checks charge subdivisions, segments, evaluations, and candidate pairs.
-  Exhaustion adds a structured verification gap linked to a limit diagnostic, not a
-  fault and not `Valid`.
-- A `Valid` Full result means all obligations completed inside their limits. Raising a
-  budget may discharge gaps; it may not erase proven faults.
-
-### `ktopo::make` and checked transactions
-
-- Add contextual variants for the internal checked-creation driver first, then public
-  constructors as needed. The one scope spans input validation, topology assembly,
-  affected-body checking, and commit.
-- Limit, cancellation, or checker failure rolls back exactly as current checked commit
-  failures do. Reports can describe attempted work, but committed journals contain only
-  successful model changes.
-- Transaction-owned tolerance-growth budgets remain separate. An operation context may
-  impose a policy ceiling on what a constructor is allowed to declare, but actual
-  entity growth is still declared, charged, rolled back, and journaled by the
-  transaction API.
-- Exact primitive construction should not start depending on model tolerance simply
-  because a context exists. Sub-resolution input rejection continues to follow the
-  documented session/model contract.
-
-### `kops`
-
-- Add context-aware top-level curve/curve, curve/surface, and surface/surface dispatch.
-  Specialized pair algorithms share the caller's scope.
-- Move repeated sample/bisection/polish/minimize/proof limits into named intersection
-  profiles. A specialized solver can add stage-specific entries without changing the
-  public function signature.
-- Replace repeated parameter-tolerance helpers with common scale-aware recipes, while
-  preserving independent model-space residual acceptance.
-- Report conditioning, fallback selection, proof budget exhaustion, and retained partial
-  evidence structurally. Completion survives dispatch normalization and nested calls.
-- Analytic closed forms still charge bounded work only if useful for aggregate metrics;
-  context introduction must not force them through iterative infrastructure.
-
-### Tessellation across `kgeom` and `ktopo::btess`
-
-- `TessOptions` remains the quality request shared by face/body tessellation.
-- A body tessellation owns one scope. Boundary discretization, per-face tessellation,
-  stitching, and output assembly use named child stages and one aggregate output/scratch
-  budget.
-- Shared edges are discretized once as today. Per-face parallelism reserves deterministic
-  child budgets by face order, and face meshes are spliced in that same order.
-- Hitting a cap without meeting chord/edge/angle quality is a limit failure; the kernel
-  never returns a lower-quality mesh labeled successful.
-
-## Compatibility and migration strategy
-
-The project is additive and staged. There is no repository-wide signature rewrite.
-
-1. Keep every existing public function and its existing defaults.
-2. Add `_with_context` entry points only at top-level API seams. Internal pair/helper
-   functions accept `&mut OperationScope` as they migrate.
-3. Implement legacy wrappers in terms of contextual entry points with an exact v1
-   compatibility policy.
-4. Preserve current return values and errors in wrappers. New reports are opt-in until
-   the facade/C API chooses a stable public representation.
-5. Move constants in behavior-preserving pilots before tuning any value. Default-value
-   changes require their own evidence, corpus update, and policy-version decision.
-6. Do not require leaf analytic evaluators or simple arena accessors to accept context.
-   Context appears where work can be iterative, recursive, procedural, parallel,
-   diagnostic-bearing, or state-changing.
-7. Once a contextual path passes bit/result/error/report equivalence, close the
-   old entry point to new crate-internal production callers with Clippy
-   `disallowed-methods` or an equivalent targeted source audit. Compatibility
-   tests may call it under an explicit local allowance. Public `#[deprecated]`
-   follows only after K5 proves the supported replacement against a real
-   consumer; removal remains a separately announced compatibility decision.
-
-### Legacy API retirement ratchet
-
-Every migrated entry point moves monotonically through these states:
-
-1. **contextual alternative available** — both generations remain callable;
-2. **equivalence proven** — v1 defaults match outputs, errors, completion,
-   reports, journals, rollback, and determinism;
-3. **internal legacy use closed** — new production code cannot call the legacy
-   wrapper, while focused equivalence tests keep it exercised;
-4. **publicly deprecated** — only after facade adoption confirms that the
-   contextual/facade replacement is sufficient; and
-5. **removed** — only under the repository's explicit compatibility policy.
-
-The owner project records the state when it migrates an entry point. This
-ratchet applies to tessellation, checking, NURBS marching, intersection slack,
-and future contextual families; “opportunistic migration” is not permission to
-add new legacy callers.
-
-Whole-body tessellation is at state 4. Production `ktopo`/`kxt` callers use
-the contextual or shared-scope entries with one operation per body, while the
-adopted `kernel::Part::tessellate_body` application path owns one scope and
-returns facade-safe mesh identities plus the exact report. The legacy wrapper
-is publicly deprecated but retains exact v1 compatibility behavior;
-`scripts/legacy_api_contract.py` audits `kernel` as well as lower production
-trees, rejects new references, and requires the deprecation to remain. The
-standalone `kgeom::tess::tessellate` wrapper is also at state 3 after the
-contextual half-cylinder ladder proved all five stages and exact mesh/report
-repeatability. The same audit rejects new production references to it across
-`kgeom`, `ktopo`, and `kxt`. The standalone face wrapper is not publicly
-deprecated because `kernel` does not expose an adopted standalone-face path.
-Standalone `kgeom::project::project_to_surface` is also at state 3: contextual
-and shared-scope paths are proven in projection, surface-point services, and
-body tessellation, and the source audit permits the legacy symbol only in its
-public definition, focused tests, and the two compatibility surface-point
-wrappers that preserve the old invalid-query behavior. X_T reconstruction now
-uses the contextual curve projector for both endpoints of every untrimmed NURBS
-edge under one graph-plus-projection owner profile. Its query aggregate is
-accounting-only at `u64::MAX` until broader import evidence supports a finite
-cap, while request overrides can impose an exact lower ceiling. Ellipse
-intersection now owns one contextual scope for all of its candidate projections
-and preserves complete-result bits under compatibility defaults. Its exact
-query N/N+1 crossing is pinned. Every `ProjectionError` variant now crosses the
-ellipse solver as `IntersectionError::Projection` with unchanged
-class/code/limit, no capability, and its direct source; `Policy` also retains
-the underlying `OperationPolicyError`. The direct
-`intersect_bounded_ellipses` entry returns `IntersectionResult` so the
-contextual source cannot be flattened by a legacy `kcore::Result` adapter.
-Both standalone projection wrappers are therefore at state 3 and closed to new
-production callers. The aggregate
-compatibility profile admits the algorithms' terminal Newton/backtracking
-sentinel observation; strict single-query defaults retain their existing stop.
-
-The `kernel` facade now adopts the contextual generic curve/curve dispatcher
-through `Part::intersect_curves`. It composes the aggregate projection profile
-before one scope, preserves exact lower report and limit snapshots, and adapts
-results to part-qualified identities without exposing the scope or descriptors.
-This is the first public owner replacement for that operation family; broader
-intersection families still follow their own contextual proof and adoption
-gates.
-
-Curve/curve dispatch now normalizes the complete current class matrix before
-specialized routing. Each unordered class pair has one dispatch arm; reversed
-calls swap the canonical result afterward, preserving completion and first-
-operand ordering without a second algorithm path. The certified fallback enters
-at this same normalized boundary and returns indeterminate evidence until
-complete-domain exclusion is proven.
-
-Its first exclusion rung is now live for NURBS/NURBS: outward interval position
-enclosures evaluated directly over each original-source range can prove a
-complete miss before fixed-grid candidate discovery. Each enclosure is tightened
-by the conservative whole-source positive-weight control hull and fails open to
-that hull if range evaluation is inconclusive. Exactly one box is outward-inflated by the model
-tolerance, so strict separation is sufficient while contact at the inclusive
-tolerance boundary remains an indeterminate candidate. A second interval rung
-computes an outward-safe Euclidean squared-distance lower bound between the
-two source-range boxes. It removes diagonal false positives when no individual axis
-gap exceeds tolerance but their combined distance does; comparison uses an
-upward-rounded squared tolerance, so the inclusive boundary remains retained.
-Deterministic binary subdivision of both curves refines every retained subcurve
-pair; generated controls partition the search and seed polishing but never prove
-exclusion. Each distinct child range box is evaluated once before the pair
-Cartesian product. The composed family profile accounts setup/subdivision work cumulatively and
-candidate/depth high-water; a denied split retains its parent cell, and an
-unrepresentable midpoint records numeric resolution without dropping cover.
-Only an empty complete cover upgrades the intersection to a proven miss.
-Each initial enclosure scan and each pair of child-range scans now pre-admits
-one Work unit per inspected original-source knot-span slot plus its logical
-setup/split unit. The one-span depth-six default is therefore 6,828 units.
-Exact N/N-1 coverage proves that a denied child scan retains its parent before
-interval evaluation; arbitrary curve control counts can no longer hide inside
-one logical split.
-
-Surface-patch exclusion follows the same provenance rule without reusing
-rounded extracted or child hulls as proof. Tensor-product outward interval de
-Boor bounds over the original source rectangle are intersected with its active
-source-support hull and a centered derivative mean-value enclosure. Any
-inconclusive arithmetic fails open. BVH, plane/implicit filtering,
-`NurbsSurface::bounding_box`, and adaptive children use those source bounds;
-rounded patches only partition and seed. Contextual evaluation now admits that
-heavier work before it executes. For `R = (nu - pu)(nv - pv)` original tensor
-span slots, including repeated/empty slots, one source-range enclosure costs
-`W = 6R + 1`: support and direct scans, the centered point, and the paired
-position/derivative scans in both parameter directions. Contextual BVH build
-preflights `R*W`; each adaptive parent preflights `1 + 4W` before either
-possible axis split or any child bound. Exact N/N-1 tests cover repeated-knot
-multi-span build, the cubic roundoff contact, and the composed public marcher;
-denial consumes no partial unit and retains the admitted parent/source cover.
-
-Retained curve-pair cells now drive discovery directly instead of being
-discarded before a second global fixed-grid search. Each cell contributes at
-most one deterministic chord-or-midpoint seed, one statically bounded
-safeguarded polish attempt, and—only after re-evaluation inside both cell
-ranges—a tolerance-level contact witness. The composed curve/curve profile
-charges these attempts cumulatively at
-`kops.intersect.nurbs-curve-pair-seed-attempts`; its 4,096 allowance matches
-the isolation cover ceiling. Exhaustion returns the discoveries accumulated so
-far with indeterminate completion and an exact report crossing. A verified
-tolerance witness proves only that emitted contact, not root uniqueness,
-complete-domain discovery, or coincident-interval extent.
-
-Exact overlap equivalence owns a separate pre-discovery admission stage,
-`kops.intersect.nurbs-curve-pair-overlap-equivalence`, with cumulative Work
-and Items resources. A conservative deterministic formula covers normalized
-knot/control/weight scans, common-knot reconstruction, and bounded checked
-inverse-refinement state plus temporary logical slots before their first
-allocation. Distinct representations therefore cannot return `Complete` with
-zero unbounded work. Exact N/N-1 Work and Items crossings return one ordered
-structured incomplete obligation and stop before isolation; pointer-identical
-operands retain a constant zero-work fast path.
-
-Newton termination is now typed internally as gradient stationarity,
-ill-conditioning, failure to find descent, parameter resolution, or the fixed
-iteration bound. A failed witness emits the corresponding stable `kops`
-diagnostic when bounded summary diagnostics are enabled; parameter-resolution
-stops also remain in the report's always-on numeric-resolution stage evidence.
-Selecting the bounded local minimizer emits a separate fallback diagnostic.
-The fallback's nested point/curve and curve/curve searches also return typed
-parameter-resolution, invalid-objective, or iteration-bound stops. Their
-observed categories are unioned in a stable order so inner termination cannot
-disappear; when the attempted fallback still produces no verified witness,
-bounded diagnostics retain those categories and parameter resolution remains
-always-on stage evidence.
-Accepted residual witnesses remain authoritative and do not become failures
-merely because Newton ended at a stationary or ill-conditioned state.
-
-Curve/curve results now retain the unresolved proof obligations themselves,
-not only the prose completion reason. Exact isolation limits, arithmetic and
-method stops, the cell-local seed crossing, and the remaining complete root /
-overlap coverage capability stay ordered through canonicalization, swapping,
-generic dispatch, and the facade. Q4 hashes this evidence and ordered overlap
-ranges/orientation separately from contact geometry, records overlap Work and
-Items usage plus allowances, and folds them into its semantic output digest.
-
-The first root-existence substrate is also landed on exact curve-pair cells.
-For polynomial or positive-weight rational subcurves in an exactly shared
-affine plane, source-range interval face signs discharge Poincaré–Miranda existence and
-source derivative hulls prove a strictly positive P-matrix Jacobian, giving
-one unique exact transverse root in the parameter rectangle. Exact robust
-orientation predicates prove coplanarity and choose an injective XY, XZ, or YZ
-projection without normalizing a floating plane normal. Noncoplanar pairs can
-instead use exact rational de Boor equality on a bounded source-parameter set
-`{mid,lo,hi} × {mid,lo,hi}` or equal source points at in-range knots whose
-multiplicity equals degree. A third noncoplanar existence route uses no guessed
-parameter: exact same/reversed normalized knots, globally proportional positive
-rational weights, and identical carrier/omitted scalar controls establish an
-exact affine parameter correspondence. A strict source-range derivative sign
-makes the carrier injective; exact carrier face ordering, interval crossing
-faces, and the existing range P-matrix then lift the projected root to 3D. The
-Q4 normalized `1/3` case is interior to a partial range and is neither an
-endpoint, midpoint, nor full-multiplicity knot. Unsupported representation,
-unsafe expansion product, nonrepresentable mapping, nonproportional weights,
-or nonmonotonicity fails closed. Candidate cells retain the original source curves;
-generated rounded controls are used only for partitioning and seed machinery.
-Exclusion and stored bounds use the original-source interval enclosures described
-above. Direct
-outward interval de Boor over each original knot span encloses homogeneous
-positions and the exact homogeneous derivative-control B-spline, then applies
-the rational quotient rule. The same source-range P-matrix proves the projected
-difference globally injective. Degree, expansion, exponent, sample, interval,
-or Jacobian failure remains inconclusive. Projected-only equality, simple-knot control-point equality,
-tangent/singular, multi-root, and interval-inconclusive cells return no
-certificate. The NURBS/NURBS solver retires the coverage gap only when
-isolation completed and every deterministic candidate component has both a
-unique-root certificate and a verified emitted representative. Polynomial and
-positive-weight rational transverse crossings therefore complete, as do
-separated two-root components. Tangent and interval-inconclusive cases
-continue to fail closed.
-
-The same proof is now available over validated caller-supplied source ranges,
-not only individual retained leaves. This lets a later ownership pass join
-adjacent cells around an exact subdivision boundary and certify their bounding
-parameter rectangle once. The solver now forms those components through exact
-shared parameter-grid vertices, orders their bounding ranges deterministically,
-and associates one representative with each certificate. The rational
-transverse control therefore completes even though not every closed leaf can
-independently discharge boundary existence. Seed-limit stops still prevent
-completion regardless of available component proof.
-
-Exact overlap extent proof now recognizes affine parameter-domain mappings,
-globally proportional positive rational weights, clipped same/reversed ranges,
-and deterministic knot-insertion descendants. Independently rounded insertion
-histories enumerate bounded inverse candidates; no candidate is trusted until
-production reinsertion reproduces the descendant exactly, and only a common
-checked ancestor grants history-independent equivalence. Those results return
-one `Complete` overlap with exact orientation and no isolation work. Altered
-refinements and tolerance-sampled near-coincidence remain `Indeterminate`.
-
-That normalized boundary now has contextual and shared-scope public entries.
-The contextual entry composes the curve/curve family profile once and creates
-one scope; ellipse/ellipse borrows it for every projection, while NURBS/NURBS
-uses the same scope for exact pair isolation, bounded seed attempts, and the
-caller's numerical policy without creating a nested report. The legacy generic
-entry is an exact v1 adapter. Focused evidence pins
-legacy result equivalence, shared-scope report equality, exact projection
-N/N+1 failure, exact isolation boundaries, reversal/completion preservation,
-and custom NURBS numerical stops through the generic dispatcher.
-
-Surface/surface dispatch uses the same single-arm rule. Its internal canonical
-rank is Plane, Cone, Cylinder, Sphere, Torus, then NURBS; this intentionally
-differs from the public class enum order so the cone/cylinder specialization
-retains its established cone-first contract. Result swapping restores caller
-order for points, branches, pcurves, and completion evidence.
-
-Curve/surface dispatch now uses the same centralized runtime class inspection
-and one typed arm per supported pair. Analytic pairs and the provisional NURBS
-curve bridges therefore enter through one driver boundary, while unsupported
-known and custom classes retain both operand identities in the structured
-`curve-surface.class-pair` capability error. The NURBS bridges remain
-`Indeterminate`; typed routing does not upgrade discovery evidence to a proof.
-Finite curve/surface range validation and two-axis surface-window fitting now
-share one ordered contract across analytic plane families, NURBS/plane, and the
-general NURBS curve marcher while retaining each solver's public error reason.
-
-The analytic containment boundary now keeps metric tolerance out of harmonic
-identity decisions for planar circle/ellipse-by-plane and circle-by-sphere.
-Exact source signs first classify identity, nonzero constant, or a general
-harmonic. The plane path treats identical/opposite stored normals according to
-the semantic orthonormal `Frame` contract and otherwise uses exact affine
-signs. The sphere path combines exact center-axis affine signs with
-`squared_distance_difference3`, whose interval and expansion paths never make
-a rounded center difference authoritative. Exact identity emits the existing
-bounded overlap path; a nonzero constant is a complete miss; unavailable
-classification or a source-general relation erased to a rounded identity stays
-`Indeterminate`. Analytic surface/surface solvers that construct a circle
-already proved to lie on a sphere keep a circle-only proof-carrying
-sphere-window clipping entry. Plane/sphere additionally keeps the corresponding
-plane-window entry. These avoid re-establishing provenance from a re-normalized
-carrier frame or rounded derived radius.
-
-The shared `kops` periodic harmonic adapter also no longer uses parameter
-tolerance to collapse distinct classified roots. Tolerance selects or
-endpoint-clamps a representative only, and an identical numeric parameter
-produced by distinct roots is incomplete evidence. Final world-point emission
-deliberately retains linear-resolution physical deduplication. Its contained
-planar-conic and primitive-surface window partitions retain
-coefficient/root-index provenance, so distinct numeric cuts remain separate
-even below tolerance, exact same-equation root collisions are
-`Indeterminate`, and only exact zero-width source ranges collapse to points.
-Exact full-period periodic axes contribute one seam equation; near-full ranges
-retain both. Thus this slice protects root topology through `kops` parameter
-fitting and window partitioning without changing the kernel's contact
-coincidence admission policy.
-
-The `kgraph` oblique spherical seam helper now checks source-derived
-coefficient signs, carries per-root provenance and exact derivative direction,
-and uses bounded algebraic side proofs for crossings and tangencies. Strictly
-positive or negative evidence selects the side; evidence containing zero fails
-closed as a singular chart. Same-root periodic aliases may merge, distinct
-close roots remain separate, and numeric collisions fail typed. Exact and
-clamped representatives remain distinguished, but only exact endpoint roots
-create one-sided anchors. Ranges wider than one period are unsupported.
-
-The provisional NURBS/plane arm has now separated proof authority from numeric
-guidance. `kcore::predicates::affine_dot3` interval-certifies ordinary
-`normal · (point - origin) + bias` signs and falls back to an exact expansion of
-the six point/origin products plus bias; non-finite input or a fallback outside
-the conservative normal-component/exponent envelope returns `None`. Its
-ordinary approximation bits, exact-zero and cancellation behavior, 20,000-case
-integer oracle, lost-subtraction residue, and cross-platform numeric golden are
-pinned.
-
-Over a finite source parameter range, original homogeneous interval de Boor and
-exact affine signs of the active original controls are the only authorities for
-plane-slab exclusion/containment and the asymmetric affine bands representing
-the finite plane `u`/`v` window. Rounded restriction, Bezier extraction, and
-recursive split controls only choose numeric subdivision and sign-variation
-guidance. Candidate points are re-evaluated on the original source; exact slab
-signs own acceptance and bisection brackets before surface-window fitting and
-residual validation. A `Candidate` range at a leaf, the static depth-72 stop, or
-either static 65,536-node root/window cap emits no certified miss or overlap,
-and the result remains `Indeterminate`.
-
-Overlap ranges require source proof in the plane slab and both window bands.
-Candidate UV boundary cells fail open. Canonical merging fills only actual
-parameter contact: it does not bridge a tolerance-sized gap, and a nested range
-does not replace the longer range's endpoint. Ordinary crossings pin exact
-`t = 0.5` bits and repeat equality. Legacy-failing evidence covers the oblique
-raw-zero false-overlap case together with zero-range rejection and curve/normal
-reversal, a midpoint plane contact erased from both rounded split control nets,
-and a finite-window excursion erased by the same split rounding; the merge
-unit additionally pins touching, nested, and nonzero-gap behavior.
-
-This closes the NURBS/plane sign-authority debt, not the operation-policy or
-completion gate. Root isolation remains incomplete, root and window node/depth
-caps remain static and non-contextual, unresolved UV boundary cells remain
-indeterminate, and affine exact fallback outside the reviewed envelope plus
-general NURBS, generic higher-polynomial, and broader topology-decision audits
-remain open.
-
-## Rollout stages
-
-### Stage 0 — Audit and vocabulary lock
-
-- Classify production constants as model acceptance, numerical guard, requested output
-  quality, proof/work limit, security/input limit, or test-only assertion tolerance.
-- Assign stable namespaced stage and diagnostic IDs for the pilot paths.
-- Record current defaults and golden outputs before moving code.
-
-Exit: every pilot constant has one documented category; no behavior changes.
-
-### Stage 1 — Land inert `kcore` infrastructure
-
-- Add validated `SessionPrecision`, `NumericalPolicy`, `SessionPolicy`,
-  `ExecutionPolicy`, `OperationContext`, `OperationScope`, budget/ledger/report types,
-  and deterministic child reservation.
-- Add unit tests for validation, accounting boundaries, report ordering, and policy
-  versioning.
-- Add context-aware parallel map helpers.
-
-Exit: types are usable without any production operation depending on them; existing
-tests and determinism hashes are unchanged.
-
-### Stage 1b — Consolidate operation-family profile composition
-
-Status: implemented for graph evaluation, graph-owned surface intersection,
-Full checking, and face tessellation; later contextual families must use the
-same contract.
-
-- Add one owner-level composition API in `kcore`: operation-family defaults
-  fill missing stage/resource entries, session entries override those defaults,
-  and explicit request overrides are the only allowed later override.
-- Preserve the root total-work ceiling and canonical stop identity through all
-  three layers.
-- Migrate graph evaluation, Full checking, and face tessellation profile setup
-  to this API; prohibit new owner-local overlay helpers.
-- Add cross-family tests for omitted stages, stricter session stages, explicit
-  overrides, accounting-mode mismatches, and root-versus-leaf precedence.
-
-Exit: every contextual family composes policy the same way, and no facade or
-operation crate implements its own default/session/request merge semantics.
-
-Implementation evidence: `OperationContext` retains family defaults, session
-entries, and explicit request overrides as distinct layers and composes them in
-that order. Builder call order is irrelevant; matching entries replace rather
-than silently taking a minimum, accounting-mode changes remain visible to the
-family's validation, and root total-work overrides retain the canonical
-`kcore.operation.total-work` stop. The facade's former local overlay helper was
-removed. Outer graph evaluation, graph-owned surface intersection, Full
-checking, and face tessellation install their owner profiles, while nested
-`*_in_scope` paths continue to validate and borrow the parent ledger without
-re-profiling or resetting work.
-
-### Stage 2 — Behavior-preserving proof/refinement pilots
-
-- Migrate `NurbsSurfaceBvh::isolate_implicit_candidates` as the geometry pilot.
-- Migrate the NURBS surface/implicit intersection proof path as the `kops` pilot.
-- Migrate face-domain containment or one Full checker proof as the `ktopo` pilot.
-- Adapt graph `EvalContext` construction when F1 lands, using child budget reservation
-  rather than duplicating policy.
-
-Exit: default results are bit-identical; candidate/depth exhaustion is visible as
-structured data; checker exhaustion remains indeterminate.
-
-### Stage 3 — Numerical-policy pilot
-
-Status: NURBS/NURBS Newton symmetric 2×2 conditioning, collapsed-range routing,
-accepted-step progress, and normalized directional-gradient stationarity now
-use shared scale-aware policy recipes. Every Newton termination has a typed
-internal outcome and stable bounded report diagnostic; parameter-resolution
-failures also retain always-on stage evidence. Contact classification now uses
-overflow-safe normalized tangent directions; point/curve minimizers use
-relative objective and unit-parameter progress guards; local search is scaled
-only by its owning range; and clamped Newton steps use their actual accepted
-displacement. Model residuals retain sole contact and overlap authority.
-Segment conditioning, legacy overlap/input and parameter-deduplication slack,
-and migration of the other intersection-family minimizers remain separate
-work.
-
-- Replace the repeated NURBS intersection parameter-tolerance helpers with the
-  scale-aware policy API.
-- Replace the absolute determinant/gradient/progress guards in the NURBS/NURBS solver
-  with normalized conditioning and scaled-zero checks.
-- Keep old v1 numerical behavior where it is semantically valid; where an old absolute
-  threshold is unsound, fix it in a separately reviewable change with adversarial scale
-  tests.
-
-Exit: candidate acceptance still depends on model residuals; parameter/conditioning
-guards have no direct proof authority; scale tests pass.
-
-The NURBS/NURBS contact-classification and minimizer/progress gate required by
-F3 is complete. Evidence covers parameter domains `1e-13`, `1`, and `1e13`,
-model scaling and translation, operand swapping, V1 contextual equivalence,
-zero derivatives, affine-offset representability, and negative residual gates.
-Broader pair-file migration still follows the portfolio order and does not
-turn these numerical guards into proof or acceptance authority.
-
-### Stage 4 — Projection and tessellation
-
-Status: projection and face/body tessellation now have contextual and
-shared-scope entry points. Whole-body tessellation owns one scope across graph
-queries, projection fallback, edge/iso depth and split work, prepared UV/patch
-items, per-patch face work, retained vertices, and retained body triangles;
-local caps, aggregate/root failures, diagnostics, legacy bits/errors, and
-Serial/fixed/available execution-policy equivalence are covered. Per-face
-boundary splits, mesh vertices, retained triangles, and every named body-owned
-split/preparation/output family now have exact pre-allocation admission and
-composition evidence. The prepared-patch stage intentionally starts at UV-chain
-construction; a distinct edge-storage stage now admits pre-UV face-use, seed,
-recursive-interior, retained-sample, and edge-record slots plus final polyline
-records and indices. A structural-items stage now admits one shared topology
-plan, identity-membership scratch, topology/mesh mappings, owner ranges, and
-all remaining non-edge holder slots before allocation. Compatibility-v1 body-
-wide preparation, edge-storage, structural, and triangle allowances remain
-accounting-only at `u64::MAX`. The 18-row face matrix and 32-row
-`body-tessellation.v3` matrix close the corpus evidence gate. The opt-in
-`bounded_v1` profiles choose the next power of two at or above twice every
-measured nonzero maximum, preserve zero, and retain smaller existing algorithm
-ceilings. Face caps in profile order are `16/512/16/131072/65536` with root
-Work 512. Body caps are projection `30/6/60/32/625`, nested face
-`16/0/64/200000/524288`, graph `64/8192`, and body
-`16/512/2048/16/1024/524288/524288/1048576/256`, with root Work 8192. All
-matrix rows pass; exact observed root crossings are 222/221 and 2,822/2,821.
-
-- Add fallible contextual projection APIs and remove public panic behavior through the
-  new path.
-- Migrate face and body tessellation resource limits while retaining `TessOptions`.
-- Verify serial/fixed/available parallel equivalence before enabling new face-level
-  parallel execution.
-
-Exit: quality failures are never silent, reports identify the limiting stage, and all
-thread-count variants produce identical mesh bits and semantic reports.
-
-#### Immediate tessellation allocation-hardening slices
-
-The contextual path is not yet a complete hostile-input allocation boundary.
-The next slices are ordered so accounting vocabulary and compatibility evidence
-land before any product cap is selected:
-
-1. **Landed:** `kgeom` has per-patch boundary-split `Work/Cumulative`, mesh-
-   vertex `Items/Cumulative`, and triangle `Items/HighWater` stages.
-   Compatibility v1 uses the u32 representability ceiling for split/vertex
-   items and the existing 200,000-triangle backstop; admission happens before
-   midpoint, refined-trim copies, earclip retention, or refinement-generation
-   allocation. Exact N/N+1, physical-cap, atomic-precedence, child/sequential
-   composition, root-work, execution-policy, and multi-hole output evidence is
-   in the owning tests.
-2. **Landed:** the body profile composes the per-face names and maps every leaf
-   plus generic root failure to stable diagnostics. Body-wide exact-edge and
-   iso-arc split `Work/Cumulative` stages use the u32 representability ceiling
-   in compatibility v1 and contribute to root total work. Each split observes
-   and accepts the next local depth first, then atomically admits leaf and root
-   work before retained-midpoint evaluation, scratch mutation, or recursion.
-   Curvature decisions cache the one midpoint evaluation needed to establish
-   the split. N/N+1, simultaneous depth/work, failure-atomicity, mixed body/face
-   root aggregation, legacy output, and execution-policy evidence is in the
-   owning tests. Recursive iso-interior scratch has exactly one retained slot
-   per accepted iso split, so that allocation is governed one-for-one by this
-   Work stage rather than duplicated into prepared-patch item accounting.
-3. **Landed:** `ktopo` has prepared-patch and retained-body-triangle
-   `Items/Cumulative` stages. Their compatibility-v1 allowances are `u64::MAX`:
-   the counters and pre-allocation seams are exact, but finite aggregate caps
-   require corpus evidence because legacy accepts arbitrarily many faces and
-   patches.
-4. **Landed:** patch builders charge each logical `(uv, global-id)` item before
-   materializing raw/unwrapped chains, arcs, rows, shifted loop copies, patch
-   polygons, cleaned `TrimLoop` copies, or local/global map slots. Checked
-   inclusive/`usize`/physical-capacity arithmetic fails with typed accounting
-   overflow before allocation. Body triangle accounting scans the mapped face
-   result, charges only retained nondegenerate triangles, then allocates in the
-   same deterministic order; later patch/face/body moves do not recharge the
-   same output.
-5. **Landed:** `ktopo` has an edge-storage `Items/Cumulative` stage. It charges
-   every body-owned face-use scratch slot, fixed seed, recursive refinement
-   interior, retained parameter/global-id sample, pre-UV edge record, final
-   vertex-index copy, and final edge-polyline record before its first relevant
-   allocation. Intentional copies recharge; ownership moves do not. Checked
-   `usize`/physical-capacity arithmetic, exact block/ring goldens, N/N+1 atomic
-   denial, coupled mesh/sample precedence, shared-scope cumulative crossing,
-   accounting overflow, final-polyline equality, and execution-policy/legacy
-   equivalence are covered. Compatibility v1 uses `u64::MAX` because no truthful
-   finite legacy aggregate is known.
-6. **Landed:** `ktopo` has a structural-items `Items/Cumulative` stage with a
-   compatibility-v1 allowance of `u64::MAX`. One admitted `BodyTopologyPlan`
-   replaces repeated `faces_of_body`/`edges_of_body`/`vertices_of_body`
-   temporaries and quadratic identity dedup while preserving first-seen order.
-   The stage charges plan identities, deterministic membership scratch,
-   `vgids`, `face_ranges`, `chains`, `holes`/`patch_holes`, outer
-   `loops_pts`/`loops_ids`, `trim_loops`, and torus `au`/`av` holder rows. It is
-   separate from retained content items, so payload moves do not recharge
-   edge/prepared/output units. The reviewed block golden is 84: 46 topology-
-   plan vector/membership items, 8 vertex mappings, 6 face ranges, and 24
-   ordinary loop/trim holders. Closed-sphere, torus, multi-hole, N/N+1, paired-
-   holder atomicity, shared-scope, overflow, diagnostic, legacy, and execution-
-   policy evidence is in the owning tests.
-7. **Face and body representation evidence gates closed:** Q3's contextual
-   `body-tessellation.v3` ladder records all 21 aggregate stages across 32
-   rows: twenty generalized legacy solids plus four tiers each for a locally
-   verified genuinely curved NURBS block, a historically host-certified plane
-   sheet, and a historically host-certified full-period cylinder sheet. The
-   matrix has 24 solids and eight sheets, preserves the legacy analytic mesh
-   bits, and verifies identical reports on
-   repetition. The certified B-surface fixture activates projection candidates,
-   Newton depth, queries, and samples. The certified tolerant edge proves two
-   explicit NURBS pcurve uses remain projection-free while graph work composes.
-   Body-level face-boundary use remains zero by design: shared edges are
-   pre-refined and frozen, and any nested boundary insertion is a crack-
-   prevention error. A separate contextual 18-row matrix now crosses plane,
-   analytic half-cylinder, and genuinely curved rational-quadratic NURBS
-   surfaces with outer, one-hole, and three-hole trims at two tolerances; it
-   pins all five face-profile stages plus trim/boundary, lift, orientation, and
-   area evidence. Solids and sheets share exact directed-incidence,
-   topological-boundary, and face-sense orientation checks, with signed volume
-   for solids and faceted area for sheets. The curved block's `3e-4` tier is
-   truthfully excluded because 25 refinement passes exceed compatibility v1's
-   limit of 24; its finest admitted tier is `5e-4`. The full-period cylinder
-   sheet uses a proven rectangular chart split into quarter-period patches and
-   needs no area exception. Both representation/trim evidence gates are now
-   closed. The reviewed explicit
-   `FaceTessellationBudgetProfile::bounded_v1()` and
-   `BodyTessellationBudgetProfile::bounded_v1()` presets with finite aggregate
-   and root caps are implemented and exercised by every matrix row. Legacy
-   wrappers stay on compatibility `v1_defaults`; the facade lifecycle client
-   and X_T oracle/inspector explicitly opt in through request overrides. The
-   current fuzz targets do not invoke tessellation, so there is no fuzz call
-   site to migrate. No later policy version promotes these values implicitly.
-
-`TrimLoop::cleaned_point_count` now validates both the retained count and exact
-nonzero cyclic orientation before `TrimLoop::new` allocates its cleaned copy.
-It and `TrimmedSurface` outer/hole winding consume the streaming
-`polygon_orientation2d_iter` sign without retaining or allocating a coordinate
-copy. Consecutive and closing duplicates remain allowed by cleanup, while exact
-zero and non-finite inputs fail closed. Rounded `TrimLoop::signed_area` is
-reporting and magnitude evidence only. The `2^52`-translated unit-square
-conformance case has a naive shoelace sum of zero yet remains rotation-invariant
-and flips sign under reversal, protecting outer and hole decisions. The
-original input `Vec<_>` is already accounted at every body-owned builder site.
-A future public path that accepts caller-created raw trim vectors still needs
-an iterator or declared-count builder seam to govern that caller-side
-collection; accepting an already materialized `Vec<_>` can protect only later
-copies.
-
-The ordinary-face `ktopo` body path now selects exactly one exact-positive
-outer loop before the existing periodic hole anchoring and outer-first loop
-order. Duplicate or missing positive outers, exact-zero loops, and non-finite
-loops fail closed. Its `2^52`-translated unit square has exact doubled area
-`+2` where the former naive shoelace sum is zero; rotation/reversal evidence and
-the public planar-sheet repeat fixture preserve deterministic tessellation.
-
-Periodic side-face ordering now has a separate source-proof seam.
-Line2d/Circle2d authored bounds and active original positive-weight
-NurbsCurve2d control hulls enclose each fin's complete vertical coordinate.
-After shared pcurve-definition validation, complete all-pcurve loops on a
-non-vertical-periodic chart with zero vertical shift must prove strict
-`top.lo > bottom.hi`. Certified reversed order remains invalid geometry;
-overlapping, mixed, vertical-periodic, shifted, or unsupported evidence returns
-the stable `ktopo.tessellation.periodic-loop-vertical-separation` capability.
-The former sampled mean is retained only for two wholly pcurve-less loops.
-
-This source scan is allocation-free but currently uncharged, matching the
-ordering scan it replaced. A future policy slice may add an explicit stage if
-profiling or hostile-input accounting requires one; the current bounded
-tessellation profiles and result bits remain unchanged for admitted cases.
-
-### Stage 5 — Checker/make integration
-
-Status: X_T reconstruction and checked-commit Fast validation are contextual.
-Facade import installs one graph family profile before parsing, owns one scope,
-and gives reconstruction plus checked commit one deterministic child spanning
-both phases.
-Checker loop orientation now uses no sampled or magnitude authority: strict
-planar straight-loop exact signs and robust containment alone can emit a Fast
-fault. Unsupported curved or periodic loops produce explicit Full
-`LoopOrientation` gaps without changing Fast fault ordering, and
-`LoopContainment` remains the separate outer/hole-role obligation.
-Face metadata, SP-curve validation, face-domain validation, and procedural
-checker samples share cumulative node visits and dependency-depth high-water,
-including canonical aggregate and root-total crossings. Policy stops roll back
-the exact transaction, allocator, index, and journal state; ordinary evaluator
-failures retain the checker's established fault ordering. Legacy wrappers use a
-non-binding aggregate allowance so compatibility does not acquire an accidental
-model-size ceiling. Contextual facade construction composition remains;
-surface projection and body tessellation have contextual entries with their
-internal legacy ratchets closed. X_T NURBS-edge reconstruction and ellipse
-intersection account curve projection in their owner scopes, and the curve-
-projector ratchet is closed. Body tessellation's `ktopo`/`kxt` callers are
-contextual, its production-use ratchet is enforced, the facade owns the
-supported application path, and the compatibility wrapper is state 4
-deprecated without changing its v1 defaults.
-
-- Route facade construction through one scope, including affected-body checking.
-- Add contextual checker APIs and structured Full verification gaps.
-- Route X_T reconstruction's nested graph evaluation through the caller's
-  scope and deterministic child reservations; do not report uncharged default
-  graph limits as contextual work.
-- Define the policy-ceiling relationship to transaction tolerance-growth budgets without
-  moving consumption out of the transaction.
-
-Exit: limit/cancellation/check failure is rollback-clean; successful journals are
-unchanged under the compatibility policy.
-
-### Stage 6 — Broad intersection migration and enforcement
-
-- Start only after Stage 1b composition and the Stage 3
-  contact-classification/minimizer scale gate are complete.
-- Migrate remaining iterative intersection paths and shared drivers as F3 consolidates
-  them.
-- Add a review lint or targeted source audit that rejects new unclassified production
-  epsilon/work-limit constants in migrated modules.
-- Add each equivalence-proven legacy entry point to the internal-use retirement
-  ratchet; focused wrapper-equivalence tests receive the only local allowances.
-- Publish policy version and limit metrics in the corpus tooling.
-
-Exit: adding a solver stage requires a named profile entry and structured stop; migrated
-modules contain no unexplained numerical or work-cap literals.
-
-## Test plan
-
-### Policy and type tests
-
-- Reject non-finite, negative, zero where forbidden, duplicate stage/resource, and
-  overflow-prone budget specifications.
-- Verify the production session regime exactly matches the existing constants.
-- Verify all default profiles are stable for `PolicyVersion::V1`.
-- Verify `Tolerances::with_linear` compatibility and that numerical guards cannot be
-  converted into entity/model tolerance accidentally.
-
-### Budget boundary tests
-
-- For each pilot stage, run at allowed work `N - 1`, `N`, and `N + 1`.
-- Assert exact consumed/high-water values and the stable limiting stage/resource.
-- Assert nested work is charged once and cannot reset by constructing a nested context.
-- Assert child reservations and unused-work reconciliation are independent of worker
-  completion order.
-- Assert limit exhaustion retains a conservative candidate cover or verified partial
-  evidence and never claims `Complete` incorrectly.
-
-### Numerical/adversarial tests
-
-- Repeat equivalent problems under translations within the size box, parameter-domain
-  rescaling, reversed ranges, and geometry scales spanning the supported regime.
-- Exercise nearly singular Jacobians, tangent contacts, multiple roots, collapsed
-  parameter progress, large coefficients with small normalized determinants, and
-  rounding at periodic seams.
-- Assert a looser model tolerance changes only documented acceptance decisions, while a
-  numerical-policy change cannot turn an unverified candidate into a certified one.
-- Assert numeric-resolution stops are distinct from configured-budget stops and invalid
-  input.
-
-### Compatibility tests
-
-- Compare every legacy wrapper with its contextual v1-default equivalent, including
-  output bits, ordering, completion, error variants, topology journals, and rollback
-  state.
-- Keep current debug/release/platform determinism hashes unchanged for behavior-preserving
-  stages.
-- Add compile tests showing ordinary legacy call sites continue to build.
-
-### Layer-specific tests
-
-- Intersection: complete/indeterminate status, retained points/curves, residual bounds,
-  and structured solver/proof limits.
-- Checker: raising a Full proof budget can discharge a gap; lowering it cannot hide a
-  fault; looser operation tolerance cannot weaken structural validity.
-- Make: limit and cancellation at validation, assembly, and checked-commit boundaries
-  leave the store and journal exactly as before the call.
-- Tessellation: requested quality is met or a typed limit is returned; output count/depth
-  high-water data is exact.
-- Procedural evaluation: child `EvalLimits` are charged to the parent operation once;
-  cycle/depth/node stops remain graph-specific and surface as structured operation
-  diagnostics.
-
-### Determinism tests
-
-- Run representative intersection, Full checker, graph evaluation, and body tessellation
-  with serial, two-thread, and available-thread policies.
-- Hash result bits, completion, semantic diagnostics, and usage reports; all must match
-  for uncancelled operations.
-- Randomize worker delays in tests to prove budget allocation and merge order do not
-  depend on scheduling.
-- Verify diagnostic level `Off`, `Summary`, and `Verbose` does not change result or work
-  selection; only permitted report detail differs.
-
-## Non-goals
-
-- Making linear/angular resolution or the size box arbitrarily configurable in v1.
-- Replacing transaction-owned, journaled tolerance-growth budgets with ephemeral work
-  accounting.
-- Treating tessellation/approximation quality as a resource limit.
-- Guaranteeing bit-identical progress usage for externally cancelled runs.
-- Adding wall-clock deadlines, randomization, completion-order reductions, or a
-  user-supplied arbitrary executor.
-- Moving every test epsilon, file-format security cap, arena capacity, or schema limit
-  into `OperationContext`.
-- Tuning every solver while introducing the types. Moving policy and changing policy are
-  separate reviews.
-- Requiring context parameters on total, bounded leaf evaluation and trivial query APIs.
-- Owning procedural-graph handles, caches, dependency stacks, or cycle detection; those
-  remain the geometry graph `EvalContext`'s responsibility.
-- Freezing the final C ABI, public `Kernel` facade, or complete error taxonomy. F2
-  provides data those projects can expose.
-
-## Dependencies and coordination
-
-- **F1 procedural geometry graph:** agree on child-budget/usage adapters between
-  `OperationScope` and graph `EvalContext`; do not merge the contexts.
-- **F3 intersection consolidation:** use the common scope and stage IDs in shared drivers;
-  avoid broad solver migration before F2 Stage 2/3 types stabilize.
-- **F4 error/capability taxonomy:** consume `StageId`, `DiagnosticCode`, and
-  `LimitSnapshot`; decide the final error mapping without redefining work data.
-- **F5 kernel facade:** owns/shares `SessionPolicy` and exposes contextual
-  request/result APIs for adopted families. F2 remains usable without it.
-- **F7 benchmarks/fuzzing:** record policy version and budget profile with results; fuzz
-  policy validation and limit boundaries.
-
-## Open risks and decisions to validate in pilots
-
-1. **Work-unit granularity.** Charging every evaluator call is clear but may add overhead;
-   batching charges reduces overhead but makes exact stop boundaries coarser. Pilot both
-   and benchmark before freezing a convention.
-2. **Child budget reservation.** Static equal partitions can strand work while dynamic
-   stealing risks schedule dependence. Prefer deterministic frontier rounds or
-   ordinal-based reservations; validate with realistic SSI and tessellation workloads.
-3. **Policy surface area.** Exposing every numerical factor invites unsupported tuning.
-   Keep `NumericalPolicy` constructors versioned and validated initially; expose only
-   settings with a documented correctness range.
-4. **Report allocation.** Verbose per-stage diagnostics could become material on large
-   bodies. Keep summaries bounded, deduplicate repeated events, and make detailed traces
-   explicitly diagnostic-level controlled.
-5. **Legacy error mapping.** Contextual structured limits and current
-   `Error::AlgorithmLimit` differ in richness. Preserve legacy behavior until F4
-   chooses the final variant and add mapping tests, except where preserving the
-   wrapper would necessarily erase a migrated source. Ellipse/ellipse is the
-   first such bounded exception: its direct entry returns `IntersectionResult`.
-   Other solver-local collapses remain migration debt.
-6. **Checker semantics.** The checker must not inherit a loose operation acceptance
-   tolerance accidentally. Pilot APIs should make fixed session/entity tolerance use
-   obvious in types and tests.
-7. **Cross-layer context lifetime.** A scope spanning a mutable topology transaction and
-   nested immutable geometry evaluation can encounter borrow pressure. Prototype the
-   checked-construction pilot before freezing exact Rust lifetime signatures; do not
-   solve it with global mutable state or interior-mutability races.
-
-## Acceptance criteria
-
-F2 is complete when all of the following hold:
-
-- `kcore` provides validated immutable session/numerical/execution policy, per-operation
-  context/scope, deterministic budget accounting, structured diagnostics, and reports.
-- Fixed session precision, model acceptance tolerance, entity tolerance, output quality,
-  and numerical guards are separately represented and documented.
-- One representative `kops` intersection, one `kgeom` refinement path, and one Full
-  `ktopo` proof consume explicit policy and a shared root ledger.
-- The geometry graph's `EvalContext` consumes a deterministic child reservation without
-  duplicating operation/session policy or graph state in the wrong layer.
-- Defaults reproduce the legacy APIs' result bits, completion, errors, journals, and
-  rollback behavior for migrated paths.
-- Limits are test-overridable and report stable stage, resource, consumed/high-water, and
-  allowed values.
-- Budget or numeric-resolution exhaustion cannot yield false completeness, false checker
-  validity, a silently degraded mesh, or committed partial topology.
-- Serial and all supported thread counts produce bit-identical uncancelled results,
-  completion, semantic diagnostics, and usage reports.
-- Transaction tolerance-growth accounting remains transaction-owned and journaled.
-- No migrated production module contains an unexplained absolute epsilon or work-cap
-  literal that makes a model/topology decision.
-- The test plan above passes in debug/release and on the supported platform matrix, and
-  pilot benchmarks show that accounting overhead is measured and acceptable.
+| `SessionPrecision` | Linear/angular resolution and size box of the file/model regime. | No in v1. | Yes, where the spec names session resolution. | Immutable session policy. |
+| `Tolerances` | Requested model-space acceptance for an operation, validated at/above session resolution. | Linear already may loosen; angular only with validated semantics. | Yes, for that operation's residual/proximity contract. | Operation context. |
+| Entity tolerance | Persisted per-face/edge/vertex model allowance with provenance. | Only through checked operation rules. | Yes, for obligations on that entity. | Topology + transaction journal. |
+| Numerical guard | Parameter progress, rounding slack, scaled-zero, or conditioning threshold. | Only through a validated numerical profile, kernel-owned initially. | No. May stop refinement or flag ill-conditioning; cannot certify incidence, coincidence, containment, or a topological sign. | Session numerical policy + local scale. |
+
+`TessOptions::chord_tol`, angular faceting tolerance, and approximation bounds are requested output
+quality — neither session resolution nor work limits. `Tolerances` stays source-compatible, is
+documented as "model acceptance tolerances", and must not grow fields for iterations, sampling, or
+conditioning. `SessionPrecision::parasolid()` is the only production v1 regime and exposes the
+current linear, angular, and half-size values as data.
+
+### Immutable session policy, fresh per-operation scope
+
+`kcore::operation` owns `SessionPolicy` (validated, immutable, cheap to share, owning no
+model/graph/topology state), a borrowed `OperationContext` snapshot (no mutable counters; shareable
+for planned parallel work), and one `OperationScope` per top-level call (owning all mutable work
+usage + diagnostic buffers). Nested algorithms borrow the same scope or deterministic child scopes;
+they never create fresh default budgets. A context is never stored in geometry/topology entities.
+There are no process-global mutable defaults; changing policy means constructing a new validated
+`SessionPolicy`/context.
+
+### Numerical policy: scale-aware and proof-ineligible
+
+`NumericalPolicy` centralizes recipes over named documented factors times `f64::EPSILON` and
+actual coefficient/window/Jacobian/accounting magnitudes — not unqualified epsilon constants;
+absolute floors survive only where the quantity has a fixed documented normalization, else they
+are bugs to classify. Consuming rules: a parameter-progress threshold may terminate an iteration
+but the candidate still needs an independent model-space residual check before acceptance; if the
+rounding floor exceeds the metric-driven step and the residual is not independently certified the
+result is numerically stopped/indeterminate, never silently accepted; an ill-conditioned Jacobian
+selects a safeguarded fallback/subdivision/conditioning diagnostic, never converting near-contact
+into contact; exact predicates and interval-certified signs continue to decide topology and a
+numeric guard never replaces them; call sites name the semantic `NumericGuardKind`, with raw
+`EPSILON` multipliers limited to `kcore` policy and narrowly justified exact-arithmetic modules.
+The default profile is versioned (`PolicyVersion::V1`) because changing a factor can change output
+bits/completion; policy versions live in corpus/benchmark metadata, never in persisted B-rep
+entities.
+
+### Budgets: deterministic plan and ledger
+
+Budgets use stable namespaced `StageId` constants defined by the owning crate (e.g.
+`kops.intersect.ssi-proof-candidates`) plus generic resource accounting
+(`ResourceKind::{Work,Items,Bytes,Depth}`, `AccountingMode::{Cumulative,HighWater}`, `LimitSpec`,
+`LimitSnapshot`). Prose messages attach separately and may change; identifiers may not. Higher-layer
+crates define typed default profile constructors returning a `BudgetPlan`, avoiding a `kcore`→higher
+dependency. A "work" unit is not a time unit (wall-clock deadlines are excluded so explored geometry
+stays machine/schedule-independent).
+
+The ledger supports `charge(stage, amount)` for cumulative work, `observe(stage, value)` for
+high-water resources, deterministic child reservation by stable work-item ordinal, a root
+total-work ceiling in addition to per-stage limits, and accepted-usage plus first-crossing/
+numeric-resolution evidence on success and failure. With a root ceiling, every child reserves root
+as well as stage capacity; a child plan omitting an explicit root ceiling gets the checked sum of
+its cumulative Work allowances (a stricter explicit child ceiling is preserved) so a valid child
+stays mergeable. Strictly sequential nested algorithms use `SequentialWorkLedger`: accepted units
+stream into parent stage/root totals immediately, local limits win ties, a rejected unit mutates
+neither view. Budget exhaustion follows the proof contract: return verified partial evidence with
+`Completion::Indeterminate` (or the checker's verification gap) and a structured `LimitSnapshot`,
+else `Error::AlgorithmLimit` during the compatibility period with the structured limit in the
+report. Never discard candidates to fit a budget and report `Complete`; never turn a work limit
+into `InvalidGeometry`. F4 may later replace `Error::AlgorithmLimit`; F2 owns the stable
+stage/resource/usage/limit data.
+
+### Reports without breaking `Result<T>`
+
+Context-aware entry points return `OperationOutcome<T, E>` (result + `OperationReport`), preserving
+diagnostics after failure. `OperationReport` carries `policy_version`, accepted `usage`,
+`limit_events` (first attempted crossing per configured stage/resource), `numeric_resolution_stages`,
+and `diagnostics`. The two machine-readable records are independent of diagnostic level; optional
+diagnostics add bounded human context but are never the only explanation for incomplete work, and
+reports are assembled only after child work is merged in deterministic ordinal order.
+`OperationScope::finish` stays fixed to `kcore::Error` (inference-safe legacy `finish(Ok(value))`);
+`finish_typed` builds a layer-owned-error outcome. Existing public functions remain compatibility
+wrappers using exact v1 defaults and discarding only the new report; the additive `_with_context`
+form's internal helpers take `&mut OperationScope` so nested work cannot reset usage.
+
+### Diagnostics: structured, bounded, observational
+
+Diagnostics (`DiagnosticCode`, `DiagnosticKind`, `OperationDiagnostic`) are semantic summaries, not
+logging: codes/stages are stable and machine-readable; messages give human context but are not
+control-flow contracts; repeats are deduplicated/capped by a documented budget; subject-specific
+detail stays in the owning result type (no `kcore`-upward dependency); enabling diagnostics cannot
+change branch selection, work accounting, output order, or mutation; callbacks are never invoked
+from parallel workers (child buffers merge by stable ordinal first). Wall time, thread count, and
+OS telemetry are non-semantic and must not enter the deterministic `OperationReport`.
+
+### Execution policy: concurrency, never ordering
+
+`ExecutionPolicy` supports `Serial`, `AtMost(NonZeroUsize)`, and `Available`. Work items get
+stable ordinals before parallel execution; result/diagnostic/limit/numeric-resolution merging is
+ordinal-ordered; floating reductions use a prescribed index order/deterministic tree, never
+completion order; budget allocation is never an atomic race (planned serially or via deterministic
+per-child reservation); unused reservation returns only at a deterministic join and cannot be
+stolen on timing; serial and every permitted thread count produce bit-identical results,
+completion, diagnostics, and usage for an uncancelled operation. External cancellation is a
+read-only token checked at documented safe points: a cancelled run need not reproduce its usage
+report, must return no successful partial mutation, must roll back any active transaction, and must
+not expose timing-based partial geometry as complete.
+
+### Relationship to procedural geometry `EvalContext`
+
+F2 must not create a second graph context. Ownership nests: `SessionPolicy` → `OperationContext` →
+`OperationScope`/global ledger → child reservation per geometry query → graph `EvalContext` +
+`EvalLimits`. The operation layer builds an `EvalContext` from F1-owned inputs only (graph borrow, query-local
+cache/cycle state, a copy of `Tolerances`, a deterministically reserved node-visit/depth allowance
+as `EvalLimits`, and a stable child work ordinal). F2 maps F1's typed
+`DependencyDepthExceeded`/`NodeVisitLimitExceeded` into the parent ledger/diagnostics without
+changing the graph error. `EvalContext` owns no `SessionPolicy`, executor, cancellation, topology,
+or diagnostic buffer; `OperationContext` knows no graph descriptors/handles/caches/cycle stacks.
+Direct `kgraph` clients may use standalone `EvalLimits` + default `Tolerances`; higher-level
+`ktopo`/`kops`/`kxt` clients must derive it from their active operation scope so nested evaluation
+is charged to the caller. Graph-owned proofs (the plane/sphere adapter's bounded `kops` proof, the
+scoped NURBS marcher, X_T intersection-chart import) compose their own budget profiles outside
+`EvalContext`, charging named `kops.intersect.*` stages while graph node-visit/dependency-depth
+stages account graph work; exact predicates pin every crossing independently. X_T chart import
+preflights Work and observes Items/Depth before retaining position/UV arrays, charges Work only
+after both whole-range lifts certify, admits only seam-safe clamped periodic proof rectangles, and
+relies on the enclosing reconstruction transaction for rollback.
+
+### Dispatch and proof authority (`kops`)
+
+- Curve/curve, curve/surface, and surface/surface each normalize the full runtime class matrix to
+  one dispatch arm per unordered pair; a reversed call swaps the canonical result, preserving
+  completion and first-operand ordering with no second path. Surface/surface canonical rank is
+  Plane<Cone<Cylinder<Sphere<Torus<NURBS (unlike the public enum order, to keep the cone-first
+  contract). Unsupported known/custom classes return a structured `*.class-pair` capability error
+  retaining both operands; typed routing never upgrades discovery to a proof (NURBS bridges stay
+  `Indeterminate`).
+- Exclusion/existence proofs consume only original-source interval enclosures (outward interval de
+  Boor tightened by conservative positive-weight control hulls, failing open when inconclusive);
+  generated/rounded controls only partition and seed, never proving exclusion, containment, or a
+  topological sign. Exactly one box is outward-inflated by model tolerance, so strict separation
+  suffices while boundary contact stays indeterminate; only an empty complete cover proves a miss.
+- The certified fallback stays indeterminate until complete-domain exclusion is proven; witnesses
+  prove only their emitted contact, not root uniqueness/complete discovery/coincident extent. Exact
+  overlap equivalence is a separate pre-discovery admission stage, so distinct representations cannot
+  return `Complete` with zero unbounded work. Root-existence certificates use exact predicates and
+  fail closed on unsupported/tangent/multi-root/non-monotone inputs; the NURBS/NURBS coverage gap
+  retires only when isolation completed and every component has both a unique-root certificate and a
+  verified representative.
+- Newton termination is typed and reported (parameter-resolution stops stay in always-on
+  numeric-resolution evidence); accepted residual witnesses stay authoritative regardless of the
+  terminal state, and tolerance only selects/clamps a representative — distinct classified roots are
+  never collapsed by parameter tolerance. Analytic containment keeps metric tolerance out of
+  harmonic-identity decisions (exact source signs classify identity / nonzero-constant / general).
+
+### Layer consumption
+
+- **`kcore`:** add `operation` types, policy validation, stable IDs, budget plans/ledgers, reports,
+  deterministic child reservation, and `ExecutionPolicy`-aware parallel primitives; keep current
+  constants and the `Tolerances` compatibility API; add `SessionPrecision` and scale-aware helpers.
+  No geometry/topology/intersection/checker/tessellation-specific fields in `kcore`.
+- **`kgeom`:** projection gains contextual fallible entry points; fixed samples/candidates/
+  iterations/halvings move to named budget profiles; NURBS isolation accepts a child scope and
+  `ImplicitIsolationLimits` becomes a view over common limit/numeric events; parameter/conditioning
+  checks call `NumericalPolicy` with local scales.
+- **`ktopo` checker:** add `check_body_report_with_context` and retain wrappers; Fast structural
+  checks use fixed session precision and entity tolerance (a looser operation tolerance must not
+  make an invalid body pass); Fast samples are fault-detection only, never proof; Full adaptive
+  checks charge subdivisions/segments/evaluations/candidate pairs and record exhaustion as a
+  structured verification gap (not a fault, not `Valid`). Loop orientation uses no sampled/magnitude
+  authority — only whole-interval-certified planar straight loops with nonzero exact polygon signs
+  and a containment-certified unique outer emit `WrongLoopOrientation`; other loops become per-loop
+  Full `LoopOrientation` gaps, unresolved outer/hole roles a separate `LoopContainment` gap. A
+  `Valid` Full result means all obligations completed within limits; raising a budget discharges
+  gaps but never erases faults.
+- **`ktopo::make` + checked transactions:** add contextual variants of the checked-creation driver
+  first, then public constructors; one scope spans input validation, assembly, affected-body
+  checking, and commit; limit/cancellation/checker failure rolls back like current checked commit;
+  committed journals contain only successful changes. Transaction-owned tolerance-growth budgets
+  stay separate — a context may impose a policy ceiling, but growth is still declared, charged,
+  rolled back, and journaled by the transaction API. Exact primitive construction must not start
+  depending on model tolerance; sub-resolution rejection follows the session/model contract.
+- **`kops`:** add context-aware curve/curve, curve/surface, and surface/surface dispatch sharing the
+  caller's scope; move repeated sample/bisection/polish/minimize/proof caps into named profiles;
+  replace repeated parameter-tolerance helpers with scale-aware recipes while preserving independent
+  model-space residual acceptance; report conditioning/fallback/exhaustion/partial evidence
+  structurally; do not force analytic closed forms through iterative infrastructure.
+- **Tessellation (`kgeom` + `ktopo::btess`):** `TessOptions` is the shared quality request; a body
+  tessellation owns one scope with named child stages and one aggregate output/scratch budget;
+  shared edges are discretized once; per-face parallelism reserves deterministic child budgets by
+  face order and splices in that order; a cap hit without meeting chord/edge/angle quality is a
+  limit failure — never a lower-quality mesh labeled successful.
+
+### Compatibility and migration
+
+Additive and staged; no repository-wide signature rewrite. Keep every existing public function and
+its defaults; add `_with_context` at top-level seams only, with internal helpers taking
+`&mut OperationScope`; implement legacy wrappers via contextual paths under exact v1 policy,
+preserving return values, errors, and golden bits; move constants in behavior-preserving pilots
+before tuning any value (default changes need their own evidence, corpus update, and policy-version
+decision); do not require context on leaf evaluators or simple accessors. Once a contextual path
+proves bit/result/error/report equivalence, close the old entry point to new crate-internal
+production callers via Clippy `disallowed-methods` or a targeted source audit; public `#[deprecated]`
+follows only after K5 proves the replacement against a real consumer; removal is a separately
+announced compatibility decision.
+
+**Legacy API retirement ratchet** — every migrated entry point moves monotonically: (1) contextual
+alternative available; (2) equivalence proven (outputs, errors, completion, reports, journals,
+rollback, determinism); (3) internal legacy use closed (production code cannot call the wrapper;
+focused equivalence tests keep it exercised); (4) publicly deprecated (only after facade
+adoption); (5) removed (only under explicit compatibility policy). The owner records the state on
+migration; "opportunistic migration" never licenses new legacy callers.
+`scripts/legacy_api_contract.py` audits `kernel` and lower production trees and rejects new refs.
+
+### Rollout invariants
+
+Rollout is staged 0–6 (audit → inert `kcore` infra → proof/refinement pilots → numerical pilot →
+projection+tessellation → checker/make → broad intersection migration); each stage's exit gate is a
+subset of the acceptance criteria below. Two invariants are unique to staging: owner-level profile
+composition fills family defaults, then session overrides, then explicit request overrides (the only
+later override), preserving the root total-work ceiling and canonical stop across all three layers
+with no crate-local merge semantics; and bounded `bounded_v1` presets take the next power of two ≥
+twice each measured nonzero maximum, preserve zero, and are never implicitly promoted by a later
+policy version. Stage 6 starts only after Stage 1b composition and the Stage 3 scale gate.
+
+### Non-goals
+
+Configurable linear/angular resolution or size box in v1; replacing journaled tolerance-growth
+budgets with ephemeral work accounting; treating tessellation/approximation quality as a resource
+limit; bit-identical progress usage for cancelled runs; wall-clock deadlines, randomization,
+completion-order reductions, or a user-supplied executor; moving every test epsilon, security cap,
+arena capacity, or schema limit into `OperationContext`; tuning every solver while introducing the
+types (moving vs changing policy are separate reviews); requiring context on total bounded leaf
+evaluators; owning procedural-graph handles/caches/cycle detection; freezing the C ABI, `Kernel`
+facade, or complete error taxonomy.
+
+### Acceptance criteria
+
+F2 is complete when: `kcore` provides validated immutable session/numerical/execution policy,
+per-operation context/scope, deterministic budget accounting, structured diagnostics, and reports;
+the four tolerance concepts are separately represented and documented; at least one `kops`
+intersection, one `kgeom` refinement, and one Full `ktopo` proof consume explicit policy and a
+shared root ledger; the graph `EvalContext` consumes a deterministic child reservation without
+misplacing policy/state; defaults reproduce legacy bits/completion/errors/journals/rollback for
+migrated paths; limits are test-overridable and report stable stage/resource/consumed/high-water/
+allowed; budget or numeric-resolution exhaustion cannot yield false completeness, false checker
+validity, a degraded mesh, or committed partial topology; serial and all thread counts produce
+bit-identical uncancelled results/diagnostics/reports; transaction tolerance-growth stays
+transaction-owned and journaled; no migrated module has an unexplained epsilon or work-cap literal
+deciding a model/topology fact; the test plan passes in debug/release across the platform matrix.
+
+## Evidence
+
+Boundary tests run each pilot stage at `N-1`/`N`/`N+1` asserting the stable limiting stage/resource;
+adversarial tests repeat problems under in-box translation, rescaling, reversed ranges, and
+regime-spanning scales; determinism tests randomize worker delays and vary diagnostic level.
+
+- F2 types + policy/budget/report/determinism: `crates/kcore/src/operation/{mod,policy,context,budget,id,tests}.rs`, `crates/kcore/tests/operation_context.rs`, `crates/kcore/tests/determinism.rs`.
+- Projection / tessellation / trim contextual paths: `crates/kgeom/tests/surface_point.rs`, `crates/kgeom/tests/trim_orientation.rs`, `crates/kernel/src/tessellation.rs`, `crates/kxt/tests/import_tess.rs`.
+- Intersection contextual + numerical scale gate: `crates/kops/tests/{curve_curve,nurbs_nurbs,ellipse_ellipse,operation_intersection,completion}.rs`, `crates/kops/tests/graph_surface*.rs`.
+- Checker / make / transaction accounting: `crates/ktopo/tests/{builders,transactions,tolerance_budgets,benchmark_observation}.rs`.
+- Legacy retirement + lane enforcement: `scripts/legacy_api_contract.py`, `scripts/test_lanes.py`.
+
+## Open items
+
+- Stage 6: migrate remaining iterative intersection paths and shared drivers; add the review
+  lint/audit rejecting new unclassified epsilon/work-cap constants; publish policy-version/limit
+  metrics. Segment conditioning, legacy overlap/input and parameter-dedup slack, and the other
+  intersection-family minimizers remain unmigrated.
+- Standalone projection/tessellation wrappers not yet publicly deprecated (no adopted
+  standalone-face path in `kernel`); solver-local error collapses beyond the ellipse/ellipse
+  exception remain migration debt.
+- NURBS/plane arm: root isolation incomplete; root/window node/depth caps still static and
+  non-contextual; unresolved UV boundary cells indeterminate; affine exact fallback outside the
+  reviewed envelope and general-NURBS / higher-polynomial / broader topology-decision audits open.
+- Design decisions to validate in pilots: work-unit granularity (per-call vs batched); child-budget
+  reservation (deterministic frontier vs ordinal); numerical-policy surface area; report allocation
+  on large bodies; legacy error-mapping richness (pending F4); checker acceptance-tolerance
+  isolation; cross-layer scope lifetime under borrow pressure.
+- Coordination: F1 child-budget/usage adapters (do not merge contexts); F3 shared drivers reuse the
+  common scope/stage IDs; F4 consumes `StageId`/`DiagnosticCode`/`LimitSnapshot`; F5 owns/shares
+  `SessionPolicy`; F7 records policy version + budget profile and fuzzes limit boundaries.
