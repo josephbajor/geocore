@@ -867,6 +867,103 @@ fn general_exact_polar_window_cap_cancels_empty_latitude_cell_and_swaps() {
 }
 
 #[test]
+fn general_single_polar_window_straddling_seam_merges_both_cells_and_swaps() {
+    let a = world_sphere();
+    let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.4);
+    let half_pi = core::f64::consts::FRAC_PI_2;
+    let a_window = window(-1.2, -0.8, 1.0 - half_pi, half_pi);
+    let latitude_seam = a_window[1].lo + 0.5 * a_window[1].width();
+    // A pole-clear peer whose longitude span stays below pi (so the pair takes
+    // the single-polar-by-single-window arm) yet whose coincident overlap
+    // crosses the polar window's artificial latitude decomposition seam, so
+    // both latitude cells are occupied and must merge into one region.
+    let b_window = window(
+        -4.4 + 2.0 * core::f64::consts::PI / 3.0,
+        -4.4 + core::f64::consts::PI,
+        0.0,
+        0.8,
+    );
+    assert!(b_window[0].width() < core::f64::consts::PI);
+
+    // Independently certify that both decomposition cells carry a region: the
+    // capability under test is the two-occupied straddle, not one-occupied.
+    let a_pieces = [
+        window(
+            a_window[0].lo,
+            a_window[0].hi,
+            a_window[1].lo,
+            latitude_seam,
+        ),
+        window(a_window[0].lo, a_window[0].hi, latitude_seam, half_pi),
+    ];
+    for a_piece in a_pieces {
+        let child =
+            intersect_bounded_spheres(&a, a_piece, &b, b_window, Tolerances::default()).unwrap();
+        assert!(child.is_complete());
+        assert!(child.points.is_empty());
+        assert!(child.curves.is_empty());
+        assert_eq!(child.regions.len(), 1);
+        assert_general_sphere_window_region(&child, &a, &b);
+    }
+
+    let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    // The two straddling cells merge into exactly one certified region.
+    assert_general_sphere_window_region(&hit, &a, &b);
+    let region = &hit.regions[0];
+    assert_eq!(region.orientation, SurfaceRegionOrientation::Same);
+    assert_eq!(region.boundary.len(), 5);
+
+    let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = region.correspondence else {
+        unreachable!()
+    };
+    assert_eq!(map.first_range(), a_window);
+    assert_eq!(map.second_range(), b_window);
+
+    let boundary = &region.boundary;
+    // The artificial latitude seam edge cancelled: only its two endpoints
+    // survive, and they are not consecutive (the shared edge was removed).
+    let seam_vertices = boundary
+        .iter()
+        .enumerate()
+        .filter_map(|(index, vertex)| {
+            (vertex.uv_a[1].to_bits() == latitude_seam.to_bits()).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(seam_vertices.len(), 2);
+    assert_ne!((seam_vertices[0] + 1) % boundary.len(), seam_vertices[1]);
+    assert_ne!((seam_vertices[1] + 1) % boundary.len(), seam_vertices[0]);
+    for (index, vertex) in boundary.iter().enumerate() {
+        let next = boundary[(index + 1) % boundary.len()];
+        assert!(
+            vertex.uv_a[1].to_bits() != latitude_seam.to_bits()
+                || next.uv_a[1].to_bits() != latitude_seam.to_bits(),
+            "shared latitude seam edge survived the straddling merge"
+        );
+    }
+
+    // Every boundary vertex is finite and lies on both coincident spheres.
+    for vertex in boundary {
+        assert!(vertex.point.x.is_finite());
+        assert!(vertex.point.y.is_finite());
+        assert!(vertex.point.z.is_finite());
+        let pa = a.eval(vertex.uv_a);
+        let pb = b.eval(vertex.uv_b);
+        assert!(((pa - a.frame().origin()).norm() - a.radius()).abs() <= region.max_residual);
+        assert!(((pb - b.frame().origin()).norm() - b.radius()).abs() <= region.max_residual);
+        assert!(pa.dist(pb) <= region.max_residual);
+        assert!(vertex.residual <= region.max_residual);
+    }
+
+    let repeated =
+        intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_eq!(hit, repeated);
+    let swapped =
+        intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
+    assert_eq!(hit.clone().swapped(), swapped);
+    assert_general_sphere_window_region(&swapped, &b, &a);
+}
+
+#[test]
 fn general_polar_window_near_pole_double_pole_wide_and_tangent_cases_fail_closed() {
     let a = world_sphere();
     let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.4);

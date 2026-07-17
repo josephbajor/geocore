@@ -668,25 +668,26 @@ fn certify_single_polar_sphere_window_union(
     }
 
     let polar_range = if first_is_polar { a_range } else { b_range };
-    let [pole_clear_piece, polar_cap] = decompose_general_sphere_polar_window(polar_range)?;
-    let mut occupied = None;
+    let polar_pieces = decompose_general_sphere_polar_window(polar_range)?;
+    let mut certified_empty_cells = [false; GENERAL_SPHERE_POLAR_UNION_PIECE_LIMIT];
+    let mut occupied = Vec::new();
     let mut empty_pieces = 0;
-    for (piece_range, piece_pair_limit, piece_arc_limit) in [
-        (
-            pole_clear_piece,
-            GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
-            GENERAL_SPHERE_WINDOW_ARC_LIMIT,
-        ),
-        (
-            polar_cap,
-            GENERAL_SPHERE_POLAR_CELL_PAIR_LIMIT,
-            GENERAL_SPHERE_POLAR_CELL_ARC_LIMIT,
-        ),
-    ] {
-        let (piece_a_range, piece_b_range) = if first_is_polar {
-            (piece_range, b_range)
+    for (polar_index, polar_piece) in polar_pieces.into_iter().enumerate() {
+        let (piece_pair_limit, piece_arc_limit) = if polar_index == 0 {
+            (
+                GENERAL_SPHERE_WINDOW_PAIR_LIMIT,
+                GENERAL_SPHERE_WINDOW_ARC_LIMIT,
+            )
         } else {
-            (a_range, piece_range)
+            (
+                GENERAL_SPHERE_POLAR_CELL_PAIR_LIMIT,
+                GENERAL_SPHERE_POLAR_CELL_ARC_LIMIT,
+            )
+        };
+        let (piece_a_range, piece_b_range) = if first_is_polar {
+            (polar_piece, b_range)
+        } else {
+            (a_range, polar_piece)
         };
         let piece_allowance =
             arbitrary_sphere_octant_parameter_allowance(piece_a_range, piece_b_range)?;
@@ -704,42 +705,118 @@ fn certify_single_polar_sphere_window_union(
         )?;
         if hit.is_proven_empty() {
             empty_pieces += 1;
-        } else if !hit.is_complete() || occupied.replace(hit).is_some() {
+            certified_empty_cells[polar_index] = true;
+        } else if !hit.is_complete() {
             return Err(Error::InvalidGeometry {
-                reason: "general coincident sphere polar-window union requires one occupied cell and one certified-empty sibling",
+                reason: GENERAL_SPHERE_UNION_MERGE_REASON,
             });
+        } else {
+            occupied.push(([polar_index, 0], hit));
         }
     }
 
-    let Some(mut hit) = occupied else {
+    if occupied.is_empty() {
         if empty_pieces == GENERAL_SPHERE_POLAR_UNION_PIECE_LIMIT {
             return Ok(SurfaceSurfaceIntersections::complete_empty());
         }
         return Err(Error::InvalidGeometry {
             reason: "general coincident sphere polar-window union did not cover both decomposition cells",
         });
-    };
-    if empty_pieces != 1 {
+    }
+    if empty_pieces + occupied.len() != GENERAL_SPHERE_POLAR_UNION_PIECE_LIMIT {
         return Err(Error::InvalidGeometry {
-            reason: "general coincident sphere polar-window union did not cancel its artificial latitude seam",
+            reason: "general coincident sphere polar-window union did not cover both decomposition cells",
         });
     }
 
-    // Both latitude cells are closed. The certified-empty sibling proves that
-    // the occupied cell cannot touch the artificial latitude seam, so its
-    // evidence has only true parent boundaries. A retained singular pole is
-    // represented once at the polar source range's lower longitude; the
-    // nonlinear map applies the same canonical alias in both directions.
     let parent_map = general_sphere_window_map(a, a_range, b, b_range, parent_parameter_allowance);
     let parent_residual = arbitrary_sphere_octant_residual_bound(a, b, parent_parameter_allowance)?;
-    for region in &mut hit.regions {
-        region.correspondence = SurfaceRegionCorrespondence::GeneralSphereWindow(parent_map);
-        region.max_residual = region.max_residual.max(parent_residual);
+
+    // One occupied latitude cell with a certified-empty sibling cannot touch
+    // the artificial latitude seam, so its points, curves, and regions pass
+    // through unchanged under the parent map. A retained singular pole is
+    // represented once at the polar source range's lower longitude; the
+    // nonlinear map applies the same canonical alias in both directions.
+    if occupied.len() == 1 {
+        let (_, mut hit) = occupied
+            .pop()
+            .expect("one occupied polar-window child was required");
+        for region in &mut hit.regions {
+            region.correspondence = SurfaceRegionCorrespondence::GeneralSphereWindow(parent_map);
+            region.max_residual = region.max_residual.max(parent_residual);
+        }
+        return SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
+            hit.points,
+            hit.curves,
+            hit.regions,
+        );
     }
+
+    // Both latitude cells carry regions: the coincident window straddles the
+    // artificial latitude seam. Isolated contacts or curve branches would sit
+    // strictly inside one cell (its sibling would then be certified empty),
+    // contradicting a straddling union, so they fail closed. The general
+    // seam-cancelling merger unions the two positive-area cell regions across
+    // the shared latitude seam with no layout-specific case analysis.
+    if occupied
+        .iter()
+        .any(|(_, hit)| !hit.points.is_empty() || !hit.curves.is_empty() || hit.regions.len() != 1)
+    {
+        return Err(Error::InvalidGeometry {
+            reason: GENERAL_SPHERE_UNION_MERGE_REASON,
+        });
+    }
+    let cells = occupied
+        .into_iter()
+        .map(|(cell, hit)| {
+            (
+                cell,
+                hit.regions
+                    .into_iter()
+                    .next()
+                    .expect("one occupied polar-window child region was required"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let latitude_seam = polar_pieces[0][1].hi;
+    let artificial_seams = [SphereCellSeam {
+        on_first_operand: first_is_polar,
+        parameter: 1,
+        value: latitude_seam,
+    }];
+    let shared_seam = |first: [usize; 2], second: [usize; 2]| {
+        (first[1] == second[1] && first[0].abs_diff(second[0]) == 1).then_some(SphereCellSeam {
+            on_first_operand: first_is_polar,
+            parameter: 1,
+            value: latitude_seam,
+        })
+    };
+    let cell_is_empty = |cell: [usize; 2]| certified_empty_cells[cell[0]];
+    let resolved = merge_certified_sphere_cell_regions(
+        &cells,
+        &shared_seam,
+        &cell_is_empty,
+        &artificial_seams,
+    )
+    .ok_or(Error::InvalidGeometry {
+        reason: GENERAL_SPHERE_UNION_MERGE_REASON,
+    })?;
+
+    // The seam-cancelling merger proves the artificial latitude seam is either
+    // exactly cancelled or untouched, so the surviving cycle has only true
+    // parent boundaries and may use the parent map.
+    let regions = resolved
+        .into_iter()
+        .map(|mut region| {
+            region.correspondence = SurfaceRegionCorrespondence::GeneralSphereWindow(parent_map);
+            region.max_residual = region.max_residual.max(parent_residual);
+            region
+        })
+        .collect();
     SurfaceSurfaceIntersections::canonicalized_complete_with_regions(
-        hit.points,
-        hit.curves,
-        hit.regions,
+        Vec::new(),
+        Vec::new(),
+        regions,
     )
 }
 
