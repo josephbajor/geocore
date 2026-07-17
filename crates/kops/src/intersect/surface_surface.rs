@@ -9,6 +9,7 @@ use super::cylinder_sphere::intersect_bounded_cylinder_sphere;
 use super::cylinder_torus::intersect_bounded_cylinder_torus;
 use super::error::{IntersectionError, IntersectionResult};
 use super::geometry_class::SurfaceDispatch;
+use super::nurbs_nurbs_surface::intersect_bounded_nurbs_nurbs_surfaces;
 use super::plane_cone::intersect_bounded_plane_cone;
 use super::plane_cylinder::intersect_bounded_plane_cylinder;
 use super::plane_nurbs_surface::intersect_bounded_plane_nurbs_surface;
@@ -108,6 +109,9 @@ pub fn intersect_bounded_surfaces(
         }
         (SurfaceDispatch::Torus(a), SurfaceDispatch::Nurbs(b)) => {
             intersect_bounded_torus_nurbs_surface(a, a_range, b, b_range, tolerances)
+        }
+        (SurfaceDispatch::Nurbs(a), SurfaceDispatch::Nurbs(b)) => {
+            intersect_bounded_nurbs_nurbs_surfaces(a, a_range, b, b_range, tolerances)
         }
         _ => return unsupported(original_a, original_b),
     };

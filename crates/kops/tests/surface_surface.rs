@@ -1076,6 +1076,54 @@ fn torus_nurbs_surface_dispatches_both_orders() {
 }
 
 #[test]
+fn nurbs_nurbs_surface_dispatches_both_orders() {
+    // Two compatible clamped quadratic-linear unit-chart NURBS patches whose
+    // shared-chart height difference has a strict interior zero contour. The
+    // unified entry now routes this pair to `intersect_bounded_nurbs_nurbs_surfaces`
+    // instead of falling through to the unsupported class-pair boundary.
+    let paired = |delta: [f64; 3]| {
+        let bend = [0.0, 0.02, 0.0];
+        let mut points = Vec::with_capacity(6);
+        for (index, &u) in [0.0, 0.5, 1.0].iter().enumerate() {
+            for &v in &[0.0, 1.0] {
+                points.push(Point3::new(u, v, 0.25 + bend[index] + delta[index]));
+            }
+        }
+        NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            points,
+            None,
+        )
+        .unwrap()
+    };
+    let surface_a = paired([0.0; 3]);
+    let surface_b = paired([-0.2, -0.0148, 0.1704]);
+    let range_a = [ParamRange::new(0.0, 0.8), ParamRange::new(0.0, 0.0015)];
+    let range_b = [ParamRange::new(0.2, 1.0), ParamRange::new(0.0005, 0.0015)];
+    let tolerances = Tolerances::with_linear(1.0e-3).unwrap();
+
+    let hit =
+        intersect_bounded_surfaces(&surface_a, range_a, &surface_b, range_b, tolerances).unwrap();
+
+    // The transverse shared-chart pair marches one honest discovery branch that
+    // stays indeterminate pending original-source certification: no longer the
+    // `UnsupportedSurfacePair` error, and not yet a complete result.
+    assert!(!hit.is_complete());
+    assert_eq!(hit.curves.len(), 1);
+    assert_eq!(hit.curves[0].kind, ContactKind::Transverse);
+
+    // A NURBS/NURBS pair shares one dispatch rank, so operand order never
+    // triggers an internal swap; reversing operands must equal the swapped
+    // canonical result, matching the graph-aware NURBS/NURBS parity contract.
+    let swapped =
+        intersect_bounded_surfaces(&surface_b, range_b, &surface_a, range_a, tolerances).unwrap();
+    assert_eq!(swapped, hit.clone().swapped());
+}
+
+#[test]
 fn plane_plane_transverse_returns_bounded_line_branch() {
     let a = horizontal_plane(0.0);
     let b = vertical_plane_x(0.0);
@@ -1327,9 +1375,12 @@ fn surface_surface_dispatches_plane_sphere_and_rejects_unsupported() {
     assert_eq!(swapped.curves[0].uv_a_start, hit.curves[0].uv_b_start);
     assert_eq!(swapped.curves[0].uv_b_start, hit.curves[0].uv_a_start);
 
+    // Two real NURBS surfaces now route to the direct NURBS/NURBS solver rather
+    // than the unsupported class-pair boundary: an incompatible basis becomes a
+    // solver-level (Kernel) rejection, no longer an unsupported class pair.
     let nurbs = bilinear_nurbs_surface();
     let other_nurbs = sloped_bilinear_nurbs_surface();
-    let err = intersect_bounded_surfaces(
+    let dispatched = intersect_bounded_surfaces(
         &nurbs,
         nurbs.param_range(),
         &other_nurbs,
@@ -1337,11 +1388,27 @@ fn surface_surface_dispatches_plane_sphere_and_rejects_unsupported() {
         Tolerances::default(),
     )
     .unwrap_err();
+    assert!(matches!(
+        dispatched,
+        IntersectionError::Kernel(Error::InvalidGeometry { .. })
+    ));
+
+    // A valid but unknown surface class still surfaces the fully classified
+    // unsupported class-pair error through the unified entry.
+    let unknown = UnsupportedSurface;
+    let err = intersect_bounded_surfaces(
+        &unknown,
+        unknown.param_range(),
+        &unknown,
+        unknown.param_range(),
+        Tolerances::default(),
+    )
+    .unwrap_err();
     assert_eq!(
         err,
         IntersectionError::UnsupportedSurfacePair {
-            class_a: Some(SurfaceClass::Nurbs.key()),
-            class_b: Some(SurfaceClass::Nurbs.key()),
+            class_a: None,
+            class_b: None,
         }
     );
     assert_eq!(err.class(), ErrorClass::Unsupported);
