@@ -295,7 +295,10 @@ externally X_T validated.
 
 Status: rung 1 point classification landed as a certified planar-face slice
 (`kernel::classify`, ledger `modeling.classification`); curved-face classes
-ride with rung 4.
+ride with rung 4. Rung 2 landed: certified planar section edge graphs
+(`kernel::section`, ledger `modeling.sectioning`) stitch face/face
+intersection curves across two planar-faced solids, with honest structured
+gaps for coincident, tangent, and uncertifiable contacts.
 
 Do not wait for an exhaustive analytic pair table before testing the end-to-end
 boolean architecture. Begin with a deliberately narrow vertical slice as soon as the

@@ -25,9 +25,11 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
 
 1. Point-on-face and point-in-body classification for analytic solids.
    *(planar-face slice landed — `kernel::classify`; curved-face classes ride
-   with rung 4, so the queue head is now rung 2)*
+   with rung 4)*
 2. Face/face intersection curves stitched into edge graphs on two block
-   bodies (planar/planar only).
+   bodies (planar/planar only). *(landed — `kernel::section` certified
+   planar section graphs, ledger `modeling.sectioning`; the queue head is
+   now rung 3)*
 3. `unite`/`subtract`/`intersect` for block/block — atomic, journaled,
    checker-clean, X_T-exported, and imported into a licensed host.
 4. Extend the same ladder to block/cylinder (introduces curved SSI pcurves).

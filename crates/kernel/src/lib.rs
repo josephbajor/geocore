@@ -262,6 +262,7 @@ mod interchange;
 mod intersection;
 mod iter;
 mod operation;
+mod section;
 mod session;
 mod tessellation;
 mod view;
@@ -306,6 +307,11 @@ pub use operation::{
     IntersectCurvesRequest, IntersectionCompletion, JournalEntities, JournalEntity, LineageView,
     MutationKind, MutationView, OperationOutcome, OperationSettings, SurfaceEvaluation,
     SurfaceEvaluationRequest, ToleranceBudgetId, ToleranceBudgetView, ToleranceEventView,
+};
+pub use section::{
+    BodySectionBudgetProfile, BodySectionGraph, SECTION_FACE_PAIRS, SECTION_WORK,
+    SectionBodiesRequest, SectionCompletion, SectionEdge, SectionGap, SectionLoop, SectionSite,
+    SectionUvLine, SectionVertex,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use tessellation::{BodyMesh, EdgePolyline, FaceTriangleRange, TessellateBodyRequest};
