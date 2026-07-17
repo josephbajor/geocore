@@ -291,7 +291,11 @@ result is independently verifiable; unresolved cases return `Indeterminate` or a
 typed limit; extrude/revolve outputs are checker-v2 clean, journaled, watertight, and
 externally X_T validated.
 
-## M5 — Analytic booleans + interrogation — NOT STARTED
+## M5 — Analytic booleans + interrogation — IN PROGRESS
+
+Status: rung 1 point classification landed as a certified planar-face slice
+(`kernel::classify`, ledger `modeling.classification`); curved-face classes
+ride with rung 4.
 
 Do not wait for an exhaustive analytic pair table before testing the end-to-end
 boolean architecture. Begin with a deliberately narrow vertical slice as soon as the

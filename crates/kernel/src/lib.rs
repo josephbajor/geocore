@@ -254,6 +254,7 @@
 //! }
 //! ```
 
+mod classify;
 mod edit;
 mod error;
 mod id;
@@ -265,6 +266,12 @@ mod session;
 mod tessellation;
 mod view;
 
+pub use classify::{
+    ClassifyPointInBodyRequest, ClassifyPointOnFaceRequest, POINT_CLASSIFICATION_RAYS,
+    POINT_CLASSIFICATION_WORK, PointBodyClassification, PointBodyVerdict,
+    PointClassificationBudgetProfile, PointFaceClassification, PointFaceSite, PointFaceVerdict,
+    RayParityWitness,
+};
 pub use edit::{
     BoundedPcurve, CreateSeedBodyRequest, CreateSeedBodyResult, CreateStrutRequest,
     CreateStrutResult, EditTransaction, FullCommitRequirement, FullCommitResult,

@@ -24,6 +24,8 @@ The queue head is always the next unfinished rung of the current vertical
 slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
 
 1. Point-on-face and point-in-body classification for analytic solids.
+   *(planar-face slice landed — `kernel::classify`; curved-face classes ride
+   with rung 4, so the queue head is now rung 2)*
 2. Face/face intersection curves stitched into edge graphs on two block
    bodies (planar/planar only).
 3. `unite`/`subtract`/`intersect` for block/block — atomic, journaled,
