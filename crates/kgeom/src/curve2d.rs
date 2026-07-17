@@ -555,8 +555,7 @@ impl Curve2d for NurbsCurve2d {
         ];
 
         let order = order.min(3);
-        let domain = self.knots.domain();
-        let t = t.clamp(domain.lo, domain.hi);
+        let t = self.knots.domain().clamp_param(t);
         let span = self.knots.find_span(t);
         let p = self.degree();
         let base = span - p;

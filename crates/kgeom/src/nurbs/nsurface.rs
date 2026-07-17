@@ -590,12 +590,26 @@ impl Surface for NurbsSurface {
         let du = self.knots_u.domain();
         let dv = self.knots_v.domain();
         let u = self.periodicity[0].map_or_else(
-            || uv[0].clamp(du.lo, du.hi),
-            |period| wrap_periodic(uv[0], du.lo, period),
+            || du.clamp_param(uv[0]),
+            |period| {
+                if uv[0].is_finite() {
+                    wrap_periodic(uv[0], du.lo, period)
+                } else {
+                    // A non-finite parameter has no meaningful wrap; pin it
+                    // to the domain start deterministically.
+                    du.lo
+                }
+            },
         );
         let v = self.periodicity[1].map_or_else(
-            || uv[1].clamp(dv.lo, dv.hi),
-            |period| wrap_periodic(uv[1], dv.lo, period),
+            || dv.clamp_param(uv[1]),
+            |period| {
+                if uv[1].is_finite() {
+                    wrap_periodic(uv[1], dv.lo, period)
+                } else {
+                    dv.lo
+                }
+            },
         );
         let (a, w) = self.homogeneous_derivs(u, v, order);
 
@@ -1238,5 +1252,31 @@ mod tests {
         non_finite[4].z = f64::NAN;
         let k = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         assert!(NurbsSurface::new(2, 2, k.clone(), k, non_finite, None).is_err());
+    }
+
+    /// Non-finite parameters are caller bugs, but the defensive clamp must
+    /// stay deterministic: NaN pins to the domain start and infinities clamp
+    /// to the nearest bound, bit-identically to boundary evaluation.
+    #[test]
+    fn non_finite_parameters_clamp_deterministically() {
+        let k = vec![0.0, 0.0, 1.0, 1.0];
+        let pts = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.5),
+            Point3::new(0.0, 1.0, -0.5),
+            Point3::new(1.0, 1.0, 0.25),
+        ];
+        let surface = NurbsSurface::new(1, 1, k.clone(), k, pts, None).unwrap();
+        assert_eq!(surface.eval([f64::NAN, f64::NAN]), surface.eval([0.0, 0.0]));
+        assert_eq!(
+            surface.eval([f64::INFINITY, f64::NAN]),
+            surface.eval([1.0, 0.0])
+        );
+        let derivs = surface.eval_derivs([f64::NAN, f64::NEG_INFINITY], 2);
+        let expected = surface.eval_derivs([0.0, 0.0], 2);
+        assert_eq!(derivs.p, expected.p);
+        assert_eq!(derivs.du, expected.du);
+        assert_eq!(derivs.dv, expected.dv);
+        assert_eq!(derivs.duv, expected.duv);
     }
 }

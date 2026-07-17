@@ -42,6 +42,18 @@ impl ParamRange {
         self.lo <= t && t <= self.hi
     }
 
+    /// Clamp an evaluation parameter into the range. `NaN` maps to `lo` so a
+    /// defensive evaluator clamp stays deterministic instead of forwarding
+    /// NaN into knot-span search; ±∞ clamp to the nearest bound exactly as
+    /// `f64::clamp` does.
+    pub fn clamp_param(self, t: f64) -> f64 {
+        if t.is_nan() {
+            self.lo
+        } else {
+            t.clamp(self.lo, self.hi)
+        }
+    }
+
     /// Intersect with a finite fallback window, producing a finite range.
     /// Panics if the intersection is empty.
     pub fn clamped(self, fallback: ParamRange) -> ParamRange {
@@ -85,5 +97,16 @@ mod tests {
         assert!((wrap_periodic(-0.5, 0.0, tau) - (tau - 0.5)).abs() < 1e-15);
         assert!((wrap_periodic(tau + 0.25, 0.0, tau) - 0.25).abs() < 1e-12);
         assert_eq!(wrap_periodic(0.25, 0.0, tau), 0.25);
+    }
+
+    #[test]
+    fn clamp_param_is_nan_safe() {
+        let range = ParamRange::new(2.0, 5.0);
+        assert_eq!(range.clamp_param(f64::NAN), 2.0);
+        assert_eq!(range.clamp_param(f64::NEG_INFINITY), 2.0);
+        assert_eq!(range.clamp_param(f64::INFINITY), 5.0);
+        assert_eq!(range.clamp_param(3.5), 3.5);
+        assert_eq!(range.clamp_param(1.0), 2.0);
+        assert_eq!(range.clamp_param(9.0), 5.0);
     }
 }

@@ -277,10 +277,10 @@ impl NurbsCurve {
     }
 
     /// Clamp an evaluation parameter into the domain (out-of-domain
-    /// parameters are a caller bug per the trait contract).
+    /// parameters are a caller bug per the trait contract; NaN maps to the
+    /// domain start so span search never sees a non-finite parameter).
     fn clamp_param(&self, t: f64) -> f64 {
-        let d = self.knots.domain();
-        t.clamp(d.lo, d.hi)
+        self.knots.domain().clamp_param(t)
     }
 }
 
@@ -627,5 +627,20 @@ mod tests {
         // Split outside the domain.
         assert!(c.split_at(0.0).is_err());
         assert!(c.split_at(1.5).is_err());
+    }
+
+    /// Non-finite parameters are caller bugs, but the defensive clamp must
+    /// stay deterministic: NaN pins to the domain start and infinities clamp
+    /// to the nearest bound, bit-identically to boundary evaluation.
+    #[test]
+    fn non_finite_parameters_clamp_deterministically() {
+        for curve in [cubic_polynomial(), rational_cubic()] {
+            let domain = curve.param_range();
+            assert_eq!(curve.eval(f64::NAN), curve.eval(domain.lo));
+            assert_eq!(curve.eval(f64::NEG_INFINITY), curve.eval(domain.lo));
+            assert_eq!(curve.eval(f64::INFINITY), curve.eval(domain.hi));
+            let derivs = curve.eval_derivs(f64::NAN, 2);
+            assert_eq!(derivs.d, curve.eval_derivs(domain.lo, 2).d);
+        }
     }
 }

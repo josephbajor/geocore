@@ -470,14 +470,26 @@ fn polish_curve(curve: &dyn Curve, p: Point3, t0: f64, window: ParamRange) -> (f
     let mut f_curr = fval(t);
     'newton: for _ in 0..MAX_ITER_CURVE {
         let d = curve.eval_derivs(t, 2);
+        // Overflowed or indeterminate evaluation cannot certify improvement;
+        // keep the best candidate seen so far (the scoped polisher returns
+        // `NonFiniteEvaluation` here — keep both variants in agreement).
+        if !d.d[..=2].iter().copied().all(finite_point) {
+            break;
+        }
         let diff = d.d[0] - p;
         let g = 2.0 * d.d[1].dot(diff);
         // Stationarity at the floating-point noise floor of g.
         let g_scale = 2.0 * d.d[1].norm() * diff.norm();
+        if !g.is_finite() || !g_scale.is_finite() {
+            break;
+        }
         if g.abs() <= 1e-15 * (1.0 + g_scale) {
             break;
         }
         let h = 2.0 * (d.d[2].dot(diff) + d.d[1].norm_sq());
+        if !h.is_finite() {
+            break;
+        }
         let mut step = if h > 0.0 && h.is_finite() {
             -g / h
         } else {
@@ -1546,5 +1558,33 @@ mod tests {
         let policy = ProjectionError::Policy(OperationPolicyError::InvalidOperationTolerance);
         assert_eq!(policy.class(), ErrorClass::InvalidInput);
         assert!(std::error::Error::source(&policy).is_some());
+    }
+
+    /// Fuzz-found regression (CI run 29543082685): finite extreme-scale
+    /// controls overflow the polisher's gradient dot product to `inf - inf`
+    /// = NaN, which previously became a NaN Newton step and a NaN curve
+    /// evaluation. The legacy polisher must keep its best finite candidate
+    /// instead, matching the scoped polisher's `NonFiniteEvaluation` gate.
+    #[test]
+    fn overflowing_gradient_keeps_projection_finite() {
+        let curve = crate::nurbs::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(-1e200, -1e200, 0.0),
+                Point3::new(0.0, -2e200, 0.0),
+                Point3::new(1e200, 0.0, 0.0),
+            ],
+            None,
+        )
+        .unwrap();
+        let result = project_to_curve(
+            &curve,
+            Point3::new(0.0, 0.0, 0.0),
+            ParamRange::new(0.0, 1.0),
+        );
+        if let Some(projection) = result {
+            assert!(projection.t.is_finite());
+        }
     }
 }
