@@ -341,7 +341,7 @@ pub fn project_to_curve_in_scope(
             (candidate + 1) as u64,
         )?;
         let t0 = window.lerp(i as f64 / n as f64);
-        let (t, f) = polish_curve_in_scope(curve, p, t0, window, scope)?;
+        let (t, f) = polish_curve_core(curve, p, t0, window, Polish::Metered(scope))?;
         let better = match best {
             None => true,
             Some((bf, bt)) => (f, t) < (bf, bt),
@@ -368,41 +368,99 @@ pub fn project_to_curve_in_scope(
     })
 }
 
-fn polish_curve_in_scope(
+/// Accounting mode shared by the curve and surface Newton polishers.
+///
+/// The `*_in_scope` projection entry points polish `Metered`: every Newton
+/// iteration and backtracking halving is observed against the caller's
+/// operation ledger, and a non-finite geometry evaluation is a hard
+/// [`ProjectionError::NonFiniteEvaluation`]. The legacy `project_to_curve`/
+/// `project_to_surface` entry points polish `Unmetered`: no accounting, and a
+/// non-finite evaluation is handled exactly as the legacy polishers always
+/// did (the curve polisher keeps the best finite candidate — the guard ported
+/// in 0a4649e — while the surface polisher, which predates that guard, carries
+/// the raw evaluation forward). For every finite input the two modes execute
+/// the identical arithmetic sequence and return bit-identical results.
+enum Polish<'scope, 'context, 'session> {
+    /// No resource accounting (legacy entry points).
+    Unmetered,
+    /// Charge the caller's operation ledger (`*_in_scope` entry points).
+    Metered(&'scope mut OperationScope<'context, 'session>),
+}
+
+impl Polish<'_, '_, '_> {
+    /// Returns `true` when the polish charges accounting and treats a
+    /// non-finite geometry evaluation as a hard error.
+    fn is_metered(&self) -> bool {
+        matches!(self, Polish::Metered(_))
+    }
+
+    /// Records a high-water resource observation when metered; a no-op when
+    /// unmetered (the legacy polishers keep no ledger).
+    fn observe(
+        &mut self,
+        stage: kcore::operation::StageId,
+        resource: ResourceKind,
+        value: u64,
+    ) -> core::result::Result<(), ProjectionError> {
+        match self {
+            Polish::Metered(scope) => observe_projection(scope, stage, resource, value),
+            Polish::Unmetered => Ok(()),
+        }
+    }
+}
+
+/// Damped Newton polish of a curve-projection candidate, shared by the legacy
+/// (`Unmetered`) and scoped (`Metered`) entry points. Returns the improved
+/// `(t, f(t))` with `f` the squared distance.
+fn polish_curve_core(
     curve: &dyn Curve,
     p: Point3,
     t0: f64,
     window: ParamRange,
-    scope: &mut OperationScope<'_, '_>,
+    mut mode: Polish<'_, '_, '_>,
 ) -> core::result::Result<(f64, f64), ProjectionError> {
+    let strict = mode.is_metered();
+    // Squared-distance objective. Metered polishes reject a non-finite
+    // evaluation (`curve_objective`); unmetered polishes carry the raw value,
+    // matching the legacy closure. Both compute the identical arithmetic.
+    let objective = |t: f64| -> core::result::Result<f64, ProjectionError> {
+        if strict {
+            curve_objective(curve, p, t)
+        } else {
+            Ok((curve.eval(t) - p).norm_sq())
+        }
+    };
     let conv = 1e-12 * window.width().max(1.0);
     let max_step = window.width() / 4.0;
     let fallback_step = window.width() / CURVE_SAMPLES as f64;
     let mut t = t0;
-    let mut f_curr = curve_objective(curve, p, t)?;
+    let mut f_curr = objective(t)?;
     for iteration in 0..MAX_ITER_CURVE {
-        observe_projection(
-            scope,
+        mode.observe(
             CURVE_PROJECTION_NEWTON_ITERATIONS,
             ResourceKind::Depth,
             (iteration + 1) as u64,
         )?;
         let d = curve.eval_derivs(t, 2);
+        // Overflowed or indeterminate evaluation cannot certify improvement:
+        // metered polishes fail closed, unmetered polishes keep the best
+        // finite candidate seen so far (the guard ported in 0a4649e).
         if !d.d[..=2].iter().copied().all(finite_point) {
-            return Err(ProjectionError::NonFiniteEvaluation);
+            return nonfinite_or_keep(strict, (t, f_curr));
         }
         let diff = d.d[0] - p;
         let g = 2.0 * d.d[1].dot(diff);
+        // Stationarity at the floating-point noise floor of g.
         let g_scale = 2.0 * d.d[1].norm() * diff.norm();
         if !g.is_finite() || !g_scale.is_finite() {
-            return Err(ProjectionError::NonFiniteEvaluation);
+            return nonfinite_or_keep(strict, (t, f_curr));
         }
         if g.abs() <= 1e-15 * (1.0 + g_scale) {
             return Ok((t, f_curr));
         }
         let h = 2.0 * (d.d[2].dot(diff) + d.d[1].norm_sq());
         if !h.is_finite() {
-            return Err(ProjectionError::NonFiniteEvaluation);
+            return nonfinite_or_keep(strict, (t, f_curr));
         }
         let mut step = if h > 0.0 && h.is_finite() {
             -g / h
@@ -413,16 +471,19 @@ fn polish_curve_in_scope(
         if step.abs() <= conv {
             return Ok((t, f_curr));
         }
+        // Near the minimum f(t) plateaus at floating-point precision, so a
+        // decrease test would stall at |Δt| ~ √ε. Small Newton steps are
+        // locally convergent on the gradient — take them unconditionally.
         if h > 0.0 && step.abs() <= 1e-6 * window.width().max(1.0) {
             t = (t + step).clamp(window.lo, window.hi);
-            f_curr = curve_objective(curve, p, t)?;
+            f_curr = objective(t)?;
             continue;
         }
-        let mut halvings = 0;
+        let mut halvings = 0_u64;
         loop {
             let t_new = (t + step).clamp(window.lo, window.hi);
             if t_new != t {
-                let f_new = curve_objective(curve, p, t_new)?;
+                let f_new = objective(t_new)?;
                 if f_new <= f_curr {
                     t = t_new;
                     f_curr = f_new;
@@ -431,16 +492,10 @@ fn polish_curve_in_scope(
             }
             step *= 0.5;
             halvings += 1;
-            observe_projection(
-                scope,
-                CURVE_PROJECTION_HALVINGS,
-                ResourceKind::Depth,
-                halvings,
-            )?;
+            mode.observe(CURVE_PROJECTION_HALVINGS, ResourceKind::Depth, halvings)?;
             if halvings >= MAX_HALVINGS as u64 || step.abs() <= conv {
                 if halvings >= MAX_HALVINGS as u64 {
-                    observe_projection(
-                        scope,
+                    mode.observe(
                         CURVE_PROJECTION_HALVINGS,
                         ResourceKind::Depth,
                         MAX_HALVINGS as u64 + 1,
@@ -450,82 +505,37 @@ fn polish_curve_in_scope(
             }
         }
     }
-    observe_projection(
-        scope,
-        CURVE_PROJECTION_NEWTON_ITERATIONS,
-        ResourceKind::Depth,
-        MAX_ITER_CURVE as u64 + 1,
-    )?;
-    unreachable!("the v1 Newton ceiling must reject its canonical crossing")
+    if strict {
+        mode.observe(
+            CURVE_PROJECTION_NEWTON_ITERATIONS,
+            ResourceKind::Depth,
+            MAX_ITER_CURVE as u64 + 1,
+        )?;
+        unreachable!("the v1 Newton ceiling must reject its canonical crossing")
+    }
+    Ok((t, f_curr))
 }
 
-/// Damped Newton polish of a curve-projection candidate. Returns the
-/// improved `(t, f(t))` with `f` the squared distance.
-fn polish_curve(curve: &dyn Curve, p: Point3, t0: f64, window: ParamRange) -> (f64, f64) {
-    let fval = |t: f64| (curve.eval(t) - p).norm_sq();
-    let conv = 1e-12 * window.width().max(1.0);
-    let max_step = window.width() / 4.0;
-    let fallback_step = window.width() / CURVE_SAMPLES as f64;
-    let mut t = t0;
-    let mut f_curr = fval(t);
-    'newton: for _ in 0..MAX_ITER_CURVE {
-        let d = curve.eval_derivs(t, 2);
-        // Overflowed or indeterminate evaluation cannot certify improvement;
-        // keep the best candidate seen so far (the scoped polisher returns
-        // `NonFiniteEvaluation` here — keep both variants in agreement).
-        if !d.d[..=2].iter().copied().all(finite_point) {
-            break;
-        }
-        let diff = d.d[0] - p;
-        let g = 2.0 * d.d[1].dot(diff);
-        // Stationarity at the floating-point noise floor of g.
-        let g_scale = 2.0 * d.d[1].norm() * diff.norm();
-        if !g.is_finite() || !g_scale.is_finite() {
-            break;
-        }
-        if g.abs() <= 1e-15 * (1.0 + g_scale) {
-            break;
-        }
-        let h = 2.0 * (d.d[2].dot(diff) + d.d[1].norm_sq());
-        if !h.is_finite() {
-            break;
-        }
-        let mut step = if h > 0.0 && h.is_finite() {
-            -g / h
-        } else {
-            -g.signum() * fallback_step
-        };
-        step = step.clamp(-max_step, max_step);
-        if step.abs() <= conv {
-            break;
-        }
-        // Near the minimum f(t) plateaus at floating-point precision, so a
-        // decrease test would stall at |Δt| ~ √ε. Small Newton steps are
-        // locally convergent on the gradient — take them unconditionally.
-        if h > 0.0 && step.abs() <= 1e-6 * window.width().max(1.0) {
-            t = (t + step).clamp(window.lo, window.hi);
-            f_curr = fval(t);
-            continue;
-        }
-        let mut halvings = 0;
-        loop {
-            let t_new = (t + step).clamp(window.lo, window.hi);
-            if t_new != t {
-                let f_new = fval(t_new);
-                if f_new <= f_curr {
-                    t = t_new;
-                    f_curr = f_new;
-                    break;
-                }
-            }
-            step *= 0.5;
-            halvings += 1;
-            if halvings >= MAX_HALVINGS || step.abs() <= conv {
-                break 'newton;
-            }
-        }
+/// A non-finite evaluation fails closed when metered, or keeps the best
+/// finite candidate seen so far when unmetered (the curve legacy behavior).
+fn nonfinite_or_keep(
+    strict: bool,
+    keep: (f64, f64),
+) -> core::result::Result<(f64, f64), ProjectionError> {
+    if strict {
+        Err(ProjectionError::NonFiniteEvaluation)
+    } else {
+        Ok(keep)
     }
-    (t, f_curr)
+}
+
+/// Damped Newton polish of a curve-projection candidate (legacy, unmetered).
+/// Returns the improved `(t, f(t))` with `f` the squared distance.
+fn polish_curve(curve: &dyn Curve, p: Point3, t0: f64, window: ParamRange) -> (f64, f64) {
+    // An unmetered polish performs no accounting and never fails: its
+    // non-finite guards keep the best finite candidate instead of erroring.
+    polish_curve_core(curve, p, t0, window, Polish::Unmetered)
+        .expect("unmetered curve polish is infallible")
 }
 
 /// Project `p` onto `surface`, searching within `window` (both directions
@@ -696,7 +706,8 @@ pub fn project_to_surface_in_scope(
             ResourceKind::Items,
             (candidate + 1) as u64,
         )?;
-        let (uv, f) = polish_surface_in_scope(surface, p, sample(i, j), window, scope)?;
+        let (uv, f) =
+            polish_surface_core(surface, p, sample(i, j), window, Polish::Metered(scope))?;
         let better = match best {
             None => true,
             Some((bf, buv)) => (f, uv[0], uv[1]) < (bf, buv[0], buv[1]),
@@ -726,13 +737,27 @@ pub fn project_to_surface_in_scope(
     })
 }
 
-fn polish_surface_in_scope(
+/// Damped Newton polish of a surface-projection candidate, shared by the
+/// legacy (`Unmetered`) and scoped (`Metered`) entry points. Returns the
+/// improved `(uv, f(uv))` with `f` the squared distance.
+fn polish_surface_core(
     surface: &dyn Surface,
     p: Point3,
     uv0: [f64; 2],
     window: [ParamRange; 2],
-    scope: &mut OperationScope<'_, '_>,
+    mut mode: Polish<'_, '_, '_>,
 ) -> core::result::Result<([f64; 2], f64), ProjectionError> {
+    let strict = mode.is_metered();
+    // Squared-distance objective. Metered polishes reject a non-finite
+    // evaluation (`surface_objective`); unmetered polishes carry the raw
+    // value, matching the legacy closure. Both compute identical arithmetic.
+    let objective = |uv: [f64; 2]| -> core::result::Result<f64, ProjectionError> {
+        if strict {
+            surface_objective(surface, p, uv)
+        } else {
+            Ok((surface.eval(uv) - p).norm_sq())
+        }
+    };
     let (wu, wv) = (window[0].width(), window[1].width());
     let conv_u = 1e-12 * wu.max(1.0);
     let conv_v = 1e-12 * wv.max(1.0);
@@ -741,18 +766,26 @@ fn polish_surface_in_scope(
         (wv / SURFACE_SAMPLES as f64).max(1e-12),
     );
     let mut uv = uv0;
-    let mut f_curr = surface_objective(surface, p, uv)?;
+    let mut f_curr = objective(uv)?;
     for iteration in 0..MAX_ITER_SURFACE {
-        observe_projection(
-            scope,
+        mode.observe(
             SURFACE_PROJECTION_NEWTON_ITERATIONS,
             ResourceKind::Depth,
             (iteration + 1) as u64,
         )?;
         let d = surface.eval_derivs(uv, 2);
-        if ![d.p, d.du, d.dv, d.duu, d.duv, d.dvv]
-            .into_iter()
-            .all(finite_point)
+        // Metered polishes fail closed on a non-finite evaluation. The legacy
+        // (unmetered) surface polisher predates the curve NaN guard of
+        // 0a4649e and instead carries the raw evaluation forward; the
+        // `strict &&` short-circuit preserves that exact behavior so finite
+        // and pathological inputs alike stay output-identical to the legacy
+        // `polish_surface`. (Porting this guard to the legacy path — closing
+        // the surface analogue of the 0a4649e curve NaN gap — is deferred as
+        // a behavior change, out of scope for this deduplication.)
+        if strict
+            && ![d.p, d.du, d.dv, d.duu, d.duv, d.dvv]
+                .into_iter()
+                .all(finite_point)
         {
             return Err(ProjectionError::NonFiniteEvaluation);
         }
@@ -760,7 +793,7 @@ fn polish_surface_in_scope(
         let g0 = 2.0 * d.du.dot(diff);
         let g1 = 2.0 * d.dv.dot(diff);
         let g_scale = 2.0 * (d.du.norm() + d.dv.norm()) * diff.norm();
-        if !g0.is_finite() || !g1.is_finite() || !g_scale.is_finite() {
+        if strict && (!g0.is_finite() || !g1.is_finite() || !g_scale.is_finite()) {
             return Err(ProjectionError::NonFiniteEvaluation);
         }
         if g0.abs().max(g1.abs()) <= 1e-15 * (1.0 + g_scale) {
@@ -770,7 +803,8 @@ fn polish_surface_in_scope(
         let h01 = 2.0 * (d.duv.dot(diff) + d.du.dot(d.dv));
         let h11 = 2.0 * (d.dvv.dot(diff) + d.dv.norm_sq());
         let det = h00 * h11 - h01 * h01;
-        if !h00.is_finite() || !h01.is_finite() || !h11.is_finite() || !det.is_finite() {
+        if strict && (!h00.is_finite() || !h01.is_finite() || !h11.is_finite() || !det.is_finite())
+        {
             return Err(ProjectionError::NonFiniteEvaluation);
         }
         let (mut su, mut sv) = if h00 > 0.0 && det > 0.0 && det.is_finite() {
@@ -793,7 +827,7 @@ fn polish_surface_in_scope(
                 (uv[0] + su).clamp(window[0].lo, window[0].hi),
                 (uv[1] + sv).clamp(window[1].lo, window[1].hi),
             ];
-            f_curr = surface_objective(surface, p, uv)?;
+            f_curr = objective(uv)?;
             continue;
         }
         let mut halvings = 0_u64;
@@ -803,7 +837,7 @@ fn polish_surface_in_scope(
                 (uv[1] + sv).clamp(window[1].lo, window[1].hi),
             ];
             if cand != uv {
-                let f_new = surface_objective(surface, p, cand)?;
+                let f_new = objective(cand)?;
                 if f_new <= f_curr {
                     uv = cand;
                     f_curr = f_new;
@@ -813,16 +847,10 @@ fn polish_surface_in_scope(
             su *= 0.5;
             sv *= 0.5;
             halvings += 1;
-            observe_projection(
-                scope,
-                SURFACE_PROJECTION_HALVINGS,
-                ResourceKind::Depth,
-                halvings,
-            )?;
+            mode.observe(SURFACE_PROJECTION_HALVINGS, ResourceKind::Depth, halvings)?;
             if halvings >= MAX_HALVINGS as u64 || (su.abs() <= conv_u && sv.abs() <= conv_v) {
                 if halvings >= MAX_HALVINGS as u64 {
-                    observe_projection(
-                        scope,
+                    mode.observe(
                         SURFACE_PROJECTION_HALVINGS,
                         ResourceKind::Depth,
                         MAX_HALVINGS as u64 + 1,
@@ -832,13 +860,15 @@ fn polish_surface_in_scope(
             }
         }
     }
-    observe_projection(
-        scope,
-        SURFACE_PROJECTION_NEWTON_ITERATIONS,
-        ResourceKind::Depth,
-        MAX_ITER_SURFACE as u64 + 1,
-    )?;
-    unreachable!("the v1 Newton ceiling must reject its canonical crossing")
+    if strict {
+        mode.observe(
+            SURFACE_PROJECTION_NEWTON_ITERATIONS,
+            ResourceKind::Depth,
+            MAX_ITER_SURFACE as u64 + 1,
+        )?;
+        unreachable!("the v1 Newton ceiling must reject its canonical crossing")
+    }
+    Ok((uv, f_curr))
 }
 
 fn finite_point(point: Point3) -> bool {
@@ -1015,87 +1045,17 @@ fn projection_accounting_result(
     result.map_err(ProjectionError::Policy)
 }
 
-/// Damped Newton polish of a surface-projection candidate. Returns the
-/// improved `(uv, f(uv))` with `f` the squared distance.
+/// Damped Newton polish of a surface-projection candidate (legacy, unmetered).
+/// Returns the improved `(uv, f(uv))` with `f` the squared distance.
 fn polish_surface(
     surface: &dyn Surface,
     p: Point3,
     uv0: [f64; 2],
     window: [ParamRange; 2],
 ) -> ([f64; 2], f64) {
-    let fval = |uv: [f64; 2]| (surface.eval(uv) - p).norm_sq();
-    let (wu, wv) = (window[0].width(), window[1].width());
-    let conv_u = 1e-12 * wu.max(1.0);
-    let conv_v = 1e-12 * wv.max(1.0);
-    let (cell_u, cell_v) = (
-        (wu / SURFACE_SAMPLES as f64).max(1e-12),
-        (wv / SURFACE_SAMPLES as f64).max(1e-12),
-    );
-    let mut uv = uv0;
-    let mut f_curr = fval(uv);
-    'newton: for _ in 0..MAX_ITER_SURFACE {
-        let d = surface.eval_derivs(uv, 2);
-        let diff = d.p - p;
-        let g0 = 2.0 * d.du.dot(diff);
-        let g1 = 2.0 * d.dv.dot(diff);
-        let g_scale = 2.0 * (d.du.norm() + d.dv.norm()) * diff.norm();
-        if g0.abs().max(g1.abs()) <= 1e-15 * (1.0 + g_scale) {
-            break;
-        }
-        let h00 = 2.0 * (d.duu.dot(diff) + d.du.norm_sq());
-        let h01 = 2.0 * (d.duv.dot(diff) + d.du.dot(d.dv));
-        let h11 = 2.0 * (d.dvv.dot(diff) + d.dv.norm_sq());
-        let det = h00 * h11 - h01 * h01;
-        // Newton step for a positive-definite Hessian; otherwise a
-        // cell-scaled gradient-descent step.
-        let (mut su, mut sv) = if h00 > 0.0 && det > 0.0 && det.is_finite() {
-            (-(h11 * g0 - h01 * g1) / det, -(h00 * g1 - h01 * g0) / det)
-        } else {
-            let gn = (g0 * g0 + g1 * g1).sqrt();
-            if gn == 0.0 {
-                break;
-            }
-            (-g0 / gn * cell_u, -g1 / gn * cell_v)
-        };
-        su = su.clamp(-wu / 4.0, wu / 4.0);
-        sv = sv.clamp(-wv / 4.0, wv / 4.0);
-        if su.abs() <= conv_u && sv.abs() <= conv_v {
-            break;
-        }
-        // See polish_curve: small PD-Newton steps bypass the f-decrease test
-        // to converge past the f(uv) floating-point plateau.
-        let newton_ok = h00 > 0.0 && det > 0.0 && det.is_finite();
-        if newton_ok && su.abs() <= 1e-6 * wu.max(1.0) && sv.abs() <= 1e-6 * wv.max(1.0) {
-            uv = [
-                (uv[0] + su).clamp(window[0].lo, window[0].hi),
-                (uv[1] + sv).clamp(window[1].lo, window[1].hi),
-            ];
-            f_curr = fval(uv);
-            continue;
-        }
-        let mut halvings = 0;
-        loop {
-            let cand = [
-                (uv[0] + su).clamp(window[0].lo, window[0].hi),
-                (uv[1] + sv).clamp(window[1].lo, window[1].hi),
-            ];
-            if cand != uv {
-                let f_new = fval(cand);
-                if f_new <= f_curr {
-                    uv = cand;
-                    f_curr = f_new;
-                    break;
-                }
-            }
-            su *= 0.5;
-            sv *= 0.5;
-            halvings += 1;
-            if halvings >= MAX_HALVINGS || (su.abs() <= conv_u && sv.abs() <= conv_v) {
-                break 'newton;
-            }
-        }
-    }
-    (uv, f_curr)
+    // An unmetered polish performs no accounting and never fails.
+    polish_surface_core(surface, p, uv0, window, Polish::Unmetered)
+        .expect("unmetered surface polish is infallible")
 }
 
 #[cfg(test)]
