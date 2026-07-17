@@ -416,7 +416,10 @@ impl<C: Cursor> Parser<'_, C> {
             if f.ty == FieldType::Char {
                 values.push(Value::Str(self.cur.chars(count)?));
             } else {
-                let mut arr = Vec::with_capacity(count);
+                // Clamp to the remaining input: every scalar consumes at
+                // least one byte, so a hostile count fails on end-of-input
+                // instead of preallocating.
+                let mut arr = Vec::with_capacity(count.min(self.cur.remaining()));
                 for _ in 0..count {
                     arr.push(self.scalar(f.ty)?);
                 }

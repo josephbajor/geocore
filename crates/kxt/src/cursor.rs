@@ -41,6 +41,11 @@ pub enum Scalar {
 pub trait Cursor {
     /// Current byte offset (diagnostics).
     fn offset(&self) -> usize;
+    /// Bytes left in the input. Declared lengths and element counts must
+    /// never preallocate beyond this: every retained element consumes at
+    /// least one input byte, so a hostile count cannot demand memory the
+    /// stream could not possibly satisfy.
+    fn remaining(&self) -> usize;
     /// True if only trailing whitespace remains.
     fn at_end(&mut self) -> bool;
     /// A number that may be null: int-valued context.
@@ -195,6 +200,10 @@ impl Cursor for TextCursor {
         self.pos
     }
 
+    fn remaining(&self) -> usize {
+        self.data.len().saturating_sub(self.pos)
+    }
+
     fn at_end(&mut self) -> bool {
         self.skip_spaces();
         self.pos >= self.data.len()
@@ -278,7 +287,9 @@ impl Cursor for TextCursor {
     }
 
     fn chars(&mut self, n: usize) -> Result<String> {
-        let mut out = String::with_capacity(n);
+        // Clamp the preallocation to the remaining input: a corrupt or
+        // hostile declared length must fail on end-of-input, not allocate.
+        let mut out = String::with_capacity(n.min(self.remaining()));
         while out.len() < n {
             let b = self.bump()?;
             if b == b'\\' {
@@ -457,6 +468,10 @@ impl Cursor for BinCursor<'_> {
             1 => Ok(true),
             _ => parse_err(self.pos, "logical byte not 0/1"),
         }
+    }
+
+    fn remaining(&self) -> usize {
+        self.data.len().saturating_sub(self.pos)
     }
 
     fn chars(&mut self, n: usize) -> Result<String> {

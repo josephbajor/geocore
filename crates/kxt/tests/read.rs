@@ -380,3 +380,24 @@ fn reconstruction_failure_leaves_store_unchanged() {
         control.insert_point(Point3::new(4.0, 5.0, 6.0)).unwrap()
     );
 }
+
+/// Fuzz-found regression (CI run 29555062631): this 3.6 KiB input parses
+/// into 87 nodes whose LOOP owns a forward fin cycle that never returns to
+/// the first fin. The ring walk previously allowed one million iterations,
+/// allocating millions of fin/pcurve entities from a few KiB of input
+/// before its cap fired (out-of-memory under the fuzzer's resource limit).
+/// The walk is now pigeonhole-bounded by the file's node count, and parser
+/// preallocations clamp to the remaining input, so reconstruction fails
+/// quickly with a typed error.
+#[test]
+fn hostile_fin_cycle_fails_without_runaway_allocation() {
+    let bytes = include_bytes!("hostile/oom_declared_length.bin");
+    // The fuzz harness prepends a one-byte mode selector; the payload is
+    // the hostile stream itself.
+    let file = read_xt(&bytes[1..]).expect("the hostile payload parses");
+    assert_eq!(file.nodes.len(), 87);
+    let mut store = Store::new();
+    let result = import(&bytes[1..], &mut store);
+    assert!(matches!(result, Err(XtError::BadField { .. })));
+    assert_eq!(store.count::<Body>(), 0, "failed import must roll back");
+}

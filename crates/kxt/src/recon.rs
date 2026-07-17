@@ -1626,7 +1626,12 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 break;
             }
             fin_idx = forward;
-            if fins.len() > 1_000_000 {
+            // Pigeonhole bound: every ring member is a distinct FIN node, so
+            // a walk longer than the file's node count proves a forward
+            // cycle that skips the first fin. Without this a few-KiB hostile
+            // file drives millions of fin/pcurve allocations (fuzz-found
+            // out-of-memory, CI run 29555062631).
+            if fins.len() >= file.nodes.len() {
                 return Err(XtError::BadField {
                     index: loop_idx,
                     what: "fin ring does not close",
