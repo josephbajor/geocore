@@ -1022,7 +1022,7 @@ fn general_polar_by_wide_multi_occupied_and_near_pole_cases_fail_closed() {
     .unwrap();
     assert_indeterminate_sphere_window(
         &straddling,
-        "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, one exact connected four-cell shared-seam path, T-shaped tree, or 2x2 cycle with two certified-empty siblings, one exact disconnected outer-column vertical-pair layout or singleton-plus-three-cell path separated by two certified-empty cut siblings, one exact five-cell simultaneous shared-seam union with one certified-empty sibling, or the exact simultaneous six-cell union with no empty sibling",
+        "general coincident sphere window union could not certify the seam-cancelled cell regions: every grid-adjacent occupied pair must own one exact shared seam edge, each connected component must trace one unambiguous cycle, separated components need certified-empty corner owners, and no surviving edge or uncancelled-seam vertex may lie on an artificial decomposition seam",
     );
 
     let near_pole = f64::from_bits(half_pi.to_bits() - 1);
@@ -1291,7 +1291,7 @@ fn general_polar_by_wide_two_adjacent_lower_cells_merge_exactly_and_swap() {
 }
 
 #[test]
-fn general_polar_by_wide_two_nonadjacent_lower_cells_fail_closed() {
+fn general_polar_by_wide_two_nonadjacent_lower_cells_merge_as_two_regions_and_swap() {
     let a = world_sphere();
     let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.4);
     let half_pi = core::f64::consts::FRAC_PI_2;
@@ -1340,11 +1340,21 @@ fn general_polar_by_wide_two_nonadjacent_lower_cells_fail_closed() {
     assert_eq!(empty, [[0, 1], [1, 0], [1, 1], [1, 2]]);
     assert_eq!(occupied, [[0, 0], [0, 2]]);
 
+    // The two occupied cells sit in the same polar row separated by a
+    // certified-empty cut sibling, so the general merger emits them as two
+    // independent regions under the parent map.
     let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
-    assert_indeterminate_sphere_window(
-        &hit,
-        "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, one exact connected four-cell shared-seam path, T-shaped tree, or 2x2 cycle with two certified-empty siblings, one exact disconnected outer-column vertical-pair layout or singleton-plus-three-cell path separated by two certified-empty cut siblings, one exact five-cell simultaneous shared-seam union with one certified-empty sibling, or the exact simultaneous six-cell union with no empty sibling",
-    );
+    assert_general_sphere_window_regions(&hit, &a, &b, 2);
+    for region in &hit.regions {
+        let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = region.correspondence else {
+            unreachable!()
+        };
+        assert_eq!(map.first_range(), a_window);
+        assert_eq!(map.second_range(), b_window);
+    }
+    let swapped =
+        intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
+    assert_eq!(hit.clone().swapped(), swapped);
 }
 
 #[test]
@@ -1910,13 +1920,17 @@ fn general_polar_by_wide_three_cell_non_cap_row_path_merges_exactly_and_swaps() 
         }
     }
     assert_eq!(occupied_rows, [true, true]);
+    // With both polar rows occupied, the general merger cancels the latitude
+    // cut alongside the longitude cuts and certifies the full connected union
+    // as one region under the parent map.
     let opposite_row_occupied =
         intersect_bounded_spheres(&a, a_window, &b, opposite_row_window, Tolerances::default())
             .unwrap();
-    assert_indeterminate_sphere_window(
-        &opposite_row_occupied,
-        "general coincident sphere polar-by-wide union supports one occupied child, one exact adjacent same-row pair, one exact adjacent same-column pair, one exact mixed-axis three-cell path, one exact full latitude-row path, one exact connected four-cell shared-seam path, T-shaped tree, or 2x2 cycle with two certified-empty siblings, one exact disconnected outer-column vertical-pair layout or singleton-plus-three-cell path separated by two certified-empty cut siblings, one exact five-cell simultaneous shared-seam union with one certified-empty sibling, or the exact simultaneous six-cell union with no empty sibling",
-    );
+    assert_general_sphere_window_region(&opposite_row_occupied, &a, &b);
+    let swapped =
+        intersect_bounded_spheres(&b, opposite_row_window, &a, a_window, Tolerances::default())
+            .unwrap();
+    assert_eq!(opposite_row_occupied.clone().swapped(), swapped);
 }
 
 #[test]
@@ -2241,7 +2255,7 @@ fn general_both_wide_three_regions_reject_nonempty_orthogonal_corner_owner() {
     let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
     assert_indeterminate_sphere_window(
         &hit,
-        "general coincident sphere both-wide union supports at most nine positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, eight, and nine require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components; seven require an exact connected union or an exact corner singleton separated from an exact six-cell component",
+        "general coincident sphere window union could not certify the seam-cancelled cell regions: every grid-adjacent occupied pair must own one exact shared seam edge, each connected component must trace one unambiguous cycle, separated components need certified-empty corner owners, and no surviving edge or uncancelled-seam vertex may lie on an artificial decomposition seam",
     );
     let repeated =
         intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
@@ -3344,7 +3358,7 @@ fn general_both_wide_five_cell_non_path_rejects_nonexact_shared_seam() {
     let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
     assert_indeterminate_sphere_window(
         &hit,
-        "general coincident sphere both-wide union supports at most nine positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, eight, and nine require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components; seven require an exact connected union or an exact corner singleton separated from an exact six-cell component",
+        "general coincident sphere window union could not certify the seam-cancelled cell regions: every grid-adjacent occupied pair must own one exact shared seam edge, each connected component must trace one unambiguous cycle, separated components need certified-empty corner owners, and no surviving edge or uncancelled-seam vertex may lie on an artificial decomposition seam",
     );
     let repeated =
         intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
@@ -3409,7 +3423,7 @@ fn general_both_wide_four_cell_cycle_rejects_one_ulp_artificial_seam() {
     let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
     assert_indeterminate_sphere_window(
         &hit,
-        "general coincident sphere both-wide union supports at most nine positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, eight, and nine require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components; seven require an exact connected union or an exact corner singleton separated from an exact six-cell component",
+        "general coincident sphere window union could not certify the seam-cancelled cell regions: every grid-adjacent occupied pair must own one exact shared seam edge, each connected component must trace one unambiguous cycle, separated components need certified-empty corner owners, and no surviving edge or uncancelled-seam vertex may lie on an artificial decomposition seam",
     );
     let repeated =
         intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
@@ -3420,19 +3434,24 @@ fn general_both_wide_four_cell_cycle_rejects_one_ulp_artificial_seam() {
 }
 
 #[test]
-fn general_both_wide_four_cell_path_rejects_approximate_shared_seam() {
+fn general_both_wide_four_cell_path_merges_via_one_owner_seam_recovery_and_swaps() {
     let a = world_sphere();
     let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.05);
     let a_window = window(-0.6, -0.6 + 1.01 * core::f64::consts::PI, -0.2, 0.2);
-    // The four positive cells are [0, 0], [1, 0], [2, 0], and [2, 1],
-    // but the last shared-seam endpoint parameters recover one ulp away from
-    // the decomposition seam and therefore cannot prove a bit-exact splice.
+    // The four positive cells are [0, 0], [1, 0], [2, 0], and [2, 1]. One
+    // shared-seam endpoint reconstructs one ulp away from the decomposition
+    // seam, so the bit-exact splice is unavailable — the one-owner
+    // complementary-chart recovery certifies the merge instead, exactly as it
+    // does for larger unions.
     let b_window = window(0.4, 0.4 + 1.3 * core::f64::consts::PI, -0.2, 0.2);
     let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
-    assert_indeterminate_sphere_window(
-        &hit,
-        "general coincident sphere both-wide union supports at most nine positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, eight, and nine require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components; seven require an exact connected union or an exact corner singleton separated from an exact six-cell component",
-    );
+    assert_general_sphere_window_region(&hit, &a, &b);
+    let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = hit.regions[0].correspondence
+    else {
+        unreachable!()
+    };
+    assert_eq!(map.first_range(), a_window);
+    assert_eq!(map.second_range(), b_window);
 
     let repeated =
         intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
@@ -3440,6 +3459,7 @@ fn general_both_wide_four_cell_path_rejects_approximate_shared_seam() {
     let swapped =
         intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
     assert_eq!(hit.clone().swapped(), swapped);
+    assert_general_sphere_window_region(&swapped, &b, &a);
 }
 
 #[test]
@@ -3498,20 +3518,25 @@ fn general_both_wide_windows_merge_exact_five_cell_path_and_swap() {
 }
 
 #[test]
-fn general_both_wide_five_cell_path_rejects_approximate_shared_seam() {
+fn general_both_wide_five_cell_path_merges_via_one_owner_seam_recovery_and_swaps() {
     let a = world_sphere();
     let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.05);
     let a_window = window(-0.6, -0.6 + 1.01 * core::f64::consts::PI, -0.2, 0.2);
-    // The five positive cells remain [0, 0], [1, 0], [1, 1], [2, 1],
-    // and [2, 2], but at least one shared-seam endpoint record is not bit exact.
+    // The five positive cells remain [0, 0], [1, 0], [1, 1], [2, 1], and
+    // [2, 2]. At least one shared-seam endpoint record is not bit exact, so
+    // the merge is certified through the one-owner complementary-chart
+    // recovery rather than the bit-exact reverse pair.
     let b_start: f64 = 0.33199999999999996;
     assert_eq!(b_start.to_bits(), 0x3fd5_3f7c_ed91_6872);
     let b_window = window(b_start, b_start + 1.02 * core::f64::consts::PI, -0.2, 0.2);
     let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
-    assert_indeterminate_sphere_window(
-        &hit,
-        "general coincident sphere both-wide union supports at most nine positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, eight, and nine require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components; seven require an exact connected union or an exact corner singleton separated from an exact six-cell component",
-    );
+    assert_general_sphere_window_region(&hit, &a, &b);
+    let SurfaceRegionCorrespondence::GeneralSphereWindow(map) = hit.regions[0].correspondence
+    else {
+        unreachable!()
+    };
+    assert_eq!(map.first_range(), a_window);
+    assert_eq!(map.second_range(), b_window);
 
     let repeated =
         intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
@@ -3519,31 +3544,42 @@ fn general_both_wide_five_cell_path_rejects_approximate_shared_seam() {
     let swapped =
         intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
     assert_eq!(hit.clone().swapped(), swapped);
+    assert_general_sphere_window_region(&swapped, &b, &a);
 }
 
 #[test]
-fn general_both_wide_broad_five_cell_path_rejects_nonexact_seams() {
+fn general_both_wide_broad_five_cell_path_merges_via_one_owner_seam_recovery() {
     let a = world_sphere();
     let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.2);
     let a_window = window(-0.6, -0.6 + 1.1 * core::f64::consts::PI, -0.8, 0.8);
-    for b_start in [-0.4, -0.39] {
-        // Both inputs occupy the same five-cell staircase as the admitted
-        // narrow fixture, but their seam records are not bit exact.
-        let b_window = window(b_start, b_start + 1.1 * core::f64::consts::PI, -0.7, 0.7);
-        let hit =
-            intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
-        assert_indeterminate_sphere_window(
-            &hit,
-            "general coincident sphere both-wide union supports at most nine positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, eight, and nine require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components; seven require an exact connected union or an exact corner singleton separated from an exact six-cell component",
-        );
+    // The first staircase recovers every non-bit-exact seam through the
+    // one-owner complementary-chart proof and merges.
+    let b_window = window(-0.4, -0.4 + 1.1 * core::f64::consts::PI, -0.7, 0.7);
+    let hit = intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_general_sphere_window_region(&hit, &a, &b);
+    let repeated =
+        intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
+    assert_eq!(hit, repeated);
+    let swapped =
+        intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
+    assert_eq!(hit.clone().swapped(), swapped);
+    assert_general_sphere_window_region(&swapped, &b, &a);
 
-        let repeated =
-            intersect_bounded_spheres(&a, a_window, &b, b_window, Tolerances::default()).unwrap();
-        assert_eq!(hit, repeated);
-        let swapped =
-            intersect_bounded_spheres(&b, b_window, &a, a_window, Tolerances::default()).unwrap();
-        assert_eq!(hit.clone().swapped(), swapped);
-    }
+    // The shifted staircase leaves at least one seam without either a
+    // bit-exact reverse pair or an unambiguous one-owner recovery, so the
+    // union stays fail-closed.
+    let unprovable_window = window(-0.39, -0.39 + 1.1 * core::f64::consts::PI, -0.7, 0.7);
+    let unprovable =
+        intersect_bounded_spheres(&a, a_window, &b, unprovable_window, Tolerances::default())
+            .unwrap();
+    assert_indeterminate_sphere_window(
+        &unprovable,
+        "general coincident sphere window union could not certify the seam-cancelled cell regions: every grid-adjacent occupied pair must own one exact shared seam edge, each connected component must trace one unambiguous cycle, separated components need certified-empty corner owners, and no surviving edge or uncancelled-seam vertex may lie on an artificial decomposition seam",
+    );
+    let unprovable_swapped =
+        intersect_bounded_spheres(&b, unprovable_window, &a, a_window, Tolerances::default())
+            .unwrap();
+    assert_eq!(unprovable.clone().swapped(), unprovable_swapped);
 
     let overfull_a_window = window(-0.57, -0.57 + 1.1 * core::f64::consts::PI, -0.8, 0.8);
     let overfull_b_window = window(-0.4, -0.4 + 1.1 * core::f64::consts::PI, -0.7, 0.7);
@@ -3557,7 +3593,7 @@ fn general_both_wide_broad_five_cell_path_rejects_nonexact_seams() {
     .unwrap();
     assert_indeterminate_sphere_window(
         &overfull,
-        "general coincident sphere both-wide union supports at most nine positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, eight, and nine require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components; seven require an exact connected union or an exact corner singleton separated from an exact six-cell component",
+        "general coincident sphere window union could not certify the seam-cancelled cell regions: every grid-adjacent occupied pair must own one exact shared seam edge, each connected component must trace one unambiguous cycle, separated components need certified-empty corner owners, and no surviving edge or uncancelled-seam vertex may lie on an artificial decomposition seam",
     );
 }
 
@@ -3584,9 +3620,12 @@ fn general_single_wide_window_preserves_parent_periodic_seam_evidence() {
 }
 
 #[test]
-fn general_wide_window_union_fails_closed_across_artificial_seams_and_two_wide_inputs() {
+fn general_wide_window_union_merges_across_artificial_seams_and_gates_two_wide_inputs() {
     let a = world_sphere();
     let b = y_tilted_sphere(Point3::new(0.0, 0.0, 0.0), 1.0, 0.2);
+    // The small second window straddles one artificial longitude cut of the
+    // wide first window; the general merger cancels that seam and certifies
+    // the union instead of failing closed on the two occupied cells.
     let crossing = intersect_bounded_spheres(
         &a,
         window(-0.6, core::f64::consts::PI - 0.6, -0.8, 0.8),
@@ -3595,16 +3634,7 @@ fn general_wide_window_union_fails_closed_across_artificial_seams_and_two_wide_i
         Tolerances::default(),
     )
     .unwrap();
-    assert!(crossing.is_empty());
-    assert!(
-        matches!(
-            crossing.completion(),
-            Completion::Indeterminate {
-                reason: "general coincident sphere wide-window union requires one positive-area cell and certified-empty siblings"
-            }
-        ),
-        "unexpected seam-crossing result: {crossing:?}"
-    );
+    assert_general_sphere_window_region(&crossing, &a, &b);
 
     let shared_seam = intersect_bounded_spheres(
         &a,
@@ -3614,10 +3644,7 @@ fn general_wide_window_union_fails_closed_across_artificial_seams_and_two_wide_i
         Tolerances::default(),
     )
     .unwrap();
-    assert_indeterminate_sphere_window(
-        &shared_seam,
-        "general coincident sphere both-wide union supports at most nine positive cells; three cells require pairwise independence, one exact adjacent pair plus an isolated cell, or an exact shared-seam path; four, six, eight, and nine require an exact connected shared-seam union; five require an exact connected union or exact sibling-separated components; seven require an exact connected union or an exact corner singleton separated from an exact six-cell component",
-    );
+    assert_general_sphere_window_region(&shared_seam, &a, &b);
 
     let polar = intersect_bounded_spheres(
         &a,
