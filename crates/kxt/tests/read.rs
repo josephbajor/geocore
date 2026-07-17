@@ -147,7 +147,7 @@ fn contextual_parse_failure_keeps_the_precomposed_zero_usage_report() {
 
 #[test]
 fn contextual_nurbs_edge_import_accounts_both_endpoint_projections() {
-    let bytes = include_bytes!("../../../oracle/outbox/solid_block_nurbs_edge.x_t");
+    let bytes = include_bytes!("certified/solid_block_nurbs_edge.certified.x_t");
     let mut legacy_store = Store::new();
     let legacy = import(bytes, &mut legacy_store).unwrap();
 
@@ -179,7 +179,7 @@ fn contextual_nurbs_edge_import_accounts_both_endpoint_projections() {
 
 #[test]
 fn curve_projection_query_limit_is_exact_and_reconstruction_rolls_back() {
-    let bytes = include_bytes!("../../../oracle/outbox/solid_block_nurbs_edge.x_t");
+    let bytes = include_bytes!("certified/solid_block_nurbs_edge.certified.x_t");
     let session = SessionPolicy::v1();
     let request = BudgetPlan::new([LimitSpec::new(
         kgeom::project::CURVE_PROJECTION_QUERIES,

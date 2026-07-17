@@ -62,7 +62,7 @@ pub const IMPORTED_TOLERANT_EDGE_SHA256: &str =
 /// Portable in-harness byte digest for the exact certified tolerant-edge fixture.
 pub const IMPORTED_TOLERANT_EDGE_BYTE_DIGEST: u64 = 0x1483_6dc5_5d6d_8a71;
 const IMPORTED_TOLERANT_EDGE_BYTES: &[u8] =
-    include_bytes!("../../oracle/outbox/solid_block_tolerant_edge.x_t");
+    include_bytes!("../testdata/solid_block_tolerant_edge.certified.x_t");
 /// Exact licensed-host-certified cylinder used for broader imported-corpus coverage.
 pub const IMPORTED_CYLINDER_IDENTITY: &str = "solid_cylinder.x_t@onshape-cloud-2026-07-11";
 /// SHA-256 pinned by `docs/oracle-certification.json` for the imported cylinder.
@@ -70,7 +70,7 @@ pub const IMPORTED_CYLINDER_SHA256: &str =
     "f1f2389c98ca323a8e5aef2f19ed2e88f406f8569c2c87a14d86c79111c6a9c4";
 /// Portable in-harness byte digest for the exact certified cylinder bytes.
 pub const IMPORTED_CYLINDER_BYTE_DIGEST: u64 = 0x57b8_9bfc_e92d_c85a;
-const IMPORTED_CYLINDER_BYTES: &[u8] = include_bytes!("../../oracle/outbox/solid_cylinder.x_t");
+const IMPORTED_CYLINDER_BYTES: &[u8] = include_bytes!("../testdata/solid_cylinder.certified.x_t");
 /// Locally generated curved exact-NURBS block used before licensed-host certification.
 pub const CURVED_NURBS_BLOCK_IDENTITY: &str =
     "solid_block_curved_nurbs_face.x_t@local-import-verified-2026-07-13";

@@ -554,7 +554,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
         self.assertEqual(len(imported_cylinder), 4)
         cylinder_sha256 = certified["fixtures_sha256"]["solid_cylinder.x_t"]
         cylinder_bytes = (
-            ROOT / "oracle" / "outbox" / "solid_cylinder.x_t"
+            ROOT / "benches" / "testdata" / "solid_cylinder.certified.x_t"
         ).read_bytes()
         self.assertEqual(len(cylinder_bytes), 2_309)
         self.assertEqual(hashlib.sha256(cylinder_bytes).hexdigest(), cylinder_sha256)
@@ -585,7 +585,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
         self.assertEqual(len(imported_tolerant), 2)
         tolerant_sha256 = certified["fixtures_sha256"]["solid_block_tolerant_edge.x_t"]
         tolerant_bytes = (
-            ROOT / "oracle" / "outbox" / "solid_block_tolerant_edge.x_t"
+            ROOT / "benches" / "testdata" / "solid_block_tolerant_edge.certified.x_t"
         ).read_bytes()
         self.assertEqual(len(tolerant_bytes), 7_172)
         self.assertEqual(hashlib.sha256(tolerant_bytes).hexdigest(), tolerant_sha256)
