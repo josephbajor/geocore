@@ -2,10 +2,11 @@
 //!
 //! A closed manifold whose faces are strict convex planar facets, with every
 //! facet a supporting plane of the complete vertex set, is the boundary of
-//! its convex hull. That gives a compact proof of both global
-//! non-self-intersection and outward orientation. A single planar sheet face
-//! is embedded when every polygonal loop is proven simple and the holes have
-//! certified strict containment.
+//! its convex hull. Coplanar facet partitions are admitted only when exact
+//! projected predicates prove their interiors disjoint. Together these give
+//! a compact proof of global non-self-intersection and outward orientation. A
+//! single planar sheet face is embedded when every polygonal loop is proven
+//! simple and the holes have certified strict containment.
 
 use crate::entity::{BodyKind, FaceId, RegionKind, Sense, ShellId, VertexId};
 use crate::geom::{CurveGeom, SurfaceGeom};
@@ -15,10 +16,33 @@ use crate::loop_proof::{
 };
 use crate::store::Store;
 use kcore::error::Result;
+use kcore::operation::{
+    AccountingMode, BudgetPlan, LimitSpec, OperationScope, ResourceKind, StageId,
+};
 use kcore::predicates::{Orientation as PredicateOrientation, orient2d, orient3d};
 use kcore::tolerance::{ANGULAR_RESOLUTION, LINEAR_RESOLUTION};
 use kgeom::curve::Curve;
 use kgeom::vec::{Point2, Vec3};
+
+/// Cumulative exact contact work for coplanar shell-facet partitions.
+pub(crate) const SHELL_FACET_PAIR_WORK: StageId =
+    match StageId::new("ktopo.check.shell-facet-pair-work") {
+        Ok(stage) => stage,
+        Err(_) => panic!("valid shell facet-pair proof stage"),
+    };
+
+const DEFAULT_SHELL_FACET_PAIR_WORK: u64 = 100_000;
+
+/// Version-1 deterministic budget for planar shell partition proofs.
+pub(crate) fn shell_proof_budget() -> BudgetPlan {
+    BudgetPlan::new([LimitSpec::new(
+        SHELL_FACET_PAIR_WORK,
+        ResourceKind::Work,
+        AccountingMode::Cumulative,
+        DEFAULT_SHELL_FACET_PAIR_WORK,
+    )])
+    .expect("built-in shell proof budget is valid")
+}
 
 /// Proof state for global shell self-intersection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,12 +72,34 @@ pub(crate) struct ShellCertification {
     pub(crate) orientation: ShellOrientation,
 }
 
-/// Attempt to certify one shell in the context of its owning body/region.
-pub(crate) fn certify_shell(
+/// Attempt to certify one shell in the context of its owning body/region,
+/// charging every non-constant proof stage to the caller-owned scope.
+pub(crate) fn certify_shell_in_scope(
     store: &Store,
     shell_id: ShellId,
     body_kind: BodyKind,
     region_kind: RegionKind,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<ShellCertification> {
+    certify_shell_impl(store, shell_id, body_kind, region_kind, Some(scope))
+}
+
+#[cfg(test)]
+fn certify_shell(
+    store: &Store,
+    shell_id: ShellId,
+    body_kind: BodyKind,
+    region_kind: RegionKind,
+) -> Result<ShellCertification> {
+    certify_shell_impl(store, shell_id, body_kind, region_kind, None)
+}
+
+fn certify_shell_impl(
+    store: &Store,
+    shell_id: ShellId,
+    body_kind: BodyKind,
+    region_kind: RegionKind,
+    scope: Option<&mut OperationScope<'_, '_>>,
 ) -> Result<ShellCertification> {
     let shell = store.get(shell_id)?;
     if body_kind == BodyKind::Sheet && shell.faces.len() == 1 {
@@ -85,7 +131,7 @@ pub(crate) fn certify_shell(
     if let Some(certification) = certify_planar_profile_prism(store, shell_id)? {
         return Ok(certification);
     }
-    certify_convex_planar_shell(store, shell_id)
+    certify_convex_planar_shell(store, shell_id, scope)
 }
 
 fn indeterminate() -> ShellCertification {
@@ -586,7 +632,14 @@ fn edge_has_vertices(
     ))
 }
 
-fn certify_convex_planar_shell(store: &Store, shell_id: ShellId) -> Result<ShellCertification> {
+type CoplanarFacet = (FaceId, Vec<VertexId>);
+type CoplanarFacetGroup = (Vec<VertexId>, Vec<CoplanarFacet>);
+
+fn certify_convex_planar_shell(
+    store: &Store,
+    shell_id: ShellId,
+    scope: Option<&mut OperationScope<'_, '_>>,
+) -> Result<ShellCertification> {
     let shell = store.get(shell_id)?;
     if shell.faces.len() < 4 {
         return Ok(indeterminate());
@@ -609,6 +662,7 @@ fn certify_convex_planar_shell(store: &Store, shell_id: ShellId) -> Result<Shell
     }
 
     let mut orientation_invalid = false;
+    let mut coplanar_groups: Vec<CoplanarFacetGroup> = Vec::new();
     for (face_id, loop_vertices) in facets {
         let face = store.get(face_id)?;
         let SurfaceGeom::Plane(plane) = store.get(face.surface)? else {
@@ -639,13 +693,10 @@ fn certify_convex_planar_shell(store: &Store, shell_id: ShellId) -> Result<Shell
             // Both sides occupied, or the whole shell is coplanar.
             return Ok(indeterminate());
         }
-        if coplanar.len() != loop_vertices.len()
-            || coplanar
-                .iter()
-                .any(|vertex| !loop_vertices.contains(vertex))
+        if loop_vertices
+            .iter()
+            .any(|vertex| !coplanar.contains(vertex))
         {
-            // This conservative slice accepts one strict convex facet per
-            // supporting plane; coplanar facet partitions remain future work.
             return Ok(indeterminate());
         }
         let expected = if positive {
@@ -656,6 +707,49 @@ fn certify_convex_planar_shell(store: &Store, shell_id: ShellId) -> Result<Shell
             Sense::Reversed
         };
         orientation_invalid |= face.sense != expected;
+
+        if coplanar.len() > loop_vertices.len() {
+            let Some(exact_coplanar) =
+                exact_supporting_plane_members(store, &loop_vertices, &shell_vertices)?
+            else {
+                return Ok(indeterminate());
+            };
+            if exact_coplanar.len() <= loop_vertices.len() {
+                return Ok(indeterminate());
+            }
+            if let Some((_, group)) = coplanar_groups.iter_mut().find(|(members, _)| {
+                members.len() == exact_coplanar.len()
+                    && members.iter().all(|vertex| exact_coplanar.contains(vertex))
+            }) {
+                group.push((face_id, loop_vertices));
+            } else {
+                coplanar_groups.push((exact_coplanar, vec![(face_id, loop_vertices)]));
+            }
+        }
+    }
+
+    let pair_work = coplanar_pair_work(&coplanar_groups);
+    if pair_work > 0
+        && let Some(scope) = scope
+    {
+        scope
+            .ledger_mut()
+            .charge(SHELL_FACET_PAIR_WORK, pair_work)?;
+    }
+    for (_, group) in coplanar_groups {
+        for left in 0..group.len() {
+            for right in left + 1..group.len() {
+                if !coplanar_facets_have_disjoint_interiors(
+                    store,
+                    group[left].0,
+                    &group[left].1,
+                    group[right].0,
+                    &group[right].1,
+                )? {
+                    return Ok(indeterminate());
+                }
+            }
+        }
     }
 
     Ok(ShellCertification {
@@ -666,6 +760,324 @@ fn certify_convex_planar_shell(store: &Store, shell_id: ShellId) -> Result<Shell
             ShellOrientation::Certified
         },
     })
+}
+
+/// Exact supporting-plane membership used only to widen one convex hull
+/// facet into a partition group. The witness consists solely of stored loop
+/// vertices; tolerance-band proximity never becomes coplanar identity.
+fn exact_supporting_plane_members(
+    store: &Store,
+    loop_vertices: &[VertexId],
+    shell_vertices: &[VertexId],
+) -> Result<Option<Vec<VertexId>>> {
+    let witness = [
+        store.vertex_position(loop_vertices[0])?.to_array(),
+        store.vertex_position(loop_vertices[1])?.to_array(),
+        store.vertex_position(loop_vertices[2])?.to_array(),
+    ];
+    let mut positive = false;
+    let mut negative = false;
+    let mut coplanar = Vec::new();
+    for &vertex in shell_vertices {
+        let point = store.vertex_position(vertex)?.to_array();
+        match orient3d(witness[0], witness[1], witness[2], point) {
+            PredicateOrientation::Positive => positive = true,
+            PredicateOrientation::Negative => negative = true,
+            PredicateOrientation::Zero => coplanar.push(vertex),
+        }
+    }
+    if positive == negative
+        || loop_vertices
+            .iter()
+            .any(|vertex| !coplanar.contains(vertex))
+    {
+        Ok(None)
+    } else {
+        Ok(Some(coplanar))
+    }
+}
+
+fn coplanar_pair_work(groups: &[CoplanarFacetGroup]) -> u64 {
+    let mut total = 0_u64;
+    for (_, group) in groups {
+        for left in 0..group.len() {
+            for right in left + 1..group.len() {
+                let left_edges = group[left].1.len() as u64;
+                let right_edges = group[right].1.len() as u64;
+                let pair = left_edges
+                    .saturating_mul(right_edges)
+                    .saturating_add(left_edges)
+                    .saturating_add(right_edges)
+                    .saturating_add(1);
+                total = total.saturating_add(pair);
+            }
+        }
+    }
+    total
+}
+
+/// Prove that two convex facets on one supporting plane meet only through
+/// shared topological boundary entities. Projection drops the dominant plane
+/// axis, so every orientation and segment decision is made by exact `orient2d`
+/// signs over stored vertex coordinates rather than derived UV samples.
+fn coplanar_facets_have_disjoint_interiors(
+    store: &Store,
+    left_face: FaceId,
+    left_vertices: &[VertexId],
+    right_face: FaceId,
+    right_vertices: &[VertexId],
+) -> Result<bool> {
+    let SurfaceGeom::Plane(plane) = store.get(store.get(left_face)?.surface)? else {
+        return Ok(false);
+    };
+    let normal = plane.frame().z();
+    let dropped_axis = if normal.x.abs() >= normal.y.abs() && normal.x.abs() >= normal.z.abs() {
+        0
+    } else if normal.y.abs() >= normal.z.abs() {
+        1
+    } else {
+        2
+    };
+    let left = projected_facet(store, left_face, left_vertices, dropped_axis)?;
+    let right = projected_facet(store, right_face, right_vertices, dropped_axis)?;
+    if left.vertices.len() < 3 || right.vertices.len() < 3 {
+        return Ok(false);
+    }
+    if left.vertices.len() == right.vertices.len()
+        && left.vertices.iter().all(|vertex| {
+            right
+                .vertices
+                .iter()
+                .any(|candidate| candidate.vertex == vertex.vertex)
+        })
+    {
+        // Equal topological boundary cycles have coincident interiors; shared
+        // edge identities authorize a partition seam, never a duplicate face.
+        return Ok(false);
+    }
+
+    for left_edge in &left.edges {
+        for right_edge in &right.edges {
+            match segment_contact(left_edge, right_edge) {
+                SegmentContact::None => {}
+                SegmentContact::Endpoint(left_vertex, right_vertex) => {
+                    if left_vertex != right_vertex {
+                        return Ok(false);
+                    }
+                }
+                SegmentContact::Overlap => {
+                    if left_edge.edge != right_edge.edge {
+                        return Ok(false);
+                    }
+                }
+                SegmentContact::Proper => return Ok(false),
+            }
+        }
+    }
+
+    for vertex in &left.vertices {
+        match convex_point_location(vertex.point, &right.vertices) {
+            ConvexPointLocation::Outside => {}
+            ConvexPointLocation::Boundary => {
+                if !right
+                    .vertices
+                    .iter()
+                    .any(|candidate| candidate.vertex == vertex.vertex)
+                {
+                    return Ok(false);
+                }
+            }
+            ConvexPointLocation::Inside => return Ok(false),
+        }
+    }
+    for vertex in &right.vertices {
+        match convex_point_location(vertex.point, &left.vertices) {
+            ConvexPointLocation::Outside => {}
+            ConvexPointLocation::Boundary => {
+                if !left
+                    .vertices
+                    .iter()
+                    .any(|candidate| candidate.vertex == vertex.vertex)
+                {
+                    return Ok(false);
+                }
+            }
+            ConvexPointLocation::Inside => return Ok(false),
+        }
+    }
+    Ok(true)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProjectedVertex {
+    vertex: VertexId,
+    point: [f64; 2],
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProjectedEdge {
+    edge: crate::entity::EdgeId,
+    start: ProjectedVertex,
+    end: ProjectedVertex,
+}
+
+struct ProjectedFacet {
+    vertices: Vec<ProjectedVertex>,
+    edges: Vec<ProjectedEdge>,
+}
+
+fn projected_facet(
+    store: &Store,
+    face_id: FaceId,
+    vertices: &[VertexId],
+    dropped_axis: usize,
+) -> Result<ProjectedFacet> {
+    let face = store.get(face_id)?;
+    let loop_ = store.get(face.loops[0])?;
+    if loop_.fins.len() != vertices.len() {
+        return Ok(ProjectedFacet {
+            vertices: Vec::new(),
+            edges: Vec::new(),
+        });
+    }
+    let mut projected = Vec::with_capacity(vertices.len());
+    for &vertex in vertices {
+        let point = store.vertex_position(vertex)?.to_array();
+        let point = match dropped_axis {
+            0 => [point[1], point[2]],
+            1 => [point[0], point[2]],
+            _ => [point[0], point[1]],
+        };
+        projected.push(ProjectedVertex { vertex, point });
+    }
+    let mut edges = Vec::with_capacity(projected.len());
+    for (index, &fin_id) in loop_.fins.iter().enumerate() {
+        edges.push(ProjectedEdge {
+            edge: store.get(fin_id)?.edge,
+            start: projected[index],
+            end: projected[(index + 1) % projected.len()],
+        });
+    }
+    Ok(ProjectedFacet {
+        vertices: projected,
+        edges,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SegmentContact {
+    None,
+    Endpoint(VertexId, VertexId),
+    Overlap,
+    Proper,
+}
+
+fn segment_contact(left: &ProjectedEdge, right: &ProjectedEdge) -> SegmentContact {
+    let o1 = orient2d(left.start.point, left.end.point, right.start.point);
+    let o2 = orient2d(left.start.point, left.end.point, right.end.point);
+    let o3 = orient2d(right.start.point, right.end.point, left.start.point);
+    let o4 = orient2d(right.start.point, right.end.point, left.end.point);
+    if opposite(o1, o2) && opposite(o3, o4) {
+        return SegmentContact::Proper;
+    }
+
+    let mut contacts = Vec::new();
+    for (orientation, endpoint, endpoint_vertex, segment_start, segment_end) in [
+        (o1, right.start, right.start.vertex, left.start, left.end),
+        (o2, right.end, right.end.vertex, left.start, left.end),
+        (o3, left.start, left.start.vertex, right.start, right.end),
+        (o4, left.end, left.end.vertex, right.start, right.end),
+    ] {
+        if orientation != PredicateOrientation::Zero
+            || !point_on_closed_segment(endpoint.point, segment_start.point, segment_end.point)
+        {
+            continue;
+        }
+        let Some(segment_vertex) = (endpoint.point == segment_start.point)
+            .then_some(segment_start.vertex)
+            .or_else(|| (endpoint.point == segment_end.point).then_some(segment_end.vertex))
+        else {
+            // A T-junction is an improper facet contact even when the
+            // touching point happens to carry another topological identity.
+            return SegmentContact::Proper;
+        };
+        let pair = if endpoint.point == right.start.point || endpoint.point == right.end.point {
+            (segment_vertex, endpoint_vertex, endpoint.point)
+        } else {
+            (endpoint_vertex, segment_vertex, endpoint.point)
+        };
+        contacts.push(pair);
+    }
+    contacts.sort_by(|left, right| {
+        left.2[0]
+            .total_cmp(&right.2[0])
+            .then_with(|| left.2[1].total_cmp(&right.2[1]))
+    });
+    contacts.dedup_by(|a, b| a.2 == b.2);
+    match contacts.len() {
+        0 => SegmentContact::None,
+        1 => SegmentContact::Endpoint(contacts[0].0, contacts[0].1),
+        _ => SegmentContact::Overlap,
+    }
+}
+
+fn opposite(left: PredicateOrientation, right: PredicateOrientation) -> bool {
+    matches!(
+        (left, right),
+        (
+            PredicateOrientation::Positive,
+            PredicateOrientation::Negative
+        ) | (
+            PredicateOrientation::Negative,
+            PredicateOrientation::Positive
+        )
+    )
+}
+
+fn point_on_closed_segment(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> bool {
+    point[0] >= start[0].min(end[0])
+        && point[0] <= start[0].max(end[0])
+        && point[1] >= start[1].min(end[1])
+        && point[1] <= start[1].max(end[1])
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConvexPointLocation {
+    Outside,
+    Boundary,
+    Inside,
+}
+
+fn convex_point_location(point: [f64; 2], polygon: &[ProjectedVertex]) -> ConvexPointLocation {
+    if polygon.len() < 3 {
+        return ConvexPointLocation::Outside;
+    }
+    let mut winding = None;
+    let mut boundary = false;
+    for index in 0..polygon.len() {
+        let start = polygon[index].point;
+        let end = polygon[(index + 1) % polygon.len()].point;
+        let side = orient2d(start, end, point);
+        if side == PredicateOrientation::Zero {
+            if point_on_closed_segment(point, start, end) {
+                boundary = true;
+                continue;
+            }
+            return ConvexPointLocation::Outside;
+        }
+        if let Some(expected) = winding {
+            if side != expected {
+                return ConvexPointLocation::Outside;
+            }
+        } else {
+            winding = Some(side);
+        }
+    }
+    if boundary {
+        ConvexPointLocation::Boundary
+    } else {
+        ConvexPointLocation::Inside
+    }
 }
 
 fn convex_planar_face_vertices(store: &Store, face_id: FaceId) -> Result<Option<Vec<VertexId>>> {
@@ -736,10 +1148,12 @@ fn strictly_convex(points: &[Point2]) -> bool {
 mod tests {
     use super::*;
     use crate::make::{block, cylinder, extrude_profile, extrude_profile_along, sphere, torus};
+    use crate::planar::{PlanarSolidFace, PlanarSolidInput, PlanarSolidVertex, PlanarVertexKey};
     use crate::profile::PlanarProfile;
     use crate::store::Store;
+    use crate::transaction::FullCommitRequirement;
     use kgeom::frame::Frame;
-    use kgeom::vec::{Point2, Vec3};
+    use kgeom::vec::{Point2, Point3, Vec3};
 
     fn solid_shell(store: &Store, body: crate::entity::BodyId) -> ShellId {
         let solid = store
@@ -773,6 +1187,158 @@ mod tests {
                 .unwrap()
                 .orientation,
             ShellOrientation::Invalid
+        );
+    }
+
+    #[test]
+    fn convex_shell_with_coplanar_facet_partitions_is_certified() {
+        let points = [
+            Point3::new(-1.0, -1.0, -1.0),
+            Point3::new(0.0, -1.0, -1.0),
+            Point3::new(1.0, -1.0, -1.0),
+            Point3::new(-1.0, 1.0, -1.0),
+            Point3::new(0.0, 1.0, -1.0),
+            Point3::new(1.0, 1.0, -1.0),
+            Point3::new(-1.0, -1.0, 1.0),
+            Point3::new(0.0, -1.0, 1.0),
+            Point3::new(1.0, -1.0, 1.0),
+            Point3::new(-1.0, 1.0, 1.0),
+            Point3::new(0.0, 1.0, 1.0),
+            Point3::new(1.0, 1.0, 1.0),
+        ];
+        let keys: Vec<_> = (0..points.len())
+            .map(|index| PlanarVertexKey::new(index as u64 + 1))
+            .collect();
+        let vertices = keys
+            .iter()
+            .copied()
+            .zip(points)
+            .map(|(key, point)| PlanarSolidVertex::new(key, point))
+            .collect();
+        let rings = [
+            [0, 3, 4, 1],
+            [1, 4, 5, 2],
+            [6, 7, 10, 9],
+            [7, 8, 11, 10],
+            [0, 1, 7, 6],
+            [1, 2, 8, 7],
+            [3, 9, 10, 4],
+            [4, 10, 11, 5],
+            [0, 6, 9, 3],
+            [2, 5, 11, 8],
+        ];
+        let faces = rings
+            .into_iter()
+            .map(|ring| PlanarSolidFace::new(ring.into_iter().map(|index| keys[index]).collect()))
+            .collect();
+        let input = PlanarSolidInput::new(vertices, faces);
+
+        let mut store = Store::new();
+        let mut transaction = store.transaction().unwrap();
+        let output = transaction.assemble_planar_solid(&input).unwrap();
+        assert_eq!(
+            transaction.store().get(output.shell()).unwrap().faces.len(),
+            10
+        );
+        let mut perturbed = transaction.store().clone();
+        let moved = output.vertex(keys[2]).unwrap();
+        let point = perturbed.get(moved).unwrap().point;
+        perturbed.get_mut(point).unwrap().z += LINEAR_RESOLUTION / 2.0;
+        let partition_face = output.faces()[1];
+        let partition_vertices = convex_planar_face_vertices(&perturbed, partition_face)
+            .unwrap()
+            .unwrap();
+        let shell_vertices = output
+            .vertices()
+            .iter()
+            .map(|(_, vertex)| *vertex)
+            .collect::<Vec<_>>();
+        assert!(
+            exact_supporting_plane_members(&perturbed, &partition_vertices, &shell_vertices)
+                .unwrap()
+                .is_none(),
+            "subresolution plane tilt must not become exact coplanar identity"
+        );
+
+        let check_with_limit = |allowed| {
+            let budget = BudgetPlan::new([LimitSpec::new(
+                SHELL_FACET_PAIR_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                allowed,
+            )])
+            .unwrap();
+            let session = kcore::operation::SessionPolicy::new(
+                kcore::operation::SessionPrecision::parasolid(),
+                kcore::operation::NumericalPolicy::v1(),
+                kcore::operation::ExecutionPolicy::Serial,
+                budget,
+                kcore::operation::PolicyVersion::V1,
+            );
+            let context = kcore::operation::OperationContext::new(
+                &session,
+                kcore::tolerance::Tolerances::default(),
+            )
+            .unwrap();
+            crate::check::check_body_report_with_context(
+                transaction.store(),
+                output.body(),
+                crate::check::CheckLevel::Full,
+                &context,
+            )
+            .unwrap()
+        };
+        let denied = check_with_limit(99);
+        assert_eq!(
+            denied.result().as_ref().unwrap_err().limit(),
+            Some(kcore::operation::LimitSnapshot {
+                stage: SHELL_FACET_PAIR_WORK,
+                resource: ResourceKind::Work,
+                consumed: 100,
+                allowed: 99,
+            })
+        );
+        let accepted = check_with_limit(100);
+        assert_eq!(
+            accepted.result().as_ref().unwrap().outcome(),
+            crate::check::CheckOutcome::Valid
+        );
+        assert!(
+            accepted
+                .report()
+                .usage()
+                .contains(&kcore::operation::LimitSnapshot {
+                    stage: SHELL_FACET_PAIR_WORK,
+                    resource: ResourceKind::Work,
+                    consumed: 100,
+                    allowed: 100,
+                })
+        );
+
+        let decision = transaction
+            .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
+            .unwrap();
+        assert!(decision.is_committed());
+        assert!(
+            decision
+                .checks()
+                .iter()
+                .all(|check| check.report().outcome() == crate::check::CheckOutcome::Valid)
+        );
+    }
+
+    #[test]
+    fn duplicate_coplanar_facet_is_not_a_disjoint_partition() {
+        let mut store = Store::new();
+        let body = block(&mut store, &Frame::world(), [2.0, 3.0, 4.0]).unwrap();
+        let shell = solid_shell(&store, body);
+        let face = store.get(shell).unwrap().faces[0];
+        let vertices = convex_planar_face_vertices(&store, face)
+            .unwrap()
+            .expect("block face is a convex planar facet");
+        assert!(
+            !coplanar_facets_have_disjoint_interiors(&store, face, &vertices, face, &vertices,)
+                .unwrap()
         );
     }
 

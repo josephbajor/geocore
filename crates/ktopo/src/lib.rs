@@ -34,6 +34,7 @@
 //! - [`euler`] — topology-internal Euler primitives and public result types;
 //!   external edits use [`transaction::Transaction`].
 //! - [`make`] — primitive body constructors.
+//! - [`planar`] — keyed, manifold planar-solid assembly for semantic builders.
 //! - [`profile`] — validated planar inputs shared by sheet and feature builders.
 //! - [`tolerance`] — entity tolerance provenance and growth contracts.
 //! - [`check`] — the body checker (structural + geometric invariants).
@@ -58,6 +59,7 @@ pub(crate) mod incidence;
 pub(crate) mod index;
 pub(crate) mod loop_proof;
 pub mod make;
+pub mod planar;
 pub mod profile;
 pub(crate) mod shell_proof;
 pub mod store;

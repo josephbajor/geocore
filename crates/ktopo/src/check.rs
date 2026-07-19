@@ -68,7 +68,7 @@ use crate::loop_proof::{
     LoopContainment, LoopSimplicity, certify_loop_containment, certify_loop_simplicity,
     certify_planar_loop_layout,
 };
-use crate::shell_proof::{ShellEmbedding, ShellOrientation, certify_shell};
+use crate::shell_proof::{ShellEmbedding, ShellOrientation, certify_shell_in_scope};
 use crate::store::{Entity, Store};
 use kcore::arena::Handle;
 use kcore::error::{CapabilityId, Error, Result};
@@ -217,8 +217,7 @@ impl FullCheckBudgetProfile {
     /// Returns the exact defaults for the Full-check proof stages migrated so far.
     pub fn v1_defaults() -> BudgetPlan {
         let face_domain = crate::domain::FaceDomainContainmentBudgetProfile::v1_defaults();
-        BudgetPlan::new(face_domain.limits().iter().copied())
-            .expect("built-in Full-check budget is valid")
+        face_domain.overlaid(&crate::shell_proof::shell_proof_budget())
     }
 }
 
@@ -602,7 +601,8 @@ fn collect_full_verification(
         for &shell_id in &region.shells {
             let shell = store.get(shell_id)?;
             if !shell.faces.is_empty() {
-                let certification = certify_shell(store, shell_id, body.kind, region.kind)?;
+                let certification =
+                    certify_shell_in_scope(store, shell_id, body.kind, region.kind, scope)?;
                 if certification.embedding != ShellEmbedding::Certified {
                     push(
                         EntityRef::Shell(shell_id),
@@ -2214,8 +2214,9 @@ mod tests {
     #[test]
     fn full_check_profile_composes_current_leaf_and_has_an_additive_growth_seam() {
         let leaf = crate::domain::FaceDomainContainmentBudgetProfile::v1_defaults();
+        let shell = crate::shell_proof::shell_proof_budget();
         let aggregate = FullCheckBudgetProfile::v1_defaults();
-        assert_eq!(aggregate, leaf);
+        assert_eq!(aggregate, leaf.overlaid(&shell));
 
         const FUTURE_STAGE: kcore::operation::StageId =
             match kcore::operation::StageId::new("ktopo.check.future-proof-work") {
@@ -2270,6 +2271,12 @@ mod tests {
                     resource: ResourceKind::Items,
                     consumed: 1,
                     allowed: 4096,
+                },
+                LimitSnapshot {
+                    stage: crate::shell_proof::SHELL_FACET_PAIR_WORK,
+                    resource: ResourceKind::Work,
+                    consumed: 0,
+                    allowed: 100_000,
                 },
             ]
         );
@@ -2337,6 +2344,12 @@ mod tests {
                     resource: ResourceKind::Items,
                     consumed: 2,
                     allowed: 4096,
+                },
+                LimitSnapshot {
+                    stage: crate::shell_proof::SHELL_FACET_PAIR_WORK,
+                    resource: ResourceKind::Work,
+                    consumed: 0,
+                    allowed: 100_000,
                 },
             ]
         );

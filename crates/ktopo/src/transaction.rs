@@ -623,6 +623,12 @@ impl<'a> Transaction<'a> {
         self.store
     }
 
+    /// Record one semantic derivation produced by an in-crate assembler.
+    pub(crate) fn record_derived_from(&mut self, derived: EntityRef, source: EntityRef) {
+        self.lineage
+            .push(LineageEvent::DerivedFrom { derived, source });
+    }
+
     /// Open the unstable low-level reconstruction/assembly seam for this
     /// transaction.
     ///
