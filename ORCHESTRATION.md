@@ -31,7 +31,9 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    planar section graphs, ledger `modeling.sectioning`; the queue head is
    now rung 3)*
 3. `unite`/`subtract`/`intersect` for block/block — atomic, journaled,
-   checker-clean, X_T-exported, and imported into a licensed host.
+   checker-clean, X_T-exported, and imported into a licensed host. *(in
+   progress — exact planar BSP and semantic shell assembly are internal;
+   facade integration and non-convex Full proof remain)*
 4. Extend the same ladder to block/cylinder (introduces curved SSI pcurves).
 
 Work that does not advance the queue head needs an explicit justification

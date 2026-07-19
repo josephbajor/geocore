@@ -298,7 +298,13 @@ Status: rung 1 point classification landed as a certified planar-face slice
 ride with rung 4. Rung 2 landed: certified planar section edge graphs
 (`kernel::section`, ledger `modeling.sectioning`) stitch face/face
 intersection curves across two planar-faced solids, with honest structured
-gaps for coincident, tangent, and uncertifiable contacts.
+gaps for coincident, tangent, and uncertifiable contacts. Rung 3 is in
+progress: section vertices retain source-edge parameter intervals, exact
+plane-triple predicates drive a symbolic convex-fragment BSP, and a keyed
+transactional planar-shell assembler is Full-valid for convex coplanar facet
+partitions. Remaining before the first public result: facade-body extraction,
+numeric representatives, CSG truth assembly, non-convex/cavity Full proofs,
+and licensed-host X_T evidence.
 
 Do not wait for an exhaustive analytic pair table before testing the end-to-end
 boolean architecture. Begin with a deliberately narrow vertical slice as soon as the
