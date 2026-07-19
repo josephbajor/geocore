@@ -254,6 +254,7 @@
 //! }
 //! ```
 
+mod boolean;
 mod classify;
 mod edit;
 mod error;
@@ -310,8 +311,8 @@ pub use operation::{
 };
 pub use section::{
     BodySectionBudgetProfile, BodySectionGraph, SECTION_FACE_PAIRS, SECTION_WORK,
-    SectionBodiesRequest, SectionCompletion, SectionEdge, SectionGap, SectionLoop, SectionSite,
-    SectionUvLine, SectionVertex,
+    SectionBodiesRequest, SectionCompletion, SectionEdge, SectionEdgeParameterInterval, SectionGap,
+    SectionLoop, SectionSite, SectionUvLine, SectionVertex,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use tessellation::{BodyMesh, EdgePolyline, FaceTriangleRange, TessellateBodyRequest};

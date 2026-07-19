@@ -143,11 +143,49 @@ pub enum SectionSite {
     AtVertex(VertexId),
 }
 
+/// Conservative intrinsic parameter enclosure on a source edge crossed by
+/// a section-graph vertex.
+///
+/// The parameter is in the source edge's supporting-curve direction, not
+/// the local fin or section-loop traversal direction. The closed interval
+/// therefore remains meaningful when adjacent faces use the edge with
+/// opposite fin senses.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SectionEdgeParameterInterval {
+    lo: f64,
+    hi: f64,
+}
+
+impl SectionEdgeParameterInterval {
+    fn from_interval(interval: Interval) -> Self {
+        Self {
+            lo: interval.lo(),
+            hi: interval.hi(),
+        }
+    }
+
+    /// Lower bound of the closed source-edge parameter enclosure.
+    pub const fn lo(self) -> f64 {
+        self.lo
+    }
+
+    /// Upper bound of the closed source-edge parameter enclosure.
+    pub const fn hi(self) -> f64 {
+        self.hi
+    }
+
+    /// Whether this enclosure contains `parameter`.
+    pub const fn contains(self, parameter: f64) -> bool {
+        self.lo <= parameter && parameter <= self.hi
+    }
+}
+
 /// One stitched section-graph vertex with its per-operand boundary sites.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectionVertex {
     pub(crate) point: Point3,
     pub(crate) sites: [SectionSite; 2],
+    pub(crate) edge_parameters: [Option<SectionEdgeParameterInterval>; 2],
 }
 
 impl SectionVertex {
@@ -159,6 +197,13 @@ impl SectionVertex {
     /// Boundary sites on the first and second operand, in operand order.
     pub const fn sites(&self) -> &[SectionSite; 2] {
         &self.sites
+    }
+
+    /// Conservative intrinsic source-edge parameter enclosures in operand
+    /// order. A slot is `Some` exactly when the matching [`SectionSite`] is
+    /// [`SectionSite::EdgeInterior`] in a certified graph.
+    pub const fn edge_parameters(&self) -> &[Option<SectionEdgeParameterInterval>; 2] {
+        &self.edge_parameters
     }
 }
 
@@ -348,6 +393,8 @@ pub(crate) const GAP_CARRIER_ORIENTATION: &str =
     "a section carrier's canonical orientation could not be certified";
 pub(crate) const GAP_PAIR_UNRESOLVED: &str =
     "a candidate face pair returned an indeterminate intersection result";
+pub(crate) const GAP_INCOMPATIBLE_EDGE_PARAMETERS: &str =
+    "stitched source-edge parameter enclosures are incompatible";
 
 impl Part<'_> {
     /// Compute the certified section edge graph between two solid bodies of
@@ -921,6 +968,8 @@ fn process_pair(
             end: span_vertex_key(&span.end, a.prep.raw, b.prep.raw),
             start_point: carrier_point(&pair.carrier, start),
             end_point: carrier_point(&pair.carrier, end),
+            start_edge_parameters: span.start.edge_parameters,
+            end_edge_parameters: span.end.edge_parameters,
         });
         acc.geometry.push(SegmentGeometry {
             faces: [a.facade.clone(), b.facade.clone()],
@@ -966,6 +1015,9 @@ fn assemble_graph(
                 adapt_site(part_id, vertex.key.a),
                 adapt_site(part_id, vertex.key.b),
             ],
+            edge_parameters: vertex
+                .edge_parameters
+                .map(|parameter| parameter.map(SectionEdgeParameterInterval::from_interval)),
         })
         .collect();
     let mut edges = Vec::with_capacity(stitched.edges.len());
@@ -997,10 +1049,7 @@ fn assemble_graph(
         .collect();
     for defect in &stitched.defects {
         gaps.push(SectionGap {
-            reason: match defect {
-                stitch::StitchDefect::DegreeNotTwo(_) => GAP_DEGENERATE_VERTEX,
-                stitch::StitchDefect::OpenChain(_) => GAP_OPEN_CHAIN,
-            },
+            reason: stitch_defect_reason(*defect),
             faces: Vec::new(),
         });
     }
@@ -1019,6 +1068,17 @@ fn assemble_graph(
     })
 }
 
+/// Stable public graph-gap reason corresponding to one internal stitch
+/// defect. Keeping this total mapping separate makes evidence incompatibility
+/// impossible to drop while assembling a partial graph.
+fn stitch_defect_reason(defect: stitch::StitchDefect) -> &'static str {
+    match defect {
+        stitch::StitchDefect::DegreeNotTwo(_) => GAP_DEGENERATE_VERTEX,
+        stitch::StitchDefect::OpenChain(_) => GAP_OPEN_CHAIN,
+        stitch::StitchDefect::IncompatibleEdgeParameter(_) => GAP_INCOMPATIBLE_EDGE_PARAMETERS,
+    }
+}
+
 #[cfg(test)]
 mod unit_tests {
     use kgeom::frame::Frame;
@@ -1035,6 +1095,14 @@ mod unit_tests {
             ktopo::make::block(edit.store_mut_for_test(), &Frame::world(), [2.0, 2.0, 2.0]).unwrap()
         };
         (session, part_id.clone(), BodyId::new(part_id, raw))
+    }
+
+    #[test]
+    fn incompatible_edge_parameter_stitch_defect_maps_to_stable_graph_gap() {
+        assert_eq!(
+            stitch_defect_reason(stitch::StitchDefect::IncompatibleEdgeParameter(7)),
+            GAP_INCOMPATIBLE_EDGE_PARAMETERS
+        );
     }
 
     #[test]

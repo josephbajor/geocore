@@ -68,6 +68,32 @@ pub struct AffineDot3 {
     used_exact_fallback: bool,
 }
 
+/// Certified side of the unique intersection of three oriented planes
+/// relative to a fourth oriented plane.
+///
+/// Plane orientation follows [`orient3d`]: each plane is supplied as three
+/// ordered points, and the reported sign is the exact sign that `orient3d`
+/// would return for the query plane's points and the (generally
+/// non-representable) three-plane intersection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlaneTripleIntersectionSide {
+    sign: Orientation,
+    used_exact_fallback: bool,
+}
+
+impl PlaneTripleIntersectionSide {
+    /// Exact side of the intersection relative to the query plane.
+    pub const fn sign(self) -> Orientation {
+        self.sign
+    }
+
+    /// Whether interval filtering was inconclusive and exact expansion
+    /// arithmetic supplied the sign.
+    pub const fn used_exact_fallback(self) -> bool {
+        self.used_exact_fallback
+    }
+}
+
 impl AffineDot3 {
     /// Exact sign of `normal · (point - origin) + bias`.
     pub const fn sign(self) -> Orientation {
@@ -386,6 +412,264 @@ pub fn affine_dot3(
         approximation,
         used_exact_fallback: true,
     })
+}
+
+/// Three ordered points defining an oriented plane for exact predicates.
+pub type OrientedPlanePoints = [[f64; 3]; 3];
+type ExactValue = Vec<f64>;
+type ExactPlane = [ExactValue; 4];
+
+const MAX_PLANE_PREDICATE_COMPONENTS: usize = 4096;
+
+fn plane_predicate_expansion_is_safe(value: &[f64]) -> bool {
+    value.len() <= MAX_PLANE_PREDICATE_COMPONENTS
+        && value
+            .iter()
+            .all(|component| *component == 0.0 || component.is_normal())
+}
+
+fn plane_exact_difference(first: f64, second: f64) -> Option<ExactValue> {
+    let (rounded, residue) = expansion::two_diff(first, second);
+    let value = expansion::from_two(rounded, residue);
+    plane_predicate_expansion_is_safe(&value).then_some(value)
+}
+
+fn plane_exact_sum(first: &[f64], second: &[f64]) -> Option<ExactValue> {
+    let value = expansion::sum(first, second);
+    plane_predicate_expansion_is_safe(&value).then_some(value)
+}
+
+fn plane_exact_product(first: &[f64], second: &[f64]) -> Option<ExactValue> {
+    for &a in first {
+        for &b in second {
+            if a == 0.0 || b == 0.0 {
+                continue;
+            }
+            if !(EXACT_COMPONENT_MIN..=EXACT_COMPONENT_MAX).contains(&a.abs())
+                || !(EXACT_COMPONENT_MIN..=EXACT_COMPONENT_MAX).contains(&b.abs())
+            {
+                return None;
+            }
+            let product = a.abs() * b.abs();
+            if !(EXACT_PRODUCT_MIN..=EXACT_PRODUCT_MAX).contains(&product) {
+                return None;
+            }
+        }
+    }
+    let value = expansion::mul(first, second);
+    plane_predicate_expansion_is_safe(&value).then_some(value)
+}
+
+fn plane_exact_cross_component(first: [&[f64]; 2], second: [&[f64]; 2]) -> Option<ExactValue> {
+    let positive = plane_exact_product(first[0], first[1])?;
+    let negative = plane_exact_product(second[0], second[1])?;
+    plane_exact_sum(&positive, &expansion::negate(&negative))
+}
+
+/// Exact coefficients `[nx, ny, nz, d]` whose affine value at `x` has the
+/// same sign as `orient3d(points[0], points[1], points[2], x)`.
+fn exact_oriented_plane(points: OrientedPlanePoints) -> Option<ExactPlane> {
+    let u = [
+        plane_exact_difference(points[1][0], points[0][0])?,
+        plane_exact_difference(points[1][1], points[0][1])?,
+        plane_exact_difference(points[1][2], points[0][2])?,
+    ];
+    let v = [
+        plane_exact_difference(points[2][0], points[0][0])?,
+        plane_exact_difference(points[2][1], points[0][1])?,
+        plane_exact_difference(points[2][2], points[0][2])?,
+    ];
+    let conventional = [
+        plane_exact_cross_component([&u[1], &v[2]], [&u[2], &v[1]])?,
+        plane_exact_cross_component([&u[2], &v[0]], [&u[0], &v[2]])?,
+        plane_exact_cross_component([&u[0], &v[1]], [&u[1], &v[0]])?,
+    ];
+    if conventional
+        .iter()
+        .all(|component| expansion::sign(component) == 0)
+    {
+        return None;
+    }
+    let spatial = [
+        expansion::negate(&conventional[0]),
+        expansion::negate(&conventional[1]),
+        expansion::negate(&conventional[2]),
+    ];
+    let mut constant = vec![0.0];
+    for axis in 0..3 {
+        let term = plane_exact_product(&conventional[axis], &[points[0][axis]])?;
+        constant = plane_exact_sum(&constant, &term)?;
+    }
+    Some([
+        spatial[0].clone(),
+        spatial[1].clone(),
+        spatial[2].clone(),
+        constant,
+    ])
+}
+
+fn exact_det3(matrix: [[&[f64]; 3]; 3]) -> Option<ExactValue> {
+    let minor = |a: &[f64], b: &[f64], c: &[f64], d: &[f64]| {
+        let positive = plane_exact_product(a, b)?;
+        let negative = plane_exact_product(c, d)?;
+        plane_exact_sum(&positive, &expansion::negate(&negative))
+    };
+    let first_minor = minor(matrix[1][1], matrix[2][2], matrix[1][2], matrix[2][1])?;
+    let second_minor = minor(matrix[1][0], matrix[2][2], matrix[1][2], matrix[2][0])?;
+    let third_minor = minor(matrix[1][0], matrix[2][1], matrix[1][1], matrix[2][0])?;
+    let first = plane_exact_product(matrix[0][0], &first_minor)?;
+    let second = plane_exact_product(matrix[0][1], &second_minor)?;
+    let third = plane_exact_product(matrix[0][2], &third_minor)?;
+    let first_two = plane_exact_sum(&first, &expansion::negate(&second))?;
+    plane_exact_sum(&first_two, &third)
+}
+
+fn exact_cramer_numerator(planes: &[ExactPlane; 3], column: usize) -> Option<ExactValue> {
+    let negatives = [
+        expansion::negate(&planes[0][3]),
+        expansion::negate(&planes[1][3]),
+        expansion::negate(&planes[2][3]),
+    ];
+    let mut matrix: [[&[f64]; 3]; 3] = [
+        [&planes[0][0], &planes[0][1], &planes[0][2]],
+        [&planes[1][0], &planes[1][1], &planes[1][2]],
+        [&planes[2][0], &planes[2][1], &planes[2][2]],
+    ];
+    for row in 0..3 {
+        matrix[row][column] = &negatives[row];
+    }
+    exact_det3(matrix)
+}
+
+fn exact_plane_triple_side(
+    intersection: [OrientedPlanePoints; 3],
+    query: OrientedPlanePoints,
+) -> Option<PlaneTripleIntersectionSide> {
+    let [first, second, third] = intersection;
+    let planes = [
+        exact_oriented_plane(first)?,
+        exact_oriented_plane(second)?,
+        exact_oriented_plane(third)?,
+    ];
+    let query = exact_oriented_plane(query)?;
+    let denominator = exact_det3([
+        [&planes[0][0], &planes[0][1], &planes[0][2]],
+        [&planes[1][0], &planes[1][1], &planes[1][2]],
+        [&planes[2][0], &planes[2][1], &planes[2][2]],
+    ])?;
+    let denominator_sign = expansion::sign(&denominator);
+    if denominator_sign == 0 {
+        return None;
+    }
+    let numerators = [
+        exact_cramer_numerator(&planes, 0)?,
+        exact_cramer_numerator(&planes, 1)?,
+        exact_cramer_numerator(&planes, 2)?,
+    ];
+    let mut numerator = plane_exact_product(&query[3], &denominator)?;
+    for axis in 0..3 {
+        let term = plane_exact_product(&query[axis], &numerators[axis])?;
+        numerator = plane_exact_sum(&numerator, &term)?;
+    }
+    let side = expansion::sign(&numerator) * denominator_sign;
+    Some(PlaneTripleIntersectionSide {
+        sign: Orientation::from_sign(side),
+        used_exact_fallback: true,
+    })
+}
+
+fn interval_oriented_plane(points: OrientedPlanePoints) -> Option<[Interval; 4]> {
+    if points
+        .iter()
+        .flatten()
+        .any(|coordinate| !coordinate.is_finite())
+    {
+        return None;
+    }
+    let u =
+        [0, 1, 2].map(|axis| Interval::point(points[1][axis]) - Interval::point(points[0][axis]));
+    let v =
+        [0, 1, 2].map(|axis| Interval::point(points[2][axis]) - Interval::point(points[0][axis]));
+    let conventional = [
+        u[1] * v[2] - u[2] * v[1],
+        u[2] * v[0] - u[0] * v[2],
+        u[0] * v[1] - u[1] * v[0],
+    ];
+    if !conventional
+        .iter()
+        .any(|component| component.sign().is_some_and(|sign| sign != 0))
+    {
+        return None;
+    }
+    let spatial = conventional.map(|component| -component);
+    let constant = conventional[0] * Interval::point(points[0][0])
+        + conventional[1] * Interval::point(points[0][1])
+        + conventional[2] * Interval::point(points[0][2]);
+    Some([spatial[0], spatial[1], spatial[2], constant])
+}
+
+fn interval_det3(matrix: [[Interval; 3]; 3]) -> Interval {
+    matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
+        - matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
+        + matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0])
+}
+
+fn interval_plane_triple_side(
+    intersection: [OrientedPlanePoints; 3],
+    query: OrientedPlanePoints,
+) -> Option<PlaneTripleIntersectionSide> {
+    let [first, second, third] = intersection.map(interval_oriented_plane);
+    let (first, second, third, query) = (first?, second?, third?, interval_oriented_plane(query)?);
+    let spatial = [first, second, third].map(|plane| [plane[0], plane[1], plane[2]]);
+    let denominator = interval_det3(spatial);
+    let denominator_sign = denominator.sign()?;
+    if denominator_sign == 0 {
+        return None;
+    }
+    let constants = [-first[3], -second[3], -third[3]];
+    let numerators: [Interval; 3] = core::array::from_fn(|column| {
+        let mut matrix = spatial;
+        for row in 0..3 {
+            matrix[row][column] = constants[row];
+        }
+        interval_det3(matrix)
+    });
+    let numerator = query[0] * numerators[0]
+        + query[1] * numerators[1]
+        + query[2] * numerators[2]
+        + query[3] * denominator;
+    let numerator_sign = numerator.sign()?;
+    if numerator_sign == 0 {
+        return None;
+    }
+    Some(PlaneTripleIntersectionSide {
+        sign: Orientation::from_sign(numerator_sign * denominator_sign),
+        used_exact_fallback: false,
+    })
+}
+
+/// Classify the unique intersection of three oriented planes against a
+/// fourth oriented plane without constructing a rounded intersection point.
+///
+/// Each plane is three ordered points and has the same side convention as
+/// [`orient3d`]. The ordinary path uses outward interval arithmetic over the
+/// planes' homogeneous coefficients and Cramer determinants. An inconclusive
+/// interval routes to exact expansion arithmetic over the original point
+/// coordinates. The result is therefore the exact sign for the supplied
+/// finite `f64` values.
+///
+/// `None` is returned for a degenerate plane, three planes without a unique
+/// intersection, non-finite input, or exact arithmetic outside the bounded
+/// normal-number/component envelope. Callers must treat `None` as
+/// indeterminate, never as coincidence or a certified miss.
+pub fn oriented_plane_triple_intersection_side(
+    intersection: [OrientedPlanePoints; 3],
+    query: OrientedPlanePoints,
+) -> Option<PlaneTripleIntersectionSide> {
+    if let Some(side) = interval_plane_triple_side(intersection, query) {
+        return Some(side);
+    }
+    exact_plane_triple_side(intersection, query)
 }
 
 /// Classify `|point - origin|² + first_radius² - second_radius²` without
@@ -1105,6 +1389,231 @@ mod tests {
                 })
                 .sum::<i128>();
         value.signum() as i8
+    }
+
+    fn det3_i128(matrix: [[i128; 3]; 3]) -> i128 {
+        matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
+            - matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
+            + matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0])
+    }
+
+    /// Exact homogeneous coefficients with the same convention as
+    /// `orient3d(points[0], points[1], points[2], x)`.
+    fn oriented_plane_i128(points: [[i64; 3]; 3]) -> Option<[i128; 4]> {
+        let difference = |point: [i64; 3]| -> [i128; 3] {
+            core::array::from_fn(|axis| i128::from(point[axis] - points[0][axis]))
+        };
+        let u = difference(points[1]);
+        let v = difference(points[2]);
+        let conventional = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        if conventional == [0; 3] {
+            return None;
+        }
+        Some([
+            -conventional[0],
+            -conventional[1],
+            -conventional[2],
+            conventional
+                .iter()
+                .enumerate()
+                .map(|(axis, coefficient)| coefficient * i128::from(points[0][axis]))
+                .sum(),
+        ])
+    }
+
+    /// Independent integer Cramer oracle. The returned numerator components
+    /// and denominator also reveal whether the exact intersection is an
+    /// integer point.
+    fn plane_triple_side_oracle(
+        intersection: [[[i64; 3]; 3]; 3],
+        query: [[i64; 3]; 3],
+    ) -> Option<(i8, [i128; 3], i128)> {
+        let planes = [
+            oriented_plane_i128(intersection[0])?,
+            oriented_plane_i128(intersection[1])?,
+            oriented_plane_i128(intersection[2])?,
+        ];
+        let query = oriented_plane_i128(query)?;
+        let spatial = planes.map(|plane| [plane[0], plane[1], plane[2]]);
+        let denominator = det3_i128(spatial);
+        if denominator == 0 {
+            return None;
+        }
+        let constants = [-planes[0][3], -planes[1][3], -planes[2][3]];
+        let numerators = core::array::from_fn(|column| {
+            let mut matrix = spatial;
+            for row in 0..3 {
+                matrix[row][column] = constants[row];
+            }
+            det3_i128(matrix)
+        });
+        let query_numerator = query[0] * numerators[0]
+            + query[1] * numerators[1]
+            + query[2] * numerators[2]
+            + query[3] * denominator;
+        Some((
+            (query_numerator.signum() * denominator.signum()) as i8,
+            numerators,
+            denominator,
+        ))
+    }
+
+    fn axis_plane(axis: usize, coordinate: f64) -> OrientedPlanePoints {
+        match axis {
+            0 => [
+                [coordinate, 0.0, 0.0],
+                [coordinate, 1.0, 0.0],
+                [coordinate, 0.0, 1.0],
+            ],
+            1 => [
+                [0.0, coordinate, 0.0],
+                [0.0, coordinate, 1.0],
+                [1.0, coordinate, 0.0],
+            ],
+            _ => [
+                [0.0, 0.0, coordinate],
+                [1.0, 0.0, coordinate],
+                [0.0, 1.0, coordinate],
+            ],
+        }
+    }
+
+    #[test]
+    fn oriented_plane_triple_side_matches_direct_representable_intersection() {
+        let intersection = [axis_plane(0, 2.0), axis_plane(1, -3.0), axis_plane(2, 5.0)];
+        let point = [2.0, -3.0, 5.0];
+        let queries = [
+            axis_plane(0, 1.0),
+            axis_plane(1, -4.0),
+            axis_plane(2, 5.0),
+            [[7.0, -2.0, 1.0], [8.0, 0.0, 2.0], [6.0, 1.0, 4.0]],
+        ];
+        for query in queries {
+            let actual = oriented_plane_triple_intersection_side(intersection, query).unwrap();
+            assert_eq!(actual.sign(), orient3d(query[0], query[1], query[2], point));
+        }
+    }
+
+    #[test]
+    fn oriented_plane_triple_side_is_permutation_invariant_off_origin() {
+        let point = [11.0, -7.0, 13.0];
+        // Three non-axis planes through `point`, with independent integer
+        // normals. Their exact intersection is the stated point.
+        let planes = [
+            [point, [11.0, -6.0, 14.0], [12.0, -7.0, 14.0]],
+            [point, [12.0, -6.0, 13.0], [11.0, -6.0, 14.0]],
+            [point, [12.0, -7.0, 14.0], [12.0, -6.0, 13.0]],
+        ];
+        let query = [[3.0, 2.0, -5.0], [5.0, 3.0, -4.0], [2.0, 6.0, -1.0]];
+        let expected = orient3d(query[0], query[1], query[2], point);
+        for order in [
+            [planes[0], planes[1], planes[2]],
+            [planes[1], planes[2], planes[0]],
+            [planes[2], planes[1], planes[0]],
+        ] {
+            assert_eq!(
+                oriented_plane_triple_intersection_side(order, query)
+                    .unwrap()
+                    .sign(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn oriented_plane_triple_side_matches_random_i128_cramer_oracle() {
+        let mut rng = Rng::new(0xD1B5_4A32_D192_ED03);
+        let point = |rng: &mut Rng| [rng.int(12), rng.int(12), rng.int(12)];
+        let plane = |rng: &mut Rng| [point(rng), point(rng), point(rng)];
+        let mut accepted = 0;
+        let mut non_integer_intersections = 0;
+        let mut exact_boundaries = 0;
+
+        for _ in 0..12_000 {
+            let intersection = [plane(&mut rng), plane(&mut rng), plane(&mut rng)];
+            let query = plane(&mut rng);
+            let Some((expected, numerators, denominator)) =
+                plane_triple_side_oracle(intersection, query)
+            else {
+                continue;
+            };
+            accepted += 1;
+            if numerators
+                .iter()
+                .any(|numerator| numerator % denominator != 0)
+            {
+                non_integer_intersections += 1;
+            }
+
+            let floating = intersection.map(|source| source.map(to3));
+            let floating_query = query.map(to3);
+            assert_eq!(
+                oriented_plane_triple_intersection_side(floating, floating_query)
+                    .unwrap()
+                    .sign()
+                    .as_i8(),
+                expected,
+                "intersection={intersection:?} query={query:?}"
+            );
+
+            // An odd permutation of the three defining planes changes both
+            // Cramer numerator and denominator signs, never the point side.
+            assert_eq!(
+                oriented_plane_triple_intersection_side(
+                    [floating[1], floating[0], floating[2]],
+                    floating_query,
+                )
+                .unwrap()
+                .sign()
+                .as_i8(),
+                expected
+            );
+
+            // Reversing the query plane orientation must reverse its sign.
+            let reversed_query = [floating_query[1], floating_query[0], floating_query[2]];
+            assert_eq!(
+                oriented_plane_triple_intersection_side(floating, reversed_query)
+                    .unwrap()
+                    .sign()
+                    .as_i8(),
+                -expected
+            );
+
+            // Reusing a defining plane creates exact rational cancellation:
+            // its query numerator is zero even when the intersection is not
+            // representable as an integer point.
+            if accepted % 257 == 0 {
+                let boundary =
+                    oriented_plane_triple_intersection_side(floating, floating[1]).unwrap();
+                assert_eq!(boundary.sign(), Orientation::Zero);
+                assert!(boundary.used_exact_fallback());
+                exact_boundaries += 1;
+            }
+        }
+
+        assert!(accepted > 10_000);
+        assert!(non_integer_intersections > 9_000);
+        assert!(exact_boundaries > 30);
+    }
+
+    #[test]
+    fn oriented_plane_triple_side_exactly_recovers_boundary_and_refuses_degeneracy() {
+        let intersection = [axis_plane(0, 2.0), axis_plane(1, -3.0), axis_plane(2, 5.0)];
+        let on = oriented_plane_triple_intersection_side(intersection, axis_plane(2, 5.0)).unwrap();
+        assert_eq!(on.sign(), Orientation::Zero);
+        assert!(on.used_exact_fallback());
+
+        let singular = [axis_plane(0, 2.0), axis_plane(0, 3.0), axis_plane(2, 5.0)];
+        assert!(oriented_plane_triple_intersection_side(singular, axis_plane(1, 0.0)).is_none());
+        let degenerate_query = [[0.0, 0.0, 0.0]; 3];
+        assert!(oriented_plane_triple_intersection_side(intersection, degenerate_query).is_none());
+        let mut non_finite = intersection;
+        non_finite[0][0][0] = f64::NAN;
+        assert!(oriented_plane_triple_intersection_side(non_finite, axis_plane(1, 0.0)).is_none());
     }
 
     #[test]

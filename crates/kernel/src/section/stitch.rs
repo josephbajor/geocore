@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
+use kcore::interval::Interval;
 use ktopo::entity::{EdgeId as RawEdgeId, FaceId as RawFaceId, VertexId as RawVertexId};
 
 /// The boundary entity of one operand that anchors a segment endpoint.
@@ -56,6 +57,12 @@ pub(crate) struct StitchSegment {
     pub start_point: [f64; 3],
     /// Numeric representative of the traversal-end endpoint.
     pub end_point: [f64; 3],
+    /// Intrinsic source-edge parameter evidence at the traversal start, in
+    /// operand order. Slots are present exactly for `SiteKey::Edge` sites.
+    pub start_edge_parameters: [Option<Interval>; 2],
+    /// Intrinsic source-edge parameter evidence at the traversal end, in
+    /// operand order. Slots are present exactly for `SiteKey::Edge` sites.
+    pub end_edge_parameters: [Option<Interval>; 2],
 }
 
 /// One stitched graph vertex.
@@ -67,6 +74,12 @@ pub(crate) struct StitchVertex {
     pub point: [f64; 3],
     /// Number of segment endpoints landing on this vertex.
     pub degree: usize,
+    /// Intersection of all compatible intrinsic source-edge parameter
+    /// enclosures observed at this key, in operand order.
+    pub edge_parameters: [Option<Interval>; 2],
+    /// False when an endpoint supplied missing, extraneous, non-finite, or
+    /// disjoint source-edge parameter evidence for this exact key.
+    pub edge_parameters_compatible: bool,
 }
 
 /// One stitched graph edge: the segment plus its endpoint vertex indices.
@@ -94,6 +107,9 @@ pub(crate) enum StitchDefect {
     DegreeNotTwo(usize),
     /// A chain failed to close (index into `chains`).
     OpenChain(usize),
+    /// Source-edge parameter evidence at one exact vertex key was
+    /// incompatible (index into `vertices`).
+    IncompatibleEdgeParameter(usize),
 }
 
 /// Deterministic stitched graph with structural evidence.
@@ -125,6 +141,7 @@ pub(crate) fn stitch_segments(segments: &[StitchSegment]) -> StitchResult {
             &mut incident,
             seg.start,
             seg.start_point,
+            seg.start_edge_parameters,
         );
         incident[start].push(Incidence {
             edge: segment,
@@ -136,6 +153,7 @@ pub(crate) fn stitch_segments(segments: &[StitchSegment]) -> StitchResult {
             &mut incident,
             seg.end,
             seg.end_point,
+            seg.end_edge_parameters,
         );
         incident[end].push(Incidence {
             edge: segment,
@@ -201,6 +219,9 @@ pub(crate) fn stitch_segments(segments: &[StitchSegment]) -> StitchResult {
         if vertex.degree != 2 {
             defects.push(StitchDefect::DegreeNotTwo(index));
         }
+        if !vertex.edge_parameters_compatible {
+            defects.push(StitchDefect::IncompatibleEdgeParameter(index));
+        }
     }
     for (index, chain) in chains.iter().enumerate() {
         if !chain.closed {
@@ -239,25 +260,75 @@ fn intern(
     incident: &mut Vec<Vec<Incidence>>,
     key: VertexKey,
     point: [f64; 3],
+    edge_parameters: [Option<Interval>; 2],
 ) -> usize {
     match index_of.entry(key) {
         Entry::Occupied(slot) => {
             let index = *slot.get();
             vertices[index].degree += 1;
+            match intersect_edge_parameters(key, vertices[index].edge_parameters, edge_parameters) {
+                Some(intersection) => vertices[index].edge_parameters = intersection,
+                None => vertices[index].edge_parameters_compatible = false,
+            }
             index
         }
         Entry::Vacant(slot) => {
             let index = vertices.len();
             slot.insert(index);
+            let edge_parameters_compatible = edge_parameters_match_key(key, edge_parameters);
             vertices.push(StitchVertex {
                 key,
                 point,
                 degree: 1,
+                edge_parameters,
+                edge_parameters_compatible,
             });
             incident.push(Vec::new());
             index
         }
     }
+}
+
+/// Validate the shape and finiteness of one endpoint's parameter evidence.
+fn edge_parameters_match_key(key: VertexKey, edge_parameters: [Option<Interval>; 2]) -> bool {
+    [key.a, key.b]
+        .into_iter()
+        .zip(edge_parameters)
+        .all(|(site, parameter)| match (site, parameter) {
+            (SiteKey::Edge(_), Some(interval)) => {
+                interval.lo().is_finite() && interval.hi().is_finite()
+            }
+            (SiteKey::Face(_) | SiteKey::Vertex(_), None) => true,
+            _ => false,
+        })
+}
+
+/// Intersect two observations at one exact stitch key. A source-edge slot
+/// may merge only when both finite enclosures overlap; non-edge slots must
+/// remain absent. `None` means the observations cannot describe one
+/// certified graph vertex and must surface as a stitch defect.
+fn intersect_edge_parameters(
+    key: VertexKey,
+    current: [Option<Interval>; 2],
+    incoming: [Option<Interval>; 2],
+) -> Option<[Option<Interval>; 2]> {
+    if !edge_parameters_match_key(key, current) || !edge_parameters_match_key(key, incoming) {
+        return None;
+    }
+    let mut merged = [None, None];
+    for (operand, site) in [key.a, key.b].into_iter().enumerate() {
+        if matches!(site, SiteKey::Edge(_)) {
+            let x = current[operand]?;
+            let y = incoming[operand]?;
+            let lo = x.lo().max(y.lo());
+            let hi = x.hi().min(y.hi());
+            if lo > hi {
+                return None;
+            }
+            merged[operand] = Some(Interval::new(lo, hi));
+        }
+    }
+    Some(merged)
 }
 
 #[cfg(test)]
@@ -301,16 +372,25 @@ mod tests {
         }
     }
 
+    fn edge_parameters(key: VertexKey, ordinal: usize) -> [Option<Interval>; 2] {
+        [key.a, key.b]
+            .map(|site| matches!(site, SiteKey::Edge(_)).then(|| Interval::point(ordinal as f64)))
+    }
+
     /// Segment from key `from` to key `to`; `pair` doubles as a point marker
     /// so representative-point provenance is observable per segment.
     fn seg(ids: &Ids, pair: usize, from: usize, to: usize) -> StitchSegment {
+        let start = key(ids, from);
+        let end = key(ids, to);
         StitchSegment {
             pair,
             faces: [ids.faces[0], ids.faces[1]],
-            start: key(ids, from),
-            end: key(ids, to),
+            start,
+            end,
             start_point: [from as f64, pair as f64, 0.0],
             end_point: [to as f64, pair as f64, 0.0],
+            start_edge_parameters: edge_parameters(start, from),
+            end_edge_parameters: edge_parameters(end, to),
         }
     }
 
@@ -351,6 +431,64 @@ mod tests {
             }]
         );
         assert!(result.defects.is_empty());
+    }
+
+    #[test]
+    fn compatible_source_edge_parameters_intersect_at_merged_vertex() {
+        let ids = ids();
+        let mut first = seg(&ids, 0, 0, 1);
+        first.start_edge_parameters[0] = Some(Interval::new(0.75, 1.25));
+        let mut second = seg(&ids, 1, 2, 0);
+        second.end_edge_parameters[0] = Some(Interval::new(1.0, 1.5));
+
+        let result = stitch_segments(&[first, second]);
+        let vertex = result
+            .vertices
+            .iter()
+            .find(|vertex| vertex.key == key(&ids, 0))
+            .expect("shared edge key is interned");
+        assert_eq!(vertex.edge_parameters[0], Some(Interval::new(1.0, 1.25)));
+        assert!(vertex.edge_parameters_compatible);
+        assert!(
+            !result
+                .defects
+                .iter()
+                .any(|defect| matches!(defect, StitchDefect::IncompatibleEdgeParameter(_)))
+        );
+    }
+
+    #[test]
+    fn disjoint_source_edge_parameters_become_an_honest_stitch_defect() {
+        let ids = ids();
+        let mut first = seg(&ids, 0, 0, 1);
+        first.start_edge_parameters[0] = Some(Interval::new(0.0, 0.5));
+        let mut second = seg(&ids, 1, 2, 0);
+        second.end_edge_parameters[0] = Some(Interval::new(1.0, 1.5));
+
+        let result = stitch_segments(&[first, second]);
+        let vertex_index = result
+            .vertices
+            .iter()
+            .position(|vertex| vertex.key == key(&ids, 0))
+            .expect("shared edge key is interned");
+        assert!(!result.vertices[vertex_index].edge_parameters_compatible);
+        assert!(
+            result
+                .defects
+                .contains(&StitchDefect::IncompatibleEdgeParameter(vertex_index))
+        );
+    }
+
+    #[test]
+    fn source_edge_parameter_intersection_is_deterministic() {
+        let ids = ids();
+        let mut first = seg(&ids, 0, 0, 1);
+        first.start_edge_parameters[0] = Some(Interval::new(0.75, 1.25));
+        let mut second = seg(&ids, 1, 2, 0);
+        second.end_edge_parameters[0] = Some(Interval::new(1.0, 1.5));
+        let segments = [first, second];
+
+        assert_eq!(stitch_segments(&segments), stitch_segments(&segments));
     }
 
     #[test]

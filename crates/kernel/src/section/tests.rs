@@ -23,6 +23,7 @@
 use std::collections::BTreeSet;
 
 use kgeom::frame::Frame;
+use ktopo::geom::CurveGeom;
 
 use super::*;
 use crate::classify::{ClassifyPointInBodyRequest, PointBodyVerdict};
@@ -31,7 +32,7 @@ use crate::{Kernel, PartEdit, PartId, Session};
 
 /// Every stable gap-reason constant the section slice may report. Any other
 /// string is a contract violation.
-const STABLE_GAP_REASONS: [&str; 12] = [
+const STABLE_GAP_REASONS: [&str; 13] = [
     GAP_PLANAR_ONLY,
     GAP_LINE_EDGES_ONLY,
     GAP_BOUNDED_EDGES_ONLY,
@@ -44,6 +45,7 @@ const STABLE_GAP_REASONS: [&str; 12] = [
     GAP_OPEN_CHAIN,
     GAP_CARRIER_ORIENTATION,
     GAP_PAIR_UNRESOLVED,
+    GAP_INCOMPATIBLE_EDGE_PARAMETERS,
 ];
 
 /// Exact-coordinate agreement tolerance for hand-derived expected points.
@@ -197,6 +199,52 @@ fn assert_certified_evidence(session: &Session, part_id: &PartId, graph: &BodySe
                 point,
                 &format!("edge {index} sample t={t}"),
             );
+        }
+    }
+}
+
+/// Independent source-curve oracle for the edge parameter evidence exposed
+/// on section vertices. Straight source edges are arc-length parameterized,
+/// so projecting the returned point onto the stored line yields the known
+/// intrinsic parameter regardless of either incident fin's traversal sense.
+fn assert_source_edge_parameters(session: &Session, part_id: &PartId, graph: &BodySectionGraph) {
+    let part = session.part(part_id.clone()).unwrap();
+    let store = &part.state.store;
+    for (vertex_index, vertex) in graph.vertices().iter().enumerate() {
+        for operand in 0..2 {
+            match &vertex.sites()[operand] {
+                SectionSite::EdgeInterior(edge_id) => {
+                    let evidence = vertex.edge_parameters()[operand].unwrap_or_else(|| {
+                        panic!(
+                            "vertex {vertex_index} operand {operand} edge site lacks parameter evidence"
+                        )
+                    });
+                    let edge = store.get(edge_id.raw()).unwrap();
+                    let curve = store.get(edge.curve.unwrap()).unwrap();
+                    let CurveGeom::Line(line) = curve else {
+                        panic!("certified planar slice source edge must be a line");
+                    };
+                    let expected = (vertex.point() - line.origin()).dot(line.dir());
+                    assert!(
+                        evidence.contains(expected),
+                        "vertex {vertex_index} operand {operand}: independently projected source \
+                         parameter {expected} lies outside [{}, {}]",
+                        evidence.lo(),
+                        evidence.hi()
+                    );
+                    assert!(
+                        evidence.hi() - evidence.lo() < 1e-9,
+                        "vertex {vertex_index} operand {operand}: source parameter enclosure is \
+                         unexpectedly wide: [{}, {}]",
+                        evidence.lo(),
+                        evidence.hi()
+                    );
+                }
+                SectionSite::FaceInterior(_) | SectionSite::AtVertex(_) => assert!(
+                    vertex.edge_parameters()[operand].is_none(),
+                    "vertex {vertex_index} operand {operand}: non-edge site carried edge parameter evidence"
+                ),
+            }
         }
     }
 }
@@ -374,6 +422,7 @@ fn run_complete_block_case(
     assert_eq!(graph.bodies(), &[a.clone(), b.clone()], "{}", case.label);
     assert_complete_section_invariants(&graph);
     assert_certified_evidence(&session, &part_id, &graph);
+    assert_source_edge_parameters(&session, &part_id, &graph);
 
     assert_eq!(
         graph.edges().len(),

@@ -45,6 +45,11 @@ pub(crate) struct PreparedRingVertex {
     pub point: [f64; 3],
     /// Edge from this vertex to the ring successor (the owning fin's edge).
     pub edge: RawEdgeId,
+    /// Intrinsic source-edge parameters at this vertex and the ring
+    /// successor, in ring traversal order. A reversed fin therefore stores
+    /// `[hi, lo]`, preserving the source curve's parameterization rather
+    /// than silently replacing it with a traversal-local fraction.
+    pub edge_parameters: [f64; 2],
 }
 
 /// One boundary loop of a prepared face as an ordered exact vertex ring.
@@ -87,6 +92,9 @@ pub(crate) struct LineCrossing {
     pub site: CrossingSite,
     /// Conservative enclosure of the crossing's carrier parameter.
     pub parameter: Interval,
+    /// Conservative enclosure of the intrinsic source-edge parameter.
+    /// Present exactly for [`CrossingSite::EdgeInterior`].
+    pub edge_parameter: Option<Interval>,
 }
 
 /// One maximal carrier span certified inside the face's trim region.
@@ -112,6 +120,9 @@ pub(crate) struct MergedEndpoint {
     pub a: Option<CrossingSite>,
     pub b: Option<CrossingSite>,
     pub parameter: Interval,
+    /// Intrinsic source-edge parameter evidence in operand order. Each slot
+    /// is present exactly when the corresponding site is `EdgeInterior`.
+    pub edge_parameters: [Option<Interval>; 2],
 }
 
 /// One maximal carrier span certified inside both faces' trim regions.
@@ -288,7 +299,18 @@ pub(crate) fn prepare_section_face(
             let (Some(v0), Some(v1)) = (edge.vertices[0], edge.vertices[1]) else {
                 return Ok(Err(GAP_BOUNDED_EDGES_ONLY));
             };
+            let Some((lo, hi)) = edge.bounds else {
+                return Ok(Err(GAP_BOUNDED_EDGES_ONLY));
+            };
+            if !lo.is_finite() || !hi.is_finite() || lo >= hi {
+                return Ok(Err(GAP_BOUNDED_EDGES_ONLY));
+            }
             let tail = if fin.sense.is_forward() { v0 } else { v1 };
+            let edge_parameters = if fin.sense.is_forward() {
+                [lo, hi]
+            } else {
+                [hi, lo]
+            };
             let point = as_coords(read(store.vertex_position(tail))?);
             if point.iter().any(|c| !c.is_finite()) {
                 // A non-finite stored coordinate can certify nothing; the
@@ -299,6 +321,7 @@ pub(crate) fn prepare_section_face(
                 vertex: tail,
                 point,
                 edge: fin.edge,
+                edge_parameters,
             });
         }
         if vertices.len() < 3 {
@@ -377,13 +400,14 @@ fn vertex_parameter(
 /// exact side signs, so the true crossing exists; the cutter offset is
 /// affine along the segment, so the interval interpolation ratio encloses
 /// its exact root.
-fn edge_crossing_parameter(
+fn edge_crossing_parameters(
     p0: [f64; 3],
     p1: [f64; 3],
+    edge_parameters: [f64; 2],
     carrier: &SectionCarrierLine,
     cutter: &PlaneWitness,
     direction_sq: Interval,
-) -> Option<Interval> {
+) -> Option<(Interval, Interval)> {
     let f0 = cutter_offset(cutter, p0);
     let f1 = cutter_offset(cutter, p1);
     let s = f0.checked_div(f0 - f1)?;
@@ -395,7 +419,19 @@ fn edge_crossing_parameter(
             + (x - Interval::point(carrier.origin[axis]))
                 * Interval::point(carrier.direction[axis]);
     }
-    finite(along.checked_div(direction_sq)?)
+    let carrier_parameter = finite(along.checked_div(direction_sq)?)?;
+
+    // Use the same certified affine interpolation ratio to retain the
+    // crossing in the source edge's intrinsic parameterization. Intersect
+    // with the active edge bounds: the exact sign flip proves the root lies
+    // in the open segment, while interval widening may harmlessly extend
+    // beyond its endpoints.
+    let [t0, t1] = edge_parameters;
+    let source_parameter =
+        finite(Interval::point(t0) + s * (Interval::point(t1) - Interval::point(t0)))?;
+    let active = Interval::new(t0.min(t1), t0.max(t1));
+    let source_parameter = intersect_intervals(source_parameter, active)?;
+    Some((carrier_parameter, source_parameter))
 }
 
 /// Exact crossing discovery over one boundary ring: an `orient3d` sign
@@ -448,14 +484,16 @@ fn ring_crossings(
             crossings.push(LineCrossing {
                 site: CrossingSite::AtVertex(ring.vertices[i].vertex),
                 parameter,
+                edge_parameter: None,
             });
         } else {
             let j = (i + 1) % n;
             if signs[j] != Orientation::Zero && signs[j] != signs[i] {
                 charge(scope, 1)?;
-                let Some(parameter) = edge_crossing_parameter(
+                let Some((parameter, edge_parameter)) = edge_crossing_parameters(
                     ring.vertices[i].point,
                     ring.vertices[j].point,
+                    ring.vertices[i].edge_parameters,
                     carrier,
                     cutter,
                     direction_sq,
@@ -465,6 +503,7 @@ fn ring_crossings(
                 crossings.push(LineCrossing {
                     site: CrossingSite::EdgeInterior(ring.vertices[i].edge),
                     parameter,
+                    edge_parameter: Some(edge_parameter),
                 });
             }
         }
@@ -605,17 +644,20 @@ fn merged_start(a: &LineCrossing, b: &LineCrossing) -> Option<MergedEndpoint> {
             a: None,
             b: Some(b.site),
             parameter: b.parameter,
+            edge_parameters: [None, b.edge_parameter],
         }),
         CrossingOrder::After => Some(MergedEndpoint {
             a: Some(a.site),
             b: None,
             parameter: a.parameter,
+            edge_parameters: [a.edge_parameter, None],
         }),
         CrossingOrder::Same => {
             intersect_intervals(a.parameter, b.parameter).map(|parameter| MergedEndpoint {
                 a: Some(a.site),
                 b: Some(b.site),
                 parameter,
+                edge_parameters: [a.edge_parameter, b.edge_parameter],
             })
         }
         CrossingOrder::Unordered => None,
@@ -632,6 +674,7 @@ fn merged_end(a: &LineCrossing, b: &LineCrossing) -> Option<(MergedEndpoint, boo
                 a: Some(a.site),
                 b: None,
                 parameter: a.parameter,
+                edge_parameters: [a.edge_parameter, None],
             },
             true,
             false,
@@ -641,6 +684,7 @@ fn merged_end(a: &LineCrossing, b: &LineCrossing) -> Option<(MergedEndpoint, boo
                 a: None,
                 b: Some(b.site),
                 parameter: b.parameter,
+                edge_parameters: [None, b.edge_parameter],
             },
             false,
             true,
@@ -651,6 +695,7 @@ fn merged_end(a: &LineCrossing, b: &LineCrossing) -> Option<(MergedEndpoint, boo
                     a: Some(a.site),
                     b: Some(b.site),
                     parameter,
+                    edge_parameters: [a.edge_parameter, b.edge_parameter],
                 },
                 true,
                 true,
@@ -820,10 +865,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn edge_interpolation_retains_intrinsic_parameter_through_reversal() {
+        // Source segment x=0..10 is cut at independently known x=2. Its
+        // intrinsic edge parameters run 3..13, so the crossing is t=5.
+        let carrier = SectionCarrierLine {
+            origin: [2.0, 0.0, 0.0],
+            direction: [0.0, 1.0, 0.0],
+        };
+        let cutter = cutter([[2.0, -1.0, -1.0], [2.0, 1.0, -1.0], [2.0, 0.0, 1.0]]);
+        let direction_sq = Interval::point(1.0);
+        let (carrier_forward, edge_forward) = edge_crossing_parameters(
+            [0.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [3.0, 13.0],
+            &carrier,
+            &cutter,
+            direction_sq,
+        )
+        .expect("forward crossing certifies");
+        assert_tight(carrier_forward, 0.0);
+        assert_tight(edge_forward, 5.0);
+
+        // Reversing both boundary traversal and its endpoint parameters
+        // must preserve the intrinsic source-edge parameter, rather than
+        // returning the traversal-local complement (11).
+        let (carrier_reversed, edge_reversed) = edge_crossing_parameters(
+            [10.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [13.0, 3.0],
+            &carrier,
+            &cutter,
+            direction_sq,
+        )
+        .expect("reversed crossing certifies");
+        assert_tight(carrier_reversed, 0.0);
+        assert_tight(edge_reversed, 5.0);
+    }
+
     fn edge_crossing(edge: RawEdgeId, t: f64) -> LineCrossing {
         LineCrossing {
             site: CrossingSite::EdgeInterior(edge),
             parameter: Interval::point(t),
+            edge_parameter: Some(Interval::point(t)),
         }
     }
 
@@ -831,6 +915,7 @@ mod tests {
         LineCrossing {
             site: CrossingSite::AtVertex(vertex),
             parameter: Interval::point(t),
+            edge_parameter: None,
         }
     }
 
@@ -877,6 +962,34 @@ mod tests {
                 face_prep.witness.positive_is_outward
             );
         }
+    }
+
+    #[test]
+    fn prepared_ring_parameters_follow_each_fins_edge_sense() {
+        let (store, body) = block_store();
+        let mut saw_forward = false;
+        let mut saw_reversed = false;
+        for face in store.faces_of_body(body).unwrap() {
+            let prep = prepared(&store, face);
+            for ring in &prep.rings {
+                for vertex in &ring.vertices {
+                    let edge = store.get(vertex.edge).unwrap();
+                    let [Some(v0), Some(v1)] = edge.vertices else {
+                        panic!("prepared block edge must be bounded");
+                    };
+                    let (lo, hi) = edge.bounds.unwrap();
+                    if vertex.vertex == v0 {
+                        saw_forward = true;
+                        assert_eq!(vertex.edge_parameters, [lo, hi]);
+                    } else {
+                        saw_reversed = true;
+                        assert_eq!(vertex.vertex, v1);
+                        assert_eq!(vertex.edge_parameters, [hi, lo]);
+                    }
+                }
+            }
+        }
+        assert!(saw_forward && saw_reversed);
     }
 
     #[test]
@@ -1033,6 +1146,8 @@ mod tests {
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].start.site, CrossingSite::EdgeInterior(start_edge));
         assert_eq!(spans[0].end.site, CrossingSite::EdgeInterior(end_edge));
+        assert_tight(spans[0].start.edge_parameter.unwrap(), 1.0);
+        assert_tight(spans[0].end.edge_parameter.unwrap(), 1.0);
     }
 
     #[test]
@@ -1068,6 +1183,8 @@ mod tests {
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].start.site, CrossingSite::AtVertex(low));
         assert_eq!(spans[0].end.site, CrossingSite::AtVertex(high));
+        assert_eq!(spans[0].start.edge_parameter, None);
+        assert_eq!(spans[0].end.edge_parameter, None);
         assert_tight(spans[0].start.parameter, -1.0);
         assert_tight(spans[0].end.parameter, 1.0);
     }
@@ -1220,9 +1337,17 @@ mod tests {
         assert_eq!(merged[0].start.a, None);
         assert_eq!(merged[0].start.b, Some(CrossingSite::EdgeInterior(eb[0])));
         assert_eq!(merged[0].start.parameter, b[0].start.parameter);
+        assert_eq!(
+            merged[0].start.edge_parameters,
+            [None, Some(Interval::point(2.0))]
+        );
         assert_eq!(merged[0].end.a, Some(CrossingSite::EdgeInterior(ea[1])));
         assert_eq!(merged[0].end.b, None);
         assert_eq!(merged[0].end.parameter, a[0].end.parameter);
+        assert_eq!(
+            merged[0].end.edge_parameters,
+            [Some(Interval::point(4.0)), None]
+        );
 
         assert_eq!(merged[1].start.a, Some(CrossingSite::EdgeInterior(ea[2])));
         assert_eq!(merged[1].start.b, None);
