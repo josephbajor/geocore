@@ -99,7 +99,7 @@ fn certify_shell_impl(
     shell_id: ShellId,
     body_kind: BodyKind,
     region_kind: RegionKind,
-    scope: Option<&mut OperationScope<'_, '_>>,
+    mut scope: Option<&mut OperationScope<'_, '_>>,
 ) -> Result<ShellCertification> {
     let shell = store.get(shell_id)?;
     if body_kind == BodyKind::Sheet && shell.faces.len() == 1 {
@@ -131,7 +131,14 @@ fn certify_shell_impl(
     if let Some(certification) = certify_planar_profile_prism(store, shell_id)? {
         return Ok(certification);
     }
-    certify_convex_planar_shell(store, shell_id, scope)
+    let convex = certify_convex_planar_shell(store, shell_id, scope.as_deref_mut())?;
+    if convex != indeterminate() {
+        return Ok(convex);
+    }
+    let Some(scope) = scope else {
+        return Ok(convex);
+    };
+    crate::planar_shell_proof::certify_general_planar_shell_in_scope(store, shell_id, scope)
 }
 
 fn indeterminate() -> ShellCertification {

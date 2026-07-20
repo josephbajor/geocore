@@ -40,7 +40,7 @@
 //! - [`check`] — the body checker (structural + geometric invariants).
 //! - [`btess`] — conforming whole-body solid and sheet tessellation.
 //! - [`domain`] — certified conservative face UV work-box construction.
-//! - `loop_proof` / `shell_proof` — checker-v2 whole-entity certificates
+//! - `loop_proof` / `shell_proof` / `planar_shell_proof` — checker-v2 whole-entity certificates
 //!   kept private until their representation coverage is production-ready.
 
 #[cfg(feature = "benchmark-internals")]
@@ -60,6 +60,7 @@ pub(crate) mod index;
 pub(crate) mod loop_proof;
 pub mod make;
 pub mod planar;
+pub(crate) mod planar_shell_proof;
 pub mod profile;
 pub(crate) mod shell_proof;
 pub mod store;

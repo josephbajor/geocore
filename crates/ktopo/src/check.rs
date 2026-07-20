@@ -217,7 +217,9 @@ impl FullCheckBudgetProfile {
     /// Returns the exact defaults for the Full-check proof stages migrated so far.
     pub fn v1_defaults() -> BudgetPlan {
         let face_domain = crate::domain::FaceDomainContainmentBudgetProfile::v1_defaults();
-        face_domain.overlaid(&crate::shell_proof::shell_proof_budget())
+        face_domain
+            .overlaid(&crate::shell_proof::shell_proof_budget())
+            .overlaid(&crate::planar_shell_proof::planar_shell_proof_budget())
     }
 }
 
@@ -2215,8 +2217,9 @@ mod tests {
     fn full_check_profile_composes_current_leaf_and_has_an_additive_growth_seam() {
         let leaf = crate::domain::FaceDomainContainmentBudgetProfile::v1_defaults();
         let shell = crate::shell_proof::shell_proof_budget();
+        let planar_shell = crate::planar_shell_proof::planar_shell_proof_budget();
         let aggregate = FullCheckBudgetProfile::v1_defaults();
-        assert_eq!(aggregate, leaf.overlaid(&shell));
+        assert_eq!(aggregate, leaf.overlaid(&shell).overlaid(&planar_shell));
 
         const FUTURE_STAGE: kcore::operation::StageId =
             match kcore::operation::StageId::new("ktopo.check.future-proof-work") {
@@ -2271,6 +2274,12 @@ mod tests {
                     resource: ResourceKind::Items,
                     consumed: 1,
                     allowed: 4096,
+                },
+                LimitSnapshot {
+                    stage: crate::planar_shell_proof::PLANAR_SHELL_PAIR_WORK,
+                    resource: ResourceKind::Work,
+                    consumed: 0,
+                    allowed: 200_000,
                 },
                 LimitSnapshot {
                     stage: crate::shell_proof::SHELL_FACET_PAIR_WORK,
@@ -2344,6 +2353,12 @@ mod tests {
                     resource: ResourceKind::Items,
                     consumed: 2,
                     allowed: 4096,
+                },
+                LimitSnapshot {
+                    stage: crate::planar_shell_proof::PLANAR_SHELL_PAIR_WORK,
+                    resource: ResourceKind::Work,
+                    consumed: 0,
+                    allowed: 200_000,
                 },
                 LimitSnapshot {
                     stage: crate::shell_proof::SHELL_FACET_PAIR_WORK,
