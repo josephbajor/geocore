@@ -16,10 +16,9 @@
 use std::collections::BTreeMap;
 
 use crate::entity::{
-    BodyId, Edge, EdgeId, EntityRef, Face, FaceDomain, FaceId, Fin, FinPcurve, Loop, LoopId,
-    ParamMap1d, Sense, ShellId,
+    BodyId, EdgeId, EntityRef, Face, FaceDomain, FaceId, ParamMap1d, Sense, ShellId,
 };
-use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
+use crate::geom::SurfaceGeom;
 use crate::loop_proof::certify_convex_polygon_circle_containment;
 use crate::planar::{PlanarSolidInput, PreparedSolid};
 use crate::transaction::Transaction;
@@ -368,50 +367,19 @@ impl Transaction<'_> {
         port_face: FaceId,
         ring: PreparedPortRing,
     ) -> Result<EdgeId> {
-        let store = self.store_mut();
-        let curve = store.insert_curve(CurveGeom::Circle(ring.circle))?;
-        let edge = store.add(Edge {
-            curve: Some(curve),
-            vertices: [None, None],
-            bounds: None,
-            fins: Vec::new(),
-            tolerance: None,
-        });
-        let range = ParamRange::new(0.0, core::f64::consts::TAU);
-
-        let side_loop: LoopId = store.add(Loop {
-            face: side_face,
-            fins: Vec::new(),
-        });
-        store.get_mut(side_face)?.loops.push(side_loop);
-        let side_curve = store.insert_pcurve(Curve2dGeom::Line(ring.side_pcurve))?;
-        let side_use =
-            FinPcurve::new(side_curve, range, ParamMap1d::identity())?.with_closure_winding([1, 0]);
-        let side_fin = store.add(Fin {
-            parent: side_loop,
-            edge,
-            sense: ring.side_sense,
-            pcurve: Some(side_use),
-        });
-        store.get_mut(side_loop)?.fins.push(side_fin);
-
-        let port_loop: LoopId = store.add(Loop {
-            face: port_face,
-            fins: Vec::new(),
-        });
-        store.get_mut(port_face)?.loops.push(port_loop);
-        let port_curve = store.insert_pcurve(Curve2dGeom::Circle(ring.planar.curve))?;
-        let port_use =
-            FinPcurve::new(port_curve, range, ring.planar.map)?.with_closure_winding([0, 0]);
-        let port_fin = store.add(Fin {
-            parent: port_loop,
-            edge,
-            sense: ring.side_sense.flipped(),
-            pcurve: Some(port_use),
-        });
-        store.get_mut(port_loop)?.fins.push(port_fin);
-        store.get_mut(edge)?.fins = vec![side_fin, port_fin];
-        Ok(edge)
+        self.allocate_cylindrical_host_port_ring(
+            side_face,
+            port_face,
+            crate::cylindrical_boss::PreparedRing {
+                circle: ring.circle,
+                side_sense: ring.side_sense,
+                side_pcurve: ring.side_pcurve,
+                planar: crate::cylindrical_boss::PreparedPlanarRingUse {
+                    curve: ring.planar.curve,
+                    map: ring.planar.map,
+                },
+            },
+        )
     }
 }
 

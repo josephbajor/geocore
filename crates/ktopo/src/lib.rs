@@ -39,6 +39,8 @@
 //!   semantic builders retaining whole Plane/Cylinder rings.
 //! - [`cylindrical_boss`] — proof-ready attachment of one capped cylindrical
 //!   boss or blind pocket to a convex planar host face.
+//! - [`cylindrical_host`] — proof-ready attachment of cylindrical bands whose
+//!   endpoints are convex-host ports or source caps.
 //! - [`cylindrical_ports`] — proof-ready reversed cylinder band joining two
 //!   convex-host port faces.
 //! - [`cylindrical_multishell`] — proof-ready convex planar host with one
@@ -59,6 +61,7 @@ pub mod btess;
 pub mod check;
 pub mod cylindrical_band;
 pub mod cylindrical_boss;
+pub mod cylindrical_host;
 pub mod cylindrical_multishell;
 pub mod cylindrical_ports;
 pub(crate) mod cylindrical_region_proof;

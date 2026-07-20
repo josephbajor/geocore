@@ -18,11 +18,10 @@ KERNEL_PACKAGE_FILES = {
     "README.md",
     "examples/boolean_xt_oracle.rs",
     "src/boolean/boundary_select.rs",
-    "src/boolean/curved_boss.rs",
     "src/boolean/curved_cavity.rs",
     "src/boolean/curved_host.rs",
+    "src/boolean/curved_host_bands.rs",
     "src/boolean/curved_pipeline.rs",
-    "src/boolean/curved_port_band.rs",
     "src/boolean/curved_realize.rs",
     "src/boolean/curved_source.rs",
     "src/boolean/dispatch.rs",
@@ -65,6 +64,7 @@ KERNEL_PACKAGE_FILES = {
     "tests/lifecycle/curved_cavity.rs",
     "tests/lifecycle/curved_one_port_budget.rs",
     "tests/lifecycle/curved_two_port.rs",
+    "tests/lifecycle/curved_two_ring_union.rs",
 }
 
 

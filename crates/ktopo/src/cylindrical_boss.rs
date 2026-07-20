@@ -177,17 +177,17 @@ impl CappedCylinderSolidOutput {
 pub type CylindricalBossSolidOutput = CappedCylinderSolidOutput;
 
 #[derive(Debug, Clone, Copy)]
-struct PreparedPlanarRingUse {
-    curve: Circle2d,
-    map: ParamMap1d,
+pub(crate) struct PreparedPlanarRingUse {
+    pub(crate) curve: Circle2d,
+    pub(crate) map: ParamMap1d,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct PreparedRing {
-    circle: Circle,
-    side_sense: Sense,
-    side_pcurve: Line2d,
-    planar: PreparedPlanarRingUse,
+pub(crate) struct PreparedRing {
+    pub(crate) circle: Circle,
+    pub(crate) side_sense: Sense,
+    pub(crate) side_pcurve: Line2d,
+    pub(crate) planar: PreparedPlanarRingUse,
 }
 
 #[derive(Debug)]
@@ -394,12 +394,12 @@ impl Transaction<'_> {
 
         let port_endpoint = 1 - prepared.cap_endpoint;
         let mut ring_edges = [None, None];
-        ring_edges[port_endpoint] = Some(self.allocate_boss_port_ring(
+        ring_edges[port_endpoint] = Some(self.allocate_cylindrical_host_port_ring(
             side_face,
             port_face,
             prepared.rings[port_endpoint],
         )?);
-        let (cap_face, cap_edge) = self.allocate_boss_cap_ring(
+        let (cap_face, cap_edge) = self.allocate_cylindrical_host_cap_ring(
             shell,
             side_face,
             prepared.rings[prepared.cap_endpoint],
@@ -436,13 +436,13 @@ impl Transaction<'_> {
         self.assemble_capped_cylinder_solid(input)
     }
 
-    fn allocate_boss_port_ring(
+    pub(crate) fn allocate_cylindrical_host_port_ring(
         &mut self,
         side_face: FaceId,
         port_face: FaceId,
         ring: PreparedRing,
     ) -> Result<EdgeId> {
-        let (edge, side_fin) = self.allocate_boss_side_ring(side_face, ring)?;
+        let (edge, side_fin) = self.allocate_cylindrical_side_ring(side_face, ring)?;
         let store = self.store_mut();
         let loop_id = store.add(Loop {
             face: port_face,
@@ -467,7 +467,7 @@ impl Transaction<'_> {
         Ok(edge)
     }
 
-    fn allocate_boss_cap_ring(
+    pub(crate) fn allocate_cylindrical_host_cap_ring(
         &mut self,
         shell: ShellId,
         side_face: FaceId,
@@ -475,7 +475,7 @@ impl Transaction<'_> {
         plane: Plane,
         domain: FaceDomain,
     ) -> Result<(FaceId, EdgeId)> {
-        let (edge, side_fin) = self.allocate_boss_side_ring(side_face, ring)?;
+        let (edge, side_fin) = self.allocate_cylindrical_side_ring(side_face, ring)?;
         let store = self.store_mut();
         let surface = store.insert_surface(SurfaceGeom::Plane(plane))?;
         let face = store.add(Face {
@@ -510,7 +510,7 @@ impl Transaction<'_> {
         Ok((face, edge))
     }
 
-    fn allocate_boss_side_ring(
+    fn allocate_cylindrical_side_ring(
         &mut self,
         side_face: FaceId,
         ring: PreparedRing,

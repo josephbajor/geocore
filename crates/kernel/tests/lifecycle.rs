@@ -24,6 +24,8 @@ mod curved_cavity;
 mod curved_one_port_budget;
 #[path = "lifecycle/curved_two_port.rs"]
 mod curved_two_port;
+#[path = "lifecycle/curved_two_ring_union.rs"]
+mod curved_two_ring_union;
 
 #[test]
 fn sessions_own_independent_parts_and_policy() {
@@ -2569,29 +2571,6 @@ fn public_curved_boolean_one_ring_subtraction_commits_a_full_valid_blind_pocket(
         [3, 2, 0]
     );
     assert_boolean_sources_retained(&reverse_order, 3);
-}
-
-#[test]
-fn public_curved_boolean_unassembled_two_ring_union_refuses_without_allocation() {
-    let mut fixture = block_cylinder_boolean_fixture(
-        Frame::world().with_origin(Point3::new(0.0, 0.0, 1.0)),
-        [4.0, 4.0, 1.0],
-        Frame::world(),
-        0.75,
-        2.0,
-    );
-    let before = boolean_topology_counts(&fixture);
-    let outcome = run_boolean(
-        &mut fixture,
-        BooleanOperation::Unite,
-        OperationSettings::new(),
-    );
-    assert!(matches!(
-        outcome.into_result().unwrap(),
-        BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
-    ));
-    assert_eq!(boolean_topology_counts(&fixture), before);
-    assert_boolean_sources_retained(&fixture, 2);
 }
 
 #[test]

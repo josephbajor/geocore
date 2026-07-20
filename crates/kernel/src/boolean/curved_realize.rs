@@ -14,13 +14,12 @@ use ktopo::entity::{BodyId as RawBodyId, FaceId as RawFaceId};
 use ktopo::transaction::{FullCommitRequirement, Transaction};
 
 use super::boundary_select::{OperandSide, SelectedBoundaryFragment, SelectedOrientation};
-use super::curved_boss::{PreparedCappedCylinder, prepare_capped_cylinder};
 use super::curved_cavity::{PreparedCylindricalCavity, prepare_cylindrical_cavity};
+use super::curved_host_bands::{PreparedCylindricalHostBands, prepare_cylindrical_host_bands};
 use super::curved_pipeline::{
     CertifiedRingCut, CurvedBooleanPipelineOutcome, CurvedBooleanPipelineRefusal, CurvedFragment,
     CurvedFragmentKey, PipelineFailure, StageResult,
 };
-use super::curved_port_band::{PreparedCylindricalPortBand, prepare_cylindrical_port_band};
 use super::curved_source::CertifiedCylinderSource;
 use super::extract::ExtractedPlanarSourceBody;
 use super::face_partition::{AxialBoundary, FaceRegionKey};
@@ -33,9 +32,8 @@ type SelectedCurvedFragment = SelectedBoundaryFragment<CurvedFragmentKey, Curved
 
 #[derive(Debug, Clone)]
 enum PreparedCurvedResult {
-    CappedCylinder(Box<PreparedCappedCylinder>),
     CylindricalCavity(Box<PreparedCylindricalCavity>),
-    CylindricalPortBand(Box<PreparedCylindricalPortBand>),
+    CylindricalHostBands(Box<PreparedCylindricalHostBands>),
     CylindricalBands(Vec<CylindricalBandSolidInput>),
     WholeSources(Vec<RawBodyId>),
 }
@@ -43,9 +41,7 @@ enum PreparedCurvedResult {
 impl PreparedCurvedResult {
     fn is_empty(&self) -> bool {
         match self {
-            Self::CappedCylinder(_) | Self::CylindricalCavity(_) | Self::CylindricalPortBand(_) => {
-                false
-            }
+            Self::CylindricalCavity(_) | Self::CylindricalHostBands(_) => false,
             Self::CylindricalBands(bands) => bands.is_empty(),
             Self::WholeSources(sources) => sources.is_empty(),
         }
@@ -126,16 +122,11 @@ fn prepare_result_proposals(
     {
         return Ok(PreparedCurvedResult::CylindricalCavity(Box::new(cavity)));
     }
-    if let Some(feature) =
-        prepare_capped_cylinder(planar, cylinder, cuts, &selected).map_err(assembly_contract)?
-    {
-        return Ok(PreparedCurvedResult::CappedCylinder(Box::new(feature)));
-    }
-    if let Some(port_band) = prepare_cylindrical_port_band(planar, cylinder, cuts, &selected)
+    if let Some(host_bands) = prepare_cylindrical_host_bands(planar, cylinder, cuts, &selected)
         .map_err(assembly_contract)?
     {
-        return Ok(PreparedCurvedResult::CylindricalPortBand(Box::new(
-            port_band,
+        return Ok(PreparedCurvedResult::CylindricalHostBands(Box::new(
+            host_bands,
         )));
     }
     prepare_band_proposals(cylinder, cuts, selected).map(PreparedCurvedResult::CylindricalBands)
@@ -306,19 +297,14 @@ fn commit_proposals(
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<CurvedBooleanPipelineOutcome> {
     match &proposals {
-        PreparedCurvedResult::CappedCylinder(feature) => precharge_curved_host_feature(
-            feature.host_vertices(),
-            feature.host_faces(),
-            feature.host_face_uses(),
-            scope,
-        )?,
         PreparedCurvedResult::CylindricalCavity(cavity) => {
             precharge_cylindrical_cavity(cavity, scope)?
         }
-        PreparedCurvedResult::CylindricalPortBand(port_band) => precharge_curved_host_feature(
-            port_band.host_vertices(),
-            port_band.host_faces(),
-            port_band.host_face_uses(),
+        PreparedCurvedResult::CylindricalHostBands(host_bands) => precharge_curved_host_feature(
+            host_bands.host_vertices(),
+            host_bands.host_faces(),
+            host_bands.host_face_uses(),
+            host_bands.semantic_preflight_work(),
             scope,
         )?,
         PreparedCurvedResult::WholeSources(sources) => {
@@ -329,20 +315,12 @@ fn commit_proposals(
     let part = edit.id.clone();
     let mut transaction = edit.state.store.transaction().map_err(Error::from)?;
     let mut raw_bodies = match &proposals {
-        PreparedCurvedResult::CappedCylinder(_)
-        | PreparedCurvedResult::CylindricalCavity(_)
-        | PreparedCurvedResult::CylindricalPortBand(_) => Vec::with_capacity(1),
+        PreparedCurvedResult::CylindricalCavity(_)
+        | PreparedCurvedResult::CylindricalHostBands(_) => Vec::with_capacity(1),
         PreparedCurvedResult::CylindricalBands(bands) => Vec::with_capacity(bands.len()),
         PreparedCurvedResult::WholeSources(sources) => Vec::with_capacity(sources.len()),
     };
     match proposals {
-        PreparedCurvedResult::CappedCylinder(proposal) => {
-            push_assembled(
-                &mut raw_bodies,
-                transaction.assemble_capped_cylinder_solid(&proposal.into_input()),
-                |output| output.body(),
-            )?;
-        }
         PreparedCurvedResult::CylindricalCavity(proposal) => {
             push_assembled(
                 &mut raw_bodies,
@@ -350,10 +328,10 @@ fn commit_proposals(
                 |output| output.body(),
             )?;
         }
-        PreparedCurvedResult::CylindricalPortBand(proposal) => {
+        PreparedCurvedResult::CylindricalHostBands(proposal) => {
             push_assembled(
                 &mut raw_bodies,
-                transaction.assemble_two_port_cylinder_solid(&proposal.into_input()),
+                transaction.assemble_cylindrical_host_solid(&proposal.into_input()),
                 |output| output.body(),
             )?;
         }
@@ -431,17 +409,16 @@ fn precharge_curved_host_feature(
     host_vertices: usize,
     host_faces: usize,
     host_face_uses: usize,
+    semantic_preflight_work: u64,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<()> {
     let vertices = u64::try_from(host_vertices).map_err(|_| work_overflow())?;
-    let faces = u64::try_from(host_faces).map_err(|_| work_overflow())?;
-    let uses = u64::try_from(host_face_uses).map_err(|_| work_overflow())?;
-    let work = vertices
-        .checked_mul(4)
-        .and_then(|value| value.checked_add(faces.checked_mul(4)?))
-        .and_then(|value| value.checked_add(uses.checked_mul(6)?))
-        .and_then(|value| value.checked_add(32))
-        .ok_or_else(work_overflow)?;
+    let work = curved_host_feature_work(
+        host_vertices,
+        host_faces,
+        host_face_uses,
+        semantic_preflight_work,
+    )?;
     scope
         .ledger_mut()
         .charge(PLANAR_BOOLEAN_REALIZATION_WORK, work)
@@ -457,6 +434,29 @@ fn precharge_curved_host_feature(
     Ok(())
 }
 
+/// Source-size-exact bound for one connected planar host with cylinder bands.
+///
+/// `4V + 4F + 6U` covers planar preparation. `H` is the topology layer's
+/// checked `F*V + 2*F*B + B*(B-1)/2 + P + 16*B` semantic-host bound: convexity,
+/// endpoint/support sweeps, pair separation, total port uses, and explicit
+/// per-band preparation/allocation.
+fn curved_host_feature_work(
+    host_vertices: usize,
+    host_faces: usize,
+    host_face_uses: usize,
+    semantic_preflight_work: u64,
+) -> StageResult<u64> {
+    let vertices = u64::try_from(host_vertices).map_err(|_| work_overflow())?;
+    let faces = u64::try_from(host_faces).map_err(|_| work_overflow())?;
+    let uses = u64::try_from(host_face_uses).map_err(|_| work_overflow())?;
+    vertices
+        .checked_mul(4)
+        .and_then(|value| value.checked_add(faces.checked_mul(4)?))
+        .and_then(|value| value.checked_add(uses.checked_mul(6)?))
+        .and_then(|value| value.checked_add(semantic_preflight_work))
+        .ok_or_else(work_overflow)
+}
+
 /// Add the face/vertex half-space matrix used by cavity convexity preflight.
 fn precharge_cylindrical_cavity(
     cavity: &PreparedCylindricalCavity,
@@ -465,15 +465,29 @@ fn precharge_cylindrical_cavity(
     let vertices = u64::try_from(cavity.host_vertices()).map_err(|_| work_overflow())?;
     let faces = u64::try_from(cavity.host_faces()).map_err(|_| work_overflow())?;
     let convexity_work = vertices.checked_mul(faces).ok_or_else(work_overflow)?;
-    precharge_curved_host_feature(
-        cavity.host_vertices(),
-        cavity.host_faces(),
-        cavity.host_face_uses(),
-        scope,
-    )?;
+    let uses = u64::try_from(cavity.host_face_uses()).map_err(|_| work_overflow())?;
+    let base_work = vertices
+        .checked_mul(4)
+        .and_then(|value| value.checked_add(faces.checked_mul(4)?))
+        .and_then(|value| value.checked_add(uses.checked_mul(6)?))
+        .and_then(|value| value.checked_add(32))
+        .ok_or_else(work_overflow)?;
     scope
         .ledger_mut()
-        .charge(PLANAR_BOOLEAN_REALIZATION_WORK, convexity_work)
+        .charge(
+            PLANAR_BOOLEAN_REALIZATION_WORK,
+            base_work
+                .checked_add(convexity_work)
+                .ok_or_else(work_overflow)?,
+        )
+        .map_err(Error::from)?;
+    scope
+        .ledger_mut()
+        .observe(
+            PLANAR_BOOLEAN_REALIZED_VERTICES,
+            ResourceKind::Items,
+            vertices,
+        )
         .map_err(Error::from)?;
     Ok(())
 }
@@ -580,4 +594,23 @@ fn refused_error(refusal: CurvedBooleanPipelineRefusal) -> PipelineFailure {
 
 fn refused<T>(refusal: CurvedBooleanPipelineRefusal) -> StageResult<T> {
     Err(refused_error(refusal))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connected_host_feature_work_counts_every_structural_term() {
+        // Block host: V=8, F=6, U=24. Each selected port face has four uses.
+        assert_eq!(curved_host_feature_work(8, 6, 24, 80).unwrap(), 280);
+        assert_eq!(curved_host_feature_work(8, 6, 24, 84).unwrap(), 284);
+        assert_eq!(curved_host_feature_work(8, 6, 24, 113).unwrap(), 313);
+    }
+
+    #[test]
+    fn connected_host_feature_work_fails_closed_on_overflow() {
+        assert!(curved_host_feature_work(usize::MAX, usize::MAX, 0, 0).is_err());
+        assert!(curved_host_feature_work(1, 0, 0, u64::MAX).is_err());
+    }
 }

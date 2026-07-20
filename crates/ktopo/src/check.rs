@@ -2315,16 +2315,16 @@ mod tests {
 
     #[test]
     fn contextual_full_check_matches_legacy_and_reuses_one_scope() {
-        const CAVITY_REGION_SNAPSHOT: LimitSnapshot = LimitSnapshot {
-            stage: crate::cylindrical_region_proof::CYLINDRICAL_CAVITY_REGION_WORK,
+        let proof_snapshot = |stage, consumed| LimitSnapshot {
+            stage,
             resource: ResourceKind::Work,
-            consumed: 0,
+            consumed,
             allowed: 1_048_576,
         };
+        let cavity_stage = crate::cylindrical_region_proof::CYLINDRICAL_CAVITY_REGION_WORK;
         let mut store = Store::new();
         let body = clean_block(&mut store);
         let legacy = check_body_report(&store, body, CheckLevel::Full).unwrap();
-
         let session = checker_session(BudgetPlan::empty());
         let context = OperationContext::new(&session, Tolerances::default()).unwrap();
         let contextual =
@@ -2345,7 +2345,8 @@ mod tests {
                     consumed: 306,
                     allowed: 4096,
                 },
-                CAVITY_REGION_SNAPSHOT,
+                proof_snapshot(cavity_stage, 0),
+                proof_snapshot(crate::shell_proof::CYLINDRICAL_HOST_SHELL_WORK, 6),
                 LimitSnapshot {
                     stage: crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
                     resource: ResourceKind::Items,
@@ -2437,7 +2438,8 @@ mod tests {
                     consumed: 3,
                     allowed: 5,
                 },
-                CAVITY_REGION_SNAPSHOT,
+                proof_snapshot(cavity_stage, 0),
+                proof_snapshot(crate::shell_proof::CYLINDRICAL_HOST_SHELL_WORK, 12),
                 LimitSnapshot {
                     stage: crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
                     resource: ResourceKind::Items,
