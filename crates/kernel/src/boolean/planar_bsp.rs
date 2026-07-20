@@ -21,6 +21,14 @@ impl SourcePlaneRef {
     pub(crate) const fn new(operand: u8, face: u32) -> Self {
         Self { operand, face }
     }
+
+    pub(crate) const fn operand(self) -> u8 {
+        self.operand
+    }
+
+    pub(crate) const fn face(self) -> u32 {
+        self.face
+    }
 }
 
 /// One exact oriented source-plane witness plus its material half-space.
@@ -55,6 +63,18 @@ impl SourcePlane {
             interior_side,
         })
     }
+
+    pub(crate) const fn id(self) -> SourcePlaneRef {
+        self.id
+    }
+
+    pub(crate) const fn points(self) -> OrientedPlanePoints {
+        self.points
+    }
+
+    pub(crate) const fn interior_side(self) -> Orientation {
+        self.interior_side
+    }
 }
 
 /// Canonical symbolic identity of one simple three-plane vertex.
@@ -71,6 +91,10 @@ impl PlaneTripleVertexKey {
 
     fn contains(self, plane: SourcePlaneRef) -> bool {
         self.planes.contains(&plane)
+    }
+
+    pub(crate) const fn planes(self) -> [SourcePlaneRef; 3] {
+        self.planes
     }
 }
 
@@ -131,6 +155,27 @@ impl ConvexPlanarFragment {
     pub(crate) fn vertices(&self) -> &[PlaneTripleVertexKey] {
         &self.vertices
     }
+
+    pub(crate) fn edge_planes(&self) -> &[SourcePlaneRef] {
+        &self.edge_planes
+    }
+
+    /// Reverse the face loop while retaining each edge's supporting plane.
+    /// Fragment sign evidence is point-set evidence and remains unchanged.
+    pub(crate) fn reversed_orientation(&self) -> Self {
+        let mut vertices = self.vertices.clone();
+        vertices.reverse();
+        let mut edge_planes = self.edge_planes.clone();
+        edge_planes.reverse();
+        edge_planes.rotate_left(1);
+        Self {
+            source_face: self.source_face,
+            support: self.support,
+            vertices,
+            edge_planes,
+            signs: self.signs.clone(),
+        }
+    }
 }
 
 /// Complete relation of a positive-area fragment to a convex solid.
@@ -144,6 +189,7 @@ pub(crate) enum FragmentClassification {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FragmentError {
     UnknownPlane,
+    DuplicatePlaneWitness,
     DuplicateCutter,
     InvalidRing,
     BoundaryContact,
@@ -160,8 +206,13 @@ pub(crate) enum FragmentSplit {
     },
 }
 
-fn plane(planes: &[SourcePlane], id: SourcePlaneRef) -> Option<&SourcePlane> {
-    planes.iter().find(|plane| plane.id == id)
+fn plane(planes: &[SourcePlane], id: SourcePlaneRef) -> Result<&SourcePlane, FragmentError> {
+    let mut matches = planes.iter().filter(|plane| plane.id == id);
+    let plane = matches.next().ok_or(FragmentError::UnknownPlane)?;
+    if matches.next().is_some() {
+        return Err(FragmentError::DuplicatePlaneWitness);
+    }
+    Ok(plane)
 }
 
 fn side_of_vertex(
@@ -171,15 +222,9 @@ fn side_of_vertex(
 ) -> Result<HalfspaceSide, FragmentError> {
     let [first, second, third] = vertex.planes;
     let witnesses = [
-        plane(planes, first)
-            .ok_or(FragmentError::UnknownPlane)?
-            .points,
-        plane(planes, second)
-            .ok_or(FragmentError::UnknownPlane)?
-            .points,
-        plane(planes, third)
-            .ok_or(FragmentError::UnknownPlane)?
-            .points,
+        plane(planes, first)?.points,
+        plane(planes, second)?.points,
+        plane(planes, third)?.points,
     ];
     let side = oriented_plane_triple_intersection_side(witnesses, cutter.points)
         .ok_or(FragmentError::UncertifiedPredicate)?
@@ -287,7 +332,7 @@ pub(crate) fn split_fragment(
     {
         return Err(FragmentError::DuplicateCutter);
     }
-    let cutter = plane(planes, cutter_id).ok_or(FragmentError::UnknownPlane)?;
+    let cutter = plane(planes, cutter_id)?;
     let sides = fragment
         .vertices
         .iter()
@@ -610,5 +655,32 @@ mod tests {
             classify_fragment(face, &fixture.plane_ids),
             Err(FragmentError::MissingClassification)
         ));
+    }
+
+    #[test]
+    fn direct_split_rejects_duplicate_plane_witnesses() {
+        let source = box_fixture(0, [0.0; 3], [1.0; 3], identity());
+        let cutter = box_fixture(1, [4.0, 0.0, 0.0], [1.0; 3], identity());
+        let mut planes = source.planes.clone();
+        planes.extend_from_slice(&cutter.planes);
+        planes.push(cutter.planes[0]);
+        assert_eq!(
+            split_fragment(&planes, &source.faces[0], cutter.plane_ids[0]),
+            Err(FragmentError::DuplicatePlaneWitness)
+        );
+    }
+
+    #[test]
+    fn reversed_orientation_preserves_each_undirected_edge_witness() {
+        let fixture = box_fixture(0, [0.0; 3], [1.0; 3], identity());
+        let original = &fixture.faces[0];
+        let reversed = original.reversed_orientation();
+        assert_eq!(reversed.reversed_orientation(), *original);
+        for index in 0..reversed.vertices().len() {
+            let next = (index + 1) % reversed.vertices().len();
+            let edge_plane = reversed.edge_planes()[index];
+            assert!(reversed.vertices()[index].contains(edge_plane));
+            assert!(reversed.vertices()[next].contains(edge_plane));
+        }
     }
 }

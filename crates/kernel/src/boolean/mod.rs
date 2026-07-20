@@ -8,4 +8,12 @@
 // assembler can consume its certified fragments without exposing a partial
 // Boolean API.
 #[allow(dead_code)]
+mod extract;
+#[allow(dead_code)]
+mod pipeline;
+#[allow(dead_code)]
 mod planar_bsp;
+#[allow(dead_code)]
+mod realize;
+#[allow(dead_code)]
+mod select;
