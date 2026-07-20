@@ -26,6 +26,8 @@ mod convex_containment;
 #[allow(dead_code)]
 mod curved_cavity;
 #[allow(dead_code)]
+mod curved_contact;
+#[allow(dead_code)]
 mod curved_host;
 #[allow(dead_code)]
 mod curved_host_bands;

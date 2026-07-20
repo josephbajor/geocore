@@ -31,7 +31,10 @@ use super::curved_realize::{CurvedRealizationRequest, realize_selected_result};
 use super::curved_source::{
     CertifiedCylinderSource, CylinderSourceGap, CylinderSourceOutcome, extract_cylinder_source,
 };
-use super::curved_support_separation::certify_cylinder_in_closed_host_exterior;
+use super::curved_support_separation::{
+    CertifiedAxialCapContact, ConvexHostCylinderSupportRelation,
+    certify_convex_host_cylinder_support_relation, certify_strict_axial_cap_contact,
+};
 use super::extract::{
     ExtractedPlanarSourceBody, PlanarSourceExtractionError, PlanarSourceGap,
     PlanarSourceProofFailure, extract_planar_source_body,
@@ -392,17 +395,19 @@ fn execute_stages(
         (planar, cylinder)
     };
 
-    if operation == PlanarBooleanOperation::Intersect
-        && certify_cylinder_in_closed_host_exterior(
+    if operation == PlanarBooleanOperation::Intersect {
+        let relation = certify_convex_host_cylinder_support_relation(
             &edit.state.store,
             &planar_source,
             &cylinder_source,
             scope,
-        )?
-    {
-        return Ok(CurvedBooleanPipelineOutcome::ProvenEmpty);
+        )?;
+        if relation.is_some() {
+            return Ok(CurvedBooleanPipelineOutcome::ProvenEmpty);
+        }
     }
 
+    let mut contact = None;
     let cuts = if certify_zero_cut_mixed_containment(
         &edit.state.store,
         &planar_source,
@@ -413,9 +418,44 @@ fn execute_stages(
     } else {
         let graph =
             section_bodies_in_scope(&edit.as_part(), &bodies[0], &bodies[1], linear, scope)?;
-        certify_section_rings(&graph, planar_operand, cylinder_operand, &cylinder_source)?
+        match certify_section_rings(&graph, planar_operand, cylinder_operand, &cylinder_source) {
+            Ok(cuts) => cuts,
+            Err(
+                failure @ PipelineFailure::Refused(CurvedBooleanPipelineRefusal::SectionIncomplete),
+            ) if operation == PlanarBooleanOperation::Unite => {
+                let relation = certify_convex_host_cylinder_support_relation(
+                    &edit.state.store,
+                    &planar_source,
+                    &cylinder_source,
+                    scope,
+                )?;
+                let Some(
+                    relation @ ConvexHostCylinderSupportRelation::CertifiedAxialSingleCap { .. },
+                ) = relation
+                else {
+                    return Err(failure);
+                };
+                let Some(certified) = certify_strict_axial_cap_contact(
+                    &edit.state.store,
+                    &planar_source,
+                    &cylinder_source,
+                    relation,
+                    scope,
+                )?
+                else {
+                    return Err(failure);
+                };
+                contact = Some(certified);
+                Vec::new()
+            }
+            Err(failure) => return Err(failure),
+        }
     };
-    precharge_curved_partition(planar_source.faces().len(), cuts.len(), scope)?;
+    let interfaces = cuts
+        .len()
+        .checked_add(usize::from(contact.is_some()))
+        .ok_or_else(work_overflow)?;
+    precharge_curved_partition(planar_source.faces().len(), interfaces, scope)?;
     let classified = build_classified_fragments(
         edit,
         &bodies,
@@ -424,6 +464,7 @@ fn execute_stages(
         &planar_source,
         &cylinder_source,
         &cuts,
+        contact.as_ref(),
         linear,
         scope,
     )?;
@@ -448,6 +489,7 @@ fn execute_stages(
             &planar_source,
             &cylinder_source,
             &cuts,
+            contact.as_ref(),
             selected,
         ),
         scope,
@@ -583,6 +625,7 @@ fn build_classified_fragments(
     planar: &ExtractedPlanarSourceBody,
     cylinder: &CertifiedCylinderSource,
     cuts: &[CertifiedRingCut],
+    contact: Option<&CertifiedAxialCapContact>,
     linear: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<Vec<ClassifiedBoundaryFragment<CurvedFragmentKey, CurvedFragment>>> {
@@ -593,6 +636,7 @@ fn build_classified_fragments(
         planar_operand as u8,
         planar,
         cuts,
+        contact,
         linear,
         scope,
         &mut classified,
@@ -603,6 +647,7 @@ fn build_classified_fragments(
         cylinder_operand as u8,
         cylinder,
         cuts,
+        contact,
         linear,
         scope,
         &mut classified,
@@ -617,6 +662,7 @@ fn append_planar_fragments(
     operand: u8,
     source: &ExtractedPlanarSourceBody,
     cuts: &[CertifiedRingCut],
+    contact: Option<&CertifiedAxialCapContact>,
     linear: f64,
     scope: &mut OperationScope<'_, '_>,
     output: &mut Vec<ClassifiedBoundaryFragment<CurvedFragmentKey, CurvedFragment>>,
@@ -628,11 +674,17 @@ fn append_planar_fragments(
             .iter()
             .find(|fragment| fragment.source_face() == source_face.plane())
             .ok_or_else(|| fragment_contract(operand))?;
-        let face_cuts = cuts
+        let mut face_cuts = cuts
             .iter()
             .filter(|cut| cut.planar_face == raw_face)
             .map(|cut| CertifiedPlanarCircleCut::new(cut.key, cut.planar_representative))
             .collect::<Vec<_>>();
+        if let Some(contact) = contact.filter(|contact| contact.host_face() == raw_face) {
+            face_cuts.push(CertifiedPlanarCircleCut::new(
+                contact.key(),
+                contact.planar_representative(),
+            ));
+        }
         let partition = partition_convex_planar_face(
             source_face.plane(),
             source_fragment.edge_planes().iter().copied(),
@@ -660,9 +712,21 @@ fn append_planar_fragments(
         let classes = classify_face_partition_from_anchor(&partition, &anchor, anchor_class)
             .map_err(cell_classification_failure)?;
         for cell in partition.cells() {
-            let classification = *classes
-                .get(cell.key())
-                .ok_or_else(cell_classification_contract)?;
+            let classification = if contact.is_some_and(|contact| {
+                contact.host_face() == raw_face
+                    && cell.key().region() == &FaceRegionKey::PlanarDisk(contact.key())
+            }) {
+                BoundaryFragmentClassification::TwoSided {
+                    other_on_source_interior: false,
+                    other_on_source_exterior: true,
+                }
+            } else {
+                adapt_cell_classification(
+                    *classes
+                        .get(cell.key())
+                        .ok_or_else(cell_classification_contract)?,
+                )
+            };
             output.push(ClassifiedBoundaryFragment::new(
                 CurvedFragmentKey::Planar(cell.key().clone()),
                 operand_side(operand),
@@ -670,7 +734,7 @@ fn append_planar_fragments(
                     face: raw_face,
                     region: cell.key().region().clone(),
                 },
-                adapt_cell_classification(classification),
+                classification,
             ));
         }
     }
@@ -684,6 +748,7 @@ fn append_cylinder_fragments(
     operand: u8,
     source: &CertifiedCylinderSource,
     cuts: &[CertifiedRingCut],
+    contact: Option<&CertifiedAxialCapContact>,
     linear: f64,
     scope: &mut OperationScope<'_, '_>,
     output: &mut Vec<ClassifiedBoundaryFragment<CurvedFragmentKey, CurvedFragment>>,
@@ -755,7 +820,20 @@ fn append_cylinder_fragments(
     }
 
     for (boundary, evidence) in boundaries.iter().enumerate() {
-        let classification = classify_anchor(edit, planar_body, evidence.center(), linear, scope)?;
+        let classification = if contact.is_some_and(|contact| contact.boundary() == boundary) {
+            BoundaryFragmentClassification::TwoSided {
+                other_on_source_interior: false,
+                other_on_source_exterior: true,
+            }
+        } else {
+            adapt_cell_classification(classify_anchor(
+                edit,
+                planar_body,
+                evidence.center(),
+                linear,
+                scope,
+            )?)
+        };
         output.push(ClassifiedBoundaryFragment::new(
             CurvedFragmentKey::CylinderCap { boundary },
             operand_side(operand),
@@ -763,7 +841,7 @@ fn append_cylinder_fragments(
                 face: evidence.cap_face(),
                 boundary,
             },
-            adapt_cell_classification(classification),
+            classification,
         ));
     }
     Ok(())

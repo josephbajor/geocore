@@ -76,7 +76,7 @@ journals.
 | M2.5 Architecture gate | IN PROGRESS / REQUIRED | Pcurves, tolerant edges, tolerance provenance, checked assembly, journals landed; seam/pole interchange fixtures, remaining Full-proof gaps, and tolerance-propagation policies remain. |
 | M3 X_T | IN PROGRESS | Modern-schema subset reads/writes with host-certified conventions; production coverage and re-certification remain (see [oracle-loop.md](oracle-loop.md)). |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases with explicit Complete/Indeterminate evidence plus first modeling consumers; general certified CC/CS/SSI does not exist yet. |
-| M5 Analytic booleans | IMPLEMENTED SLICE | Public block/block CSG is atomic, Full-checked, deterministic, host-validated. Axial rings drive block/cylinder intersections, bands, host features, two-ring unions, and both containment cavity orientations; support separation proves exact-contact intersections empty. Constructive/arc contacts, broader layouts, and curved external evidence remain. |
+| M5 Analytic booleans | IMPLEMENTED SLICE | Public block/block CSG is atomic, Full-checked, deterministic, host-validated. Axial rings drive block/cylinder intersections, bands, host features, two-ring unions, and both containment cavity orientations; certified support relations prove exact-contact intersections empty and realize flush cap-contact unions. Bounded-arc contacts, broader layouts, and curved external evidence remain. |
 | M6–M8 | NOT STARTED | General modeling, blends, stable API, and production hardening remain. |
 
 ## Reconciled critical path
@@ -317,8 +317,9 @@ features. It proves zero-cut disjoint and support-separated axial exact-contact
 intersections empty, assembles zero-cut finite-cylinder outers with negative
 convex-planar cavity shells, and refuses unsupported curved truth/topology
 classes before allocation. The results export deterministically and self-import
-Fast-valid. Constructive/full-ring and bounded-arc contacts/layouts, and the
-curved licensed-host evidence gate remain.
+Fast-valid. Certified flush axial cap-contact unions also remove their full-disk
+interface and Full-commit one connected boss. Bounded-arc contacts/layouts and
+the curved licensed-host evidence gate remain.
 
 Do not wait for an exhaustive analytic pair table before testing the end-to-end
 boolean architecture. Begin with a deliberately narrow vertical slice as soon as the

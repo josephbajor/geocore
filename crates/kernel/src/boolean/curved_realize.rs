@@ -19,12 +19,16 @@ use super::convex_containment::{
     prepare_admitted_mixed_convex_containment,
 };
 use super::curved_cavity::{PreparedCylindricalCavity, prepare_cylindrical_cavity};
+use super::curved_contact::{
+    PreparedSupportContact, admit_support_contact, prepare_admitted_support_contact,
+};
 use super::curved_host_bands::{PreparedCylindricalHostBands, prepare_cylindrical_host_bands};
 use super::curved_pipeline::{
     CertifiedRingCut, CurvedBooleanPipelineOutcome, CurvedBooleanPipelineRefusal, CurvedFragment,
     CurvedFragmentKey, PipelineFailure, StageResult,
 };
 use super::curved_source::CertifiedCylinderSource;
+use super::curved_support_separation::CertifiedAxialCapContact;
 use super::extract::ExtractedPlanarSourceBody;
 use super::face_partition::{AxialBoundary, FaceRegionKey};
 use super::pipeline::{PLANAR_BOOLEAN_REALIZATION_WORK, PLANAR_BOOLEAN_REALIZED_VERTICES};
@@ -36,6 +40,7 @@ type SelectedCurvedFragment = SelectedBoundaryFragment<CurvedFragmentKey, Curved
 
 #[derive(Debug, Clone)]
 enum PreparedCurvedResult {
+    SupportContact(Box<PreparedSupportContact>),
     MixedConvexContainment(Box<PreparedMixedConvexContainment>),
     CylindricalCavity(Box<PreparedCylindricalCavity>),
     CylindricalHostBands(Box<PreparedCylindricalHostBands>),
@@ -46,7 +51,8 @@ enum PreparedCurvedResult {
 impl PreparedCurvedResult {
     fn is_empty(&self) -> bool {
         match self {
-            Self::MixedConvexContainment(_)
+            Self::SupportContact(_)
+            | Self::MixedConvexContainment(_)
             | Self::CylindricalCavity(_)
             | Self::CylindricalHostBands(_) => false,
             Self::CylindricalBands(bands) => bands.is_empty(),
@@ -61,6 +67,7 @@ pub(super) struct CurvedRealizationRequest<'a> {
     planar: &'a ExtractedPlanarSourceBody,
     cylinder: &'a CertifiedCylinderSource,
     cuts: &'a [CertifiedRingCut],
+    contact: Option<&'a CertifiedAxialCapContact>,
     selected: Vec<SelectedCurvedFragment>,
 }
 
@@ -71,6 +78,7 @@ impl<'a> CurvedRealizationRequest<'a> {
         planar: &'a ExtractedPlanarSourceBody,
         cylinder: &'a CertifiedCylinderSource,
         cuts: &'a [CertifiedRingCut],
+        contact: Option<&'a CertifiedAxialCapContact>,
         selected: Vec<SelectedCurvedFragment>,
     ) -> Self {
         Self {
@@ -79,6 +87,7 @@ impl<'a> CurvedRealizationRequest<'a> {
             planar,
             cylinder,
             cuts,
+            contact,
             selected,
         }
     }
@@ -89,23 +98,7 @@ pub(super) fn realize_selected_result(
     request: CurvedRealizationRequest<'_>,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<CurvedBooleanPipelineOutcome> {
-    let CurvedRealizationRequest {
-        bodies,
-        source_boundary_keys,
-        planar,
-        cylinder,
-        cuts,
-        selected,
-    } = request;
-    let proposals = prepare_result_proposals(
-        bodies,
-        source_boundary_keys,
-        planar,
-        cylinder,
-        cuts,
-        selected,
-        scope,
-    )?;
+    let proposals = prepare_result_proposals(request, scope)?;
     if proposals.is_empty() {
         return Ok(CurvedBooleanPipelineOutcome::ProvenEmpty);
     }
@@ -113,14 +106,35 @@ pub(super) fn realize_selected_result(
 }
 
 fn prepare_result_proposals(
-    bodies: &[BodyId; 2],
-    source_boundary_keys: &BTreeMap<OperandSide, BTreeSet<CurvedFragmentKey>>,
-    planar: &ExtractedPlanarSourceBody,
-    cylinder: &CertifiedCylinderSource,
-    cuts: &[CertifiedRingCut],
-    selected: Vec<SelectedCurvedFragment>,
+    request: CurvedRealizationRequest<'_>,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<PreparedCurvedResult> {
+    let CurvedRealizationRequest {
+        bodies,
+        source_boundary_keys,
+        planar,
+        cylinder,
+        cuts,
+        contact,
+        selected,
+    } = request;
+    if let Some(contact) = contact {
+        let Some(admission) = admit_support_contact(planar, cylinder, *contact, &selected)
+            .map_err(assembly_contract)?
+        else {
+            return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
+        };
+        precharge_planar_curved_assembly(
+            admission.host_vertices(),
+            admission.host_faces(),
+            admission.host_face_uses(),
+            admission.semantic_preflight_work(),
+            scope,
+        )?;
+        let prepared = prepare_admitted_support_contact(admission, planar, cylinder, *contact)
+            .map_err(assembly_contract)?;
+        return Ok(PreparedCurvedResult::SupportContact(Box::new(prepared)));
+    }
     if let Some(admission) =
         admit_mixed_convex_containment(source_boundary_keys, planar, cuts, &selected)
             .map_err(assembly_contract)?
@@ -323,7 +337,8 @@ fn commit_proposals(
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<CurvedBooleanPipelineOutcome> {
     match &proposals {
-        PreparedCurvedResult::MixedConvexContainment(_) => {}
+        PreparedCurvedResult::SupportContact(_)
+        | PreparedCurvedResult::MixedConvexContainment(_) => {}
         PreparedCurvedResult::CylindricalCavity(cavity) => {
             precharge_cylindrical_cavity(cavity, scope)?
         }
@@ -342,13 +357,21 @@ fn commit_proposals(
     let part = edit.id.clone();
     let mut transaction = edit.state.store.transaction().map_err(Error::from)?;
     let mut raw_bodies = match &proposals {
-        PreparedCurvedResult::MixedConvexContainment(_)
+        PreparedCurvedResult::SupportContact(_)
+        | PreparedCurvedResult::MixedConvexContainment(_)
         | PreparedCurvedResult::CylindricalCavity(_)
         | PreparedCurvedResult::CylindricalHostBands(_) => Vec::with_capacity(1),
         PreparedCurvedResult::CylindricalBands(bands) => Vec::with_capacity(bands.len()),
         PreparedCurvedResult::WholeSources(sources) => Vec::with_capacity(sources.len()),
     };
     match proposals {
+        PreparedCurvedResult::SupportContact(proposal) => {
+            push_assembled(
+                &mut raw_bodies,
+                transaction.assemble_cylindrical_host_solid(&proposal.into_input()),
+                |output| output.body(),
+            )?;
+        }
         PreparedCurvedResult::MixedConvexContainment(proposal) => {
             push_assembled(
                 &mut raw_bodies,

@@ -41,8 +41,9 @@ enforcement over new parallel surface area. Read the queue literally.
    axial cap-overlap connected union, one-ring axial block-minus-cylinder blind pockets, two-port
    axial through-holes, two-ring two-sided connected unions, and support-separated axial
    exact-contact empty intersections plus inverse-containment convex-planar cavities now run through
-   the public facade and export deterministically; constructive/arc contacts, broader layouts, and
-   curved licensed-host evidence remain.
+   the public facade and export deterministically; certified flush axial cap-contact connected
+   unions also land, while bounded-arc contacts, broader layouts, and curved licensed-host evidence
+   remain.
    Broader intersection/NURBS families, revolve, and curved profiles remain milestone backlog.
 
 **External-evidence lane.** Current Onshape records pin the 15-file writer bundle and the six-file

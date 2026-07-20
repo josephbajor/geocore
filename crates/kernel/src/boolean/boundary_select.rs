@@ -35,16 +35,29 @@ pub(crate) enum SelectedOrientation {
 
 /// Complete relation of one open fragment to the other operand.
 ///
-/// `Interior` and `Exterior` are the only decisive classes. The remaining
+/// `Interior`, `Exterior`, and `TwoSided` are decisive classes. The remaining
 /// variants preserve why the classifier could not supply an open-set
 /// relation; selection never converts them into a guessed truth value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BoundaryFragmentClassification {
     Interior,
     Exterior,
+    /// Certified occupancy of the other operand on both source sides.
+    ///
+    /// This represents a coincident boundary cell without guessing a single
+    /// open-set class. The first value is adjacent to the source interior;
+    /// the second is adjacent to the source exterior.
+    TwoSided {
+        other_on_source_interior: bool,
+        other_on_source_exterior: bool,
+    },
     Boundary,
-    Indeterminate { reason: &'static str },
-    Unsupported { reason: &'static str },
+    Indeterminate {
+        reason: &'static str,
+    },
+    Unsupported {
+        reason: &'static str,
+    },
 }
 
 /// A representation-independent boundary fragment awaiting truth selection.
@@ -153,9 +166,17 @@ fn selected_orientation(
     operand: OperandSide,
     classification: BoundaryFragmentClassification,
 ) -> Result<Option<SelectedOrientation>, BoundarySelectionError> {
-    let other_inside = match classification {
-        BoundaryFragmentClassification::Interior => true,
-        BoundaryFragmentClassification::Exterior => false,
+    let (other_on_source_interior, other_on_source_exterior, is_contact) = match classification {
+        BoundaryFragmentClassification::Interior => (true, true, false),
+        BoundaryFragmentClassification::Exterior => (false, false, false),
+        BoundaryFragmentClassification::TwoSided {
+            other_on_source_interior,
+            other_on_source_exterior,
+        } => (
+            other_on_source_interior,
+            other_on_source_exterior,
+            other_on_source_interior != other_on_source_exterior,
+        ),
         BoundaryFragmentClassification::Boundary => {
             return Err(BoundarySelectionError::BoundaryContact);
         }
@@ -169,14 +190,19 @@ fn selected_orientation(
 
     let (source_interior, source_exterior) = match operand {
         OperandSide::Left => (
-            result_contains(operation, true, other_inside),
-            result_contains(operation, false, other_inside),
+            result_contains(operation, true, other_on_source_interior),
+            result_contains(operation, false, other_on_source_exterior),
         ),
         OperandSide::Right => (
-            result_contains(operation, other_inside, true),
-            result_contains(operation, other_inside, false),
+            result_contains(operation, other_on_source_interior, true),
+            result_contains(operation, other_on_source_exterior, false),
         ),
     };
+    if is_contact && source_interior != source_exterior {
+        // A retained coincident boundary needs pairwise coalescing before one
+        // canonical source can own it. Until that proof exists, fail closed.
+        return Err(BoundarySelectionError::BoundaryContact);
+    }
     Ok(match (source_interior, source_exterior) {
         (true, false) => Some(SelectedOrientation::Preserved),
         (false, true) => Some(SelectedOrientation::Reversed),
@@ -260,6 +286,41 @@ mod tests {
                 selected_orientation(operation, operand, classification),
                 Ok(expected)
             );
+        }
+    }
+
+    #[test]
+    fn opposed_contact_is_omitted_or_refused_from_generic_side_truth() {
+        use BoundaryFragmentClassification::{Exterior, Interior};
+        use OperandSide::{Left, Right};
+        use RegularizedBooleanOperation::{Intersect, Subtract, Unite};
+
+        let contact = BoundaryFragmentClassification::TwoSided {
+            other_on_source_interior: false,
+            other_on_source_exterior: true,
+        };
+        for operand in [Left, Right] {
+            assert_eq!(selected_orientation(Unite, operand, contact), Ok(None));
+            assert_eq!(selected_orientation(Intersect, operand, contact), Ok(None));
+            assert_eq!(
+                selected_orientation(Subtract, operand, contact),
+                Err(BoundarySelectionError::BoundaryContact)
+            );
+        }
+
+        for operation in [Unite, Intersect, Subtract] {
+            for operand in [Left, Right] {
+                for (other_inside, expected) in [(false, Exterior), (true, Interior)] {
+                    let equal = BoundaryFragmentClassification::TwoSided {
+                        other_on_source_interior: other_inside,
+                        other_on_source_exterior: other_inside,
+                    };
+                    assert_eq!(
+                        selected_orientation(operation, operand, equal),
+                        selected_orientation(operation, operand, expected)
+                    );
+                }
+            }
         }
     }
 

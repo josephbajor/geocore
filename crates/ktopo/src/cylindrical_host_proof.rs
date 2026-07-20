@@ -5,8 +5,8 @@
 //! planar peers are classified from topology as either host ports (a circular
 //! inner loop beside one polygonal outer loop) or caps (one circular loop).
 //! The polygonal outer loops reconstruct one virtual convex host. Endpoint
-//! roles and exact support incidence then derive through-hole, outward-boss,
-//! and inward-pocket winding without an operation or feature-count tag.
+//! roles and resolution-bounded support incidence then derive through-hole,
+//! outward-boss, and inward-pocket winding without operation/layout tags.
 
 use super::*;
 use kcore::error::Error;
@@ -430,7 +430,17 @@ fn certify_band_in_host(
                     Sense::Reversed
                 }
                 || cap_outward != port_outward;
-            if !outward && !certify_inward_sweep(store, band, port, cap, host_facets)? {
+            if outward {
+                let SurfaceGeom::Plane(plane) = store.get(port_face.surface)? else {
+                    return Ok(None);
+                };
+                let support_outward = plane.frame().z() * sense_factor(port_face.sense);
+                if interval_vector_dot(support_outward, cap.center - plane.frame().origin()).lo()
+                    <= LINEAR_RESOLUTION
+                {
+                    return Ok(None);
+                }
+            } else if !certify_inward_sweep(store, band, port, cap, host_facets)? {
                 return Ok(None);
             }
         }
@@ -472,14 +482,10 @@ fn certify_port_to_port_sweep(
             } else {
                 (band.high.center, band.low.center)
             };
-            if exact_affine_sign(outward, incident, plane.frame().origin())
-                != Some(PredicateOrientation::Zero)
-                || exact_affine_sign(outward, opposite, plane.frame().origin())
-                    != Some(PredicateOrientation::Negative)
-                || exact_vector_dot(outward, band.cylinder.frame().x())
-                    != Some(PredicateOrientation::Zero)
-                || exact_vector_dot(outward, band.cylinder.frame().y())
-                    != Some(PredicateOrientation::Zero)
+            if !support_incident_within_resolution(outward, incident, plane.frame().origin())
+                || interval_vector_dot(outward, opposite - plane.frame().origin()).hi()
+                    >= -LINEAR_RESOLUTION
+                || !axis_is_support_normal(band.cylinder, outward)
             {
                 return Ok(false);
             }
@@ -506,14 +512,10 @@ fn certify_inward_sweep(
         };
         let outward = plane.frame().z() * sense_factor(face.sense);
         if *face_id == port.planar_face {
-            if exact_affine_sign(outward, port.center, plane.frame().origin())
-                != Some(PredicateOrientation::Zero)
-                || exact_affine_sign(outward, cap.center, plane.frame().origin())
-                    != Some(PredicateOrientation::Negative)
-                || exact_vector_dot(outward, band.cylinder.frame().x())
-                    != Some(PredicateOrientation::Zero)
-                || exact_vector_dot(outward, band.cylinder.frame().y())
-                    != Some(PredicateOrientation::Zero)
+            if !support_incident_within_resolution(outward, port.center, plane.frame().origin())
+                || interval_vector_dot(outward, cap.center - plane.frame().origin()).hi()
+                    >= -LINEAR_RESOLUTION
+                || !axis_is_support_normal(band.cylinder, outward)
             {
                 return Ok(false);
             }
@@ -573,6 +575,19 @@ fn interval_vector_dot(left: Vec3, right: Vec3) -> Interval {
     Interval::point(left.x) * Interval::point(right.x)
         + Interval::point(left.y) * Interval::point(right.y)
         + Interval::point(left.z) * Interval::point(right.z)
+}
+
+fn support_incident_within_resolution(normal: Vec3, point: Point3, origin: Point3) -> bool {
+    let projection = interval_vector_dot(normal, point - origin);
+    projection.lo() >= -LINEAR_RESOLUTION && projection.hi() <= LINEAR_RESOLUTION
+}
+
+fn axis_is_support_normal(cylinder: Cylinder, normal: Vec3) -> bool {
+    let axis = cylinder.frame().z();
+    normal == axis
+        || normal == axis * -1.0
+        || exact_vector_dot(normal, cylinder.frame().x()) == Some(PredicateOrientation::Zero)
+            && exact_vector_dot(normal, cylinder.frame().y()) == Some(PredicateOrientation::Zero)
 }
 
 fn bands_are_pairwise_separated(bands: &[BandEvidence]) -> bool {
@@ -684,11 +699,11 @@ fn host_cylinder_ring_boundary(
     if circle.radius() != cylinder.radius()
         || exact_axis_alignment(cylinder.frame(), circle.frame().z()).is_none()
         || !certified_point_on_axis(cylinder.frame(), circle.frame().origin())
-        || exact_affine_sign(
+        || !support_incident_within_resolution(
             plane.frame().z(),
             circle.frame().origin(),
             plane.frame().origin(),
-        ) != Some(PredicateOrientation::Zero)
+        )
     {
         return Ok(None);
     }

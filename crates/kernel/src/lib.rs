@@ -8,8 +8,9 @@
 //! evaluation, certified convex-planar plus axial, zero-cut whole-source and
 //! contained-cylinder cavity, one-ring connected-union/blind-pocket, two-port
 //! through-hole, two-ring two-sided connected-union, inverse-containment
-//! convex-planar cavity, and support-separated exact-contact empty
-//! intersections, and typed X_T import/export plus
+//! convex-planar cavity, support-separated exact-contact empty intersections,
+//! certified flush axial cap-contact connected union, and typed X_T
+//! import/export plus
 //! graph-owned bounded curve intersection
 //! with F2 reports and delegated classified errors. Rigid copies own disjoint
 //! topology and geometry closures and retain exact `DerivedFrom` lineage. Committed

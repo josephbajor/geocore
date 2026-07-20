@@ -20,6 +20,8 @@ use kernel::{
 
 #[path = "lifecycle/curved_cavity.rs"]
 mod curved_cavity;
+#[path = "lifecycle/curved_constructive_contact.rs"]
+mod curved_constructive_contact;
 #[path = "lifecycle/curved_inverse_cavity.rs"]
 mod curved_inverse_cavity;
 #[path = "lifecycle/curved_one_port_budget.rs"]

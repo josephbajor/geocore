@@ -2,8 +2,9 @@
 //!
 //! A proposal contains one convex planar host and one or more finite analytic
 //! cylinder bands. Each band endpoint is declared as either a host port or a
-//! closing cap. Exact support incidence maps the unordered declarations onto
-//! the geometric low/high endpoints and derives the only admissible winding:
+//! closing cap. Support incidence is exact for unbound planes and resolution-
+//! bounded for structurally bound planes. It maps declarations onto geometric
+//! endpoints and derives the only admissible winding:
 //! one-port bands may point outward or inward, while two-port bands are
 //! reversed void boundaries. Multiple bands are admitted only when their
 //! cylinders are exactly coaxial and their closed axial intervals are
@@ -12,6 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::convex_containment::certify_convex_planar_input;
 use crate::cylindrical_boss::{PreparedPlanarRingUse, PreparedRing};
 use crate::entity::{BodyId, EdgeId, EntityRef, Face, FaceDomain, FaceId, Sense, ShellId};
 use crate::geom::SurfaceGeom;
@@ -21,7 +23,7 @@ use crate::transaction::Transaction;
 use kcore::error::{Error, Result};
 use kcore::interval::Interval;
 use kcore::predicates::{Orientation, affine_dot3};
-use kcore::tolerance::check_in_size_box;
+use kcore::tolerance::{LINEAR_RESOLUTION, check_in_size_box};
 use kgeom::curve::{Circle, Curve};
 use kgeom::curve2d::{Circle2d, Line2d};
 use kgeom::frame::Frame;
@@ -31,10 +33,9 @@ use kgeom::vec::{Point2, Point3, Vec2, Vec3};
 
 /// Semantic role of one finite-band endpoint.
 ///
-/// The two declarations on a band are unordered. Exact preflight maps every
-/// port support onto one geometric endpoint; a cap occupies the remaining
-/// endpoint. This preserves compatibility with callers whose source face
-/// discovery order is unrelated to cylinder parameter order.
+/// Declarations are unordered. Unbound port incidence is exact; structurally
+/// bound planes admit a conservative [`LINEAR_RESOLUTION`] envelope. A cap
+/// occupies the remaining endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CylindricalHostEndpoint {
     /// Complete circular attachment to one convex host face.
@@ -207,19 +208,7 @@ impl CylindricalHostPreflightWork {
 pub fn cylindrical_host_preflight_work(
     input: &CylindricalHostSolidInput,
 ) -> Result<CylindricalHostPreflightWork> {
-    let faces = as_u64(input.host.faces().len())?;
-    let vertices = as_u64(input.host.vertices().len())?;
-    let bands = as_u64(input.bands.len())?;
-    let host_vertex_face_pairs = faces.checked_mul(vertices).ok_or_else(work_overflow)?;
-    let endpoint_support_pairs = faces
-        .checked_mul(bands)
-        .and_then(|value| value.checked_mul(2))
-        .ok_or_else(work_overflow)?;
-    let band_pairs = bands
-        .checked_mul(bands.saturating_sub(1))
-        .and_then(|value| value.checked_div(2))
-        .ok_or_else(work_overflow)?;
-    let mut port_boundary_uses = 0_u64;
+    let mut port_boundary_uses = 0_usize;
     for endpoint in input.bands.iter().flat_map(|band| band.endpoints) {
         if let CylindricalHostEndpoint::Port { host_face } = endpoint {
             let face = input
@@ -230,10 +219,43 @@ pub fn cylindrical_host_preflight_work(
                     reason: "cylindrical-host port face index is invalid",
                 })?;
             port_boundary_uses = port_boundary_uses
-                .checked_add(as_u64(face.vertices().len())?)
+                .checked_add(face.vertices().len())
                 .ok_or_else(work_overflow)?;
         }
     }
+    cylindrical_host_dimension_work(
+        input.host.faces().len(),
+        input.host.vertices().len(),
+        input.bands.len(),
+        port_boundary_uses,
+    )
+}
+
+/// Return generalized-host work from already-admitted source dimensions.
+///
+/// This allocation-free admission seam uses the same
+/// `F*V + 2*F*B + B*(B-1)/2 + P + 16*B` formula as
+/// [`cylindrical_host_preflight_work`]. `P` is the caller-certified total
+/// boundary-use count across every declared port.
+pub fn cylindrical_host_dimension_work(
+    host_faces: usize,
+    host_vertices: usize,
+    band_count: usize,
+    port_boundary_uses: usize,
+) -> Result<CylindricalHostPreflightWork> {
+    let faces = as_u64(host_faces)?;
+    let vertices = as_u64(host_vertices)?;
+    let bands = as_u64(band_count)?;
+    let port_boundary_uses = as_u64(port_boundary_uses)?;
+    let host_vertex_face_pairs = faces.checked_mul(vertices).ok_or_else(work_overflow)?;
+    let endpoint_support_pairs = faces
+        .checked_mul(bands)
+        .and_then(|value| value.checked_mul(2))
+        .ok_or_else(work_overflow)?;
+    let band_pairs = bands
+        .checked_mul(bands.saturating_sub(1))
+        .and_then(|value| value.checked_div(2))
+        .ok_or_else(work_overflow)?;
     let band_linear_work = bands.checked_mul(16).ok_or_else(work_overflow)?;
     let total = host_vertex_face_pairs
         .checked_add(endpoint_support_pairs)
@@ -358,7 +380,7 @@ impl PreparedCylindricalHost {
         }
         let _work = cylindrical_host_preflight_work(input)?;
         let host = PreparedSolid::new(&input.host, store)?;
-        certify_convex_host(&input.host, &host, store)?;
+        certify_convex_planar_input(&input.host, &host, store)?;
 
         let mut ports = BTreeSet::new();
         for endpoint in input.bands.iter().flat_map(|band| band.endpoints) {
@@ -463,9 +485,8 @@ impl PreparedBand {
             let Some((plane, sense)) = host.face_plane(host_face, store)? else {
                 return invalid("cylindrical-host port face index is invalid");
             };
-            if exact_dot(plane.frame().x(), frame.z())? != Orientation::Zero
-                || exact_dot(plane.frame().y(), frame.z())? != Orientation::Zero
-            {
+            let bound_support = host_input.faces()[host_face].plane_binding().is_some();
+            if !axis_is_port_normal(plane.frame(), &frame, bound_support)? {
                 return invalid(
                     "cylindrical-host band axis must be perpendicular to every port plane",
                 );
@@ -474,15 +495,19 @@ impl PreparedBand {
             let signs = centers.map(|center| exact_affine(outward, center, plane.frame().origin()));
             let [low, high] = signs;
             let [low, high] = [low?, high?];
-            let endpoint = match (low, high) {
+            let exact_endpoint = match (low, high) {
                 (Orientation::Zero, sign) if sign != Orientation::Zero => 0,
                 (sign, Orientation::Zero) if sign != Orientation::Zero => 1,
-                _ => {
-                    return invalid(
-                        "each cylindrical-host port must support exactly one band endpoint",
-                    );
-                }
+                _ => usize::MAX,
             };
+            let endpoint = if bound_support {
+                resolution_port_endpoint(outward, plane.frame().origin(), centers)
+            } else {
+                (exact_endpoint < 2).then_some(exact_endpoint)
+            }
+            .ok_or(Error::InvalidGeometry {
+                reason: "each cylindrical-host port must support exactly one band endpoint",
+            })?;
             if endpoint_ports[endpoint].replace(host_face).is_some() {
                 return invalid("cylindrical-host ports must map to distinct band endpoints");
             }
@@ -709,35 +734,6 @@ impl Transaction<'_> {
     }
 }
 
-fn certify_convex_host(
-    input: &PlanarSolidInput,
-    prepared: &PreparedSolid,
-    store: &crate::store::Store,
-) -> Result<()> {
-    for index in 0..input.faces().len() {
-        let (plane, sense) = prepared
-            .face_plane(index, store)?
-            .ok_or(Error::InvalidGeometry {
-                reason: "cylindrical-host face disappeared during preflight",
-            })?;
-        let outward = plane.frame().z() * if sense.is_forward() { 1.0 } else { -1.0 };
-        let mut strictly_inside = false;
-        for vertex in input.vertices() {
-            match exact_affine(outward, vertex.position(), plane.frame().origin())? {
-                Orientation::Negative => strictly_inside = true,
-                Orientation::Zero => {}
-                Orientation::Positive => {
-                    return invalid("cylindrical-host planar host must be globally convex");
-                }
-            }
-        }
-        if !strictly_inside {
-            return invalid("cylindrical-host face must support a bounded convex solid");
-        }
-    }
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 fn certify_complete_sweep_containment(
     input: &PlanarSolidInput,
@@ -760,12 +756,18 @@ fn certify_complete_sweep_containment(
             .find(|(_, host_face)| *host_face == index)
         {
             let other = 1 - *endpoint;
-            if exact_affine(outward, centers[*endpoint], plane.frame().origin())?
-                != Orientation::Zero
-                || exact_affine(outward, centers[other], plane.frame().origin())?
-                    != Orientation::Negative
-                || exact_dot(outward, frame.x())? != Orientation::Zero
-                || exact_dot(outward, frame.y())? != Orientation::Zero
+            let bound_support = input.faces()[index].plane_binding().is_some();
+            if !(exact_affine(outward, centers[*endpoint], plane.frame().origin())?
+                == Orientation::Zero
+                || bound_support
+                    && within_resolution(support_projection(
+                        outward,
+                        centers[*endpoint],
+                        plane.frame().origin(),
+                    )))
+                || support_projection(outward, centers[other], plane.frame().origin()).hi()
+                    >= -LINEAR_RESOLUTION
+                || !axis_is_port_normal(plane.frame(), &frame, bound_support)?
             {
                 return invalid("cylindrical-host inward sweep must enter every port support");
             }
@@ -920,6 +922,41 @@ fn exact_affine(normal: Vec3, point: Point3, origin: Point3) -> Result<Orientati
         })
 }
 
+fn axis_is_port_normal(plane: &Frame, cylinder: &Frame, bound_support: bool) -> Result<bool> {
+    if exact_dot(plane.x(), cylinder.z())? == Orientation::Zero
+        && exact_dot(plane.y(), cylinder.z())? == Orientation::Zero
+    {
+        return Ok(true);
+    }
+    if !bound_support {
+        return Ok(false);
+    }
+    let shared_axis = plane.z() == cylinder.z() || plane.z() == cylinder.z() * -1.0;
+    Ok(shared_axis
+        || exact_dot(plane.z(), cylinder.x())? == Orientation::Zero
+            && exact_dot(plane.z(), cylinder.y())? == Orientation::Zero)
+}
+
+fn resolution_port_endpoint(outward: Vec3, origin: Point3, centers: [Point3; 2]) -> Option<usize> {
+    let projections = centers.map(|center| support_projection(outward, center, origin));
+    let incident = projections.map(within_resolution);
+    let endpoint = match incident {
+        [true, false] => 0,
+        [false, true] => 1,
+        _ => return None,
+    };
+    let far = projections[1 - endpoint];
+    (far.lo() > LINEAR_RESOLUTION || far.hi() < -LINEAR_RESOLUTION).then_some(endpoint)
+}
+
+fn support_projection(normal: Vec3, point: Point3, origin: Point3) -> Interval {
+    interval_dot(normal, point - origin)
+}
+
+fn within_resolution(projection: Interval) -> bool {
+    projection.lo() >= -LINEAR_RESOLUTION && projection.hi() <= LINEAR_RESOLUTION
+}
+
 fn interval_dot(left: Vec3, right: Vec3) -> Interval {
     Interval::point(left.x) * Interval::point(right.x)
         + Interval::point(left.y) * Interval::point(right.y)
@@ -950,24 +987,40 @@ fn invalid<T>(reason: &'static str) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::check::CheckOutcome;
     use crate::entity::{
         Body, Edge as RawEdge, Face as RawFace, Fin as RawFin, Loop as RawLoop, Region, Shell,
         Vertex as RawVertex,
     };
-    use crate::planar::{PlanarSolidFace, PlanarSolidVertex, PlanarVertexKey};
+    use crate::planar::{
+        PlanarFacePlaneBinding, PlanarSolidFace, PlanarSolidVertex, PlanarVertexKey,
+    };
     use crate::store::Store;
-    use crate::transaction::LineageEvent;
+    use crate::transaction::{FullCommitRequirement, LineageEvent};
+
+    const CUBE_RINGS: [[usize; 4]; 6] = [
+        [0, 2, 3, 1],
+        [4, 5, 7, 6],
+        [0, 1, 5, 4],
+        [2, 6, 7, 3],
+        [0, 4, 6, 2],
+        [1, 3, 7, 5],
+    ];
 
     fn cube(sources: Option<[FaceId; 6]>) -> PlanarSolidInput {
+        cube_in_frame(Frame::world(), sources)
+    }
+
+    fn cube_in_frame(frame: Frame, sources: Option<[FaceId; 6]>) -> PlanarSolidInput {
         let points = [
-            Point3::new(-1.0, -1.0, -1.0),
-            Point3::new(1.0, -1.0, -1.0),
-            Point3::new(-1.0, 1.0, -1.0),
-            Point3::new(1.0, 1.0, -1.0),
-            Point3::new(-1.0, -1.0, 1.0),
-            Point3::new(1.0, -1.0, 1.0),
-            Point3::new(-1.0, 1.0, 1.0),
-            Point3::new(1.0, 1.0, 1.0),
+            frame.point_at(-1.0, -1.0, -1.0),
+            frame.point_at(1.0, -1.0, -1.0),
+            frame.point_at(-1.0, 1.0, -1.0),
+            frame.point_at(1.0, 1.0, -1.0),
+            frame.point_at(-1.0, -1.0, 1.0),
+            frame.point_at(1.0, -1.0, 1.0),
+            frame.point_at(-1.0, 1.0, 1.0),
+            frame.point_at(1.0, 1.0, 1.0),
         ];
         let keys = core::array::from_fn::<_, 8, _>(|index| PlanarVertexKey::new(index as u64));
         let vertices = keys
@@ -975,24 +1028,56 @@ mod tests {
             .zip(points)
             .map(|(key, point)| PlanarSolidVertex::new(key, point))
             .collect();
-        let faces = [
-            [0, 2, 3, 1],
-            [4, 5, 7, 6],
-            [0, 1, 5, 4],
-            [2, 6, 7, 3],
-            [0, 4, 6, 2],
-            [1, 3, 7, 5],
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(index, ring)| {
-            let face = PlanarSolidFace::new(ring.map(|vertex| keys[vertex]).to_vec());
-            sources.map_or(face.clone(), |sources| {
-                face.with_source(EntityRef::Face(sources[index]))
+        let faces = CUBE_RINGS
+            .into_iter()
+            .enumerate()
+            .map(|(index, ring)| {
+                let face = PlanarSolidFace::new(ring.map(|vertex| keys[vertex]).to_vec());
+                sources.map_or(face.clone(), |sources| {
+                    face.with_source(EntityRef::Face(sources[index]))
+                })
             })
-        })
-        .collect();
+            .collect();
         PlanarSolidInput::new(vertices, faces)
+    }
+
+    fn bound_cube_in_frame(store: &mut Store, frame: Frame) -> PlanarSolidInput {
+        let source = crate::make::block(store, &frame, [2.0; 3]).unwrap();
+        let surfaces = store
+            .faces_of_body(source)
+            .unwrap()
+            .into_iter()
+            .map(|face| store.get(face).unwrap().surface())
+            .collect::<Vec<_>>();
+        let input = cube_in_frame(frame, None);
+        let faces = input
+            .faces()
+            .iter()
+            .enumerate()
+            .map(|(face_index, face)| {
+                let carriers = (0..CUBE_RINGS[face_index].len())
+                    .map(|edge_index| {
+                        let a = CUBE_RINGS[face_index][edge_index];
+                        let b =
+                            CUBE_RINGS[face_index][(edge_index + 1) % CUBE_RINGS[face_index].len()];
+                        let other = CUBE_RINGS
+                            .iter()
+                            .enumerate()
+                            .find(|(candidate_index, candidate)| {
+                                *candidate_index != face_index
+                                    && candidate.contains(&a)
+                                    && candidate.contains(&b)
+                            })
+                            .unwrap()
+                            .0;
+                        surfaces[other]
+                    })
+                    .collect();
+                PlanarSolidFace::new(face.vertices().to_vec())
+                    .with_plane_binding(PlanarFacePlaneBinding::new(surfaces[face_index], carriers))
+            })
+            .collect();
+        PlanarSolidInput::new(input.vertices().to_vec(), faces)
     }
 
     fn two_ended(
@@ -1042,6 +1127,57 @@ mod tests {
             store.count::<RawEdge>(),
             store.count::<RawVertex>(),
         ]
+    }
+
+    #[test]
+    fn dimension_work_matches_exact_formula_and_input_preflight() {
+        let one_band = cylindrical_host_dimension_work(6, 8, 1, 4).unwrap();
+        assert_eq!(
+            [
+                one_band.host_vertex_face_pairs(),
+                one_band.endpoint_support_pairs(),
+                one_band.band_pairs(),
+                one_band.port_boundary_uses(),
+                one_band.band_linear_work(),
+                one_band.total(),
+            ],
+            [48, 12, 0, 4, 16, 80]
+        );
+        let two_bands = cylindrical_host_dimension_work(6, 8, 2, 8).unwrap();
+        assert_eq!(
+            [
+                two_bands.host_vertex_face_pairs(),
+                two_bands.endpoint_support_pairs(),
+                two_bands.band_pairs(),
+                two_bands.port_boundary_uses(),
+                two_bands.band_linear_work(),
+                two_bands.total(),
+            ],
+            [48, 24, 1, 8, 32, 113]
+        );
+        assert_eq!(
+            cylindrical_host_preflight_work(&two_ended(None, None)).unwrap(),
+            two_bands
+        );
+    }
+
+    #[test]
+    fn dimension_work_fails_closed_on_overflow() {
+        for dimensions in [
+            (usize::MAX, usize::MAX, 1, 0),
+            (usize::MAX, 0, usize::MAX, 0),
+        ] {
+            assert!(
+                cylindrical_host_dimension_work(
+                    dimensions.0,
+                    dimensions.1,
+                    dimensions.2,
+                    dimensions.3,
+                )
+                .is_err(),
+                "dimensions {dimensions:?} must overflow"
+            );
+        }
     }
 
     #[test]
@@ -1187,6 +1323,75 @@ mod tests {
                 expected_sense
             );
         }
+    }
+
+    #[test]
+    fn off_center_oblique_one_port_host_is_full_valid() {
+        let frame = Frame::new(
+            Point3::new(3.0, -2.0, 1.25),
+            Vec3::new(0.0, 0.6, 0.8),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let mut store = Store::new();
+        let band = CylindricalHostBandInput::new(
+            frame.with_origin(frame.point_at(0.5, -0.25, 1.0)),
+            0.25,
+            ParamRange::new(0.0, 1.5),
+            [
+                CylindricalHostEndpoint::port(1),
+                CylindricalHostEndpoint::cap(),
+            ],
+        );
+        let input =
+            CylindricalHostSolidInput::new(bound_cube_in_frame(&mut store, frame), vec![band]);
+        assert_eq!(cylindrical_host_preflight_work(&input).unwrap().total(), 80);
+
+        let before = topology_counts(&store);
+        let mut transaction = store.transaction().unwrap();
+        let output = transaction.assemble_cylindrical_host_solid(&input).unwrap();
+        let after = topology_counts(transaction.store());
+        for (index, expected) in [1, 2, 1, 8, 10, 28, 14, 8].into_iter().enumerate() {
+            assert_eq!(after[index] - before[index], expected);
+        }
+        let decision = transaction
+            .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
+            .unwrap();
+        assert!(decision.is_committed(), "checks: {:?}", decision.checks());
+        assert!(decision.checks().iter().all(|check| {
+            check.report().outcome() == CheckOutcome::Valid && check.report().gaps.is_empty()
+        }));
+    }
+
+    #[test]
+    fn bound_port_beyond_resolution_envelope_is_rejected_atomically() {
+        let frame = Frame::new(
+            Point3::new(3.0, -2.0, 1.25),
+            Vec3::new(0.0, 0.6, 0.8),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let mut store = Store::new();
+        let band = CylindricalHostBandInput::new(
+            frame.with_origin(frame.point_at(0.5, -0.25, 1.0 + 4.0 * LINEAR_RESOLUTION)),
+            0.25,
+            ParamRange::new(0.0, 1.5),
+            [
+                CylindricalHostEndpoint::port(1),
+                CylindricalHostEndpoint::cap(),
+            ],
+        );
+        let input =
+            CylindricalHostSolidInput::new(bound_cube_in_frame(&mut store, frame), vec![band]);
+        let before = topology_counts(&store);
+        let mut transaction = store.transaction().unwrap();
+        assert!(matches!(
+            transaction.assemble_cylindrical_host_solid(&input),
+            Err(Error::InvalidGeometry {
+                reason: "each cylindrical-host port must support exactly one band endpoint"
+            })
+        ));
+        assert_eq!(topology_counts(transaction.store()), before);
     }
 
     #[test]

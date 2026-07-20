@@ -18,8 +18,9 @@ The current facade supports:
   copies and contained-cylinder cavities, one-ring axial cap-overlap connected
   union, one-ring axial block-minus-cylinder blind pockets, two-port axial
   through-holes, two-ring two-sided connected unions, inverse-containment
-  convex-planar cavities, and support-separated axial exact-contact empty
-  intersections, with typed empty/created/refused outcomes and Full validation;
+  convex-planar cavities, support-separated axial exact-contact empty
+  intersections, and certified flush axial cap-contact connected unions, with
+  typed empty/created/refused outcomes and Full validation;
 - atomic typed X_T import and deterministic X_T export; and
 - deterministic facade-ID mutation, lineage, and tolerance journal iteration;
   and
