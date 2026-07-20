@@ -117,6 +117,11 @@ impl<K, F> SelectedBoundaryFragment<K, F> {
         self.orientation
     }
 
+    /// Representation payload retained for topology recognition.
+    pub(crate) const fn fragment(&self) -> &F {
+        &self.fragment
+    }
+
     pub(crate) fn into_parts(self) -> (K, OperandSide, F, SelectedOrientation) {
         (self.key, self.operand, self.fragment, self.orientation)
     }

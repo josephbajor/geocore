@@ -4,16 +4,16 @@
 //! decide where fragment witness points sit relative to the operand bodies,
 //! and that decision must be certified or honestly refused — never guessed.
 //!
-//! The algorithm is general over topology (any loop structure, any number of
-//! shells, holes, non-convex boundaries). Metric decisions use conservative
-//! interval filters; combinatorial decisions (trim containment, ray-crossing
-//! parity) use the exact `orient2d`/`orient3d` predicates on stored vertex
+//! The algorithm is topology-driven rather than constructor-driven. Metric
+//! decisions use conservative interval filters; combinatorial decisions (trim
+//! containment and ray-crossing parity) use the exact `orient2d`/`orient3d`
+//! predicates on stored vertex
 //! coordinates, never on derived intersection points. The certified slice
-//! covers polygonal planar faces, full-circle planar trims, and finite
-//! full-period cylindrical bands with whole-edge analytic incidence bounds.
-//! Solid parity additionally covers general bodies composed of coaxial
-//! admitted cylinder bands and circular planar faces through a certified
-//! common-axis ray. Every other configuration returns
+//! covers polygonal planar faces, full-circle planar trims, one convex polygon
+//! with a strictly contained circular hole, and finite full-period cylindrical
+//! bands with whole-edge analytic incidence bounds. Solid parity additionally
+//! covers admitted planar/cylindrical mixtures through a certified common-axis
+//! ray. Every other configuration returns
 //! [`PointFaceVerdict::Indeterminate`] /
 //! [`PointBodyVerdict::Indeterminate`] with a stable reason instead of an
 //! uncertified answer.
@@ -33,6 +33,7 @@ use kcore::operation::{
     AccountingMode, BudgetPlan, LimitSpec, OperationScope, ResourceKind, StageId,
 };
 use kcore::predicates::{Orientation, orient2d, orient3d, polygon_orientation2d_iter};
+use kgeom::curve::Circle;
 use kgeom::vec::Point3;
 use ktopo::entity::{
     BodyKind, EdgeId as RawEdgeId, FaceId as RawFaceId, Loop, RegionKind, VertexId as RawVertexId,
@@ -491,6 +492,10 @@ struct PreparedFace {
     normal: [f64; 3],
     normal_sq: Interval,
     loops: Vec<PreparedLoop>,
+    /// Strictly contained full-circle holes on an otherwise polygonal plane
+    /// face. The current admitted mixed layout is one convex polygon and one
+    /// topology-owned circle; broader curved loop arrangements fail closed.
+    circle_rings: Vec<curved::CircleRing>,
     /// Metric half-width of the on-surface band (session linear resolution).
     on_tol: f64,
     /// Conservative half-width outside which off-face is certified: covers
@@ -568,11 +573,30 @@ fn prepare_face(
 
     charge(scope, face.loops().len() as u64)?;
     let mut loops = Vec::with_capacity(face.loops().len());
+    let mut circle_rings = Vec::new();
     let mut max_elem_tol = linear;
     let mut deviation_sq_hi: f64 = 0.0;
     for &loop_id in face.loops() {
         let ring = read(store.get::<Loop>(loop_id))?;
         charge(scope, ring.fins().len() as u64)?;
+        if let [fin_id] = ring.fins() {
+            let fin = read(store.get(*fin_id))?;
+            let edge = read(store.get(fin.edge))?;
+            if edge
+                .curve
+                .is_some_and(|curve| matches!(store.curve(curve), Ok(CurveGeom::Circle(_))))
+            {
+                let Some(circle) = curved::prepare_planar_circle_ring(
+                    store, raw, loop_id, *fin_id, linear, scope,
+                )?
+                else {
+                    return Ok(PrepOutcome::Gap(curved::GAP_CIRCULAR_PLANE_TRIM));
+                };
+                max_elem_tol = max_elem_tol.max(circle.edge_tol);
+                circle_rings.push(circle);
+                continue;
+            }
+        }
         let mut vertices = Vec::with_capacity(ring.fins().len());
         for &fin_id in ring.fins() {
             let fin = read(store.get(fin_id))?;
@@ -580,7 +604,26 @@ fn prepare_face(
             let Some(curve_id) = edge.curve else {
                 return Ok(PrepOutcome::Gap(GAP_LINE_EDGES_ONLY));
             };
-            if !matches!(read(store.curve(curve_id))?, CurveGeom::Line(_)) {
+            let curve = read(store.curve(curve_id))?;
+            let verified_plane_line = curve.as_intersection().is_some_and(|intersection| {
+                let Some(certificate) = intersection.certificate().as_plane_line() else {
+                    return false;
+                };
+                let Some(bounds) = edge.bounds else {
+                    return false;
+                };
+                let sources = intersection.source_surfaces();
+                sources[0] != sources[1]
+                    && sources.contains(&face.surface)
+                    && certificate.carrier_range().lo == bounds.0
+                    && certificate.carrier_range().hi == bounds.1
+                    && certificate.tolerance() <= linear
+                    && certificate
+                        .residual_bounds()
+                        .into_iter()
+                        .all(|bound| bound.is_finite() && bound <= linear)
+            });
+            if !matches!(curve, CurveGeom::Line(_)) && !verified_plane_line {
                 return Ok(PrepOutcome::Gap(GAP_LINE_EDGES_ONLY));
             }
             let tail = if fin.sense.is_forward() {
@@ -624,6 +667,13 @@ fn prepare_face(
     let Some(drop_axis) = choose_drop_axis(&loops) else {
         return Ok(PrepOutcome::Gap(GAP_DEGENERATE_PROJECTION));
     };
+    if !circle_rings.is_empty()
+        && (loops.len() != 1
+            || circle_rings.len() != 1
+            || !certify_convex_polygon_circle_hole(&loops[0], circle_rings[0].circle, drop_axis))
+    {
+        return Ok(PrepOutcome::Gap(curved::GAP_CIRCULAR_PLANE_TRIM));
+    }
     Ok(PrepOutcome::Ready(PreparedBoundaryFace::Planar(
         PreparedFace {
             raw,
@@ -631,6 +681,7 @@ fn prepare_face(
             normal,
             normal_sq,
             loops,
+            circle_rings,
             on_tol: linear,
             guard,
             drop_axis,
@@ -666,6 +717,14 @@ fn project(point: [f64; 3], drop_axis: usize) -> [f64; 2] {
     }
 }
 
+fn project_intervals(point: [Interval; 3], drop_axis: usize) -> [Interval; 2] {
+    match drop_axis {
+        0 => [point[1], point[2]],
+        1 => [point[0], point[2]],
+        _ => [point[0], point[1]],
+    }
+}
+
 /// Pick the dropped axis with the largest projected outer-loop area whose
 /// projection keeps every loop's exact polygon orientation nonzero.
 fn choose_drop_axis(loops: &[PreparedLoop]) -> Option<usize> {
@@ -691,6 +750,76 @@ fn choose_drop_axis(loops: &[PreparedLoop]) -> Option<usize> {
         }
     }
     None
+}
+
+/// Prove that one full circle is a strict hole of one convex polygon.
+///
+/// The proof is performed in the same exact projection used by polygon trim
+/// classification. Exact orientation establishes a consistently convex outer
+/// ring. Outward-rounded determinant intervals then keep the circle's complete
+/// projected ellipse strictly inside every polygon half-plane; no sampling of
+/// the circle is involved.
+fn certify_convex_polygon_circle_hole(
+    polygon: &PreparedLoop,
+    circle: Circle,
+    drop_axis: usize,
+) -> bool {
+    let vertices = &polygon.vertices;
+    if vertices.len() < 3 {
+        return false;
+    }
+    let orientation = polygon_orientation2d_iter(
+        vertices
+            .iter()
+            .map(|vertex| project(vertex.point, drop_axis)),
+    );
+    if orientation == Orientation::Zero {
+        return false;
+    }
+    for index in 0..vertices.len() {
+        let before = project(
+            vertices[(index + vertices.len() - 1) % vertices.len()].point,
+            drop_axis,
+        );
+        let current = project(vertices[index].point, drop_axis);
+        let after = project(vertices[(index + 1) % vertices.len()].point, drop_axis);
+        if orient2d(before, current, after) != orientation {
+            return false;
+        }
+    }
+
+    let center = project(circle.frame().origin().to_array(), drop_axis);
+    let x = project(circle.frame().x().to_array(), drop_axis);
+    let y = project(circle.frame().y().to_array(), drop_axis);
+    for index in 0..vertices.len() {
+        let start = project(vertices[index].point, drop_axis);
+        let end = project(vertices[(index + 1) % vertices.len()].point, drop_axis);
+        if orient2d(start, end, center) != orientation {
+            return false;
+        }
+        let edge = [
+            Interval::point(end[0]) - Interval::point(start[0]),
+            Interval::point(end[1]) - Interval::point(start[1]),
+        ];
+        let center_offset = [
+            Interval::point(center[0]) - Interval::point(start[0]),
+            Interval::point(center[1]) - Interval::point(start[1]),
+        ];
+        let mut center_det = edge[0] * center_offset[1] - edge[1] * center_offset[0];
+        let x_det = edge[0] * Interval::point(x[1]) - edge[1] * Interval::point(x[0]);
+        let y_det = edge[0] * Interval::point(y[1]) - edge[1] * Interval::point(y[0]);
+        let Some(amplitude) = (x_det.square() + y_det.square()).sqrt() else {
+            return false;
+        };
+        let amplitude = amplitude * Interval::point(circle.radius());
+        if orientation == Orientation::Negative {
+            center_det = -center_det;
+        }
+        if center_det.lo() <= amplitude.hi() {
+            return false;
+        }
+    }
+    true
 }
 
 enum BandOutcome {
@@ -830,11 +959,63 @@ fn winding_parity(face: &PreparedFace, point: [f64; 3]) -> WindingOutcome {
             }
         }
     }
-    if crossings % 2 == 1 {
-        WindingOutcome::Inside
-    } else {
-        WindingOutcome::Outside
+    let polygon_inside = crossings % 2 == 1;
+    match curved::circular_trim_parity(&face.circle_rings, point) {
+        curved::TrimParity::Inside if polygon_inside => WindingOutcome::Outside,
+        curved::TrimParity::Inside => WindingOutcome::Inside,
+        curved::TrimParity::Outside if polygon_inside => WindingOutcome::Inside,
+        curved::TrimParity::Outside => WindingOutcome::Outside,
+        curved::TrimParity::Gap => WindingOutcome::Gap,
     }
+}
+
+/// Interval half-plane containment for the one convex polygon admitted on a
+/// mixed polygon/circle plane. The point is the certified intersection of a
+/// line with that plane, so its projected coordinates remain intervals; a
+/// contact with any supporting line fails closed instead of being rounded to
+/// either side.
+fn convex_polygon_parity_at_line(
+    face: &PreparedFace,
+    point: [f64; 3],
+    direction: [f64; 3],
+    t: Interval,
+) -> WindingOutcome {
+    let [ring] = face.loops.as_slice() else {
+        return WindingOutcome::Gap;
+    };
+    let orientation = polygon_orientation2d_iter(
+        ring.vertices
+            .iter()
+            .map(|vertex| project(vertex.point, face.drop_axis)),
+    );
+    if orientation == Orientation::Zero {
+        return WindingOutcome::Gap;
+    }
+    let hit = project_intervals(
+        core::array::from_fn(|axis| {
+            Interval::point(point[axis]) + Interval::point(direction[axis]) * t
+        }),
+        face.drop_axis,
+    );
+    for index in 0..ring.vertices.len() {
+        let start = project(ring.vertices[index].point, face.drop_axis);
+        let end = project(
+            ring.vertices[(index + 1) % ring.vertices.len()].point,
+            face.drop_axis,
+        );
+        let determinant = (Interval::point(end[0]) - Interval::point(start[0]))
+            * (hit[1] - Interval::point(start[1]))
+            - (Interval::point(end[1]) - Interval::point(start[1]))
+                * (hit[0] - Interval::point(start[0]));
+        match orientation {
+            Orientation::Positive if determinant.lo() > 0.0 => {}
+            Orientation::Positive if determinant.hi() < 0.0 => return WindingOutcome::Outside,
+            Orientation::Negative if determinant.hi() < 0.0 => {}
+            Orientation::Negative if determinant.lo() > 0.0 => return WindingOutcome::Outside,
+            _ => return WindingOutcome::Gap,
+        }
+    }
+    WindingOutcome::Inside
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -857,7 +1038,10 @@ fn face_site(
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<SiteOutcome> {
     let vertex_count: u64 = face.loops.iter().map(|l| l.vertices.len() as u64).sum();
-    charge(scope, 1 + 3 * vertex_count)?;
+    charge(
+        scope,
+        1 + 3 * vertex_count + 2 * face.circle_rings.len() as u64,
+    )?;
     match plane_band(face, point) {
         BandOutcome::OffMargin => return Ok(SiteOutcome::Off),
         BandOutcome::Gap => return Ok(SiteOutcome::Gap(GAP_GUARD_BAND)),
@@ -872,6 +1056,13 @@ fn face_site(
         ScanOutcome::Hit(edge) => return Ok(SiteOutcome::On(RawSite::EdgeInterior(edge))),
         ScanOutcome::Gap => return Ok(SiteOutcome::Gap(GAP_GUARD_BAND)),
         ScanOutcome::Clear => {}
+    }
+    match curved::circle_edge_scan(&face.circle_rings, point, face.guard) {
+        curved::RingScan::Hit(edge) => {
+            return Ok(SiteOutcome::On(RawSite::EdgeInterior(edge)));
+        }
+        curved::RingScan::Gap => return Ok(SiteOutcome::Gap(GAP_GUARD_BAND)),
+        curved::RingScan::Clear => {}
     }
     match winding_parity(face, point) {
         WindingOutcome::Inside => Ok(SiteOutcome::On(RawSite::Interior)),
@@ -1246,10 +1437,10 @@ fn classify_in_body_impl(
         });
     }
 
-    let all_planar = prepared
-        .iter()
-        .all(|face| matches!(face, PreparedBoundaryFace::Planar(_)));
-    if all_planar && let Some((face, site)) = boundary {
+    let all_polygonal_planar = prepared.iter().all(|face| {
+        matches!(face, PreparedBoundaryFace::Planar(planar) if planar.circle_rings.is_empty())
+    });
+    if all_polygonal_planar && let Some((face, site)) = boundary {
         return Ok(PointBodyClassification {
             body: body.clone(),
             verdict: PointBodyVerdict::Boundary {
@@ -1259,24 +1450,9 @@ fn classify_in_body_impl(
             witness: None,
         });
     }
-    if !all_planar {
-        let curved_faces = prepared
-            .iter()
-            .filter_map(|face| match face {
-                PreparedBoundaryFace::Curved(face) => Some(face),
-                PreparedBoundaryFace::Planar(_) => None,
-            })
-            .collect::<Vec<_>>();
-        if curved_faces.len() != prepared.len() {
-            return Ok(PointBodyClassification {
-                body: body.clone(),
-                verdict: PointBodyVerdict::Indeterminate {
-                    reason: curved::GAP_CURVED_BODY_PARITY,
-                },
-                witness: None,
-            });
-        }
-        if !curved::certify_closed_boundary(store, body.raw(), &curved_faces, scope)? {
+    if !all_polygonal_planar {
+        let boundary_faces = prepared.iter().collect::<Vec<_>>();
+        if !curved::certify_closed_boundary(store, body.raw(), &boundary_faces, scope)? {
             return Ok(PointBodyClassification {
                 body: body.clone(),
                 verdict: PointBodyVerdict::Indeterminate {
@@ -1295,7 +1471,7 @@ fn classify_in_body_impl(
                 witness: None,
             });
         }
-        return match curved::axial_parity_refs(&curved_faces, point, scope)? {
+        return match curved::axial_parity_refs(&boundary_faces, point, scope)? {
             curved::CurvedParityOutcome::Decided { inside, witness } => {
                 let far = witness.far_point;
                 Ok(PointBodyClassification {
@@ -1391,7 +1567,10 @@ fn classify_in_body_impl(
 mod tests {
     use kcore::operation::{AccountingMode, BudgetPlan, LimitSpec, ResourceKind};
     use kgeom::frame::Frame;
+    use kgeom::param::ParamRange;
     use kgeom::vec::{Point2, Point3};
+    use ktopo::cylindrical_boss::CylindricalBossSolidInput;
+    use ktopo::planar::{PlanarSolidFace, PlanarSolidInput, PlanarSolidVertex, PlanarVertexKey};
     use ktopo::profile::PlanarProfile;
     use ktopo::store::Store;
 
@@ -1426,6 +1605,70 @@ mod tests {
             .unwrap()
     }
 
+    fn boss_host() -> PlanarSolidInput {
+        let points = [
+            Point3::new(-2.0, -2.0, -1.0),
+            Point3::new(2.0, -2.0, -1.0),
+            Point3::new(-2.0, 2.0, -1.0),
+            Point3::new(2.0, 2.0, -1.0),
+            Point3::new(-2.0, -2.0, 1.0),
+            Point3::new(2.0, -2.0, 1.0),
+            Point3::new(-2.0, 2.0, 1.0),
+            Point3::new(2.0, 2.0, 1.0),
+        ];
+        let keys = core::array::from_fn::<_, 8, _>(|index| PlanarVertexKey::new(index as u64));
+        let vertices = keys
+            .into_iter()
+            .zip(points)
+            .map(|(key, point)| PlanarSolidVertex::new(key, point))
+            .collect();
+        let faces = [
+            [0, 2, 3, 1],
+            [4, 5, 7, 6],
+            [0, 1, 5, 4],
+            [2, 6, 7, 3],
+            [0, 4, 6, 2],
+            [1, 3, 7, 5],
+        ]
+        .into_iter()
+        .map(|ring| PlanarSolidFace::new(ring.map(|index| keys[index]).to_vec()))
+        .collect();
+        PlanarSolidInput::new(vertices, faces)
+    }
+
+    fn boss_part(reorder: bool) -> (Session, PartId, BodyId, FaceId) {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let (body, port) = {
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let store = edit.store_mut_for_test();
+            let mut transaction = store.transaction().unwrap();
+            let input = CylindricalBossSolidInput::new(
+                boss_host(),
+                1,
+                Frame::world().with_origin(Point3::new(0.0, 0.0, 1.0)),
+                0.75,
+                ParamRange::new(0.0, 1.0),
+            );
+            let output = transaction.assemble_cylindrical_boss_solid(&input).unwrap();
+            let body = output.body();
+            let port = output.port_face();
+            if reorder {
+                let mut assembly = transaction.assembly();
+                assembly.get_mut(output.shell()).unwrap().faces.reverse();
+                assembly.get_mut(port).unwrap().loops.reverse();
+            }
+            transaction.commit_checked_body(body).unwrap();
+            (body, port)
+        };
+        (
+            session,
+            part_id.clone(),
+            BodyId::new(part_id.clone(), body),
+            FaceId::new(part_id, port),
+        )
+    }
+
     #[test]
     fn block_interior_exterior_and_witness_parity_are_certified() {
         let (session, part_id, body) = solid_part(|store| {
@@ -1451,6 +1694,104 @@ mod tests {
             assert_eq!(outside.verdict(), &PointBodyVerdict::Exterior);
             assert_eq!(outside.witness().unwrap().crossings() % 2, 0);
         }
+    }
+
+    #[test]
+    fn capped_boss_mixed_boundary_matches_closed_form_and_is_storage_order_independent() {
+        for reorder in [false, true] {
+            let (session, part_id, body, port) = boss_part(reorder);
+            for point in [
+                Point3::new(1.5, 0.0, 0.0),
+                Point3::new(0.0, 0.0, 0.5),
+                Point3::new(0.0, 0.0, 1.0),
+                Point3::new(0.0, 0.0, 1.5),
+            ] {
+                let result = body_verdict(&session, &part_id, &body, point);
+                assert_eq!(result.verdict(), &PointBodyVerdict::Interior, "{point:?}");
+                assert_eq!(result.witness().unwrap().crossings() % 2, 1);
+            }
+            for point in [
+                Point3::new(0.0, 0.0, -1.25),
+                Point3::new(2.25, 0.0, 0.0),
+                Point3::new(0.0, 0.0, 2.25),
+            ] {
+                let result = body_verdict(&session, &part_id, &body, point);
+                assert_eq!(result.verdict(), &PointBodyVerdict::Exterior, "{point:?}");
+                assert_eq!(result.witness().unwrap().crossings() % 2, 0);
+            }
+
+            let part = session.part(part_id.clone()).unwrap();
+            for (point, expected) in [
+                (
+                    Point3::new(1.5, 0.0, 1.0),
+                    PointFaceVerdict::On(PointFaceSite::Interior),
+                ),
+                (Point3::new(0.0, 0.0, 1.0), PointFaceVerdict::Off),
+            ] {
+                let result = part
+                    .classify_point_on_face(ClassifyPointOnFaceRequest::new(port.clone(), point))
+                    .unwrap()
+                    .into_result()
+                    .unwrap();
+                assert_eq!(result.verdict(), &expected);
+            }
+            let attachment = body_verdict(&session, &part_id, &body, Point3::new(0.75, 0.0, 1.0));
+            assert!(matches!(
+                attachment.verdict(),
+                PointBodyVerdict::Boundary {
+                    site: PointFaceSite::EdgeInterior(_),
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn capped_boss_mixed_parity_work_has_an_exact_n_and_n_minus_one_boundary() {
+        let (session, part_id, body, _) = boss_part(false);
+        let point = Point3::new(0.0, 0.0, 1.5);
+        let part = session.part(part_id).unwrap();
+        let baseline = part
+            .classify_point_in_body(ClassifyPointInBodyRequest::new(body.clone(), point))
+            .unwrap();
+        assert_eq!(
+            baseline.result().unwrap().verdict(),
+            &PointBodyVerdict::Interior
+        );
+        let consumed = baseline
+            .report()
+            .usage()
+            .iter()
+            .find(|usage| {
+                usage.stage == POINT_CLASSIFICATION_WORK && usage.resource == ResourceKind::Work
+            })
+            .unwrap()
+            .consumed;
+        assert!(consumed > 0);
+
+        let run = |allowed| {
+            let plan = BudgetPlan::new([LimitSpec::new(
+                POINT_CLASSIFICATION_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                allowed,
+            )])
+            .unwrap();
+            part.classify_point_in_body(
+                ClassifyPointInBodyRequest::new(body.clone(), point)
+                    .with_settings(OperationSettings::new().with_budget_overrides(plan)),
+            )
+            .unwrap()
+        };
+        let refused = run(consumed - 1);
+        assert_eq!(
+            refused.result().unwrap_err().limit().unwrap().stage,
+            POINT_CLASSIFICATION_WORK
+        );
+        assert_eq!(
+            run(consumed).result().unwrap().verdict(),
+            &PointBodyVerdict::Interior
+        );
     }
 
     #[test]

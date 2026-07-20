@@ -65,10 +65,10 @@ pub(super) struct CircularPlaneFace {
 }
 
 #[derive(Debug)]
-struct CircleRing {
-    edge: RawEdgeId,
-    circle: Circle,
-    edge_tol: f64,
+pub(super) struct CircleRing {
+    pub(super) edge: RawEdgeId,
+    pub(super) circle: Circle,
+    pub(super) edge_tol: f64,
 }
 
 #[derive(Debug)]
@@ -114,6 +114,16 @@ fn prepare_circular_plane(
     if face.loops().is_empty() {
         return Ok(CurvedPrepOutcome::NotApplicable);
     }
+    // A plane with both polygonal and circular cycles belongs to the mixed
+    // planar preparation path in the parent module. Decide this before
+    // reading any individual cycle so storage order cannot change the gap.
+    if face.loops().iter().any(|loop_id| {
+        store
+            .get::<Loop>(*loop_id)
+            .is_ok_and(|loop_| loop_.fins().len() != 1)
+    }) {
+        return Ok(CurvedPrepOutcome::NotApplicable);
+    }
     let mut rings = Vec::with_capacity(face.loops().len());
     let mut max_tol = linear.max(face.tolerance().map_or(0.0, |value| value.value()));
     for &loop_id in face.loops() {
@@ -128,35 +138,23 @@ fn prepare_circular_plane(
         };
         let fin = read(store.get(*fin_id))?;
         let edge = read(store.get(fin.edge))?;
-        if ring.face() != raw || fin.parent() != loop_id || !edge.fins().contains(fin_id) {
-            return Ok(CurvedPrepOutcome::Gap(GAP_CIRCULAR_PLANE_TRIM));
-        }
-        if edge.vertices() != [None, None] || edge.bounds().is_some() {
-            return Ok(CurvedPrepOutcome::Gap(GAP_CIRCULAR_PLANE_TRIM));
-        }
-        let edge_tol = linear.max(edge.tolerance.map_or(0.0, |value| value.value()));
-        charge_whole_fin_authority(store, raw, loop_id, *fin_id, scope)?;
-        if certify_whole_fin_incidence(store, raw, loop_id, *fin_id, edge_tol)
-            != WholeFinIncidence::Certified
-        {
-            return Ok(CurvedPrepOutcome::Gap(GAP_CIRCULAR_PLANE_TRIM));
-        }
         let Some(curve_id) = edge.curve else {
             return Ok(CurvedPrepOutcome::NotApplicable);
         };
-        let CurveGeom::Circle(circle) = read(store.curve(curve_id))? else {
+        if !matches!(read(store.curve(curve_id))?, CurveGeom::Circle(_)) {
             return if rings.is_empty() {
                 Ok(CurvedPrepOutcome::NotApplicable)
             } else {
                 Ok(CurvedPrepOutcome::Gap(GAP_CIRCULAR_PLANE_TRIM))
             };
         };
-        max_tol = max_tol.max(edge_tol);
-        rings.push(CircleRing {
-            edge: fin.edge,
-            circle: *circle,
-            edge_tol,
-        });
+        let Some(prepared) =
+            prepare_planar_circle_ring(store, raw, loop_id, *fin_id, linear, scope)?
+        else {
+            return Ok(CurvedPrepOutcome::Gap(GAP_CIRCULAR_PLANE_TRIM));
+        };
+        max_tol = max_tol.max(prepared.edge_tol);
+        rings.push(prepared);
     }
 
     let normal = as_coords(plane.frame().z());
@@ -179,6 +177,51 @@ fn prepare_circular_plane(
             guard,
         },
     )))
+}
+
+/// Prepare one topology-owned vertex-less circular loop on a planar face.
+///
+/// Callers first identify the 3D circle class. This seam owns all backlink,
+/// topology, tolerance, and whole-fin incidence checks shared by circular-cap
+/// and polygon-with-circle-hole preparation.
+pub(super) fn prepare_planar_circle_ring(
+    store: &Store,
+    raw: RawFaceId,
+    loop_id: ktopo::entity::LoopId,
+    fin_id: ktopo::entity::FinId,
+    linear: f64,
+    scope: &mut kcore::operation::OperationScope<'_, '_>,
+) -> Result<Option<CircleRing>> {
+    let ring = read(store.get::<Loop>(loop_id))?;
+    let fin = read(store.get(fin_id))?;
+    let edge = read(store.get(fin.edge))?;
+    if ring.face() != raw
+        || ring.fins() != [fin_id]
+        || fin.parent() != loop_id
+        || !edge.fins().contains(&fin_id)
+        || edge.vertices() != [None, None]
+        || edge.bounds().is_some()
+    {
+        return Ok(None);
+    }
+    let edge_tol = linear.max(edge.tolerance.map_or(0.0, |value| value.value()));
+    charge_whole_fin_authority(store, raw, loop_id, fin_id, scope)?;
+    if certify_whole_fin_incidence(store, raw, loop_id, fin_id, edge_tol)
+        != WholeFinIncidence::Certified
+    {
+        return Ok(None);
+    }
+    let Some(curve_id) = edge.curve else {
+        return Ok(None);
+    };
+    let CurveGeom::Circle(circle) = read(store.curve(curve_id))? else {
+        return Ok(None);
+    };
+    Ok(Some(CircleRing {
+        edge: fin.edge,
+        circle: *circle,
+        edge_tol,
+    }))
 }
 
 fn prepare_cylinder(
@@ -378,13 +421,13 @@ fn cylinder_radial_band(face: &CylinderFace, point: [f64; 3]) -> MetricBand {
     }
 }
 
-enum RingScan {
+pub(super) enum RingScan {
     Hit(RawEdgeId),
     Clear,
     Gap,
 }
 
-fn circle_edge_scan(rings: &[CircleRing], point: [f64; 3], guard: f64) -> RingScan {
+pub(super) fn circle_edge_scan(rings: &[CircleRing], point: [f64; 3], guard: f64) -> RingScan {
     let guard_sq = Interval::point(guard).square();
     let mut gap = false;
     for ring in rings {
@@ -426,13 +469,13 @@ fn cylinder_ring_scan(face: &CylinderFace, point: [f64; 3]) -> RingScan {
     if gap { RingScan::Gap } else { RingScan::Clear }
 }
 
-enum TrimParity {
+pub(super) enum TrimParity {
     Inside,
     Outside,
     Gap,
 }
 
-fn circular_trim_parity(rings: &[CircleRing], point: [f64; 3]) -> TrimParity {
+pub(super) fn circular_trim_parity(rings: &[CircleRing], point: [f64; 3]) -> TrimParity {
     let mut containing = 0_u64;
     for ring in rings {
         let local = local_intervals(*ring.circle.frame(), point);
@@ -468,41 +511,73 @@ pub(super) enum CurvedParityOutcome {
 /// Count crossings along a shared cylinder-axis direction.
 ///
 /// A line parallel to every admitted cylinder axis cannot cross a cylindrical
-/// face.  Its crossings against circular planar faces are isolated with
-/// outward intervals and accepted only when the plane intersection lies
-/// strictly inside the exact circular trim parity.  This is general over
-/// face order, cylinder placement/radius, and any number of ring trims.
+/// face. Its crossings against planar faces use exact polygon triangulation
+/// plus outward-interval circle-hole parity at the same plane hit. This is
+/// general over face order, cylinder placement/radius, and the admitted planar
+/// trim layouts.
 pub(super) fn axial_parity_refs(
-    faces: &[&PreparedCurvedFace],
+    faces: &[&super::PreparedBoundaryFace],
     point: [f64; 3],
     scope: &mut kcore::operation::OperationScope<'_, '_>,
 ) -> Result<CurvedParityOutcome> {
+    let mut planar_triangles = Vec::new();
+    for &face in faces {
+        if let super::PreparedBoundaryFace::Planar(planar) = face {
+            let mut triangles = Vec::new();
+            for ring in &planar.loops {
+                let Some(mut ring_triangles) =
+                    super::triangulate_loop(ring, planar.drop_axis, scope)?
+                else {
+                    return Ok(CurvedParityOutcome::Gap);
+                };
+                triangles.append(&mut ring_triangles);
+            }
+            planar_triangles.push((planar.raw, triangles));
+        }
+    }
     let attempt_work: u64 = faces
         .iter()
         .map(|face| match face {
-            PreparedCurvedFace::CircularPlane(face) => 1 + face.rings.len() as u64,
-            PreparedCurvedFace::Cylinder(_) => 1,
+            super::PreparedBoundaryFace::Planar(face) => {
+                1 + face.circle_rings.len() as u64
+                    + face
+                        .loops
+                        .iter()
+                        .map(|ring| ring.vertices.len() as u64)
+                        .sum::<u64>()
+            }
+            super::PreparedBoundaryFace::Curved(PreparedCurvedFace::CircularPlane(face)) => {
+                1 + face.rings.len() as u64
+            }
+            super::PreparedBoundaryFace::Curved(PreparedCurvedFace::Cylinder(_)) => 1,
         })
         .sum();
     charge(scope, attempt_work)?;
     let axes: Vec<[f64; 3]> = faces
         .iter()
         .filter_map(|face| match face {
-            PreparedCurvedFace::Cylinder(face) => Some(as_coords(face.frame.z())),
-            PreparedCurvedFace::CircularPlane(_) => None,
+            super::PreparedBoundaryFace::Curved(PreparedCurvedFace::Cylinder(face)) => {
+                Some(as_coords(face.frame.z()))
+            }
+            _ => None,
         })
         .collect();
     if axes.is_empty()
-        || !faces
-            .iter()
-            .any(|face| matches!(face, PreparedCurvedFace::CircularPlane(_)))
+        || !faces.iter().any(|face| {
+            !matches!(
+                face,
+                super::PreparedBoundaryFace::Curved(PreparedCurvedFace::Cylinder(_))
+            )
+        })
     {
         return Ok(CurvedParityOutcome::Gap);
     }
     for base in axes {
         for direction in [base, [-base[0], -base[1], -base[2]]] {
             charge(scope, attempt_work)?;
-            if let Some(witness) = axial_parity_direction(faces, point, direction) {
+            if let Some(witness) =
+                axial_parity_direction(faces, &planar_triangles, point, direction, scope)?
+            {
                 return Ok(CurvedParityOutcome::Decided {
                     inside: witness.crossings % 2 == 1,
                     witness,
@@ -521,7 +596,7 @@ pub(super) fn axial_parity_refs(
 pub(super) fn certify_closed_boundary(
     store: &Store,
     body: RawBodyId,
-    prepared: &[&PreparedCurvedFace],
+    prepared: &[&super::PreparedBoundaryFace],
     scope: &mut kcore::operation::OperationScope<'_, '_>,
 ) -> Result<bool> {
     charge(scope, 1)?;
@@ -652,83 +727,36 @@ fn charge_whole_fin_authority(
 }
 
 fn axial_parity_direction(
-    faces: &[&PreparedCurvedFace],
+    faces: &[&super::PreparedBoundaryFace],
+    planar_triangles: &[(RawFaceId, Vec<super::Triangle>)],
     point: [f64; 3],
     direction: [f64; 3],
-) -> Option<RawCurvedParityWitness> {
-    let mut crossings = 0_u32;
-    let mut crossed_faces = Vec::new();
+    scope: &mut kcore::operation::OperationScope<'_, '_>,
+) -> Result<Option<RawCurvedParityWitness>> {
     let mut far_t = 1.0_f64;
     for &face in faces {
         match face {
-            PreparedCurvedFace::Cylinder(cylinder) => {
+            super::PreparedBoundaryFace::Curved(PreparedCurvedFace::Cylinder(cylinder)) => {
                 let axis = as_coords(cylinder.frame.z());
                 // Exact stored-axis identity is the admitted common-axis
                 // proof. Near-parallel axes are never rounded into this
                 // family; they make this ray candidate fail closed.
                 if axis != direction && axis != [-direction[0], -direction[1], -direction[2]] {
-                    return None;
+                    return Ok(None);
                 }
             }
-            PreparedCurvedFace::CircularPlane(plane) => {
-                let numerator = -dot_interval(plane.normal, point, plane.origin);
-                let denominator = dot_vectors_interval(plane.normal, direction);
-                if denominator.contains(0.0) {
-                    if numerator.contains(0.0) {
-                        return None;
-                    }
-                    continue;
+            super::PreparedBoundaryFace::Curved(PreparedCurvedFace::CircularPlane(plane)) => {
+                if update_far_parameter(plane.normal, plane.origin, point, direction, &mut far_t)
+                    .is_none()
+                {
+                    return Ok(None);
                 }
-                let t = numerator.checked_div(denominator)?;
-                if t.hi() <= 0.0 {
-                    continue;
-                }
-                if !t.lo().is_finite() || !t.hi().is_finite() {
-                    return None;
-                }
-                if t.lo() <= 0.0 {
-                    // A query may lie on the infinite extension of a cap
-                    // plane while remaining strictly outside every circular
-                    // trim. That is not a boundary contact and contributes no
-                    // positive-ray crossing. Prove the trim miss at t = 0
-                    // before discarding this otherwise degenerate plane hit.
-                    let mut containing = 0_u64;
-                    for ring in &plane.rings {
-                        let local = line_point_local_intervals(
-                            *ring.circle.frame(),
-                            point,
-                            direction,
-                            Interval::point(0.0),
-                        );
-                        let sign = local[0].square() + local[1].square()
-                            - Interval::point(ring.circle.radius()).square();
-                        if sign.hi() < 0.0 {
-                            containing += 1;
-                        } else if sign.lo() <= 0.0 {
-                            return None;
-                        }
-                    }
-                    if containing.is_multiple_of(2) {
-                        continue;
-                    }
-                    return None;
-                }
-                far_t = far_t.max(t.hi());
-                let mut containing = 0_u64;
-                for ring in &plane.rings {
-                    let local =
-                        line_point_local_intervals(*ring.circle.frame(), point, direction, t);
-                    let sign = local[0].square() + local[1].square()
-                        - Interval::point(ring.circle.radius()).square();
-                    if sign.hi() < 0.0 {
-                        containing += 1;
-                    } else if sign.lo() <= 0.0 {
-                        return None;
-                    }
-                }
-                if containing % 2 == 1 {
-                    crossings = crossings.checked_add(1)?;
-                    crossed_faces.push(plane.raw);
+            }
+            super::PreparedBoundaryFace::Planar(plane) => {
+                if update_far_parameter(plane.normal, plane.origin, point, direction, &mut far_t)
+                    .is_none()
+                {
+                    return Ok(None);
                 }
             }
         }
@@ -739,14 +767,145 @@ fn axial_parity_direction(
         point[1] + far_t * direction[1],
         point[2] + far_t * direction[2],
     ];
-    far_point
-        .iter()
-        .all(|value| value.is_finite())
-        .then_some(RawCurvedParityWitness {
-            far_point,
-            crossings,
-            crossed_faces,
-        })
+    if far_point.iter().any(|value| !value.is_finite()) {
+        return Ok(None);
+    }
+
+    let mut crossings = 0_u32;
+    let mut crossed_faces = Vec::new();
+    for &face in faces {
+        let (raw, normal, origin, rings, planar_data) = match face {
+            super::PreparedBoundaryFace::Curved(PreparedCurvedFace::Cylinder(_)) => continue,
+            super::PreparedBoundaryFace::Curved(PreparedCurvedFace::CircularPlane(plane)) => (
+                plane.raw,
+                plane.normal,
+                plane.origin,
+                plane.rings.as_slice(),
+                None,
+            ),
+            super::PreparedBoundaryFace::Planar(plane) => {
+                let Some((_, triangles)) = planar_triangles
+                    .iter()
+                    .find(|(candidate, _)| *candidate == plane.raw)
+                else {
+                    return Ok(None);
+                };
+                (
+                    plane.raw,
+                    plane.normal,
+                    plane.origin,
+                    plane.circle_rings.as_slice(),
+                    Some((plane, triangles.as_slice())),
+                )
+            }
+        };
+        let Some(parameter) = positive_plane_parameter(normal, origin, point, direction) else {
+            return Ok(None);
+        };
+        let Some(t) = parameter else {
+            continue;
+        };
+        let circle_inside = match circular_trim_parity_at_line(rings, point, direction, t) {
+            TrimParity::Inside => true,
+            TrimParity::Outside => false,
+            TrimParity::Gap => return Ok(None),
+        };
+        let material_hit = if let Some((plane, triangles)) = planar_data {
+            let polygon_inside = if plane.circle_rings.is_empty() {
+                let Some(polygon_crossings) =
+                    super::count_face_crossings(triangles, point, far_point, scope)?
+                else {
+                    return Ok(None);
+                };
+                polygon_crossings % 2 == 1
+            } else {
+                match super::convex_polygon_parity_at_line(plane, point, direction, t) {
+                    super::WindingOutcome::Inside => true,
+                    super::WindingOutcome::Outside => false,
+                    super::WindingOutcome::Gap => return Ok(None),
+                }
+            };
+            polygon_inside ^ circle_inside
+        } else {
+            circle_inside
+        };
+        if material_hit {
+            let Some(next) = crossings.checked_add(1) else {
+                return Ok(None);
+            };
+            crossings = next;
+            crossed_faces.push(raw);
+        }
+    }
+    Ok(Some(RawCurvedParityWitness {
+        far_point,
+        crossings,
+        crossed_faces,
+    }))
+}
+
+fn update_far_parameter(
+    normal: [f64; 3],
+    origin: [f64; 3],
+    point: [f64; 3],
+    direction: [f64; 3],
+    far_t: &mut f64,
+) -> Option<()> {
+    let numerator = -dot_interval(normal, point, origin);
+    let denominator = dot_vectors_interval(normal, direction);
+    if denominator.contains(0.0) {
+        return (!numerator.contains(0.0)).then_some(());
+    }
+    let t = numerator.checked_div(denominator)?;
+    if !t.lo().is_finite() || !t.hi().is_finite() {
+        return None;
+    }
+    if t.lo() > 0.0 {
+        *far_t = (*far_t).max(t.hi());
+    }
+    Some(())
+}
+
+fn positive_plane_parameter(
+    normal: [f64; 3],
+    origin: [f64; 3],
+    point: [f64; 3],
+    direction: [f64; 3],
+) -> Option<Option<Interval>> {
+    let numerator = -dot_interval(normal, point, origin);
+    let denominator = dot_vectors_interval(normal, direction);
+    if denominator.contains(0.0) {
+        return (!numerator.contains(0.0)).then_some(None);
+    }
+    let t = numerator.checked_div(denominator)?;
+    if !t.lo().is_finite() || !t.hi().is_finite() {
+        return None;
+    }
+    Some((t.lo() > 0.0).then_some(t))
+}
+
+fn circular_trim_parity_at_line(
+    rings: &[CircleRing],
+    point: [f64; 3],
+    direction: [f64; 3],
+    t: Interval,
+) -> TrimParity {
+    let mut containing = 0_u64;
+    for ring in rings {
+        let local = line_point_local_intervals(*ring.circle.frame(), point, direction, t);
+        let sign =
+            local[0].square() + local[1].square() - Interval::point(ring.circle.radius()).square();
+        if sign.hi() < 0.0 {
+            containing += 1;
+        } else if sign.lo() <= 0.0 {
+            return TrimParity::Gap;
+        }
+    }
+    if containing % 2 == 1 {
+        TrimParity::Inside
+    } else {
+        TrimParity::Outside
+    }
 }
 
 fn point_circle_distance_sq(circle: Circle, point: [f64; 3]) -> Option<Interval> {

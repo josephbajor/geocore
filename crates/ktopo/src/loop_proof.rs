@@ -13,9 +13,11 @@ use crate::incidence::{
 use crate::incidence_authority::{WholeFinIncidence, certify_whole_fin_incidence};
 use crate::store::Store;
 use kcore::error::Result;
+use kcore::interval::Interval;
 use kcore::predicates::{Orientation, orient2d, polygon_orientation2d_iter};
 use kcore::tolerance::LINEAR_RESOLUTION;
 use kgeom::curve::Curve;
+use kgeom::curve2d::Circle2d;
 use kgeom::param::ParamRange;
 use kgeom::vec::{Point2, Point3};
 
@@ -212,7 +214,13 @@ pub(crate) fn certify_face_loop_layout(
         return Ok(LoopContainment::Certified);
     }
     if matches!(store.get(face.surface)?, SurfaceGeom::Plane(_)) {
-        return certify_loop_containment(store, &face.loops);
+        let polygonal = certify_loop_containment(store, &face.loops)?;
+        if polygonal == LoopContainment::Certified
+            || certify_convex_polygon_circle_face(store, face_id)?
+        {
+            return Ok(LoopContainment::Certified);
+        }
+        return Ok(LoopContainment::Indeterminate);
     }
     if !matches!(store.get(face.surface)?, SurfaceGeom::Cylinder(_)) || face.loops.len() != 2 {
         return Ok(LoopContainment::Indeterminate);
@@ -253,6 +261,115 @@ pub(crate) fn certify_face_loop_layout(
         return Ok(LoopContainment::Indeterminate);
     }
     Ok(LoopContainment::Certified)
+}
+
+/// Certify that one circle lies strictly inside one convex polygon.
+///
+/// Every edge is treated as an oriented affine form over the complete circle.
+/// Outward interval arithmetic bounds the harmonic amplitude, so a successful
+/// result proves strict containment without sampling or a caller tolerance.
+pub(crate) fn certify_convex_polygon_circle_containment(
+    polygon: &[Point2],
+    circle: Circle2d,
+) -> bool {
+    if polygon.len() < 3 {
+        return false;
+    }
+    let mut winding = None;
+    for index in 0..polygon.len() {
+        let first = polygon[index];
+        let second = polygon[(index + 1) % polygon.len()];
+        let third = polygon[(index + 2) % polygon.len()];
+        let turn = orient2d([first.x, first.y], [second.x, second.y], [third.x, third.y]);
+        if turn == Orientation::Zero || winding.is_some_and(|expected| expected != turn) {
+            return false;
+        }
+        winding = Some(turn);
+    }
+    let winding = winding.expect("a polygon with three vertices has a turn");
+    let center = circle.center();
+    let x = circle.x_dir();
+    let y = x.perp();
+    let radius = Interval::point(circle.radius());
+    for index in 0..polygon.len() {
+        let start = polygon[index];
+        let end = polygon[(index + 1) % polygon.len()];
+        let edge = [
+            Interval::point(end.x) - Interval::point(start.x),
+            Interval::point(end.y) - Interval::point(start.y),
+        ];
+        let offset = [
+            Interval::point(center.x) - Interval::point(start.x),
+            Interval::point(center.y) - Interval::point(start.y),
+        ];
+        let radial_x = [Interval::point(x.x) * radius, Interval::point(x.y) * radius];
+        let radial_y = [Interval::point(y.x) * radius, Interval::point(y.y) * radius];
+        let mut constant = cross2_interval(edge, offset);
+        let cosine = cross2_interval(edge, radial_x);
+        let sine = cross2_interval(edge, radial_y);
+        if winding == Orientation::Negative {
+            constant = -constant;
+        }
+        let Some(amplitude) = (cosine.square() + sine.square()).sqrt() else {
+            return false;
+        };
+        if !constant.lo().is_finite()
+            || !amplitude.hi().is_finite()
+            || constant.lo() <= amplitude.hi()
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn cross2_interval(left: [Interval; 2], right: [Interval; 2]) -> Interval {
+    left[0] * right[1] - left[1] * right[0]
+}
+
+fn certify_convex_polygon_circle_face(
+    store: &Store,
+    face_id: crate::entity::FaceId,
+) -> Result<bool> {
+    let face = store.get(face_id)?;
+    if face.loops.len() != 2 || !matches!(store.get(face.surface)?, SurfaceGeom::Plane(_)) {
+        return Ok(false);
+    }
+    let mut polygon = None;
+    let mut circle = None;
+    for &loop_id in &face.loops {
+        if let Some(segments) = planar_segment_ring(store, loop_id)? {
+            if polygon.replace(segments).is_some() {
+                return Ok(false);
+            }
+            continue;
+        }
+        let loop_ = store.get(loop_id)?;
+        let [fin_id] = loop_.fins.as_slice() else {
+            return Ok(false);
+        };
+        let fin = store.get(*fin_id)?;
+        let Some(use_) = fin.pcurve else {
+            return Ok(false);
+        };
+        let Curve2dGeom::Circle(value) = store.get(use_.curve())? else {
+            return Ok(false);
+        };
+        if use_.closure_winding() != Some([0, 0])
+            || certify_loop_simplicity(store, loop_id)? != LoopSimplicity::Certified
+            || circle.replace(*value).is_some()
+        {
+            return Ok(false);
+        }
+    }
+    let (Some(polygon), Some(circle)) = (polygon, circle) else {
+        return Ok(false);
+    };
+    let points = polygon
+        .iter()
+        .map(|segment| segment.start)
+        .collect::<Vec<_>>();
+    Ok(certify_convex_polygon_circle_containment(&points, circle))
 }
 
 /// Certify exact orientation and the unique outer identity for planar

@@ -5,9 +5,10 @@
 //! source face into two-dimensional cells, classifies one anchor per exact
 //! dual component, and propagates occupancy across transverse cuts. Generic
 //! boundary truth selection then decides which cells survive. The current
-//! topology adapter commits selected axial cylinder bands or proof-matched
-//! complete source boundaries. Partial, mixed, and reversed whole-boundary
-//! classes remain explicit typed refusals.
+//! topology adapter commits selected axial cylinder bands, one-port capped
+//! cylindrical bosses, or proof-matched complete source boundaries. Other
+//! partial, mixed, and reversed whole-boundary classes remain explicit typed
+//! refusals.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -25,6 +26,7 @@ use super::boundary_select::{
     BoundaryFragmentClassification, BoundarySelectionError, ClassifiedBoundaryFragment,
     OperandSide, RegularizedBooleanOperation, SelectedOrientation, select_boundary_fragments,
 };
+use super::curved_boss::{PreparedCylindricalBoss, prepare_cylindrical_boss};
 use super::curved_source::{
     CertifiedCylinderSource, CylinderSourceGap, CylinderSourceOutcome, extract_cylinder_source,
 };
@@ -198,13 +200,13 @@ pub(crate) fn execute_curved_in_scope(
 }
 
 #[derive(Debug, Clone)]
-struct CertifiedRingCut {
-    key: usize,
-    planar_face: RawFaceId,
-    center: Point3,
-    planar_representative: PlanarCircleRepresentative,
-    axial_parameter: f64,
-    exact_order: usize,
+pub(super) struct CertifiedRingCut {
+    pub(super) key: usize,
+    pub(super) planar_face: RawFaceId,
+    pub(super) center: Point3,
+    pub(super) planar_representative: PlanarCircleRepresentative,
+    pub(super) axial_parameter: f64,
+    pub(super) exact_order: usize,
 }
 
 fn certify_section_rings(
@@ -313,14 +315,14 @@ fn axis_order(axis: [f64; 3], point: Point3, origin: Point3) -> Option<Orientati
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum CurvedFragmentKey {
+pub(super) enum CurvedFragmentKey {
     Planar(FaceCellKey<SourcePlaneRef, usize>),
     CylinderSide(FaceCellKey<u8, usize>),
     CylinderCap { boundary: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum CurvedFragment {
+pub(super) enum CurvedFragment {
     Planar {
         face: RawFaceId,
         region: FaceRegionKey<usize>,
@@ -409,6 +411,7 @@ fn execute_stages(
     let proposals = prepare_result_proposals(
         &bodies,
         &source_boundary_keys,
+        &planar_source,
         &cylinder_source,
         &cuts,
         selected,
@@ -753,6 +756,7 @@ fn axial_parameter(source: &CertifiedCylinderSource, point: Point3) -> Option<f6
 
 #[derive(Debug, Clone)]
 enum PreparedCurvedResult {
+    CylindricalBoss(Box<PreparedCylindricalBoss>),
     CylindricalBands(Vec<CylindricalBandSolidInput>),
     WholeSources(Vec<RawBodyId>),
 }
@@ -760,6 +764,7 @@ enum PreparedCurvedResult {
 impl PreparedCurvedResult {
     fn is_empty(&self) -> bool {
         match self {
+            Self::CylindricalBoss(_) => false,
             Self::CylindricalBands(bands) => bands.is_empty(),
             Self::WholeSources(sources) => sources.is_empty(),
         }
@@ -769,6 +774,7 @@ impl PreparedCurvedResult {
 fn prepare_result_proposals(
     bodies: &[BodyId; 2],
     source_boundary_keys: &BTreeMap<OperandSide, BTreeSet<CurvedFragmentKey>>,
+    planar: &ExtractedPlanarSourceBody,
     cylinder: &CertifiedCylinderSource,
     cuts: &[CertifiedRingCut],
     selected: Vec<
@@ -779,6 +785,11 @@ fn prepare_result_proposals(
         prepare_whole_source_copies(bodies, source_boundary_keys, &selected)
     {
         return Ok(PreparedCurvedResult::WholeSources(source_copies));
+    }
+    if let Some(boss) = prepare_cylindrical_boss(planar, cylinder, cuts, &selected)
+        .map_err(|reason| refused_error(CurvedBooleanPipelineRefusal::AssemblyContract(reason)))?
+    {
+        return Ok(PreparedCurvedResult::CylindricalBoss(Box::new(boss)));
     }
     prepare_band_proposals(cylinder, cuts, selected).map(PreparedCurvedResult::CylindricalBands)
 }
@@ -952,15 +963,30 @@ fn commit_proposals(
     proposals: PreparedCurvedResult,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<CurvedBooleanPipelineOutcome> {
-    if let PreparedCurvedResult::WholeSources(sources) = &proposals {
-        precharge_whole_source_copies(edit, sources, scope)?;
+    match &proposals {
+        PreparedCurvedResult::CylindricalBoss(boss) => precharge_cylindrical_boss(boss, scope)?,
+        PreparedCurvedResult::WholeSources(sources) => {
+            precharge_whole_source_copies(edit, sources, scope)?;
+        }
+        PreparedCurvedResult::CylindricalBands(_) => {}
     }
     let mut transaction = edit.state.store.transaction().map_err(Error::from)?;
     let mut raw_bodies = match &proposals {
+        PreparedCurvedResult::CylindricalBoss(_) => Vec::with_capacity(1),
         PreparedCurvedResult::CylindricalBands(bands) => Vec::with_capacity(bands.len()),
         PreparedCurvedResult::WholeSources(sources) => Vec::with_capacity(sources.len()),
     };
     match proposals {
+        PreparedCurvedResult::CylindricalBoss(proposal) => {
+            let body = match transaction.assemble_cylindrical_boss_solid(&proposal.into_input()) {
+                Ok(output) => output.body(),
+                Err(kcore::error::Error::InvalidGeometry { reason }) => {
+                    return refused(CurvedBooleanPipelineRefusal::AssemblyContract(reason));
+                }
+                Err(source) => return Err(source.into()),
+            };
+            raw_bodies.push(body);
+        }
         PreparedCurvedResult::CylindricalBands(proposals) => {
             for proposal in proposals {
                 let body = match transaction.assemble_cylindrical_band_solid(&proposal) {
@@ -1011,6 +1037,37 @@ fn commit_proposals(
             full_checks,
         },
     ))
+}
+
+/// Charge a source-size-exact conservative bound before boss allocation.
+fn precharge_cylindrical_boss(
+    proposal: &PreparedCylindricalBoss,
+    scope: &mut OperationScope<'_, '_>,
+) -> StageResult<()> {
+    let vertices = u64::try_from(proposal.host_vertices()).map_err(|_| work_overflow())?;
+    let faces = u64::try_from(proposal.host_faces()).map_err(|_| work_overflow())?;
+    let uses = u64::try_from(proposal.host_face_uses()).map_err(|_| work_overflow())?;
+    // Host vertices/points, analytic line-edge closure, face/loop/fin uses,
+    // and a generous constant for the port ring, side band, cap, and scaffold.
+    let work = vertices
+        .checked_mul(4)
+        .and_then(|value| value.checked_add(faces.checked_mul(4)?))
+        .and_then(|value| value.checked_add(uses.checked_mul(6)?))
+        .and_then(|value| value.checked_add(32))
+        .ok_or_else(work_overflow)?;
+    scope
+        .ledger_mut()
+        .charge(PLANAR_BOOLEAN_REALIZATION_WORK, work)
+        .map_err(Error::from)?;
+    scope
+        .ledger_mut()
+        .observe(
+            PLANAR_BOOLEAN_REALIZED_VERTICES,
+            ResourceKind::Items,
+            vertices,
+        )
+        .map_err(Error::from)?;
+    Ok(())
 }
 
 /// Charge a conservative visit/allocation bound for identity rigid copies

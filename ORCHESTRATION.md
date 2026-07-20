@@ -41,10 +41,11 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    topology, payload-agnostic exact boundary truth selection, and finite-cylinder
    Full proof landed; proof-bearing curved face partition/classification and the
    first Full-checked axial intersection, cylinder-minus-block remainder bands,
-   and zero-cut truth-selected whole-source union/subtraction copies now land
-   through the public facade with deterministic X_T emission and Fast
-   self-import; cut/connected curved union, block-minus-cylinder mixed/cavity
-   subtraction, broader contacts, and licensed-host evidence remain)*
+   zero-cut truth-selected whole-source union/subtraction copies, and one-ring
+   axial cap-overlap connected union now land through the public facade with
+   deterministic X_T emission and Fast self-import; multi-ring/other connected
+   curved union, block-minus-cylinder mixed/cavity subtraction, broader
+   contacts, and licensed-host evidence remain)*
 
 Work that does not advance the queue head needs an explicit justification
 linking it to a rung ("rung 2 needs curve/curve overlap dedup because …").

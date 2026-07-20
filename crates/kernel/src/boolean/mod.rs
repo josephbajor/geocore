@@ -22,6 +22,8 @@ mod component_layout;
 #[allow(dead_code)]
 mod components;
 #[allow(dead_code)]
+mod curved_boss;
+#[allow(dead_code)]
 mod curved_pipeline;
 #[allow(dead_code)]
 mod curved_source;

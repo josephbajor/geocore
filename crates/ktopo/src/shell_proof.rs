@@ -15,7 +15,8 @@ use crate::incidence::{
 };
 use crate::incidence_authority::{WholeFinIncidence, certify_whole_fin_incidence};
 use crate::loop_proof::{
-    LoopContainment, LoopSimplicity, certify_loop_containment, certify_loop_simplicity,
+    LoopContainment, LoopSimplicity, certify_face_loop_layout, certify_loop_containment,
+    certify_loop_orientation, certify_loop_simplicity,
 };
 use crate::store::Store;
 use kcore::error::Result;
@@ -142,6 +143,11 @@ fn certify_shell_impl(
         return Ok(certification);
     }
     if let Some(certification) = certify_cylinder_band_shell(store, shell_id)? {
+        return Ok(certification);
+    }
+    if let Some(certification) =
+        certify_cylindrical_boss_shell(store, shell_id, scope.as_deref_mut())?
+    {
         return Ok(certification);
     }
     if let Some(certification) = certify_planar_profile_prism(store, shell_id)? {
@@ -422,6 +428,277 @@ fn certify_cylinder_band_shell(
     Ok(Some(ShellCertification {
         embedding: ShellEmbedding::Certified,
         orientation,
+    }))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BossRingBoundary {
+    planar_face: FaceId,
+    planar_loop: LoopId,
+    edge: EdgeId,
+    center: Point3,
+    planar_axis_alignment: PredicateOrientation,
+    side_traverses_positive_u: bool,
+}
+
+/// Certify a convex planar host with one strictly contained circular port and
+/// one outward capped cylindrical band attached to that port.
+///
+/// The proof reconstructs the virtual closed convex host from the polygonal
+/// outer loop of the punctured face, proves the cylinder/circle/plane lifts
+/// over both complete ring edges, and uses the port support plane to separate
+/// the host and boss interiors. Recognition is topology and geometry driven;
+/// no constructor identity or face storage order participates.
+fn certify_cylindrical_boss_shell(
+    store: &Store,
+    shell_id: ShellId,
+    scope: Option<&mut OperationScope<'_, '_>>,
+) -> Result<Option<ShellCertification>> {
+    let shell = store.get(shell_id)?;
+    if shell.faces.len() < 6 || !shell.edges.is_empty() || shell.vertex.is_some() {
+        return Ok(None);
+    }
+    let mut side = None;
+    for &face_id in &shell.faces {
+        let face = store.get(face_id)?;
+        if let SurfaceGeom::Cylinder(cylinder) = store.get(face.surface)?
+            && side.replace((face_id, *cylinder)).is_some()
+        {
+            return Ok(None);
+        }
+    }
+    let Some((side_face_id, cylinder)) = side else {
+        return Ok(None);
+    };
+    let side_face = store.get(side_face_id)?;
+    if side_face.shell != shell_id || side_face.loops.len() != 2 {
+        return Ok(None);
+    }
+    let mut boundaries = Vec::with_capacity(2);
+    for &loop_id in &side_face.loops {
+        let Some(boundary) = boss_ring_boundary(store, shell_id, side_face_id, cylinder, loop_id)?
+        else {
+            return Ok(None);
+        };
+        if boundaries.iter().any(|prior: &BossRingBoundary| {
+            prior.edge == boundary.edge || prior.planar_face == boundary.planar_face
+        }) {
+            return Ok(None);
+        }
+        boundaries.push(boundary);
+    }
+    let separation = exact_affine_sign(
+        cylinder.frame().z(),
+        boundaries[1].center,
+        boundaries[0].center,
+    );
+    let (low, high) = match separation {
+        Some(PredicateOrientation::Positive) => (boundaries[0], boundaries[1]),
+        Some(PredicateOrientation::Negative) => (boundaries[1], boundaries[0]),
+        _ => return Ok(None),
+    };
+    if !low.side_traverses_positive_u || high.side_traverses_positive_u {
+        return Ok(Some(ShellCertification {
+            embedding: ShellEmbedding::Certified,
+            orientation: ShellOrientation::Invalid,
+        }));
+    }
+
+    let port_face = store.get(low.planar_face)?;
+    let cap_face = store.get(high.planar_face)?;
+    if port_face.loops.len() != 2
+        || !port_face.loops.contains(&low.planar_loop)
+        || cap_face.loops.as_slice() != [high.planar_loop]
+        || certify_face_loop_layout(store, low.planar_face)? != LoopContainment::Certified
+    {
+        return Ok(None);
+    }
+    let Some(port_outer_loop) = port_face
+        .loops
+        .iter()
+        .copied()
+        .find(|loop_id| *loop_id != low.planar_loop)
+    else {
+        return Ok(None);
+    };
+    let Some(port_vertices) =
+        convex_planar_face_loop_vertices(store, low.planar_face, port_outer_loop)?
+    else {
+        return Ok(None);
+    };
+
+    let low_orientation = certify_loop_orientation(store, low.planar_face, low.planar_loop)?;
+    let high_orientation = certify_loop_orientation(store, high.planar_face, high.planar_loop)?;
+    let expected_port_positive = !port_face.sense.is_forward();
+    let expected_cap_positive = cap_face.sense.is_forward();
+    if low_orientation.is_none_or(|orientation| {
+        (orientation == PredicateOrientation::Positive) != expected_port_positive
+    }) || high_orientation.is_none_or(|orientation| {
+        (orientation == PredicateOrientation::Positive) != expected_cap_positive
+    }) {
+        return Ok(Some(ShellCertification {
+            embedding: ShellEmbedding::Certified,
+            orientation: ShellOrientation::Invalid,
+        }));
+    }
+
+    let port_outward = oriented_axis_alignment(low.planar_axis_alignment, port_face.sense);
+    let cap_outward = oriented_axis_alignment(high.planar_axis_alignment, cap_face.sense);
+    let orientation_invalid =
+        side_face.sense != Sense::Forward || port_outward != Some(1) || cap_outward != Some(1);
+
+    let mut host_facets = Vec::with_capacity(shell.faces.len() - 2);
+    host_facets.push((low.planar_face, port_vertices));
+    for &face_id in &shell.faces {
+        if face_id == side_face_id || face_id == low.planar_face || face_id == high.planar_face {
+            continue;
+        }
+        let Some(vertices) = convex_planar_face_vertices(store, face_id)? else {
+            return Ok(None);
+        };
+        host_facets.push((face_id, vertices));
+    }
+    if host_facets.len() + 2 != shell.faces.len() {
+        return Ok(None);
+    }
+    let host = certify_convex_planar_facets(store, host_facets, scope)?;
+    if host.embedding != ShellEmbedding::Certified {
+        return Ok(None);
+    }
+    Ok(Some(ShellCertification {
+        embedding: ShellEmbedding::Certified,
+        orientation: if orientation_invalid || host.orientation != ShellOrientation::Positive {
+            ShellOrientation::Invalid
+        } else {
+            ShellOrientation::Positive
+        },
+    }))
+}
+
+fn boss_ring_boundary(
+    store: &Store,
+    shell_id: ShellId,
+    side_face_id: FaceId,
+    cylinder: Cylinder,
+    side_loop_id: LoopId,
+) -> Result<Option<BossRingBoundary>> {
+    let side_loop = store.get(side_loop_id)?;
+    let [side_fin_id] = side_loop.fins.as_slice() else {
+        return Ok(None);
+    };
+    if side_loop.face != side_face_id
+        || certify_loop_simplicity(store, side_loop_id)? != LoopSimplicity::Certified
+    {
+        return Ok(None);
+    }
+    let side_fin = store.get(*side_fin_id)?;
+    let edge = store.get(side_fin.edge)?;
+    let [first_fin, second_fin] = edge.fins.as_slice() else {
+        return Ok(None);
+    };
+    if side_fin.parent != side_loop_id
+        || edge.tolerance.is_some()
+        || edge.bounds.is_some()
+        || edge.vertices != [None, None]
+        || !edge.fins.contains(side_fin_id)
+    {
+        return Ok(None);
+    }
+    let planar_fin_id = if first_fin == side_fin_id {
+        *second_fin
+    } else if second_fin == side_fin_id {
+        *first_fin
+    } else {
+        return Ok(None);
+    };
+    let planar_fin = store.get(planar_fin_id)?;
+    if planar_fin.edge != side_fin.edge || planar_fin.sense == side_fin.sense {
+        return Ok(None);
+    }
+    let planar_loop_id = planar_fin.parent;
+    let planar_loop = store.get(planar_loop_id)?;
+    let planar_face_id = planar_loop.face;
+    let planar_face = store.get(planar_face_id)?;
+    if planar_face.shell != shell_id
+        || planar_loop.fins.as_slice() != [planar_fin_id]
+        || !planar_face.loops.contains(&planar_loop_id)
+        || certify_loop_simplicity(store, planar_loop_id)? != LoopSimplicity::Certified
+        || !matches!(store.get(planar_face.surface)?, SurfaceGeom::Plane(_))
+    {
+        return Ok(None);
+    }
+    if certify_whole_fin_incidence(
+        store,
+        side_face_id,
+        side_loop_id,
+        *side_fin_id,
+        LINEAR_RESOLUTION,
+    ) != WholeFinIncidence::Certified
+        || certify_whole_fin_incidence(
+            store,
+            planar_face_id,
+            planar_loop_id,
+            planar_fin_id,
+            LINEAR_RESOLUTION,
+        ) != WholeFinIncidence::Certified
+    {
+        return Ok(None);
+    }
+
+    let Some(curve_id) = edge.curve else {
+        return Ok(None);
+    };
+    let CurveGeom::Circle(circle) = store.get(curve_id)? else {
+        return Ok(None);
+    };
+    let SurfaceGeom::Plane(plane) = store.get(planar_face.surface)? else {
+        unreachable!("boss ring classification retains a plane");
+    };
+    if circle.radius() != cylinder.radius()
+        || exact_axis_alignment(cylinder.frame(), circle.frame().z()).is_none()
+        || !certified_point_on_axis(cylinder.frame(), circle.frame().origin())
+        || exact_affine_sign(
+            plane.frame().z(),
+            circle.frame().origin(),
+            plane.frame().origin(),
+        ) != Some(PredicateOrientation::Zero)
+    {
+        return Ok(None);
+    }
+    let Some(planar_axis_alignment) = exact_axis_alignment(cylinder.frame(), plane.frame().z())
+    else {
+        return Ok(None);
+    };
+    let Some(side_use) = side_fin.pcurve else {
+        return Ok(None);
+    };
+    let Curve2dGeom::Line(side_line) = store.get(side_use.curve())? else {
+        return Ok(None);
+    };
+    if side_line.dir().y != 0.0 || side_line.dir().x == 0.0 {
+        return Ok(None);
+    }
+    let Some(side_traverses_positive_u) = traversal_is_positive(
+        [side_line.dir().x, side_use.edge_to_pcurve().scale()],
+        side_fin.sense,
+    ) else {
+        return Ok(None);
+    };
+    let Some(planar_use) = planar_fin.pcurve else {
+        return Ok(None);
+    };
+    if !matches!(store.get(planar_use.curve())?, Curve2dGeom::Circle(_))
+        || planar_use.closure_winding() != Some([0, 0])
+    {
+        return Ok(None);
+    }
+    Ok(Some(BossRingBoundary {
+        planar_face: planar_face_id,
+        planar_loop: planar_loop_id,
+        edge: side_fin.edge,
+        center: circle.frame().origin(),
+        planar_axis_alignment,
+        side_traverses_positive_u,
     }))
 }
 
@@ -977,18 +1254,31 @@ fn certify_convex_planar_shell(
     if shell.faces.len() < 4 {
         return Ok(indeterminate());
     }
-    let mut shell_vertices = Vec::new();
     let mut facets = Vec::with_capacity(shell.faces.len());
     for &face_id in &shell.faces {
         let Some(vertices) = convex_planar_face_vertices(store, face_id)? else {
             return Ok(indeterminate());
         };
-        for &vertex in &vertices {
+        facets.push((face_id, vertices));
+    }
+    certify_convex_planar_facets(store, facets, scope)
+}
+
+fn certify_convex_planar_facets(
+    store: &Store,
+    facets: Vec<(FaceId, Vec<VertexId>)>,
+    scope: Option<&mut OperationScope<'_, '_>>,
+) -> Result<ShellCertification> {
+    if facets.len() < 4 {
+        return Ok(indeterminate());
+    }
+    let mut shell_vertices = Vec::new();
+    for (_, vertices) in &facets {
+        for &vertex in vertices {
             if !shell_vertices.contains(&vertex) {
                 shell_vertices.push(vertex);
             }
         }
-        facets.push((face_id, vertices));
     }
     if shell_vertices.len() < 4 {
         return Ok(indeterminate());
@@ -1415,13 +1705,24 @@ fn convex_point_location(point: [f64; 2], polygon: &[ProjectedVertex]) -> Convex
 
 fn convex_planar_face_vertices(store: &Store, face_id: FaceId) -> Result<Option<Vec<VertexId>>> {
     let face = store.get(face_id)?;
-    let SurfaceGeom::Plane(plane) = store.get(face.surface)? else {
-        return Ok(None);
-    };
     if face.loops.len() != 1 {
         return Ok(None);
     }
-    let loop_id = face.loops[0];
+    convex_planar_face_loop_vertices(store, face_id, face.loops[0])
+}
+
+fn convex_planar_face_loop_vertices(
+    store: &Store,
+    face_id: FaceId,
+    loop_id: LoopId,
+) -> Result<Option<Vec<VertexId>>> {
+    let face = store.get(face_id)?;
+    let SurfaceGeom::Plane(plane) = store.get(face.surface)? else {
+        return Ok(None);
+    };
+    if !face.loops.contains(&loop_id) || store.get(loop_id)?.face != face_id {
+        return Ok(None);
+    }
     if certify_loop_simplicity(store, loop_id)? != LoopSimplicity::Certified {
         return Ok(None);
     }

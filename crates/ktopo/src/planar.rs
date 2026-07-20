@@ -482,8 +482,24 @@ impl Transaction<'_> {
 }
 
 impl PreparedSolid {
-    fn new(input: &PlanarSolidInput, store: &crate::store::Store) -> Result<Self> {
+    pub(crate) fn new(input: &PlanarSolidInput, store: &crate::store::Store) -> Result<Self> {
         Self::new_with_winding(input, store, PreparedShellWinding::Positive)
+    }
+
+    /// Resolve one preflighted face's supporting plane and orientation.
+    pub(crate) fn face_plane(
+        &self,
+        index: usize,
+        store: &crate::store::Store,
+    ) -> Result<Option<(Plane, Sense)>> {
+        let Some(face) = self.faces.get(index) else {
+            return Ok(None);
+        };
+        let plane = match face.surface {
+            PreparedFaceSurface::New(plane) => plane,
+            PreparedFaceSurface::Reuse(surface) => live_plane(store, surface)?,
+        };
+        Ok(Some((plane, face.sense)))
     }
 
     pub(crate) fn new_with_winding(
