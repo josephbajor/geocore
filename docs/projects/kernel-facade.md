@@ -4,7 +4,7 @@ Status: K1–K3, K5 adoption, and the landed K4 slices (typed X_T import/export,
 checked semantic edits — MVFS/KVFS, MEV/KEV, MEF/KEF, KFMRH/MFKRH, face split/merge, bridge/ring —
 rigid body copy with certificate reissuance, polygonal-profile extrusion, operation-owned tolerance
 batching, block/cylinder construction, the opt-in Full-assurance commit gate, facade body tessellation, public typed block/block Boolean outcomes plus axial intersection, cylinder-minus-block remainder bands, zero-cut
-truth-selected whole-source union/subtraction copies, one-ring axial cap-overlap connected union, and one-ring axial block-minus-cylinder blind pockets) are implemented;
+truth-selected whole-source union/subtraction copies, one-ring axial cap-overlap connected union, one-ring axial block-minus-cylinder blind pockets, and two-port axial through-holes) are implemented;
 broader semantic edit families, transmitted-proof reissuance beyond the named families, partition
 history, and the C ABI remain.
 
@@ -277,7 +277,7 @@ signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handle
 - Broader semantic edit families beyond the landed MVFS/KVFS, MEV/KEV, MEF/KEF, KFMRH/MFKRH,
   split/merge, bridge/ring, and rigid copy; nested edit transactions pending a journal-composition +
   partition-history contract; tolerance-propagation policies beyond MEF inheritance / KEF ordered max.
-- Extend the landed deterministic-X_T axial, zero-cut, one-ring connected-union, and one-ring blind-pocket block/cylinder slice to through-hole/multi-port and contained curved void subtraction, multi-ring/other connected curved union,
+- Extend the landed deterministic-X_T axial, zero-cut, one-ring connected-union/blind-pocket, and two-port through-hole block/cylinder slice to contained curved void subtraction and multi-ring/other connected curved union,
   broader contacts and multi-component layouts, and licensed-host evidence without exposing lower-layer
   symbolic fragments, graph descriptors, or raw candidate topology.
 - Rigid-copy preflight gaps: altered/witness-mismatched higher-order charts, graph-valid shared-basis

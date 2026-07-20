@@ -38,10 +38,10 @@ enforcement over new parallel surface area. Read the queue literally.
    finite-cylinder Full proof landed. Exact curved face partition/classification and failure-atomic,
    Full-checked axial intersection, cylinder-minus-block remainder bands, and zero-cut
    truth-selected whole-source union/subtraction copies, one-ring axial cap-overlap connected union,
-   and one-ring axial block-minus-cylinder blind pockets now run through the public facade and export
-   deterministically; through-hole/multi-port and contained curved void subtraction, multi-ring/other
-   connected curved union, broader layouts, and licensed-host evidence remain. Broader intersection/NURBS
-   families, revolve, and curved profiles remain milestone backlog.
+   one-ring axial block-minus-cylinder blind pockets, and two-port axial through-holes now run
+   through the public facade and export deterministically; contained curved void subtraction,
+   multi-ring/other connected curved union, broader layouts, and licensed-host evidence remain.
+   Broader intersection/NURBS families, revolve, and curved profiles remain milestone backlog.
 
 **External-evidence lane.** Current Onshape records pin the 15-file writer bundle and the six-file
 public Boolean bundle. Fingerprints: `docs/oracle-certification.json` and

@@ -27,6 +27,7 @@ use super::boundary_select::{
     OperandSide, RegularizedBooleanOperation, SelectedOrientation, select_boundary_fragments,
 };
 use super::curved_boss::{PreparedCappedCylinder, prepare_capped_cylinder};
+use super::curved_port_band::{PreparedCylindricalPortBand, prepare_cylindrical_port_band};
 use super::curved_source::{
     CertifiedCylinderSource, CylinderSourceGap, CylinderSourceOutcome, extract_cylinder_source,
 };
@@ -757,6 +758,7 @@ fn axial_parameter(source: &CertifiedCylinderSource, point: Point3) -> Option<f6
 #[derive(Debug, Clone)]
 enum PreparedCurvedResult {
     CappedCylinder(Box<PreparedCappedCylinder>),
+    CylindricalPortBand(Box<PreparedCylindricalPortBand>),
     CylindricalBands(Vec<CylindricalBandSolidInput>),
     WholeSources(Vec<RawBodyId>),
 }
@@ -765,6 +767,7 @@ impl PreparedCurvedResult {
     fn is_empty(&self) -> bool {
         match self {
             Self::CappedCylinder(_) => false,
+            Self::CylindricalPortBand(_) => false,
             Self::CylindricalBands(bands) => bands.is_empty(),
             Self::WholeSources(sources) => sources.is_empty(),
         }
@@ -790,6 +793,13 @@ fn prepare_result_proposals(
         .map_err(|reason| refused_error(CurvedBooleanPipelineRefusal::AssemblyContract(reason)))?
     {
         return Ok(PreparedCurvedResult::CappedCylinder(Box::new(feature)));
+    }
+    if let Some(port_band) = prepare_cylindrical_port_band(planar, cylinder, cuts, &selected)
+        .map_err(|reason| refused_error(CurvedBooleanPipelineRefusal::AssemblyContract(reason)))?
+    {
+        return Ok(PreparedCurvedResult::CylindricalPortBand(Box::new(
+            port_band,
+        )));
     }
     prepare_band_proposals(cylinder, cuts, selected).map(PreparedCurvedResult::CylindricalBands)
 }
@@ -964,9 +974,18 @@ fn commit_proposals(
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<CurvedBooleanPipelineOutcome> {
     match &proposals {
-        PreparedCurvedResult::CappedCylinder(feature) => {
-            precharge_capped_cylinder(feature, scope)?;
-        }
+        PreparedCurvedResult::CappedCylinder(feature) => precharge_curved_host_feature(
+            feature.host_vertices(),
+            feature.host_faces(),
+            feature.host_face_uses(),
+            scope,
+        )?,
+        PreparedCurvedResult::CylindricalPortBand(port_band) => precharge_curved_host_feature(
+            port_band.host_vertices(),
+            port_band.host_faces(),
+            port_band.host_face_uses(),
+            scope,
+        )?,
         PreparedCurvedResult::WholeSources(sources) => {
             precharge_whole_source_copies(edit, sources, scope)?;
         }
@@ -975,12 +994,23 @@ fn commit_proposals(
     let mut transaction = edit.state.store.transaction().map_err(Error::from)?;
     let mut raw_bodies = match &proposals {
         PreparedCurvedResult::CappedCylinder(_) => Vec::with_capacity(1),
+        PreparedCurvedResult::CylindricalPortBand(_) => Vec::with_capacity(1),
         PreparedCurvedResult::CylindricalBands(bands) => Vec::with_capacity(bands.len()),
         PreparedCurvedResult::WholeSources(sources) => Vec::with_capacity(sources.len()),
     };
     match proposals {
         PreparedCurvedResult::CappedCylinder(proposal) => {
             let body = match transaction.assemble_capped_cylinder_solid(&proposal.into_input()) {
+                Ok(output) => output.body(),
+                Err(kcore::error::Error::InvalidGeometry { reason }) => {
+                    return refused(CurvedBooleanPipelineRefusal::AssemblyContract(reason));
+                }
+                Err(source) => return Err(source.into()),
+            };
+            raw_bodies.push(body);
+        }
+        PreparedCurvedResult::CylindricalPortBand(proposal) => {
+            let body = match transaction.assemble_two_port_cylinder_solid(&proposal.into_input()) {
                 Ok(output) => output.body(),
                 Err(kcore::error::Error::InvalidGeometry { reason }) => {
                     return refused(CurvedBooleanPipelineRefusal::AssemblyContract(reason));
@@ -1041,16 +1071,19 @@ fn commit_proposals(
     ))
 }
 
-/// Charge a source-size-exact conservative bound before capped-feature allocation.
-fn precharge_capped_cylinder(
-    proposal: &PreparedCappedCylinder,
+/// Charge a source-size-exact conservative bound before host-feature allocation.
+fn precharge_curved_host_feature(
+    host_vertices: usize,
+    host_faces: usize,
+    host_face_uses: usize,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<()> {
-    let vertices = u64::try_from(proposal.host_vertices()).map_err(|_| work_overflow())?;
-    let faces = u64::try_from(proposal.host_faces()).map_err(|_| work_overflow())?;
-    let uses = u64::try_from(proposal.host_face_uses()).map_err(|_| work_overflow())?;
+    let vertices = u64::try_from(host_vertices).map_err(|_| work_overflow())?;
+    let faces = u64::try_from(host_faces).map_err(|_| work_overflow())?;
+    let uses = u64::try_from(host_face_uses).map_err(|_| work_overflow())?;
     // Host vertices/points, analytic line-edge closure, face/loop/fin uses,
-    // and a generous constant for the port ring, side band, cap, and scaffold.
+    // and a generous constant for two ring boundaries, the cylinder side,
+    // optional closing cap, and scaffold.
     let work = vertices
         .checked_mul(4)
         .and_then(|value| value.checked_add(faces.checked_mul(4)?))

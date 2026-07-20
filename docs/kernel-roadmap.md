@@ -76,7 +76,7 @@ journals.
 | M2.5 Architecture gate | IN PROGRESS / REQUIRED | Pcurves, tolerant edges, tolerance provenance, checked assembly, journals landed; seam/pole interchange fixtures, remaining Full-proof gaps, and tolerance-propagation policies remain. |
 | M3 X_T | IN PROGRESS | Modern-schema subset reads/writes with host-certified conventions; production coverage and re-certification remain (see [oracle-loop.md](oracle-loop.md)). |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases with explicit Complete/Indeterminate evidence plus first modeling consumers; general certified CC/CS/SSI does not exist yet. |
-| M5 Analytic booleans | IMPLEMENTED SLICE | Public block/block CSG is Full-checked, atomic, deterministic, and licensed-host validated. Exact axial rings drive block/cylinder intersection, cylinder-minus-block bands, one-ring union and blind pockets; zero-cut selection copies whole boundaries. Through-hole/multi-port and contained curved void subtraction, multi-ring union, and curved external evidence remain. |
+| M5 Analytic booleans | IMPLEMENTED SLICE | Public block/block CSG is Full-checked, atomic, deterministic, and licensed-host validated. Exact axial rings drive block/cylinder intersection, cylinder-minus-block bands, one-ring union/blind pockets, and two-port through-holes; zero-cut selection copies whole boundaries. Contained curved void subtraction, multi-ring union, and curved external evidence remain. |
 | M6–M8 | NOT STARTED | General modeling, blends, stable API, and production hardening remain. |
 
 ## Reconciled critical path
@@ -310,13 +310,13 @@ and exact dual-cell classification now feed the public intersection facade. It
 atomically assembles and Full-checks strict axial slab-through-cylinder intersection
 bands and the two positive remainder bands for axial finite-cylinder-minus-block
 subtraction, copies every zero-cut truth-selected complete source boundary for
-union/subtraction, assembles the one-ring axial cap-overlap union and one-ring
-axial block-minus-cylinder blind pocket as Full-certified capped cylindrical
-features, proves zero-cut disjoint intersections empty, and refuses unsupported
-curved truth/topology classes before allocation. The results export
-deterministically and self-import Fast-valid. Through-hole/multi-port and
-contained curved void subtraction, multi-ring/other connected curved union,
-broader contact and multi-component layouts, and the licensed-host evidence gate remain.
+union/subtraction, assembles one-ring axial cap-overlap unions and blind pockets
+plus two-port axial through-holes as Full-certified cylindrical host features,
+proves zero-cut disjoint intersections empty, and refuses unsupported curved
+truth/topology classes before allocation. The results export deterministically
+and self-import Fast-valid. Contained curved void subtraction, multi-ring/other
+connected curved union, broader contact and multi-component layouts, and the
+curved licensed-host evidence gate remain.
 
 Do not wait for an exhaustive analytic pair table before testing the end-to-end
 boolean architecture. Begin with a deliberately narrow vertical slice as soon as the

@@ -7,22 +7,17 @@
 //! selected boundary into the topology layer's neutral semantic input; it does
 //! not inspect the Boolean operation or primitive constructor layout.
 
-use std::collections::BTreeMap;
-
 use kcore::predicates::{Orientation, orient3d};
 use kgeom::param::ParamRange;
 use ktopo::cylindrical_boss::CappedCylinderSolidInput;
-use ktopo::entity::EntityRef;
-use ktopo::planar::{
-    PlanarFacePlaneBinding, PlanarSolidFace, PlanarSolidInput, PlanarSolidVertex, PlanarVertexKey,
-};
 
 use super::boundary_select::{OperandSide, SelectedBoundaryFragment, SelectedOrientation};
+use super::curved_host::{prepare_curved_host, source_operand, source_plane_for_face};
 use super::curved_pipeline::{CertifiedRingCut, CurvedFragment, CurvedFragmentKey};
 use super::curved_source::CertifiedCylinderSource;
 use super::extract::ExtractedPlanarSourceBody;
 use super::face_partition::{AxialBoundary, FaceRegionKey};
-use super::planar_bsp::{PlaneTripleVertexKey, SourcePlane, SourcePlaneRef};
+use super::planar_bsp::SourcePlane;
 
 type SelectedCurvedFragment = SelectedBoundaryFragment<CurvedFragmentKey, CurvedFragment>;
 
@@ -66,7 +61,7 @@ pub(super) fn prepare_capped_cylinder(
     let [cut] = cuts else {
         return Ok(None);
     };
-    let planar_operand = common_planar_operand(planar)?;
+    let planar_operand = source_operand(planar)?;
     let planar_side = operand_side(planar_operand);
     let cylinder_side = operand_side(planar_operand ^ 1);
     if selected.len() != planar.faces().len().saturating_add(2) {
@@ -138,7 +133,10 @@ pub(super) fn prepare_capped_cylinder(
         return Ok(None);
     }
 
-    let (host, port_face) = prepare_host(planar, cut.planar_face)?;
+    let (host, port_faces) = prepare_curved_host(planar, &[cut.planar_face])?;
+    let [port_face] = port_faces.as_slice() else {
+        return Err("capped cylinder requires exactly one host port");
+    };
     let cap_parameter = axial_parameter(cylinder, cap.center())
         .ok_or("capped cylinder source cap has no finite axial parameter")?;
     let axial_range = ordered_range(cut.axial_parameter, cap_parameter)?;
@@ -148,7 +146,7 @@ pub(super) fn prepare_capped_cylinder(
     Ok(Some(PreparedCappedCylinder {
         input: CappedCylinderSolidInput::new(
             host,
-            port_face,
+            *port_face,
             *cylinder.cylinder().frame(),
             cylinder.cylinder().radius(),
             axial_range,
@@ -178,17 +176,7 @@ fn capped_feature_orientation(
     port_face: ktopo::entity::FaceId,
     cap_center: kgeom::vec::Point3,
 ) -> Result<SelectedOrientation, &'static str> {
-    let source_face = planar
-        .faces()
-        .iter()
-        .find(|face| face.face().raw() == port_face)
-        .ok_or("capped cylinder port has no planar source face")?;
-    let source_plane = planar
-        .planes()
-        .iter()
-        .find(|plane| plane.id() == source_face.plane())
-        .ok_or("capped cylinder port has no source-plane proof")?;
-    orientation_for_source_plane(*source_plane, cap_center)
+    orientation_for_source_plane(source_plane_for_face(planar, port_face)?, cap_center)
 }
 
 fn orientation_for_source_plane(
@@ -215,107 +203,12 @@ fn ordered_range(first: f64, second: f64) -> Result<ParamRange, &'static str> {
     })
 }
 
-fn common_planar_operand(planar: &ExtractedPlanarSourceBody) -> Result<u8, &'static str> {
-    let Some(first) = planar.planes().first().map(|plane| plane.id().operand()) else {
-        return Err("capped cylinder host has no source planes");
-    };
-    if first > 1
-        || planar
-            .planes()
-            .iter()
-            .any(|plane| plane.id().operand() != first)
-    {
-        return Err("capped cylinder host planes have inconsistent operand identities");
-    }
-    Ok(first)
-}
-
 fn operand_side(operand: u8) -> OperandSide {
     if operand == 0 {
         OperandSide::Left
     } else {
         OperandSide::Right
     }
-}
-
-fn prepare_host(
-    source: &ExtractedPlanarSourceBody,
-    port_source: ktopo::entity::FaceId,
-) -> Result<(PlanarSolidInput, usize), &'static str> {
-    let mut key_by_vertex = BTreeMap::<PlaneTripleVertexKey, PlanarVertexKey>::new();
-    let mut vertices = Vec::with_capacity(source.vertices().len());
-    for (index, vertex) in source.vertices().iter().enumerate() {
-        let value =
-            u64::try_from(index).map_err(|_| "capped cylinder host vertex identity exceeds u64")?;
-        let key = PlanarVertexKey::new(value);
-        if key_by_vertex.insert(vertex.key(), key).is_some() {
-            return Err("capped cylinder host repeats a source vertex identity");
-        }
-        vertices.push(PlanarSolidVertex::new(key, vertex.position()));
-    }
-
-    let registry = source
-        .faces()
-        .iter()
-        .map(|face| (face.plane(), (face.face().raw(), face.surface())))
-        .collect::<BTreeMap<_, _>>();
-    if registry.len() != source.faces().len() {
-        return Err("capped cylinder host repeats a source face identity");
-    }
-
-    let mut faces = Vec::with_capacity(source.faces().len());
-    let mut port_face = None;
-    for source_face in source.faces() {
-        let fragment = unique_fragment(source, source_face.plane())?;
-        let ring = fragment
-            .vertices()
-            .iter()
-            .map(|key| {
-                key_by_vertex
-                    .get(key)
-                    .copied()
-                    .ok_or("capped cylinder face references an unknown source vertex")
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let carriers = fragment
-            .edge_planes()
-            .iter()
-            .map(|plane| {
-                registry
-                    .get(plane)
-                    .map(|(_, surface)| *surface)
-                    .ok_or("capped cylinder edge references an unknown source plane")
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let face_index = faces.len();
-        faces.push(
-            PlanarSolidFace::new(ring)
-                .with_source(EntityRef::Face(source_face.face().raw()))
-                .with_plane_binding(PlanarFacePlaneBinding::new(source_face.surface(), carriers)),
-        );
-        if source_face.face().raw() == port_source && port_face.replace(face_index).is_some() {
-            return Err("capped cylinder cut matches more than one host face");
-        }
-    }
-    let port_face = port_face.ok_or("capped cylinder cut has no host face")?;
-    Ok((PlanarSolidInput::new(vertices, faces), port_face))
-}
-
-fn unique_fragment(
-    source: &ExtractedPlanarSourceBody,
-    face: SourcePlaneRef,
-) -> Result<&super::planar_bsp::ConvexPlanarFragment, &'static str> {
-    let mut matches = source
-        .fragments()
-        .iter()
-        .filter(|fragment| fragment.source_face() == face);
-    let fragment = matches
-        .next()
-        .ok_or("capped cylinder host face has no source fragment")?;
-    if matches.next().is_some() {
-        return Err("capped cylinder host face has multiple source fragments");
-    }
-    Ok(fragment)
 }
 
 fn axial_parameter(source: &CertifiedCylinderSource, point: kgeom::vec::Point3) -> Option<f64> {
@@ -327,6 +220,7 @@ fn axial_parameter(source: &CertifiedCylinderSource, point: kgeom::vec::Point3) 
 
 #[cfg(test)]
 mod tests {
+    use super::super::planar_bsp::SourcePlaneRef;
     use super::*;
 
     #[test]

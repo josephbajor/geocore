@@ -43,10 +43,10 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    first Full-checked axial intersection, cylinder-minus-block remainder bands,
    zero-cut truth-selected whole-source union/subtraction copies, one-ring
    axial cap-overlap connected union, and one-ring axial block-minus-cylinder
-   blind pockets now land through the public facade with deterministic X_T
-   emission and Fast self-import; through-hole/multi-port and contained curved
-   void subtraction, multi-ring/other connected union, broader contacts, and
-   licensed-host evidence remain)*
+   blind pockets and two-port axial through-holes now land through the public
+   facade with deterministic X_T emission and Fast self-import; contained
+   curved void subtraction, multi-ring/other connected union, broader contacts,
+   and licensed-host evidence remain)*
 
 Work that does not advance the queue head needs an explicit justification
 linking it to a rung ("rung 2 needs curve/curve overlap dedup because …").

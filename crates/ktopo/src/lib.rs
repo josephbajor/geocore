@@ -39,6 +39,8 @@
 //!   semantic builders retaining whole Plane/Cylinder rings.
 //! - [`cylindrical_boss`] — proof-ready attachment of one capped cylindrical
 //!   boss or blind pocket to a convex planar host face.
+//! - [`cylindrical_ports`] — proof-ready reversed cylinder band joining two
+//!   convex-host port faces.
 //! - [`profile`] — validated planar inputs shared by sheet and feature builders.
 //! - [`tolerance`] — entity tolerance provenance and growth contracts.
 //! - [`check`] — the body checker (structural + geometric invariants).
@@ -55,6 +57,7 @@ pub mod btess;
 pub mod check;
 pub mod cylindrical_band;
 pub mod cylindrical_boss;
+pub mod cylindrical_ports;
 pub mod domain;
 pub mod entity;
 pub mod euler;

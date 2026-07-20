@@ -19,7 +19,9 @@ KERNEL_PACKAGE_FILES = {
     "examples/boolean_xt_oracle.rs",
     "src/boolean/boundary_select.rs",
     "src/boolean/curved_boss.rs",
+    "src/boolean/curved_host.rs",
     "src/boolean/curved_pipeline.rs",
+    "src/boolean/curved_port_band.rs",
     "src/boolean/curved_source.rs",
     "src/boolean/dispatch.rs",
     "src/boolean/component_layout.rs",
@@ -59,6 +61,7 @@ KERNEL_PACKAGE_FILES = {
     "src/view/part.rs",
     "tests/lifecycle.rs",
     "tests/lifecycle/curved_one_port_budget.rs",
+    "tests/lifecycle/curved_two_port.rs",
 }
 
 

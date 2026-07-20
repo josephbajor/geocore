@@ -6,8 +6,8 @@
 //! polygonal-profile extrusion construction, deterministic complete-body
 //! rigid copy, body checking and tessellation, operation-scoped surface
 //! evaluation, certified convex-planar plus axial, zero-cut whole-source,
-//! one-ring connected-union, and one-ring blind-pocket curved body Booleans,
-//! and typed X_T import/export plus graph-owned bounded curve intersection
+//! one-ring connected-union/blind-pocket, and two-port through-hole curved body
+//! Booleans, and typed X_T import/export plus graph-owned bounded curve intersection
 //! with F2 reports and delegated classified errors. Rigid copies own disjoint
 //! topology and geometry closures and retain exact `DerivedFrom` lineage. Committed
 //! mutation, lineage, tolerance-growth, and descriptive face-tolerance
