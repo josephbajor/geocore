@@ -911,9 +911,23 @@ impl Part<'_> {
         );
         let mut scope = OperationScope::new(&context);
         let linear = settings.tolerances().linear();
-        let result = section_impl(self, &body_a, &body_b, linear, &mut scope);
+        let result = section_bodies_in_scope(self, &body_a, &body_b, linear, &mut scope);
         Ok(scope.finish_typed(result))
     }
+}
+
+/// Reuse body sectioning inside a facade-owned compound operation.
+///
+/// The caller owns identity/distinctness validation and composes both section
+/// and graph-surface budget families before entering this seam.
+pub(crate) fn section_bodies_in_scope(
+    part: &Part<'_>,
+    body_a: &BodyId,
+    body_b: &BodyId,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<BodySectionGraph> {
+    section_impl(part, body_a, body_b, linear, scope)
 }
 
 /// Orchestrate admission, broad phase, per-pair intersection, exact clip,

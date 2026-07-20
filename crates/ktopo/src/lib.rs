@@ -35,6 +35,8 @@
 //!   external edits use [`transaction::Transaction`].
 //! - [`make`] — primitive body constructors.
 //! - [`planar`] — keyed, manifold planar-solid assembly for semantic builders.
+//! - [`cylindrical_band`] — proof-ready finite cylindrical-band assembly for
+//!   semantic builders retaining whole Plane/Cylinder rings.
 //! - [`profile`] — validated planar inputs shared by sheet and feature builders.
 //! - [`tolerance`] — entity tolerance provenance and growth contracts.
 //! - [`check`] — the body checker (structural + geometric invariants).
@@ -49,6 +51,7 @@ pub mod benchmark;
 pub(crate) mod body_copy;
 pub mod btess;
 pub mod check;
+pub mod cylindrical_band;
 pub mod domain;
 pub mod entity;
 pub mod euler;

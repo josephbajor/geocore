@@ -19,6 +19,7 @@ use crate::loop_proof::{
 };
 use crate::store::Store;
 use kcore::error::Result;
+use kcore::interval::Interval;
 use kcore::operation::{
     AccountingMode, BudgetPlan, LimitSpec, OperationScope, ResourceKind, StageId,
 };
@@ -511,7 +512,7 @@ fn cylinder_band_boundary(
     };
     if circle.radius() != cylinder.radius()
         || exact_axis_alignment(cylinder.frame(), circle.frame().z()).is_none()
-        || !exact_point_on_axis(cylinder.frame(), circle.frame().origin())
+        || !certified_point_on_axis(cylinder.frame(), circle.frame().origin())
         || exact_affine_sign(
             cap_plane.frame().z(),
             circle.frame().origin(),
@@ -573,10 +574,23 @@ fn exact_axis_alignment(frame: &Frame, direction: Vec3) -> Option<PredicateOrien
     }
 }
 
-fn exact_point_on_axis(frame: &Frame, point: Point3) -> bool {
-    [frame.x(), frame.y()].into_iter().all(|radial| {
-        exact_affine_sign(radial, point, frame.origin()) == Some(PredicateOrientation::Zero)
-    })
+fn certified_point_on_axis(frame: &Frame, point: Point3) -> bool {
+    let origin = frame.origin();
+    let offset = [
+        Interval::point(point.x) - Interval::point(origin.x),
+        Interval::point(point.y) - Interval::point(origin.y),
+        Interval::point(point.z) - Interval::point(origin.z),
+    ];
+    let radial_sq = [frame.x(), frame.y()]
+        .into_iter()
+        .map(|axis| {
+            let dot = Interval::point(axis.x) * offset[0]
+                + Interval::point(axis.y) * offset[1]
+                + Interval::point(axis.z) * offset[2];
+            dot.square()
+        })
+        .fold(Interval::point(0.0), |sum, term| sum + term);
+    radial_sq.hi() <= LINEAR_RESOLUTION * LINEAR_RESOLUTION
 }
 
 fn exact_vector_dot(left: Vec3, right: Vec3) -> Option<PredicateOrientation> {

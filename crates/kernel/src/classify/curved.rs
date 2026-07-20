@@ -683,7 +683,34 @@ fn axial_parity_direction(
                 if t.hi() <= 0.0 {
                     continue;
                 }
-                if t.lo() <= 0.0 || !t.lo().is_finite() || !t.hi().is_finite() {
+                if !t.lo().is_finite() || !t.hi().is_finite() {
+                    return None;
+                }
+                if t.lo() <= 0.0 {
+                    // A query may lie on the infinite extension of a cap
+                    // plane while remaining strictly outside every circular
+                    // trim. That is not a boundary contact and contributes no
+                    // positive-ray crossing. Prove the trim miss at t = 0
+                    // before discarding this otherwise degenerate plane hit.
+                    let mut containing = 0_u64;
+                    for ring in &plane.rings {
+                        let local = line_point_local_intervals(
+                            *ring.circle.frame(),
+                            point,
+                            direction,
+                            Interval::point(0.0),
+                        );
+                        let sign = local[0].square() + local[1].square()
+                            - Interval::point(ring.circle.radius()).square();
+                        if sign.hi() < 0.0 {
+                            containing += 1;
+                        } else if sign.lo() <= 0.0 {
+                            return None;
+                        }
+                    }
+                    if containing.is_multiple_of(2) {
+                        continue;
+                    }
                     return None;
                 }
                 far_t = far_t.max(t.hi());

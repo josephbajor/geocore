@@ -35,8 +35,10 @@ enforcement over new parallel surface area. Read the queue literally.
    CSG is public and externally validated. The next consumer is block/cylinder Boolean support:
    public cylinder construction, finite-cylinder classification, topology-owned curved trim,
    closed-fragment stitching, exact rings and bounded arcs, generic exact boundary selection, and
-   finite-cylinder Full proof landed; curved face partition/classification, mixed assembly, and X_T
-   remain. Broader intersection/NURBS families, revolve, and curved profiles remain milestone backlog.
+   finite-cylinder Full proof landed. Exact curved face partition/classification and failure-atomic,
+   Full-checked axial intersection bands now run through the public facade and export deterministically;
+   curved union/subtraction, broader layouts, and licensed-host evidence remain. Broader
+   intersection/NURBS families, revolve, and curved profiles remain milestone backlog.
 
 **External-evidence lane.** Current Onshape records pin the 15-file writer bundle and the six-file
 public Boolean bundle. Fingerprints: `docs/oracle-certification.json` and

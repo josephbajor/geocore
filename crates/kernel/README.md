@@ -12,8 +12,9 @@ The current facade supports:
 - contextual block and cylinder construction plus Fast/Full body checking;
 - operation-accounted conforming solid and sheet tessellation;
 - bounded, operation-accounted surface evaluation; and
-- failure-atomic block/block unite, intersect, and subtract with typed
-  empty/multi-body/cavity outcomes and Full validation;
+- failure-atomic block/block unite/intersect/subtract plus axial
+  convex-planar/finite-cylinder intersection, with typed empty/created/refused
+  outcomes and Full validation;
 - atomic typed X_T import and deterministic X_T export; and
 - deterministic facade-ID mutation, lineage, and tolerance journal iteration;
   and

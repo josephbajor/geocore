@@ -188,11 +188,11 @@ pub(crate) fn execute_planar_boolean(
         .context(edit.policy)?
         .with_family_budget_defaults(defaults);
     let mut scope = OperationScope::new(&context);
-    let result = execute_in_scope(edit, operation, left, right, &mut scope);
+    let result = execute_planar_in_scope(edit, operation, left, right, &mut scope);
     Ok(scope.finish_typed(result))
 }
 
-fn validate_operand(edit: &PartEdit<'_>, body: &BodyId) -> Result<()> {
+pub(crate) fn validate_operand(edit: &PartEdit<'_>, body: &BodyId) -> Result<()> {
     if body.part() != &edit.id {
         return Err(Error::WrongPart {
             expected: edit.id.clone(),
@@ -208,7 +208,7 @@ fn validate_operand(edit: &PartEdit<'_>, body: &BodyId) -> Result<()> {
         })
 }
 
-fn execute_in_scope(
+pub(crate) fn execute_planar_in_scope(
     edit: &mut PartEdit<'_>,
     operation: PlanarBooleanOperation,
     left: BodyId,
@@ -344,7 +344,9 @@ fn execute_stages(
     ))
 }
 
-fn validate_pipeline_budget(scope: &OperationScope<'_, '_>) -> StageResult<()> {
+pub(crate) fn validate_pipeline_budget(
+    scope: &OperationScope<'_, '_>,
+) -> core::result::Result<(), Error> {
     for (stage, resource, mode) in [
         (
             PLANAR_BOOLEAN_BSP_WORK,

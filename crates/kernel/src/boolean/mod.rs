@@ -1,10 +1,12 @@
-//! Failure-atomic Boolean operations over the certified convex-planar slice.
+//! Failure-atomic Boolean operations over certified planar and first curved slices.
 //!
 //! The public facade is deliberately one operation family. Its implementation
-//! remains a symbolic exact-plane BSP followed by conservative realization,
-//! deterministic shell grouping, and one Full-checked topology transaction.
-//! Unsupported geometry and incomplete proof are returned as typed refusal
-//! values; no partial topology or lower-layer symbolic identity escapes.
+//! dispatches between a symbolic exact-plane BSP and an axial
+//! convex-planar/finite-cylinder pipeline with proof-bearing face cells. Both
+//! paths select conservatively and commit through Full-checked topology
+//! transactions. Unsupported geometry and incomplete proof are returned as
+//! typed refusal values; no partial topology or lower-layer symbolic identity
+//! escapes.
 
 use kcore::operation::{BudgetPlan, StageId};
 
@@ -20,7 +22,15 @@ mod component_layout;
 #[allow(dead_code)]
 mod components;
 #[allow(dead_code)]
+mod curved_pipeline;
+#[allow(dead_code)]
+mod curved_source;
+#[allow(dead_code)]
+mod dispatch;
+#[allow(dead_code)]
 mod extract;
+#[allow(dead_code)]
+mod face_partition;
 #[allow(dead_code)]
 mod pipeline;
 #[allow(dead_code)]
@@ -50,6 +60,9 @@ impl BooleanBudgetProfile {
     pub fn v1_defaults() -> BudgetPlan {
         pipeline::PlanarBooleanPipelineBudgetProfile::v1_defaults()
             .overlaid(&extract::PlanarSourceExtractionBudgetProfile::v1_defaults())
+            .overlaid(&crate::classify::PointClassificationBudgetProfile::v1_defaults())
+            .overlaid(&crate::section::BodySectionBudgetProfile::v1_defaults())
+            .overlaid(&kops::intersect::GraphSurfaceBudgetProfile::v1_defaults())
             .overlaid(&ktopo::check::CheckBudgetProfile::v1_defaults(
                 ktopo::check::CheckLevel::Full,
             ))
@@ -147,6 +160,14 @@ pub enum BooleanOperandUnsupportedReason {
     CoplanarFacetPartition,
     /// A source vertex is not a simple intersection of three planes.
     NonSimpleVertex,
+    /// The curved operand is not one connected finite-cylinder solid layout.
+    FiniteCylinderBodyLayout,
+    /// The curved operand does not have one cylindrical side and two planar caps.
+    FiniteCylinderFaceLayout,
+    /// Whole ring boundaries could not be bound manifoldly to both caps.
+    FiniteCylinderBoundaryIncidence,
+    /// The finite-cylinder carrier or axial boundary order was not certified.
+    FiniteCylinderAnalyticGeometry,
 }
 
 /// Exact source-body obligation that could not be certified.
@@ -180,6 +201,13 @@ pub enum BooleanRefusal {
         /// Operand that failed preflight.
         operand: BooleanOperand,
         /// Complete facade-safe Fast evidence for the still-live source body.
+        report: BodyCheckReport,
+    },
+    /// Full checking could not certify the curved source operand.
+    OperandNotFullValid {
+        /// Operand that failed curved-source preflight.
+        operand: BooleanOperand,
+        /// Complete facade-safe Full evidence for the still-live source body.
         report: BodyCheckReport,
     },
     /// The operand is valid but outside the supported source class.
@@ -216,6 +244,8 @@ pub enum BooleanRefusal {
     VertexRealizationIncomplete,
     /// The certified symbolic boundary could not satisfy topology assembly.
     AssemblyRejected,
+    /// Selected curved cells require a closed-boundary topology class not yet assembled.
+    CurvedResultTopologyUnsupported,
     /// Candidate topology failed before Full proof reports were available.
     CandidateTopologyInvalid {
         /// Proven topology fault count.
@@ -337,9 +367,19 @@ impl PartEdit<'_> {
         };
         let part = self.id.clone();
         Ok(
-            pipeline::execute_planar_boolean(self, operation, left, right, settings)?
-                .map(|outcome| adapt_outcome(part, outcome)),
+            dispatch::execute_boolean(self, operation, left, right, settings)?
+                .map(|outcome| adapt_dispatch_outcome(part, outcome)),
         )
+    }
+}
+
+fn adapt_dispatch_outcome(
+    part: crate::PartId,
+    outcome: dispatch::BooleanPipelineOutcome,
+) -> BooleanOutcome {
+    match outcome {
+        dispatch::BooleanPipelineOutcome::Planar(outcome) => adapt_outcome(part, outcome),
+        dispatch::BooleanPipelineOutcome::Curved(outcome) => adapt_curved_outcome(part, outcome),
     }
 }
 
@@ -460,6 +500,122 @@ fn adapt_refusal(
             BooleanRefusal::FullValidationRejected { reports }
         }
         PlanarBooleanPipelineRefusal::WorkCountOverflow => BooleanRefusal::WorkCountOverflow,
+    }
+}
+
+fn adapt_curved_outcome(
+    part: crate::PartId,
+    outcome: curved_pipeline::CurvedBooleanPipelineOutcome,
+) -> BooleanOutcome {
+    match outcome {
+        curved_pipeline::CurvedBooleanPipelineOutcome::ProvenEmpty => {
+            BooleanOutcome::Success(BooleanResult::ProvenEmpty)
+        }
+        curved_pipeline::CurvedBooleanPipelineOutcome::Committed(committed) => {
+            let (bodies, journal, full_checks) = committed.into_parts();
+            let reports = full_checks
+                .iter()
+                .map(|check| adapt_transaction_check(&part, check))
+                .collect::<Vec<_>>();
+            debug_assert_eq!(reports.len(), bodies.len());
+            BooleanOutcome::Success(BooleanResult::Created(BooleanCreatedResult {
+                bodies,
+                journal: ChangeJournal::from_raw(part, journal),
+                reports,
+            }))
+        }
+        curved_pipeline::CurvedBooleanPipelineOutcome::Refused(refusal) => {
+            BooleanOutcome::Refused(adapt_curved_refusal(&part, refusal))
+        }
+    }
+}
+
+fn adapt_curved_refusal(
+    part: &crate::PartId,
+    refusal: curved_pipeline::CurvedBooleanPipelineRefusal,
+) -> BooleanRefusal {
+    use boundary_select::BoundarySelectionError;
+    use curved_pipeline::CurvedBooleanPipelineRefusal;
+
+    match refusal {
+        CurvedBooleanPipelineRefusal::PlanarSourceNotFastValid { operand, report } => {
+            BooleanRefusal::OperandNotFastValid {
+                operand: adapt_operand(operand),
+                report,
+            }
+        }
+        CurvedBooleanPipelineRefusal::PlanarSourceUnsupported { operand, gap } => {
+            BooleanRefusal::UnsupportedOperand {
+                operand: adapt_operand(operand),
+                reason: adapt_unsupported_operand(gap),
+            }
+        }
+        CurvedBooleanPipelineRefusal::PlanarSourceUncertified { operand, failure } => {
+            BooleanRefusal::UncertifiedOperand {
+                operand: adapt_operand(operand),
+                reason: adapt_operand_proof(failure),
+            }
+        }
+        CurvedBooleanPipelineRefusal::CylinderSourceNotFullValid { operand, report } => {
+            BooleanRefusal::OperandNotFullValid {
+                operand: adapt_operand(operand),
+                report,
+            }
+        }
+        CurvedBooleanPipelineRefusal::CylinderSourceUnsupported { operand, gap } => {
+            BooleanRefusal::UnsupportedOperand {
+                operand: adapt_operand(operand),
+                reason: adapt_cylinder_gap(gap),
+            }
+        }
+        CurvedBooleanPipelineRefusal::SectionIncomplete
+        | CurvedBooleanPipelineRefusal::ClassificationIndeterminate { .. }
+        | CurvedBooleanPipelineRefusal::Selection(BoundarySelectionError::Indeterminate {
+            ..
+        }) => BooleanRefusal::BoundaryProofIncomplete,
+        CurvedBooleanPipelineRefusal::ClassificationBoundaryContact
+        | CurvedBooleanPipelineRefusal::Selection(BoundarySelectionError::BoundaryContact) => {
+            BooleanRefusal::BoundaryContact
+        }
+        CurvedBooleanPipelineRefusal::Selection(BoundarySelectionError::Unsupported { .. }) => {
+            BooleanRefusal::BoundaryClassificationUnsupported
+        }
+        CurvedBooleanPipelineRefusal::Partition(_)
+        | CurvedBooleanPipelineRefusal::CellClassification(_)
+        | CurvedBooleanPipelineRefusal::Selection(BoundarySelectionError::DuplicateFragmentKey) => {
+            BooleanRefusal::BoundaryContractViolation
+        }
+        CurvedBooleanPipelineRefusal::ResultTopologyUnsupported => {
+            BooleanRefusal::CurvedResultTopologyUnsupported
+        }
+        CurvedBooleanPipelineRefusal::AssemblyContract(_) => BooleanRefusal::AssemblyRejected,
+        CurvedBooleanPipelineRefusal::FullTopologyFault { fault_count } => {
+            BooleanRefusal::CandidateTopologyInvalid { fault_count }
+        }
+        CurvedBooleanPipelineRefusal::FullProofRejected(checks) => {
+            let reports = checks
+                .iter()
+                .map(|check| adapt_transaction_check(part, check))
+                .collect();
+            BooleanRefusal::FullValidationRejected { reports }
+        }
+        CurvedBooleanPipelineRefusal::WorkCountOverflow => BooleanRefusal::WorkCountOverflow,
+    }
+}
+
+fn adapt_cylinder_gap(reason: curved_source::CylinderSourceGap) -> BooleanOperandUnsupportedReason {
+    use curved_source::CylinderSourceGap;
+
+    match reason {
+        CylinderSourceGap::BodyLayout => BooleanOperandUnsupportedReason::FiniteCylinderBodyLayout,
+        CylinderSourceGap::FaceLayout => BooleanOperandUnsupportedReason::FiniteCylinderFaceLayout,
+        CylinderSourceGap::TolerantEntity => BooleanOperandUnsupportedReason::TolerantEntity,
+        CylinderSourceGap::BoundaryIncidence => {
+            BooleanOperandUnsupportedReason::FiniteCylinderBoundaryIncidence
+        }
+        CylinderSourceGap::AnalyticGeometry => {
+            BooleanOperandUnsupportedReason::FiniteCylinderAnalyticGeometry
+        }
     }
 }
 

@@ -428,6 +428,21 @@ impl Part<'_> {
     }
 }
 
+/// Reuse point/body classification inside a facade-owned compound operation.
+///
+/// The caller owns identity validation and composes the classification budget
+/// before entering this seam. No nested operation report or scope is created.
+pub(crate) fn classify_point_in_body_in_scope(
+    part: &Part<'_>,
+    body: &BodyId,
+    point: Point3,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<PointBodyClassification> {
+    require_finite_point(point)?;
+    classify_in_body_impl(part, body, as_coords(point), linear, scope)
+}
+
 fn require_finite_point(point: Point3) -> Result<()> {
     if [point.x, point.y, point.z].iter().all(|c| c.is_finite()) {
         Ok(())

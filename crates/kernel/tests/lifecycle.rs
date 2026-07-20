@@ -4,17 +4,18 @@ use kernel::{
     AccountingMode, BOOLEAN_BSP_WORK, BlockRequest, BodyId, BodyKind,
     BodyTessellationBudgetProfile, BooleanBodiesRequest, BooleanOperation, BooleanOutcome,
     BooleanRefusal, BooleanResult, BoundedCurve, BoundedPcurve, BudgetPlan, CheckBodyRequest,
-    CheckLevel, CheckOutcome, CreateSeedBodyRequest, CreateStrutRequest, CylinderRequest,
-    EntityKind, Error, ExecutionPolicy, ExportXtRequest, ExtrudeProfileAlongRequest,
-    ExtrudeProfileRequest, Frame, FullCommitRequirement, GrowTolerancesRequest, ImportXtRequest,
-    IntersectCurvesRequest, JoinRingRequest, Kernel, LimitSpec, MergeFaceAsHoleRequest,
-    MutationKind, NumericalPolicy, OperationSettings, ParamRange, PartId, PcurveChart,
-    PcurveEndpointKind, PcurveMetadata, PcurveSeam, PcurveSeamSide, Point2, Point3, PolicyVersion,
-    RegionKind, RemoveBridgeRequest, RemoveSeedBodyRequest, RemoveStrutRequest, ResourceKind,
-    SectionBodiesRequest, SectionCompletion, SectionCurveFragmentSpan, SectionRing, Session,
-    SessionPolicy, SessionPrecision, SplitHoleAsFaceRequest, SurfaceDerivativeOrder,
-    SurfaceEvaluationRequest, SurfaceParameter, TessOptions, TessellateBodyRequest,
-    ToleranceGrowth, ToleranceGrowthTarget, Tolerances, Vec3,
+    CheckLevel, CheckOutcome, ClassifyPointInBodyRequest, CreateSeedBodyRequest,
+    CreateStrutRequest, CylinderRequest, EntityKind, Error, ExecutionPolicy, ExportXtRequest,
+    ExtrudeProfileAlongRequest, ExtrudeProfileRequest, Frame, FullCommitRequirement,
+    GrowTolerancesRequest, ImportXtRequest, IntersectCurvesRequest, JoinRingRequest, Kernel,
+    LimitSpec, MergeFaceAsHoleRequest, MutationKind, NumericalPolicy, OperationSettings,
+    ParamRange, PartId, PcurveChart, PcurveEndpointKind, PcurveMetadata, PcurveSeam,
+    PcurveSeamSide, Point2, Point3, PolicyVersion, RegionKind, RemoveBridgeRequest,
+    RemoveSeedBodyRequest, RemoveStrutRequest, ResourceKind, SectionBodiesRequest,
+    SectionCompletion, SectionCurveFragmentSpan, SectionRing, Session, SessionPolicy,
+    SessionPrecision, SplitHoleAsFaceRequest, SurfaceDerivativeOrder, SurfaceEvaluationRequest,
+    SurfaceParameter, TessOptions, TessellateBodyRequest, ToleranceGrowth, ToleranceGrowthTarget,
+    Tolerances, Vec3,
 };
 
 #[test]
@@ -1177,6 +1178,39 @@ fn boolean_fixture(
     }
 }
 
+fn block_cylinder_boolean_fixture(
+    block_frame: Frame,
+    block_extents: [f64; 3],
+    cylinder_frame: Frame,
+    radius: f64,
+    height: f64,
+) -> BooleanFixture {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (left, right) = {
+        let mut edit = session.edit_part(part.clone()).unwrap();
+        let block = edit
+            .create_block(BlockRequest::new(block_frame, block_extents))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let cylinder = edit
+            .create_cylinder(CylinderRequest::new(cylinder_frame, radius, height))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (block, cylinder)
+    };
+    BooleanFixture {
+        session,
+        part,
+        left,
+        right,
+    }
+}
+
 fn overlapping_boolean_fixture() -> BooleanFixture {
     boolean_fixture(
         boolean_frame([1.25, -0.75, 0.5], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]),
@@ -1304,6 +1338,274 @@ fn public_boolean_connected_operations_commit_one_full_valid_body_and_retain_sou
         assert_eq!(created.journal().part(), fixture.part);
         assert!(created.journal().mutation_count() > 0);
         assert_boolean_sources_retained(&fixture, 3);
+    }
+}
+
+#[test]
+fn public_boolean_axial_block_cylinder_intersection_commits_a_full_valid_band() {
+    for swapped in [false, true] {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let base = Point3::new(3.0, -2.0, 1.25);
+        let cylinder_frame = boolean_frame(base.to_array(), [0.0, 0.6, 0.8], [1.0, 0.0, 0.0]);
+        let block_frame = cylinder_frame.with_origin(base + cylinder_frame.z());
+        let (block, cylinder) = {
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let block = edit
+                .create_block(BlockRequest::new(block_frame, [4.0, 4.0, 1.0]))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            let cylinder = edit
+                .create_cylinder(CylinderRequest::new(cylinder_frame, 0.75, 2.0))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            (block, cylinder)
+        };
+        let (left, right) = if swapped {
+            (cylinder.clone(), block.clone())
+        } else {
+            (block.clone(), cylinder.clone())
+        };
+        let outcome = session
+            .edit_part(part_id.clone())
+            .unwrap()
+            .boolean_bodies(BooleanBodiesRequest::new(
+                BooleanOperation::Intersect,
+                left,
+                right,
+            ))
+            .unwrap();
+        let result = outcome.into_result().unwrap();
+        let BooleanOutcome::Success(BooleanResult::Created(created)) = result else {
+            panic!("axial block/cylinder intersection must create one band: {result:?}")
+        };
+        assert_eq!(created.bodies().len(), 1);
+        assert_eq!(created.reports().len(), 1);
+        assert_eq!(created.reports()[0].report().level(), CheckLevel::Full);
+        assert_eq!(created.reports()[0].report().outcome(), CheckOutcome::Valid);
+        assert!(created.reports()[0].report().gaps().is_empty());
+        assert_eq!(created.journal().lineage_count(), 3);
+
+        let result = created.bodies()[0].clone();
+        let part = session.part(part_id.clone()).unwrap();
+        assert_eq!(part.bodies().len(), 3);
+        assert!(part.body(block).is_ok());
+        assert!(part.body(cylinder).is_ok());
+        let result_view = part.body(result.clone()).unwrap();
+        assert_eq!(result_view.faces().unwrap().len(), 3);
+        assert_eq!(result_view.edges().unwrap().len(), 2);
+        assert_eq!(result_view.vertices().unwrap().len(), 0);
+        let surface_classes = result_view
+            .faces()
+            .unwrap()
+            .map(|face| {
+                let face = part.face(face).unwrap();
+                part.surface(face.surface()).unwrap().class_key().as_str()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            surface_classes
+                .iter()
+                .filter(|class| **class == "kernel.surface.cylinder.v1")
+                .count(),
+            1
+        );
+        assert_eq!(
+            surface_classes
+                .iter()
+                .filter(|class| **class == "kernel.surface.plane.v1")
+                .count(),
+            2
+        );
+        let interior = part
+            .classify_point_in_body(ClassifyPointInBodyRequest::new(
+                result.clone(),
+                base + cylinder_frame.z(),
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(interior.verdict(), &kernel::PointBodyVerdict::Interior);
+        let exterior = part
+            .classify_point_in_body(ClassifyPointInBodyRequest::new(
+                result.clone(),
+                base + cylinder_frame.z() * 0.25,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(exterior.verdict(), &kernel::PointBodyVerdict::Exterior);
+        let first_xt = part
+            .export_xt(ExportXtRequest::new(result.clone()))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        let second_xt = part
+            .export_xt(ExportXtRequest::new(result))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(first_xt.bytes(), second_xt.bytes());
+        drop(part);
+
+        let imported_part = session.create_part();
+        let imported = session
+            .edit_part(imported_part.clone())
+            .unwrap()
+            .import_xt(ImportXtRequest::new(first_xt.bytes()))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(imported.bodies().len(), 1);
+        let imported_check = session
+            .part(imported_part)
+            .unwrap()
+            .check_body(CheckBodyRequest::new(
+                imported.bodies()[0].clone(),
+                CheckLevel::Fast,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            imported_check.outcome(),
+            CheckOutcome::Valid,
+            "imported axial Boolean Fast report: {imported_check:#?}"
+        );
+    }
+}
+
+#[test]
+fn public_curved_boolean_zero_cut_selection_handles_containment_and_empty() {
+    let cylinder_frame = Frame::world().with_origin(Point3::new(0.0, 0.0, -1.0));
+    let mut contained =
+        block_cylinder_boolean_fixture(Frame::world(), [6.0, 6.0, 6.0], cylinder_frame, 0.75, 2.0);
+    let section = contained
+        .session
+        .part(contained.part.clone())
+        .unwrap()
+        .section_bodies(SectionBodiesRequest::new(
+            contained.left.clone(),
+            contained.right.clone(),
+        ))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(
+        section.completion(),
+        SectionCompletion::Complete,
+        "contained zero-cut graph gaps: {:?}",
+        section.gaps()
+    );
+    assert!(
+        section.edges().is_empty()
+            && section.loops().is_empty()
+            && section.branches().is_empty()
+            && section.rings().is_empty()
+            && section.curve_endpoints().is_empty()
+            && section.curve_fragments().is_empty()
+            && section.curve_components().is_empty(),
+        "contained zero-cut graph: {section:#?}"
+    );
+    let part = contained.session.part(contained.part.clone()).unwrap();
+    for vertex in part
+        .body(contained.left.clone())
+        .unwrap()
+        .vertices()
+        .unwrap()
+    {
+        let point = part.vertex(vertex).unwrap().position().unwrap();
+        let classification = part
+            .classify_point_in_body(ClassifyPointInBodyRequest::new(
+                contained.right.clone(),
+                point,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            classification.verdict(),
+            &kernel::PointBodyVerdict::Exterior,
+            "block vertex {point:?}"
+        );
+    }
+    for point in [
+        Point3::new(0.75, 0.0, 0.0),
+        Point3::new(0.0, 0.0, -1.0),
+        Point3::new(0.0, 0.0, 1.0),
+    ] {
+        let classification = part
+            .classify_point_in_body(ClassifyPointInBodyRequest::new(
+                contained.left.clone(),
+                point,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            classification.verdict(),
+            &kernel::PointBodyVerdict::Interior,
+            "cylinder boundary anchor {point:?}"
+        );
+    }
+    drop(part);
+    let result = boolean_success(run_boolean(
+        &mut contained,
+        BooleanOperation::Intersect,
+        OperationSettings::new(),
+    ));
+    let BooleanResult::Created(created) = result else {
+        panic!("a contained finite cylinder must be copied as one selected band")
+    };
+    assert_eq!(created.bodies().len(), 1);
+    assert_eq!(created.journal().lineage_count(), 3);
+    assert_boolean_sources_retained(&contained, 3);
+
+    let mut disjoint = block_cylinder_boolean_fixture(
+        Frame::world().with_origin(Point3::new(8.0, 0.0, 0.0)),
+        [2.0, 2.0, 2.0],
+        Frame::world().with_origin(Point3::new(-8.0, 0.0, -1.0)),
+        0.75,
+        2.0,
+    );
+    let result = boolean_success(run_boolean(
+        &mut disjoint,
+        BooleanOperation::Intersect,
+        OperationSettings::new(),
+    ));
+    assert!(matches!(result, BooleanResult::ProvenEmpty));
+    assert_boolean_sources_retained(&disjoint, 2);
+}
+
+#[test]
+fn public_curved_boolean_unassembled_truths_refuse_without_allocation() {
+    for (operation, swapped) in [
+        (BooleanOperation::Unite, false),
+        (BooleanOperation::Subtract, false),
+        (BooleanOperation::Subtract, true),
+    ] {
+        let mut fixture = block_cylinder_boolean_fixture(
+            Frame::world().with_origin(Point3::new(0.0, 0.0, 1.0)),
+            [4.0, 4.0, 1.0],
+            Frame::world(),
+            0.75,
+            2.0,
+        );
+        if swapped {
+            core::mem::swap(&mut fixture.left, &mut fixture.right);
+        }
+        let before = boolean_topology_counts(&fixture);
+        let outcome = run_boolean(&mut fixture, operation, OperationSettings::new());
+        assert!(matches!(
+            outcome.into_result().unwrap(),
+            BooleanOutcome::Refused(BooleanRefusal::CurvedResultTopologyUnsupported)
+        ));
+        assert_eq!(boolean_topology_counts(&fixture), before);
+        assert_boolean_sources_retained(&fixture, 2);
     }
 }
 
@@ -1559,4 +1861,68 @@ fn public_boolean_bsp_budget_accepts_n_and_reports_exact_n_minus_one_crossing() 
     };
     assert_eq!(denied.result().unwrap_err().limit(), Some(expected));
     assert_eq!(denied.report().limit_events(), &[expected]);
+}
+
+#[test]
+fn public_curved_boolean_bsp_budget_is_exact_and_denial_is_failure_atomic() {
+    let fixture = || {
+        let base = Point3::new(3.0, -2.0, 1.25);
+        let cylinder_frame = boolean_frame(base.to_array(), [0.0, 0.6, 0.8], [1.0, 0.0, 0.0]);
+        block_cylinder_boolean_fixture(
+            cylinder_frame.with_origin(base + cylinder_frame.z()),
+            [4.0, 4.0, 1.0],
+            cylinder_frame,
+            0.75,
+            2.0,
+        )
+    };
+    let baseline = run_boolean(
+        &mut fixture(),
+        BooleanOperation::Intersect,
+        OperationSettings::new(),
+    );
+    let usage = *baseline
+        .report()
+        .usage()
+        .iter()
+        .find(|usage| usage.stage == BOOLEAN_BSP_WORK && usage.resource == ResourceKind::Work)
+        .unwrap();
+    assert!(usage.consumed > 0);
+
+    let settings_at = |allowed| {
+        OperationSettings::new().with_budget_overrides(
+            BudgetPlan::new([LimitSpec::new(
+                BOOLEAN_BSP_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                allowed,
+            )])
+            .unwrap(),
+        )
+    };
+    let admitted = run_boolean(
+        &mut fixture(),
+        BooleanOperation::Intersect,
+        settings_at(usage.consumed),
+    );
+    assert!(matches!(
+        admitted.into_result().unwrap(),
+        BooleanOutcome::Success(BooleanResult::Created(_))
+    ));
+
+    let mut denied_fixture = fixture();
+    let before = boolean_topology_counts(&denied_fixture);
+    let denied = run_boolean(
+        &mut denied_fixture,
+        BooleanOperation::Intersect,
+        settings_at(usage.consumed - 1),
+    );
+    let expected = kernel::LimitSnapshot {
+        allowed: usage.consumed - 1,
+        ..usage
+    };
+    assert_eq!(denied.result().unwrap_err().limit(), Some(expected));
+    assert_eq!(denied.report().limit_events(), &[expected]);
+    assert_eq!(boolean_topology_counts(&denied_fixture), before);
+    assert_boolean_sources_retained(&denied_fixture, 2);
 }

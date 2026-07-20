@@ -3,9 +3,8 @@
 Status: K1–K3, K5 adoption, and the landed K4 slices (typed X_T import/export, `ChangeJournal`,
 checked semantic edits — MVFS/KVFS, MEV/KEV, MEF/KEF, KFMRH/MFKRH, face split/merge, bridge/ring —
 rigid body copy with certificate reissuance, polygonal-profile extrusion, operation-owned tolerance
-batching, block/cylinder construction, the opt-in Full-assurance commit gate, facade body
-tessellation, and public typed
-block/block Boolean outcomes) are implemented;
+batching, block/cylinder construction, the opt-in Full-assurance commit gate, facade body tessellation, and public typed
+block/block Boolean outcomes plus axial block/cylinder intersection bands) are implemented;
 broader semantic edit families, transmitted-proof reissuance beyond the named families, partition
 history, and the C ABI remain.
 
@@ -278,8 +277,9 @@ signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handle
 - Broader semantic edit families beyond the landed MVFS/KVFS, MEV/KEV, MEF/KEF, KFMRH/MFKRH,
   split/merge, bridge/ring, and rigid copy; nested edit transactions pending a journal-composition +
   partition-history contract; tolerance-propagation policies beyond MEF inheritance / KEF ordered max.
-- Extend the Boolean facade implementation from exact planar block/block to block/cylinder without
-  exposing lower-layer symbolic fragments, graph descriptors, or raw candidate topology.
+- Extend the landed deterministic-X_T axial block/cylinder intersection slice to curved
+  union/subtraction, broader contacts and multi-component layouts, and licensed-host evidence without exposing lower-layer
+  symbolic fragments, graph descriptors, or raw candidate topology.
 - Rigid-copy preflight gaps: altered/witness-mismatched higher-order charts, graph-valid shared-basis
   or periodic-source/carrier proofs, other-sample dual offsets, nested five-/seven-sample roots, and
   Offset(Plane)-peer transmitted proofs; graph trace representation/binding beyond four-descriptor
@@ -289,9 +289,10 @@ signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handle
 - F5 exposes body section graphs, verified Plane/Cylinder branches, and exact endpoint-free
   `SectionRing` components when topology-owned trims retain the whole period. `SectionCurveFragment`
   now exposes exact bounded arcs with source-root endpoint identity and topology provenance; cyclic
-  bounded/bounded trim intersection and curved face-region partition/classification remain. There is
-  no general surface/surface entry point; future adapters must preserve the lower `kops` completion
-  boundary/evidence, not duplicate or widen it.
+  bounded/bounded trim intersection remains. Exact planar-circle and periodic-cylinder face-region
+  partitions now propagate open-cell occupancy over their proof-bearing dual graph for the axial
+  Boolean slice. There is no general surface/surface entry point; future adapters must preserve the
+  lower `kops` completion boundary/evidence, not duplicate or widen it.
 - Encapsulation follow-on (separate announced low-level break): make entity fields crate-private and
   replace cross-crate raw assembly with a sealed reconstruction seam; `cargo package -p kernel` full
   creation still blocked by versionless direct path dependencies; `xt_inspect`/`xt_oracle` stay
