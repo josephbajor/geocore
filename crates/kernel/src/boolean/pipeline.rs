@@ -635,7 +635,6 @@ mod tests {
     use kcore::operation::{LimitSnapshot, OperationReport};
     use kgeom::frame::Frame;
     use kgeom::vec::{Point3, Vec3};
-    use ktopo::check::VerificationGapKind;
     use ktopo::entity::{Body as RawBody, Edge as RawEdge, Face as RawFace, Vertex as RawVertex};
     use ktopo::transaction::{LineageEvent, MutationKind};
 
@@ -676,6 +675,40 @@ mod tests {
                 .create_block(BlockRequest::new(
                     frame([1.75, -0.25, 0.75], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
                     [3.0, 2.0, 2.75],
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            (left, right)
+        };
+        Fixture {
+            session,
+            part,
+            left,
+            right,
+        }
+    }
+
+    fn arbitrary_rotated_fixture() -> Fixture {
+        let mut session = Kernel::new().create_session();
+        let part = session.create_part();
+        let (sin, cos) = kcore::math::sincos(0.47);
+        let (left, right) = {
+            let mut edit = session.edit_part(part.clone()).unwrap();
+            let left = edit
+                .create_block(BlockRequest::new(
+                    frame([-0.3, 0.2, -0.1], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
+                    [4.0, 3.5, 3.0],
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            let right = edit
+                .create_block(BlockRequest::new(
+                    frame([0.5, 0.1, 0.25], [0.0, 0.0, 1.0], [cos, sin, 0.0]),
+                    [3.25, 2.75, 3.5],
                 ))
                 .unwrap()
                 .into_result()
@@ -823,41 +856,76 @@ mod tests {
     }
 
     #[test]
-    fn overlapping_unite_and_subtract_preserve_precise_full_proof_refusal() {
+    fn overlapping_unite_and_subtract_are_full_valid_journaled_and_deterministic() {
         for operation in [
             PlanarBooleanOperation::Unite,
             PlanarBooleanOperation::Subtract,
         ] {
-            let mut attempted = rotated_fixture();
-            let mut control = rotated_fixture();
-            let before = store_counts(&attempted);
-            let outcome = run_operation(&mut attempted, operation, OperationSettings::new());
-            let PlanarBooleanPipelineOutcome::Refused(
-                PlanarBooleanPipelineRefusal::FullProofRejected(reports),
-            ) = outcome.into_result().unwrap()
-            else {
-                panic!("{operation:?} did not retain its exact Full-proof refusal");
-            };
-            assert_eq!(reports.len(), 1);
-            assert!(reports[0].faults.is_empty());
-            assert_eq!(
-                reports[0]
-                    .gaps
+            let mut first_fixture = rotated_fixture();
+            let mut second_fixture = rotated_fixture();
+            let first = committed(run_operation(
+                &mut first_fixture,
+                operation,
+                OperationSettings::new(),
+            ));
+            let second = committed(run_operation(
+                &mut second_fixture,
+                operation,
+                OperationSettings::new(),
+            ));
+            assert_eq!(first.body().raw(), second.body().raw());
+            assert_eq!(first.journal(), second.journal());
+            assert!(!first.journal().mutations().is_empty());
+            assert!(!first.full_outcomes().is_empty());
+            assert!(
+                first
+                    .full_outcomes()
                     .iter()
-                    .map(|gap| (gap.kind, gap.cause))
-                    .collect::<Vec<_>>(),
-                vec![
-                    (VerificationGapKind::ShellSelfIntersection, None),
-                    (VerificationGapKind::ShellOrientation, None),
-                ]
+                    .all(|outcome| *outcome == CheckOutcome::Valid)
             );
-            assert_eq!(store_counts(&attempted), before);
-            assert_eq!(
-                add_probe(&mut attempted).raw(),
-                add_probe(&mut control).raw(),
-                "{operation:?} refusal changed the next body identity"
-            );
-            assert_eq!(store_counts(&attempted), store_counts(&control));
+            assert_eq!(first.full_outcomes(), second.full_outcomes());
+            assert_bound_output_geometry(&first_fixture, &first);
+            assert_bound_output_geometry(&second_fixture, &second);
+        }
+    }
+
+    #[test]
+    fn arbitrary_angle_overlap_is_full_valid_for_all_truth_tables_and_operand_orders() {
+        for operation in [
+            PlanarBooleanOperation::Unite,
+            PlanarBooleanOperation::Subtract,
+            PlanarBooleanOperation::Intersect,
+        ] {
+            for swapped in [false, true] {
+                let mut first_fixture = arbitrary_rotated_fixture();
+                let mut second_fixture = arbitrary_rotated_fixture();
+                if swapped {
+                    core::mem::swap(&mut first_fixture.left, &mut first_fixture.right);
+                    core::mem::swap(&mut second_fixture.left, &mut second_fixture.right);
+                }
+                let first = committed(run_operation(
+                    &mut first_fixture,
+                    operation,
+                    OperationSettings::new(),
+                ));
+                let second = committed(run_operation(
+                    &mut second_fixture,
+                    operation,
+                    OperationSettings::new(),
+                ));
+                assert_eq!(first.body().raw(), second.body().raw());
+                assert_eq!(first.journal(), second.journal());
+                assert!(!first.journal().mutations().is_empty());
+                assert!(!first.full_outcomes().is_empty());
+                assert!(
+                    first
+                        .full_outcomes()
+                        .iter()
+                        .all(|outcome| *outcome == CheckOutcome::Valid)
+                );
+                assert_bound_output_geometry(&first_fixture, &first);
+                assert_bound_output_geometry(&second_fixture, &second);
+            }
         }
     }
 

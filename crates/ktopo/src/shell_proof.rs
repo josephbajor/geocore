@@ -140,6 +140,12 @@ fn certify_shell_impl(
     let Some(scope) = scope else {
         return Ok(convex);
     };
+    let semantic = crate::semantic_planar_shell_proof::certify_semantic_planar_shell_in_scope(
+        store, shell_id, scope,
+    )?;
+    if semantic != indeterminate() {
+        return Ok(semantic);
+    }
     crate::planar_shell_proof::certify_general_planar_shell_in_scope(store, shell_id, scope)
 }
 

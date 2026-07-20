@@ -303,13 +303,13 @@ progress: section vertices retain source-edge parameter intervals, exact
 plane-triple predicates drive a symbolic convex-fragment BSP, and a keyed
 transactional pipeline extracts exact convex planar facade bodies, applies
 all three CSG truth tables, realizes certified representatives, and commits
-rotated/off-origin block intersection as Full-valid. Exact-coplanar connected
-non-convex shells also have a general Full proof. Unite/subtract candidates
-now retain immutable source Plane supports and graph-verified Plane/Plane edge
-carriers through assembly, but still roll back because semantic plane-triple
-reconstruction is not yet Full-checker authority. Remaining before the first
-public result: consume that evidence, facade operations, cavity/multishell
-proof, and licensed-host X_T evidence.
+connected rotated/off-origin block overlap results as Full-valid for
+unite/subtract/intersect. The checker reconstructs ideal vertices from exactly
+three immutable source Planes, verifies graph-bound Plane/Plane carriers,
+certifies pairwise facet embedding, and proves orientation by interval volume;
+arbitrary-angle and both-operand-order fixtures pass while ambiguous evidence
+fails closed. Remaining before the first public result: cavity/multishell proof,
+facade operations, and licensed-host X_T evidence.
 
 Do not wait for an exhaustive analytic pair table before testing the end-to-end
 boolean architecture. Begin with a deliberately narrow vertical slice as soon as the
