@@ -2058,6 +2058,32 @@ fn sheet_faces_can_share_a_surface_node() {
         .filter(|node| node.code == code::PLANE)
         .count();
     assert_eq!(plane_nodes, 1, "shared plane should be emitted once");
+    let faces = parsed
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.code == code::FACE)
+        .collect::<Vec<_>>();
+    assert_eq!(faces.len(), 2);
+    for (position, face_entry) in faces.iter().enumerate() {
+        let face_id = *face_entry.0;
+        let face = face_entry.1;
+        let other_id = *faces[1 - position].0;
+        assert_eq!(
+            parsed
+                .field(face, "next_on_surface")
+                .and_then(kxt::Value::as_ptr),
+            Some(other_id),
+            "shared-surface ownership must be a circular ring"
+        );
+        assert_eq!(
+            parsed
+                .field(face, "previous_on_surface")
+                .and_then(kxt::Value::as_ptr),
+            Some(other_id),
+            "two-owner ring points both directions to the peer"
+        );
+        assert_ne!(face_id, other_id);
+    }
     assert_eq!(imported.faces_of_body(imported_body).unwrap().len(), 2);
     assert_eq!(
         imported

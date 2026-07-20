@@ -428,8 +428,8 @@ impl Plan {
                     ptr(shell_id),
                     ptr(id_of(&self.surfaces, face.surface())),
                     sense(face.sense()),
-                    ptr(adjacent(&surface_faces, surface_position, 1)),
-                    ptr(adjacent(&surface_faces, surface_position, -1)),
+                    ptr(owner_ring_adjacent(&surface_faces, surface_position, 1)),
+                    ptr(owner_ring_adjacent(&surface_faces, surface_position, -1)),
                     // Solid faces front the void-region shell; sheet faces
                     // bound their own shell from both sides and front it
                     // too (disk_nat.x_t). The front chain mirrors the face
@@ -2279,6 +2279,18 @@ fn adjacent<T>(values: &[(Handle<T>, u32)], position: usize, direction: i8) -> u
     match direction {
         -1 if position > 0 => values[position - 1].1,
         1 if position + 1 < values.len() => values[position + 1].1,
+        _ => 0,
+    }
+}
+
+/// Parasolid ownership lists are singleton-null or circular doubly linked rings.
+fn owner_ring_adjacent<T>(values: &[(Handle<T>, u32)], position: usize, direction: i8) -> u32 {
+    if values.len() < 2 {
+        return 0;
+    }
+    match direction {
+        -1 => values[(position + values.len() - 1) % values.len()].1,
+        1 => values[(position + 1) % values.len()].1,
         _ => 0,
     }
 }
