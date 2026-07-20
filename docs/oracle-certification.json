@@ -1,6 +1,7 @@
 {
   "schema_version": "kernel-oracle-certification.v1",
-  "status": "current",
+  "status": "stale",
+  "reason": "finite-cylinder Full proof changed regenerated manifest checker evidence after writer b596027; licensed-host payload re-certification is pending",
   "certified_at": "2026-07-20",
   "host": "onshape",
   "host_version": "cloud-2026-07-20",

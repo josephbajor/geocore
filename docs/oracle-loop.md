@@ -40,10 +40,11 @@ compares clean. The supplemental public Boolean matrix imported 6/6 and
 compared 6/6 clean, including fragmented shared-surface solids, disjoint union
 bodies, and a two-shell finite-void cavity. Evidence: `docs/oracle-results.tsv`.
 
-**Current certification state (2026-07-20): current.**
-`docs/oracle-certification.json` pins the 15 base payloads;
-`docs/oracle-boolean-certification.json` pins the six operation payloads. CI
-regenerates both and rejects an identity mismatch.
+**Current certification state (2026-07-20): base stale, Boolean current.**
+Finite-cylinder Full proof changed the regenerated base manifest's checker
+evidence after writer `b596027`; its 15 payload hashes are unchanged, but the
+base bundle needs licensed-host re-certification. The six block/block operation
+payloads remain pinned by `docs/oracle-boolean-certification.json`.
 
 ## 1. Generate the bundle
 
