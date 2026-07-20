@@ -287,10 +287,11 @@ signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handle
 - Non-rigid transform families and attribute-carrying copy (needs an authorable storage contract)
   remain follow-on.
 - F5 exposes body section graphs, verified Plane/Cylinder branches, and exact endpoint-free
-  `SectionRing` components when topology-owned trims retain the whole period. Certified bounded
-  arcs still await public endpoint adaptation, and there is no general surface/surface entry point;
-  future adapters must preserve the lower `kops` completion boundary/evidence, not duplicate or
-  widen it.
+  `SectionRing` components when topology-owned trims retain the whole period. `SectionCurveFragment`
+  now exposes exact bounded arcs with source-root endpoint identity and topology provenance; cyclic
+  bounded/bounded trim intersection and curved face-region partition/classification remain. There is
+  no general surface/surface entry point; future adapters must preserve the lower `kops` completion
+  boundary/evidence, not duplicate or widen it.
 - Encapsulation follow-on (separate announced low-level break): make entity fields crate-private and
   replace cross-crate raw assembly with a sealed reconstruction seam; `cargo package -p kernel` full
   creation still blocked by versionless direct path dependencies; `xt_inspect`/`xt_oracle` stay

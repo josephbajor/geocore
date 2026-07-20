@@ -34,8 +34,8 @@ enforcement over new parallel surface area. Read the queue literally.
 3. **Resume algorithm/API expansion behind the completed gates — OPEN (current head).** Block/block
    CSG is public and externally validated. The next consumer is block/cylinder Boolean support:
    public cylinder construction, finite-cylinder classification, topology-owned curved trim,
-   general closed-fragment stitching, and exact endpoint-free Plane/Cylinder Section rings landed;
-   bounded-arc facade persistence, Boolean consumption/assembly, Full proof, and X_T evidence
+   closed-fragment stitching, exact rings and bounded arcs, generic exact boundary selection, and
+   finite-cylinder Full proof landed; curved face partition/classification, mixed assembly, and X_T
    remain. Broader intersection/NURBS families, revolve, and curved profiles remain milestone backlog.
 
 **External-evidence lane.** Current Onshape records pin the 15-file writer bundle and the six-file

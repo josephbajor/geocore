@@ -17,6 +17,7 @@ KERNEL_PACKAGE_FILES = {
     "Cargo.toml.orig",
     "README.md",
     "examples/boolean_xt_oracle.rs",
+    "src/boolean/boundary_select.rs",
     "src/boolean/component_layout.rs",
     "src/boolean/components.rs",
     "src/boolean/extract.rs",

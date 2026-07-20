@@ -10,6 +10,7 @@ use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use crate::incidence::{
     IncidenceCertification, certify_edge_surface_incidence, certify_pcurve_incidence,
 };
+use crate::incidence_authority::{WholeFinIncidence, certify_whole_fin_incidence};
 use crate::store::Store;
 use kcore::error::Result;
 use kcore::predicates::{Orientation, orient2d, polygon_orientation2d_iter};
@@ -51,6 +52,87 @@ pub(crate) struct PlanarLoopLayout {
     /// Exact orientation for each input loop, or `None` when that loop is
     /// outside this proof slice.
     pub(crate) orientations: Vec<(LoopId, Option<Orientation>)>,
+}
+
+/// Certify one loop's intrinsic traversal orientation in its owning surface
+/// chart.
+///
+/// Polygonal plane loops use exact projected predicates. A single-fin circle
+/// on a plane and a full-period constant-height line on a cylinder use the
+/// exact sign of their stored pcurve parameter correspondence and fin sense,
+/// after topology-owned whole-fin incidence succeeds. Periodic chart closure
+/// is therefore proven without sampling or inventing a duplicate seam
+/// vertex.
+pub(crate) fn certify_loop_orientation(
+    store: &Store,
+    face_id: crate::entity::FaceId,
+    loop_id: LoopId,
+) -> Result<Option<Orientation>> {
+    let loop_ = store.get(loop_id)?;
+    if loop_.face != face_id
+        || store
+            .get(face_id)?
+            .loops
+            .iter()
+            .filter(|&&candidate| candidate == loop_id)
+            .count()
+            != 1
+    {
+        return Ok(None);
+    }
+    if let Some((_, orientation)) = strict_planar_ring(store, loop_id)? {
+        return Ok(Some(orientation));
+    }
+    let [fin_id] = loop_.fins.as_slice() else {
+        return Ok(None);
+    };
+    let fin = store.get(*fin_id)?;
+    let edge = store.get(fin.edge)?;
+    if edge.tolerance.is_some()
+        || certify_whole_fin_incidence(store, face_id, loop_id, *fin_id, LINEAR_RESOLUTION)
+            != WholeFinIncidence::Certified
+    {
+        return Ok(None);
+    }
+    let Some(use_) = fin.pcurve else {
+        return Ok(None);
+    };
+    let face = store.get(face_id)?;
+    let parameter_orientation = match (store.get(face.surface)?, store.get(use_.curve())?) {
+        (SurfaceGeom::Plane(_), Curve2dGeom::Circle(_))
+            if use_.closure_winding() == Some([0, 0]) =>
+        {
+            traversal_orientation([use_.edge_to_pcurve().scale(), 1.0], fin.sense)
+        }
+        (SurfaceGeom::Cylinder(_), Curve2dGeom::Line(line))
+            if line.dir().y == 0.0
+                && line.dir().x != 0.0
+                && matches!(use_.closure_winding(), Some([1 | -1, 0])) =>
+        {
+            traversal_orientation([line.dir().x, use_.edge_to_pcurve().scale()], fin.sense)
+        }
+        _ => None,
+    };
+    Ok(parameter_orientation)
+}
+
+fn traversal_orientation(factors: [f64; 2], sense: Sense) -> Option<Orientation> {
+    if factors
+        .iter()
+        .any(|factor| !factor.is_finite() || *factor == 0.0)
+    {
+        return None;
+    }
+    let negative = factors
+        .iter()
+        .filter(|factor| factor.is_sign_negative())
+        .count()
+        + usize::from(sense == Sense::Reversed);
+    Some(if negative % 2 == 0 {
+        Orientation::Positive
+    } else {
+        Orientation::Negative
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -111,6 +193,66 @@ pub(crate) fn certify_loop_containment(
     } else {
         LoopContainment::Indeterminate
     })
+}
+
+/// Certify that all loops on one face form a supported non-overlapping face
+/// boundary layout.
+///
+/// Plane faces retain strict outer/hole containment. A full-period cylinder
+/// band instead has two disjoint constant-height periodic boundaries; neither
+/// contains the other in an unwrapped chart. That layout is certified from
+/// two distinct topology-owned whole-fin line pcurves, without cutting the
+/// periodic surface at an artificial seam.
+pub(crate) fn certify_face_loop_layout(
+    store: &Store,
+    face_id: crate::entity::FaceId,
+) -> Result<LoopContainment> {
+    let face = store.get(face_id)?;
+    if face.loops.len() < 2 {
+        return Ok(LoopContainment::Certified);
+    }
+    if matches!(store.get(face.surface)?, SurfaceGeom::Plane(_)) {
+        return certify_loop_containment(store, &face.loops);
+    }
+    if !matches!(store.get(face.surface)?, SurfaceGeom::Cylinder(_)) || face.loops.len() != 2 {
+        return Ok(LoopContainment::Indeterminate);
+    }
+
+    let mut edges = Vec::with_capacity(2);
+    let mut heights = Vec::with_capacity(2);
+    for &loop_id in &face.loops {
+        let loop_ = store.get(loop_id)?;
+        let [fin_id] = loop_.fins.as_slice() else {
+            return Ok(LoopContainment::Indeterminate);
+        };
+        let fin = store.get(*fin_id)?;
+        let edge = store.get(fin.edge)?;
+        let Some(use_) = fin.pcurve else {
+            return Ok(LoopContainment::Indeterminate);
+        };
+        let Curve2dGeom::Line(line) = store.get(use_.curve())? else {
+            return Ok(LoopContainment::Indeterminate);
+        };
+        if loop_.face != face_id
+            || fin.parent != loop_id
+            || edge.tolerance.is_some()
+            || line.dir().y != 0.0
+            || line.dir().x == 0.0
+            || certify_loop_orientation(store, face_id, loop_id)?.is_none()
+        {
+            return Ok(LoopContainment::Indeterminate);
+        }
+        edges.push(fin.edge);
+        heights.push(line.origin().y);
+    }
+    if edges[0] == edges[1]
+        || !heights[0].is_finite()
+        || !heights[1].is_finite()
+        || heights[0] == heights[1]
+    {
+        return Ok(LoopContainment::Indeterminate);
+    }
+    Ok(LoopContainment::Certified)
 }
 
 /// Certify exact orientation and the unique outer identity for planar

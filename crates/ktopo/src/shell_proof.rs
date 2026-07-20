@@ -8,11 +8,12 @@
 //! single planar sheet face is embedded when every polygonal loop is proven
 //! simple and the holes have certified strict containment.
 
-use crate::entity::{BodyKind, FaceId, RegionKind, Sense, ShellId, VertexId};
-use crate::geom::{CurveGeom, SurfaceGeom};
+use crate::entity::{BodyKind, EdgeId, FaceId, LoopId, RegionKind, Sense, ShellId, VertexId};
+use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use crate::incidence::{
     IncidenceCertification, certify_edge_surface_incidence, exact_line_carrier,
 };
+use crate::incidence_authority::{WholeFinIncidence, certify_whole_fin_incidence};
 use crate::loop_proof::{
     LoopContainment, LoopSimplicity, certify_loop_containment, certify_loop_simplicity,
 };
@@ -21,10 +22,12 @@ use kcore::error::Result;
 use kcore::operation::{
     AccountingMode, BudgetPlan, LimitSpec, OperationScope, ResourceKind, StageId,
 };
-use kcore::predicates::{Orientation as PredicateOrientation, orient2d, orient3d};
+use kcore::predicates::{Orientation as PredicateOrientation, affine_dot3, orient2d, orient3d};
 use kcore::tolerance::{ANGULAR_RESOLUTION, LINEAR_RESOLUTION};
 use kgeom::curve::Curve;
-use kgeom::vec::{Point2, Vec3};
+use kgeom::frame::Frame;
+use kgeom::surface::Cylinder;
+use kgeom::vec::{Point2, Point3, Vec3};
 
 /// Cumulative exact contact work for coplanar shell-facet partitions.
 pub(crate) const SHELL_FACET_PAIR_WORK: StageId =
@@ -135,6 +138,9 @@ fn certify_shell_impl(
         return Ok(certification);
     }
     if let Some(certification) = certify_sphere_cap_shell(store, shell_id)? {
+        return Ok(certification);
+    }
+    if let Some(certification) = certify_cylinder_band_shell(store, shell_id)? {
         return Ok(certification);
     }
     if let Some(certification) = certify_planar_profile_prism(store, shell_id)? {
@@ -313,6 +319,297 @@ fn certify_sphere_cap_shell(
             ShellOrientation::Invalid
         },
     }))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CylinderBandBoundary {
+    cap_face: FaceId,
+    edge: EdgeId,
+    center: Point3,
+    cap_axis_alignment: PredicateOrientation,
+    side_traverses_positive_u: bool,
+}
+
+/// Certify a finite full-period cylindrical band closed by two circular
+/// planar caps.
+///
+/// Admission is entirely topology and geometry driven: exactly one
+/// cylindrical face owns two single-fin ring loops, each ring edge is shared
+/// with exactly one single-fin planar cap, and whole-fin incidence proves all
+/// four lifts. Exact affine dot signs then prove that the distinct circle
+/// centers lie on the cylinder axis and both cap planes are perpendicular to
+/// it. This establishes an embedded `S1 × [a, b]` band with two disks without
+/// relying on constructor order or sampled agreement.
+fn certify_cylinder_band_shell(
+    store: &Store,
+    shell_id: ShellId,
+) -> Result<Option<ShellCertification>> {
+    let shell = store.get(shell_id)?;
+    if shell.faces.len() != 3 {
+        return Ok(None);
+    }
+
+    let mut side = None;
+    let mut caps = Vec::with_capacity(2);
+    for &face_id in &shell.faces {
+        let face = store.get(face_id)?;
+        match store.get(face.surface)? {
+            SurfaceGeom::Cylinder(cylinder) if side.is_none() => {
+                side = Some((face_id, *cylinder));
+            }
+            SurfaceGeom::Plane(_) => caps.push(face_id),
+            _ => return Ok(None),
+        }
+    }
+    let (Some((side_face_id, cylinder)), [cap_a, cap_b]) = (side, caps.as_slice()) else {
+        return Ok(None);
+    };
+    let cap_faces = [*cap_a, *cap_b];
+    let side_face = store.get(side_face_id)?;
+    if side_face.shell != shell_id || side_face.loops.len() != 2 {
+        return Ok(None);
+    }
+
+    let mut boundaries = Vec::with_capacity(2);
+    for &loop_id in &side_face.loops {
+        let Some(boundary) =
+            cylinder_band_boundary(store, shell_id, side_face_id, cylinder, loop_id, &cap_faces)?
+        else {
+            return Ok(None);
+        };
+        if boundaries.iter().any(|prior: &CylinderBandBoundary| {
+            prior.edge == boundary.edge || prior.cap_face == boundary.cap_face
+        }) {
+            return Ok(None);
+        }
+        boundaries.push(boundary);
+    }
+    if boundaries.len() != 2
+        || cap_faces
+            .iter()
+            .any(|cap| !boundaries.iter().any(|boundary| boundary.cap_face == *cap))
+    {
+        return Ok(None);
+    }
+
+    let separation = exact_affine_sign(
+        cylinder.frame().z(),
+        boundaries[1].center,
+        boundaries[0].center,
+    );
+    let (low, high) = match separation {
+        Some(PredicateOrientation::Positive) => (boundaries[0], boundaries[1]),
+        Some(PredicateOrientation::Negative) => (boundaries[1], boundaries[0]),
+        _ => return Ok(None),
+    };
+    if !low.side_traverses_positive_u || high.side_traverses_positive_u {
+        return Ok(Some(ShellCertification {
+            embedding: ShellEmbedding::Certified,
+            orientation: ShellOrientation::Invalid,
+        }));
+    }
+
+    let low_outward =
+        oriented_axis_alignment(low.cap_axis_alignment, store.get(low.cap_face)?.sense);
+    let high_outward =
+        oriented_axis_alignment(high.cap_axis_alignment, store.get(high.cap_face)?.sense);
+    let orientation = match (side_face.sense, low_outward, high_outward) {
+        (Sense::Forward, Some(-1), Some(1)) => ShellOrientation::Positive,
+        (Sense::Reversed, Some(1), Some(-1)) => ShellOrientation::Negative,
+        _ => ShellOrientation::Invalid,
+    };
+    Ok(Some(ShellCertification {
+        embedding: ShellEmbedding::Certified,
+        orientation,
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cylinder_band_boundary(
+    store: &Store,
+    shell_id: ShellId,
+    side_face_id: FaceId,
+    cylinder: Cylinder,
+    side_loop_id: LoopId,
+    cap_faces: &[FaceId; 2],
+) -> Result<Option<CylinderBandBoundary>> {
+    let side_loop = store.get(side_loop_id)?;
+    let [side_fin_id] = side_loop.fins.as_slice() else {
+        return Ok(None);
+    };
+    if side_loop.face != side_face_id
+        || certify_loop_simplicity(store, side_loop_id)? != LoopSimplicity::Certified
+    {
+        return Ok(None);
+    }
+    let side_fin = store.get(*side_fin_id)?;
+    if side_fin.parent != side_loop_id {
+        return Ok(None);
+    }
+    let edge = store.get(side_fin.edge)?;
+    let [first_fin, second_fin] = edge.fins.as_slice() else {
+        return Ok(None);
+    };
+    if edge.tolerance.is_some()
+        || edge.bounds.is_some()
+        || edge.vertices != [None, None]
+        || !edge.fins.contains(side_fin_id)
+    {
+        return Ok(None);
+    }
+    let cap_fin_id = if first_fin == side_fin_id {
+        *second_fin
+    } else if second_fin == side_fin_id {
+        *first_fin
+    } else {
+        return Ok(None);
+    };
+    let cap_fin = store.get(cap_fin_id)?;
+    if cap_fin.edge != side_fin.edge || cap_fin.sense == side_fin.sense {
+        return Ok(None);
+    }
+    let cap_loop_id = cap_fin.parent;
+    let cap_loop = store.get(cap_loop_id)?;
+    let cap_face_id = cap_loop.face;
+    if !cap_faces.contains(&cap_face_id)
+        || cap_loop.fins.as_slice() != [cap_fin_id]
+        || certify_loop_simplicity(store, cap_loop_id)? != LoopSimplicity::Certified
+    {
+        return Ok(None);
+    }
+    let cap_face = store.get(cap_face_id)?;
+    if cap_face.shell != shell_id || cap_face.loops.as_slice() != [cap_loop_id] {
+        return Ok(None);
+    }
+
+    if certify_whole_fin_incidence(
+        store,
+        side_face_id,
+        side_loop_id,
+        *side_fin_id,
+        LINEAR_RESOLUTION,
+    ) != WholeFinIncidence::Certified
+        || certify_whole_fin_incidence(
+            store,
+            cap_face_id,
+            cap_loop_id,
+            cap_fin_id,
+            LINEAR_RESOLUTION,
+        ) != WholeFinIncidence::Certified
+    {
+        return Ok(None);
+    }
+
+    let Some(curve_id) = edge.curve else {
+        return Ok(None);
+    };
+    let CurveGeom::Circle(circle) = store.get(curve_id)? else {
+        return Ok(None);
+    };
+    let SurfaceGeom::Plane(cap_plane) = store.get(cap_face.surface)? else {
+        return Ok(None);
+    };
+    if circle.radius() != cylinder.radius()
+        || exact_axis_alignment(cylinder.frame(), circle.frame().z()).is_none()
+        || !exact_point_on_axis(cylinder.frame(), circle.frame().origin())
+        || exact_affine_sign(
+            cap_plane.frame().z(),
+            circle.frame().origin(),
+            cap_plane.frame().origin(),
+        ) != Some(PredicateOrientation::Zero)
+    {
+        return Ok(None);
+    }
+    let Some(cap_axis_alignment) = exact_axis_alignment(cylinder.frame(), cap_plane.frame().z())
+    else {
+        return Ok(None);
+    };
+
+    let Some(side_use) = side_fin.pcurve else {
+        return Ok(None);
+    };
+    let Curve2dGeom::Line(side_line) = store.get(side_use.curve())? else {
+        return Ok(None);
+    };
+    if side_line.dir().y != 0.0 || side_line.dir().x == 0.0 {
+        return Ok(None);
+    }
+    let Some(side_traverses_positive_u) = traversal_is_positive(
+        [side_line.dir().x, side_use.edge_to_pcurve().scale()],
+        side_fin.sense,
+    ) else {
+        return Ok(None);
+    };
+
+    let Some(cap_use) = cap_fin.pcurve else {
+        return Ok(None);
+    };
+    if !matches!(store.get(cap_use.curve())?, Curve2dGeom::Circle(_))
+        || cap_use.closure_winding() != Some([0, 0])
+        || traversal_is_positive([cap_use.edge_to_pcurve().scale(), 1.0], cap_fin.sense)
+            != Some(true)
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(CylinderBandBoundary {
+        cap_face: cap_face_id,
+        edge: side_fin.edge,
+        center: circle.frame().origin(),
+        cap_axis_alignment,
+        side_traverses_positive_u,
+    }))
+}
+
+fn exact_axis_alignment(frame: &Frame, direction: Vec3) -> Option<PredicateOrientation> {
+    if exact_vector_dot(frame.x(), direction)? != PredicateOrientation::Zero
+        || exact_vector_dot(frame.y(), direction)? != PredicateOrientation::Zero
+    {
+        return None;
+    }
+    match exact_vector_dot(frame.z(), direction)? {
+        PredicateOrientation::Zero => None,
+        alignment => Some(alignment),
+    }
+}
+
+fn exact_point_on_axis(frame: &Frame, point: Point3) -> bool {
+    [frame.x(), frame.y()].into_iter().all(|radial| {
+        exact_affine_sign(radial, point, frame.origin()) == Some(PredicateOrientation::Zero)
+    })
+}
+
+fn exact_vector_dot(left: Vec3, right: Vec3) -> Option<PredicateOrientation> {
+    affine_dot3(left.to_array(), right.to_array(), [0.0; 3], 0.0).map(|value| value.sign())
+}
+
+fn exact_affine_sign(normal: Vec3, point: Point3, origin: Point3) -> Option<PredicateOrientation> {
+    affine_dot3(normal.to_array(), point.to_array(), origin.to_array(), 0.0)
+        .map(|value| value.sign())
+}
+
+fn traversal_is_positive<const N: usize>(factors: [f64; N], sense: Sense) -> Option<bool> {
+    if factors
+        .iter()
+        .any(|factor| !factor.is_finite() || *factor == 0.0)
+    {
+        return None;
+    }
+    let negative = factors
+        .iter()
+        .filter(|factor| factor.is_sign_negative())
+        .count()
+        + usize::from(sense == Sense::Reversed);
+    Some(negative % 2 == 0)
+}
+
+fn oriented_axis_alignment(alignment: PredicateOrientation, sense: Sense) -> Option<i8> {
+    let sign = match alignment {
+        PredicateOrientation::Positive => 1,
+        PredicateOrientation::Negative => -1,
+        PredicateOrientation::Zero => return None,
+    };
+    Some(if sense == Sense::Forward { sign } else { -sign })
 }
 
 fn sense_factor(sense: Sense) -> f64 {
@@ -1451,13 +1748,38 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_curved_multiface_shell_remains_indeterminate() {
+    fn finite_cylinder_band_is_embedded_and_orientation_is_decidable() {
         let mut store = Store::new();
         let body = cylinder(&mut store, &Frame::world(), 1.0, 2.0).unwrap();
         let shell = solid_shell(&store, body);
         assert_eq!(
             certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
-            indeterminate()
+            ShellCertification {
+                embedding: ShellEmbedding::Certified,
+                orientation: ShellOrientation::Positive,
+            }
+        );
+
+        let side = store
+            .get(shell)
+            .unwrap()
+            .faces
+            .iter()
+            .copied()
+            .find(|face| {
+                matches!(
+                    store.get(store.get(*face).unwrap().surface).unwrap(),
+                    SurfaceGeom::Cylinder(_)
+                )
+            })
+            .unwrap();
+        store.get_mut(side).unwrap().sense = Sense::Reversed;
+        assert_eq!(
+            certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
+            ShellCertification {
+                embedding: ShellEmbedding::Certified,
+                orientation: ShellOrientation::Invalid,
+            }
         );
     }
 }

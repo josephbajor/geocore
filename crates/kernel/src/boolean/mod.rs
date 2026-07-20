@@ -14,6 +14,8 @@ use crate::operation::{
 use crate::{BodyId, PartEdit};
 
 #[allow(dead_code)]
+mod boundary_select;
+#[allow(dead_code)]
 mod component_layout;
 #[allow(dead_code)]
 mod components;
@@ -198,6 +200,8 @@ pub enum BooleanRefusal {
     BoundaryContact,
     /// Exact symbolic boundary classification was incomplete.
     BoundaryProofIncomplete,
+    /// A valid boundary fragment requires an unsupported classification proof family.
+    BoundaryClassificationUnsupported,
     /// Symbolic boundary evidence violated the admitted contract.
     BoundaryContractViolation,
     /// Selected faces could not be certified as closed shell components.
@@ -416,7 +420,13 @@ fn adapt_refusal(
         }
         PlanarBooleanPipelineRefusal::Symbolic(SelectionError::Fragment(
             FragmentError::UncertifiedPredicate | FragmentError::MissingClassification,
-        )) => BooleanRefusal::BoundaryProofIncomplete,
+        ))
+        | PlanarBooleanPipelineRefusal::Symbolic(SelectionError::BoundaryIndeterminate(_)) => {
+            BooleanRefusal::BoundaryProofIncomplete
+        }
+        PlanarBooleanPipelineRefusal::Symbolic(SelectionError::BoundaryUnsupported(_)) => {
+            BooleanRefusal::BoundaryClassificationUnsupported
+        }
         PlanarBooleanPipelineRefusal::Symbolic(_) => BooleanRefusal::BoundaryContractViolation,
         PlanarBooleanPipelineRefusal::ComponentPartition(_) => {
             BooleanRefusal::ShellPartitionIncomplete

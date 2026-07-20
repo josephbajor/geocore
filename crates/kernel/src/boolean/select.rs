@@ -7,35 +7,19 @@
 //! intersection; subtraction reverses only boundary contributed by the
 //! subtrahend.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
+use super::boundary_select::{
+    BoundaryFragmentClassification, BoundarySelectionError, ClassifiedBoundaryFragment,
+    SelectedBoundaryFragment, select_boundary_fragments,
+};
+pub(crate) use super::boundary_select::{
+    OperandSide, RegularizedBooleanOperation as PlanarBooleanOperation, SelectedOrientation,
+};
 use super::planar_bsp::{
     ConvexPlanarFragment, FragmentClassification, FragmentError, PlaneTripleVertexKey, SourcePlane,
     SourcePlaneRef, classify_fragment, partition_fragments,
 };
-
-/// One regularized planar Boolean truth table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PlanarBooleanOperation {
-    Unite,
-    Intersect,
-    Subtract,
-}
-
-/// Operand ownership is explicit rather than inferred from caller-assigned
-/// plane numbers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum OperandSide {
-    Left,
-    Right,
-}
-
-/// Orientation of a selected polygon relative to its source face ring.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum SelectedOrientation {
-    Preserved,
-    Reversed,
-}
 
 /// Canonical identity of one partitioned source-face fragment.
 ///
@@ -150,6 +134,8 @@ impl SelectedPlanarFragment {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SelectionError {
     Fragment(FragmentError),
+    BoundaryIndeterminate(&'static str),
+    BoundaryUnsupported(&'static str),
     DuplicateSolidPlane,
     InsufficientSolidPlanes,
     DuplicatePlaneWitness,
@@ -167,21 +153,16 @@ impl From<FragmentError> for SelectionError {
     }
 }
 
-fn selected_orientation(
-    operation: PlanarBooleanOperation,
-    operand: OperandSide,
-    classification: FragmentClassification,
-) -> Option<SelectedOrientation> {
-    use FragmentClassification::{Exterior, Interior};
-    use OperandSide::{Left, Right};
-    use PlanarBooleanOperation::{Intersect, Subtract, Unite};
-    use SelectedOrientation::{Preserved, Reversed};
-
-    match (operation, operand, classification) {
-        (Unite, _, Exterior) | (Intersect, _, Interior) => Some(Preserved),
-        (Subtract, Left, Exterior) => Some(Preserved),
-        (Subtract, Right, Interior) => Some(Reversed),
-        _ => None,
+impl From<BoundarySelectionError> for SelectionError {
+    fn from(error: BoundarySelectionError) -> Self {
+        match error {
+            BoundarySelectionError::DuplicateFragmentKey => Self::DuplicateFragmentKey,
+            BoundarySelectionError::BoundaryContact => {
+                Self::Fragment(FragmentError::BoundaryContact)
+            }
+            BoundarySelectionError::Indeterminate { reason } => Self::BoundaryIndeterminate(reason),
+            BoundarySelectionError::Unsupported { reason } => Self::BoundaryUnsupported(reason),
+        }
     }
 }
 
@@ -191,32 +172,37 @@ fn select_classified_fragments(
     operation: PlanarBooleanOperation,
     fragments: impl IntoIterator<Item = ClassifiedPlanarFragment>,
 ) -> Result<Vec<SelectedPlanarFragment>, SelectionError> {
-    let mut admitted = BTreeSet::new();
-    let mut selected = BTreeMap::new();
-    for classified in fragments {
-        let key = SelectedFragmentKey::from_fragment(classified.operand, &classified.fragment)?;
-        if !admitted.insert(key.clone()) {
-            return Err(SelectionError::DuplicateFragmentKey);
-        }
-        let Some(orientation) =
-            selected_orientation(operation, classified.operand, classified.classification)
-        else {
-            continue;
-        };
-        let fragment = match orientation {
-            SelectedOrientation::Preserved => classified.fragment,
-            SelectedOrientation::Reversed => classified.fragment.reversed_orientation(),
-        };
-        selected.insert(
-            key.clone(),
-            SelectedPlanarFragment {
+    let classified = fragments
+        .into_iter()
+        .map(|classified| {
+            let key = SelectedFragmentKey::from_fragment(classified.operand, &classified.fragment)?;
+            let classification = match classified.classification {
+                FragmentClassification::Interior => BoundaryFragmentClassification::Interior,
+                FragmentClassification::Exterior => BoundaryFragmentClassification::Exterior,
+            };
+            Ok(ClassifiedBoundaryFragment::new(
+                key,
+                classified.operand,
+                classified.fragment,
+                classification,
+            ))
+        })
+        .collect::<Result<Vec<_>, SelectionError>>()?;
+    select_boundary_fragments(operation, classified)?
+        .into_iter()
+        .map(|selected| {
+            let (key, _, fragment, orientation) = SelectedBoundaryFragment::into_parts(selected);
+            let fragment = match orientation {
+                SelectedOrientation::Preserved => fragment,
+                SelectedOrientation::Reversed => fragment.reversed_orientation(),
+            };
+            Ok(SelectedPlanarFragment {
                 key,
                 fragment,
                 orientation,
-            },
-        );
-    }
-    Ok(selected.into_values().collect())
+            })
+        })
+        .collect()
 }
 
 fn canonical_solid_planes(

@@ -65,8 +65,8 @@ use crate::incidence::{
     check_pcurve_parameterization,
 };
 use crate::loop_proof::{
-    LoopContainment, LoopSimplicity, certify_loop_containment, certify_loop_simplicity,
-    certify_planar_loop_layout,
+    LoopContainment, LoopSimplicity, certify_face_loop_layout, certify_loop_orientation,
+    certify_loop_simplicity, certify_planar_loop_layout,
 };
 use crate::shell_proof::{ShellEmbedding, ShellOrientation, certify_shell_in_scope};
 use crate::store::{Entity, Store};
@@ -530,17 +530,8 @@ fn collect_full_verification(
                 face_domain_gap_cause(containment),
             );
         }
-        let layout = certify_planar_loop_layout(store, &face.loops)?;
         for &loop_id in &face.loops {
-            if layout
-                .orientations
-                .iter()
-                .find_map(|(candidate, orientation)| {
-                    (*candidate == loop_id).then_some(*orientation)
-                })
-                .flatten()
-                .is_none()
-            {
+            if certify_loop_orientation(store, face_id, loop_id)?.is_none() {
                 push(
                     EntityRef::Loop(loop_id),
                     VerificationGapKind::LoopOrientation,
@@ -589,7 +580,7 @@ fn collect_full_verification(
             }
         }
         if face.loops.len() > 1
-            && certify_loop_containment(store, &face.loops)? != LoopContainment::Certified
+            && certify_face_loop_layout(store, face_id)? != LoopContainment::Certified
         {
             push(
                 EntityRef::Face(face_id),
@@ -2609,7 +2600,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_curved_loop_orientation_is_a_full_gap_not_a_fast_fault() {
+    fn finite_cylinder_loop_orientation_and_shell_are_full_valid() {
         let mut store = Store::new();
         let body = cylinder(&mut store, &Frame::world(), 1.0, 2.0).unwrap();
 
@@ -2622,12 +2613,12 @@ mod tests {
         );
 
         let full = check_body_report(&store, body, CheckLevel::Full).unwrap();
-        assert_eq!(full.outcome(), CheckOutcome::Indeterminate, "{full:?}");
+        assert_eq!(full.outcome(), CheckOutcome::Valid, "{full:?}");
         assert!(full.faults.is_empty(), "{full:?}");
         assert!(
             full.gaps
                 .iter()
-                .any(|gap| gap.kind == VerificationGapKind::LoopOrientation),
+                .all(|gap| gap.kind != VerificationGapKind::LoopOrientation),
             "{full:?}"
         );
     }

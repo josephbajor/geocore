@@ -6,9 +6,9 @@
 //! This module computes that graph for the planar slice — every face on a
 //! plane, every edge a bounded straight line. It also clips complete-period
 //! Plane/Cylinder circle carriers against topology-owned polygon/ring trims
-//! and promotes intact carriers into endpoint-free [`SectionRing`] values.
-//! Certified bounded arcs remain branch evidence with a structured gap until
-//! the public graph can retain their exact trim endpoints.
+//! and retains both intact carriers and certified bounded arcs as exact
+//! curved fragments. Their endpoint joins use source edge/root identities;
+//! carrier points are diagnostic representatives only.
 //!
 //! The algorithm is general over topology (any number of faces, loops,
 //! holes, non-convex boundaries). Per candidate face pair it takes the
@@ -59,7 +59,7 @@ use ktopo::store::Store;
 use crate::error::{Error, Result};
 use crate::operation::{OperationOutcome, OperationSettings};
 use crate::session::Part;
-use crate::{BodyId, EdgeId, EntityKind, FaceId, PartId, VertexId};
+use crate::{BodyId, EdgeId, EntityKind, FaceId, FinId, LoopId, PartId, VertexId};
 
 /// Cumulative predicate/clip/stitch work performed by one section query.
 pub const SECTION_WORK: StageId = known_stage("kernel.section.work");
@@ -494,6 +494,241 @@ impl SectionRing {
     }
 }
 
+/// Conservative enclosure of one projective pcurve half-angle.
+///
+/// The exact curved clipper orders trim roots by disjoint intervals in
+/// `y = tan(q / 2)`. This enclosure is therefore topological ordering
+/// evidence; a rounded carrier angle is never substituted for it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SectionProjectiveParameterInterval {
+    lo: f64,
+    hi: f64,
+}
+
+impl SectionProjectiveParameterInterval {
+    fn from_interval(interval: Interval) -> Self {
+        Self {
+            lo: interval.lo(),
+            hi: interval.hi(),
+        }
+    }
+
+    /// Lower bound of the closed projective-parameter enclosure.
+    pub const fn lo(self) -> f64 {
+        self.lo
+    }
+
+    /// Upper bound of the closed projective-parameter enclosure.
+    pub const fn hi(self) -> f64 {
+        self.hi
+    }
+}
+
+/// Stable proof identity of one isolated root on a source topology edge.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SectionSourceParameterKey {
+    edge: EdgeId,
+    root_ordinal: usize,
+}
+
+impl SectionSourceParameterKey {
+    /// Source edge containing the isolated root.
+    pub fn edge(&self) -> EdgeId {
+        self.edge.clone()
+    }
+
+    /// Ordinal in certified intrinsic source-edge parameter order.
+    pub const fn root_ordinal(&self) -> usize {
+        self.root_ordinal
+    }
+}
+
+/// Exact combinatorial identity of one stitched curved-fragment endpoint.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum SectionCurveEndpointTopology {
+    /// Physical trim event on one or both operand boundaries.
+    Trim {
+        /// Operand-local boundary sites.
+        sites: [SectionSite; 2],
+        /// Isolated source-edge roots exactly where `sites` names an edge.
+        source_parameters: [Option<SectionSourceParameterKey>; 2],
+    },
+    /// Intentional parameter seam of a complete-period carrier.
+    ParameterSeam {
+        /// Index into [`BodySectionGraph::branches`].
+        branch: usize,
+        /// Index into [`SectionBranch::fragment_sites`].
+        site: usize,
+    },
+}
+
+/// One proof-keyed vertex shared by stitched curved fragments.
+///
+/// Equality and joins are owned by [`SectionCurveEndpointTopology`], never
+/// by a metric point comparison. Source-edge intervals are intersected only
+/// after those exact identities match.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionCurveEndpoint {
+    topology: SectionCurveEndpointTopology,
+    edge_parameters: [Option<SectionEdgeParameterInterval>; 2],
+}
+
+impl SectionCurveEndpoint {
+    /// Exact combinatorial endpoint identity.
+    pub const fn topology(&self) -> &SectionCurveEndpointTopology {
+        &self.topology
+    }
+
+    /// Compatible intrinsic source-edge parameter enclosures by operand.
+    pub const fn edge_parameters(&self) -> &[Option<SectionEdgeParameterInterval>; 2] {
+        &self.edge_parameters
+    }
+}
+
+/// Topology-owned trim event that bounds one curved fragment occurrence.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionCurveTrimProvenance {
+    operand: usize,
+    face: FaceId,
+    loop_id: LoopId,
+    fin: FinId,
+    source_parameter: SectionSourceParameterKey,
+    edge_parameter: SectionEdgeParameterInterval,
+    pcurve_half_angle: SectionProjectiveParameterInterval,
+}
+
+impl SectionCurveTrimProvenance {
+    /// Operand slot whose face trim contributed this event.
+    pub const fn operand(&self) -> usize {
+        self.operand
+    }
+
+    /// Trimmed source face.
+    pub fn face(&self) -> FaceId {
+        self.face.clone()
+    }
+
+    /// Source boundary loop.
+    pub fn loop_id(&self) -> LoopId {
+        self.loop_id.clone()
+    }
+
+    /// Source fin whose pcurve supplied the crossing equation.
+    pub fn fin(&self) -> FinId {
+        self.fin.clone()
+    }
+
+    /// Stable source-edge/root identity.
+    pub const fn source_parameter(&self) -> &SectionSourceParameterKey {
+        &self.source_parameter
+    }
+
+    /// Intrinsic source-edge parameter enclosure.
+    pub const fn edge_parameter(&self) -> SectionEdgeParameterInterval {
+        self.edge_parameter
+    }
+
+    /// Projective pcurve parameter enclosure used for cyclic ordering.
+    pub const fn pcurve_half_angle(&self) -> SectionProjectiveParameterInterval {
+        self.pcurve_half_angle
+    }
+}
+
+/// One directed occurrence of a stitched curved-fragment endpoint.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionCurveFragmentEnd {
+    endpoint: usize,
+    point: Point3,
+    carrier_parameter: f64,
+    trim: SectionCurveTrimProvenance,
+}
+
+impl SectionCurveFragmentEnd {
+    /// Index into [`BodySectionGraph::curve_endpoints`].
+    pub const fn endpoint(&self) -> usize {
+        self.endpoint
+    }
+
+    /// Numeric model-space representative (evidence, not join authority).
+    pub const fn point(&self) -> Point3 {
+        self.point
+    }
+
+    /// Numeric representative in the source branch's canonical parameter.
+    pub const fn carrier_parameter(&self) -> f64 {
+        self.carrier_parameter
+    }
+
+    /// Exact topology and parameter provenance for this trim event.
+    pub const fn trim(&self) -> &SectionCurveTrimProvenance {
+        &self.trim
+    }
+}
+
+/// Exact coverage of one public curved fragment.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum SectionCurveFragmentSpan {
+    /// The complete periodic carrier survived both trims without endpoints.
+    Whole,
+    /// Directed bounded arc between two exact trim events.
+    Arc {
+        /// Start/end occurrences in canonical carrier orientation.
+        endpoints: Box<[SectionCurveFragmentEnd; 2]>,
+        /// Whether the arc crosses the plane pcurve's projective chart seam.
+        wraps_pcurve_seam: bool,
+    },
+}
+
+/// One proof-bearing exact curved fragment retained by the section graph.
+///
+/// [`Self::branch`] links to the carrier, paired pcurves, source faces, and
+/// residual certificate. The source ordinal is deterministic within that
+/// branch and the span follows its canonical carrier orientation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionCurveFragment {
+    branch: usize,
+    source_ordinal: usize,
+    span: SectionCurveFragmentSpan,
+}
+
+impl SectionCurveFragment {
+    /// Index into [`BodySectionGraph::branches`].
+    pub const fn branch(&self) -> usize {
+        self.branch
+    }
+
+    /// Deterministic clipper-owned ordinal within the source branch.
+    pub const fn source_ordinal(&self) -> usize {
+        self.source_ordinal
+    }
+
+    /// Exact whole-period or bounded-arc coverage.
+    pub const fn span(&self) -> &SectionCurveFragmentSpan {
+        &self.span
+    }
+}
+
+/// One maximal directed component of exact curved fragments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionCurveComponent {
+    fragments: Vec<usize>,
+    closed: bool,
+}
+
+impl SectionCurveComponent {
+    /// Indices into [`BodySectionGraph::curve_fragments`] in traversal order.
+    pub fn fragments(&self) -> &[usize] {
+        &self.fragments
+    }
+
+    /// Whether exact endpoint incidence closes this component.
+    pub const fn closed(&self) -> bool {
+        self.closed
+    }
+}
+
 impl SectionLoop {
     /// Edge indices in traversal order.
     pub fn edges(&self) -> &[usize] {
@@ -546,6 +781,9 @@ pub struct BodySectionGraph {
     pub(crate) vertices: Vec<SectionVertex>,
     pub(crate) edges: Vec<SectionEdge>,
     pub(crate) branches: Vec<SectionBranch>,
+    pub(crate) curve_endpoints: Vec<SectionCurveEndpoint>,
+    pub(crate) curve_fragments: Vec<SectionCurveFragment>,
+    pub(crate) curve_components: Vec<SectionCurveComponent>,
     pub(crate) loops: Vec<SectionLoop>,
     pub(crate) rings: Vec<SectionRing>,
     pub(crate) gaps: Vec<SectionGap>,
@@ -572,6 +810,21 @@ impl BodySectionGraph {
     /// branches whose exact trims retained a whole closed component.
     pub fn branches(&self) -> &[SectionBranch] {
         &self.branches
+    }
+
+    /// Proof-keyed endpoints shared by bounded curved fragments.
+    pub fn curve_endpoints(&self) -> &[SectionCurveEndpoint] {
+        &self.curve_endpoints
+    }
+
+    /// Exact curved fragments in deterministic clipper order.
+    pub fn curve_fragments(&self) -> &[SectionCurveFragment] {
+        &self.curve_fragments
+    }
+
+    /// Maximal directed curved components in deterministic discovery order.
+    pub fn curve_components(&self) -> &[SectionCurveComponent] {
+        &self.curve_components
     }
 
     /// Stitched chains in deterministic discovery order.
@@ -618,7 +871,7 @@ pub(crate) const GAP_PAIR_UNRESOLVED: &str =
 pub(crate) const GAP_INCOMPATIBLE_EDGE_PARAMETERS: &str =
     "stitched source-edge parameter enclosures are incompatible";
 pub(crate) const GAP_CURVED_TRIM_UNRESOLVED: &str =
-    "certified bounded curved fragments await public endpoint adaptation and graph stitching";
+    "two independently bounded curved trims cannot yet be intersected in cyclic parameter space";
 pub(crate) const GAP_CLOSED_STITCH: &str =
     "closed curved section fragments could not be stitched into manifold rings";
 
@@ -845,6 +1098,31 @@ struct SegmentGeometry {
     residual_bounds: [f64; 2],
 }
 
+/// Facade adaptation evidence aligned index-for-index with the exact closed
+/// stitcher's fragment input. The stitcher intentionally owns only proof
+/// identities; metric representatives and full trim provenance stay here.
+#[derive(Debug, Clone, Copy)]
+struct ClosedFragmentEvidence {
+    branch: usize,
+    ordinal: usize,
+    span: ClosedFragmentEvidenceSpan,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ClosedFragmentEvidenceSpan {
+    Whole,
+    Arc {
+        ends: [ClosedFragmentEndEvidence; 2],
+        wraps_pcurve_seam: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ClosedFragmentEndEvidence {
+    trim_operand: usize,
+    site: curved_clip::ClosedConicTrimSite,
+}
+
 /// Deterministic collectors for one section query.
 #[derive(Default)]
 struct SectionAccumulator {
@@ -852,6 +1130,7 @@ struct SectionAccumulator {
     geometry: Vec<SegmentGeometry>,
     branches: Vec<SectionBranch>,
     closed_fragments: Vec<closed_stitch::ClosedCurveFragment>,
+    closed_fragment_evidence: Vec<ClosedFragmentEvidence>,
     gaps: Vec<SectionGap>,
 }
 
@@ -864,12 +1143,20 @@ impl SectionAccumulator {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 enum ClosedTrimMerge {
     Empty,
-    Whole,
-    UnsupportedFragments,
+    Fragments(Vec<MergedClosedFragment>),
+    UnsupportedIntersection,
     Gap(&'static str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MergedClosedFragment {
+    fragment: curved_clip::ClosedConicFragment,
+    /// `None` is a whole-period carrier; bounded fragments name the operand
+    /// whose exact face trim contributed both endpoints.
+    trim_operand: Option<usize>,
 }
 
 fn whole_closed_conic_fragment(fragments: &[curved_clip::ClosedConicFragment]) -> bool {
@@ -883,10 +1170,11 @@ fn whole_closed_conic_fragment(fragments: &[curved_clip::ClosedConicFragment]) -
     )
 }
 
-/// Intersect the two operand-local trim results for the currently admitted
-/// exact class. Empty is absorbing and whole-period is the identity. Bounded
-/// arcs remain verified clip evidence, but are not promoted until the public
-/// section graph can retain their exact endpoint topology.
+/// Intersect two operand-local trim results over the currently admitted exact
+/// classes. Empty is absorbing and whole-period is the identity, so any
+/// bounded set on the other operand is retained without a layout taxonomy.
+/// Two independently bounded sets require cyclic interval-set intersection,
+/// which remains a typed gap rather than a numeric merge.
 fn merge_closed_trim_outcomes(
     a: &curved_clip::ClosedConicClipOutcome,
     b: &curved_clip::ClosedConicClipOutcome,
@@ -907,11 +1195,136 @@ fn merge_closed_trim_outcomes(
     let (Fragments(a), Fragments(b)) = (a, b) else {
         unreachable!("indeterminate closed trim outcomes returned above")
     };
-    if whole_closed_conic_fragment(a) && whole_closed_conic_fragment(b) {
-        ClosedTrimMerge::Whole
-    } else {
-        ClosedTrimMerge::UnsupportedFragments
+    let (a_whole, b_whole) = (
+        whole_closed_conic_fragment(a),
+        whole_closed_conic_fragment(b),
+    );
+    if a_whole && b_whole {
+        return ClosedTrimMerge::Fragments(vec![MergedClosedFragment {
+            fragment: a[0],
+            trim_operand: None,
+        }]);
     }
+    if a_whole {
+        return ClosedTrimMerge::Fragments(
+            b.iter()
+                .copied()
+                .map(|fragment| MergedClosedFragment {
+                    fragment,
+                    trim_operand: Some(1),
+                })
+                .collect(),
+        );
+    }
+    if b_whole {
+        return ClosedTrimMerge::Fragments(
+            a.iter()
+                .copied()
+                .map(|fragment| MergedClosedFragment {
+                    fragment,
+                    trim_operand: Some(0),
+                })
+                .collect(),
+        );
+    }
+    ClosedTrimMerge::UnsupportedIntersection
+}
+
+fn certified_closed_trim_endpoint(
+    source: closed_stitch::ClosedBranchSource,
+    trim_operand: usize,
+    site: curved_clip::ClosedConicTrimSite,
+) -> Option<closed_stitch::CertifiedClosedEndpoint> {
+    if trim_operand >= 2 || source.faces[trim_operand] != site.face {
+        return None;
+    }
+    let mut sites = source.faces.map(stitch::SiteKey::Face);
+    sites[trim_operand] = stitch::SiteKey::Edge(site.edge);
+    let mut keys = [None, None];
+    keys[trim_operand] = Some(closed_stitch::CertifiedSourceParameterKey::new(
+        site.edge,
+        site.root_ordinal,
+    ));
+    let mut parameters = [None, None];
+    parameters[trim_operand] = Some(site.edge_parameter);
+    Some(closed_stitch::CertifiedClosedEndpoint::trim_site(
+        stitch::VertexKey {
+            a: sites[0],
+            b: sites[1],
+        },
+        keys,
+        parameters,
+    ))
+}
+
+/// Adapt exact merged clip fragments into proof-key stitch inputs and retain
+/// their richer facade evidence in the same deterministic order.
+fn append_closed_fragments(
+    branch_index: usize,
+    merged: &[MergedClosedFragment],
+    acc: &mut SectionAccumulator,
+) -> bool {
+    let Some(source) = closed_stitch::ClosedBranchSource::from_section_branch(
+        branch_index,
+        &acc.branches[branch_index],
+    ) else {
+        return false;
+    };
+    let mut stitch_inputs = Vec::with_capacity(merged.len());
+    let mut facade_evidence = Vec::with_capacity(merged.len());
+    for (ordinal, merged) in merged.iter().copied().enumerate() {
+        let (span, evidence_span) = match (
+            merged.trim_operand,
+            merged.fragment.start,
+            merged.fragment.end,
+        ) {
+            (None, None, None) if merged.fragment.wraps_pcurve_seam => (
+                closed_stitch::ClosedFragmentSpan::Whole,
+                ClosedFragmentEvidenceSpan::Whole,
+            ),
+            (Some(trim_operand), Some(start), Some(end)) => {
+                let (Some(start_key), Some(end_key)) = (
+                    certified_closed_trim_endpoint(source, trim_operand, start),
+                    certified_closed_trim_endpoint(source, trim_operand, end),
+                ) else {
+                    return false;
+                };
+                (
+                    closed_stitch::ClosedFragmentSpan::Arc {
+                        start: start_key,
+                        end: end_key,
+                    },
+                    ClosedFragmentEvidenceSpan::Arc {
+                        ends: [
+                            ClosedFragmentEndEvidence {
+                                trim_operand,
+                                site: start,
+                            },
+                            ClosedFragmentEndEvidence {
+                                trim_operand,
+                                site: end,
+                            },
+                        ],
+                        wraps_pcurve_seam: merged.fragment.wraps_pcurve_seam,
+                    },
+                )
+            }
+            _ => return false,
+        };
+        stitch_inputs.push(closed_stitch::ClosedCurveFragment {
+            source: source.fragment(ordinal),
+            orientation: closed_stitch::ClosedFragmentOrientation::AlongCarrier,
+            span,
+        });
+        facade_evidence.push(ClosedFragmentEvidence {
+            branch: branch_index,
+            ordinal,
+            span: evidence_span,
+        });
+    }
+    acc.closed_fragments.extend(stitch_inputs);
+    acc.closed_fragment_evidence.extend(facade_evidence);
+    true
 }
 
 /// Decide whether the graph-owned cylinder-longitude parameterization must be
@@ -1095,25 +1508,15 @@ fn collect_plane_cylinder_branches(
                 acc.branches.push(branch);
                 match trim {
                     ClosedTrimMerge::Empty => {}
-                    ClosedTrimMerge::Whole => {
-                        let Some(source) = closed_stitch::ClosedBranchSource::from_section_branch(
-                            branch_index,
-                            &acc.branches[branch_index],
-                        ) else {
+                    ClosedTrimMerge::Fragments(fragments) => {
+                        if !append_closed_fragments(branch_index, &fragments, acc) {
                             acc.gaps.push(SectionGap {
                                 reason: GAP_CLOSED_STITCH,
                                 faces: facades.to_vec(),
                             });
-                            continue;
-                        };
-                        acc.closed_fragments
-                            .push(closed_stitch::ClosedCurveFragment {
-                                source: source.fragment(0),
-                                orientation: closed_stitch::ClosedFragmentOrientation::AlongCarrier,
-                                span: closed_stitch::ClosedFragmentSpan::Whole,
-                            });
+                        }
                     }
-                    ClosedTrimMerge::UnsupportedFragments => acc.gaps.push(SectionGap {
+                    ClosedTrimMerge::UnsupportedIntersection => acc.gaps.push(SectionGap {
                         reason: GAP_CURVED_TRIM_UNRESOLVED,
                         faces: facades.to_vec(),
                     }),
@@ -1550,6 +1953,81 @@ fn adapt_site(part: &PartId, key: stitch::SiteKey) -> SectionSite {
     }
 }
 
+fn adapt_closed_endpoint(
+    part: &PartId,
+    vertex: &closed_stitch::ClosedStitchVertex,
+) -> SectionCurveEndpoint {
+    let topology = match vertex.key {
+        closed_stitch::CertifiedClosedEndpointKey::TrimSite {
+            site,
+            edge_parameter_keys,
+        } => SectionCurveEndpointTopology::Trim {
+            sites: [adapt_site(part, site.a), adapt_site(part, site.b)],
+            source_parameters: edge_parameter_keys.map(|key| {
+                key.map(|key| SectionSourceParameterKey {
+                    edge: EdgeId::new(part.clone(), key.edge()),
+                    root_ordinal: key.root_ordinal(),
+                })
+            }),
+        },
+        closed_stitch::CertifiedClosedEndpointKey::PeriodSeam { branch, site } => {
+            SectionCurveEndpointTopology::ParameterSeam {
+                branch: branch.index(),
+                site,
+            }
+        }
+    };
+    SectionCurveEndpoint {
+        topology,
+        edge_parameters: vertex
+            .edge_parameters
+            .map(|value| value.map(SectionEdgeParameterInterval::from_interval)),
+    }
+}
+
+fn curved_carrier_point(branch: &SectionBranch, parameter: f64) -> Option<Point3> {
+    let SectionCarrier::Circle {
+        center,
+        normal,
+        x_direction,
+        radius,
+    } = branch.carrier;
+    let (sin, cos) = kcore::math::sincos(parameter);
+    let point = center + x_direction * (radius * cos) + normal.cross(x_direction) * (radius * sin);
+    [point.x, point.y, point.z]
+        .into_iter()
+        .all(f64::is_finite)
+        .then_some(point)
+}
+
+fn adapt_curve_fragment_end(
+    part: &PartId,
+    branch: &SectionBranch,
+    endpoint: usize,
+    evidence: ClosedFragmentEndEvidence,
+) -> Option<SectionCurveFragmentEnd> {
+    let site = evidence.site;
+    Some(SectionCurveFragmentEnd {
+        endpoint,
+        point: curved_carrier_point(branch, site.carrier_parameter)?,
+        carrier_parameter: site.carrier_parameter,
+        trim: SectionCurveTrimProvenance {
+            operand: evidence.trim_operand,
+            face: FaceId::new(part.clone(), site.face),
+            loop_id: LoopId::new(part.clone(), site.loop_id),
+            fin: FinId::new(part.clone(), site.fin),
+            source_parameter: SectionSourceParameterKey {
+                edge: EdgeId::new(part.clone(), site.edge),
+                root_ordinal: site.root_ordinal,
+            },
+            edge_parameter: SectionEdgeParameterInterval::from_interval(site.edge_parameter),
+            pcurve_half_angle: SectionProjectiveParameterInterval::from_interval(
+                site.pcurve_half_angle,
+            ),
+        },
+    })
+}
+
 /// Intersect, clip, and merge one surviving candidate pair, appending its
 /// certified spans as stitch segments in canonical along-carrier order.
 fn process_pair(
@@ -1643,8 +2121,16 @@ fn assemble_graph(
         geometry,
         branches,
         closed_fragments,
+        closed_fragment_evidence,
         mut gaps,
     } = acc;
+    if closed_fragments.len() != closed_fragment_evidence.len() {
+        return Err(Error::InconsistentTopology {
+            source: kcore::error::Error::InvalidGeometry {
+                reason: "closed section fragment evidence is not index-aligned",
+            },
+        });
+    }
     let stitched = stitch::stitch_segments(&segments);
     let closed_stitched = closed_stitch::stitch_closed_fragments(&closed_fragments);
     let vertices = stitched
@@ -1688,36 +2174,102 @@ fn assemble_graph(
             closed: chain.closed,
         })
         .collect();
-    let mut rings = Vec::with_capacity(closed_stitched.chains.len());
+    let curve_endpoints = closed_stitched
+        .vertices
+        .iter()
+        .map(|vertex| adapt_closed_endpoint(part_id, vertex))
+        .collect::<Vec<_>>();
+    let mut fragment_endpoints = vec![None; closed_fragments.len()];
+    for chain in &closed_stitched.chains {
+        for fragment in &chain.fragments {
+            let Some(slot) = fragment_endpoints.get_mut(fragment.input_fragment) else {
+                return Err(Error::InconsistentTopology {
+                    source: kcore::error::Error::InvalidGeometry {
+                        reason: "closed stitch chain referenced an unknown fragment",
+                    },
+                });
+            };
+            *slot = Some(fragment.endpoints);
+        }
+    }
+    let mut curve_fragments = Vec::with_capacity(closed_fragment_evidence.len());
+    for (input_index, evidence) in closed_fragment_evidence.iter().copied().enumerate() {
+        let Some(branch) = branches.get(evidence.branch) else {
+            return Err(Error::InconsistentTopology {
+                source: kcore::error::Error::InvalidGeometry {
+                    reason: "curved section fragment referenced an unknown branch",
+                },
+            });
+        };
+        let span = match evidence.span {
+            ClosedFragmentEvidenceSpan::Whole => SectionCurveFragmentSpan::Whole,
+            ClosedFragmentEvidenceSpan::Arc {
+                ends,
+                wraps_pcurve_seam,
+            } => {
+                let Some(endpoint_indices) = fragment_endpoints
+                    .get(input_index)
+                    .copied()
+                    .flatten()
+                    .flatten()
+                else {
+                    return Err(Error::InconsistentTopology {
+                        source: kcore::error::Error::InvalidGeometry {
+                            reason: "certified curved arc lacks stitched endpoint indices",
+                        },
+                    });
+                };
+                let (Some(start), Some(end)) = (
+                    adapt_curve_fragment_end(part_id, branch, endpoint_indices[0], ends[0]),
+                    adapt_curve_fragment_end(part_id, branch, endpoint_indices[1], ends[1]),
+                ) else {
+                    return Err(Error::InconsistentTopology {
+                        source: kcore::error::Error::InvalidGeometry {
+                            reason: "certified curved endpoint has no finite representative",
+                        },
+                    });
+                };
+                SectionCurveFragmentSpan::Arc {
+                    endpoints: Box::new([start, end]),
+                    wraps_pcurve_seam,
+                }
+            }
+        };
+        curve_fragments.push(SectionCurveFragment {
+            branch: evidence.branch,
+            source_ordinal: evidence.ordinal,
+            span,
+        });
+    }
+    let curve_components = closed_stitched
+        .chains
+        .iter()
+        .map(|chain| SectionCurveComponent {
+            fragments: chain
+                .fragments
+                .iter()
+                .map(|fragment| fragment.input_fragment)
+                .collect(),
+            closed: chain.closed,
+        })
+        .collect::<Vec<_>>();
+    let mut rings = Vec::new();
     for chain in &closed_stitched.chains {
         let [fragment] = chain.fragments.as_slice() else {
-            gaps.push(SectionGap {
-                reason: GAP_CURVED_TRIM_UNRESOLVED,
-                faces: Vec::new(),
-            });
             continue;
         };
         let Some(input) = closed_fragments.get(fragment.input_fragment) else {
-            gaps.push(SectionGap {
-                reason: GAP_CLOSED_STITCH,
-                faces: Vec::new(),
-            });
             continue;
         };
-        if !chain.closed
-            || fragment.endpoints.is_some()
-            || !matches!(input.span, closed_stitch::ClosedFragmentSpan::Whole)
-            || fragment.source.branch.index() >= branches.len()
+        if chain.closed
+            && fragment.endpoints.is_none()
+            && matches!(input.span, closed_stitch::ClosedFragmentSpan::Whole)
+            && fragment.source.branch.index() < branches.len()
         {
-            gaps.push(SectionGap {
-                reason: GAP_CLOSED_STITCH,
-                faces: Vec::new(),
+            rings.push(SectionRing {
+                branch: fragment.source.branch.index(),
             });
-            continue;
         }
-        rings.push(SectionRing {
-            branch: fragment.source.branch.index(),
-        });
     }
     for defect in &stitched.defects {
         gaps.push(SectionGap {
@@ -1749,6 +2301,9 @@ fn assemble_graph(
         vertices,
         edges,
         branches,
+        curve_endpoints,
+        curve_fragments,
+        curve_components,
         loops,
         rings,
         gaps,

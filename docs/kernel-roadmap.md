@@ -303,10 +303,11 @@ Deterministic operation outputs passed the supplemental Onshape oracle 6/6 on
 import and 6/6 there-and-back (`docs/oracle-boolean-certification.json`). The
 active queue head is rung 4 block/cylinder. Public finite-cylinder construction,
 manifold finite-cylinder classification, topology-owned conic/ring trim proofs,
-deterministic closed-fragment stitching, and exact endpoint-free
-Plane/Cylinder Section rings now cover the strict slab-through-cylinder class.
-Bounded-arc facade persistence, Boolean fragment selection/assembly, Full proof,
-and the same external evidence gate remain.
+deterministic closed-fragment stitching, exact Plane/Cylinder rings and
+bounded-arc endpoint topology, payload-agnostic exact boundary truth selection,
+and finite-cylinder Full proof now cover the strict slab-through-cylinder class.
+Proof-bearing curved face partition/classification, mixed-boundary assembly, and
+the same external evidence gate remain.
 
 Do not wait for an exhaustive analytic pair table before testing the end-to-end
 boolean architecture. Begin with a deliberately narrow vertical slice as soon as the

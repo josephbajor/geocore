@@ -11,9 +11,10 @@ use kernel::{
     MutationKind, NumericalPolicy, OperationSettings, ParamRange, PartId, PcurveChart,
     PcurveEndpointKind, PcurveMetadata, PcurveSeam, PcurveSeamSide, Point2, Point3, PolicyVersion,
     RegionKind, RemoveBridgeRequest, RemoveSeedBodyRequest, RemoveStrutRequest, ResourceKind,
-    SectionBodiesRequest, SectionCompletion, SectionRing, Session, SessionPolicy, SessionPrecision,
-    SplitHoleAsFaceRequest, SurfaceDerivativeOrder, SurfaceEvaluationRequest, SurfaceParameter,
-    TessOptions, TessellateBodyRequest, ToleranceGrowth, ToleranceGrowthTarget, Tolerances, Vec3,
+    SectionBodiesRequest, SectionCompletion, SectionCurveFragmentSpan, SectionRing, Session,
+    SessionPolicy, SessionPrecision, SplitHoleAsFaceRequest, SurfaceDerivativeOrder,
+    SurfaceEvaluationRequest, SurfaceParameter, TessOptions, TessellateBodyRequest,
+    ToleranceGrowth, ToleranceGrowthTarget, Tolerances, Vec3,
 };
 
 #[test]
@@ -166,9 +167,10 @@ fn facade_only_client_can_construct_and_check_a_cylinder_with_reports() {
     assert_eq!(body.vertices().unwrap().len(), 0);
 
     let check = part
-        .check_body(CheckBodyRequest::new(created.body(), CheckLevel::Fast))
+        .check_body(CheckBodyRequest::new(created.body(), CheckLevel::Full))
         .unwrap();
     assert_eq!(check.result().unwrap().outcome(), CheckOutcome::Valid);
+    assert!(check.result().unwrap().gaps().is_empty());
     assert!(check.report().limit_events().is_empty());
 }
 
@@ -209,6 +211,12 @@ fn facade_only_client_can_observe_exact_plane_cylinder_section_rings() {
         rings
             .iter()
             .all(|ring| ring.branch() < graph.branches().len())
+    );
+    assert!(
+        graph
+            .curve_fragments()
+            .iter()
+            .all(|fragment| matches!(fragment.span(), SectionCurveFragmentSpan::Whole))
     );
     assert!(graph.gaps().is_empty());
 }

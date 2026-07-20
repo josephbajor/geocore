@@ -37,9 +37,10 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
 4. Extend the same ladder to block/cylinder (introduces curved SSI pcurves).
    *(active queue head — public cylinder construction, certified finite-cylinder
    classification, topology-owned conic/ring trim proofs, deterministic closed
-   fragment stitching, and exact endpoint-free Plane/Cylinder Section rings
-   landed; bounded-arc facade persistence, Boolean fragment selection/assembly,
-   Full proof, and X_T oracle evidence remain)*
+   fragment stitching, exact Plane/Cylinder rings and bounded-arc endpoint
+   topology, payload-agnostic exact boundary truth selection, and finite-cylinder
+   Full proof landed; curved face partition/classification, mixed-boundary
+   assembly, and X_T oracle evidence remain)*
 
 Work that does not advance the queue head needs an explicit justification
 linking it to a rung ("rung 2 needs curve/curve overlap dedup because …").

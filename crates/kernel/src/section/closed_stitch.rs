@@ -144,6 +144,14 @@ impl CertifiedSourceParameterKey {
     pub(crate) const fn new(edge: RawEdgeId, root_ordinal: usize) -> Self {
         Self { edge, root_ordinal }
     }
+
+    pub(crate) const fn edge(self) -> RawEdgeId {
+        self.edge
+    }
+
+    pub(crate) const fn root_ordinal(self) -> usize {
+        self.root_ordinal
+    }
 }
 
 /// Proof-owned endpoint identity.  Equality is the only admission path for a

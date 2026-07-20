@@ -1093,6 +1093,21 @@ fn block_slab_through_cylinder_exposes_two_exact_closed_rings() {
     assert!(graph.loops().is_empty());
     assert_eq!(graph.branches().len(), 2);
     assert_eq!(graph.rings().len(), 2);
+    assert_eq!(graph.curve_endpoints().len(), 0);
+    assert_eq!(graph.curve_fragments().len(), 2);
+    assert_eq!(graph.curve_components().len(), 2);
+    assert!(
+        graph
+            .curve_fragments()
+            .iter()
+            .all(|fragment| matches!(fragment.span(), SectionCurveFragmentSpan::Whole))
+    );
+    assert!(
+        graph
+            .curve_components()
+            .iter()
+            .all(SectionCurveComponent::closed)
+    );
     assert!(graph.gaps().is_empty());
     let mut ring_branches = graph
         .rings()
@@ -1145,6 +1160,134 @@ fn block_slab_through_cylinder_exposes_two_exact_closed_rings() {
     heights.sort_by(f64::total_cmp);
     assert_eq!(heights, vec![0.5, 1.5]);
     assert_stable_gap_reasons(&graph);
+}
+
+#[test]
+fn clipped_plane_cylinder_circles_retain_exact_public_arc_endpoints() {
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let (block, cylinder) = {
+        let mut edit = session.edit_part(part_id.clone()).unwrap();
+        let block = edit
+            .extrude_profile(ExtrudeProfileRequest::new(
+                frame_at([0.0, 0.0, 0.5]),
+                vec![
+                    Point2::new(-3.0, -3.0),
+                    Point2::new(3.0, -3.0),
+                    Point2::new(3.0, 3.0),
+                    Point2::new(-3.0, 3.0),
+                ],
+                vec![vec![
+                    Point2::new(-1.0, -2.5),
+                    Point2::new(-1.0, 2.5),
+                    Point2::new(1.0, 2.5),
+                    Point2::new(1.0, -2.5),
+                ]],
+                1.0,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let cylinder = edit
+            .create_cylinder(CylinderRequest::new(Frame::world(), 1.5, 2.0))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (block, cylinder)
+    };
+    let graph = section_graph(&session, &part_id, &block, &cylinder);
+
+    assert_eq!(graph.branches().len(), 2, "bounded graph: {graph:#?}");
+    assert_eq!(graph.curve_fragments().len(), 4);
+    assert_eq!(graph.curve_endpoints().len(), 8);
+    assert_eq!(graph.curve_components().len(), 4);
+    assert!(graph.rings().is_empty());
+    assert_eq!(graph.completion(), SectionCompletion::Indeterminate);
+    assert!(
+        graph
+            .curve_components()
+            .iter()
+            .all(|component| !component.closed())
+    );
+    assert!(
+        graph
+            .gaps()
+            .iter()
+            .all(|gap| gap.reason() != GAP_CURVED_TRIM_UNRESOLVED),
+        "public endpoint adaptation must not report the retired facade gap: {:?}",
+        graph.gaps()
+    );
+
+    let part = session.part(part_id.clone()).unwrap();
+    let mut branch_ordinals = vec![Vec::new(); graph.branches().len()];
+    for fragment in graph.curve_fragments() {
+        branch_ordinals[fragment.branch()].push(fragment.source_ordinal());
+        let branch = &graph.branches()[fragment.branch()];
+        let SectionCurveFragmentSpan::Arc { endpoints, .. } = fragment.span() else {
+            panic!("partially clipped circle must persist as a bounded arc")
+        };
+        for end in endpoints.iter() {
+            assert!(end.endpoint() < graph.curve_endpoints().len());
+            assert_boundary_on_both(
+                &session,
+                &part_id,
+                graph.bodies(),
+                end.point(),
+                "certified curved fragment endpoint",
+            );
+            assert!(branch.range().contains(end.carrier_parameter()));
+
+            let trim = end.trim();
+            assert_eq!(trim.face(), branch.faces()[trim.operand()]);
+            assert!(trim.edge_parameter().lo() < trim.edge_parameter().hi());
+            assert!(trim.pcurve_half_angle().lo() < trim.pcurve_half_angle().hi());
+            assert_eq!(part.loop_(trim.loop_id()).unwrap().face(), trim.face());
+            assert_eq!(part.fin(trim.fin()).unwrap().loop_(), trim.loop_id());
+            assert_eq!(
+                part.fin(trim.fin()).unwrap().edge(),
+                trim.source_parameter().edge()
+            );
+
+            let endpoint = &graph.curve_endpoints()[end.endpoint()];
+            let SectionCurveEndpointTopology::Trim {
+                sites,
+                source_parameters,
+            } = endpoint.topology()
+            else {
+                panic!("physical curved trim event must not become a chart seam")
+            };
+            assert_eq!(
+                sites[trim.operand()],
+                SectionSite::EdgeInterior(trim.source_parameter().edge())
+            );
+            assert_eq!(
+                source_parameters[trim.operand()].as_ref(),
+                Some(trim.source_parameter())
+            );
+            assert_eq!(
+                endpoint.edge_parameters()[trim.operand()],
+                Some(trim.edge_parameter())
+            );
+        }
+    }
+    assert!(branch_ordinals.iter().all(|ordinals| ordinals == &[0, 1]));
+    assert_stable_gap_reasons(&graph);
+
+    let swapped = section_graph(&session, &part_id, &cylinder, &block);
+    assert_eq!(swapped.curve_fragments().len(), 4);
+    assert_eq!(swapped.curve_endpoints().len(), 8);
+    assert!(swapped.curve_fragments().iter().all(|fragment| {
+        let SectionCurveFragmentSpan::Arc { endpoints, .. } = fragment.span() else {
+            return false;
+        };
+        endpoints.iter().all(|end| {
+            end.trim().operand() == 1
+                && end.trim().face() == swapped.branches()[fragment.branch()].faces()[1]
+        })
+    }));
+    assert_stable_gap_reasons(&swapped);
 }
 
 #[test]

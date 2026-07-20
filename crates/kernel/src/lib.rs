@@ -321,9 +321,12 @@ pub use primitive::CylinderRequest;
 pub use section::{
     BodySectionBudgetProfile, BodySectionGraph, SECTION_FACE_PAIRS, SECTION_WORK,
     SectionBodiesRequest, SectionBranch, SectionBranchEvidence, SectionBranchTopology,
-    SectionCarrier, SectionCompletion, SectionEdge, SectionEdgeParameterInterval,
-    SectionFragmentSite, SectionGap, SectionLoop, SectionRing, SectionSite, SectionUvCircle,
-    SectionUvCurve, SectionUvLine, SectionVertex,
+    SectionCarrier, SectionCompletion, SectionCurveComponent, SectionCurveEndpoint,
+    SectionCurveEndpointTopology, SectionCurveFragment, SectionCurveFragmentEnd,
+    SectionCurveFragmentSpan, SectionCurveTrimProvenance, SectionEdge,
+    SectionEdgeParameterInterval, SectionFragmentSite, SectionGap, SectionLoop,
+    SectionProjectiveParameterInterval, SectionRing, SectionSite, SectionSourceParameterKey,
+    SectionUvCircle, SectionUvCurve, SectionUvLine, SectionVertex,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use tessellation::{BodyMesh, EdgePolyline, FaceTriangleRange, TessellateBodyRequest};
