@@ -80,6 +80,16 @@ impl<K, F> ClassifiedBoundaryFragment<K, F> {
             classification,
         }
     }
+
+    /// Canonical identity within the owning source operand.
+    pub(crate) const fn key(&self) -> &K {
+        &self.key
+    }
+
+    /// Source operand that owns this boundary fragment.
+    pub(crate) const fn operand(&self) -> OperandSide {
+        self.operand
+    }
 }
 
 /// One representation-independent fragment retained by the set truth.
@@ -92,6 +102,21 @@ pub(crate) struct SelectedBoundaryFragment<K, F> {
 }
 
 impl<K, F> SelectedBoundaryFragment<K, F> {
+    /// Canonical identity within the owning source operand.
+    pub(crate) const fn key(&self) -> &K {
+        &self.key
+    }
+
+    /// Source operand that owns this retained boundary fragment.
+    pub(crate) const fn operand(&self) -> OperandSide {
+        self.operand
+    }
+
+    /// Retained orientation relative to the source boundary.
+    pub(crate) const fn orientation(&self) -> SelectedOrientation {
+        self.orientation
+    }
+
     pub(crate) fn into_parts(self) -> (K, OperandSide, F, SelectedOrientation) {
         (self.key, self.operand, self.fragment, self.orientation)
     }

@@ -1,7 +1,7 @@
 //! Facade-only lifecycle tests: no lower-layer crate is imported.
 
 use kernel::{
-    AccountingMode, BOOLEAN_BSP_WORK, BlockRequest, BodyId, BodyKind,
+    AccountingMode, BOOLEAN_BSP_WORK, BOOLEAN_POST_SELECTION_WORK, BlockRequest, BodyId, BodyKind,
     BodyTessellationBudgetProfile, BooleanBodiesRequest, BooleanOperation, BooleanOutcome,
     BooleanRefusal, BooleanResult, BoundedCurve, BoundedPcurve, BudgetPlan, CheckBodyRequest,
     CheckLevel, CheckOutcome, ClassifyPointInBodyRequest, CreateSeedBodyRequest,
@@ -1301,6 +1301,174 @@ fn boolean_body_x_center(fixture: &BooleanFixture, body: BodyId) -> f64 {
     (min + max) * 0.5
 }
 
+fn boolean_body_topology_signature(fixture: &BooleanFixture, body: BodyId) -> [usize; 3] {
+    let part = fixture.session.part(fixture.part.clone()).unwrap();
+    let body = part.body(body).unwrap();
+    [
+        body.faces().unwrap().len(),
+        body.edges().unwrap().len(),
+        body.vertices().unwrap().len(),
+    ]
+}
+
+fn assert_boolean_created_full_valid(created: &kernel::BooleanCreatedResult) {
+    assert_eq!(created.reports().len(), created.bodies().len());
+    assert!(
+        created
+            .reports()
+            .iter()
+            .zip(created.bodies())
+            .all(|(report, body)| report.body() == *body
+                && report.report().level() == CheckLevel::Full
+                && report.report().outcome() == CheckOutcome::Valid
+                && report.report().faults().is_empty()
+                && report.report().gaps().is_empty())
+    );
+}
+
+fn assert_whole_source_copy_lineage(
+    fixture: &BooleanFixture,
+    created: &kernel::BooleanCreatedResult,
+    expected_sources: &[BodyId],
+) {
+    assert_eq!(created.journal().part(), fixture.part);
+    let mutations = created.journal().mutations().collect::<Vec<_>>();
+    assert!(!mutations.is_empty());
+    assert!(
+        mutations
+            .iter()
+            .all(|mutation| mutation.kind() == MutationKind::Created)
+    );
+    assert_eq!(created.journal().lineage_count(), mutations.len());
+
+    let mut derived = Vec::new();
+    let mut body_pairs = Vec::new();
+    let mut face_pairs = Vec::new();
+    for event in created.journal().lineage() {
+        let LineageView::DerivedFrom {
+            derived: derived_entity,
+            source,
+        } = event
+        else {
+            panic!("whole-source copy lineage must contain only DerivedFrom events")
+        };
+        assert!(!derived.contains(&derived_entity));
+        derived.push(derived_entity.clone());
+        match (derived_entity, source) {
+            (JournalEntity::Body(result), JournalEntity::Body(source)) => {
+                body_pairs.push((result, source));
+            }
+            (JournalEntity::Face(result), JournalEntity::Face(source)) => {
+                face_pairs.push((result, source));
+            }
+            (derived, source) => assert_eq!(derived.kind(), source.kind()),
+        }
+    }
+    assert_eq!(derived.len(), mutations.len());
+    assert!(
+        mutations
+            .iter()
+            .all(|mutation| derived.contains(mutation.entity()))
+    );
+    assert_eq!(
+        body_pairs,
+        created
+            .bodies()
+            .iter()
+            .cloned()
+            .zip(expected_sources.iter().cloned())
+            .collect::<Vec<_>>()
+    );
+
+    let part = fixture.session.part(fixture.part.clone()).unwrap();
+    for (result, source) in created.bodies().iter().zip(expected_sources) {
+        let result_faces = part
+            .body(result.clone())
+            .unwrap()
+            .faces()
+            .unwrap()
+            .collect::<Vec<_>>();
+        let source_faces = part
+            .body(source.clone())
+            .unwrap()
+            .faces()
+            .unwrap()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            face_pairs
+                .iter()
+                .filter(|(derived, original)| {
+                    result_faces.contains(derived) && source_faces.contains(original)
+                })
+                .count(),
+            result_faces.len()
+        );
+        assert!(result_faces.iter().all(|face| {
+            face_pairs
+                .iter()
+                .filter(|(derived, source)| derived == face && source_faces.contains(source))
+                .count()
+                == 1
+        }));
+    }
+}
+
+fn assert_deterministic_xt_and_fast_self_import(
+    fixture: &mut BooleanFixture,
+    bodies: &[BodyId],
+) -> Vec<Vec<u8>> {
+    let exports = {
+        let part = fixture.session.part(fixture.part.clone()).unwrap();
+        bodies
+            .iter()
+            .map(|body| {
+                let first = part
+                    .export_xt(ExportXtRequest::new(body.clone()))
+                    .unwrap()
+                    .into_result()
+                    .unwrap();
+                let second = part
+                    .export_xt(ExportXtRequest::new(body.clone()))
+                    .unwrap()
+                    .into_result()
+                    .unwrap();
+                assert_eq!(first.bytes(), second.bytes());
+                first.bytes().to_vec()
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let imported_part = fixture.session.create_part();
+    for bytes in &exports {
+        let imported = fixture
+            .session
+            .edit_part(imported_part.clone())
+            .unwrap()
+            .import_xt(ImportXtRequest::new(bytes))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(imported.bodies().len(), 1);
+        let report = fixture
+            .session
+            .part(imported_part.clone())
+            .unwrap()
+            .check_body(CheckBodyRequest::new(
+                imported.bodies()[0].clone(),
+                CheckLevel::Fast,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(report.outcome(), CheckOutcome::Valid);
+    }
+    assert_eq!(
+        fixture.session.part(imported_part).unwrap().bodies().len(),
+        bodies.len()
+    );
+    exports
+}
+
 #[test]
 fn public_boolean_connected_operations_commit_one_full_valid_body_and_retain_sources() {
     for operation in [
@@ -1559,10 +1727,11 @@ fn public_curved_boolean_zero_cut_selection_handles_containment_and_empty() {
         OperationSettings::new(),
     ));
     let BooleanResult::Created(created) = result else {
-        panic!("a contained finite cylinder must be copied as one selected band")
+        panic!("a contained finite cylinder must retain one complete source boundary")
     };
     assert_eq!(created.bodies().len(), 1);
-    assert_eq!(created.journal().lineage_count(), 3);
+    assert_boolean_created_full_valid(&created);
+    assert_whole_source_copy_lineage(&contained, &created, &[contained.right.clone()]);
     assert_boolean_sources_retained(&contained, 3);
 
     let mut disjoint = block_cylinder_boolean_fixture(
@@ -1579,6 +1748,170 @@ fn public_curved_boolean_zero_cut_selection_handles_containment_and_empty() {
     ));
     assert!(matches!(result, BooleanResult::ProvenEmpty));
     assert_boolean_sources_retained(&disjoint, 2);
+}
+
+#[test]
+fn public_curved_boolean_zero_cut_whole_source_union_and_subtraction_commit_copies() {
+    let cylinder_frame = Frame::world().with_origin(Point3::new(0.0, 0.0, -1.0));
+    for swapped in [false, true] {
+        let mut fixture = block_cylinder_boolean_fixture(
+            Frame::world(),
+            [6.0, 6.0, 6.0],
+            cylinder_frame,
+            0.75,
+            2.0,
+        );
+        let block = fixture.left.clone();
+        if swapped {
+            core::mem::swap(&mut fixture.left, &mut fixture.right);
+        }
+        let result = boolean_success(run_boolean(
+            &mut fixture,
+            BooleanOperation::Unite,
+            OperationSettings::new(),
+        ));
+        let BooleanResult::Created(created) = result else {
+            panic!("contained curved union must copy the complete outer boundary")
+        };
+        assert_eq!(created.bodies().len(), 1);
+        assert_boolean_created_full_valid(&created);
+        assert_eq!(
+            boolean_body_topology_signature(&fixture, created.bodies()[0].clone()),
+            [6, 12, 8]
+        );
+        assert_boolean_sources_retained(&fixture, 3);
+        assert_whole_source_copy_lineage(&fixture, &created, &[block]);
+
+        let result_body = created.bodies()[0].clone();
+        let part = fixture.session.part(fixture.part.clone()).unwrap();
+        for (point, expected) in [
+            (
+                Point3::new(2.0, 0.0, 0.0),
+                kernel::PointBodyVerdict::Interior,
+            ),
+            (
+                Point3::new(4.0, 0.0, 0.0),
+                kernel::PointBodyVerdict::Exterior,
+            ),
+        ] {
+            let classification = part
+                .classify_point_in_body(ClassifyPointInBodyRequest::new(result_body.clone(), point))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            assert_eq!(classification.verdict(), &expected);
+        }
+        drop(part);
+        assert_deterministic_xt_and_fast_self_import(&mut fixture, &[result_body]);
+    }
+
+    let mut union = block_cylinder_boolean_fixture(
+        Frame::world().with_origin(Point3::new(8.0, 0.0, 0.0)),
+        [2.0, 2.0, 2.0],
+        Frame::world().with_origin(Point3::new(-8.0, 0.0, -1.0)),
+        0.75,
+        2.0,
+    );
+    let union_sources = [union.left.clone(), union.right.clone()];
+    let result = boolean_success(run_boolean(
+        &mut union,
+        BooleanOperation::Unite,
+        OperationSettings::new(),
+    ));
+    let BooleanResult::Created(created) = result else {
+        panic!("disjoint curved union must copy both complete source boundaries")
+    };
+    assert_eq!(created.bodies().len(), 2);
+    assert_boolean_created_full_valid(&created);
+    assert_eq!(
+        created
+            .bodies()
+            .iter()
+            .map(|body| boolean_body_topology_signature(&union, body.clone()))
+            .collect::<Vec<_>>(),
+        vec![[6, 12, 8], [3, 2, 0]]
+    );
+    assert_boolean_sources_retained(&union, 4);
+    assert_whole_source_copy_lineage(&union, &created, &union_sources);
+    let result_bodies = created.bodies().to_vec();
+    let part = union.session.part(union.part.clone()).unwrap();
+    for (body_index, point) in [Point3::new(8.0, 0.0, 0.0), Point3::new(-8.0, 0.0, 0.0)]
+        .into_iter()
+        .enumerate()
+    {
+        for (candidate, body) in result_bodies.iter().enumerate() {
+            let classification = part
+                .classify_point_in_body(ClassifyPointInBodyRequest::new(body.clone(), point))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            let expected = if candidate == body_index {
+                kernel::PointBodyVerdict::Interior
+            } else {
+                kernel::PointBodyVerdict::Exterior
+            };
+            assert_eq!(classification.verdict(), &expected);
+        }
+    }
+    drop(part);
+    let exports = assert_deterministic_xt_and_fast_self_import(&mut union, &result_bodies);
+    assert_ne!(exports[0], exports[1]);
+
+    for swapped in [false, true] {
+        let mut fixture = block_cylinder_boolean_fixture(
+            Frame::world().with_origin(Point3::new(8.0, 0.0, 0.0)),
+            [2.0, 2.0, 2.0],
+            Frame::world().with_origin(Point3::new(-8.0, 0.0, -1.0)),
+            0.75,
+            2.0,
+        );
+        if swapped {
+            core::mem::swap(&mut fixture.left, &mut fixture.right);
+        }
+        let expected_source = fixture.left.clone();
+        let expected_signature = if swapped { [3, 2, 0] } else { [6, 12, 8] };
+        let left_anchor = if swapped {
+            Point3::new(-8.0, 0.0, 0.0)
+        } else {
+            Point3::new(8.0, 0.0, 0.0)
+        };
+        let right_anchor = if swapped {
+            Point3::new(8.0, 0.0, 0.0)
+        } else {
+            Point3::new(-8.0, 0.0, 0.0)
+        };
+        let result = boolean_success(run_boolean(
+            &mut fixture,
+            BooleanOperation::Subtract,
+            OperationSettings::new(),
+        ));
+        let BooleanResult::Created(created) = result else {
+            panic!("disjoint curved subtraction must copy its complete left boundary")
+        };
+        assert_eq!(created.bodies().len(), 1);
+        assert_boolean_created_full_valid(&created);
+        assert_eq!(
+            boolean_body_topology_signature(&fixture, created.bodies()[0].clone()),
+            expected_signature
+        );
+        assert_boolean_sources_retained(&fixture, 3);
+        assert_whole_source_copy_lineage(&fixture, &created, &[expected_source]);
+        let result_body = created.bodies()[0].clone();
+        let part = fixture.session.part(fixture.part.clone()).unwrap();
+        for (point, expected) in [
+            (left_anchor, kernel::PointBodyVerdict::Interior),
+            (right_anchor, kernel::PointBodyVerdict::Exterior),
+        ] {
+            let classification = part
+                .classify_point_in_body(ClassifyPointInBodyRequest::new(result_body.clone(), point))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            assert_eq!(classification.verdict(), &expected);
+        }
+        drop(part);
+        assert_deterministic_xt_and_fast_self_import(&mut fixture, &[result_body]);
+    }
 }
 
 fn assert_curved_subtraction_band_topology_and_lineage(
@@ -2164,6 +2497,74 @@ fn public_curved_boolean_bsp_budget_is_exact_and_denial_is_failure_atomic() {
     let denied = run_boolean(
         &mut denied_fixture,
         BooleanOperation::Intersect,
+        settings_at(usage.consumed - 1),
+    );
+    let expected = kernel::LimitSnapshot {
+        allowed: usage.consumed - 1,
+        ..usage
+    };
+    assert_eq!(denied.result().unwrap_err().limit(), Some(expected));
+    assert_eq!(denied.report().limit_events(), &[expected]);
+    assert_eq!(boolean_topology_counts(&denied_fixture), before);
+    assert_boolean_sources_retained(&denied_fixture, 2);
+}
+
+#[test]
+fn public_curved_whole_source_copy_budget_is_exact_and_denial_is_failure_atomic() {
+    let fixture = || {
+        block_cylinder_boolean_fixture(
+            Frame::world().with_origin(Point3::new(8.0, 0.0, 0.0)),
+            [2.0, 2.0, 2.0],
+            Frame::world().with_origin(Point3::new(-8.0, 0.0, -1.0)),
+            0.75,
+            2.0,
+        )
+    };
+    let baseline = run_boolean(
+        &mut fixture(),
+        BooleanOperation::Unite,
+        OperationSettings::new(),
+    );
+    assert!(matches!(
+        baseline.result().unwrap(),
+        BooleanOutcome::Success(BooleanResult::Created(_))
+    ));
+    let usage = *baseline
+        .report()
+        .usage()
+        .iter()
+        .find(|usage| {
+            usage.stage == BOOLEAN_POST_SELECTION_WORK && usage.resource == ResourceKind::Work
+        })
+        .unwrap();
+    assert!(usage.consumed > 0);
+
+    let settings_at = |allowed| {
+        OperationSettings::new().with_budget_overrides(
+            BudgetPlan::new([LimitSpec::new(
+                BOOLEAN_POST_SELECTION_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                allowed,
+            )])
+            .unwrap(),
+        )
+    };
+    let admitted = run_boolean(
+        &mut fixture(),
+        BooleanOperation::Unite,
+        settings_at(usage.consumed),
+    );
+    assert!(matches!(
+        admitted.into_result().unwrap(),
+        BooleanOutcome::Success(BooleanResult::Created(_))
+    ));
+
+    let mut denied_fixture = fixture();
+    let before = boolean_topology_counts(&denied_fixture);
+    let denied = run_boolean(
+        &mut denied_fixture,
+        BooleanOperation::Unite,
         settings_at(usage.consumed - 1),
     );
     let expected = kernel::LimitSnapshot {
