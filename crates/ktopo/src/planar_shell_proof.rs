@@ -96,7 +96,7 @@ pub(crate) fn certify_general_planar_shell_in_scope(
         ShellOrientation::Invalid
     } else {
         match exact_signed_volume_sign(&shell.facets) {
-            Orientation::Positive => ShellOrientation::Certified,
+            Orientation::Positive => ShellOrientation::Positive,
             Orientation::Negative => ShellOrientation::Invalid,
             Orientation::Zero => ShellOrientation::Indeterminate,
         }
@@ -950,7 +950,7 @@ mod tests {
             certify_general_planar_shell_in_scope(transaction.store(), shell, &mut scope).unwrap(),
             ShellCertification {
                 embedding: ShellEmbedding::Certified,
-                orientation: ShellOrientation::Certified,
+                orientation: ShellOrientation::Positive,
             }
         );
         let consumed = scope

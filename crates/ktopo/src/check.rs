@@ -53,8 +53,8 @@
 //!   identity (they still get all local checks).
 
 use crate::entity::{
-    Body, BodyId, BodyKind, Edge, EdgeId, EntityRef, Face, FaceId, Fin, FinId, LoopId, RegionKind,
-    SeamSide, ShellId, VertexId,
+    Body, BodyId, BodyKind, Edge, EdgeId, EntityRef, Face, FaceId, Fin, FinId, LoopId, RegionId,
+    RegionKind, SeamSide, ShellId, VertexId,
 };
 use crate::geom::SurfaceGeom;
 use crate::graph_work::GraphQueryWork;
@@ -180,6 +180,10 @@ pub enum FaultKind {
     FaceDomainMissesPcurveEndpoint,
     /// The Euler–Poincaré identity fails for a shell (see module docs).
     EulerViolation,
+    /// The reduced region/shell partition is structurally inconsistent, or a
+    /// complete multi-shell proof found winding or containment that cannot
+    /// bound the declared connected solid region.
+    RegionShellLayout,
     /// A global shell proof found one or more facet normals pointing into
     /// the material.
     ShellOrientation,
@@ -274,6 +278,9 @@ pub enum VerificationGapKind {
     LoopOrientation,
     /// A shell has not been proven free of global self-intersection.
     ShellSelfIntersection,
+    /// Relative separation and containment of a solid region's shells has
+    /// not been proven.
+    RegionContainment,
     /// A solid shell's global outward orientation has not been proven.
     ShellOrientation,
     /// A wire body has not been proven free of global self-intersection.
@@ -601,6 +608,40 @@ fn collect_full_verification(
     }
     for &region_id in &body.regions {
         let region = store.get(region_id)?;
+        if body.kind == BodyKind::Solid && region.kind == RegionKind::Solid {
+            match crate::semantic_planar_shell_proof::certify_semantic_planar_region_in_scope(
+                store, region_id, scope,
+            )? {
+                crate::semantic_planar_shell_proof::SemanticPlanarRegionCertification::Certified => {
+                    continue;
+                }
+                crate::semantic_planar_shell_proof::SemanticPlanarRegionCertification::Invalid => {
+                    faults.push(Fault {
+                        entity: EntityRef::Region(region_id),
+                        kind: FaultKind::RegionShellLayout,
+                    });
+                    continue;
+                }
+                crate::semantic_planar_shell_proof::SemanticPlanarRegionCertification::Indeterminate => {
+                    push(
+                        EntityRef::Region(region_id),
+                        VerificationGapKind::RegionContainment,
+                        None,
+                    );
+                    continue;
+                }
+                crate::semantic_planar_shell_proof::SemanticPlanarRegionCertification::NotApplicable => {
+                    if region.shells.len() > 1 {
+                        push(
+                            EntityRef::Region(region_id),
+                            VerificationGapKind::RegionContainment,
+                            None,
+                        );
+                        continue;
+                    }
+                }
+            }
+        }
         for &shell_id in &region.shells {
             let shell = store.get(shell_id)?;
             if !shell.faces.is_empty() {
@@ -615,11 +656,13 @@ fn collect_full_verification(
                 }
                 if body.kind == BodyKind::Solid {
                     match certification.orientation {
-                        ShellOrientation::Certified => {}
-                        ShellOrientation::Invalid => faults.push(Fault {
-                            entity: EntityRef::Shell(shell_id),
-                            kind: FaultKind::ShellOrientation,
-                        }),
+                        ShellOrientation::Positive => {}
+                        ShellOrientation::Negative | ShellOrientation::Invalid => {
+                            faults.push(Fault {
+                                entity: EntityRef::Shell(shell_id),
+                                kind: FaultKind::ShellOrientation,
+                            })
+                        }
                         ShellOrientation::Indeterminate => push(
                             EntityRef::Shell(shell_id),
                             VerificationGapKind::ShellOrientation,
@@ -705,8 +748,15 @@ impl<'a> Checker<'a, '_> {
             self.fault(EntityRef::Body(body_id), FaultKind::NoRegions);
         }
         let mut has_solid_region = false;
+        let mut regions: Vec<RegionId> = Vec::new();
         let mut shells: Vec<ShellId> = Vec::new();
+        let mut retained_shell_count = Some(0_usize);
         for (i, &rid) in body.regions.iter().enumerate() {
+            if regions.contains(&rid) {
+                self.fault(EntityRef::Region(rid), FaultKind::BackPointerMismatch);
+                continue;
+            }
+            regions.push(rid);
             let Some(region) = self.live(rid, EntityRef::Region(rid)) else {
                 continue;
             };
@@ -720,6 +770,16 @@ impl<'a> Checker<'a, '_> {
                 has_solid_region = true;
                 if body.kind == BodyKind::Sheet || body.kind == BodyKind::Wire {
                     self.fault(EntityRef::Region(rid), FaultKind::KindMismatch);
+                }
+            }
+            if body.kind == BodyKind::Solid {
+                retained_shell_count =
+                    retained_shell_count.and_then(|count| count.checked_add(region.shells.len()));
+                if region.kind == RegionKind::Void && !region.shells.is_empty() {
+                    self.fault(EntityRef::Region(rid), FaultKind::RegionShellLayout);
+                }
+                if region.kind == RegionKind::Solid && region.shells.is_empty() {
+                    self.fault(EntityRef::Region(rid), FaultKind::RegionShellLayout);
                 }
             }
             for &sid in &region.shells {
@@ -739,6 +799,12 @@ impl<'a> Checker<'a, '_> {
         }
         if body.kind == BodyKind::Solid && !has_solid_region {
             self.fault(EntityRef::Body(body_id), FaultKind::NoSolidRegion);
+        }
+        if body.kind == BodyKind::Solid
+            && retained_shell_count.and_then(|count| count.checked_add(1))
+                != Some(body.regions.len())
+        {
+            self.fault(EntityRef::Body(body_id), FaultKind::RegionShellLayout);
         }
 
         // Faces, loops, and the edge/vertex closure.
@@ -1766,6 +1832,10 @@ fn domain_covers_natural_surface(domain: crate::entity::FaceDomain, surface: &Su
 }
 
 #[cfg(test)]
+#[path = "check_region_tests.rs"]
+mod region_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::entity::{
@@ -2290,6 +2360,12 @@ mod tests {
                     allowed: 200_000,
                 },
                 LimitSnapshot {
+                    stage: crate::semantic_planar_shell_proof::SEMANTIC_PLANAR_REGION_WORK,
+                    resource: ResourceKind::Work,
+                    consumed: 0,
+                    allowed: 1_048_576,
+                },
+                LimitSnapshot {
                     stage: crate::semantic_planar_shell_proof::SEMANTIC_PLANAR_SHELL_WORK,
                     resource: ResourceKind::Work,
                     consumed: 0,
@@ -2373,6 +2449,12 @@ mod tests {
                     resource: ResourceKind::Work,
                     consumed: 0,
                     allowed: 200_000,
+                },
+                LimitSnapshot {
+                    stage: crate::semantic_planar_shell_proof::SEMANTIC_PLANAR_REGION_WORK,
+                    resource: ResourceKind::Work,
+                    consumed: 0,
+                    allowed: 1_048_576,
                 },
                 LimitSnapshot {
                     stage: crate::semantic_planar_shell_proof::SEMANTIC_PLANAR_SHELL_WORK,
@@ -2819,121 +2901,6 @@ mod tests {
     }
 
     #[test]
-    fn flipped_fin_sense_opens_the_loop() {
-        let mut store = Store::new();
-        let body = clean_block(&mut store);
-        let face = store.faces_of_body(body).unwrap()[0];
-        let lp = store.get(face).unwrap().loops[0];
-        let fin = store.get(lp).unwrap().fins[0];
-        let s = store.get(fin).unwrap().sense;
-        store.get_mut(fin).unwrap().sense = s.flipped();
-        let faults = check_body(&store, body).unwrap();
-        assert_has(&faults, FaultKind::OpenLoop);
-        assert_has(&faults, FaultKind::FinsNotOpposed);
-    }
-
-    #[test]
-    fn reversed_loop_has_wrong_orientation() {
-        let mut store = Store::new();
-        let body = clean_block(&mut store);
-        let face = store.faces_of_body(body).unwrap()[0];
-        let lp = store.get(face).unwrap().loops[0];
-        let mut fins = store.get(lp).unwrap().fins.clone();
-        fins.reverse();
-        for &fin in &fins {
-            let s = store.get(fin).unwrap().sense;
-            store.get_mut(fin).unwrap().sense = s.flipped();
-        }
-        store.get_mut(lp).unwrap().fins = fins;
-        let faults = check_body(&store, body).unwrap();
-        assert_has(&faults, FaultKind::WrongLoopOrientation);
-        assert_has(&faults, FaultKind::FinsNotOpposed);
-    }
-
-    #[test]
-    fn moved_vertex_is_off_curve() {
-        let mut store = Store::new();
-        let body = clean_block(&mut store);
-        let v = store.vertices_of_body(body).unwrap()[0];
-        let point = store.get(v).unwrap().point;
-        *store.get_mut(point).unwrap() += Vec3::new(1e-4, 0.0, 0.0);
-        let faults = check_body(&store, body).unwrap();
-        assert_has(&faults, FaultKind::VertexOffCurve);
-    }
-
-    #[test]
-    fn oversized_coordinate_leaves_size_box() {
-        let mut store = Store::new();
-        let body = clean_block(&mut store);
-        let v = store.vertices_of_body(body).unwrap()[0];
-        let point = store.get(v).unwrap().point;
-        *store.get_mut(point).unwrap() = Point3::new(600.0, 0.0, 0.0);
-        let faults = check_body(&store, body).unwrap();
-        assert_has(&faults, FaultKind::OutsideSizeBox);
-        assert_has(&faults, FaultKind::VertexOffCurve);
-    }
-
-    #[test]
-    fn region_kind_faults() {
-        let mut store = Store::new();
-        let body = clean_block(&mut store);
-        let exterior = store.get(body).unwrap().regions[0];
-        store.get_mut(exterior).unwrap().kind = RegionKind::Solid;
-        assert_has(
-            &check_body(&store, body).unwrap(),
-            FaultKind::ExteriorNotVoid,
-        );
-        store.get_mut(exterior).unwrap().kind = RegionKind::Void;
-
-        let solid = store.get(body).unwrap().regions[1];
-        store.get_mut(solid).unwrap().kind = RegionKind::Void;
-        assert_has(&check_body(&store, body).unwrap(), FaultKind::NoSolidRegion);
-    }
-
-    #[test]
-    fn body_without_regions_faults() {
-        let mut store = Store::new();
-        let body = store.add(Body {
-            kind: BodyKind::Solid,
-            regions: Vec::new(),
-        });
-        let faults = check_body(&store, body).unwrap();
-        assert_has(&faults, FaultKind::NoRegions);
-        assert_has(&faults, FaultKind::NoSolidRegion);
-    }
-
-    #[test]
-    fn fin_missing_from_loop_list_opens_ring() {
-        let mut store = Store::new();
-        let body = clean_block(&mut store);
-        let face = store.faces_of_body(body).unwrap()[0];
-        let lp = store.get(face).unwrap().loops[0];
-        store.get_mut(lp).unwrap().fins.remove(1);
-        let faults = check_body(&store, body).unwrap();
-        assert_has(&faults, FaultKind::OpenLoop);
-        assert_has(&faults, FaultKind::BackPointerMismatch);
-    }
-
-    #[test]
-    fn reversed_bounds_are_bad() {
-        let mut store = Store::new();
-        let body = clean_block(&mut store);
-        let e = store.edges_of_body(body).unwrap()[0];
-        let (t0, t1) = store.get(e).unwrap().bounds.unwrap();
-        store.get_mut(e).unwrap().bounds = Some((t1, t0));
-        assert_has(&check_body(&store, body).unwrap(), FaultKind::BadBounds);
-    }
-
-    #[test]
-    fn vertex_bearing_edge_without_bounds_faults() {
-        let mut store = Store::new();
-        let body = clean_block(&mut store);
-        let e = store.edges_of_body(body).unwrap()[0];
-        store.get_mut(e).unwrap().bounds = None;
-        assert_has(&check_body(&store, body).unwrap(), FaultKind::MissingBounds);
-    }
-
-    #[test]
     fn zero_loop_face_on_plane_faults() {
         let mut store = Store::new();
         let body = sphere_body(&mut store);
@@ -2945,50 +2912,6 @@ mod tests {
         assert_has(
             &check_body(&store, body).unwrap(),
             FaultKind::ZeroLoopFaceOnOpenSurface,
-        );
-    }
-
-    #[test]
-    fn sub_resolution_tolerance_faults() {
-        let mut store = Store::new();
-        let body = clean_block(&mut store);
-        let v = store.vertices_of_body(body).unwrap()[0];
-        store.get_mut(v).unwrap().tolerance =
-            Some(crate::tolerance::EntityTolerance::unchecked(1e-12));
-        assert_has(&check_body(&store, body).unwrap(), FaultKind::BadTolerance);
-    }
-
-    #[test]
-    fn removed_face_breaks_euler_and_fin_counts() {
-        let mut store = Store::new();
-        let body = clean_block(&mut store);
-        let face = store.faces_of_body(body).unwrap()[0];
-        let shell = store.get(face).unwrap().shell;
-        let lp = store.get(face).unwrap().loops[0];
-        let fins = store.get(lp).unwrap().fins.clone();
-        for fin in fins {
-            let e = store.get(fin).unwrap().edge;
-            store.get_mut(e).unwrap().fins.retain(|&f| f != fin);
-            store.remove(fin).unwrap();
-        }
-        store.remove(lp).unwrap();
-        store.get_mut(shell).unwrap().faces.retain(|&f| f != face);
-        store.remove(face).unwrap();
-        let faults = check_body(&store, body).unwrap();
-        assert_has(&faults, FaultKind::EulerViolation);
-        assert_has(&faults, FaultKind::BadFinCount);
-    }
-
-    #[test]
-    fn loop_with_foreign_parent_mismatches() {
-        let mut store = Store::new();
-        let body = clean_block(&mut store);
-        let faces = store.faces_of_body(body).unwrap();
-        let lp = store.get(faces[0]).unwrap().loops[0];
-        store.get_mut(lp).unwrap().face = faces[1];
-        assert_has(
-            &check_body(&store, body).unwrap(),
-            FaultKind::BackPointerMismatch,
         );
     }
 
@@ -3012,27 +2935,6 @@ mod tests {
         let body = sheet_square(&mut store);
         store.get_mut(body).unwrap().kind = BodyKind::Wire;
         assert_has(&check_body(&store, body).unwrap(), FaultKind::KindMismatch);
-    }
-
-    #[test]
-    fn extra_fin_breaks_manifold_count() {
-        let mut store = Store::new();
-        let body = clean_block(&mut store);
-        let e = store.edges_of_body(body).unwrap()[0];
-        let some_loop = {
-            let face = store.faces_of_body(body).unwrap()[0];
-            store.get(face).unwrap().loops[0]
-        };
-        let fin = store.add(Fin {
-            parent: some_loop,
-            edge: e,
-            sense: Sense::Forward,
-            pcurve: None,
-        });
-        store.get_mut(e).unwrap().fins.push(fin);
-        let faults = check_body(&store, body).unwrap();
-        assert_has(&faults, FaultKind::BadFinCount);
-        assert_has(&faults, FaultKind::BackPointerMismatch);
     }
 
     #[test]

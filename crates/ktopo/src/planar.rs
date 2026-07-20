@@ -301,10 +301,25 @@ enum PreparedFaceSurface {
 }
 
 #[derive(Debug)]
-struct PreparedSolid {
+pub(crate) struct PreparedSolid {
     vertices: BTreeMap<PlanarVertexKey, Point3>,
     edges: BTreeMap<PlanarEdgeKey, PreparedEdge>,
     faces: Vec<PreparedFace>,
+}
+
+/// Required signed winding of one connected planar shell proposal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PreparedShellWinding {
+    Positive,
+    Negative,
+}
+
+#[derive(Debug)]
+pub(crate) struct AllocatedPlanarShell {
+    pub(crate) shell: ShellId,
+    pub(crate) vertices: Vec<(PlanarVertexKey, VertexId)>,
+    pub(crate) edges: Vec<(PlanarEdgeKey, EdgeId)>,
+    pub(crate) faces: Vec<FaceId>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -325,7 +340,23 @@ impl Transaction<'_> {
     pub fn assemble_planar_solid(&mut self, input: &PlanarSolidInput) -> Result<PlanarSolidOutput> {
         let prepared = PreparedSolid::new(input, self.store())?;
         let (body, shell) = crate::make::solid_body_scaffold(self.store_mut());
+        let allocated = self.allocate_prepared_planar_shell(prepared, shell)?;
 
+        Ok(PlanarSolidOutput {
+            body,
+            shell: allocated.shell,
+            vertices: allocated.vertices,
+            edges: allocated.edges,
+            faces: allocated.faces,
+        })
+    }
+
+    /// Allocate one fully preflighted shell under an existing region shell.
+    pub(crate) fn allocate_prepared_planar_shell(
+        &mut self,
+        prepared: PreparedSolid,
+        shell: ShellId,
+    ) -> Result<AllocatedPlanarShell> {
         let mut vertex_handles = BTreeMap::new();
         let mut edge_handles = BTreeMap::new();
         let mut face_handles = Vec::with_capacity(prepared.faces.len());
@@ -438,8 +469,7 @@ impl Transaction<'_> {
             self.record_derived_from(derived, source);
         }
 
-        Ok(PlanarSolidOutput {
-            body,
+        Ok(AllocatedPlanarShell {
             shell,
             vertices: vertex_handles.into_iter().collect(),
             edges: edge_handles
@@ -453,6 +483,14 @@ impl Transaction<'_> {
 
 impl PreparedSolid {
     fn new(input: &PlanarSolidInput, store: &crate::store::Store) -> Result<Self> {
+        Self::new_with_winding(input, store, PreparedShellWinding::Positive)
+    }
+
+    pub(crate) fn new_with_winding(
+        input: &PlanarSolidInput,
+        store: &crate::store::Store,
+        winding: PreparedShellWinding,
+    ) -> Result<Self> {
         if input.vertices.len() < 4 || input.faces.len() < 4 {
             return invalid("a planar solid requires at least four vertices and four faces");
         }
@@ -511,7 +549,7 @@ impl PreparedSolid {
         validate_edge_uses(&uses)?;
         validate_face_connectivity(input.faces.len(), &uses)?;
         validate_vertex_links(&face_keys)?;
-        validate_positive_volume(&vertices, &face_keys)?;
+        validate_volume(&vertices, &face_keys, winding)?;
 
         let mut edges = BTreeMap::new();
         for (&key, edge_uses) in &uses {
@@ -868,9 +906,10 @@ fn validate_vertex_links(faces: &[Vec<PlanarVertexKey>]) -> Result<()> {
     Ok(())
 }
 
-fn validate_positive_volume(
+fn validate_volume(
     vertices: &BTreeMap<PlanarVertexKey, Point3>,
     faces: &[Vec<PlanarVertexKey>],
+    winding: PreparedShellWinding,
 ) -> Result<()> {
     let reference = *vertices.values().next().expect("minimum input was checked");
     let mut six_volume = Interval::point(0.0);
@@ -882,10 +921,14 @@ fn validate_positive_volume(
             six_volume = six_volume + determinant(a, b, c);
         }
     }
-    if six_volume.lo() > 0.0 {
+    let certified = match winding {
+        PreparedShellWinding::Positive => six_volume.lo() > 0.0,
+        PreparedShellWinding::Negative => six_volume.hi() < 0.0,
+    };
+    if certified {
         Ok(())
     } else {
-        invalid("outward planar-solid faces must certify positive enclosed volume")
+        invalid("planar-solid faces must certify their required signed volume")
     }
 }
 

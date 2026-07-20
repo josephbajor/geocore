@@ -55,15 +55,22 @@ pub(crate) enum ShellEmbedding {
     Indeterminate,
 }
 
-/// Proof state for a solid shell's global outward orientation.
+/// Certified winding of a solid shell's coherent oriented boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShellOrientation {
-    /// Every facet normal points away from the convex interior.
-    Certified,
-    /// At least one supporting facet normal provably points into the
-    /// convex interior.
+    /// The oriented boundary has strictly positive signed volume.
+    Positive,
+    /// The oriented boundary has strictly negative signed volume.
+    ///
+    /// This is the coherent orientation required of a cavity shell, not an
+    /// invariant violation by itself. The owning region decides whether the
+    /// sign is appropriate for the shell's nesting role.
+    Negative,
+    /// Local face senses are provably inconsistent with one coherent shell
+    /// orientation, or a representation-specific proof found a wrong-facing
+    /// facet without certifying coherent negative winding.
     Invalid,
-    /// The current proof slice cannot establish an interior half-space.
+    /// The current proof slice cannot establish coherent nonzero winding.
     Indeterminate,
 }
 
@@ -176,7 +183,7 @@ fn certify_whole_closed_surface(
     Ok(Some(ShellCertification {
         embedding: ShellEmbedding::Certified,
         orientation: if face.sense == Sense::Forward {
-            ShellOrientation::Certified
+            ShellOrientation::Positive
         } else {
             ShellOrientation::Invalid
         },
@@ -301,7 +308,7 @@ fn certify_sphere_cap_shell(
     Ok(Some(ShellCertification {
         embedding: ShellEmbedding::Certified,
         orientation: if orientation_valid {
-            ShellOrientation::Certified
+            ShellOrientation::Positive
         } else {
             ShellOrientation::Invalid
         },
@@ -484,7 +491,7 @@ fn certify_planar_profile_prism(
         orientation: if orientation_invalid {
             ShellOrientation::Invalid
         } else {
-            ShellOrientation::Certified
+            ShellOrientation::Positive
         },
     }))
 }
@@ -772,7 +779,7 @@ fn certify_convex_planar_shell(
         orientation: if orientation_invalid {
             ShellOrientation::Invalid
         } else {
-            ShellOrientation::Certified
+            ShellOrientation::Positive
         },
     })
 }
@@ -1191,7 +1198,7 @@ mod tests {
             certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
             ShellCertification {
                 embedding: ShellEmbedding::Certified,
-                orientation: ShellOrientation::Certified,
+                orientation: ShellOrientation::Positive,
             }
         );
 
@@ -1369,7 +1376,7 @@ mod tests {
                 certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
                 ShellCertification {
                     embedding: ShellEmbedding::Certified,
-                    orientation: ShellOrientation::Certified,
+                    orientation: ShellOrientation::Positive,
                 }
             );
         }
@@ -1398,7 +1405,7 @@ mod tests {
             certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
             ShellCertification {
                 embedding: ShellEmbedding::Certified,
-                orientation: ShellOrientation::Certified,
+                orientation: ShellOrientation::Positive,
             }
         );
 
@@ -1429,7 +1436,7 @@ mod tests {
             certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
             ShellCertification {
                 embedding: ShellEmbedding::Certified,
-                orientation: ShellOrientation::Certified,
+                orientation: ShellOrientation::Positive,
             }
         );
 

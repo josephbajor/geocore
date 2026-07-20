@@ -15,13 +15,21 @@ use ktopo::entity::{EntityRef, FaceId as RawFaceId, SurfaceId as RawSurfaceId};
 use ktopo::planar::{
     PlanarFacePlaneBinding, PlanarSolidFace, PlanarSolidInput, PlanarSolidVertex, PlanarVertexKey,
 };
+use ktopo::planar_multishell::PlanarMultiShellSolidInput;
 use ktopo::transaction::{FullCommitRequirement, Journal};
 
+use super::component_layout::{
+    ComponentLayoutError, RealizedPlanarVertex, RealizedVertexMap, post_selection_precharge,
+    propose_component_bodies, validate_disjoint_component_vertices,
+};
+use super::components::{
+    ComponentPartitionError, SelectedShellComponent, partition_shell_components,
+};
 use super::extract::{
     ExtractedPlanarSourceBody, PlanarSourceExtractionBudgetProfile, PlanarSourceExtractionError,
     PlanarSourceGap, PlanarSourceProofFailure, extract_planar_source_body,
 };
-use super::planar_bsp::{PlaneTripleVertexKey, SourcePlane};
+use super::planar_bsp::{PlaneTripleVertexKey, SourcePlane, SourcePlaneRef};
 use super::realize::{RealizationError, realize_symbolic_vertex};
 use super::select::{
     PlanarBooleanOperation, SelectedPlanarFragment, SelectionError, select_boolean_fragments,
@@ -88,21 +96,23 @@ impl PlanarBooleanPipelineBudgetProfile {
 /// One internal Boolean result that survived Full checking and was committed.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CommittedPlanarBoolean {
-    body: BodyId,
+    bodies: Vec<BodyId>,
     journal: Journal,
-    full_outcomes: Vec<CheckOutcome>,
+    full_outcomes: Vec<(BodyId, CheckOutcome)>,
 }
 
 impl CommittedPlanarBoolean {
-    pub(crate) fn body(&self) -> BodyId {
-        self.body.clone()
+    /// Result bodies in ascending minimum symbolic component-key order.
+    pub(crate) fn bodies(&self) -> &[BodyId] {
+        &self.bodies
     }
 
     pub(crate) const fn journal(&self) -> &Journal {
         &self.journal
     }
 
-    pub(crate) fn full_outcomes(&self) -> &[CheckOutcome] {
+    /// Body-associated Full outcomes in deterministic checker order.
+    pub(crate) fn full_outcomes(&self) -> &[(BodyId, CheckOutcome)] {
         &self.full_outcomes
     }
 }
@@ -123,6 +133,8 @@ pub(crate) enum PlanarBooleanPipelineRefusal {
         failure: PlanarSourceProofFailure,
     },
     Symbolic(SelectionError),
+    ComponentPartition(ComponentPartitionError),
+    ComponentLayout(ComponentLayoutError),
     Realization(RealizationError),
     /// Source plane identity could not be bound uniquely to live source geometry.
     PlaneBindingContract(&'static str),
@@ -143,7 +155,7 @@ pub(crate) enum PlanarBooleanPipelineRefusal {
 pub(crate) enum PlanarBooleanPipelineOutcome {
     /// Truth selection proved that the regularized result has no boundary.
     ProvenEmpty,
-    /// One result body and its deterministic journal were persisted.
+    /// One or more result bodies and their deterministic journal were persisted.
     Committed(CommittedPlanarBoolean),
     /// No result topology survived; the exact gap remains explicit.
     Refused(PlanarBooleanPipelineRefusal),
@@ -246,23 +258,58 @@ fn execute_stages(
         return Ok(PlanarBooleanPipelineOutcome::ProvenEmpty);
     }
     let planes = combined_planes(&left_source, &right_source);
-    let (vertices, vertex_keys) = realize_vertices(&selected, &planes, scope)?;
-    let faces = prepare_faces(&selected, &vertex_keys, &plane_registry)?;
-    let input = PlanarSolidInput::new(vertices, faces);
+    let precharge =
+        post_selection_precharge(&selected, planes.len()).ok_or_else(work_count_overflow)?;
+    scope
+        .ledger_mut()
+        .charge(PLANAR_BOOLEAN_REALIZATION_WORK, precharge.work)
+        .map_err(Error::from)?;
+    scope
+        .ledger_mut()
+        .observe(
+            PLANAR_BOOLEAN_REALIZED_VERTICES,
+            ResourceKind::Items,
+            precharge.ring_uses,
+        )
+        .map_err(Error::from)?;
+    let components = partition_shell_components(selected).map_err(|error| {
+        PipelineFailure::Refused(PlanarBooleanPipelineRefusal::ComponentPartition(error))
+    })?;
+    validate_disjoint_component_vertices(&components).map_err(|error| {
+        PipelineFailure::Refused(PlanarBooleanPipelineRefusal::ComponentLayout(error))
+    })?;
+    let realized = realize_vertices(&components, &planes, scope)?;
+    let proposals = prepare_body_proposals(components, &realized, &planes, &plane_registry)?;
 
     let mut transaction = edit.state.store.transaction().map_err(Error::from)?;
-    let output = match transaction.assemble_planar_solid(&input) {
-        Ok(output) => output,
-        Err(kcore::error::Error::InvalidGeometry { reason }) => {
-            return Err(PipelineFailure::Refused(
-                PlanarBooleanPipelineRefusal::AssemblyContract(reason),
-            ));
-        }
-        Err(source) => return Err(source.into()),
-    };
-    let raw_body = output.body();
+    let mut raw_bodies = Vec::with_capacity(proposals.len());
+    for proposal in proposals {
+        let body = if let Some(cavity) = proposal.cavity {
+            let input = PlanarMultiShellSolidInput::new(proposal.outer, vec![cavity]);
+            match transaction.assemble_planar_multishell_solid(&input) {
+                Ok(output) => output.body(),
+                Err(kcore::error::Error::InvalidGeometry { reason }) => {
+                    return Err(PipelineFailure::Refused(
+                        PlanarBooleanPipelineRefusal::AssemblyContract(reason),
+                    ));
+                }
+                Err(source) => return Err(source.into()),
+            }
+        } else {
+            match transaction.assemble_planar_solid(&proposal.outer) {
+                Ok(output) => output.body(),
+                Err(kcore::error::Error::InvalidGeometry { reason }) => {
+                    return Err(PipelineFailure::Refused(
+                        PlanarBooleanPipelineRefusal::AssemblyContract(reason),
+                    ));
+                }
+                Err(source) => return Err(source.into()),
+            }
+        };
+        raw_bodies.push(body);
+    }
     let decision = match transaction.commit_full_in_scope(
-        &[raw_body],
+        &raw_bodies,
         FullCommitRequirement::RequireValid,
         scope,
         0,
@@ -278,7 +325,12 @@ fn execute_stages(
     let outcomes = decision
         .checks()
         .iter()
-        .map(|check| check.report().outcome())
+        .map(|check| {
+            (
+                BodyId::new(edit.id.clone(), check.body()),
+                check.report().outcome(),
+            )
+        })
         .collect::<Vec<_>>();
     let reports = decision
         .checks()
@@ -291,9 +343,13 @@ fn execute_stages(
             PlanarBooleanPipelineRefusal::FullProofRejected(reports),
         ));
     };
+    let bodies = raw_bodies
+        .into_iter()
+        .map(|body| BodyId::new(edit.id.clone(), body))
+        .collect();
     Ok(PlanarBooleanPipelineOutcome::Committed(
         CommittedPlanarBoolean {
-            body: BodyId::new(edit.id.clone(), raw_body),
+            bodies,
             journal,
             full_outcomes: outcomes,
         },
@@ -462,43 +518,18 @@ fn combined_planes(
 }
 
 fn realize_vertices(
-    selected: &[SelectedPlanarFragment],
+    components: &[SelectedShellComponent],
     planes: &[SourcePlane],
     scope: &mut OperationScope<'_, '_>,
-) -> StageResult<(
-    Vec<PlanarSolidVertex>,
-    BTreeMap<PlaneTripleVertexKey, PlanarVertexKey>,
-)> {
-    let ring_uses = selected.iter().try_fold(0_u64, |total, selected| {
-        total.checked_add(u64::try_from(selected.fragment().vertices().len()).ok()?)
-    });
-    let Some(ring_uses) = ring_uses else {
-        return Err(work_count_overflow());
-    };
-    let plane_count = u64::try_from(planes.len()).map_err(|_| work_count_overflow())?;
-    let work = ring_uses
-        .checked_mul(plane_count.checked_add(2).ok_or_else(work_count_overflow)?)
-        .ok_or_else(work_count_overflow)?;
-    scope
-        .ledger_mut()
-        .charge(PLANAR_BOOLEAN_REALIZATION_WORK, work)
-        .map_err(Error::from)?;
-    scope
-        .ledger_mut()
-        .observe(
-            PLANAR_BOOLEAN_REALIZED_VERTICES,
-            ResourceKind::Items,
-            ring_uses,
-        )
-        .map_err(Error::from)?;
-
+) -> StageResult<RealizedVertexMap> {
     let mut unique = BTreeSet::new();
-    for selected in selected {
-        unique.extend(selected.fragment().vertices().iter().copied());
+    for component in components {
+        for face in component.faces() {
+            unique.extend(face.fragment().vertices().iter().copied());
+        }
     }
     let all_plane_ids = planes.iter().map(|plane| plane.id()).collect::<Vec<_>>();
-    let mut vertices = Vec::with_capacity(unique.len());
-    let mut keys = BTreeMap::new();
+    let mut vertices = BTreeMap::new();
     for (index, triple) in unique.into_iter().enumerate() {
         let key = PlanarVertexKey::new(u64::try_from(index).map_err(|_| work_count_overflow())?);
         let defining = triple.planes();
@@ -516,10 +547,65 @@ fn realize_vertices(
                     ));
                 }
             };
-        vertices.push(PlanarSolidVertex::new(key, realized.point()));
-        keys.insert(triple, key);
+        vertices.insert(triple, RealizedPlanarVertex::new(key, realized));
     }
-    Ok((vertices, keys))
+    Ok(vertices)
+}
+
+#[derive(Debug)]
+struct PlanarBodyProposal {
+    outer: PlanarSolidInput,
+    cavity: Option<PlanarSolidInput>,
+}
+
+fn prepare_body_proposals(
+    components: Vec<SelectedShellComponent>,
+    realized: &RealizedVertexMap,
+    planes: &[SourcePlane],
+    registry: &BTreeMap<SourcePlaneRef, SourcePlaneBinding>,
+) -> StageResult<Vec<PlanarBodyProposal>> {
+    propose_component_bodies(components, realized, planes)
+        .map_err(|error| {
+            PipelineFailure::Refused(PlanarBooleanPipelineRefusal::ComponentLayout(error))
+        })?
+        .into_iter()
+        .map(|proposal| {
+            let (outer, cavity) = proposal.into_parts();
+            Ok(PlanarBodyProposal {
+                outer: prepare_component_input(&outer, realized, registry)?,
+                cavity: cavity
+                    .as_ref()
+                    .map(|cavity| prepare_component_input(cavity, realized, registry))
+                    .transpose()?,
+            })
+        })
+        .collect()
+}
+
+fn prepare_component_input(
+    component: &SelectedShellComponent,
+    realized: &RealizedVertexMap,
+    registry: &BTreeMap<SourcePlaneRef, SourcePlaneBinding>,
+) -> StageResult<PlanarSolidInput> {
+    let triples = component
+        .faces()
+        .iter()
+        .flat_map(|face| face.fragment().vertices().iter().copied())
+        .collect::<BTreeSet<_>>();
+    let mut keys = BTreeMap::new();
+    let mut vertices = Vec::with_capacity(triples.len());
+    for triple in triples {
+        let vertex = realized.get(&triple).ok_or_else(|| {
+            plane_binding_refusal("selected planar Boolean shell has an unrealized vertex")
+        })?;
+        keys.insert(triple, vertex.key());
+        vertices.push(PlanarSolidVertex::new(
+            vertex.key(),
+            vertex.evidence().point(),
+        ));
+    }
+    let faces = prepare_faces(component.faces(), &keys, registry)?;
+    Ok(PlanarSolidInput::new(vertices, faces))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -635,7 +721,9 @@ mod tests {
     use kcore::operation::{LimitSnapshot, OperationReport};
     use kgeom::frame::Frame;
     use kgeom::vec::{Point3, Vec3};
-    use ktopo::entity::{Body as RawBody, Edge as RawEdge, Face as RawFace, Vertex as RawVertex};
+    use ktopo::entity::{
+        Body as RawBody, Edge as RawEdge, Face as RawFace, RegionKind, Vertex as RawVertex,
+    };
     use ktopo::transaction::{LineageEvent, MutationKind};
 
     use super::*;
@@ -751,6 +839,30 @@ mod tests {
         }
     }
 
+    fn raw_bodies(committed: &CommittedPlanarBoolean) -> Vec<ktopo::entity::BodyId> {
+        committed.bodies().iter().map(BodyId::raw).collect()
+    }
+
+    fn raw_full_outcomes(
+        committed: &CommittedPlanarBoolean,
+    ) -> Vec<(ktopo::entity::BodyId, CheckOutcome)> {
+        committed
+            .full_outcomes()
+            .iter()
+            .map(|(body, outcome)| (body.raw(), *outcome))
+            .collect()
+    }
+
+    fn assert_full_valid(committed: &CommittedPlanarBoolean) {
+        assert!(!committed.full_outcomes().is_empty());
+        assert!(
+            committed
+                .full_outcomes()
+                .iter()
+                .all(|(_, outcome)| *outcome == CheckOutcome::Valid)
+        );
+    }
+
     #[test]
     fn rotated_off_origin_intersection_is_full_valid_journaled_and_deterministic() {
         let mut first_fixture = rotated_fixture();
@@ -764,15 +876,11 @@ mod tests {
             OperationSettings::new(),
         ));
 
-        assert_eq!(first.body().raw(), second.body().raw());
+        assert_eq!(raw_bodies(&first), raw_bodies(&second));
+        assert_eq!(first.bodies().len(), 1);
         assert_eq!(first.journal(), second.journal());
         assert!(!first.journal().mutations().is_empty());
-        assert!(
-            first
-                .full_outcomes()
-                .iter()
-                .all(|outcome| *outcome == CheckOutcome::Valid)
-        );
+        assert_full_valid(&first);
         let lineage = first.journal().lineage();
         assert!(!lineage.is_empty());
         let created_faces = first
@@ -820,37 +928,39 @@ mod tests {
             assert!(store.get(derived_surface).unwrap().as_plane().is_some());
         }
 
-        for edge in store.edges_of_body(committed.body().raw()).unwrap() {
-            let edge = store.get(edge).unwrap();
-            let descriptor = store
-                .get(edge.curve().unwrap())
-                .unwrap()
-                .as_intersection()
-                .expect("Boolean boundary edges retain verified intersections");
-            let bound = descriptor.source_surfaces();
-            assert!(bound.iter().all(|surface| {
-                source_surfaces.contains(surface)
-                    && store.get(*surface).unwrap().as_plane().is_some()
-            }));
-            assert!(descriptor.certificate().as_plane_line().is_some());
+        for body in committed.bodies() {
+            for edge in store.edges_of_body(body.raw()).unwrap() {
+                let edge = store.get(edge).unwrap();
+                let descriptor = store
+                    .get(edge.curve().unwrap())
+                    .unwrap()
+                    .as_intersection()
+                    .expect("Boolean boundary edges retain verified intersections");
+                let bound = descriptor.source_surfaces();
+                assert!(bound.iter().all(|surface| {
+                    source_surfaces.contains(surface)
+                        && store.get(*surface).unwrap().as_plane().is_some()
+                }));
+                assert!(descriptor.certificate().as_plane_line().is_some());
 
-            let adjacent = edge
-                .fins()
-                .iter()
-                .map(|fin| {
-                    let fin = store.get(*fin).unwrap();
-                    let loop_ = store.get(fin.parent()).unwrap();
-                    store.get(loop_.face()).unwrap().surface()
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(adjacent.len(), 2);
-            assert_ne!(bound[0], bound[1]);
-            assert!(adjacent.iter().all(|support| bound.contains(support)));
-            if adjacent[0] != adjacent[1] {
-                assert!(
-                    bound == [adjacent[0], adjacent[1]] || bound == [adjacent[1], adjacent[0]],
-                    "verified edge sources differ from adjacent bound face supports"
-                );
+                let adjacent = edge
+                    .fins()
+                    .iter()
+                    .map(|fin| {
+                        let fin = store.get(*fin).unwrap();
+                        let loop_ = store.get(fin.parent()).unwrap();
+                        store.get(loop_.face()).unwrap().surface()
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(adjacent.len(), 2);
+                assert_ne!(bound[0], bound[1]);
+                assert!(adjacent.iter().all(|support| bound.contains(support)));
+                if adjacent[0] != adjacent[1] {
+                    assert!(
+                        bound == [adjacent[0], adjacent[1]] || bound == [adjacent[1], adjacent[0]],
+                        "verified edge sources differ from adjacent bound face supports"
+                    );
+                }
             }
         }
     }
@@ -873,17 +983,12 @@ mod tests {
                 operation,
                 OperationSettings::new(),
             ));
-            assert_eq!(first.body().raw(), second.body().raw());
+            assert_eq!(raw_bodies(&first), raw_bodies(&second));
+            assert_eq!(first.bodies().len(), 1);
             assert_eq!(first.journal(), second.journal());
             assert!(!first.journal().mutations().is_empty());
-            assert!(!first.full_outcomes().is_empty());
-            assert!(
-                first
-                    .full_outcomes()
-                    .iter()
-                    .all(|outcome| *outcome == CheckOutcome::Valid)
-            );
-            assert_eq!(first.full_outcomes(), second.full_outcomes());
+            assert_full_valid(&first);
+            assert_eq!(raw_full_outcomes(&first), raw_full_outcomes(&second));
             assert_bound_output_geometry(&first_fixture, &first);
             assert_bound_output_geometry(&second_fixture, &second);
         }
@@ -913,16 +1018,11 @@ mod tests {
                     operation,
                     OperationSettings::new(),
                 ));
-                assert_eq!(first.body().raw(), second.body().raw());
+                assert_eq!(raw_bodies(&first), raw_bodies(&second));
+                assert_eq!(first.bodies().len(), 1);
                 assert_eq!(first.journal(), second.journal());
                 assert!(!first.journal().mutations().is_empty());
-                assert!(!first.full_outcomes().is_empty());
-                assert!(
-                    first
-                        .full_outcomes()
-                        .iter()
-                        .all(|outcome| *outcome == CheckOutcome::Valid)
-                );
+                assert_full_valid(&first);
                 assert_bound_output_geometry(&first_fixture, &first);
                 assert_bound_output_geometry(&second_fixture, &second);
             }
@@ -1015,6 +1115,110 @@ mod tests {
             left,
             right,
         }
+    }
+
+    fn containment_fixture() -> Fixture {
+        let mut session = Kernel::new().create_session();
+        let part = session.create_part();
+        let (left, right) = {
+            let mut edit = session.edit_part(part.clone()).unwrap();
+            let left = edit
+                .create_block(BlockRequest::new(Frame::world(), [6.0, 5.0, 4.0]))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            let right = edit
+                .create_block(BlockRequest::new(
+                    Frame::world().with_origin(Point3::new(0.25, -0.2, 0.1)),
+                    [1.5, 1.0, 0.8],
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            (left, right)
+        };
+        Fixture {
+            session,
+            part,
+            left,
+            right,
+        }
+    }
+
+    #[test]
+    fn disjoint_union_commits_two_deterministic_full_valid_body_roots_atomically() {
+        let mut first_fixture = disjoint_fixture();
+        let mut second_fixture = disjoint_fixture();
+        let first = committed(run_operation(
+            &mut first_fixture,
+            PlanarBooleanOperation::Unite,
+            OperationSettings::new(),
+        ));
+        let second = committed(run_operation(
+            &mut second_fixture,
+            PlanarBooleanOperation::Unite,
+            OperationSettings::new(),
+        ));
+
+        assert_eq!(first.bodies().len(), 2);
+        assert_eq!(raw_bodies(&first), raw_bodies(&second));
+        assert_eq!(first.journal(), second.journal());
+        assert_eq!(raw_full_outcomes(&first), raw_full_outcomes(&second));
+        assert_full_valid(&first);
+        assert_eq!(
+            first
+                .journal()
+                .mutations()
+                .iter()
+                .filter(|mutation| {
+                    mutation.kind == MutationKind::Created
+                        && matches!(mutation.entity, EntityRef::Body(_))
+                })
+                .count(),
+            2
+        );
+        assert_bound_output_geometry(&first_fixture, &first);
+        assert_bound_output_geometry(&second_fixture, &second);
+    }
+
+    #[test]
+    fn contained_subtraction_commits_one_exactly_nested_two_shell_body() {
+        let mut first_fixture = containment_fixture();
+        let mut second_fixture = containment_fixture();
+        let first = committed(run_operation(
+            &mut first_fixture,
+            PlanarBooleanOperation::Subtract,
+            OperationSettings::new(),
+        ));
+        let second = committed(run_operation(
+            &mut second_fixture,
+            PlanarBooleanOperation::Subtract,
+            OperationSettings::new(),
+        ));
+
+        assert_eq!(first.bodies().len(), 1);
+        assert_eq!(raw_bodies(&first), raw_bodies(&second));
+        assert_eq!(first.journal(), second.journal());
+        assert_eq!(raw_full_outcomes(&first), raw_full_outcomes(&second));
+        assert_full_valid(&first);
+
+        let part = first_fixture
+            .session
+            .part(first_fixture.part.clone())
+            .unwrap();
+        let body = part.state.store.get(first.bodies()[0].raw()).unwrap();
+        assert_eq!(body.regions().len(), 3);
+        let solid = body
+            .regions()
+            .iter()
+            .copied()
+            .find(|region| part.state.store.get(*region).unwrap().kind() == RegionKind::Solid)
+            .unwrap();
+        assert_eq!(part.state.store.get(solid).unwrap().shells().len(), 2);
+        assert_bound_output_geometry(&first_fixture, &first);
+        assert_bound_output_geometry(&second_fixture, &second);
     }
 
     #[test]

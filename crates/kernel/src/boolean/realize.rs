@@ -65,6 +65,7 @@ impl CertifiedDefiningPlaneResidual {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RealizedPlaneTriple {
     point: Point3,
+    coordinates: [Interval; 3],
     position_error_bound: f64,
     defining_plane_residuals: [CertifiedDefiningPlaneResidual; 3],
     certified_sides: Vec<CertifiedSide>,
@@ -74,6 +75,14 @@ impl RealizedPlaneTriple {
     /// Deterministic finite point passed to geometric/topological assembly.
     pub(crate) const fn point(&self) -> Point3 {
         self.point
+    }
+
+    /// Conservative enclosure of the exact three-plane intersection.
+    ///
+    /// Downstream grouping may use a sign proved by these intervals as a
+    /// proposal, but Full semantic checking remains the commit authority.
+    pub(crate) const fn coordinates(&self) -> [Interval; 3] {
+        self.coordinates
     }
 
     /// Conservative distance from the point to the exact three-plane vertex.
@@ -267,6 +276,7 @@ fn realize_witness_triple(
 
     Ok(RealizedPlaneTriple {
         point,
+        coordinates,
         position_error_bound,
         defining_plane_residuals,
         certified_sides,

@@ -73,6 +73,31 @@ pub(crate) fn certify_semantic_facet_pair(
     certify_prepared_facet_pair(shell, left, right)
 }
 
+/// Prove two facets from distinct shells strictly disjoint.
+///
+/// Shared-feature authorization is deliberately unavailable across shells:
+/// region boundaries must have positive geometric clearance and may not use a
+/// common face, edge, or vertex.
+pub(crate) fn certify_semantic_cross_shell_facet_disjoint(
+    left_shell: &SemanticPlanarShellEvidence,
+    left: &SemanticFacetEvidence,
+    right_shell: &SemanticPlanarShellEvidence,
+    right: &SemanticFacetEvidence,
+) -> SemanticFacetPairRelation {
+    let Some(left) = ProofFacet::new(left_shell, left) else {
+        return SemanticFacetPairRelation::Ambiguous;
+    };
+    let Some(right) = ProofFacet::new(right_shell, right) else {
+        return SemanticFacetPairRelation::Ambiguous;
+    };
+    for axis in separating_axes(&left, &right) {
+        if strictly_separated(&left.coordinates, &right.coordinates, axis) == Some(true) {
+            return SemanticFacetPairRelation::Disjoint;
+        }
+    }
+    SemanticFacetPairRelation::Ambiguous
+}
+
 fn certify_prepared_facet_pair(
     shell: &SemanticPlanarShellEvidence,
     left: &SemanticFacetEvidence,

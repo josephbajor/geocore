@@ -32,10 +32,10 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    now rung 3)*
 3. `unite`/`subtract`/`intersect` for block/block — atomic, journaled,
    checker-clean, X_T-exported, and imported into a licensed host. *(in
-   progress — the internal exact-planar pipeline now commits connected overlap
-   results for all three truth tables through semantic plane-triple Full proof,
-   including arbitrary-angle and operand-order fixtures; cavity/multishell
-   proof, facade operations, and licensed-host X_T evidence remain)*
+   progress — the internal exact-planar pipeline now commits connected overlap,
+   disjoint union as atomic multiple bodies, and contained subtraction as one
+   two-shell cavity body through semantic plane-triple Full proof; public facade
+   operations and licensed-host X_T evidence remain)*
 4. Extend the same ladder to block/cylinder (introduces curved SSI pcurves).
 
 Work that does not advance the queue head needs an explicit justification

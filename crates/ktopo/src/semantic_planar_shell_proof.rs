@@ -18,6 +18,11 @@ use crate::semantic_planar_pair_proof::{
     SemanticFacetPairRelation, certify_semantic_facet_pair, semantic_facet_pair_work,
     semantic_signed_volume_interval, semantic_signed_volume_work,
 };
+#[cfg(test)]
+pub(crate) use crate::semantic_planar_region_proof::SEMANTIC_PLANAR_REGION_WORK;
+pub(crate) use crate::semantic_planar_region_proof::{
+    SemanticPlanarRegionCertification, certify_semantic_planar_region_in_scope,
+};
 use crate::shell_proof::{ShellCertification, ShellEmbedding, ShellOrientation};
 use crate::store::Store;
 use kcore::error::Result;
@@ -47,6 +52,7 @@ pub(crate) fn semantic_planar_shell_proof_budget() -> BudgetPlan {
         DEFAULT_SEMANTIC_PLANAR_SHELL_WORK,
     )])
     .expect("built-in semantic planar shell proof budget is valid")
+    .overlaid(&crate::semantic_planar_region_proof::semantic_planar_region_proof_budget())
 }
 
 /// Certify embedding and orientation of one bound semantic planar shell.
@@ -66,14 +72,21 @@ pub(crate) fn certify_semantic_planar_shell_in_scope(
         return Ok(indeterminate_shell());
     };
 
-    let Some(pair_and_volume_work) = semantic_pair_and_volume_work(&evidence) else {
+    certify_prepared_semantic_planar_shell_in_scope(&evidence, scope)
+}
+
+pub(crate) fn certify_prepared_semantic_planar_shell_in_scope(
+    evidence: &SemanticPlanarShellEvidence,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<ShellCertification> {
+    let Some(pair_and_volume_work) = semantic_pair_and_volume_work(evidence) else {
         return Ok(indeterminate_shell());
     };
     charge(scope, pair_and_volume_work)?;
     for left in 0..evidence.facets().len() {
         for right in left + 1..evidence.facets().len() {
             if certify_semantic_facet_pair(
-                &evidence,
+                evidence,
                 &evidence.facets()[left],
                 &evidence.facets()[right],
             ) == SemanticFacetPairRelation::Ambiguous
@@ -86,13 +99,13 @@ pub(crate) fn certify_semantic_planar_shell_in_scope(
     let orientation = if evidence.sense_mismatch() {
         ShellOrientation::Invalid
     } else {
-        semantic_signed_volume_interval(&evidence).map_or(
+        semantic_signed_volume_interval(evidence).map_or(
             ShellOrientation::Indeterminate,
             |volume| {
                 if volume.lo() > 0.0 {
-                    ShellOrientation::Certified
+                    ShellOrientation::Positive
                 } else if volume.hi() < 0.0 {
-                    ShellOrientation::Invalid
+                    ShellOrientation::Negative
                 } else {
                     ShellOrientation::Indeterminate
                 }
@@ -795,10 +808,11 @@ fn charge(scope: &mut OperationScope<'_, '_>, amount: u64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::entity::RegionId;
     use crate::make::block;
     use crate::planar::{
-        PlanarFacePlaneBinding, PlanarSolidFace, PlanarSolidInput, PlanarSolidVertex,
-        PlanarVertexKey,
+        PlanarFacePlaneBinding, PlanarSolidFace, PlanarSolidInput, PlanarSolidOutput,
+        PlanarSolidVertex, PlanarVertexKey,
     };
     use kcore::operation::{
         ExecutionPolicy, NumericalPolicy, OperationContext, PolicyVersion, SessionPolicy,
@@ -831,22 +845,43 @@ mod tests {
     }
 
     fn bound_box(store: &mut Store) -> PlanarSolidInput {
-        let source = block(store, &Frame::world(), [2.0, 3.0, 4.0]).unwrap();
+        bound_box_at(store, [0.0; 3], [1.0, 1.5, 2.0])
+    }
+
+    fn bound_box_at(
+        store: &mut Store,
+        center: [f64; 3],
+        half_extents: [f64; 3],
+    ) -> PlanarSolidInput {
+        let frame = Frame::new(
+            Point3::new(center[0], center[1], center[2]),
+            kgeom::vec::Vec3::new(0.0, 0.0, 1.0),
+            kgeom::vec::Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let source = block(
+            store,
+            &frame,
+            half_extents.map(|half_extent| 2.0 * half_extent),
+        )
+        .unwrap();
         let surfaces: Vec<_> = store
             .faces_of_body(source)
             .unwrap()
             .into_iter()
             .map(|face| store.get(face).unwrap().surface)
             .collect();
+        let [cx, cy, cz] = center;
+        let [hx, hy, hz] = half_extents;
         let points = [
-            Point3::new(-1.0, -1.5, -2.0),
-            Point3::new(1.0, -1.5, -2.0),
-            Point3::new(-1.0, 1.5, -2.0),
-            Point3::new(1.0, 1.5, -2.0),
-            Point3::new(-1.0, -1.5, 2.0),
-            Point3::new(1.0, -1.5, 2.0),
-            Point3::new(-1.0, 1.5, 2.0),
-            Point3::new(1.0, 1.5, 2.0),
+            Point3::new(cx - hx, cy - hy, cz - hz),
+            Point3::new(cx + hx, cy - hy, cz - hz),
+            Point3::new(cx - hx, cy + hy, cz - hz),
+            Point3::new(cx + hx, cy + hy, cz - hz),
+            Point3::new(cx - hx, cy - hy, cz + hz),
+            Point3::new(cx + hx, cy - hy, cz + hz),
+            Point3::new(cx - hx, cy + hy, cz + hz),
+            Point3::new(cx + hx, cy + hy, cz + hz),
         ];
         let vertices = points
             .into_iter()
@@ -898,6 +933,70 @@ mod tests {
             PolicyVersion::V1,
         );
         (session, Tolerances::default())
+    }
+
+    fn assemble_box(
+        store: &mut Store,
+        center: [f64; 3],
+        half_extents: [f64; 3],
+    ) -> PlanarSolidOutput {
+        let input = bound_box_at(store, center, half_extents);
+        let mut transaction = store.transaction().unwrap();
+        let output = transaction.assemble_planar_solid(&input).unwrap();
+        transaction.commit_checked_body(output.body()).unwrap();
+        output
+    }
+
+    fn reverse_shell(store: &mut Store, output: &PlanarSolidOutput) {
+        for &face_id in output.faces() {
+            let face = store.get(face_id).unwrap().clone();
+            store.get_mut(face_id).unwrap().sense = face.sense.flipped();
+            for loop_id in face.loops {
+                let mut fins = store.get(loop_id).unwrap().fins.clone();
+                fins.reverse();
+                for &fin_id in &fins {
+                    let sense = store.get(fin_id).unwrap().sense;
+                    store.get_mut(fin_id).unwrap().sense = sense.flipped();
+                }
+                store.get_mut(loop_id).unwrap().fins = fins;
+            }
+        }
+    }
+
+    fn attach_second_shell(
+        store: &mut Store,
+        outer: &PlanarSolidOutput,
+        inner: &PlanarSolidOutput,
+    ) -> RegionId {
+        let outer_body = store.get(outer.body()).unwrap();
+        let outer_region = *outer_body
+            .regions()
+            .iter()
+            .find(|&&region| store.get(region).unwrap().kind() == crate::entity::RegionKind::Solid)
+            .unwrap();
+        let inner_region = store.get(inner.shell()).unwrap().region;
+        store
+            .get_mut(inner_region)
+            .unwrap()
+            .shells
+            .retain(|shell| *shell != inner.shell());
+        store.get_mut(inner.shell()).unwrap().region = outer_region;
+        store
+            .get_mut(outer_region)
+            .unwrap()
+            .shells
+            .push(inner.shell());
+        let cavity_void = store.add(crate::entity::Region {
+            body: outer.body(),
+            kind: crate::entity::RegionKind::Void,
+            shells: Vec::new(),
+        });
+        store
+            .get_mut(outer.body())
+            .unwrap()
+            .regions
+            .push(cavity_void);
+        outer_region
     }
 
     #[test]
@@ -970,7 +1069,7 @@ mod tests {
             .unwrap(),
             ShellCertification {
                 embedding: ShellEmbedding::Certified,
-                orientation: ShellOrientation::Certified,
+                orientation: ShellOrientation::Positive,
             }
         );
     }
@@ -1057,6 +1156,199 @@ mod tests {
     }
 
     #[test]
+    fn positive_convex_outer_strictly_contains_negative_cavity() {
+        let mut store = Store::new();
+        let outer = assemble_box(&mut store, [0.0; 3], [3.0, 2.5, 2.0]);
+        let inner = assemble_box(&mut store, [0.25, -0.2, 0.1], [0.75, 0.5, 0.4]);
+        reverse_shell(&mut store, &inner);
+        let region = attach_second_shell(&mut store, &outer, &inner);
+        let (session, tolerances) = context();
+        let operation = OperationContext::new(&session, tolerances).unwrap();
+        let mut negative_scope = OperationScope::new(&operation);
+        assert_eq!(
+            certify_semantic_planar_shell_in_scope(&store, inner.shell(), &mut negative_scope)
+                .unwrap(),
+            ShellCertification {
+                embedding: ShellEmbedding::Certified,
+                orientation: ShellOrientation::Negative,
+            }
+        );
+        let mut scope = OperationScope::new(&operation);
+        assert_eq!(
+            certify_semantic_planar_region_in_scope(&store, region, &mut scope).unwrap(),
+            SemanticPlanarRegionCertification::Certified
+        );
+
+        let report =
+            crate::check::check_body_report(&store, outer.body(), crate::check::CheckLevel::Full)
+                .unwrap();
+        assert_eq!(
+            report.outcome(),
+            crate::check::CheckOutcome::Valid,
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn cavity_full_check_requires_exact_reduced_void_region_ownership() {
+        let mut store = Store::new();
+        let outer = assemble_box(&mut store, [0.0; 3], [3.0, 2.5, 2.0]);
+        let inner = assemble_box(&mut store, [0.25, -0.2, 0.1], [0.75, 0.5, 0.4]);
+        reverse_shell(&mut store, &inner);
+        let _ = attach_second_shell(&mut store, &outer, &inner);
+        let cavity_void = *store.get(outer.body()).unwrap().regions().last().unwrap();
+
+        let assert_region_layout_fault = |candidate: &Store| {
+            let report = crate::check::check_body_report(
+                candidate,
+                outer.body(),
+                crate::check::CheckLevel::Full,
+            )
+            .unwrap();
+            assert_eq!(report.outcome(), crate::check::CheckOutcome::Invalid);
+            assert!(
+                report
+                    .faults
+                    .iter()
+                    .any(|fault| fault.kind == crate::check::FaultKind::RegionShellLayout),
+                "{report:?}"
+            );
+        };
+
+        let mut missing = store.clone();
+        missing.get_mut(outer.body()).unwrap().regions.pop();
+        assert_region_layout_fault(&missing);
+
+        let mut extra = store.clone();
+        let extra_void = extra.add(crate::entity::Region {
+            body: outer.body(),
+            kind: crate::entity::RegionKind::Void,
+            shells: Vec::new(),
+        });
+        extra
+            .get_mut(outer.body())
+            .unwrap()
+            .regions
+            .push(extra_void);
+        assert_region_layout_fault(&extra);
+
+        let mut wrong_kind = store.clone();
+        wrong_kind.get_mut(cavity_void).unwrap().kind = crate::entity::RegionKind::Solid;
+        assert_region_layout_fault(&wrong_kind);
+
+        let mut nonempty = store;
+        let void_shell = nonempty.add(crate::entity::Shell {
+            region: cavity_void,
+            faces: Vec::new(),
+            edges: Vec::new(),
+            vertex: None,
+        });
+        nonempty
+            .get_mut(cavity_void)
+            .unwrap()
+            .shells
+            .push(void_shell);
+        let report = crate::check::check_body_report(
+            &nonempty,
+            outer.body(),
+            crate::check::CheckLevel::Full,
+        )
+        .unwrap();
+        assert_eq!(report.outcome(), crate::check::CheckOutcome::Invalid);
+        assert!(
+            report
+                .faults
+                .iter()
+                .any(|fault| fault.kind == crate::check::FaultKind::KindMismatch),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn two_shell_region_refuses_same_sign_outside_and_contact() {
+        let run = |center, half_extents, reverse| {
+            let mut store = Store::new();
+            let outer = assemble_box(&mut store, [0.0; 3], [3.0, 2.5, 2.0]);
+            let inner = assemble_box(&mut store, center, half_extents);
+            if reverse {
+                reverse_shell(&mut store, &inner);
+            }
+            let region = attach_second_shell(&mut store, &outer, &inner);
+            let (session, tolerances) = context();
+            let operation = OperationContext::new(&session, tolerances).unwrap();
+            let mut scope = OperationScope::new(&operation);
+            certify_semantic_planar_region_in_scope(&store, region, &mut scope).unwrap()
+        };
+
+        assert_eq!(
+            run([0.0; 3], [0.75, 0.5, 0.4], false),
+            SemanticPlanarRegionCertification::Invalid
+        );
+        assert_eq!(
+            run([5.0, 0.0, 0.0], [0.75, 0.5, 0.4], true),
+            SemanticPlanarRegionCertification::Invalid
+        );
+        assert_eq!(
+            run([2.25, 0.0, 0.0], [0.75, 0.5, 0.4], true),
+            SemanticPlanarRegionCertification::Indeterminate
+        );
+    }
+
+    #[test]
+    fn semantic_region_work_budget_accepts_exact_n_and_rejects_n_minus_one() {
+        let mut store = Store::new();
+        let outer = assemble_box(&mut store, [0.0; 3], [3.0, 2.5, 2.0]);
+        let inner = assemble_box(&mut store, [0.25, -0.2, 0.1], [0.75, 0.5, 0.4]);
+        reverse_shell(&mut store, &inner);
+        let region = attach_second_shell(&mut store, &outer, &inner);
+
+        let (default_session, tolerances) = context();
+        let default_operation = OperationContext::new(&default_session, tolerances).unwrap();
+        let mut default_scope = OperationScope::new(&default_operation);
+        assert_eq!(
+            certify_semantic_planar_region_in_scope(&store, region, &mut default_scope).unwrap(),
+            SemanticPlanarRegionCertification::Certified
+        );
+        let required = default_scope
+            .ledger()
+            .snapshots()
+            .into_iter()
+            .find(|snapshot| snapshot.stage == SEMANTIC_PLANAR_REGION_WORK)
+            .unwrap()
+            .consumed;
+        assert!(required > 0);
+
+        let budget = |allowed| {
+            semantic_planar_shell_proof_budget().overlaid(
+                &BudgetPlan::new([LimitSpec::new(
+                    SEMANTIC_PLANAR_REGION_WORK,
+                    ResourceKind::Work,
+                    AccountingMode::Cumulative,
+                    allowed,
+                )])
+                .unwrap(),
+            )
+        };
+        let (exact_session, tolerances) = context_with_budget(budget(required));
+        let exact_operation = OperationContext::new(&exact_session, tolerances).unwrap();
+        let mut exact_scope = OperationScope::new(&exact_operation);
+        assert_eq!(
+            certify_semantic_planar_region_in_scope(&store, region, &mut exact_scope).unwrap(),
+            SemanticPlanarRegionCertification::Certified
+        );
+
+        let (short_session, tolerances) = context_with_budget(budget(required - 1));
+        let short_operation = OperationContext::new(&short_session, tolerances).unwrap();
+        let mut short_scope = OperationScope::new(&short_operation);
+        let error =
+            certify_semantic_planar_region_in_scope(&store, region, &mut short_scope).unwrap_err();
+        assert_eq!(
+            error.limit().map(|limit| limit.stage),
+            Some(SEMANTIC_PLANAR_REGION_WORK)
+        );
+    }
+
+    #[test]
     fn semantic_work_budget_accepts_exact_n_and_rejects_n_minus_one() {
         let mut store = Store::new();
         let input = bound_box(&mut store);
@@ -1074,7 +1366,7 @@ mod tests {
             .unwrap(),
             ShellCertification {
                 embedding: ShellEmbedding::Certified,
-                orientation: ShellOrientation::Certified,
+                orientation: ShellOrientation::Positive,
             }
         );
         let required = default_scope
@@ -1106,7 +1398,7 @@ mod tests {
             .unwrap(),
             ShellCertification {
                 embedding: ShellEmbedding::Certified,
-                orientation: ShellOrientation::Certified,
+                orientation: ShellOrientation::Positive,
             }
         );
 
