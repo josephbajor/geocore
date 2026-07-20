@@ -28,34 +28,22 @@ After such a change:
    notes field of `docs/oracle-results.tsv` until those fields receive a
    versioned schema of their own.
 
-CI does not replace the licensed host. Q8 should add a deterministic staleness
-check that compares the current writer/bundle identity with the last committed
-certified identity and reports certification as stale. That gate blocks a
-writer-conformance claim, not unrelated kernel development.
+CI does not replace the licensed host. Its deterministic freshness checks
+compare regenerated writer/bundle identities with the last committed licensed
+evidence. A stale record blocks a conformance claim, not unrelated development.
 
-**Last licensed-host run (2026-07-11, writer=2beb267):** the full 14-fixture
-loop ran through the API CLI: 11/14 imports
-accepted (wire/acorn remain the known parse-level rejections), and the first
-there-and-back leg in project history compared 6/9 exports clean — block,
-cylinder, sphere, torus, and both sheets round-trip through Onshape's kernel
-with matching topology, geometry classes, and volume. `offset_plane.x_t` was
-rejected as corrupt until the writer registered each OFFSET_SURF in its basis
-surface's geometric-owner ring (exemplar evidence: 44/44); it now imports.
-Open findings from the compare leg: the two exactly-analytic NURBS fixtures
-come back host-canonicalized (line/plane), so class-preservation needs
-genuinely curved fixtures; Onshape's cone and tolerant-edge re-exports fail
-our reconstruction (preserved as `*_onshape_reexport.x_t` reader-gap
-fixtures); and the accepted offset sheet materializes no exportable body, so
-its re-export leg is unavailable.
+**Last licensed-host run (2026-07-20, writer=b596027):** the declared base
+matrix imported 12/15 and compared 7/12 clean. Wire/acorn parse rejection,
+analytic NURBS canonicalization, cone/tolerant-edge reader gaps, and the offset
+sheet's missing re-export remain open. The curved B-surface is accepted and
+compares clean. The supplemental public Boolean matrix imported 6/6 and
+compared 6/6 clean, including fragmented shared-surface solids, disjoint union
+bodies, and a two-shell finite-void cavity. Evidence: `docs/oracle-results.tsv`.
 
-**Current certification state (2026-07-13): stale.** Commit `2d7b8dc`
-changed `kxt/src/write.rs` during the facade accessor migration after that host
-run. The declared bundle also now contains
-`solid_block_curved_nurbs_face.x_t`, a genuinely curved polynomial B-surface
-solid that is deterministic, locally import/check/tessellation verified, and
-not yet host-certified. The record deliberately retains the historical 14
-payload identities and remains stale until a licensed host reruns the complete
-15-fixture bundle.
+**Current certification state (2026-07-20): current.**
+`docs/oracle-certification.json` pins the 15 base payloads;
+`docs/oracle-boolean-certification.json` pins the six operation payloads. CI
+regenerates both and rejects an identity mismatch.
 
 ## 1. Generate the bundle
 
@@ -71,14 +59,12 @@ and re-checked locally before it is written, so a host is never handed a file th
 repository's own pipeline rejects. `oracle/` is gitignored transport space; the
 committed record is `docs/oracle-results.tsv`.
 
-The bundle deliberately retains the host-accepted exactly planar
-`solid_block_nurbs_face.x_t` and adds
+The bundle retains the host-canonicalized exactly planar
+`solid_block_nurbs_face.x_t` and the host-preserved
 `solid_block_curved_nurbs_face.x_t`. The curved fixture preserves exact linear
 block boundaries while displacing the sole interior biquadratic control point;
 it therefore cannot be canonicalized to a plane. **Every host run must include
-both B-surface fixtures.** The curved payload has local round-trip and mesh
-evidence only until a licensed host accepts it, so it must not be added to the
-historical certification hash map early.
+both B-surface fixtures.**
 
 The exporter rejects stale or unexpected outbox entries, and the API CLI reads
 the manifest order rather than globbing transport residue. After generation,
@@ -92,6 +78,20 @@ python3 scripts/oracle_loop.py certification-check --outbox oracle/outbox
 and per-fixture SHA-256 identities. A `current` mismatch fails CI. An explicitly
 `stale` record must carry a reason and passes ordinary development CI with a
 prominent warning; release/conformance gates add `--require-current`.
+
+The block/block Boolean rung has a separate facade-only supplemental bundle:
+
+```sh
+cargo run --release -p kernel --example boolean_xt_oracle -- oracle/boolean-outbox
+python3 scripts/oracle_loop.py certification-check \
+  --outbox oracle/boolean-outbox \
+  --record docs/oracle-boolean-certification.json
+```
+
+Its six payloads cover connected unite/subtract/intersect, both bodies of a
+disjoint union, and contained subtraction with one finite void. Generation
+requires Full-valid committed results, independent volumes, local X_T import,
+byte-stable replay, and an empty output directory.
 
 ## 2. Run the loop (Onshape API CLI — primary)
 
@@ -128,6 +128,15 @@ Each certification run is then:
 ```sh
 cargo run --release -p kxt --bin xt_oracle -- export oracle/outbox
 python3 scripts/oracle_loop.py bundle --reexport --compare --results-rows
+```
+
+For the supplemental Boolean matrix:
+
+```sh
+python3 scripts/oracle_loop.py bundle \
+  --outbox oracle/boolean-outbox \
+  --inbox oracle/inbox/onshape/boolean \
+  --reexport --compare --results-rows
 ```
 
 `bundle` uploads every outbox fixture, waits for each translation verdict,

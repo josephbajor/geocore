@@ -128,6 +128,13 @@ jobs:
         run: cargo run --locked --release -p kxt --bin xt_oracle -- export "$RUNNER_TEMP/oracle-outbox"
       - name: Verify licensed-host certification freshness
         run: python3 scripts/oracle_loop.py certification-check --outbox "$RUNNER_TEMP/oracle-outbox"
+      - name: Regenerate the exact Boolean oracle bundle
+        run: cargo run --locked --release -p kernel --example boolean_xt_oracle -- "$RUNNER_TEMP/boolean-oracle-outbox"
+      - name: Verify Boolean licensed-host certification freshness
+        run: |
+          python3 scripts/oracle_loop.py certification-check \
+            --outbox "$RUNNER_TEMP/boolean-oracle-outbox" \
+            --record docs/oracle-boolean-certification.json
 
   benchmark-smoke:
     name: Benchmark contracts and bounded smoke

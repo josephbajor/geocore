@@ -76,7 +76,8 @@ journals.
 | M2.5 Architecture gate | IN PROGRESS / REQUIRED | Pcurves, tolerant edges, tolerance provenance, checked assembly, journals landed; seam/pole interchange fixtures, remaining Full-proof gaps, and tolerance-propagation policies remain. |
 | M3 X_T | IN PROGRESS | Modern-schema subset reads/writes with host-certified conventions; production coverage and re-certification remain (see [oracle-loop.md](oracle-loop.md)). |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases with explicit Complete/Indeterminate evidence plus first modeling consumers; general certified CC/CS/SSI does not exist yet. |
-| M5–M8 | NOT STARTED | No booleans, general modeling, blends, stable API, or production hardening. |
+| M5 Analytic booleans | IMPLEMENTED SLICE | Public block/block CSG is Full-checked, failure-atomic, deterministic, and licensed-host validated; block/cylinder is next. |
+| M6–M8 | NOT STARTED | General modeling, blends, stable API, and production hardening remain. |
 
 ## Reconciled critical path
 
@@ -293,23 +294,15 @@ externally X_T validated.
 
 ## M5 — Analytic booleans + interrogation — IN PROGRESS
 
-Status: rung 1 point classification landed as a certified planar-face slice
-(`kernel::classify`, ledger `modeling.classification`); curved-face classes
-ride with rung 4. Rung 2 landed: certified planar section edge graphs
-(`kernel::section`, ledger `modeling.sectioning`) stitch face/face
-intersection curves across two planar-faced solids, with honest structured
-gaps for coincident, tangent, and uncertifiable contacts. Rung 3 is in
-progress: section vertices retain source-edge parameter intervals, exact
-plane-triple predicates drive a symbolic convex-fragment BSP, and a keyed
-transactional pipeline extracts exact convex planar facade bodies, applies
-all three CSG truth tables, realizes certified representatives, and commits
-connected overlap, disjoint union as atomic multiple bodies, and contained
-subtraction as one two-shell cavity body. Full checking reconstructs ideal
-vertices from exactly three immutable source Planes, verifies graph-bound
-Plane/Plane carriers, certifies coplanar-partitioned shell embedding, and proves
-strict cavity separation, winding, containment, and reduced region ownership;
-ambiguous evidence fails closed. Remaining before the first public result:
-facade operations and licensed-host X_T evidence.
+Status: rungs 1–3 are implemented slices. `kernel::classify` certifies planar
+point classification; `kernel::section` produces certified planar section
+graphs; the public typed block/block Boolean facade applies all three CSG truth
+tables and atomically Full-commits connected, proven-empty, multi-body, and
+one-cavity results while exact contact and incomplete proof fail closed.
+Deterministic operation outputs passed the supplemental Onshape oracle 6/6 on
+import and 6/6 there-and-back (`docs/oracle-boolean-certification.json`). The
+active queue head is rung 4 block/cylinder: curved classification, SSI pcurves,
+fragment assembly, Full proof, and the same external evidence gate.
 
 Do not wait for an exhaustive analytic pair table before testing the end-to-end
 boolean architecture. Begin with a deliberately narrow vertical slice as soon as the

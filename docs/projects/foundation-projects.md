@@ -31,20 +31,15 @@ enforcement over new parallel surface area. Read the queue literally.
    admission, structural-holder items, atomic N/N+1 evidence, and the body/face representation gates
    landed. Compatibility-v1 preparation/edge/structural/body totals remain accounting-only at
    `u64::MAX` (no truthful finite legacy cap exists).
-3. **Resume algorithm/API expansion behind the completed gates — OPEN (current head).** Landed: F3
-   contextual curve/curve dispatch adoption, bounded NURBS cell-local seed/polish, G5a plane/plane and
-   plane/sphere graph arms, M3c transmitted-chart import through corpus profile v15, magnitude-13/14
-   opt-in algebraic search, and the first M4d rigid-copy + polygonal-extrusion consumers. Remaining:
-   broader intersection/offset/NURBS families, descriptor chains ≥5, the remaining sphere-window
-   layouts, revolve and curved-profile extrusion, external X_T validation. These legs do not leapfrog
-   items 1–2.
+3. **Resume algorithm/API expansion behind the completed gates — OPEN (current head).** Block/block
+   CSG is public and externally validated. The next consumer is block/cylinder Boolean support:
+   certified curved classification and SSI pcurves, fragment assembly, Full proof, and X_T evidence.
+   Broader intersection/NURBS families, revolve, and curved profiles remain milestone backlog.
 
-**External-evidence lane.** The historical 14-file writer bundle is host-certified (Onshape). A 15th
-genuinely-curved B-surface fixture is locally verified with host certification pending, so the bundle
-record is correctly stale until the complete 15-file licensed-host rerun. Fingerprints in
-`docs/oracle-certification.json`; findings ratcheted in `docs/oracle-results.tsv` (oracle loop:
-ORCHESTRATION.md R5, `docs/oracle-loop.md`). No C ABI, plugin ABI, broad topology privacy break,
-speculative facade family, or file-size-only module split is part of this convergence phase.
+**External-evidence lane.** Current Onshape records pin the 15-file writer bundle and the six-file
+public Boolean bundle. Fingerprints: `docs/oracle-certification.json` and
+`docs/oracle-boolean-certification.json`; findings: `docs/oracle-results.tsv` (ORCHESTRATION R5).
+Wire/acorn rejection and the recorded base-reader gaps remain open.
 
 ## F0 — Completion-preserving result symmetry
 

@@ -606,7 +606,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
             case
             for case in tessellation
             if case["policy_values"].get("source_fixture")
-            == "solid_block_curved_nurbs_face.x_t@local-import-verified-2026-07-13"
+            == "solid_block_curved_nurbs_face.x_t@onshape-cloud-2026-07-20"
         ]
         self.assertEqual(len(curved_nurbs), 4)
         curved_bytes = (
@@ -629,7 +629,7 @@ class BenchmarkBaselineTests(unittest.TestCase):
                 case["size_parameters"]["input_bytes"] == len(curved_bytes)
                 and case["policy_values"]["source_sha256"] == curved_sha256
                 and case["policy_values"]["source_evidence"]
-                == "local-import-verified;host-certification=pending"
+                == "licensed-host-accepted:onshape-cloud-2026-07-20"
                 and case["expected_result_counters"]["source_faces"] == 6
                 and case["expected_result_counters"]["source_edges"] == 12
                 and case["expected_result_counters"]["source_vertices"] == 8

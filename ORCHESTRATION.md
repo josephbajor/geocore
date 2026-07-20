@@ -28,15 +28,14 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    with rung 4)*
 2. Face/face intersection curves stitched into edge graphs on two block
    bodies (planar/planar only). *(landed — `kernel::section` certified
-   planar section graphs, ledger `modeling.sectioning`; the queue head is
-   now rung 3)*
+   planar section graphs, ledger `modeling.sectioning`)*
 3. `unite`/`subtract`/`intersect` for block/block — atomic, journaled,
-   checker-clean, X_T-exported, and imported into a licensed host. *(in
-   progress — the internal exact-planar pipeline now commits connected overlap,
-   disjoint union as atomic multiple bodies, and contained subtraction as one
-   two-shell cavity body through semantic plane-triple Full proof; public facade
-   operations and licensed-host X_T evidence remain)*
+   checker-clean, X_T-exported, and imported into a licensed host. *(landed —
+   public typed facade; connected, proven-empty, atomic multi-body, and
+   two-shell cavity results; Full proof; deterministic X_T; Onshape 6/6 import
+   and 6/6 there-and-back at writer `b596027`)*
 4. Extend the same ladder to block/cylinder (introduces curved SSI pcurves).
+   *(active queue head)*
 
 Work that does not advance the queue head needs an explicit justification
 linking it to a rung ("rung 2 needs curve/curve overlap dedup because …").

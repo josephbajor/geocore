@@ -1,0 +1,20 @@
+{
+  "schema_version": "kernel-oracle-certification.v1",
+  "status": "current",
+  "certified_at": "2026-07-20",
+  "host": "onshape",
+  "host_version": "cloud-2026-07-20",
+  "writer_revision": "b596027",
+  "results_reference": "docs/oracle-results.tsv rows dated 2026-07-20 with writer=b596027 and bundle=86ccbd25cd0cd6b1ffb01fbc425dd64cd9df7e5255c0c5a46a4505116cfd46ef",
+  "writer_inputs_sha256": "f699d8c2e70435af61c7a32ba710e43c5082fe2ae4d2c193787ca029019268b1",
+  "bundle_sha256": "86ccbd25cd0cd6b1ffb01fbc425dd64cd9df7e5255c0c5a46a4505116cfd46ef",
+  "fixture_count": 6,
+  "fixtures_sha256": {
+    "connected_intersect.x_t": "11349d98bb42266d619c082fc64452f0d6876a7d8c85f3636901e72c8dcf8518",
+    "connected_subtract.x_t": "a2243434857f5fdbb19fb1295320535a1fea3888a0c1225e40edbcdf2662ebdb",
+    "connected_unite.x_t": "6b8b328ec2d8b87e9a0860374f2b50db8c2fe1c5ca31b2ce6ce73554ae6c22f6",
+    "contained_subtract_cavity.x_t": "69329de33ff2446fd0e676df0018aa3544cad40520f7638bc60a7f1230fd73c9",
+    "disjoint_unite_body_0.x_t": "2c749c68f6e1d23dd4a4198ec10ab2d0117a3a23019a6327c8f7360ceca1bc26",
+    "disjoint_unite_body_1.x_t": "e38db334c1582aba9d8c0b60897c4e0973d2d18192ad46c2a380f1de26de1012"
+  }
+}

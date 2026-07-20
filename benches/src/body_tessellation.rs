@@ -71,16 +71,16 @@ pub const IMPORTED_CYLINDER_SHA256: &str =
 /// Portable in-harness byte digest for the exact certified cylinder bytes.
 pub const IMPORTED_CYLINDER_BYTE_DIGEST: u64 = 0x57b8_9bfc_e92d_c85a;
 const IMPORTED_CYLINDER_BYTES: &[u8] = include_bytes!("../testdata/solid_cylinder.certified.x_t");
-/// Locally generated curved exact-NURBS block used before licensed-host certification.
+/// Licensed-host-certified curved exact-NURBS block.
 pub const CURVED_NURBS_BLOCK_IDENTITY: &str =
-    "solid_block_curved_nurbs_face.x_t@local-import-verified-2026-07-13";
-/// Review boundary for this local fixture while licensed-host certification is pending.
+    "solid_block_curved_nurbs_face.x_t@onshape-cloud-2026-07-20";
+/// Exact licensed-host evidence pinned by the current oracle record.
 pub const CURVED_NURBS_BLOCK_SOURCE_EVIDENCE: &str =
-    "local-import-verified;host-certification=pending";
-/// SHA-256 of the reviewed local curved-NURBS block bytes.
+    "licensed-host-accepted:onshape-cloud-2026-07-20";
+/// SHA-256 of the certified curved-NURBS block bytes.
 pub const CURVED_NURBS_BLOCK_SHA256: &str =
     "7fad6999a2d2bd0653a3b7558e0460e9ccfe07a43d00f249709ea7aae642829e";
-/// Portable in-harness byte digest of the reviewed local curved-NURBS block bytes.
+/// Portable in-harness byte digest of the certified curved-NURBS block bytes.
 pub const CURVED_NURBS_BLOCK_BYTE_DIGEST: u64 = 0xb8e1_8725_bad5_df39;
 const CURVED_NURBS_BLOCK_BYTES: &[u8] =
     include_bytes!("../testdata/solid_block_curved_nurbs_face.local.x_t");

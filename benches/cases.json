@@ -2826,9 +2826,9 @@
         "measure_ratio_ceiling": 1.000000001,
         "orientation_proof": "positive-signed-volume",
         "incidence_proof": "directed-manifold+exact-topological-boundary",
-        "source_fixture": "solid_block_curved_nurbs_face.x_t@local-import-verified-2026-07-13",
+        "source_fixture": "solid_block_curved_nurbs_face.x_t@onshape-cloud-2026-07-20",
         "source_sha256": "7fad6999a2d2bd0653a3b7558e0460e9ccfe07a43d00f249709ea7aae642829e",
-        "source_evidence": "local-import-verified;host-certification=pending"
+        "source_evidence": "licensed-host-accepted:onshape-cloud-2026-07-20"
       },
       "expected_result_counters": {
         "source_faces": 6,
@@ -2884,9 +2884,9 @@
         "measure_ratio_ceiling": 1.000000001,
         "orientation_proof": "positive-signed-volume",
         "incidence_proof": "directed-manifold+exact-topological-boundary",
-        "source_fixture": "solid_block_curved_nurbs_face.x_t@local-import-verified-2026-07-13",
+        "source_fixture": "solid_block_curved_nurbs_face.x_t@onshape-cloud-2026-07-20",
         "source_sha256": "7fad6999a2d2bd0653a3b7558e0460e9ccfe07a43d00f249709ea7aae642829e",
-        "source_evidence": "local-import-verified;host-certification=pending"
+        "source_evidence": "licensed-host-accepted:onshape-cloud-2026-07-20"
       },
       "expected_result_counters": {
         "source_faces": 6,
@@ -2942,9 +2942,9 @@
         "measure_ratio_ceiling": 1.000000001,
         "orientation_proof": "positive-signed-volume",
         "incidence_proof": "directed-manifold+exact-topological-boundary",
-        "source_fixture": "solid_block_curved_nurbs_face.x_t@local-import-verified-2026-07-13",
+        "source_fixture": "solid_block_curved_nurbs_face.x_t@onshape-cloud-2026-07-20",
         "source_sha256": "7fad6999a2d2bd0653a3b7558e0460e9ccfe07a43d00f249709ea7aae642829e",
-        "source_evidence": "local-import-verified;host-certification=pending"
+        "source_evidence": "licensed-host-accepted:onshape-cloud-2026-07-20"
       },
       "expected_result_counters": {
         "source_faces": 6,
@@ -3000,9 +3000,9 @@
         "measure_ratio_ceiling": 1.000000001,
         "orientation_proof": "positive-signed-volume",
         "incidence_proof": "directed-manifold+exact-topological-boundary",
-        "source_fixture": "solid_block_curved_nurbs_face.x_t@local-import-verified-2026-07-13",
+        "source_fixture": "solid_block_curved_nurbs_face.x_t@onshape-cloud-2026-07-20",
         "source_sha256": "7fad6999a2d2bd0653a3b7558e0460e9ccfe07a43d00f249709ea7aae642829e",
-        "source_evidence": "local-import-verified;host-certification=pending",
+        "source_evidence": "licensed-host-accepted:onshape-cloud-2026-07-20",
         "rejected_finer_tier": "chord-3e-4;interior-refinement-passes=25;allowed=24"
       },
       "expected_result_counters": {

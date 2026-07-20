@@ -3,7 +3,8 @@
 Status: K1–K3, K5 adoption, and the landed K4 slices (typed X_T import/export, `ChangeJournal`,
 checked semantic edits — MVFS/KVFS, MEV/KEV, MEF/KEF, KFMRH/MFKRH, face split/merge, bridge/ring —
 rigid body copy with certificate reissuance, polygonal-profile extrusion, operation-owned tolerance
-batching, the opt-in Full-assurance commit gate, and facade body tessellation) are implemented;
+batching, the opt-in Full-assurance commit gate, facade body tessellation, and public typed
+block/block Boolean outcomes) are implemented;
 broader semantic edit families, transmitted-proof reissuance beyond the named families, partition
 history, and the C ABI remain.
 
@@ -267,12 +268,17 @@ signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handle
 - Transmitted-proof / interchange atomicity: `crates/kxt/tests/{finite_open_two_sample_dual_offset,finite_open_cubic_dual_offset,finite_open_five_sample_dual_offset,finite_open_seven_sample_dual_offset,offset_nurbs_intersection,intersection_chart}.rs`.
 - Edit / journal / tolerance families: `crates/ktopo/tests/{euler_transactions,builders,tolerance_budgets,transactions,pcurves}.rs`.
 - Contextual intersection + ellipse source retention: `crates/kops/tests/{ellipse_ellipse,curve_curve}.rs`; legacy-boundary audit `scripts/legacy_api_contract.py`.
+- Public Boolean facade + external operation evidence: `crates/kernel/src/boolean/`,
+  `crates/kernel/tests/lifecycle.rs`, `crates/kernel/examples/boolean_xt_oracle.rs`,
+  `docs/oracle-boolean-certification.json`.
 
 ## Open items
 
 - Broader semantic edit families beyond the landed MVFS/KVFS, MEV/KEV, MEF/KEF, KFMRH/MFKRH,
   split/merge, bridge/ring, and rigid copy; nested edit transactions pending a journal-composition +
   partition-history contract; tolerance-propagation policies beyond MEF inheritance / KEF ordered max.
+- Extend the Boolean facade implementation from exact planar block/block to block/cylinder without
+  exposing lower-layer symbolic fragments, graph descriptors, or raw candidate topology.
 - Rigid-copy preflight gaps: altered/witness-mismatched higher-order charts, graph-valid shared-basis
   or periodic-source/carrier proofs, other-sample dual offsets, nested five-/seven-sample roots, and
   Offset(Plane)-peer transmitted proofs; graph trace representation/binding beyond four-descriptor

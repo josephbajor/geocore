@@ -152,11 +152,10 @@ artifacts and fail the job. A scheduled job may use longer budgets and rotating
 seeds but must stay bounded and never silently update checked-in corpora/baselines.
 The Python contract surface is load-bearing: CI runs
 `python -m unittest discover -s scripts/tests` and validates the excluded
-`benches/`/`fuzz/` manifests and locks. A non-host oracle-certification status
-check compares current writer/bundle identity with the last committed licensed-host
-identity; it must reject a falsely "current" status, report an acknowledged stale
-status prominently, reserve a failing gate for writer-conformance/release claims,
-and never pretend to perform the licensed-host validation in `docs/oracle-loop.md`.
+`benches/`/`fuzz/` manifests and locks. Non-host oracle-certification checks
+regenerate both the declared base and supplemental Boolean bundles and compare
+their writer/payload identities with committed licensed-host records; they reject
+false freshness and never pretend to perform `docs/oracle-loop.md` validation.
 
 Developer lanes (`scripts/test_lanes.py`, fail-closed): `focused` (one package
 target); `fast` (workspace library/binary tests plus reviewed integration smoke
