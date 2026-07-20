@@ -4450,7 +4450,15 @@ mod tests {
                 ResourceKind::Items,
             )
             .allowed,
-            FullCheckBudgetProfile::v1_defaults().limits()[0].allowed,
+            FullCheckBudgetProfile::v1_defaults()
+                .limits()
+                .iter()
+                .find(|limit| {
+                    limit.stage == ktopo::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS
+                        && limit.resource == ResourceKind::Items
+                })
+                .expect("Full-check defaults include face-domain item containment")
+                .allowed,
         );
     }
 

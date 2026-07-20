@@ -41,6 +41,8 @@
 //!   boss or blind pocket to a convex planar host face.
 //! - [`cylindrical_ports`] — proof-ready reversed cylinder band joining two
 //!   convex-host port faces.
+//! - [`cylindrical_multishell`] — proof-ready convex planar host with one
+//!   closed cylindrical cavity shell.
 //! - [`profile`] — validated planar inputs shared by sheet and feature builders.
 //! - [`tolerance`] — entity tolerance provenance and growth contracts.
 //! - [`check`] — the body checker (structural + geometric invariants).
@@ -57,7 +59,9 @@ pub mod btess;
 pub mod check;
 pub mod cylindrical_band;
 pub mod cylindrical_boss;
+pub mod cylindrical_multishell;
 pub mod cylindrical_ports;
+pub(crate) mod cylindrical_region_proof;
 pub mod domain;
 pub mod entity;
 pub mod euler;
@@ -73,6 +77,7 @@ pub mod planar;
 pub mod planar_multishell;
 pub(crate) mod planar_shell_proof;
 pub mod profile;
+pub(crate) mod region_proof;
 pub(crate) mod semantic_planar_math;
 pub(crate) mod semantic_planar_pair_proof;
 pub(crate) mod semantic_planar_region_proof;

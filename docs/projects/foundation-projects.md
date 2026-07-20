@@ -37,10 +37,10 @@ enforcement over new parallel surface area. Read the queue literally.
    closed-fragment stitching, exact rings and bounded arcs, generic exact boundary selection, and
    finite-cylinder Full proof landed. Exact curved face partition/classification and failure-atomic,
    Full-checked axial intersection, cylinder-minus-block remainder bands, and zero-cut
-   truth-selected whole-source union/subtraction copies, one-ring axial cap-overlap connected union,
-   one-ring axial block-minus-cylinder blind pockets, and two-port axial through-holes now run
-   through the public facade and export deterministically; contained curved void subtraction,
-   multi-ring/other connected curved union, broader layouts, and licensed-host evidence remain.
+   truth-selected whole-source union/subtraction copies and contained-cylinder cavities, one-ring
+   axial cap-overlap connected union, one-ring axial block-minus-cylinder blind pockets, and two-port
+   axial through-holes now run through the public facade and export deterministically;
+   multi-ring/other connected curved union, broader contacts/layouts, and curved licensed-host evidence remain.
    Broader intersection/NURBS families, revolve, and curved profiles remain milestone backlog.
 
 **External-evidence lane.** Current Onshape records pin the 15-file writer bundle and the six-file

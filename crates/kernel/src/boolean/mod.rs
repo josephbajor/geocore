@@ -24,11 +24,15 @@ mod components;
 #[allow(dead_code)]
 mod curved_boss;
 #[allow(dead_code)]
+mod curved_cavity;
+#[allow(dead_code)]
 mod curved_host;
 #[allow(dead_code)]
 mod curved_pipeline;
 #[allow(dead_code)]
 mod curved_port_band;
+#[allow(dead_code)]
+mod curved_realize;
 #[allow(dead_code)]
 mod curved_source;
 #[allow(dead_code)]

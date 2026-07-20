@@ -224,6 +224,7 @@ impl FullCheckBudgetProfile {
         face_domain
             .overlaid(&crate::shell_proof::shell_proof_budget())
             .overlaid(&crate::semantic_planar_shell_proof::semantic_planar_shell_proof_budget())
+            .overlaid(&crate::region_proof::region_proof_budget())
             .overlaid(&crate::planar_shell_proof::planar_shell_proof_budget())
     }
 }
@@ -600,20 +601,18 @@ fn collect_full_verification(
     for &region_id in &body.regions {
         let region = store.get(region_id)?;
         if body.kind == BodyKind::Solid && region.kind == RegionKind::Solid {
-            match crate::semantic_planar_shell_proof::certify_semantic_planar_region_in_scope(
-                store, region_id, scope,
-            )? {
-                crate::semantic_planar_shell_proof::SemanticPlanarRegionCertification::Certified => {
+            match crate::region_proof::certify_region_in_scope(store, region_id, scope)? {
+                crate::region_proof::RegionCertification::Certified => {
                     continue;
                 }
-                crate::semantic_planar_shell_proof::SemanticPlanarRegionCertification::Invalid => {
+                crate::region_proof::RegionCertification::Invalid => {
                     faults.push(Fault {
                         entity: EntityRef::Region(region_id),
                         kind: FaultKind::RegionShellLayout,
                     });
                     continue;
                 }
-                crate::semantic_planar_shell_proof::SemanticPlanarRegionCertification::Indeterminate => {
+                crate::region_proof::RegionCertification::Indeterminate => {
                     push(
                         EntityRef::Region(region_id),
                         VerificationGapKind::RegionContainment,
@@ -621,7 +620,7 @@ fn collect_full_verification(
                     );
                     continue;
                 }
-                crate::semantic_planar_shell_proof::SemanticPlanarRegionCertification::NotApplicable => {
+                crate::region_proof::RegionCertification::NotApplicable => {
                     if region.shells.len() > 1 {
                         push(
                             EntityRef::Region(region_id),
@@ -2281,12 +2280,14 @@ mod tests {
         let shell = crate::shell_proof::shell_proof_budget();
         let semantic_shell =
             crate::semantic_planar_shell_proof::semantic_planar_shell_proof_budget();
+        let region = crate::region_proof::region_proof_budget();
         let planar_shell = crate::planar_shell_proof::planar_shell_proof_budget();
         let aggregate = FullCheckBudgetProfile::v1_defaults();
         assert_eq!(
             aggregate,
             leaf.overlaid(&shell)
                 .overlaid(&semantic_shell)
+                .overlaid(&region)
                 .overlaid(&planar_shell)
         );
 
@@ -2314,6 +2315,12 @@ mod tests {
 
     #[test]
     fn contextual_full_check_matches_legacy_and_reuses_one_scope() {
+        const CAVITY_REGION_SNAPSHOT: LimitSnapshot = LimitSnapshot {
+            stage: crate::cylindrical_region_proof::CYLINDRICAL_CAVITY_REGION_WORK,
+            resource: ResourceKind::Work,
+            consumed: 0,
+            allowed: 1_048_576,
+        };
         let mut store = Store::new();
         let body = clean_block(&mut store);
         let legacy = check_body_report(&store, body, CheckLevel::Full).unwrap();
@@ -2338,6 +2345,7 @@ mod tests {
                     consumed: 306,
                     allowed: 4096,
                 },
+                CAVITY_REGION_SNAPSHOT,
                 LimitSnapshot {
                     stage: crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
                     resource: ResourceKind::Items,
@@ -2429,6 +2437,7 @@ mod tests {
                     consumed: 3,
                     allowed: 5,
                 },
+                CAVITY_REGION_SNAPSHOT,
                 LimitSnapshot {
                     stage: crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
                     resource: ResourceKind::Items,

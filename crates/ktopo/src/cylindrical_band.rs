@@ -134,6 +134,12 @@ impl CylindricalBandSolidOutput {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CylindricalBandWinding {
+    Positive,
+    Negative,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PreparedCap {
     circle: Circle,
@@ -143,19 +149,25 @@ struct PreparedCap {
     side_pcurve: Line2d,
     cap_pcurve: Circle2d,
     cap_parameter_map: ParamMap1d,
+    face_sense: Sense,
     source: Option<FaceId>,
 }
 
 #[derive(Debug)]
-struct PreparedBand {
-    cylinder: Cylinder,
+pub(crate) struct PreparedBand {
+    pub(crate) cylinder: Cylinder,
     side_domain: FaceDomain,
+    side_sense: Sense,
     side_source: Option<FaceId>,
     caps: [PreparedCap; 2],
 }
 
 impl PreparedBand {
-    fn new(input: &CylindricalBandSolidInput, store: &crate::store::Store) -> Result<Self> {
+    pub(crate) fn new_with_winding(
+        input: &CylindricalBandSolidInput,
+        winding: CylindricalBandWinding,
+        store: &crate::store::Store,
+    ) -> Result<Self> {
         if !input.radius.is_finite() || input.radius <= 0.0 {
             return invalid("cylindrical-band radius must be finite and positive");
         }
@@ -203,14 +215,24 @@ impl PreparedBand {
             } else {
                 ParamMap1d::affine(-1.0, core::f64::consts::TAU)?
             };
+            let conventional_side_sense = if low { Sense::Forward } else { Sense::Reversed };
             caps.push(PreparedCap {
                 circle,
                 plane,
                 domain: cap_domain,
-                side_sense: if low { Sense::Forward } else { Sense::Reversed },
+                side_sense: if winding == CylindricalBandWinding::Positive {
+                    conventional_side_sense
+                } else {
+                    conventional_side_sense.flipped()
+                },
                 side_pcurve,
                 cap_pcurve,
                 cap_parameter_map,
+                face_sense: if winding == CylindricalBandWinding::Positive {
+                    Sense::Forward
+                } else {
+                    Sense::Reversed
+                },
                 source: input.cap_sources[index],
             });
         }
@@ -220,10 +242,22 @@ impl PreparedBand {
         Ok(Self {
             cylinder,
             side_domain,
+            side_sense: if winding == CylindricalBandWinding::Positive {
+                Sense::Forward
+            } else {
+                Sense::Reversed
+            },
             side_source: input.side_source,
             caps,
         })
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AllocatedCylindricalBandShell {
+    pub(crate) side_face: FaceId,
+    pub(crate) cap_faces: [FaceId; 2],
+    pub(crate) ring_edges: [EdgeId; 2],
 }
 
 impl Transaction<'_> {
@@ -236,8 +270,25 @@ impl Transaction<'_> {
         &mut self,
         input: &CylindricalBandSolidInput,
     ) -> Result<CylindricalBandSolidOutput> {
-        let prepared = PreparedBand::new(input, self.store())?;
+        let prepared =
+            PreparedBand::new_with_winding(input, CylindricalBandWinding::Positive, self.store())?;
         let (body, shell) = crate::make::solid_body_scaffold(self.store_mut());
+        let allocated = self.allocate_prepared_cylindrical_band_shell(prepared, shell)?;
+
+        Ok(CylindricalBandSolidOutput {
+            body,
+            shell,
+            side_face: allocated.side_face,
+            cap_faces: allocated.cap_faces,
+            ring_edges: allocated.ring_edges,
+        })
+    }
+
+    pub(crate) fn allocate_prepared_cylindrical_band_shell(
+        &mut self,
+        prepared: PreparedBand,
+        shell: ShellId,
+    ) -> Result<AllocatedCylindricalBandShell> {
         let mut lineage = Vec::with_capacity(3);
 
         let side_surface = self
@@ -247,7 +298,7 @@ impl Transaction<'_> {
             shell,
             loops: Vec::new(),
             surface: side_surface,
-            sense: Sense::Forward,
+            sense: prepared.side_sense,
             domain: Some(prepared.side_domain),
             tolerance: None,
         });
@@ -271,9 +322,7 @@ impl Transaction<'_> {
             self.record_derived_from(derived, source);
         }
 
-        Ok(CylindricalBandSolidOutput {
-            body,
-            shell,
+        Ok(AllocatedCylindricalBandShell {
             side_face,
             cap_faces: cap_faces
                 .try_into()
@@ -322,7 +371,7 @@ impl Transaction<'_> {
             shell,
             loops: Vec::new(),
             surface: cap_surface,
-            sense: Sense::Forward,
+            sense: cap.face_sense,
             domain: Some(cap.domain),
             tolerance: None,
         });

@@ -15,9 +15,9 @@ The current facade supports:
 - failure-atomic block/block unite/intersect/subtract plus axial
   convex-planar/finite-cylinder intersection, finite-cylinder-minus-planar
   remainder bands, zero-cut truth-selected whole-source union/subtraction
-  copies, one-ring axial cap-overlap connected union, one-ring axial
-  block-minus-cylinder blind pockets, and two-port axial through-holes, with
-  typed empty/created/refused outcomes and Full validation;
+  copies and contained-cylinder cavities, one-ring axial cap-overlap connected
+  union, one-ring axial block-minus-cylinder blind pockets, and two-port axial
+  through-holes, with typed empty/created/refused outcomes and Full validation;
 - atomic typed X_T import and deterministic X_T export; and
 - deterministic facade-ID mutation, lineage, and tolerance journal iteration;
   and

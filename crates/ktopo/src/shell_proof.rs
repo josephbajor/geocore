@@ -342,6 +342,14 @@ struct CylinderBandBoundary {
     side_traverses_positive_u: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CylinderBandShellProof {
+    pub(crate) certification: ShellCertification,
+    pub(crate) cylinder: Cylinder,
+    pub(crate) low_center: Point3,
+    pub(crate) high_center: Point3,
+}
+
 /// Certify a finite full-period cylindrical band closed by two circular
 /// planar caps.
 ///
@@ -356,6 +364,13 @@ fn certify_cylinder_band_shell(
     store: &Store,
     shell_id: ShellId,
 ) -> Result<Option<ShellCertification>> {
+    Ok(certify_cylinder_band_shell_proof(store, shell_id)?.map(|proof| proof.certification))
+}
+
+pub(crate) fn certify_cylinder_band_shell_proof(
+    store: &Store,
+    shell_id: ShellId,
+) -> Result<Option<CylinderBandShellProof>> {
     let shell = store.get(shell_id)?;
     if shell.faces.len() != 3 {
         return Ok(None);
@@ -414,10 +429,19 @@ fn certify_cylinder_band_shell(
         Some(PredicateOrientation::Negative) => (boundaries[1], boundaries[0]),
         _ => return Ok(None),
     };
-    if !low.side_traverses_positive_u || high.side_traverses_positive_u {
-        return Ok(Some(ShellCertification {
-            embedding: ShellEmbedding::Certified,
-            orientation: ShellOrientation::Invalid,
+    let expected_low_traversal = side_face.sense == Sense::Forward;
+    let expected_high_traversal = side_face.sense == Sense::Reversed;
+    if low.side_traverses_positive_u != expected_low_traversal
+        || high.side_traverses_positive_u != expected_high_traversal
+    {
+        return Ok(Some(CylinderBandShellProof {
+            certification: ShellCertification {
+                embedding: ShellEmbedding::Certified,
+                orientation: ShellOrientation::Invalid,
+            },
+            cylinder,
+            low_center: low.center,
+            high_center: high.center,
         }));
     }
 
@@ -430,9 +454,14 @@ fn certify_cylinder_band_shell(
         (Sense::Reversed, Some(1), Some(-1)) => ShellOrientation::Negative,
         _ => ShellOrientation::Invalid,
     };
-    Ok(Some(ShellCertification {
-        embedding: ShellEmbedding::Certified,
-        orientation,
+    Ok(Some(CylinderBandShellProof {
+        certification: ShellCertification {
+            embedding: ShellEmbedding::Certified,
+            orientation,
+        },
+        cylinder,
+        low_center: low.center,
+        high_center: high.center,
     }))
 }
 
@@ -1124,7 +1153,7 @@ fn cylinder_band_boundary(
     if !matches!(store.get(cap_use.curve())?, Curve2dGeom::Circle(_))
         || cap_use.closure_winding() != Some([0, 0])
         || traversal_is_positive([cap_use.edge_to_pcurve().scale(), 1.0], cap_fin.sense)
-            != Some(true)
+            != Some(cap_face.sense == Sense::Forward)
     {
         return Ok(None);
     }
