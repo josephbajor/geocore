@@ -71,7 +71,7 @@ use ktopo::graph_work::GraphQueryWork;
 use ktopo::store::Store;
 use ktopo::tolerance::EntityTolerance;
 use ktopo::transaction::{AssemblyStore, Journal, MutationKind};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const fn stage(value: &'static str) -> StageId {
     match StageId::new(value) {
@@ -691,8 +691,15 @@ fn reconstruct_into(
         code::BODY => body_indices.push(1u32),
         code::POINTER_LIS_BLOCK => {
             // An array-of-parts file: entries point to the parts.
-            let mut block_idx = 1u32;
-            while block_idx != 0 {
+            let blocks = linked_indices(
+                file,
+                1,
+                "next_block",
+                false,
+                1,
+                "part-list block chain does not terminate",
+            )?;
+            for block_idx in blocks {
                 let block = xnode(file, block_idx)?;
                 for v in entries(file, block)? {
                     if xnode(file, v)?.code == code::BODY {
@@ -704,7 +711,6 @@ fn reconstruct_into(
                         });
                     }
                 }
-                block_idx = ptr(file, block, "next_block")?;
             }
         }
         code::ASSEMBLY => {
@@ -826,6 +832,37 @@ fn ptr(file: &XtFile, node: &Node, name: &'static str) -> Result<u32> {
         index: 0,
         what: "expected a pointer field",
     })
+}
+
+/// Collect one transport pointer chain before reconstruction allocates.
+///
+/// Linear lists must end at null. Rings may additionally close at their
+/// first node; a repeat anywhere else proves malformed topology. Since each
+/// accepted index names a distinct parsed node, this also bounds the walk by
+/// `file.nodes.len()` without an arbitrary hop limit.
+fn linked_indices(
+    file: &XtFile,
+    first: u32,
+    link: &'static str,
+    allow_head_closure: bool,
+    owner: u32,
+    what: &'static str,
+) -> Result<Vec<u32>> {
+    let mut indices = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut current = first;
+    while current != 0 {
+        if !seen.insert(current) {
+            return Err(XtError::BadField { index: owner, what });
+        }
+        indices.push(current);
+        let next = ptr(file, xnode(file, current)?, link)?;
+        if allow_head_closure && next == first {
+            return Ok(indices);
+        }
+        current = next;
+    }
+    Ok(indices)
 }
 
 fn ch(file: &XtFile, node: &Node, name: &'static str) -> Result<char> {
@@ -1406,15 +1443,22 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 });
             }
         };
+        let region_indices = linked_indices(
+            file,
+            ptr(file, body_node, "region")?,
+            "next",
+            false,
+            body_idx,
+            "region chain does not terminate",
+        )?;
         let body = self.store.add(Body {
             kind,
             regions: Vec::new(),
         });
 
         // Region chain; the head is the infinite (exterior) region.
-        let mut region_idx = ptr(file, body_node, "region")?;
         let mut is_acorn = false;
-        while region_idx != 0 {
+        for region_idx in region_indices {
             let region_node = xnode(file, region_idx)?;
             let region_kind = match ch(file, region_node, "type")? {
                 'S' => RegionKind::Solid,
@@ -1426,8 +1470,15 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                     });
                 }
             };
-            let next_region = ptr(file, region_node, "next")?;
             let first_shell = ptr(file, region_node, "shell")?;
+            let shell_indices = linked_indices(
+                file,
+                first_shell,
+                "next",
+                false,
+                region_idx,
+                "shell chain does not terminate",
+            )?;
             let region = self.store.add(Region {
                 body,
                 kind: region_kind,
@@ -1435,15 +1486,11 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             });
             self.store.get_mut(body)?.regions.push(region);
 
-            let mut shell_idx = first_shell;
-            while shell_idx != 0 {
-                let next_shell = ptr(file, xnode(file, shell_idx)?, "next")?;
+            for shell_idx in shell_indices {
                 if let Some(acorn) = self.shell(region, shell_idx)? {
                     is_acorn |= acorn;
                 }
-                shell_idx = next_shell;
             }
-            region_idx = next_region;
         }
         if self.store.get(body)?.regions.is_empty() {
             return Err(XtError::BadField {
@@ -1465,6 +1512,22 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
         let first_face = ptr(file, shell_node, "face")?;
         let first_edge = ptr(file, shell_node, "edge")?;
         let vertex_idx = ptr(file, shell_node, "vertex")?;
+        let face_indices = linked_indices(
+            file,
+            first_face,
+            "next",
+            false,
+            shell_idx,
+            "face chain does not terminate",
+        )?;
+        let edge_indices = linked_indices(
+            file,
+            first_edge,
+            "next",
+            false,
+            shell_idx,
+            "wire-edge chain does not terminate",
+        )?;
 
         let shell = self.store.add(Shell {
             region,
@@ -1475,19 +1538,13 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
 
         // Back-faces: the faces whose normal points out of this shell's
         // region — exactly our convention.
-        let mut face_idx = first_face;
-        while face_idx != 0 {
-            let next = ptr(file, xnode(file, face_idx)?, "next")?;
+        for face_idx in face_indices {
             self.face(shell, face_idx)?;
-            face_idx = next;
         }
         // Wireframe edges.
-        let mut edge_idx = first_edge;
-        while edge_idx != 0 {
-            let next = ptr(file, xnode(file, edge_idx)?, "next")?;
+        for edge_idx in edge_indices {
             let (edge, _) = self.edge(edge_idx)?;
             self.store.get_mut(shell)?.edges.push(edge);
-            edge_idx = next;
         }
         // Acorn vertex.
         let mut acorn = false;
@@ -1522,6 +1579,14 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
         let first_loop = ptr(file, face_node, "loop")?;
         let xt_face_sense = ch(file, face_node, "sense")?;
         let tolerance = tolerance(file, face_node)?;
+        let loop_indices = linked_indices(
+            file,
+            first_loop,
+            "next",
+            false,
+            face_idx,
+            "loop chain does not terminate",
+        )?;
 
         let (surface, surf_sense) = self.surface(surface_idx)?;
         let domain = FaceDomain::natural(self.store.get(surface)?);
@@ -1541,11 +1606,8 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
         });
         self.store.get_mut(shell)?.faces.push(face);
 
-        let mut loop_idx = first_loop;
-        while loop_idx != 0 {
-            let next = ptr(file, xnode(file, loop_idx)?, "next")?;
+        for loop_idx in loop_indices {
             self.lp(face, loop_idx)?;
-            loop_idx = next;
         }
         let natural = self
             .graph
@@ -1577,6 +1639,14 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 what: "isolated loops (single-vertex loops)",
             });
         }
+        let fin_indices = linked_indices(
+            file,
+            first_fin,
+            "forward",
+            true,
+            loop_idx,
+            "fin ring does not close",
+        )?;
         let lp = self.store.add(Loop {
             face,
             fins: Vec::new(),
@@ -1584,9 +1654,8 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
         self.store.get_mut(face)?.loops.push(lp);
 
         // Walk the fin ring via forward pointers.
-        let mut fin_idx = first_fin;
         let mut fins = Vec::new();
-        loop {
+        for fin_idx in fin_indices {
             let fin_node = xnode(file, fin_idx)?;
             let edge_idx = ptr(file, fin_node, "edge")?;
             if edge_idx == 0 {
@@ -1596,7 +1665,6 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
                 });
             }
             let xt_sense = ch(file, fin_node, "sense")?;
-            let forward = ptr(file, fin_node, "forward")?;
 
             let (edge, flip) = self.edge(edge_idx)?;
             let mut sense = match xt_sense {
@@ -1621,22 +1689,6 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
             });
             self.store.get_mut(edge)?.fins.push(fin);
             fins.push(fin);
-
-            if forward == first_fin || forward == 0 {
-                break;
-            }
-            fin_idx = forward;
-            // Pigeonhole bound: every ring member is a distinct FIN node, so
-            // a walk longer than the file's node count proves a forward
-            // cycle that skips the first fin. Without this a few-KiB hostile
-            // file drives millions of fin/pcurve allocations (fuzz-found
-            // out-of-memory, CI run 29555062631).
-            if fins.len() >= file.nodes.len() {
-                return Err(XtError::BadField {
-                    index: loop_idx,
-                    what: "fin ring does not close",
-                });
-            }
         }
         self.store.get_mut(lp)?.fins = fins;
         Ok(())
@@ -1673,6 +1725,15 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
         }
         let file = self.file;
         let edge_node = xnode(file, edge_idx)?;
+        let head_fin_idx = ptr(file, edge_node, "fin")?;
+        let fin_indices = linked_indices(
+            file,
+            head_fin_idx,
+            "other",
+            true,
+            edge_idx,
+            "fin ring around edge does not close",
+        )?;
         let curve_idx = ptr(file, edge_node, "curve")?;
         let (curve, curve_reversed, trim) = if curve_idx == 0 {
             (None, false, None)
@@ -1696,27 +1757,13 @@ impl Recon<'_, '_, '_, '_, '_, '_, '_> {
         // precisely to make both reachable).
         let mut start_idx = 0u32;
         let mut end_idx = 0u32;
-        let head_fin_idx = ptr(file, edge_node, "fin")?;
-        let mut f_idx = head_fin_idx;
-        let mut hops = 0;
-        while f_idx != 0 {
+        for f_idx in fin_indices {
             let fin_node = xnode(file, f_idx)?;
             let v = ptr(file, fin_node, "vertex")?;
             match ch(file, fin_node, "sense")? {
                 '+' if end_idx == 0 => end_idx = v,
                 '-' if start_idx == 0 => start_idx = v,
                 _ => {}
-            }
-            f_idx = ptr(file, fin_node, "other")?;
-            if f_idx == head_fin_idx {
-                break;
-            }
-            hops += 1;
-            if hops > 10_000 {
-                return Err(XtError::BadField {
-                    index: edge_idx,
-                    what: "fin ring around edge does not close",
-                });
             }
         }
         let mut start = if start_idx != 0 {

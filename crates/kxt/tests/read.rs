@@ -386,9 +386,9 @@ fn reconstruction_failure_leaves_store_unchanged() {
 /// the first fin. The ring walk previously allowed one million iterations,
 /// allocating millions of fin/pcurve entities from a few KiB of input
 /// before its cap fired (out-of-memory under the fuzzer's resource limit).
-/// The walk is now pigeonhole-bounded by the file's node count, and parser
-/// preallocations clamp to the remaining input, so reconstruction fails
-/// quickly with a typed error.
+/// Reconstruction now prevalidates distinct transport indices before
+/// allocating, and parser preallocations clamp to the remaining input, so
+/// reconstruction fails quickly with a typed error.
 #[test]
 fn hostile_fin_cycle_fails_without_runaway_allocation() {
     let bytes = include_bytes!("hostile/oom_declared_length.bin");
@@ -399,5 +399,36 @@ fn hostile_fin_cycle_fails_without_runaway_allocation() {
     let mut store = Store::new();
     let result = import(&bytes[1..], &mut store);
     assert!(matches!(result, Err(XtError::BadField { .. })));
+    assert_eq!(store.count::<Body>(), 0, "failed import must roll back");
+}
+
+/// Fuzz-found regression (CI run 29732650730): the six-face block's first
+/// face list was mutated from `10 -> 11 -> 12 -> 13` to `10 -> 11 -> 12 ->
+/// 10`. Reconstructing the repeated faces grew shared edge-fin vectors
+/// quadratically until libFuzzer's five-second timeout fired. All transport
+/// lists are now cycle-checked before reconstruction allocates.
+#[test]
+fn hostile_face_chain_cycle_fails_before_allocation() {
+    let mut file = read_xt(&fixture("block.x_t")).unwrap();
+    let faces = file
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.code == code::FACE)
+        .map(|(&index, _)| index)
+        .collect::<Vec<_>>();
+    assert!(faces.len() >= 3);
+
+    let next = file.defs[&code::FACE].field_index("next").unwrap();
+    file.nodes.get_mut(&faces[2]).unwrap().values[next] = Value::Ptr(faces[0]);
+
+    let mut store = Store::new();
+    let error = reconstruct(&file, &mut store).unwrap_err();
+    assert!(matches!(
+        error,
+        XtError::BadField {
+            index: 4,
+            what: "face chain does not terminate"
+        }
+    ));
     assert_eq!(store.count::<Body>(), 0, "failed import must roll back");
 }
