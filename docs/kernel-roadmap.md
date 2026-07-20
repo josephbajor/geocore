@@ -301,10 +301,14 @@ intersection curves across two planar-faced solids, with honest structured
 gaps for coincident, tangent, and uncertifiable contacts. Rung 3 is in
 progress: section vertices retain source-edge parameter intervals, exact
 plane-triple predicates drive a symbolic convex-fragment BSP, and a keyed
-transactional planar-shell assembler is Full-valid for convex coplanar facet
-partitions. Remaining before the first public result: facade-body extraction,
-numeric representatives, CSG truth assembly, non-convex/cavity Full proofs,
-and licensed-host X_T evidence.
+transactional pipeline extracts exact convex planar facade bodies, applies
+all three CSG truth tables, realizes certified representatives, and commits
+rotated/off-origin block intersection as Full-valid. Exact-coplanar connected
+non-convex shells also have a general Full proof. Unite/subtract candidates
+currently roll back because their residual-certified common planes are not
+yet checker authority. Remaining before the first public result: transport
+that evidence, facade operations, cavity/multishell proof, and licensed-host
+X_T evidence.
 
 Do not wait for an exhaustive analytic pair table before testing the end-to-end
 boolean architecture. Begin with a deliberately narrow vertical slice as soon as the
