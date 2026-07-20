@@ -18,6 +18,7 @@ KERNEL_PACKAGE_FILES = {
     "README.md",
     "examples/boolean_xt_oracle.rs",
     "src/boolean/boundary_select.rs",
+    "src/boolean/curved_boss.rs",
     "src/boolean/curved_pipeline.rs",
     "src/boolean/curved_source.rs",
     "src/boolean/dispatch.rs",
