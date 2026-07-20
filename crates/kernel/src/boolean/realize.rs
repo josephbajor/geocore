@@ -9,6 +9,7 @@
 
 use kcore::interval::Interval;
 use kcore::operation::OperationContext;
+use kcore::plane_triple::{PlaneTripleEnclosureError, enclose_plane_triple_intersection};
 use kcore::predicates::{
     Orientation, OrientedPlanePoints, oriented_plane_triple_intersection_side,
 };
@@ -41,12 +42,31 @@ impl CertifiedSide {
     }
 }
 
+/// One defining-plane residual bound retained with its stable identity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct CertifiedDefiningPlaneResidual {
+    plane: SourcePlaneRef,
+    distance_upper_bound: f64,
+}
+
+impl CertifiedDefiningPlaneResidual {
+    /// Stable identity of the defining plane whose residual was bounded.
+    pub(crate) const fn plane(self) -> SourcePlaneRef {
+        self.plane
+    }
+
+    /// Conservative distance from the representative to the defining plane.
+    pub(crate) const fn distance_upper_bound(self) -> f64 {
+        self.distance_upper_bound
+    }
+}
+
 /// A finite representative with proof-bearing numeric error bounds.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct RealizedPlaneTriple {
     point: Point3,
     position_error_bound: f64,
-    defining_plane_distance_bounds: [f64; 3],
+    defining_plane_residuals: [CertifiedDefiningPlaneResidual; 3],
     certified_sides: Vec<CertifiedSide>,
 }
 
@@ -61,9 +81,9 @@ impl RealizedPlaneTriple {
         self.position_error_bound
     }
 
-    /// Conservative distances from the point to the three defining planes.
-    pub(crate) const fn defining_plane_distance_bounds(&self) -> [f64; 3] {
-        self.defining_plane_distance_bounds
+    /// Defining-plane residual evidence in stable plane-identity order.
+    pub(crate) const fn defining_plane_residuals(&self) -> &[CertifiedDefiningPlaneResidual; 3] {
+        &self.defining_plane_residuals
     }
 
     /// Strict non-defining plane relations checked during realization.
@@ -110,7 +130,9 @@ pub(crate) fn realize_symbolic_vertex(
 ) -> Result<RealizedPlaneTriple, RealizationError> {
     let defining_ids = vertex.planes();
     let defining_planes = defining_ids
-        .map(|plane| unique_source_plane(source_planes, plane).map(SourcePlane::points))
+        .map(|plane| {
+            unique_source_plane(source_planes, plane).map(|source| (plane, source.points()))
+        })
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?
         .try_into()
@@ -155,62 +177,31 @@ fn unique_source_plane(
 /// strict relation. Their returned evidence remains in caller order.
 fn realize_witness_triple(
     context: &OperationContext<'_>,
-    mut defining_planes: [OrientedPlanePoints; 3],
+    mut defining_planes: [(SourcePlaneRef, OrientedPlanePoints); 3],
     side_planes: &[(SourcePlaneRef, OrientedPlanePoints)],
 ) -> Result<RealizedPlaneTriple, RealizationError> {
-    defining_planes.sort_by(compare_plane_witnesses);
+    defining_planes.sort_by(compare_plane_records);
+    let defining_witnesses = defining_planes.map(|(_, witness)| witness);
     let size_box_half = context.session().precision().size_box_half();
-    let planes = defining_planes
+    let enclosure =
+        enclose_plane_triple_intersection(defining_witnesses, size_box_half, f64::MIN_POSITIVE)
+            .map_err(map_enclosure_error)?;
+    if !context
+        .session()
+        .numerical()
+        .reciprocal_condition_is_usable(enclosure.reciprocal_condition_lower_bound())
+    {
+        return Err(RealizationError::IllConditioned);
+    }
+    let coordinates = enclosure.coordinates();
+
+    let planes = defining_witnesses
         .map(|plane| interval_oriented_plane(plane, size_box_half))
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
     let planes: [PlaneIntervals; 3] = planes
         .try_into()
         .map_err(|_| RealizationError::UncertifiedIntersection)?;
-    let spatial = planes.map(|plane| [plane[0], plane[1], plane[2]]);
-    let determinant = interval_det3(spatial);
-    let determinant_magnitude =
-        strict_magnitude_lower(determinant).ok_or(RealizationError::UncertifiedIntersection)?;
-
-    let matrix_norm =
-        matrix_infinity_norm_upper(spatial).ok_or(RealizationError::UncertifiedIntersection)?;
-    let adjugate_norm =
-        adjugate_infinity_norm_upper(spatial).ok_or(RealizationError::UncertifiedIntersection)?;
-    let condition_denominator = Interval::point(matrix_norm) * Interval::point(adjugate_norm);
-    let reciprocal_condition = Interval::point(determinant_magnitude)
-        .checked_div(condition_denominator)
-        .ok_or(RealizationError::UncertifiedIntersection)?
-        .lo();
-    if !context
-        .session()
-        .numerical()
-        .reciprocal_condition_is_usable(reciprocal_condition)
-    {
-        return Err(RealizationError::IllConditioned);
-    }
-
-    let constants = [-planes[0][3], -planes[1][3], -planes[2][3]];
-    let coordinates: [Option<Interval>; 3] = core::array::from_fn(|column| {
-        let mut numerator_matrix = spatial;
-        for row in 0..3 {
-            numerator_matrix[row][column] = constants[row];
-        }
-        interval_det3(numerator_matrix).checked_div(determinant)
-    });
-    let coordinates = coordinates
-        .into_iter()
-        .collect::<Option<Vec<_>>>()
-        .ok_or(RealizationError::UncertifiedIntersection)?;
-    let coordinates: [Interval; 3] = coordinates
-        .try_into()
-        .map_err(|_| RealizationError::UncertifiedIntersection)?;
-    if coordinates.iter().any(|coordinate| {
-        !interval_is_finite(*coordinate)
-            || coordinate.lo() < -size_box_half
-            || coordinate.hi() > size_box_half
-    }) {
-        return Err(RealizationError::UnrepresentablePoint);
-    }
 
     let point_coordinates = coordinates.map(interval_midpoint);
     if point_coordinates
@@ -226,19 +217,26 @@ fn realize_witness_triple(
         return Err(RealizationError::UnrepresentablePoint);
     }
 
-    let mut defining_plane_distance_bounds = [0.0; 3];
+    let mut defining_plane_residuals = Vec::with_capacity(3);
     for (index, plane) in planes.iter().enumerate() {
         let distance = plane_distance_upper(*plane, point_coordinates)
             .ok_or(RealizationError::ResidualTooLarge)?;
         if distance > context.tolerances().linear() {
             return Err(RealizationError::ResidualTooLarge);
         }
-        defining_plane_distance_bounds[index] = distance;
+        defining_plane_residuals.push(CertifiedDefiningPlaneResidual {
+            plane: defining_planes[index].0,
+            distance_upper_bound: distance,
+        });
     }
+    defining_plane_residuals.sort_by_key(|residual| residual.plane);
+    let defining_plane_residuals = defining_plane_residuals
+        .try_into()
+        .map_err(|_| RealizationError::UncertifiedIntersection)?;
 
     let mut certified_sides = Vec::with_capacity(side_planes.len());
     for &(plane_id, side_plane) in side_planes {
-        let exact_side = oriented_plane_triple_intersection_side(defining_planes, side_plane)
+        let exact_side = oriented_plane_triple_intersection_side(defining_witnesses, side_plane)
             .ok_or(RealizationError::UncertifiedSide)?
             .sign();
         if exact_side == Orientation::Zero {
@@ -270,9 +268,32 @@ fn realize_witness_triple(
     Ok(RealizedPlaneTriple {
         point,
         position_error_bound,
-        defining_plane_distance_bounds,
+        defining_plane_residuals,
         certified_sides,
     })
+}
+
+fn map_enclosure_error(error: PlaneTripleEnclosureError) -> RealizationError {
+    match error {
+        PlaneTripleEnclosureError::NonFinitePlane
+        | PlaneTripleEnclosureError::PlaneWitnessOutsideSizeBox
+        | PlaneTripleEnclosureError::UncertifiedPlane => RealizationError::InvalidPlane,
+        PlaneTripleEnclosureError::UncertifiedIntersection => {
+            RealizationError::UncertifiedIntersection
+        }
+        PlaneTripleEnclosureError::IllConditioned => RealizationError::IllConditioned,
+        PlaneTripleEnclosureError::IntersectionOutsideSizeBox => {
+            RealizationError::UnrepresentablePoint
+        }
+        PlaneTripleEnclosureError::InvalidLimits => RealizationError::UncertifiedIntersection,
+    }
+}
+
+fn compare_plane_records(
+    first: &(SourcePlaneRef, OrientedPlanePoints),
+    second: &(SourcePlaneRef, OrientedPlanePoints),
+) -> core::cmp::Ordering {
+    compare_plane_witnesses(&first.1, &second.1).then_with(|| first.0.cmp(&second.0))
 }
 
 fn compare_plane_witnesses(
@@ -326,12 +347,6 @@ fn interval_oriented_plane(
         .ok_or(RealizationError::InvalidPlane)
 }
 
-fn interval_det3(matrix: [[Interval; 3]; 3]) -> Interval {
-    matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
-        - matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
-        + matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0])
-}
-
 fn interval_is_finite(interval: Interval) -> bool {
     interval.lo().is_finite() && interval.hi().is_finite()
 }
@@ -350,48 +365,6 @@ fn strict_magnitude_lower(interval: Interval) -> Option<f64> {
         return None;
     };
     (lower.is_finite() && lower > 0.0).then_some(lower)
-}
-
-fn matrix_infinity_norm_upper(matrix: [[Interval; 3]; 3]) -> Option<f64> {
-    matrix
-        .into_iter()
-        .map(|row| {
-            row.into_iter()
-                .try_fold(Interval::point(0.0), |sum, value| {
-                    Some(sum + Interval::point(interval_abs_upper(value)?))
-                })
-        })
-        .collect::<Option<Vec<_>>>()?
-        .into_iter()
-        .map(Interval::hi)
-        .reduce(f64::max)
-        .filter(|norm| norm.is_finite() && *norm > 0.0)
-}
-
-fn adjugate_infinity_norm_upper(matrix: [[Interval; 3]; 3]) -> Option<f64> {
-    let cofactor = |row: usize, column: usize| {
-        let rows = [(row + 1) % 3, (row + 2) % 3];
-        let columns = [(column + 1) % 3, (column + 2) % 3];
-        matrix[rows[0]][columns[0]] * matrix[rows[1]][columns[1]]
-            - matrix[rows[0]][columns[1]] * matrix[rows[1]][columns[0]]
-    };
-    (0..3)
-        .map(|adjugate_row| {
-            (0..3).try_fold(Interval::point(0.0), |sum, adjugate_column| {
-                // adj(A)[row][column] = cofactor(A)[column][row].
-                Some(
-                    sum + Interval::point(interval_abs_upper(cofactor(
-                        adjugate_column,
-                        adjugate_row,
-                    ))?),
-                )
-            })
-        })
-        .collect::<Option<Vec<_>>>()?
-        .into_iter()
-        .map(Interval::hi)
-        .reduce(f64::max)
-        .filter(|norm| norm.is_finite() && *norm > 0.0)
 }
 
 fn interval_midpoint(interval: Interval) -> f64 {
@@ -508,6 +481,19 @@ mod tests {
         (SourcePlaneRef::new(2, face), witness)
     }
 
+    fn defining_witness(
+        face: u32,
+        witness: OrientedPlanePoints,
+    ) -> (SourcePlaneRef, OrientedPlanePoints) {
+        (SourcePlaneRef::new(0, face), witness)
+    }
+
+    fn defining_triple(
+        witnesses: [OrientedPlanePoints; 3],
+    ) -> [(SourcePlaneRef, OrientedPlanePoints); 3] {
+        core::array::from_fn(|index| defining_witness(index as u32, witnesses[index]))
+    }
+
     #[test]
     fn randomized_integer_intersections_match_independent_exact_oracle() {
         let context = context();
@@ -533,7 +519,7 @@ mod tests {
             if determinant.abs() < 8 || row_abs_max == 0 {
                 continue;
             }
-            let defining = matrix.map(|normal| {
+            let defining_witnesses = matrix.map(|normal| {
                 let normal = normal.map(|value| value as f64);
                 let solution = solution.map(|value| value as f64);
                 let first = cross(normal, [1.0, -2.0, 3.0]);
@@ -541,7 +527,7 @@ mod tests {
                 let anchor = add(solution, add(scale(first, 0.25), scale(second, 0.125)));
                 plane_witness(normal, anchor)
             });
-            if defining
+            if defining_witnesses
                 .iter()
                 .flatten()
                 .flatten()
@@ -552,27 +538,20 @@ mod tests {
             let query_normal = [2.0, -3.0, 5.0];
             let solution_f64 = solution.map(|value| value as f64);
             let query = plane_witness(query_normal, add(solution_f64, scale(query_normal, 2.0)));
+            let defining = defining_triple(defining_witnesses);
             let realized =
                 realize_witness_triple(&context, defining, &[side_witness(0, query)]).unwrap();
             let expected = Point3::from_array(solution_f64);
             let actual_error = realized.point().dist(expected);
             assert!(actual_error <= realized.position_error_bound());
             assert!(realized.position_error_bound() <= context.tolerances().linear());
-            let mut defining_with_normals = defining
-                .into_iter()
-                .zip(matrix.map(|normal| normal.map(|value| value as f64)))
-                .collect::<Vec<_>>();
-            defining_with_normals
-                .sort_by(|(first, _), (second, _)| compare_plane_witnesses(first, second));
-            for (bound, (_, normal)) in realized
-                .defining_plane_distance_bounds()
-                .into_iter()
-                .zip(defining_with_normals)
-            {
+            for residual in realized.defining_plane_residuals() {
+                let index = usize::try_from(residual.plane().face()).unwrap();
+                let normal = matrix[index].map(|value| value as f64);
                 let actual_distance =
                     euclidean_plane_distance(normal, solution_f64, realized.point().to_array());
-                assert!(actual_distance <= bound + 1e-12);
-                assert!(bound <= context.tolerances().linear());
+                assert!(actual_distance <= residual.distance_upper_bound() + 1e-12);
+                assert!(residual.distance_upper_bound() <= context.tolerances().linear());
             }
             let exact_numeric_side =
                 orient3d(query[0], query[1], query[2], realized.point().to_array());
@@ -597,10 +576,17 @@ mod tests {
         let context = context();
         let solution = [7.25, -11.5, 3.75];
         let planes = [
-            plane_witness([2.0, -3.0, 5.0], solution),
-            plane_witness([-7.0, 4.0, 3.0], solution),
-            plane_witness([6.0, 5.0, -2.0], solution),
+            defining_witness(90, plane_witness([2.0, -3.0, 5.0], solution)),
+            defining_witness(3, plane_witness([-7.0, 4.0, 3.0], solution)),
+            defining_witness(41, plane_witness([6.0, 5.0, -2.0], solution)),
         ];
+        let mut witness_order = planes;
+        witness_order.sort_by(compare_plane_records);
+        assert_ne!(
+            witness_order.map(|(id, _)| id),
+            [planes[1].0, planes[2].0, planes[0].0],
+            "fixture must make witness-coordinate and stable-ID order adversarial"
+        );
         let permutations = [
             [planes[0], planes[1], planes[2]],
             [planes[0], planes[2], planes[1]],
@@ -610,6 +596,28 @@ mod tests {
             [planes[2], planes[1], planes[0]],
         ];
         let expected = realize_witness_triple(&context, permutations[0], &[]).unwrap();
+        assert_eq!(
+            expected
+                .defining_plane_residuals()
+                .map(|residual| residual.plane()),
+            [planes[1].0, planes[2].0, planes[0].0]
+        );
+        for residual in expected.defining_plane_residuals() {
+            let witness = planes
+                .iter()
+                .find(|(id, _)| *id == residual.plane())
+                .unwrap()
+                .1;
+            let interval =
+                interval_oriented_plane(witness, context.session().precision().size_box_half())
+                    .unwrap();
+            let independently_indexed =
+                plane_distance_upper(interval, expected.point().to_array()).unwrap();
+            assert_eq!(
+                residual.distance_upper_bound().to_bits(),
+                independently_indexed.to_bits()
+            );
+        }
         for permutation in permutations.into_iter().skip(1) {
             let actual = realize_witness_triple(&context, permutation, &[]).unwrap();
             assert_eq!(actual.point().x.to_bits(), expected.point().x.to_bits());
@@ -627,13 +635,27 @@ mod tests {
         let duplicate_x = plane_witness([2.0, 0.0, 0.0], origin);
         let z = plane_witness([0.0, 0.0, 1.0], origin);
         assert_eq!(
-            realize_witness_triple(&context, [x, duplicate_x, z], &[]),
+            realize_witness_triple(&context, defining_triple([x, duplicate_x, z]), &[]),
             Err(RealizationError::UncertifiedIntersection)
         );
 
         let nearly_x = plane_witness([1.0, 1e-15, 0.0], origin);
+        let shared_enclosure = enclose_plane_triple_intersection(
+            [x, nearly_x, z],
+            context.session().precision().size_box_half(),
+            f64::MIN_POSITIVE,
+        )
+        .unwrap();
+        assert!(
+            !context
+                .session()
+                .numerical()
+                .reciprocal_condition_is_usable(
+                    shared_enclosure.reciprocal_condition_lower_bound()
+                )
+        );
         assert_eq!(
-            realize_witness_triple(&context, [x, nearly_x, z], &[]),
+            realize_witness_triple(&context, defining_triple([x, nearly_x, z]), &[]),
             Err(RealizationError::IllConditioned)
         );
 
@@ -643,7 +665,7 @@ mod tests {
             plane_witness([0.0, 0.0, 1.0], origin),
         ];
         assert_eq!(
-            realize_witness_triple(&context, outside, &[]),
+            realize_witness_triple(&context, defining_triple(outside), &[]),
             Err(RealizationError::UnrepresentablePoint)
         );
     }
@@ -659,14 +681,22 @@ mod tests {
         ];
         let boundary = plane_witness([2.0, -3.0, 5.0], vertex);
         assert_eq!(
-            realize_witness_triple(&context, defining, &[side_witness(0, boundary)]),
+            realize_witness_triple(
+                &context,
+                defining_triple(defining),
+                &[side_witness(0, boundary)],
+            ),
             Err(RealizationError::BoundaryContact)
         );
 
         let next_x = f64::from_bits(vertex[0].to_bits() + 1);
         let unstable = plane_witness([1.0, 0.0, 0.0], [next_x, vertex[1], vertex[2]]);
         assert_eq!(
-            realize_witness_triple(&context, defining, &[side_witness(0, unstable)]),
+            realize_witness_triple(
+                &context,
+                defining_triple(defining),
+                &[side_witness(0, unstable)],
+            ),
             Err(RealizationError::UncertifiedSide)
         );
     }
@@ -678,13 +708,13 @@ mod tests {
         let mut non_finite = valid;
         non_finite[0][0] = f64::INFINITY;
         assert_eq!(
-            realize_witness_triple(&context, [valid, valid, non_finite], &[]),
+            realize_witness_triple(&context, defining_triple([valid, valid, non_finite]), &[],),
             Err(RealizationError::InvalidPlane)
         );
         let mut outside = valid;
         outside[0][1] = 501.0;
         assert_eq!(
-            realize_witness_triple(&context, [valid, valid, outside], &[]),
+            realize_witness_triple(&context, defining_triple([valid, valid, outside]), &[],),
             Err(RealizationError::InvalidPlane)
         );
     }
@@ -729,6 +759,12 @@ mod tests {
             realize_symbolic_vertex(&context, &source_planes, key, &[ids[3], ids[4]]).unwrap();
         assert!(realized.point().dist(Point3::from_array(vertex_point)) <= 1e-12);
         assert_eq!(realized, permuted);
+        assert_eq!(
+            realized
+                .defining_plane_residuals()
+                .map(|residual| residual.plane()),
+            key.planes()
+        );
         let mut expected_side_ids = [ids[3], ids[4]];
         expected_side_ids.sort_unstable();
         assert_eq!(

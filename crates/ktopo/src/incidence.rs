@@ -15,7 +15,7 @@ use crate::store::Store;
 use kcore::error::Result as KernelResult;
 use kcore::math;
 use kcore::operation::OperationPolicyError;
-use kgeom::curve::Curve;
+use kgeom::curve::{Curve, Line};
 use kgeom::curve2d::Curve2d;
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
@@ -635,6 +635,19 @@ pub(crate) fn certify_edge_surface_incidence(
     ))
 }
 
+/// Borrow the exact affine carrier of a plain or graph-verified line curve.
+///
+/// A verified Plane/Plane descriptor evaluates exactly as its retained line
+/// carrier; its source and paired-pcurve certificates remain available on the
+/// descriptor for stronger semantic-plane proofs.
+pub(crate) fn exact_line_carrier(curve: &CurveGeom) -> Option<Line> {
+    match curve {
+        CurveGeom::Line(line) => Some(*line),
+        CurveGeom::Intersection(intersection) => intersection.carrier().as_line(),
+        _ => None,
+    }
+}
+
 /// Prove equality of a 3D edge trace and the trace produced by lifting one
 /// pcurve through its supporting surface.
 ///
@@ -729,12 +742,14 @@ fn signed_plane_distance(frame: &Frame, point: Point3) -> f64 {
 }
 
 fn plane_curve_residual_bound(curve: &CurveGeom, frame: &Frame, range: ParamRange) -> Option<f64> {
-    match curve {
-        CurveGeom::Line(line) => Some(
+    if let Some(line) = exact_line_carrier(curve) {
+        return Some(
             signed_plane_distance(frame, line.eval(range.lo))
                 .abs()
                 .max(signed_plane_distance(frame, line.eval(range.hi)).abs()),
-        ),
+        );
+    }
+    match curve {
         CurveGeom::Circle(_) | CurveGeom::Ellipse(_) => {
             let Some(AnalyticTrace::Harmonic {
                 center,
@@ -757,6 +772,10 @@ fn plane_curve_residual_bound(curve: &CurveGeom, frame: &Frame, range: ParamRang
                 .map(|&point| signed_plane_distance(frame, point).abs())
                 .fold(0.0, f64::max),
         ),
+        CurveGeom::Line(_) => {
+            unreachable!("line carriers returned before curve-class dispatch")
+        }
+        CurveGeom::Intersection(_) => None,
         _ => None,
     }
 }
@@ -833,11 +852,13 @@ fn max_abs_quadratic(a: f64, b: f64, c: f64, range: ParamRange) -> f64 {
 }
 
 fn attached_curve_trace(curve: &CurveGeom) -> Option<AnalyticTrace> {
-    match curve {
-        CurveGeom::Line(line) => Some(AnalyticTrace::Affine {
+    if let Some(line) = exact_line_carrier(curve) {
+        return Some(AnalyticTrace::Affine {
             origin: line.origin(),
             direction: line.dir(),
-        }),
+        });
+    }
+    match curve {
         CurveGeom::Circle(circle) => Some(AnalyticTrace::Harmonic {
             center: circle.frame().origin(),
             cosine: circle.frame().x() * circle.radius(),
@@ -848,6 +869,10 @@ fn attached_curve_trace(curve: &CurveGeom) -> Option<AnalyticTrace> {
             cosine: ellipse.frame().x() * ellipse.major_radius(),
             sine: ellipse.frame().y() * ellipse.minor_radius(),
         }),
+        CurveGeom::Line(_) => {
+            unreachable!("line carriers returned before curve-class dispatch")
+        }
+        CurveGeom::Intersection(_) => None,
         CurveGeom::Nurbs(_) => None,
         _ => None,
     }

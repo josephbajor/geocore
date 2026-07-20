@@ -41,6 +41,7 @@ pub mod interval;
 pub mod math;
 pub mod operation;
 pub mod parallel;
+pub mod plane_triple;
 pub mod predicates;
 pub mod proof;
 pub mod tolerance;

@@ -117,14 +117,32 @@ impl SelectedPlanarFragment {
     /// The smallest symbolic vertex is chosen as the start without changing
     /// the selected direction.
     pub(crate) fn oriented_vertices(&self) -> Vec<PlaneTripleVertexKey> {
-        let mut vertices = self.fragment.vertices().to_vec();
-        let start = vertices
+        self.oriented_boundary()
+            .into_iter()
+            .map(|(vertex, _)| vertex)
+            .collect()
+    }
+
+    /// Return the result-oriented ring with each vertex paired to the plane
+    /// carrying its directed edge to the cyclic successor.
+    ///
+    /// Vertex and edge-plane sequences are rotated together so proof-bearing
+    /// edge provenance cannot be detached by canonical start selection.
+    pub(crate) fn oriented_boundary(&self) -> Vec<(PlaneTripleVertexKey, SourcePlaneRef)> {
+        let mut boundary = self
+            .fragment
+            .vertices()
+            .iter()
+            .copied()
+            .zip(self.fragment.edge_planes().iter().copied())
+            .collect::<Vec<_>>();
+        let start = boundary
             .iter()
             .enumerate()
-            .min_by_key(|(_, vertex)| *vertex)
+            .min_by_key(|(_, (vertex, _))| *vertex)
             .map_or(0, |(index, _)| index);
-        vertices.rotate_left(start);
-        vertices
+        boundary.rotate_left(start);
+        boundary
     }
 }
 
@@ -1029,6 +1047,20 @@ mod tests {
         .pop()
         .unwrap();
         let ring = selected.oriented_vertices();
+        let boundary = selected.oriented_boundary();
+        assert_eq!(
+            ring,
+            boundary
+                .iter()
+                .map(|(vertex, _)| *vertex)
+                .collect::<Vec<_>>()
+        );
+        for index in 0..boundary.len() {
+            let (from, carrier) = boundary[index];
+            let (to, _) = boundary[(index + 1) % boundary.len()];
+            assert!(from.planes().contains(&carrier));
+            assert!(to.planes().contains(&carrier));
+        }
         let source = fragment.vertices();
         let start = source.iter().position(|vertex| *vertex == ring[0]).unwrap();
         assert_eq!(ring[1], source[(start + source.len() - 1) % source.len()]);

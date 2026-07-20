@@ -19,7 +19,7 @@ use kgeom::vec::Point3;
 use ktopo::check::{CheckLevel, CheckOutcome, CheckReport, check_body_report_in_scope};
 use ktopo::entity::{
     BodyKind, EdgeId as RawEdgeId, FaceId as RawFaceId, FinId as RawFinId, RegionKind,
-    VertexId as RawVertexId,
+    SurfaceId as RawSurfaceId, VertexId as RawVertexId,
 };
 use ktopo::store::Store;
 
@@ -96,6 +96,7 @@ pub(crate) enum PlanarSourceExtractionError {
 pub(crate) struct ExtractedSourceFace {
     plane: SourcePlaneRef,
     face: FaceId,
+    surface: RawSurfaceId,
 }
 
 impl ExtractedSourceFace {
@@ -105,6 +106,10 @@ impl ExtractedSourceFace {
 
     pub(crate) fn face(&self) -> FaceId {
         self.face.clone()
+    }
+
+    pub(crate) const fn surface(&self) -> RawSurfaceId {
+        self.surface
     }
 }
 
@@ -186,6 +191,7 @@ impl ExtractedPlanarSourceBody {
 #[derive(Debug)]
 struct FaceSeed {
     raw: RawFaceId,
+    surface: RawSurfaceId,
     id: SourcePlaneRef,
     vertices: Vec<RawVertexId>,
     edges: Vec<RawEdgeId>,
@@ -251,6 +257,7 @@ pub(crate) fn extract_planar_source_body(
         .map(|seed| ExtractedSourceFace {
             plane: seed.id,
             face: FaceId::new(part.id.clone(), seed.raw),
+            surface: seed.surface,
         })
         .collect();
 
@@ -417,6 +424,7 @@ fn prepare_face_seeds(
         }
         seeds.push(FaceSeed {
             raw,
+            surface: face.surface(),
             id: SourcePlaneRef::new(operand, face_index as u32),
             vertices,
             edges,
@@ -903,6 +911,19 @@ mod tests {
                 .iter()
                 .all(|plane| plane.interior_side() != Orientation::Zero)
         );
+        let part = session.part(part_id).unwrap();
+        assert!(first.faces().iter().all(|face| {
+            part.state
+                .store
+                .get(face.face().raw())
+                .is_ok_and(|source| source.surface() == face.surface())
+                && part
+                    .state
+                    .store
+                    .geometry()
+                    .surface(face.surface())
+                    .is_some_and(|surface| surface.as_plane().is_some())
+        }));
     }
 
     #[test]

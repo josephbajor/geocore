@@ -11,8 +11,10 @@ use kcore::operation::{
     AccountingMode, BudgetPlan, LimitSpec, OperationScope, ResourceKind, StageId,
 };
 use ktopo::check::{CheckLevel, CheckOutcome, CheckReport};
-use ktopo::entity::EntityRef;
-use ktopo::planar::{PlanarSolidFace, PlanarSolidInput, PlanarSolidVertex, PlanarVertexKey};
+use ktopo::entity::{EntityRef, FaceId as RawFaceId, SurfaceId as RawSurfaceId};
+use ktopo::planar::{
+    PlanarFacePlaneBinding, PlanarSolidFace, PlanarSolidInput, PlanarSolidVertex, PlanarVertexKey,
+};
 use ktopo::transaction::{FullCommitRequirement, Journal};
 
 use super::extract::{
@@ -122,6 +124,8 @@ pub(crate) enum PlanarBooleanPipelineRefusal {
     },
     Symbolic(SelectionError),
     Realization(RealizationError),
+    /// Source plane identity could not be bound uniquely to live source geometry.
+    PlaneBindingContract(&'static str),
     /// The symbolic boundary did not satisfy the general planar assembler.
     AssemblyContract(&'static str),
     /// The Full checker proved a candidate fault before journal commit.
@@ -235,6 +239,7 @@ fn execute_stages(
     validate_pipeline_budget(scope)?;
     let left_source = extract_operand(edit, left, 0, scope)?;
     let right_source = extract_operand(edit, right, 1, scope)?;
+    let plane_registry = build_plane_registry(edit, &left_source, &right_source)?;
 
     let selected = select_with_precharge(&left_source, &right_source, operation, scope)?;
     if selected.is_empty() {
@@ -242,7 +247,7 @@ fn execute_stages(
     }
     let planes = combined_planes(&left_source, &right_source);
     let (vertices, vertex_keys) = realize_vertices(&selected, &planes, scope)?;
-    let faces = prepare_faces(&selected, &vertex_keys, &left_source, &right_source)?;
+    let faces = prepare_faces(&selected, &vertex_keys, &plane_registry)?;
     let input = PlanarSolidInput::new(vertices, faces);
 
     let mut transaction = edit.state.store.transaction().map_err(Error::from)?;
@@ -517,47 +522,108 @@ fn realize_vertices(
     Ok((vertices, keys))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SourcePlaneBinding {
+    face: RawFaceId,
+    surface: RawSurfaceId,
+}
+
+fn build_plane_registry(
+    edit: &PartEdit<'_>,
+    left: &ExtractedPlanarSourceBody,
+    right: &ExtractedPlanarSourceBody,
+) -> StageResult<BTreeMap<super::planar_bsp::SourcePlaneRef, SourcePlaneBinding>> {
+    let mut registry = BTreeMap::new();
+    for face in left.faces().iter().chain(right.faces()) {
+        let binding = SourcePlaneBinding {
+            face: face.face().raw(),
+            surface: face.surface(),
+        };
+        if registry.insert(face.plane(), binding).is_some() {
+            return Err(plane_binding_refusal(
+                "planar Boolean source-plane identities must be unique",
+            ));
+        }
+        let Ok(source_face) = edit.state.store.get(binding.face) else {
+            return Err(plane_binding_refusal(
+                "planar Boolean source-plane registry contains a stale face",
+            ));
+        };
+        if source_face.surface() != binding.surface
+            || edit
+                .state
+                .store
+                .geometry()
+                .surface(binding.surface)
+                .and_then(|surface| surface.as_plane())
+                .is_none()
+        {
+            return Err(plane_binding_refusal(
+                "planar Boolean source face and Plane surface are mismatched",
+            ));
+        }
+    }
+
+    let mut witnesses = BTreeSet::new();
+    for plane in left.planes().iter().chain(right.planes()) {
+        if !witnesses.insert(plane.id()) {
+            return Err(plane_binding_refusal(
+                "planar Boolean source-plane witnesses must be unique",
+            ));
+        }
+        if !registry.contains_key(&plane.id()) {
+            return Err(plane_binding_refusal(
+                "planar Boolean source plane has no face/surface binding",
+            ));
+        }
+    }
+    if registry.len() != witnesses.len() {
+        return Err(plane_binding_refusal(
+            "planar Boolean face/surface registry has no plane witness",
+        ));
+    }
+    Ok(registry)
+}
+
 fn prepare_faces(
     selected: &[SelectedPlanarFragment],
     keys: &BTreeMap<PlaneTripleVertexKey, PlanarVertexKey>,
-    left: &ExtractedPlanarSourceBody,
-    right: &ExtractedPlanarSourceBody,
-) -> Result<Vec<PlanarSolidFace>> {
-    let mut sources = BTreeMap::new();
-    for face in left.faces().iter().chain(right.faces()) {
-        if sources
-            .insert(face.plane(), EntityRef::Face(face.face().raw()))
-            .is_some()
-        {
-            return Err(kcore::error::Error::InvalidGeometry {
-                reason: "planar Boolean source-face identities must be unique",
-            }
-            .into());
-        }
-    }
+    registry: &BTreeMap<super::planar_bsp::SourcePlaneRef, SourcePlaneBinding>,
+) -> StageResult<Vec<PlanarSolidFace>> {
     selected
         .iter()
         .map(|selected| {
-            let source_face = selected.fragment().source_face();
-            let source = *sources.get(&source_face).ok_or_else(|| {
-                Error::from(kcore::error::Error::InvalidGeometry {
-                    reason: "selected planar Boolean face has no source lineage",
-                })
-            })?;
-            let ring = selected
-                .oriented_vertices()
-                .into_iter()
-                .map(|triple| {
-                    keys.get(&triple).copied().ok_or_else(|| {
-                        Error::from(kcore::error::Error::InvalidGeometry {
-                            reason: "selected planar Boolean face has an unrealized vertex",
-                        })
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(PlanarSolidFace::new(ring).with_source(source))
+            let support = registry
+                .get(&selected.fragment().source_face())
+                .copied()
+                .ok_or_else(|| {
+                    plane_binding_refusal(
+                        "selected planar Boolean face has no source plane binding",
+                    )
+                })?;
+            let boundary = selected.oriented_boundary();
+            let mut ring = Vec::with_capacity(boundary.len());
+            let mut carriers = Vec::with_capacity(boundary.len());
+            for (triple, carrier) in boundary {
+                ring.push(keys.get(&triple).copied().ok_or_else(|| {
+                    plane_binding_refusal("selected planar Boolean face has an unrealized vertex")
+                })?);
+                let carrier = registry.get(&carrier).ok_or_else(|| {
+                    plane_binding_refusal(
+                        "selected planar Boolean edge carrier has no source plane binding",
+                    )
+                })?;
+                carriers.push(carrier.surface);
+            }
+            Ok(PlanarSolidFace::new(ring)
+                .with_source(EntityRef::Face(support.face))
+                .with_plane_binding(PlanarFacePlaneBinding::new(support.surface, carriers)))
         })
         .collect()
+}
+
+fn plane_binding_refusal(reason: &'static str) -> PipelineFailure {
+    PipelineFailure::Refused(PlanarBooleanPipelineRefusal::PlaneBindingContract(reason))
 }
 
 fn work_count_overflow() -> PipelineFailure {
@@ -654,12 +720,14 @@ mod tests {
 
     #[test]
     fn rotated_off_origin_intersection_is_full_valid_journaled_and_deterministic() {
+        let mut first_fixture = rotated_fixture();
+        let mut second_fixture = rotated_fixture();
         let first = committed(run_intersection(
-            &mut rotated_fixture(),
+            &mut first_fixture,
             OperationSettings::new(),
         ));
         let second = committed(run_intersection(
-            &mut rotated_fixture(),
+            &mut second_fixture,
             OperationSettings::new(),
         ));
 
@@ -691,6 +759,67 @@ mod tests {
                 source: EntityRef::Face(_),
             }
         )));
+        assert_bound_output_geometry(&first_fixture, &first);
+        assert_bound_output_geometry(&second_fixture, &second);
+    }
+
+    fn assert_bound_output_geometry(fixture: &Fixture, committed: &CommittedPlanarBoolean) {
+        let part = fixture.session.part(fixture.part.clone()).unwrap();
+        let store = &part.state.store;
+        let source_surfaces = [fixture.left.raw(), fixture.right.raw()]
+            .into_iter()
+            .flat_map(|body| store.faces_of_body(body).unwrap())
+            .map(|face| store.get(face).unwrap().surface())
+            .collect::<Vec<_>>();
+
+        for event in committed.journal().lineage() {
+            let LineageEvent::DerivedFrom {
+                derived: EntityRef::Face(derived),
+                source: EntityRef::Face(source),
+            } = event
+            else {
+                continue;
+            };
+            let derived_surface = store.get(*derived).unwrap().surface();
+            let source_surface = store.get(*source).unwrap().surface();
+            assert_eq!(derived_surface, source_surface);
+            assert!(source_surfaces.contains(&derived_surface));
+            assert!(store.get(derived_surface).unwrap().as_plane().is_some());
+        }
+
+        for edge in store.edges_of_body(committed.body().raw()).unwrap() {
+            let edge = store.get(edge).unwrap();
+            let descriptor = store
+                .get(edge.curve().unwrap())
+                .unwrap()
+                .as_intersection()
+                .expect("Boolean boundary edges retain verified intersections");
+            let bound = descriptor.source_surfaces();
+            assert!(bound.iter().all(|surface| {
+                source_surfaces.contains(surface)
+                    && store.get(*surface).unwrap().as_plane().is_some()
+            }));
+            assert!(descriptor.certificate().as_plane_line().is_some());
+
+            let adjacent = edge
+                .fins()
+                .iter()
+                .map(|fin| {
+                    let fin = store.get(*fin).unwrap();
+                    let loop_ = store.get(fin.parent()).unwrap();
+                    store.get(loop_.face()).unwrap().surface()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(adjacent.len(), 2);
+            assert_ne!(bound[0], bound[1]);
+            assert!(adjacent.iter().all(|support| bound.contains(support)));
+            if adjacent[0] != adjacent[1] {
+                assert!(
+                    bound == [adjacent[0], adjacent[1]] || bound == [adjacent[1], adjacent[0]],
+                    "verified edge sources differ from adjacent bound face supports"
+                );
+            }
+        }
     }
 
     #[test]

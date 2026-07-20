@@ -9,7 +9,7 @@
 
 use crate::entity::{
     BodyId, Edge, EdgeId, EntityRef, Face, FaceDomain, FaceId, Fin, FinPcurve, Loop, ParamMap1d,
-    Sense, ShellId, Vertex, VertexId,
+    Sense, ShellId, SurfaceId, Vertex, VertexId,
 };
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use crate::transaction::Transaction;
@@ -23,6 +23,9 @@ use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
 use kgeom::surface::Plane;
 use kgeom::vec::{Point2, Point3};
+use kgraph::{
+    AffineParamMap1d, PairedPlaneLineResidualCertificate, certify_paired_plane_line_residuals,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Stable combinatorial identity of one assembled vertex.
@@ -97,6 +100,38 @@ impl PlanarSolidVertex {
 pub struct PlanarSolidFace {
     vertices: Vec<PlanarVertexKey>,
     source: Option<EntityRef>,
+    plane_binding: Option<PlanarFacePlaneBinding>,
+}
+
+/// Semantic planes retained by one assembled planar face and all of its edges.
+///
+/// The supporting plane is reused as the resulting face surface. Each carrier
+/// is paired with that support for the directed edge at the same index as the
+/// face's vertex ring. Validation is all-or-nothing across a complete solid.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanarFacePlaneBinding {
+    support: SurfaceId,
+    edge_carriers: Vec<SurfaceId>,
+}
+
+impl PlanarFacePlaneBinding {
+    /// Bind a face support and one cutting plane to every directed edge.
+    pub fn new(support: SurfaceId, edge_carriers: Vec<SurfaceId>) -> Self {
+        Self {
+            support,
+            edge_carriers,
+        }
+    }
+
+    /// Existing plane surface supporting the complete face.
+    pub const fn support(&self) -> SurfaceId {
+        self.support
+    }
+
+    /// Existing cutting-plane identities in directed-edge order.
+    pub fn edge_carriers(&self) -> &[SurfaceId] {
+        &self.edge_carriers
+    }
 }
 
 impl PlanarSolidFace {
@@ -105,6 +140,7 @@ impl PlanarSolidFace {
         Self {
             vertices,
             source: None,
+            plane_binding: None,
         }
     }
 
@@ -122,6 +158,17 @@ impl PlanarSolidFace {
     /// Optional source face reference.
     pub const fn source(&self) -> Option<EntityRef> {
         self.source
+    }
+
+    /// Retain complete semantic plane evidence for this face and its edges.
+    pub fn with_plane_binding(mut self, binding: PlanarFacePlaneBinding) -> Self {
+        self.plane_binding = Some(binding);
+        self
+    }
+
+    /// Optional complete semantic plane binding.
+    pub const fn plane_binding(&self) -> Option<&PlanarFacePlaneBinding> {
+        self.plane_binding.as_ref()
     }
 }
 
@@ -207,28 +254,50 @@ struct EdgeUse {
     face: usize,
     from: PlanarVertexKey,
     to: PlanarVertexKey,
+    planes: Option<[SurfaceId; 2]>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct PreparedEdge {
     line: Line,
     length: f64,
+    binding: Option<PreparedEdgeBinding>,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedEdgeBinding {
+    surfaces: [SurfaceId; 2],
+    pcurves: [Line2d; 2],
+    certificate: PairedPlaneLineResidualCertificate,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct PreparedFin {
     edge: PlanarEdgeKey,
     sense: Sense,
-    pcurve: Line2d,
+    pcurve: PreparedFinPcurve,
     length: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PreparedFinPcurve {
+    New(Line2d),
+    Bound(usize),
 }
 
 #[derive(Debug)]
 struct PreparedFace {
-    plane: Plane,
+    surface: PreparedFaceSurface,
+    sense: Sense,
     domain: FaceDomain,
     fins: Vec<PreparedFin>,
     source: Option<EntityRef>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PreparedFaceSurface {
+    New(Plane),
+    Reuse(SurfaceId),
 }
 
 #[derive(Debug)]
@@ -236,6 +305,12 @@ struct PreparedSolid {
     vertices: BTreeMap<PlanarVertexKey, Point3>,
     edges: BTreeMap<PlanarEdgeKey, PreparedEdge>,
     faces: Vec<PreparedFace>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AllocatedEdge {
+    edge: EdgeId,
+    bound_pcurves: Option<[crate::entity::Curve2dId; 2]>,
 }
 
 impl Transaction<'_> {
@@ -257,7 +332,7 @@ impl Transaction<'_> {
         let mut lineage = Vec::new();
 
         {
-            let mut store = self.assembly();
+            let store = self.store_mut();
             for (&key, &position) in &prepared.vertices {
                 let point = store.add(position);
                 let vertex = store.add(Vertex {
@@ -268,7 +343,20 @@ impl Transaction<'_> {
             }
 
             for (&key, edge) in &prepared.edges {
-                let curve = store.insert_curve(CurveGeom::Line(edge.line))?;
+                let (curve, bound_pcurves) = if let Some(binding) = &edge.binding {
+                    let pcurves = [
+                        store.insert_pcurve(Curve2dGeom::Line(binding.pcurves[0]))?,
+                        store.insert_pcurve(Curve2dGeom::Line(binding.pcurves[1]))?,
+                    ];
+                    let curve = store.insert_verified_plane_intersection_curve(
+                        binding.surfaces,
+                        pcurves,
+                        binding.certificate,
+                    )?;
+                    (curve, Some(pcurves))
+                } else {
+                    (store.insert_curve(CurveGeom::Line(edge.line))?, None)
+                };
                 let value = store.add(Edge {
                     curve: Some(curve),
                     vertices: [
@@ -279,16 +367,27 @@ impl Transaction<'_> {
                     fins: Vec::new(),
                     tolerance: None,
                 });
-                edge_handles.insert(key, value);
+                edge_handles.insert(
+                    key,
+                    AllocatedEdge {
+                        edge: value,
+                        bound_pcurves,
+                    },
+                );
             }
 
             for face in prepared.faces {
-                let surface = store.insert_surface(SurfaceGeom::Plane(face.plane))?;
+                let surface = match face.surface {
+                    PreparedFaceSurface::New(plane) => {
+                        store.insert_surface(SurfaceGeom::Plane(plane))?
+                    }
+                    PreparedFaceSurface::Reuse(surface) => surface,
+                };
                 let face_handle = store.add(Face {
                     shell,
                     loops: Vec::new(),
                     surface,
-                    sense: Sense::Forward,
+                    sense: face.sense,
                     domain: Some(face.domain),
                     tolerance: None,
                 });
@@ -302,8 +401,17 @@ impl Transaction<'_> {
 
                 let mut fins = Vec::with_capacity(face.fins.len());
                 for prepared_fin in face.fins {
-                    let edge = edge_handles[&prepared_fin.edge];
-                    let curve = store.insert_pcurve(Curve2dGeom::Line(prepared_fin.pcurve))?;
+                    let allocated = edge_handles[&prepared_fin.edge];
+                    let curve = match prepared_fin.pcurve {
+                        PreparedFinPcurve::New(pcurve) => {
+                            store.insert_pcurve(Curve2dGeom::Line(pcurve))?
+                        }
+                        PreparedFinPcurve::Bound(index) => {
+                            allocated.bound_pcurves.ok_or(Error::InvalidGeometry {
+                                reason: "bound planar fin lost its paired pcurve evidence",
+                            })?[index]
+                        }
+                    };
                     let pcurve = FinPcurve::new(
                         curve,
                         ParamRange::new(0.0, prepared_fin.length),
@@ -311,11 +419,11 @@ impl Transaction<'_> {
                     )?;
                     let fin = store.add(Fin {
                         parent: loop_handle,
-                        edge,
+                        edge: allocated.edge,
                         sense: prepared_fin.sense,
                         pcurve: Some(pcurve),
                     });
-                    store.get_mut(edge)?.fins.push(fin);
+                    store.get_mut(allocated.edge)?.fins.push(fin);
                     fins.push(fin);
                 }
                 store.get_mut(loop_handle)?.fins = fins;
@@ -334,7 +442,10 @@ impl Transaction<'_> {
             body,
             shell,
             vertices: vertex_handles.into_iter().collect(),
-            edges: edge_handles.into_iter().collect(),
+            edges: edge_handles
+                .into_iter()
+                .map(|(key, allocated)| (key, allocated.edge))
+                .collect(),
             faces: face_handles,
         })
     }
@@ -344,6 +455,14 @@ impl PreparedSolid {
     fn new(input: &PlanarSolidInput, store: &crate::store::Store) -> Result<Self> {
         if input.vertices.len() < 4 || input.faces.len() < 4 {
             return invalid("a planar solid requires at least four vertices and four faces");
+        }
+        let bound_faces = input
+            .faces
+            .iter()
+            .filter(|face| face.plane_binding.is_some())
+            .count();
+        if bound_faces != 0 && bound_faces != input.faces.len() {
+            return invalid("planar-solid semantic plane bindings must cover every face");
         }
 
         let mut vertices = BTreeMap::new();
@@ -357,13 +476,13 @@ impl PreparedSolid {
         let mut uses: BTreeMap<PlanarEdgeKey, Vec<EdgeUse>> = BTreeMap::new();
         let mut referenced = BTreeSet::new();
         let mut face_keys = Vec::with_capacity(input.faces.len());
-        let mut face_frames = Vec::with_capacity(input.faces.len());
+        let mut face_geometry = Vec::with_capacity(input.faces.len());
         let mut face_domains = Vec::with_capacity(input.faces.len());
 
         for (face_index, face) in input.faces.iter().enumerate() {
             validate_source(store, face.source)?;
-            let (frame, domain) = prepare_face(face, &vertices)?;
-            face_frames.push(frame);
+            let (frame, surface, sense, domain) = prepare_face(face, &vertices, store)?;
+            face_geometry.push((frame, surface, sense));
             face_domains.push(domain);
             face_keys.push(face.vertices.clone());
             for index in 0..face.vertices.len() {
@@ -376,6 +495,10 @@ impl PreparedSolid {
                     face: face_index,
                     from,
                     to,
+                    planes: face
+                        .plane_binding
+                        .as_ref()
+                        .map(|binding| [binding.support, binding.edge_carriers[index]]),
                 });
                 referenced.insert(from);
                 referenced.insert(to);
@@ -391,7 +514,7 @@ impl PreparedSolid {
         validate_positive_volume(&vertices, &face_keys)?;
 
         let mut edges = BTreeMap::new();
-        for &key in uses.keys() {
+        for (&key, edge_uses) in &uses {
             let start = vertices[&key.first];
             let end = vertices[&key.second];
             let direction = end - start;
@@ -400,20 +523,45 @@ impl PreparedSolid {
             if !length.is_finite() || length <= LINEAR_RESOLUTION {
                 return invalid("planar-solid edges must exceed linear resolution");
             }
-            edges.insert(key, PreparedEdge { line, length });
+            let binding = prepare_edge_binding(store, line, start, end, length, edge_uses)?;
+            edges.insert(
+                key,
+                PreparedEdge {
+                    line,
+                    length,
+                    binding,
+                },
+            );
         }
 
         let mut faces = Vec::with_capacity(input.faces.len());
         for (face_index, face) in input.faces.iter().enumerate() {
-            let frame = face_frames[face_index];
+            let (frame, surface, sense) = face_geometry[face_index];
             let mut fins = Vec::with_capacity(face.vertices.len());
             for index in 0..face.vertices.len() {
                 let from = face.vertices[index];
                 let to = face.vertices[(index + 1) % face.vertices.len()];
                 let edge = PlanarEdgeKey::new(from, to).expect("face preflight rejected self-edge");
-                let prepared_edge = edges[&edge];
-                let start = frame_uv(&frame, vertices[&edge.first]);
-                let end = frame_uv(&frame, vertices[&edge.second]);
+                let prepared_edge = &edges[&edge];
+                let pcurve = if let Some(binding) = &prepared_edge.binding {
+                    let support = face
+                        .plane_binding
+                        .as_ref()
+                        .expect("all-or-nothing binding was preflighted")
+                        .support;
+                    let index = binding
+                        .surfaces
+                        .iter()
+                        .position(|candidate| *candidate == support)
+                        .ok_or(Error::InvalidGeometry {
+                            reason: "bound face support is absent from its edge plane pair",
+                        })?;
+                    PreparedFinPcurve::Bound(index)
+                } else {
+                    let start = frame_uv(&frame, vertices[&edge.first]);
+                    let end = frame_uv(&frame, vertices[&edge.second]);
+                    PreparedFinPcurve::New(Line2d::new(start, end - start)?)
+                };
                 fins.push(PreparedFin {
                     edge,
                     sense: if from == edge.first {
@@ -421,12 +569,13 @@ impl PreparedSolid {
                     } else {
                         Sense::Reversed
                     },
-                    pcurve: Line2d::new(start, end - start)?,
+                    pcurve,
                     length: prepared_edge.length,
                 });
             }
             faces.push(PreparedFace {
-                plane: Plane::new(frame),
+                surface,
+                sense,
                 domain: face_domains[face_index],
                 fins,
                 source: face.source,
@@ -455,7 +604,8 @@ fn validate_source(store: &crate::store::Store, source: Option<EntityRef>) -> Re
 fn prepare_face(
     face: &PlanarSolidFace,
     vertices: &BTreeMap<PlanarVertexKey, Point3>,
-) -> Result<(Frame, FaceDomain)> {
+    store: &crate::store::Store,
+) -> Result<(Frame, PreparedFaceSurface, Sense, FaceDomain)> {
     if face.vertices.len() < 3 {
         return invalid("a planar-solid face requires at least three vertices");
     }
@@ -470,33 +620,79 @@ fn prepare_face(
         })?);
     }
 
-    let mut frame = None;
-    for index in 0..points.len() {
-        let a = points[index];
-        let b = points[(index + 1) % points.len()];
-        let c = points[(index + 2) % points.len()];
-        if let Ok(candidate) = Frame::new(a, (b - a).cross(c - a), b - a) {
-            frame = Some(candidate);
-            break;
+    let (frame, surface, sense, projected) = if let Some(binding) = &face.plane_binding {
+        if binding.edge_carriers.len() != face.vertices.len() {
+            return invalid("a planar face binding requires one carrier per directed edge");
         }
-    }
-    let frame = frame.ok_or(Error::InvalidGeometry {
-        reason: "a planar-solid face must contain a stable non-collinear corner",
-    })?;
-
-    let normal = frame.z();
-    let dominant_axis = if normal.x.abs() >= normal.y.abs() && normal.x.abs() >= normal.z.abs() {
-        0
-    } else if normal.y.abs() >= normal.z.abs() {
-        1
+        let plane = live_plane(store, binding.support)?;
+        let mut carriers = Vec::with_capacity(binding.edge_carriers.len());
+        for &carrier in &binding.edge_carriers {
+            if carrier == binding.support {
+                return invalid("a planar edge support and carrier plane must be distinct");
+            }
+            live_plane(store, carrier)?;
+            if carriers.contains(&carrier) {
+                return invalid("a planar face must not repeat an edge carrier plane");
+            }
+            carriers.push(carrier);
+        }
+        let frame = *plane.frame();
+        let projected: Vec<_> = points
+            .iter()
+            .copied()
+            .map(|point| {
+                let point = frame_uv(&frame, point);
+                [point.x, point.y]
+            })
+            .collect();
+        let sense = match orient2d(projected[0], projected[1], projected[2]) {
+            Orientation::Positive => Sense::Forward,
+            Orientation::Negative => Sense::Reversed,
+            Orientation::Zero => {
+                return invalid("a bound planar face must have nonzero orientation on its support");
+            }
+        };
+        (
+            frame,
+            PreparedFaceSurface::Reuse(binding.support),
+            sense,
+            projected,
+        )
     } else {
-        2
+        let mut frame = None;
+        for index in 0..points.len() {
+            let a = points[index];
+            let b = points[(index + 1) % points.len()];
+            let c = points[(index + 2) % points.len()];
+            if let Ok(candidate) = Frame::new(a, (b - a).cross(c - a), b - a) {
+                frame = Some(candidate);
+                break;
+            }
+        }
+        let frame = frame.ok_or(Error::InvalidGeometry {
+            reason: "a planar-solid face must contain a stable non-collinear corner",
+        })?;
+        let normal = frame.z();
+        let dominant_axis = if normal.x.abs() >= normal.y.abs() && normal.x.abs() >= normal.z.abs()
+        {
+            0
+        } else if normal.y.abs() >= normal.z.abs() {
+            1
+        } else {
+            2
+        };
+        let projected = points
+            .iter()
+            .copied()
+            .map(|point| dominant_projection(point, dominant_axis))
+            .collect();
+        (
+            frame,
+            PreparedFaceSurface::New(Plane::new(frame)),
+            Sense::Forward,
+            projected,
+        )
     };
-    let projected: Vec<_> = points
-        .iter()
-        .copied()
-        .map(|point| dominant_projection(point, dominant_axis))
-        .collect();
     let expected_turn = orient2d(projected[0], projected[1], projected[2]);
     if expected_turn == Orientation::Zero {
         return invalid("a planar-solid face loop must have nonzero convex turns");
@@ -518,7 +714,72 @@ fn prepare_face(
         }
         uv.push(frame_uv(&frame, point));
     }
-    Ok((frame, point_domain(uv)?))
+    Ok((frame, surface, sense, point_domain(uv)?))
+}
+
+fn live_plane(store: &crate::store::Store, surface: SurfaceId) -> Result<Plane> {
+    match store.get(surface)? {
+        SurfaceGeom::Plane(plane) => Ok(*plane),
+        _ => invalid("planar semantic evidence must reference Plane surfaces"),
+    }
+}
+
+fn prepare_edge_binding(
+    store: &crate::store::Store,
+    line: Line,
+    start: Point3,
+    end: Point3,
+    length: f64,
+    edge_uses: &[EdgeUse],
+) -> Result<Option<PreparedEdgeBinding>> {
+    let [first, second] = edge_uses else {
+        return invalid("every planar-solid edge must have exactly two face uses");
+    };
+    let (Some(first), Some(second)) = (first.planes, second.planes) else {
+        if first.planes.is_none() && second.planes.is_none() {
+            return Ok(None);
+        }
+        return invalid("both uses of a planar edge must carry semantic plane evidence");
+    };
+    if !same_unordered_plane_pair(first, second) {
+        return invalid("both uses of a planar edge must claim the same plane pair");
+    }
+
+    let surfaces = first;
+    let planes = [
+        live_plane(store, surfaces[0])?,
+        live_plane(store, surfaces[1])?,
+    ];
+    let [first_pcurve, second_pcurve] = planes.map(|plane| {
+        let start = frame_uv(plane.frame(), start);
+        let end = frame_uv(plane.frame(), end);
+        Line2d::new(start, end - start)
+    });
+    let pcurves = [first_pcurve?, second_pcurve?];
+    let parameter_maps = [
+        AffineParamMap1d::new(1.0, 0.0).expect("identity graph parameter map is valid"),
+        AffineParamMap1d::new(1.0, 0.0).expect("identity graph parameter map is valid"),
+    ];
+    let certificate = certify_paired_plane_line_residuals(
+        line,
+        ParamRange::new(0.0, length),
+        planes,
+        pcurves,
+        parameter_maps,
+        LINEAR_RESOLUTION,
+    )
+    .map_err(|_| Error::InvalidGeometry {
+        reason: "bound planar edge lacks a whole-range paired plane certificate",
+    })?;
+    Ok(Some(PreparedEdgeBinding {
+        surfaces,
+        pcurves,
+        certificate,
+    }))
+}
+
+fn same_unordered_plane_pair(first: [SurfaceId; 2], second: [SurfaceId; 2]) -> bool {
+    first == second || first == [second[1], second[0]]
 }
 
 fn dominant_projection(point: Point3, dropped_axis: usize) -> [f64; 2] {
@@ -660,8 +921,12 @@ fn invalid<T>(reason: &'static str) -> Result<T> {
 mod tests {
     use super::*;
     use crate::entity::{Body, Edge, Fin, Loop, Region, Shell};
+    use crate::incidence::{
+        IncidenceCertification, certify_edge_surface_incidence, certify_pcurve_incidence,
+    };
     use crate::store::Store;
     use crate::transaction::{FullCommitRequirement, Journal, LineageEvent};
+    use kgeom::surface::Sphere;
     use kgeom::vec::Vec3;
 
     const KEYS: [PlanarVertexKey; 8] = [
@@ -709,6 +974,62 @@ mod tests {
             })
             .collect();
         PlanarSolidInput::new(vertices, faces)
+    }
+
+    fn box_rings() -> [[usize; 4]; 6] {
+        [
+            [0, 2, 3, 1],
+            [4, 5, 7, 6],
+            [0, 1, 5, 4],
+            [2, 6, 7, 3],
+            [0, 4, 6, 2],
+            [1, 3, 7, 5],
+        ]
+    }
+
+    fn source_surfaces(store: &mut Store) -> Vec<SurfaceId> {
+        let source = crate::make::block(store, &Frame::world(), [2.0, 3.0, 4.0]).unwrap();
+        store
+            .faces_of_body(source)
+            .unwrap()
+            .into_iter()
+            .map(|face| store.get(face).unwrap().surface())
+            .collect()
+    }
+
+    fn bind_keyed_box(input: &mut PlanarSolidInput, surfaces: &[SurfaceId]) {
+        let rings = box_rings();
+        assert_eq!(surfaces.len(), rings.len());
+        for (face_index, ring) in rings.iter().enumerate() {
+            let mut carriers = Vec::with_capacity(ring.len());
+            for edge_index in 0..ring.len() {
+                let first = ring[edge_index];
+                let second = ring[(edge_index + 1) % ring.len()];
+                let other = rings
+                    .iter()
+                    .enumerate()
+                    .find_map(|(candidate_index, candidate)| {
+                        (candidate_index != face_index
+                            && (0..candidate.len()).any(|index| {
+                                let a = candidate[index];
+                                let b = candidate[(index + 1) % candidate.len()];
+                                a == first && b == second || a == second && b == first
+                            }))
+                        .then_some(candidate_index)
+                    })
+                    .expect("every box edge has a second face use");
+                carriers.push(surfaces[other]);
+            }
+            input.faces[face_index].plane_binding =
+                Some(PlanarFacePlaneBinding::new(surfaces[face_index], carriers));
+        }
+    }
+
+    fn bound_keyed_box(store: &mut Store) -> (PlanarSolidInput, Vec<SurfaceId>) {
+        let surfaces = source_surfaces(store);
+        let mut input = keyed_box(None);
+        bind_keyed_box(&mut input, &surfaces);
+        (input, surfaces)
     }
 
     fn rotated_off_origin_box() -> PlanarSolidInput {
@@ -834,6 +1155,206 @@ mod tests {
             })
             .collect();
         assert_eq!(journal.lineage(), expected);
+    }
+
+    #[test]
+    fn bound_faces_reuse_source_surfaces_and_edges_retain_verified_plane_pairs() {
+        let mut store = Store::new();
+        let (input, surfaces) = bound_keyed_box(&mut store);
+        let surface_count = store.count::<SurfaceGeom>();
+        let mut transaction = store.transaction().unwrap();
+        let output = transaction.assemble_planar_solid(&input).unwrap();
+
+        assert_eq!(transaction.store().count::<SurfaceGeom>(), surface_count);
+        for (index, &face) in output.faces().iter().enumerate() {
+            assert_eq!(
+                transaction.store().get(face).unwrap().surface(),
+                surfaces[index]
+            );
+        }
+        for &(key, edge) in output.edges() {
+            let expected = input
+                .faces()
+                .iter()
+                .find_map(|face| {
+                    let binding = face.plane_binding()?;
+                    (0..face.vertices().len()).find_map(|index| {
+                        let candidate = PlanarEdgeKey::new(
+                            face.vertices()[index],
+                            face.vertices()[(index + 1) % face.vertices().len()],
+                        )?;
+                        (candidate == key)
+                            .then_some([binding.support(), binding.edge_carriers()[index]])
+                    })
+                })
+                .unwrap();
+            let edge_value = transaction.store().get(edge).unwrap();
+            let descriptor = transaction
+                .store()
+                .get(edge_value.curve().unwrap())
+                .unwrap()
+                .as_intersection()
+                .expect("bound planar edges use verified intersection descriptors");
+            assert!(same_unordered_plane_pair(
+                descriptor.source_surfaces(),
+                expected
+            ));
+            assert!(descriptor.certificate().as_plane_line().is_some());
+            let paired = descriptor.pcurves();
+            assert!(edge_value.fins().iter().all(|fin| {
+                let pcurve = transaction
+                    .store()
+                    .get(*fin)
+                    .unwrap()
+                    .pcurve()
+                    .unwrap()
+                    .curve();
+                paired.contains(&pcurve)
+            }));
+        }
+
+        for &face in output.faces() {
+            let face = transaction.store().get(face).unwrap();
+            for &loop_id in face.loops() {
+                for &fin_id in transaction.store().get(loop_id).unwrap().fins() {
+                    let fin = transaction.store().get(fin_id).unwrap();
+                    assert_eq!(
+                        certify_edge_surface_incidence(
+                            transaction.store(),
+                            fin.edge(),
+                            face.surface(),
+                            LINEAR_RESOLUTION,
+                        )
+                        .unwrap(),
+                        IncidenceCertification::Certified,
+                    );
+                    assert_eq!(
+                        certify_pcurve_incidence(
+                            transaction.store(),
+                            fin.edge(),
+                            face.surface(),
+                            fin.pcurve().unwrap(),
+                            LINEAR_RESOLUTION,
+                        )
+                        .unwrap(),
+                        IncidenceCertification::Certified,
+                    );
+                }
+            }
+        }
+
+        let decision = transaction
+            .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
+            .unwrap();
+        assert!(decision.is_committed(), "{decision:#?}");
+        assert!(
+            decision.checks().iter().all(|check| {
+                check.report().faults.is_empty() && check.report().gaps.is_empty()
+            })
+        );
+    }
+
+    #[test]
+    fn bound_face_sense_tracks_reversed_support_frame_orientation() {
+        let mut store = Store::new();
+        let mut surfaces = source_surfaces(&mut store);
+        let original = *store.get(surfaces[0]).unwrap().as_plane().unwrap();
+        let frame = original.frame();
+        let reversed = Plane::new(
+            Frame::new(frame.origin(), -frame.z(), frame.x()).expect("reversed plane frame"),
+        );
+        surfaces[0] = store.insert_surface(SurfaceGeom::Plane(reversed)).unwrap();
+        let mut input = keyed_box(None);
+        bind_keyed_box(&mut input, &surfaces);
+
+        let mut transaction = store.transaction().unwrap();
+        let output = transaction.assemble_planar_solid(&input).unwrap();
+        assert_eq!(
+            transaction.store().get(output.faces()[0]).unwrap().sense(),
+            Sense::Reversed
+        );
+        for &face in &output.faces()[1..] {
+            assert_eq!(
+                transaction.store().get(face).unwrap().sense(),
+                Sense::Forward
+            );
+        }
+        transaction.rollback().unwrap();
+    }
+
+    #[test]
+    fn malformed_plane_bindings_refuse_before_topology_allocation() {
+        let mut store = Store::new();
+        let (valid, surfaces) = bound_keyed_box(&mut store);
+        let non_plane = store
+            .insert_surface(SurfaceGeom::Sphere(
+                Sphere::new(Frame::world(), 1.0).unwrap(),
+            ))
+            .unwrap();
+
+        let mut mixed = valid.clone();
+        mixed.faces[0].plane_binding = None;
+        let mut wrong_class = valid.clone();
+        wrong_class.faces[0].plane_binding.as_mut().unwrap().support = non_plane;
+        let mut mismatched = valid.clone();
+        let opposite = surfaces
+            .iter()
+            .copied()
+            .find(|surface| {
+                *surface != mismatched.faces[0].plane_binding.as_ref().unwrap().support
+                    && !mismatched.faces[0]
+                        .plane_binding
+                        .as_ref()
+                        .unwrap()
+                        .edge_carriers
+                        .contains(surface)
+            })
+            .unwrap();
+        mismatched.faces[0]
+            .plane_binding
+            .as_mut()
+            .unwrap()
+            .edge_carriers[0] = opposite;
+
+        let expected = {
+            let mut transaction = store.transaction().unwrap();
+            let output = transaction.assemble_planar_solid(&valid).unwrap();
+            transaction.rollback().unwrap();
+            output
+        };
+        let mut transaction = store.transaction().unwrap();
+        let stale = transaction
+            .assembly()
+            .insert_surface(SurfaceGeom::Plane(Plane::new(Frame::world())))
+            .unwrap();
+        transaction.assembly().remove_surface(stale).unwrap();
+        let mut stale_input = valid.clone();
+        stale_input.faces[0].plane_binding.as_mut().unwrap().support = stale;
+        let before = (
+            transaction.store().count::<Body>(),
+            transaction.store().count::<Face>(),
+            transaction.store().count::<Edge>(),
+            transaction.store().count::<Vertex>(),
+            transaction.store().count::<CurveGeom>(),
+            transaction.store().count::<crate::geom::Curve2dGeom>(),
+        );
+        for input in [&mixed, &wrong_class, &mismatched, &stale_input] {
+            assert!(transaction.assemble_planar_solid(input).is_err());
+            assert_eq!(
+                (
+                    transaction.store().count::<Body>(),
+                    transaction.store().count::<Face>(),
+                    transaction.store().count::<Edge>(),
+                    transaction.store().count::<Vertex>(),
+                    transaction.store().count::<CurveGeom>(),
+                    transaction.store().count::<crate::geom::Curve2dGeom>(),
+                ),
+                before
+            );
+        }
+        let after_refusals = transaction.assemble_planar_solid(&valid).unwrap();
+        assert_eq!(after_refusals, expected);
+        transaction.rollback().unwrap();
     }
 
     #[test]

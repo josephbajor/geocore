@@ -33,9 +33,10 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
 3. `unite`/`subtract`/`intersect` for block/block — atomic, journaled,
    checker-clean, X_T-exported, and imported into a licensed host. *(in
    progress — exact-planar `intersect` now commits through the internal
-   journaled Full-valid pipeline; `unite`/`subtract` reach Full checking and
-   roll back on missing common-plane evidence; proof transport, facade API,
-   and X_T evidence remain)*
+   journaled Full-valid pipeline; immutable source Plane supports and verified
+   Plane/Plane edge carriers now survive result assembly; `unite`/`subtract`
+   reach Full checking and roll back until the semantic plane-triple consumer,
+   facade API, and X_T evidence land)*
 4. Extend the same ladder to block/cylinder (introduces curved SSI pcurves).
 
 Work that does not advance the queue head needs an explicit justification

@@ -23,8 +23,10 @@
 //! hidden by the global sum.
 
 use crate::entity::{EdgeId, FaceId, Sense, ShellId, VertexId};
-use crate::geom::{CurveGeom, SurfaceGeom};
-use crate::incidence::{IncidenceCertification, certify_edge_surface_incidence};
+use crate::geom::SurfaceGeom;
+use crate::incidence::{
+    IncidenceCertification, certify_edge_surface_incidence, exact_line_carrier,
+};
 use crate::loop_proof::{LoopSimplicity, certify_loop_simplicity};
 use crate::shell_proof::{ShellCertification, ShellEmbedding, ShellOrientation};
 use crate::store::Store;
@@ -178,7 +180,7 @@ impl Facet {
             };
             if edge.tolerance.is_some()
                 || edge.bounds.is_none()
-                || !matches!(store.get(curve)?, CurveGeom::Line(_))
+                || exact_line_carrier(store.get(curve)?).is_none()
                 || certify_edge_surface_incidence(store, fin.edge, face.surface, LINEAR_RESOLUTION)?
                     != IncidenceCertification::Certified
             {

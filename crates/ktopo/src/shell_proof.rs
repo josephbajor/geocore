@@ -10,7 +10,9 @@
 
 use crate::entity::{BodyKind, FaceId, RegionKind, Sense, ShellId, VertexId};
 use crate::geom::{CurveGeom, SurfaceGeom};
-use crate::incidence::{IncidenceCertification, certify_edge_surface_incidence};
+use crate::incidence::{
+    IncidenceCertification, certify_edge_surface_incidence, exact_line_carrier,
+};
 use crate::loop_proof::{
     LoopContainment, LoopSimplicity, certify_loop_containment, certify_loop_simplicity,
 };
@@ -509,7 +511,7 @@ fn planar_prism_cap(store: &Store, face_id: FaceId) -> Result<Option<PrismCap>> 
             };
             if edge.tolerance.is_some()
                 || edge.bounds.is_none()
-                || !matches!(store.get(curve)?, CurveGeom::Line(_))
+                || exact_line_carrier(store.get(curve)?).is_none()
                 || certify_edge_surface_incidence(
                     store,
                     fin_value.edge,
@@ -614,7 +616,7 @@ fn planar_prism_side(store: &Store, face_id: FaceId) -> Result<Option<Vec<crate:
         };
         if edge.tolerance.is_some()
             || edge.bounds.is_none()
-            || !matches!(store.get(curve)?, CurveGeom::Line(_))
+            || exact_line_carrier(store.get(curve)?).is_none()
             || certify_edge_surface_incidence(store, fin.edge, face.surface, LINEAR_RESOLUTION)?
                 != IncidenceCertification::Certified
             || edges.contains(&fin.edge)
@@ -1111,7 +1113,7 @@ fn convex_planar_face_vertices(store: &Store, face_id: FaceId) -> Result<Option<
         let Some(curve_id) = edge.curve else {
             return Ok(None);
         };
-        if edge.tolerance.is_some() || !matches!(store.get(curve_id)?, CurveGeom::Line(_)) {
+        if edge.tolerance.is_some() || exact_line_carrier(store.get(curve_id)?).is_none() {
             return Ok(None);
         }
         let Some(vertex) = store.fin_tail(fin_id)? else {

@@ -277,7 +277,18 @@ fn planar_segment_ring(store: &Store, loop_id: LoopId) -> Result<Option<Vec<Segm
             {
                 return Ok(None);
             }
-            pcurve_line_segment(store, pcurve, edge, fin.sense, range)?
+            if let Some(segment) = verified_plane_line_vertex_segment(
+                store,
+                fin_id,
+                pcurve,
+                edge,
+                face.surface,
+                plane.frame(),
+            )? {
+                Some(segment)
+            } else {
+                pcurve_line_segment(store, pcurve, edge, fin.sense, range)?
+            }
         } else {
             if certify_edge_surface_incidence(store, fin.edge, face.surface, tolerance)?
                 != IncidenceCertification::Certified
@@ -336,6 +347,42 @@ fn pcurve_line_segment(
         return Ok(None);
     }
     Ok(Some(Segment2 { start, end }))
+}
+
+fn verified_plane_line_vertex_segment(
+    store: &Store,
+    fin_id: crate::entity::FinId,
+    use_: FinPcurve,
+    edge: &Edge,
+    face_surface: crate::entity::SurfaceId,
+    frame: &kgeom::frame::Frame,
+) -> Result<Option<Segment2>> {
+    let Some(curve_id) = edge.curve else {
+        return Ok(None);
+    };
+    let Some(intersection) = store.get(curve_id)?.as_intersection() else {
+        return Ok(None);
+    };
+    if intersection.certificate().as_plane_line().is_none() {
+        return Ok(None);
+    }
+    let Some(source_index) = intersection
+        .source_surfaces()
+        .iter()
+        .position(|surface| *surface == face_surface)
+    else {
+        return Ok(None);
+    };
+    if intersection.pcurves()[source_index] != use_.curve() {
+        return Ok(None);
+    }
+    let (Some(tail), Some(head)) = (store.fin_tail(fin_id)?, store.fin_head(fin_id)?) else {
+        return Ok(None);
+    };
+    Ok(Some(Segment2 {
+        start: plane_uv(frame, store.vertex_position(tail)?),
+        end: plane_uv(frame, store.vertex_position(head)?),
+    }))
 }
 
 fn model_line_segment(
