@@ -9,9 +9,12 @@
 //! interval filters; combinatorial decisions (trim containment, ray-crossing
 //! parity) use the exact `orient2d`/`orient3d` predicates on stored vertex
 //! coordinates, never on derived intersection points. The certified slice
-//! covers faces on planar surfaces bounded by straight line edges — exactly
-//! the face class the first boolean rungs produce and consume. Every other
-//! configuration returns [`PointFaceVerdict::Indeterminate`] /
+//! covers polygonal planar faces, full-circle planar trims, and finite
+//! full-period cylindrical bands with whole-edge analytic incidence bounds.
+//! Solid parity additionally covers general bodies composed of coaxial
+//! admitted cylinder bands and circular planar faces through a certified
+//! common-axis ray. Every other configuration returns
+//! [`PointFaceVerdict::Indeterminate`] /
 //! [`PointBodyVerdict::Indeterminate`] with a stable reason instead of an
 //! uncertified answer.
 //!
@@ -20,6 +23,10 @@
 //! conservative widening covering vertex near-coplanarity and entity
 //! tolerances — are `Indeterminate` by design, because no verdict about them
 //! is certifiable from the stored geometry.
+
+mod curved;
+
+use std::collections::HashSet;
 
 use kcore::interval::Interval;
 use kcore::operation::{
@@ -345,8 +352,8 @@ impl PointBodyClassification {
     }
 }
 
-const GAP_PLANAR_ONLY: &str =
-    "point classification is certified only for faces on planar surfaces in this slice";
+const GAP_SUPPORTED_SURFACES: &str =
+    "point classification is certified only for supported planar and cylindrical faces";
 const GAP_LINE_EDGES_ONLY: &str =
     "point classification is certified only for faces bounded by straight line edges";
 const GAP_BOUNDED_EDGES_ONLY: &str =
@@ -478,15 +485,58 @@ struct PreparedFace {
     drop_axis: usize,
 }
 
+enum PreparedBoundaryFace {
+    Planar(PreparedFace),
+    Curved(curved::PreparedCurvedFace),
+}
+
+impl PreparedBoundaryFace {
+    fn raw(&self) -> RawFaceId {
+        match self {
+            Self::Planar(face) => face.raw,
+            Self::Curved(face) => face.raw(),
+        }
+    }
+}
+
 enum PrepOutcome {
-    Ready(PreparedFace),
+    Ready(PreparedBoundaryFace),
     Gap(&'static str),
 }
 
-fn prepare_face(store: &Store, raw: RawFaceId, linear: f64) -> Result<PrepOutcome> {
+fn prepare_face(
+    store: &Store,
+    raw: RawFaceId,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<PrepOutcome> {
+    charge(scope, 1)?;
     let face = read(store.get(raw))?;
-    let SurfaceGeom::Plane(plane) = read(store.surface(face.surface))? else {
-        return Ok(PrepOutcome::Gap(GAP_PLANAR_ONLY));
+    let plane = match read(store.surface(face.surface))? {
+        SurfaceGeom::Cylinder(_) => {
+            return match curved::prepare_curved_face(store, raw, linear, scope)? {
+                curved::CurvedPrepOutcome::Ready(face) => {
+                    Ok(PrepOutcome::Ready(PreparedBoundaryFace::Curved(face)))
+                }
+                curved::CurvedPrepOutcome::Gap(reason) => Ok(PrepOutcome::Gap(reason)),
+                curved::CurvedPrepOutcome::NotApplicable => {
+                    Ok(PrepOutcome::Gap(GAP_SUPPORTED_SURFACES))
+                }
+            };
+        }
+        SurfaceGeom::Plane(plane) => {
+            match curved::prepare_curved_face(store, raw, linear, scope)? {
+                curved::CurvedPrepOutcome::Ready(face) => {
+                    return Ok(PrepOutcome::Ready(PreparedBoundaryFace::Curved(face)));
+                }
+                curved::CurvedPrepOutcome::Gap(reason) => {
+                    return Ok(PrepOutcome::Gap(reason));
+                }
+                curved::CurvedPrepOutcome::NotApplicable => {}
+            }
+            *plane
+        }
+        _ => return Ok(PrepOutcome::Gap(GAP_SUPPORTED_SURFACES)),
     };
     let origin = as_coords(plane.frame().origin());
     let z = plane.frame().z();
@@ -501,11 +551,13 @@ fn prepare_face(store: &Store, raw: RawFaceId, linear: f64) -> Result<PrepOutcom
         return Ok(PrepOutcome::Gap(GAP_NO_LOOPS));
     }
 
+    charge(scope, face.loops().len() as u64)?;
     let mut loops = Vec::with_capacity(face.loops().len());
     let mut max_elem_tol = linear;
     let mut deviation_sq_hi: f64 = 0.0;
     for &loop_id in face.loops() {
         let ring = read(store.get::<Loop>(loop_id))?;
+        charge(scope, ring.fins().len() as u64)?;
         let mut vertices = Vec::with_capacity(ring.fins().len());
         for &fin_id in ring.fins() {
             let fin = read(store.get(fin_id))?;
@@ -557,16 +609,18 @@ fn prepare_face(store: &Store, raw: RawFaceId, linear: f64) -> Result<PrepOutcom
     let Some(drop_axis) = choose_drop_axis(&loops) else {
         return Ok(PrepOutcome::Gap(GAP_DEGENERATE_PROJECTION));
     };
-    Ok(PrepOutcome::Ready(PreparedFace {
-        raw,
-        origin,
-        normal,
-        normal_sq,
-        loops,
-        on_tol: linear,
-        guard,
-        drop_axis,
-    }))
+    Ok(PrepOutcome::Ready(PreparedBoundaryFace::Planar(
+        PreparedFace {
+            raw,
+            origin,
+            normal,
+            normal_sq,
+            loops,
+            on_tol: linear,
+            guard,
+            drop_axis,
+        },
+    )))
 }
 
 /// Conservative interval enclosure of `normal · (point - origin)`.
@@ -808,6 +862,17 @@ fn face_site(
         WindingOutcome::Inside => Ok(SiteOutcome::On(RawSite::Interior)),
         WindingOutcome::Outside => Ok(SiteOutcome::Off),
         WindingOutcome::Gap => Ok(SiteOutcome::Gap(GAP_PROJECTED_CONTACT)),
+    }
+}
+
+fn boundary_face_site(
+    face: &PreparedBoundaryFace,
+    point: [f64; 3],
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<SiteOutcome> {
+    match face {
+        PreparedBoundaryFace::Planar(face) => face_site(face, point, scope),
+        PreparedBoundaryFace::Curved(face) => curved::face_site(face, point, scope),
     }
 }
 
@@ -1070,9 +1135,9 @@ fn classify_on_face_impl(
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<PointFaceClassification> {
     let store = &part.state.store;
-    let verdict = match prepare_face(store, face.raw(), linear)? {
+    let verdict = match prepare_face(store, face.raw(), linear, scope)? {
         PrepOutcome::Gap(reason) => PointFaceVerdict::Indeterminate { reason },
-        PrepOutcome::Ready(prepared) => match face_site(&prepared, point, scope)? {
+        PrepOutcome::Ready(prepared) => match boundary_face_site(&prepared, point, scope)? {
             SiteOutcome::On(site) => PointFaceVerdict::On(wrap_site(face.part(), site)),
             SiteOutcome::Off => PointFaceVerdict::Off,
             SiteOutcome::Gap(reason) => PointFaceVerdict::Indeterminate { reason },
@@ -1103,16 +1168,22 @@ fn classify_in_body_impl(
         });
     }
 
+    charge(scope, 1 + raw_body.regions().len() as u64)?;
     let mut face_ids: Vec<RawFaceId> = Vec::new();
+    let mut seen_face_ids = HashSet::new();
     for &region_id in raw_body.regions() {
+        charge(scope, 1)?;
         let region = read(store.get(region_id))?;
         if region.kind() != RegionKind::Solid {
             continue;
         }
+        charge(scope, region.shells().len() as u64)?;
         for &shell_id in region.shells() {
+            charge(scope, 1)?;
             let shell = read(store.get(shell_id))?;
+            charge(scope, shell.faces().len() as u64)?;
             for &face_id in shell.faces() {
-                if !face_ids.contains(&face_id) {
+                if seen_face_ids.insert(face_id) {
                     face_ids.push(face_id);
                 }
             }
@@ -1127,31 +1198,29 @@ fn classify_in_body_impl(
     }
     charge(scope, face_ids.len() as u64)?;
 
-    // Boundary phase: any certified face contact decides the query; every
-    // capability gap or guard-band contact blocks an interior/exterior claim.
-    let mut prepared: Vec<PreparedFace> = Vec::with_capacity(face_ids.len());
+    // Prepare and test every face before emitting a verdict. Curved bodies
+    // must pass their whole-boundary closure audit even when the query lies
+    // on a surviving face of malformed topology.
+    let mut prepared: Vec<PreparedBoundaryFace> = Vec::with_capacity(face_ids.len());
     let mut first_gap: Option<&'static str> = None;
+    let mut boundary: Option<(RawFaceId, RawSite)> = None;
     for &face_id in face_ids.iter() {
-        match prepare_face(store, face_id, linear)? {
+        match prepare_face(store, face_id, linear, scope)? {
             PrepOutcome::Gap(reason) => {
                 first_gap.get_or_insert(reason);
             }
-            PrepOutcome::Ready(face) => match face_site(&face, point, scope)? {
-                SiteOutcome::On(site) => {
-                    return Ok(PointBodyClassification {
-                        body: body.clone(),
-                        verdict: PointBodyVerdict::Boundary {
-                            face: FaceId::new(body.part().clone(), face_id),
-                            site: wrap_site(body.part(), site),
-                        },
-                        witness: None,
-                    });
+            PrepOutcome::Ready(face) => {
+                match boundary_face_site(&face, point, scope)? {
+                    SiteOutcome::On(site) => {
+                        boundary.get_or_insert((face.raw(), site));
+                    }
+                    SiteOutcome::Off => {}
+                    SiteOutcome::Gap(reason) => {
+                        first_gap.get_or_insert(reason);
+                    }
                 }
-                SiteOutcome::Off => prepared.push(face),
-                SiteOutcome::Gap(reason) => {
-                    first_gap.get_or_insert(reason);
-                }
-            },
+                prepared.push(face);
+            }
         }
     }
     if let Some(reason) = first_gap {
@@ -1162,10 +1231,99 @@ fn classify_in_body_impl(
         });
     }
 
-    // Parity phase: triangulate every face exactly, then count certified
-    // transversal crossings along a deterministic generic segment.
+    let all_planar = prepared
+        .iter()
+        .all(|face| matches!(face, PreparedBoundaryFace::Planar(_)));
+    if all_planar && let Some((face, site)) = boundary {
+        return Ok(PointBodyClassification {
+            body: body.clone(),
+            verdict: PointBodyVerdict::Boundary {
+                face: FaceId::new(body.part().clone(), face),
+                site: wrap_site(body.part(), site),
+            },
+            witness: None,
+        });
+    }
+    if !all_planar {
+        let curved_faces = prepared
+            .iter()
+            .filter_map(|face| match face {
+                PreparedBoundaryFace::Curved(face) => Some(face),
+                PreparedBoundaryFace::Planar(_) => None,
+            })
+            .collect::<Vec<_>>();
+        if curved_faces.len() != prepared.len() {
+            return Ok(PointBodyClassification {
+                body: body.clone(),
+                verdict: PointBodyVerdict::Indeterminate {
+                    reason: curved::GAP_CURVED_BODY_PARITY,
+                },
+                witness: None,
+            });
+        }
+        if !curved::certify_closed_boundary(store, body.raw(), &curved_faces, scope)? {
+            return Ok(PointBodyClassification {
+                body: body.clone(),
+                verdict: PointBodyVerdict::Indeterminate {
+                    reason: curved::GAP_CURVED_BODY_PARITY,
+                },
+                witness: None,
+            });
+        }
+        if let Some((face, site)) = boundary {
+            return Ok(PointBodyClassification {
+                body: body.clone(),
+                verdict: PointBodyVerdict::Boundary {
+                    face: FaceId::new(body.part().clone(), face),
+                    site: wrap_site(body.part(), site),
+                },
+                witness: None,
+            });
+        }
+        return match curved::axial_parity_refs(&curved_faces, point, scope)? {
+            curved::CurvedParityOutcome::Decided { inside, witness } => {
+                let far = witness.far_point;
+                Ok(PointBodyClassification {
+                    body: body.clone(),
+                    verdict: if inside {
+                        PointBodyVerdict::Interior
+                    } else {
+                        PointBodyVerdict::Exterior
+                    },
+                    witness: Some(RayParityWitness {
+                        far_point: Point3::new(far[0], far[1], far[2]),
+                        crossings: witness.crossings,
+                        crossed_faces: witness
+                            .crossed_faces
+                            .into_iter()
+                            .map(|raw| FaceId::new(body.part().clone(), raw))
+                            .collect(),
+                    }),
+                })
+            }
+            curved::CurvedParityOutcome::Gap => Ok(PointBodyClassification {
+                body: body.clone(),
+                verdict: PointBodyVerdict::Indeterminate {
+                    reason: curved::GAP_CURVED_BODY_PARITY,
+                },
+                witness: None,
+            }),
+        };
+    }
+
+    // Planar parity phase: triangulate every face exactly, then count
+    // certified transversal crossings along a deterministic generic segment.
     let mut triangulated: Vec<ParityFace> = Vec::with_capacity(prepared.len());
     for face in prepared {
+        let PreparedBoundaryFace::Planar(face) = face else {
+            return Ok(PointBodyClassification {
+                body: body.clone(),
+                verdict: PointBodyVerdict::Indeterminate {
+                    reason: curved::GAP_CURVED_BODY_PARITY,
+                },
+                witness: None,
+            });
+        };
         let mut triangles = Vec::new();
         for ring in &face.loops {
             match triangulate_loop(ring, face.drop_axis, scope)? {
@@ -1488,7 +1646,7 @@ mod tests {
         assert_eq!(
             center.verdict(),
             &PointBodyVerdict::Indeterminate {
-                reason: super::GAP_PLANAR_ONLY
+                reason: super::GAP_SUPPORTED_SURFACES
             }
         );
     }

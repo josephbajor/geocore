@@ -1653,6 +1653,80 @@ fn plane_cylinder_perpendicular_cut_returns_circle_branch() {
 }
 
 #[test]
+fn plane_cylinder_perpendicular_cut_is_invariant_under_shared_rigid_frame() {
+    let renormalized_frame = Frame::new(
+        Point3::new(2.0, -1.0, 3.0),
+        Vec3::new(0.0, 1.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .unwrap();
+    let renormalized_center = renormalized_frame.origin() + renormalized_frame.z() * 0.8;
+    let general_frame = Frame::new(
+        Point3::new(-4.0, 2.5, 0.75),
+        Vec3::new(0.3, -0.7, 1.1),
+        Vec3::new(1.0, 0.4, 0.2),
+    )
+    .unwrap();
+    let general_center = general_frame.origin() + general_frame.z() * 0.8;
+    let cases = [
+        (
+            renormalized_frame,
+            Frame::new(
+                renormalized_center,
+                renormalized_frame.z(),
+                renormalized_frame.y(),
+            )
+            .unwrap(),
+            renormalized_center,
+        ),
+        (
+            renormalized_frame,
+            Frame::new(
+                renormalized_center,
+                -renormalized_frame.z(),
+                renormalized_frame.y(),
+            )
+            .unwrap(),
+            renormalized_center,
+        ),
+        (
+            general_frame,
+            general_frame.with_origin(general_center),
+            general_center,
+        ),
+    ];
+
+    for (cylinder_frame, plane_frame, expected_center) in cases {
+        let cylinder = Cylinder::new(cylinder_frame, 1.25).unwrap();
+        let plane = Plane::new(plane_frame);
+        let hit = intersect_bounded_plane_cylinder(
+            &plane,
+            [ParamRange::new(-2.0, 2.0), ParamRange::new(-2.0, 2.0)],
+            &cylinder,
+            [
+                ParamRange::new(0.0, core::f64::consts::TAU),
+                ParamRange::new(-0.2, 1.8),
+            ],
+            Tolerances::default(),
+        )
+        .unwrap();
+
+        assert!(hit.is_complete());
+        assert!(hit.points.is_empty());
+        assert_eq!(hit.curves.len(), 1);
+        assert_eq!(
+            hit.curves[0].curve_range,
+            ParamRange::new(0.0, core::f64::consts::TAU)
+        );
+        let SurfaceIntersectionCurve::Circle(circle) = &hit.curves[0].curve else {
+            panic!("a plane normal to a cylinder axis must cut a circle");
+        };
+        assert!(circle.frame().origin().dist(expected_center) <= Tolerances::default().linear());
+        assert_eq!(circle.radius(), cylinder.radius());
+    }
+}
+
+#[test]
 fn plane_cylinder_surface_windows_clip_circle_branch() {
     let plane = horizontal_plane(0.5);
     let cylinder = Cylinder::new(Frame::world(), 1.0).unwrap();

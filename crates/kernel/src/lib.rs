@@ -263,6 +263,7 @@ mod interchange;
 mod intersection;
 mod iter;
 mod operation;
+mod primitive;
 mod section;
 mod session;
 mod tessellation;
@@ -316,10 +317,13 @@ pub use operation::{
     MutationKind, MutationView, OperationOutcome, OperationSettings, SurfaceEvaluation,
     SurfaceEvaluationRequest, ToleranceBudgetId, ToleranceBudgetView, ToleranceEventView,
 };
+pub use primitive::CylinderRequest;
 pub use section::{
     BodySectionBudgetProfile, BodySectionGraph, SECTION_FACE_PAIRS, SECTION_WORK,
-    SectionBodiesRequest, SectionCompletion, SectionEdge, SectionEdgeParameterInterval, SectionGap,
-    SectionLoop, SectionSite, SectionUvLine, SectionVertex,
+    SectionBodiesRequest, SectionBranch, SectionBranchEvidence, SectionBranchTopology,
+    SectionCarrier, SectionCompletion, SectionEdge, SectionEdgeParameterInterval,
+    SectionFragmentSite, SectionGap, SectionLoop, SectionSite, SectionUvCircle, SectionUvCurve,
+    SectionUvLine, SectionVertex,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use tessellation::{BodyMesh, EdgePolyline, FaceTriangleRange, TessellateBodyRequest};

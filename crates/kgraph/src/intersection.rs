@@ -25,6 +25,13 @@ use kgeom::vec::{Vec2, Vec3};
 
 use crate::{Curve2dHandle, GeometryRef, SurfaceHandle};
 
+mod plane_cylinder;
+
+pub use plane_cylinder::{
+    CylinderLongitudeTrace, PairedPlaneCylinderCircleResidualCertificate, PlaneCylinderCircleTrace,
+    certify_paired_plane_cylinder_circle_residuals,
+};
+
 /// Fixed interval subdivisions consumed by one nonlinear spherical-circle
 /// whole-branch chart proof.
 pub const SPHERICAL_CIRCLE_PROOF_SEGMENTS: usize = 128;

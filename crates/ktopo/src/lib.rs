@@ -56,6 +56,7 @@ pub mod geom;
 #[doc(hidden)]
 pub mod graph_work;
 pub(crate) mod incidence;
+pub mod incidence_authority;
 pub(crate) mod index;
 pub(crate) mod loop_proof;
 pub mod make;

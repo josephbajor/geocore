@@ -29,6 +29,7 @@ mod ellipse_sphere;
 mod ellipse_torus;
 mod error;
 mod geometry_class;
+mod graph_plane_cylinder;
 mod graph_surface;
 mod line_circle;
 mod line_cone;
@@ -101,11 +102,12 @@ pub use graph_surface::{
     BRANCH_CERTIFICATE_FAILURE, GraphSurfaceBudgetProfile, GraphSurfaceIntersectionError,
     GraphSurfaceIntersectionResult, GraphSurfaceSurfaceIntersections,
     IntersectionBranchCertificate, IntersectionBranchEdge, IntersectionBranchEndpointEvent,
-    IntersectionBranchGraph, IntersectionBranchVertex, IntersectionBranchVertexEvent,
-    NURBS_TRACE_CERTIFICATE_WORK, PERSISTENT_DESCRIPTOR_FAILURE, PersistentIntersectionBranchEdge,
-    PersistentIntersectionBranchGraph, SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS,
-    intersect_bounded_graph_surfaces, intersect_bounded_graph_surfaces_in_scope,
-    intersect_bounded_graph_surfaces_with_context, persist_verified_graph_surface_intersections,
+    IntersectionBranchGraph, IntersectionBranchTopology, IntersectionBranchVertex,
+    IntersectionBranchVertexEvent, NURBS_TRACE_CERTIFICATE_WORK, PERSISTENT_DESCRIPTOR_FAILURE,
+    PersistentIntersectionBranchEdge, PersistentIntersectionBranchGraph,
+    SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS, intersect_bounded_graph_surfaces,
+    intersect_bounded_graph_surfaces_in_scope, intersect_bounded_graph_surfaces_with_context,
+    persist_verified_graph_surface_intersections,
 };
 pub use kgraph::{CurveClass, GeometryClassKey, SurfaceClass};
 pub use line_circle::intersect_bounded_line_circle;

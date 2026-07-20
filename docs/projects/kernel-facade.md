@@ -3,7 +3,8 @@
 Status: K1–K3, K5 adoption, and the landed K4 slices (typed X_T import/export, `ChangeJournal`,
 checked semantic edits — MVFS/KVFS, MEV/KEV, MEF/KEF, KFMRH/MFKRH, face split/merge, bridge/ring —
 rigid body copy with certificate reissuance, polygonal-profile extrusion, operation-owned tolerance
-batching, the opt-in Full-assurance commit gate, facade body tessellation, and public typed
+batching, block/cylinder construction, the opt-in Full-assurance commit gate, facade body
+tessellation, and public typed
 block/block Boolean outcomes) are implemented;
 broader semantic edit families, transmitted-proof reissuance beyond the named families, partition
 history, and the C ABI remain.
@@ -263,7 +264,7 @@ an independent `EvalContext`. A reviewed `cargo public-api`/rustdoc-JSON snapsho
 signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handles/descriptors,
 `OperationScope`, `EvalContext`, or `repr(C)`.
 
-- Facade crate + lifecycle/adoption: `crates/kernel/src/{lib,session,operation,edit,error,id,interchange,intersection,iter,tessellation}.rs`, `crates/kernel/src/view/`, `crates/kernel/tests/lifecycle.rs`, `examples/kernel-lifecycle`, `scripts/package_contract.py`.
+- Facade crate + lifecycle/adoption: `crates/kernel/src/{lib,session,operation,primitive,edit,error,id,interchange,intersection,iter,tessellation}.rs`, `crates/kernel/src/view/`, `crates/kernel/tests/lifecycle.rs`, `examples/kernel-lifecycle`, `scripts/package_contract.py`.
 - Rigid copy + certificate reissuance: `crates/ktopo/tests/body_copy.rs`, `crates/kgraph/tests/{intersection_curve_certificate,transmitted_plane_offset_nurbs}.rs`.
 - Transmitted-proof / interchange atomicity: `crates/kxt/tests/{finite_open_two_sample_dual_offset,finite_open_cubic_dual_offset,finite_open_five_sample_dual_offset,finite_open_seven_sample_dual_offset,offset_nurbs_intersection,intersection_chart}.rs`.
 - Edit / journal / tolerance families: `crates/ktopo/tests/{euler_transactions,builders,tolerance_budgets,transactions,pcurves}.rs`.
@@ -285,8 +286,9 @@ signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handle
   two-sample/quadratic/cubic chains; broader transmitted-proof reissuance.
 - Non-rigid transform families and attribute-carrying copy (needs an authorable storage contract)
   remain follow-on.
-- F5 does not yet expose surface/surface intersection; a future adapter must preserve the lower
-  `kops` completion boundary/evidence, not duplicate or widen it.
+- F5 exposes body section graphs and verified partial closed Plane/Cylinder branches, but not a
+  general surface/surface entry point; future adapters must preserve the lower `kops` completion
+  boundary/evidence, not duplicate or widen it.
 - Encapsulation follow-on (separate announced low-level break): make entity fields crate-private and
   replace cross-crate raw assembly with a sealed reconstruction seam; `cargo package -p kernel` full
   creation still blocked by versionless direct path dependencies; `xt_inspect`/`xt_oracle` stay

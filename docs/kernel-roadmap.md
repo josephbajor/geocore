@@ -301,8 +301,11 @@ tables and atomically Full-commits connected, proven-empty, multi-body, and
 one-cavity results while exact contact and incomplete proof fail closed.
 Deterministic operation outputs passed the supplemental Onshape oracle 6/6 on
 import and 6/6 there-and-back (`docs/oracle-boolean-certification.json`). The
-active queue head is rung 4 block/cylinder: curved classification, SSI pcurves,
-fragment assembly, Full proof, and the same external evidence gate.
+active queue head is rung 4 block/cylinder. Public finite-cylinder construction,
+manifold finite-cylinder classification, and verified closed Plane/Cylinder
+circle carriers with paired pcurves now provide partial section evidence;
+exact curved trimming and fragment stitching, Boolean assembly, Full proof, and
+the same external evidence gate remain.
 
 Do not wait for an exhaustive analytic pair table before testing the end-to-end
 boolean architecture. Begin with a deliberately narrow vertical slice as soon as the

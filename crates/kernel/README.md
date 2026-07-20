@@ -9,7 +9,7 @@ The current facade supports:
 
 - kernel/session/part lifecycle with opaque, part-qualified identities;
 - deterministic semantic topology and geometry views;
-- contextual block construction and Fast/Full body checking;
+- contextual block and cylinder construction plus Fast/Full body checking;
 - operation-accounted conforming solid and sheet tessellation;
 - bounded, operation-accounted surface evaluation; and
 - failure-atomic block/block unite, intersect, and subtract with typed

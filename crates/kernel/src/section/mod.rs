@@ -1,11 +1,13 @@
-//! Certified planar section edge graphs between two solid bodies.
+//! Certified section evidence between two solid bodies.
 //!
 //! Second rung of the boolean ladder: `unite`/`subtract`/`intersect` need the
 //! curves where the two operand boundaries meet, stitched into a coherent
 //! edge graph whose vertices sit on the operands' own edges and vertices.
 //! This module computes that graph for the planar slice — every face on a
-//! plane, every edge a bounded straight line — and refuses honestly
-//! everywhere else.
+//! plane, every edge a bounded straight line. It also retains complete-period
+//! Plane/Cylinder circle carriers with paired pcurves as verified partial
+//! evidence, while refusing to promote them into trimmed edges or a complete
+//! body graph until curved clipping and fragment stitching are certified.
 //!
 //! The algorithm is general over topology (any number of faces, loops,
 //! holes, non-convex boundaries). Per candidate face pair it takes the
@@ -40,10 +42,10 @@ use kcore::operation::{
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
 use kgeom::vec::{Point2, Point3, Vec2, Vec3};
-use kgraph::AffineParamMap1d;
+use kgraph::{AffineParamMap1d, CurveDescriptor};
 use kops::intersect::{
-    ContactKind, GraphSurfaceIntersectionError, IntersectionBranchEdge,
-    intersect_bounded_graph_surfaces_in_scope,
+    ContactKind, GraphSurfaceIntersectionError, IntersectionBranchEdge, IntersectionBranchTopology,
+    IntersectionBranchVertexEvent, intersect_bounded_graph_surfaces_in_scope,
 };
 use ktopo::entity::{BodyKind, FaceId as RawFaceId, Sense, SurfaceId as RawSurfaceId};
 use ktopo::geom::SurfaceGeom;
@@ -278,6 +280,186 @@ impl SectionEdge {
     }
 }
 
+/// Topology of one verified, not-yet-trimmed section carrier branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SectionBranchTopology {
+    /// Distinct low/high fragment sites bound an open carrier interval.
+    Open,
+    /// The carrier covers one complete period and both endpoint slots share
+    /// one intentional parameter-seam site.
+    Closed,
+}
+
+/// Kernel-facade carrier geometry for a verified section branch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum SectionCarrier {
+    /// Circular carrier.
+    Circle {
+        /// Circle center.
+        center: Point3,
+        /// Unit normal of the circle plane.
+        normal: Vec3,
+        /// Unit direction from the center at parameter zero.
+        x_direction: Vec3,
+        /// Positive circle radius.
+        radius: f64,
+    },
+}
+
+/// Circular pcurve composed directly with its carrier parameter map.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SectionUvCircle {
+    center: Point2,
+    radius: f64,
+    x_direction: Vec2,
+    parameter_scale: f64,
+    parameter_offset: f64,
+}
+
+impl SectionUvCircle {
+    /// Circle center in surface parameters.
+    pub const fn center(self) -> Point2 {
+        self.center
+    }
+
+    /// Positive parameter-space radius.
+    pub const fn radius(self) -> f64 {
+        self.radius
+    }
+
+    /// Unit direction from the center at pcurve parameter zero.
+    pub const fn x_direction(self) -> Vec2 {
+        self.x_direction
+    }
+
+    /// Carrier-angle multiplier.
+    pub const fn parameter_scale(self) -> f64 {
+        self.parameter_scale
+    }
+
+    /// Carrier-angle phase offset.
+    pub const fn parameter_offset(self) -> f64 {
+        self.parameter_offset
+    }
+}
+
+/// Kernel-facade parameter-space carrier trace.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum SectionUvCurve {
+    /// Affine parameter-space line composed with the carrier map.
+    Line(SectionUvLine),
+    /// Parameter-space circle composed with the carrier angle map.
+    Circle(SectionUvCircle),
+}
+
+/// Kernel-owned summary of the paired whole-range proof.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SectionBranchEvidence {
+    residual_bounds: [f64; 2],
+    tolerance: f64,
+}
+
+impl SectionBranchEvidence {
+    /// Conservative model-space trace residuals in operand order.
+    pub const fn residual_bounds(self) -> [f64; 2] {
+        self.residual_bounds
+    }
+
+    /// Model-space tolerance used by the graph-owned proof.
+    pub const fn tolerance(self) -> f64 {
+        self.tolerance
+    }
+}
+
+/// One graph-owned site retained for future trim-fragment assembly.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SectionFragmentSite {
+    point: Point3,
+    surface_parameters: [[f64; 2]; 2],
+    surface_window_boundaries: [bool; 2],
+}
+
+impl SectionFragmentSite {
+    /// Model-space representative on the certified carrier.
+    pub const fn point(self) -> Point3 {
+        self.point
+    }
+
+    /// Parameters on the two source face surfaces, in operand order.
+    pub const fn surface_parameters(self) -> [[f64; 2]; 2] {
+        self.surface_parameters
+    }
+
+    /// Which conservative source surface windows contain this site on their
+    /// boundary. This is chart evidence, not a trimmed-face boundary claim.
+    pub const fn surface_window_boundaries(self) -> [bool; 2] {
+        self.surface_window_boundaries
+    }
+}
+
+/// One certified Plane/Cylinder circle carrier awaiting exact trim clipping.
+///
+/// These branches are verified partial evidence. They are deliberately kept
+/// separate from [`SectionEdge`], whose endpoints and sites already carry
+/// certified trimmed-face topology.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionBranch {
+    faces: [FaceId; 2],
+    carrier: SectionCarrier,
+    range: ParamRange,
+    topology: SectionBranchTopology,
+    pcurves: [SectionUvCurve; 2],
+    fragment_sites: Vec<SectionFragmentSite>,
+    endpoint_sites: [usize; 2],
+    evidence: SectionBranchEvidence,
+}
+
+impl SectionBranch {
+    /// Source faces in operand order.
+    pub const fn faces(&self) -> &[FaceId; 2] {
+        &self.faces
+    }
+
+    /// Exact model-space carrier through kernel-owned value types.
+    pub const fn carrier(&self) -> SectionCarrier {
+        self.carrier
+    }
+
+    /// Complete finite carrier interval covered by the paired proof.
+    pub const fn range(&self) -> ParamRange {
+        self.range
+    }
+
+    /// Open/closed topology of the carrier interval.
+    pub const fn topology(&self) -> SectionBranchTopology {
+        self.topology
+    }
+
+    /// Exact paired pcurves in operand order.
+    pub const fn pcurves(&self) -> &[SectionUvCurve; 2] {
+        &self.pcurves
+    }
+
+    /// Graph-owned sites retained for later trim-fragment assembly.
+    pub fn fragment_sites(&self) -> &[SectionFragmentSite] {
+        &self.fragment_sites
+    }
+
+    /// Fragment-site indices at the low/high parameter slots. A closed
+    /// branch intentionally returns the same site in both slots.
+    pub const fn endpoint_sites(&self) -> [usize; 2] {
+        self.endpoint_sites
+    }
+
+    /// Kernel-owned summary of the graph-owned paired residual proof.
+    pub const fn evidence(&self) -> SectionBranchEvidence {
+        self.evidence
+    }
+}
+
 /// One stitched chain of section edges.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectionLoop {
@@ -336,6 +518,7 @@ pub struct BodySectionGraph {
     pub(crate) bodies: [BodyId; 2],
     pub(crate) vertices: Vec<SectionVertex>,
     pub(crate) edges: Vec<SectionEdge>,
+    pub(crate) branches: Vec<SectionBranch>,
     pub(crate) loops: Vec<SectionLoop>,
     pub(crate) gaps: Vec<SectionGap>,
     pub(crate) completion: SectionCompletion,
@@ -355,6 +538,12 @@ impl BodySectionGraph {
     /// Certified edges in deterministic pair-major, along-carrier order.
     pub fn edges(&self) -> &[SectionEdge] {
         &self.edges
+    }
+
+    /// Certified surface-window branches awaiting exact curved trim clipping
+    /// and fragment stitching.
+    pub fn branches(&self) -> &[SectionBranch] {
+        &self.branches
     }
 
     /// Stitched chains in deterministic discovery order.
@@ -395,6 +584,8 @@ pub(crate) const GAP_PAIR_UNRESOLVED: &str =
     "a candidate face pair returned an indeterminate intersection result";
 pub(crate) const GAP_INCOMPATIBLE_EDGE_PARAMETERS: &str =
     "stitched source-edge parameter enclosures are incompatible";
+pub(crate) const GAP_CURVED_TRIM_UNRESOLVED: &str =
+    "a certified curved section carrier awaits exact trim clipping and fragment stitching";
 
 impl Part<'_> {
     /// Compute the certified section edge graph between two solid bodies of
@@ -464,10 +655,19 @@ fn section_impl(
     charge(scope, (faces_a.len() + faces_b.len()) as u64)?;
 
     let mut acc = SectionAccumulator::default();
+    let mut examined: u64 = 0;
+    collect_plane_cylinder_branches(
+        store,
+        part_id,
+        &faces_a,
+        &faces_b,
+        &mut examined,
+        scope,
+        &mut acc,
+    )?;
     let admitted_a = admit_faces(store, part_id, &faces_a, linear, scope, &mut acc)?;
     let admitted_b = admit_faces(store, part_id, &faces_b, linear, scope, &mut acc)?;
 
-    let mut examined: u64 = 0;
     for (a_index, slot_a) in admitted_a.iter().enumerate() {
         let Some(face_a) = slot_a else { continue };
         for (b_index, slot_b) in admitted_b.iter().enumerate() {
@@ -551,6 +751,7 @@ struct SegmentGeometry {
 struct SectionAccumulator {
     segments: Vec<stitch::StitchSegment>,
     geometry: Vec<SegmentGeometry>,
+    branches: Vec<SectionBranch>,
     gaps: Vec<SectionGap>,
 }
 
@@ -561,6 +762,180 @@ impl SectionAccumulator {
             faces: vec![a.facade.clone(), b.facade.clone()],
         });
     }
+}
+
+/// Collect proof-bearing Plane/Cylinder circle carriers independently of the
+/// planar trim/stitch admission path.
+///
+/// Face domains are conservative source-owned surface windows. They are
+/// sufficient for analytic branch discovery and paired trace proof, but not
+/// for claiming membership in the exact trimmed face. Every retained branch
+/// therefore carries an explicit curved-trim gap and cannot contribute to a
+/// `Complete` body section graph yet.
+#[allow(clippy::too_many_arguments)]
+fn collect_plane_cylinder_branches(
+    store: &Store,
+    part_id: &PartId,
+    faces_a: &[RawFaceId],
+    faces_b: &[RawFaceId],
+    examined: &mut u64,
+    scope: &mut OperationScope<'_, '_>,
+    acc: &mut SectionAccumulator,
+) -> Result<()> {
+    for &raw_a in faces_a {
+        let face_a = read(store.get(raw_a))?;
+        let surface_a = read(store.surface(face_a.surface))?;
+        for &raw_b in faces_b {
+            let face_b = read(store.get(raw_b))?;
+            let surface_b = read(store.surface(face_b.surface))?;
+            if !matches!(
+                (surface_a, surface_b),
+                (SurfaceGeom::Plane(_), SurfaceGeom::Cylinder(_))
+                    | (SurfaceGeom::Cylinder(_), SurfaceGeom::Plane(_))
+            ) {
+                continue;
+            }
+            *examined += 1;
+            scope
+                .ledger_mut()
+                .observe(SECTION_FACE_PAIRS, ResourceKind::Items, *examined)
+                .map_err(Error::from)?;
+            charge(scope, 1)?;
+            let facades = [
+                FaceId::new(part_id.clone(), raw_a),
+                FaceId::new(part_id.clone(), raw_b),
+            ];
+            let (Some(domain_a), Some(domain_b)) = (face_a.domain(), face_b.domain()) else {
+                acc.gaps.push(SectionGap {
+                    reason: GAP_PAIR_UNRESOLVED,
+                    faces: facades.to_vec(),
+                });
+                continue;
+            };
+            let intersections = match intersect_bounded_graph_surfaces_in_scope(
+                store.geometry(),
+                face_a.surface,
+                [domain_a.u, domain_a.v],
+                face_b.surface,
+                [domain_b.u, domain_b.v],
+                scope,
+            ) {
+                Ok(intersections) => intersections,
+                Err(error) => {
+                    if let Some(error) = lift_limit_error(error) {
+                        return Err(error);
+                    }
+                    acc.gaps.push(SectionGap {
+                        reason: GAP_PAIR_UNRESOLVED,
+                        faces: facades.to_vec(),
+                    });
+                    continue;
+                }
+            };
+            if !intersections.raw.is_complete()
+                || !intersections.raw.points.is_empty()
+                || !intersections.raw.regions.is_empty()
+            {
+                acc.gaps.push(SectionGap {
+                    reason: GAP_PAIR_UNRESOLVED,
+                    faces: facades.to_vec(),
+                });
+                continue;
+            }
+            for edge in &intersections.branch_graph.edges {
+                let Some(branch) = adapt_plane_cylinder_branch(
+                    &facades,
+                    edge,
+                    &intersections.branch_graph.vertices,
+                ) else {
+                    acc.gaps.push(SectionGap {
+                        reason: GAP_PAIR_UNRESOLVED,
+                        faces: facades.to_vec(),
+                    });
+                    continue;
+                };
+                acc.branches.push(branch);
+                acc.gaps.push(SectionGap {
+                    reason: GAP_CURVED_TRIM_UNRESOLVED,
+                    faces: facades.to_vec(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Adapt one whole-period graph branch without turning its chart seam into
+/// two physical endpoints.
+fn adapt_plane_cylinder_branch(
+    faces: &[FaceId; 2],
+    edge: &IntersectionBranchEdge,
+    vertices: &[kops::intersect::IntersectionBranchVertex],
+) -> Option<SectionBranch> {
+    if edge.topology != IntersectionBranchTopology::Closed
+        || edge.endpoint_vertices[0] != edge.endpoint_vertices[1]
+        || edge.kind != ContactKind::Transverse
+    {
+        return None;
+    }
+    let CurveDescriptor::Circle(carrier) = edge.carrier else {
+        return None;
+    };
+    let certificate = edge.certificate.as_plane_cylinder_circle()?;
+    let pcurves = [
+        adapt_branch_pcurve(&edge.pcurves[0], edge.parameter_maps[0])?,
+        adapt_branch_pcurve(&edge.pcurves[1], edge.parameter_maps[1])?,
+    ];
+    let vertex = *vertices.get(edge.endpoint_vertices[0])?;
+    let IntersectionBranchVertexEvent::PeriodSeam { surfaces } = vertex.event else {
+        return None;
+    };
+    Some(SectionBranch {
+        faces: faces.clone(),
+        carrier: SectionCarrier::Circle {
+            center: carrier.frame().origin(),
+            normal: carrier.frame().z(),
+            x_direction: carrier.frame().x(),
+            radius: carrier.radius(),
+        },
+        range: edge.carrier_range,
+        topology: SectionBranchTopology::Closed,
+        pcurves,
+        fragment_sites: vec![SectionFragmentSite {
+            point: vertex.point,
+            surface_parameters: vertex.surface_parameters,
+            surface_window_boundaries: surfaces,
+        }],
+        endpoint_sites: [0, 0],
+        evidence: SectionBranchEvidence {
+            residual_bounds: certificate.residual_bounds(),
+            tolerance: certificate.tolerance(),
+        },
+    })
+}
+
+/// Compose graph-owned pcurve geometry with its carrier map into facade-owned
+/// exact values. Unsupported descriptor families fail closed.
+fn adapt_branch_pcurve(
+    descriptor: &kgraph::Curve2dDescriptor,
+    map: AffineParamMap1d,
+) -> Option<SectionUvCurve> {
+    if let Some(line) = descriptor.as_line() {
+        return Some(SectionUvCurve::Line(compose_uv_line(
+            line.origin(),
+            line.dir(),
+            map,
+            false,
+        )));
+    }
+    let circle = descriptor.as_circle()?;
+    Some(SectionUvCurve::Circle(SectionUvCircle {
+        center: circle.center(),
+        radius: circle.radius(),
+        x_direction: circle.x_dir(),
+        parameter_scale: map.scale(),
+        parameter_offset: map.offset(),
+    }))
 }
 
 /// Run slice admission over one body's stored face list.
@@ -1003,6 +1378,7 @@ fn assemble_graph(
     let SectionAccumulator {
         segments,
         geometry,
+        branches,
         mut gaps,
     } = acc;
     let stitched = stitch::stitch_segments(&segments);
@@ -1062,6 +1438,7 @@ fn assemble_graph(
         bodies,
         vertices,
         edges,
+        branches,
         loops,
         gaps,
         completion,

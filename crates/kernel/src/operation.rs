@@ -829,6 +829,10 @@ pub struct BodyCreated {
 }
 
 impl BodyCreated {
+    pub(crate) const fn new(body: BodyId, journal: ChangeJournal) -> Self {
+        Self { body, journal }
+    }
+
     /// Created body identity.
     pub fn body(&self) -> BodyId {
         self.body.clone()

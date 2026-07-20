@@ -123,12 +123,19 @@ fn direct_nurbs_nurbs_promotes_a_paired_whole_range_trace() {
         assert_eq!(raw_branch.uv_a_end[1], 0.0015);
         assert_eq!(raw_branch.uv_b_end[1], 0.0015);
         assert_eq!(
+            result.branch_graph.edges[0].topology,
+            kops::intersect::IntersectionBranchTopology::Open
+        );
+        assert_eq!(
             result.branch_graph.edges[0]
                 .endpoint_events
                 .map(|event| match event {
                     kops::intersect::IntersectionBranchEndpointEvent::SurfaceWindowBoundary {
                         surfaces,
                     } => surfaces,
+                    kops::intersect::IntersectionBranchEndpointEvent::PeriodSeam { .. } => {
+                        panic!("an open NURBS branch cannot end at a periodic seam")
+                    }
                 }),
             [[true, true], [true, true]]
         );

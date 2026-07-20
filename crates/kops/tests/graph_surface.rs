@@ -10,20 +10,22 @@ use kgeom::curve::{Curve, Line};
 use kgeom::frame::Frame;
 use kgeom::nurbs::NurbsSurface;
 use kgeom::param::ParamRange;
-use kgeom::surface::{Plane, Sphere, Surface};
+use kgeom::surface::{Cylinder, Plane, Sphere, Surface};
 use kgeom::vec::{Point3, Vec3};
 use kgraph::{
     Curve2dDescriptor, CurveClass, CurveDescriptor, EvalContext, EvalError, EvalLimits,
     GeometryGraph, GeometryGraphError, GeometryRef, IntersectionCertificateError,
-    OffsetSurfaceDescriptor, PairedTrace, PlaneSphereCircleTrace, SurfaceClass,
+    OffsetSurfaceDescriptor, PairedTrace, PlaneCylinderCircleTrace, PlaneSphereCircleTrace,
+    SurfaceClass,
 };
 use kops::intersect::{
     BRANCH_CERTIFICATE_FAILURE, CURVE_CURVE_CLASS_PAIR, ContactKind, GraphSurfaceBudgetProfile,
-    GraphSurfaceIntersectionError, IntersectionBranchVertexEvent, IntersectionError,
-    SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS, SURFACE_SURFACE_CLASS_PAIR, intersect_bounded_curves,
-    intersect_bounded_graph_surfaces, intersect_bounded_graph_surfaces_in_scope,
-    intersect_bounded_graph_surfaces_with_context, intersect_bounded_plane_sphere,
-    intersect_bounded_planes, persist_verified_graph_surface_intersections,
+    GraphSurfaceIntersectionError, IntersectionBranchTopology, IntersectionBranchVertexEvent,
+    IntersectionError, SPHERICAL_CIRCLE_PROOF_SUBDIVISIONS, SURFACE_SURFACE_CLASS_PAIR,
+    intersect_bounded_curves, intersect_bounded_graph_surfaces,
+    intersect_bounded_graph_surfaces_in_scope, intersect_bounded_graph_surfaces_with_context,
+    intersect_bounded_plane_cylinder, intersect_bounded_plane_sphere, intersect_bounded_planes,
+    persist_verified_graph_surface_intersections,
 };
 
 fn horizontal_plane(z: f64) -> Plane {
@@ -94,6 +96,168 @@ fn sphere_window() -> [ParamRange; 2] {
         ParamRange::new(0.0, core::f64::consts::TAU),
         ParamRange::new(-core::f64::consts::FRAC_PI_2, core::f64::consts::FRAC_PI_2),
     ]
+}
+
+fn cylinder_window() -> [ParamRange; 2] {
+    [
+        ParamRange::new(0.0, core::f64::consts::TAU),
+        ParamRange::new(0.0, 2.0),
+    ]
+}
+
+#[test]
+fn plane_cylinder_full_circle_is_one_closed_certified_branch() {
+    let plane = horizontal_plane(1.0);
+    let cylinder = Cylinder::new(Frame::world(), 0.75).unwrap();
+    let plane_range = [ParamRange::new(-2.0, 2.0), ParamRange::new(-2.0, 2.0)];
+    let cylinder_range = cylinder_window();
+    let tolerances = Tolerances::default();
+    let mut graph = GeometryGraph::new();
+    let plane_handle = graph.insert_surface(plane).unwrap();
+    let cylinder_handle = graph.insert_surface(cylinder).unwrap();
+
+    let hit = intersect_bounded_graph_surfaces(
+        &graph,
+        plane_handle,
+        plane_range,
+        cylinder_handle,
+        cylinder_range,
+        tolerances,
+    )
+    .unwrap();
+    let raw = intersect_bounded_plane_cylinder(
+        &plane,
+        plane_range,
+        &cylinder,
+        cylinder_range,
+        tolerances,
+    )
+    .unwrap();
+    assert_eq!(hit.raw, raw);
+    assert!(hit.raw.is_complete());
+    assert_eq!(hit.branch_graph.vertices.len(), 1);
+    assert_eq!(hit.branch_graph.edges.len(), 1);
+
+    let edge = &hit.branch_graph.edges[0];
+    assert_eq!(edge.topology, IntersectionBranchTopology::Closed);
+    assert_eq!(edge.endpoint_vertices, [0, 0]);
+    assert!(matches!(
+        hit.branch_graph.vertices[0].event,
+        IntersectionBranchVertexEvent::PeriodSeam { .. }
+    ));
+    let CurveDescriptor::Circle(carrier) = &edge.carrier else {
+        panic!("Plane/Cylinder full-period carrier must remain an exact circle");
+    };
+    assert!(matches!(edge.pcurves[0], Curve2dDescriptor::Circle(_)));
+    assert!(matches!(edge.pcurves[1], Curve2dDescriptor::Line(_)));
+    let certificate = edge.certificate.as_plane_cylinder_circle().unwrap();
+    assert!(matches!(
+        certificate.traces(),
+        [
+            PlaneCylinderCircleTrace::Plane(_),
+            PlaneCylinderCircleTrace::Cylinder(_)
+        ]
+    ));
+    for parameter in [0.0, 0.31, 2.7, core::f64::consts::TAU] {
+        let point = carrier.eval(parameter);
+        let plane_uv = edge.pcurves[0]
+            .as_curve()
+            .eval(edge.parameter_maps[0].map(parameter));
+        let cylinder_uv = edge.pcurves[1]
+            .as_curve()
+            .eval(edge.parameter_maps[1].map(parameter));
+        assert!(point.dist(plane.eval([plane_uv.x, plane_uv.y])) <= certificate.tolerance());
+        assert!(
+            point.dist(cylinder.eval([cylinder_uv.x, cylinder_uv.y])) <= certificate.tolerance()
+        );
+    }
+
+    let reversed = intersect_bounded_graph_surfaces(
+        &graph,
+        cylinder_handle,
+        cylinder_range,
+        plane_handle,
+        plane_range,
+        tolerances,
+    )
+    .unwrap();
+    assert_eq!(reversed.raw, raw.swapped());
+    assert_eq!(reversed.branch_graph.vertices.len(), 1);
+    let reversed_edge = &reversed.branch_graph.edges[0];
+    assert_eq!(reversed_edge.topology, IntersectionBranchTopology::Closed);
+    assert_eq!(reversed_edge.endpoint_vertices, [0, 0]);
+    assert!(matches!(
+        reversed_edge.pcurves[0],
+        Curve2dDescriptor::Line(_)
+    ));
+    assert!(matches!(
+        reversed_edge.pcurves[1],
+        Curve2dDescriptor::Circle(_)
+    ));
+    assert!(matches!(
+        reversed_edge
+            .certificate
+            .as_plane_cylinder_circle()
+            .unwrap()
+            .traces(),
+        [
+            PlaneCylinderCircleTrace::Cylinder(_),
+            PlaneCylinderCircleTrace::Plane(_)
+        ]
+    ));
+}
+
+#[test]
+fn translated_tilted_plane_cylinder_circle_remains_closed_and_paired() {
+    let cylinder_frame = Frame::new(
+        Point3::new(2.0, -1.0, 3.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .unwrap();
+    let cylinder = Cylinder::new(cylinder_frame, 1.25).unwrap();
+    let cut_center = cylinder_frame.origin() + cylinder_frame.z() * 0.8;
+    let plane = Plane::new(Frame::new(cut_center, cylinder_frame.z(), cylinder_frame.y()).unwrap());
+    let plane_range = [ParamRange::new(-2.0, 2.0), ParamRange::new(-2.0, 2.0)];
+    let cylinder_range = [
+        ParamRange::new(0.0, core::f64::consts::TAU),
+        ParamRange::new(-0.2, 1.8),
+    ];
+    let mut graph = GeometryGraph::new();
+    let plane_handle = graph.insert_surface(plane).unwrap();
+    let cylinder_handle = graph.insert_surface(cylinder).unwrap();
+
+    let hit = intersect_bounded_graph_surfaces(
+        &graph,
+        plane_handle,
+        plane_range,
+        cylinder_handle,
+        cylinder_range,
+        Tolerances::default(),
+    )
+    .unwrap();
+    assert_eq!(hit.branch_graph.vertices.len(), 1);
+    let edge = &hit.branch_graph.edges[0];
+    assert_eq!(edge.topology, IntersectionBranchTopology::Closed);
+    assert_eq!(edge.endpoint_vertices, [0, 0]);
+    let CurveDescriptor::Circle(carrier) = &edge.carrier else {
+        panic!("tilted Plane/Cylinder branch must retain an exact circle");
+    };
+    assert!(carrier.frame().origin().dist(cut_center) <= 1e-12);
+    let certificate = edge.certificate.as_plane_cylinder_circle().unwrap();
+    for parameter in [0.0, 0.43, 3.2, core::f64::consts::TAU] {
+        let point = carrier.eval(parameter);
+        let plane_uv = edge.pcurves[0]
+            .as_curve()
+            .eval(edge.parameter_maps[0].map(parameter));
+        let cylinder_uv = edge.pcurves[1]
+            .as_curve()
+            .eval(edge.parameter_maps[1].map(parameter));
+        assert!(point.dist(plane.eval([plane_uv.x, plane_uv.y])) <= certificate.tolerance());
+        assert!(
+            point.dist(cylinder.eval([cylinder_uv.x, cylinder_uv.y])) <= certificate.tolerance()
+        );
+    }
 }
 
 fn assert_plane_sphere_edge_lifts_over_complete_range(

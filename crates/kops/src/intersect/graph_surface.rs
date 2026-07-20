@@ -19,8 +19,12 @@
 //! contracts. Common-axis circles retain their longitude/latitude fast path;
 //! other finite secants use a certified nonlinear spherical pcurve and fail
 //! closed at chart singularities or outside windows.
+//! Direct Plane/Cylinder pairs additionally promote complete-period circle
+//! branches with an explicit closed topology and one canonical seam vertex;
+//! open arcs, rulings, and ellipses remain unsupported by this adapter.
 
 use super::error::IntersectionError;
+use super::graph_plane_cylinder::build_verified_plane_cylinder_circle_branch;
 use super::nurbs_nurbs_surface::{
     intersect_bounded_dual_offset_nurbs_surfaces_with_traces_in_scope,
     intersect_bounded_nurbs_nurbs_surfaces_with_traces_in_scope,
@@ -38,6 +42,7 @@ use super::nurbs_surface_march::{
     ContextMarchError, MarchOutput, MarchTrace, NURBS_SURFACE_MARCH_SAMPLE_LIMIT,
     NurbsSurfaceMarchBudgetProfile,
 };
+use super::plane_cylinder::intersect_bounded_plane_cylinder;
 use super::plane_nurbs_surface::intersect_bounded_plane_nurbs_surface_with_traces_in_scope;
 use super::plane_plane::intersect_bounded_planes;
 use super::plane_sphere::intersect_bounded_plane_sphere;
@@ -59,16 +64,17 @@ use kgeom::curve::{Circle, Curve, Line};
 use kgeom::curve2d::{Circle2d, Line2d};
 use kgeom::nurbs::NurbsSurface;
 use kgeom::param::ParamRange;
-use kgeom::surface::{Plane, Sphere};
+use kgeom::surface::{Cylinder, Plane, Sphere};
 use kgeom::vec::{Point3, Vec2};
 use kgraph::{
     AffineParamMap1d, Curve2dDescriptor, Curve2dHandle, CurveDescriptor, CurveHandle,
     EvalBudgetProfile, EvalContext, EvalError, EvalLimits, EvalUsage, ExactSurfaceField,
     GeometryGraph, GeometryGraphError, GeometryRef, IntersectionCertificateError,
-    NurbsIntersectionTrace, PairedTrace, PlaneCircleTrace, PlaneSphereCircleTrace,
-    SphereLatitudeTrace, SurfaceDescriptor, SurfaceHandle, TransmittedOffsetPlaneTrace,
-    VerifiedIntersectionCertificate, VerifiedNurbsIntersectionCertificate,
-    certify_paired_plane_line_residuals, certify_paired_plane_sphere_circle_residuals,
+    NurbsIntersectionTrace, PairedPlaneCylinderCircleResidualCertificate, PairedTrace,
+    PlaneCircleTrace, PlaneSphereCircleTrace, SphereLatitudeTrace, SurfaceDescriptor,
+    SurfaceHandle, TransmittedOffsetPlaneTrace, VerifiedIntersectionCertificate,
+    VerifiedNurbsIntersectionCertificate, certify_paired_plane_line_residuals,
+    certify_paired_plane_sphere_circle_residuals,
     certify_paired_plane_sphere_oblique_circle_residuals,
     certify_verified_dual_offset_nurbs_intersection_residuals,
     certify_verified_nurbs_nurbs_intersection_residuals,
@@ -333,9 +339,14 @@ pub enum IntersectionBranchVertexEvent {
         /// Which source surface windows clip this endpoint.
         surfaces: [bool; 2],
     },
+    /// Canonical parameter seam of a closed periodic branch.
+    PeriodSeam {
+        /// Which source chart windows contain the retained seam boundary.
+        surfaces: [bool; 2],
+    },
 }
 
-/// End condition for one endpoint of an open intersection branch.
+/// End condition for one endpoint slot of an intersection branch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntersectionBranchEndpointEvent {
     /// The branch is clipped by at least one requested surface window.
@@ -343,6 +354,22 @@ pub enum IntersectionBranchEndpointEvent {
         /// Which source surface windows clip this endpoint.
         surfaces: [bool; 2],
     },
+    /// Both endpoint slots reference one canonical seam vertex of a closed
+    /// periodic branch.
+    PeriodSeam {
+        /// Which source chart windows contain the retained seam boundary.
+        surfaces: [bool; 2],
+    },
+}
+
+/// Topology of one certified operation-local branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntersectionBranchTopology {
+    /// Distinct low/high endpoints bound the carrier fragment.
+    Open,
+    /// The carrier covers one complete period; both endpoint slots reference
+    /// one intentional parameter-seam vertex.
+    Closed,
 }
 
 /// One deterministic operation-local branch-graph vertex.
@@ -367,6 +394,8 @@ pub struct IntersectionBranchEdge {
     pub carrier: CurveDescriptor,
     /// Active finite interval on the carrier.
     pub carrier_range: ParamRange,
+    /// Whether this branch is open or covers one complete period.
+    pub topology: IntersectionBranchTopology,
     /// Graph-ready pcurve descriptors, in operand order.
     pub pcurves: [Curve2dDescriptor; 2],
     /// Carrier-to-pcurve parameter maps, in operand order.
@@ -386,6 +415,8 @@ pub struct IntersectionBranchEdge {
 pub enum IntersectionBranchCertificate {
     /// Existing exact analytic line/circle proof family.
     Analytic(Box<VerifiedIntersectionCertificate>),
+    /// Whole-period Plane/Cylinder circle proof.
+    PlaneCylinderCircle(Box<PairedPlaneCylinderCircleResidualCertificate>),
     /// Operation-generated degree-1 analytic/NURBS trace proof.
     Nurbs(Box<VerifiedNurbsIntersectionCertificate>),
 }
@@ -395,6 +426,7 @@ impl IntersectionBranchCertificate {
     pub fn residual_bounds(&self) -> [f64; 2] {
         match self {
             Self::Analytic(certificate) => certificate.residual_bounds(),
+            Self::PlaneCylinderCircle(certificate) => certificate.residual_bounds(),
             Self::Nurbs(certificate) => certificate.residual_bounds(),
         }
     }
@@ -403,6 +435,7 @@ impl IntersectionBranchCertificate {
     pub fn tolerance(&self) -> f64 {
         match self {
             Self::Analytic(certificate) => certificate.tolerance(),
+            Self::PlaneCylinderCircle(certificate) => certificate.tolerance(),
             Self::Nurbs(certificate) => certificate.tolerance(),
         }
     }
@@ -411,7 +444,7 @@ impl IntersectionBranchCertificate {
     pub fn as_plane_line(&self) -> Option<kgraph::PairedPlaneLineResidualCertificate> {
         match self {
             Self::Analytic(certificate) => certificate.as_plane_line(),
-            Self::Nurbs(_) => None,
+            Self::PlaneCylinderCircle(_) | Self::Nurbs(_) => None,
         }
     }
 
@@ -421,14 +454,22 @@ impl IntersectionBranchCertificate {
     ) -> Option<kgraph::PairedPlaneSphereCircleResidualCertificate> {
         match self {
             Self::Analytic(certificate) => certificate.as_plane_sphere_circle(),
-            Self::Nurbs(_) => None,
+            Self::PlaneCylinderCircle(_) | Self::Nurbs(_) => None,
+        }
+    }
+
+    /// Borrow the whole-period Plane/Cylinder circle proof when it matches.
+    pub fn as_plane_cylinder_circle(&self) -> Option<PairedPlaneCylinderCircleResidualCertificate> {
+        match self {
+            Self::PlaneCylinderCircle(certificate) => Some(**certificate),
+            Self::Analytic(_) | Self::Nurbs(_) => None,
         }
     }
 
     /// Borrow the operation-generated analytic/NURBS proof when it matches.
     pub fn as_nurbs(&self) -> Option<&VerifiedNurbsIntersectionCertificate> {
         match self {
-            Self::Analytic(_) => None,
+            Self::Analytic(_) | Self::PlaneCylinderCircle(_) => None,
             Self::Nurbs(certificate) => Some(certificate.as_ref()),
         }
     }
@@ -462,6 +503,9 @@ enum ResolvedGraphSurfaceField<'a> {
     },
     Sphere {
         surface: Sphere,
+    },
+    Cylinder {
+        surface: Cylinder,
     },
     Nurbs(&'a NurbsSurface),
     OffsetNurbs {
@@ -635,6 +679,32 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
             ResolvedGraphSurfaceField::Plane {
                 surface: plane,
                 direct: direct_plane,
+            },
+        ],
+        (
+            Some(ResolvedGraphSurfaceField::Plane {
+                surface: plane,
+                direct: true,
+            }),
+            Some(ResolvedGraphSurfaceField::Cylinder { surface: cylinder }),
+        ) => [
+            ResolvedGraphSurfaceField::Plane {
+                surface: plane,
+                direct: true,
+            },
+            ResolvedGraphSurfaceField::Cylinder { surface: cylinder },
+        ],
+        (
+            Some(ResolvedGraphSurfaceField::Cylinder { surface: cylinder }),
+            Some(ResolvedGraphSurfaceField::Plane {
+                surface: plane,
+                direct: true,
+            }),
+        ) => [
+            ResolvedGraphSurfaceField::Cylinder { surface: cylinder },
+            ResolvedGraphSurfaceField::Plane {
+                surface: plane,
+                direct: true,
             },
         ],
         (
@@ -1008,6 +1078,25 @@ pub fn intersect_bounded_graph_surfaces_in_scope(
         ),
         [
             ResolvedGraphSurfaceField::Plane { surface: plane, .. },
+            ResolvedGraphSurfaceField::Cylinder { surface: cylinder },
+        ] => (
+            intersect_bounded_plane_cylinder(&plane, range_a, &cylinder, range_b, tolerances)
+                .map_err(IntersectionError::from)
+                .map_err(GraphSurfaceIntersectionError::Intersection)?,
+            None,
+        ),
+        [
+            ResolvedGraphSurfaceField::Cylinder { surface: cylinder },
+            ResolvedGraphSurfaceField::Plane { surface: plane, .. },
+        ] => (
+            intersect_bounded_plane_cylinder(&plane, range_b, &cylinder, range_a, tolerances)
+                .map(SurfaceSurfaceIntersections::swapped)
+                .map_err(IntersectionError::from)
+                .map_err(GraphSurfaceIntersectionError::Intersection)?,
+            None,
+        ),
+        [
+            ResolvedGraphSurfaceField::Plane { surface: plane, .. },
             ResolvedGraphSurfaceField::Nurbs(surface),
         ] => {
             let output =
@@ -1264,6 +1353,13 @@ fn persist_verified_graph_surface_intersections_impl(
                         *certificate,
                     )?,
             },
+            IntersectionBranchCertificate::PlaneCylinderCircle(_) => {
+                return Err(GraphSurfaceIntersectionError::BranchCertificate(
+                    IntersectionCertificateError::UnsupportedCarrierParameterization {
+                        reason: "persistent Plane/Cylinder periodic branches require a closed-curve descriptor contract",
+                    },
+                ));
+            }
             IntersectionBranchCertificate::Nurbs(certificate) => graph
                 .insert_verified_nurbs_intersection_curve(
                     edge.source_surfaces,
@@ -1572,6 +1668,11 @@ fn resolve_exact_surface_field<'a>(
     }
     if let Some(sphere) = descriptor.as_sphere() {
         return Ok(Some(ResolvedGraphSurfaceField::Sphere { surface: *sphere }));
+    }
+    if let Some(cylinder) = descriptor.as_cylinder() {
+        return Ok(Some(ResolvedGraphSurfaceField::Cylinder {
+            surface: *cylinder,
+        }));
     }
     if let Some(surface) = descriptor.as_nurbs() {
         return Ok(Some(ResolvedGraphSurfaceField::Nurbs(surface)));
@@ -1896,6 +1997,7 @@ fn build_verified_branch_graph(
         let VerifiedBranchPayload {
             carrier,
             carrier_range,
+            topology,
             pcurves,
             parameter_maps,
             certificate,
@@ -1928,6 +2030,7 @@ fn build_verified_branch_graph(
                 VerifiedBranchPayload {
                     carrier: CurveDescriptor::Line(carrier),
                     carrier_range,
+                    topology: IntersectionBranchTopology::Open,
                     pcurves: [
                         Curve2dDescriptor::Line(pcurve_a),
                         Curve2dDescriptor::Line(pcurve_b),
@@ -1938,6 +2041,34 @@ fn build_verified_branch_graph(
                     )),
                 }
             }
+            (
+                SurfaceIntersectionCurve::Circle(raw_circle),
+                [
+                    ResolvedGraphSurfaceField::Plane { surface: plane, .. },
+                    ResolvedGraphSurfaceField::Cylinder { surface: cylinder },
+                ],
+            ) => build_verified_plane_cylinder_circle_branch(
+                *raw_circle,
+                branch,
+                plane,
+                cylinder,
+                true,
+                tolerance,
+            )?,
+            (
+                SurfaceIntersectionCurve::Circle(raw_circle),
+                [
+                    ResolvedGraphSurfaceField::Cylinder { surface: cylinder },
+                    ResolvedGraphSurfaceField::Plane { surface: plane, .. },
+                ],
+            ) => build_verified_plane_cylinder_circle_branch(
+                *raw_circle,
+                branch,
+                plane,
+                cylinder,
+                false,
+                tolerance,
+            )?,
             (SurfaceIntersectionCurve::Circle(raw_circle), fields) => {
                 build_verified_plane_sphere_circle_branch(
                     *raw_circle,
@@ -1969,7 +2100,10 @@ fn build_verified_branch_graph(
             }
         };
 
-        let endpoint_vertices = [vertices.len(), vertices.len() + 1];
+        let endpoint_vertices = match topology {
+            IntersectionBranchTopology::Open => [vertices.len(), vertices.len() + 1],
+            IntersectionBranchTopology::Closed => [vertices.len(), vertices.len()],
+        };
         let mut endpoint_events = [
             IntersectionBranchEndpointEvent::SurfaceWindowBoundary {
                 surfaces: [false; 2],
@@ -1978,7 +2112,11 @@ fn build_verified_branch_graph(
                 surfaces: [false; 2],
             },
         ];
-        for (endpoint, parameter) in [carrier_range.lo, carrier_range.hi].into_iter().enumerate() {
+        let endpoint_parameters: &[f64] = match topology {
+            IntersectionBranchTopology::Open => &[carrier_range.lo, carrier_range.hi],
+            IntersectionBranchTopology::Closed => &[carrier_range.lo],
+        };
+        for (endpoint, &parameter) in endpoint_parameters.iter().enumerate() {
             let surface_parameters = [
                 pcurves[0].as_curve().eval(parameter_maps[0].map(parameter)),
                 pcurves[1].as_curve().eval(parameter_maps[1].map(parameter)),
@@ -1987,9 +2125,20 @@ fn build_verified_branch_graph(
                 on_window_boundary(surface_parameters[0], surface_ranges[0], tolerance),
                 on_window_boundary(surface_parameters[1], surface_ranges[1], tolerance),
             ];
-            endpoint_events[endpoint] = IntersectionBranchEndpointEvent::SurfaceWindowBoundary {
-                surfaces: boundary_surfaces,
+            let endpoint_event = match topology {
+                IntersectionBranchTopology::Open => {
+                    IntersectionBranchEndpointEvent::SurfaceWindowBoundary {
+                        surfaces: boundary_surfaces,
+                    }
+                }
+                IntersectionBranchTopology::Closed => IntersectionBranchEndpointEvent::PeriodSeam {
+                    surfaces: boundary_surfaces,
+                },
             };
+            endpoint_events[endpoint] = endpoint_event;
+            if topology == IntersectionBranchTopology::Closed {
+                endpoint_events[1] = endpoint_event;
+            }
             vertices.push(IntersectionBranchVertex {
                 point: carrier.as_curve().eval(parameter),
                 surface_parameters: [
@@ -1997,8 +2146,17 @@ fn build_verified_branch_graph(
                     [surface_parameters[1].x, surface_parameters[1].y],
                 ],
                 kind: branch.kind,
-                event: IntersectionBranchVertexEvent::BoundaryEndpoint {
-                    surfaces: boundary_surfaces,
+                event: match topology {
+                    IntersectionBranchTopology::Open => {
+                        IntersectionBranchVertexEvent::BoundaryEndpoint {
+                            surfaces: boundary_surfaces,
+                        }
+                    }
+                    IntersectionBranchTopology::Closed => {
+                        IntersectionBranchVertexEvent::PeriodSeam {
+                            surfaces: boundary_surfaces,
+                        }
+                    }
                 },
             });
         }
@@ -2006,6 +2164,7 @@ fn build_verified_branch_graph(
             source_surfaces,
             carrier,
             carrier_range,
+            topology,
             pcurves,
             parameter_maps,
             endpoint_vertices,
@@ -2022,12 +2181,13 @@ fn build_verified_branch_graph(
     })
 }
 
-struct VerifiedBranchPayload {
-    carrier: CurveDescriptor,
-    carrier_range: ParamRange,
-    pcurves: [Curve2dDescriptor; 2],
-    parameter_maps: [AffineParamMap1d; 2],
-    certificate: IntersectionBranchCertificate,
+pub(super) struct VerifiedBranchPayload {
+    pub(super) carrier: CurveDescriptor,
+    pub(super) carrier_range: ParamRange,
+    pub(super) topology: IntersectionBranchTopology,
+    pub(super) pcurves: [Curve2dDescriptor; 2],
+    pub(super) parameter_maps: [AffineParamMap1d; 2],
+    pub(super) certificate: IntersectionBranchCertificate,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2454,6 +2614,7 @@ fn build_verified_analytic_nurbs_branch(
     Ok(VerifiedBranchPayload {
         carrier: CurveDescriptor::Nurbs(raw_carrier.clone()),
         carrier_range: raw_carrier.param_range(),
+        topology: IntersectionBranchTopology::Open,
         pcurves: pcurves.map(Curve2dDescriptor::Nurbs),
         parameter_maps: [identity, identity],
         certificate: IntersectionBranchCertificate::Nurbs(Box::new(certificate)),
@@ -2575,6 +2736,7 @@ fn build_verified_plane_sphere_circle_branch(
     Ok(VerifiedBranchPayload {
         carrier: CurveDescriptor::Circle(carrier),
         carrier_range,
+        topology: IntersectionBranchTopology::Open,
         pcurves,
         parameter_maps: if plane_first {
             [plane_map, identity]
@@ -2653,6 +2815,7 @@ fn build_verified_oblique_plane_sphere_circle_branch(
     Ok(VerifiedBranchPayload {
         carrier: CurveDescriptor::Circle(carrier),
         carrier_range: raw_branch.curve_range,
+        topology: IntersectionBranchTopology::Open,
         pcurves,
         parameter_maps: [identity, identity],
         certificate: IntersectionBranchCertificate::Analytic(Box::new(

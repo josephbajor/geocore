@@ -33,8 +33,9 @@ enforcement over new parallel surface area. Read the queue literally.
    `u64::MAX` (no truthful finite legacy cap exists).
 3. **Resume algorithm/API expansion behind the completed gates — OPEN (current head).** Block/block
    CSG is public and externally validated. The next consumer is block/cylinder Boolean support:
-   certified curved classification and SSI pcurves, fragment assembly, Full proof, and X_T evidence.
-   Broader intersection/NURBS families, revolve, and curved profiles remain milestone backlog.
+   public cylinder construction, finite-cylinder classification, and closed Plane/Cylinder carrier
+   evidence landed; exact trim/fragment assembly, Full proof, and X_T evidence remain. Broader
+   intersection/NURBS families, revolve, and curved profiles remain milestone backlog.
 
 **External-evidence lane.** Current Onshape records pin the 15-file writer bundle and the six-file
 public Boolean bundle. Fingerprints: `docs/oracle-certification.json` and
@@ -129,7 +130,8 @@ becoming the architecture.
 curve-pair isolation with bounded verified polishing, shared conic/SSI emitters, coincident-window
 region arms (Plane/Plane, Cylinder/Cylinder, Sphere/Sphere octants + bounded general sphere windows,
 Cone/Cone, Torus/Torus), exact algebraic carriers/residuals through magnitude-twelve (opt-in 13/14),
-and the line/Torus quartic slice.
+the line/Torus quartic slice, and operation-local closed Plane/Cylinder circle branches with paired
+whole-period pcurve evidence.
 **Evidence:** SSI/conic bit-signature regressions; sphere-window arm exemplars (piece/pair/arc N/N-1
 ceilings); magnitude-12→14 enumeration goldens; `kops` `Indeterminate` / `kgraph` typed-error
 propagation tests (per-arm fixtures: see git history).

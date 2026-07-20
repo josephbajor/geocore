@@ -2,7 +2,7 @@ use super::circle_cylinder::intersect_bounded_circle_cylinder;
 use super::ellipse_cylinder::intersect_bounded_ellipse_cylinder;
 use super::line_cylinder::intersect_bounded_line_cylinder;
 use super::line_plane::intersect_bounded_line_plane;
-use super::planar_curve_plane::{intersect_bounded_circle_plane, intersect_bounded_ellipse_plane};
+use super::planar_curve_plane::{clip_bounded_circle_on_plane, intersect_bounded_ellipse_plane};
 use super::result::{
     ContactKind, CurveSurfaceIntersections, CurveSurfaceOverlap, CurveSurfacePoint,
     SurfaceIntersectionCurve, SurfaceSurfaceCurve, SurfaceSurfaceIntersections,
@@ -10,6 +10,7 @@ use super::result::{
 };
 use kcore::error::{Error, Result};
 use kcore::math;
+use kcore::predicates::{Orientation, affine_dot3};
 use kcore::tolerance::Tolerances;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::frame::Frame;
@@ -51,6 +52,24 @@ pub fn intersect_bounded_plane_cylinder(
     }
 
     if radial_len <= tolerances.angular() {
+        // The rounded norm only identifies the near-degenerate branch. Shared
+        // signed Frame axes preserve the construction identity; otherwise
+        // exact dyadic dot signs decide whether the radial harmonic vanishes.
+        // A merely small nonzero harmonic must not become a circular result.
+        let zero = [0.0; 3];
+        let exact_radial_zero = normal == axis
+            || normal == -axis
+            || [cylinder.frame().x(), cylinder.frame().y()]
+                .into_iter()
+                .map(|direction| affine_dot3(normal.to_array(), direction.to_array(), zero, 0.0))
+                .all(|component| {
+                    component.is_some_and(|component| component.sign() == Orientation::Zero)
+                });
+        if !exact_radial_zero {
+            return Ok(SurfaceSurfaceIntersections::indeterminate_empty(
+                "near-perpendicular Plane/Cylinder orientation lacks exact classification",
+            ));
+        }
         let v = -offset / nz;
         let center = cylinder.frame().origin() + axis * v;
         let circle = Circle::new(
@@ -196,7 +215,7 @@ fn clip_circle_branch(
     cylinder_range: [ParamRange; 2],
     tolerances: Tolerances,
 ) -> Result<SurfaceSurfaceIntersections> {
-    let plane_hit = intersect_bounded_circle_plane(
+    let plane_hit = clip_bounded_circle_on_plane(
         &circle,
         circle.param_range(),
         plane,

@@ -228,7 +228,6 @@ fn check_pcurve_chart_with_periods(
 }
 
 /// Validate optional closed-use winding and singular endpoint metadata.
-#[cfg(test)]
 pub(crate) fn check_pcurve_metadata(
     store: &Store,
     edge: &Edge,

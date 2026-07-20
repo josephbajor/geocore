@@ -35,7 +35,10 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    two-shell cavity results; Full proof; deterministic X_T; Onshape 6/6 import
    and 6/6 there-and-back at writer `b596027`)*
 4. Extend the same ladder to block/cylinder (introduces curved SSI pcurves).
-   *(active queue head)*
+   *(active queue head — public cylinder construction, certified finite-cylinder
+   classification, and verified closed Plane/Cylinder section carriers landed;
+   curved trim/fragment assembly, Full proof, Boolean consumption, and X_T
+   oracle evidence remain)*
 
 Work that does not advance the queue head needs an explicit justification
 linking it to a rung ("rung 2 needs curve/curve overlap dedup because …").

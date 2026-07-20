@@ -158,12 +158,19 @@ fn overlapping_windows_promote_in_both_orders_and_persist_identities() {
         );
         assert_eq!(result.branch_graph.edges.len(), 1);
         assert_eq!(
+            result.branch_graph.edges[0].topology,
+            kops::intersect::IntersectionBranchTopology::Open
+        );
+        assert_eq!(
             result.branch_graph.edges[0]
                 .endpoint_events
                 .map(|event| match event {
                     kops::intersect::IntersectionBranchEndpointEvent::SurfaceWindowBoundary {
                         surfaces,
                     } => surfaces,
+                    kops::intersect::IntersectionBranchEndpointEvent::PeriodSeam { .. } => {
+                        panic!("an open NURBS branch cannot end at a periodic seam")
+                    }
                 }),
             [[true, true], [true, true]]
         );

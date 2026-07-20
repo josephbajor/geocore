@@ -28,11 +28,11 @@ use ktopo::geom::CurveGeom;
 use super::*;
 use crate::classify::{ClassifyPointInBodyRequest, PointBodyVerdict};
 use crate::operation::{BlockRequest, ExtrudeProfileRequest};
-use crate::{Kernel, PartEdit, PartId, Session};
+use crate::{CylinderRequest, Kernel, PartEdit, PartId, Session};
 
 /// Every stable gap-reason constant the section slice may report. Any other
 /// string is a contract violation.
-const STABLE_GAP_REASONS: [&str; 13] = [
+const STABLE_GAP_REASONS: [&str; 14] = [
     GAP_PLANAR_ONLY,
     GAP_LINE_EDGES_ONLY,
     GAP_BOUNDED_EDGES_ONLY,
@@ -46,6 +46,7 @@ const STABLE_GAP_REASONS: [&str; 13] = [
     GAP_CARRIER_ORIENTATION,
     GAP_PAIR_UNRESOLVED,
     GAP_INCOMPATIBLE_EDGE_PARAMETERS,
+    GAP_CURVED_TRIM_UNRESOLVED,
 ];
 
 /// Exact-coordinate agreement tolerance for hand-derived expected points.
@@ -1045,4 +1046,84 @@ fn wrong_part_rejected() {
         matches!(error, Error::WrongPart { .. }),
         "a body id from a different part must be rejected, got {error:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 12. Curved partial evidence: two full circles stay explicitly closed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn block_slab_through_cylinder_exposes_two_closed_circle_branches() {
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let (block, cylinder) = {
+        let mut edit = session.edit_part(part_id.clone()).unwrap();
+        // The block's z faces cut complete circles from the smaller cylinder;
+        // its four side planes lie strictly outside the cylinder.
+        let block = create_block_in(&mut edit, [0.0, 0.0, 1.0], [4.0, 4.0, 1.0]);
+        let cylinder = edit
+            .create_cylinder(CylinderRequest::new(Frame::world(), 0.75, 2.0))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (block, cylinder)
+    };
+    let graph = section_graph(&session, &part_id, &block, &cylinder);
+
+    assert_eq!(graph.completion(), SectionCompletion::Indeterminate);
+    assert!(graph.edges().is_empty());
+    assert_eq!(graph.branches().len(), 2);
+    assert_eq!(
+        graph
+            .gaps()
+            .iter()
+            .filter(|gap| gap.reason() == GAP_CURVED_TRIM_UNRESOLVED)
+            .count(),
+        2
+    );
+    let mut heights = Vec::new();
+    for (branch_index, branch) in graph.branches().iter().enumerate() {
+        assert_eq!(branch.topology(), SectionBranchTopology::Closed);
+        assert_eq!(branch.endpoint_sites(), [0, 0]);
+        assert_eq!(branch.fragment_sites().len(), 1);
+        assert_eq!(branch.range().width(), core::f64::consts::TAU);
+        assert!(matches!(branch.pcurves()[0], SectionUvCurve::Circle(_)));
+        assert!(matches!(branch.pcurves()[1], SectionUvCurve::Line(_)));
+        let evidence = branch.evidence();
+        assert!(
+            evidence
+                .residual_bounds()
+                .into_iter()
+                .all(|bound| bound.is_finite() && bound <= evidence.tolerance())
+        );
+        let (center, normal, x_direction, radius) = match branch.carrier() {
+            SectionCarrier::Circle {
+                center,
+                normal,
+                x_direction,
+                radius,
+            } => (center, normal, x_direction, radius),
+        };
+        heights.push(center.z);
+        assert_eq!(radius, 0.75);
+        let y_direction = normal.cross(x_direction);
+        for parameter in [0.17, 1.9, 4.8] {
+            let (sin, cos) = kcore::math::sincos(parameter);
+            let point = center + x_direction * (radius * cos) + y_direction * (radius * sin);
+            assert_boundary_on_both(
+                &session,
+                &part_id,
+                graph.bodies(),
+                point,
+                &format!("closed curved branch {branch_index}"),
+            );
+        }
+        let seam = branch.fragment_sites()[0].point();
+        let expected_seam = center + x_direction * radius;
+        assert!(seam.dist(expected_seam) <= 1e-9);
+    }
+    heights.sort_by(f64::total_cmp);
+    assert_eq!(heights, vec![0.5, 1.5]);
+    assert_stable_gap_reasons(&graph);
 }

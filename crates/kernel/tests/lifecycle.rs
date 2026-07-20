@@ -4,16 +4,16 @@ use kernel::{
     AccountingMode, BOOLEAN_BSP_WORK, BlockRequest, BodyId, BodyKind,
     BodyTessellationBudgetProfile, BooleanBodiesRequest, BooleanOperation, BooleanOutcome,
     BooleanRefusal, BooleanResult, BoundedCurve, BoundedPcurve, BudgetPlan, CheckBodyRequest,
-    CheckLevel, CheckOutcome, CreateSeedBodyRequest, CreateStrutRequest, EntityKind, Error,
-    ExecutionPolicy, ExportXtRequest, ExtrudeProfileAlongRequest, ExtrudeProfileRequest, Frame,
-    FullCommitRequirement, GrowTolerancesRequest, ImportXtRequest, IntersectCurvesRequest,
-    JoinRingRequest, Kernel, LimitSpec, MergeFaceAsHoleRequest, MutationKind, NumericalPolicy,
-    OperationSettings, ParamRange, PartId, PcurveChart, PcurveEndpointKind, PcurveMetadata,
-    PcurveSeam, PcurveSeamSide, Point2, Point3, PolicyVersion, RegionKind, RemoveBridgeRequest,
-    RemoveSeedBodyRequest, RemoveStrutRequest, ResourceKind, Session, SessionPolicy,
-    SessionPrecision, SplitHoleAsFaceRequest, SurfaceDerivativeOrder, SurfaceEvaluationRequest,
-    SurfaceParameter, TessOptions, TessellateBodyRequest, ToleranceGrowth, ToleranceGrowthTarget,
-    Tolerances, Vec3,
+    CheckLevel, CheckOutcome, CreateSeedBodyRequest, CreateStrutRequest, CylinderRequest,
+    EntityKind, Error, ExecutionPolicy, ExportXtRequest, ExtrudeProfileAlongRequest,
+    ExtrudeProfileRequest, Frame, FullCommitRequirement, GrowTolerancesRequest, ImportXtRequest,
+    IntersectCurvesRequest, JoinRingRequest, Kernel, LimitSpec, MergeFaceAsHoleRequest,
+    MutationKind, NumericalPolicy, OperationSettings, ParamRange, PartId, PcurveChart,
+    PcurveEndpointKind, PcurveMetadata, PcurveSeam, PcurveSeamSide, Point2, Point3, PolicyVersion,
+    RegionKind, RemoveBridgeRequest, RemoveSeedBodyRequest, RemoveStrutRequest, ResourceKind,
+    Session, SessionPolicy, SessionPrecision, SplitHoleAsFaceRequest, SurfaceDerivativeOrder,
+    SurfaceEvaluationRequest, SurfaceParameter, TessOptions, TessellateBodyRequest,
+    ToleranceGrowth, ToleranceGrowthTarget, Tolerances, Vec3,
 };
 
 #[test]
@@ -132,6 +132,43 @@ fn facade_only_client_can_construct_and_check_a_block_with_reports() {
     assert_eq!(check.result().unwrap().outcome(), CheckOutcome::Valid);
     assert!(check.result().unwrap().faults().is_empty());
     assert!(!check.report().usage().is_empty());
+    assert!(check.report().limit_events().is_empty());
+}
+
+#[test]
+fn facade_only_client_can_construct_and_check_a_cylinder_with_reports() {
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let rejected = session
+        .edit_part(part_id.clone())
+        .unwrap()
+        .create_cylinder(CylinderRequest::new(Frame::world(), -1.0, 3.0))
+        .unwrap();
+    assert!(rejected.into_result().is_err());
+    assert_eq!(session.part(part_id.clone()).unwrap().bodies().len(), 0);
+
+    let creation = session
+        .edit_part(part_id.clone())
+        .unwrap()
+        .create_cylinder(CylinderRequest::new(Frame::world(), 1.25, 3.0))
+        .unwrap();
+    assert!(creation.report().usage().is_empty());
+    let created = creation.into_result().unwrap();
+    assert_eq!(created.journal().part(), part_id);
+    assert!(created.journal().mutation_count() > 0);
+    assert_eq!(created.journal().lineage_count(), 0);
+
+    let part = session.part(part_id.clone()).unwrap();
+    let body = part.body(created.body()).unwrap();
+    assert_eq!(body.kind(), BodyKind::Solid);
+    assert_eq!(body.faces().unwrap().len(), 3);
+    assert_eq!(body.edges().unwrap().len(), 2);
+    assert_eq!(body.vertices().unwrap().len(), 0);
+
+    let check = part
+        .check_body(CheckBodyRequest::new(created.body(), CheckLevel::Fast))
+        .unwrap();
+    assert_eq!(check.result().unwrap().outcome(), CheckOutcome::Valid);
     assert!(check.report().limit_events().is_empty());
 }
 
