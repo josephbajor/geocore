@@ -1,15 +1,19 @@
 //! Facade-only lifecycle tests: no lower-layer crate is imported.
 
 use kernel::{
-    BlockRequest, BodyTessellationBudgetProfile, BoundedCurve, BoundedPcurve, CheckBodyRequest,
+    AccountingMode, BOOLEAN_BSP_WORK, BlockRequest, BodyId, BodyKind,
+    BodyTessellationBudgetProfile, BooleanBodiesRequest, BooleanOperation, BooleanOutcome,
+    BooleanRefusal, BooleanResult, BoundedCurve, BoundedPcurve, BudgetPlan, CheckBodyRequest,
     CheckLevel, CheckOutcome, CreateSeedBodyRequest, CreateStrutRequest, EntityKind, Error,
-    ExportXtRequest, ExtrudeProfileAlongRequest, ExtrudeProfileRequest, Frame,
+    ExecutionPolicy, ExportXtRequest, ExtrudeProfileAlongRequest, ExtrudeProfileRequest, Frame,
     FullCommitRequirement, GrowTolerancesRequest, ImportXtRequest, IntersectCurvesRequest,
-    JoinRingRequest, Kernel, MergeFaceAsHoleRequest, MutationKind, OperationSettings, ParamRange,
-    PcurveChart, PcurveEndpointKind, PcurveMetadata, PcurveSeam, PcurveSeamSide, Point2, Point3,
-    RemoveBridgeRequest, RemoveSeedBodyRequest, RemoveStrutRequest, SessionPolicy,
-    SplitHoleAsFaceRequest, SurfaceDerivativeOrder, SurfaceEvaluationRequest, SurfaceParameter,
-    TessOptions, TessellateBodyRequest, ToleranceGrowth, ToleranceGrowthTarget, Vec3,
+    JoinRingRequest, Kernel, LimitSpec, MergeFaceAsHoleRequest, MutationKind, NumericalPolicy,
+    OperationSettings, ParamRange, PartId, PcurveChart, PcurveEndpointKind, PcurveMetadata,
+    PcurveSeam, PcurveSeamSide, Point2, Point3, PolicyVersion, RegionKind, RemoveBridgeRequest,
+    RemoveSeedBodyRequest, RemoveStrutRequest, ResourceKind, Session, SessionPolicy,
+    SessionPrecision, SplitHoleAsFaceRequest, SurfaceDerivativeOrder, SurfaceEvaluationRequest,
+    SurfaceParameter, TessOptions, TessellateBodyRequest, ToleranceGrowth, ToleranceGrowthTarget,
+    Tolerances, Vec3,
 };
 
 #[test]
@@ -1037,4 +1041,436 @@ fn facade_only_client_can_import_inspect_and_deterministically_export_xt() {
     assert_eq!(first.bytes(), second.bytes());
     assert_eq!(authored.bytes(), first.bytes());
     assert!(first.text().starts_with("**ABCDEFGHIJKLMNOPQRSTUVWXYZ"));
+}
+
+struct BooleanFixture {
+    session: Session,
+    part: PartId,
+    left: BodyId,
+    right: BodyId,
+}
+
+fn boolean_frame(origin: [f64; 3], z: [f64; 3], x: [f64; 3]) -> Frame {
+    Frame::new(
+        Point3::from_array(origin),
+        Vec3::from_array(z),
+        Vec3::from_array(x),
+    )
+    .unwrap()
+}
+
+fn boolean_fixture(
+    left_frame: Frame,
+    left_extents: [f64; 3],
+    right_frame: Frame,
+    right_extents: [f64; 3],
+) -> BooleanFixture {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (left, right) = {
+        let mut edit = session.edit_part(part.clone()).unwrap();
+        let left = edit
+            .create_block(BlockRequest::new(left_frame, left_extents))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let right = edit
+            .create_block(BlockRequest::new(right_frame, right_extents))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (left, right)
+    };
+    BooleanFixture {
+        session,
+        part,
+        left,
+        right,
+    }
+}
+
+fn overlapping_boolean_fixture() -> BooleanFixture {
+    boolean_fixture(
+        boolean_frame([1.25, -0.75, 0.5], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]),
+        [3.5, 2.75, 2.5],
+        boolean_frame([1.75, -0.25, 0.75], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+        [3.0, 2.0, 2.75],
+    )
+}
+
+fn disjoint_boolean_fixture() -> BooleanFixture {
+    boolean_fixture(
+        Frame::world().with_origin(Point3::new(-8.0, 1.0, 0.5)),
+        [2.0, 1.5, 2.5],
+        boolean_frame([8.0, -1.0, -0.5], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]),
+        [1.75, 2.25, 1.25],
+    )
+}
+
+fn contained_boolean_fixture() -> BooleanFixture {
+    boolean_fixture(
+        Frame::world(),
+        [6.0, 5.0, 4.0],
+        Frame::world().with_origin(Point3::new(0.25, -0.2, 0.1)),
+        [1.5, 1.0, 0.8],
+    )
+}
+
+fn run_boolean(
+    fixture: &mut BooleanFixture,
+    operation: BooleanOperation,
+    settings: OperationSettings,
+) -> kernel::OperationOutcome<BooleanOutcome> {
+    let request = BooleanBodiesRequest::new(operation, fixture.left.clone(), fixture.right.clone())
+        .with_settings(settings);
+    fixture
+        .session
+        .edit_part(fixture.part.clone())
+        .unwrap()
+        .boolean_bodies(request)
+        .unwrap()
+}
+
+fn boolean_success(outcome: kernel::OperationOutcome<BooleanOutcome>) -> BooleanResult {
+    match outcome.into_result().unwrap() {
+        BooleanOutcome::Success(result) => result,
+        BooleanOutcome::Refused(refusal) => panic!("unexpected Boolean refusal: {refusal:?}"),
+        other => panic!("unexpected Boolean outcome: {other:?}"),
+    }
+}
+
+fn assert_boolean_sources_retained(fixture: &BooleanFixture, expected_body_count: usize) {
+    let part = fixture.session.part(fixture.part.clone()).unwrap();
+    assert_eq!(part.bodies().len(), expected_body_count);
+    assert_eq!(
+        part.body(fixture.left.clone()).unwrap().kind(),
+        BodyKind::Solid
+    );
+    assert_eq!(
+        part.body(fixture.right.clone()).unwrap().kind(),
+        BodyKind::Solid
+    );
+}
+
+fn boolean_topology_counts(fixture: &BooleanFixture) -> [usize; 8] {
+    let part = fixture.session.part(fixture.part.clone()).unwrap();
+    [
+        part.bodies().len(),
+        part.regions().len(),
+        part.shells().len(),
+        part.faces().len(),
+        part.loops().len(),
+        part.fins().len(),
+        part.edges().len(),
+        part.vertices().len(),
+    ]
+}
+
+fn boolean_body_x_center(fixture: &BooleanFixture, body: BodyId) -> f64 {
+    let part = fixture.session.part(fixture.part.clone()).unwrap();
+    let body = part.body(body).unwrap();
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    for vertex in body.vertices().unwrap() {
+        let x = part.vertex(vertex).unwrap().position().unwrap().x;
+        min = min.min(x);
+        max = max.max(x);
+    }
+    (min + max) * 0.5
+}
+
+#[test]
+fn public_boolean_connected_operations_commit_one_full_valid_body_and_retain_sources() {
+    for operation in [
+        BooleanOperation::Unite,
+        BooleanOperation::Intersect,
+        BooleanOperation::Subtract,
+    ] {
+        let mut fixture = overlapping_boolean_fixture();
+        let request =
+            BooleanBodiesRequest::new(operation, fixture.left.clone(), fixture.right.clone());
+        assert_eq!(request.operation(), operation);
+        assert_eq!(request.left(), fixture.left);
+        assert_eq!(request.right(), fixture.right);
+        assert_eq!(request.settings(), &OperationSettings::default());
+
+        let result = boolean_success(run_boolean(
+            &mut fixture,
+            operation,
+            OperationSettings::new(),
+        ));
+        let BooleanResult::Created(created) = result else {
+            panic!("connected Boolean must create topology")
+        };
+        assert_eq!(created.bodies().len(), 1);
+        assert_eq!(created.reports().len(), created.bodies().len());
+        assert!(
+            created
+                .reports()
+                .iter()
+                .zip(created.bodies())
+                .all(|(report, body)| report.body() == *body
+                    && report.report().level() == CheckLevel::Full
+                    && report.report().outcome() == CheckOutcome::Valid)
+        );
+        assert_eq!(created.journal().part(), fixture.part);
+        assert!(created.journal().mutation_count() > 0);
+        assert_boolean_sources_retained(&fixture, 3);
+    }
+}
+
+#[test]
+fn public_boolean_represents_multiple_and_empty_results_without_special_cases() {
+    let mut union_fixture = disjoint_boolean_fixture();
+    let union = boolean_success(run_boolean(
+        &mut union_fixture,
+        BooleanOperation::Unite,
+        OperationSettings::new(),
+    ));
+    let BooleanResult::Created(created) = union else {
+        panic!("disjoint union must create two bodies")
+    };
+    assert_eq!(created.bodies().len(), 2);
+    assert_eq!(created.reports().len(), 2);
+    assert!(boolean_body_x_center(&union_fixture, created.bodies()[0].clone()) < 0.0);
+    assert!(boolean_body_x_center(&union_fixture, created.bodies()[1].clone()) > 0.0);
+    assert_boolean_sources_retained(&union_fixture, 4);
+
+    let mut intersection_fixture = disjoint_boolean_fixture();
+    let intersection = boolean_success(run_boolean(
+        &mut intersection_fixture,
+        BooleanOperation::Intersect,
+        OperationSettings::new(),
+    ));
+    assert!(matches!(intersection, BooleanResult::ProvenEmpty));
+    assert!(intersection.is_empty());
+    assert!(intersection.bodies().is_empty());
+    assert!(intersection.created().is_none());
+    assert_boolean_sources_retained(&intersection_fixture, 2);
+}
+
+#[test]
+fn public_boolean_contained_subtraction_commits_one_two_shell_solid() {
+    let mut fixture = contained_boolean_fixture();
+    let result = boolean_success(run_boolean(
+        &mut fixture,
+        BooleanOperation::Subtract,
+        OperationSettings::new(),
+    ));
+    let BooleanResult::Created(created) = result else {
+        panic!("contained subtraction must create a cavity body")
+    };
+    assert_eq!(created.bodies().len(), 1);
+    let part = fixture.session.part(fixture.part.clone()).unwrap();
+    let body = part.body(created.bodies()[0].clone()).unwrap();
+    assert_eq!(body.regions().len(), 3);
+    let solid = body
+        .regions()
+        .find(|region| part.region(region.clone()).unwrap().kind() == RegionKind::Solid)
+        .unwrap();
+    assert_eq!(part.region(solid).unwrap().shells().len(), 2);
+    drop(part);
+    assert_boolean_sources_retained(&fixture, 3);
+}
+
+#[test]
+fn public_boolean_exact_contact_refuses_without_persisting_candidate_topology() {
+    let mut fixture = boolean_fixture(
+        Frame::world(),
+        [2.0, 2.0, 2.0],
+        Frame::world().with_origin(Point3::new(2.0, 0.0, 0.0)),
+        [2.0, 2.0, 2.0],
+    );
+    let before = boolean_topology_counts(&fixture);
+    let outcome = run_boolean(
+        &mut fixture,
+        BooleanOperation::Intersect,
+        OperationSettings::new(),
+    );
+    assert!(matches!(
+        outcome.into_result().unwrap(),
+        BooleanOutcome::Refused(BooleanRefusal::BoundaryContact)
+    ));
+    assert_eq!(boolean_topology_counts(&fixture), before);
+    assert_boolean_sources_retained(&fixture, 2);
+}
+
+#[test]
+fn public_boolean_rejects_wrong_part_and_stale_operands_before_invalid_settings() {
+    let precision = SessionPrecision::try_new(1.0e-6, 1.0e-11, 500.0).unwrap();
+    let policy = SessionPolicy::new(
+        precision,
+        NumericalPolicy::v1(),
+        ExecutionPolicy::Serial,
+        BudgetPlan::empty(),
+        PolicyVersion::V1,
+    );
+    let valid_settings =
+        OperationSettings::new().with_tolerances(Tolerances::with_linear(1.0e-6).unwrap());
+    let mut session = Kernel::with_default_policy(policy).create_session();
+    let local_part = session.create_part();
+    let (left, right) = {
+        let mut edit = session.edit_part(local_part.clone()).unwrap();
+        let left = edit
+            .create_block(
+                BlockRequest::new(Frame::world(), [2.0, 2.0, 2.0])
+                    .with_settings(valid_settings.clone()),
+            )
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let right = edit
+            .create_block(
+                BlockRequest::new(
+                    Frame::world().with_origin(Point3::new(0.5, 0.25, 0.125)),
+                    [2.0, 2.0, 2.0],
+                )
+                .with_settings(valid_settings.clone()),
+            )
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (left, right)
+    };
+    let foreign_part = session.create_part();
+    let foreign = session
+        .edit_part(foreign_part)
+        .unwrap()
+        .create_block(
+            BlockRequest::new(Frame::world(), [1.0, 1.0, 1.0])
+                .with_settings(valid_settings.clone()),
+        )
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .body();
+
+    let wrong_part = session
+        .edit_part(local_part.clone())
+        .unwrap()
+        .boolean_bodies(BooleanBodiesRequest::new(
+            BooleanOperation::Intersect,
+            foreign,
+            right.clone(),
+        ));
+    assert!(matches!(wrong_part, Err(Error::WrongPart { .. })));
+
+    let (surface, sense, position) = {
+        let part = session.part(local_part.clone()).unwrap();
+        let face = part
+            .face(
+                part.body(left.clone())
+                    .unwrap()
+                    .faces()
+                    .unwrap()
+                    .next()
+                    .unwrap(),
+            )
+            .unwrap();
+        let loop_id = face.loops().next().unwrap();
+        let fin = part
+            .fin(part.loop_(loop_id).unwrap().fins().next().unwrap())
+            .unwrap();
+        let vertex = fin.tail().unwrap().unwrap();
+        (
+            face.surface(),
+            face.sense(),
+            part.vertex(vertex).unwrap().position().unwrap(),
+        )
+    };
+    let stale = {
+        let mut edit = session.edit_part(local_part.clone()).unwrap();
+        let mut transaction = edit.begin_edit(valid_settings.clone()).unwrap();
+        let seed = transaction
+            .create_seed_body(CreateSeedBodyRequest::new(surface, sense, position))
+            .unwrap();
+        let stale = seed.body();
+        transaction
+            .remove_seed_body(RemoveSeedBodyRequest::new(stale.clone()))
+            .unwrap();
+        transaction
+            .commit(core::slice::from_ref(&left))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        stale
+    };
+    let stale_operand = session
+        .edit_part(local_part.clone())
+        .unwrap()
+        .boolean_bodies(BooleanBodiesRequest::new(
+            BooleanOperation::Intersect,
+            stale,
+            right.clone(),
+        ));
+    assert!(matches!(
+        stale_operand,
+        Err(Error::StaleEntity {
+            kind: EntityKind::Body
+        })
+    ));
+
+    let invalid_settings =
+        session
+            .edit_part(local_part)
+            .unwrap()
+            .boolean_bodies(BooleanBodiesRequest::new(
+                BooleanOperation::Intersect,
+                left,
+                right,
+            ));
+    assert!(matches!(invalid_settings, Err(Error::Core { .. })));
+}
+
+#[test]
+fn public_boolean_bsp_budget_accepts_n_and_reports_exact_n_minus_one_crossing() {
+    let baseline = run_boolean(
+        &mut overlapping_boolean_fixture(),
+        BooleanOperation::Intersect,
+        OperationSettings::new(),
+    );
+    let usage = *baseline
+        .report()
+        .usage()
+        .iter()
+        .find(|usage| usage.stage == BOOLEAN_BSP_WORK && usage.resource == ResourceKind::Work)
+        .unwrap();
+    assert!(usage.consumed > 0);
+
+    let settings_at = |allowed| {
+        OperationSettings::new().with_budget_overrides(
+            BudgetPlan::new([LimitSpec::new(
+                BOOLEAN_BSP_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                allowed,
+            )])
+            .unwrap(),
+        )
+    };
+    let admitted = run_boolean(
+        &mut overlapping_boolean_fixture(),
+        BooleanOperation::Intersect,
+        settings_at(usage.consumed),
+    );
+    assert!(matches!(
+        admitted.into_result().unwrap(),
+        BooleanOutcome::Success(BooleanResult::Created(_))
+    ));
+
+    let denied = run_boolean(
+        &mut overlapping_boolean_fixture(),
+        BooleanOperation::Intersect,
+        settings_at(usage.consumed - 1),
+    );
+    let expected = kernel::LimitSnapshot {
+        allowed: usage.consumed - 1,
+        ..usage
+    };
+    assert_eq!(denied.result().unwrap_err().limit(), Some(expected));
+    assert_eq!(denied.report().limit_events(), &[expected]);
 }

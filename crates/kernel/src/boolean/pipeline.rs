@@ -1,22 +1,23 @@
 //! Failure-atomic internal pipeline for the first convex planar Boolean seam.
 //!
-//! This module deliberately stops short of a public facade operation.  It
-//! composes the proof-bearing source extractor, symbolic BSP, conservative
-//! plane-triple realization, keyed planar assembler, and Full checked commit
-//! without granting floating-point arithmetic topological authority.
+//! This module backs the public facade with the proof-bearing source extractor,
+//! symbolic BSP, conservative plane-triple realization, keyed planar assembler,
+//! and Full checked commit without granting floating-point arithmetic
+//! topological authority.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use kcore::operation::{
     AccountingMode, BudgetPlan, LimitSpec, OperationScope, ResourceKind, StageId,
 };
-use ktopo::check::{CheckLevel, CheckOutcome, CheckReport};
+#[cfg(test)]
+use ktopo::check::CheckOutcome;
 use ktopo::entity::{EntityRef, FaceId as RawFaceId, SurfaceId as RawSurfaceId};
 use ktopo::planar::{
     PlanarFacePlaneBinding, PlanarSolidFace, PlanarSolidInput, PlanarSolidVertex, PlanarVertexKey,
 };
 use ktopo::planar_multishell::PlanarMultiShellSolidInput;
-use ktopo::transaction::{FullCommitRequirement, Journal};
+use ktopo::transaction::{FullBodyCheck, FullCommitRequirement, Journal};
 
 use super::component_layout::{
     ComponentLayoutError, RealizedPlanarVertex, RealizedVertexMap, post_selection_precharge,
@@ -26,8 +27,8 @@ use super::components::{
     ComponentPartitionError, SelectedShellComponent, partition_shell_components,
 };
 use super::extract::{
-    ExtractedPlanarSourceBody, PlanarSourceExtractionBudgetProfile, PlanarSourceExtractionError,
-    PlanarSourceGap, PlanarSourceProofFailure, extract_planar_source_body,
+    ExtractedPlanarSourceBody, PlanarSourceExtractionError, PlanarSourceGap,
+    PlanarSourceProofFailure, extract_planar_source_body,
 };
 use super::planar_bsp::{PlaneTripleVertexKey, SourcePlane, SourcePlaneRef};
 use super::realize::{RealizationError, realize_symbolic_vertex};
@@ -35,7 +36,9 @@ use super::select::{
     PlanarBooleanOperation, SelectedPlanarFragment, SelectionError, select_boolean_fragments,
 };
 use crate::error::{Error, Result};
-use crate::operation::{OperationOutcome, OperationSettings};
+use crate::operation::{
+    BodyCheckReport, OperationOutcome, OperationSettings, adapt_live_body_check,
+};
 use crate::session::PartEdit;
 use crate::{BodyId, EntityKind};
 
@@ -98,7 +101,7 @@ impl PlanarBooleanPipelineBudgetProfile {
 pub(crate) struct CommittedPlanarBoolean {
     bodies: Vec<BodyId>,
     journal: Journal,
-    full_outcomes: Vec<(BodyId, CheckOutcome)>,
+    full_checks: Vec<FullBodyCheck>,
 }
 
 impl CommittedPlanarBoolean {
@@ -111,9 +114,13 @@ impl CommittedPlanarBoolean {
         &self.journal
     }
 
-    /// Body-associated Full outcomes in deterministic checker order.
-    pub(crate) fn full_outcomes(&self) -> &[(BodyId, CheckOutcome)] {
-        &self.full_outcomes
+    /// Exact Full evidence in deterministic checker order.
+    pub(crate) fn full_checks(&self) -> &[FullBodyCheck] {
+        &self.full_checks
+    }
+
+    pub(crate) fn into_parts(self) -> (Vec<BodyId>, Journal, Vec<FullBodyCheck>) {
+        (self.bodies, self.journal, self.full_checks)
     }
 }
 
@@ -122,7 +129,7 @@ impl CommittedPlanarBoolean {
 pub(crate) enum PlanarBooleanPipelineRefusal {
     SourceNotFastValid {
         operand: u8,
-        report: CheckReport,
+        report: BodyCheckReport,
     },
     UnsupportedSource {
         operand: u8,
@@ -140,12 +147,12 @@ pub(crate) enum PlanarBooleanPipelineRefusal {
     PlaneBindingContract(&'static str),
     /// The symbolic boundary did not satisfy the general planar assembler.
     AssemblyContract(&'static str),
-    /// The Full checker proved a candidate fault before journal commit.
+    /// Candidate ownership or Fast topology failed before Full reports existed.
     FullTopologyFault {
         fault_count: usize,
     },
     /// RequireValid rejected one or more proof-incomplete candidate reports.
-    FullProofRejected(Vec<CheckReport>),
+    FullProofRejected(Vec<FullBodyCheck>),
     /// A deterministic upper-bound calculation did not fit in `u64`.
     WorkCountOverflow,
 }
@@ -176,11 +183,7 @@ pub(crate) fn execute_planar_boolean(
     validate_operand(edit, &left)?;
     validate_operand(edit, &right)?;
 
-    let defaults = PlanarBooleanPipelineBudgetProfile::v1_defaults()
-        .overlaid(&PlanarSourceExtractionBudgetProfile::v1_defaults())
-        .overlaid(&ktopo::check::CheckBudgetProfile::v1_defaults(
-            CheckLevel::Full,
-        ));
+    let defaults = super::BooleanBudgetProfile::v1_defaults();
     let context = settings
         .context(edit.policy)?
         .with_family_budget_defaults(defaults);
@@ -322,25 +325,10 @@ fn execute_stages(
         }
         Err(source) => return Err(source.into()),
     };
-    let outcomes = decision
-        .checks()
-        .iter()
-        .map(|check| {
-            (
-                BodyId::new(edit.id.clone(), check.body()),
-                check.report().outcome(),
-            )
-        })
-        .collect::<Vec<_>>();
-    let reports = decision
-        .checks()
-        .iter()
-        .map(|check| check.report().clone())
-        .collect::<Vec<_>>();
-    let (journal, _) = decision.into_parts();
+    let (journal, full_checks) = decision.into_parts();
     let Some(journal) = journal else {
         return Ok(PlanarBooleanPipelineOutcome::Refused(
-            PlanarBooleanPipelineRefusal::FullProofRejected(reports),
+            PlanarBooleanPipelineRefusal::FullProofRejected(full_checks),
         ));
     };
     let bodies = raw_bodies
@@ -351,7 +339,7 @@ fn execute_stages(
         CommittedPlanarBoolean {
             bodies,
             journal,
-            full_outcomes: outcomes,
+            full_checks,
         },
     ))
 }
@@ -394,11 +382,14 @@ fn extract_operand(
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<ExtractedPlanarSourceBody> {
     let part = edit.as_part();
-    match extract_planar_source_body(&part, body, operand, scope) {
+    match extract_planar_source_body(&part, body.clone(), operand, scope) {
         Ok(source) => Ok(source),
-        Err(PlanarSourceExtractionError::NotFastValid(report)) => Err(PipelineFailure::Refused(
-            PlanarBooleanPipelineRefusal::SourceNotFastValid { operand, report },
-        )),
+        Err(PlanarSourceExtractionError::NotFastValid(report)) => {
+            let report = adapt_live_body_check(&edit.id, &edit.state.store, body.raw(), report)?;
+            Err(PipelineFailure::Refused(
+                PlanarBooleanPipelineRefusal::SourceNotFastValid { operand, report },
+            ))
+        }
         Err(PlanarSourceExtractionError::Unsupported(gap)) => Err(PipelineFailure::Refused(
             PlanarBooleanPipelineRefusal::UnsupportedSource { operand, gap },
         )),
@@ -847,19 +838,19 @@ mod tests {
         committed: &CommittedPlanarBoolean,
     ) -> Vec<(ktopo::entity::BodyId, CheckOutcome)> {
         committed
-            .full_outcomes()
+            .full_checks()
             .iter()
-            .map(|(body, outcome)| (body.raw(), *outcome))
+            .map(|check| (check.body(), check.report().outcome()))
             .collect()
     }
 
     fn assert_full_valid(committed: &CommittedPlanarBoolean) {
-        assert!(!committed.full_outcomes().is_empty());
+        assert!(!committed.full_checks().is_empty());
         assert!(
             committed
-                .full_outcomes()
+                .full_checks()
                 .iter()
-                .all(|(_, outcome)| *outcome == CheckOutcome::Valid)
+                .all(|check| check.report().outcome() == CheckOutcome::Valid)
         );
     }
 

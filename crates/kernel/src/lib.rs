@@ -5,7 +5,7 @@
 //! immutable semantic views. Contextual operations cover checked block and
 //! polygonal-profile extrusion construction, deterministic complete-body
 //! rigid copy, body checking and tessellation, operation-scoped surface
-//! evaluation, and typed X_T
+//! evaluation, certified convex-planar body Booleans, and typed X_T
 //! import/export plus graph-owned bounded curve intersection with F2 reports
 //! and delegated classified errors. Rigid copies own disjoint topology and
 //! geometry closures and retain exact `DerivedFrom` lineage. Committed
@@ -268,6 +268,13 @@ mod session;
 mod tessellation;
 mod view;
 
+pub use boolean::{
+    BOOLEAN_BSP_FRAGMENTS, BOOLEAN_BSP_WORK, BOOLEAN_POST_SELECTION_WORK,
+    BOOLEAN_REALIZED_VERTICES, BOOLEAN_SOURCE_EXTRACTION_WORK, BooleanBodiesRequest,
+    BooleanBudgetProfile, BooleanCreatedResult, BooleanOperand, BooleanOperandProofFailure,
+    BooleanOperandUnsupportedReason, BooleanOperation, BooleanOutcome, BooleanRefusal,
+    BooleanResult,
+};
 pub use classify::{
     ClassifyPointInBodyRequest, ClassifyPointOnFaceRequest, POINT_CLASSIFICATION_RAYS,
     POINT_CLASSIFICATION_WORK, PointBodyClassification, PointBodyVerdict,

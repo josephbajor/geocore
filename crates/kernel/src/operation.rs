@@ -1778,6 +1778,18 @@ fn adapt_check_report(
     })
 }
 
+pub(crate) fn adapt_live_body_check(
+    part: &PartId,
+    store: &ktopo::store::Store,
+    body: ktopo::entity::BodyId,
+    report: ktopo::check::CheckReport,
+) -> Result<BodyCheckReport> {
+    Ok(BodyCheckReport {
+        body: BodyId::new(part.clone(), body),
+        report: adapt_check_report(part, store, report)?,
+    })
+}
+
 pub(crate) fn adapt_transaction_check(
     part: &PartId,
     check: &ktopo::transaction::FullBodyCheck,

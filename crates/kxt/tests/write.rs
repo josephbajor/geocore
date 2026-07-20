@@ -7,12 +7,18 @@
 
 use kcore::tolerance::LINEAR_RESOLUTION;
 use kgeom::curve::{Circle, Curve, Ellipse, Line};
-use kgeom::curve2d::{Line2d, NurbsCurve2d};
+use kgeom::curve2d::{Circle2d, Line2d, NurbsCurve2d};
 use kgeom::frame::Frame;
 use kgeom::nurbs::{NurbsCurve, NurbsSurface};
 use kgeom::param::ParamRange;
-use kgeom::surface::{Plane, Surface};
+use kgeom::surface::{Plane, Sphere, Surface};
 use kgeom::vec::{Point2, Point3, Vec2, Vec3};
+use kgraph::{
+    AffineParamMap1d, NurbsIntersectionTrace, PlaneCircleTrace, PlaneSphereCircleTrace,
+    SphereLatitudeTrace, certify_paired_plane_line_residuals,
+    certify_paired_plane_sphere_circle_residuals,
+    certify_verified_plane_nurbs_intersection_residuals,
+};
 use ktopo::btess::{TessOptions, check_watertight, tessellate_body};
 use ktopo::check::check_body;
 use ktopo::entity::{
@@ -21,10 +27,13 @@ use ktopo::entity::{
 };
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::make;
+use ktopo::planar::{PlanarSolidFace, PlanarSolidInput, PlanarSolidVertex, PlanarVertexKey};
+use ktopo::planar_multishell::PlanarMultiShellSolidInput;
 use ktopo::store::Store;
 use ktopo::tolerance::{EntityTolerance, ToleranceOrigin};
 use ktopo::transaction::AssemblyStore;
 use kxt::schema::code;
+use kxt::{XtCapability, XtError};
 
 fn tilted() -> Frame {
     Frame::new(
@@ -33,6 +42,91 @@ fn tilted() -> Frame {
         Vec3::new(0.0, 1.0, 0.0),
     )
     .unwrap()
+}
+
+fn box_shell(
+    first_key: u64,
+    center: [f64; 3],
+    half_extents: [f64; 3],
+    negative: bool,
+) -> PlanarSolidInput {
+    let [cx, cy, cz] = center;
+    let [hx, hy, hz] = half_extents;
+    let points = [
+        [cx - hx, cy - hy, cz - hz],
+        [cx + hx, cy - hy, cz - hz],
+        [cx - hx, cy + hy, cz - hz],
+        [cx + hx, cy + hy, cz - hz],
+        [cx - hx, cy - hy, cz + hz],
+        [cx + hx, cy - hy, cz + hz],
+        [cx - hx, cy + hy, cz + hz],
+        [cx + hx, cy + hy, cz + hz],
+    ];
+    let keys: [PlanarVertexKey; 8] = core::array::from_fn(|index| {
+        PlanarVertexKey::new(first_key + u64::try_from(index).unwrap())
+    });
+    let vertices = points
+        .into_iter()
+        .enumerate()
+        .map(|(index, [x, y, z])| PlanarSolidVertex::new(keys[index], Point3::new(x, y, z)))
+        .collect();
+    let rings = [
+        [0, 2, 3, 1],
+        [4, 5, 7, 6],
+        [0, 1, 5, 4],
+        [2, 6, 7, 3],
+        [0, 4, 6, 2],
+        [1, 3, 7, 5],
+    ];
+    let faces = rings
+        .into_iter()
+        .map(|ring| {
+            let mut ring = ring.map(|index| keys[index]).to_vec();
+            if negative {
+                ring.reverse();
+            }
+            PlanarSolidFace::new(ring)
+        })
+        .collect();
+    PlanarSolidInput::new(vertices, faces)
+}
+
+fn cavity_block(cavity_count: usize) -> (Store, BodyId) {
+    let mut store = Store::new();
+    let outer = box_shell(10, [0.0; 3], [3.0, 2.5, 2.0], false);
+    let placements = [
+        ([-1.0, -0.25, 0.1], [0.4, 0.5, 0.6]),
+        ([1.0, 0.35, -0.15], [0.45, 0.4, 0.5]),
+    ];
+    let cavities = placements[..cavity_count]
+        .iter()
+        .enumerate()
+        .map(|(index, &(center, half_extents))| {
+            box_shell(
+                100 + u64::try_from(index).unwrap() * 10,
+                center,
+                half_extents,
+                true,
+            )
+        })
+        .collect();
+    let input = PlanarMultiShellSolidInput::new(outer, cavities);
+    let body;
+    {
+        let mut transaction = store.transaction().unwrap();
+        body = transaction
+            .assemble_planar_multishell_solid(&input)
+            .unwrap()
+            .body();
+        transaction.commit_checked_body(body).unwrap();
+    }
+    (store, body)
+}
+
+fn fnv64(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
 }
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -128,6 +222,196 @@ fn edit_body<R>(
     };
     transaction.commit_checked_body(body).unwrap();
     result
+}
+
+fn replace_first_block_edge_with_verified_plane_line(store: &mut Store, body: BodyId) -> Line {
+    let edge_id = first_bounded_edge(store, body);
+    let (carrier, bounds, surfaces) = {
+        let edge = store.get(edge_id).unwrap();
+        let carrier = *store.get(edge.curve().unwrap()).unwrap().as_line().unwrap();
+        let bounds = edge.bounds().unwrap();
+        let [first, second] = edge.fins() else {
+            panic!("block edge must have two fins")
+        };
+        let fins = [*first, *second];
+        let surfaces = fins.map(|fin| {
+            let loop_id = store.get(fin).unwrap().parent();
+            let face = store.get(loop_id).unwrap().face();
+            store.get(face).unwrap().surface()
+        });
+        (carrier, bounds, surfaces)
+    };
+    let planes = surfaces.map(|surface| *store.get(surface).unwrap().as_plane().unwrap());
+    let pcurves = planes.map(|plane| {
+        let local = plane.frame().to_local(carrier.origin());
+        Line2d::new(
+            Point2::new(local.x, local.y),
+            Vec2::new(
+                carrier.dir().dot(plane.frame().x()),
+                carrier.dir().dot(plane.frame().y()),
+            ),
+        )
+        .unwrap()
+    });
+    let certificate = certify_paired_plane_line_residuals(
+        carrier,
+        ParamRange::new(bounds.0, bounds.1),
+        planes,
+        pcurves,
+        [AffineParamMap1d::new(1.0, 0.0).unwrap(); 2],
+        LINEAR_RESOLUTION,
+    )
+    .unwrap();
+    let pcurves = pcurves.map(|pcurve| store.insert_pcurve(Curve2dGeom::Line(pcurve)).unwrap());
+    let verified = store
+        .insert_verified_plane_intersection_curve(surfaces, pcurves, certificate)
+        .unwrap();
+    edit_body(store, body, |store| {
+        store.get_mut(edge_id).unwrap().curve = Some(verified);
+    });
+    carrier
+}
+
+fn replace_semicircle_with_verified_plane_sphere_circle(store: &mut Store, body: BodyId) -> Circle {
+    let edge_id = store
+        .edges_of_body(body)
+        .unwrap()
+        .into_iter()
+        .find(|edge| {
+            store
+                .get(*edge)
+                .unwrap()
+                .curve()
+                .is_some_and(|curve| store.get(curve).unwrap().as_circle().is_some())
+        })
+        .unwrap();
+    let (carrier, bounds, plane_surface) = {
+        let edge = store.get(edge_id).unwrap();
+        let carrier = *store
+            .get(edge.curve().unwrap())
+            .unwrap()
+            .as_circle()
+            .unwrap();
+        let bounds = edge.bounds().unwrap();
+        let fin = edge.fins()[0];
+        let loop_id = store.get(fin).unwrap().parent();
+        let face = store.get(loop_id).unwrap().face();
+        let plane_surface = store.get(face).unwrap().surface();
+        (carrier, bounds, plane_surface)
+    };
+    let plane = *store.get(plane_surface).unwrap().as_plane().unwrap();
+    let sphere = Sphere::new(*carrier.frame(), carrier.radius()).unwrap();
+    let sphere_surface = store.insert_surface(SurfaceGeom::Sphere(sphere)).unwrap();
+    let identity = AffineParamMap1d::new(1.0, 0.0).unwrap();
+    let plane_pcurve =
+        Circle2d::new(Vec2::new(0.0, 0.0), carrier.radius(), Vec2::new(1.0, 0.0)).unwrap();
+    let sphere_pcurve = Line2d::new(Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap();
+    let certificate = certify_paired_plane_sphere_circle_residuals(
+        carrier,
+        ParamRange::new(bounds.0, bounds.1),
+        [
+            PlaneSphereCircleTrace::Plane(PlaneCircleTrace::new(plane, plane_pcurve, identity)),
+            PlaneSphereCircleTrace::Sphere(SphereLatitudeTrace::new(
+                sphere,
+                sphere_pcurve,
+                identity,
+            )),
+        ],
+        LINEAR_RESOLUTION,
+    )
+    .unwrap();
+    let pcurves = [
+        store
+            .insert_pcurve(Curve2dGeom::Circle(plane_pcurve))
+            .unwrap(),
+        store
+            .insert_pcurve(Curve2dGeom::Line(sphere_pcurve))
+            .unwrap(),
+    ];
+    let verified = store
+        .insert_verified_plane_sphere_intersection_curve(
+            [plane_surface, sphere_surface],
+            pcurves,
+            certificate,
+        )
+        .unwrap();
+    edit_body(store, body, |store| {
+        store.get_mut(edge_id).unwrap().curve = Some(verified);
+    });
+    carrier
+}
+
+fn replace_wire_line_with_verified_nurbs_intersection(store: &mut Store, body: BodyId) {
+    let edge_id = first_bounded_edge(store, body);
+    let (start, end, bounds) = {
+        let edge = store.get(edge_id).unwrap();
+        let [Some(start_vertex), Some(end_vertex)] = edge.vertices() else {
+            unreachable!()
+        };
+        let start = store.vertex_position(start_vertex).unwrap();
+        let end = store.vertex_position(end_vertex).unwrap();
+        let bounds = edge.bounds().unwrap();
+        (start, end, bounds)
+    };
+    let plane = Plane::new(Frame::world());
+    let surface = NurbsSurface::new(
+        1,
+        1,
+        vec![bounds.0, bounds.0, bounds.1, bounds.1],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            start,
+            start + Vec3::new(0.0, 0.0, 1.0),
+            end,
+            end + Vec3::new(0.0, 0.0, 1.0),
+        ],
+        None,
+    )
+    .unwrap();
+    let surfaces = [
+        store.insert_surface(SurfaceGeom::Plane(plane)).unwrap(),
+        store
+            .insert_surface(SurfaceGeom::Nurbs(surface.clone()))
+            .unwrap(),
+    ];
+    let knots = vec![bounds.0, bounds.0, bounds.1, bounds.1];
+    let carrier = NurbsCurve::new(1, knots.clone(), vec![start, end], None).unwrap();
+    let pcurve = NurbsCurve2d::new(
+        1,
+        knots,
+        vec![Point2::new(bounds.0, 0.0), Point2::new(bounds.1, 0.0)],
+        None,
+    )
+    .unwrap();
+    let certificate = certify_verified_plane_nurbs_intersection_residuals(
+        carrier,
+        [
+            NurbsIntersectionTrace::Plane(plane),
+            NurbsIntersectionTrace::Nurbs(surface),
+        ],
+        [pcurve.clone(), pcurve.clone()],
+        LINEAR_RESOLUTION,
+    )
+    .unwrap();
+    let pcurves = [pcurve.clone(), pcurve]
+        .map(|pcurve| store.insert_pcurve(Curve2dGeom::Nurbs(pcurve)).unwrap());
+    let verified = store
+        .insert_verified_nurbs_intersection_curve(surfaces, pcurves, certificate)
+        .unwrap();
+    edit_body(store, body, |store| {
+        store.get_mut(edge_id).unwrap().curve = Some(verified);
+    });
+}
+
+fn assert_vec_bits(actual: Vec3, expected: Vec3) {
+    assert_eq!(actual.x.to_bits(), expected.x.to_bits());
+    assert_eq!(actual.y.to_bits(), expected.y.to_bits());
+    assert_eq!(actual.z.to_bits(), expected.z.to_bits());
+}
+
+fn xt_vector(file: &kxt::parse::XtFile, node: &kxt::parse::Node, field: &str) -> Vec3 {
+    let [x, y, z] = file.field(node, field).unwrap().as_vector().unwrap();
+    Vec3::new(x, y, z)
 }
 
 fn assemble_body(
@@ -976,6 +1260,120 @@ fn all_analytic_primitives_round_trip() {
 }
 
 #[test]
+fn one_cavity_solid_round_trips_region_and_shell_counts() {
+    let (store, body) = cavity_block(1);
+    let (text, imported, imported_body) = assert_checker_roundtrip(&store, body);
+    let parsed = kxt::read_xt(text.as_bytes()).unwrap();
+
+    assert_eq!(store.get(body).unwrap().regions().len(), 3);
+    assert_eq!(store.count::<Shell>(), 2);
+    assert_eq!(
+        parsed
+            .nodes
+            .values()
+            .filter(|node| node.code == code::REGION)
+            .count(),
+        3
+    );
+    assert_eq!(
+        parsed
+            .nodes
+            .values()
+            .filter(|node| node.code == code::SHELL)
+            .count(),
+        4
+    );
+    assert_eq!(imported.get(imported_body).unwrap().regions().len(), 3);
+    assert_eq!(imported.count::<Shell>(), 2);
+    let solid = imported
+        .get(imported_body)
+        .unwrap()
+        .regions()
+        .iter()
+        .copied()
+        .find(|&region| imported.get(region).unwrap().kind() == RegionKind::Solid)
+        .unwrap();
+    assert_eq!(imported.get(solid).unwrap().shells().len(), 2);
+}
+
+#[test]
+fn two_cavity_solid_writer_mapping_is_count_independent() {
+    let (store, body) = cavity_block(2);
+    let (text, imported, imported_body) = assert_checker_roundtrip(&store, body);
+    let parsed = kxt::read_xt(text.as_bytes()).unwrap();
+
+    assert_eq!(store.get(body).unwrap().regions().len(), 4);
+    assert_eq!(store.count::<Shell>(), 3);
+    assert_eq!(
+        parsed
+            .nodes
+            .values()
+            .filter(|node| node.code == code::REGION)
+            .count(),
+        4
+    );
+    assert_eq!(
+        parsed
+            .nodes
+            .values()
+            .filter(|node| node.code == code::SHELL)
+            .count(),
+        6
+    );
+    assert_eq!(imported.get(imported_body).unwrap().regions().len(), 4);
+    assert_eq!(imported.count::<Shell>(), 3);
+    let solid = imported
+        .get(imported_body)
+        .unwrap()
+        .regions()
+        .iter()
+        .copied()
+        .find(|&region| imported.get(region).unwrap().kind() == RegionKind::Solid)
+        .unwrap();
+    assert_eq!(imported.get(solid).unwrap().shells().len(), 3);
+}
+
+#[test]
+fn malformed_reduced_solid_layouts_fail_closed() {
+    let mut unpaired_store = Store::new();
+    let unpaired_body = make::block(&mut unpaired_store, &Frame::world(), [1.0, 1.0, 1.0]).unwrap();
+    let mut transaction = unpaired_store.transaction().unwrap();
+    {
+        let mut store = transaction.assembly();
+        let extra_void = store.add(Region {
+            body: unpaired_body,
+            kind: RegionKind::Void,
+            shells: Vec::new(),
+        });
+        store
+            .get_mut(unpaired_body)
+            .unwrap()
+            .regions
+            .push(extra_void);
+    }
+    assert!(kxt::export_text(transaction.store(), unpaired_body).is_err());
+    transaction.rollback().unwrap();
+
+    let (mut reordered_store, reordered_body) = cavity_block(1);
+    let mut transaction = reordered_store.transaction().unwrap();
+    {
+        let mut store = transaction.assembly();
+        store.get_mut(reordered_body).unwrap().regions.swap(1, 2);
+    }
+    assert!(kxt::export_text(transaction.store(), reordered_body).is_err());
+    transaction.rollback().unwrap();
+}
+
+#[test]
+fn one_shell_solid_output_keeps_legacy_bytes() {
+    let mut store = Store::new();
+    let body = make::block(&mut store, &tilted(), [0.2, 0.3, 0.4]).unwrap();
+    let text = kxt::export_text(&store, body).unwrap();
+    assert_eq!(text.len(), 6300);
+    assert_eq!(fnv64(text.as_bytes()), 0x796a_e490_2698_30b1);
+}
+
+#[test]
 fn checked_non_solid_builders_round_trip() {
     let mut sheet_store = Store::new();
     let sheet = make::planar_sheet(
@@ -1534,6 +1932,117 @@ fn sheet_semicircle_arc_round_trips() {
     let (lo, hi) = arc.bounds.unwrap();
     assert!((lo - 0.0).abs() < 1e-12);
     assert!((hi - core::f64::consts::PI).abs() < 1e-12);
+}
+
+#[test]
+fn verified_plane_line_edge_exports_as_its_exact_native_line() {
+    let mut store = Store::new();
+    let body = make::block(
+        &mut store,
+        &Frame::new(
+            Point3::new(0.3, -1.2, 2.1),
+            Vec3::new(1.0, 2.0, 3.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap(),
+        [1.25, 1.5, 1.75],
+    )
+    .unwrap();
+    let carrier = replace_first_block_edge_with_verified_plane_line(&mut store, body);
+
+    let text = kxt::export_text(&store, body).unwrap();
+    assert_eq!(text, kxt::export_text(&store, body).unwrap());
+    let parsed = kxt::read_xt(text.as_bytes()).unwrap();
+    let line = parsed
+        .nodes
+        .values()
+        .find(|node| {
+            node.code == code::LINE
+                && xt_vector(&parsed, node, "pvec") == carrier.origin()
+                && xt_vector(&parsed, node, "direction") == carrier.dir()
+        })
+        .expect("verified carrier is emitted directly as a LINE");
+    assert_vec_bits(xt_vector(&parsed, line, "pvec"), carrier.origin());
+    assert_vec_bits(xt_vector(&parsed, line, "direction"), carrier.dir());
+
+    let mut imported = Store::new();
+    let reconstruction = kxt::import(text.as_bytes(), &mut imported).unwrap();
+    assert_eq!(reconstruction.bodies.len(), 1);
+    assert!(
+        check_body(&imported, reconstruction.bodies[0])
+            .unwrap()
+            .is_empty()
+    );
+    assert!(imported.iter::<CurveGeom>().any(|(_, curve)| {
+        curve
+            .as_line()
+            .is_some_and(|line| line.origin() == carrier.origin() && line.dir() == carrier.dir())
+    }));
+}
+
+#[test]
+fn verified_plane_sphere_edge_exports_as_its_exact_native_circle() {
+    let mut store = Store::new();
+    let body = sheet_semicircle(&mut store);
+    let carrier = replace_semicircle_with_verified_plane_sphere_circle(&mut store, body);
+
+    let text = kxt::export_text(&store, body).unwrap();
+    assert_eq!(text, kxt::export_text(&store, body).unwrap());
+    let parsed = kxt::read_xt(text.as_bytes()).unwrap();
+    let circle = parsed
+        .nodes
+        .values()
+        .find(|node| {
+            node.code == code::CIRCLE
+                && xt_vector(&parsed, node, "centre") == carrier.frame().origin()
+                && parsed.field(node, "radius").unwrap().as_f64() == Some(carrier.radius())
+        })
+        .expect("verified carrier is emitted directly as a CIRCLE");
+    assert_vec_bits(
+        xt_vector(&parsed, circle, "centre"),
+        carrier.frame().origin(),
+    );
+    assert_vec_bits(xt_vector(&parsed, circle, "normal"), carrier.frame().z());
+    assert_vec_bits(xt_vector(&parsed, circle, "x_axis"), carrier.frame().x());
+    assert_eq!(
+        parsed
+            .field(circle, "radius")
+            .unwrap()
+            .as_f64()
+            .unwrap()
+            .to_bits(),
+        carrier.radius().to_bits()
+    );
+
+    let mut imported = Store::new();
+    let reconstruction = kxt::import(text.as_bytes(), &mut imported).unwrap();
+    assert_eq!(reconstruction.bodies.len(), 1);
+    assert!(
+        check_body(&imported, reconstruction.bodies[0])
+            .unwrap()
+            .is_empty()
+    );
+    assert!(imported.iter::<CurveGeom>().any(|(_, curve)| {
+        curve.as_circle().is_some_and(|circle| {
+            circle.frame() == carrier.frame() && circle.radius() == carrier.radius()
+        })
+    }));
+}
+
+#[test]
+fn verified_nurbs_intersection_remains_a_typed_writer_refusal() {
+    let mut store = Store::new();
+    let body = wire_line(&mut store);
+    replace_wire_line_with_verified_nurbs_intersection(&mut store, body);
+
+    let error = kxt::export_text(&store, body).unwrap_err();
+    assert_eq!(
+        error,
+        XtError::Unsupported {
+            capability: XtCapability::ProceduralCurves,
+            what: "verified or procedural curve has no supported native X_T carrier",
+        }
+    );
 }
 
 #[test]

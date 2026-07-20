@@ -14,16 +14,16 @@ use crate::schema::{base_schema, code};
 use kcore::arena::Handle;
 use kcore::math;
 use kcore::tolerance::{LINEAR_RESOLUTION, Tolerances, check_in_size_box};
-use kgeom::curve::Curve;
+use kgeom::curve::{Circle, Curve, Ellipse, Line};
 use kgeom::curve2d::{Curve2d, NurbsCurve2d};
 use kgeom::nurbs::{KnotVector, NurbsCurve, NurbsSurface};
 use kgeom::surface::{Dir, Surface};
 use kgeom::vec::{Point3, Vec3};
-use kgraph::{EvalLimits, SurfaceDerivativeOrder};
+use kgraph::{EvalLimits, SurfaceDerivativeOrder, VerifiedIntersectionCarrier};
 use ktopo::check::check_body;
 use ktopo::entity::{
-    BodyId, BodyKind, CurveId, Edge, EdgeId, FaceId, FinId, FinPcurve, LoopId, PointId, RegionKind,
-    Sense, SurfaceId, VertexId,
+    BodyId, BodyKind, CurveId, Edge, EdgeId, FaceId, FinId, FinPcurve, LoopId, PointId, RegionId,
+    RegionKind, Sense, ShellId, SurfaceId, VertexId,
 };
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::store::Store;
@@ -83,8 +83,7 @@ struct Plan {
     curves: Vec<(CurveId, u32)>,
     fin_pcurves: Vec<FinPcurvePlan>,
     points: Vec<(PointId, u32)>,
-    shell_id: u32,
-    void_shell_id: u32,
+    scaffold: Scaffold,
     first_aux_id: u32,
     max_id: u32,
 }
@@ -112,10 +111,25 @@ enum DummyFinRole {
     WireStart,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Scaffold {
     shell_id: u32,
-    void_shell_id: u32,
+    solid: Option<SolidScaffold>,
+}
+
+#[derive(Debug, Clone)]
+struct SolidScaffold {
+    regions: Vec<(RegionId, u32)>,
+    solid_region: RegionId,
+    shell_pairs: Vec<SolidShellPair>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SolidShellPair {
+    shell: ShellId,
+    void_region: RegionId,
+    back_id: u32,
+    front_id: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -135,6 +149,20 @@ struct SurfaceAuxIds {
     v_knot_mult: u32,
     u_knots: u32,
     v_knots: u32,
+}
+
+/// Native X_T curve geometry retained by one supported graph descriptor.
+///
+/// Verified analytic intersections deliberately borrow their immutable
+/// certificate carrier rather than reconstructing it from endpoints or
+/// source surfaces. This preserves the exact carrier bits while keeping all
+/// other procedural families on the typed refusal path.
+#[derive(Debug, Clone, Copy)]
+enum NativeCurve<'curve> {
+    Line(Line),
+    Circle(Circle),
+    Ellipse(Ellipse),
+    Nurbs(&'curve NurbsCurve),
 }
 
 /// Export one checker-clean solid, supported sheet body, supported wire body,
@@ -190,13 +218,17 @@ impl Plan {
             match e.curve() {
                 Some(curve) => {
                     push_interned(&mut curve_handles, curve);
-                    match (store.get(curve)?, e.vertices(), e.bounds()) {
-                        (CurveGeom::Line(_), [Some(_), Some(_)], Some(_)) => {}
-                        (CurveGeom::Circle(_), [None, None], None) => {}
-                        (CurveGeom::Circle(_), [Some(_), Some(_)], Some(_)) => {}
-                        (CurveGeom::Ellipse(_), [None, None], None) => {}
-                        (CurveGeom::Ellipse(_), [Some(_), Some(_)], Some(_)) => {}
-                        (CurveGeom::Nurbs(n), [Some(_), Some(_)], Some(_)) => {
+                    let curve = store.get(curve)?;
+                    if let CurveGeom::Intersection(descriptor) = curve {
+                        validate_verified_intersection_edge(descriptor, e)?;
+                    }
+                    match (native_curve(curve)?, e.vertices(), e.bounds()) {
+                        (NativeCurve::Line(_), [Some(_), Some(_)], Some(_)) => {}
+                        (NativeCurve::Circle(_), [None, None], None) => {}
+                        (NativeCurve::Circle(_), [Some(_), Some(_)], Some(_)) => {}
+                        (NativeCurve::Ellipse(_), [None, None], None) => {}
+                        (NativeCurve::Ellipse(_), [Some(_), Some(_)], Some(_)) => {}
+                        (NativeCurve::Nurbs(n), [Some(_), Some(_)], Some(_)) => {
                             validate_nurbs_curve(n)?;
                         }
                         _ => {
@@ -308,8 +340,7 @@ impl Plan {
             curves,
             fin_pcurves,
             points,
-            shell_id: scaffold.shell_id,
-            void_shell_id: scaffold.void_shell_id,
+            scaffold,
             first_aux_id,
             max_id: next - 1,
         })
@@ -338,7 +369,7 @@ impl Plan {
                 ptr(0),
                 Value::Int(body_type(self.body_kind)),
                 Value::Int(1),
-                ptr(self.shell_id),
+                ptr(self.scaffold.shell_id),
                 ptr(first_id(&self.surfaces)),
                 ptr(self.first_curve_id()),
                 ptr(first_id(&self.points)),
@@ -359,7 +390,7 @@ impl Plan {
             ],
         });
         match self.body_kind {
-            BodyKind::Solid => self.push_solid_scaffold_nodes(&mut out),
+            BodyKind::Solid => self.push_solid_scaffold_nodes(store, &mut out)?,
             BodyKind::Sheet => self.push_sheet_scaffold_nodes(&mut out),
             BodyKind::Wire => self.push_wire_scaffold_nodes(&mut out),
             BodyKind::Acorn => self.push_acorn_scaffold_nodes(&mut out),
@@ -368,8 +399,8 @@ impl Plan {
         for (position, &(face_id, index)) in self.faces.iter().enumerate() {
             let face = store.get(face_id)?;
             let first_loop = face.loops().first().map_or(0, |&lp| id_of(&self.loops, lp));
-            let next = adjacent(&self.faces, position, 1);
-            let previous = adjacent(&self.faces, position, -1);
+            let (shell_id, front_shell_id, next, previous) =
+                self.face_scaffold(store, face_id, position)?;
             let surface_faces: Vec<_> = self
                 .faces
                 .iter()
@@ -394,7 +425,7 @@ impl Plan {
                     ptr(next),
                     ptr(previous),
                     ptr(first_loop),
-                    ptr(self.shell_id),
+                    ptr(shell_id),
                     ptr(id_of(&self.surfaces, face.surface())),
                     sense(face.sense()),
                     ptr(adjacent(&surface_faces, surface_position, 1)),
@@ -405,11 +436,7 @@ impl Plan {
                     // chain either way.
                     ptr(next),
                     ptr(previous),
-                    ptr(match self.body_kind {
-                        BodyKind::Solid => self.void_shell_id,
-                        BodyKind::Sheet => self.shell_id,
-                        _ => 0,
-                    }),
+                    ptr(front_shell_id),
                 ],
             });
         }
@@ -692,14 +719,15 @@ impl Plan {
                 self.adjacent_curve_node(position, 1),
                 self.adjacent_curve_node(position, -1),
             );
-            let aux = if matches!(store.get(curve_id)?, CurveGeom::Nurbs(_)) {
+            let curve = native_curve(store.get(curve_id)?)?;
+            let aux = if matches!(curve, NativeCurve::Nurbs(_)) {
                 let ids = CurveAuxIds::allocate(&mut next_aux);
-                push_curve_aux_nodes(&mut out, store.get(curve_id)?, ids)?;
+                push_curve_aux_nodes(&mut out, curve, ids)?;
                 Some(ids)
             } else {
                 None
             };
-            out.push(curve_node(store.get(curve_id)?, index, common, aux)?);
+            out.push(curve_node(curve, index, common, aux)?);
         }
         for plan in &self.fin_pcurves {
             self.push_fin_pcurve_nodes(store, *plan, &mut next_aux, &mut out)?;
@@ -958,70 +986,130 @@ impl Plan {
         }
     }
 
-    fn push_solid_scaffold_nodes(&self, out: &mut Vec<OutNode>) {
-        out.push(OutNode {
-            code: code::REGION,
-            index: 2,
-            values: vec![
-                int(2),
-                ptr(0),
-                ptr(1),
-                ptr(3),
-                ptr(0),
-                ptr(self.void_shell_id),
-                Value::Char('V'),
-                // V26105 appended field (see REGION_EDIT_SCRIPT): null owner.
-                ptr(0),
-            ],
-        });
-        out.push(OutNode {
-            code: code::REGION,
-            index: 3,
-            values: vec![
-                int(3),
-                ptr(0),
-                ptr(1),
-                ptr(0),
-                ptr(2),
-                ptr(self.shell_id),
-                Value::Char('S'),
-                // V26105 appended field (see REGION_EDIT_SCRIPT): null owner.
-                ptr(0),
-            ],
-        });
-        out.push(OutNode {
-            code: code::SHELL,
-            index: self.shell_id,
-            values: vec![
-                int(self.shell_id),
-                ptr(0),
-                ptr(1),
-                ptr(0),
-                ptr(first_id(&self.faces)),
-                ptr(0),
-                ptr(0),
-                ptr(3),
-                ptr(0),
-            ],
-        });
-        out.push(OutNode {
-            code: code::SHELL,
-            index: self.void_shell_id,
-            values: vec![
-                int(self.void_shell_id),
-                ptr(0),
-                ptr(0),
-                ptr(0),
-                ptr(0),
-                ptr(0),
-                ptr(0),
-                ptr(2),
-                ptr(first_id(&self.faces)),
-            ],
-        });
+    fn face_scaffold(
+        &self,
+        store: &Store,
+        face: FaceId,
+        global_position: usize,
+    ) -> Result<(u32, u32, u32, u32)> {
+        let Some(solid) = &self.scaffold.solid else {
+            let next = adjacent(&self.faces, global_position, 1);
+            let previous = adjacent(&self.faces, global_position, -1);
+            let front_shell = match self.body_kind {
+                BodyKind::Sheet => self.scaffold.shell_id,
+                _ => 0,
+            };
+            return Ok((self.scaffold.shell_id, front_shell, next, previous));
+        };
+        let pair = solid
+            .shell_pairs
+            .iter()
+            .find(|pair| {
+                store
+                    .get(pair.shell)
+                    .is_ok_and(|shell| shell.faces().contains(&face))
+            })
+            .ok_or(XtError::InvalidModel {
+                what: "solid face is missing from its planned shell",
+            })?;
+        let shell = store.get(pair.shell)?;
+        let position = shell
+            .faces()
+            .iter()
+            .position(|&candidate| candidate == face)
+            .ok_or(XtError::InvalidModel {
+                what: "solid face is missing from its planned shell",
+            })?;
+        let next = shell
+            .faces()
+            .get(position + 1)
+            .map_or(0, |&face| id_of(&self.faces, face));
+        let previous = position
+            .checked_sub(1)
+            .and_then(|position| shell.faces().get(position))
+            .map_or(0, |&face| id_of(&self.faces, face));
+        Ok((pair.back_id, pair.front_id, next, previous))
+    }
+
+    fn push_solid_scaffold_nodes(&self, store: &Store, out: &mut Vec<OutNode>) -> Result<()> {
+        let solid = self
+            .scaffold
+            .solid
+            .as_ref()
+            .expect("solid bodies have a planned solid scaffold");
+        for (position, &(region, index)) in solid.regions.iter().enumerate() {
+            let region_value = store.get(region)?;
+            let shell = if region == solid.solid_region {
+                solid.shell_pairs.first().map_or(0, |pair| pair.back_id)
+            } else {
+                solid
+                    .shell_pairs
+                    .iter()
+                    .find(|pair| pair.void_region == region)
+                    .map_or(0, |pair| pair.front_id)
+            };
+            out.push(OutNode {
+                code: code::REGION,
+                index,
+                values: vec![
+                    int(index),
+                    ptr(0),
+                    ptr(1),
+                    ptr(adjacent(&solid.regions, position, 1)),
+                    ptr(adjacent(&solid.regions, position, -1)),
+                    ptr(shell),
+                    Value::Char(match region_value.kind() {
+                        RegionKind::Solid => 'S',
+                        RegionKind::Void => 'V',
+                    }),
+                    // V26105 appended field (see REGION_EDIT_SCRIPT): null owner.
+                    ptr(0),
+                ],
+            });
+        }
+        let solid_region_id = id_of(&solid.regions, solid.solid_region);
+        for (position, pair) in solid.shell_pairs.iter().enumerate() {
+            out.push(OutNode {
+                code: code::SHELL,
+                index: pair.back_id,
+                values: vec![
+                    int(pair.back_id),
+                    ptr(0),
+                    ptr(1),
+                    ptr(solid
+                        .shell_pairs
+                        .get(position + 1)
+                        .map_or(0, |pair| pair.back_id)),
+                    ptr(first_mapped_id(&self.faces, store.get(pair.shell)?.faces())),
+                    ptr(0),
+                    ptr(0),
+                    ptr(solid_region_id),
+                    ptr(0),
+                ],
+            });
+        }
+        for pair in &solid.shell_pairs {
+            out.push(OutNode {
+                code: code::SHELL,
+                index: pair.front_id,
+                values: vec![
+                    int(pair.front_id),
+                    ptr(0),
+                    ptr(0),
+                    ptr(0),
+                    ptr(0),
+                    ptr(0),
+                    ptr(0),
+                    ptr(id_of(&solid.regions, pair.void_region)),
+                    ptr(first_mapped_id(&self.faces, store.get(pair.shell)?.faces())),
+                ],
+            });
+        }
+        Ok(())
     }
 
     fn push_sheet_scaffold_nodes(&self, out: &mut Vec<OutNode>) {
+        let shell_id = self.scaffold.shell_id;
         out.push(OutNode {
             code: code::REGION,
             index: 2,
@@ -1031,7 +1119,7 @@ impl Plan {
                 ptr(1),
                 ptr(0),
                 ptr(0),
-                ptr(self.shell_id),
+                ptr(shell_id),
                 Value::Char('V'),
                 // V26105 appended field (see REGION_EDIT_SCRIPT): null owner.
                 ptr(0),
@@ -1039,9 +1127,9 @@ impl Plan {
         });
         out.push(OutNode {
             code: code::SHELL,
-            index: self.shell_id,
+            index: shell_id,
             values: vec![
-                int(self.shell_id),
+                int(shell_id),
                 ptr(0),
                 ptr(1),
                 ptr(0),
@@ -1057,6 +1145,7 @@ impl Plan {
     }
 
     fn push_wire_scaffold_nodes(&self, out: &mut Vec<OutNode>) {
+        let shell_id = self.scaffold.shell_id;
         out.push(OutNode {
             code: code::REGION,
             index: 2,
@@ -1066,7 +1155,7 @@ impl Plan {
                 ptr(1),
                 ptr(0),
                 ptr(0),
-                ptr(self.shell_id),
+                ptr(shell_id),
                 Value::Char('V'),
                 // V26105 appended field (see REGION_EDIT_SCRIPT): null owner.
                 ptr(0),
@@ -1074,9 +1163,9 @@ impl Plan {
         });
         out.push(OutNode {
             code: code::SHELL,
-            index: self.shell_id,
+            index: shell_id,
             values: vec![
-                int(self.shell_id),
+                int(shell_id),
                 ptr(0),
                 ptr(1),
                 ptr(0),
@@ -1090,6 +1179,7 @@ impl Plan {
     }
 
     fn push_acorn_scaffold_nodes(&self, out: &mut Vec<OutNode>) {
+        let shell_id = self.scaffold.shell_id;
         out.push(OutNode {
             code: code::REGION,
             index: 2,
@@ -1099,7 +1189,7 @@ impl Plan {
                 ptr(1),
                 ptr(0),
                 ptr(0),
-                ptr(self.shell_id),
+                ptr(shell_id),
                 Value::Char('V'),
                 // V26105 appended field (see REGION_EDIT_SCRIPT): null owner.
                 ptr(0),
@@ -1107,9 +1197,9 @@ impl Plan {
         });
         out.push(OutNode {
             code: code::SHELL,
-            index: self.shell_id,
+            index: shell_id,
             values: vec![
-                int(self.shell_id),
+                int(shell_id),
                 ptr(0),
                 ptr(1),
                 ptr(0),
@@ -1134,41 +1224,78 @@ impl Scaffold {
     }
 
     fn solid(store: &Store, body: &ktopo::entity::Body) -> Result<Self> {
-        if body.regions().len() != 2 {
+        if body.regions().len() < 2 {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterBodyTopology,
-                what: "solid text writing requires one void and one solid region",
+                what: "solid text writing requires exterior void and solid regions",
             });
         }
-        let void_region = body.regions()[0];
+        let void_regions: Vec<_> = core::iter::once(body.regions()[0])
+            .chain(body.regions()[2..].iter().copied())
+            .collect();
         let solid_region = body.regions()[1];
-        let vr = store.get(void_region)?;
         let sr = store.get(solid_region)?;
-        if vr.kind() != RegionKind::Void
-            || !vr.shells().is_empty()
-            || sr.kind() != RegionKind::Solid
-        {
+        let mut void_layout_is_valid = true;
+        for &region in &void_regions {
+            let region = store.get(region)?;
+            void_layout_is_valid &= region.kind() == RegionKind::Void && region.shells().is_empty();
+        }
+        if sr.kind() != RegionKind::Solid || !void_layout_is_valid {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterBodyTopology,
-                what: "solid text writing requires the standard solid region scaffold",
+                what: "solid text writing requires one solid region after an empty exterior void, followed by empty finite voids",
             });
         }
-        let [shell] = sr.shells() else {
+        if sr.shells().len() != void_regions.len() {
             return Err(XtError::Unsupported {
                 capability: XtCapability::WriterBodyTopology,
-                what: "solid text writing requires exactly one solid shell",
-            });
-        };
-        let sh = store.get(*shell)?;
-        if sh.faces().is_empty() || !sh.edges().is_empty() || sh.vertex().is_some() {
-            return Err(XtError::Unsupported {
-                capability: XtCapability::WriterBodyTopology,
-                what: "wireframe, acorn, and empty shells are not writable yet",
+                what: "solid text writing requires one retained shell per void region",
             });
         }
+        for &shell in sr.shells() {
+            let shell_value = store.get(shell)?;
+            if shell_value.faces().is_empty()
+                || !shell_value.edges().is_empty()
+                || shell_value.vertex().is_some()
+            {
+                return Err(XtError::Unsupported {
+                    capability: XtCapability::WriterBodyTopology,
+                    what: "solid text writing requires non-empty face-only retained shells",
+                });
+            }
+        }
+
+        let mut next = 2;
+        let regions = assign(body.regions(), &mut next);
+        let back_shells = assign(sr.shells(), &mut next);
+        let front_shells = assign(sr.shells(), &mut next);
+        let shell_pairs = back_shells
+            .into_iter()
+            .zip(front_shells)
+            .zip(void_regions)
+            .map(
+                |(((shell, back_id), (front_shell, front_id)), void_region)| {
+                    debug_assert_eq!(shell, front_shell);
+                    SolidShellPair {
+                        shell,
+                        void_region,
+                        back_id,
+                        front_id,
+                    }
+                },
+            )
+            .collect::<Vec<_>>();
+        let shell_id = shell_pairs
+            .first()
+            .expect("validated solid has a retained shell")
+            .back_id;
         Ok(Scaffold {
-            shell_id: 4,
-            void_shell_id: 5,
+            shell_id,
+            solid: Some(SolidScaffold {
+                regions,
+                solid_region,
+                shell_pairs,
+            }),
         })
     }
 
@@ -1199,7 +1326,7 @@ impl Scaffold {
         }
         Ok(Scaffold {
             shell_id: 3,
-            void_shell_id: 0,
+            solid: None,
         })
     }
 
@@ -1230,7 +1357,7 @@ impl Scaffold {
         }
         Ok(Scaffold {
             shell_id: 3,
-            void_shell_id: 0,
+            solid: None,
         })
     }
 
@@ -1261,12 +1388,19 @@ impl Scaffold {
         }
         Ok(Scaffold {
             shell_id: 3,
-            void_shell_id: 0,
+            solid: None,
         })
     }
 
-    fn first_entity_id(self) -> u32 {
-        if self.void_shell_id == 0 { 4 } else { 6 }
+    fn first_entity_id(&self) -> u32 {
+        self.solid.as_ref().map_or(4, |solid| {
+            solid
+                .shell_pairs
+                .last()
+                .expect("validated solid has a retained shell")
+                .front_id
+                + 1
+        })
     }
 }
 
@@ -1523,17 +1657,17 @@ fn reject_shared_offset_bases(store: &Store, surfaces: &[SurfaceId]) -> Result<(
 }
 
 fn curve_node(
-    curve: &CurveGeom,
+    curve: NativeCurve<'_>,
     index: u32,
     mut values: Vec<Value>,
     aux: Option<CurveAuxIds>,
 ) -> Result<OutNode> {
     let code = match curve {
-        CurveGeom::Line(c) => {
+        NativeCurve::Line(c) => {
             values.extend([vector(c.origin()), vector(c.dir())]);
             code::LINE
         }
-        CurveGeom::Circle(c) => {
+        NativeCurve::Circle(c) => {
             values.extend([
                 vector(c.frame().origin()),
                 vector(c.frame().z()),
@@ -1542,7 +1676,7 @@ fn curve_node(
             ]);
             code::CIRCLE
         }
-        CurveGeom::Ellipse(c) => {
+        NativeCurve::Ellipse(c) => {
             values.extend([
                 vector(c.frame().origin()),
                 vector(c.frame().z()),
@@ -1552,16 +1686,10 @@ fn curve_node(
             ]);
             code::ELLIPSE
         }
-        CurveGeom::Nurbs(_) => {
+        NativeCurve::Nurbs(_) => {
             let aux = aux.expect("planned NURBS curve auxiliaries");
             values.extend([ptr(aux.nurbs), ptr(aux.data)]);
             code::B_CURVE
-        }
-        _ => {
-            return Err(XtError::Unsupported {
-                capability: XtCapability::ProceduralCurves,
-                what: "unimplemented geometry-graph curve class",
-            });
         }
     };
     Ok(OutNode {
@@ -1571,8 +1699,12 @@ fn curve_node(
     })
 }
 
-fn push_curve_aux_nodes(out: &mut Vec<OutNode>, curve: &CurveGeom, ids: CurveAuxIds) -> Result<()> {
-    let CurveGeom::Nurbs(curve) = curve else {
+fn push_curve_aux_nodes(
+    out: &mut Vec<OutNode>,
+    curve: NativeCurve<'_>,
+    ids: CurveAuxIds,
+) -> Result<()> {
+    let NativeCurve::Nurbs(curve) = curve else {
         return Ok(());
     };
     let (knots, multiplicities) = compressed_knots(curve.knots());
@@ -1710,11 +1842,53 @@ fn aux_node_count(store: &Store, surfaces: &[SurfaceId], curves: &[CurveId]) -> 
         }
     }
     for &curve in curves {
-        if matches!(store.get(curve)?, CurveGeom::Nurbs(_)) {
+        if matches!(native_curve(store.get(curve)?)?, NativeCurve::Nurbs(_)) {
             count += 5;
         }
     }
     Ok(count)
+}
+
+fn native_curve(curve: &CurveGeom) -> Result<NativeCurve<'_>> {
+    match curve {
+        CurveGeom::Line(curve) => Ok(NativeCurve::Line(*curve)),
+        CurveGeom::Circle(curve) => Ok(NativeCurve::Circle(*curve)),
+        CurveGeom::Ellipse(curve) => Ok(NativeCurve::Ellipse(*curve)),
+        CurveGeom::Nurbs(curve) => Ok(NativeCurve::Nurbs(curve)),
+        CurveGeom::Intersection(descriptor) => match descriptor.carrier() {
+            VerifiedIntersectionCarrier::Line(carrier) => Ok(NativeCurve::Line(carrier)),
+            VerifiedIntersectionCarrier::Circle(carrier) => Ok(NativeCurve::Circle(carrier)),
+        },
+        _ => Err(XtError::Unsupported {
+            capability: XtCapability::ProceduralCurves,
+            what: "verified or procedural curve has no supported native X_T carrier",
+        }),
+    }
+}
+
+fn validate_verified_intersection_edge(
+    descriptor: &kgraph::VerifiedIntersectionCurveDescriptor,
+    edge: &Edge,
+) -> Result<()> {
+    if edge.tolerance().is_some() {
+        return Err(XtError::Unsupported {
+            capability: XtCapability::WriterEdgeTopology,
+            what: "verified analytic intersection export requires an exact edge",
+        });
+    }
+    let ([Some(_), Some(_)], Some((lo, hi))) = (edge.vertices(), edge.bounds()) else {
+        return Err(XtError::Unsupported {
+            capability: XtCapability::WriterEdgeTopology,
+            what: "verified analytic intersection export requires a bounded edge",
+        });
+    };
+    let certified = descriptor.carrier_range();
+    if !lo.is_finite() || !hi.is_finite() || lo >= hi || lo < certified.lo || hi > certified.hi {
+        return Err(XtError::InvalidModel {
+            what: "verified intersection edge bounds exceed its certified carrier range",
+        });
+    }
+    Ok(())
 }
 
 fn validate_nurbs_curve(curve: &NurbsCurve) -> Result<()> {
@@ -2095,6 +2269,10 @@ fn id_of<T>(values: &[(Handle<T>, u32)], handle: Handle<T>) -> u32 {
 
 fn first_id<T>(values: &[(Handle<T>, u32)]) -> u32 {
     values.first().map_or(0, |&(_, id)| id)
+}
+
+fn first_mapped_id<T>(values: &[(Handle<T>, u32)], handles: &[Handle<T>]) -> u32 {
+    handles.first().map_or(0, |&handle| id_of(values, handle))
 }
 
 fn adjacent<T>(values: &[(Handle<T>, u32)], position: usize, direction: i8) -> u32 {
