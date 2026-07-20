@@ -743,22 +743,30 @@ fn prepare_band_proposals(
     let mut side_bands = Vec::<(AxialBoundary<usize>, AxialBoundary<usize>)>::new();
     for selected in selected {
         let (_, _, fragment, orientation) = selected.into_parts();
-        if orientation != SelectedOrientation::Preserved {
-            return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
-        }
-        match fragment {
-            CurvedFragment::Planar {
-                face,
-                region: FaceRegionKey::PlanarDisk(cut),
-            } => {
+        match (fragment, orientation) {
+            (
+                CurvedFragment::Planar {
+                    face,
+                    region: FaceRegionKey::PlanarDisk(cut),
+                },
+                // Band assembly regenerates result-oriented cap geometry;
+                // this selected face supplies lineage only, so reversal is
+                // admissible here but not for side or source-cap fragments.
+                SelectedOrientation::Preserved | SelectedOrientation::Reversed,
+            ) => {
                 if planar_disks.insert(cut, face).is_some() {
                     return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
                 }
             }
-            CurvedFragment::CylinderSide {
-                region: FaceRegionKey::AxialBand { lower, upper },
-            } => side_bands.push((lower, upper)),
-            CurvedFragment::CylinderCap { face, boundary } if boundary < 2 => {
+            (
+                CurvedFragment::CylinderSide {
+                    region: FaceRegionKey::AxialBand { lower, upper },
+                },
+                SelectedOrientation::Preserved,
+            ) => side_bands.push((lower, upper)),
+            (CurvedFragment::CylinderCap { face, boundary }, SelectedOrientation::Preserved)
+                if boundary < 2 =>
+            {
                 if source_caps[boundary].replace(face).is_some() {
                     return refused(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported);
                 }
@@ -984,7 +992,7 @@ mod tests {
     }
 
     #[test]
-    fn axial_intersection_is_invariant_to_both_operand_face_storage_orders() {
+    fn axial_band_results_ignore_both_operand_face_storage_orders() {
         let mut session = Kernel::new().create_session();
         let part = session.create_part();
         let base = Point3::new(3.0, -2.0, 1.25);
@@ -1010,25 +1018,33 @@ mod tests {
             (block, cylinder)
         };
 
-        let outcome = super::super::dispatch::execute_boolean(
-            &mut session.edit_part(part).unwrap(),
-            PlanarBooleanOperation::Intersect,
-            block,
-            cylinder,
-            crate::OperationSettings::new(),
-        )
-        .unwrap()
-        .into_result()
-        .unwrap();
-        assert!(
-            matches!(
-                outcome,
-                super::super::dispatch::BooleanPipelineOutcome::Curved(
-                    CurvedBooleanPipelineOutcome::Committed(_)
-                )
+        for (operation, left, right, expected_bodies) in [
+            (
+                PlanarBooleanOperation::Intersect,
+                block.clone(),
+                cylinder.clone(),
+                1,
             ),
-            "outcome: {outcome:?}"
-        );
+            (PlanarBooleanOperation::Subtract, cylinder, block, 2),
+        ] {
+            let outcome = super::super::dispatch::execute_boolean(
+                &mut session.edit_part(part.clone()).unwrap(),
+                operation,
+                left,
+                right,
+                crate::OperationSettings::new(),
+            )
+            .unwrap()
+            .into_result()
+            .unwrap();
+            let super::super::dispatch::BooleanPipelineOutcome::Curved(
+                CurvedBooleanPipelineOutcome::Committed(committed),
+            ) = outcome
+            else {
+                panic!("expected committed curved result, got {outcome:?}")
+            };
+            assert_eq!(committed.bodies.len(), expected_bodies);
+        }
     }
 
     #[test]

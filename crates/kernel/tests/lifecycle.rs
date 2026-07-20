@@ -7,10 +7,10 @@ use kernel::{
     CheckLevel, CheckOutcome, ClassifyPointInBodyRequest, CreateSeedBodyRequest,
     CreateStrutRequest, CylinderRequest, EntityKind, Error, ExecutionPolicy, ExportXtRequest,
     ExtrudeProfileAlongRequest, ExtrudeProfileRequest, Frame, FullCommitRequirement,
-    GrowTolerancesRequest, ImportXtRequest, IntersectCurvesRequest, JoinRingRequest, Kernel,
-    LimitSpec, MergeFaceAsHoleRequest, MutationKind, NumericalPolicy, OperationSettings,
-    ParamRange, PartId, PcurveChart, PcurveEndpointKind, PcurveMetadata, PcurveSeam,
-    PcurveSeamSide, Point2, Point3, PolicyVersion, RegionKind, RemoveBridgeRequest,
+    GrowTolerancesRequest, ImportXtRequest, IntersectCurvesRequest, JoinRingRequest, JournalEntity,
+    Kernel, LimitSpec, LineageView, MergeFaceAsHoleRequest, MutationKind, NumericalPolicy,
+    OperationSettings, ParamRange, PartId, PcurveChart, PcurveEndpointKind, PcurveMetadata,
+    PcurveSeam, PcurveSeamSide, Point2, Point3, PolicyVersion, RegionKind, RemoveBridgeRequest,
     RemoveSeedBodyRequest, RemoveStrutRequest, ResourceKind, SectionBodiesRequest,
     SectionCompletion, SectionCurveFragmentSpan, SectionRing, Session, SessionPolicy,
     SessionPrecision, SplitHoleAsFaceRequest, SurfaceDerivativeOrder, SurfaceEvaluationRequest,
@@ -1581,12 +1581,261 @@ fn public_curved_boolean_zero_cut_selection_handles_containment_and_empty() {
     assert_boolean_sources_retained(&disjoint, 2);
 }
 
+fn assert_curved_subtraction_band_topology_and_lineage(
+    fixture: &BooleanFixture,
+    created: &kernel::BooleanCreatedResult,
+) {
+    let part = fixture.session.part(fixture.part.clone()).unwrap();
+    let mut result_faces = Vec::new();
+    for body in created.bodies() {
+        let body = part.body(body.clone()).unwrap();
+        assert_eq!(body.kind(), BodyKind::Solid);
+        assert_eq!(body.faces().unwrap().len(), 3);
+        assert_eq!(body.edges().unwrap().len(), 2);
+        assert_eq!(body.vertices().unwrap().len(), 0);
+        let faces = body.faces().unwrap().collect::<Vec<_>>();
+        let surface_classes = faces
+            .iter()
+            .map(|face| {
+                let face = part.face(face.clone()).unwrap();
+                part.surface(face.surface()).unwrap().class_key().as_str()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            surface_classes
+                .iter()
+                .filter(|class| **class == "kernel.surface.cylinder.v1")
+                .count(),
+            1
+        );
+        assert_eq!(
+            surface_classes
+                .iter()
+                .filter(|class| **class == "kernel.surface.plane.v1")
+                .count(),
+            2
+        );
+
+        let cylinder_face = faces
+            .iter()
+            .find(|face| {
+                let face = part.face((*face).clone()).unwrap();
+                part.surface(face.surface()).unwrap().class_key().as_str()
+                    == "kernel.surface.cylinder.v1"
+            })
+            .unwrap();
+        let cylinder_face = part.face(cylinder_face.clone()).unwrap();
+        let cylinder_eval = part
+            .evaluate_surface(SurfaceEvaluationRequest::new(
+                cylinder_face.surface(),
+                [0.0, 0.0],
+                SurfaceDerivativeOrder::First,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        let axis = cylinder_eval.derivatives().dv;
+        let mut caps = faces
+            .iter()
+            .filter_map(|face| {
+                let face = part.face(face.clone()).unwrap();
+                (part.surface(face.surface()).unwrap().class_key().as_str()
+                    == "kernel.surface.plane.v1")
+                    .then_some(face)
+            })
+            .map(|face| {
+                let evaluation = part
+                    .evaluate_surface(SurfaceEvaluationRequest::new(
+                        face.surface(),
+                        [0.0, 0.0],
+                        SurfaceDerivativeOrder::First,
+                    ))
+                    .unwrap()
+                    .into_result()
+                    .unwrap();
+                let derivatives = evaluation.derivatives();
+                let position = derivatives.p;
+                let normal_sign = derivatives.du.cross(derivatives.dv).dot(axis)
+                    * if face.sense().is_forward() { 1.0 } else { -1.0 };
+                (
+                    position.x * axis.x + position.y * axis.y + position.z * axis.z,
+                    normal_sign,
+                )
+            })
+            .collect::<Vec<_>>();
+        caps.sort_by(|left, right| left.0.total_cmp(&right.0));
+        assert_eq!(caps.len(), 2);
+        assert!(caps[0].1 < 0.0, "low cap must point against the band axis");
+        assert!(caps[1].1 > 0.0, "high cap must point with the band axis");
+        result_faces.extend(faces);
+    }
+
+    let source_faces = [fixture.left.clone(), fixture.right.clone()]
+        .into_iter()
+        .flat_map(|body| {
+            part.body(body)
+                .unwrap()
+                .faces()
+                .unwrap()
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut derived_faces = Vec::new();
+    let mut cylindrical_sources = 0;
+    let mut planar_sources = 0;
+    for event in created.journal().lineage() {
+        let LineageView::DerivedFrom {
+            derived: JournalEntity::Face(derived),
+            source: JournalEntity::Face(source),
+        } = event
+        else {
+            panic!("curved subtraction lineage must derive result faces from source faces")
+        };
+        assert!(result_faces.contains(&derived));
+        assert!(source_faces.contains(&source));
+        assert!(!derived_faces.contains(&derived));
+        derived_faces.push(derived);
+        let source_face = part.face(source).unwrap();
+        match part
+            .surface(source_face.surface())
+            .unwrap()
+            .class_key()
+            .as_str()
+        {
+            "kernel.surface.cylinder.v1" => cylindrical_sources += 1,
+            "kernel.surface.plane.v1" => planar_sources += 1,
+            class => panic!("unexpected curved subtraction lineage surface: {class}"),
+        }
+    }
+    assert_eq!(derived_faces.len(), result_faces.len());
+    assert_eq!(cylindrical_sources, 2);
+    assert_eq!(planar_sources, 4);
+}
+
+#[test]
+fn public_curved_boolean_axial_cylinder_subtraction_commits_two_ordered_full_valid_bands() {
+    let base = Point3::new(3.0, -2.0, 1.25);
+    let cylinder_frame = boolean_frame(base.to_array(), [0.0, 0.6, 0.8], [1.0, 0.0, 0.0]);
+    let mut fixture = block_cylinder_boolean_fixture(
+        cylinder_frame.with_origin(base + cylinder_frame.z()),
+        [4.0, 4.0, 1.0],
+        cylinder_frame,
+        0.75,
+        2.0,
+    );
+    core::mem::swap(&mut fixture.left, &mut fixture.right);
+
+    let result = boolean_success(run_boolean(
+        &mut fixture,
+        BooleanOperation::Subtract,
+        OperationSettings::new(),
+    ));
+    let BooleanResult::Created(created) = result else {
+        panic!("an axial cylinder-minus-block subtraction must create two bands")
+    };
+    assert_eq!(created.bodies().len(), 2);
+    assert_eq!(created.reports().len(), 2);
+    assert!(
+        created
+            .reports()
+            .iter()
+            .zip(created.bodies())
+            .all(|(report, body)| report.body() == *body
+                && report.report().level() == CheckLevel::Full
+                && report.report().outcome() == CheckOutcome::Valid
+                && report.report().faults().is_empty()
+                && report.report().gaps().is_empty())
+    );
+    assert_eq!(created.journal().part(), fixture.part);
+    assert!(created.journal().mutation_count() > 0);
+    assert_eq!(created.journal().lineage_count(), 6);
+    assert_boolean_sources_retained(&fixture, 4);
+    assert_curved_subtraction_band_topology_and_lineage(&fixture, &created);
+
+    let bodies = created.bodies().to_vec();
+    let part = fixture.session.part(fixture.part.clone()).unwrap();
+    let low_anchor = base + cylinder_frame.z() * 0.25;
+    let removed_anchor = base + cylinder_frame.z();
+    let high_anchor = base + cylinder_frame.z() * 1.75;
+    for (body, inside, outside) in [
+        (bodies[0].clone(), low_anchor, high_anchor),
+        (bodies[1].clone(), high_anchor, low_anchor),
+    ] {
+        for (point, expected) in [
+            (inside, kernel::PointBodyVerdict::Interior),
+            (outside, kernel::PointBodyVerdict::Exterior),
+            (removed_anchor, kernel::PointBodyVerdict::Exterior),
+        ] {
+            let classification = part
+                .classify_point_in_body(ClassifyPointInBodyRequest::new(body.clone(), point))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            assert_eq!(
+                classification.verdict(),
+                &expected,
+                "body {body:?} at {point:?}"
+            );
+        }
+    }
+
+    let mut exports = Vec::new();
+    for body in &bodies {
+        let first = part
+            .export_xt(ExportXtRequest::new(body.clone()))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        let second = part
+            .export_xt(ExportXtRequest::new(body.clone()))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(first.bytes(), second.bytes());
+        exports.push(first.bytes().to_vec());
+    }
+    assert_ne!(exports[0], exports[1]);
+    drop(part);
+
+    let imported_part = fixture.session.create_part();
+    for bytes in &exports {
+        let imported = fixture
+            .session
+            .edit_part(imported_part.clone())
+            .unwrap()
+            .import_xt(ImportXtRequest::new(bytes))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(imported.bodies().len(), 1);
+        let check = fixture
+            .session
+            .part(imported_part.clone())
+            .unwrap()
+            .check_body(CheckBodyRequest::new(
+                imported.bodies()[0].clone(),
+                CheckLevel::Fast,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            check.outcome(),
+            CheckOutcome::Valid,
+            "imported band: {check:#?}"
+        );
+    }
+    assert_eq!(
+        fixture.session.part(imported_part).unwrap().bodies().len(),
+        2
+    );
+}
+
 #[test]
 fn public_curved_boolean_unassembled_truths_refuse_without_allocation() {
     for (operation, swapped) in [
         (BooleanOperation::Unite, false),
         (BooleanOperation::Subtract, false),
-        (BooleanOperation::Subtract, true),
     ] {
         let mut fixture = block_cylinder_boolean_fixture(
             Frame::world().with_origin(Point3::new(0.0, 0.0, 1.0)),

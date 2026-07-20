@@ -36,8 +36,9 @@ enforcement over new parallel surface area. Read the queue literally.
    public cylinder construction, finite-cylinder classification, topology-owned curved trim,
    closed-fragment stitching, exact rings and bounded arcs, generic exact boundary selection, and
    finite-cylinder Full proof landed. Exact curved face partition/classification and failure-atomic,
-   Full-checked axial intersection bands now run through the public facade and export deterministically;
-   curved union/subtraction, broader layouts, and licensed-host evidence remain. Broader
+   Full-checked axial intersection and cylinder-minus-block remainder bands now run through the
+   public facade and export deterministically; curved union, block-minus-cylinder mixed/cavity
+   subtraction, broader layouts, and licensed-host evidence remain. Broader
    intersection/NURBS families, revolve, and curved profiles remain milestone backlog.
 
 **External-evidence lane.** Current Onshape records pin the 15-file writer bundle and the six-file

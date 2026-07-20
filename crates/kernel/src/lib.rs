@@ -5,7 +5,7 @@
 //! immutable semantic views. Contextual operations cover checked block and
 //! polygonal-profile extrusion construction, deterministic complete-body
 //! rigid copy, body checking and tessellation, operation-scoped surface
-//! evaluation, certified convex-planar body Booleans, and typed X_T
+//! evaluation, certified convex-planar and first axial curved body Booleans, and typed X_T
 //! import/export plus graph-owned bounded curve intersection with F2 reports
 //! and delegated classified errors. Rigid copies own disjoint topology and
 //! geometry closures and retain exact `DerivedFrom` lineage. Committed
