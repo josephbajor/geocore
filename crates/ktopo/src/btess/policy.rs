@@ -254,11 +254,13 @@ impl BodyTessellationBudgetProfile {
     /// Returns the finite corpus-backed whole-body tessellation preset.
     ///
     /// Each measured high-water or cumulative stage is rounded up to the next
-    /// power of two at or above twice the `body-tessellation.v3` maximum. A
-    /// measured zero remains zero. Existing finite algorithm ceilings remain
-    /// authoritative, so local depth/sample caps and the 200,000-triangle face
-    /// ceiling are retained instead of expanded. The root work ceiling applies
-    /// inclusively to the sum of all cumulative `Work` stages.
+    /// power of two at or above twice the reviewed corpus maximum. The
+    /// structural-items corpus includes the fragmented planar Boolean oracle
+    /// bodies (maximum 792, hence 2,048). A measured zero remains zero.
+    /// Existing finite algorithm ceilings remain authoritative, so local
+    /// depth/sample caps and the 200,000-triangle face ceiling are retained
+    /// instead of expanded. The root work ceiling applies inclusively to the
+    /// sum of all cumulative `Work` stages.
     ///
     /// This preset is explicitly opt-in. [`Self::v1_defaults`] remains the
     /// compatibility contract for callers that have not selected finite
@@ -360,7 +362,7 @@ impl BodyTessellationBudgetProfile {
                     BODY_TESSELLATION_STRUCTURAL_ITEMS,
                     ResourceKind::Items,
                     AccountingMode::Cumulative,
-                    256,
+                    2_048,
                 ),
             ]
             .into_iter()
@@ -688,7 +690,7 @@ mod tests {
                     BODY_TESSELLATION_STRUCTURAL_ITEMS,
                     ResourceKind::Items,
                     AccountingMode::Cumulative,
-                    256
+                    2_048
                 ),
             ]
         );
