@@ -15,6 +15,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use kcore::operation::{AccountingMode, OperationScope, ResourceKind};
 use kcore::predicates::{Orientation, affine_dot3};
 use kgeom::vec::Point3;
+use ktopo::convex_multishell::{
+    certify_mixed_convex_multishell_input, mixed_convex_multishell_dimension_work,
+};
 use ktopo::entity::FaceId as RawFaceId;
 use ktopo::geom::SurfaceGeom;
 use ktopo::transaction::{FullBodyCheck, Journal};
@@ -23,6 +26,7 @@ use super::boundary_select::{
     BoundaryFragmentClassification, BoundarySelectionError, ClassifiedBoundaryFragment,
     OperandSide, RegularizedBooleanOperation, select_boundary_fragments,
 };
+use super::convex_containment::prepare_mixed_convex_containment_input;
 use super::curved_realize::{CurvedRealizationRequest, realize_selected_result};
 use super::curved_source::{
     CertifiedCylinderSource, CylinderSourceGap, CylinderSourceOutcome, extract_cylinder_source,
@@ -399,8 +403,18 @@ fn execute_stages(
         return Ok(CurvedBooleanPipelineOutcome::ProvenEmpty);
     }
 
-    let graph = section_bodies_in_scope(&edit.as_part(), &bodies[0], &bodies[1], linear, scope)?;
-    let cuts = certify_section_rings(&graph, planar_operand, cylinder_operand, &cylinder_source)?;
+    let cuts = if certify_zero_cut_mixed_containment(
+        &edit.state.store,
+        &planar_source,
+        &cylinder_source,
+        scope,
+    )? {
+        Vec::new()
+    } else {
+        let graph =
+            section_bodies_in_scope(&edit.as_part(), &bodies[0], &bodies[1], linear, scope)?;
+        certify_section_rings(&graph, planar_operand, cylinder_operand, &cylinder_source)?
+    };
     precharge_curved_partition(planar_source.faces().len(), cuts.len(), scope)?;
     let classified = build_classified_fragments(
         edit,
@@ -438,6 +452,42 @@ fn execute_stages(
         ),
         scope,
     )
+}
+
+/// Prove the complete planar source strictly inside the convex cylinder.
+///
+/// This certificate excludes every boundary intersection before the general
+/// section path. Failure to establish this optional relation delegates to
+/// sectioning; topology/store errors other than a negative semantic relation
+/// remain execution failures.
+fn certify_zero_cut_mixed_containment(
+    store: &ktopo::store::Store,
+    planar: &ExtractedPlanarSourceBody,
+    cylinder: &CertifiedCylinderSource,
+    scope: &mut OperationScope<'_, '_>,
+) -> StageResult<bool> {
+    let preflight_work =
+        mixed_convex_multishell_dimension_work(&[(planar.faces().len(), planar.vertices().len())])
+            .map_err(|_| {
+                PipelineFailure::Refused(CurvedBooleanPipelineRefusal::WorkCountOverflow)
+            })?;
+    scope
+        .ledger_mut()
+        .charge(PLANAR_BOOLEAN_BSP_WORK, preflight_work)
+        .map_err(Error::from)?;
+    let prepared = prepare_mixed_convex_containment_input(planar, cylinder).map_err(|reason| {
+        PipelineFailure::Refused(CurvedBooleanPipelineRefusal::AssemblyContract(reason))
+    })?;
+    if prepared.semantic_preflight_work() != preflight_work {
+        return refused(CurvedBooleanPipelineRefusal::AssemblyContract(
+            "mixed containment semantic work changed after admission",
+        ));
+    }
+    match certify_mixed_convex_multishell_input(prepared.input(), store) {
+        Ok(()) => Ok(true),
+        Err(kcore::error::Error::InvalidGeometry { .. }) => Ok(false),
+        Err(source) => Err(source.into()),
+    }
 }
 
 fn extract_planar_operand(

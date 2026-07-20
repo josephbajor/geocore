@@ -2,6 +2,7 @@
 
 use crate::cylindrical_region_proof::CylindricalCavityRegionCertification;
 use crate::entity::RegionId;
+use crate::mixed_region_proof::MixedConvexRegionCertification;
 use crate::semantic_planar_shell_proof::SemanticPlanarRegionCertification;
 use crate::store::Store;
 use kcore::error::Result;
@@ -17,6 +18,7 @@ pub(crate) enum RegionCertification {
 
 pub(crate) fn region_proof_budget() -> BudgetPlan {
     crate::cylindrical_region_proof::cylindrical_cavity_region_proof_budget()
+        .overlaid(&crate::mixed_region_proof::mixed_convex_region_proof_budget())
 }
 
 pub(crate) fn certify_region_in_scope(
@@ -24,6 +26,19 @@ pub(crate) fn certify_region_in_scope(
     region_id: RegionId,
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<RegionCertification> {
+    match crate::mixed_region_proof::certify_mixed_convex_region_in_scope(store, region_id, scope)?
+    {
+        MixedConvexRegionCertification::Certified => {
+            return Ok(RegionCertification::Certified);
+        }
+        MixedConvexRegionCertification::Invalid => {
+            return Ok(RegionCertification::Invalid);
+        }
+        MixedConvexRegionCertification::Indeterminate => {
+            return Ok(RegionCertification::Indeterminate);
+        }
+        MixedConvexRegionCertification::NotApplicable => {}
+    }
     match crate::cylindrical_region_proof::certify_cylindrical_cavity_region_in_scope(
         store, region_id, scope,
     )? {

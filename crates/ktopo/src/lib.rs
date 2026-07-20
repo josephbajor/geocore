@@ -45,6 +45,8 @@
 //!   convex-host port faces.
 //! - [`cylindrical_multishell`] — proof-ready convex planar host with one
 //!   closed cylindrical cavity shell.
+//! - [`convex_multishell`] — oriented convex whole-shell assembly for mixed
+//!   analytic outer/cavity region layouts.
 //! - [`profile`] — validated planar inputs shared by sheet and feature builders.
 //! - [`tolerance`] — entity tolerance provenance and growth contracts.
 //! - [`check`] — the body checker (structural + geometric invariants).
@@ -59,6 +61,8 @@ pub mod benchmark;
 pub(crate) mod body_copy;
 pub mod btess;
 pub mod check;
+pub(crate) mod convex_containment;
+pub mod convex_multishell;
 pub mod cylindrical_band;
 pub mod cylindrical_boss;
 pub mod cylindrical_host;
@@ -76,6 +80,7 @@ pub mod incidence_authority;
 pub(crate) mod index;
 pub(crate) mod loop_proof;
 pub mod make;
+pub(crate) mod mixed_region_proof;
 pub mod planar;
 pub mod planar_multishell;
 pub(crate) mod planar_shell_proof;

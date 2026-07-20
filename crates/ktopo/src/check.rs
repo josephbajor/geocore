@@ -2353,6 +2353,7 @@ mod tests {
                     consumed: 1,
                     allowed: 4096,
                 },
+                proof_snapshot(crate::mixed_region_proof::MIXED_CONVEX_REGION_WORK, 0),
                 LimitSnapshot {
                     stage: crate::planar_shell_proof::PLANAR_SHELL_PAIR_WORK,
                     resource: ResourceKind::Work,
@@ -2379,7 +2380,6 @@ mod tests {
                 },
             ]
         );
-
         const CALLER_STAGE: kcore::operation::StageId =
             match kcore::operation::StageId::new("ktopo.check.caller-work") {
                 Ok(stage) => stage,
@@ -2446,6 +2446,7 @@ mod tests {
                     consumed: 2,
                     allowed: 4096,
                 },
+                proof_snapshot(crate::mixed_region_proof::MIXED_CONVEX_REGION_WORK, 0),
                 LimitSnapshot {
                     stage: crate::planar_shell_proof::PLANAR_SHELL_PAIR_WORK,
                     resource: ResourceKind::Work,

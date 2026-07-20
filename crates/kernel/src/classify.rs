@@ -24,6 +24,7 @@
 //! tolerances — are `Indeterminate` by design, because no verdict about them
 //! is certifiable from the stored geometry.
 
+mod convex;
 mod curved;
 
 use std::collections::HashSet;
@@ -33,7 +34,6 @@ use kcore::operation::{
     AccountingMode, BudgetPlan, LimitSpec, OperationScope, ResourceKind, StageId,
 };
 use kcore::predicates::{Orientation, orient2d, orient3d, polygon_orientation2d_iter};
-use kgeom::curve::Circle;
 use kgeom::vec::Point3;
 use ktopo::entity::{
     BodyKind, EdgeId as RawEdgeId, FaceId as RawFaceId, Loop, RegionKind, VertexId as RawVertexId,
@@ -503,6 +503,8 @@ struct PreparedFace {
     guard: f64,
     /// Coordinate axis dropped by the exact trim-classification projection.
     drop_axis: usize,
+    /// Exact support-order proof for one strictly convex polygonal loop.
+    convex_orientation: Option<Orientation>,
 }
 
 enum PreparedBoundaryFace {
@@ -667,12 +669,26 @@ fn prepare_face(
     let Some(drop_axis) = choose_drop_axis(&loops) else {
         return Ok(PrepOutcome::Gap(GAP_DEGENERATE_PROJECTION));
     };
-    if !circle_rings.is_empty()
-        && (loops.len() != 1
-            || circle_rings.len() != 1
-            || !certify_convex_polygon_circle_hole(&loops[0], circle_rings[0].circle, drop_axis))
-    {
-        return Ok(PrepOutcome::Gap(curved::GAP_CIRCULAR_PLANE_TRIM));
+    let convex_orientation = if let [polygon] = loops.as_slice() {
+        let Some(work) = convex::support_work(polygon.vertices.len()) else {
+            return Ok(PrepOutcome::Gap(GAP_DEGENERATE_PROJECTION));
+        };
+        charge(scope, work)?;
+        convex::certify_strict_polygon(polygon, drop_axis)
+    } else {
+        None
+    };
+    if !circle_rings.is_empty() {
+        let (Some(orientation), [polygon], [circle]) = (
+            convex_orientation,
+            loops.as_slice(),
+            circle_rings.as_slice(),
+        ) else {
+            return Ok(PrepOutcome::Gap(curved::GAP_CIRCULAR_PLANE_TRIM));
+        };
+        if !convex::certify_circle_hole(polygon, circle.circle, drop_axis, orientation) {
+            return Ok(PrepOutcome::Gap(curved::GAP_CIRCULAR_PLANE_TRIM));
+        }
     }
     Ok(PrepOutcome::Ready(PreparedBoundaryFace::Planar(
         PreparedFace {
@@ -685,6 +701,7 @@ fn prepare_face(
             on_tol: linear,
             guard,
             drop_axis,
+            convex_orientation,
         },
     )))
 }
@@ -750,76 +767,6 @@ fn choose_drop_axis(loops: &[PreparedLoop]) -> Option<usize> {
         }
     }
     None
-}
-
-/// Prove that one full circle is a strict hole of one convex polygon.
-///
-/// The proof is performed in the same exact projection used by polygon trim
-/// classification. Exact orientation establishes a consistently convex outer
-/// ring. Outward-rounded determinant intervals then keep the circle's complete
-/// projected ellipse strictly inside every polygon half-plane; no sampling of
-/// the circle is involved.
-fn certify_convex_polygon_circle_hole(
-    polygon: &PreparedLoop,
-    circle: Circle,
-    drop_axis: usize,
-) -> bool {
-    let vertices = &polygon.vertices;
-    if vertices.len() < 3 {
-        return false;
-    }
-    let orientation = polygon_orientation2d_iter(
-        vertices
-            .iter()
-            .map(|vertex| project(vertex.point, drop_axis)),
-    );
-    if orientation == Orientation::Zero {
-        return false;
-    }
-    for index in 0..vertices.len() {
-        let before = project(
-            vertices[(index + vertices.len() - 1) % vertices.len()].point,
-            drop_axis,
-        );
-        let current = project(vertices[index].point, drop_axis);
-        let after = project(vertices[(index + 1) % vertices.len()].point, drop_axis);
-        if orient2d(before, current, after) != orientation {
-            return false;
-        }
-    }
-
-    let center = project(circle.frame().origin().to_array(), drop_axis);
-    let x = project(circle.frame().x().to_array(), drop_axis);
-    let y = project(circle.frame().y().to_array(), drop_axis);
-    for index in 0..vertices.len() {
-        let start = project(vertices[index].point, drop_axis);
-        let end = project(vertices[(index + 1) % vertices.len()].point, drop_axis);
-        if orient2d(start, end, center) != orientation {
-            return false;
-        }
-        let edge = [
-            Interval::point(end[0]) - Interval::point(start[0]),
-            Interval::point(end[1]) - Interval::point(start[1]),
-        ];
-        let center_offset = [
-            Interval::point(center[0]) - Interval::point(start[0]),
-            Interval::point(center[1]) - Interval::point(start[1]),
-        ];
-        let mut center_det = edge[0] * center_offset[1] - edge[1] * center_offset[0];
-        let x_det = edge[0] * Interval::point(x[1]) - edge[1] * Interval::point(x[0]);
-        let y_det = edge[0] * Interval::point(y[1]) - edge[1] * Interval::point(y[0]);
-        let Some(amplitude) = (x_det.square() + y_det.square()).sqrt() else {
-            return false;
-        };
-        let amplitude = amplitude * Interval::point(circle.radius());
-        if orientation == Orientation::Negative {
-            center_det = -center_det;
-        }
-        if center_det.lo() <= amplitude.hi() {
-            return false;
-        }
-    }
-    true
 }
 
 enum BandOutcome {
@@ -967,55 +914,6 @@ fn winding_parity(face: &PreparedFace, point: [f64; 3]) -> WindingOutcome {
         curved::TrimParity::Outside => WindingOutcome::Outside,
         curved::TrimParity::Gap => WindingOutcome::Gap,
     }
-}
-
-/// Interval half-plane containment for the one convex polygon admitted on a
-/// mixed polygon/circle plane. The point is the certified intersection of a
-/// line with that plane, so its projected coordinates remain intervals; a
-/// contact with any supporting line fails closed instead of being rounded to
-/// either side.
-fn convex_polygon_parity_at_line(
-    face: &PreparedFace,
-    point: [f64; 3],
-    direction: [f64; 3],
-    t: Interval,
-) -> WindingOutcome {
-    let [ring] = face.loops.as_slice() else {
-        return WindingOutcome::Gap;
-    };
-    let orientation = polygon_orientation2d_iter(
-        ring.vertices
-            .iter()
-            .map(|vertex| project(vertex.point, face.drop_axis)),
-    );
-    if orientation == Orientation::Zero {
-        return WindingOutcome::Gap;
-    }
-    let hit = project_intervals(
-        core::array::from_fn(|axis| {
-            Interval::point(point[axis]) + Interval::point(direction[axis]) * t
-        }),
-        face.drop_axis,
-    );
-    for index in 0..ring.vertices.len() {
-        let start = project(ring.vertices[index].point, face.drop_axis);
-        let end = project(
-            ring.vertices[(index + 1) % ring.vertices.len()].point,
-            face.drop_axis,
-        );
-        let determinant = (Interval::point(end[0]) - Interval::point(start[0]))
-            * (hit[1] - Interval::point(start[1]))
-            - (Interval::point(end[1]) - Interval::point(start[1]))
-                * (hit[0] - Interval::point(start[0]));
-        match orientation {
-            Orientation::Positive if determinant.lo() > 0.0 => {}
-            Orientation::Positive if determinant.hi() < 0.0 => return WindingOutcome::Outside,
-            Orientation::Negative if determinant.hi() < 0.0 => {}
-            Orientation::Negative if determinant.lo() > 0.0 => return WindingOutcome::Outside,
-            _ => return WindingOutcome::Gap,
-        }
-    }
-    WindingOutcome::Inside
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1565,10 +1463,12 @@ fn classify_in_body_impl(
 
 #[cfg(test)]
 mod tests {
-    use kcore::operation::{AccountingMode, BudgetPlan, LimitSpec, ResourceKind};
+    use kcore::operation::{AccountingMode, BudgetPlan, LimitSnapshot, LimitSpec, ResourceKind};
     use kgeom::frame::Frame;
     use kgeom::param::ParamRange;
     use kgeom::vec::{Point2, Point3};
+    use ktopo::convex_multishell::{MixedConvexMultiShellSolidInput, OrientedWholeShellInput};
+    use ktopo::cylindrical_band::CylindricalBandSolidInput;
     use ktopo::cylindrical_boss::CylindricalBossSolidInput;
     use ktopo::planar::{PlanarSolidFace, PlanarSolidInput, PlanarSolidVertex, PlanarVertexKey};
     use ktopo::profile::PlanarProfile;
@@ -1667,6 +1567,26 @@ mod tests {
             BodyId::new(part_id.clone(), body),
             FaceId::new(part_id, port),
         )
+    }
+
+    fn mixed_cavity_part() -> (Session, PartId, BodyId) {
+        solid_part(|store| {
+            let mut transaction = store.transaction().unwrap();
+            let input = MixedConvexMultiShellSolidInput::new(
+                OrientedWholeShellInput::Cylindrical(CylindricalBandSolidInput::new(
+                    Frame::world(),
+                    4.0,
+                    ParamRange::new(-3.0, 3.0),
+                )),
+                vec![OrientedWholeShellInput::Planar(boss_host())],
+            );
+            let body = transaction
+                .assemble_mixed_convex_multishell_solid(&input)
+                .unwrap()
+                .body();
+            transaction.commit_checked_body(body).unwrap();
+            body
+        })
     }
 
     #[test]
@@ -1791,6 +1711,93 @@ mod tests {
         assert_eq!(
             run(consumed).result().unwrap().verdict(),
             &PointBodyVerdict::Interior
+        );
+    }
+
+    #[test]
+    fn mixed_convex_cavity_parity_is_diagonal_independent_and_exactly_bounded() {
+        const REQUIRED_WORK: u64 = 785;
+
+        let (session, part_id, body) = mixed_cavity_part();
+        let part = session.part(part_id).unwrap();
+        let classify = |point| {
+            part.classify_point_in_body(ClassifyPointInBodyRequest::new(body.clone(), point))
+                .unwrap()
+        };
+        let cavity = classify(Point3::new(0.0, 0.0, 0.0));
+        let material = classify(Point3::new(3.0, 0.0, 0.0));
+        let outside = classify(Point3::new(5.0, 0.0, 0.0));
+        for (classification, expected_verdict, expected_crossings) in [
+            (&cavity, PointBodyVerdict::Exterior, 2),
+            (&material, PointBodyVerdict::Interior, 1),
+            (&outside, PointBodyVerdict::Exterior, 0),
+        ] {
+            let classification = classification.result().unwrap();
+            assert_eq!(classification.verdict(), &expected_verdict);
+            let witness = classification.witness().unwrap();
+            assert_eq!(witness.crossings(), expected_crossings);
+            assert_eq!(witness.crossed_faces().len(), expected_crossings as usize);
+            for (index, face) in witness.crossed_faces().iter().enumerate() {
+                assert!(
+                    !witness.crossed_faces()[..index].contains(face),
+                    "one result face was counted more than once"
+                );
+            }
+        }
+
+        let consumed = cavity
+            .report()
+            .usage()
+            .iter()
+            .find(|usage| {
+                usage.stage == POINT_CLASSIFICATION_WORK && usage.resource == ResourceKind::Work
+            })
+            .unwrap()
+            .consumed;
+        assert_eq!(consumed, REQUIRED_WORK);
+        let run = |allowed| {
+            let plan = BudgetPlan::new([LimitSpec::new(
+                POINT_CLASSIFICATION_WORK,
+                ResourceKind::Work,
+                AccountingMode::Cumulative,
+                allowed,
+            )])
+            .unwrap();
+            part.classify_point_in_body(
+                ClassifyPointInBodyRequest::new(body.clone(), Point3::new(0.0, 0.0, 0.0))
+                    .with_settings(OperationSettings::new().with_budget_overrides(plan)),
+            )
+            .unwrap()
+        };
+        let accepted = run(REQUIRED_WORK);
+        assert_eq!(
+            accepted.result().unwrap().verdict(),
+            &PointBodyVerdict::Exterior
+        );
+        assert!(accepted.report().usage().contains(&LimitSnapshot {
+            stage: POINT_CLASSIFICATION_WORK,
+            resource: ResourceKind::Work,
+            consumed: REQUIRED_WORK,
+            allowed: REQUIRED_WORK,
+        }));
+        let denied = run(REQUIRED_WORK - 1);
+        assert_eq!(
+            denied.result().unwrap_err().limit(),
+            Some(LimitSnapshot {
+                stage: POINT_CLASSIFICATION_WORK,
+                resource: ResourceKind::Work,
+                consumed: REQUIRED_WORK,
+                allowed: REQUIRED_WORK - 1,
+            })
+        );
+        assert_eq!(
+            denied.report().limit_events(),
+            &[LimitSnapshot {
+                stage: POINT_CLASSIFICATION_WORK,
+                resource: ResourceKind::Work,
+                consumed: REQUIRED_WORK,
+                allowed: REQUIRED_WORK - 1,
+            }]
         );
     }
 

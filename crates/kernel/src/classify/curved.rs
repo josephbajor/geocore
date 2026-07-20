@@ -522,7 +522,9 @@ pub(super) fn axial_parity_refs(
 ) -> Result<CurvedParityOutcome> {
     let mut planar_triangles = Vec::new();
     for &face in faces {
-        if let super::PreparedBoundaryFace::Planar(planar) = face {
+        if let super::PreparedBoundaryFace::Planar(planar) = face
+            && planar.convex_orientation.is_none()
+        {
             let mut triangles = Vec::new();
             for ring in &planar.loops {
                 let Some(mut ring_triangles) =
@@ -784,18 +786,16 @@ fn axial_parity_direction(
                 None,
             ),
             super::PreparedBoundaryFace::Planar(plane) => {
-                let Some((_, triangles)) = planar_triangles
+                let triangles = planar_triangles
                     .iter()
                     .find(|(candidate, _)| *candidate == plane.raw)
-                else {
-                    return Ok(None);
-                };
+                    .map(|(_, triangles)| triangles.as_slice());
                 (
                     plane.raw,
                     plane.normal,
                     plane.origin,
                     plane.circle_rings.as_slice(),
-                    Some((plane, triangles.as_slice())),
+                    Some((plane, triangles)),
                 )
             }
         };
@@ -811,19 +811,22 @@ fn axial_parity_direction(
             TrimParity::Gap => return Ok(None),
         };
         let material_hit = if let Some((plane, triangles)) = planar_data {
-            let polygon_inside = if plane.circle_rings.is_empty() {
+            let polygon_inside = if plane.convex_orientation.is_some() {
+                match super::convex::polygon_parity_at_line(plane, point, direction, t) {
+                    super::WindingOutcome::Inside => true,
+                    super::WindingOutcome::Outside => false,
+                    super::WindingOutcome::Gap => return Ok(None),
+                }
+            } else {
+                let Some(triangles) = triangles else {
+                    return Ok(None);
+                };
                 let Some(polygon_crossings) =
                     super::count_face_crossings(triangles, point, far_point, scope)?
                 else {
                     return Ok(None);
                 };
                 polygon_crossings % 2 == 1
-            } else {
-                match super::convex_polygon_parity_at_line(plane, point, direction, t) {
-                    super::WindingOutcome::Inside => true,
-                    super::WindingOutcome::Outside => false,
-                    super::WindingOutcome::Gap => return Ok(None),
-                }
             };
             polygon_inside ^ circle_inside
         } else {

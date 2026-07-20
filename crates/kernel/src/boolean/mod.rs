@@ -22,6 +22,8 @@ mod component_layout;
 #[allow(dead_code)]
 mod components;
 #[allow(dead_code)]
+mod convex_containment;
+#[allow(dead_code)]
 mod curved_cavity;
 #[allow(dead_code)]
 mod curved_host;

@@ -14,6 +14,10 @@ use ktopo::entity::{BodyId as RawBodyId, FaceId as RawFaceId};
 use ktopo::transaction::{FullCommitRequirement, Transaction};
 
 use super::boundary_select::{OperandSide, SelectedBoundaryFragment, SelectedOrientation};
+use super::convex_containment::{
+    PreparedMixedConvexContainment, admit_mixed_convex_containment,
+    prepare_admitted_mixed_convex_containment,
+};
 use super::curved_cavity::{PreparedCylindricalCavity, prepare_cylindrical_cavity};
 use super::curved_host_bands::{PreparedCylindricalHostBands, prepare_cylindrical_host_bands};
 use super::curved_pipeline::{
@@ -32,6 +36,7 @@ type SelectedCurvedFragment = SelectedBoundaryFragment<CurvedFragmentKey, Curved
 
 #[derive(Debug, Clone)]
 enum PreparedCurvedResult {
+    MixedConvexContainment(Box<PreparedMixedConvexContainment>),
     CylindricalCavity(Box<PreparedCylindricalCavity>),
     CylindricalHostBands(Box<PreparedCylindricalHostBands>),
     CylindricalBands(Vec<CylindricalBandSolidInput>),
@@ -41,7 +46,9 @@ enum PreparedCurvedResult {
 impl PreparedCurvedResult {
     fn is_empty(&self) -> bool {
         match self {
-            Self::CylindricalCavity(_) | Self::CylindricalHostBands(_) => false,
+            Self::MixedConvexContainment(_)
+            | Self::CylindricalCavity(_)
+            | Self::CylindricalHostBands(_) => false,
             Self::CylindricalBands(bands) => bands.is_empty(),
             Self::WholeSources(sources) => sources.is_empty(),
         }
@@ -97,6 +104,7 @@ pub(super) fn realize_selected_result(
         cylinder,
         cuts,
         selected,
+        scope,
     )?;
     if proposals.is_empty() {
         return Ok(CurvedBooleanPipelineOutcome::ProvenEmpty);
@@ -111,7 +119,25 @@ fn prepare_result_proposals(
     cylinder: &CertifiedCylinderSource,
     cuts: &[CertifiedRingCut],
     selected: Vec<SelectedCurvedFragment>,
+    scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<PreparedCurvedResult> {
+    if let Some(admission) =
+        admit_mixed_convex_containment(source_boundary_keys, planar, cuts, &selected)
+            .map_err(assembly_contract)?
+    {
+        precharge_planar_curved_assembly(
+            admission.planar_vertices(),
+            admission.planar_faces(),
+            admission.planar_face_uses(),
+            admission.semantic_preflight_work(),
+            scope,
+        )?;
+        let containment = prepare_admitted_mixed_convex_containment(admission, planar, cylinder)
+            .map_err(assembly_contract)?;
+        return Ok(PreparedCurvedResult::MixedConvexContainment(Box::new(
+            containment,
+        )));
+    }
     if let Some(source_copies) =
         prepare_whole_source_copies(bodies, source_boundary_keys, &selected)
     {
@@ -297,10 +323,11 @@ fn commit_proposals(
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<CurvedBooleanPipelineOutcome> {
     match &proposals {
+        PreparedCurvedResult::MixedConvexContainment(_) => {}
         PreparedCurvedResult::CylindricalCavity(cavity) => {
             precharge_cylindrical_cavity(cavity, scope)?
         }
-        PreparedCurvedResult::CylindricalHostBands(host_bands) => precharge_curved_host_feature(
+        PreparedCurvedResult::CylindricalHostBands(host_bands) => precharge_planar_curved_assembly(
             host_bands.host_vertices(),
             host_bands.host_faces(),
             host_bands.host_face_uses(),
@@ -315,12 +342,20 @@ fn commit_proposals(
     let part = edit.id.clone();
     let mut transaction = edit.state.store.transaction().map_err(Error::from)?;
     let mut raw_bodies = match &proposals {
-        PreparedCurvedResult::CylindricalCavity(_)
+        PreparedCurvedResult::MixedConvexContainment(_)
+        | PreparedCurvedResult::CylindricalCavity(_)
         | PreparedCurvedResult::CylindricalHostBands(_) => Vec::with_capacity(1),
         PreparedCurvedResult::CylindricalBands(bands) => Vec::with_capacity(bands.len()),
         PreparedCurvedResult::WholeSources(sources) => Vec::with_capacity(sources.len()),
     };
     match proposals {
+        PreparedCurvedResult::MixedConvexContainment(proposal) => {
+            push_assembled(
+                &mut raw_bodies,
+                transaction.assemble_mixed_convex_multishell_solid(&proposal.into_input()),
+                |output| output.body(),
+            )?;
+        }
         PreparedCurvedResult::CylindricalCavity(proposal) => {
             push_assembled(
                 &mut raw_bodies,
@@ -404,8 +439,8 @@ fn commit_full(
     ))
 }
 
-/// Charge a source-size-exact conservative bound before host-feature allocation.
-fn precharge_curved_host_feature(
+/// Charge a source-size-exact conservative bound before mixed curved allocation.
+fn precharge_planar_curved_assembly(
     host_vertices: usize,
     host_faces: usize,
     host_face_uses: usize,
@@ -413,7 +448,7 @@ fn precharge_curved_host_feature(
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<()> {
     let vertices = u64::try_from(host_vertices).map_err(|_| work_overflow())?;
-    let work = curved_host_feature_work(
+    let work = planar_curved_realization_work(
         host_vertices,
         host_faces,
         host_face_uses,
@@ -434,13 +469,13 @@ fn precharge_curved_host_feature(
     Ok(())
 }
 
-/// Source-size-exact bound for one connected planar host with cylinder bands.
+/// Source-size-exact bound for one planar shell participating in curved output.
 ///
-/// `4V + 4F + 6U` covers planar preparation. `H` is the topology layer's
-/// checked `F*V + 2*F*B + B*(B-1)/2 + P + 16*B` semantic-host bound: convexity,
-/// endpoint/support sweeps, pair separation, total port uses, and explicit
-/// per-band preparation/allocation.
-fn curved_host_feature_work(
+/// `4V + 4F + 6U` covers common planar preparation and `H` is the topology
+/// producer's checked semantic preflight bound. Carrier-specific producers
+/// document their own formula for `H`; this layer only adds that already-
+/// checked term to the common exact base before allocation.
+fn planar_curved_realization_work(
     host_vertices: usize,
     host_faces: usize,
     host_face_uses: usize,
@@ -601,16 +636,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn connected_host_feature_work_counts_every_structural_term() {
-        // Block host: V=8, F=6, U=24. Each selected port face has four uses.
-        assert_eq!(curved_host_feature_work(8, 6, 24, 80).unwrap(), 280);
-        assert_eq!(curved_host_feature_work(8, 6, 24, 84).unwrap(), 284);
-        assert_eq!(curved_host_feature_work(8, 6, 24, 113).unwrap(), 313);
+    fn planar_curved_realization_work_counts_every_structural_term() {
+        // Convex block shell: V=8, F=6, U=24.
+        assert_eq!(planar_curved_realization_work(8, 6, 24, 80).unwrap(), 280);
+        assert_eq!(planar_curved_realization_work(8, 6, 24, 84).unwrap(), 284);
+        assert_eq!(planar_curved_realization_work(8, 6, 24, 113).unwrap(), 313);
     }
 
     #[test]
-    fn connected_host_feature_work_fails_closed_on_overflow() {
-        assert!(curved_host_feature_work(usize::MAX, usize::MAX, 0, 0).is_err());
-        assert!(curved_host_feature_work(1, 0, 0, u64::MAX).is_err());
+    fn planar_curved_realization_work_fails_closed_on_overflow() {
+        assert!(planar_curved_realization_work(usize::MAX, usize::MAX, 0, 0).is_err());
+        assert!(planar_curved_realization_work(1, 0, 0, u64::MAX).is_err());
     }
 }
