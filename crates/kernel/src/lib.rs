@@ -322,8 +322,8 @@ pub use section::{
     BodySectionBudgetProfile, BodySectionGraph, SECTION_FACE_PAIRS, SECTION_WORK,
     SectionBodiesRequest, SectionBranch, SectionBranchEvidence, SectionBranchTopology,
     SectionCarrier, SectionCompletion, SectionEdge, SectionEdgeParameterInterval,
-    SectionFragmentSite, SectionGap, SectionLoop, SectionSite, SectionUvCircle, SectionUvCurve,
-    SectionUvLine, SectionVertex,
+    SectionFragmentSite, SectionGap, SectionLoop, SectionRing, SectionSite, SectionUvCircle,
+    SectionUvCurve, SectionUvLine, SectionVertex,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use tessellation::{BodyMesh, EdgePolyline, FaceTriangleRange, TessellateBodyRequest};

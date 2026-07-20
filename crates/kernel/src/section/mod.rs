@@ -4,10 +4,11 @@
 //! curves where the two operand boundaries meet, stitched into a coherent
 //! edge graph whose vertices sit on the operands' own edges and vertices.
 //! This module computes that graph for the planar slice — every face on a
-//! plane, every edge a bounded straight line. It also retains complete-period
-//! Plane/Cylinder circle carriers with paired pcurves as verified partial
-//! evidence, while refusing to promote them into trimmed edges or a complete
-//! body graph until curved clipping and fragment stitching are certified.
+//! plane, every edge a bounded straight line. It also clips complete-period
+//! Plane/Cylinder circle carriers against topology-owned polygon/ring trims
+//! and promotes intact carriers into endpoint-free [`SectionRing`] values.
+//! Certified bounded arcs remain branch evidence with a structured gap until
+//! the public graph can retain their exact trim endpoints.
 //!
 //! The algorithm is general over topology (any number of faces, loops,
 //! holes, non-convex boundaries). Per candidate face pair it takes the
@@ -29,7 +30,10 @@
 //! that global segment order, and loops start from the lowest unused edge
 //! index. Serial re-execution reproduces the graph bit-identically.
 
+mod broad_phase;
 mod clip;
+mod closed_stitch;
+mod curved_clip;
 mod stitch;
 
 #[cfg(test)]
@@ -39,6 +43,7 @@ use kcore::interval::Interval;
 use kcore::operation::{
     AccountingMode, BudgetPlan, LimitSpec, OperationScope, ResourceKind, StageId,
 };
+use kcore::predicates::{Orientation, affine_dot3};
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
 use kgeom::vec::{Point2, Point3, Vec2, Vec3};
@@ -280,7 +285,7 @@ impl SectionEdge {
     }
 }
 
-/// Topology of one verified, not-yet-trimmed section carrier branch.
+/// Topology of one verified section carrier branch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SectionBranchTopology {
@@ -400,11 +405,13 @@ impl SectionFragmentSite {
     }
 }
 
-/// One certified Plane/Cylinder circle carrier awaiting exact trim clipping.
+/// One certified Plane/Cylinder circle carrier.
 ///
-/// These branches are verified partial evidence. They are deliberately kept
-/// separate from [`SectionEdge`], whose endpoints and sites already carry
-/// certified trimmed-face topology.
+/// These branches are deliberately kept separate from [`SectionEdge`], whose
+/// endpoints and sites carry bounded trimmed-face topology. A matching
+/// [`SectionRing`] proves that exact trimming retained this complete-period
+/// carrier; a branch without a ring remains verified intersection evidence,
+/// with unresolved trim/fragment work represented by graph gaps.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectionBranch {
     faces: [FaceId; 2],
@@ -467,6 +474,26 @@ pub struct SectionLoop {
     pub(crate) closed: bool,
 }
 
+/// One endpoint-free closed section component carried by a complete-period
+/// curved branch.
+///
+/// The referenced branch retains the exact carrier, paired pcurves, source
+/// faces, intentional chart seam, and residual proof. A ring is emitted only
+/// after both exact face trims certify the whole branch and the closed
+/// fragment stitcher accepts it; the chart seam is never promoted to a
+/// physical vertex.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SectionRing {
+    branch: usize,
+}
+
+impl SectionRing {
+    /// Index into [`BodySectionGraph::branches`].
+    pub const fn branch(self) -> usize {
+        self.branch
+    }
+}
+
 impl SectionLoop {
     /// Edge indices in traversal order.
     pub fn edges(&self) -> &[usize] {
@@ -520,6 +547,7 @@ pub struct BodySectionGraph {
     pub(crate) edges: Vec<SectionEdge>,
     pub(crate) branches: Vec<SectionBranch>,
     pub(crate) loops: Vec<SectionLoop>,
+    pub(crate) rings: Vec<SectionRing>,
     pub(crate) gaps: Vec<SectionGap>,
     pub(crate) completion: SectionCompletion,
 }
@@ -540,8 +568,8 @@ impl BodySectionGraph {
         &self.edges
     }
 
-    /// Certified surface-window branches awaiting exact curved trim clipping
-    /// and fragment stitching.
+    /// Certified curved carrier branches. [`Self::rings`] identifies the
+    /// branches whose exact trims retained a whole closed component.
     pub fn branches(&self) -> &[SectionBranch] {
         &self.branches
     }
@@ -549,6 +577,11 @@ impl BodySectionGraph {
     /// Stitched chains in deterministic discovery order.
     pub fn loops(&self) -> &[SectionLoop] {
         &self.loops
+    }
+
+    /// Endpoint-free curved components in deterministic discovery order.
+    pub fn rings(&self) -> &[SectionRing] {
+        &self.rings
     }
 
     /// Structured reasons the graph is not certified complete.
@@ -585,7 +618,9 @@ pub(crate) const GAP_PAIR_UNRESOLVED: &str =
 pub(crate) const GAP_INCOMPATIBLE_EDGE_PARAMETERS: &str =
     "stitched source-edge parameter enclosures are incompatible";
 pub(crate) const GAP_CURVED_TRIM_UNRESOLVED: &str =
-    "a certified curved section carrier awaits exact trim clipping and fragment stitching";
+    "certified bounded curved fragments await public endpoint adaptation and graph stitching";
+pub(crate) const GAP_CLOSED_STITCH: &str =
+    "closed curved section fragments could not be stitched into manifold rings";
 
 impl Part<'_> {
     /// Compute the certified section edge graph between two solid bodies of
@@ -653,6 +688,8 @@ fn section_impl(
     let faces_a = read(store.faces_of_body(body_a.raw()))?;
     let faces_b = read(store.faces_of_body(body_b.raw()))?;
     charge(scope, (faces_a.len() + faces_b.len()) as u64)?;
+    let envelopes_a = broad_phase::prepare_face_envelopes(store, &faces_a, scope)?;
+    let envelopes_b = broad_phase::prepare_face_envelopes(store, &faces_b, scope)?;
 
     let mut acc = SectionAccumulator::default();
     let mut examined: u64 = 0;
@@ -661,17 +698,24 @@ fn section_impl(
         part_id,
         &faces_a,
         &faces_b,
+        &envelopes_a,
+        &envelopes_b,
+        linear,
         &mut examined,
         scope,
         &mut acc,
     )?;
-    let admitted_a = admit_faces(store, part_id, &faces_a, linear, scope, &mut acc)?;
-    let admitted_b = admit_faces(store, part_id, &faces_b, linear, scope, &mut acc)?;
+    let admitted_a = admit_faces(store, part_id, &faces_a, linear, scope)?;
+    let admitted_b = admit_faces(store, part_id, &faces_b, linear, scope)?;
 
     for (a_index, slot_a) in admitted_a.iter().enumerate() {
-        let Some(face_a) = slot_a else { continue };
         for (b_index, slot_b) in admitted_b.iter().enumerate() {
-            let Some(face_b) = slot_b else { continue };
+            let envelope_a = envelopes_a[a_index];
+            let envelope_b = envelopes_b[b_index];
+            if plane_cylinder_pair(envelope_a.class, envelope_b.class) {
+                // The curved dispatcher above owns this pair exactly once.
+                continue;
+            }
             let ordinal = pair_ordinal(a_index, admitted_b.len(), b_index);
             examined += 1;
             scope
@@ -679,6 +723,15 @@ fn section_impl(
                 .observe(SECTION_FACE_PAIRS, ResourceKind::Items, examined)
                 .map_err(Error::from)?;
             charge(scope, 1)?;
+            if broad_phase::certifiably_disjoint(envelope_a, envelope_b, linear) {
+                continue;
+            }
+            let (PlanarFaceAdmission::Ready(face_a), PlanarFaceAdmission::Ready(face_b)) =
+                (slot_a, slot_b)
+            else {
+                record_admission_gaps(slot_a, slot_b, &mut acc);
+                continue;
+            };
             if clip::boxes_certifiably_disjoint(&face_a.prep, &face_b.prep, linear) {
                 continue;
             }
@@ -735,6 +788,52 @@ struct AdmittedFace {
     window: Option<[ParamRange; 2]>,
 }
 
+/// Pair-local planar admission.  A face outside the planar trim class is not
+/// a graph gap until a non-disjoint pair actually needs that class.
+enum PlanarFaceAdmission {
+    Ready(Box<AdmittedFace>),
+    Gap {
+        facade: FaceId,
+        reason: &'static str,
+    },
+}
+
+fn plane_cylinder_pair(a: broad_phase::FaceSurfaceClass, b: broad_phase::FaceSurfaceClass) -> bool {
+    matches!(
+        (a, b),
+        (
+            broad_phase::FaceSurfaceClass::Plane,
+            broad_phase::FaceSurfaceClass::Cylinder
+        ) | (
+            broad_phase::FaceSurfaceClass::Cylinder,
+            broad_phase::FaceSurfaceClass::Plane
+        )
+    )
+}
+
+fn record_admission_gaps(
+    a: &PlanarFaceAdmission,
+    b: &PlanarFaceAdmission,
+    acc: &mut SectionAccumulator,
+) {
+    let pair_faces = [admission_facade(a).clone(), admission_facade(b).clone()];
+    for admission in [a, b] {
+        if let PlanarFaceAdmission::Gap { reason, .. } = admission {
+            acc.gaps.push(SectionGap {
+                reason,
+                faces: pair_faces.to_vec(),
+            });
+        }
+    }
+}
+
+fn admission_facade(admission: &PlanarFaceAdmission) -> &FaceId {
+    match admission {
+        PlanarFaceAdmission::Ready(face) => &face.facade,
+        PlanarFaceAdmission::Gap { facade, .. } => facade,
+    }
+}
+
 /// Facade-typed evidence carried per certified segment, aligned index-for-
 /// index with the stitch segment sequence.
 struct SegmentGeometry {
@@ -752,6 +851,7 @@ struct SectionAccumulator {
     segments: Vec<stitch::StitchSegment>,
     geometry: Vec<SegmentGeometry>,
     branches: Vec<SectionBranch>,
+    closed_fragments: Vec<closed_stitch::ClosedCurveFragment>,
     gaps: Vec<SectionGap>,
 }
 
@@ -764,28 +864,134 @@ impl SectionAccumulator {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClosedTrimMerge {
+    Empty,
+    Whole,
+    UnsupportedFragments,
+    Gap(&'static str),
+}
+
+fn whole_closed_conic_fragment(fragments: &[curved_clip::ClosedConicFragment]) -> bool {
+    matches!(
+        fragments,
+        [curved_clip::ClosedConicFragment {
+            start: None,
+            end: None,
+            wraps_pcurve_seam: true,
+        }]
+    )
+}
+
+/// Intersect the two operand-local trim results for the currently admitted
+/// exact class. Empty is absorbing and whole-period is the identity. Bounded
+/// arcs remain verified clip evidence, but are not promoted until the public
+/// section graph can retain their exact endpoint topology.
+fn merge_closed_trim_outcomes(
+    a: &curved_clip::ClosedConicClipOutcome,
+    b: &curved_clip::ClosedConicClipOutcome,
+) -> ClosedTrimMerge {
+    use curved_clip::ClosedConicClipOutcome::{Fragments, Indeterminate};
+
+    if matches!(a, Fragments(fragments) if fragments.is_empty())
+        || matches!(b, Fragments(fragments) if fragments.is_empty())
+    {
+        return ClosedTrimMerge::Empty;
+    }
+    if let Indeterminate(gap) = a {
+        return ClosedTrimMerge::Gap(gap.reason());
+    }
+    if let Indeterminate(gap) = b {
+        return ClosedTrimMerge::Gap(gap.reason());
+    }
+    let (Fragments(a), Fragments(b)) = (a, b) else {
+        unreachable!("indeterminate closed trim outcomes returned above")
+    };
+    if whole_closed_conic_fragment(a) && whole_closed_conic_fragment(b) {
+        ClosedTrimMerge::Whole
+    } else {
+        ClosedTrimMerge::UnsupportedFragments
+    }
+}
+
+/// Decide whether the graph-owned cylinder-longitude parameterization must be
+/// reversed to follow Section's canonical `n_A × n_B` orientation.
+///
+/// The exact dyadic sign of the plane-normal/cylinder-axis dot product owns
+/// the decision. Operand order and both face senses then contribute only
+/// exact sign flips. Parallel-but-indeterminate and perpendicular inputs are
+/// refused rather than oriented from a rounded dot product.
+fn canonical_plane_cylinder_flip(
+    surface_a: &SurfaceGeom,
+    sense_a: Sense,
+    surface_b: &SurfaceGeom,
+    sense_b: Sense,
+) -> Option<bool> {
+    let (plane_normal, plane_sense, cylinder_axis, cylinder_sense, plane_is_a) =
+        match (surface_a, surface_b) {
+            (SurfaceGeom::Plane(plane), SurfaceGeom::Cylinder(cylinder)) => (
+                plane.frame().z(),
+                sense_a,
+                cylinder.frame().z(),
+                sense_b,
+                true,
+            ),
+            (SurfaceGeom::Cylinder(cylinder), SurfaceGeom::Plane(plane)) => (
+                plane.frame().z(),
+                sense_b,
+                cylinder.frame().z(),
+                sense_a,
+                false,
+            ),
+            _ => return None,
+        };
+    let mut sign = match affine_dot3(
+        plane_normal.to_array(),
+        cylinder_axis.to_array(),
+        [0.0; 3],
+        0.0,
+    )?
+    .sign()
+    {
+        Orientation::Positive => 1_i8,
+        Orientation::Negative => -1_i8,
+        Orientation::Zero => return None,
+    };
+    if !plane_is_a {
+        sign = -sign;
+    }
+    if !plane_sense.is_forward() {
+        sign = -sign;
+    }
+    if !cylinder_sense.is_forward() {
+        sign = -sign;
+    }
+    Some(sign < 0)
+}
+
 /// Collect proof-bearing Plane/Cylinder circle carriers independently of the
 /// planar trim/stitch admission path.
 ///
-/// Face domains are conservative source-owned surface windows. They are
-/// sufficient for analytic branch discovery and paired trace proof, but not
-/// for claiming membership in the exact trimmed face. Every retained branch
-/// therefore carries an explicit curved-trim gap and cannot contribute to a
-/// `Complete` body section graph yet.
+/// Face domains are conservative source-owned surface windows used only for
+/// analytic branch discovery and paired trace proof. Exact membership is
+/// decided afterward from topology-owned loops, fins, edges, and pcurves.
 #[allow(clippy::too_many_arguments)]
 fn collect_plane_cylinder_branches(
     store: &Store,
     part_id: &PartId,
     faces_a: &[RawFaceId],
     faces_b: &[RawFaceId],
+    envelopes_a: &[broad_phase::FaceEnvelope],
+    envelopes_b: &[broad_phase::FaceEnvelope],
+    linear: f64,
     examined: &mut u64,
     scope: &mut OperationScope<'_, '_>,
     acc: &mut SectionAccumulator,
 ) -> Result<()> {
-    for &raw_a in faces_a {
+    for (a_index, &raw_a) in faces_a.iter().enumerate() {
         let face_a = read(store.get(raw_a))?;
         let surface_a = read(store.surface(face_a.surface))?;
-        for &raw_b in faces_b {
+        for (b_index, &raw_b) in faces_b.iter().enumerate() {
             let face_b = read(store.get(raw_b))?;
             let surface_b = read(store.surface(face_b.surface))?;
             if !matches!(
@@ -801,10 +1007,23 @@ fn collect_plane_cylinder_branches(
                 .observe(SECTION_FACE_PAIRS, ResourceKind::Items, *examined)
                 .map_err(Error::from)?;
             charge(scope, 1)?;
+            if broad_phase::certifiably_disjoint(envelopes_a[a_index], envelopes_b[b_index], linear)
+            {
+                continue;
+            }
             let facades = [
                 FaceId::new(part_id.clone(), raw_a),
                 FaceId::new(part_id.clone(), raw_b),
             ];
+            let Some(flipped) =
+                canonical_plane_cylinder_flip(surface_a, face_a.sense, surface_b, face_b.sense)
+            else {
+                acc.gaps.push(SectionGap {
+                    reason: GAP_CARRIER_ORIENTATION,
+                    faces: facades.to_vec(),
+                });
+                continue;
+            };
             let (Some(domain_a), Some(domain_b)) = (face_a.domain(), face_b.domain()) else {
                 acc.gaps.push(SectionGap {
                     reason: GAP_PAIR_UNRESOLVED,
@@ -847,6 +1066,7 @@ fn collect_plane_cylinder_branches(
                     &facades,
                     edge,
                     &intersections.branch_graph.vertices,
+                    flipped,
                 ) else {
                     acc.gaps.push(SectionGap {
                         reason: GAP_PAIR_UNRESOLVED,
@@ -854,11 +1074,54 @@ fn collect_plane_cylinder_branches(
                     });
                     continue;
                 };
+                let clipped = [
+                    curved_clip::clip_closed_conic_to_face(
+                        store,
+                        raw_a,
+                        branch.pcurves[0],
+                        branch.range,
+                        scope,
+                    )?,
+                    curved_clip::clip_closed_conic_to_face(
+                        store,
+                        raw_b,
+                        branch.pcurves[1],
+                        branch.range,
+                        scope,
+                    )?,
+                ];
+                let trim = merge_closed_trim_outcomes(&clipped[0], &clipped[1]);
+                let branch_index = acc.branches.len();
                 acc.branches.push(branch);
-                acc.gaps.push(SectionGap {
-                    reason: GAP_CURVED_TRIM_UNRESOLVED,
-                    faces: facades.to_vec(),
-                });
+                match trim {
+                    ClosedTrimMerge::Empty => {}
+                    ClosedTrimMerge::Whole => {
+                        let Some(source) = closed_stitch::ClosedBranchSource::from_section_branch(
+                            branch_index,
+                            &acc.branches[branch_index],
+                        ) else {
+                            acc.gaps.push(SectionGap {
+                                reason: GAP_CLOSED_STITCH,
+                                faces: facades.to_vec(),
+                            });
+                            continue;
+                        };
+                        acc.closed_fragments
+                            .push(closed_stitch::ClosedCurveFragment {
+                                source: source.fragment(0),
+                                orientation: closed_stitch::ClosedFragmentOrientation::AlongCarrier,
+                                span: closed_stitch::ClosedFragmentSpan::Whole,
+                            });
+                    }
+                    ClosedTrimMerge::UnsupportedFragments => acc.gaps.push(SectionGap {
+                        reason: GAP_CURVED_TRIM_UNRESOLVED,
+                        faces: facades.to_vec(),
+                    }),
+                    ClosedTrimMerge::Gap(reason) => acc.gaps.push(SectionGap {
+                        reason,
+                        faces: facades.to_vec(),
+                    }),
+                }
             }
         }
     }
@@ -871,6 +1134,7 @@ fn adapt_plane_cylinder_branch(
     faces: &[FaceId; 2],
     edge: &IntersectionBranchEdge,
     vertices: &[kops::intersect::IntersectionBranchVertex],
+    flipped: bool,
 ) -> Option<SectionBranch> {
     if edge.topology != IntersectionBranchTopology::Closed
         || edge.endpoint_vertices[0] != edge.endpoint_vertices[1]
@@ -883,8 +1147,8 @@ fn adapt_plane_cylinder_branch(
     };
     let certificate = edge.certificate.as_plane_cylinder_circle()?;
     let pcurves = [
-        adapt_branch_pcurve(&edge.pcurves[0], edge.parameter_maps[0])?,
-        adapt_branch_pcurve(&edge.pcurves[1], edge.parameter_maps[1])?,
+        adapt_branch_pcurve(&edge.pcurves[0], edge.parameter_maps[0], flipped)?,
+        adapt_branch_pcurve(&edge.pcurves[1], edge.parameter_maps[1], flipped)?,
     ];
     let vertex = *vertices.get(edge.endpoint_vertices[0])?;
     let IntersectionBranchVertexEvent::PeriodSeam { surfaces } = vertex.event else {
@@ -894,7 +1158,11 @@ fn adapt_plane_cylinder_branch(
         faces: faces.clone(),
         carrier: SectionCarrier::Circle {
             center: carrier.frame().origin(),
-            normal: carrier.frame().z(),
+            normal: if flipped {
+                -carrier.frame().z()
+            } else {
+                carrier.frame().z()
+            },
             x_direction: carrier.frame().x(),
             radius: carrier.radius(),
         },
@@ -919,13 +1187,14 @@ fn adapt_plane_cylinder_branch(
 fn adapt_branch_pcurve(
     descriptor: &kgraph::Curve2dDescriptor,
     map: AffineParamMap1d,
+    flipped: bool,
 ) -> Option<SectionUvCurve> {
     if let Some(line) = descriptor.as_line() {
         return Some(SectionUvCurve::Line(compose_uv_line(
             line.origin(),
             line.dir(),
             map,
-            false,
+            flipped,
         )));
     }
     let circle = descriptor.as_circle()?;
@@ -933,54 +1202,48 @@ fn adapt_branch_pcurve(
         center: circle.center(),
         radius: circle.radius(),
         x_direction: circle.x_dir(),
-        parameter_scale: map.scale(),
+        parameter_scale: if flipped { -map.scale() } else { map.scale() },
         parameter_offset: map.offset(),
     }))
 }
 
 /// Run slice admission over one body's stored face list.
 ///
-/// The returned vector is aligned with `faces` so pair ordinals stay stable;
-/// an inadmissible face records its gap and leaves `None` in its slot.
+/// The returned vector is aligned with `faces` so pair ordinals stay stable.
+/// Inadmissibility remains latent until a non-disjoint pair needs the face.
 fn admit_faces(
     store: &Store,
     part_id: &PartId,
     faces: &[RawFaceId],
     linear: f64,
     scope: &mut OperationScope<'_, '_>,
-    acc: &mut SectionAccumulator,
-) -> Result<Vec<Option<AdmittedFace>>> {
+) -> Result<Vec<PlanarFaceAdmission>> {
     let mut admitted = Vec::with_capacity(faces.len());
     for &raw in faces {
         let facade = FaceId::new(part_id.clone(), raw);
         match clip::prepare_section_face(store, raw, linear, scope)? {
             Err(reason) => {
-                acc.gaps.push(SectionGap {
-                    reason,
-                    faces: vec![facade],
-                });
-                admitted.push(None);
+                admitted.push(PlanarFaceAdmission::Gap { facade, reason });
             }
             Ok(prep) => {
                 let face = read(store.get(raw))?;
                 let SurfaceGeom::Plane(plane) = read(store.surface(face.surface))? else {
-                    acc.gaps.push(SectionGap {
+                    admitted.push(PlanarFaceAdmission::Gap {
+                        facade,
                         reason: GAP_PLANAR_ONLY,
-                        faces: vec![facade],
                     });
-                    admitted.push(None);
                     continue;
                 };
                 let frame = *plane.frame();
                 let window = face_window(&frame, &prep, linear);
-                admitted.push(Some(AdmittedFace {
+                admitted.push(PlanarFaceAdmission::Ready(Box::new(AdmittedFace {
                     prep,
                     facade,
                     surface: face.surface,
                     frame,
                     sense: face.sense,
                     window,
-                }));
+                })));
             }
         }
     }
@@ -1379,9 +1642,11 @@ fn assemble_graph(
         segments,
         geometry,
         branches,
+        closed_fragments,
         mut gaps,
     } = acc;
     let stitched = stitch::stitch_segments(&segments);
+    let closed_stitched = closed_stitch::stitch_closed_fragments(&closed_fragments);
     let vertices = stitched
         .vertices
         .iter()
@@ -1423,9 +1688,54 @@ fn assemble_graph(
             closed: chain.closed,
         })
         .collect();
+    let mut rings = Vec::with_capacity(closed_stitched.chains.len());
+    for chain in &closed_stitched.chains {
+        let [fragment] = chain.fragments.as_slice() else {
+            gaps.push(SectionGap {
+                reason: GAP_CURVED_TRIM_UNRESOLVED,
+                faces: Vec::new(),
+            });
+            continue;
+        };
+        let Some(input) = closed_fragments.get(fragment.input_fragment) else {
+            gaps.push(SectionGap {
+                reason: GAP_CLOSED_STITCH,
+                faces: Vec::new(),
+            });
+            continue;
+        };
+        if !chain.closed
+            || fragment.endpoints.is_some()
+            || !matches!(input.span, closed_stitch::ClosedFragmentSpan::Whole)
+            || fragment.source.branch.index() >= branches.len()
+        {
+            gaps.push(SectionGap {
+                reason: GAP_CLOSED_STITCH,
+                faces: Vec::new(),
+            });
+            continue;
+        }
+        rings.push(SectionRing {
+            branch: fragment.source.branch.index(),
+        });
+    }
     for defect in &stitched.defects {
         gaps.push(SectionGap {
             reason: stitch_defect_reason(*defect),
+            faces: Vec::new(),
+        });
+    }
+    for defect in &closed_stitched.defects {
+        gaps.push(SectionGap {
+            reason: closed_stitch_defect_reason(*defect),
+            faces: Vec::new(),
+        });
+    }
+    if closed_stitched.completion == closed_stitch::ClosedStitchCompletion::Indeterminate
+        && closed_stitched.defects.is_empty()
+    {
+        gaps.push(SectionGap {
+            reason: GAP_CLOSED_STITCH,
             faces: Vec::new(),
         });
     }
@@ -1440,6 +1750,7 @@ fn assemble_graph(
         edges,
         branches,
         loops,
+        rings,
         gaps,
         completion,
     })
@@ -1456,9 +1767,19 @@ fn stitch_defect_reason(defect: stitch::StitchDefect) -> &'static str {
     }
 }
 
+fn closed_stitch_defect_reason(defect: closed_stitch::ClosedStitchDefect) -> &'static str {
+    match defect {
+        closed_stitch::ClosedStitchDefect::IncompatibleEndpointParameter(_) => {
+            GAP_INCOMPATIBLE_EDGE_PARAMETERS
+        }
+        _ => GAP_CLOSED_STITCH,
+    }
+}
+
 #[cfg(test)]
 mod unit_tests {
     use kgeom::frame::Frame;
+    use kgeom::surface::{Cylinder, Plane};
     use kgeom::vec::Point3;
 
     use super::*;
@@ -1628,5 +1949,59 @@ mod unit_tests {
         // Parallel outward normals have a zero cross product: refused.
         assert_eq!(certified_carrier_sign([1.0, 0.0, 0.0], z, z), None);
         assert_eq!(certified_carrier_sign([0.0, 1.0, 0.0], z, z), None);
+    }
+
+    #[test]
+    fn plane_cylinder_orientation_accounts_for_operand_order_and_face_senses() {
+        let plane = SurfaceGeom::Plane(Plane::new(Frame::world()));
+        let cylinder = SurfaceGeom::Cylinder(Cylinder::new(Frame::world(), 1.0).unwrap());
+        let f = Sense::Forward;
+        let r = Sense::Reversed;
+
+        assert_eq!(
+            canonical_plane_cylinder_flip(&plane, f, &cylinder, f),
+            Some(false)
+        );
+        assert_eq!(
+            canonical_plane_cylinder_flip(&plane, r, &cylinder, f),
+            Some(true)
+        );
+        assert_eq!(
+            canonical_plane_cylinder_flip(&plane, f, &cylinder, r),
+            Some(true)
+        );
+        assert_eq!(
+            canonical_plane_cylinder_flip(&plane, r, &cylinder, r),
+            Some(false)
+        );
+
+        assert_eq!(
+            canonical_plane_cylinder_flip(&cylinder, f, &plane, f),
+            Some(true)
+        );
+        assert_eq!(
+            canonical_plane_cylinder_flip(&cylinder, r, &plane, f),
+            Some(false)
+        );
+        assert_eq!(
+            canonical_plane_cylinder_flip(&cylinder, f, &plane, r),
+            Some(false)
+        );
+        assert_eq!(
+            canonical_plane_cylinder_flip(&cylinder, r, &plane, r),
+            Some(true)
+        );
+
+        let perpendicular = SurfaceGeom::Cylinder(
+            Cylinder::new(
+                Frame::from_z(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+                1.0,
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            canonical_plane_cylinder_flip(&plane, f, &perpendicular, f),
+            None
+        );
     }
 }

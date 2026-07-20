@@ -76,7 +76,7 @@ journals.
 | M2.5 Architecture gate | IN PROGRESS / REQUIRED | Pcurves, tolerant edges, tolerance provenance, checked assembly, journals landed; seam/pole interchange fixtures, remaining Full-proof gaps, and tolerance-propagation policies remain. |
 | M3 X_T | IN PROGRESS | Modern-schema subset reads/writes with host-certified conventions; production coverage and re-certification remain (see [oracle-loop.md](oracle-loop.md)). |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases with explicit Complete/Indeterminate evidence plus first modeling consumers; general certified CC/CS/SSI does not exist yet. |
-| M5 Analytic booleans | IMPLEMENTED SLICE | Public block/block CSG is Full-checked, failure-atomic, deterministic, and licensed-host validated; block/cylinder is next. |
+| M5 Analytic booleans | IMPLEMENTED SLICE | Public block/block CSG is Full-checked, failure-atomic, deterministic, and licensed-host validated; block/cylinder now has exact closed Section rings and next needs Boolean consumption. |
 | M6–M8 | NOT STARTED | General modeling, blends, stable API, and production hardening remain. |
 
 ## Reconciled critical path
@@ -302,10 +302,11 @@ one-cavity results while exact contact and incomplete proof fail closed.
 Deterministic operation outputs passed the supplemental Onshape oracle 6/6 on
 import and 6/6 there-and-back (`docs/oracle-boolean-certification.json`). The
 active queue head is rung 4 block/cylinder. Public finite-cylinder construction,
-manifold finite-cylinder classification, and verified closed Plane/Cylinder
-circle carriers with paired pcurves now provide partial section evidence;
-exact curved trimming and fragment stitching, Boolean assembly, Full proof, and
-the same external evidence gate remain.
+manifold finite-cylinder classification, topology-owned conic/ring trim proofs,
+deterministic closed-fragment stitching, and exact endpoint-free
+Plane/Cylinder Section rings now cover the strict slab-through-cylinder class.
+Bounded-arc facade persistence, Boolean fragment selection/assembly, Full proof,
+and the same external evidence gate remain.
 
 Do not wait for an exhaustive analytic pair table before testing the end-to-end
 boolean architecture. Begin with a deliberately narrow vertical slice as soon as the

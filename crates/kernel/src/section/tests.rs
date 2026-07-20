@@ -32,7 +32,7 @@ use crate::{CylinderRequest, Kernel, PartEdit, PartId, Session};
 
 /// Every stable gap-reason constant the section slice may report. Any other
 /// string is a contract violation.
-const STABLE_GAP_REASONS: [&str; 14] = [
+const STABLE_GAP_REASONS: [&str; 21] = [
     GAP_PLANAR_ONLY,
     GAP_LINE_EDGES_ONLY,
     GAP_BOUNDED_EDGES_ONLY,
@@ -47,6 +47,13 @@ const STABLE_GAP_REASONS: [&str; 14] = [
     GAP_PAIR_UNRESOLVED,
     GAP_INCOMPATIBLE_EDGE_PARAMETERS,
     GAP_CURVED_TRIM_UNRESOLVED,
+    GAP_CLOSED_STITCH,
+    curved_clip::ClosedConicClipGap::UnsupportedTrim.reason(),
+    curved_clip::ClosedConicClipGap::MalformedTrim.reason(),
+    curved_clip::ClosedConicClipGap::ArithmeticGuard.reason(),
+    curved_clip::ClosedConicClipGap::TangentialContact.reason(),
+    curved_clip::ClosedConicClipGap::CoincidentBoundary.reason(),
+    curved_clip::ClosedConicClipGap::UnorderedCrossings.reason(),
 ];
 
 /// Exact-coordinate agreement tolerance for hand-derived expected points.
@@ -286,7 +293,12 @@ fn loop_closes(edges: &[SectionEdge], lp: &SectionLoop) -> bool {
 /// implementation), every loop closed and chained, every edge in exactly one
 /// loop.
 fn assert_complete_section_invariants(graph: &BodySectionGraph) {
-    assert_eq!(graph.completion(), SectionCompletion::Complete);
+    assert_eq!(
+        graph.completion(),
+        SectionCompletion::Complete,
+        "complete graph gaps: {:?}",
+        graph.gaps()
+    );
     assert!(
         graph.gaps().is_empty(),
         "a Complete graph must report no gaps, got {:?}",
@@ -1049,11 +1061,10 @@ fn wrong_part_rejected() {
 }
 
 // ---------------------------------------------------------------------------
-// 12. Curved partial evidence: two full circles stay explicitly closed
+// 12. Exact curved evidence: two full circles become endpoint-free rings
 // ---------------------------------------------------------------------------
 
-#[test]
-fn block_slab_through_cylinder_exposes_two_closed_circle_branches() {
+fn block_slab_and_cylinder() -> (Session, PartId, BodyId, BodyId) {
     let mut session = Kernel::new().create_session();
     let part_id = session.create_part();
     let (block, cylinder) = {
@@ -1069,19 +1080,27 @@ fn block_slab_through_cylinder_exposes_two_closed_circle_branches() {
             .body();
         (block, cylinder)
     };
+    (session, part_id, block, cylinder)
+}
+
+#[test]
+fn block_slab_through_cylinder_exposes_two_exact_closed_rings() {
+    let (session, part_id, block, cylinder) = block_slab_and_cylinder();
     let graph = section_graph(&session, &part_id, &block, &cylinder);
 
-    assert_eq!(graph.completion(), SectionCompletion::Indeterminate);
+    assert_eq!(graph.completion(), SectionCompletion::Complete);
     assert!(graph.edges().is_empty());
+    assert!(graph.loops().is_empty());
     assert_eq!(graph.branches().len(), 2);
-    assert_eq!(
-        graph
-            .gaps()
-            .iter()
-            .filter(|gap| gap.reason() == GAP_CURVED_TRIM_UNRESOLVED)
-            .count(),
-        2
-    );
+    assert_eq!(graph.rings().len(), 2);
+    assert!(graph.gaps().is_empty());
+    let mut ring_branches = graph
+        .rings()
+        .iter()
+        .map(|ring| ring.branch())
+        .collect::<Vec<_>>();
+    ring_branches.sort_unstable();
+    assert_eq!(ring_branches, vec![0, 1]);
     let mut heights = Vec::new();
     for (branch_index, branch) in graph.branches().iter().enumerate() {
         assert_eq!(branch.topology(), SectionBranchTopology::Closed);
@@ -1126,4 +1145,109 @@ fn block_slab_through_cylinder_exposes_two_closed_circle_branches() {
     heights.sort_by(f64::total_cmp);
     assert_eq!(heights, vec![0.5, 1.5]);
     assert_stable_gap_reasons(&graph);
+}
+
+#[test]
+fn closed_ring_operand_swap_reverses_the_canonical_carriers() {
+    let (session, part_id, block, cylinder) = block_slab_and_cylinder();
+    let forward = section_graph(&session, &part_id, &block, &cylinder);
+    let swapped = section_graph(&session, &part_id, &cylinder, &block);
+    assert_eq!(forward.completion(), SectionCompletion::Complete);
+    assert_eq!(swapped.completion(), SectionCompletion::Complete);
+    assert_eq!(forward.rings().len(), 2);
+    assert_eq!(swapped.rings().len(), 2);
+
+    for forward_branch in forward.branches() {
+        let (center, normal, x_direction) = match forward_branch.carrier() {
+            SectionCarrier::Circle {
+                center,
+                normal,
+                x_direction,
+                ..
+            } => (center, normal, x_direction),
+        };
+        let swapped_branch = swapped
+            .branches()
+            .iter()
+            .find(|branch| match branch.carrier() {
+                SectionCarrier::Circle {
+                    center: candidate, ..
+                } => candidate.dist(center) <= POINT_MATCH_TOL,
+            })
+            .expect("swapped graph must retain the same geometric ring");
+        let (swapped_normal, swapped_x) = match swapped_branch.carrier() {
+            SectionCarrier::Circle {
+                normal,
+                x_direction,
+                ..
+            } => (normal, x_direction),
+        };
+        assert!((normal + swapped_normal).norm() <= POINT_MATCH_TOL);
+        assert!((x_direction - swapped_x).norm() <= POINT_MATCH_TOL);
+
+        let (SectionUvCurve::Circle(forward_plane), SectionUvCurve::Circle(swapped_plane)) =
+            (forward_branch.pcurves()[0], swapped_branch.pcurves()[1])
+        else {
+            panic!("operand swap must exchange the plane pcurve slot")
+        };
+        assert_eq!(
+            forward_plane.parameter_scale(),
+            -swapped_plane.parameter_scale()
+        );
+        let (SectionUvCurve::Line(forward_cylinder), SectionUvCurve::Line(swapped_cylinder)) =
+            (forward_branch.pcurves()[1], swapped_branch.pcurves()[0])
+        else {
+            panic!("operand swap must exchange the cylinder pcurve slot")
+        };
+        let forward_direction = forward_cylinder.direction();
+        let swapped_direction = swapped_cylinder.direction();
+        assert_eq!(forward_direction.x, -swapped_direction.x);
+        assert_eq!(forward_direction.y, -swapped_direction.y);
+    }
+}
+
+#[test]
+fn rigidly_oriented_slab_through_cylinder_keeps_two_exact_rings() {
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let base = Point3::new(3.0, -2.0, 1.25);
+    let cylinder_frame =
+        Frame::new(base, Vec3::new(0.0, 0.6, 0.8), Vec3::new(1.0, 0.0, 0.0)).unwrap();
+    let block_frame = cylinder_frame.with_origin(base + cylinder_frame.z());
+    let (block, cylinder) = {
+        let mut edit = session.edit_part(part_id.clone()).unwrap();
+        let block = edit
+            .create_block(BlockRequest::new(block_frame, [4.0, 4.0, 1.0]))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let cylinder = edit
+            .create_cylinder(CylinderRequest::new(cylinder_frame, 0.75, 2.0))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (block, cylinder)
+    };
+    let graph = section_graph(&session, &part_id, &block, &cylinder);
+    assert_eq!(
+        graph.completion(),
+        SectionCompletion::Complete,
+        "rigid graph gaps: {:?}",
+        graph.gaps()
+    );
+    assert_eq!(graph.rings().len(), 2);
+    assert!(graph.gaps().is_empty());
+
+    let mut axial_parameters = graph
+        .rings()
+        .iter()
+        .map(|ring| match graph.branches()[ring.branch()].carrier() {
+            SectionCarrier::Circle { center, .. } => (center - base).dot(cylinder_frame.z()),
+        })
+        .collect::<Vec<_>>();
+    axial_parameters.sort_by(f64::total_cmp);
+    assert!((axial_parameters[0] - 0.5).abs() <= POINT_MATCH_TOL);
+    assert!((axial_parameters[1] - 1.5).abs() <= POINT_MATCH_TOL);
 }

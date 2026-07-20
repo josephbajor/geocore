@@ -11,9 +11,9 @@ use kernel::{
     MutationKind, NumericalPolicy, OperationSettings, ParamRange, PartId, PcurveChart,
     PcurveEndpointKind, PcurveMetadata, PcurveSeam, PcurveSeamSide, Point2, Point3, PolicyVersion,
     RegionKind, RemoveBridgeRequest, RemoveSeedBodyRequest, RemoveStrutRequest, ResourceKind,
-    Session, SessionPolicy, SessionPrecision, SplitHoleAsFaceRequest, SurfaceDerivativeOrder,
-    SurfaceEvaluationRequest, SurfaceParameter, TessOptions, TessellateBodyRequest,
-    ToleranceGrowth, ToleranceGrowthTarget, Tolerances, Vec3,
+    SectionBodiesRequest, SectionCompletion, SectionRing, Session, SessionPolicy, SessionPrecision,
+    SplitHoleAsFaceRequest, SurfaceDerivativeOrder, SurfaceEvaluationRequest, SurfaceParameter,
+    TessOptions, TessellateBodyRequest, ToleranceGrowth, ToleranceGrowthTarget, Tolerances, Vec3,
 };
 
 #[test]
@@ -170,6 +170,47 @@ fn facade_only_client_can_construct_and_check_a_cylinder_with_reports() {
         .unwrap();
     assert_eq!(check.result().unwrap().outcome(), CheckOutcome::Valid);
     assert!(check.report().limit_events().is_empty());
+}
+
+#[test]
+fn facade_only_client_can_observe_exact_plane_cylinder_section_rings() {
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let (block, cylinder) = {
+        let mut edit = session.edit_part(part_id.clone()).unwrap();
+        let block = edit
+            .create_block(BlockRequest::new(
+                Frame::world().with_origin(Point3::new(0.0, 0.0, 1.0)),
+                [4.0, 4.0, 1.0],
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let cylinder = edit
+            .create_cylinder(CylinderRequest::new(Frame::world(), 0.75, 2.0))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (block, cylinder)
+    };
+
+    let outcome = session
+        .part(part_id)
+        .unwrap()
+        .section_bodies(SectionBodiesRequest::new(block, cylinder))
+        .unwrap();
+    let graph = outcome.into_result().unwrap();
+    assert_eq!(graph.completion(), SectionCompletion::Complete);
+    let rings: &[SectionRing] = graph.rings();
+    assert_eq!(rings.len(), 2);
+    assert!(
+        rings
+            .iter()
+            .all(|ring| ring.branch() < graph.branches().len())
+    );
+    assert!(graph.gaps().is_empty());
 }
 
 #[test]

@@ -33,9 +33,10 @@ enforcement over new parallel surface area. Read the queue literally.
    `u64::MAX` (no truthful finite legacy cap exists).
 3. **Resume algorithm/API expansion behind the completed gates — OPEN (current head).** Block/block
    CSG is public and externally validated. The next consumer is block/cylinder Boolean support:
-   public cylinder construction, finite-cylinder classification, and closed Plane/Cylinder carrier
-   evidence landed; exact trim/fragment assembly, Full proof, and X_T evidence remain. Broader
-   intersection/NURBS families, revolve, and curved profiles remain milestone backlog.
+   public cylinder construction, finite-cylinder classification, topology-owned curved trim,
+   general closed-fragment stitching, and exact endpoint-free Plane/Cylinder Section rings landed;
+   bounded-arc facade persistence, Boolean consumption/assembly, Full proof, and X_T evidence
+   remain. Broader intersection/NURBS families, revolve, and curved profiles remain milestone backlog.
 
 **External-evidence lane.** Current Onshape records pin the 15-file writer bundle and the six-file
 public Boolean bundle. Fingerprints: `docs/oracle-certification.json` and
@@ -131,7 +132,8 @@ curve-pair isolation with bounded verified polishing, shared conic/SSI emitters,
 region arms (Plane/Plane, Cylinder/Cylinder, Sphere/Sphere octants + bounded general sphere windows,
 Cone/Cone, Torus/Torus), exact algebraic carriers/residuals through magnitude-twelve (opt-in 13/14),
 the line/Torus quartic slice, and operation-local closed Plane/Cylinder circle branches with paired
-whole-period pcurve evidence.
+whole-period pcurve evidence. Kernel Section now consumes those branches through topology-owned
+polygon/ring clipping and emits exact endpoint-free rings for the strict whole-period class.
 **Evidence:** SSI/conic bit-signature regressions; sphere-window arm exemplars (piece/pair/arc N/N-1
 ceilings); magnitude-12→14 enumeration goldens; `kops` `Indeterminate` / `kgraph` typed-error
 propagation tests (per-arm fixtures: see git history).
