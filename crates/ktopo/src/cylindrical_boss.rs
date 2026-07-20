@@ -1,11 +1,14 @@
-//! Semantic assembly of one capped cylindrical boss on a convex planar host.
+//! Semantic assembly of one capped cylindrical segment on a convex planar host.
 //!
 //! The host is supplied through [`PlanarSolidInput`]. One designated convex
-//! face is punctured by a strictly contained circular loop, and a positive
-//! finite cylinder band is attached on the face's outward side. The other end
-//! of the band is closed by one planar cap. All caller-controlled geometry,
-//! convexity, incidence, size-box, and optional lineage data are preflighted
-//! before a body scaffold is allocated.
+//! face is punctured by a strictly contained circular loop. Exactly one axial
+//! endpoint must lie on that face. The other endpoint may be on its outward
+//! side, forming a boss, or its inward side, forming a blind pocket. This
+//! distinction is derived from exact endpoint incidence and the oriented host
+//! support plane; it is not a caller-supplied operation tag. All
+//! caller-controlled geometry, convexity, incidence, containment, size-box,
+//! and optional lineage data are preflighted before a body scaffold is
+//! allocated.
 
 use std::collections::BTreeMap;
 
@@ -18,6 +21,7 @@ use crate::loop_proof::certify_convex_polygon_circle_containment;
 use crate::planar::{PlanarSolidInput, PreparedSolid};
 use crate::transaction::Transaction;
 use kcore::error::{Error, Result};
+use kcore::interval::Interval;
 use kcore::predicates::{Orientation, affine_dot3};
 use kcore::tolerance::check_in_size_box;
 use kgeom::curve::{Circle, Curve};
@@ -27,14 +31,16 @@ use kgeom::param::ParamRange;
 use kgeom::surface::{Cylinder, Plane};
 use kgeom::vec::{Point2, Point3, Vec2, Vec3};
 
-/// Complete semantic input for one positive cylindrical boss.
+/// Complete semantic input for one capped cylindrical host feature.
 ///
-/// `port_face` indexes `host.faces()`. `axial_range.lo` is the attachment
-/// plane and `frame.z()` points from the host into the boss. Optional source
-/// faces are semantic lineage for the cylindrical side and high cap; planar
-/// host lineage remains owned by [`PlanarSolidInput`].
+/// `port_face` indexes `host.faces()`. Exactly one endpoint of `axial_range`
+/// must be incident with that face. The other endpoint's exact position
+/// relative to the face's oriented support plane determines whether the
+/// feature is an outward boss or an inward blind pocket. Optional source faces
+/// are semantic lineage for the cylindrical side and closing cap; planar host
+/// lineage remains owned by [`PlanarSolidInput`].
 #[derive(Debug, Clone, PartialEq)]
-pub struct CylindricalBossSolidInput {
+pub struct CappedCylinderSolidInput {
     host: PlanarSolidInput,
     port_face: usize,
     frame: Frame,
@@ -44,8 +50,8 @@ pub struct CylindricalBossSolidInput {
     cap_source: Option<FaceId>,
 }
 
-impl CylindricalBossSolidInput {
-    /// Describe a capped boss attached at the low end of `axial_range`.
+impl CappedCylinderSolidInput {
+    /// Describe one capped cylinder segment attached at either axial endpoint.
     pub const fn new(
         host: PlanarSolidInput,
         port_face: usize,
@@ -91,12 +97,12 @@ impl CylindricalBossSolidInput {
         self.frame
     }
 
-    /// Positive boss radius.
+    /// Positive cylinder radius.
     pub const fn radius(&self) -> f64 {
         self.radius
     }
 
-    /// Finite increasing boss interval.
+    /// Finite increasing cylinder interval.
     pub const fn axial_range(&self) -> ParamRange {
         self.axial_range
     }
@@ -106,15 +112,21 @@ impl CylindricalBossSolidInput {
         self.side_source
     }
 
-    /// Optional source of the high cap.
+    /// Optional source of the closing cap.
     pub const fn cap_source(&self) -> Option<FaceId> {
         self.cap_source
     }
 }
 
-/// Stable handles produced by cylindrical-boss assembly.
+/// Backward-compatible name for an outward capped-cylinder input.
+///
+/// The aliased input now also admits a semantically proven inward blind
+/// pocket. New neutral adapters should prefer [`CappedCylinderSolidInput`].
+pub type CylindricalBossSolidInput = CappedCylinderSolidInput;
+
+/// Stable handles produced by capped-cylinder assembly.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CylindricalBossSolidOutput {
+pub struct CappedCylinderSolidOutput {
     body: BodyId,
     shell: ShellId,
     host_faces: Vec<FaceId>,
@@ -124,7 +136,7 @@ pub struct CylindricalBossSolidOutput {
     ring_edges: [EdgeId; 2],
 }
 
-impl CylindricalBossSolidOutput {
+impl CappedCylinderSolidOutput {
     /// Newly assembled solid body.
     pub const fn body(&self) -> BodyId {
         self.body
@@ -150,7 +162,7 @@ impl CylindricalBossSolidOutput {
         self.side_face
     }
 
-    /// High planar cap face.
+    /// Closing planar cap face opposite the attachment endpoint.
     pub const fn cap_face(&self) -> FaceId {
         self.cap_face
     }
@@ -160,6 +172,9 @@ impl CylindricalBossSolidOutput {
         self.ring_edges
     }
 }
+
+/// Backward-compatible output name for capped-cylinder assembly.
+pub type CylindricalBossSolidOutput = CappedCylinderSolidOutput;
 
 #[derive(Debug, Clone, Copy)]
 struct PreparedPlanarRingUse {
@@ -176,25 +191,27 @@ struct PreparedRing {
 }
 
 #[derive(Debug)]
-struct PreparedBoss {
+struct PreparedCappedCylinder {
     host: PreparedSolid,
     port_face: usize,
     cylinder: Cylinder,
     side_domain: FaceDomain,
+    side_sense: Sense,
     cap_plane: Plane,
     cap_domain: FaceDomain,
+    cap_endpoint: usize,
     rings: [PreparedRing; 2],
     side_source: Option<FaceId>,
     cap_source: Option<FaceId>,
 }
 
-impl PreparedBoss {
-    fn new(input: &CylindricalBossSolidInput, store: &crate::store::Store) -> Result<Self> {
+impl PreparedCappedCylinder {
+    fn new(input: &CappedCylinderSolidInput, store: &crate::store::Store) -> Result<Self> {
         if !input.radius.is_finite() || input.radius <= 0.0 {
-            return invalid("cylindrical-boss radius must be finite and positive");
+            return invalid("capped-cylinder radius must be finite and positive");
         }
         if !input.axial_range.is_finite() || input.axial_range.lo >= input.axial_range.hi {
-            return invalid("cylindrical-boss axial range must be finite and increasing");
+            return invalid("capped-cylinder axial range must be finite and increasing");
         }
         for source in [input.side_source, input.cap_source].into_iter().flatten() {
             if !store.contains(source) {
@@ -204,7 +221,7 @@ impl PreparedBoss {
 
         let host = PreparedSolid::new(&input.host, store)?;
         let Some((port_plane, port_sense)) = host.face_plane(input.port_face, store)? else {
-            return invalid("cylindrical-boss port face index is invalid");
+            return invalid("capped-cylinder port face index is invalid");
         };
         certify_convex_host(&input.host, &host, store)?;
 
@@ -219,21 +236,43 @@ impl PreparedBoss {
         let zero = [0.0; 3];
         if exact_dot(port_plane.frame().x(), frame.z(), zero)? != Orientation::Zero
             || exact_dot(port_plane.frame().y(), frame.z(), zero)? != Orientation::Zero
-            || exact_affine(
-                port_plane.frame().z(),
-                low_center,
-                port_plane.frame().origin(),
-                0.0,
-            )? != Orientation::Zero
         {
-            return invalid(
-                "cylindrical-boss axis and port plane must be exactly perpendicular and incident",
-            );
+            return invalid("capped-cylinder axis must be exactly perpendicular to its port plane");
         }
         let outward = port_plane.frame().z() * if port_sense.is_forward() { 1.0 } else { -1.0 };
-        if exact_affine(outward, high_center, low_center, 0.0)? != Orientation::Positive {
-            return invalid("cylindrical-boss must extend from the outward side of its port face");
-        }
+        let [low_incidence, high_incidence] = [low_center, high_center].map(|center| {
+            exact_affine(
+                port_plane.frame().z(),
+                center,
+                port_plane.frame().origin(),
+                0.0,
+            )
+        });
+        let endpoint_incidence = [low_incidence?, high_incidence?];
+        let port_endpoint = match endpoint_incidence {
+            [Orientation::Zero, nonzero] if nonzero != Orientation::Zero => 0,
+            [nonzero, Orientation::Zero] if nonzero != Orientation::Zero => 1,
+            _ => {
+                return invalid(
+                    "exactly one capped-cylinder endpoint must be incident with its port plane",
+                );
+            }
+        };
+        let cap_endpoint = 1 - port_endpoint;
+        let endpoints = [low_center, high_center];
+        let feature_direction = exact_affine(
+            outward,
+            endpoints[cap_endpoint],
+            endpoints[port_endpoint],
+            0.0,
+        )?;
+        let side_sense = match feature_direction {
+            Orientation::Positive => Sense::Forward,
+            Orientation::Negative => Sense::Reversed,
+            Orientation::Zero => {
+                return invalid("capped-cylinder segment must have nonzero signed height");
+            }
+        };
 
         let positions = input
             .host
@@ -247,49 +286,78 @@ impl PreparedBoss {
             .iter()
             .map(|key| {
                 let point = positions.get(key).copied().ok_or(Error::InvalidGeometry {
-                    reason: "cylindrical-boss port references an unknown host vertex",
+                    reason: "capped-cylinder port references an unknown host vertex",
                 })?;
                 Ok(frame_uv(port_plane.frame(), point))
             })
             .collect::<Result<Vec<_>>>()?;
-        let low_circle = Circle::new(frame, input.radius)?;
-        preflight_circle_extent(low_circle)?;
-        let low_planar = planar_ring_use(port_plane.frame(), low_circle)?;
-        if !certify_convex_polygon_circle_containment(&polygon, low_planar.curve) {
+        let circles = [
+            Circle::new(frame, input.radius)?,
+            Circle::new(frame.with_origin(high_center), input.radius)?,
+        ];
+        preflight_circle_extent(circles[0])?;
+        preflight_circle_extent(circles[1])?;
+        let port_planar = planar_ring_use(port_plane.frame(), circles[port_endpoint])?;
+        if !certify_convex_polygon_circle_containment(&polygon, port_planar.curve) {
             return invalid(
-                "cylindrical-boss attachment disk must lie strictly inside its convex port face",
+                "capped-cylinder attachment disk must lie strictly inside its convex port face",
             );
         }
 
-        let high_frame = frame.with_origin(high_center);
-        let high_circle = Circle::new(high_frame, input.radius)?;
-        preflight_circle_extent(high_circle)?;
-        let cap_plane = Plane::new(high_frame);
+        if side_sense == Sense::Reversed {
+            certify_inward_segment_containment(
+                input,
+                &host,
+                store,
+                frame,
+                input.radius,
+                endpoints,
+                input.port_face,
+            )?;
+        }
+
+        let cap_frame = Frame::new(endpoints[cap_endpoint], outward, frame.x())?;
+        let cap_plane = Plane::new(cap_frame);
         let cap_domain =
             FaceDomain::from_bounds(-input.radius, input.radius, -input.radius, input.radius)?;
         let side_domain = FaceDomain::from_bounds(0.0, core::f64::consts::TAU, 0.0, height)?;
-        let rings = [
-            PreparedRing {
-                circle: low_circle,
-                side_sense: Sense::Forward,
-                side_pcurve: Line2d::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0))?,
-                planar: low_planar,
-            },
-            PreparedRing {
-                circle: high_circle,
-                side_sense: Sense::Reversed,
-                side_pcurve: Line2d::new(Point2::new(0.0, height), Vec2::new(1.0, 0.0))?,
-                planar: planar_ring_use(cap_plane.frame(), high_circle)?,
-            },
-        ];
+        let mut rings = Vec::with_capacity(2);
+        for (index, side_v) in [0.0, height].into_iter().enumerate() {
+            let conventional = if index == 0 {
+                Sense::Forward
+            } else {
+                Sense::Reversed
+            };
+            let ring_sense = if side_sense == Sense::Forward {
+                conventional
+            } else {
+                conventional.flipped()
+            };
+            let planar = if index == port_endpoint {
+                port_planar
+            } else {
+                planar_ring_use(cap_plane.frame(), circles[index])?
+            };
+            rings.push(PreparedRing {
+                circle: circles[index],
+                side_sense: ring_sense,
+                side_pcurve: Line2d::new(Point2::new(0.0, side_v), Vec2::new(1.0, 0.0))?,
+                planar,
+            });
+        }
+        let rings = rings
+            .try_into()
+            .expect("two axial endpoints prepare exactly two capped-cylinder rings");
 
         Ok(Self {
             host,
             port_face: input.port_face,
             cylinder,
             side_domain,
+            side_sense,
             cap_plane,
             cap_domain,
+            cap_endpoint,
             rings,
             side_source: input.side_source,
             cap_source: input.cap_source,
@@ -298,15 +366,15 @@ impl PreparedBoss {
 }
 
 impl Transaction<'_> {
-    /// Assemble one positive capped cylindrical boss on a convex planar host.
+    /// Assemble one capped cylindrical boss or pocket on a convex planar host.
     ///
     /// Complete semantic preflight occurs before topology allocation. The
     /// caller owns the eventual checked or Full commit.
-    pub fn assemble_cylindrical_boss_solid(
+    pub fn assemble_capped_cylinder_solid(
         &mut self,
-        input: &CylindricalBossSolidInput,
-    ) -> Result<CylindricalBossSolidOutput> {
-        let prepared = PreparedBoss::new(input, self.store())?;
+        input: &CappedCylinderSolidInput,
+    ) -> Result<CappedCylinderSolidOutput> {
+        let prepared = PreparedCappedCylinder::new(input, self.store())?;
         let (body, shell) = crate::make::solid_body_scaffold(self.store_mut());
         let host = self.allocate_prepared_planar_shell(prepared.host, shell)?;
         let port_face = host.faces[prepared.port_face];
@@ -318,20 +386,27 @@ impl Transaction<'_> {
             shell,
             loops: Vec::new(),
             surface: side_surface,
-            sense: Sense::Forward,
+            sense: prepared.side_sense,
             domain: Some(prepared.side_domain),
             tolerance: None,
         });
         self.store_mut().get_mut(shell)?.faces.push(side_face);
 
-        let low_edge = self.allocate_boss_port_ring(side_face, port_face, prepared.rings[0])?;
-        let (cap_face, high_edge) = self.allocate_boss_cap_ring(
+        let port_endpoint = 1 - prepared.cap_endpoint;
+        let mut ring_edges = [None, None];
+        ring_edges[port_endpoint] = Some(self.allocate_boss_port_ring(
+            side_face,
+            port_face,
+            prepared.rings[port_endpoint],
+        )?);
+        let (cap_face, cap_edge) = self.allocate_boss_cap_ring(
             shell,
             side_face,
-            prepared.rings[1],
+            prepared.rings[prepared.cap_endpoint],
             prepared.cap_plane,
             prepared.cap_domain,
         )?;
+        ring_edges[prepared.cap_endpoint] = Some(cap_edge);
 
         if let Some(source) = prepared.side_source {
             self.record_derived_from(EntityRef::Face(side_face), EntityRef::Face(source));
@@ -340,15 +415,25 @@ impl Transaction<'_> {
             self.record_derived_from(EntityRef::Face(cap_face), EntityRef::Face(source));
         }
 
-        Ok(CylindricalBossSolidOutput {
+        Ok(CappedCylinderSolidOutput {
             body,
             shell,
             host_faces: host.faces,
             port_face,
             side_face,
             cap_face,
-            ring_edges: [low_edge, high_edge],
+            ring_edges: ring_edges.map(|edge| {
+                edge.expect("port and cap allocation cover both capped-cylinder endpoints")
+            }),
         })
+    }
+
+    /// Backward-compatible spelling for capped-cylinder assembly.
+    pub fn assemble_cylindrical_boss_solid(
+        &mut self,
+        input: &CylindricalBossSolidInput,
+    ) -> Result<CylindricalBossSolidOutput> {
+        self.assemble_capped_cylinder_solid(input)
     }
 
     fn allocate_boss_port_ring(
@@ -471,7 +556,7 @@ fn certify_convex_host(
         let (plane, sense) = prepared
             .face_plane(index, store)?
             .ok_or(Error::InvalidGeometry {
-                reason: "cylindrical-boss host face disappeared during preflight",
+                reason: "capped-cylinder host face disappeared during preflight",
             })?;
         let outward = plane.frame().z() * if sense.is_forward() { 1.0 } else { -1.0 };
         let mut strictly_inside = false;
@@ -480,15 +565,101 @@ fn certify_convex_host(
                 Orientation::Negative => strictly_inside = true,
                 Orientation::Zero => {}
                 Orientation::Positive => {
-                    return invalid("cylindrical-boss host must be globally convex");
+                    return invalid("capped-cylinder host must be globally convex");
                 }
             }
         }
         if !strictly_inside {
-            return invalid("cylindrical-boss host face must support a bounded convex solid");
+            return invalid("capped-cylinder host face must support a bounded convex solid");
         }
     }
     Ok(())
+}
+
+/// Prove that every point of an inward finite cylinder segment lies in the
+/// virtual convex host. For a linear axial sweep, the maximum of each host
+/// half-space form occurs on one of the two endpoint circles. The port support
+/// is handled exactly (the port ring lies on it and every other section is
+/// strictly inward); every other support receives an outward-rounded interval
+/// proof that both complete endpoint circles are strictly inward.
+fn certify_inward_segment_containment(
+    input: &CappedCylinderSolidInput,
+    prepared: &PreparedSolid,
+    store: &crate::store::Store,
+    cylinder_frame: Frame,
+    radius: f64,
+    endpoints: [Point3; 2],
+    port_face: usize,
+) -> Result<()> {
+    for index in 0..input.host.faces().len() {
+        let (plane, sense) = prepared
+            .face_plane(index, store)?
+            .ok_or(Error::InvalidGeometry {
+                reason: "capped-cylinder host face disappeared during containment preflight",
+            })?;
+        let outward = plane.frame().z() * if sense.is_forward() { 1.0 } else { -1.0 };
+        if index == port_face {
+            let [first, second] =
+                endpoints.map(|center| exact_affine(outward, center, plane.frame().origin(), 0.0));
+            let endpoint_signs = [first?, second?];
+            if endpoint_signs
+                .into_iter()
+                .filter(|sign| *sign == Orientation::Zero)
+                .count()
+                != 1
+                || !endpoint_signs.contains(&Orientation::Negative)
+                || exact_dot(outward, cylinder_frame.x(), [0.0; 3])? != Orientation::Zero
+                || exact_dot(outward, cylinder_frame.y(), [0.0; 3])? != Orientation::Zero
+            {
+                return invalid(
+                    "inward capped-cylinder segment must leave its port strictly into the host",
+                );
+            }
+            continue;
+        }
+
+        for center in endpoints {
+            if exact_affine(outward, center, plane.frame().origin(), 0.0)? != Orientation::Negative
+                || !certify_circle_strictly_inside_halfspace(
+                    outward,
+                    plane.frame().origin(),
+                    cylinder_frame,
+                    center,
+                    radius,
+                )
+            {
+                return invalid(
+                    "complete inward capped-cylinder segment must lie strictly inside the convex host",
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn certify_circle_strictly_inside_halfspace(
+    outward: Vec3,
+    support_origin: Point3,
+    cylinder_frame: Frame,
+    center: Point3,
+    radius: f64,
+) -> bool {
+    let offset = center - support_origin;
+    let signed = interval_dot(outward, offset);
+    if signed.hi() >= 0.0 {
+        return false;
+    }
+    let radius = Interval::point(radius);
+    let radial_x = interval_dot(outward, cylinder_frame.x()) * radius;
+    let radial_y = interval_dot(outward, cylinder_frame.y()) * radius;
+    let radial_squared = radial_x.square() + radial_y.square();
+    radial_squared.hi() < signed.square().lo()
+}
+
+fn interval_dot(left: Vec3, right: Vec3) -> Interval {
+    Interval::point(left.x) * Interval::point(right.x)
+        + Interval::point(left.y) * Interval::point(right.y)
+        + Interval::point(left.z) * Interval::point(right.z)
 }
 
 fn planar_ring_use(frame: &Frame, circle: Circle) -> Result<PreparedPlanarRingUse> {
@@ -517,7 +688,7 @@ fn exact_dot(normal: Vec3, vector: Vec3, origin: [f64; 3]) -> Result<Orientation
     affine_dot3(normal.to_array(), vector.to_array(), origin, 0.0)
         .map(|value| value.sign())
         .ok_or(Error::InvalidGeometry {
-            reason: "cylindrical-boss exact vector predicate is indeterminate",
+            reason: "capped-cylinder exact vector predicate is indeterminate",
         })
 }
 
@@ -525,7 +696,7 @@ fn exact_affine(normal: Vec3, point: Point3, origin: Point3, bias: f64) -> Resul
     affine_dot3(normal.to_array(), point.to_array(), origin.to_array(), bias)
         .map(|value| value.sign())
         .ok_or(Error::InvalidGeometry {
-            reason: "cylindrical-boss exact affine predicate is indeterminate",
+            reason: "capped-cylinder exact affine predicate is indeterminate",
         })
 }
 
@@ -544,7 +715,11 @@ fn invalid<T>(reason: &'static str) -> Result<T> {
 mod tests {
     use super::*;
     use crate::check::{CheckLevel, CheckOutcome, check_body_report};
-    use crate::entity::{Body, Face as RawFace, Region, Shell};
+    use crate::entity::{
+        Body, Edge as RawEdge, Face as RawFace, Fin as RawFin, Loop as RawLoop, Region, Shell,
+        Vertex as RawVertex,
+    };
+    use crate::geom::SurfaceGeom;
     use crate::planar::{PlanarSolidFace, PlanarSolidVertex, PlanarVertexKey};
     use crate::store::Store;
     use crate::transaction::FullCommitRequirement;
@@ -588,6 +763,23 @@ mod tests {
             radius,
             ParamRange::new(0.0, 1.5),
         )
+    }
+
+    fn pocket(radius: f64) -> CappedCylinderSolidInput {
+        CappedCylinderSolidInput::new(cube(), 1, Frame::world(), radius, ParamRange::new(0.0, 1.0))
+    }
+
+    fn topology_counts(store: &Store) -> [usize; 8] {
+        [
+            store.count::<Body>(),
+            store.count::<Region>(),
+            store.count::<Shell>(),
+            store.count::<RawFace>(),
+            store.count::<RawLoop>(),
+            store.count::<RawFin>(),
+            store.count::<RawEdge>(),
+            store.count::<RawVertex>(),
+        ]
     }
 
     #[test]
@@ -647,36 +839,172 @@ mod tests {
     }
 
     #[test]
+    fn convex_host_blind_pocket_is_full_valid() {
+        let mut store = Store::new();
+        let mut transaction = store.transaction().unwrap();
+        let output = transaction
+            .assemble_capped_cylinder_solid(&pocket(0.75))
+            .unwrap();
+        let faces = transaction.store().faces_of_body(output.body()).unwrap();
+        assert_eq!(faces.len(), 8);
+        assert_eq!(
+            transaction
+                .store()
+                .edges_of_body(output.body())
+                .unwrap()
+                .len(),
+            14
+        );
+        assert_eq!(
+            transaction
+                .store()
+                .vertices_of_body(output.body())
+                .unwrap()
+                .len(),
+            8
+        );
+        assert_eq!(
+            transaction
+                .store()
+                .get(output.body())
+                .unwrap()
+                .regions()
+                .len(),
+            2
+        );
+        assert_eq!(
+            transaction
+                .store()
+                .get(output.shell())
+                .unwrap()
+                .faces()
+                .len(),
+            8
+        );
+        assert_eq!(
+            transaction
+                .store()
+                .get(transaction.store().get(output.shell()).unwrap().region())
+                .unwrap()
+                .shells(),
+            [output.shell()]
+        );
+        assert_eq!(
+            transaction
+                .store()
+                .get(output.body())
+                .unwrap()
+                .regions()
+                .iter()
+                .map(|region| transaction.store().get(*region).unwrap().shells().len())
+                .sum::<usize>(),
+            1
+        );
+        let mut loop_counts = faces
+            .iter()
+            .map(|face| transaction.store().get(*face).unwrap().loops().len())
+            .collect::<Vec<_>>();
+        loop_counts.sort_unstable();
+        assert_eq!(loop_counts, [1, 1, 1, 1, 1, 1, 2, 2]);
+        let (planes, cylinders) = faces.iter().fold((0, 0), |(planes, cylinders), face| {
+            match transaction
+                .store()
+                .get(transaction.store().get(*face).unwrap().surface())
+                .unwrap()
+            {
+                SurfaceGeom::Plane(_) => (planes + 1, cylinders),
+                SurfaceGeom::Cylinder(_) => (planes, cylinders + 1),
+                _ => (planes, cylinders),
+            }
+        });
+        assert_eq!((planes, cylinders), (7, 1));
+        assert_eq!(
+            transaction.store().get(output.side_face()).unwrap().sense(),
+            Sense::Reversed
+        );
+        assert_eq!(
+            transaction
+                .store()
+                .get(output.port_face())
+                .unwrap()
+                .loops()
+                .len(),
+            2
+        );
+        let [low_ring, high_ring] = output.ring_edges();
+        assert_ne!(low_ring, high_ring);
+
+        let decision = transaction
+            .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
+            .unwrap();
+        assert!(decision.is_committed(), "checks: {:?}", decision.checks());
+        assert!(decision.checks().iter().all(|check| {
+            check.report().outcome() == CheckOutcome::Valid && check.report().gaps.is_empty()
+        }));
+        assert_eq!(
+            check_body_report(&store, output.body(), CheckLevel::Full)
+                .unwrap()
+                .outcome(),
+            CheckOutcome::Valid
+        );
+    }
+
+    #[test]
+    fn blind_pocket_wrong_side_sense_is_full_invalid() {
+        let mut store = Store::new();
+        let mut transaction = store.transaction().unwrap();
+        let output = transaction
+            .assemble_capped_cylinder_solid(&pocket(0.75))
+            .unwrap();
+        transaction
+            .store_mut()
+            .get_mut(output.side_face())
+            .unwrap()
+            .sense = Sense::Forward;
+        let decision = transaction
+            .commit_full(&[output.body()], FullCommitRequirement::RequireValid)
+            .unwrap();
+        assert!(!decision.is_committed());
+        assert!(
+            decision
+                .checks()
+                .iter()
+                .any(|check| check.report().outcome() == CheckOutcome::Invalid)
+        );
+        assert_eq!(store.count::<Body>(), 0);
+    }
+
+    #[test]
     fn malformed_inputs_fail_before_topology_allocation() {
         let mut store = Store::new();
         let mut transaction = store.transaction().unwrap();
-        let before = (
-            transaction.store().count::<Body>(),
-            transaction.store().count::<Region>(),
-            transaction.store().count::<Shell>(),
-            transaction.store().count::<RawFace>(),
-        );
-        let inward = CylindricalBossSolidInput::new(
+        let before = topology_counts(transaction.store());
+        let no_incident_endpoint = CappedCylinderSolidInput::new(
             cube(),
-            0,
-            Frame::world().with_origin(Point3::new(0.0, 0.0, -1.0)),
+            1,
+            Frame::world(),
             0.5,
-            ParamRange::new(0.0, 1.0),
+            ParamRange::new(0.0, 0.5),
         );
-        for proposal in [input(-0.5), input(1.0), input(1.25), inward] {
+        let escapes_convex_host = CappedCylinderSolidInput::new(
+            cube(),
+            1,
+            Frame::world(),
+            0.5,
+            ParamRange::new(-2.0, 1.0),
+        );
+        for proposal in [
+            input(-0.5),
+            input(1.0),
+            input(1.25),
+            no_incident_endpoint,
+            escapes_convex_host,
+        ] {
             assert!(matches!(
-                transaction.assemble_cylindrical_boss_solid(&proposal),
+                transaction.assemble_capped_cylinder_solid(&proposal),
                 Err(Error::InvalidGeometry { .. })
             ));
-            assert_eq!(
-                (
-                    transaction.store().count::<Body>(),
-                    transaction.store().count::<Region>(),
-                    transaction.store().count::<Shell>(),
-                    transaction.store().count::<RawFace>(),
-                ),
-                before
-            );
+            assert_eq!(topology_counts(transaction.store()), before);
         }
     }
 }

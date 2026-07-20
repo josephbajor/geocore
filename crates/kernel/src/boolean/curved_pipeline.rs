@@ -6,9 +6,9 @@
 //! dual component, and propagates occupancy across transverse cuts. Generic
 //! boundary truth selection then decides which cells survive. The current
 //! topology adapter commits selected axial cylinder bands, one-port capped
-//! cylindrical bosses, or proof-matched complete source boundaries. Other
-//! partial, mixed, and reversed whole-boundary classes remain explicit typed
-//! refusals.
+//! cylindrical bosses and blind pockets, or proof-matched complete source
+//! boundaries. Other partial, mixed, and reversed whole-boundary classes
+//! remain explicit typed refusals.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -26,7 +26,7 @@ use super::boundary_select::{
     BoundaryFragmentClassification, BoundarySelectionError, ClassifiedBoundaryFragment,
     OperandSide, RegularizedBooleanOperation, SelectedOrientation, select_boundary_fragments,
 };
-use super::curved_boss::{PreparedCylindricalBoss, prepare_cylindrical_boss};
+use super::curved_boss::{PreparedCappedCylinder, prepare_capped_cylinder};
 use super::curved_source::{
     CertifiedCylinderSource, CylinderSourceGap, CylinderSourceOutcome, extract_cylinder_source,
 };
@@ -756,7 +756,7 @@ fn axial_parameter(source: &CertifiedCylinderSource, point: Point3) -> Option<f6
 
 #[derive(Debug, Clone)]
 enum PreparedCurvedResult {
-    CylindricalBoss(Box<PreparedCylindricalBoss>),
+    CappedCylinder(Box<PreparedCappedCylinder>),
     CylindricalBands(Vec<CylindricalBandSolidInput>),
     WholeSources(Vec<RawBodyId>),
 }
@@ -764,7 +764,7 @@ enum PreparedCurvedResult {
 impl PreparedCurvedResult {
     fn is_empty(&self) -> bool {
         match self {
-            Self::CylindricalBoss(_) => false,
+            Self::CappedCylinder(_) => false,
             Self::CylindricalBands(bands) => bands.is_empty(),
             Self::WholeSources(sources) => sources.is_empty(),
         }
@@ -786,10 +786,10 @@ fn prepare_result_proposals(
     {
         return Ok(PreparedCurvedResult::WholeSources(source_copies));
     }
-    if let Some(boss) = prepare_cylindrical_boss(planar, cylinder, cuts, &selected)
+    if let Some(feature) = prepare_capped_cylinder(planar, cylinder, cuts, &selected)
         .map_err(|reason| refused_error(CurvedBooleanPipelineRefusal::AssemblyContract(reason)))?
     {
-        return Ok(PreparedCurvedResult::CylindricalBoss(Box::new(boss)));
+        return Ok(PreparedCurvedResult::CappedCylinder(Box::new(feature)));
     }
     prepare_band_proposals(cylinder, cuts, selected).map(PreparedCurvedResult::CylindricalBands)
 }
@@ -964,7 +964,9 @@ fn commit_proposals(
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<CurvedBooleanPipelineOutcome> {
     match &proposals {
-        PreparedCurvedResult::CylindricalBoss(boss) => precharge_cylindrical_boss(boss, scope)?,
+        PreparedCurvedResult::CappedCylinder(feature) => {
+            precharge_capped_cylinder(feature, scope)?;
+        }
         PreparedCurvedResult::WholeSources(sources) => {
             precharge_whole_source_copies(edit, sources, scope)?;
         }
@@ -972,13 +974,13 @@ fn commit_proposals(
     }
     let mut transaction = edit.state.store.transaction().map_err(Error::from)?;
     let mut raw_bodies = match &proposals {
-        PreparedCurvedResult::CylindricalBoss(_) => Vec::with_capacity(1),
+        PreparedCurvedResult::CappedCylinder(_) => Vec::with_capacity(1),
         PreparedCurvedResult::CylindricalBands(bands) => Vec::with_capacity(bands.len()),
         PreparedCurvedResult::WholeSources(sources) => Vec::with_capacity(sources.len()),
     };
     match proposals {
-        PreparedCurvedResult::CylindricalBoss(proposal) => {
-            let body = match transaction.assemble_cylindrical_boss_solid(&proposal.into_input()) {
+        PreparedCurvedResult::CappedCylinder(proposal) => {
+            let body = match transaction.assemble_capped_cylinder_solid(&proposal.into_input()) {
                 Ok(output) => output.body(),
                 Err(kcore::error::Error::InvalidGeometry { reason }) => {
                     return refused(CurvedBooleanPipelineRefusal::AssemblyContract(reason));
@@ -1039,9 +1041,9 @@ fn commit_proposals(
     ))
 }
 
-/// Charge a source-size-exact conservative bound before boss allocation.
-fn precharge_cylindrical_boss(
-    proposal: &PreparedCylindricalBoss,
+/// Charge a source-size-exact conservative bound before capped-feature allocation.
+fn precharge_capped_cylinder(
+    proposal: &PreparedCappedCylinder,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<()> {
     let vertices = u64::try_from(proposal.host_vertices()).map_err(|_| work_overflow())?;
@@ -1210,6 +1212,7 @@ fn refused<T>(refusal: CurvedBooleanPipelineRefusal) -> StageResult<T> {
 mod tests {
     use kgeom::frame::Frame;
     use kgeom::vec::{Point3, Vec3};
+    use ktopo::check::CheckOutcome;
     use ktopo::entity::RegionKind;
 
     use super::*;
@@ -1234,6 +1237,64 @@ mod tests {
             .faces
             .reverse();
         transaction.commit_checked_body(body.raw()).unwrap();
+    }
+
+    #[test]
+    fn capped_features_ignore_operand_and_face_storage_order() {
+        for (operation, cylinder_first) in [
+            (PlanarBooleanOperation::Unite, false),
+            (PlanarBooleanOperation::Unite, true),
+            (PlanarBooleanOperation::Subtract, false),
+        ] {
+            let mut session = Kernel::new().create_session();
+            let part = session.create_part();
+            let (block, cylinder) = {
+                let mut edit = session.edit_part(part.clone()).unwrap();
+                let block = edit
+                    .create_block(BlockRequest::new(Frame::world(), [4.0, 4.0, 2.0]))
+                    .unwrap()
+                    .into_result()
+                    .unwrap()
+                    .body();
+                let cylinder = edit
+                    .create_cylinder(CylinderRequest::new(Frame::world(), 0.75, 2.0))
+                    .unwrap()
+                    .into_result()
+                    .unwrap()
+                    .body();
+                reverse_body_face_storage(&mut edit, &block);
+                reverse_body_face_storage(&mut edit, &cylinder);
+                (block, cylinder)
+            };
+            let (left, right) = if cylinder_first {
+                (cylinder, block)
+            } else {
+                (block, cylinder)
+            };
+            let outcome = super::super::dispatch::execute_boolean(
+                &mut session.edit_part(part).unwrap(),
+                operation,
+                left,
+                right,
+                crate::OperationSettings::new(),
+            )
+            .unwrap()
+            .into_result()
+            .unwrap();
+            let super::super::dispatch::BooleanPipelineOutcome::Curved(
+                CurvedBooleanPipelineOutcome::Committed(committed),
+            ) = outcome
+            else {
+                panic!("expected committed capped feature, got {outcome:?}")
+            };
+            assert_eq!(committed.bodies.len(), 1);
+            assert!(
+                committed
+                    .full_checks
+                    .iter()
+                    .all(|check| check.report().outcome() == CheckOutcome::Valid)
+            );
+        }
     }
 
     #[test]

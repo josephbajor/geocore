@@ -38,7 +38,7 @@
 //! - [`cylindrical_band`] — proof-ready finite cylindrical-band assembly for
 //!   semantic builders retaining whole Plane/Cylinder rings.
 //! - [`cylindrical_boss`] — proof-ready attachment of one capped cylindrical
-//!   boss to a convex planar host face.
+//!   boss or blind pocket to a convex planar host face.
 //! - [`profile`] — validated planar inputs shared by sheet and feature builders.
 //! - [`tolerance`] — entity tolerance provenance and growth contracts.
 //! - [`check`] — the body checker (structural + geometric invariants).

@@ -14,9 +14,10 @@ The current facade supports:
 - bounded, operation-accounted surface evaluation; and
 - failure-atomic block/block unite/intersect/subtract plus axial
   convex-planar/finite-cylinder intersection, finite-cylinder-minus-planar
-  remainder bands, and zero-cut truth-selected whole-source union/subtraction
-  copies plus one-ring axial cap-overlap connected union, with typed
-  empty/created/refused outcomes and Full validation;
+  remainder bands, zero-cut truth-selected whole-source union/subtraction
+  copies, one-ring axial cap-overlap connected union, and one-ring axial
+  block-minus-cylinder blind pockets, with typed empty/created/refused outcomes
+  and Full validation;
 - atomic typed X_T import and deterministic X_T export; and
 - deterministic facade-ID mutation, lineage, and tolerance journal iteration;
   and

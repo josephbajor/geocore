@@ -58,6 +58,7 @@ KERNEL_PACKAGE_FILES = {
     "src/view/mod.rs",
     "src/view/part.rs",
     "tests/lifecycle.rs",
+    "tests/lifecycle/curved_one_port_budget.rs",
 }
 
 

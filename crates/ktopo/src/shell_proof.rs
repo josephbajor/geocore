@@ -442,13 +442,16 @@ struct BossRingBoundary {
 }
 
 /// Certify a convex planar host with one strictly contained circular port and
-/// one outward capped cylindrical band attached to that port.
+/// one capped cylindrical band attached to that port.
 ///
 /// The proof reconstructs the virtual closed convex host from the polygonal
 /// outer loop of the punctured face, proves the cylinder/circle/plane lifts
-/// over both complete ring edges, and uses the port support plane to separate
-/// the host and boss interiors. Recognition is topology and geometry driven;
-/// no constructor identity or face storage order participates.
+/// over both complete ring edges, and derives outward-boss versus inward-pocket
+/// placement from the port endpoint and oriented support plane. An inward
+/// segment additionally proves both complete endpoint circles strictly inside
+/// every non-port host support, which proves its full axial sweep lies inside
+/// the virtual convex host. Recognition is topology and geometry driven; no
+/// constructor identity, operation tag, or face storage order participates.
 fn certify_cylindrical_boss_shell(
     store: &Store,
     shell_id: ShellId,
@@ -497,19 +500,21 @@ fn certify_cylindrical_boss_shell(
         Some(PredicateOrientation::Negative) => (boundaries[1], boundaries[0]),
         _ => return Ok(None),
     };
-    if !low.side_traverses_positive_u || high.side_traverses_positive_u {
-        return Ok(Some(ShellCertification {
-            embedding: ShellEmbedding::Certified,
-            orientation: ShellOrientation::Invalid,
-        }));
-    }
-
-    let port_face = store.get(low.planar_face)?;
-    let cap_face = store.get(high.planar_face)?;
+    let low_face = store.get(low.planar_face)?;
+    let high_face = store.get(high.planar_face)?;
+    let (port, cap) = if low_face.loops.len() == 2 && high_face.loops.len() == 1 {
+        (low, high)
+    } else if high_face.loops.len() == 2 && low_face.loops.len() == 1 {
+        (high, low)
+    } else {
+        return Ok(None);
+    };
+    let port_face = store.get(port.planar_face)?;
+    let cap_face = store.get(cap.planar_face)?;
     if port_face.loops.len() != 2
-        || !port_face.loops.contains(&low.planar_loop)
-        || cap_face.loops.as_slice() != [high.planar_loop]
-        || certify_face_loop_layout(store, low.planar_face)? != LoopContainment::Certified
+        || !port_face.loops.contains(&port.planar_loop)
+        || cap_face.loops.as_slice() != [cap.planar_loop]
+        || certify_face_loop_layout(store, port.planar_face)? != LoopContainment::Certified
     {
         return Ok(None);
     }
@@ -517,40 +522,53 @@ fn certify_cylindrical_boss_shell(
         .loops
         .iter()
         .copied()
-        .find(|loop_id| *loop_id != low.planar_loop)
+        .find(|loop_id| *loop_id != port.planar_loop)
     else {
         return Ok(None);
     };
     let Some(port_vertices) =
-        convex_planar_face_loop_vertices(store, low.planar_face, port_outer_loop)?
+        convex_planar_face_loop_vertices(store, port.planar_face, port_outer_loop)?
     else {
         return Ok(None);
     };
 
-    let low_orientation = certify_loop_orientation(store, low.planar_face, low.planar_loop)?;
-    let high_orientation = certify_loop_orientation(store, high.planar_face, high.planar_loop)?;
+    let port_orientation = certify_loop_orientation(store, port.planar_face, port.planar_loop)?;
+    let cap_orientation = certify_loop_orientation(store, cap.planar_face, cap.planar_loop)?;
     let expected_port_positive = !port_face.sense.is_forward();
     let expected_cap_positive = cap_face.sense.is_forward();
-    if low_orientation.is_none_or(|orientation| {
+    let loop_orientation_invalid = port_orientation.is_none_or(|orientation| {
         (orientation == PredicateOrientation::Positive) != expected_port_positive
-    }) || high_orientation.is_none_or(|orientation| {
+    }) || cap_orientation.is_none_or(|orientation| {
         (orientation == PredicateOrientation::Positive) != expected_cap_positive
-    }) {
-        return Ok(Some(ShellCertification {
-            embedding: ShellEmbedding::Certified,
-            orientation: ShellOrientation::Invalid,
-        }));
-    }
+    });
 
-    let port_outward = oriented_axis_alignment(low.planar_axis_alignment, port_face.sense);
-    let cap_outward = oriented_axis_alignment(high.planar_axis_alignment, cap_face.sense);
-    let orientation_invalid =
-        side_face.sense != Sense::Forward || port_outward != Some(1) || cap_outward != Some(1);
+    let Some(port_outward) = oriented_axis_alignment(port.planar_axis_alignment, port_face.sense)
+    else {
+        return Ok(None);
+    };
+    let Some(cap_outward) = oriented_axis_alignment(cap.planar_axis_alignment, cap_face.sense)
+    else {
+        return Ok(None);
+    };
+    let cap_direction = if cap.edge == high.edge { 1 } else { -1 };
+    let outward_feature = cap_direction == port_outward;
+    let expected_side_sense = if outward_feature {
+        Sense::Forward
+    } else {
+        Sense::Reversed
+    };
+    let expected_low_traversal = side_face.sense == Sense::Forward;
+    let expected_high_traversal = side_face.sense == Sense::Reversed;
+    let orientation_invalid = loop_orientation_invalid
+        || side_face.sense != expected_side_sense
+        || low.side_traverses_positive_u != expected_low_traversal
+        || high.side_traverses_positive_u != expected_high_traversal
+        || cap_outward != port_outward;
 
     let mut host_facets = Vec::with_capacity(shell.faces.len() - 2);
-    host_facets.push((low.planar_face, port_vertices));
+    host_facets.push((port.planar_face, port_vertices));
     for &face_id in &shell.faces {
-        if face_id == side_face_id || face_id == low.planar_face || face_id == high.planar_face {
+        if face_id == side_face_id || face_id == port.planar_face || face_id == cap.planar_face {
             continue;
         }
         let Some(vertices) = convex_planar_face_vertices(store, face_id)? else {
@@ -559,6 +577,19 @@ fn certify_cylindrical_boss_shell(
         host_facets.push((face_id, vertices));
     }
     if host_facets.len() + 2 != shell.faces.len() {
+        return Ok(None);
+    }
+    if !outward_feature
+        && !certify_inward_capped_segment_in_host(
+            store,
+            cylinder,
+            low.center,
+            high.center,
+            port,
+            cap,
+            &host_facets,
+        )?
+    {
         return Ok(None);
     }
     let host = certify_convex_planar_facets(store, host_facets, scope)?;
@@ -573,6 +604,75 @@ fn certify_cylindrical_boss_shell(
             ShellOrientation::Positive
         },
     }))
+}
+
+fn certify_inward_capped_segment_in_host(
+    store: &Store,
+    cylinder: Cylinder,
+    low_center: Point3,
+    high_center: Point3,
+    port: BossRingBoundary,
+    cap: BossRingBoundary,
+    host_facets: &[(FaceId, Vec<VertexId>)],
+) -> Result<bool> {
+    for (face_id, _) in host_facets {
+        let face = store.get(*face_id)?;
+        let SurfaceGeom::Plane(plane) = store.get(face.surface)? else {
+            return Ok(false);
+        };
+        let outward = plane.frame().z() * sense_factor(face.sense);
+        if *face_id == port.planar_face {
+            if exact_affine_sign(outward, port.center, plane.frame().origin())
+                != Some(PredicateOrientation::Zero)
+                || exact_affine_sign(outward, cap.center, plane.frame().origin())
+                    != Some(PredicateOrientation::Negative)
+                || exact_vector_dot(outward, cylinder.frame().x())
+                    != Some(PredicateOrientation::Zero)
+                || exact_vector_dot(outward, cylinder.frame().y())
+                    != Some(PredicateOrientation::Zero)
+            {
+                return Ok(false);
+            }
+            continue;
+        }
+        for center in [low_center, high_center] {
+            if exact_affine_sign(outward, center, plane.frame().origin())
+                != Some(PredicateOrientation::Negative)
+                || !certify_circle_strictly_inside_support(
+                    outward,
+                    plane.frame().origin(),
+                    cylinder,
+                    center,
+                )
+            {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn certify_circle_strictly_inside_support(
+    outward: Vec3,
+    support_origin: Point3,
+    cylinder: Cylinder,
+    center: Point3,
+) -> bool {
+    let signed = interval_vector_dot(outward, center - support_origin);
+    if signed.hi() >= 0.0 {
+        return false;
+    }
+    let radius = Interval::point(cylinder.radius());
+    let radial_x = interval_vector_dot(outward, cylinder.frame().x()) * radius;
+    let radial_y = interval_vector_dot(outward, cylinder.frame().y()) * radius;
+    let radial_squared = radial_x.square() + radial_y.square();
+    radial_squared.hi() < signed.square().lo()
+}
+
+fn interval_vector_dot(left: Vec3, right: Vec3) -> Interval {
+    Interval::point(left.x) * Interval::point(right.x)
+        + Interval::point(left.y) * Interval::point(right.y)
+        + Interval::point(left.z) * Interval::point(right.z)
 }
 
 fn boss_ring_boundary(
