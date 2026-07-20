@@ -22,6 +22,8 @@ use kernel::{
 mod curved_cavity;
 #[path = "lifecycle/curved_one_port_budget.rs"]
 mod curved_one_port_budget;
+#[path = "lifecycle/curved_support_contact.rs"]
+mod curved_support_contact;
 #[path = "lifecycle/curved_two_port.rs"]
 mod curved_two_port;
 #[path = "lifecycle/curved_two_ring_union.rs"]

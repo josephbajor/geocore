@@ -4,7 +4,7 @@ Status: K1–K3, K5 adoption, and the landed K4 slices (typed X_T import/export,
 checked semantic edits — MVFS/KVFS, MEV/KEV, MEF/KEF, KFMRH/MFKRH, face split/merge, bridge/ring —
 rigid body copy with certificate reissuance, polygonal-profile extrusion, operation-owned tolerance
 batching, block/cylinder construction, the opt-in Full-assurance commit gate, facade body tessellation, public typed block/block Boolean outcomes plus axial intersection, cylinder-minus-block remainder bands, zero-cut
-truth-selected whole-source union/subtraction copies and contained-cylinder cavities, one-ring axial cap-overlap connected union, one-ring axial block-minus-cylinder blind pockets, two-port axial through-holes, and two-ring two-sided unions) are implemented;
+truth-selected whole-source union/subtraction copies and contained-cylinder cavities, one-ring axial cap-overlap connected union, one-ring axial block-minus-cylinder blind pockets, two-port axial through-holes, two-ring two-sided unions, and support-separated exact-contact empty intersections) are implemented;
 broader semantic edit families, transmitted-proof reissuance beyond the named families, partition
 history, and the C ABI remain.
 
@@ -277,8 +277,8 @@ signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handle
 - Broader semantic edit families beyond the landed MVFS/KVFS, MEV/KEV, MEF/KEF, KFMRH/MFKRH,
   split/merge, bridge/ring, and rigid copy; nested edit transactions pending a journal-composition +
   partition-history contract; tolerance-propagation policies beyond MEF inheritance / KEF ordered max.
-- Extend the landed deterministic-X_T axial, zero-cut whole-source/contained-cylinder-cavity, one-ring union/pocket, two-port hole, and two-ring two-sided union block/cylinder slice to other connected curved unions,
-  broader contacts and multi-component layouts, and curved licensed-host evidence without exposing lower-layer
+- Extend the landed deterministic-X_T axial, zero-cut whole-source/cavity, host-feature, two-port-hole, two-ring-union, and support-separated-contact block/cylinder slice to inverse-containment mixed-shell cavities,
+  constructive/full-ring and bounded-arc contacts/layouts, and curved licensed-host evidence without exposing lower-layer
   symbolic fragments, graph descriptors, or raw candidate topology.
 - Rigid-copy preflight gaps: altered/witness-mismatched higher-order charts, graph-valid shared-basis
   or periodic-source/carrier proofs, other-sample dual offsets, nested five-/seven-sample roots, and

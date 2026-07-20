@@ -76,7 +76,7 @@ journals.
 | M2.5 Architecture gate | IN PROGRESS / REQUIRED | Pcurves, tolerant edges, tolerance provenance, checked assembly, journals landed; seam/pole interchange fixtures, remaining Full-proof gaps, and tolerance-propagation policies remain. |
 | M3 X_T | IN PROGRESS | Modern-schema subset reads/writes with host-certified conventions; production coverage and re-certification remain (see [oracle-loop.md](oracle-loop.md)). |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases with explicit Complete/Indeterminate evidence plus first modeling consumers; general certified CC/CS/SSI does not exist yet. |
-| M5 Analytic booleans | IMPLEMENTED SLICE | Public block/block CSG is Full-checked, atomic, deterministic, and licensed-host validated. Axial rings drive block/cylinder intersections, remainder bands, one-ring union/pockets, two-port holes, and two-ring two-sided unions; zero-cut selection copies boundaries and creates cylinder cavities. Other unions, contacts/layouts, and curved external evidence remain. |
+| M5 Analytic booleans | IMPLEMENTED SLICE | Public block/block CSG is atomic, Full-checked, deterministic, host-validated. Axial rings drive block/cylinder intersections, bands, host features, and two-ring unions; zero-cut selection copies boundaries and creates cylinder cavities; support separation proves exact-contact intersections empty. Inverse cavities, constructive/arc contacts, broader layouts, and curved external evidence remain. |
 | M6–M8 | NOT STARTED | General modeling, blends, stable API, and production hardening remain. |
 
 ## Reconciled critical path
@@ -313,11 +313,11 @@ subtraction, copies every zero-cut truth-selected complete source boundary for
 union/subtraction, creates zero-cut contained finite-cylinder cavities, and
 assembles one-ring axial cap-overlap unions and blind pockets, two-port axial
 through-holes, and two-ring two-sided unions as Full-certified cylindrical host
-features. It proves zero-cut
-disjoint intersections empty and refuses unsupported curved truth/topology
+features. It proves zero-cut disjoint and support-separated axial exact-contact
+intersections empty, and refuses unsupported curved truth/topology
 classes before allocation. The results export deterministically and self-import
-Fast-valid. Other connected curved unions, broader contacts and
-multi-component layouts, and the curved licensed-host evidence gate remain.
+Fast-valid. Inverse-containment mixed-shell cavities, constructive/full-ring
+and bounded-arc contacts/layouts, and the curved licensed-host evidence gate remain.
 
 Do not wait for an exhaustive analytic pair table before testing the end-to-end
 boolean architecture. Begin with a deliberately narrow vertical slice as soon as the

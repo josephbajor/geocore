@@ -7,8 +7,9 @@
 //! rigid copy, body checking and tessellation, operation-scoped surface
 //! evaluation, certified convex-planar plus axial, zero-cut whole-source and
 //! contained-cylinder cavity, one-ring connected-union/blind-pocket, two-port
-//! through-hole, and two-ring two-sided connected-union curved body Booleans,
-//! and typed X_T import/export plus graph-owned bounded curve intersection
+//! through-hole, two-ring two-sided connected-union, and support-separated
+//! exact-contact empty intersections, and typed X_T import/export plus
+//! graph-owned bounded curve intersection
 //! with F2 reports and delegated classified errors. Rigid copies own disjoint
 //! topology and geometry closures and retain exact `DerivedFrom` lineage. Committed
 //! mutation, lineage, tolerance-growth, and descriptive face-tolerance

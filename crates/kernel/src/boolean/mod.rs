@@ -34,6 +34,8 @@ mod curved_realize;
 #[allow(dead_code)]
 mod curved_source;
 #[allow(dead_code)]
+mod curved_support_separation;
+#[allow(dead_code)]
 mod dispatch;
 #[allow(dead_code)]
 mod extract;

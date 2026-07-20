@@ -155,6 +155,7 @@ impl ExtractedSourceVertex {
 /// Deterministic semantic input for one operand of the exact planar BSP.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ExtractedPlanarSourceBody {
+    interior_sample: Point3,
     planes: Vec<SourcePlane>,
     faces: Vec<ExtractedSourceFace>,
     edges: Vec<ExtractedSourceEdge>,
@@ -163,6 +164,11 @@ pub(crate) struct ExtractedPlanarSourceBody {
 }
 
 impl ExtractedPlanarSourceBody {
+    /// Strict material-side witness shared by cross-operand support proofs.
+    pub(crate) const fn interior_sample(&self) -> Point3 {
+        self.interior_sample
+    }
+
     pub(crate) fn planes(&self) -> &[SourcePlane] {
         &self.planes
     }
@@ -262,6 +268,7 @@ pub(crate) fn extract_planar_source_body(
         .collect();
 
     Ok(ExtractedPlanarSourceBody {
+        interior_sample,
         planes,
         faces,
         edges,

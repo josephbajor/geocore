@@ -24,6 +24,7 @@ KERNEL_PACKAGE_FILES = {
     "src/boolean/curved_pipeline.rs",
     "src/boolean/curved_realize.rs",
     "src/boolean/curved_source.rs",
+    "src/boolean/curved_support_separation.rs",
     "src/boolean/dispatch.rs",
     "src/boolean/component_layout.rs",
     "src/boolean/components.rs",
@@ -63,6 +64,7 @@ KERNEL_PACKAGE_FILES = {
     "tests/lifecycle.rs",
     "tests/lifecycle/curved_cavity.rs",
     "tests/lifecycle/curved_one_port_budget.rs",
+    "tests/lifecycle/curved_support_contact.rs",
     "tests/lifecycle/curved_two_port.rs",
     "tests/lifecycle/curved_two_ring_union.rs",
 }

@@ -27,6 +27,7 @@ use super::curved_realize::{CurvedRealizationRequest, realize_selected_result};
 use super::curved_source::{
     CertifiedCylinderSource, CylinderSourceGap, CylinderSourceOutcome, extract_cylinder_source,
 };
+use super::curved_support_separation::certify_cylinder_in_closed_host_exterior;
 use super::extract::{
     ExtractedPlanarSourceBody, PlanarSourceExtractionError, PlanarSourceGap,
     PlanarSourceProofFailure, extract_planar_source_body,
@@ -386,6 +387,17 @@ fn execute_stages(
         )?;
         (planar, cylinder)
     };
+
+    if operation == PlanarBooleanOperation::Intersect
+        && certify_cylinder_in_closed_host_exterior(
+            &edit.state.store,
+            &planar_source,
+            &cylinder_source,
+            scope,
+        )?
+    {
+        return Ok(CurvedBooleanPipelineOutcome::ProvenEmpty);
+    }
 
     let graph = section_bodies_in_scope(&edit.as_part(), &bodies[0], &bodies[1], linear, scope)?;
     let cuts = certify_section_rings(&graph, planar_operand, cylinder_operand, &cylinder_source)?;
