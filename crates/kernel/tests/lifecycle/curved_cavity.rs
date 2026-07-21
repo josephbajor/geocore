@@ -46,6 +46,30 @@ fn public_contained_cylinder_subtraction_commits_an_exact_two_shell_cavity() {
     );
 
     let part = fixture.session.part(fixture.part.clone()).unwrap();
+    let properties_query = || {
+        part.body_properties(kernel::BodyPropertiesRequest::new(body.clone()))
+            .unwrap()
+    };
+    let properties_outcome = properties_query();
+    assert_eq!(properties_query(), properties_outcome);
+    let kernel::BodyPropertiesOutcome::Certified {
+        properties,
+        full_check,
+    } = properties_outcome.into_result().unwrap()
+    else {
+        panic!("Full-valid exact cavity properties were refused")
+    };
+    assert_eq!(full_check.outcome(), CheckOutcome::Valid);
+    assert!(
+        properties
+            .volume()
+            .contains(216.0 - core::f64::consts::PI * 0.75 * 0.75 * 2.0)
+    );
+    assert!(
+        properties
+            .surface_area()
+            .contains(216.0 + 2.0 * core::f64::consts::PI * 0.75 * (0.75 + 2.0))
+    );
     let body_view = part.body(body.clone()).unwrap();
     let regions = body_view.regions().collect::<Vec<_>>();
     assert_eq!(regions.len(), 3);

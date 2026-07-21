@@ -53,7 +53,7 @@
 //! - [`tolerance`] — entity tolerance provenance and growth contracts.
 //! - [`check`] — the body checker (structural + geometric invariants).
 //! - [`btess`] — conforming whole-body solid and sheet tessellation.
-//! - [`body_properties`] — Full-gated analytic solid volume and centroid enclosures.
+//! - [`body_properties`] — Full-gated analytic solid volume, centroid, and area enclosures.
 //! - [`domain`] — certified conservative face UV work-box construction.
 //! - `loop_proof` / `shell_proof` / `planar_shell_proof` — checker-v2 whole-entity certificates
 //!   kept private until their representation coverage is production-ready.

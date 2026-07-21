@@ -537,6 +537,28 @@ fn cap_crossing_segment_volume() -> f64 {
     segment_area * CYLINDER_HEIGHT
 }
 
+fn expected_surface_area(operation: BooleanOperation, case: CapCrossingCase) -> f64 {
+    let chord = 2.0 * ROOT_Y;
+    let theta = (OFFSET_X / RADIUS).acos();
+    let arc = 2.0 * RADIUS * theta;
+    let segment = RADIUS * RADIUS * theta - OFFSET_X * ROOT_Y;
+    let block =
+        2.0 * ((OUTER_X - OFFSET_X) * BLOCK_Y + (OUTER_X - OFFSET_X) * BLOCK_Z + BLOCK_Y * BLOCK_Z);
+    let cylinder = 2.0 * core::f64::consts::PI * RADIUS * (RADIUS + CYLINDER_HEIGHT);
+    let intersection = 2.0 * segment + CYLINDER_HEIGHT * (chord + arc);
+    match operation {
+        BooleanOperation::Intersect => intersection,
+        BooleanOperation::Unite => block + cylinder - intersection,
+        BooleanOperation::Subtract if case.swapped => {
+            cylinder - 2.0 * segment - CYLINDER_HEIGHT * arc + CYLINDER_HEIGHT * chord
+        }
+        BooleanOperation::Subtract => {
+            block - CYLINDER_HEIGHT * chord + CYLINDER_HEIGHT * arc + 2.0 * segment
+        }
+        _ => panic!("unsupported test operation {operation:?}"),
+    }
+}
+
 fn expected_centroid_x(operation: BooleanOperation, case: CapCrossingCase) -> f64 {
     let intersection_volume = cap_crossing_segment_volume();
     let intersection_first_moment = 8.0 * 2.0_f64.sqrt() / 3.0;
@@ -696,6 +718,13 @@ fn assert_cap_crossing_operation(
         case.name,
         properties.volume(),
     );
+    let expected_area = expected_surface_area(operation, case);
+    assert!(
+        properties.surface_area().contains(expected_area),
+        "{} {operation:?}: expected area {expected_area:.17e}, enclosure {:?}",
+        case.name,
+        properties.surface_area(),
+    );
     let expected_centroid = fixture.frame.point_at(
         expected_centroid_x(operation, case),
         0.0,
@@ -718,6 +747,12 @@ fn assert_cap_crossing_operation(
         "{} {operation:?}: loose centroid enclosure {:?}",
         case.name,
         properties.centroid(),
+    );
+    assert!(
+        properties.surface_area().error_bound() <= expected_area.max(1.0) * 1.0e-10,
+        "{} {operation:?}: loose area enclosure {:?}",
+        case.name,
+        properties.surface_area(),
     );
     let mesh = part
         .tessellate_body(TessellateBodyRequest::new(

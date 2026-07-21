@@ -1,4 +1,4 @@
-//! Facade-safe certified volume and centroid interrogation.
+//! Facade-safe certified solid-body property interrogation.
 
 use kcore::operation::OperationScope;
 
@@ -7,7 +7,7 @@ use crate::operation::{OperationOutcome, OperationSettings, adapt_check_report};
 use crate::session::Part;
 use crate::{BodyId, CapabilityId, CheckReport, FaceId, PartId, Point3};
 
-/// Typed request for certified solid-body volume and centroid.
+/// Typed request for certified solid-body volume, centroid, and surface area.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BodyPropertiesRequest {
     body: BodyId,
@@ -138,6 +138,7 @@ pub struct BodyProperties {
     body: BodyId,
     volume: ScalarEnclosure,
     centroid: Point3Enclosure,
+    surface_area: ScalarEnclosure,
 }
 
 impl BodyProperties {
@@ -154,6 +155,11 @@ impl BodyProperties {
     /// Certified model-space centroid enclosure.
     pub const fn centroid(&self) -> Point3Enclosure {
         self.centroid
+    }
+
+    /// Certified positive area of the complete material boundary.
+    pub const fn surface_area(&self) -> ScalarEnclosure {
+        self.surface_area
     }
 }
 
@@ -184,6 +190,8 @@ pub enum BodyPropertiesRefusal {
     },
     /// Outward arithmetic did not prove a finite strictly positive volume.
     NonPositiveVolumeEnclosure,
+    /// Oriented face-domain integration did not prove positive boundary area.
+    NonPositiveSurfaceAreaEnclosure,
 }
 
 impl BodyPropertiesRefusal {
@@ -196,7 +204,10 @@ impl BodyPropertiesRefusal {
             | Self::UncertifiedAnalyticBoundary { .. } => {
                 Some(capability::ANALYTIC_BODY_PROPERTIES)
             }
-            Self::NonSolidBody | Self::BodyNotFullValid | Self::NonPositiveVolumeEnclosure => None,
+            Self::NonSolidBody
+            | Self::BodyNotFullValid
+            | Self::NonPositiveVolumeEnclosure
+            | Self::NonPositiveSurfaceAreaEnclosure => None,
         }
     }
 }
@@ -246,7 +257,7 @@ impl BodyPropertiesOutcome {
 }
 
 impl Part<'_> {
-    /// Certify one body's volume and centroid in a single operation scope.
+    /// Certify one body's volume, centroid, and surface area in one scope.
     ///
     /// Wrong-part and stale identities plus invalid or incomplete policy
     /// configuration are rejected before the scope starts. The Full checker
@@ -294,6 +305,7 @@ fn adapt_outcome(
                 body,
                 volume: ScalarEnclosure::from_lower(properties.volume()),
                 centroid: Point3Enclosure::from_lower(properties.centroid()),
+                surface_area: ScalarEnclosure::from_lower(properties.surface_area()),
             },
             full_check: adapt_check_report(part, store, full_check)?,
         },
@@ -337,6 +349,9 @@ fn adapt_refusal(
         }
         ktopo::body_properties::BodyPropertiesRefusal::NonPositiveVolumeEnclosure => {
             BodyPropertiesRefusal::NonPositiveVolumeEnclosure
+        }
+        ktopo::body_properties::BodyPropertiesRefusal::NonPositiveSurfaceAreaEnclosure => {
+            BodyPropertiesRefusal::NonPositiveSurfaceAreaEnclosure
         }
     }
 }
@@ -403,6 +418,7 @@ mod tests {
                 .unwrap(),
         );
         assert!(block.volume().contains(24.0));
+        assert!(block.surface_area().contains(52.0));
         assert!(
             block.centroid().contains(Point3::new(0.0, 0.0, 0.0)),
             "{:?}",
@@ -421,6 +437,11 @@ mod tests {
                 .contains(core::f64::consts::PI * 1.5 * 1.5 * 2.0)
         );
         assert!(
+            cylinder
+                .surface_area()
+                .contains(2.0 * core::f64::consts::PI * 1.5 * (1.5 + 2.0))
+        );
+        assert!(
             cylinder.centroid().contains(Point3::new(0.0, 0.0, 1.0)),
             "{:?}",
             cylinder.centroid()
@@ -433,8 +454,10 @@ mod tests {
                 .unwrap(),
         );
         assert!(translated.volume().contains(24.0));
+        assert!((translated.surface_area().value() - 52.0).abs() <= 1.0e-12);
         assert!(translated.centroid().contains(translated_frame.origin()));
         assert!(translated.centroid().error_bound() <= 1.0e-10);
+        assert!(translated.surface_area().error_bound() <= 1.0e-10);
     }
 
     #[test]

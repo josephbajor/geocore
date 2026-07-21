@@ -1,4 +1,4 @@
-//! Certified volume and centroid interrogation for analytic solid B-reps.
+//! Certified volume, centroid, and surface-area interrogation for analytic solid B-reps.
 //!
 //! This module integrates the committed, oriented boundary representation; it
 //! never promotes a tessellated approximation into geometric authority.  The
@@ -37,10 +37,10 @@ pub const BODY_PROPERTIES_ANALYTIC_WORK: StageId =
     known_stage("ktopo.interrogate.body-properties-analytic-work");
 
 const DEFAULT_ANALYTIC_WORK: u64 = 1_048_576;
-const PLANE_LINE_WORK: u64 = 64;
-const PLANE_CIRCLE_WORK: u64 = 192;
-const CYLINDER_LINE_WORK: u64 = 512;
-const CYLINDER_CIRCLE_WORK: u64 = 512;
+const PLANE_LINE_WORK: u64 = 80;
+const PLANE_CIRCLE_WORK: u64 = 240;
+const CYLINDER_LINE_WORK: u64 = 640;
+const CYLINDER_CIRCLE_WORK: u64 = 640;
 
 /// Aggregate v1 policy for Full validation followed by analytic properties.
 #[derive(Debug, Clone, Copy, Default)]
@@ -140,11 +140,12 @@ impl Point3Enclosure {
     }
 }
 
-/// Certified volume and centroid of one solid body.
+/// Certified volume, centroid, and boundary area of one solid body.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CertifiedBodyProperties {
     volume: ScalarEnclosure,
     centroid: Point3Enclosure,
+    surface_area: ScalarEnclosure,
 }
 
 impl CertifiedBodyProperties {
@@ -156,6 +157,11 @@ impl CertifiedBodyProperties {
     /// Certified model-space centroid enclosure.
     pub const fn centroid(self) -> Point3Enclosure {
         self.centroid
+    }
+
+    /// Certified positive area of the complete material boundary.
+    pub const fn surface_area(self) -> ScalarEnclosure {
+        self.surface_area
     }
 }
 
@@ -185,6 +191,8 @@ pub enum BodyPropertiesRefusal {
     },
     /// Outward arithmetic did not prove a finite strictly positive volume.
     NonPositiveVolumeEnclosure,
+    /// Oriented face-domain integration did not prove positive boundary area.
+    NonPositiveSurfaceAreaEnclosure,
 }
 
 /// Full-check evidence paired with either certified properties or a refusal.
@@ -271,7 +279,7 @@ pub fn body_properties_analytic_work(store: &Store, body: BodyId) -> Result<u64>
         })
 }
 
-/// Full-validate and certify volume/centroid in one caller-owned scope.
+/// Full-validate and certify volume, centroid, and surface area in one caller-owned scope.
 pub fn certify_body_properties_in_scope(
     store: &Store,
     body: BodyId,
@@ -337,6 +345,38 @@ impl Flux {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SpanIntegral {
+    signed_parameter_area: Interval,
+    flux: Flux,
+}
+
+impl SpanIntegral {
+    fn zero() -> Self {
+        Self {
+            signed_parameter_area: Interval::point(0.0),
+            flux: Flux::zero(),
+        }
+    }
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            signed_parameter_area: self.signed_parameter_area + other.signed_parameter_area,
+            flux: self.flux.add(other.flux),
+        }
+    }
+
+    fn finite(self) -> bool {
+        finite_interval(self.signed_parameter_area) && self.flux.finite()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FaceIntegral {
+    surface_area: Interval,
+    flux: Flux,
+}
+
 fn integrate_body(
     store: &Store,
     body: BodyId,
@@ -384,15 +424,20 @@ fn integrate_body(
 
     let anchor = canonical_anchor(store, &faces)?;
     let mut total = Flux::zero();
+    let mut surface_area = Interval::point(0.0);
     for face_id in faces {
-        let face_flux = integrate_face(store, face_id, anchor)?;
-        total = total.add(face_flux);
-        if !total.finite() {
+        let face = integrate_face(store, face_id, anchor)?;
+        total = total.add(face.flux);
+        surface_area = surface_area + face.surface_area;
+        if !total.finite() || !finite_interval(surface_area) {
             return Err(BodyPropertiesRefusal::UncertifiedAnalyticBoundary { face: face_id });
         }
     }
     if !finite_interval(total.volume) || total.volume.lo() <= 0.0 {
         return Err(BodyPropertiesRefusal::NonPositiveVolumeEnclosure);
+    }
+    if !finite_interval(surface_area) || surface_area.lo() <= 0.0 {
+        return Err(BodyPropertiesRefusal::NonPositiveSurfaceAreaEnclosure);
     }
     let centroid = [
         total.moment[0]
@@ -414,7 +459,14 @@ fn integrate_body(
     let Some(centroid) = Point3Enclosure::from_intervals([cx, cy, cz]) else {
         return Err(BodyPropertiesRefusal::NonPositiveVolumeEnclosure);
     };
-    Ok(CertifiedBodyProperties { volume, centroid })
+    let Some(surface_area) = ScalarEnclosure::from_interval(surface_area) else {
+        return Err(BodyPropertiesRefusal::NonPositiveSurfaceAreaEnclosure);
+    };
+    Ok(CertifiedBodyProperties {
+        volume,
+        centroid,
+        surface_area,
+    })
 }
 
 fn canonical_anchor(
@@ -456,14 +508,14 @@ fn integrate_face(
     store: &Store,
     face_id: FaceId,
     anchor: Point3,
-) -> core::result::Result<Flux, BodyPropertiesRefusal> {
+) -> core::result::Result<FaceIntegral, BodyPropertiesRefusal> {
     let face = store
         .get(face_id)
         .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?;
     let surface = store
         .get(face.surface)
         .map_err(|_| BodyPropertiesRefusal::BodyNotFullValid)?;
-    let mut total = Flux::zero();
+    let mut total = SpanIntegral::zero();
     for &loop_id in &face.loops {
         let spans = prepare_property_loop(store, face_id, loop_id, surface)?;
         for span in spans {
@@ -479,7 +531,55 @@ fn integrate_face(
             }
         }
     }
-    Ok(total)
+    let orientation = if face.sense.is_forward() { 1.0 } else { -1.0 };
+    let parameter_area = total.signed_parameter_area * Interval::point(orientation);
+    if parameter_area.lo() <= 0.0 {
+        return Err(BodyPropertiesRefusal::UncertifiedAnalyticBoundary { face: face_id });
+    }
+    let jacobian = surface_area_jacobian(surface)
+        .ok_or(BodyPropertiesRefusal::UncertifiedAnalyticBoundary { face: face_id })?;
+    let surface_area = parameter_area * jacobian;
+    if !finite_interval(surface_area) || surface_area.lo() <= 0.0 {
+        return Err(BodyPropertiesRefusal::UncertifiedAnalyticBoundary { face: face_id });
+    }
+    Ok(FaceIntegral {
+        surface_area,
+        flux: total.flux,
+    })
+}
+
+fn surface_area_jacobian(surface: &SurfaceGeom) -> Option<Interval> {
+    // Frame axes have a semantic orthonormal contract. Hull the literal-f64
+    // metric with that contract value so both the stored arithmetic and the
+    // authored frame meaning remain enclosed after normalization roundoff.
+    match surface {
+        SurfaceGeom::Plane(plane) => {
+            let frame = plane.frame();
+            squared_norm(interval_cross(point_vec(frame.x()), point_vec(frame.y())))
+                .sqrt()
+                .map(|metric| interval_hull(metric, 1.0))
+        }
+        SurfaceGeom::Cylinder(cylinder) => {
+            let frame = cylinder.frame();
+            let x_cross_z = interval_cross(point_vec(frame.x()), point_vec(frame.z()));
+            let y_cross_z = interval_cross(point_vec(frame.y()), point_vec(frame.z()));
+            let a = squared_norm(x_cross_z);
+            let b = squared_norm(y_cross_z);
+            let c = interval_dot(x_cross_z, y_cross_z);
+            let half = interval_ratio(1.0, 2.0);
+            let mean = (a + b) * half;
+            let amplitude = (((b - a) * half).square() + c.square()).sqrt()?;
+            let lower = (mean - amplitude).lo().max(0.0);
+            let upper = (mean + amplitude).hi();
+            if !lower.is_finite() || !upper.is_finite() || lower > upper {
+                return None;
+            }
+            Interval::new(lower, upper)
+                .sqrt()
+                .map(|metric| interval_hull(metric, 1.0) * Interval::point(cylinder.radius()))
+        }
+        _ => None,
+    }
 }
 
 fn prepare_property_loop<'a>(
@@ -564,7 +664,7 @@ fn integrate_plane_span(
     plane: kgeom::surface::Plane,
     anchor: Point3,
     span: BoundedPcurveSpan<'_>,
-) -> Option<Flux> {
+) -> Option<SpanIntegral> {
     let frame = plane.frame();
     let x = frame.x();
     let y = frame.y();
@@ -584,6 +684,7 @@ fn integrate_plane_span(
                 Interval::point(line.dir().y),
             );
             let du = Interval::point(line.dir().x);
+            let signed_area = v.scale(-du).integrate(span.start(), span.end())?;
             let volume_poly = v.scale(-(h * interval_ratio(1.0, 3.0)) * du);
             let mut moment = [Interval::point(0.0); 3];
             for coordinate in 0..3 {
@@ -597,11 +698,14 @@ fn integrate_plane_span(
                     .scale(-(h * interval_ratio(1.0, 4.0)) * du);
                 moment[coordinate] = primitive.integrate(span.start(), span.end())?;
             }
-            let flux = Flux {
-                volume: volume_poly.integrate(span.start(), span.end())?,
-                moment,
+            let integral = SpanIntegral {
+                signed_parameter_area: signed_area,
+                flux: Flux {
+                    volume: volume_poly.integrate(span.start(), span.end())?,
+                    moment,
+                },
             };
-            flux.finite().then_some(flux)
+            integral.finite().then_some(integral)
         }
         Curve2dGeom::Circle(circle) => {
             let circle_x = circle.x_dir();
@@ -618,6 +722,10 @@ fn integrate_plane_span(
                 Interval::point(circle_y.y) * radius,
             );
             let du = u.derivative();
+            let signed_area = v
+                .scale_interval(Interval::point(-1.0))
+                .mul(du)
+                .integrate(span.start(), span.end())?;
             let volume_form = v.scale_interval(-(h * interval_ratio(1.0, 3.0))).mul(du);
             let mut moment = [Interval::point(0.0); 3];
             for coordinate in 0..3 {
@@ -632,11 +740,14 @@ fn integrate_plane_span(
                     .mul(du);
                 moment[coordinate] = primitive.integrate(span.start(), span.end())?;
             }
-            let flux = Flux {
-                volume: volume_form.integrate(span.start(), span.end())?,
-                moment,
+            let integral = SpanIntegral {
+                signed_parameter_area: signed_area,
+                flux: Flux {
+                    volume: volume_form.integrate(span.start(), span.end())?,
+                    moment,
+                },
             };
-            flux.finite().then_some(flux)
+            integral.finite().then_some(integral)
         }
         _ => None,
     }
@@ -646,7 +757,7 @@ fn integrate_cylinder_span(
     cylinder: kgeom::surface::Cylinder,
     anchor: Point3,
     span: BoundedPcurveSpan<'_>,
-) -> Option<Flux> {
+) -> Option<SpanIntegral> {
     let Curve2dGeom::Line(line) = span.curve() else {
         return None;
     };
@@ -677,13 +788,16 @@ fn integrate_cylinder_span(
     let u_origin = Interval::point(line.origin().x) + Interval::point(span.chart_offset().x);
     let u_direction = line.dir().x;
     if u_direction == 0.0 {
-        return Some(Flux::zero());
+        return Some(SpanIntegral::zero());
     }
     let v = Poly::affine_interval(
         Interval::point(line.origin().y) + Interval::point(span.chart_offset().y),
         Interval::point(line.dir().y),
     );
     let v2 = v.mul(v);
+    let signed_area = v
+        .scale(Interval::point(-u_direction))
+        .integrate(span.start(), span.end())?;
     let mut volume = ComplexInterval::zero();
     let mut moment = [ComplexInterval::zero(); 3];
     for power in -LAURENT_ORDER..=LAURENT_ORDER {
@@ -718,11 +832,14 @@ fn integrate_cylinder_span(
     if !volume.im.contains_zero() || moment.iter().any(|value| !value.im.contains_zero()) {
         return None;
     }
-    let flux = Flux {
-        volume: volume.re,
-        moment: [moment[0].re, moment[1].re, moment[2].re],
+    let integral = SpanIntegral {
+        signed_parameter_area: signed_area,
+        flux: Flux {
+            volume: volume.re,
+            moment: [moment[0].re, moment[1].re, moment[2].re],
+        },
     };
-    flux.finite().then_some(flux)
+    integral.finite().then_some(integral)
 }
 
 const POLY_DEGREE: usize = 3;
@@ -1131,6 +1248,10 @@ fn interval_product(left: f64, right: f64) -> Interval {
     Interval::point(left) * Interval::point(right)
 }
 
+fn interval_hull(value: Interval, point: f64) -> Interval {
+    Interval::new(value.lo().min(point), value.hi().max(point))
+}
+
 fn point_vec(value: Vec3) -> [Interval; 3] {
     [
         Interval::point(value.x),
@@ -1157,6 +1278,10 @@ fn interval_cross(left: [Interval; 3], right: [Interval; 3]) -> [Interval; 3] {
         left[2] * right[0] - left[0] * right[2],
         left[0] * right[1] - left[1] * right[0],
     ]
+}
+
+fn squared_norm(value: [Interval; 3]) -> Interval {
+    value[0].square() + value[1].square() + value[2].square()
 }
 
 fn finite_interval(value: Interval) -> bool {
