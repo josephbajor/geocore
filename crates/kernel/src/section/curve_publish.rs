@@ -33,6 +33,7 @@ pub(super) fn publish_curves(
     closed_fragments: &[closed_stitch::ClosedCurveFragment],
     closed_fragment_evidence: &[ClosedFragmentEvidence],
     ruling_fragments: &[ruling_publish::CertifiedRulingFragment],
+    disk_fragments: &[super::disk_publish::CertifiedDiskCapFragment],
     closed_stitched: &closed_stitch::ClosedStitchResult,
 ) -> Result<PublishedCurves> {
     if closed_fragments.len() != closed_fragment_evidence.len() {
@@ -68,6 +69,7 @@ pub(super) fn publish_curves(
         &mut endpoints,
         &mut fragments,
     )?;
+    super::disk_publish::publish_fragments(part, disk_fragments, &mut endpoints, &mut fragments)?;
 
     let mixed_stitched = mixed_stitch::stitch_curve_fragments(&fragments, endpoints.len())?;
     let components = mixed_stitched

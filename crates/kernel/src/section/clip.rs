@@ -12,7 +12,8 @@
 
 use kcore::interval::Interval;
 use kcore::operation::OperationScope;
-use kcore::predicates::{Orientation, orient2d, orient3d};
+use kcore::predicates::{Orientation, affine_dot3, orient2d, orient3d};
+use kgeom::surface::Plane;
 use kgeom::vec::Point3;
 use ktopo::entity::{EdgeId as RawEdgeId, FaceId as RawFaceId, Loop, VertexId as RawVertexId};
 use ktopo::geom::{CurveGeom, SurfaceGeom};
@@ -383,6 +384,48 @@ fn cutter_offset(cutter: &PlaneWitness, p: [f64; 3]) -> Interval {
     dot_iv(normal, sub_iv(p, cutter.points[0]))
 }
 
+/// Exact and interval views of the plane used to cut a prepared polygon.
+///
+/// Stored-vertex witnesses retain the original planar/planar path.  Analytic
+/// planes cover vertexless topology such as finite-cylinder caps: their
+/// authored origin and normal feed the exact affine predicate directly, so
+/// no derived sample point or rounded plane reconstruction owns a side sign.
+#[derive(Debug, Clone, Copy)]
+enum PlaneCutter<'a> {
+    Witness(&'a PlaneWitness),
+    Analytic(&'a Plane),
+}
+
+impl PlaneCutter<'_> {
+    fn sign(self, point: [f64; 3]) -> Option<Orientation> {
+        match self {
+            Self::Witness(witness) => Some(orient3d(
+                witness.points[0],
+                witness.points[1],
+                witness.points[2],
+                point,
+            )),
+            Self::Analytic(plane) => affine_dot3(
+                plane.frame().z().to_array(),
+                point,
+                plane.frame().origin().to_array(),
+                0.0,
+            )
+            .map(|value| value.sign()),
+        }
+    }
+
+    fn offset(self, point: [f64; 3]) -> Interval {
+        match self {
+            Self::Witness(witness) => cutter_offset(witness, point),
+            Self::Analytic(plane) => dot_iv(
+                plane.frame().z().to_array().map(Interval::point),
+                sub_iv(point, plane.frame().origin().to_array()),
+            ),
+        }
+    }
+}
+
 /// Conservative enclosure of the carrier parameter of one exact point:
 /// `((p - origin) · direction) / |direction|²`.
 fn vertex_parameter(
@@ -405,11 +448,11 @@ fn edge_crossing_parameters(
     p1: [f64; 3],
     edge_parameters: [f64; 2],
     carrier: &SectionCarrierLine,
-    cutter: &PlaneWitness,
+    cutter: PlaneCutter<'_>,
     direction_sq: Interval,
 ) -> Option<(Interval, Interval)> {
-    let f0 = cutter_offset(cutter, p0);
-    let f1 = cutter_offset(cutter, p1);
+    let f0 = cutter.offset(p0);
+    let f1 = cutter.offset(p1);
     let s = f0.checked_div(f0 - f1)?;
     let mut along = Interval::point(0.0);
     for axis in 0..3 {
@@ -444,25 +487,21 @@ fn edge_crossing_parameters(
 fn ring_crossings(
     ring: &PreparedRing,
     carrier: &SectionCarrierLine,
-    cutter: &PlaneWitness,
+    cutter: PlaneCutter<'_>,
     direction_sq: Interval,
     crossings: &mut Vec<LineCrossing>,
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<Option<&'static str>> {
     let n = ring.vertices.len();
     charge(scope, n as u64)?;
-    let signs: Vec<Orientation> = ring
+    let Some(signs): Option<Vec<Orientation>> = ring
         .vertices
         .iter()
-        .map(|v| {
-            orient3d(
-                cutter.points[0],
-                cutter.points[1],
-                cutter.points[2],
-                v.point,
-            )
-        })
-        .collect();
+        .map(|vertex| cutter.sign(vertex.point))
+        .collect()
+    else {
+        return Ok(Some(GAP_CARRIER_ORIENTATION));
+    };
     for i in 0..n {
         if signs[i] == Orientation::Zero && signs[(i + 1) % n] == Orientation::Zero {
             return Ok(Some(GAP_TANGENT_CONTACT));
@@ -527,6 +566,31 @@ pub(crate) fn clip_face_with_plane(
     linear: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> Result<ClipOutcome> {
+    clip_face_with_cutter(face, carrier, PlaneCutter::Witness(cutter), linear, scope)
+}
+
+/// Clip a polygonal planar face by an authored analytic plane.
+///
+/// This is the vertexless-cap counterpart of [`clip_face_with_plane`]. Exact
+/// affine signs use the plane frame directly; interval interpolation retains
+/// the same conservative crossing and source-edge parameter evidence.
+pub(crate) fn clip_face_with_analytic_plane(
+    face: &PreparedSectionFace,
+    carrier: &SectionCarrierLine,
+    cutter: &Plane,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<ClipOutcome> {
+    clip_face_with_cutter(face, carrier, PlaneCutter::Analytic(cutter), linear, scope)
+}
+
+fn clip_face_with_cutter(
+    face: &PreparedSectionFace,
+    carrier: &SectionCarrierLine,
+    cutter: PlaneCutter<'_>,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<ClipOutcome> {
     // The clip itself is exact; the session linear tolerance participates
     // only in the broad phase.
     let _ = linear;
@@ -534,9 +598,18 @@ pub(crate) fn clip_face_with_plane(
         .origin
         .iter()
         .chain(carrier.direction.iter())
-        .chain(cutter.points.iter().flatten())
         .all(|c| c.is_finite());
-    if !inputs_finite {
+    let cutter_finite = match cutter {
+        PlaneCutter::Witness(witness) => witness.points.iter().flatten().all(|c| c.is_finite()),
+        PlaneCutter::Analytic(plane) => plane
+            .frame()
+            .origin()
+            .to_array()
+            .into_iter()
+            .chain(plane.frame().z().to_array())
+            .all(f64::is_finite),
+    };
+    if !inputs_finite || !cutter_finite {
         return Ok(ClipOutcome::Gap(GAP_CARRIER_ORIENTATION));
     }
     let direction_sq = [0, 1, 2]
@@ -766,7 +839,7 @@ mod tests {
     use kcore::operation::{OperationContext, OperationScope, SessionPolicy};
     use kcore::tolerance::Tolerances;
     use kgeom::frame::Frame;
-    use kgeom::vec::Point2;
+    use kgeom::vec::{Point2, Point3, Vec3};
     use ktopo::entity::BodyId as RawBodyId;
     use ktopo::profile::PlanarProfile;
 
@@ -880,7 +953,7 @@ mod tests {
             [10.0, 0.0, 0.0],
             [3.0, 13.0],
             &carrier,
-            &cutter,
+            PlaneCutter::Witness(&cutter),
             direction_sq,
         )
         .expect("forward crossing certifies");
@@ -895,7 +968,7 @@ mod tests {
             [0.0, 0.0, 0.0],
             [13.0, 3.0],
             &carrier,
-            &cutter,
+            PlaneCutter::Witness(&cutter),
             direction_sq,
         )
         .expect("reversed crossing certifies");
@@ -1104,6 +1177,32 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn authored_analytic_plane_clips_polygon_without_derived_witness_points() {
+        let (store, body) = block_store();
+        let top = prepared(&store, face_where(&store, body, |p| p[2] == 1.0));
+        let carrier = SectionCarrierLine {
+            origin: [0.0, 0.0, 1.0],
+            direction: [0.0, 1.0, 0.0],
+        };
+        let plane = Plane::new(
+            Frame::from_z(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+        );
+        let outcome = with_scope(|scope| {
+            clip_face_with_analytic_plane(&top, &carrier, &plane, linear(), scope).unwrap()
+        });
+        let ClipOutcome::Spans(spans) = outcome else {
+            panic!("authored analytic plane must certify the square chord")
+        };
+        let [span] = spans.as_slice() else {
+            panic!("square chord must be one connected span: {spans:?}")
+        };
+        assert_tight(span.start.parameter, -1.0);
+        assert_tight(span.end.parameter, 1.0);
+        assert!(matches!(span.start.site, CrossingSite::EdgeInterior(_)));
+        assert!(matches!(span.end.site, CrossingSite::EdgeInterior(_)));
     }
 
     #[test]

@@ -79,9 +79,9 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    17F/45E/30V with literal-derived volume, deterministic X_T, and Fast
    self-import; pure planar BSP and convex curved shortcuts still require that
    certificate. The deterministic fifteen-payload Boolean bundle imports and
-   compares 15/15 in Onshape at writer `fedf1ab`. Next: general cap-crossing
-   planar-solid/finite-cylinder intersections through proof-keyed disk-cap
-   chords and mixed chord/arc/ruling incidence.)*
+   compares 15/15 in Onshape at writer `fedf1ab`. Proof-keyed disk-cap chords
+   now close deterministic chord/ruling Section components across rigid frames
+   and operand orders. Next: arrange and materialize the cap-crossing disk cells.)*
 
 Work that does not advance the queue head needs an explicit justification
 linking it to a rung ("rung 2 needs curve/curve overlap dedup because …").

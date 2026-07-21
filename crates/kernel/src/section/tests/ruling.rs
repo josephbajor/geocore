@@ -74,35 +74,34 @@ fn assert_ruling_contract(
     graph: &BodySectionGraph,
     expected_axis: Vec3,
 ) {
-    assert_eq!(graph.completion(), SectionCompletion::Indeterminate);
+    assert_eq!(graph.completion(), SectionCompletion::Complete);
     assert!(graph.edges().is_empty());
     assert!(graph.vertices().is_empty());
     assert!(graph.loops().is_empty());
     assert!(graph.rings().is_empty());
     assert_eq!(graph.curve_endpoints().len(), 8, "ruling graph: {graph:#?}");
-    assert_eq!(graph.curve_fragments().len(), 4);
-    assert!(graph.curve_components().is_empty());
-    assert_eq!(graph.branches().len(), 4);
-    assert_eq!(
-        graph
-            .gaps()
-            .iter()
-            .filter(|gap| gap.reason() == GAP_MIXED_FRAGMENT_STITCH)
-            .count(),
-        1,
-        "all disconnected rulings must share one graph-global mixed-stitch gap"
-    );
+    assert_eq!(graph.curve_fragments().len(), 8);
+    assert_eq!(graph.curve_components().len(), 2);
     assert!(
         graph
-            .gaps()
+            .curve_components()
             .iter()
-            .all(|gap| gap.reason() != GAP_CURVED_TRIM_UNRESOLVED
-                && gap.reason() != GAP_RULING_TRIM_UNRESOLVED),
-        "topology-clipped rulings must not retain either retired trim reason"
+            .all(|component| { component.closed() && component.fragments().len() == 4 })
     );
+    assert_eq!(graph.branches().len(), 8);
+    assert!(graph.gaps().is_empty(), "ruling graph: {graph:#?}");
     assert_stable_gap_reasons(graph);
 
-    for (branch_index, branch) in graph.branches().iter().enumerate() {
+    let part = session.part(part_id.clone()).unwrap();
+    let ruling_branches = graph
+        .branches()
+        .iter()
+        .enumerate()
+        .filter(|(_, branch)| branch_is_ruling(&part, branch))
+        .collect::<Vec<_>>();
+    assert_eq!(ruling_branches.len(), 4);
+    assert_eq!(graph.branches().len() - ruling_branches.len(), 4);
+    for (branch_index, branch) in ruling_branches {
         assert_eq!(branch.topology(), SectionBranchTopology::Open);
         assert_eq!(branch.endpoint_sites(), [0, 1]);
         assert_eq!(branch.fragment_sites().len(), 2);
@@ -151,10 +150,10 @@ fn assert_ruling_contract(
                 source_parameters[trim.operand()].as_ref(),
                 Some(trim.source_parameter())
             );
-            assert_eq!(
-                endpoint.edge_parameters()[trim.operand()],
-                Some(trim.edge_parameter())
-            );
+            let common = endpoint.edge_parameters()[trim.operand()]
+                .expect("shared chord/ruling root must retain an edge enclosure");
+            assert!(common.lo() >= trim.edge_parameter().lo());
+            assert!(common.hi() <= trim.edge_parameter().hi());
         }
 
         let pcurves = [uv_line(branch.pcurves()[0]), uv_line(branch.pcurves()[1])];
@@ -208,15 +207,27 @@ fn assert_ruling_contract(
     }
 }
 
+fn branch_is_ruling(part: &Part<'_>, branch: &SectionBranch) -> bool {
+    branch.faces().iter().any(|face| {
+        let surface = part.face(face.clone()).unwrap().surface();
+        part.surface(surface).unwrap().class_key().as_str() == "kernel.surface.cylinder.v1"
+    })
+}
+
 fn midpoint(branch: &SectionBranch) -> Point3 {
     let (origin, direction) = line_carrier(branch);
     origin + direction * (branch.range().lo + branch.range().hi) * 0.5
 }
 
-fn matching_branch<'a>(branches: &'a [SectionBranch], target: &SectionBranch) -> &'a SectionBranch {
+fn matching_branch<'a>(
+    part: &Part<'_>,
+    branches: &'a [SectionBranch],
+    target: &SectionBranch,
+) -> &'a SectionBranch {
     let target_midpoint = midpoint(target);
     branches
         .iter()
+        .filter(|candidate| branch_is_ruling(part, candidate))
         .find(|candidate| midpoint(candidate).dist(target_midpoint) <= RULING_TOL)
         .expect("equivalent query must retain the same geometric ruling")
 }
@@ -249,8 +260,13 @@ fn oblique_rulings_reverse_for_operand_swap_and_ignore_cylinder_axis_sign() {
     assert_ruling_contract(&session, &part_id, &forward, cylinder_frame.z());
     assert_ruling_contract(&session, &part_id, &swapped, cylinder_frame.z());
 
-    for branch in forward.branches() {
-        let counterpart = matching_branch(swapped.branches(), branch);
+    let part = session.part(part_id.clone()).unwrap();
+    for branch in forward
+        .branches()
+        .iter()
+        .filter(|branch| branch_is_ruling(&part, branch))
+    {
+        let counterpart = matching_branch(&part, swapped.branches(), branch);
         let (origin, direction) = line_carrier(branch);
         let (swapped_origin, swapped_direction) = line_carrier(counterpart);
         assert_point_close(swapped_origin, origin, "operand-swap carrier origin");
@@ -288,8 +304,13 @@ fn oblique_rulings_reverse_for_operand_swap_and_ignore_cylinder_axis_sign() {
         &reversed,
         cylinder_frame.z(),
     );
-    for branch in forward.branches() {
-        let counterpart = matching_branch(reversed.branches(), branch);
+    let reverse_part_view = reverse_session.part(reverse_part.clone()).unwrap();
+    for branch in forward
+        .branches()
+        .iter()
+        .filter(|branch| branch_is_ruling(&part, branch))
+    {
+        let counterpart = matching_branch(&reverse_part_view, reversed.branches(), branch);
         let (_, direction) = line_carrier(branch);
         let (_, reversed_direction) = line_carrier(counterpart);
         assert!(

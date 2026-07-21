@@ -528,7 +528,7 @@ fn adapt_trim(
     }
 }
 
-fn intern_endpoint(
+pub(super) fn intern_endpoint(
     part: &PartId,
     certified: CertifiedClosedEndpoint,
     root_scalars: [Option<super::root_identity::CertifiedSourceRootScalar>; 2],

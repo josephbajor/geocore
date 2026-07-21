@@ -349,8 +349,8 @@ Cycle-wide certified integer-period lifting admits the seam-crossing radius-1.7 
 cylinder-left Subtract across all four frames with 10/32/20 topology, literal-derived volume, deterministic X_T, and Fast self-import.
 Exact planar-shell admission is now separate from its optional typed convex certificate: complete non-convex ten-support star/cylinder Intersect
 uses general mixed planning and Full-commits at 17F/45E/30V with literal-derived volume and deterministic X_T/Fast self-import; pure planar BSP and convex shortcuts still require the certificate.
-Next is general cap-crossing planar-solid/finite-cylinder intersection through
-proof-keyed disk-cap chords and unified mixed chord/arc/ruling incidence.
+Proof-keyed disk-cap chords now close mixed chord/ruling Section components across rigid frames and operand orders.
+Next is proof-bearing arrangement/materialization of the cap-crossing disk cells and a Full-committed public Boolean slice.
 
 Evidence: `ordered_planar_minus_cylinder_commits_every_disconnected_profile_component`,
 `disconnected_subtract_batch_denies_n_minus_one_before_any_component_allocates`,
@@ -359,6 +359,7 @@ Evidence: `ordered_planar_minus_cylinder_commits_every_disconnected_profile_comp
 `five_portal_shell_work_accepts_exact_n_and_refuses_n_minus_one_atomically`,
 `seam_crossing_five_patch_cylinder_subtract_is_full_valid_in_all_frames`, and
 `nonconvex_star_section_and_intersection_commit_full_valid_deterministically`.
+Section evidence: `facade_closes_offset_disk_cap_chords_with_cylinder_rulings`.
 
 Do not wait for an exhaustive analytic pair table before testing the end-to-end
 boolean architecture. Begin with a deliberately narrow vertical slice as soon as the
