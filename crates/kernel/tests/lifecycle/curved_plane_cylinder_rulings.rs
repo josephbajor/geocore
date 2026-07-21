@@ -204,46 +204,40 @@ fn assert_graph_shape(
     );
     assert_eq!(
         graph.completion(),
-        SectionCompletion::Indeterminate,
+        SectionCompletion::Complete,
         "{}",
         case.name
     );
     assert_eq!(
         graph.branches().len(),
-        EXPECTED_ROOTS.len(),
+        2 * EXPECTED_ROOTS.len(),
         "{}",
         case.name
     );
     assert_eq!(
         graph.curve_fragments().len(),
-        EXPECTED_ROOTS.len(),
+        2 * EXPECTED_ROOTS.len(),
         "{}",
         case.name
     );
     assert_eq!(graph.curve_endpoints().len(), 8, "{}", case.name);
-    assert!(graph.curve_components().is_empty(), "{}", case.name);
-    assert!(graph.rings().is_empty(), "{}", case.name);
+    assert_eq!(graph.curve_components().len(), 2, "{}", case.name);
     assert!(
-        graph.gaps().iter().all(|gap| {
-            gap.reason()
-                != "Plane/Cylinder ruling-line branches await topology-owned open-interval trimming"
-        }),
-        "{}: landed topology clipping retained the retired ruling gap",
-        case.name
-    );
-    assert_eq!(
         graph
-            .gaps()
+            .curve_components()
             .iter()
-            .filter(|gap| {
-                gap.reason() == "bounded section fragments await mixed-family stitching"
-                    && gap.faces().is_empty()
-            })
-            .count(),
-        1,
+            .all(|component| component.closed() && component.fragments().len() == 4),
         "{}",
         case.name
     );
+    assert!(graph.rings().is_empty(), "{}", case.name);
+    assert!(graph.gaps().is_empty(), "{}", case.name);
+}
+
+fn is_ruling_branch(part: &kernel::Part<'_>, branch: &SectionBranch, case: RulingCase) -> bool {
+    let cylinder_slot = usize::from(!case.swapped);
+    let face = part.face(branch.faces()[cylinder_slot].clone()).unwrap();
+    part.surface(face.surface()).unwrap().class_key().as_str() == "kernel.surface.cylinder.v1"
 }
 
 fn assert_branch(
@@ -366,7 +360,11 @@ fn assert_branches(
     case: RulingCase,
 ) {
     let mut seen = [false; EXPECTED_ROOTS.len()];
-    for branch in graph.branches() {
+    for branch in graph
+        .branches()
+        .iter()
+        .filter(|branch| is_ruling_branch(part, branch, case))
+    {
         let root = assert_branch(part, branch, frame, case);
         assert!(!seen[root], "{}: duplicate analytic ruling", case.name);
         seen[root] = true;
@@ -493,9 +491,12 @@ fn assert_fragment_end(
         Some(trim.source_parameter())
     );
     assert!(source_parameters[block_slot].is_none(), "{}", case.name);
-    assert_eq!(
-        endpoint.edge_parameters()[cylinder_slot],
-        Some(edge_interval)
+    let common = endpoint.edge_parameters()[cylinder_slot]
+        .unwrap_or_else(|| panic!("{}: shared cap/ruling root lost its enclosure", case.name));
+    assert!(
+        common.lo() >= edge_interval.lo() && common.hi() <= edge_interval.hi(),
+        "{}",
+        case.name
     );
     assert!(
         endpoint.edge_parameters()[block_slot].is_none(),
@@ -522,12 +523,15 @@ fn assert_fragments(
     let mut roots = Vec::new();
     let mut saw_expanded_root_enclosure = false;
     for fragment in graph.curve_fragments() {
-        branch_indices.push(fragment.branch());
-        assert_eq!(fragment.source_ordinal(), 0, "{}", case.name);
         let branch = graph
             .branches()
             .get(fragment.branch())
             .unwrap_or_else(|| panic!("{}: fragment escaped its branch table", case.name));
+        if !is_ruling_branch(part, branch, case) {
+            continue;
+        }
+        branch_indices.push(fragment.branch());
+        assert_eq!(fragment.source_ordinal(), 0, "{}", case.name);
         let (origin, direction) = line_carrier(branch, case);
         let mut discovery = branch
             .fragment_sites()
@@ -558,7 +562,8 @@ fn assert_fragments(
         }
     }
     branch_indices.sort_unstable();
-    assert_eq!(branch_indices, vec![0, 1, 2, 3], "{}", case.name);
+    branch_indices.dedup();
+    assert_eq!(branch_indices.len(), EXPECTED_ROOTS.len(), "{}", case.name);
     endpoint_indices.sort_unstable();
     endpoint_indices.dedup();
     assert_eq!(

@@ -48,6 +48,13 @@ pub(super) enum RetainedSpanParameter {
         endpoint: usize,
         enclosure_bits: [u64; 2],
         parameter_bits: u64,
+        /// Certified integer lift in the source carrier's canonical period.
+        ///
+        /// Root identity and its scalar remain canonical.  The lift only
+        /// selects which occurrence bounds this directed source span, so the
+        /// complementary arc of a split whole circle can retain an increasing
+        /// finite carrier range without inventing a second root.
+        period_shift: i32,
     },
 }
 
@@ -240,6 +247,7 @@ pub(crate) enum MixedShellMaterializationError {
     UnexpectedSourceRootScalar(SourceRootScalarKey),
     UnexpectedSectionTrimScalar(SectionTrimScalarKey),
     ScalarOutsideCertifiedRange,
+    InvalidSourcePeriodLift,
     NonIncreasingEdgeRange(usize),
     EndpointBitsMismatch { distance: f64 },
     UnsupportedSourceCurve,
@@ -290,6 +298,7 @@ fn source_parameter(
     source: MixedSourceFaceKey,
     evidence: &RetainedSpanParameter,
     inputs: &mut BTreeMap<SourceRootScalarKey, f64>,
+    carrier_period: Option<f64>,
 ) -> Result<f64, MixedShellMaterializationError> {
     match evidence {
         RetainedSpanParameter::SourceVertex {
@@ -300,6 +309,7 @@ fn source_parameter(
             endpoint,
             enclosure_bits,
             parameter_bits,
+            period_shift,
         } => {
             let key = SourceRootScalarKey::new(source.operand(), *endpoint);
             let certified = f64::from_bits(*parameter_bits);
@@ -308,21 +318,32 @@ fn source_parameter(
             if !lo.is_finite() || !hi.is_finite() || lo > hi {
                 return Err(MixedShellMaterializationError::ScalarOutsideCertifiedRange);
             }
-            if certified.is_finite() && certified >= lo && certified <= hi {
+            let canonical = if certified.is_finite() && certified >= lo && certified <= hi {
                 if let Some(candidate) = inputs.remove(&key)
                     && candidate.to_bits() != certified.to_bits()
                 {
                     return Err(MixedShellMaterializationError::ScalarOutsideCertifiedRange);
                 }
-                Ok(certified)
+                certified
             } else {
                 inputs
                     .remove(&key)
                     .filter(|candidate| {
                         candidate.is_finite() && *candidate >= lo && *candidate <= hi
                     })
-                    .ok_or(MixedShellMaterializationError::MissingSourceRootScalar(key))
+                    .ok_or(MixedShellMaterializationError::MissingSourceRootScalar(key))?
+            };
+            if *period_shift == 0 {
+                return Ok(canonical);
             }
+            let period = carrier_period
+                .filter(|period| period.is_finite() && *period > 0.0)
+                .ok_or(MixedShellMaterializationError::InvalidSourcePeriodLift)?;
+            let lifted = canonical + f64::from(*period_shift) * period;
+            lifted
+                .is_finite()
+                .then_some(lifted)
+                .ok_or(MixedShellMaterializationError::InvalidSourcePeriodLift)
         }
     }
 }
@@ -492,6 +513,10 @@ pub(super) fn retain_materialization_evidence(
                         endpoint: *endpoint,
                         enclosure_bits: *enclosure_bits,
                         parameter_bits,
+                        // Current bounded-polygon lineage is nonperiodic.
+                        // Root-split whole-circle lineage must supply its
+                        // certified source-span lift at this retention seam.
+                        period_shift: 0,
                     }
                 }
             });
@@ -905,9 +930,13 @@ fn intrinsic_source_range(
     if Some(evidence.map(evidence_vertex)) != edge.endpoints {
         return Err(MixedShellMaterializationError::PlanVertexMismatch);
     }
+    let carrier_period = match source_carrier(store, retained.edge)? {
+        AnalyticShellCurve::Circle(circle) => Some(circle.param_range().width()),
+        AnalyticShellCurve::Line(_) => None,
+    };
     let parameters = [
-        source_parameter(retained.source, evidence[0], source_scalars)?,
-        source_parameter(retained.source, evidence[1], source_scalars)?,
+        source_parameter(retained.source, evidence[0], source_scalars, carrier_period)?,
+        source_parameter(retained.source, evidence[1], source_scalars, carrier_period)?,
     ];
     Ok(parameters)
 }
@@ -981,12 +1010,13 @@ fn source_pcurve(
     let fin = store
         .get(retained.fin)
         .map_err(|_| MixedShellMaterializationError::StoreRead)?;
-    source_pcurve_for_fin(store, fin)
+    source_pcurve_for_fin(store, fin, false)
 }
 
 fn source_pcurve_for_fin(
     store: &Store,
     fin: &ktopo::entity::Fin,
+    retain_closure_winding: bool,
 ) -> Result<AnalyticPcurveUse, MixedShellMaterializationError> {
     let pcurve = fin
         .pcurve()
@@ -1002,11 +1032,22 @@ fn source_pcurve_for_fin(
     let raw_map = pcurve.edge_to_pcurve();
     let map = AffineParamMap1d::new(raw_map.scale(), raw_map.offset())
         .map_err(|_| MixedShellMaterializationError::InvalidAnalyticGeometry)?;
-    let mut use_ = AnalyticPcurveUse::new(curve, map).with_chart(pcurve.chart());
-    if let Some(winding) = pcurve.closure_winding() {
+    Ok(apply_source_closure_winding(
+        AnalyticPcurveUse::new(curve, map).with_chart(pcurve.chart()),
+        pcurve.closure_winding(),
+        retain_closure_winding,
+    ))
+}
+
+fn apply_source_closure_winding(
+    mut use_: AnalyticPcurveUse,
+    winding: Option<[i32; 2]>,
+    retain: bool,
+) -> AnalyticPcurveUse {
+    if retain && let Some(winding) = winding {
         use_ = use_.with_closure_winding(winding);
     }
-    Ok(use_)
+    use_
 }
 
 fn section_pcurve(
@@ -1359,7 +1400,7 @@ fn build_mixed_shell_input_from_blueprint(
                         let fin = store
                             .get(raw_fin)
                             .map_err(|_| MixedShellMaterializationError::StoreRead)?;
-                        source_pcurve_for_fin(store, fin)?
+                        source_pcurve_for_fin(store, fin, true)?
                     }
                 };
                 let pcurve = if contains_endpoint_free_ring {
@@ -1564,3 +1605,7 @@ pub(super) fn remaining_gaps(
     }
     gaps.into_iter().collect()
 }
+
+#[cfg(test)]
+#[path = "mixed_shell_materialize_tests.rs"]
+mod tests;

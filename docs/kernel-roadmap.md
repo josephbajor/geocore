@@ -349,8 +349,8 @@ Cycle-wide certified integer-period lifting admits the seam-crossing radius-1.7 
 cylinder-left Subtract across all four frames with 10/32/20 topology, literal-derived volume, deterministic X_T, and Fast self-import.
 Exact planar-shell admission is now separate from its optional typed convex certificate: complete non-convex ten-support star/cylinder Intersect
 uses general mixed planning and Full-commits at 17F/45E/30V with literal-derived volume and deterministic X_T/Fast self-import; pure planar BSP and convex shortcuts still require the certificate.
-Proof-keyed disk-cap chords now close mixed chord/ruling Section components across rigid frames and operand orders.
-Next is proof-bearing arrangement/materialization of the cap-crossing disk cells and a Full-committed public Boolean slice.
+Proof-keyed disk-cap chords now feed count-independent exact disk arrangements with dual classification, source-arc lineage, and period-lifted realization.
+Next is transverse annulus-trace certification, mixed-shell adoption of the selected cap-crossing cells, and a Full-committed public Boolean slice.
 
 Evidence: `ordered_planar_minus_cylinder_commits_every_disconnected_profile_component`,
 `disconnected_subtract_batch_denies_n_minus_one_before_any_component_allocates`,
