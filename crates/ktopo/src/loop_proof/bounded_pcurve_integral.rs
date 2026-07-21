@@ -55,6 +55,16 @@ impl<'a> BoundedPcurveSpan<'a> {
     pub(super) const fn chart_offset(self) -> Point2 {
         self.chart_offset
     }
+
+    /// Return the same authored traversal in a different proof-local chart.
+    ///
+    /// This never changes the stored pcurve use. The enclosing loop proof may
+    /// use it only after certifying that `chart_offset` differs by whole
+    /// periods of the owning surface.
+    pub(super) const fn with_chart_offset(mut self, chart_offset: Point2) -> Self {
+        self.chart_offset = chart_offset;
+        self
+    }
 }
 
 /// Why a signed line-integral proof failed closed.

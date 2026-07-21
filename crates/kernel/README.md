@@ -48,6 +48,7 @@ the facade compatibility promise.
 The five-portal cap-retaining slice verifies exact face/edge/vertex signatures
 (23/47/30 for Unite; 10/32/20 for cylinder-left Subtract), independent analytic
 mesh volumes, deterministic X_T, Fast self-import, and exact N/N-1 shell-work atomicity.
+Proof-local period lifting also admits a radius-1.7 five-support subtraction across authored `u=0` without mutating pcurves.
 
 ## Application boundary
 

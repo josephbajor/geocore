@@ -11,6 +11,8 @@
 mod analytic_face_layout;
 pub(crate) mod bounded_pcurve_integral;
 pub(crate) mod bounded_pcurve_simplicity;
+#[cfg(test)]
+mod periodic_lift_tests;
 
 #[cfg(test)]
 pub(crate) use analytic_face_layout::FACE_LOOP_CONTAINMENT_WORK;
@@ -176,11 +178,13 @@ fn prepare_bounded_analytic_loop<'a>(
     }
     let face = store.get(face_id)?;
     let surface = store.get(face.surface)?;
-    let periods = match surface {
-        SurfaceGeom::Plane(_) => [None, None],
-        SurfaceGeom::Cylinder(_) => [Some(core::f64::consts::TAU), None],
-        _ => return Ok(None),
+    if !matches!(surface, SurfaceGeom::Plane(_) | SurfaceGeom::Cylinder(_)) {
+        return Ok(None);
+    }
+    let Some(leaf_surface) = surface.as_leaf_surface() else {
+        return Ok(None);
     };
+    let periods = leaf_surface.periodicity();
     let mut spans = Vec::with_capacity(loop_.fins.len());
     for &fin_id in &loop_.fins {
         if certify_whole_fin_incidence(store, face_id, loop_id, fin_id, LINEAR_RESOLUTION)
@@ -238,26 +242,80 @@ fn certify_bounded_chart_joins<K: Copy + Eq>(
     periods: [Option<f64>; 2],
     spans: &mut [BoundedLoopSpan<'_, K>],
 ) -> bool {
+    certify_bounded_chart_lifts(surface, periods, spans).is_ok()
+}
+
+const MAX_BOUNDED_CHART_LIFT: i64 = 1_i64 << 40;
+
+/// Typed reason that an ordered bounded loop could not be placed in one
+/// coherent proof-local periodic chart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundedChartLiftGap {
+    TooFewSpans,
+    UnsupportedSurface,
+    InvalidPeriod { direction: usize },
+    TopologyDiscontinuity { span_index: usize },
+    NonFiniteEndpoint { span_index: usize },
+    AmbiguousPeriodLift { span_index: usize, direction: usize },
+    PeriodLiftOverflow { span_index: usize, direction: usize },
+    AccumulatedLiftOverflow { span_index: usize, direction: usize },
+    NonzeroWinding { direction: usize },
+    ShiftOverflow { span_index: usize, direction: usize },
+    ModelJoinMismatch { span_index: usize },
+}
+
+/// Solve the integer chart gauge for a complete ordered loop before any
+/// simplicity or signed-integral proof consumes its pcurves.
+///
+/// R1/R6: a relative lift is admitted only when outward interval arithmetic
+/// places the exact endpoint delta strictly inside one nearest-integer period
+/// cell. There is no sampling, epsilon-based rounding, or layout recognition.
+/// Prefix propagation fixes span zero as the proof-local gauge anchor, and a
+/// zero final sum proves that the bounded loop is contractible in every
+/// periodic direction.
+fn certify_bounded_chart_lifts<K: Copy + Eq>(
+    surface: &SurfaceGeom,
+    periods: [Option<f64>; 2],
+    spans: &mut [BoundedLoopSpan<'_, K>],
+) -> core::result::Result<(), BoundedChartLiftGap> {
+    if spans.len() < 2 {
+        return Err(BoundedChartLiftGap::TooFewSpans);
+    }
     let model_tolerance = 2.0 * LINEAR_RESOLUTION;
-    let Some(parameter_neighborhood) =
-        bounded_join_parameter_neighborhood(surface, model_tolerance)
-    else {
-        return false;
+    let Some(chart_neighborhood) = bounded_join_chart_neighborhood(surface, model_tolerance) else {
+        return Err(BoundedChartLiftGap::UnsupportedSurface);
     };
+    let Some(leaf_surface) = surface.as_leaf_surface() else {
+        return Err(BoundedChartLiftGap::UnsupportedSurface);
+    };
+    for (direction, period) in periods.into_iter().enumerate() {
+        if period.is_some_and(|period| !period.is_finite() || period <= 0.0) {
+            return Err(BoundedChartLiftGap::InvalidPeriod { direction });
+        }
+    }
+
+    let mut endpoints = Vec::with_capacity(spans.len());
+    for (span_index, span) in spans.iter().copied().enumerate() {
+        let Some(start) = bounded_span_endpoint(span.geometry(), true) else {
+            return Err(BoundedChartLiftGap::NonFiniteEndpoint { span_index });
+        };
+        let Some(end) = bounded_span_endpoint(span.geometry(), false) else {
+            return Err(BoundedChartLiftGap::NonFiniteEndpoint { span_index });
+        };
+        endpoints.push((start, end));
+    }
+
+    // `relative_lifts[i]` is the integer shift that span i+1 needs relative
+    // to span i. It is inferred from the authored charts before any mutation,
+    // so alternating representatives cannot make the result order-dependent.
+    let mut relative_lifts = vec![[0_i64; 2]; spans.len()];
     for index in 0..spans.len() {
         let next = (index + 1) % spans.len();
         if spans[index].head() != spans[next].tail() {
-            return false;
+            return Err(BoundedChartLiftGap::TopologyDiscontinuity { span_index: index });
         }
-        let Some(current_end) = bounded_span_endpoint(spans[index].geometry(), false) else {
-            return false;
-        };
-        let Some(next_start) = bounded_span_endpoint(spans[next].geometry(), true) else {
-            return false;
-        };
-        if point2_bits_equal(current_end, next_start) {
-            continue;
-        }
+        let current_end = endpoints[index].1;
+        let next_start = endpoints[next].0;
         for (direction, period) in periods.into_iter().enumerate() {
             let Some(period) = period else { continue };
             let values = if direction == 0 {
@@ -265,32 +323,174 @@ fn certify_bounded_chart_joins<K: Copy + Eq>(
             } else {
                 [current_end.y, next_start.y]
             };
-            let delta = Interval::point(values[0]) - Interval::point(values[1]);
-            if !period.is_finite()
-                || period <= 0.0
-                || delta.lo() <= -0.5 * period
-                || delta.hi() >= 0.5 * period
-            {
-                return false;
-            }
+            relative_lifts[index][direction] =
+                certified_integer_period_lift(values[0], values[1], period, index, direction)?;
         }
-        let Some(surface) = surface.as_leaf_surface() else {
-            return false;
-        };
-        let current_point = surface.eval([current_end.x, current_end.y]);
-        let next_point = surface.eval([next_start.x, next_start.y]);
-        if !certify_model_distance(current_point, next_point, model_tolerance) {
-            return false;
-        }
-        let Some(evidence) = CertifiedBoundedLoopJoin::new(parameter_neighborhood) else {
-            return false;
-        };
-        spans[index] = spans[index].with_head_join(evidence);
     }
-    true
+
+    let mut lifts = vec![[0_i64; 2]; spans.len()];
+    for direction in 0..2 {
+        let mut accumulated = 0_i64;
+        for index in 0..spans.len() - 1 {
+            accumulated = checked_accumulated_lift(
+                accumulated,
+                relative_lifts[index][direction],
+                index,
+                direction,
+            )?;
+            lifts[index + 1][direction] = accumulated;
+        }
+        let closure = checked_accumulated_lift(
+            accumulated,
+            relative_lifts[spans.len() - 1][direction],
+            spans.len() - 1,
+            direction,
+        )?;
+        if closure != 0 {
+            return Err(BoundedChartLiftGap::NonzeroWinding { direction });
+        }
+    }
+
+    let mut lifted_spans = spans.to_vec();
+    for (span_index, span) in lifted_spans.iter_mut().enumerate() {
+        let geometry = span.geometry();
+        let chart_offset = shifted_chart_offset(
+            geometry.chart_offset(),
+            periods,
+            lifts[span_index],
+            span_index,
+        )?;
+        *span = span.with_geometry(geometry.with_chart_offset(chart_offset));
+    }
+
+    // Whole-period propagation establishes a coherent chart. Rounded f64
+    // additions need not produce bit-identical endpoint coordinates, so the
+    // existing topology-owned, surface-lifted near-join certificate remains
+    // the final authorization for any residual.
+    for index in 0..lifted_spans.len() {
+        let next = (index + 1) % lifted_spans.len();
+        let Some(current_end) = bounded_span_endpoint(lifted_spans[index].geometry(), false) else {
+            return Err(BoundedChartLiftGap::NonFiniteEndpoint { span_index: index });
+        };
+        let Some(next_start) = bounded_span_endpoint(lifted_spans[next].geometry(), true) else {
+            return Err(BoundedChartLiftGap::NonFiniteEndpoint { span_index: next });
+        };
+        if point2_bits_equal(current_end, next_start) {
+            continue;
+        }
+        let current_point = leaf_surface.eval([current_end.x, current_end.y]);
+        let next_point = leaf_surface.eval([next_start.x, next_start.y]);
+        if !certify_model_distance(current_point, next_point, model_tolerance) {
+            return Err(BoundedChartLiftGap::ModelJoinMismatch { span_index: index });
+        }
+        let Some(evidence) = CertifiedBoundedLoopJoin::new(chart_neighborhood) else {
+            return Err(BoundedChartLiftGap::UnsupportedSurface);
+        };
+        lifted_spans[index] = lifted_spans[index].with_head_join(evidence);
+    }
+    spans.copy_from_slice(&lifted_spans);
+    Ok(())
 }
 
-fn bounded_join_parameter_neighborhood(surface: &SurfaceGeom, model_tolerance: f64) -> Option<f64> {
+fn certified_integer_period_lift(
+    current: f64,
+    next: f64,
+    period: f64,
+    span_index: usize,
+    direction: usize,
+) -> core::result::Result<i64, BoundedChartLiftGap> {
+    if current.to_bits() == next.to_bits() {
+        return Ok(0);
+    }
+    let Some(quotient) =
+        (Interval::point(current) - Interval::point(next)).checked_div(Interval::point(period))
+    else {
+        return Err(BoundedChartLiftGap::PeriodLiftOverflow {
+            span_index,
+            direction,
+        });
+    };
+    if !quotient.lo().is_finite() || !quotient.hi().is_finite() {
+        return Err(BoundedChartLiftGap::PeriodLiftOverflow {
+            span_index,
+            direction,
+        });
+    }
+    let midpoint = 0.5 * quotient.lo() + 0.5 * quotient.hi();
+    let candidate = midpoint.round();
+    if !candidate.is_finite() || candidate.abs() > MAX_BOUNDED_CHART_LIFT as f64 {
+        return Err(BoundedChartLiftGap::PeriodLiftOverflow {
+            span_index,
+            direction,
+        });
+    }
+
+    // Strict containment is essential: touching either half-period boundary
+    // means two nearest integer lifts remain possible, so the proof fails.
+    if quotient.lo() <= candidate - 0.5 || quotient.hi() >= candidate + 0.5 {
+        return Err(BoundedChartLiftGap::AmbiguousPeriodLift {
+            span_index,
+            direction,
+        });
+    }
+    Ok(candidate as i64)
+}
+
+fn checked_accumulated_lift(
+    accumulated: i64,
+    relative: i64,
+    span_index: usize,
+    direction: usize,
+) -> core::result::Result<i64, BoundedChartLiftGap> {
+    let Some(lift) = accumulated.checked_add(relative) else {
+        return Err(BoundedChartLiftGap::AccumulatedLiftOverflow {
+            span_index,
+            direction,
+        });
+    };
+    if lift.abs() > MAX_BOUNDED_CHART_LIFT {
+        return Err(BoundedChartLiftGap::AccumulatedLiftOverflow {
+            span_index,
+            direction,
+        });
+    }
+    Ok(lift)
+}
+
+fn shifted_chart_offset(
+    chart_offset: Point2,
+    periods: [Option<f64>; 2],
+    lifts: [i64; 2],
+    span_index: usize,
+) -> core::result::Result<Point2, BoundedChartLiftGap> {
+    let mut coordinates = [chart_offset.x, chart_offset.y];
+    for direction in 0..2 {
+        let Some(period) = periods[direction] else {
+            if lifts[direction] != 0 {
+                return Err(BoundedChartLiftGap::ShiftOverflow {
+                    span_index,
+                    direction,
+                });
+            }
+            continue;
+        };
+        let shift = lifts[direction] as f64 * period;
+        let shifted = coordinates[direction] + shift;
+        if !shift.is_finite()
+            || !shifted.is_finite()
+            || lifts[direction] != 0 && shifted.to_bits() == coordinates[direction].to_bits()
+        {
+            return Err(BoundedChartLiftGap::ShiftOverflow {
+                span_index,
+                direction,
+            });
+        }
+        coordinates[direction] = shifted;
+    }
+    Ok(Point2::new(coordinates[0], coordinates[1]))
+}
+
+fn bounded_join_chart_neighborhood(surface: &SurfaceGeom, model_tolerance: f64) -> Option<f64> {
     if !model_tolerance.is_finite() || model_tolerance < 0.0 {
         return None;
     }

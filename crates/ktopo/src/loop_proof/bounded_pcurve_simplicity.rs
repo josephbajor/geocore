@@ -11,6 +11,9 @@ use kcore::math;
 use kcore::predicates::Orientation;
 use kgeom::vec::Point2;
 
+#[cfg(test)]
+mod certified_join_tests;
+
 const MAX_SAFE_SCALAR: f64 = f64::from_bits(((1023 + 450) as u64) << 52);
 const MIN_SAFE_SCALAR: f64 = f64::from_bits(((1023 - 450) as u64) << 52);
 const MAX_PERIOD_INDEX: i64 = 1_i64 << 40;
@@ -26,19 +29,18 @@ pub(crate) struct BoundedLoopSpan<'a, K> {
 
 /// Proof token minted only after topology-owned identity, whole-fin
 /// incidence, and surface-lifted endpoint distance certify one chart join.
-/// The parameter neighborhood is a conservative local radius in the
-/// normalized Line2d parameter metric; it is never sufficient by itself to
-/// discharge an intersection.
+/// The chart neighborhood is a conservative local distance in the owning
+/// surface chart. Consumers convert it to each pcurve's parameter metric; it
+/// is never sufficient by itself to discharge an intersection.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct CertifiedBoundedLoopJoin {
-    parameter_neighborhood: f64,
+    chart_neighborhood: f64,
 }
 
 impl CertifiedBoundedLoopJoin {
-    pub(super) fn new(parameter_neighborhood: f64) -> Option<Self> {
-        (parameter_neighborhood.is_finite() && parameter_neighborhood >= 0.0).then_some(Self {
-            parameter_neighborhood,
-        })
+    pub(super) fn new(chart_neighborhood: f64) -> Option<Self> {
+        (chart_neighborhood.is_finite() && chart_neighborhood >= 0.0)
+            .then_some(Self { chart_neighborhood })
     }
 }
 
@@ -59,6 +61,12 @@ impl<'a, K: Copy> BoundedLoopSpan<'a, K> {
 
     pub(crate) const fn geometry(self) -> BoundedPcurveSpan<'a> {
         self.geometry
+    }
+
+    /// Replace only the proof-local chart of this span.
+    pub(super) const fn with_geometry(mut self, geometry: BoundedPcurveSpan<'a>) -> Self {
+        self.geometry = geometry;
+        self
     }
 
     pub(super) const fn tail(self) -> K {
@@ -223,23 +231,31 @@ fn pair_relation<K: Copy + Eq>(
     let left = spans[left_index];
     let right = spans[right_index];
     let shared = shared_endpoint_parameters(left, right);
+    let certified_joins = certified_shared_joins(left, right);
     match (left.geometry.curve(), right.geometry.curve()) {
         (crate::geom::Curve2dGeom::Line(_), crate::geom::Curve2dGeom::Line(_)) => {
-            let certified_joins = certified_shared_joins(left, right);
             line_line_relation(left.geometry, right.geometry, &shared, &certified_joins)
         }
         (crate::geom::Curve2dGeom::Line(_), crate::geom::Curve2dGeom::Circle(_)) => {
-            line_circle_relation(left.geometry, right.geometry, &shared)
+            line_circle_relation(left.geometry, right.geometry, &shared, &certified_joins)
         }
         (crate::geom::Curve2dGeom::Circle(_), crate::geom::Curve2dGeom::Line(_)) => {
             let reversed = shared
                 .iter()
                 .map(|&(left, right)| (right, left))
                 .collect::<Vec<_>>();
-            line_circle_relation(right.geometry, left.geometry, &reversed)
+            let reversed_joins = certified_joins
+                .iter()
+                .map(|join| CertifiedSharedJoin {
+                    left_parameter: join.right_parameter,
+                    right_parameter: join.left_parameter,
+                    evidence: join.evidence,
+                })
+                .collect::<Vec<_>>();
+            line_circle_relation(right.geometry, left.geometry, &reversed, &reversed_joins)
         }
         (crate::geom::Curve2dGeom::Circle(_), crate::geom::Curve2dGeom::Circle(_)) => {
-            circle_circle_relation(left.geometry, right.geometry, &shared)
+            circle_circle_relation(left.geometry, right.geometry, &shared, &certified_joins)
         }
         _ => Err(()),
     }
@@ -321,12 +337,10 @@ fn line_line_relation(
         }
         let left_root = ratio_interval(&cross_exact(&offset, &right_direction)?, &determinant)?;
         let right_root = ratio_interval(&cross_exact(&offset, &left_direction)?, &determinant)?;
-        let authorized = certified_joins
-            .iter()
-            .copied()
-            .any(|join| certified_join_confines_roots(left_root, right_root, join));
-        if authorized {
-            return Ok(PairRelation::Disjoint);
+        match uniquely_confining_join(left, left_root, right, right_root, certified_joins) {
+            Ok(Some(_)) => return Ok(PairRelation::Disjoint),
+            Err(()) => return Ok(PairRelation::Indeterminate),
+            Ok(None) => {}
         }
         // A topology identity alone does not authorize a rounded near join.
         // Exact evaluated endpoints were handled above, and certified near
@@ -340,22 +354,98 @@ fn line_line_relation(
     coincident_line_relation(left, right, shared, &left_origin, &left_direction)
 }
 
-fn certified_join_confines_roots(
+fn uniquely_confining_join(
+    left: BoundedPcurveSpan<'_>,
     left_root: Interval,
+    right: BoundedPcurveSpan<'_>,
+    right_root: Interval,
+    certified_joins: &[CertifiedSharedJoin],
+) -> core::result::Result<Option<usize>, ()> {
+    let mut matches = certified_joins
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, join)| {
+            certified_join_confines_roots(left, left_root, right, right_root, *join)
+        });
+    let first = matches.next().map(|(index, _)| index);
+    if matches.next().is_some() {
+        Err(())
+    } else {
+        Ok(first)
+    }
+}
+
+fn certified_join_confines_roots(
+    left: BoundedPcurveSpan<'_>,
+    left_root: Interval,
+    right: BoundedPcurveSpan<'_>,
     right_root: Interval,
     join: CertifiedSharedJoin,
 ) -> bool {
-    let radius = join.evidence.parameter_neighborhood;
-    if !radius.is_finite() || radius < 0.0 {
+    let Some(left_radius) = join_parameter_radius(left, join.evidence) else {
+        return false;
+    };
+    let Some(right_radius) = join_parameter_radius(right, join.evidence) else {
+        return false;
+    };
+    root_inside_parameter_neighborhood(left_root, join.left_parameter, left_radius)
+        && root_inside_parameter_neighborhood(right_root, join.right_parameter, right_radius)
+}
+
+fn join_parameter_radius(
+    span: BoundedPcurveSpan<'_>,
+    evidence: CertifiedBoundedLoopJoin,
+) -> Option<f64> {
+    let chart_radius = evidence.chart_neighborhood;
+    if !chart_radius.is_finite() || chart_radius < 0.0 {
+        return None;
+    }
+    let chart_speed = match span.curve() {
+        crate::geom::Curve2dGeom::Line(_) => 1.0,
+        crate::geom::Curve2dGeom::Circle(circle) => circle.radius(),
+        _ => return None,
+    };
+    if !chart_speed.is_finite() || chart_speed <= 0.0 {
+        return None;
+    }
+    if chart_radius == 0.0 {
+        return Some(0.0);
+    }
+    let radius = Interval::point(chart_radius)
+        .checked_div(Interval::point(chart_speed))?
+        .lo();
+    (radius.is_finite() && radius >= 0.0).then_some(radius)
+}
+
+fn root_inside_parameter_neighborhood(root: Interval, parameter: f64, radius: f64) -> bool {
+    if !parameter.is_finite() || !radius.is_finite() || radius < 0.0 {
         return false;
     }
-    let neighborhood = Interval::new(-radius, radius);
-    let left_neighborhood = Interval::point(join.left_parameter) + neighborhood;
-    let right_neighborhood = Interval::point(join.right_parameter) + neighborhood;
-    left_root.lo() >= left_neighborhood.lo()
-        && left_root.hi() <= left_neighborhood.hi()
-        && right_root.lo() >= right_neighborhood.lo()
-        && right_root.hi() <= right_neighborhood.hi()
+    if radius == 0.0 {
+        return root.lo() == parameter && root.hi() == parameter;
+    }
+    // These bounds are rounded inward: an accepted root therefore fits
+    // inside the proven chart-distance radius even at an f64 boundary.
+    let lo = (parameter - radius).next_up();
+    let hi = (parameter + radius).next_down();
+    lo.is_finite() && hi.is_finite() && lo <= hi && root.lo() >= lo && root.hi() <= hi
+}
+
+fn uncertified_shared_parameters(
+    shared: &[(f64, f64)],
+    certified_joins: &[CertifiedSharedJoin],
+) -> Vec<(f64, f64)> {
+    shared
+        .iter()
+        .copied()
+        .filter(|&(left, right)| {
+            !certified_joins.iter().any(|join| {
+                left.to_bits() == join.left_parameter.to_bits()
+                    && right.to_bits() == join.right_parameter.to_bits()
+            })
+        })
+        .collect()
 }
 
 fn coincident_line_relation(
@@ -414,16 +504,23 @@ fn line_circle_relation(
     line_span: BoundedPcurveSpan<'_>,
     circle_span: BoundedPcurveSpan<'_>,
     shared: &[(f64, f64)],
+    certified_joins: &[CertifiedSharedJoin],
 ) -> core::result::Result<PairRelation, ()> {
     if !circle_span_is_injective(circle_span)? {
         return Ok(PairRelation::ForbiddenIntersection);
     }
-    // A line and a nondegenerate circle have at most two intersections. Two
-    // distinct topology-owned common endpoints therefore exhaust the carrier
-    // intersection set without reconstructing either endpoint numerically.
+    // Two exact, distinct topology-owned intersections exhaust the maximum
+    // two roots of a line/circle pair. Near joins must proceed through the
+    // root solver so each certificate is matched and consumed independently.
     if shared.len() == 2
         && shared[0].0.to_bits() != shared[1].0.to_bits()
         && shared[0].1.to_bits() != shared[1].1.to_bits()
+        && shared.iter().all(|&(line_parameter, circle_parameter)| {
+            endpoint_point(line_span, line_parameter).is_some_and(|line_point| {
+                endpoint_point(circle_span, circle_parameter)
+                    .is_some_and(|circle_point| points_bit_equal(line_point, circle_point))
+            })
+        })
     {
         return Ok(PairRelation::Disjoint);
     }
@@ -446,6 +543,8 @@ fn line_circle_relation(
     }
     let denominator = dot_exact(&direction, &direction)?.interval()?;
     let mut uncertain = false;
+    let ordinary_shared = uncertified_shared_parameters(shared, certified_joins);
+    let mut consumed_joins = vec![false; certified_joins.len()];
     for root in roots.roots {
         let circle_membership = root_membership(root, circle_span)?;
         let RootMembership::Candidate(circle_use) = circle_membership else {
@@ -458,12 +557,29 @@ fn line_circle_relation(
             exact_vec_interval(&direction)?,
         );
         let line_root = numerator.checked_div(denominator).ok_or(())?;
+        match uniquely_confining_join(
+            line_span,
+            line_root,
+            circle_span,
+            circle_use.parameter,
+            certified_joins,
+        ) {
+            Ok(Some(join_index)) if !consumed_joins[join_index] => {
+                consumed_joins[join_index] = true;
+                continue;
+            }
+            Err(()) => {
+                uncertain = true;
+                continue;
+            }
+            Ok(Some(_)) | Ok(None) => {}
+        }
         match classify_root_pair(
             line_span,
             line_root,
             circle_span,
             circle_use.parameter,
-            shared,
+            &ordinary_shared,
         ) {
             PairRelation::ForbiddenIntersection => {
                 return Ok(PairRelation::ForbiddenIntersection);
@@ -484,6 +600,7 @@ fn circle_circle_relation(
     left: BoundedPcurveSpan<'_>,
     right: BoundedPcurveSpan<'_>,
     shared: &[(f64, f64)],
+    certified_joins: &[CertifiedSharedJoin],
 ) -> core::result::Result<PairRelation, ()> {
     if !circle_span_is_injective(left)? || !circle_span_is_injective(right)? {
         return Ok(PairRelation::ForbiddenIntersection);
@@ -535,6 +652,7 @@ fn circle_circle_relation(
         left,
         right,
         shared,
+        certified_joins,
         &left_center,
         &left_cosine,
         &left_sine,
@@ -562,6 +680,7 @@ fn match_circle_roots(
     left: BoundedPcurveSpan<'_>,
     right: BoundedPcurveSpan<'_>,
     shared: &[(f64, f64)],
+    certified_joins: &[CertifiedSharedJoin],
     left_center: &[Exact; 2],
     left_cosine: &[Exact; 2],
     left_sine: &[Exact; 2],
@@ -571,13 +690,19 @@ fn match_circle_roots(
     right_sine: &[Exact; 2],
     right_roots: Vec<Interval>,
 ) -> core::result::Result<PairRelation, ()> {
+    let ordinary_shared = uncertified_shared_parameters(shared, certified_joins);
     if left_roots.len() == 1 && right_roots.len() == 1 {
+        match uniquely_confining_join(left, left_roots[0], right, right_roots[0], certified_joins) {
+            Ok(Some(_)) => return Ok(PairRelation::Disjoint),
+            Err(()) => return Ok(PairRelation::Indeterminate),
+            Ok(None) => {}
+        }
         return Ok(classify_root_pair(
             left,
             left_roots[0],
             right,
             right_roots[0],
-            shared,
+            &ordinary_shared,
         ));
     }
     let left_points = left_roots
@@ -589,6 +714,7 @@ fn match_circle_roots(
         .map(|&root| circle_point_interval(right_center, right_cosine, right_sine, root))
         .collect::<core::result::Result<Vec<_>, _>>()?;
     let mut uncertain = false;
+    let mut consumed_joins = vec![false; certified_joins.len()];
     for (left_root_index, &left_root) in left_roots.iter().enumerate() {
         let matches = right_points
             .iter()
@@ -600,7 +726,18 @@ fn match_circle_roots(
             return Ok(PairRelation::Indeterminate);
         };
         let right_root = right_roots[*right_root_index];
-        match classify_root_pair(left, left_root, right, right_root, shared) {
+        match uniquely_confining_join(left, left_root, right, right_root, certified_joins) {
+            Ok(Some(join_index)) if !consumed_joins[join_index] => {
+                consumed_joins[join_index] = true;
+                continue;
+            }
+            Err(()) => {
+                uncertain = true;
+                continue;
+            }
+            Ok(Some(_)) | Ok(None) => {}
+        }
+        match classify_root_pair(left, left_root, right, right_root, &ordinary_shared) {
             PairRelation::ForbiddenIntersection => {
                 return Ok(PairRelation::ForbiddenIntersection);
             }
@@ -1201,6 +1338,7 @@ mod tests {
                     Point2::default(),
                 ),
                 &[],
+                &[],
             )
             .unwrap(),
             PairRelation::ForbiddenIntersection
@@ -1210,11 +1348,11 @@ mod tests {
         let line_use = BoundedPcurveSpan::new(&endpoint_tangent, 0.0, 1.0, Point2::default());
         let circle_use = BoundedPcurveSpan::new(&unit_circle, 0.0, 1.0, Point2::default());
         assert_eq!(
-            line_circle_relation(line_use, circle_use, &[(0.0, 0.0)]).unwrap(),
+            line_circle_relation(line_use, circle_use, &[(0.0, 0.0)], &[]).unwrap(),
             PairRelation::Disjoint
         );
         assert_eq!(
-            line_circle_relation(line_use, circle_use, &[]).unwrap(),
+            line_circle_relation(line_use, circle_use, &[], &[]).unwrap(),
             PairRelation::ForbiddenIntersection
         );
 
@@ -1251,6 +1389,7 @@ mod tests {
                     Point2::default(),
                 ),
                 &[],
+                &[],
             )
             .unwrap(),
             PairRelation::ForbiddenIntersection
@@ -1261,6 +1400,7 @@ mod tests {
                 BoundedPcurveSpan::new(&unit_circle, 0.0, 1.0, Point2::default()),
                 BoundedPcurveSpan::new(&unit_circle, 1.0, 2.0, Point2::default()),
                 &[(1.0, 1.0)],
+                &[],
             )
             .unwrap(),
             PairRelation::Disjoint
@@ -1269,6 +1409,7 @@ mod tests {
             circle_circle_relation(
                 BoundedPcurveSpan::new(&unit_circle, 0.0, 2.0, Point2::default()),
                 BoundedPcurveSpan::new(&unit_circle, 1.0, 3.0, Point2::default()),
+                &[],
                 &[],
             )
             .unwrap(),
@@ -1281,6 +1422,7 @@ mod tests {
             circle_circle_relation(
                 BoundedPcurveSpan::new(&unit_circle, 0.0, 1.0, Point2::default()),
                 BoundedPcurveSpan::new(&rephased, 0.0, 1.0, Point2::default()),
+                &[],
                 &[],
             )
             .unwrap(),

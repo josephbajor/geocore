@@ -45,10 +45,10 @@ enforcement over new parallel surface area. Read the queue literally.
    the public facade and export deterministically; certified flush axial cap-contact connected
    unions also land; topology-owned ruling trims with operation-shared source-edge root identity
    now publish bounded line fragments and closed mixed arc/ruling cycles across shared translated, permuted, and all-nonzero oblique exact frames. Semantic rounded-frame Plane incidence and sloped-support ruling recovery, proof-bearing periodic Section embeddings, general disk/annulus arrangements and adapters, exact bounded analytic loop proof, exact source-root/carrier trim scalars, and correlation-preserving multi-chart clipped-cylinder Full proof landed. Rectangular/three-sided/five-support bounded-arc intersection and every ordered rectangular/three-sided planar-minus-cylinder component Full-commit across four frames. Endpoint-free cap planning/incidence/materialization plus count-independent portal-shell proof now let rectangular/five-support cap-retaining Unite and cylinder-left Subtract Full-commit with deterministic X_T, exact topology/volume, and N/N-1 evidence.
-   Next is cycle-wide periodic lifting for seam-crossing bounded loops; broader NURBS families, revolve, and curved profiles remain milestone backlog.
+   Cycle-wide proof-local periodic lifting now certifies seam-crossing bounded loops. Next is convex-proof-independent exact planar-shell extraction for non-convex mixed operands; broader NURBS families, revolve, and curved profiles remain milestone backlog.
 
 **External-evidence lane.** Onshape records pin exact historical bytes: the 15-file base and six-file
-historical Boolean records are stale; the deterministic thirteen-file offline Boolean bundle is queued, not host-certified. Fingerprints: `docs/oracle-certification.json` and
+historical Boolean records are stale; the deterministic fourteen-file offline Boolean bundle is queued, not host-certified. Fingerprints: `docs/oracle-certification.json` and
 `docs/oracle-boolean-certification.json`; findings: `docs/oracle-results.tsv` (ORCHESTRATION R5).
 CI checks those identities offline; manual catch-up batches own host evidence. Wire/acorn and base-reader gaps remain open.
 

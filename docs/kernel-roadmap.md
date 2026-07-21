@@ -302,7 +302,7 @@ tables and atomically Full-commits connected, proven-empty, multi-body, and
 one-cavity results while exact contact and incomplete proof fail closed.
 Six historical operation outputs passed the supplemental Onshape oracle 6/6
 on import and 6/6 there-and-back; that record is stale while the deterministic
-thirteen-payload offline bundle awaits licensed-host replay
+fourteen-payload offline bundle awaits licensed-host replay
 (`docs/oracle-boolean-certification.json`). The
 active queue head is rung 4 block/cylinder. Public finite-cylinder construction,
 manifold finite-cylinder classification, topology-owned conic/ring trim proofs,
@@ -346,15 +346,19 @@ for rectangular and five-support layouts across all four frames. The five-portal
 results preserve exact face/edge/vertex signatures (23/47/30; 10/32/20), satisfy
 independent analytic mesh-volume checks, export deterministic X_T, Fast self-import,
 and admit exact 14,966,784/1,095,237 shell work while denying N-1 without mutation.
-The thirteen-file offline Boolean bundle is byte-stable and queued/stale; only
-the preserved six-file host record is certified. Next is a cycle-wide certified
-integer-period lift for bounded cylinder loops crossing the authored `u=0` seam.
+Cycle-wide certified integer-period lifting admits the seam-crossing radius-1.7
+five-support cylinder-left Subtract across all four frames with 10/32/20 topology,
+literal-derived volume, deterministic X_T, and Fast self-import. The fourteen-file
+offline Boolean bundle is byte-stable and queued/stale; only the preserved six-file
+host record is certified. Next is general exact planar-shell topology/incidence
+extraction independent of optional convex half-space proof for non-convex prisms.
 
 Evidence: `ordered_planar_minus_cylinder_commits_every_disconnected_profile_component`,
 `disconnected_subtract_batch_denies_n_minus_one_before_any_component_allocates`,
 `cap_retaining_mixed_union_and_cylinder_subtract_commit_full_valid`,
-`convex_five_patch_cap_retaining_operations_commit_under_default_policy`, and
-`five_portal_shell_work_accepts_exact_n_and_refuses_n_minus_one_atomically`.
+`convex_five_patch_cap_retaining_operations_commit_under_default_policy`,
+`five_portal_shell_work_accepts_exact_n_and_refuses_n_minus_one_atomically`, and
+`seam_crossing_five_patch_cylinder_subtract_is_full_valid_in_all_frames`.
 
 Do not wait for an exhaustive analytic pair table before testing the end-to-end
 boolean architecture. Begin with a deliberately narrow vertical slice as soon as the

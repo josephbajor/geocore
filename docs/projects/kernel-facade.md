@@ -277,7 +277,7 @@ signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handle
 - Broader semantic edit families beyond the landed MVFS/KVFS, MEV/KEV, MEF/KEF, KFMRH/MFKRH,
   split/merge, bridge/ring, and rigid copy; nested edit transactions pending a journal-composition +
   partition-history contract; tolerance-propagation policies beyond MEF inheritance / KEF ordered max.
-- Add cycle-wide certified integer-period lifts for bounded cylinder loops crossing the authored seam, then extend the landed deterministic-X_T axial, disconnected planar-minus-cylinder, multi-portal cap-retaining, zero-cut/cavity, host-feature, support-contact, and convex bounded-arc slices to broader mixed layouts and curved licensed-host evidence without exposing lower-layer
+- Separate exact planar-shell topology/incidence extraction from optional convex half-space proof so non-convex profile prisms can enter the landed deterministic-X_T axial, disconnected planar-minus-cylinder, multi-portal cap-retaining, zero-cut/cavity, host-feature, support-contact, and seam-crossing bounded-arc pipeline without exposing lower-layer
   symbolic fragments, graph descriptors, or raw candidate topology.
 - Rigid-copy preflight gaps: altered/witness-mismatched higher-order charts, graph-valid shared-basis
   or periodic-source/carrier proofs, other-sample dual offsets, nested five-/seven-sample roots, and

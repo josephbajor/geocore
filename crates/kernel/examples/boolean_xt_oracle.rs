@@ -29,7 +29,9 @@ const CAP_RETAINING_UNITE: &str = "cap_retaining_plane_cylinder_unite.x_t";
 const CAP_RETAINING_CYLINDER_SUBTRACT: &str = "cap_retaining_cylinder_minus_plane.x_t";
 const FIVE_PORTAL_UNITE: &str = "five_portal_plane_cylinder_unite.x_t";
 const FIVE_PORTAL_CYLINDER_SUBTRACT: &str = "five_portal_cylinder_minus_plane.x_t";
-const EXPECTED_FILES: [&str; 13] = [
+const SEAM_CROSSING_FIVE_PORTAL_CYLINDER_SUBTRACT: &str =
+    "seam_crossing_five_portal_cylinder_minus_plane.x_t";
+const EXPECTED_FILES: [&str; 14] = [
     CONNECTED_UNITE,
     CONNECTED_SUBTRACT,
     CONNECTED_INTERSECT,
@@ -43,6 +45,7 @@ const EXPECTED_FILES: [&str; 13] = [
     CAP_RETAINING_CYLINDER_SUBTRACT,
     FIVE_PORTAL_UNITE,
     FIVE_PORTAL_CYLINDER_SUBTRACT,
+    SEAM_CROSSING_FIVE_PORTAL_CYLINDER_SUBTRACT,
 ];
 
 const BOUNDED_ARC_RADIUS: f64 = 1.5;
@@ -62,6 +65,10 @@ const FIVE_PORTAL_PROFILE_AREA: f64 = 6.086_761_704_674_135;
 /// Independently evaluated disk/profile intersection area for those literals.
 const FIVE_PORTAL_INTERSECTION_VOLUME: f64 = 6.014_725_024_492_857;
 const FIVE_PORTAL_RELATIVE_VOLUME_TOLERANCE: f64 = 1.0e-3;
+/// Literal-support circle-segment evaluation for the seam-crossing profile.
+/// For each edge, `d = cross(p_i, p_j) / |p_j - p_i|` and the removed cap is
+/// `R^2 acos(d/R) - d sqrt(R^2 - d^2)`; the overlap height is exactly one.
+const SEAM_CROSSING_FIVE_PORTAL_CYLINDER_SUBTRACT_VOLUME: f64 = 7.570_496_318_579_939;
 
 const SIN_047: f64 = 0.452_886_285_379_068_3;
 const COS_047: f64 = 0.891_568_288_195_329;
@@ -427,6 +434,7 @@ fn build_bundle() -> OracleResult<Vec<Artifact>> {
         cap_retaining_cylinder_volume() - FIVE_PORTAL_INTERSECTION_VOLUME,
         FIVE_PORTAL_CYLINDER_SUBTRACT_COUNTS,
     )?);
+    artifacts.push(build_seam_crossing_five_portal_subtract()?);
     Ok(artifacts)
 }
 
@@ -572,6 +580,37 @@ fn build_five_portal_result(
     )
 }
 
+fn build_seam_crossing_five_portal_subtract() -> OracleResult<Artifact> {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (block, cylinder) = create_seam_crossing_five_portal_operands(&mut session, &part)?;
+    let bodies = run_boolean(
+        &mut session,
+        &part,
+        cylinder.clone(),
+        block.clone(),
+        BooleanOperation::Subtract,
+    )?;
+    require(
+        bodies.len() == 1,
+        format!(
+            "{SEAM_CROSSING_FIVE_PORTAL_CYLINDER_SUBTRACT} expected one result body, got {}",
+            bodies.len()
+        ),
+    )?;
+    assert_sources_retained(&session, &part, &block, &cylinder, 3)?;
+    make_artifact_with_volume_tolerance(
+        &mut session,
+        &part,
+        bodies[0].clone(),
+        SEAM_CROSSING_FIVE_PORTAL_CYLINDER_SUBTRACT,
+        SEAM_CROSSING_FIVE_PORTAL_CYLINDER_SUBTRACT_VOLUME,
+        FIVE_PORTAL_CYLINDER_SUBTRACT_COUNTS,
+        FIVE_PORTAL_RELATIVE_VOLUME_TOLERANCE,
+        CAP_RETAINING_CHORD_TOLERANCE,
+    )
+}
+
 fn create_bounded_arc_operands(
     session: &mut Session,
     part: &PartId,
@@ -645,6 +684,38 @@ fn create_five_portal_operands(
                 ProfilePoint2::new(-0.940_456_404, -1.294_427_191),
                 ProfilePoint2::new(0.940_456_404, -1.294_427_191),
                 ProfilePoint2::new(1.521_690_426, 0.494_427_191),
+            ],
+            Vec::new(),
+            BOUNDED_ARC_SLAB_HI - BOUNDED_ARC_SLAB_LO,
+        ))?
+        .into_result()?
+        .body();
+    let cylinder = edit
+        .create_cylinder(CylinderRequest::new(
+            frame,
+            BOUNDED_ARC_RADIUS,
+            BOUNDED_ARC_CYLINDER_HEIGHT,
+        ))?
+        .into_result()?
+        .body();
+    Ok((block, cylinder))
+}
+
+fn create_seam_crossing_five_portal_operands(
+    session: &mut Session,
+    part: &PartId,
+) -> OracleResult<(BodyId, BodyId)> {
+    let frame = Frame::world();
+    let mut edit = session.edit_part(part.clone())?;
+    let block = edit
+        .extrude_profile(ExtrudeProfileRequest::new(
+            frame.with_origin(frame.point_at(0.0, 0.0, BOUNDED_ARC_SLAB_LO)),
+            vec![
+                ProfilePoint2::new(0.0, 1.7),
+                ProfilePoint2::new(-1.616_796_077_701_761, 0.525_328_890_437_410_6),
+                ProfilePoint2::new(-0.999_234_928_897_204_3, -1.375_328_890_437_410_5),
+                ProfilePoint2::new(0.999_234_928_897_203_8, -1.375_328_890_437_411),
+                ProfilePoint2::new(1.616_796_077_701_761, 0.525_328_890_437_410_1),
             ],
             Vec::new(),
             BOUNDED_ARC_SLAB_HI - BOUNDED_ARC_SLAB_LO,

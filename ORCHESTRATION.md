@@ -70,9 +70,12 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    atomically Full-commit across the same four frames. The five-portal slice has
    exact topology/analytic-volume evidence, deterministic X_T, Fast self-import,
    and exact 14,966,784/1,095,237 N/N-1 shell-work refusal under the finite
-   16,777,216 default; the thirteen-file offline Boolean bundle is queued/stale,
-   not host-certified. Next: cycle-wide integer-period lifts for otherwise-valid
-   bounded cylinder loops crossing the authored `u=0` seam.)*
+   16,777,216 default. Cycle-wide certified integer-period lifting now admits
+   the seam-crossing radius-1.7 cylinder-left Subtract across all four frames
+   with 10/32/20 topology, literal-derived volume, deterministic X_T, and Fast
+   self-import; the fourteen-file offline bundle is queued/stale, not host-certified.
+   Next: separate exact planar-shell topology/incidence extraction from optional
+   convex half-space proof so non-convex profile prisms can enter mixed planning.)*
 
 Work that does not advance the queue head needs an explicit justification
 linking it to a rung ("rung 2 needs curve/curve overlap dedup because …").

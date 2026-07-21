@@ -357,6 +357,57 @@ fn convex_five_patch_fixture(placement: Placement) -> MixedCycleFixture {
     }
 }
 
+fn seam_crossing_five_patch_fixture(placement: Placement) -> MixedCycleFixture {
+    let frame = mixed_frame(placement);
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let (block, cylinder) = {
+        let mut edit = session.edit_part(part_id.clone()).unwrap();
+        // Circumradius 1.7 makes the portal centered nearest the cylinder's
+        // periodic seam cross that seam. Every pentagon support remains
+        // strictly inside the radius-1.5 disk and every vertex outside it.
+        let block = edit
+            .extrude_profile(ExtrudeProfileRequest::new(
+                frame.with_origin(frame.point_at(0.0, 0.0, SLAB_LO)),
+                vec![
+                    Point2::new(0.0, 1.7),
+                    Point2::new(-1.616_796_077_701_761, 0.525_328_890_437_410_6),
+                    Point2::new(-0.999_234_928_897_204_3, -1.375_328_890_437_410_5),
+                    Point2::new(0.999_234_928_897_203_8, -1.375_328_890_437_411),
+                    Point2::new(1.616_796_077_701_761, 0.525_328_890_437_410_1),
+                ],
+                Vec::new(),
+                SLAB_HI - SLAB_LO,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let cylinder = edit
+            .create_cylinder(CylinderRequest::new(frame, RADIUS, CYLINDER_HEIGHT))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (block, cylinder)
+    };
+    let before = source_signature(&session, &part_id, &block, &cylinder);
+    assert_eq!(before.block.faces.len(), 7);
+    assert_eq!(before.block.edges.len(), 15);
+    assert_eq!(before.block.vertices.len(), 10);
+    assert_eq!(before.cylinder.faces.len(), 3);
+    assert_eq!(before.cylinder.edges.len(), 2);
+    assert!(before.cylinder.vertices.is_empty());
+    MixedCycleFixture {
+        session,
+        part_id,
+        block,
+        cylinder,
+        frame,
+        before,
+    }
+}
+
 fn cap_retaining_fixture(placement: Placement) -> MixedCycleFixture {
     let frame = mixed_frame(placement);
     let mut session = Kernel::new().create_session();
@@ -1741,6 +1792,105 @@ fn convex_five_patch_cap_retaining_operations_commit_under_default_policy() {
             );
             assert_eq!(after.body_count, before.body_count + 1);
         }
+    }
+}
+
+#[test]
+fn seam_crossing_five_patch_cylinder_subtract_is_full_valid_in_all_frames() {
+    // Independently evaluated from each literal edge p_i -> p_{i+1} with
+    // d_i = cross(p_i, p_{i+1}) / |p_{i+1} - p_i| and circular segment
+    // C_i = r^2 acos(d_i/r) - d_i sqrt(r^2 - d_i^2). The overlap prism
+    // height is one, so V(cylinder - profile) = pi r^2 + sum(C_i).
+    const EXPECTED_VOLUME: f64 = 7.570_496_318_579_939;
+
+    for placement in [
+        Placement::World,
+        Placement::Translated,
+        Placement::AxisPermuted,
+        Placement::Oblique,
+    ] {
+        let MixedCycleFixture {
+            mut session,
+            part_id,
+            block,
+            cylinder,
+            frame: _,
+            before,
+        } = seam_crossing_five_patch_fixture(placement);
+        let outcome = session
+            .edit_part(part_id.clone())
+            .unwrap()
+            .boolean_bodies(BooleanBodiesRequest::new(
+                BooleanOperation::Subtract,
+                cylinder.clone(),
+                block.clone(),
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        let BooleanOutcome::Success(BooleanResult::Created(created)) = outcome else {
+            panic!("seam-crossing five-patch {placement:?} did not commit: {outcome:?}")
+        };
+        assert_eq!(created.bodies().len(), 1, "{placement:?}");
+        assert_eq!(created.reports().len(), 1, "{placement:?}");
+        assert_eq!(
+            created.reports()[0].report().outcome(),
+            CheckOutcome::Valid,
+            "{placement:?}",
+        );
+
+        let result = created.bodies()[0].clone();
+        let signature = body_signature(&session.part(part_id.clone()).unwrap(), result.clone());
+        assert_eq!(
+            (
+                signature.faces.len(),
+                signature.edges.len(),
+                signature.vertices.len(),
+            ),
+            (10, 32, 20),
+            "{placement:?}",
+        );
+        let full = session
+            .part(part_id.clone())
+            .unwrap()
+            .check_body(CheckBodyRequest::new(result.clone(), CheckLevel::Full))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            full.outcome(),
+            CheckOutcome::Valid,
+            "{placement:?}: {full:?}"
+        );
+
+        let mesh = session
+            .part(part_id.clone())
+            .unwrap()
+            .tessellate_body(TessellateBodyRequest::new(
+                result.clone(),
+                TessOptions {
+                    chord_tol: 1.0e-3,
+                    max_edge_len: None,
+                },
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        let actual_volume = mesh_volume(mesh.positions(), mesh.triangles());
+        assert!(
+            (actual_volume - EXPECTED_VOLUME).abs() <= EXPECTED_VOLUME * 1.0e-3,
+            "{placement:?}: mesh volume {actual_volume:.17e} differs from independent analytic value {EXPECTED_VOLUME:.17e}",
+        );
+        let _xt =
+            assert_mixed_deterministic_xt_and_fast_self_import(&mut session, &part_id, &result);
+
+        let after = source_signature(&session, &part_id, &block, &cylinder);
+        assert_eq!(after.block, before.block, "source prism was mutated");
+        assert_eq!(
+            after.cylinder, before.cylinder,
+            "source cylinder was mutated"
+        );
+        assert_eq!(after.body_count, before.body_count + 1);
     }
 }
 
