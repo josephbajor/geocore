@@ -263,7 +263,7 @@ an independent `EvalContext`. A reviewed `cargo public-api`/rustdoc-JSON snapsho
 signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handles/descriptors,
 `OperationScope`, `EvalContext`, or `repr(C)`.
 
-- Facade crate + lifecycle/adoption: `crates/kernel/src/{lib,session,operation,primitive,edit,error,id,interchange,intersection,iter,tessellation}.rs`, `crates/kernel/src/view/`, `crates/kernel/tests/lifecycle.rs`, `examples/kernel-lifecycle`, `scripts/package_contract.py`.
+- Facade crate + lifecycle/adoption: `crates/kernel/src/{lib,session,operation,primitive,properties,edit,error,id,interchange,intersection,iter,tessellation}.rs`, `crates/kernel/src/view/`, `crates/kernel/tests/lifecycle.rs`, `examples/kernel-lifecycle`, `scripts/package_contract.py`.
 - Rigid copy + certificate reissuance: `crates/ktopo/tests/body_copy.rs`, `crates/kgraph/tests/{intersection_curve_certificate,transmitted_plane_offset_nurbs}.rs`.
 - Transmitted-proof / interchange atomicity: `crates/kxt/tests/{finite_open_two_sample_dual_offset,finite_open_cubic_dual_offset,finite_open_five_sample_dual_offset,finite_open_seven_sample_dual_offset,offset_nurbs_intersection,intersection_chart}.rs`.
 - Edit / journal / tolerance families: `crates/ktopo/tests/{euler_transactions,builders,tolerance_budgets,transactions,pcurves}.rs`.
@@ -279,7 +279,7 @@ signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handle
 - Broader semantic edit families beyond the landed MVFS/KVFS, MEV/KEV, MEF/KEF, KFMRH/MFKRH,
   split/merge, bridge/ring, and rigid copy; nested edit transactions pending a journal-composition +
   partition-history contract; tolerance-propagation policies beyond MEF inheritance / KEF ordered max.
-- Expose deterministic certified body volume and centroid for Full-valid public blocks, finite cylinders, and supported Plane/Cylinder Boolean results; area, inertia, distance, clash, and new surface-pair booleans remain queued.
+- Public `body_properties` retains its Full report and returns outward-certified volume/centroid enclosures from the exact oriented Plane/Cylinder boundary, with typed non-solid/unsupported/tolerant/inconclusive refusal, no mesh authority, fixed analytic work, rigid-covariant primitive/cap-crossing evidence, Boolean additivity, and exact N/N-1 refusal. Certified surface area and inertia are next; distance, clash, and new surface-pair booleans remain queued.
 - Rigid-copy preflight gaps: altered/witness-mismatched higher-order charts, graph-valid shared-basis
   or periodic-source/carrier proofs, other-sample dual offsets, nested five-/seven-sample roots, and
   Offset(Plane)-peer transmitted proofs; graph trace representation/binding beyond four-descriptor

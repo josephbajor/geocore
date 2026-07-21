@@ -5,8 +5,9 @@
 
 use super::*;
 use kernel::{
-    EdgeId, FaceId, SectionBranch, SectionBranchTopology, SectionCarrier,
-    SectionCurveEndpointTopology, SectionSite, SectionSourceParameterKey, SectionUvCurve,
+    BodyPropertiesOutcome, BodyPropertiesRequest, EdgeId, FaceId, SectionBranch,
+    SectionBranchTopology, SectionCarrier, SectionCurveEndpointTopology, SectionSite,
+    SectionSourceParameterKey, SectionUvCurve,
 };
 
 const RADIUS: f64 = 1.5;
@@ -536,6 +537,65 @@ fn cap_crossing_segment_volume() -> f64 {
     segment_area * CYLINDER_HEIGHT
 }
 
+fn expected_centroid_x(operation: BooleanOperation, case: CapCrossingCase) -> f64 {
+    let intersection_volume = cap_crossing_segment_volume();
+    let intersection_first_moment = 8.0 * 2.0_f64.sqrt() / 3.0;
+    let block_volume = (OUTER_X - OFFSET_X) * BLOCK_Y * BLOCK_Z;
+    let block_first_moment = block_volume * 0.5 * (OFFSET_X + OUTER_X);
+    let cylinder_volume = core::f64::consts::PI * RADIUS * RADIUS * CYLINDER_HEIGHT;
+    match operation {
+        BooleanOperation::Intersect => intersection_first_moment / intersection_volume,
+        BooleanOperation::Unite => {
+            (block_first_moment - intersection_first_moment)
+                / (block_volume + cylinder_volume - intersection_volume)
+        }
+        BooleanOperation::Subtract if case.swapped => {
+            -intersection_first_moment / (cylinder_volume - intersection_volume)
+        }
+        BooleanOperation::Subtract => {
+            (block_first_moment - intersection_first_moment) / (block_volume - intersection_volume)
+        }
+        _ => panic!("unsupported test operation {operation:?}"),
+    }
+}
+
+fn commit_cap_boolean(
+    fixture: &mut CapCrossingFixture,
+    operation: BooleanOperation,
+    left: BodyId,
+    right: BodyId,
+) -> BodyId {
+    let outcome = fixture
+        .session
+        .edit_part(fixture.part_id.clone())
+        .unwrap()
+        .boolean_bodies(BooleanBodiesRequest::new(operation, left, right))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    let BooleanOutcome::Success(BooleanResult::Created(created)) = outcome else {
+        panic!("properties additivity setup refused: {outcome:?}")
+    };
+    assert_eq!(created.bodies().len(), 1);
+    created.bodies()[0].clone()
+}
+
+fn certified_body_properties(part: &kernel::Part<'_>, body: BodyId) -> kernel::BodyProperties {
+    let BodyPropertiesOutcome::Certified {
+        properties,
+        full_check,
+    } = part
+        .body_properties(BodyPropertiesRequest::new(body))
+        .unwrap()
+        .into_result()
+        .unwrap()
+    else {
+        panic!("Full-valid Plane/Cylinder body properties were refused")
+    };
+    assert_eq!(full_check.outcome(), CheckOutcome::Valid);
+    properties
+}
+
 fn assert_cap_crossing_operation(
     operation: BooleanOperation,
     case: CapCrossingCase,
@@ -601,6 +661,63 @@ fn assert_cap_crossing_operation(
         CheckOutcome::Valid,
         "{} {operation:?}: {full:?}",
         case.name,
+    );
+    let properties_query = || {
+        part.body_properties(BodyPropertiesRequest::new(result.clone()))
+            .unwrap()
+    };
+    let properties_outcome = properties_query();
+    let repeated_properties = properties_query();
+    assert_eq!(
+        repeated_properties, properties_outcome,
+        "{} {operation:?}: repeated properties query changed value or accounting",
+        case.name,
+    );
+    assert!(
+        properties_outcome.report().usage().iter().any(|usage| {
+            usage.stage == kernel::BODY_PROPERTIES_ANALYTIC_WORK
+                && usage.resource == ResourceKind::Work
+                && usage.consumed > 0
+        }),
+        "{} {operation:?}",
+        case.name,
+    );
+    let BodyPropertiesOutcome::Certified {
+        properties,
+        full_check,
+    } = properties_outcome.into_result().unwrap()
+    else {
+        panic!("{} {operation:?}: analytic properties refused", case.name)
+    };
+    assert_eq!(full_check.outcome(), CheckOutcome::Valid, "{}", case.name);
+    assert!(
+        properties.volume().contains(expected_volume),
+        "{} {operation:?}: expected volume {expected_volume:.17e}, enclosure {:?}",
+        case.name,
+        properties.volume(),
+    );
+    let expected_centroid = fixture.frame.point_at(
+        expected_centroid_x(operation, case),
+        0.0,
+        0.5 * CYLINDER_HEIGHT,
+    );
+    assert!(
+        properties.centroid().contains(expected_centroid),
+        "{} {operation:?}: expected centroid {expected_centroid:?}, enclosure {:?}",
+        case.name,
+        properties.centroid(),
+    );
+    assert!(
+        properties.volume().error_bound() <= expected_volume.max(1.0) * 1.0e-10,
+        "{} {operation:?}: loose volume enclosure {:?}",
+        case.name,
+        properties.volume(),
+    );
+    assert!(
+        properties.centroid().error_bound() <= 1.0e-10,
+        "{} {operation:?}: loose centroid enclosure {:?}",
+        case.name,
+        properties.centroid(),
     );
     let mesh = part
         .tessellate_body(TessellateBodyRequest::new(
@@ -771,4 +888,81 @@ fn cap_crossing_intersection_full_commits_the_circular_segment_prism() {
             expected_volume,
         );
     }
+}
+
+#[test]
+fn certified_properties_obey_cap_crossing_boolean_additivity() {
+    let case = CASES[0];
+    let mut fixture = cap_crossing_fixture(case);
+    let prism = fixture.prism.clone();
+    let cylinder = fixture.cylinder.clone();
+    let intersection = commit_cap_boolean(
+        &mut fixture,
+        BooleanOperation::Intersect,
+        prism.clone(),
+        cylinder.clone(),
+    );
+    let union = commit_cap_boolean(
+        &mut fixture,
+        BooleanOperation::Unite,
+        prism.clone(),
+        cylinder.clone(),
+    );
+    let block_minus_cylinder = commit_cap_boolean(
+        &mut fixture,
+        BooleanOperation::Subtract,
+        prism.clone(),
+        cylinder.clone(),
+    );
+    let cylinder_minus_block = commit_cap_boolean(
+        &mut fixture,
+        BooleanOperation::Subtract,
+        cylinder.clone(),
+        prism.clone(),
+    );
+    let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+    let block = certified_body_properties(&part, prism);
+    let cylinder = certified_body_properties(&part, cylinder);
+    let intersection = certified_body_properties(&part, intersection);
+    let union = certified_body_properties(&part, union);
+    let block_minus_cylinder = certified_body_properties(&part, block_minus_cylinder);
+    let cylinder_minus_block = certified_body_properties(&part, cylinder_minus_block);
+
+    let volume = |properties: &kernel::BodyProperties| properties.volume().value();
+    let first_moment = |properties: &kernel::BodyProperties| {
+        let local = fixture.frame.to_local(properties.centroid().value());
+        local * volume(properties)
+    };
+    let volume_tolerance = 1.0e-9;
+    let moment_tolerance = 1.0e-8;
+    assert!(
+        (volume(&union) + volume(&intersection) - volume(&block) - volume(&cylinder)).abs()
+            <= volume_tolerance
+    );
+    assert!(
+        (volume(&block_minus_cylinder) + volume(&intersection) - volume(&block)).abs()
+            <= volume_tolerance
+    );
+    assert!(
+        (volume(&cylinder_minus_block) + volume(&intersection) - volume(&cylinder)).abs()
+            <= volume_tolerance
+    );
+    assert!(
+        (first_moment(&union) + first_moment(&intersection)
+            - first_moment(&block)
+            - first_moment(&cylinder))
+        .norm()
+            <= moment_tolerance
+    );
+    assert!(
+        (first_moment(&block_minus_cylinder) + first_moment(&intersection) - first_moment(&block))
+            .norm()
+            <= moment_tolerance
+    );
+    assert!(
+        (first_moment(&cylinder_minus_block) + first_moment(&intersection)
+            - first_moment(&cylinder))
+        .norm()
+            <= moment_tolerance
+    );
 }

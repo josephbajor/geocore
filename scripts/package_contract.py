@@ -59,6 +59,7 @@ KERNEL_PACKAGE_FILES = {
     "src/lib.rs",
     "src/operation.rs",
     "src/primitive.rs",
+    "src/properties.rs",
     "src/section/broad_phase.rs",
     "src/section/branch_publish.rs",
     "src/section/circle_discovery.rs",

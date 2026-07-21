@@ -167,7 +167,7 @@ fn certify_bounded_analytic_loop_orientation(
     })
 }
 
-fn prepare_bounded_analytic_loop<'a>(
+pub(crate) fn prepare_bounded_analytic_loop<'a>(
     store: &'a Store,
     face_id: crate::entity::FaceId,
     loop_id: LoopId,

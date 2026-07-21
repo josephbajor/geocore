@@ -40,19 +40,19 @@ impl<'a> BoundedPcurveSpan<'a> {
         }
     }
 
-    pub(super) const fn curve(self) -> &'a Curve2dGeom {
+    pub(crate) const fn curve(self) -> &'a Curve2dGeom {
         self.curve
     }
 
-    pub(super) const fn start(self) -> f64 {
+    pub(crate) const fn start(self) -> f64 {
         self.start
     }
 
-    pub(super) const fn end(self) -> f64 {
+    pub(crate) const fn end(self) -> f64 {
         self.end
     }
 
-    pub(super) const fn chart_offset(self) -> Point2 {
+    pub(crate) const fn chart_offset(self) -> Point2 {
         self.chart_offset
     }
 

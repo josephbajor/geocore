@@ -4,8 +4,9 @@
 //! opaque part-qualified topology and geometry identities, and returns
 //! immutable semantic views. Contextual operations cover checked block and
 //! polygonal-profile extrusion construction, deterministic complete-body
-//! rigid copy, body checking and tessellation, operation-scoped surface
-//! evaluation, certified convex-planar plus axial, zero-cut whole-source and
+//! rigid copy, body checking and tessellation, certified Plane/Cylinder solid
+//! volume/centroid enclosures, operation-scoped surface evaluation, certified
+//! convex-planar plus axial, zero-cut whole-source and
 //! contained-cylinder cavity, one-ring connected-union/blind-pocket, two-port
 //! through-hole, two-ring two-sided connected-union, inverse-containment
 //! convex-planar cavity, support-separated exact-contact empty intersections,
@@ -269,6 +270,7 @@ mod intersection;
 mod iter;
 mod operation;
 mod primitive;
+mod properties;
 mod section;
 mod session;
 mod tessellation;
@@ -323,6 +325,10 @@ pub use operation::{
     SurfaceEvaluationRequest, ToleranceBudgetId, ToleranceBudgetView, ToleranceEventView,
 };
 pub use primitive::CylinderRequest;
+pub use properties::{
+    BodyProperties, BodyPropertiesOutcome, BodyPropertiesRefusal, BodyPropertiesRequest,
+    Point3Enclosure, ScalarEnclosure,
+};
 pub use section::{
     BodySectionBudgetProfile, BodySectionGraph, CertifiedSectionPeriodicFaceEmbedding,
     SECTION_FACE_PAIRS, SECTION_WORK, SectionBodiesRequest, SectionBranch, SectionBranchEvidence,
@@ -360,6 +366,7 @@ pub use kgeom::surface::SurfaceDerivs;
 pub use kgeom::tess::TessOptions;
 pub use kgeom::vec::{Point2, Point3, Vec3};
 pub use kgraph::{EvalBudgetProfile, GeometryClassKey, SurfaceDerivativeOrder};
+pub use ktopo::body_properties::{BODY_PROPERTIES_ANALYTIC_WORK, BodyPropertiesBudgetProfile};
 pub use ktopo::btess::BodyTessellationBudgetProfile;
 pub use ktopo::check::{
     CheckLevel, CheckOutcome, FaultKind, FullCheckBudgetProfile, VerificationGapCause,

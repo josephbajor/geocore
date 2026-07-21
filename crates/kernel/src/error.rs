@@ -54,6 +54,9 @@ pub mod capability {
     /// Reissuing verified intersection certificates under rigid body copy.
     pub const RIGID_COPY_VERIFIED_INTERSECTION: CapabilityId =
         known_capability("kernel.modeling.rigid-copy.verified-intersection");
+    /// Certified Plane/Cylinder boundary integration for body volume and centroid.
+    pub const ANALYTIC_BODY_PROPERTIES: CapabilityId =
+        known_capability("kernel.interrogation.body-properties.plane-cylinder");
 }
 
 /// Facade identity kind used in stale-ID diagnostics and committed journals.

@@ -350,15 +350,15 @@ cylinder-left Subtract across all four frames with 10/32/20 topology, literal-de
 Exact planar-shell admission is now separate from its optional typed convex certificate: complete non-convex ten-support star/cylinder Intersect
 uses general mixed planning and Full-commits at 17F/45E/30V with literal-derived volume and deterministic X_T/Fast self-import; pure planar BSP and convex shortcuts still require the certificate.
 Proof-keyed disk-cap chords now feed count-independent exact disk arrangements with dual classification, source-arc lineage, and period-lifted realization.
-Certified transverse annulus traces, exact nested line-cycle planar cells, and disk cells now share finite source-arc planning/materialization; a count-independent chord-portal theorem Full-certifies cap-crossing Unite and block-minus-cylinder at 9F/18E/12V, while Intersect and cylinder-minus-block commit at 4F/6E/4V across both rigid frames/orders with literal-derived volume, deterministic X_T, and Fast self-import. The sixteen-payload bundle is stale pending one licensed-host replay. Next is deterministic certified public body volume and centroid for Full-valid blocks, cylinders, and supported Plane/Cylinder Boolean results.
+Certified transverse annulus traces, exact nested line-cycle planar cells, and disk cells now share finite source-arc planning/materialization; a count-independent chord-portal theorem Full-certifies cap-crossing Unite and block-minus-cylinder at 9F/18E/12V, while Intersect and cylinder-minus-block commit at 4F/6E/4V across both rigid frames/orders with literal-derived volume, deterministic X_T, and Fast self-import. Public `body_properties` now consumes one Full-valid exact Plane/Cylinder B-rep, integrates count-independent divergence/Green flux around a body-wide anchor, and returns outward volume/centroid enclosures without tessellation. Primitive, large rigid-placement, all cap-crossing meanings/orders, Boolean additivity, unsupported sphere/sheet refusal, repeated-query determinism, and exact N/N-1 work evidence are green. The sixteen-payload bundle is stale pending one licensed-host replay. Next is certified surface area and inertia; distance and clash remain queued.
 
 Evidence: `ordered_planar_minus_cylinder_commits_every_disconnected_profile_component`,
 `disconnected_subtract_batch_denies_n_minus_one_before_any_component_allocates`,
 `cap_retaining_mixed_union_and_cylinder_subtract_commit_full_valid`,
 `convex_five_patch_cap_retaining_operations_commit_under_default_policy`,
 `five_portal_shell_work_accepts_exact_n_and_refuses_n_minus_one_atomically`,
-`seam_crossing_five_patch_cylinder_subtract_is_full_valid_in_all_frames`, and
-`nonconvex_star_section_and_intersection_commit_full_valid_deterministically`.
+`seam_crossing_five_patch_cylinder_subtract_is_full_valid_in_all_frames`, `nonconvex_star_section_and_intersection_commit_full_valid_deterministically`, `certified_properties_obey_cap_crossing_boolean_additivity`, and
+`analytic_work_budget_accepts_exactly_n_and_rejects_n_minus_one`.
 Section evidence: `facade_closes_offset_disk_cap_chords_with_cylinder_rulings`, `cap_crossing_section_certifies_complete_transverse_annulus_traces`, and `cap_crossing_intersection_full_commits_the_circular_segment_prism`.
 
 Do not wait for an exhaustive analytic pair table before testing the end-to-end

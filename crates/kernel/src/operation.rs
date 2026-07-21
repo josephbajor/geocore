@@ -1769,7 +1769,7 @@ fn account_graph_query(
     }
 }
 
-fn adapt_check_report(
+pub(crate) fn adapt_check_report(
     part: &PartId,
     store: &ktopo::store::Store,
     report: ktopo::check::CheckReport,

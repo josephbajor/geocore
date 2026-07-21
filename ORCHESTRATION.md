@@ -88,10 +88,12 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    source arcs. A count-independent chord-portal theorem now Full-certifies
    cap-crossing Unite and both ordered Subtract meanings alongside Intersect:
    the 4F/6E/4V and 9F/18E/12V results commit across both rigid frames/orders
-   with analytic volume, deterministic X_T, and Fast self-import. Next: expose
-   deterministic certified body volume and centroid for Full-valid blocks,
-   finite cylinders, and supported Plane/Cylinder Boolean results; area,
-   inertia, distance, clash, and new surface-pair booleans remain queued.)*
+   with analytic volume, deterministic X_T, and Fast self-import. Public
+   `body_properties` now Full-validates and certifies outward volume/centroid
+   enclosures directly from exact Plane/Cylinder B-rep flux, including all
+   cap-crossing Boolean meanings across rigid frames/orders; it fails closed
+   without tessellation and has exact N/N-1 analytic-work evidence. Next:
+   certified surface area and inertia; distance, clash, and new surface-pair booleans remain queued.)*
 
 Work that does not advance the queue head needs an explicit justification
 linking it to a rung ("rung 2 needs curve/curve overlap dedup because …").
