@@ -24,7 +24,7 @@ use super::{
     SectionSourceParameterKey, SectionUvCurve, adapt_site, interval_midpoint, stitch,
 };
 use crate::error::{Error, Result};
-use crate::{EdgeId, FaceId, FinId, LoopId, PartId};
+use crate::{FaceId, FinId, LoopId, PartId};
 
 /// Clip, merge, identity-certify, and accumulate one ruling branch.
 pub(super) fn append_branch(
@@ -123,6 +123,7 @@ struct CertifiedRulingTrimSite {
     operand: usize,
     site: RulingTrimSite,
     root: SourceRootKey,
+    source_root_scalar: super::root_identity::CertifiedSourceRootScalar,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -213,20 +214,26 @@ fn certify_endpoint(
             RootResolution::Resolved(root) => root,
             RootResolution::Indeterminate(gap) => return Ok(Err(gap.reason())),
         };
-        let root_parameter = match roots.certify_order(
+        let (root_parameter, source_root_scalar) = match roots.certify_order(
             store,
             SourceRootQuery::new(site.edge, faces[1 - operand]),
             scope,
         )? {
-            super::root_identity::RootOrderOutcome::Certified(order) => order
-                .roots()
-                .get(root.ordinal())
-                .copied()
-                .ok_or(Error::InconsistentTopology {
-                    source: kcore::error::Error::InvalidGeometry {
-                        reason: "source-root ordinal escaped its certified order",
+            super::root_identity::RootOrderOutcome::Certified(order) => {
+                let parameter = order.roots().get(root.ordinal()).copied().ok_or(
+                    Error::InconsistentTopology {
+                        source: kcore::error::Error::InvalidGeometry {
+                            reason: "source-root ordinal escaped its certified order",
+                        },
                     },
-                })?,
+                )?;
+                let scalar = order.materialize(root).ok_or(Error::InconsistentTopology {
+                    source: kcore::error::Error::InvalidGeometry {
+                        reason: "ruling source root has no canonical scalar materialization",
+                    },
+                })?;
+                (parameter, scalar)
+            }
             super::root_identity::RootOrderOutcome::Indeterminate(gap) => {
                 return Ok(Err(gap.reason()));
             }
@@ -260,6 +267,7 @@ fn certify_endpoint(
             operand,
             site,
             root,
+            source_root_scalar,
         });
     }
     if certified_sites.iter().all(Option::is_none) {
@@ -313,9 +321,10 @@ fn recertify_expanded_branch(
             "ruling endpoints produced an invalid expanded proof range",
         ));
     }
-    let source = branch.ruling_recertification.ok_or_else(|| {
-        inconsistent_topology("ruling branch lost its graph-owned recertification source")
-    })?;
+    let source = branch
+        .ruling_recertification
+        .as_ref()
+        .ok_or_else(|| inconsistent_topology("ruling branch lost its recertification source"))?;
     let source_range = if branch.ruling_parameter_flipped {
         ParamRange {
             lo: -range.hi,
@@ -324,17 +333,28 @@ fn recertify_expanded_branch(
     } else {
         range
     };
-    let Ok(certificate) = certify_paired_plane_cylinder_ruling_residuals(
-        source.carrier(),
-        source_range,
-        source.traces(),
-        source.tolerance(),
-    ) else {
-        return Ok(None);
+    let residual_bounds = match source {
+        super::RulingRecertification::Graph(source) => {
+            let Ok(certificate) = certify_paired_plane_cylinder_ruling_residuals(
+                source.carrier(),
+                source_range,
+                source.traces(),
+                source.tolerance(),
+            ) else {
+                return Ok(None);
+            };
+            certificate.residual_bounds()
+        }
+        super::RulingRecertification::Semantic(source) => {
+            let Some(bounds) = super::semantic_ruling::recertify(branch, range, source) else {
+                return Ok(None);
+            };
+            bounds
+        }
     };
     Ok(Some(ExpandedRulingCertificate {
         range,
-        residual_bounds: certificate.residual_bounds(),
+        residual_bounds,
     }))
 }
 
@@ -444,7 +464,10 @@ pub(super) fn publish_fragments(
         };
         let mut public_ends = Vec::with_capacity(2);
         for evidence in fragment.endpoints {
-            let endpoint = intern_endpoint(part, evidence.endpoint, endpoints)?;
+            let root_scalars = evidence
+                .sites
+                .map(|site| site.map(|site| site.source_root_scalar));
+            let endpoint = intern_endpoint(part, evidence.endpoint, root_scalars, endpoints)?;
             let parameter = interval_midpoint(evidence.carrier_parameter);
             let point = line_point(branch, parameter).ok_or_else(|| {
                 inconsistent_topology("ruling fragment has no finite carrier representative")
@@ -495,10 +518,11 @@ fn adapt_trim(
         face: FaceId::new(part.clone(), site.face),
         loop_id: LoopId::new(part.clone(), site.loop_id),
         fin: FinId::new(part.clone(), site.fin),
-        source_parameter: SectionSourceParameterKey {
-            edge: EdgeId::new(part.clone(), certified.root.edge()),
-            root_ordinal: certified.root.ordinal(),
-        },
+        source_parameter: SectionSourceParameterKey::from_certified_root(
+            part,
+            certified.root,
+            certified.source_root_scalar,
+        ),
         edge_parameter: SectionEdgeParameterInterval::from_interval(site.edge_parameter),
         carrier_parameter: SectionCarrierParameterInterval::from_interval(carrier_parameter),
     }
@@ -507,13 +531,19 @@ fn adapt_trim(
 fn intern_endpoint(
     part: &PartId,
     certified: CertifiedClosedEndpoint,
+    root_scalars: [Option<super::root_identity::CertifiedSourceRootScalar>; 2],
     endpoints: &mut Vec<SectionCurveEndpoint>,
 ) -> Result<usize> {
-    let candidate = adapt_endpoint(part, certified);
+    let candidate = adapt_endpoint(part, certified, root_scalars)?;
     if let Some(index) = endpoints
         .iter()
         .position(|endpoint| endpoint.topology == candidate.topology)
     {
+        if !endpoint_materializations_match(&endpoints[index], &candidate) {
+            return Err(inconsistent_topology(
+                "one source-root identity retained inconsistent scalar materializations",
+            ));
+        }
         for operand in 0..2 {
             match (
                 endpoints[index].edge_parameters[operand],
@@ -545,39 +575,94 @@ fn intern_endpoint(
     Ok(index)
 }
 
+fn endpoint_materializations_match(
+    first: &SectionCurveEndpoint,
+    second: &SectionCurveEndpoint,
+) -> bool {
+    match (&first.topology, &second.topology) {
+        (
+            SectionCurveEndpointTopology::Trim {
+                source_parameters: first,
+                ..
+            },
+            SectionCurveEndpointTopology::Trim {
+                source_parameters: second,
+                ..
+            },
+        ) => first
+            .iter()
+            .zip(second)
+            .all(|(first, second)| match (first, second) {
+                (None, None) => true,
+                (Some(first), Some(second)) => first.has_same_materialization(second),
+                _ => false,
+            }),
+        (
+            SectionCurveEndpointTopology::ParameterSeam { .. },
+            SectionCurveEndpointTopology::ParameterSeam { .. },
+        ) => true,
+        _ => false,
+    }
+}
+
 fn inconsistent_topology(reason: &'static str) -> Error {
     Error::InconsistentTopology {
         source: kcore::error::Error::InvalidGeometry { reason },
     }
 }
 
-fn adapt_endpoint(part: &PartId, certified: CertifiedClosedEndpoint) -> SectionCurveEndpoint {
+fn adapt_endpoint(
+    part: &PartId,
+    certified: CertifiedClosedEndpoint,
+    root_scalars: [Option<super::root_identity::CertifiedSourceRootScalar>; 2],
+) -> Result<SectionCurveEndpoint> {
     let topology = match certified.key {
         CertifiedClosedEndpointKey::TrimSite {
             site,
             edge_parameter_keys,
-        } => SectionCurveEndpointTopology::Trim {
-            sites: [adapt_site(part, site.a), adapt_site(part, site.b)],
-            source_parameters: edge_parameter_keys.map(|key| {
-                key.map(|key| SectionSourceParameterKey {
-                    edge: EdgeId::new(part.clone(), key.edge()),
-                    root_ordinal: key.root_ordinal(),
-                })
-            }),
-        },
+        } => {
+            let mut source_parameters = [None, None];
+            for operand in 0..2 {
+                source_parameters[operand] =
+                    match (edge_parameter_keys[operand], root_scalars[operand]) {
+                        (None, None) => None,
+                        (Some(key), Some(scalar)) => {
+                            Some(SectionSourceParameterKey::from_certified_root(
+                                part,
+                                SourceRootKey::new(key.edge(), key.root_ordinal()),
+                                scalar,
+                            ))
+                        }
+                        _ => {
+                            return Err(inconsistent_topology(
+                                "ruling endpoint root identity and scalar authority disagree",
+                            ));
+                        }
+                    };
+            }
+            SectionCurveEndpointTopology::Trim {
+                sites: [adapt_site(part, site.a), adapt_site(part, site.b)],
+                source_parameters,
+            }
+        }
         CertifiedClosedEndpointKey::PeriodSeam { branch, site } => {
+            if root_scalars != [None, None] {
+                return Err(inconsistent_topology(
+                    "parameter-seam endpoint retained a physical root scalar",
+                ));
+            }
             SectionCurveEndpointTopology::ParameterSeam {
                 branch: branch.index(),
                 site,
             }
         }
     };
-    SectionCurveEndpoint {
+    Ok(SectionCurveEndpoint {
         topology,
         edge_parameters: certified
             .edge_parameters
             .map(|value| value.map(SectionEdgeParameterInterval::from_interval)),
-    }
+    })
 }
 
 #[cfg(test)]

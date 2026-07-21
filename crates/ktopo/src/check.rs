@@ -65,7 +65,7 @@ use crate::incidence::{
     check_pcurve_parameterization,
 };
 use crate::loop_proof::{
-    LoopContainment, LoopSimplicity, certify_face_loop_layout, certify_loop_orientation,
+    LoopContainment, LoopSimplicity, certify_face_loop_layout_in_scope, certify_loop_orientation,
     certify_loop_simplicity, certify_planar_loop_layout,
 };
 use crate::shell_proof::{ShellEmbedding, ShellOrientation, certify_shell_in_scope};
@@ -222,6 +222,7 @@ impl FullCheckBudgetProfile {
     pub fn v1_defaults() -> BudgetPlan {
         let face_domain = crate::domain::FaceDomainContainmentBudgetProfile::v1_defaults();
         face_domain
+            .overlaid(&crate::loop_proof::face_loop_containment_budget())
             .overlaid(&crate::shell_proof::shell_proof_budget())
             .overlaid(&crate::semantic_planar_shell_proof::semantic_planar_shell_proof_budget())
             .overlaid(&crate::region_proof::region_proof_budget())
@@ -581,7 +582,8 @@ fn collect_full_verification(
             }
         }
         if face.loops.len() > 1
-            && certify_face_loop_layout(store, face_id)? != LoopContainment::Certified
+            && certify_face_loop_layout_in_scope(store, face_id, scope)?
+                != LoopContainment::Certified
         {
             push(
                 EntityRef::Face(face_id),
@@ -1193,7 +1195,9 @@ impl<'a> Checker<'a, '_> {
             return true;
         };
         let range = match edge.bounds {
-            Some((lo, hi)) if lo.is_finite() && hi.is_finite() && lo < hi => (lo, hi),
+            Some((lo, hi)) if lo.is_finite() && hi.is_finite() && lo < hi => {
+                ParamRange::new(lo, hi)
+            }
             None => {
                 let Some(curve) = edge.curve.and_then(|curve| self.store.get(curve).ok()) else {
                     // Legacy edge/pcurve validation reports the missing or stale curve.
@@ -1204,7 +1208,7 @@ impl<'a> Checker<'a, '_> {
                     // Legacy incidence validation reports BadRange.
                     return true;
                 }
-                (range.lo, range.hi)
+                range
             }
             Some(_) => {
                 // `check_edge` and legacy incidence validation report BadBounds/BadRange.
@@ -1212,7 +1216,7 @@ impl<'a> Checker<'a, '_> {
             }
         };
         for index in 0..EDGE_SAMPLES {
-            let t = range.0 + (range.1 - range.0) * index as f64 / (EDGE_SAMPLES - 1) as f64;
+            let t = range.lerp(index as f64 / (EDGE_SAMPLES - 1) as f64);
             let Ok(uv) = pcurve_use.evaluate_uv(pcurve.as_curve(), t, periods) else {
                 // The immediately following legacy validation reports BadChart/BadRange.
                 return true;
@@ -1371,10 +1375,11 @@ impl<'a> Checker<'a, '_> {
         let Some((a, b)) = window else {
             return;
         };
+        let range = ParamRange::new(a, b);
         let mut boxed = true;
         let mut off_faces: Vec<FaceId> = Vec::new();
         for i in 0..EDGE_SAMPLES {
-            let t = a + (b - a) * (i as f64) / ((EDGE_SAMPLES - 1) as f64);
+            let t = range.lerp(i as f64 / (EDGE_SAMPLES - 1) as f64);
             let p = c.eval(t);
             if !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite())
                 || p.x.abs() > SIZE_BOX_HALF
@@ -1506,8 +1511,9 @@ impl<'a> Checker<'a, '_> {
         let mut surface_faulted = Vec::new();
         let mut disagreement_faulted = false;
         let mut boxed = true;
+        let range = ParamRange::new(t0, t1);
         for i in 0..EDGE_SAMPLES {
-            let t = t0 + (t1 - t0) * (i as f64) / ((EDGE_SAMPLES - 1) as f64);
+            let t = range.lerp(i as f64 / (EDGE_SAMPLES - 1) as f64);
             let mut reference = None;
             for &(fin_id, pcurve_use, pcurve, surface, periods) in &uses {
                 if surface_faulted.contains(&fin_id) {
@@ -2277,6 +2283,7 @@ mod tests {
     #[test]
     fn full_check_profile_composes_current_leaf_and_has_an_additive_growth_seam() {
         let leaf = crate::domain::FaceDomainContainmentBudgetProfile::v1_defaults();
+        let face_loops = crate::loop_proof::face_loop_containment_budget();
         let shell = crate::shell_proof::shell_proof_budget();
         let semantic_shell =
             crate::semantic_planar_shell_proof::semantic_planar_shell_proof_budget();
@@ -2285,7 +2292,8 @@ mod tests {
         let aggregate = FullCheckBudgetProfile::v1_defaults();
         assert_eq!(
             aggregate,
-            leaf.overlaid(&shell)
+            leaf.overlaid(&face_loops)
+                .overlaid(&shell)
                 .overlaid(&semantic_shell)
                 .overlaid(&region)
                 .overlaid(&planar_shell)
@@ -2321,6 +2329,19 @@ mod tests {
             consumed,
             allowed: 1_048_576,
         };
+        let mixed_profile_snapshot = |consumed| LimitSnapshot {
+            stage: crate::shell_proof::MIXED_PROFILE_PRISM_WORK,
+            resource: ResourceKind::Work,
+            consumed,
+            allowed: 2_097_152,
+        };
+        let portal_cylinder_snapshot = |consumed| LimitSnapshot {
+            stage: kcore::operation::StageId::new("ktopo.check.portal-cylinder-shell-work")
+                .unwrap(),
+            resource: ResourceKind::Work,
+            consumed,
+            allowed: 16_777_216,
+        };
         let cavity_stage = crate::cylindrical_region_proof::CYLINDRICAL_CAVITY_REGION_WORK;
         let mut store = Store::new();
         let body = clean_block(&mut store);
@@ -2345,6 +2366,7 @@ mod tests {
                     consumed: 306,
                     allowed: 4096,
                 },
+                proof_snapshot(crate::shell_proof::CONVEX_CYLINDRICAL_SHELL_WORK, 0),
                 proof_snapshot(cavity_stage, 0),
                 proof_snapshot(crate::shell_proof::CYLINDRICAL_HOST_SHELL_WORK, 6),
                 LimitSnapshot {
@@ -2353,13 +2375,16 @@ mod tests {
                     consumed: 1,
                     allowed: 4096,
                 },
+                proof_snapshot(crate::loop_proof::FACE_LOOP_CONTAINMENT_WORK, 0),
                 proof_snapshot(crate::mixed_region_proof::MIXED_CONVEX_REGION_WORK, 0),
+                mixed_profile_snapshot(0),
                 LimitSnapshot {
                     stage: crate::planar_shell_proof::PLANAR_SHELL_PAIR_WORK,
                     resource: ResourceKind::Work,
                     consumed: 0,
                     allowed: 200_000,
                 },
+                portal_cylinder_snapshot(0),
                 LimitSnapshot {
                     stage: crate::semantic_planar_shell_proof::SEMANTIC_PLANAR_REGION_WORK,
                     resource: ResourceKind::Work,
@@ -2438,6 +2463,7 @@ mod tests {
                     consumed: 3,
                     allowed: 5,
                 },
+                proof_snapshot(crate::shell_proof::CONVEX_CYLINDRICAL_SHELL_WORK, 0),
                 proof_snapshot(cavity_stage, 0),
                 proof_snapshot(crate::shell_proof::CYLINDRICAL_HOST_SHELL_WORK, 12),
                 LimitSnapshot {
@@ -2446,13 +2472,16 @@ mod tests {
                     consumed: 2,
                     allowed: 4096,
                 },
+                proof_snapshot(crate::loop_proof::FACE_LOOP_CONTAINMENT_WORK, 0),
                 proof_snapshot(crate::mixed_region_proof::MIXED_CONVEX_REGION_WORK, 0),
+                mixed_profile_snapshot(0),
                 LimitSnapshot {
                     stage: crate::planar_shell_proof::PLANAR_SHELL_PAIR_WORK,
                     resource: ResourceKind::Work,
                     consumed: 0,
                     allowed: 200_000,
                 },
+                portal_cylinder_snapshot(0),
                 LimitSnapshot {
                     stage: crate::semantic_planar_shell_proof::SEMANTIC_PLANAR_REGION_WORK,
                     resource: ResourceKind::Work,

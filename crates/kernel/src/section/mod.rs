@@ -9,9 +9,12 @@
 //! clipped against topology-owned polygon/ring trims and retained as intact
 //! carriers or certified bounded arcs. Ruling lines are clipped to the same
 //! topology-owned trims and retained as bounded affine fragments. Operation-
-//! shared source-edge root identities own endpoint joins; carrier points and
-//! parameters are diagnostic representatives only. Mixed-family traversal
-//! remains an explicit structured gap.
+//! shared source-edge root identities own endpoint joins and publish one
+//! canonical scalar inside each certified isolating interval. Carrier points
+//! and carrier parameters remain diagnostic representatives only. Degree-two
+//! mixed-family traversal publishes deterministic closed components; every
+//! branched, incomplete, or ambiguous incidence remains an explicit
+//! structured gap.
 //!
 //! The algorithm is general over topology (any number of faces, loops,
 //! holes, non-convex boundaries). Per candidate face pair it takes the
@@ -34,15 +37,26 @@
 //! index. Serial re-execution reproduces the graph bit-identically.
 
 mod broad_phase;
+mod circle_discovery;
 mod clip;
 mod closed_stitch;
+mod curve_publish;
 mod curved_clip;
 mod mixed_stitch;
+mod periodic_embedding;
 mod root_identity;
 mod ruling_clip;
 mod ruling_public;
 mod ruling_publish;
+mod semantic_ruling;
 mod stitch;
+
+pub use periodic_embedding::{
+    CertifiedSectionPeriodicFaceEmbedding, SectionCarrierTrimScalarEvidence,
+    SectionPeriodicComponentEmbedding, SectionPeriodicCycleOrientation,
+    SectionPeriodicEmbeddingGap, SectionPeriodicFaceEmbeddingEvidence,
+    SectionPeriodicFragmentEmbedding, SectionUvParameterInterval,
+};
 
 #[cfg(test)]
 mod tests;
@@ -442,8 +456,14 @@ pub struct SectionBranch {
     fragment_sites: Vec<SectionFragmentSite>,
     endpoint_sites: [usize; 2],
     evidence: SectionBranchEvidence,
-    ruling_recertification: Option<PairedPlaneCylinderRulingResidualCertificate>,
+    ruling_recertification: Option<RulingRecertification>,
     ruling_parameter_flipped: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum RulingRecertification {
+    Graph(PairedPlaneCylinderRulingResidualCertificate),
+    Semantic(semantic_ruling::SemanticRulingRecertification),
 }
 
 impl SectionBranch {
@@ -548,14 +568,35 @@ impl SectionProjectiveParameterInterval {
     }
 }
 
-/// Stable proof identity of one isolated root on a source topology edge.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Stable proof identity and scalar authority for one isolated source root.
+///
+/// Equality and hashing remain solely `(edge, root_ordinal)` so the scalar is
+/// never promoted into a join key. The publisher independently requires every
+/// occurrence of that identity to carry bit-identical materialization
+/// evidence and fails closed on disagreement.
+#[derive(Debug, Clone)]
 pub struct SectionSourceParameterKey {
     edge: EdgeId,
     root_ordinal: usize,
+    root_parameter_bits: u64,
+    root_enclosure_bits: [u64; 2],
 }
 
 impl SectionSourceParameterKey {
+    fn from_certified_root(
+        part: &PartId,
+        key: root_identity::SourceRootKey,
+        scalar: root_identity::CertifiedSourceRootScalar,
+    ) -> Self {
+        let enclosure = scalar.enclosure();
+        Self {
+            edge: EdgeId::new(part.clone(), key.edge()),
+            root_ordinal: key.ordinal(),
+            root_parameter_bits: scalar.parameter().to_bits(),
+            root_enclosure_bits: [enclosure.lo().to_bits(), enclosure.hi().to_bits()],
+        }
+    }
+
     /// Source edge containing the isolated root.
     pub fn edge(&self) -> EdgeId {
         self.edge.clone()
@@ -564,6 +605,44 @@ impl SectionSourceParameterKey {
     /// Ordinal in certified intrinsic source-edge parameter order.
     pub const fn root_ordinal(&self) -> usize {
         self.root_ordinal
+    }
+
+    /// Deterministic finite scalar used to materialize this source-edge root.
+    ///
+    /// The returned value lies inside [`Self::root_parameter_enclosure`]. The
+    /// enclosure and root identity remain the proof authority; consumers must
+    /// not join topology by comparing this floating-point representative.
+    pub const fn root_parameter(&self) -> f64 {
+        f64::from_bits(self.root_parameter_bits)
+    }
+
+    /// Canonical isolating enclosure proven to contain exactly this one
+    /// transverse source-edge root.
+    pub const fn root_parameter_enclosure(&self) -> SectionEdgeParameterInterval {
+        SectionEdgeParameterInterval {
+            lo: f64::from_bits(self.root_enclosure_bits[0]),
+            hi: f64::from_bits(self.root_enclosure_bits[1]),
+        }
+    }
+
+    fn has_same_materialization(&self, other: &Self) -> bool {
+        self.root_parameter_bits == other.root_parameter_bits
+            && self.root_enclosure_bits == other.root_enclosure_bits
+    }
+}
+
+impl PartialEq for SectionSourceParameterKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.edge == other.edge && self.root_ordinal == other.root_ordinal
+    }
+}
+
+impl Eq for SectionSourceParameterKey {}
+
+impl core::hash::Hash for SectionSourceParameterKey {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        core::hash::Hash::hash(&self.edge, state);
+        core::hash::Hash::hash(&self.root_ordinal, state);
     }
 }
 
@@ -819,6 +898,7 @@ pub struct BodySectionGraph {
     pub(crate) curve_endpoints: Vec<SectionCurveEndpoint>,
     pub(crate) curve_fragments: Vec<SectionCurveFragment>,
     pub(crate) curve_components: Vec<SectionCurveComponent>,
+    pub(crate) periodic_face_embeddings: Vec<SectionPeriodicFaceEmbeddingEvidence>,
     pub(crate) loops: Vec<SectionLoop>,
     pub(crate) rings: Vec<SectionRing>,
     pub(crate) gaps: Vec<SectionGap>,
@@ -862,6 +942,13 @@ impl BodySectionGraph {
     /// alongside an [`SectionCompletion::Indeterminate`] gap.
     pub fn curve_components(&self) -> &[SectionCurveComponent] {
         &self.curve_components
+    }
+
+    /// Proof-bearing lifted component evidence for every cylinder face that
+    /// carries bounded section fragments. Indeterminate entries retain the
+    /// exact missing obligation without weakening graph completion.
+    pub fn periodic_face_embeddings(&self) -> &[SectionPeriodicFaceEmbeddingEvidence] {
+        &self.periodic_face_embeddings
     }
 
     /// Stitched chains in deterministic discovery order.
@@ -1049,7 +1136,14 @@ fn section_impl(
             process_pair(store, face_a, face_b, linear, ordinal, scope, &mut acc)?;
         }
     }
-    assemble_graph(part_id, [body_a.clone(), body_b.clone()], acc)
+    assemble_graph(
+        store,
+        part_id,
+        [body_a.clone(), body_b.clone()],
+        acc,
+        linear,
+        scope,
+    )
 }
 
 fn read<T>(result: kcore::error::Result<T>) -> Result<T> {
@@ -1167,6 +1261,9 @@ struct ClosedFragmentEvidence {
 }
 
 #[derive(Debug, Clone, Copy)]
+// This short-lived publication record remains `Copy` so the exact stitcher
+// and facade adapter cannot acquire allocation or ownership failure seams.
+#[allow(clippy::large_enum_variant)]
 enum ClosedFragmentEvidenceSpan {
     Whole,
     Arc {
@@ -1179,6 +1276,13 @@ enum ClosedFragmentEvidenceSpan {
 struct ClosedFragmentEndEvidence {
     trim_operand: usize,
     site: curved_clip::ClosedConicTrimSite,
+    source_root_scalar: root_identity::CertifiedSourceRootScalar,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CertifiedClosedSiteRoot {
+    site: curved_clip::ClosedConicTrimSite,
+    source_root_scalar: root_identity::CertifiedSourceRootScalar,
 }
 
 /// Deterministic collectors for one section query.
@@ -1368,8 +1472,8 @@ fn append_closed_fragments(
                     Err(reason) => return Ok(Err(reason)),
                 };
                 let (Some(start_key), Some(end_key)) = (
-                    certified_closed_trim_endpoint(source, trim_operand, start),
-                    certified_closed_trim_endpoint(source, trim_operand, end),
+                    certified_closed_trim_endpoint(source, trim_operand, start.site),
+                    certified_closed_trim_endpoint(source, trim_operand, end.site),
                 ) else {
                     return Ok(Err(GAP_CLOSED_STITCH));
                 };
@@ -1382,11 +1486,13 @@ fn append_closed_fragments(
                         ends: [
                             ClosedFragmentEndEvidence {
                                 trim_operand,
-                                site: start,
+                                site: start.site,
+                                source_root_scalar: start.source_root_scalar,
                             },
                             ClosedFragmentEndEvidence {
                                 trim_operand,
-                                site: end,
+                                site: end.site,
+                                source_root_scalar: end.source_root_scalar,
                             },
                         ],
                         wraps_pcurve_seam: merged.fragment.wraps_pcurve_seam,
@@ -1418,7 +1524,7 @@ fn certify_closed_site_root(
     mut site: curved_clip::ClosedConicTrimSite,
     root_identity: &mut root_identity::RootIdentityAuthority,
     scope: &mut OperationScope<'_, '_>,
-) -> Result<core::result::Result<curved_clip::ClosedConicTrimSite, &'static str>> {
+) -> Result<core::result::Result<CertifiedClosedSiteRoot, &'static str>> {
     if trim_operand >= 2 || source.faces[trim_operand] != site.face {
         return Ok(Err(GAP_CLOSED_STITCH));
     }
@@ -1427,18 +1533,25 @@ fn certify_closed_site_root(
         root_identity::RootResolution::Resolved(root) => root,
         root_identity::RootResolution::Indeterminate(gap) => return Ok(Err(gap.reason())),
     };
-    let root_parameter = match root_identity.certify_order(store, query, scope)? {
-        root_identity::RootOrderOutcome::Certified(order) => order
-            .roots()
-            .get(root.ordinal())
-            .copied()
-            .ok_or(Error::InconsistentTopology {
-                source: kcore::error::Error::InvalidGeometry {
-                    reason: "closed source-root ordinal escaped its certified order",
-                },
-            })?,
-        root_identity::RootOrderOutcome::Indeterminate(gap) => return Ok(Err(gap.reason())),
-    };
+    let (root_parameter, source_root_scalar) =
+        match root_identity.certify_order(store, query, scope)? {
+            root_identity::RootOrderOutcome::Certified(order) => {
+                let parameter = order.roots().get(root.ordinal()).copied().ok_or(
+                    Error::InconsistentTopology {
+                        source: kcore::error::Error::InvalidGeometry {
+                            reason: "closed source-root ordinal escaped its certified order",
+                        },
+                    },
+                )?;
+                let scalar = order.materialize(root).ok_or(Error::InconsistentTopology {
+                    source: kcore::error::Error::InvalidGeometry {
+                        reason: "closed source root has no canonical scalar materialization",
+                    },
+                })?;
+                (parameter, scalar)
+            }
+            root_identity::RootOrderOutcome::Indeterminate(gap) => return Ok(Err(gap.reason())),
+        };
     site.root_ordinal = root.ordinal();
     // The pcurve observation and analytic source root are independently
     // enclosed under whole-fin tolerance incidence. Their unique overlap
@@ -1448,7 +1561,10 @@ fn certify_closed_site_root(
         site.edge_parameter.lo().min(root_parameter.lo()),
         site.edge_parameter.hi().max(root_parameter.hi()),
     );
-    Ok(Ok(site))
+    Ok(Ok(CertifiedClosedSiteRoot {
+        site,
+        source_root_scalar,
+    }))
 }
 
 /// Decide whether the graph-owned cylinder-longitude parameterization must be
@@ -1615,23 +1731,50 @@ fn collect_plane_cylinder_branches(
                 });
                 continue;
             };
+            let discovery_domains = circle_discovery::plane_cylinder_discovery_domains(
+                [surface_a, surface_b],
+                [[domain_a.u, domain_a.v], [domain_b.u, domain_b.v]],
+            );
             let intersections = match intersect_bounded_graph_surfaces_in_scope(
                 store.geometry(),
                 face_a.surface,
-                [domain_a.u, domain_a.v],
+                discovery_domains[0],
                 face_b.surface,
-                [domain_b.u, domain_b.v],
+                discovery_domains[1],
                 scope,
             ) {
                 Ok(intersections) => intersections,
                 Err(error) => {
-                    if let Some(error) = lift_limit_error(error) {
+                    if let Some(error) = lift_limit_error(error.clone()) {
                         return Err(error);
                     }
-                    acc.gaps.push(SectionGap {
-                        reason: GAP_PAIR_UNRESOLVED,
-                        faces: facades.to_vec(),
-                    });
+                    if let Some(branches) = semantic_ruling::recover(
+                        store,
+                        [raw_a, raw_b],
+                        &facades,
+                        [surface_a, surface_b],
+                        [face_a.sense, face_b.sense],
+                        discovery_domains,
+                        &error,
+                        scope,
+                    )? {
+                        for branch in branches {
+                            ruling_publish::append_branch(
+                                store,
+                                [raw_a, raw_b],
+                                &facades,
+                                branch,
+                                root_identity,
+                                scope,
+                                acc,
+                            )?;
+                        }
+                    } else {
+                        acc.gaps.push(SectionGap {
+                            reason: GAP_PAIR_UNRESOLVED,
+                            faces: facades.to_vec(),
+                        });
+                    }
                     continue;
                 }
             };
@@ -1950,7 +2093,7 @@ fn adapt_plane_cylinder_ruling_branch(
             residual_bounds: certificate.residual_bounds(),
             tolerance: certificate.tolerance(),
         },
-        ruling_recertification: Some(certificate),
+        ruling_recertification: Some(RulingRecertification::Graph(certificate)),
         ruling_parameter_flipped: flipped,
     }))
 }
@@ -2344,84 +2487,6 @@ fn adapt_site(part: &PartId, key: stitch::SiteKey) -> SectionSite {
     }
 }
 
-fn adapt_closed_endpoint(
-    part: &PartId,
-    vertex: &closed_stitch::ClosedStitchVertex,
-) -> SectionCurveEndpoint {
-    let topology = match vertex.key {
-        closed_stitch::CertifiedClosedEndpointKey::TrimSite {
-            site,
-            edge_parameter_keys,
-        } => SectionCurveEndpointTopology::Trim {
-            sites: [adapt_site(part, site.a), adapt_site(part, site.b)],
-            source_parameters: edge_parameter_keys.map(|key| {
-                key.map(|key| SectionSourceParameterKey {
-                    edge: EdgeId::new(part.clone(), key.edge()),
-                    root_ordinal: key.root_ordinal(),
-                })
-            }),
-        },
-        closed_stitch::CertifiedClosedEndpointKey::PeriodSeam { branch, site } => {
-            SectionCurveEndpointTopology::ParameterSeam {
-                branch: branch.index(),
-                site,
-            }
-        }
-    };
-    SectionCurveEndpoint {
-        topology,
-        edge_parameters: vertex
-            .edge_parameters
-            .map(|value| value.map(SectionEdgeParameterInterval::from_interval)),
-    }
-}
-
-fn curved_carrier_point(branch: &SectionBranch, parameter: f64) -> Option<Point3> {
-    let SectionCarrier::Circle {
-        center,
-        normal,
-        x_direction,
-        radius,
-    } = branch.carrier
-    else {
-        return None;
-    };
-    let (sin, cos) = kcore::math::sincos(parameter);
-    let point = center + x_direction * (radius * cos) + normal.cross(x_direction) * (radius * sin);
-    [point.x, point.y, point.z]
-        .into_iter()
-        .all(f64::is_finite)
-        .then_some(point)
-}
-
-fn adapt_curve_fragment_end(
-    part: &PartId,
-    branch: &SectionBranch,
-    endpoint: usize,
-    evidence: ClosedFragmentEndEvidence,
-) -> Option<SectionCurveFragmentEnd> {
-    let site = evidence.site;
-    Some(SectionCurveFragmentEnd {
-        endpoint,
-        point: curved_carrier_point(branch, site.carrier_parameter)?,
-        carrier_parameter: site.carrier_parameter,
-        trim: SectionCurveTrimProvenance {
-            operand: evidence.trim_operand,
-            face: FaceId::new(part.clone(), site.face),
-            loop_id: LoopId::new(part.clone(), site.loop_id),
-            fin: FinId::new(part.clone(), site.fin),
-            source_parameter: SectionSourceParameterKey {
-                edge: EdgeId::new(part.clone(), site.edge),
-                root_ordinal: site.root_ordinal,
-            },
-            edge_parameter: SectionEdgeParameterInterval::from_interval(site.edge_parameter),
-            pcurve_half_angle: SectionProjectiveParameterInterval::from_interval(
-                site.pcurve_half_angle,
-            ),
-        },
-    })
-}
-
 /// Intersect, clip, and merge one surviving candidate pair, appending its
 /// certified spans as stitch segments in canonical along-carrier order.
 fn process_pair(
@@ -2506,9 +2571,12 @@ fn process_pair(
 /// Structural stitch defects become graph-global gaps; completion is
 /// `Complete` exactly when no gap of any kind was recorded.
 fn assemble_graph(
+    store: &Store,
     part_id: &PartId,
     bodies: [BodyId; 2],
     acc: SectionAccumulator,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
 ) -> Result<BodySectionGraph> {
     let SectionAccumulator {
         segments,
@@ -2519,13 +2587,6 @@ fn assemble_graph(
         ruling_fragments,
         mut gaps,
     } = acc;
-    if closed_fragments.len() != closed_fragment_evidence.len() {
-        return Err(Error::InconsistentTopology {
-            source: kcore::error::Error::InvalidGeometry {
-                reason: "closed section fragment evidence is not index-aligned",
-            },
-        });
-    }
     let stitched = stitch::stitch_segments(&segments);
     let closed_stitched = closed_stitch::stitch_closed_fragments(&closed_fragments);
     let vertices = stitched
@@ -2569,115 +2630,29 @@ fn assemble_graph(
             closed: chain.closed,
         })
         .collect();
-    let mut curve_endpoints = closed_stitched
-        .vertices
-        .iter()
-        .map(|vertex| adapt_closed_endpoint(part_id, vertex))
-        .collect::<Vec<_>>();
-    let mut fragment_endpoints = vec![None; closed_fragments.len()];
-    for chain in &closed_stitched.chains {
-        for fragment in &chain.fragments {
-            let Some(slot) = fragment_endpoints.get_mut(fragment.input_fragment) else {
-                return Err(Error::InconsistentTopology {
-                    source: kcore::error::Error::InvalidGeometry {
-                        reason: "closed stitch chain referenced an unknown fragment",
-                    },
-                });
-            };
-            *slot = Some(fragment.endpoints);
-        }
-    }
-    let mut curve_fragments =
-        Vec::with_capacity(closed_fragment_evidence.len() + ruling_fragments.len());
-    for (input_index, evidence) in closed_fragment_evidence.iter().copied().enumerate() {
-        let Some(branch) = branches.get(evidence.branch) else {
-            return Err(Error::InconsistentTopology {
-                source: kcore::error::Error::InvalidGeometry {
-                    reason: "curved section fragment referenced an unknown branch",
-                },
-            });
-        };
-        let span = match evidence.span {
-            ClosedFragmentEvidenceSpan::Whole => SectionCurveFragmentSpan::Whole,
-            ClosedFragmentEvidenceSpan::Arc {
-                ends,
-                wraps_pcurve_seam,
-            } => {
-                let Some(endpoint_indices) = fragment_endpoints
-                    .get(input_index)
-                    .copied()
-                    .flatten()
-                    .flatten()
-                else {
-                    return Err(Error::InconsistentTopology {
-                        source: kcore::error::Error::InvalidGeometry {
-                            reason: "certified curved arc lacks stitched endpoint indices",
-                        },
-                    });
-                };
-                let (Some(start), Some(end)) = (
-                    adapt_curve_fragment_end(part_id, branch, endpoint_indices[0], ends[0]),
-                    adapt_curve_fragment_end(part_id, branch, endpoint_indices[1], ends[1]),
-                ) else {
-                    return Err(Error::InconsistentTopology {
-                        source: kcore::error::Error::InvalidGeometry {
-                            reason: "certified curved endpoint has no finite representative",
-                        },
-                    });
-                };
-                SectionCurveFragmentSpan::Arc {
-                    endpoints: Box::new([start, end]),
-                    wraps_pcurve_seam,
-                }
-            }
-        };
-        curve_fragments.push(SectionCurveFragment {
-            branch: evidence.branch,
-            source_ordinal: evidence.ordinal,
-            span,
-        });
-    }
-    if !ruling_fragments.is_empty() {
-        let mut published_endpoints = curve_endpoints.clone();
-        let mut published_fragments = curve_fragments.clone();
-        ruling_publish::publish_fragments(
-            part_id,
-            &branches,
-            &ruling_fragments,
-            &mut published_endpoints,
-            &mut published_fragments,
-        )?;
-        curve_endpoints = published_endpoints;
-        curve_fragments = published_fragments;
-    }
-    let mixed_stitched =
-        mixed_stitch::stitch_curve_fragments(&curve_fragments, curve_endpoints.len())?;
-    let curve_components = mixed_stitched
-        .components
-        .iter()
-        .map(|component| SectionCurveComponent {
-            fragments: component.fragments.clone(),
-            closed: component.closed,
-        })
-        .collect::<Vec<_>>();
-    let mut rings = Vec::new();
-    for chain in &closed_stitched.chains {
-        let [fragment] = chain.fragments.as_slice() else {
-            continue;
-        };
-        let Some(input) = closed_fragments.get(fragment.input_fragment) else {
-            continue;
-        };
-        if chain.closed
-            && fragment.endpoints.is_none()
-            && matches!(input.span, closed_stitch::ClosedFragmentSpan::Whole)
-            && fragment.source.branch.index() < branches.len()
-        {
-            rings.push(SectionRing {
-                branch: fragment.source.branch.index(),
-            });
-        }
-    }
+    let curve_publish::PublishedCurves {
+        endpoints: curve_endpoints,
+        fragments: curve_fragments,
+        components: curve_components,
+        rings,
+        has_mixed_stitch_defects,
+    } = curve_publish::publish_curves(
+        part_id,
+        &branches,
+        &closed_fragments,
+        &closed_fragment_evidence,
+        &ruling_fragments,
+        &closed_stitched,
+    )?;
+    let periodic_face_embeddings = periodic_embedding::certify_periodic_faces(
+        store,
+        part_id,
+        &branches,
+        &curve_fragments,
+        &curve_components,
+        linear,
+        scope,
+    )?;
     for defect in &stitched.defects {
         gaps.push(SectionGap {
             reason: stitch_defect_reason(*defect),
@@ -2698,7 +2673,7 @@ fn assemble_graph(
             faces: Vec::new(),
         });
     }
-    if !mixed_stitched.defects.is_empty() {
+    if has_mixed_stitch_defects {
         gaps.push(SectionGap {
             reason: GAP_MIXED_FRAGMENT_STITCH,
             faces: Vec::new(),
@@ -2717,6 +2692,7 @@ fn assemble_graph(
         curve_endpoints,
         curve_fragments,
         curve_components,
+        periodic_face_embeddings,
         loops,
         rings,
         gaps,

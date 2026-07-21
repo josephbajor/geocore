@@ -9,8 +9,9 @@ use std::path::{Path, PathBuf};
 
 use kernel::{
     BlockRequest, BodyId, BodyKind, BooleanBodiesRequest, BooleanOperation, BooleanOutcome,
-    BooleanResult, CheckBodyRequest, CheckLevel, CheckOutcome, ExportXtRequest, Frame,
-    ImportXtRequest, Kernel, PartId, Point3, Session, TessOptions, TessellateBodyRequest, Vec3,
+    BooleanResult, CheckBodyRequest, CheckLevel, CheckOutcome, CylinderRequest, ExportXtRequest,
+    ExtrudeProfileRequest, Frame, ImportXtRequest, Kernel, PartId, Point2 as ProfilePoint2, Point3,
+    Session, TessOptions, TessellateBodyRequest, Vec3,
 };
 
 type OracleResult<T> = Result<T, Box<dyn StdError>>;
@@ -21,14 +22,46 @@ const CONNECTED_INTERSECT: &str = "connected_intersect.x_t";
 const DISJOINT_BODY_0: &str = "disjoint_unite_body_0.x_t";
 const DISJOINT_BODY_1: &str = "disjoint_unite_body_1.x_t";
 const CONTAINED_CAVITY: &str = "contained_subtract_cavity.x_t";
-const EXPECTED_FILES: [&str; 6] = [
+const BOUNDED_ARC_INTERSECT: &str = "bounded_arc_plane_cylinder_intersect.x_t";
+const BOUNDED_ARC_SUBTRACT_BODY_0: &str = "bounded_arc_plane_cylinder_subtract_body_0.x_t";
+const BOUNDED_ARC_SUBTRACT_BODY_1: &str = "bounded_arc_plane_cylinder_subtract_body_1.x_t";
+const CAP_RETAINING_UNITE: &str = "cap_retaining_plane_cylinder_unite.x_t";
+const CAP_RETAINING_CYLINDER_SUBTRACT: &str = "cap_retaining_cylinder_minus_plane.x_t";
+const FIVE_PORTAL_UNITE: &str = "five_portal_plane_cylinder_unite.x_t";
+const FIVE_PORTAL_CYLINDER_SUBTRACT: &str = "five_portal_cylinder_minus_plane.x_t";
+const EXPECTED_FILES: [&str; 13] = [
     CONNECTED_UNITE,
     CONNECTED_SUBTRACT,
     CONNECTED_INTERSECT,
     DISJOINT_BODY_0,
     DISJOINT_BODY_1,
     CONTAINED_CAVITY,
+    BOUNDED_ARC_INTERSECT,
+    BOUNDED_ARC_SUBTRACT_BODY_0,
+    BOUNDED_ARC_SUBTRACT_BODY_1,
+    CAP_RETAINING_UNITE,
+    CAP_RETAINING_CYLINDER_SUBTRACT,
+    FIVE_PORTAL_UNITE,
+    FIVE_PORTAL_CYLINDER_SUBTRACT,
 ];
+
+const BOUNDED_ARC_RADIUS: f64 = 1.5;
+const BOUNDED_ARC_HALF_STRIP_WIDTH: f64 = 1.0;
+const BOUNDED_ARC_STRIP_HALF_LENGTH: f64 = 3.0;
+const BOUNDED_ARC_SLAB_LO: f64 = 0.5;
+const BOUNDED_ARC_SLAB_HI: f64 = 1.5;
+const BOUNDED_ARC_CYLINDER_HEIGHT: f64 = 2.0;
+/// Independently evaluated `asin(BOUNDED_ARC_HALF_STRIP_WIDTH / BOUNDED_ARC_RADIUS)` reference.
+const BOUNDED_ARC_STRIP_HALF_ANGLE: f64 = 0.729_727_656_226_966_3;
+const BOUNDED_ARC_RELATIVE_VOLUME_TOLERANCE: f64 = 5.0e-4;
+const BOUNDED_ARC_CHORD_TOLERANCE: f64 = 1.0e-3;
+const CAP_RETAINING_RELATIVE_VOLUME_TOLERANCE: f64 = 6.0e-4;
+const CAP_RETAINING_CHORD_TOLERANCE: f64 = 1.0e-3;
+/// Shoelace area of the exact nine-decimal profile literals below.
+const FIVE_PORTAL_PROFILE_AREA: f64 = 6.086_761_704_674_135;
+/// Independently evaluated disk/profile intersection area for those literals.
+const FIVE_PORTAL_INTERSECTION_VOLUME: f64 = 6.014_725_024_492_857;
+const FIVE_PORTAL_RELATIVE_VOLUME_TOLERANCE: f64 = 1.0e-3;
 
 const SIN_047: f64 = 0.452_886_285_379_068_3;
 const COS_047: f64 = 0.891_568_288_195_329;
@@ -149,6 +182,61 @@ const CONNECTED_INTERSECT_COUNTS: TopologyCounts = TopologyCounts {
     fins: 42,
     edges: 21,
     vertices: 14,
+};
+const BOUNDED_ARC_INTERSECT_COUNTS: TopologyCounts = TopologyCounts {
+    regions: 2,
+    shells: 1,
+    faces: 6,
+    loops: 6,
+    fins: 24,
+    edges: 12,
+    vertices: 8,
+};
+const BOUNDED_ARC_SUBTRACT_COMPONENT_COUNTS: TopologyCounts = TopologyCounts {
+    // The public body view includes the solid and exterior regions.
+    regions: 2,
+    shells: 1,
+    faces: 6,
+    loops: 6,
+    fins: 24,
+    edges: 12,
+    vertices: 8,
+};
+const CAP_RETAINING_UNITE_COUNTS: TopologyCounts = TopologyCounts {
+    regions: 2,
+    shells: 1,
+    faces: 13,
+    loops: 16,
+    fins: 52,
+    edges: 26,
+    vertices: 16,
+};
+const CAP_RETAINING_CYLINDER_SUBTRACT_COUNTS: TopologyCounts = TopologyCounts {
+    regions: 2,
+    shells: 1,
+    faces: 7,
+    loops: 10,
+    fins: 28,
+    edges: 14,
+    vertices: 8,
+};
+const FIVE_PORTAL_UNITE_COUNTS: TopologyCounts = TopologyCounts {
+    regions: 2,
+    shells: 1,
+    faces: 23,
+    loops: 29,
+    fins: 94,
+    edges: 47,
+    vertices: 30,
+};
+const FIVE_PORTAL_CYLINDER_SUBTRACT_COUNTS: TopologyCounts = TopologyCounts {
+    regions: 2,
+    shells: 1,
+    faces: 10,
+    loops: 16,
+    fins: 64,
+    edges: 32,
+    vertices: 20,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -311,7 +399,291 @@ fn build_bundle() -> OracleResult<Vec<Artifact>> {
         CONTAINED_OUTER.volume() - CONTAINED_INNER.volume(),
         CAVITY_COUNTS,
     )?);
+    artifacts.push(build_bounded_arc_intersection()?);
+    artifacts.extend(build_bounded_arc_subtract()?);
+    artifacts.push(build_cap_retaining_result(
+        CAP_RETAINING_UNITE,
+        BooleanOperation::Unite,
+        cap_retaining_block_volume() + cap_retaining_cylinder_volume()
+            - bounded_arc_disk_strip_volume(),
+        CAP_RETAINING_UNITE_COUNTS,
+    )?);
+    artifacts.push(build_cap_retaining_result(
+        CAP_RETAINING_CYLINDER_SUBTRACT,
+        BooleanOperation::Subtract,
+        cap_retaining_cylinder_volume() - bounded_arc_disk_strip_volume(),
+        CAP_RETAINING_CYLINDER_SUBTRACT_COUNTS,
+    )?);
+    artifacts.push(build_five_portal_result(
+        FIVE_PORTAL_UNITE,
+        BooleanOperation::Unite,
+        FIVE_PORTAL_PROFILE_AREA + cap_retaining_cylinder_volume()
+            - FIVE_PORTAL_INTERSECTION_VOLUME,
+        FIVE_PORTAL_UNITE_COUNTS,
+    )?);
+    artifacts.push(build_five_portal_result(
+        FIVE_PORTAL_CYLINDER_SUBTRACT,
+        BooleanOperation::Subtract,
+        cap_retaining_cylinder_volume() - FIVE_PORTAL_INTERSECTION_VOLUME,
+        FIVE_PORTAL_CYLINDER_SUBTRACT_COUNTS,
+    )?);
     Ok(artifacts)
+}
+
+fn build_bounded_arc_intersection() -> OracleResult<Artifact> {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (block, cylinder) = create_bounded_arc_operands(&mut session, &part)?;
+    let bodies = run_boolean(
+        &mut session,
+        &part,
+        block.clone(),
+        cylinder.clone(),
+        BooleanOperation::Intersect,
+    )?;
+    require(
+        bodies.len() == 1,
+        format!(
+            "{BOUNDED_ARC_INTERSECT} expected one result body, got {}",
+            bodies.len()
+        ),
+    )?;
+    assert_sources_retained(&session, &part, &block, &cylinder, 3)?;
+
+    make_artifact_with_volume_tolerance(
+        &mut session,
+        &part,
+        bodies[0].clone(),
+        BOUNDED_ARC_INTERSECT,
+        bounded_arc_disk_strip_volume(),
+        BOUNDED_ARC_INTERSECT_COUNTS,
+        BOUNDED_ARC_RELATIVE_VOLUME_TOLERANCE,
+        BOUNDED_ARC_CHORD_TOLERANCE,
+    )
+}
+
+fn build_bounded_arc_subtract() -> OracleResult<Vec<Artifact>> {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (block, cylinder) = create_bounded_arc_operands(&mut session, &part)?;
+    let bodies = run_boolean(
+        &mut session,
+        &part,
+        block.clone(),
+        cylinder.clone(),
+        BooleanOperation::Subtract,
+    )?;
+    require(
+        bodies.len() == 2,
+        format!(
+            "bounded-arc planar subtraction expected two result bodies, got {}",
+            bodies.len()
+        ),
+    )?;
+    assert_sources_retained(&session, &part, &block, &cylinder, 4)?;
+
+    let expected_component_volume =
+        (bounded_arc_strip_block_volume() - bounded_arc_disk_strip_volume()) * 0.5;
+    let first = make_artifact_with_volume_tolerance(
+        &mut session,
+        &part,
+        bodies[0].clone(),
+        BOUNDED_ARC_SUBTRACT_BODY_0,
+        expected_component_volume,
+        BOUNDED_ARC_SUBTRACT_COMPONENT_COUNTS,
+        BOUNDED_ARC_RELATIVE_VOLUME_TOLERANCE,
+        BOUNDED_ARC_CHORD_TOLERANCE,
+    )?;
+    let second = make_artifact_with_volume_tolerance(
+        &mut session,
+        &part,
+        bodies[1].clone(),
+        BOUNDED_ARC_SUBTRACT_BODY_1,
+        expected_component_volume,
+        BOUNDED_ARC_SUBTRACT_COMPONENT_COUNTS,
+        BOUNDED_ARC_RELATIVE_VOLUME_TOLERANCE,
+        BOUNDED_ARC_CHORD_TOLERANCE,
+    )?;
+    assert_sources_retained(&session, &part, &block, &cylinder, 4)?;
+    Ok(vec![first, second])
+}
+
+fn build_cap_retaining_result(
+    file: &'static str,
+    operation: BooleanOperation,
+    expected_volume: f64,
+    expected_counts: TopologyCounts,
+) -> OracleResult<Artifact> {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (block, cylinder) = create_cap_retaining_operands(&mut session, &part)?;
+    let (left, right) = match operation {
+        BooleanOperation::Unite => (block.clone(), cylinder.clone()),
+        BooleanOperation::Subtract => (cylinder.clone(), block.clone()),
+        _ => return Err(failure("cap-retaining oracle operation changed")),
+    };
+    let bodies = run_boolean(&mut session, &part, left, right, operation)?;
+    require(
+        bodies.len() == 1,
+        format!("{file} expected one result body, got {}", bodies.len()),
+    )?;
+    assert_sources_retained(&session, &part, &block, &cylinder, 3)?;
+    make_artifact_with_volume_tolerance(
+        &mut session,
+        &part,
+        bodies[0].clone(),
+        file,
+        expected_volume,
+        expected_counts,
+        CAP_RETAINING_RELATIVE_VOLUME_TOLERANCE,
+        CAP_RETAINING_CHORD_TOLERANCE,
+    )
+}
+
+fn build_five_portal_result(
+    file: &'static str,
+    operation: BooleanOperation,
+    expected_volume: f64,
+    expected_counts: TopologyCounts,
+) -> OracleResult<Artifact> {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (block, cylinder) = create_five_portal_operands(&mut session, &part)?;
+    let (left, right) = match operation {
+        BooleanOperation::Unite => (block.clone(), cylinder.clone()),
+        BooleanOperation::Subtract => (cylinder.clone(), block.clone()),
+        _ => return Err(failure("five-portal oracle operation changed")),
+    };
+    let bodies = run_boolean(&mut session, &part, left, right, operation)?;
+    require(
+        bodies.len() == 1,
+        format!("{file} expected one result body, got {}", bodies.len()),
+    )?;
+    assert_sources_retained(&session, &part, &block, &cylinder, 3)?;
+    make_artifact_with_volume_tolerance(
+        &mut session,
+        &part,
+        bodies[0].clone(),
+        file,
+        expected_volume,
+        expected_counts,
+        FIVE_PORTAL_RELATIVE_VOLUME_TOLERANCE,
+        CAP_RETAINING_CHORD_TOLERANCE,
+    )
+}
+
+fn create_bounded_arc_operands(
+    session: &mut Session,
+    part: &PartId,
+) -> OracleResult<(BodyId, BodyId)> {
+    let mut edit = session.edit_part(part.clone())?;
+    let frame = Frame::world();
+    let block = edit
+        .extrude_profile(ExtrudeProfileRequest::new(
+            frame.with_origin(frame.point_at(0.0, 0.0, BOUNDED_ARC_SLAB_LO)),
+            vec![
+                ProfilePoint2::new(
+                    -BOUNDED_ARC_HALF_STRIP_WIDTH,
+                    -BOUNDED_ARC_STRIP_HALF_LENGTH,
+                ),
+                ProfilePoint2::new(BOUNDED_ARC_HALF_STRIP_WIDTH, -BOUNDED_ARC_STRIP_HALF_LENGTH),
+                ProfilePoint2::new(BOUNDED_ARC_HALF_STRIP_WIDTH, BOUNDED_ARC_STRIP_HALF_LENGTH),
+                ProfilePoint2::new(-BOUNDED_ARC_HALF_STRIP_WIDTH, BOUNDED_ARC_STRIP_HALF_LENGTH),
+            ],
+            Vec::new(),
+            BOUNDED_ARC_SLAB_HI - BOUNDED_ARC_SLAB_LO,
+        ))?
+        .into_result()?
+        .body();
+    let cylinder = edit
+        .create_cylinder(CylinderRequest::new(
+            frame,
+            BOUNDED_ARC_RADIUS,
+            BOUNDED_ARC_CYLINDER_HEIGHT,
+        ))?
+        .into_result()?
+        .body();
+    Ok((block, cylinder))
+}
+
+fn create_cap_retaining_operands(
+    session: &mut Session,
+    part: &PartId,
+) -> OracleResult<(BodyId, BodyId)> {
+    let frame = Frame::world();
+    let mut edit = session.edit_part(part.clone())?;
+    let block = edit
+        .create_block(BlockRequest::new(
+            frame.with_origin(frame.point_at(0.0, 0.0, 1.0)),
+            [2.0, 5.0, 1.0],
+        ))?
+        .into_result()?
+        .body();
+    let cylinder = edit
+        .create_cylinder(CylinderRequest::new(
+            frame,
+            BOUNDED_ARC_RADIUS,
+            BOUNDED_ARC_CYLINDER_HEIGHT,
+        ))?
+        .into_result()?
+        .body();
+    Ok((block, cylinder))
+}
+
+fn create_five_portal_operands(
+    session: &mut Session,
+    part: &PartId,
+) -> OracleResult<(BodyId, BodyId)> {
+    let frame = Frame::world();
+    let mut edit = session.edit_part(part.clone())?;
+    let block = edit
+        .extrude_profile(ExtrudeProfileRequest::new(
+            frame.with_origin(frame.point_at(0.0, 0.0, BOUNDED_ARC_SLAB_LO)),
+            vec![
+                ProfilePoint2::new(0.0, 1.6),
+                ProfilePoint2::new(-1.521_690_426, 0.494_427_191),
+                ProfilePoint2::new(-0.940_456_404, -1.294_427_191),
+                ProfilePoint2::new(0.940_456_404, -1.294_427_191),
+                ProfilePoint2::new(1.521_690_426, 0.494_427_191),
+            ],
+            Vec::new(),
+            BOUNDED_ARC_SLAB_HI - BOUNDED_ARC_SLAB_LO,
+        ))?
+        .into_result()?
+        .body();
+    let cylinder = edit
+        .create_cylinder(CylinderRequest::new(
+            frame,
+            BOUNDED_ARC_RADIUS,
+            BOUNDED_ARC_CYLINDER_HEIGHT,
+        ))?
+        .into_result()?
+        .body();
+    Ok((block, cylinder))
+}
+
+fn bounded_arc_disk_strip_volume() -> f64 {
+    let half_width = BOUNDED_ARC_HALF_STRIP_WIDTH;
+    let radius = BOUNDED_ARC_RADIUS;
+    let strip_area = 2.0
+        * (half_width * (radius * radius - half_width * half_width).sqrt()
+            + radius * radius * BOUNDED_ARC_STRIP_HALF_ANGLE);
+    strip_area * (BOUNDED_ARC_SLAB_HI - BOUNDED_ARC_SLAB_LO)
+}
+
+fn bounded_arc_strip_block_volume() -> f64 {
+    2.0 * BOUNDED_ARC_HALF_STRIP_WIDTH
+        * 2.0
+        * BOUNDED_ARC_STRIP_HALF_LENGTH
+        * (BOUNDED_ARC_SLAB_HI - BOUNDED_ARC_SLAB_LO)
+}
+
+fn cap_retaining_block_volume() -> f64 {
+    2.0 * 5.0
+}
+
+fn cap_retaining_cylinder_volume() -> f64 {
+    core::f64::consts::PI * BOUNDED_ARC_RADIUS * BOUNDED_ARC_RADIUS * BOUNDED_ARC_CYLINDER_HEIGHT
 }
 
 fn build_single_result(
@@ -475,13 +847,41 @@ fn make_artifact(
     expected_volume: f64,
     expected_counts: TopologyCounts,
 ) -> OracleResult<Artifact> {
-    let (body_kind, counts, mesh) = inspect_body(session, part, body.clone())?;
+    make_artifact_with_volume_tolerance(
+        session,
+        part,
+        body,
+        file,
+        expected_volume,
+        expected_counts,
+        2.0e-10,
+        1.0e-6,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn make_artifact_with_volume_tolerance(
+    session: &mut Session,
+    part: &PartId,
+    body: BodyId,
+    file: &'static str,
+    expected_volume: f64,
+    expected_counts: TopologyCounts,
+    relative_volume_tolerance: f64,
+    chord_tolerance: f64,
+) -> OracleResult<Artifact> {
+    let (body_kind, counts, mesh) = inspect_body(session, part, body.clone(), chord_tolerance)?;
     require(body_kind == "solid", format!("{file} was not a solid body"))?;
     require(
         counts == expected_counts,
         format!("{file} topology changed: expected {expected_counts:?}, got {counts:?}"),
     )?;
-    assert_volume(file, mesh.volume, expected_volume)?;
+    assert_volume(
+        file,
+        mesh.volume,
+        expected_volume,
+        relative_volume_tolerance,
+    )?;
 
     let bytes = session
         .part(part.clone())?
@@ -503,8 +903,12 @@ fn make_artifact(
         format!("{file} local import did not reconstruct exactly one body"),
     )?;
     let imported_body = imported.bodies()[0].clone();
-    let (imported_kind, imported_counts, imported_mesh) =
-        inspect_body(session, &imported_part, imported_body.clone())?;
+    let (imported_kind, imported_counts, imported_mesh) = inspect_body(
+        session,
+        &imported_part,
+        imported_body.clone(),
+        chord_tolerance,
+    )?;
     require(
         imported_kind == body_kind,
         format!("{file} body kind changed on import"),
@@ -513,7 +917,12 @@ fn make_artifact(
         imported_counts == counts,
         format!("{file} topology counts changed on import"),
     )?;
-    assert_volume(file, imported_mesh.volume, expected_volume)?;
+    assert_volume(
+        file,
+        imported_mesh.volume,
+        expected_volume,
+        relative_volume_tolerance,
+    )?;
 
     Ok(Artifact {
         file,
@@ -528,6 +937,7 @@ fn inspect_body(
     session: &Session,
     part: &PartId,
     body: BodyId,
+    chord_tolerance: f64,
 ) -> OracleResult<(&'static str, TopologyCounts, MeshSummary)> {
     let part = session.part(part.clone())?;
     let body_view = part.body(body.clone())?;
@@ -584,7 +994,7 @@ fn inspect_body(
         .tessellate_body(TessellateBodyRequest::new(
             body,
             TessOptions {
-                chord_tol: 1.0e-6,
+                chord_tol: chord_tolerance,
                 max_edge_len: None,
             },
         ))?
@@ -619,8 +1029,13 @@ fn mesh_volume(positions: &[Point3], triangles: &[[u32; 3]]) -> f64 {
     (six_volume / 6.0).abs()
 }
 
-fn assert_volume(file: &str, actual: f64, expected: f64) -> OracleResult<()> {
-    let tolerance = expected.abs().max(1.0) * 2.0e-10;
+fn assert_volume(
+    file: &str,
+    actual: f64,
+    expected: f64,
+    relative_tolerance: f64,
+) -> OracleResult<()> {
+    let tolerance = expected.abs().max(1.0) * relative_tolerance;
     require(
         actual.is_finite() && (actual - expected).abs() <= tolerance,
         format!(

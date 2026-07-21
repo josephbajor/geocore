@@ -323,7 +323,12 @@ pub fn extrude_profile_with_journal(
 ) -> Result<BodyCreation> {
     checked_body_creation(store, |store| {
         let height = positive_dimension(height, "profile extrusion height")?;
-        extrude_profile_along_in(store, profile, profile.frame().z() * height)
+        extrude_profile_along_in(
+            store,
+            profile,
+            profile.frame().z() * height,
+            SideFrameConstruction::ProfileAxial,
+        )
     })
 }
 
@@ -347,14 +352,28 @@ pub fn extrude_profile_along_with_journal(
     translation: Vec3,
 ) -> Result<BodyCreation> {
     checked_body_creation(store, |store| {
-        extrude_profile_along_in(store, profile, translation)
+        extrude_profile_along_in(
+            store,
+            profile,
+            translation,
+            SideFrameConstruction::ModelSpaceSweep,
+        )
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SideFrameConstruction {
+    /// Preserve the exact authored profile-frame relation of a normal sweep.
+    ProfileAxial,
+    /// Derive the plane from an arbitrary model-space sweep vector.
+    ModelSpaceSweep,
 }
 
 fn extrude_profile_along_in(
     store: &mut Store,
     profile: &PlanarProfile,
     translation: Vec3,
+    side_frame_construction: SideFrameConstruction,
 ) -> Result<BodyId> {
     let frame = profile.frame();
     check_in_size_box(translation.to_array())?;
@@ -394,7 +413,7 @@ fn extrude_profile_along_in(
             &reflected_outer,
             &reflected_hole_slices,
         )?;
-        return extrude_profile_along_in(store, &reflected, translation);
+        return extrude_profile_along_in(store, &reflected, translation, side_frame_construction);
     }
     let top_origin = frame.origin() + translation;
     for point in core::iter::once(profile.outer()).chain(profile.holes().iter().map(Vec::as_slice))
@@ -435,6 +454,7 @@ fn extrude_profile_along_in(
             frame,
             polygon,
             translation,
+            side_frame_construction,
         )?;
     }
     Ok(body)
@@ -470,6 +490,7 @@ fn add_extruded_polygon_ring(
     profile_frame: &Frame,
     polygon: &[Point2],
     translation: Vec3,
+    side_frame_construction: SideFrameConstruction,
 ) -> Result<()> {
     let count = polygon.len();
     let bottom_positions: Vec<_> = polygon
@@ -539,7 +560,14 @@ fn add_extruded_polygon_ring(
         let start = bottom_positions[index];
         let end = bottom_positions[next];
         let edge_vector = end - start;
-        let side_frame = Frame::new(start, edge_vector.cross(translation), edge_vector)?;
+        let side_frame = match side_frame_construction {
+            SideFrameConstruction::ProfileAxial => {
+                axial_profile_side_frame(profile_frame, start, polygon[index], polygon[next])?
+            }
+            SideFrameConstruction::ModelSpaceSweep => {
+                Frame::new(start, edge_vector.cross(translation), edge_vector)?
+            }
+        };
         let side_points = [
             bottom_positions[index],
             bottom_positions[next],
@@ -602,6 +630,33 @@ fn add_extruded_polygon_ring(
         }
     }
     Ok(())
+}
+
+/// Build an axial extrusion side plane from its authored profile-space edge.
+///
+/// Model-space endpoint subtraction needlessly rounds a relation already
+/// known in the profile chart. Lifting the normalized 2D tangent and its
+/// right normal preserves exact signed parent axes whenever an authored edge
+/// lies on one chart axis, while remaining the general construction for every
+/// finite nondegenerate polygon edge.
+fn axial_profile_side_frame(
+    profile_frame: &Frame,
+    origin: Point3,
+    start: Point2,
+    end: Point2,
+) -> Result<Frame> {
+    let delta = end - start;
+    let length = delta.norm();
+    if !length.is_finite() || length <= LINEAR_RESOLUTION {
+        return Err(Error::InvalidGeometry {
+            reason: "profile extrusion side edge is degenerate",
+        });
+    }
+    let du = delta.x / length;
+    let dv = delta.y / length;
+    let tangent = profile_frame.x() * du + profile_frame.y() * dv;
+    let normal = profile_frame.x() * dv - profile_frame.y() * du;
+    Frame::new(origin, normal, tangent)
 }
 
 fn add_exact_vertex(store: &mut Store, position: Point3) -> VertexId {

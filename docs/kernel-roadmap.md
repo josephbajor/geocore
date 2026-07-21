@@ -73,10 +73,10 @@ journals.
 | M0 Foundations | IMPLEMENTED SLICE | Exact predicates, intervals, tolerances, arenas, deterministic math and journals exist; the broader topological-decision audit and several fallback envelopes remain open. |
 | M1 Geometry | IMPLEMENTED SLICE | Analytic + clamped-NURBS geometry with exact splitting/restriction and certified boxes; periodic/procedural NURBS remain. |
 | M2 Topology | IMPLEMENTED SLICE | Full B-rep hierarchy, Euler operators, checked transactions, Fast/Full checker, watertight tessellation; general bodies and degenerate classes remain. |
-| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Pcurves, tolerant edges, tolerance provenance, checked assembly, journals landed; seam/pole interchange fixtures, remaining Full-proof gaps, and tolerance-propagation policies remain. |
+| M2.5 Architecture gate | IN PROGRESS / REQUIRED | Pcurves, tolerant edges, analytic shell assembly, bounded analytic loop and clipped-cylinder Full proofs, and journals landed; seam/pole interchange fixtures and tolerance-propagation policies remain. |
 | M3 X_T | IN PROGRESS | Modern-schema subset reads/writes with host-certified conventions; production coverage and re-certification remain (see [oracle-loop.md](oracle-loop.md)). |
 | M4 Intersections/profile ops | PROVISIONAL / GATED | Broad analytic special cases with explicit Complete/Indeterminate evidence plus first modeling consumers; general certified CC/CS/SSI does not exist yet. |
-| M5 Analytic booleans | IMPLEMENTED SLICE | Public block/block CSG is atomic, Full-checked, deterministic, host-validated. Axial rings drive block/cylinder intersections, bands, host features, two-ring unions, and both containment cavity orientations; certified support relations prove exact-contact intersections empty and realize flush cap-contact unions. Bounded-arc contacts, broader layouts, and curved external evidence remain. |
+| M5 Analytic booleans | IMPLEMENTED SLICE | Public block/block/axial ring CSG, bounded-arc intersection, disconnected planar-minus-cylinder, and multi-portal cap-retaining Unite/cylinder-left Subtract are atomic, Full-checked, deterministic-X_T, and self-import Fast-valid across their certified frames; broader mixed topology and curved host evidence remain. |
 | M6–M8 | NOT STARTED | General modeling, blends, stable API, and production hardening remain. |
 
 ## Reconciled critical path
@@ -128,7 +128,7 @@ Conformance debt:
 - Add `insphere` when a 3D Delaunay or equivalent consumer first needs it.
 - Continue the repository-wide decision audit: exact predicates or certified
   intervals govern topology; metric tolerance governs proximity only. Remaining
-  targets include curved-pcurve signed line integrals, curved/periodic containment,
+  targets include pcurve classes beyond bounded Line2d/Circle2d and curved/periodic containment,
   amplitude policy in higher conic/primitive families, fallbacks outside reviewed
   exponent envelopes, general NURBS root classification, and raw extreme-scale
   vector arithmetic.
@@ -300,16 +300,20 @@ point classification; `kernel::section` produces certified planar section
 graphs; the public typed block/block Boolean facade applies all three CSG truth
 tables and atomically Full-commits connected, proven-empty, multi-body, and
 one-cavity results while exact contact and incomplete proof fail closed.
-Deterministic operation outputs passed the supplemental Onshape oracle 6/6 on
-import and 6/6 there-and-back (`docs/oracle-boolean-certification.json`). The
+Six historical operation outputs passed the supplemental Onshape oracle 6/6
+on import and 6/6 there-and-back; that record is stale while the deterministic
+thirteen-payload offline bundle awaits licensed-host replay
+(`docs/oracle-boolean-certification.json`). The
 active queue head is rung 4 block/cylinder. Public finite-cylinder construction,
 manifold finite-cylinder classification, topology-owned conic/ring trim proofs,
 deterministic closed-fragment stitching, exact Plane/Cylinder rings,
 bounded-arc endpoint topology, finite exact-family transverse ruling carriers
 with paired whole-range residual proof, topology-owned ruling trims with operation-shared
-source-edge root identity, deterministic closed mixed arc/ruling cycles for the
-certified bounded fixture, payload-agnostic exact boundary truth selection,
-finite-cylinder Full proof, proof-bearing planar-circle/periodic-band partitions,
+source-edge root identity, deterministic closed mixed arc/ruling cycles across
+shared translated, permuted, and all-nonzero oblique exact frames,
+payload-agnostic exact boundary truth selection,
+semantic finite-cylinder Full proof across general authored frames,
+proof-bearing planar-circle/periodic-band partitions,
 and exact dual-cell classification now feed the public intersection facade. It
 atomically assembles and Full-checks strict axial slab-through-cylinder intersection
 bands and the two positive remainder bands for axial finite-cylinder-minus-block
@@ -322,9 +326,35 @@ intersections empty, assembles zero-cut finite-cylinder outers with negative
 convex-planar cavity shells, and refuses unsupported curved truth/topology
 classes before allocation. The results export deterministically and self-import
 Fast-valid. Certified flush axial cap-contact unions also remove their full-disk
-interface and Full-commit one connected boss. Broader rigid mixed-cycle
-placements, bounded-arc contacts/layouts, and the curved licensed-host evidence
-gate remain.
+interface and Full-commit one connected boss. General disk/annulus arrangement
+verification, semantic rounded-frame Plane incidence, exact bounded
+Line2d/Circle2d loop proof, Full-certified analytic Plane/Cylinder shell
+assembly, proof-bearing periodic Section embeddings, and internal arrangement
+adapters, exact source-root and carrier trim-scalar evidence, and analytic-shell
+materialization, semantic recovery of topology-proven sloped rulings, and
+correlation-preserving harmonic support bounds now drive public bounded-arc
+intersection. Rectangular, three-sided, and five-support convex clipped-cylinder layouts
+Full-commit across world, translated, axis-permuted, and oblique frames in both
+operand orders, preserve both sources, export deterministically, and Fast-validate
+after self-import; the bounded-arc realization stage denies N-1 without mutation. Ordered
+planar-minus-cylinder also atomically Full-commits every deterministic
+disconnected component for rectangular and three-sided layouts across all four frames and denies an
+N-1 disconnected batch before allocation. Endpoint-free cap
+truth/planning/incidence/materialization and multi-loop face/shell proof now let
+cap-retaining mixed Unite and cylinder-left Subtract atomically Full-commit
+for rectangular and five-support layouts across all four frames. The five-portal
+results preserve exact face/edge/vertex signatures (23/47/30; 10/32/20), satisfy
+independent analytic mesh-volume checks, export deterministic X_T, Fast self-import,
+and admit exact 14,966,784/1,095,237 shell work while denying N-1 without mutation.
+The thirteen-file offline Boolean bundle is byte-stable and queued/stale; only
+the preserved six-file host record is certified. Next is a cycle-wide certified
+integer-period lift for bounded cylinder loops crossing the authored `u=0` seam.
+
+Evidence: `ordered_planar_minus_cylinder_commits_every_disconnected_profile_component`,
+`disconnected_subtract_batch_denies_n_minus_one_before_any_component_allocates`,
+`cap_retaining_mixed_union_and_cylinder_subtract_commit_full_valid`,
+`convex_five_patch_cap_retaining_operations_commit_under_default_policy`, and
+`five_portal_shell_work_accepts_exact_n_and_refuses_n_minus_one_atomically`.
 
 Do not wait for an exhaustive analytic pair table before testing the end-to-end
 boolean architecture. Begin with a deliberately narrow vertical slice as soon as the

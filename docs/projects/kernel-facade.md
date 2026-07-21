@@ -3,7 +3,7 @@
 Status: K1–K3, K5 adoption, and the landed K4 slices (typed X_T import/export, `ChangeJournal`,
 checked semantic edits — MVFS/KVFS, MEV/KEV, MEF/KEF, KFMRH/MFKRH, face split/merge, bridge/ring —
 rigid body copy with certificate reissuance, polygonal-profile extrusion, operation-owned tolerance
-batching, block/cylinder construction, the opt-in Full-assurance commit gate, facade body tessellation, public typed block/block Boolean outcomes plus axial intersection, cylinder-minus-block remainder bands, zero-cut
+batching, block/cylinder construction, the opt-in Full-assurance commit gate, facade body tessellation, public typed block/block Boolean outcomes plus axial intersection, cylinder-minus-block remainder bands, ordered disconnected planar-minus-cylinder, and five-portal cap-retaining Unite/cylinder-left Subtract, zero-cut
 truth-selected whole-source union/subtraction copies and both containment cavity orientations, one-ring axial cap-overlap connected union, one-ring axial block-minus-cylinder blind pockets, two-port axial through-holes, two-ring two-sided unions, support-separated exact-contact empty intersections, and certified flush axial cap-contact connected unions) are implemented;
 broader semantic edit families, transmitted-proof reissuance beyond the named families, partition
 history, and the C ABI remain.
@@ -277,8 +277,7 @@ signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handle
 - Broader semantic edit families beyond the landed MVFS/KVFS, MEV/KEV, MEF/KEF, KFMRH/MFKRH,
   split/merge, bridge/ring, and rigid copy; nested edit transactions pending a journal-composition +
   partition-history contract; tolerance-propagation policies beyond MEF inheritance / KEF ordered max.
-- Extend the landed deterministic-X_T axial, zero-cut whole-source/cavity, inverse-cavity, host-feature, two-port-hole, two-ring-union, support-separated-contact, and flush-cap-contact block/cylinder slice to
-  bounded-arc contacts/layouts and curved licensed-host evidence without exposing lower-layer
+- Add cycle-wide certified integer-period lifts for bounded cylinder loops crossing the authored seam, then extend the landed deterministic-X_T axial, disconnected planar-minus-cylinder, multi-portal cap-retaining, zero-cut/cavity, host-feature, support-contact, and convex bounded-arc slices to broader mixed layouts and curved licensed-host evidence without exposing lower-layer
   symbolic fragments, graph descriptors, or raw candidate topology.
 - Rigid-copy preflight gaps: altered/witness-mismatched higher-order charts, graph-valid shared-basis
   or periodic-source/carrier proofs, other-sample dual offsets, nested five-/seven-sample roots, and
@@ -289,9 +288,8 @@ signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handle
 - F5 exposes body section graphs, verified Plane/Cylinder circle and finite exact-family transverse ruling
   branches, and exact endpoint-free `SectionRing` components when topology-owned trims retain the
   whole period. `SectionCurveFragment` exposes exact bounded arcs and topology-clipped line segments
-  with operation-shared source-root endpoint identity and topology provenance; `SectionCurveComponent` exposes deterministic closed mixed arc/ruling cycles for the certified bounded fixture, while broader rigid placements remain fail-closed. Exact planar-circle and periodic-cylinder face-region
-  partitions now propagate open-cell occupancy over their proof-bearing dual graph for the axial
-  Boolean slice. There is no general surface/surface entry point; future adapters must preserve the
+  with operation-shared source-root endpoint identity and topology provenance; `SectionCurveComponent` exposes deterministic closed mixed arc/ruling cycles across shared translated, permuted, and all-nonzero oblique exact frames, while semantic Plane supports certify rounded-frame source incidence. Exact planar-circle and periodic-cylinder face-region
+  partitions now propagate open-cell occupancy over their proof-bearing dual graph. Exact retained source/carrier scalars, semantic sloped-support recovery, and harmonic support bounds materialize selected convex multi-chart bounded-arc cells through five supports; ordered planar-minus-cylinder atomically Full-commits every disconnected rectangular/three-sided component across four frames. Endpoint-free cap truth/planning/incidence/materialization and count-independent portal-shell proof Full-commit rectangular/five-support cap-retaining Unite and cylinder-left Subtract across those frames with deterministic X_T, exact topology/volume, and N/N-1 shell-work evidence. There is no general surface/surface entry point; future adapters must preserve the
   lower `kops` completion boundary/evidence, not duplicate or widen it.
 - Encapsulation follow-on (separate announced low-level break): make entity fields crate-private and
   replace cross-crate raw assembly with a sealed reconstruction seam; `cargo package -p kernel` full

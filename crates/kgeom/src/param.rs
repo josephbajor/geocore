@@ -64,7 +64,12 @@ impl ParamRange {
     /// Linear interpolation across the range (requires finite bounds).
     pub fn lerp(self, s: f64) -> f64 {
         debug_assert!(self.is_finite());
-        self.lo + (self.hi - self.lo) * s
+        let value = self.lo + (self.hi - self.lo) * s;
+        if (0.0..=1.0).contains(&s) {
+            value.clamp(self.lo, self.hi)
+        } else {
+            value
+        }
     }
 }
 
@@ -108,5 +113,15 @@ mod tests {
         assert_eq!(range.clamp_param(3.5), 3.5);
         assert_eq!(range.clamp_param(1.0), 2.0);
         assert_eq!(range.clamp_param(9.0), 5.0);
+    }
+
+    #[test]
+    fn finite_lerp_rounding_stays_inside_its_closed_range() {
+        let range = ParamRange::new(1.381_966_011_250_105_8, 3.618_033_988_749_893_6);
+        for index in 0..=64 {
+            assert!(range.contains(range.lerp(f64::from(index) / 64.0)));
+        }
+        assert_eq!(range.lerp(0.0), range.lo);
+        assert_eq!(range.lerp(1.0), range.hi);
     }
 }

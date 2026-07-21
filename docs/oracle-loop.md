@@ -59,11 +59,18 @@ compares clean. The supplemental public Boolean matrix imported 6/6 and
 compared 6/6 clean, including fragmented shared-surface solids, disjoint union
 bodies, and a two-shell finite-void cavity. Evidence: `docs/oracle-results.tsv`.
 
-**Current certification state (2026-07-20): base stale, Boolean current.**
+**Current certification state (2026-07-21): base stale, Boolean stale.**
 Finite-cylinder Full proof changed the regenerated base manifest's checker
 evidence after writer `b596027`; its 15 payload hashes are unchanged, but the
-base bundle needs licensed-host re-certification. The six block/block operation
-payloads remain pinned by `docs/oracle-boolean-certification.json`.
+base bundle needs licensed-host re-certification. The six-payload Boolean record
+retains historical 2026-07-20 evidence, but the generator now adds seven queued
+Plane/Cylinder payloads: bounded-arc intersection, both ordered
+planar-minus-cylinder bodies, rectangular cap-retaining Unite/cylinder-left
+Subtract, and five-portal variants of both operations.
+The complete regenerated thirteen-payload bundle has deterministic offline identity
+`fb7a515ba3f1f458a296a8c60d303044f9d5d8cbf2aedba06d753f50441a49fa`
+and awaits a fresh licensed-host run; this queued identity is not host
+certification.
 
 ## 1. Generate the bundle
 
@@ -100,7 +107,7 @@ and per-fixture SHA-256 identities. A `current` mismatch fails CI. An explicitly
 `stale` record must carry a reason and passes ordinary development CI with a
 prominent warning; release/conformance gates add `--require-current`.
 
-The block/block Boolean rung has a separate facade-only supplemental bundle:
+The Boolean rung has a separate facade-only supplemental bundle:
 
 ```sh
 cargo run --release -p kernel --example boolean_xt_oracle -- oracle/boolean-outbox
@@ -109,10 +116,24 @@ python3 scripts/oracle_loop.py certification-check \
   --record docs/oracle-boolean-certification.json
 ```
 
-Its six payloads cover connected unite/subtract/intersect, both bodies of a
-disjoint union, and contained subtraction with one finite void. Generation
-requires Full-valid committed results, independent volumes, local X_T import,
-byte-stable replay, and an empty output directory.
+Its thirteen payloads cover connected block/block unite/subtract/intersect, both
+bodies of a disjoint union, contained subtraction with one finite void, one
+bounded-arc block/cylinder intersection, and both public-result-order bodies of
+the bounded-arc planar-minus-cylinder subtraction, plus rectangular and
+five-portal cap-retaining Unite/cylinder-left Subtract. Generation requires
+Full-valid committed results, independent volumes, local X_T import,
+byte-stable replay, and an empty output directory. The seven queued files are
+`bounded_arc_plane_cylinder_intersect.x_t`,
+`bounded_arc_plane_cylinder_subtract_body_0.x_t`,
+`bounded_arc_plane_cylinder_subtract_body_1.x_t`,
+`cap_retaining_plane_cylinder_unite.x_t`,
+`cap_retaining_cylinder_minus_plane.x_t`,
+`five_portal_plane_cylinder_unite.x_t`, and
+`five_portal_cylinder_minus_plane.x_t`; this batch is not yet
+licensed-host certification. After the final queued changes settle, regenerate
+the bundle, record `identity` output, and manually dispatch the full
+thirteen-payload Boolean suite with that exact `bundle_sha256`; keep the record
+stale until every final payload has completed import/re-export comparison.
 
 ## 2. Manual catch-up entry points
 

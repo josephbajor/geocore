@@ -1421,6 +1421,11 @@ fn assert_shared_mixed_endpoint_identity(
             endpoint_occurrences[1].source_parameter
         );
         let key = endpoint_occurrences[0].source_parameter.clone();
+        let root_parameter = key.root_parameter();
+        let root_enclosure = key.root_parameter_enclosure();
+        assert!(root_parameter.is_finite());
+        assert!(root_enclosure.lo().is_finite() && root_enclosure.hi().is_finite());
+        assert!(root_enclosure.contains(root_parameter));
         assert!(
             !keys.contains(&key),
             "two physical endpoints reused {key:?}"
@@ -1439,9 +1444,18 @@ fn assert_shared_mixed_endpoint_identity(
         let common = graph.curve_endpoints()[endpoint_index].edge_parameters()[block_operand]
             .expect("mixed endpoint must retain common source-edge evidence");
         assert!(common.lo().is_finite() && common.hi().is_finite() && common.lo() <= common.hi());
+        assert!(common.lo() <= root_enclosure.lo());
+        assert!(common.hi() >= root_enclosure.hi());
         for occurrence in endpoint_occurrences {
+            assert_eq!(occurrence.source_parameter.root_parameter(), root_parameter);
+            assert_eq!(
+                occurrence.source_parameter.root_parameter_enclosure(),
+                root_enclosure
+            );
             assert!(common.lo() >= occurrence.edge_parameter.lo());
             assert!(common.hi() <= occurrence.edge_parameter.hi());
+            assert!(occurrence.edge_parameter.lo() <= root_enclosure.lo());
+            assert!(occurrence.edge_parameter.hi() >= root_enclosure.hi());
         }
         keys.push(key);
     }
@@ -1502,6 +1516,31 @@ fn assert_mixed_slab_contract(
     keys
 }
 
+fn root_scalar_signature(graph: &BodySectionGraph) -> Vec<(EdgeId, usize, [u64; 3])> {
+    graph
+        .curve_endpoints()
+        .iter()
+        .filter_map(|endpoint| match endpoint.topology() {
+            SectionCurveEndpointTopology::Trim {
+                source_parameters, ..
+            } => source_parameters.iter().flatten().next(),
+            SectionCurveEndpointTopology::ParameterSeam { .. } => None,
+        })
+        .map(|key| {
+            let enclosure = key.root_parameter_enclosure();
+            (
+                key.edge(),
+                key.root_ordinal(),
+                [
+                    key.root_parameter().to_bits(),
+                    enclosure.lo().to_bits(),
+                    enclosure.hi().to_bits(),
+                ],
+            )
+        })
+        .collect()
+}
+
 #[test]
 fn slab_cylinder_mixed_arc_line_cycles_are_complete_and_operand_symmetric() {
     let (session, part_id, block, cylinder) = mixed_slab_and_cylinder();
@@ -1510,6 +1549,10 @@ fn slab_cylinder_mixed_arc_line_cycles_are_complete_and_operand_symmetric() {
     assert_eq!(
         repeated, graph,
         "mixed cycle assembly must be deterministic"
+    );
+    assert_eq!(
+        root_scalar_signature(&repeated),
+        root_scalar_signature(&graph)
     );
     let forward_keys = assert_mixed_slab_contract(&session, &part_id, &graph, 0);
 
@@ -1522,6 +1565,20 @@ fn slab_cylinder_mixed_arc_line_cycles_are_complete_and_operand_symmetric() {
     let swapped_keys = assert_mixed_slab_contract(&session, &part_id, &swapped, 1);
     assert_eq!(forward_keys.len(), swapped_keys.len());
     assert!(forward_keys.iter().all(|key| swapped_keys.contains(key)));
+    for forward in forward_keys {
+        let swapped = swapped_keys
+            .iter()
+            .find(|candidate| *candidate == &forward)
+            .expect("operand swap must retain every root identity");
+        assert_eq!(
+            forward.root_parameter().to_bits(),
+            swapped.root_parameter().to_bits()
+        );
+        assert_eq!(
+            forward.root_parameter_enclosure(),
+            swapped.root_parameter_enclosure()
+        );
+    }
 }
 
 #[test]
@@ -1631,4 +1688,65 @@ fn rigidly_oriented_slab_through_cylinder_keeps_two_exact_rings() {
     axial_parameters.sort_by(f64::total_cmp);
     assert!((axial_parameters[0] - 0.5).abs() <= POINT_MATCH_TOL);
     assert!((axial_parameters[1] - 1.5).abs() <= POINT_MATCH_TOL);
+}
+
+#[test]
+fn oblique_triangular_prism_cylinder_section_keeps_all_bounded_rulings() {
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let frame = Frame::new(
+        Point3::new(3.0, -2.0, 1.25),
+        Vec3::new(0.48, 0.64, 0.6),
+        Vec3::new(0.8, -0.6, 0.0),
+    )
+    .unwrap();
+    let (prism, cylinder) = {
+        let mut edit = session.edit_part(part_id.clone()).unwrap();
+        let prism = edit
+            .extrude_profile(ExtrudeProfileRequest::new(
+                frame.with_origin(frame.point_at(0.0, 0.0, 0.5)),
+                vec![
+                    Point2::new(-4.0, -1.25),
+                    Point2::new(4.0, -1.25),
+                    Point2::new(0.0, 1.75),
+                ],
+                Vec::new(),
+                1.0,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let cylinder = edit
+            .create_cylinder(CylinderRequest::new(frame, 1.5, 2.0))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (prism, cylinder)
+    };
+
+    for (left, right) in [
+        (prism.clone(), cylinder.clone()),
+        (cylinder.clone(), prism.clone()),
+    ] {
+        let graph = section_graph(&session, &part_id, &left, &right);
+        assert_eq!(
+            graph.completion(),
+            SectionCompletion::Complete,
+            "oblique triangular graph gaps: {:?}",
+            graph.gaps()
+        );
+        assert!(graph.gaps().is_empty());
+        assert_eq!(graph.branches().len(), 8);
+        assert_eq!(graph.curve_fragments().len(), 12);
+        assert_eq!(graph.curve_endpoints().len(), 12);
+        assert_eq!(graph.curve_components().len(), 3);
+        assert!(
+            graph
+                .curve_components()
+                .iter()
+                .all(SectionCurveComponent::closed)
+        );
+    }
 }

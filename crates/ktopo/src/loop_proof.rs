@@ -1,11 +1,30 @@
 //! Conservative whole-loop simplicity proofs.
 //!
-//! The first proof slice handles exact straight-segment loops on planes and
-//! one-fin circle/ellipse loops. Segment intersection signs use the robust
-//! kernel predicates; unsupported curved or nonlinear-chart compositions
-//! remain indeterminate.
+//! Exact plane-segment loops and one-fin circle/ellipse loops use their
+//! specialized predicates. Finite mixed `Line2d`/`Circle2d` loops on planes
+//! and cylinders use pairwise exact/interval intersection proofs plus a
+//! bounded Green integral. Near chart joins are admitted only after exact
+//! topology identity, whole-fin incidence, and outward surface-lifted
+//! distance certification. Unsupported curves and nonlinear charts remain
+//! indeterminate.
 
-use crate::entity::{Edge, FinPcurve, LoopId, Sense};
+mod analytic_face_layout;
+pub(crate) mod bounded_pcurve_integral;
+pub(crate) mod bounded_pcurve_simplicity;
+
+#[cfg(test)]
+pub(crate) use analytic_face_layout::FACE_LOOP_CONTAINMENT_WORK;
+pub(crate) use analytic_face_layout::face_loop_containment_budget;
+
+use self::analytic_face_layout::{certify_analytic_face_layout, charge_face_loop_containment_work};
+use self::bounded_pcurve_integral::{
+    BoundedPcurveSpan, SignedLineIntegralProof, certify_signed_line_integral,
+};
+use self::bounded_pcurve_simplicity::{
+    BoundedLoopSimplicity, BoundedLoopSpan, CertifiedBoundedLoopJoin,
+    certify_bounded_loop_simplicity,
+};
+use crate::entity::{Edge, FinPcurve, LoopId, Sense, VertexId};
 use crate::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use crate::incidence::{
     IncidenceCertification, certify_edge_surface_incidence, certify_pcurve_incidence,
@@ -85,6 +104,9 @@ pub(crate) fn certify_loop_orientation(
     if let Some((_, orientation)) = strict_planar_ring(store, loop_id)? {
         return Ok(Some(orientation));
     }
+    if let Some(orientation) = certify_bounded_analytic_loop_orientation(store, face_id, loop_id)? {
+        return Ok(Some(orientation));
+    }
     let [fin_id] = loop_.fins.as_slice() else {
         return Ok(None);
     };
@@ -116,6 +138,199 @@ pub(crate) fn certify_loop_orientation(
         _ => None,
     };
     Ok(parameter_orientation)
+}
+
+/// Consume bounded analytic integral evidence only after independent
+/// topology, whole-incidence, certified chart-closure, and simplicity proofs.
+fn certify_bounded_analytic_loop_orientation(
+    store: &Store,
+    face_id: crate::entity::FaceId,
+    loop_id: LoopId,
+) -> Result<Option<Orientation>> {
+    if certify_loop_simplicity(store, loop_id)? != LoopSimplicity::Certified {
+        return Ok(None);
+    }
+    let Some(prepared) = prepare_bounded_analytic_loop(store, face_id, loop_id)? else {
+        return Ok(None);
+    };
+    let spans = prepared
+        .iter()
+        .copied()
+        .map(BoundedLoopSpan::geometry)
+        .collect::<Vec<_>>();
+
+    Ok(match certify_signed_line_integral(&spans) {
+        SignedLineIntegralProof::Certified(proof) => Some(proof.orientation()),
+        SignedLineIntegralProof::Indeterminate(_) => None,
+    })
+}
+
+fn prepare_bounded_analytic_loop<'a>(
+    store: &'a Store,
+    face_id: crate::entity::FaceId,
+    loop_id: LoopId,
+) -> Result<Option<Vec<BoundedLoopSpan<'a, VertexId>>>> {
+    let loop_ = store.get(loop_id)?;
+    if loop_.face != face_id || loop_.fins.len() < 2 {
+        return Ok(None);
+    }
+    let face = store.get(face_id)?;
+    let surface = store.get(face.surface)?;
+    let periods = match surface {
+        SurfaceGeom::Plane(_) => [None, None],
+        SurfaceGeom::Cylinder(_) => [Some(core::f64::consts::TAU), None],
+        _ => return Ok(None),
+    };
+    let mut spans = Vec::with_capacity(loop_.fins.len());
+    for &fin_id in &loop_.fins {
+        if certify_whole_fin_incidence(store, face_id, loop_id, fin_id, LINEAR_RESOLUTION)
+            != WholeFinIncidence::Certified
+        {
+            return Ok(None);
+        }
+        let fin = store.get(fin_id)?;
+        let edge = store.get(fin.edge)?;
+        let (Some((lo, hi)), [Some(_), Some(_)], Some(use_), Some(tail), Some(head)) = (
+            edge.bounds,
+            edge.vertices,
+            fin.pcurve,
+            store.fin_tail(fin_id)?,
+            store.fin_head(fin_id)?,
+        ) else {
+            return Ok(None);
+        };
+        if edge.tolerance.is_some() || use_.closure_winding().is_some() || use_.seam().is_some() {
+            return Ok(None);
+        }
+        let map = use_.edge_to_pcurve();
+        let q_lo = map.map(lo);
+        let q_hi = map.map(hi);
+        // Whole-fin incidence already certifies the authored active pcurve
+        // range against this affine map with the kernel's conservative
+        // parameter comparison. Requiring the recomputed endpoints to have
+        // identical floating-point bits would reject an equivalent nonzero
+        // offset/phase map after one rounded multiply-add.
+        if !q_lo.is_finite() || !q_hi.is_finite() {
+            return Ok(None);
+        }
+        let (edge_start, edge_end) = traversal_bounds(fin.sense, ParamRange::new(lo, hi));
+        let start = map.map(edge_start);
+        let end = map.map(edge_end);
+        let curve = store.get(use_.curve())?;
+        if !matches!(curve, Curve2dGeom::Line(_) | Curve2dGeom::Circle(_)) {
+            return Ok(None);
+        }
+        let chart_offset = use_.chart().apply(Point2::default(), periods)?;
+        spans.push(BoundedLoopSpan::new(
+            BoundedPcurveSpan::new(curve, start, end, chart_offset),
+            tail,
+            head,
+        ));
+    }
+    if !certify_bounded_chart_joins(surface, periods, &mut spans) {
+        return Ok(None);
+    }
+    Ok(Some(spans))
+}
+
+fn certify_bounded_chart_joins<K: Copy + Eq>(
+    surface: &SurfaceGeom,
+    periods: [Option<f64>; 2],
+    spans: &mut [BoundedLoopSpan<'_, K>],
+) -> bool {
+    let model_tolerance = 2.0 * LINEAR_RESOLUTION;
+    let Some(parameter_neighborhood) =
+        bounded_join_parameter_neighborhood(surface, model_tolerance)
+    else {
+        return false;
+    };
+    for index in 0..spans.len() {
+        let next = (index + 1) % spans.len();
+        if spans[index].head() != spans[next].tail() {
+            return false;
+        }
+        let Some(current_end) = bounded_span_endpoint(spans[index].geometry(), false) else {
+            return false;
+        };
+        let Some(next_start) = bounded_span_endpoint(spans[next].geometry(), true) else {
+            return false;
+        };
+        if point2_bits_equal(current_end, next_start) {
+            continue;
+        }
+        for (direction, period) in periods.into_iter().enumerate() {
+            let Some(period) = period else { continue };
+            let values = if direction == 0 {
+                [current_end.x, next_start.x]
+            } else {
+                [current_end.y, next_start.y]
+            };
+            let delta = Interval::point(values[0]) - Interval::point(values[1]);
+            if !period.is_finite()
+                || period <= 0.0
+                || delta.lo() <= -0.5 * period
+                || delta.hi() >= 0.5 * period
+            {
+                return false;
+            }
+        }
+        let Some(surface) = surface.as_leaf_surface() else {
+            return false;
+        };
+        let current_point = surface.eval([current_end.x, current_end.y]);
+        let next_point = surface.eval([next_start.x, next_start.y]);
+        if !certify_model_distance(current_point, next_point, model_tolerance) {
+            return false;
+        }
+        let Some(evidence) = CertifiedBoundedLoopJoin::new(parameter_neighborhood) else {
+            return false;
+        };
+        spans[index] = spans[index].with_head_join(evidence);
+    }
+    true
+}
+
+fn bounded_join_parameter_neighborhood(surface: &SurfaceGeom, model_tolerance: f64) -> Option<f64> {
+    if !model_tolerance.is_finite() || model_tolerance < 0.0 {
+        return None;
+    }
+    let tolerance = Interval::point(model_tolerance);
+    let neighborhood = match surface {
+        SurfaceGeom::Plane(_) => tolerance.lo(),
+        SurfaceGeom::Cylinder(cylinder) => {
+            // Line2d directions are normalized in (u,v). The cylinder metric
+            // has maximum speed max(radius, 1). Keep the admitted parameter
+            // radius no larger than model_tolerance / max(radius, 1); using
+            // the outward quotient's lower bound cannot enlarge that radius.
+            let metric_scale = Interval::point(cylinder.radius().max(1.0));
+            tolerance.checked_div(metric_scale)?.lo()
+        }
+        _ => return None,
+    };
+    (neighborhood.is_finite() && neighborhood >= 0.0).then_some(neighborhood)
+}
+
+fn bounded_span_endpoint(span: BoundedPcurveSpan<'_>, start: bool) -> Option<Point2> {
+    let parameter = if start { span.start() } else { span.end() };
+    let point = span.curve().as_curve().eval(parameter) + span.chart_offset();
+    (point.x.is_finite() && point.y.is_finite()).then_some(point)
+}
+
+fn point2_bits_equal(left: Point2, right: Point2) -> bool {
+    left.x.to_bits() == right.x.to_bits() && left.y.to_bits() == right.y.to_bits()
+}
+
+fn certify_model_distance(left: Point3, right: Point3, tolerance: f64) -> bool {
+    let distance_squared = [left.x, left.y, left.z]
+        .into_iter()
+        .zip([right.x, right.y, right.z])
+        .fold(Interval::point(0.0), |sum, (left, right)| {
+            sum + (Interval::point(left) - Interval::point(right)).square()
+        });
+    let allowed_squared = Interval::point(tolerance).square();
+    distance_squared.hi().is_finite()
+        && allowed_squared.lo().is_finite()
+        && distance_squared.hi() <= allowed_squared.lo()
 }
 
 fn traversal_orientation(factors: [f64; 2], sense: Sense) -> Option<Orientation> {
@@ -167,7 +382,15 @@ pub(crate) fn certify_loop_simplicity(store: &Store, loop_id: LoopId) -> Result<
         tails.push(tail);
     }
     let Some(segments) = planar_segment_ring(store, loop_id)? else {
-        return Ok(LoopSimplicity::Indeterminate);
+        let face_id = loop_.face;
+        let Some(spans) = prepare_bounded_analytic_loop(store, face_id, loop_id)? else {
+            return Ok(LoopSimplicity::Indeterminate);
+        };
+        return Ok(match certify_bounded_loop_simplicity(&spans) {
+            BoundedLoopSimplicity::Certified => LoopSimplicity::Certified,
+            BoundedLoopSimplicity::SelfIntersecting => LoopSimplicity::SelfIntersecting,
+            BoundedLoopSimplicity::Indeterminate(_) => LoopSimplicity::Indeterminate,
+        });
     };
     Ok(certify_segment_ring(&segments))
 }
@@ -217,50 +440,38 @@ pub(crate) fn certify_face_loop_layout(
         let polygonal = certify_loop_containment(store, &face.loops)?;
         if polygonal == LoopContainment::Certified
             || certify_convex_polygon_circle_face(store, face_id)?
+            || certify_analytic_face_layout(store, face_id)?
         {
             return Ok(LoopContainment::Certified);
         }
         return Ok(LoopContainment::Indeterminate);
     }
-    if !matches!(store.get(face.surface)?, SurfaceGeom::Cylinder(_)) || face.loops.len() != 2 {
-        return Ok(LoopContainment::Indeterminate);
-    }
+    Ok(if certify_analytic_face_layout(store, face_id)? {
+        LoopContainment::Certified
+    } else {
+        LoopContainment::Indeterminate
+    })
+}
 
-    let mut edges = Vec::with_capacity(2);
-    let mut heights = Vec::with_capacity(2);
-    for &loop_id in &face.loops {
-        let loop_ = store.get(loop_id)?;
-        let [fin_id] = loop_.fins.as_slice() else {
-            return Ok(LoopContainment::Indeterminate);
-        };
-        let fin = store.get(*fin_id)?;
-        let edge = store.get(fin.edge)?;
-        let Some(use_) = fin.pcurve else {
-            return Ok(LoopContainment::Indeterminate);
-        };
-        let Curve2dGeom::Line(line) = store.get(use_.curve())? else {
-            return Ok(LoopContainment::Indeterminate);
-        };
-        if loop_.face != face_id
-            || fin.parent != loop_id
-            || edge.tolerance.is_some()
-            || line.dir().y != 0.0
-            || line.dir().x == 0.0
-            || certify_loop_orientation(store, face_id, loop_id)?.is_none()
-        {
-            return Ok(LoopContainment::Indeterminate);
+/// Budgeted Full-check entry point for face-loop layout certification.
+pub(crate) fn certify_face_loop_layout_in_scope(
+    store: &Store,
+    face_id: crate::entity::FaceId,
+    scope: &mut kcore::operation::OperationScope<'_, '_>,
+) -> Result<LoopContainment> {
+    let face = store.get(face_id)?;
+    if face.loops.len() >= 2 {
+        let mut fin_count = 0_usize;
+        for &loop_id in &face.loops {
+            fin_count = fin_count
+                .checked_add(store.get(loop_id)?.fins.len())
+                .ok_or(kcore::error::Error::InvalidGeometry {
+                    reason: "face-loop containment fin count overflow",
+                })?;
         }
-        edges.push(fin.edge);
-        heights.push(line.origin().y);
+        charge_face_loop_containment_work(scope, face.loops.len(), fin_count)?;
     }
-    if edges[0] == edges[1]
-        || !heights[0].is_finite()
-        || !heights[1].is_finite()
-        || heights[0] == heights[1]
-    {
-        return Ok(LoopContainment::Indeterminate);
-    }
-    Ok(LoopContainment::Certified)
+    certify_face_loop_layout(store, face_id)
 }
 
 /// Certify that one circle lies strictly inside one convex polygon.
@@ -814,6 +1025,10 @@ fn point_location(point: Point2, segments: &[Segment2]) -> PointLocation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kgeom::curve2d::Line2d;
+    use kgeom::frame::Frame;
+    use kgeom::surface::Plane;
+    use kgeom::vec::Vec2;
 
     fn segment(start: [f64; 2], end: [f64; 2]) -> Segment2 {
         Segment2 {
@@ -951,5 +1166,36 @@ mod tests {
             LoopSimplicity::Certified
         );
         assert_eq!(strict_ring_orientation(&tolerance_joined), None);
+    }
+
+    #[test]
+    fn certified_chart_join_mints_only_for_surface_lifted_near_incidence() {
+        let prove = |epsilon: f64| {
+            let curves = [
+                Curve2dGeom::Line(Line2d::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap()),
+                Curve2dGeom::Line(
+                    Line2d::new(Point2::new(1.0 + epsilon, 0.0), Vec2::new(0.0, 1.0)).unwrap(),
+                ),
+                Curve2dGeom::Line(
+                    Line2d::new(Point2::new(1.0, 1.0), Vec2::new(-1.0, 0.0)).unwrap(),
+                ),
+                Curve2dGeom::Line(
+                    Line2d::new(Point2::new(0.0, 1.0), Vec2::new(0.0, -1.0)).unwrap(),
+                ),
+            ];
+            let mut spans = (0..4)
+                .map(|index| {
+                    BoundedLoopSpan::new(
+                        BoundedPcurveSpan::new(&curves[index], 0.0, 1.0, Point2::default()),
+                        index,
+                        (index + 1) % 4,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let surface = SurfaceGeom::Plane(Plane::new(Frame::world()));
+            certify_bounded_chart_joins(&surface, [None, None], &mut spans)
+        };
+        assert!(prove(5.0e-13));
+        assert!(!prove(0.25));
     }
 }
