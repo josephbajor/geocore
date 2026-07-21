@@ -1,0 +1,1670 @@
+//! Proof-bearing adoption of mixed planar/periodic face arrangements.
+//!
+//! Section owns exact endpoint identity, analytic carriers, paired pcurves,
+//! deterministic carrier-evaluated trim scalars, and the integer lift of every
+//! cylinder-side use. Planar lineage retains exact source topology and
+//! isolated-root scalar evidence. [`MixedShellProofPlan`] retains that
+//! certified proposal; its materializer coalesces raw source spans by equality,
+//! preserves shared endpoint identity, and runs read-only analytic-shell
+//! preflight before any transaction is opened.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use ktopo::store::Store;
+
+#[path = "mixed_shell_components.rs"]
+pub(crate) mod components;
+#[path = "mixed_shell_materialize.rs"]
+pub(crate) mod materialize;
+
+use super::boundary_select::{OperandSide, SelectedBoundaryFragment, SelectedOrientation};
+use super::face_arrangement::{ArrangementCycle, ArrangementDirection, ArrangementEdgeKey};
+use super::mixed_cap_boundary::MixedCylinderCapRing;
+use super::mixed_face_arrangement::{
+    MixedArrangementVertex, MixedCutFragmentKey, MixedPlanarFaceArrangement,
+    MixedPlanarSourceLineage, MixedSourceParameterEvidence, MixedSourceSpanKey,
+};
+use super::mixed_periodic_arrangement::{
+    MixedPeriodicFaceArrangement, PeriodicArrangementCellKey, PeriodicArrangementVertexKey,
+    PeriodicCutFragmentKey, PeriodicSourceLoopKey,
+};
+use crate::{
+    BodySectionGraph, FaceId, SectionBranch, SectionCompletion, SectionCurveEndpointTopology,
+    SectionCurveFragment, SectionCurveFragmentSpan, SectionPeriodicFaceEmbeddingEvidence,
+};
+
+type PeriodicArrangementCycle =
+    ArrangementCycle<PeriodicSourceLoopKey, PeriodicCutFragmentKey, PeriodicArrangementVertexKey>;
+type OrientedCycleParts<S, C, V> = (
+    Vec<(ArrangementEdgeKey<S, C>, ArrangementDirection)>,
+    Vec<V>,
+);
+
+/// Topology-order identity of one source face within its operand body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct MixedSourceFaceKey {
+    operand: usize,
+    topology_ordinal: usize,
+}
+
+impl MixedSourceFaceKey {
+    pub(crate) const fn operand(self) -> usize {
+        self.operand
+    }
+
+    pub(crate) const fn topology_ordinal(self) -> usize {
+        self.topology_ordinal
+    }
+}
+
+/// Arrangement-local cell identity, qualified by its source face.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum MixedShellCellKind {
+    Planar(usize),
+    Periodic(PeriodicArrangementCellKey),
+    CylinderCap(usize),
+}
+
+/// Canonical identity consumed from representation-independent truth selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct MixedShellCellKey {
+    source: MixedSourceFaceKey,
+    cell: MixedShellCellKind,
+}
+
+impl MixedShellCellKey {
+    pub(crate) const fn planar(source: MixedSourceFaceKey, cell: usize) -> Self {
+        Self {
+            source,
+            cell: MixedShellCellKind::Planar(cell),
+        }
+    }
+
+    pub(crate) const fn periodic(
+        source: MixedSourceFaceKey,
+        cell: PeriodicArrangementCellKey,
+    ) -> Self {
+        Self {
+            source,
+            cell: MixedShellCellKind::Periodic(cell),
+        }
+    }
+
+    pub(crate) const fn cylinder_cap(source: MixedSourceFaceKey, boundary: usize) -> Self {
+        Self {
+            source,
+            cell: MixedShellCellKind::CylinderCap(boundary),
+        }
+    }
+
+    pub(crate) const fn source(self) -> MixedSourceFaceKey {
+        self.source
+    }
+
+    pub(crate) const fn cell(self) -> MixedShellCellKind {
+        self.cell
+    }
+}
+
+/// One already-certified arrangement made available to the bridge.
+pub(crate) enum MixedArrangementBinding<'a> {
+    Planar {
+        face: FaceId,
+        operand: usize,
+        arrangement: &'a MixedPlanarFaceArrangement,
+        lineage: &'a MixedPlanarSourceLineage,
+    },
+    Periodic {
+        face: FaceId,
+        operand: usize,
+        arrangement: &'a MixedPeriodicFaceArrangement,
+    },
+    CylinderCap {
+        ring: &'a MixedCylinderCapRing,
+    },
+}
+
+impl MixedArrangementBinding<'_> {
+    fn face(&self) -> &FaceId {
+        match self {
+            Self::Planar { face, .. } | Self::Periodic { face, .. } => face,
+            Self::CylinderCap { ring } => ring.cap_face(),
+        }
+    }
+
+    const fn operand(&self) -> usize {
+        match self {
+            Self::Planar { operand, .. } | Self::Periodic { operand, .. } => *operand,
+            Self::CylinderCap { ring } => ring.operand(),
+        }
+    }
+}
+
+/// Exact physical vertex identity retained by the proof plan.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum MixedShellVertexKey {
+    /// A Section-owned trim endpoint shared across all incident source faces.
+    SectionEndpoint(usize),
+    /// A planar arrangement vertex whose raw source vertex is not exposed yet.
+    PlanarSourceVertex {
+        source: MixedSourceFaceKey,
+        topology_ordinal: usize,
+    },
+    /// A combinatorial seam for an endpoint-free source ring; never physical.
+    ProofSeam {
+        source: MixedSourceFaceKey,
+        loop_key: PeriodicSourceLoopKey,
+    },
+}
+
+/// Exact identity of one physical edge proposal.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum MixedShellEdgeKey {
+    /// Planar source span backed by retained fin/root lineage evidence.
+    PlanarSource {
+        source: MixedSourceFaceKey,
+        span: MixedSourceSpanKey,
+    },
+    /// Topology-owned complete source loop on the periodic face.
+    PeriodicSource {
+        source: MixedSourceFaceKey,
+        loop_key: PeriodicSourceLoopKey,
+    },
+    /// Canonical index into `BodySectionGraph::curve_fragments`.
+    SectionFragment(usize),
+}
+
+/// Pcurve/chart authority retained for one directed face use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MixedPcurveLineage {
+    /// Source topology remains the authority for its existing fin pcurve.
+    SourceTopology,
+    /// Section branch pcurve plus an exact integer cylinder-period lift.
+    Section {
+        branch: usize,
+        operand: usize,
+        cylinder_period_shift: i64,
+    },
+}
+
+/// One oriented use in a selected derived face loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MixedShellEdgeUse {
+    edge: MixedShellEdgeKey,
+    direction: ArrangementDirection,
+    pcurve: MixedPcurveLineage,
+}
+
+impl MixedShellEdgeUse {
+    pub(crate) const fn edge(&self) -> &MixedShellEdgeKey {
+        &self.edge
+    }
+
+    pub(crate) const fn direction(&self) -> ArrangementDirection {
+        self.direction
+    }
+
+    pub(crate) const fn pcurve(&self) -> MixedPcurveLineage {
+        self.pcurve
+    }
+}
+
+/// One selected, oriented, closed face-boundary component.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MixedShellLoopPlan {
+    uses: Vec<MixedShellEdgeUse>,
+    vertices: Vec<MixedShellVertexKey>,
+}
+
+impl MixedShellLoopPlan {
+    pub(crate) fn uses(&self) -> &[MixedShellEdgeUse] {
+        &self.uses
+    }
+
+    /// Traversed vertices, including the repeated closing identity.
+    pub(crate) fn vertices(&self) -> &[MixedShellVertexKey] {
+        &self.vertices
+    }
+}
+
+/// One truth-selected derived face, still qualified by its source topology.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MixedShellFacePlan {
+    source: MixedSourceFaceKey,
+    source_face: FaceId,
+    selected_orientation: SelectedOrientation,
+    loops: Vec<MixedShellLoopPlan>,
+}
+
+impl MixedShellFacePlan {
+    pub(crate) const fn source(&self) -> MixedSourceFaceKey {
+        self.source
+    }
+
+    pub(crate) const fn source_face(&self) -> &FaceId {
+        &self.source_face
+    }
+
+    pub(crate) const fn selected_orientation(&self) -> SelectedOrientation {
+        self.selected_orientation
+    }
+
+    pub(crate) fn loops(&self) -> &[MixedShellLoopPlan] {
+        &self.loops
+    }
+}
+
+/// Section payload retained once for every shared physical cut edge.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct MixedSectionEdgePlan {
+    fragment_index: usize,
+    fragment: SectionCurveFragment,
+    branch: SectionBranch,
+    endpoints: [usize; 2],
+    carrier_faces: [MixedSourceFaceKey; 2],
+}
+
+impl MixedSectionEdgePlan {
+    pub(crate) const fn fragment_index(&self) -> usize {
+        self.fragment_index
+    }
+
+    pub(crate) const fn fragment(&self) -> &SectionCurveFragment {
+        &self.fragment
+    }
+
+    pub(crate) const fn branch(&self) -> &SectionBranch {
+        &self.branch
+    }
+
+    pub(crate) const fn endpoints(&self) -> [usize; 2] {
+        self.endpoints
+    }
+
+    pub(crate) const fn carrier_faces(&self) -> [MixedSourceFaceKey; 2] {
+        self.carrier_faces
+    }
+}
+
+/// Exact evidence still required before analytic-shell materialization.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum MixedShellMaterializationGap {
+    /// Section must publish one exact intrinsic source-edge root parameter.
+    ExactSourceRootParameterRequired {
+        source: MixedSourceFaceKey,
+        span: MixedSourceSpanKey,
+        endpoint: usize,
+    },
+    /// Section must publish a proven exact carrier scalar, not a representative.
+    ExactTrimParameterRequired { fragment: usize, endpoint: usize },
+}
+
+/// Exact intermediate produced for the admitted block/cylinder arrangement.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct MixedShellProofPlan {
+    faces: Vec<MixedShellFacePlan>,
+    section_edges: Vec<MixedSectionEdgePlan>,
+    cap_rings: Vec<MixedCylinderCapRing>,
+    materialization: materialize::RetainedMaterializationEvidence,
+    materialization_gaps: Vec<MixedShellMaterializationGap>,
+}
+
+impl MixedShellProofPlan {
+    pub(crate) fn faces(&self) -> &[MixedShellFacePlan] {
+        &self.faces
+    }
+
+    pub(crate) fn section_edges(&self) -> &[MixedSectionEdgePlan] {
+        &self.section_edges
+    }
+
+    pub(crate) fn cap_rings(&self) -> &[MixedCylinderCapRing] {
+        &self.cap_rings
+    }
+
+    pub(crate) fn materialization_gaps(&self) -> &[MixedShellMaterializationGap] {
+        &self.materialization_gaps
+    }
+}
+
+/// Typed refusal while building the exact intermediate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MixedShellPlanError {
+    SectionIncomplete,
+    EmptySelection,
+    InvalidOperand(usize),
+    FacePartMismatch,
+    SourceBodyUnavailable(usize),
+    FaceNotOwnedByOperand {
+        operand: usize,
+        face: FaceId,
+    },
+    DuplicateArrangement(MixedSourceFaceKey),
+    SelectionOperandMismatch(MixedShellCellKey),
+    DuplicateSelectedCell(MixedShellCellKey),
+    MissingArrangement(MixedSourceFaceKey),
+    ArrangementKindMismatch(MixedShellCellKey),
+    MissingPlanarCell(MixedShellCellKey),
+    MissingPeriodicCell(MixedShellCellKey),
+    CylinderCapBindingMismatch(MixedShellCellKey),
+    MalformedArrangementCycle(MixedShellCellKey),
+    PlanarCutEndpointIdentityUnavailable(MixedSourceFaceKey),
+    MissingPlanarCutLineage(MixedSourceFaceKey),
+    AmbiguousPlanarCutLineage(MixedSourceFaceKey),
+    UnknownSectionFragment(usize),
+    UnknownSectionBranch {
+        fragment: usize,
+        branch: usize,
+    },
+    SectionFragmentLeavesFace {
+        fragment: usize,
+        source: MixedSourceFaceKey,
+    },
+    PeriodicComponentMismatch(PeriodicCutFragmentKey),
+    PeriodicFragmentEndpointMismatch(PeriodicCutFragmentKey),
+    MissingPeriodicEmbedding {
+        source: MixedSourceFaceKey,
+        fragment: usize,
+    },
+    PhysicalUseContainsProofSeam(MixedShellCellKey),
+    SectionUseCount {
+        fragment: usize,
+        actual: usize,
+    },
+    SectionUseDirectionMismatch(usize),
+    EndpointFreeRingUseCount {
+        source: MixedSourceFaceKey,
+        loop_key: PeriodicSourceLoopKey,
+        actual: usize,
+    },
+    EndpointFreeRingUseDirectionMismatch {
+        source: MixedSourceFaceKey,
+        loop_key: PeriodicSourceLoopKey,
+    },
+    EndpointFreeRingBindingMismatch {
+        source: MixedSourceFaceKey,
+        loop_key: PeriodicSourceLoopKey,
+    },
+    PlanarLineageMismatch(MixedSourceFaceKey),
+}
+
+#[derive(Clone, Copy)]
+struct SectionUseLineage {
+    fragment: usize,
+    arrangement_to_section: ArrangementDirection,
+    cylinder_period_shift: i64,
+}
+
+/// Translate certified arrangements and truth-selected cells into one exact
+/// shared-use proof plan.  The selector, not this bridge, owns side decisions.
+pub(crate) fn plan_mixed_shell<'a>(
+    store: &Store,
+    graph: &BodySectionGraph,
+    bindings: impl IntoIterator<Item = MixedArrangementBinding<'a>>,
+    selected: impl IntoIterator<Item = SelectedBoundaryFragment<MixedShellCellKey, ()>>,
+) -> Result<MixedShellProofPlan, MixedShellPlanError> {
+    if graph.completion() != SectionCompletion::Complete || !graph.gaps().is_empty() {
+        return Err(MixedShellPlanError::SectionIncomplete);
+    }
+
+    let mut arrangements = BTreeMap::new();
+    for binding in bindings {
+        let source = source_face_key(store, graph, binding.face(), binding.operand())?;
+        if arrangements.insert(source, binding).is_some() {
+            return Err(MixedShellPlanError::DuplicateArrangement(source));
+        }
+    }
+
+    let mut selected_cells = BTreeMap::new();
+    for fragment in selected {
+        let (key, operand, (), orientation) = fragment.into_parts();
+        if operand != operand_side(key.source.operand) {
+            return Err(MixedShellPlanError::SelectionOperandMismatch(key));
+        }
+        if selected_cells.insert(key, orientation).is_some() {
+            return Err(MixedShellPlanError::DuplicateSelectedCell(key));
+        }
+    }
+    if selected_cells.is_empty() {
+        return Err(MixedShellPlanError::EmptySelection);
+    }
+
+    let mut faces = Vec::with_capacity(selected_cells.len());
+    let mut cap_rings = Vec::new();
+    for (key, orientation) in selected_cells {
+        let binding = arrangements
+            .get(&key.source)
+            .ok_or(MixedShellPlanError::MissingArrangement(key.source))?;
+        let face = match (binding, key.cell) {
+            (
+                MixedArrangementBinding::Planar {
+                    face,
+                    operand,
+                    arrangement,
+                    lineage,
+                },
+                MixedShellCellKind::Planar(cell_key),
+            ) => {
+                let cell = arrangement
+                    .cells()
+                    .iter()
+                    .find(|cell| cell.key() == cell_key)
+                    .ok_or(MixedShellPlanError::MissingPlanarCell(key))?;
+                validate_planar_lineage(
+                    store,
+                    graph,
+                    face,
+                    *operand,
+                    arrangement,
+                    lineage,
+                    key.source,
+                )?;
+                let lineage = planar_cut_lineage(graph, face, *operand, arrangement, key.source)?;
+                let loop_plan = planar_loop(
+                    graph,
+                    key,
+                    key.source,
+                    *operand,
+                    cell.boundary(),
+                    &lineage,
+                    orientation,
+                )?;
+                MixedShellFacePlan {
+                    source: key.source,
+                    source_face: face.clone(),
+                    selected_orientation: orientation,
+                    loops: vec![loop_plan],
+                }
+            }
+            (
+                MixedArrangementBinding::Periodic {
+                    face,
+                    operand,
+                    arrangement,
+                },
+                MixedShellCellKind::Periodic(cell_key),
+            ) => {
+                let cell = arrangement
+                    .cells()
+                    .iter()
+                    .find(|cell| *cell.key() == cell_key)
+                    .ok_or(MixedShellPlanError::MissingPeriodicCell(key))?;
+                let lineage = periodic_cut_lineage(graph, face, *operand, arrangement, key.source)?;
+                let loops = cell
+                    .boundaries()
+                    .iter()
+                    .map(|cycle| {
+                        periodic_loop(
+                            graph,
+                            key,
+                            key.source,
+                            *operand,
+                            cycle,
+                            &lineage,
+                            orientation,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                MixedShellFacePlan {
+                    source: key.source,
+                    source_face: face.clone(),
+                    selected_orientation: orientation,
+                    loops,
+                }
+            }
+            (
+                MixedArrangementBinding::CylinderCap { ring },
+                MixedShellCellKind::CylinderCap(boundary),
+            ) => {
+                if ring.cap_source() != key.source
+                    || ring.operand() != key.source.operand()
+                    || ring.boundary() != boundary
+                    || ring.cap_face() != binding.face()
+                {
+                    return Err(MixedShellPlanError::CylinderCapBindingMismatch(key));
+                }
+                let seam = MixedShellVertexKey::ProofSeam {
+                    source: ring.side_source(),
+                    loop_key: ring.side_loop_key(),
+                };
+                let loop_ = MixedShellLoopPlan {
+                    uses: vec![MixedShellEdgeUse {
+                        edge: MixedShellEdgeKey::PeriodicSource {
+                            source: ring.side_source(),
+                            loop_key: ring.side_loop_key(),
+                        },
+                        // Resolved from the selected periodic-side use once
+                        // every selected face has been planned.
+                        direction: ArrangementDirection::Forward,
+                        pcurve: MixedPcurveLineage::SourceTopology,
+                    }],
+                    vertices: vec![seam.clone(), seam],
+                };
+                cap_rings.push((*ring).clone());
+                MixedShellFacePlan {
+                    source: key.source,
+                    source_face: ring.cap_face().clone(),
+                    selected_orientation: orientation,
+                    loops: vec![loop_],
+                }
+            }
+            _ => return Err(MixedShellPlanError::ArrangementKindMismatch(key)),
+        };
+        faces.push(face);
+    }
+
+    resolve_endpoint_free_cap_directions(&mut faces, &cap_rings)?;
+    validate_section_pairing(&faces)?;
+    validate_endpoint_free_ring_pairing(&faces)?;
+    let section_edges = collect_section_edges(store, graph, &faces)?;
+    let materialization =
+        materialize::retain_materialization_evidence(&faces, &arrangements, graph, &section_edges);
+    let materialization_gaps = materialize::remaining_gaps(&materialization);
+    Ok(MixedShellProofPlan {
+        faces,
+        section_edges,
+        cap_rings,
+        materialization,
+        materialization_gaps,
+    })
+}
+
+pub(crate) fn source_face_key(
+    store: &Store,
+    graph: &BodySectionGraph,
+    face: &FaceId,
+    operand: usize,
+) -> Result<MixedSourceFaceKey, MixedShellPlanError> {
+    let body = graph
+        .bodies()
+        .get(operand)
+        .ok_or(MixedShellPlanError::InvalidOperand(operand))?;
+    if body.part() != face.part() {
+        return Err(MixedShellPlanError::FacePartMismatch);
+    }
+    let faces = store
+        .faces_of_body(body.raw())
+        .map_err(|_| MixedShellPlanError::SourceBodyUnavailable(operand))?;
+    let topology_ordinal = faces
+        .iter()
+        .position(|candidate| *candidate == face.raw())
+        .ok_or_else(|| MixedShellPlanError::FaceNotOwnedByOperand {
+            operand,
+            face: face.clone(),
+        })?;
+    Ok(MixedSourceFaceKey {
+        operand,
+        topology_ordinal,
+    })
+}
+
+const fn operand_side(operand: usize) -> OperandSide {
+    if operand == 0 {
+        OperandSide::Left
+    } else {
+        OperandSide::Right
+    }
+}
+
+fn validate_planar_lineage(
+    store: &Store,
+    graph: &BodySectionGraph,
+    face: &FaceId,
+    operand: usize,
+    arrangement: &MixedPlanarFaceArrangement,
+    lineage: &MixedPlanarSourceLineage,
+    source: MixedSourceFaceKey,
+) -> Result<(), MixedShellPlanError> {
+    let fail = || MixedShellPlanError::PlanarLineageMismatch(source);
+    let raw_face = store.get(face.raw()).map_err(|_| fail())?;
+    let [loop_id] = raw_face.loops() else {
+        return Err(fail());
+    };
+    let loop_ = store.get(*loop_id).map_err(|_| fail())?;
+    let mut expected_vertices = Vec::new();
+    for fin_id in loop_.fins() {
+        let fin = store.get(*fin_id).map_err(|_| fail())?;
+        let edge = store.get(fin.edge()).map_err(|_| fail())?;
+        let [Some(first), Some(second)] = edge.vertices() else {
+            return Err(fail());
+        };
+        let pair = if fin.sense() == ktopo::entity::Sense::Forward {
+            [first, second]
+        } else {
+            [second, first]
+        };
+        for vertex in pair {
+            if !expected_vertices.contains(&vertex) {
+                expected_vertices.push(vertex);
+            }
+        }
+    }
+    if lineage.source_vertices() != expected_vertices
+        || lineage.spans().len() != arrangement.source_spans().len()
+    {
+        return Err(fail());
+    }
+    let mut seen = BTreeSet::new();
+    for span in arrangement.source_spans() {
+        let candidates = lineage
+            .spans()
+            .iter()
+            .filter(|candidate| candidate.key() == span.key())
+            .collect::<Vec<_>>();
+        let [candidate] = candidates.as_slice() else {
+            return Err(fail());
+        };
+        if !seen.insert(span.key().clone()) {
+            return Err(fail());
+        }
+        let fin_id = *loop_
+            .fins()
+            .get(span.key().fin_loop_ordinal)
+            .ok_or_else(fail)?;
+        let fin = store.get(fin_id).map_err(|_| fail())?;
+        let edge = store.get(fin.edge()).map_err(|_| fail())?;
+        if candidate.loop_id() != *loop_id
+            || candidate.fin() != fin_id
+            || candidate.edge() != fin.edge()
+        {
+            return Err(fail());
+        }
+        for (vertex, evidence) in span.endpoints().into_iter().zip(candidate.range()) {
+            match (vertex, evidence) {
+                (
+                    MixedArrangementVertex::SourceVertex(ordinal),
+                    MixedSourceParameterEvidence::SourceVertex {
+                        topology_ordinal,
+                        vertex,
+                        edge_parameter_bits,
+                    },
+                ) => {
+                    let [Some(edge_start), Some(edge_end)] = edge.vertices() else {
+                        return Err(fail());
+                    };
+                    let Some((lo, hi)) = edge.bounds() else {
+                        return Err(fail());
+                    };
+                    let expected_parameter = if *vertex == edge_start {
+                        lo
+                    } else if *vertex == edge_end {
+                        hi
+                    } else {
+                        return Err(fail());
+                    };
+                    if topology_ordinal != ordinal
+                        || lineage.source_vertices().get(*ordinal) != Some(vertex)
+                        || *edge_parameter_bits != expected_parameter.to_bits()
+                    {
+                        return Err(fail());
+                    }
+                }
+                (
+                    MixedArrangementVertex::SectionEndpoint(endpoint),
+                    MixedSourceParameterEvidence::SectionRoot {
+                        endpoint: claimed,
+                        root_ordinal,
+                        enclosure_bits,
+                    },
+                ) => {
+                    let section = graph.curve_endpoints().get(*endpoint).ok_or_else(fail)?;
+                    let SectionCurveEndpointTopology::Trim {
+                        source_parameters, ..
+                    } = section.topology()
+                    else {
+                        return Err(fail());
+                    };
+                    let parameter = source_parameters[operand].as_ref().ok_or_else(fail)?;
+                    let enclosure = section.edge_parameters()[operand].ok_or_else(fail)?;
+                    if claimed != endpoint
+                        || parameter.edge().raw() != candidate.edge()
+                        || parameter.root_ordinal() != *root_ordinal
+                        || *enclosure_bits != [enclosure.lo().to_bits(), enclosure.hi().to_bits()]
+                    {
+                        return Err(fail());
+                    }
+                }
+                _ => return Err(fail()),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn fragment_endpoints(fragment: &SectionCurveFragment) -> Option<[usize; 2]> {
+    match fragment.span() {
+        SectionCurveFragmentSpan::Whole => None,
+        SectionCurveFragmentSpan::Arc { endpoints, .. } => {
+            Some([endpoints[0].endpoint(), endpoints[1].endpoint()])
+        }
+        SectionCurveFragmentSpan::LineSegment { endpoints } => {
+            Some([endpoints[0].endpoint(), endpoints[1].endpoint()])
+        }
+    }
+}
+
+fn direction_from_endpoint_order(
+    arrangement: [usize; 2],
+    section: [usize; 2],
+) -> Option<ArrangementDirection> {
+    if arrangement == section {
+        Some(ArrangementDirection::Forward)
+    } else if arrangement == [section[1], section[0]] {
+        Some(ArrangementDirection::Reverse)
+    } else {
+        None
+    }
+}
+
+fn planar_cut_lineage(
+    graph: &BodySectionGraph,
+    face: &FaceId,
+    operand: usize,
+    arrangement: &MixedPlanarFaceArrangement,
+    source: MixedSourceFaceKey,
+) -> Result<BTreeMap<MixedCutFragmentKey, SectionUseLineage>, MixedShellPlanError> {
+    let mut output = BTreeMap::new();
+    for cut in arrangement.cut_fragments() {
+        let [start, end] = cut.endpoints();
+        let (
+            MixedArrangementVertex::SectionEndpoint(start),
+            MixedArrangementVertex::SectionEndpoint(end),
+        ) = (start, end)
+        else {
+            return Err(MixedShellPlanError::PlanarCutEndpointIdentityUnavailable(
+                source,
+            ));
+        };
+        let arrangement_endpoints = [*start, *end];
+        let mut found = None;
+        for (fragment_index, fragment) in graph.curve_fragments().iter().enumerate() {
+            let branch = graph.branches().get(fragment.branch()).ok_or(
+                MixedShellPlanError::UnknownSectionBranch {
+                    fragment: fragment_index,
+                    branch: fragment.branch(),
+                },
+            )?;
+            if branch.faces()[operand] != *face {
+                continue;
+            }
+            let Some(section_endpoints) = fragment_endpoints(fragment) else {
+                continue;
+            };
+            let Some(arrangement_to_section) =
+                direction_from_endpoint_order(arrangement_endpoints, section_endpoints)
+            else {
+                continue;
+            };
+            if found
+                .replace(SectionUseLineage {
+                    fragment: fragment_index,
+                    arrangement_to_section,
+                    cylinder_period_shift: 0,
+                })
+                .is_some()
+            {
+                return Err(MixedShellPlanError::AmbiguousPlanarCutLineage(source));
+            }
+        }
+        let lineage = found.ok_or(MixedShellPlanError::MissingPlanarCutLineage(source))?;
+        output.insert(cut.key().clone(), lineage);
+    }
+    Ok(output)
+}
+
+fn periodic_cut_lineage(
+    graph: &BodySectionGraph,
+    face: &FaceId,
+    operand: usize,
+    arrangement: &MixedPeriodicFaceArrangement,
+    source: MixedSourceFaceKey,
+) -> Result<BTreeMap<PeriodicCutFragmentKey, SectionUseLineage>, MixedShellPlanError> {
+    let certified = graph
+        .periodic_face_embeddings()
+        .iter()
+        .find_map(|evidence| match evidence {
+            SectionPeriodicFaceEmbeddingEvidence::Certified(value)
+                if value.operand() == operand && value.face() == *face =>
+            {
+                Some(value)
+            }
+            _ => None,
+        });
+    let Some(certified) = certified else {
+        return Err(MixedShellPlanError::MissingPeriodicEmbedding {
+            source,
+            fragment: 0,
+        });
+    };
+    let mut output = BTreeMap::new();
+    for cut in arrangement.cut_fragments() {
+        let key = *cut.key();
+        let component = graph
+            .curve_components()
+            .get(key.component())
+            .ok_or(MixedShellPlanError::PeriodicComponentMismatch(key))?;
+        if component.fragments().get(key.ordinal()) != Some(&key.fragment()) {
+            return Err(MixedShellPlanError::PeriodicComponentMismatch(key));
+        }
+        let fragment = graph
+            .curve_fragments()
+            .get(key.fragment())
+            .ok_or(MixedShellPlanError::UnknownSectionFragment(key.fragment()))?;
+        let branch = graph.branches().get(fragment.branch()).ok_or(
+            MixedShellPlanError::UnknownSectionBranch {
+                fragment: key.fragment(),
+                branch: fragment.branch(),
+            },
+        )?;
+        if branch.faces()[operand] != *face {
+            return Err(MixedShellPlanError::SectionFragmentLeavesFace {
+                fragment: key.fragment(),
+                source,
+            });
+        }
+        let [start, end] = cut.endpoints();
+        let (
+            PeriodicArrangementVertexKey::SectionEndpoint(start),
+            PeriodicArrangementVertexKey::SectionEndpoint(end),
+        ) = (start, end)
+        else {
+            return Err(MixedShellPlanError::PeriodicFragmentEndpointMismatch(key));
+        };
+        let Some(section_endpoints) = fragment_endpoints(fragment) else {
+            return Err(MixedShellPlanError::PeriodicFragmentEndpointMismatch(key));
+        };
+        let arrangement_to_section =
+            direction_from_endpoint_order([*start, *end], section_endpoints)
+                .ok_or(MixedShellPlanError::PeriodicFragmentEndpointMismatch(key))?;
+        let embedding = certified
+            .components()
+            .iter()
+            .find(|candidate| candidate.component() == key.component())
+            .and_then(|candidate| candidate.fragments().get(key.ordinal()))
+            .filter(|candidate| candidate.fragment() == key.fragment())
+            .ok_or(MixedShellPlanError::MissingPeriodicEmbedding {
+                source,
+                fragment: key.fragment(),
+            })?;
+        output.insert(
+            key,
+            SectionUseLineage {
+                fragment: key.fragment(),
+                arrangement_to_section,
+                cylinder_period_shift: embedding.period_shift(),
+            },
+        );
+    }
+    Ok(output)
+}
+
+fn opposite(direction: ArrangementDirection) -> ArrangementDirection {
+    match direction {
+        ArrangementDirection::Forward => ArrangementDirection::Reverse,
+        ArrangementDirection::Reverse => ArrangementDirection::Forward,
+    }
+}
+
+fn compose_direction(
+    first: ArrangementDirection,
+    second: ArrangementDirection,
+) -> ArrangementDirection {
+    if first == second {
+        ArrangementDirection::Forward
+    } else {
+        ArrangementDirection::Reverse
+    }
+}
+
+fn oriented_cycle<S: Clone, C: Clone, V: Clone>(
+    cycle: &ArrangementCycle<S, C, V>,
+    orientation: SelectedOrientation,
+) -> OrientedCycleParts<S, C, V> {
+    let mut uses = cycle
+        .uses()
+        .iter()
+        .map(|use_| (use_.edge().clone(), use_.direction()))
+        .collect::<Vec<_>>();
+    let mut vertices = cycle.vertices().to_vec();
+    if orientation == SelectedOrientation::Reversed {
+        uses = uses
+            .into_iter()
+            .rev()
+            .map(|(edge, direction)| (edge, opposite(direction)))
+            .collect();
+        if vertices.len() > 1 {
+            let anchor = vertices[0].clone();
+            let mut reversed = vec![anchor.clone()];
+            reversed.extend(vertices[1..vertices.len() - 1].iter().rev().cloned());
+            reversed.push(anchor);
+            vertices = reversed;
+        }
+    }
+    (uses, vertices)
+}
+
+fn planar_loop(
+    graph: &BodySectionGraph,
+    cell: MixedShellCellKey,
+    source: MixedSourceFaceKey,
+    operand: usize,
+    cycle: &ArrangementCycle<MixedSourceSpanKey, MixedCutFragmentKey, MixedArrangementVertex>,
+    lineage: &BTreeMap<MixedCutFragmentKey, SectionUseLineage>,
+    orientation: SelectedOrientation,
+) -> Result<MixedShellLoopPlan, MixedShellPlanError> {
+    let (native_uses, native_vertices) = oriented_cycle(cycle, orientation);
+    if native_vertices.len() != native_uses.len() + 1
+        || native_vertices.first() != native_vertices.last()
+    {
+        return Err(MixedShellPlanError::MalformedArrangementCycle(cell));
+    }
+    let vertices = native_vertices
+        .into_iter()
+        .map(|vertex| match vertex {
+            MixedArrangementVertex::SourceVertex(topology_ordinal) => {
+                MixedShellVertexKey::PlanarSourceVertex {
+                    source,
+                    topology_ordinal,
+                }
+            }
+            MixedArrangementVertex::SectionEndpoint(endpoint) => {
+                MixedShellVertexKey::SectionEndpoint(endpoint)
+            }
+        })
+        .collect();
+    let mut uses = Vec::with_capacity(native_uses.len());
+    for (edge, direction) in native_uses {
+        uses.push(match edge {
+            ArrangementEdgeKey::Source(span) => MixedShellEdgeUse {
+                edge: MixedShellEdgeKey::PlanarSource { source, span },
+                direction,
+                pcurve: MixedPcurveLineage::SourceTopology,
+            },
+            ArrangementEdgeKey::Cut(cut) => {
+                let section = lineage
+                    .get(&cut)
+                    .ok_or(MixedShellPlanError::MissingPlanarCutLineage(source))?;
+                let fragment = graph.curve_fragments().get(section.fragment).ok_or(
+                    MixedShellPlanError::UnknownSectionFragment(section.fragment),
+                )?;
+                MixedShellEdgeUse {
+                    edge: MixedShellEdgeKey::SectionFragment(section.fragment),
+                    direction: compose_direction(direction, section.arrangement_to_section),
+                    pcurve: MixedPcurveLineage::Section {
+                        branch: fragment.branch(),
+                        operand,
+                        cylinder_period_shift: 0,
+                    },
+                }
+            }
+        });
+    }
+    Ok(MixedShellLoopPlan { uses, vertices })
+}
+
+fn periodic_loop(
+    graph: &BodySectionGraph,
+    cell: MixedShellCellKey,
+    source: MixedSourceFaceKey,
+    operand: usize,
+    cycle: &PeriodicArrangementCycle,
+    lineage: &BTreeMap<PeriodicCutFragmentKey, SectionUseLineage>,
+    orientation: SelectedOrientation,
+) -> Result<MixedShellLoopPlan, MixedShellPlanError> {
+    let (native_uses, native_vertices) = oriented_cycle(cycle, orientation);
+    if native_vertices.len() != native_uses.len() + 1
+        || native_vertices.first() != native_vertices.last()
+    {
+        return Err(MixedShellPlanError::MalformedArrangementCycle(cell));
+    }
+    let vertices = native_vertices
+        .into_iter()
+        .map(|vertex| match vertex {
+            PeriodicArrangementVertexKey::SourceLoopSeam(loop_key) => {
+                MixedShellVertexKey::ProofSeam { source, loop_key }
+            }
+            PeriodicArrangementVertexKey::SectionEndpoint(endpoint) => {
+                MixedShellVertexKey::SectionEndpoint(endpoint)
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut uses = Vec::with_capacity(native_uses.len());
+    for (edge, direction) in native_uses {
+        uses.push(match edge {
+            ArrangementEdgeKey::Source(loop_key) => MixedShellEdgeUse {
+                edge: MixedShellEdgeKey::PeriodicSource { source, loop_key },
+                direction: compose_direction(direction, loop_key.source_direction()),
+                pcurve: MixedPcurveLineage::SourceTopology,
+            },
+            ArrangementEdgeKey::Cut(cut) => {
+                let section =
+                    lineage
+                        .get(&cut)
+                        .ok_or(MixedShellPlanError::MissingPeriodicEmbedding {
+                            source,
+                            fragment: cut.fragment(),
+                        })?;
+                let fragment = graph.curve_fragments().get(section.fragment).ok_or(
+                    MixedShellPlanError::UnknownSectionFragment(section.fragment),
+                )?;
+                MixedShellEdgeUse {
+                    edge: MixedShellEdgeKey::SectionFragment(section.fragment),
+                    direction: compose_direction(direction, section.arrangement_to_section),
+                    pcurve: MixedPcurveLineage::Section {
+                        branch: fragment.branch(),
+                        operand,
+                        cylinder_period_shift: section.cylinder_period_shift,
+                    },
+                }
+            }
+        });
+    }
+    if uses.iter().zip(&vertices).any(|(use_, vertex)| {
+        matches!(use_.edge, MixedShellEdgeKey::SectionFragment(_))
+            && matches!(vertex, MixedShellVertexKey::ProofSeam { .. })
+    }) {
+        return Err(MixedShellPlanError::PhysicalUseContainsProofSeam(cell));
+    }
+    Ok(MixedShellLoopPlan { uses, vertices })
+}
+
+fn validate_section_pairing(faces: &[MixedShellFacePlan]) -> Result<(), MixedShellPlanError> {
+    let mut uses = BTreeMap::<usize, Vec<ArrangementDirection>>::new();
+    for use_ in faces
+        .iter()
+        .flat_map(MixedShellFacePlan::loops)
+        .flat_map(MixedShellLoopPlan::uses)
+    {
+        if let MixedShellEdgeKey::SectionFragment(fragment) = use_.edge() {
+            uses.entry(*fragment).or_default().push(use_.direction());
+        }
+    }
+    for (fragment, directions) in uses {
+        if directions.len() != 2 {
+            return Err(MixedShellPlanError::SectionUseCount {
+                fragment,
+                actual: directions.len(),
+            });
+        }
+        if directions[0] == directions[1] {
+            return Err(MixedShellPlanError::SectionUseDirectionMismatch(fragment));
+        }
+    }
+    Ok(())
+}
+
+fn validate_endpoint_free_ring_pairing(
+    faces: &[MixedShellFacePlan],
+) -> Result<(), MixedShellPlanError> {
+    let mut uses =
+        BTreeMap::<(MixedSourceFaceKey, PeriodicSourceLoopKey), Vec<ArrangementDirection>>::new();
+    for use_ in faces
+        .iter()
+        .flat_map(MixedShellFacePlan::loops)
+        .flat_map(MixedShellLoopPlan::uses)
+    {
+        if let MixedShellEdgeKey::PeriodicSource { source, loop_key } = use_.edge() {
+            uses.entry((*source, *loop_key))
+                .or_default()
+                .push(use_.direction());
+        }
+    }
+    for ((source, loop_key), directions) in uses {
+        if directions.len() != 2 {
+            return Err(MixedShellPlanError::EndpointFreeRingUseCount {
+                source,
+                loop_key,
+                actual: directions.len(),
+            });
+        }
+        if directions[0] == directions[1] {
+            return Err(MixedShellPlanError::EndpointFreeRingUseDirectionMismatch {
+                source,
+                loop_key,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn resolve_endpoint_free_cap_directions(
+    faces: &mut [MixedShellFacePlan],
+    rings: &[MixedCylinderCapRing],
+) -> Result<(), MixedShellPlanError> {
+    for ring in rings {
+        let source = ring.side_source();
+        let loop_key = ring.side_loop_key();
+        let mut side_direction = None;
+        let mut cap_location = None;
+        let mut actual = 0_usize;
+
+        for (face_index, face) in faces.iter().enumerate() {
+            for (loop_index, loop_) in face.loops.iter().enumerate() {
+                for (use_index, use_) in loop_.uses.iter().enumerate() {
+                    if use_.edge != (MixedShellEdgeKey::PeriodicSource { source, loop_key }) {
+                        continue;
+                    }
+                    actual = actual.saturating_add(1);
+                    if face.source == ring.side_source() {
+                        if side_direction.replace(use_.direction).is_some() {
+                            return Err(MixedShellPlanError::EndpointFreeRingBindingMismatch {
+                                source,
+                                loop_key,
+                            });
+                        }
+                    } else if face.source == ring.cap_source()
+                        && face.source_face == *ring.cap_face()
+                    {
+                        if cap_location
+                            .replace((face_index, loop_index, use_index))
+                            .is_some()
+                        {
+                            return Err(MixedShellPlanError::EndpointFreeRingBindingMismatch {
+                                source,
+                                loop_key,
+                            });
+                        }
+                    } else {
+                        return Err(MixedShellPlanError::EndpointFreeRingBindingMismatch {
+                            source,
+                            loop_key,
+                        });
+                    }
+                }
+            }
+        }
+
+        if actual != 2 {
+            return Err(MixedShellPlanError::EndpointFreeRingUseCount {
+                source,
+                loop_key,
+                actual,
+            });
+        }
+        let (Some(side_direction), Some((face_index, loop_index, use_index))) =
+            (side_direction, cap_location)
+        else {
+            return Err(MixedShellPlanError::EndpointFreeRingBindingMismatch { source, loop_key });
+        };
+        faces[face_index].loops[loop_index].uses[use_index].direction = opposite(side_direction);
+    }
+    Ok(())
+}
+
+fn collect_section_edges(
+    store: &Store,
+    graph: &BodySectionGraph,
+    faces: &[MixedShellFacePlan],
+) -> Result<Vec<MixedSectionEdgePlan>, MixedShellPlanError> {
+    let fragment_indices = faces
+        .iter()
+        .flat_map(MixedShellFacePlan::loops)
+        .flat_map(MixedShellLoopPlan::uses)
+        .filter_map(|use_| match use_.edge() {
+            MixedShellEdgeKey::SectionFragment(fragment) => Some(*fragment),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let mut output = Vec::with_capacity(fragment_indices.len());
+    for fragment_index in fragment_indices {
+        let fragment = graph
+            .curve_fragments()
+            .get(fragment_index)
+            .ok_or(MixedShellPlanError::UnknownSectionFragment(fragment_index))?;
+        let branch = graph.branches().get(fragment.branch()).ok_or(
+            MixedShellPlanError::UnknownSectionBranch {
+                fragment: fragment_index,
+                branch: fragment.branch(),
+            },
+        )?;
+        let endpoints = fragment_endpoints(fragment)
+            .ok_or(MixedShellPlanError::UnknownSectionFragment(fragment_index))?;
+        let carrier_faces = [
+            source_face_key(store, graph, &branch.faces()[0], 0)?,
+            source_face_key(store, graph, &branch.faces()[1], 1)?,
+        ];
+        output.push(MixedSectionEdgePlan {
+            fragment_index,
+            fragment: fragment.clone(),
+            branch: branch.clone(),
+            endpoints,
+            carrier_faces,
+        });
+    }
+    Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::boundary_select::{
+        BoundaryFragmentClassification, ClassifiedBoundaryFragment, RegularizedBooleanOperation,
+        select_boundary_fragments,
+    };
+    use super::super::mixed_face_arrangement::arrange_mixed_planar_face_with_lineage;
+    use super::super::mixed_periodic_arrangement::arrange_mixed_periodic_face;
+    use super::*;
+    use crate::{BlockRequest, CylinderRequest, Kernel, SectionBodiesRequest};
+    use kgeom::frame::Frame;
+
+    type PlanarArrangementSet = Vec<(
+        FaceId,
+        super::super::mixed_face_arrangement::MixedPlanarFaceOutput,
+    )>;
+    type SelectedMixedCells = Vec<SelectedBoundaryFragment<MixedShellCellKey, ()>>;
+
+    fn store_shape(store: &Store) -> [usize; 5] {
+        [
+            store.count::<ktopo::entity::Face>(),
+            store.count::<ktopo::entity::Loop>(),
+            store.count::<ktopo::entity::Fin>(),
+            store.count::<ktopo::entity::Edge>(),
+            store.count::<ktopo::entity::Vertex>(),
+        ]
+    }
+
+    fn with_fixture(
+        frame: Frame,
+        test: impl FnOnce(&mut Store, &BodySectionGraph, usize, FaceId, MixedPeriodicFaceArrangement),
+    ) {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let (block, cylinder) = {
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let block = edit
+                .create_block(BlockRequest::new(
+                    frame.with_origin(frame.point_at(0.0, 0.0, 1.0)),
+                    [2.0, 5.0, 1.0],
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            let cylinder = edit
+                .create_cylinder(CylinderRequest::new(frame, 1.5, 2.0))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            (block, cylinder)
+        };
+        let graph = session
+            .part(part_id.clone())
+            .unwrap()
+            .section_bodies(SectionBodiesRequest::new(block, cylinder))
+            .unwrap()
+            .into_result()
+            .unwrap();
+        let (periodic_operand, periodic_face) = graph
+            .periodic_face_embeddings()
+            .iter()
+            .find_map(|evidence| match evidence {
+                SectionPeriodicFaceEmbeddingEvidence::Certified(value) => {
+                    Some((value.operand(), value.face()))
+                }
+                _ => None,
+            })
+            .unwrap();
+        let periodic =
+            arrange_mixed_periodic_face(&graph, periodic_face.clone(), periodic_operand).unwrap();
+        let mut edit = session.edit_part(part_id).unwrap();
+        test(
+            edit.store_mut_for_test(),
+            &graph,
+            periodic_operand,
+            periodic_face,
+            periodic,
+        );
+    }
+
+    fn selected_patch(
+        store: &Store,
+        graph: &BodySectionGraph,
+        periodic_operand: usize,
+        periodic_face: &FaceId,
+        periodic: &MixedPeriodicFaceArrangement,
+    ) -> (PlanarArrangementSet, SelectedMixedCells) {
+        let periodic_source =
+            source_face_key(store, graph, periodic_face, periodic_operand).unwrap();
+        let periodic_cells = periodic
+            .cells()
+            .iter()
+            .filter(|cell| matches!(cell.key(), PeriodicArrangementCellKey::ComponentDisk(_)))
+            .collect::<Vec<_>>();
+        assert!(!periodic_cells.is_empty());
+        let periodic_lineage = periodic_cut_lineage(
+            graph,
+            periodic_face,
+            periodic_operand,
+            periodic,
+            periodic_source,
+        )
+        .unwrap();
+        let target_uses = periodic_cells
+            .iter()
+            .flat_map(|cell| cell.boundaries())
+            .flat_map(ArrangementCycle::uses)
+            .filter_map(|use_| match use_.edge() {
+                ArrangementEdgeKey::Cut(key) => {
+                    let lineage = periodic_lineage.get(key).unwrap();
+                    Some((
+                        lineage.fragment,
+                        compose_direction(use_.direction(), lineage.arrangement_to_section),
+                    ))
+                }
+                ArrangementEdgeKey::Source(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(!target_uses.is_empty());
+
+        let planar_operand = 1 - periodic_operand;
+        let mut planar_faces = Vec::<FaceId>::new();
+        for (fragment, _) in &target_uses {
+            let branch = &graph.branches()[graph.curve_fragments()[*fragment].branch()];
+            let face = branch.faces()[planar_operand].clone();
+            if !planar_faces.contains(&face) {
+                planar_faces.push(face);
+            }
+        }
+        let arrangements = planar_faces
+            .into_iter()
+            .map(|face| {
+                let output = arrange_mixed_planar_face_with_lineage(
+                    store,
+                    graph,
+                    face.clone(),
+                    planar_operand,
+                )
+                .unwrap();
+                (face, output)
+            })
+            .collect::<Vec<_>>();
+
+        let mut selected_keys = periodic_cells
+            .iter()
+            .map(|cell| MixedShellCellKey::periodic(periodic_source, *cell.key()))
+            .collect::<BTreeSet<_>>();
+        for (fragment, periodic_direction) in target_uses {
+            let mut matched = None;
+            for (face, output) in &arrangements {
+                let arrangement = output.arrangement();
+                let source = source_face_key(store, graph, face, planar_operand).unwrap();
+                let lineage =
+                    planar_cut_lineage(graph, face, planar_operand, arrangement, source).unwrap();
+                for cell in arrangement.cells() {
+                    for use_ in cell.boundary().uses() {
+                        let ArrangementEdgeKey::Cut(key) = use_.edge() else {
+                            continue;
+                        };
+                        let Some(candidate) = lineage.get(key) else {
+                            continue;
+                        };
+                        let direction =
+                            compose_direction(use_.direction(), candidate.arrangement_to_section);
+                        if candidate.fragment == fragment && direction != periodic_direction {
+                            let key = MixedShellCellKey::planar(source, cell.key());
+                            assert!(matched.replace(key).is_none());
+                        }
+                    }
+                }
+            }
+            selected_keys.insert(matched.expect("opposed planar cell use"));
+        }
+
+        let classified = selected_keys.into_iter().map(|key| {
+            ClassifiedBoundaryFragment::new(
+                key,
+                operand_side(key.source().operand()),
+                (),
+                BoundaryFragmentClassification::Exterior,
+            )
+        });
+        let selected =
+            select_boundary_fragments(RegularizedBooleanOperation::Unite, classified).unwrap();
+        (arrangements, selected)
+    }
+
+    #[test]
+    fn certified_block_cylinder_patch_preserves_shared_identity_and_chart_lifts() {
+        let oblique = Frame::new(
+            kgeom::vec::Point3::new(3.0, -2.0, 1.25),
+            kgeom::vec::Vec3::new(0.48, 0.64, 0.6),
+            kgeom::vec::Vec3::new(0.8, -0.6, 0.0),
+        )
+        .unwrap();
+        for frame in [Frame::world(), oblique] {
+            with_fixture(
+                frame,
+                |store, graph, periodic_operand, periodic_face, periodic| {
+                    let (planar, selected) =
+                        selected_patch(store, graph, periodic_operand, &periodic_face, &periodic);
+                    let bindings =
+                        std::iter::once(MixedArrangementBinding::Periodic {
+                            face: periodic_face,
+                            operand: periodic_operand,
+                            arrangement: &periodic,
+                        })
+                        .chain(planar.iter().map(|(face, output)| {
+                            MixedArrangementBinding::Planar {
+                                face: face.clone(),
+                                operand: 1 - periodic_operand,
+                                arrangement: output.arrangement(),
+                                lineage: output.lineage(),
+                            }
+                        }));
+                    let plan = plan_mixed_shell(store, graph, bindings, selected).unwrap();
+                    for edge in plan.section_edges() {
+                        let uses = plan
+                            .faces()
+                            .iter()
+                            .flat_map(MixedShellFacePlan::loops)
+                            .flat_map(MixedShellLoopPlan::uses)
+                            .filter(|use_| {
+                                use_.edge()
+                                    == &MixedShellEdgeKey::SectionFragment(edge.fragment_index())
+                            })
+                            .collect::<Vec<_>>();
+                        assert_eq!(uses.len(), 2);
+                        assert_ne!(uses[0].direction(), uses[1].direction());
+                    }
+                    assert!(plan.materialization_gaps().is_empty());
+                    let blueprint =
+                        materialize::prepare_mixed_shell_materialization(&plan, store).unwrap();
+                    assert!(blueprint.all_edges_have_two_opposed_uses());
+                    assert_eq!(
+                        blueprint.planar_use_count(),
+                        blueprint.planar_edge_count() * 2
+                    );
+                    let before = store_shape(store);
+                    let input = materialize::materialize_mixed_shell_input(
+                        &plan,
+                        store,
+                        &materialize::MixedShellScalarInputs::empty(),
+                        1.0e-9,
+                    )
+                    .unwrap();
+                    assert_eq!(store_shape(store), before);
+
+                    let mut transaction = store.transaction().unwrap();
+                    let output = transaction.assemble_analytic_shell(&input, 1.0e-9).unwrap();
+                    let faults =
+                        ktopo::check::check_body(transaction.store(), output.body()).unwrap();
+                    assert!(faults.is_empty(), "{faults:#?}");
+                    let full = ktopo::check::check_body_report(
+                        transaction.store(),
+                        output.body(),
+                        ktopo::check::CheckLevel::Full,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        full.outcome(),
+                        ktopo::check::CheckOutcome::Valid,
+                        "{full:#?}"
+                    );
+                    transaction.rollback().unwrap();
+                    assert_eq!(store_shape(store), before);
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn binding_and_selection_order_do_not_change_the_plan() {
+        with_fixture(
+            Frame::world(),
+            |store, graph, periodic_operand, periodic_face, periodic| {
+                let (planar, selected) =
+                    selected_patch(store, graph, periodic_operand, &periodic_face, &periodic);
+                let make_bindings = || {
+                    let mut bindings = planar
+                        .iter()
+                        .map(|(face, output)| MixedArrangementBinding::Planar {
+                            face: face.clone(),
+                            operand: 1 - periodic_operand,
+                            arrangement: output.arrangement(),
+                            lineage: output.lineage(),
+                        })
+                        .collect::<Vec<_>>();
+                    bindings.push(MixedArrangementBinding::Periodic {
+                        face: periodic_face.clone(),
+                        operand: periodic_operand,
+                        arrangement: &periodic,
+                    });
+                    bindings
+                };
+                let expected =
+                    plan_mixed_shell(store, graph, make_bindings(), selected.clone()).unwrap();
+                let mut bindings = make_bindings();
+                bindings.reverse();
+                let mut reversed_selected = selected;
+                reversed_selected.reverse();
+                let actual = plan_mixed_shell(store, graph, bindings, reversed_selected).unwrap();
+                assert_eq!(actual, expected);
+                assert_eq!(
+                    materialize::prepare_mixed_shell_materialization(&actual, store).unwrap(),
+                    materialize::prepare_mixed_shell_materialization(&expected, store).unwrap()
+                );
+                assert_eq!(
+                    materialize::materialize_mixed_shell_input(
+                        &actual,
+                        store,
+                        &materialize::MixedShellScalarInputs::empty(),
+                        1.0e-9,
+                    )
+                    .unwrap(),
+                    materialize::materialize_mixed_shell_input(
+                        &expected,
+                        store,
+                        &materialize::MixedShellScalarInputs::empty(),
+                        1.0e-9,
+                    )
+                    .unwrap()
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn missing_peer_and_forged_cell_fail_closed_without_metric_matching() {
+        with_fixture(
+            Frame::world(),
+            |store, graph, periodic_operand, periodic_face, periodic| {
+                let (planar, mut selected) =
+                    selected_patch(store, graph, periodic_operand, &periodic_face, &periodic);
+                let target = planar
+                    .iter()
+                    .position(|(_, output)| {
+                        output.lineage().spans().iter().any(|span| {
+                            span.range().iter().any(|value| {
+                                matches!(value, MixedSourceParameterEvidence::SectionRoot { .. })
+                            })
+                        })
+                    })
+                    .unwrap();
+                let mut forged_root = planar[target].1.lineage().clone();
+                let root = forged_root
+                    .spans
+                    .iter_mut()
+                    .flat_map(|span| &mut span.range)
+                    .find_map(|value| match value {
+                        MixedSourceParameterEvidence::SectionRoot { enclosure_bits, .. } => {
+                            Some(enclosure_bits)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                root[0] ^= 1;
+                let mut forged_vertex = planar[target].1.lineage().clone();
+                forged_vertex.source_vertices.swap(0, 1);
+                for forged in [forged_root, forged_vertex] {
+                    let bindings = std::iter::once(MixedArrangementBinding::Periodic {
+                        face: periodic_face.clone(),
+                        operand: periodic_operand,
+                        arrangement: &periodic,
+                    })
+                    .chain(planar.iter().enumerate().map(
+                        |(index, (face, output))| MixedArrangementBinding::Planar {
+                            face: face.clone(),
+                            operand: 1 - periodic_operand,
+                            arrangement: output.arrangement(),
+                            lineage: if index == target {
+                                &forged
+                            } else {
+                                output.lineage()
+                            },
+                        },
+                    ));
+                    assert!(matches!(
+                        plan_mixed_shell(store, graph, bindings, selected.clone()),
+                        Err(MixedShellPlanError::PlanarLineageMismatch(_))
+                    ));
+                }
+                selected.pop();
+                let bindings = std::iter::once(MixedArrangementBinding::Periodic {
+                    face: periodic_face.clone(),
+                    operand: periodic_operand,
+                    arrangement: &periodic,
+                })
+                .chain(planar.iter().map(|(face, output)| {
+                    MixedArrangementBinding::Planar {
+                        face: face.clone(),
+                        operand: 1 - periodic_operand,
+                        arrangement: output.arrangement(),
+                        lineage: output.lineage(),
+                    }
+                }));
+                assert!(matches!(
+                    plan_mixed_shell(store, graph, bindings, selected),
+                    Err(MixedShellPlanError::SectionUseCount { actual: 1, .. })
+                ));
+
+                let periodic_source =
+                    source_face_key(store, graph, &periodic_face, periodic_operand).unwrap();
+                let forged = ClassifiedBoundaryFragment::new(
+                    MixedShellCellKey::periodic(
+                        periodic_source,
+                        PeriodicArrangementCellKey::ComponentDisk(usize::MAX),
+                    ),
+                    operand_side(periodic_operand),
+                    (),
+                    BoundaryFragmentClassification::Exterior,
+                );
+                let forged =
+                    select_boundary_fragments(RegularizedBooleanOperation::Unite, [forged])
+                        .unwrap();
+                assert!(matches!(
+                    plan_mixed_shell(
+                        store,
+                        graph,
+                        [MixedArrangementBinding::Periodic {
+                            face: periodic_face,
+                            operand: periodic_operand,
+                            arrangement: &periodic,
+                        }],
+                        forged,
+                    ),
+                    Err(MixedShellPlanError::MissingPeriodicCell(_))
+                ));
+            },
+        );
+    }
+}

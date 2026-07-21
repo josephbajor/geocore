@@ -31,10 +31,20 @@ use kgeom::frame::Frame;
 use kgeom::surface::Cylinder;
 use kgeom::vec::{Point2, Point3, Vec3};
 
+#[path = "convex_cylindrical_shell_proof.rs"]
+mod convex_cylindrical_shell_proof;
 #[path = "cylindrical_host_proof.rs"]
 mod cylindrical_host_proof;
+#[path = "mixed_profile_prism_proof.rs"]
+mod mixed_profile_prism_proof;
+#[path = "portal_cylinder_shell_proof.rs"]
+mod portal_cylinder_shell_proof;
+#[cfg(test)]
+pub(crate) use convex_cylindrical_shell_proof::CONVEX_CYLINDRICAL_SHELL_WORK;
 #[cfg(test)]
 pub(crate) use cylindrical_host_proof::CYLINDRICAL_HOST_SHELL_WORK;
+#[cfg(test)]
+pub(crate) use mixed_profile_prism_proof::MIXED_PROFILE_PRISM_WORK;
 
 /// Cumulative exact contact work for coplanar shell-facet partitions.
 pub(crate) const SHELL_FACET_PAIR_WORK: StageId =
@@ -54,7 +64,11 @@ pub(crate) fn shell_proof_budget() -> BudgetPlan {
         DEFAULT_SHELL_FACET_PAIR_WORK,
     )])
     .expect("built-in shell proof budget is valid");
-    facet_pairs.overlaid(&cylindrical_host_proof::cylindrical_host_proof_budget())
+    facet_pairs
+        .overlaid(&cylindrical_host_proof::cylindrical_host_proof_budget())
+        .overlaid(&portal_cylinder_shell_proof::portal_cylinder_proof_budget())
+        .overlaid(&mixed_profile_prism_proof::mixed_profile_prism_proof_budget())
+        .overlaid(&convex_cylindrical_shell_proof::convex_cylindrical_shell_proof_budget())
 }
 
 /// Proof state for global shell self-intersection.
@@ -152,6 +166,27 @@ fn certify_shell_impl(
         return Ok(certification);
     }
     if let Some(certification) = cylindrical_host_proof::certify_cylindrical_host_shell(
+        store,
+        shell_id,
+        scope.as_deref_mut(),
+    )? {
+        return Ok(certification);
+    }
+    if let Some(certification) = portal_cylinder_shell_proof::certify_portal_cylinder_shell(
+        store,
+        shell_id,
+        scope.as_deref_mut(),
+    )? {
+        return Ok(certification);
+    }
+    if let Some(certification) = mixed_profile_prism_proof::certify_mixed_profile_prism(
+        store,
+        shell_id,
+        scope.as_deref_mut(),
+    )? {
+        return Ok(certification);
+    }
+    if let Some(certification) = convex_cylindrical_shell_proof::certify_convex_cylindrical_shell(
         store,
         shell_id,
         scope.as_deref_mut(),
@@ -341,6 +376,7 @@ struct CylinderBandBoundary {
     cap_face: FaceId,
     edge: EdgeId,
     center: Point3,
+    axial_parameter: f64,
     cap_axis_alignment: PredicateOrientation,
     side_traverses_positive_u: bool,
 }
@@ -359,10 +395,11 @@ pub(crate) struct CylinderBandShellProof {
 /// Admission is entirely topology and geometry driven: exactly one
 /// cylindrical face owns two single-fin ring loops, each ring edge is shared
 /// with exactly one single-fin planar cap, and whole-fin incidence proves all
-/// four lifts. Exact affine dot signs then prove that the distinct circle
-/// centers lie on the cylinder axis and both cap planes are perpendicular to
-/// it. This establishes an embedded `S1 × [a, b]` band with two disks without
-/// relying on constructor order or sampled agreement.
+/// four lifts. The certified edge-to-pcurve correspondences then prove both
+/// axial levels and each cap chart's orientation relative to the cylinder
+/// chart. This establishes an embedded `S1 × [a, b]` band with two disks
+/// without relying on constructor order, rounded model-space frame equality,
+/// or sampled agreement.
 fn certify_cylinder_band_shell(
     store: &Store,
     shell_id: ShellId,
@@ -422,14 +459,12 @@ pub(crate) fn certify_cylinder_band_shell_proof(
         return Ok(None);
     }
 
-    let separation = exact_affine_sign(
-        cylinder.frame().z(),
-        boundaries[1].center,
-        boundaries[0].center,
-    );
-    let (low, high) = match separation {
-        Some(PredicateOrientation::Positive) => (boundaries[0], boundaries[1]),
-        Some(PredicateOrientation::Negative) => (boundaries[1], boundaries[0]),
+    let (low, high) = match boundaries[0]
+        .axial_parameter
+        .partial_cmp(&boundaries[1].axial_parameter)
+    {
+        Some(core::cmp::Ordering::Less) => (boundaries[0], boundaries[1]),
+        Some(core::cmp::Ordering::Greater) => (boundaries[1], boundaries[0]),
         _ => return Ok(None),
     };
     let expected_low_traversal = side_face.sense == Sense::Forward;
@@ -550,24 +585,12 @@ fn cylinder_band_boundary(
     let CurveGeom::Circle(circle) = store.get(curve_id)? else {
         return Ok(None);
     };
-    let SurfaceGeom::Plane(cap_plane) = store.get(cap_face.surface)? else {
+    let SurfaceGeom::Plane(_) = store.get(cap_face.surface)? else {
         return Ok(None);
     };
-    if circle.radius() != cylinder.radius()
-        || exact_axis_alignment(cylinder.frame(), circle.frame().z()).is_none()
-        || !certified_point_on_axis(cylinder.frame(), circle.frame().origin())
-        || exact_affine_sign(
-            cap_plane.frame().z(),
-            circle.frame().origin(),
-            cap_plane.frame().origin(),
-        ) != Some(PredicateOrientation::Zero)
-    {
+    if circle.radius() != cylinder.radius() {
         return Ok(None);
     }
-    let Some(cap_axis_alignment) = exact_axis_alignment(cylinder.frame(), cap_plane.frame().z())
-    else {
-        return Ok(None);
-    };
 
     let Some(side_use) = side_fin.pcurve else {
         return Ok(None);
@@ -578,6 +601,12 @@ fn cylinder_band_boundary(
     if side_line.dir().y != 0.0 || side_line.dir().x == 0.0 {
         return Ok(None);
     }
+    let Some(edge_traverses_positive_u) = traversal_is_positive(
+        [side_line.dir().x, side_use.edge_to_pcurve().scale()],
+        Sense::Forward,
+    ) else {
+        return Ok(None);
+    };
     let Some(side_traverses_positive_u) = traversal_is_positive(
         [side_line.dir().x, side_use.edge_to_pcurve().scale()],
         side_fin.sense,
@@ -588,18 +617,32 @@ fn cylinder_band_boundary(
     let Some(cap_use) = cap_fin.pcurve else {
         return Ok(None);
     };
-    if !matches!(store.get(cap_use.curve())?, Curve2dGeom::Circle(_))
+    let Curve2dGeom::Circle(cap_circle) = store.get(cap_use.curve())? else {
+        return Ok(None);
+    };
+    if cap_circle.radius() != cylinder.radius()
         || cap_use.closure_winding() != Some([0, 0])
         || traversal_is_positive([cap_use.edge_to_pcurve().scale(), 1.0], cap_fin.sense)
             != Some(cap_face.sense == Sense::Forward)
     {
         return Ok(None);
     }
+    let Some(edge_traverses_positive_cap) =
+        traversal_is_positive([cap_use.edge_to_pcurve().scale()], Sense::Forward)
+    else {
+        return Ok(None);
+    };
+    let cap_axis_alignment = if edge_traverses_positive_u == edge_traverses_positive_cap {
+        PredicateOrientation::Positive
+    } else {
+        PredicateOrientation::Negative
+    };
 
     Ok(Some(CylinderBandBoundary {
         cap_face: cap_face_id,
         edge: side_fin.edge,
         center: circle.frame().origin(),
+        axial_parameter: side_line.origin().y,
         cap_axis_alignment,
         side_traverses_positive_u,
     }))
@@ -1861,6 +1904,97 @@ mod tests {
                 embedding: ShellEmbedding::Certified,
                 orientation: ShellOrientation::Invalid,
             }
+        );
+    }
+
+    #[test]
+    fn finite_cylinder_band_proof_is_frame_invariant() {
+        let frames = [
+            Frame::world().with_origin(Point3::new(4.0, -3.0, 2.0)),
+            Frame::new(
+                Point3::new(-2.0, 3.5, 1.25),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            )
+            .unwrap(),
+            Frame::new(
+                Point3::new(3.0, -2.0, 1.25),
+                Vec3::new(0.48, 0.64, 0.6),
+                Vec3::new(0.8, -0.6, 0.0),
+            )
+            .unwrap(),
+        ];
+
+        for frame in frames {
+            let mut store = Store::new();
+            let body = cylinder(&mut store, &frame, 1.5, 2.0).unwrap();
+            let shell = solid_shell(&store, body);
+            assert_eq!(
+                certify_shell(&store, shell, BodyKind::Solid, RegionKind::Solid).unwrap(),
+                ShellCertification {
+                    embedding: ShellEmbedding::Certified,
+                    orientation: ShellOrientation::Positive,
+                }
+            );
+            let report =
+                crate::check::check_body_report(&store, body, crate::check::CheckLevel::Full)
+                    .unwrap();
+            assert_eq!(
+                report.outcome(),
+                crate::check::CheckOutcome::Valid,
+                "{frame:?}: {report:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cylinder_band_proof_refuses_a_tampered_cap_chart_frame() {
+        let frame = Frame::new(
+            Point3::new(3.0, -2.0, 1.25),
+            Vec3::new(0.48, 0.64, 0.6),
+            Vec3::new(0.8, -0.6, 0.0),
+        )
+        .unwrap();
+        let mut store = Store::new();
+        let body = cylinder(&mut store, &frame, 1.5, 2.0).unwrap();
+        let shell = solid_shell(&store, body);
+        let cap = store
+            .get(shell)
+            .unwrap()
+            .faces
+            .iter()
+            .copied()
+            .find(|face| {
+                matches!(
+                    store.get(store.get(*face).unwrap().surface).unwrap(),
+                    SurfaceGeom::Plane(_)
+                )
+            })
+            .unwrap();
+        let surface = store.get(cap).unwrap().surface;
+        let SurfaceGeom::Plane(plane) = *store.get(surface).unwrap() else {
+            unreachable!("selected cap has a planar surface")
+        };
+
+        let shifted = Frame::new(
+            plane.frame().origin() + plane.frame().x() * 0.25,
+            plane.frame().z(),
+            plane.frame().x(),
+        )
+        .unwrap();
+        let mut transaction = store.transaction().unwrap();
+        transaction
+            .assembly()
+            .replace_surface(
+                surface,
+                SurfaceGeom::Plane(kgeom::surface::Plane::new(shifted)),
+            )
+            .unwrap();
+        assert!(
+            certify_cylinder_band_shell_proof(transaction.store(), shell)
+                .unwrap()
+                .is_none(),
+            "a stale cap pcurve must not license the shifted chart frame"
         );
     }
 }

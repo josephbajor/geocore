@@ -44,7 +44,19 @@ mod dispatch;
 #[allow(dead_code)]
 mod extract;
 #[allow(dead_code)]
+mod face_arrangement;
+#[allow(dead_code)]
 mod face_partition;
+#[allow(dead_code)]
+mod mixed_boundary;
+#[allow(dead_code)]
+mod mixed_cap_boundary;
+#[allow(dead_code)]
+mod mixed_face_arrangement;
+#[allow(dead_code)]
+mod mixed_periodic_arrangement;
+#[allow(dead_code)]
+mod mixed_shell_plan;
 #[allow(dead_code)]
 mod pipeline;
 #[allow(dead_code)]

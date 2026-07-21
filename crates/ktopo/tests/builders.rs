@@ -11,6 +11,7 @@ use kgeom::vec::{Point2, Point3, Vec3};
 use ktopo::btess::{TessOptions, check_watertight, signed_volume, tessellate_body};
 use ktopo::check::{CheckLevel, CheckOutcome, VerificationGapKind, check_body_report};
 use ktopo::entity::{BodyKind, Edge, Face, Fin, Loop, Region, Shell, Vertex};
+use ktopo::geom::SurfaceGeom;
 use ktopo::make;
 use ktopo::profile::PlanarProfile;
 use ktopo::store::Store;
@@ -234,6 +235,49 @@ fn oblique_polygonal_profile_extrusion_is_full_valid_watertight_and_volume_prese
         assert!(check_watertight(&mesh).is_empty());
         assert!((signed_volume(&mesh) - 24.0).abs() <= 1.0e-9);
     }
+}
+
+#[test]
+fn axial_profile_extrusion_retains_exact_authored_side_axes() {
+    let frame = Frame::new(
+        Point3::new(3.0, -2.0, 1.25),
+        Vec3::new(0.48, 0.64, 0.6),
+        Vec3::new(0.8, -0.6, 0.0),
+    )
+    .unwrap();
+    let polygon = [
+        Point2::new(-2.0, -1.0),
+        Point2::new(2.0, -1.0),
+        Point2::new(2.0, 3.0),
+        Point2::new(-2.0, 3.0),
+    ];
+    let profile = PlanarProfile::from_polygon(frame, &polygon).unwrap();
+    let mut store = Store::new();
+    let body = make::extrude_profile(&mut store, &profile, 2.0).unwrap();
+
+    let side_normals = store
+        .faces_of_body(body)
+        .unwrap()
+        .into_iter()
+        .skip(2)
+        .map(
+            |face| match store.surface(store.get(face).unwrap().surface).unwrap() {
+                SurfaceGeom::Plane(plane) => plane.frame().z(),
+                other => panic!("axial polygon extrusion created a non-plane side: {other:?}"),
+            },
+        )
+        .collect::<Vec<_>>();
+    assert_eq!(
+        side_normals,
+        vec![-frame.y(), frame.x(), frame.y(), -frame.x()],
+        "authored axis-aligned profile edges must reuse exact signed parent axes"
+    );
+    assert!(
+        side_normals
+            .iter()
+            .all(|normal| normal.dot(frame.z()) == 0.0),
+        "authored side planes lost their exact axial orthogonality"
+    );
 }
 
 #[test]

@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use kcore::operation::{OperationScope, ResourceKind};
 use kgeom::frame::Frame;
 use kgeom::param::ParamRange;
+use ktopo::analytic_shell::{AnalyticShellAssemblyError, AnalyticShellInput};
 use ktopo::cylindrical_band::CylindricalBandSolidInput;
 use ktopo::entity::{BodyId as RawBodyId, FaceId as RawFaceId};
 use ktopo::transaction::{FullCommitRequirement, Transaction};
@@ -29,7 +30,7 @@ use super::curved_pipeline::{
 };
 use super::curved_source::CertifiedCylinderSource;
 use super::curved_support_separation::CertifiedAxialCapContact;
-use super::extract::ExtractedPlanarSourceBody;
+use super::extract::CertifiedConvexPlanarSource;
 use super::face_partition::{AxialBoundary, FaceRegionKey};
 use super::pipeline::{PLANAR_BOOLEAN_REALIZATION_WORK, PLANAR_BOOLEAN_REALIZED_VERTICES};
 use crate::BodyId;
@@ -64,7 +65,7 @@ impl PreparedCurvedResult {
 pub(super) struct CurvedRealizationRequest<'a> {
     bodies: &'a [BodyId; 2],
     source_boundary_keys: &'a BTreeMap<OperandSide, BTreeSet<CurvedFragmentKey>>,
-    planar: &'a ExtractedPlanarSourceBody,
+    planar: &'a CertifiedConvexPlanarSource,
     cylinder: &'a CertifiedCylinderSource,
     cuts: &'a [CertifiedRingCut],
     contact: Option<&'a CertifiedAxialCapContact>,
@@ -75,7 +76,7 @@ impl<'a> CurvedRealizationRequest<'a> {
     pub(super) fn new(
         bodies: &'a [BodyId; 2],
         source_boundary_keys: &'a BTreeMap<OperandSide, BTreeSet<CurvedFragmentKey>>,
-        planar: &'a ExtractedPlanarSourceBody,
+        planar: &'a CertifiedConvexPlanarSource,
         cylinder: &'a CertifiedCylinderSource,
         cuts: &'a [CertifiedRingCut],
         contact: Option<&'a CertifiedAxialCapContact>,
@@ -103,6 +104,61 @@ pub(super) fn realize_selected_result(
         return Ok(CurvedBooleanPipelineOutcome::ProvenEmpty);
     }
     commit_proposals(edit, proposals, scope)
+}
+
+/// Realize one completely authored bounded analytic shell atomically.
+///
+/// All deterministic post-selection work and the exact proposed vertex
+/// high-water are charged before the transaction is opened. The topology
+/// producer performs its complete allocation-free preflight before its first
+/// insertion; any proposal defect is therefore an honest assembly refusal,
+/// while store failures remain execution failures. The shared commit helper
+/// then requires a successful persisted Full proof before exposing a journal.
+pub(super) fn realize_analytic_shell_input(
+    edit: &mut PartEdit<'_>,
+    input: &AnalyticShellInput,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> StageResult<CurvedBooleanPipelineOutcome> {
+    realize_analytic_shell_inputs(edit, core::slice::from_ref(input), linear, scope)
+}
+
+/// Realize independently connected analytic shells as one atomic result.
+///
+/// Every component is charged and then preflighted by the topology batch
+/// adapter before the first allocation. Component order is caller-owned and
+/// becomes public result-body/report order after the single Full commit.
+pub(super) fn realize_analytic_shell_inputs(
+    edit: &mut PartEdit<'_>,
+    inputs: &[AnalyticShellInput],
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> StageResult<CurvedBooleanPipelineOutcome> {
+    if inputs.is_empty() {
+        return Ok(CurvedBooleanPipelineOutcome::ProvenEmpty);
+    }
+    for input in inputs {
+        precharge_analytic_shell(input, scope)?;
+    }
+
+    let part = edit.id.clone();
+    let mut transaction = edit.state.store.transaction().map_err(Error::from)?;
+    let outputs = match transaction.assemble_analytic_shell_batch(inputs, linear) {
+        Ok(outputs) => outputs,
+        Err(AnalyticShellAssemblyError::Preflight(_)) => {
+            return refused(CurvedBooleanPipelineRefusal::AssemblyContract(
+                "analytic shell batch failed complete preflight",
+            ));
+        }
+        Err(AnalyticShellAssemblyError::Store(source)) => return Err(source.into()),
+        Err(_) => {
+            return refused(CurvedBooleanPipelineRefusal::AssemblyContract(
+                "analytic shell assembly returned an unsupported refusal",
+            ));
+        }
+    };
+    let bodies = outputs.iter().map(|output| output.body()).collect();
+    commit_full(part, transaction, bodies, scope)
 }
 
 fn prepare_result_proposals(
@@ -492,6 +548,78 @@ fn precharge_planar_curved_assembly(
     Ok(())
 }
 
+/// Charge a conservative checked bound for analytic-shell preflight and
+/// allocation before opening the transaction.
+fn precharge_analytic_shell(
+    input: &AnalyticShellInput,
+    scope: &mut OperationScope<'_, '_>,
+) -> StageResult<()> {
+    let mut loop_count = 0_usize;
+    let mut fin_count = 0_usize;
+    for face in input.faces() {
+        loop_count = loop_count
+            .checked_add(face.loops().len())
+            .ok_or_else(work_overflow)?;
+        for loop_ in face.loops() {
+            fin_count = fin_count
+                .checked_add(loop_.fins().len())
+                .ok_or_else(work_overflow)?;
+        }
+    }
+    let vertices = u64::try_from(input.vertices().len()).map_err(|_| work_overflow())?;
+    let work = analytic_shell_realization_work(
+        input.vertices().len(),
+        input.edges().len(),
+        input.faces().len(),
+        loop_count,
+        fin_count,
+    )?;
+    scope
+        .ledger_mut()
+        .charge(PLANAR_BOOLEAN_REALIZATION_WORK, work)
+        .map_err(Error::from)?;
+    scope
+        .ledger_mut()
+        .observe(
+            PLANAR_BOOLEAN_REALIZED_VERTICES,
+            ResourceKind::Items,
+            vertices,
+        )
+        .map_err(Error::from)?;
+    Ok(())
+}
+
+/// Conservative structural ceiling for analytic-shell preflight/allocation.
+///
+/// Let `N = 1 + V + E + F + L + U`, where `L` is the loop count and `U` the
+/// directed edge-use count. `N^2` covers the producer's worst quadratic loop
+/// canonicalization and dominates its ordered-map/dual traversals; `16N`
+/// covers the fixed-number validation, certificate, geometry, topology, and
+/// lineage operations attached to every authored item.
+fn analytic_shell_realization_work(
+    vertices: usize,
+    edges: usize,
+    faces: usize,
+    loops: usize,
+    uses: usize,
+) -> StageResult<u64> {
+    let vertices = u64::try_from(vertices).map_err(|_| work_overflow())?;
+    let edges = u64::try_from(edges).map_err(|_| work_overflow())?;
+    let faces = u64::try_from(faces).map_err(|_| work_overflow())?;
+    let loops = u64::try_from(loops).map_err(|_| work_overflow())?;
+    let uses = u64::try_from(uses).map_err(|_| work_overflow())?;
+    let size = 1_u64
+        .checked_add(vertices)
+        .and_then(|value| value.checked_add(edges))
+        .and_then(|value| value.checked_add(faces))
+        .and_then(|value| value.checked_add(loops))
+        .and_then(|value| value.checked_add(uses))
+        .ok_or_else(work_overflow)?;
+    size.checked_mul(size)
+        .and_then(|value| value.checked_add(size.checked_mul(16)?))
+        .ok_or_else(work_overflow)
+}
+
 /// Source-size-exact bound for one planar shell participating in curved output.
 ///
 /// `4V + 4F + 6U` covers common planar preparation and `H` is the topology
@@ -670,5 +798,29 @@ mod tests {
     fn planar_curved_realization_work_fails_closed_on_overflow() {
         assert!(planar_curved_realization_work(usize::MAX, usize::MAX, 0, 0).is_err());
         assert!(planar_curved_realization_work(1, 0, 0, u64::MAX).is_err());
+    }
+
+    #[test]
+    fn analytic_shell_realization_work_counts_complete_structure() {
+        // Half-cylinder shell: V=4, E=6, F=4, L=4, U=12, hence N=31.
+        assert_eq!(
+            analytic_shell_realization_work(4, 6, 4, 4, 12).unwrap(),
+            1_457
+        );
+    }
+
+    #[test]
+    fn analytic_shell_realization_work_fails_closed_on_overflow() {
+        assert!(analytic_shell_realization_work(usize::MAX, 0, 0, 0, 0).is_err());
+        assert!(
+            analytic_shell_realization_work(
+                (u64::MAX / 2) as usize,
+                (u64::MAX / 2) as usize,
+                0,
+                0,
+                0,
+            )
+            .is_err()
+        );
     }
 }

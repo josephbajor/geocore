@@ -16,7 +16,7 @@ use ktopo::store::Store;
 
 use super::curved_pipeline::{CurvedBooleanPipelineRefusal, PipelineFailure, StageResult};
 use super::curved_source::CertifiedCylinderSource;
-use super::extract::ExtractedPlanarSourceBody;
+use super::extract::CertifiedConvexPlanarSource;
 use super::face_partition::PlanarCircleRepresentative;
 use super::pipeline::PLANAR_BOOLEAN_BSP_WORK;
 use super::planar_bsp::{SourcePlane, SourcePlaneRef};
@@ -80,7 +80,7 @@ impl CertifiedAxialCapContact {
 /// order cannot affect accounting.
 pub(super) fn certify_convex_host_cylinder_support_relation(
     store: &Store,
-    host: &ExtractedPlanarSourceBody,
+    host: &CertifiedConvexPlanarSource,
     cylinder: &CertifiedCylinderSource,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<Option<ConvexHostCylinderSupportRelation>> {
@@ -145,7 +145,7 @@ pub(super) fn certify_convex_host_cylinder_support_relation(
 /// Strengthen a certified cap/support relation to strict full-disk containment.
 pub(super) fn certify_strict_axial_cap_contact(
     store: &Store,
-    host: &ExtractedPlanarSourceBody,
+    host: &CertifiedConvexPlanarSource,
     cylinder: &CertifiedCylinderSource,
     relation: ConvexHostCylinderSupportRelation,
     scope: &mut OperationScope<'_, '_>,
@@ -267,7 +267,7 @@ fn support_scan_work(face_count: usize) -> Option<u64> {
         .checked_mul(WORK_PER_SUPPORT)
 }
 
-fn source_plane_index(host: &ExtractedPlanarSourceBody, id: SourcePlaneRef) -> Option<usize> {
+fn source_plane_index(host: &CertifiedConvexPlanarSource, id: SourcePlaneRef) -> Option<usize> {
     let index = usize::try_from(id.face()).ok()?;
     (host.faces().get(index)?.plane() == id && host.planes().get(index)?.id() == id)
         .then_some(index)

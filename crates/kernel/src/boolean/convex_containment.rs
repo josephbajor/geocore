@@ -19,7 +19,7 @@ use super::boundary_select::{OperandSide, SelectedBoundaryFragment, SelectedOrie
 use super::curved_host::{prepare_curved_host, source_operand};
 use super::curved_pipeline::{CertifiedRingCut, CurvedFragment, CurvedFragmentKey};
 use super::curved_source::CertifiedCylinderSource;
-use super::extract::ExtractedPlanarSourceBody;
+use super::extract::CertifiedConvexPlanarSource;
 
 type SelectedCurvedFragment = SelectedBoundaryFragment<CurvedFragmentKey, CurvedFragment>;
 
@@ -179,7 +179,7 @@ pub(super) fn recognize_mixed_convex_containment<K: Ord, F>(
 /// admitted positive finite-cylinder and negative convex-planar assemblers.
 pub(super) fn admit_mixed_convex_containment(
     source_boundary_keys: &BTreeMap<OperandSide, BTreeSet<CurvedFragmentKey>>,
-    planar: &ExtractedPlanarSourceBody,
+    planar: &CertifiedConvexPlanarSource,
     cuts: &[CertifiedRingCut],
     selected: &[SelectedCurvedFragment],
 ) -> Result<Option<MixedConvexContainmentAdmission>, &'static str> {
@@ -218,7 +218,7 @@ pub(super) fn admit_mixed_convex_containment(
 /// Materialize semantic inputs only after result work admission succeeds.
 pub(super) fn prepare_admitted_mixed_convex_containment(
     admission: MixedConvexContainmentAdmission,
-    planar: &ExtractedPlanarSourceBody,
+    planar: &CertifiedConvexPlanarSource,
     cylinder: &CertifiedCylinderSource,
 ) -> Result<PreparedMixedConvexContainment, &'static str> {
     let prepared = prepare_mixed_convex_containment_input(planar, cylinder)?;
@@ -235,7 +235,7 @@ pub(super) fn prepare_admitted_mixed_convex_containment(
 /// Prepare canonical positive cylinder and planar shell inputs without
 /// assigning them a Boolean result role.
 pub(super) fn prepare_mixed_convex_containment_input(
-    planar: &ExtractedPlanarSourceBody,
+    planar: &CertifiedConvexPlanarSource,
     cylinder: &CertifiedCylinderSource,
 ) -> Result<PreparedMixedConvexContainment, &'static str> {
     let (planar_input, ports) = prepare_curved_host(planar, &[])?;

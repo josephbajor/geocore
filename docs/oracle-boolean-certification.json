@@ -1,6 +1,7 @@
 {
   "schema_version": "kernel-oracle-certification.v1",
-  "status": "current",
+  "status": "stale",
+  "reason": "the supplemental Boolean generator now emits fifteen payloads, adding bounded-arc Plane/Cylinder intersection, both ordered planar-minus-cylinder component bodies, rectangular and five-portal cap-retaining operations, seam-crossing five-portal cylinder-left Subtract, and nonconvex star/cylinder Intersect; the deterministic queued offline bundle is 61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7, which differs from the preserved six-payload 2026-07-20 host run, and full licensed-host replay is pending",
   "certified_at": "2026-07-20",
   "host": "onshape",
   "host_version": "cloud-2026-07-20",

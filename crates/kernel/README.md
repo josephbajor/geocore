@@ -15,7 +15,9 @@ The current facade supports:
 - certified body section graphs exposing Plane/Cylinder rings, exact bounded
   arcs, and topology-clipped transverse ruling fragments with operation-shared
   source-edge root identity plus deterministic closed mixed-family cycles for
-  the certified bounded fixture; broader rigid placements remain fail-closed;
+  shared translated, permuted, and all-nonzero oblique exact frames, with
+  semantic Plane incidence certification for rounded general frames and
+  proof-bearing lifted periodic cylinder-face embeddings;
 - failure-atomic block/block unite/intersect/subtract plus axial
   convex-planar/finite-cylinder intersection, finite-cylinder-minus-planar
   remainder bands, zero-cut truth-selected whole-source union/subtraction
@@ -24,7 +26,14 @@ The current facade supports:
   through-holes, two-ring two-sided connected unions, inverse-containment
   convex-planar cavities, support-separated axial exact-contact empty
   intersections, and certified flush axial cap-contact connected unions, with
-  typed empty/created/refused outcomes and Full validation;
+  convex bounded-arc Plane/Cylinder intersections with rectangular,
+  three-sided, and five-support multi-chart layouts across general authored frames, plus ordered
+  planar-minus-cylinder subtraction that Full-commits every disconnected
+  rectangular or three-sided component and rectangular/five-support
+  cap-retaining mixed Unite and cylinder-left Subtract across world, translated, permuted, and oblique
+  frames, plus complete nonconvex ten-support star/cylinder Intersect through
+  convex-certificate-independent mixed planning, typed empty/created/refused
+  outcomes, and Full validation;
 - atomic typed X_T import and deterministic X_T export; and
 - deterministic facade-ID mutation, lineage, and tolerance journal iteration;
   and
@@ -37,6 +46,14 @@ Broader modeling operations and additional semantic edits remain under active
 development. The facade is additive: lower crates remain available to kernel
 implementation and trusted adapter work, but their raw layouts are not part of
 the facade compatibility promise.
+
+The five-portal cap-retaining slice verifies exact face/edge/vertex signatures
+(23/47/30 for Unite; 10/32/20 for cylinder-left Subtract), independent analytic
+mesh volumes, deterministic X_T, Fast self-import, and exact N/N-1 shell-work atomicity.
+Proof-local period lifting also admits a radius-1.7 five-support subtraction across authored `u=0` without mutating pcurves.
+Exact planar-shell admission is separate from its optional typed convex certificate:
+the nonconvex star result is 17F/45E/30V with literal-derived volume and deterministic
+X_T/Fast self-import, while pure planar BSP and convex shortcuts remain certificate-gated.
 
 ## Application boundary
 

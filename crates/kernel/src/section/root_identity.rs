@@ -43,7 +43,53 @@ pub(crate) struct SourceRootKey {
     ordinal: usize,
 }
 
+/// Canonical scalar witness for one isolated source root.
+///
+/// The interval is the authority: it was produced by the complete analytic
+/// root-order proof and contains exactly one transverse root. `parameter` is
+/// a deterministic finite value inside that interval for authoring a
+/// tolerance-bounded topology split. Floating-point equality of parameters
+/// never owns endpoint identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct CertifiedSourceRootScalar {
+    parameter_bits: u64,
+    enclosure_bits: [u64; 2],
+}
+
+impl CertifiedSourceRootScalar {
+    fn from_enclosure(enclosure: Interval) -> Option<Self> {
+        if !finite(enclosure) || enclosure.lo() > enclosure.hi() {
+            return None;
+        }
+        // The split form avoids overflow in `lo + hi` and is deterministic
+        // over the certified finite enclosure.
+        let parameter = 0.5 * enclosure.lo() + 0.5 * enclosure.hi();
+        if !parameter.is_finite() || parameter < enclosure.lo() || parameter > enclosure.hi() {
+            return None;
+        }
+        Some(Self {
+            parameter_bits: parameter.to_bits(),
+            enclosure_bits: [enclosure.lo().to_bits(), enclosure.hi().to_bits()],
+        })
+    }
+
+    pub(crate) const fn parameter(self) -> f64 {
+        f64::from_bits(self.parameter_bits)
+    }
+
+    pub(crate) fn enclosure(self) -> Interval {
+        Interval::new(
+            f64::from_bits(self.enclosure_bits[0]),
+            f64::from_bits(self.enclosure_bits[1]),
+        )
+    }
+}
+
 impl SourceRootKey {
+    pub(crate) const fn new(edge: RawEdgeId, ordinal: usize) -> Self {
+        Self { edge, ordinal }
+    }
+
     pub(crate) const fn edge(self) -> RawEdgeId {
         self.edge
     }
@@ -146,6 +192,18 @@ impl CertifiedSourceRootOrder {
     /// Roots in strictly increasing intrinsic source-edge parameter order.
     pub(crate) fn roots(&self) -> &[Interval] {
         &self.roots
+    }
+
+    /// Materialize the canonical scalar witness for an identity issued from
+    /// this exact query order.
+    pub(crate) fn materialize(&self, key: SourceRootKey) -> Option<CertifiedSourceRootScalar> {
+        if key.edge != self.query.edge {
+            return None;
+        }
+        self.roots
+            .get(key.ordinal)
+            .copied()
+            .and_then(CertifiedSourceRootScalar::from_enclosure)
     }
 
     fn resolve(&self, observed: Interval) -> RootResolution {
@@ -577,6 +635,42 @@ mod tests {
         assert!(roots[0].contains(1.0));
         assert!(roots[1].contains(3.0));
         assert!(roots[0].hi() < roots[1].lo());
+    }
+
+    #[test]
+    fn canonical_scalar_materialization_retains_the_independent_exact_roots() {
+        // For x(t) = -2 + t on x^2 + y^2 = 1, the intrinsic roots are
+        // exactly the dyadic scalars 1 and 3. This oracle is independent of
+        // the interval midpoint used by materialization.
+        let roots = certify_line_cylinder(
+            Line::new(Point3::new(-2.0, 0.0, 0.25), Vec3::new(1.0, 0.0, 0.0)).unwrap(),
+            Cylinder::new(Frame::world(), 1.0).unwrap(),
+            Interval::new(0.0, 4.0),
+        )
+        .unwrap();
+        let mut store = Store::new();
+        let body = ktopo::make::block(&mut store, &Frame::world(), [1.0; 3]).unwrap();
+        let edge = store.edges_of_body(body).unwrap()[0];
+        let opposing_face = store.faces_of_body(body).unwrap()[0];
+        let order = CertifiedSourceRootOrder {
+            query: SourceRootQuery::new(edge, opposing_face),
+            roots,
+        };
+
+        for (ordinal, exact) in [1.0, 3.0].into_iter().enumerate() {
+            let key = SourceRootKey::new(edge, ordinal);
+            let first = order.materialize(key).unwrap();
+            let repeated = order.materialize(key).unwrap();
+            assert_eq!(first, repeated);
+            assert!(first.enclosure().contains(exact));
+            assert!(first.enclosure().contains(first.parameter()));
+            assert!(first.parameter().is_finite());
+        }
+        assert!(
+            order
+                .materialize(SourceRootKey::new(edge, usize::MAX))
+                .is_none()
+        );
     }
 
     #[test]

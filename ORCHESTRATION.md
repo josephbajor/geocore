@@ -40,9 +40,13 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    fragment stitching, exact Plane/Cylinder rings and bounded-arc endpoint
    topology, finite exact-family transverse ruling carriers with paired
    whole-range residual proof, topology-owned ruling trims with operation-shared source-edge root
-   identity, deterministic closed mixed arc/ruling cycles for the certified bounded fixture,
-   payload-agnostic exact boundary truth selection, and finite-cylinder
-   Full proof landed; proof-bearing curved face partition/classification and the
+   identity, deterministic closed mixed arc/ruling cycles across shared translated,
+   permuted, and all-nonzero oblique exact frames,
+   semantic Plane incidence for rounded frames, exact disk/annulus arrangement
+   verification, bounded Line2d/Circle2d loop proof, and a failure-atomic
+   analytic Plane/Cylinder shell assembler with clipped-cylinder Full proof,
+   payload-agnostic exact boundary truth selection, and semantic finite-cylinder
+   Full proof across general authored frames landed; proof-bearing curved face partition/classification and the
    first Full-checked axial intersection, cylinder-minus-block remainder bands,
    zero-cut truth-selected whole-source union/subtraction copies, one-ring
    axial cap-overlap connected union, and one-ring axial block-minus-cylinder
@@ -51,8 +55,31 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    support-separated axial exact-contact empty intersections, inverse-
    containment mixed-shell cavities, and certified flush axial cap-contact
    connected unions now land through the public facade with deterministic X_T
-   emission and Fast self-import; broader rigid mixed-cycle placements, bounded-arc
-   contacts/layouts, and curved licensed-host evidence remain)*
+   emission and Fast self-import; proof-bearing periodic Section embeddings,
+   internal disk/annulus arrangement adoption, exact source-root and carrier
+   trim-scalar materialization, semantic sloped-support ruling recovery, and
+   convex multi-chart clipped-cylinder proof now let bounded-arc intersections
+   Full-commit across the authored frame/operand-order matrix for rectangular,
+   three-sided, and five-support layouts, emit deterministic X_T, and Fast self-import;
+   ordered planar-minus-cylinder atomically Full-commits every deterministic
+   disconnected rectangular/three-sided component across four authored frames
+   with deterministic X_T, Fast self-import, and N-1 batch refusal;
+   endpoint-free cap edges/planning/incidence/materialization, multi-loop
+   face proof, and the count-independent portal-cylinder shell theorem now let
+   rectangular and five-support cap-retaining Unite/cylinder-left Subtract
+   atomically Full-commit across the same four frames. The five-portal slice has
+   exact topology/analytic-volume evidence, deterministic X_T, Fast self-import,
+   and exact 14,966,784/1,095,237 N/N-1 shell-work refusal under the finite
+   16,777,216 default. Cycle-wide certified integer-period lifting now admits
+   the seam-crossing radius-1.7 cylinder-left Subtract across all four frames
+   with 10/32/20 topology, literal-derived volume, deterministic X_T, and Fast
+   self-import. Exact planar-shell admission is now independent of the optional
+   typed convex half-space certificate, so a complete non-convex ten-support
+   star/cylinder Intersect reaches general mixed planning and Full-commits at
+   17F/45E/30V with literal-derived volume, deterministic X_T, and Fast
+   self-import; pure planar BSP and convex curved shortcuts still require that
+   certificate. Next: replay the queued deterministic fifteen-payload Boolean
+   bundle in the licensed host.)*
 
 Work that does not advance the queue head needs an explicit justification
 linking it to a rung ("rung 2 needs curve/curve overlap dedup because …").

@@ -27,8 +27,8 @@ use super::components::{
     ComponentPartitionError, SelectedShellComponent, partition_shell_components,
 };
 use super::extract::{
-    ExtractedPlanarSourceBody, PlanarSourceExtractionError, PlanarSourceGap,
-    PlanarSourceProofFailure, extract_planar_source_body,
+    CertifiedConvexPlanarSource, PlanarSourceConvexityFailure, PlanarSourceExtractionError,
+    PlanarSourceGap, PlanarSourceProofFailure, extract_planar_source_body,
 };
 use super::planar_bsp::{PlaneTripleVertexKey, SourcePlane, SourcePlaneRef};
 use super::realize::{RealizationError, realize_symbolic_vertex};
@@ -382,10 +382,20 @@ fn extract_operand(
     body: BodyId,
     operand: u8,
     scope: &mut OperationScope<'_, '_>,
-) -> StageResult<ExtractedPlanarSourceBody> {
+) -> StageResult<CertifiedConvexPlanarSource> {
     let part = edit.as_part();
     match extract_planar_source_body(&part, body.clone(), operand, scope) {
-        Ok(source) => Ok(source),
+        Ok(source) => match source.into_convex_certificate() {
+            Ok(certificate) => Ok(certificate),
+            Err(PlanarSourceConvexityFailure::Unsupported(gap)) => Err(PipelineFailure::Refused(
+                PlanarBooleanPipelineRefusal::UnsupportedSource { operand, gap },
+            )),
+            Err(PlanarSourceConvexityFailure::Uncertified(failure)) => {
+                Err(PipelineFailure::Refused(
+                    PlanarBooleanPipelineRefusal::UncertifiedSource { operand, failure },
+                ))
+            }
+        },
         Err(PlanarSourceExtractionError::NotFastValid(report)) => {
             let report = adapt_live_body_check(&edit.id, &edit.state.store, body.raw(), report)?;
             Err(PipelineFailure::Refused(
@@ -419,8 +429,8 @@ struct BspPrecharge {
 }
 
 fn select_with_precharge(
-    left: &ExtractedPlanarSourceBody,
-    right: &ExtractedPlanarSourceBody,
+    left: &CertifiedConvexPlanarSource,
+    right: &CertifiedConvexPlanarSource,
     operation: PlanarBooleanOperation,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<Vec<SelectedPlanarFragment>> {
@@ -501,8 +511,8 @@ fn power_of_two(exponent: u64) -> Option<u64> {
 }
 
 fn combined_planes(
-    left: &ExtractedPlanarSourceBody,
-    right: &ExtractedPlanarSourceBody,
+    left: &CertifiedConvexPlanarSource,
+    right: &CertifiedConvexPlanarSource,
 ) -> Vec<SourcePlane> {
     let mut planes = left.planes().to_vec();
     planes.extend_from_slice(right.planes());
@@ -609,8 +619,8 @@ struct SourcePlaneBinding {
 
 fn build_plane_registry(
     edit: &PartEdit<'_>,
-    left: &ExtractedPlanarSourceBody,
-    right: &ExtractedPlanarSourceBody,
+    left: &CertifiedConvexPlanarSource,
+    right: &CertifiedConvexPlanarSource,
 ) -> StageResult<BTreeMap<super::planar_bsp::SourcePlaneRef, SourcePlaneBinding>> {
     let mut registry = BTreeMap::new();
     for face in left.faces().iter().chain(right.faces()) {

@@ -27,7 +27,9 @@ use super::boundary_select::{
     OperandSide, RegularizedBooleanOperation, select_boundary_fragments,
 };
 use super::convex_containment::prepare_mixed_convex_containment_input;
-use super::curved_realize::{CurvedRealizationRequest, realize_selected_result};
+use super::curved_realize::{
+    CurvedRealizationRequest, realize_analytic_shell_inputs, realize_selected_result,
+};
 use super::curved_source::{
     CertifiedCylinderSource, CylinderSourceGap, CylinderSourceOutcome, extract_cylinder_source,
 };
@@ -36,8 +38,8 @@ use super::curved_support_separation::{
     certify_convex_host_cylinder_support_relation, certify_strict_axial_cap_contact,
 };
 use super::extract::{
-    ExtractedPlanarSourceBody, PlanarSourceExtractionError, PlanarSourceGap,
-    PlanarSourceProofFailure, extract_planar_source_body,
+    CertifiedConvexPlanarSource, ExtractedPlanarSourceBody, PlanarSourceExtractionError,
+    PlanarSourceGap, PlanarSourceProofFailure, extract_planar_source_body,
 };
 use super::face_partition::{
     AxialBoundary, CertifiedAxialRingCut, CertifiedPlanarCircleCut, FaceCellClassificationError,
@@ -45,7 +47,18 @@ use super::face_partition::{
     PlanarCircleRepresentative, classify_face_partition_from_anchor, partition_convex_planar_face,
     partition_periodic_cylinder_face,
 };
-use super::pipeline::{PLANAR_BOOLEAN_BSP_FRAGMENTS, PLANAR_BOOLEAN_BSP_WORK};
+use super::mixed_boundary::{MixedBoundaryError, prepare_mixed_bounded_arc_boundary};
+use super::mixed_shell_plan::components::{
+    MixedShellComponentError, mixed_shell_component_work, partition_prepared_mixed_shell_components,
+};
+use super::mixed_shell_plan::materialize::{
+    MixedShellMaterializationError, MixedShellScalarInputs,
+    materialize_mixed_shell_component_inputs, prepare_mixed_shell_materialization,
+};
+use super::mixed_shell_plan::{MixedShellPlanError, plan_mixed_shell};
+use super::pipeline::{
+    PLANAR_BOOLEAN_BSP_FRAGMENTS, PLANAR_BOOLEAN_BSP_WORK, PLANAR_BOOLEAN_REALIZATION_WORK,
+};
 use super::planar_bsp::SourcePlaneRef;
 use super::select::PlanarBooleanOperation;
 use crate::BodyId;
@@ -397,10 +410,14 @@ fn execute_stages(
         (planar, cylinder)
     };
 
-    if operation == PlanarBooleanOperation::Intersect {
+    let planar_certificate = planar_source.convex_certificate().ok();
+
+    if operation == PlanarBooleanOperation::Intersect
+        && let Some(planar_certificate) = planar_certificate
+    {
         let relation = certify_convex_host_cylinder_support_relation(
             &edit.state.store,
-            &planar_source,
+            planar_certificate,
             &cylinder_source,
             scope,
         )?;
@@ -410,24 +427,63 @@ fn execute_stages(
     }
 
     let mut contact = None;
-    let cuts = if certify_zero_cut_mixed_containment(
-        &edit.state.store,
-        &planar_source,
-        &cylinder_source,
-        scope,
-    )? {
+    let zero_cut_containment = match planar_certificate {
+        Some(planar_certificate) => certify_zero_cut_mixed_containment(
+            &edit.state.store,
+            planar_certificate,
+            &cylinder_source,
+            scope,
+        )?,
+        None => false,
+    };
+    let cuts = if zero_cut_containment {
         Vec::new()
     } else {
         let graph =
             section_bodies_in_scope(&edit.as_part(), &bodies[0], &bodies[1], linear, scope)?;
+        if planar_certificate.is_none() {
+            if graph.completion() == SectionCompletion::Complete && graph.gaps().is_empty() {
+                return execute_mixed_bounded_arc(
+                    edit,
+                    operation,
+                    &graph,
+                    &bodies,
+                    &planar_source,
+                    &cylinder_source,
+                    planar_operand,
+                    cylinder_operand,
+                    linear,
+                    scope,
+                );
+            }
+            return refused(CurvedBooleanPipelineRefusal::SectionIncomplete);
+        }
+        let planar_certificate = planar_certificate
+            .ok_or_else(|| refused_error(CurvedBooleanPipelineRefusal::SectionIncomplete))?;
         match certify_section_rings(&graph, planar_operand, cylinder_operand, &cylinder_source) {
             Ok(cuts) => cuts,
+            Err(PipelineFailure::Refused(CurvedBooleanPipelineRefusal::SectionIncomplete))
+                if graph.completion() == SectionCompletion::Complete && graph.gaps().is_empty() =>
+            {
+                return execute_mixed_bounded_arc(
+                    edit,
+                    operation,
+                    &graph,
+                    &bodies,
+                    &planar_source,
+                    &cylinder_source,
+                    planar_operand,
+                    cylinder_operand,
+                    linear,
+                    scope,
+                );
+            }
             Err(
                 failure @ PipelineFailure::Refused(CurvedBooleanPipelineRefusal::SectionIncomplete),
             ) if operation == PlanarBooleanOperation::Unite => {
                 let relation = certify_convex_host_cylinder_support_relation(
                     &edit.state.store,
-                    &planar_source,
+                    planar_certificate,
                     &cylinder_source,
                     scope,
                 )?;
@@ -439,7 +495,7 @@ fn execute_stages(
                 };
                 let Some(certified) = certify_strict_axial_cap_contact(
                     &edit.state.store,
-                    &planar_source,
+                    planar_certificate,
                     &cylinder_source,
                     relation,
                     scope,
@@ -453,17 +509,19 @@ fn execute_stages(
             Err(failure) => return Err(failure),
         }
     };
+    let planar_certificate = planar_certificate
+        .ok_or_else(|| refused_error(CurvedBooleanPipelineRefusal::SectionIncomplete))?;
     let interfaces = cuts
         .len()
         .checked_add(usize::from(contact.is_some()))
         .ok_or_else(work_overflow)?;
-    precharge_curved_partition(planar_source.faces().len(), interfaces, scope)?;
+    precharge_curved_partition(planar_certificate.faces().len(), interfaces, scope)?;
     let classified = build_classified_fragments(
         edit,
         &bodies,
         planar_operand,
         cylinder_operand,
-        &planar_source,
+        planar_certificate,
         &cylinder_source,
         &cuts,
         contact.as_ref(),
@@ -488,7 +546,7 @@ fn execute_stages(
         CurvedRealizationRequest::new(
             &bodies,
             &source_boundary_keys,
-            &planar_source,
+            planar_certificate,
             &cylinder_source,
             &cuts,
             contact.as_ref(),
@@ -496,6 +554,86 @@ fn execute_stages(
         ),
         scope,
     )
+}
+
+/// Consume one complete bounded Plane/Cylinder arrangement through generic
+/// Boolean truth. Every choice before allocation is backed by Section
+/// identity or exact arrangement incidence. Endpoint-free source rings are
+/// retained through the same exact incidence path when generic truth selects
+/// either finite-cylinder cap.
+#[allow(clippy::too_many_arguments)]
+fn execute_mixed_bounded_arc(
+    edit: &mut PartEdit<'_>,
+    operation: PlanarBooleanOperation,
+    graph: &BodySectionGraph,
+    bodies: &[BodyId; 2],
+    planar: &ExtractedPlanarSourceBody,
+    cylinder: &CertifiedCylinderSource,
+    planar_operand: usize,
+    cylinder_operand: usize,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> StageResult<CurvedBooleanPipelineOutcome> {
+    let operation = adapt_operation(operation);
+    let prepared = prepare_mixed_bounded_arc_boundary(
+        &edit.as_part(),
+        graph,
+        bodies,
+        planar,
+        cylinder,
+        planar_operand,
+        cylinder_operand,
+        operation,
+        linear,
+        scope,
+    )
+    .map_err(mixed_boundary_failure)?;
+    let selected = select_boundary_fragments(operation, prepared.classified())
+        .map_err(|error| refused_error(CurvedBooleanPipelineRefusal::Selection(error)))?;
+    if selected.is_empty() {
+        return Ok(CurvedBooleanPipelineOutcome::ProvenEmpty);
+    }
+    let plan = plan_mixed_shell(&edit.state.store, graph, prepared.bindings(), selected)
+        .map_err(mixed_plan_failure)?;
+
+    // Complete exact-scalar evidence is materialized and preflighted before
+    // the failure-atomic realization transaction opens.
+    realize_mixed_shell(edit, &plan, linear, scope)
+}
+
+fn realize_mixed_shell(
+    edit: &mut PartEdit<'_>,
+    plan: &super::mixed_shell_plan::MixedShellProofPlan,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> StageResult<CurvedBooleanPipelineOutcome> {
+    if !plan.materialization_gaps().is_empty() {
+        return refused(CurvedBooleanPipelineRefusal::SectionIncomplete);
+    }
+    let blueprint = prepare_mixed_shell_materialization(plan, &edit.state.store)
+        .map_err(mixed_materialization_failure)?;
+    scope
+        .ledger_mut()
+        .charge(PLANAR_BOOLEAN_REALIZATION_WORK, blueprint.work())
+        .map_err(Error::from)?;
+    let component_work = mixed_shell_component_work(plan, &blueprint)
+        .ok_or_else(|| refused_error(CurvedBooleanPipelineRefusal::WorkCountOverflow))?;
+    scope
+        .ledger_mut()
+        .charge(PLANAR_BOOLEAN_REALIZATION_WORK, component_work)
+        .map_err(Error::from)?;
+    let components = partition_prepared_mixed_shell_components(plan, &blueprint)
+        .map_err(mixed_component_failure)?;
+    let inputs = materialize_mixed_shell_component_inputs(
+        plan,
+        &blueprint,
+        &components,
+        &edit.state.store,
+        &MixedShellScalarInputs::empty(),
+        linear,
+    )
+    .map_err(mixed_materialization_failure)?;
+    realize_analytic_shell_inputs(edit, &inputs, linear, scope)
 }
 
 /// Prove the complete planar source strictly inside the convex cylinder.
@@ -506,7 +644,7 @@ fn execute_stages(
 /// remain execution failures.
 fn certify_zero_cut_mixed_containment(
     store: &ktopo::store::Store,
-    planar: &ExtractedPlanarSourceBody,
+    planar: &CertifiedConvexPlanarSource,
     cylinder: &CertifiedCylinderSource,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<bool> {
@@ -624,7 +762,7 @@ fn build_classified_fragments(
     bodies: &[BodyId; 2],
     planar_operand: usize,
     cylinder_operand: usize,
-    planar: &ExtractedPlanarSourceBody,
+    planar: &CertifiedConvexPlanarSource,
     cylinder: &CertifiedCylinderSource,
     cuts: &[CertifiedRingCut],
     contact: Option<&CertifiedAxialCapContact>,
@@ -662,7 +800,7 @@ fn append_planar_fragments(
     edit: &PartEdit<'_>,
     cylinder_body: &BodyId,
     operand: u8,
-    source: &ExtractedPlanarSourceBody,
+    source: &CertifiedConvexPlanarSource,
     cuts: &[CertifiedRingCut],
     contact: Option<&CertifiedAxialCapContact>,
     linear: f64,
@@ -912,6 +1050,76 @@ fn charge_source_scan(scope: &mut OperationScope<'_, '_>, amount: usize) -> Resu
         .ledger_mut()
         .charge(super::extract::PLANAR_SOURCE_EXTRACTION_WORK, amount)
         .map_err(Error::from)
+}
+
+fn mixed_boundary_failure(error: MixedBoundaryError) -> PipelineFailure {
+    match error {
+        MixedBoundaryError::Execution(error) => PipelineFailure::Execution(error),
+        MixedBoundaryError::IncompleteSection => {
+            refused_error(CurvedBooleanPipelineRefusal::SectionIncomplete)
+        }
+        MixedBoundaryError::AnchorBoundaryContact => {
+            refused_error(CurvedBooleanPipelineRefusal::ClassificationBoundaryContact)
+        }
+        MixedBoundaryError::AnchorIndeterminate(reason) => {
+            refused_error(CurvedBooleanPipelineRefusal::ClassificationIndeterminate { reason })
+        }
+        MixedBoundaryError::CylinderCapSelectionRequired => {
+            refused_error(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported)
+        }
+        MixedBoundaryError::PlanarArrangement(_)
+        | MixedBoundaryError::PeriodicArrangement(_)
+        | MixedBoundaryError::MissingPeriodicFaceEvidence
+        | MixedBoundaryError::SourceTopology
+        | MixedBoundaryError::AnchorUnavailable
+        | MixedBoundaryError::ContradictoryDual
+        | MixedBoundaryError::DisconnectedDual
+        | MixedBoundaryError::CylinderCapNotExterior => {
+            refused_error(CurvedBooleanPipelineRefusal::AssemblyContract(
+                "mixed boundary arrangement contract failed",
+            ))
+        }
+    }
+}
+
+fn mixed_plan_failure(error: MixedShellPlanError) -> PipelineFailure {
+    match error {
+        MixedShellPlanError::SectionIncomplete => {
+            refused_error(CurvedBooleanPipelineRefusal::SectionIncomplete)
+        }
+        _ => refused_error(CurvedBooleanPipelineRefusal::AssemblyContract(
+            "mixed shell proof-plan contract failed",
+        )),
+    }
+}
+
+fn mixed_materialization_failure(error: MixedShellMaterializationError) -> PipelineFailure {
+    match error {
+        MixedShellMaterializationError::WorkCountOverflow => {
+            refused_error(CurvedBooleanPipelineRefusal::WorkCountOverflow)
+        }
+        MixedShellMaterializationError::MissingSourceRootScalar(_)
+        | MixedShellMaterializationError::MissingSectionTrimScalar(_) => {
+            refused_error(CurvedBooleanPipelineRefusal::SectionIncomplete)
+        }
+        MixedShellMaterializationError::AnalyticPreflight(
+            ktopo::analytic_shell::AnalyticShellPlanError::DisconnectedShell,
+        ) => refused_error(CurvedBooleanPipelineRefusal::ResultTopologyUnsupported),
+        _ => refused_error(CurvedBooleanPipelineRefusal::AssemblyContract(
+            "mixed analytic-shell materialization failed",
+        )),
+    }
+}
+
+fn mixed_component_failure(error: MixedShellComponentError) -> PipelineFailure {
+    match error {
+        MixedShellComponentError::PhysicalIncidence(
+            MixedShellMaterializationError::WorkCountOverflow,
+        ) => refused_error(CurvedBooleanPipelineRefusal::WorkCountOverflow),
+        _ => refused_error(CurvedBooleanPipelineRefusal::AssemblyContract(
+            "mixed shell component partition failed",
+        )),
+    }
 }
 
 fn partition_failure(error: FacePartitionError) -> PipelineFailure {
@@ -1195,5 +1403,76 @@ mod tests {
             ),
             "outcome: {outcome:?}"
         );
+    }
+
+    #[test]
+    fn bounded_arc_planar_subtract_commits_two_full_valid_components_atomically() {
+        let mut session = Kernel::new().create_session();
+        let part = session.create_part();
+        let (block, cylinder) = {
+            let mut edit = session.edit_part(part.clone()).unwrap();
+            let block = edit
+                .create_block(BlockRequest::new(
+                    Frame::world().with_origin(Point3::new(0.0, 0.0, 1.0)),
+                    [2.0, 6.0, 1.0],
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            let cylinder = edit
+                .create_cylinder(CylinderRequest::new(Frame::world(), 1.5, 2.0))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            (block, cylinder)
+        };
+        let signature = |session: &crate::Session| {
+            let part = session.part(part.clone()).unwrap();
+            (
+                part.bodies().len(),
+                part.body(block.clone())
+                    .unwrap()
+                    .faces()
+                    .unwrap()
+                    .collect::<Vec<_>>(),
+                part.body(cylinder.clone())
+                    .unwrap()
+                    .faces()
+                    .unwrap()
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let before = signature(&session);
+
+        let outcome = super::super::dispatch::execute_boolean(
+            &mut session.edit_part(part.clone()).unwrap(),
+            PlanarBooleanOperation::Subtract,
+            block.clone(),
+            cylinder.clone(),
+            crate::OperationSettings::new(),
+        )
+        .unwrap()
+        .into_result()
+        .unwrap();
+        let super::super::dispatch::BooleanPipelineOutcome::Curved(
+            CurvedBooleanPipelineOutcome::Committed(committed),
+        ) = outcome
+        else {
+            panic!("unexpected ordered subtract outcome: {outcome:?}")
+        };
+        assert_eq!(committed.bodies.len(), 2);
+        assert_eq!(committed.full_checks.len(), 2);
+        assert!(
+            committed
+                .full_checks
+                .iter()
+                .all(|check| check.report().outcome() == CheckOutcome::Valid)
+        );
+        let after = signature(&session);
+        assert_eq!(after.0, before.0 + 2);
+        assert_eq!(after.1, before.1);
+        assert_eq!(after.2, before.2);
     }
 }

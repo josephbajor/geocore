@@ -34,6 +34,8 @@
 //! - [`euler`] — topology-internal Euler primitives and public result types;
 //!   external edits use [`transaction::Transaction`].
 //! - [`make`] — primitive body constructors.
+//! - [`analytic_shell`] — allocation-free, keyed preflight plans for bounded
+//!   Plane/Cylinder analytic shells.
 //! - [`planar`] — keyed, manifold planar-solid assembly for semantic builders.
 //! - [`cylindrical_band`] — proof-ready finite cylindrical-band assembly for
 //!   semantic builders retaining whole Plane/Cylinder rings.
@@ -55,6 +57,7 @@
 //! - `loop_proof` / `shell_proof` / `planar_shell_proof` — checker-v2 whole-entity certificates
 //!   kept private until their representation coverage is production-ready.
 
+pub mod analytic_shell;
 #[cfg(feature = "benchmark-internals")]
 #[doc(hidden)]
 pub mod benchmark;

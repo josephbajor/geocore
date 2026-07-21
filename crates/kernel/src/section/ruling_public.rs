@@ -38,9 +38,10 @@ impl SectionCarrierParameterInterval {
 
 /// Topology and parameter provenance for one ruling-fragment trim event.
 ///
-/// [`SectionSourceParameterKey`] is the exact identity used for joins. The
-/// edge and carrier parameter enclosures are supporting consistency and
-/// ordering evidence and never substitute for that identity.
+/// [`SectionSourceParameterKey`] owns both exact join identity and the
+/// canonical certified source-root scalar. The occurrence edge and carrier
+/// enclosures are supporting consistency and ordering evidence and never
+/// substitute for that operation-shared authority.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectionRulingTrimProvenance {
     pub(super) operand: usize,
