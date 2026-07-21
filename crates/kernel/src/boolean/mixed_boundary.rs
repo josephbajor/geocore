@@ -7,10 +7,11 @@
 //! across every Section cut in the certified connected dual graph.
 //!
 //! A cylinder-side annulus uses its topology-owned source ring as the same
-//! kind of anchor. Complete Section evidence proves that uncut cylinder caps
-//! have constant classification. Exterior caps enter the same generic truth
-//! selector as every other source fragment and retain the periodic side's
-//! endpoint-free whole-loop identity without inventing a seam vertex.
+//! kind of anchor. Complete Section evidence either proves an uncut cylinder
+//! cap has constant classification or splits a cut cap into exact disk cells.
+//! Both enter the same generic truth selector. Uncut caps retain the periodic
+//! side's endpoint-free whole-loop identity without inventing a seam vertex;
+//! cut caps retain their finite source-arc and Section-chord lineage.
 
 use std::collections::BTreeMap;
 
@@ -25,8 +26,12 @@ use super::boundary_select::{
     RegularizedBooleanOperation,
 };
 use super::curved_source::CertifiedCylinderSource;
+use super::disk_face_arrangement::{
+    ArrangedDiskFace, DiskCellClassification, arrange_section_disk_face,
+    classify_disk_face_from_anchor,
+};
 use super::extract::ExtractedPlanarSourceBody;
-use super::face_arrangement::ArrangementEdgeKey;
+use super::face_arrangement::{ArrangementDirection, ArrangementEdgeKey};
 use super::mixed_cap_boundary::{
     MixedCylinderCapRing, bind_cylinder_cap_rings, classified_exterior_cap,
 };
@@ -36,7 +41,7 @@ use super::mixed_face_arrangement::{
 };
 use super::mixed_periodic_arrangement::{
     MixedPeriodicArrangementError, MixedPeriodicFaceArrangement, PeriodicArrangementCellKey,
-    arrange_mixed_periodic_face,
+    PeriodicSourceLoopKey, arrange_mixed_periodic_face,
 };
 use super::mixed_shell_plan::{
     MixedArrangementBinding, MixedShellCellKey, MixedSourceFaceKey, source_face_key,
@@ -84,10 +89,23 @@ struct PreparedPeriodicFace {
     arrangement: MixedPeriodicFaceArrangement,
 }
 
+struct PreparedDiskFace {
+    face: FaceId,
+    operand: usize,
+    arrangement: ArrangedDiskFace,
+}
+
+struct PreparedCylinderCaps {
+    disks: Vec<PreparedDiskFace>,
+    uncut_boundaries: Vec<usize>,
+    classified: Vec<ClassifiedBoundaryFragment<MixedShellCellKey, ()>>,
+}
+
 /// Owned arrangements plus their complete open-cell classifications.
 pub(crate) struct PreparedMixedBoundary {
     planar: Vec<PreparedPlanarFace>,
     periodic: Vec<PreparedPeriodicFace>,
+    disks: Vec<PreparedDiskFace>,
     caps: Vec<MixedCylinderCapRing>,
     classified: Vec<ClassifiedBoundaryFragment<MixedShellCellKey, ()>>,
 }
@@ -111,6 +129,11 @@ impl PreparedMixedBoundary {
                         arrangement: &face.arrangement,
                     }),
             )
+            .chain(self.disks.iter().map(|face| MixedArrangementBinding::Disk {
+                face: face.face.clone(),
+                operand: face.operand,
+                arranged: &face.arrangement,
+            }))
             .chain(
                 self.caps
                     .iter()
@@ -126,10 +149,11 @@ impl PreparedMixedBoundary {
 
 /// Arrange and classify every planar-host face and the finite cylinder side.
 ///
-/// Each uncut cylinder cap is classified as one endpoint-free source cell.
-/// The proof plan retains its exact shared source-ring identity. Realization
-/// remains fail-closed until the analytic-shell adapter accepts endpoint-free
-/// edges; this boundary layer never changes set truth to hide that seam.
+/// Each uncut cylinder cap is classified as one endpoint-free source cell;
+/// each cap carrying complete transverse chord evidence is arranged as an
+/// exact disk and classified by its connected dual. The proof plan retains
+/// either exact shared source-ring identity or finite source-arc lineage.
+/// This boundary layer never changes set truth to hide a realization seam.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_mixed_bounded_arc_boundary(
     part: &Part<'_>,
@@ -214,15 +238,6 @@ pub(crate) fn prepare_mixed_bounded_arc_boundary(
             .map_err(MixedBoundaryError::PeriodicArrangement)?;
     let periodic_source = source_face_key(store, graph, &periodic_face, cylinder_operand)
         .map_err(|_| MixedBoundaryError::SourceTopology)?;
-    let cap_rings = bind_cylinder_cap_rings(
-        store,
-        graph,
-        cylinder,
-        cylinder_operand,
-        &periodic_face,
-        &periodic_arrangement,
-    )
-    .map_err(|_| MixedBoundaryError::SourceTopology)?;
     let periodic_classes = classify_periodic_face(
         part,
         graph,
@@ -242,15 +257,38 @@ pub(crate) fn prepare_mixed_bounded_arc_boundary(
         )
     }));
 
-    certify_exterior_cylinder_caps(
+    let PreparedCylinderCaps {
+        disks: prepared_disks,
+        uncut_boundaries: uncut_cap_boundaries,
+        classified: cap_classified,
+    } = prepare_cylinder_caps(
         part,
         graph,
-        &bodies[planar_operand],
+        bodies,
         cylinder,
+        planar_operand,
         cylinder_operand,
         linear,
         scope,
     )?;
+    classified.extend(cap_classified);
+
+    let cap_rings = if uncut_cap_boundaries.is_empty() {
+        Vec::new()
+    } else {
+        bind_cylinder_cap_rings(
+            store,
+            graph,
+            cylinder,
+            cylinder_operand,
+            &periodic_face,
+            &periodic_arrangement,
+        )
+        .map_err(|_| MixedBoundaryError::SourceTopology)?
+        .into_iter()
+        .filter(|ring| uncut_cap_boundaries.contains(&ring.boundary()))
+        .collect::<Vec<_>>()
+    };
     classified.extend(cap_rings.iter().map(|ring| {
         classified_exterior_cap(
             MixedShellCellKey::cylinder_cap(ring.cap_source(), ring.boundary()),
@@ -266,7 +304,74 @@ pub(crate) fn prepare_mixed_bounded_arc_boundary(
             source: periodic_source,
             arrangement: periodic_arrangement,
         }],
-        caps: cap_rings.into_iter().collect(),
+        disks: prepared_disks,
+        caps: cap_rings,
+        classified,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_cylinder_caps(
+    part: &Part<'_>,
+    graph: &BodySectionGraph,
+    bodies: &[BodyId; 2],
+    cylinder: &CertifiedCylinderSource,
+    planar_operand: usize,
+    cylinder_operand: usize,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<PreparedCylinderCaps, MixedBoundaryError> {
+    let store = &part.state.store;
+    let mut disks = Vec::new();
+    let mut uncut_boundaries = Vec::new();
+    let mut classified = Vec::new();
+    for (boundary_index, boundary) in cylinder.boundaries().iter().enumerate() {
+        let cap_face = FaceId::new(bodies[cylinder_operand].part().clone(), boundary.cap_face());
+        let cut = graph
+            .branches()
+            .iter()
+            .any(|branch| branch.faces()[cylinder_operand] == cap_face);
+        if !cut {
+            if classify_anchor(
+                part,
+                &bodies[planar_operand],
+                boundary.center(),
+                linear,
+                scope,
+            )? {
+                return Err(MixedBoundaryError::CylinderCapNotExterior);
+            }
+            uncut_boundaries.push(boundary_index);
+            continue;
+        }
+
+        let arrangement = arrange_section_disk_face(store, graph, &cap_face, cylinder_operand)
+            .map_err(|_| MixedBoundaryError::SourceTopology)?;
+        let source = source_face_key(store, graph, &cap_face, cylinder_operand)
+            .map_err(|_| MixedBoundaryError::SourceTopology)?;
+        let classes =
+            classify_disk_face(part, &bodies[planar_operand], &arrangement, linear, scope)?;
+        classified.extend(arrangement.arrangement().cells().iter().map(|cell| {
+            let classification = match classes[&cell.key()] {
+                DiskCellClassification::Interior => BoundaryFragmentClassification::Interior,
+                DiskCellClassification::Exterior => BoundaryFragmentClassification::Exterior,
+            };
+            ClassifiedBoundaryFragment::new(
+                MixedShellCellKey::disk(source, cell.key()),
+                operand_side(cylinder_operand),
+                (),
+                classification,
+            )
+        }));
+        disks.push(PreparedDiskFace {
+            face: cap_face,
+            operand: cylinder_operand,
+            arrangement,
+        });
+    }
+    Ok(PreparedCylinderCaps {
+        disks,
+        uncut_boundaries,
         classified,
     })
 }
@@ -314,9 +419,11 @@ fn classify_planar_face(
         .cells()
         .iter()
         .find(|cell| {
-            cell.boundary().uses().iter().any(
-                |use_| matches!(use_.edge(), ArrangementEdgeKey::Source(key) if key == span.key()),
-            )
+            cell.boundaries().iter().any(|boundary| {
+                boundary.uses().iter().any(
+                    |use_| matches!(use_.edge(), ArrangementEdgeKey::Source(key) if key == span.key()),
+                )
+            })
         })
         .map(|cell| cell.key())
         .ok_or(MixedBoundaryError::AnchorUnavailable)?;
@@ -348,41 +455,142 @@ fn classify_periodic_face(
             _ => None,
         })
         .ok_or(MixedBoundaryError::MissingPeriodicFaceEvidence)?;
-    let loop_id = certified.source_loops()[0].raw();
-    let loop_ = part
-        .state
-        .store
+    let source_span = arrangement
+        .source_spans()
+        .first()
+        .ok_or(MixedBoundaryError::AnchorUnavailable)?;
+    let source_loop = certified
+        .source_loops()
+        .get(source_span.key().topology_ordinal())
+        .ok_or(MixedBoundaryError::SourceTopology)?;
+    let owner = arrangement
+        .cells()
+        .iter()
+        .find(|cell| {
+            cell.boundaries().iter().any(|boundary| {
+                boundary.uses().iter().any(|use_| {
+                    matches!(
+                        use_.edge(),
+                        ArrangementEdgeKey::Source(key) if key == source_span.key()
+                    ) && use_.direction() == ArrangementDirection::Forward
+                })
+            })
+        })
+        .map(|cell| *cell.key())
+        .ok_or(MixedBoundaryError::AnchorUnavailable)?;
+    let point =
+        periodic_source_span_point(&part.state.store, source_loop.raw(), *source_span.key())?;
+    let anchor = classify_anchor(part, other, point, linear, scope)?;
+    propagate_periodic(arrangement, owner, anchor)
+}
+
+fn periodic_source_span_point(
+    store: &Store,
+    loop_id: ktopo::entity::LoopId,
+    source: PeriodicSourceLoopKey,
+) -> Result<Point3, MixedBoundaryError> {
+    let loop_ = store
         .get(loop_id)
         .map_err(|_| MixedBoundaryError::SourceTopology)?;
     let [fin_id] = loop_.fins() else {
         return Err(MixedBoundaryError::SourceTopology);
     };
-    let fin = part
-        .state
-        .store
+    let fin = store
         .get(*fin_id)
         .map_err(|_| MixedBoundaryError::SourceTopology)?;
-    let edge = part
-        .state
-        .store
+    let edge = store
         .get(fin.edge())
         .map_err(|_| MixedBoundaryError::SourceTopology)?;
     let curve_id = edge.curve().ok_or(MixedBoundaryError::SourceTopology)?;
-    let CurveGeom::Circle(circle) = part
-        .state
-        .store
+    let CurveGeom::Circle(circle) = store
         .get(curve_id)
         .map_err(|_| MixedBoundaryError::SourceTopology)?
     else {
         return Err(MixedBoundaryError::SourceTopology);
     };
-    let point = circle.eval(circle.param_range().lo);
-    let anchor = classify_anchor(part, other, point, linear, scope)?;
-    propagate_periodic(
-        arrangement,
-        PeriodicArrangementCellKey::AnnularRemainder,
-        anchor,
+    let Some(roots) = source.terminal_roots() else {
+        return source
+            .is_whole_loop()
+            .then(|| circle.eval(circle.param_range().lo))
+            .ok_or(MixedBoundaryError::SourceTopology);
+    };
+    let lifted = roots.map(|root| {
+        let shift = root.cylinder_chart_shift() as f64 * core::f64::consts::TAU;
+        let enclosure = root.root_enclosure();
+        [enclosure[0] + shift, enclosure[1] + shift]
+    });
+    let open = if lifted[0][1] < lifted[1][0] {
+        [lifted[0][1], lifted[1][0]]
+    } else if lifted[1][1] < lifted[0][0] {
+        [lifted[1][1], lifted[0][0]]
+    } else {
+        return Err(MixedBoundaryError::AnchorUnavailable);
+    };
+    let parameter = open[0] * 0.5 + open[1] * 0.5;
+    if !parameter.is_finite() || parameter <= open[0] || parameter >= open[1] {
+        return Err(MixedBoundaryError::AnchorUnavailable);
+    }
+    Ok(circle.eval(parameter))
+}
+
+fn classify_disk_face(
+    part: &Part<'_>,
+    other: &BodyId,
+    disk: &ArrangedDiskFace,
+    linear: f64,
+    scope: &mut OperationScope<'_, '_>,
+) -> Result<BTreeMap<usize, DiskCellClassification>, MixedBoundaryError> {
+    let anchor_arc = disk
+        .source_arcs()
+        .first()
+        .ok_or(MixedBoundaryError::AnchorUnavailable)?;
+    let point = disk_source_arc_point(&part.state.store, anchor_arc)?;
+    let anchor = if classify_anchor(part, other, point, linear, scope)? {
+        DiskCellClassification::Interior
+    } else {
+        DiskCellClassification::Exterior
+    };
+    Ok(
+        classify_disk_face_from_anchor(disk, anchor_arc.key(), anchor)
+            .map_err(|_| MixedBoundaryError::SourceTopology)?
+            .classes()
+            .clone(),
     )
+}
+
+fn disk_source_arc_point(
+    store: &Store,
+    source: &super::disk_face_arrangement::DiskSourceArcLineage,
+) -> Result<Point3, MixedBoundaryError> {
+    let edge = store
+        .get(source.edge())
+        .map_err(|_| MixedBoundaryError::SourceTopology)?;
+    let curve = edge.curve().ok_or(MixedBoundaryError::SourceTopology)?;
+    let CurveGeom::Circle(circle) = store
+        .get(curve)
+        .map_err(|_| MixedBoundaryError::SourceTopology)?
+    else {
+        return Err(MixedBoundaryError::SourceTopology);
+    };
+    let roots = source.roots();
+    let shifts = source.period_shifts();
+    let lifted = [0, 1].map(|index| {
+        let shift = f64::from(shifts[index]) * core::f64::consts::TAU;
+        let enclosure = roots[index].root_enclosure();
+        [enclosure[0] + shift, enclosure[1] + shift]
+    });
+    let open = if lifted[0][1] < lifted[1][0] {
+        [lifted[0][1], lifted[1][0]]
+    } else if lifted[1][1] < lifted[0][0] {
+        [lifted[1][1], lifted[0][0]]
+    } else {
+        return Err(MixedBoundaryError::AnchorUnavailable);
+    };
+    let parameter = open[0] * 0.5 + open[1] * 0.5;
+    if !parameter.is_finite() || parameter <= open[0] || parameter >= open[1] {
+        return Err(MixedBoundaryError::AnchorUnavailable);
+    }
+    Ok(circle.eval(parameter))
 }
 
 fn source_span_point(
@@ -498,30 +706,6 @@ fn propagate_pair<K: Copy + Ord>(
     }
 }
 
-fn certify_exterior_cylinder_caps(
-    part: &Part<'_>,
-    graph: &BodySectionGraph,
-    other: &BodyId,
-    cylinder: &CertifiedCylinderSource,
-    cylinder_operand: usize,
-    linear: f64,
-    scope: &mut OperationScope<'_, '_>,
-) -> Result<(), MixedBoundaryError> {
-    for boundary in cylinder.boundaries() {
-        if graph
-            .branches()
-            .iter()
-            .any(|branch| branch.faces()[cylinder_operand].raw() == boundary.cap_face())
-        {
-            return Err(MixedBoundaryError::CylinderCapNotExterior);
-        }
-        if classify_anchor(part, other, boundary.center(), linear, scope)? {
-            return Err(MixedBoundaryError::CylinderCapNotExterior);
-        }
-    }
-    Ok(())
-}
-
 /// Whether generic set truth omits an exterior source cap.
 ///
 /// Retained for a focused truth-table proof. Production cap fragments now go
@@ -564,7 +748,11 @@ mod tests {
     use super::super::extract::extract_planar_source_body;
     use super::super::mixed_shell_plan::{
         MixedShellCellKind, MixedShellEdgeKey, MixedShellVertexKey,
-        materialize::prepare_mixed_shell_materialization, plan_mixed_shell,
+        materialize::{
+            MixedShellScalarInputs, materialize_mixed_shell_input,
+            prepare_mixed_shell_materialization,
+        },
+        plan_mixed_shell,
     };
     use super::*;
     use crate::{BlockRequest, CylinderRequest, Kernel, SectionBodiesRequest};
@@ -739,6 +927,203 @@ mod tests {
                 2,
                 "materialization must retain both endpoint-free rings without seam vertices"
             );
+        }
+    }
+
+    #[test]
+    fn cap_disk_classification_toggles_across_each_exact_chord_in_both_orders() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let (block, cylinder) = {
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let block = edit
+                .create_block(BlockRequest::new(
+                    Frame::world().with_origin(kgeom::vec::Point3::new(1.5, 0.0, 1.0)),
+                    [2.0, 6.0, 4.0],
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            let cylinder = edit
+                .create_cylinder(CylinderRequest::new(Frame::world(), 1.5, 2.0))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            (block, cylinder)
+        };
+
+        for (bodies, cylinder_operand) in [
+            ([block.clone(), cylinder.clone()], 1usize),
+            ([cylinder.clone(), block.clone()], 0usize),
+        ] {
+            let graph = session
+                .part(part_id.clone())
+                .unwrap()
+                .section_bodies(SectionBodiesRequest::new(
+                    bodies[0].clone(),
+                    bodies[1].clone(),
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            let part = session.part(part_id.clone()).unwrap();
+            let context = OperationContext::new(part.policy(), Tolerances::default())
+                .unwrap()
+                .with_family_budget_defaults(super::super::BooleanBudgetProfile::v1_defaults());
+            let mut scope = OperationScope::new(&context);
+            let cylinder_source =
+                match extract_cylinder_source(&part.state.store, cylinder.raw(), &mut scope)
+                    .unwrap()
+                {
+                    CylinderSourceOutcome::Ready(source) => source,
+                    other => panic!("unexpected cylinder extraction: {other:?}"),
+                };
+
+            let planar_operand = 1 - cylinder_operand;
+            let caps = prepare_cylinder_caps(
+                &part,
+                &graph,
+                &bodies,
+                &cylinder_source,
+                planar_operand,
+                cylinder_operand,
+                context.tolerances().linear(),
+                &mut scope,
+            )
+            .unwrap();
+            assert!(caps.uncut_boundaries.is_empty());
+            for disk in &caps.disks {
+                assert_eq!(disk.arrangement.arrangement().cells().len(), 2);
+            }
+            let prepared = PreparedMixedBoundary {
+                planar: Vec::new(),
+                periodic: Vec::new(),
+                disks: caps.disks,
+                caps: Vec::new(),
+                classified: caps.classified,
+            };
+            assert_eq!(prepared.disks.len(), 2);
+            assert!(prepared.caps.is_empty());
+            assert_eq!(
+                prepared
+                    .bindings()
+                    .iter()
+                    .filter(|binding| matches!(binding, MixedArrangementBinding::Disk { .. }))
+                    .count(),
+                2
+            );
+            for operation in [
+                RegularizedBooleanOperation::Unite,
+                RegularizedBooleanOperation::Intersect,
+            ] {
+                let selected = select_boundary_fragments(operation, prepared.classified()).unwrap();
+                assert_eq!(
+                    selected
+                        .iter()
+                        .filter(|fragment| {
+                            matches!(fragment.key().cell(), MixedShellCellKind::Disk(_))
+                        })
+                        .count(),
+                    2,
+                    "one truth-selected disk cell per cap for {operation:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cap_crossing_selection_preflights_one_mixed_shell_in_both_orders() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let (block, cylinder) = {
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let block = edit
+                .create_block(BlockRequest::new(
+                    Frame::world().with_origin(kgeom::vec::Point3::new(1.5, 0.0, 1.0)),
+                    [2.0, 6.0, 4.0],
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            let cylinder = edit
+                .create_cylinder(CylinderRequest::new(Frame::world(), 1.5, 2.0))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            (block, cylinder)
+        };
+
+        for (bodies, planar_operand, cylinder_operand) in [
+            ([block.clone(), cylinder.clone()], 0usize, 1usize),
+            ([cylinder.clone(), block.clone()], 1usize, 0usize),
+        ] {
+            let graph = session
+                .part(part_id.clone())
+                .unwrap()
+                .section_bodies(SectionBodiesRequest::new(
+                    bodies[0].clone(),
+                    bodies[1].clone(),
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap();
+            let part = session.part(part_id.clone()).unwrap();
+            let context = OperationContext::new(part.policy(), Tolerances::default())
+                .unwrap()
+                .with_family_budget_defaults(super::super::BooleanBudgetProfile::v1_defaults());
+            let mut scope = OperationScope::new(&context);
+            let planar = extract_planar_source_body(
+                &part,
+                block.clone(),
+                u8::try_from(planar_operand).unwrap(),
+                &mut scope,
+            )
+            .unwrap();
+            let cylinder_source =
+                match extract_cylinder_source(&part.state.store, cylinder.raw(), &mut scope)
+                    .unwrap()
+                {
+                    CylinderSourceOutcome::Ready(source) => source,
+                    other => panic!("unexpected cylinder extraction: {other:?}"),
+                };
+            let prepared = prepare_mixed_bounded_arc_boundary(
+                &part,
+                &graph,
+                &bodies,
+                &planar,
+                &cylinder_source,
+                planar_operand,
+                cylinder_operand,
+                RegularizedBooleanOperation::Intersect,
+                context.tolerances().linear(),
+                &mut scope,
+            )
+            .unwrap();
+            let selected = select_boundary_fragments(
+                RegularizedBooleanOperation::Intersect,
+                prepared.classified(),
+            )
+            .unwrap();
+            let plan =
+                plan_mixed_shell(&part.state.store, &graph, prepared.bindings(), selected).unwrap();
+            assert!(
+                plan.materialization_gaps().is_empty(),
+                "{:?}",
+                plan.materialization_gaps()
+            );
+            let blueprint = prepare_mixed_shell_materialization(&plan, &part.state.store).unwrap();
+            assert_eq!(blueprint.edges().len(), 6);
+            materialize_mixed_shell_input(
+                &plan,
+                &part.state.store,
+                &MixedShellScalarInputs::empty(),
+                context.tolerances().linear(),
+            )
+            .unwrap();
         }
     }
 }

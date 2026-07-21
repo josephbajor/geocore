@@ -27,13 +27,13 @@ use super::super::mixed_cap_boundary::MixedCylinderCapRing;
 use super::super::mixed_periodic_arrangement::PeriodicSourceLoopKey;
 use super::components::MixedShellComponent;
 use super::{
-    ArrangementDirection, MixedArrangementBinding, MixedPcurveLineage, MixedSectionEdgePlan,
-    MixedShellEdgeKey, MixedShellFacePlan, MixedShellMaterializationGap, MixedShellProofPlan,
-    MixedShellVertexKey, MixedSourceFaceKey, MixedSourceParameterEvidence, MixedSourceSpanKey,
-    SelectedOrientation,
+    ArrangementDirection, MixedArrangementBinding, MixedBoundedSourceSpanPlan, MixedPcurveLineage,
+    MixedSectionEdgePlan, MixedShellEdgeKey, MixedShellFacePlan, MixedShellMaterializationGap,
+    MixedShellProofPlan, MixedShellVertexKey, MixedSourceFaceKey, MixedSourceParameterEvidence,
+    MixedSourceSpanKey, SelectedOrientation,
 };
 use crate::{
-    BodySectionGraph, SectionCarrier, SectionCurveEndpointTopology,
+    BodySectionGraph, SectionCarrier, SectionCurveEndpointTopology, SectionCurveFragmentSpan,
     SectionPeriodicFaceEmbeddingEvidence, SectionUvCurve,
 };
 
@@ -464,6 +464,7 @@ fn intern_vertex(
 pub(super) fn retain_materialization_evidence(
     faces: &[MixedShellFacePlan],
     arrangements: &BTreeMap<MixedSourceFaceKey, MixedArrangementBinding<'_>>,
+    bounded_source_spans: &[MixedBoundedSourceSpanPlan],
     graph: &BodySectionGraph,
     section_edges: &[MixedSectionEdgePlan],
 ) -> RetainedMaterializationEvidence {
@@ -476,7 +477,7 @@ pub(super) fn retain_materialization_evidence(
             _ => None,
         })
         .collect::<BTreeSet<_>>();
-    let source_spans = used
+    let mut source_spans = used
         .into_iter()
         .filter_map(|(source, span)| {
             let MixedArrangementBinding::Planar { lineage, .. } = arrangements.get(&source)? else {
@@ -529,7 +530,20 @@ pub(super) fn retain_materialization_evidence(
                 range,
             })
         })
-        .collect();
+        .collect::<Vec<_>>();
+    source_spans.extend(bounded_source_spans.iter().map(|item| RetainedPlanarSpan {
+        source: item.source(),
+        span: item.span().clone(),
+        loop_id: item.loop_id(),
+        fin: item.fin(),
+        edge: item.edge(),
+        range: item.roots().map(|root| RetainedSpanParameter::SectionRoot {
+            endpoint: root.endpoint(),
+            enclosure_bits: root.enclosure().map(f64::to_bits),
+            parameter_bits: root.parameter().to_bits(),
+            period_shift: root.period_shift(),
+        }),
+    }));
     let section_trims = section_edges
         .iter()
         .map(|edge| {
@@ -543,6 +557,11 @@ pub(super) fn retain_materialization_evidence(
                     face.components()
                         .iter()
                         .flat_map(|component| component.fragments())
+                        .chain(
+                            face.boundary_traces()
+                                .iter()
+                                .flat_map(|trace| trace.fragments()),
+                        )
                         .find(|fragment| fragment.fragment() == edge.fragment_index())
                         .map(|fragment| {
                             fragment
@@ -550,7 +569,8 @@ pub(super) fn retain_materialization_evidence(
                                 .each_ref()
                                 .map(|trim| (trim.carrier_parameter(), trim.point()))
                         })
-                });
+                })
+                .or_else(|| retained_ruling_trim_scalars(edge.fragment()));
             RetainedSectionTrim {
                 fragment: edge.fragment_index(),
                 endpoints: edge.endpoints(),
@@ -562,6 +582,34 @@ pub(super) fn retain_materialization_evidence(
         source_spans,
         section_trims,
     }
+}
+
+fn retained_ruling_trim_scalars(
+    fragment: &crate::SectionCurveFragment,
+) -> Option<[(f64, Point3); 2]> {
+    let SectionCurveFragmentSpan::LineSegment { endpoints } = fragment.span() else {
+        return None;
+    };
+    let values = endpoints.each_ref().map(|end| {
+        let parameter = end.carrier_parameter();
+        if !parameter.is_finite() {
+            return None;
+        }
+        let trims = end.trims().iter().flatten().collect::<Vec<_>>();
+        if trims.is_empty()
+            || trims.iter().any(|trim| {
+                let enclosure = trim.carrier_parameter();
+                !enclosure.lo().is_finite()
+                    || !enclosure.hi().is_finite()
+                    || parameter < enclosure.lo()
+                    || parameter > enclosure.hi()
+            })
+        {
+            return None;
+        }
+        Some((parameter, end.point()))
+    });
+    Some([values[0]?, values[1]?])
 }
 
 fn opposite(direction: ArrangementDirection) -> ArrangementDirection {

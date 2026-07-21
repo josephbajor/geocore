@@ -82,8 +82,9 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    compares 15/15 in Onshape at writer `fedf1ab`. Proof-keyed disk-cap chords
    now feed count-independent exact disk arrangements with source-arc lineage
    and period-lifted realization. Certified maximal transverse annulus traces
-   now retain exact source-loop roots, lifted charts, and count-independent
-   noncrossing proof. Next: adopt the selected disk and periodic cells in mixed-shell planning/materialization and Full-commit the public slice.)*
+   and exact nested line-cycle planar cells now lower through shared finite
+   source arcs. Cap-crossing Intersect Full-commits at 4F/6E/4V across both
+   rigid frames/orders with deterministic X_T and Fast self-import. Next: extend the same cells through Unite/Subtract and queue the oracle payload.)*
 
 Work that does not advance the queue head needs an explicit justification
 linking it to a rung ("rung 2 needs curve/curve overlap dedup because …").

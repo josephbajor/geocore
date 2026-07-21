@@ -8,18 +8,21 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use kcore::predicates::{Orientation, affine_dot3};
+use kcore::predicates::{Orientation, affine_dot3, orient2d, polygon_orientation2d};
+use kgeom::curve2d::Curve2d;
 use ktopo::entity::{
     EdgeId as RawEdgeId, FaceId as RawFaceId, FinId as RawFinId, LoopId as RawLoopId, Sense,
     VertexId as RawVertexId,
 };
-use ktopo::geom::SurfaceGeom;
+use ktopo::geom::{Curve2dGeom, SurfaceGeom};
 use ktopo::store::Store;
 
 use super::face_arrangement::{
-    ArrangementDartKey, ArrangementDirection, CertifiedEndpointRotation, DirectedCutFragment,
-    DirectedSourceSpan, FaceArrangement, FaceArrangementError, FaceArrangementInput,
-    arrange_bounded_face,
+    ArrangementCycle, ArrangementDartKey, ArrangementDirection, CertifiedCellTopology,
+    CertifiedCycleAssignment, CertifiedCycleSide, CertifiedEndpointRotation,
+    CertifiedSurfaceEmbedding, DirectedCutFragment, DirectedSourceSpan, FaceArrangement,
+    FaceArrangementError, FaceArrangementInput, SurfaceArrangementError, SurfaceFaceArrangement,
+    arrange_bounded_face, arrange_bounded_surface,
 };
 use crate::section::{
     BodySectionGraph, SectionCompletion, SectionCurveEndpointTopology, SectionCurveFragment,
@@ -48,9 +51,130 @@ pub(crate) enum MixedArrangementVertex {
     SectionEndpoint(usize),
 }
 
-/// Certified planar arrangement produced for one source face.
-pub(crate) type MixedPlanarFaceArrangement =
+type ConnectedPlanarArrangement =
     FaceArrangement<MixedSourceSpanKey, MixedCutFragmentKey, MixedArrangementVertex>;
+type EmbeddedPlanarArrangement =
+    SurfaceFaceArrangement<MixedSourceSpanKey, MixedCutFragmentKey, MixedArrangementVertex, usize>;
+type EmbeddedPlanarError =
+    SurfaceArrangementError<MixedSourceSpanKey, MixedCutFragmentKey, MixedArrangementVertex, usize>;
+
+/// One exact planar cell, including every disconnected boundary cycle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MixedPlanarArrangementCell {
+    key: usize,
+    boundaries:
+        Vec<ArrangementCycle<MixedSourceSpanKey, MixedCutFragmentKey, MixedArrangementVertex>>,
+}
+
+impl MixedPlanarArrangementCell {
+    pub(crate) const fn key(&self) -> usize {
+        self.key
+    }
+
+    pub(crate) fn boundaries(
+        &self,
+    ) -> &[ArrangementCycle<MixedSourceSpanKey, MixedCutFragmentKey, MixedArrangementVertex>] {
+        &self.boundaries
+    }
+
+    #[cfg(test)]
+    fn boundary(
+        &self,
+    ) -> &ArrangementCycle<MixedSourceSpanKey, MixedCutFragmentKey, MixedArrangementVertex> {
+        assert_eq!(self.boundaries.len(), 1);
+        &self.boundaries[0]
+    }
+}
+
+/// Exact cells on the forward and reverse sides of one planar cut fragment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MixedPlanarCutAdjacency {
+    cut: MixedCutFragmentKey,
+    forward_cell: usize,
+    reverse_cell: usize,
+}
+
+impl MixedPlanarCutAdjacency {
+    pub(crate) const fn cut(&self) -> &MixedCutFragmentKey {
+        &self.cut
+    }
+
+    pub(crate) const fn forward_cell(&self) -> usize {
+        self.forward_cell
+    }
+
+    pub(crate) const fn reverse_cell(&self) -> usize {
+        self.reverse_cell
+    }
+}
+
+/// Representation-independent proof summary used by focused adapter tests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MixedPlanarArrangementProof {
+    source_spans_conserved: usize,
+    opposed_cut_pairs: usize,
+    closed_cycles: usize,
+    exterior_cycles: usize,
+    dual_connected: bool,
+}
+
+impl MixedPlanarArrangementProof {
+    pub(crate) const fn source_spans_conserved(&self) -> usize {
+        self.source_spans_conserved
+    }
+
+    pub(crate) const fn opposed_cut_pairs(&self) -> usize {
+        self.opposed_cut_pairs
+    }
+
+    pub(crate) const fn closed_cycles(&self) -> usize {
+        self.closed_cycles
+    }
+
+    pub(crate) const fn exterior_cycles(&self) -> usize {
+        self.exterior_cycles
+    }
+
+    pub(crate) const fn dual_connected(&self) -> bool {
+        self.dual_connected
+    }
+}
+
+/// Certified planar arrangement produced for one source face.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MixedPlanarFaceArrangement {
+    source_spans: Vec<DirectedSourceSpan<MixedSourceSpanKey, MixedArrangementVertex>>,
+    cut_fragments: Vec<DirectedCutFragment<MixedCutFragmentKey, MixedArrangementVertex>>,
+    cells: Vec<MixedPlanarArrangementCell>,
+    adjacency: Vec<MixedPlanarCutAdjacency>,
+    proof: MixedPlanarArrangementProof,
+}
+
+impl MixedPlanarFaceArrangement {
+    pub(crate) fn source_spans(
+        &self,
+    ) -> &[DirectedSourceSpan<MixedSourceSpanKey, MixedArrangementVertex>] {
+        &self.source_spans
+    }
+
+    pub(crate) fn cut_fragments(
+        &self,
+    ) -> &[DirectedCutFragment<MixedCutFragmentKey, MixedArrangementVertex>] {
+        &self.cut_fragments
+    }
+
+    pub(crate) fn cells(&self) -> &[MixedPlanarArrangementCell] {
+        &self.cells
+    }
+
+    pub(crate) fn adjacency(&self) -> &[MixedPlanarCutAdjacency] {
+        &self.adjacency
+    }
+
+    pub(crate) const fn proof(&self) -> &MixedPlanarArrangementProof {
+        &self.proof
+    }
+}
 
 /// Exact parameter authority at one end of a topology-owned source span.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,6 +327,9 @@ pub(crate) enum MixedFaceArrangementError {
     IncompatibleRootOrder(RawEdgeId),
     UnassignedRootProvenance(usize),
     InteriorCrossingProofRequired(Vec<MixedCutFragmentKey>),
+    InteriorCycleEmbeddingRequired(Vec<MixedCutFragmentKey>),
+    InteriorCycleOrientationRequired(Vec<MixedCutFragmentKey>),
+    SourceBoundaryOrientationRequired,
     OpenCutEndpoint(MixedArrangementVertex),
     BranchedCutEndpoint(MixedArrangementVertex),
     InconsistentCutDirection(MixedArrangementVertex),
@@ -210,6 +337,7 @@ pub(crate) enum MixedFaceArrangementError {
     Arrangement(
         FaceArrangementError<MixedSourceSpanKey, MixedCutFragmentKey, MixedArrangementVertex>,
     ),
+    EmbeddedArrangement(EmbeddedPlanarError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,7 +361,7 @@ struct CutEndpointEvidence {
     boundary_root: Option<BoundaryRootEvidence>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum EvidenceEndpoint {
     SourceVertex(RawVertexId),
     SectionEndpoint(usize),
@@ -252,6 +380,7 @@ enum CutEmbedding {
         branch: usize,
         origin: [f64; 2],
         direction: [f64; 2],
+        endpoints: [[f64; 2]; 2],
     },
     Circle {
         branch: usize,
@@ -398,6 +527,15 @@ fn adapt_fragment(
     let branch = graph.branches().get(fragment.branch()).ok_or(
         MixedFaceArrangementError::MissingSectionBranch(fragment.branch()),
     )?;
+    let carrier_parameters = match fragment.span() {
+        SectionCurveFragmentSpan::Whole => None,
+        SectionCurveFragmentSpan::Arc { endpoints, .. } => {
+            Some(endpoints.each_ref().map(|end| end.carrier_parameter()))
+        }
+        SectionCurveFragmentSpan::LineSegment { endpoints } => {
+            Some(endpoints.each_ref().map(|end| end.carrier_parameter()))
+        }
+    };
     let occurrences = match fragment.span() {
         SectionCurveFragmentSpan::Whole => {
             return Err(MixedFaceArrangementError::WholeFragment(key));
@@ -438,10 +576,17 @@ fn adapt_fragment(
         (SectionCurveFragmentSpan::LineSegment { .. }, SectionUvCurve::Line(line)) => {
             let origin = line.origin();
             let direction = line.direction();
+            let parameters = carrier_parameters.ok_or(
+                MixedFaceArrangementError::EndpointSiteMismatch(start_endpoint(&start)),
+            )?;
             CutEmbedding::Line {
                 branch: fragment.branch(),
                 origin: [origin.x, origin.y],
                 direction: [direction.x, direction.y],
+                endpoints: parameters.map(|parameter| {
+                    let point = origin + direction * parameter;
+                    [point.x, point.y]
+                }),
             }
         }
         (SectionCurveFragmentSpan::Arc { .. }, SectionUvCurve::Circle(_)) => CutEmbedding::Circle {
@@ -592,12 +737,19 @@ fn arrange_planar_face_evidence_with_lineage(
         })
         .collect::<Result<Vec<_>, MixedFaceArrangementError>>()?;
     let rotations = build_rotations(&split.spans, &cut_fragments)?;
-    let arrangement = arrange_bounded_face(FaceArrangementInput::new(
-        split.spans,
-        cut_fragments,
-        rotations,
-    ))
-    .map_err(MixedFaceArrangementError::Arrangement)?;
+    let source_anchor = split
+        .spans
+        .first()
+        .map(|span| span.key().clone())
+        .ok_or(MixedFaceArrangementError::EmptySourceLoop)?;
+    let input = FaceArrangementInput::new(split.spans, cut_fragments, rotations);
+    let arrangement = match arrange_bounded_face(input.clone()) {
+        Ok(arrangement) => normalize_connected_arrangement(arrangement),
+        Err(FaceArrangementError::DisconnectedPrimal) => {
+            arrange_interior_planar_surface(store, face, &cuts, source_anchor, input)?
+        }
+        Err(error) => return Err(MixedFaceArrangementError::Arrangement(error)),
+    };
     Ok(MixedPlanarFaceOutput {
         arrangement,
         lineage: MixedPlanarSourceLineage {
@@ -607,11 +759,359 @@ fn arrange_planar_face_evidence_with_lineage(
     })
 }
 
+fn normalize_connected_arrangement(
+    arrangement: ConnectedPlanarArrangement,
+) -> MixedPlanarFaceArrangement {
+    let proof = arrangement.proof();
+    MixedPlanarFaceArrangement {
+        source_spans: arrangement.source_spans().to_vec(),
+        cut_fragments: arrangement.cut_fragments().to_vec(),
+        cells: arrangement
+            .cells()
+            .iter()
+            .map(|cell| MixedPlanarArrangementCell {
+                key: cell.key(),
+                boundaries: vec![cell.boundary().clone()],
+            })
+            .collect(),
+        adjacency: arrangement
+            .adjacency()
+            .iter()
+            .map(|edge| MixedPlanarCutAdjacency {
+                cut: edge.cut().clone(),
+                forward_cell: edge.forward_cell(),
+                reverse_cell: edge.reverse_cell(),
+            })
+            .collect(),
+        proof: MixedPlanarArrangementProof {
+            source_spans_conserved: proof.source_spans_conserved(),
+            opposed_cut_pairs: proof.opposed_cut_pairs(),
+            closed_cycles: proof.closed_cycles(),
+            exterior_cycles: proof.exterior_cycles(),
+            dual_connected: proof.dual_connected(),
+        },
+    }
+}
+
+fn normalize_embedded_arrangement(
+    arrangement: EmbeddedPlanarArrangement,
+) -> MixedPlanarFaceArrangement {
+    let proof = arrangement.proof();
+    MixedPlanarFaceArrangement {
+        source_spans: arrangement.source_spans().to_vec(),
+        cut_fragments: arrangement.cut_fragments().to_vec(),
+        cells: arrangement
+            .cells()
+            .iter()
+            .map(|cell| MixedPlanarArrangementCell {
+                key: *cell.key(),
+                boundaries: cell.boundaries().to_vec(),
+            })
+            .collect(),
+        adjacency: arrangement
+            .adjacency()
+            .iter()
+            .map(|edge| MixedPlanarCutAdjacency {
+                cut: edge.cut().clone(),
+                forward_cell: *edge.forward_cell(),
+                reverse_cell: *edge.reverse_cell(),
+            })
+            .collect(),
+        proof: MixedPlanarArrangementProof {
+            source_spans_conserved: proof.source_spans_conserved(),
+            opposed_cut_pairs: proof.opposed_cut_pairs(),
+            closed_cycles: proof.closed_cycles(),
+            exterior_cycles: proof.exterior_cycles(),
+            dual_connected: proof.dual_connected(),
+        },
+    }
+}
+
+#[derive(Debug)]
+struct InteriorLineCycle {
+    anchor: MixedCutFragmentKey,
+    orientation: Orientation,
+    points: Vec<[f64; 2]>,
+}
+
+fn arrange_interior_planar_surface(
+    store: &Store,
+    face: RawFaceId,
+    cuts: &[FaceCutEvidence],
+    source_anchor: MixedSourceSpanKey,
+    input: FaceArrangementInput<MixedSourceSpanKey, MixedCutFragmentKey, MixedArrangementVertex>,
+) -> Result<MixedPlanarFaceArrangement, MixedFaceArrangementError> {
+    let keys = || cuts.iter().map(|cut| cut.key.clone()).collect::<Vec<_>>();
+    if cuts.iter().flat_map(|cut| &cut.endpoints).any(|endpoint| {
+        endpoint.boundary_root.is_some()
+            || !matches!(endpoint.vertex, EvidenceEndpoint::SectionEndpoint(_))
+    }) {
+        return Err(MixedFaceArrangementError::InteriorCycleEmbeddingRequired(
+            keys(),
+        ));
+    }
+    let cycles = collect_interior_line_cycles(cuts)?;
+    let source_orientation = source_boundary_orientation(store, face)?;
+    let containment = cycle_containment(&cycles)?;
+    let parents = immediate_cycle_parents(&containment)
+        .ok_or_else(|| MixedFaceArrangementError::InteriorCycleEmbeddingRequired(keys()))?;
+    let mut child_counts = vec![0usize; cycles.len() + 1];
+    for parent in &parents {
+        child_counts[parent.map_or(0, |parent| parent + 1)] += 1;
+    }
+
+    let mut assignments = vec![
+        CertifiedCycleAssignment::new(
+            ArrangementDartKey::source(source_anchor.clone(), ArrangementDirection::Forward),
+            CertifiedCycleSide::Cell(0usize),
+        ),
+        CertifiedCycleAssignment::new(
+            ArrangementDartKey::source(source_anchor, ArrangementDirection::Reverse),
+            CertifiedCycleSide::Exterior,
+        ),
+    ];
+    for (index, cycle) in cycles.iter().enumerate() {
+        let interior = index + 1;
+        let exterior = parents[index].map_or(0, |parent| parent + 1);
+        let (forward, reverse) = if cycle.orientation == source_orientation {
+            (interior, exterior)
+        } else {
+            (exterior, interior)
+        };
+        assignments.push(CertifiedCycleAssignment::new(
+            ArrangementDartKey::cut(cycle.anchor.clone(), ArrangementDirection::Forward),
+            CertifiedCycleSide::Cell(forward),
+        ));
+        assignments.push(CertifiedCycleAssignment::new(
+            ArrangementDartKey::cut(cycle.anchor.clone(), ArrangementDirection::Reverse),
+            CertifiedCycleSide::Cell(reverse),
+        ));
+    }
+    let cells = child_counts
+        .into_iter()
+        .enumerate()
+        .map(|(key, children)| {
+            i64::try_from(children)
+                .ok()
+                .and_then(|children| 1_i64.checked_sub(children))
+                .map(|chi| CertifiedCellTopology::new(key, chi))
+                .ok_or_else(|| MixedFaceArrangementError::InteriorCycleEmbeddingRequired(keys()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let embedded =
+        arrange_bounded_surface(input, CertifiedSurfaceEmbedding::new(assignments, cells, 1))
+            .map_err(MixedFaceArrangementError::EmbeddedArrangement)?;
+    Ok(normalize_embedded_arrangement(embedded))
+}
+
+fn collect_interior_line_cycles(
+    cuts: &[FaceCutEvidence],
+) -> Result<Vec<InteriorLineCycle>, MixedFaceArrangementError> {
+    let keys = || cuts.iter().map(|cut| cut.key.clone()).collect::<Vec<_>>();
+    let mut starts = BTreeMap::new();
+    for (index, cut) in cuts.iter().enumerate() {
+        let Some(start) = section_endpoint(&cut.endpoints[0].vertex) else {
+            return Err(MixedFaceArrangementError::InteriorCycleOrientationRequired(
+                keys(),
+            ));
+        };
+        if !matches!(cut.embedding, CutEmbedding::Line { .. })
+            || starts.insert(start, index).is_some()
+        {
+            return Err(MixedFaceArrangementError::InteriorCycleOrientationRequired(
+                keys(),
+            ));
+        }
+    }
+    let mut unvisited = (0..cuts.len()).collect::<BTreeSet<_>>();
+    let mut cycles = Vec::new();
+    while let Some(first) = unvisited
+        .iter()
+        .min_by_key(|index| &cuts[**index].key)
+        .copied()
+    {
+        let mut current = first;
+        let mut points = Vec::new();
+        loop {
+            if !unvisited.remove(&current) {
+                return Err(MixedFaceArrangementError::InteriorCycleOrientationRequired(
+                    keys(),
+                ));
+            }
+            let CutEmbedding::Line { endpoints, .. } = &cuts[current].embedding else {
+                return Err(MixedFaceArrangementError::InteriorCycleOrientationRequired(
+                    keys(),
+                ));
+            };
+            points.push(endpoints[0]);
+            let end = section_endpoint(&cuts[current].endpoints[1].vertex).ok_or_else(|| {
+                MixedFaceArrangementError::InteriorCycleOrientationRequired(keys())
+            })?;
+            let next = *starts.get(&end).ok_or_else(|| {
+                MixedFaceArrangementError::InteriorCycleOrientationRequired(keys())
+            })?;
+            if next == first {
+                break;
+            }
+            current = next;
+        }
+        let orientation = polygon_orientation2d(&points);
+        if orientation == Orientation::Zero {
+            return Err(MixedFaceArrangementError::InteriorCycleOrientationRequired(
+                keys(),
+            ));
+        }
+        cycles.push(InteriorLineCycle {
+            anchor: cuts[first].key.clone(),
+            orientation,
+            points,
+        });
+    }
+    Ok(cycles)
+}
+
+const fn section_endpoint(endpoint: &EvidenceEndpoint) -> Option<usize> {
+    match endpoint {
+        EvidenceEndpoint::SectionEndpoint(endpoint) => Some(*endpoint),
+        EvidenceEndpoint::SourceVertex(_) => None,
+    }
+}
+
+fn source_boundary_orientation(
+    store: &Store,
+    face: RawFaceId,
+) -> Result<Orientation, MixedFaceArrangementError> {
+    let face = store
+        .get(face)
+        .map_err(|_| MixedFaceArrangementError::MissingSourceFace)?;
+    let [loop_id] = face.loops() else {
+        return Err(MixedFaceArrangementError::SourceBoundaryOrientationRequired);
+    };
+    let loop_ = store
+        .get(*loop_id)
+        .map_err(|_| MixedFaceArrangementError::SourceBoundaryOrientationRequired)?;
+    let mut points = Vec::with_capacity(loop_.fins().len());
+    for fin_id in loop_.fins() {
+        let fin = store
+            .get(*fin_id)
+            .map_err(|_| MixedFaceArrangementError::SourceBoundaryOrientationRequired)?;
+        let edge = store
+            .get(fin.edge())
+            .map_err(|_| MixedFaceArrangementError::SourceBoundaryOrientationRequired)?;
+        let (lo, hi) = edge
+            .bounds()
+            .ok_or(MixedFaceArrangementError::SourceBoundaryOrientationRequired)?;
+        let parameter = if fin.sense() == Sense::Forward {
+            lo
+        } else {
+            hi
+        };
+        let pcurve = fin
+            .pcurve()
+            .ok_or(MixedFaceArrangementError::SourceBoundaryOrientationRequired)?;
+        let mapped = pcurve.edge_to_pcurve().map(parameter);
+        let point = match store
+            .get(pcurve.curve())
+            .map_err(|_| MixedFaceArrangementError::SourceBoundaryOrientationRequired)?
+        {
+            Curve2dGeom::Line(line) => line.eval(mapped),
+            _ => return Err(MixedFaceArrangementError::SourceBoundaryOrientationRequired),
+        };
+        points.push([point.x, point.y]);
+    }
+    let orientation = polygon_orientation2d(&points);
+    if orientation == Orientation::Zero {
+        Err(MixedFaceArrangementError::SourceBoundaryOrientationRequired)
+    } else {
+        Ok(orientation)
+    }
+}
+
+fn cycle_containment(
+    cycles: &[InteriorLineCycle],
+) -> Result<Vec<Vec<bool>>, MixedFaceArrangementError> {
+    let keys = || {
+        cycles
+            .iter()
+            .map(|cycle| cycle.anchor.clone())
+            .collect::<Vec<_>>()
+    };
+    let mut result = vec![vec![false; cycles.len()]; cycles.len()];
+    for outer in 0..cycles.len() {
+        for inner in 0..cycles.len() {
+            if outer == inner {
+                continue;
+            }
+            result[outer][inner] =
+                strict_point_in_polygon(&cycles[outer].points, cycles[inner].points[0])
+                    .ok_or_else(|| {
+                        MixedFaceArrangementError::InteriorCycleEmbeddingRequired(keys())
+                    })?;
+        }
+    }
+    if (0..cycles.len()).any(|left| {
+        (0..cycles.len()).any(|right| left != right && result[left][right] && result[right][left])
+    }) {
+        return Err(MixedFaceArrangementError::InteriorCycleEmbeddingRequired(
+            keys(),
+        ));
+    }
+    Ok(result)
+}
+
+fn immediate_cycle_parents(containment: &[Vec<bool>]) -> Option<Vec<Option<usize>>> {
+    (0..containment.len())
+        .map(|child| {
+            let containers = (0..containment.len())
+                .filter(|&candidate| containment[candidate][child])
+                .collect::<Vec<_>>();
+            if containers.is_empty() {
+                return Some(None);
+            }
+            let parents = containers
+                .iter()
+                .copied()
+                .filter(|&candidate| {
+                    containers
+                        .iter()
+                        .all(|&other| other == candidate || containment[other][candidate])
+                })
+                .collect::<Vec<_>>();
+            (parents.len() == 1).then_some(Some(parents[0]))
+        })
+        .collect()
+}
+
+fn strict_point_in_polygon(polygon: &[[f64; 2]], point: [f64; 2]) -> Option<bool> {
+    let mut winding = 0_i64;
+    for index in 0..polygon.len() {
+        let start = polygon[index];
+        let end = polygon[(index + 1) % polygon.len()];
+        let side = orient2d(start, end, point);
+        if side == Orientation::Zero
+            && point[0] >= start[0].min(end[0])
+            && point[0] <= start[0].max(end[0])
+            && point[1] >= start[1].min(end[1])
+            && point[1] <= start[1].max(end[1])
+        {
+            return None;
+        }
+        if start[1] <= point[1] {
+            if end[1] > point[1] && side == Orientation::Positive {
+                winding += 1;
+            }
+        } else if end[1] <= point[1] && side == Orientation::Negative {
+            winding -= 1;
+        }
+    }
+    Some(winding != 0)
+}
+
 fn certify_cut_embedding(cuts: &[FaceCutEvidence]) -> Result<(), MixedFaceArrangementError> {
     let mut unproved = BTreeSet::new();
     for left in 0..cuts.len() {
         for right in (left + 1)..cuts.len() {
-            if cut_pair_proven_disjoint(&cuts[left].embedding, &cuts[right].embedding) {
+            if cut_pair_proven_disjoint(&cuts[left], &cuts[right]) {
                 continue;
             }
             unproved.insert(cuts[left].key.clone());
@@ -627,8 +1127,8 @@ fn certify_cut_embedding(cuts: &[FaceCutEvidence]) -> Result<(), MixedFaceArrang
     }
 }
 
-fn cut_pair_proven_disjoint(left: &CutEmbedding, right: &CutEmbedding) -> bool {
-    match (left, right) {
+fn cut_pair_proven_disjoint(left: &FaceCutEvidence, right: &FaceCutEvidence) -> bool {
+    match (&left.embedding, &right.embedding) {
         (CutEmbedding::Circle { branch: left }, CutEmbedding::Circle { branch: right })
             if left == right =>
         {
@@ -641,54 +1141,64 @@ fn cut_pair_proven_disjoint(left: &CutEmbedding, right: &CutEmbedding) -> bool {
         (
             CutEmbedding::Line {
                 branch: left_branch,
-                origin: left_origin,
                 direction: left_direction,
+                endpoints: left_endpoints,
+                ..
             },
             CutEmbedding::Line {
                 branch: right_branch,
-                origin: right_origin,
                 direction: right_direction,
+                endpoints: right_endpoints,
+                ..
             },
         ) => {
             if left_branch == right_branch {
                 return true;
             }
-            distinct_parallel_lines(
-                *left_origin,
-                *left_direction,
-                *right_origin,
-                *right_direction,
-            )
+            let shared = shared_endpoint_count(left, right);
+            if shared == 1 {
+                return line_direction_relation(*left_direction, *right_direction)
+                    .is_some_and(|orientation| orientation != Orientation::Zero);
+            }
+            shared == 0 && line_segments_proven_disjoint(*left_endpoints, *right_endpoints)
         }
         _ => false,
     }
 }
 
-fn distinct_parallel_lines(
-    left_origin: [f64; 2],
-    left_direction: [f64; 2],
-    right_origin: [f64; 2],
-    right_direction: [f64; 2],
-) -> bool {
-    let normal = [-left_direction[1], left_direction[0], 0.0];
-    let Some(direction_side) = affine_dot3(
-        normal,
-        [right_direction[0], right_direction[1], 0.0],
-        [0.0; 3],
-        0.0,
-    ) else {
-        return false;
-    };
-    if direction_side.sign() != Orientation::Zero {
+fn line_segments_proven_disjoint(left: [[f64; 2]; 2], right: [[f64; 2]; 2]) -> bool {
+    let orientations = [
+        orient2d(left[0], left[1], right[0]),
+        orient2d(left[0], left[1], right[1]),
+        orient2d(right[0], right[1], left[0]),
+        orient2d(right[0], right[1], left[1]),
+    ];
+    if orientations.contains(&Orientation::Zero) {
         return false;
     }
+    !(orientations[0] != orientations[1] && orientations[2] != orientations[3])
+}
+
+fn shared_endpoint_count(left: &FaceCutEvidence, right: &FaceCutEvidence) -> usize {
+    left.endpoints
+        .iter()
+        .flat_map(|left| {
+            right
+                .endpoints
+                .iter()
+                .filter(move |right| left.vertex == right.vertex)
+        })
+        .count()
+}
+
+fn line_direction_relation(left: [f64; 2], right: [f64; 2]) -> Option<Orientation> {
     affine_dot3(
-        normal,
-        [right_origin[0], right_origin[1], 0.0],
-        [left_origin[0], left_origin[1], 0.0],
+        [-left[1], left[0], 0.0],
+        [right[0], right[1], 0.0],
+        [0.0; 3],
         0.0,
     )
-    .is_some_and(|side| side.sign() != Orientation::Zero)
+    .map(|side| side.sign())
 }
 
 fn collect_unique_roots(
@@ -1105,6 +1615,7 @@ mod tests {
                 branch: 7,
                 origin: [0.0, 0.0],
                 direction: [1.0, 0.0],
+                endpoints: [[0.0, 0.0], [1.0, 0.0]],
             },
         }
     }
@@ -1202,6 +1713,7 @@ mod tests {
                 branch: 40 + index,
                 origin: [0.0, index as f64],
                 direction: [1.0, 0.0],
+                endpoints: [[0.0, index as f64], [1.0, index as f64]],
             }),
         )
         .unwrap();
@@ -1303,6 +1815,112 @@ mod tests {
     }
 
     #[test]
+    fn exact_shared_endpoint_proves_distinct_nonparallel_lines_meet_only_at_the_join() {
+        let line = |branch: usize,
+                    endpoint_ids: [usize; 2],
+                    origin: [f64; 2],
+                    direction: [f64; 2]| FaceCutEvidence {
+            key: MixedCutFragmentKey {
+                branch,
+                source_ordinal: 0,
+            },
+            endpoints: endpoint_ids.map(|endpoint| CutEndpointEvidence {
+                vertex: EvidenceEndpoint::SectionEndpoint(endpoint),
+                boundary_root: None,
+            }),
+            embedding: CutEmbedding::Line {
+                branch,
+                origin,
+                direction,
+                endpoints: [origin, [origin[0] + direction[0], origin[1] + direction[1]]],
+            },
+        };
+        let horizontal = line(0, [10, 11], [0.0, 0.0], [1.0, 0.0]);
+        let joined_vertical = line(1, [11, 12], [1.0, 0.0], [0.0, 1.0]);
+        assert!(certify_cut_embedding(&[horizontal.clone(), joined_vertical]).is_ok());
+
+        let unjoined_vertical = line(1, [12, 13], [0.5, -1.0], [0.0, 1.0]);
+        assert!(matches!(
+            certify_cut_embedding(&[horizontal.clone(), unjoined_vertical]),
+            Err(MixedFaceArrangementError::InteriorCrossingProofRequired(keys))
+                if keys.len() == 2
+        ));
+
+        let ambiguous_collinear = line(2, [11, 14], [0.5, 0.0], [1.0, 0.0]);
+        assert!(matches!(
+            certify_cut_embedding(&[horizontal, ambiguous_collinear]),
+            Err(MixedFaceArrangementError::InteriorCrossingProofRequired(keys))
+                if keys.len() == 2
+        ));
+    }
+
+    fn interior_polygon_cuts(
+        branch_base: usize,
+        endpoint_base: usize,
+        points: &[[f64; 2]],
+    ) -> Vec<FaceCutEvidence> {
+        (0..points.len())
+            .map(|index| {
+                let next = (index + 1) % points.len();
+                let start = points[index];
+                let end = points[next];
+                let branch = branch_base + index;
+                FaceCutEvidence {
+                    key: MixedCutFragmentKey {
+                        branch,
+                        source_ordinal: 0,
+                    },
+                    endpoints: [endpoint_base + index, endpoint_base + next].map(|endpoint| {
+                        CutEndpointEvidence {
+                            vertex: EvidenceEndpoint::SectionEndpoint(endpoint),
+                            boundary_root: None,
+                        }
+                    }),
+                    embedding: CutEmbedding::Line {
+                        branch,
+                        origin: start,
+                        direction: [end[0] - start[0], end[1] - start[1]],
+                        endpoints: [start, end],
+                    },
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn any_nested_count_of_exact_line_cycles_builds_connected_planar_dual_cells() {
+        let fixture = planar_fixture(false);
+        for cycle_count in 1..=4 {
+            let mut cuts = Vec::new();
+            for cycle in 0..cycle_count {
+                let radius = 3.5 - cycle as f64 * 0.6;
+                cuts.extend(interior_polygon_cuts(
+                    cycle * 10,
+                    100 + cycle * 10,
+                    &[
+                        [-radius, -radius],
+                        [radius, -radius],
+                        [radius, radius],
+                        [-radius, radius],
+                    ],
+                ));
+            }
+            let arrangement =
+                arrange_planar_face_evidence(&fixture.store, fixture.face, cuts.clone()).unwrap();
+            assert_eq!(arrangement.cells().len(), cycle_count + 1);
+            assert_eq!(arrangement.adjacency().len(), cycle_count * 4);
+            assert_eq!(arrangement.cells()[0].boundaries().len(), 2);
+            assert_eq!(arrangement.cells().last().unwrap().boundaries().len(), 1);
+            assert!(arrangement.proof().dual_connected());
+
+            cuts.reverse();
+            let permuted =
+                arrange_planar_face_evidence(&fixture.store, fixture.face, cuts).unwrap();
+            assert_eq!(permuted, arrangement);
+        }
+    }
+
+    #[test]
     fn exact_root_defects_refuse_before_arrangement() {
         let fixture = planar_fixture(false);
 
@@ -1352,6 +1970,7 @@ mod tests {
                     branch: 0,
                     origin: [0.0, 0.0],
                     direction: [1.0, 0.0],
+                    endpoints: [[0.0, 0.0], [1.0, 0.0]],
                 },
             },
             FaceCutEvidence {
@@ -1367,6 +1986,7 @@ mod tests {
                     branch: 1,
                     origin: [0.0, 1.0],
                     direction: [1.0, 0.0],
+                    endpoints: [[0.0, 1.0], [1.0, 1.0]],
                 },
             },
         ];
@@ -1397,6 +2017,7 @@ mod tests {
             branch: 9,
             origin: [0.0, 0.0],
             direction: [0.0, 1.0],
+            endpoints: [[0.0, 0.0], [0.0, 1.0]],
         };
         second.endpoints = [root(&fixture, 1, 30, 0, 0.5), root(&fixture, 3, 31, 0, 0.5)];
         assert!(matches!(
