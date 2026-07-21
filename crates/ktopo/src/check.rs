@@ -2323,26 +2323,36 @@ mod tests {
 
     #[test]
     fn contextual_full_check_matches_legacy_and_reuses_one_scope() {
-        let proof_snapshot = |stage, consumed| LimitSnapshot {
+        let snapshot = |stage, resource, consumed, allowed| LimitSnapshot {
             stage,
-            resource: ResourceKind::Work,
+            resource,
             consumed,
-            allowed: 1_048_576,
+            allowed,
         };
-        let mixed_profile_snapshot = |consumed| LimitSnapshot {
-            stage: crate::shell_proof::MIXED_PROFILE_PRISM_WORK,
-            resource: ResourceKind::Work,
-            consumed,
-            allowed: 16_777_216,
+        let proof_snapshot =
+            |stage, consumed| snapshot(stage, ResourceKind::Work, consumed, 1_048_576);
+        let mixed_profile_snapshot = |consumed| {
+            snapshot(
+                crate::shell_proof::MIXED_PROFILE_PRISM_WORK,
+                ResourceKind::Work,
+                consumed,
+                16_777_216,
+            )
         };
-        let portal_cylinder_snapshot = |consumed| LimitSnapshot {
-            stage: kcore::operation::StageId::new("ktopo.check.portal-cylinder-shell-work")
-                .unwrap(),
-            resource: ResourceKind::Work,
-            consumed,
-            allowed: 16_777_216,
+        let portal_cylinder_snapshot = |consumed| {
+            snapshot(
+                kcore::operation::StageId::new("ktopo.check.portal-cylinder-shell-work").unwrap(),
+                ResourceKind::Work,
+                consumed,
+                16_777_216,
+            )
         };
         let cavity_stage = crate::cylindrical_region_proof::CYLINDRICAL_CAVITY_REGION_WORK;
+        let domain_stage = crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS;
+        let planar_stage = crate::planar_shell_proof::PLANAR_SHELL_PAIR_WORK;
+        let semantic_region = crate::semantic_planar_shell_proof::SEMANTIC_PLANAR_REGION_WORK;
+        let semantic_shell = crate::semantic_planar_shell_proof::SEMANTIC_PLANAR_SHELL_WORK;
+        let facet_stage = crate::shell_proof::SHELL_FACET_PAIR_WORK;
         let mut store = Store::new();
         let body = clean_block(&mut store);
         let legacy = check_body_report(&store, body, CheckLevel::Full).unwrap();
@@ -2354,55 +2364,31 @@ mod tests {
         assert_eq!(
             contextual.report().usage(),
             [
-                LimitSnapshot {
-                    stage: kgraph::eval_stage::DEPENDENCY_DEPTH,
-                    resource: ResourceKind::Depth,
-                    consumed: 1,
-                    allowed: 64,
-                },
-                LimitSnapshot {
-                    stage: kgraph::eval_stage::NODE_VISITS,
-                    resource: ResourceKind::Work,
-                    consumed: 306,
-                    allowed: 4096,
-                },
+                snapshot(
+                    kgraph::eval_stage::DEPENDENCY_DEPTH,
+                    ResourceKind::Depth,
+                    1,
+                    64
+                ),
+                snapshot(
+                    kgraph::eval_stage::NODE_VISITS,
+                    ResourceKind::Work,
+                    306,
+                    4096
+                ),
+                proof_snapshot(crate::shell_proof::CHORD_PORTAL_SHELL_WORK, 0),
                 proof_snapshot(crate::shell_proof::CONVEX_CYLINDRICAL_SHELL_WORK, 0),
                 proof_snapshot(cavity_stage, 0),
                 proof_snapshot(crate::shell_proof::CYLINDRICAL_HOST_SHELL_WORK, 6),
-                LimitSnapshot {
-                    stage: crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
-                    resource: ResourceKind::Items,
-                    consumed: 1,
-                    allowed: 4096,
-                },
+                snapshot(domain_stage, ResourceKind::Items, 1, 4096),
                 proof_snapshot(crate::loop_proof::FACE_LOOP_CONTAINMENT_WORK, 0),
                 proof_snapshot(crate::mixed_region_proof::MIXED_CONVEX_REGION_WORK, 0),
                 mixed_profile_snapshot(0),
-                LimitSnapshot {
-                    stage: crate::planar_shell_proof::PLANAR_SHELL_PAIR_WORK,
-                    resource: ResourceKind::Work,
-                    consumed: 0,
-                    allowed: 200_000,
-                },
+                snapshot(planar_stage, ResourceKind::Work, 0, 200_000),
                 portal_cylinder_snapshot(0),
-                LimitSnapshot {
-                    stage: crate::semantic_planar_shell_proof::SEMANTIC_PLANAR_REGION_WORK,
-                    resource: ResourceKind::Work,
-                    consumed: 0,
-                    allowed: 1_048_576,
-                },
-                LimitSnapshot {
-                    stage: crate::semantic_planar_shell_proof::SEMANTIC_PLANAR_SHELL_WORK,
-                    resource: ResourceKind::Work,
-                    consumed: 0,
-                    allowed: 1_048_576,
-                },
-                LimitSnapshot {
-                    stage: crate::shell_proof::SHELL_FACET_PAIR_WORK,
-                    resource: ResourceKind::Work,
-                    consumed: 0,
-                    allowed: 100_000,
-                },
+                proof_snapshot(semantic_region, 0),
+                proof_snapshot(semantic_shell, 0),
+                snapshot(facet_stage, ResourceKind::Work, 0, 100_000),
             ]
         );
         const CALLER_STAGE: kcore::operation::StageId =
@@ -2445,61 +2431,32 @@ mod tests {
         assert_eq!(
             report.usage(),
             [
-                LimitSnapshot {
-                    stage: kgraph::eval_stage::DEPENDENCY_DEPTH,
-                    resource: ResourceKind::Depth,
-                    consumed: 1,
-                    allowed: 64,
-                },
-                LimitSnapshot {
-                    stage: kgraph::eval_stage::NODE_VISITS,
-                    resource: ResourceKind::Work,
-                    consumed: 612,
-                    allowed: 4096,
-                },
-                LimitSnapshot {
-                    stage: CALLER_STAGE,
-                    resource: ResourceKind::Work,
-                    consumed: 3,
-                    allowed: 5,
-                },
+                snapshot(
+                    kgraph::eval_stage::DEPENDENCY_DEPTH,
+                    ResourceKind::Depth,
+                    1,
+                    64
+                ),
+                snapshot(
+                    kgraph::eval_stage::NODE_VISITS,
+                    ResourceKind::Work,
+                    612,
+                    4096
+                ),
+                snapshot(CALLER_STAGE, ResourceKind::Work, 3, 5),
+                proof_snapshot(crate::shell_proof::CHORD_PORTAL_SHELL_WORK, 0),
                 proof_snapshot(crate::shell_proof::CONVEX_CYLINDRICAL_SHELL_WORK, 0),
                 proof_snapshot(cavity_stage, 0),
                 proof_snapshot(crate::shell_proof::CYLINDRICAL_HOST_SHELL_WORK, 12),
-                LimitSnapshot {
-                    stage: crate::domain::FACE_DOMAIN_CONTAINMENT_SEGMENTS,
-                    resource: ResourceKind::Items,
-                    consumed: 2,
-                    allowed: 4096,
-                },
+                snapshot(domain_stage, ResourceKind::Items, 2, 4096),
                 proof_snapshot(crate::loop_proof::FACE_LOOP_CONTAINMENT_WORK, 0),
                 proof_snapshot(crate::mixed_region_proof::MIXED_CONVEX_REGION_WORK, 0),
                 mixed_profile_snapshot(0),
-                LimitSnapshot {
-                    stage: crate::planar_shell_proof::PLANAR_SHELL_PAIR_WORK,
-                    resource: ResourceKind::Work,
-                    consumed: 0,
-                    allowed: 200_000,
-                },
+                snapshot(planar_stage, ResourceKind::Work, 0, 200_000),
                 portal_cylinder_snapshot(0),
-                LimitSnapshot {
-                    stage: crate::semantic_planar_shell_proof::SEMANTIC_PLANAR_REGION_WORK,
-                    resource: ResourceKind::Work,
-                    consumed: 0,
-                    allowed: 1_048_576,
-                },
-                LimitSnapshot {
-                    stage: crate::semantic_planar_shell_proof::SEMANTIC_PLANAR_SHELL_WORK,
-                    resource: ResourceKind::Work,
-                    consumed: 0,
-                    allowed: 1_048_576,
-                },
-                LimitSnapshot {
-                    stage: crate::shell_proof::SHELL_FACET_PAIR_WORK,
-                    resource: ResourceKind::Work,
-                    consumed: 0,
-                    allowed: 100_000,
-                },
+                proof_snapshot(semantic_region, 0),
+                proof_snapshot(semantic_shell, 0),
+                snapshot(facet_stage, ResourceKind::Work, 0, 100_000),
             ]
         );
         assert!(report.limit_events().is_empty());

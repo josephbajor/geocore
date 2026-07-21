@@ -17,6 +17,7 @@ const OUTER_X: f64 = 2.5;
 const BLOCK_Y: f64 = 6.0;
 const BLOCK_Z: f64 = 4.0;
 const GEOMETRY_TOLERANCE: f64 = 1.0e-9;
+const MESH_RELATIVE_VOLUME_TOLERANCE: f64 = 1.0e-3;
 
 #[derive(Debug, Clone, Copy)]
 enum Placement {
@@ -529,157 +530,245 @@ fn mesh_volume(positions: &[Point3], triangles: &[[u32; 3]]) -> f64 {
     (six_volume / 6.0).abs()
 }
 
-#[test]
-fn cap_crossing_intersection_full_commits_the_circular_segment_prism() {
+fn cap_crossing_segment_volume() -> f64 {
     let segment_area = RADIUS * RADIUS * (OFFSET_X / RADIUS).acos()
         - OFFSET_X * (RADIUS * RADIUS - OFFSET_X * OFFSET_X).sqrt();
-    let expected_volume = segment_area * CYLINDER_HEIGHT;
+    segment_area * CYLINDER_HEIGHT
+}
 
+fn assert_cap_crossing_operation(
+    operation: BooleanOperation,
+    case: CapCrossingCase,
+    expected_topology: [usize; 3],
+    expected_volume: f64,
+) {
+    let mut fixture = cap_crossing_fixture(case);
+    let bodies = if case.swapped {
+        [fixture.cylinder.clone(), fixture.prism.clone()]
+    } else {
+        [fixture.prism.clone(), fixture.cylinder.clone()]
+    };
+    let outcome = fixture
+        .session
+        .edit_part(fixture.part_id.clone())
+        .unwrap()
+        .boolean_bodies(BooleanBodiesRequest::new(
+            operation,
+            bodies[0].clone(),
+            bodies[1].clone(),
+        ))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    let BooleanOutcome::Success(BooleanResult::Created(created)) = outcome else {
+        assert_eq!(
+            source_signature(
+                &fixture.session,
+                &fixture.part_id,
+                &fixture.prism,
+                &fixture.cylinder,
+            ),
+            fixture.before,
+            "{} {operation:?}: refusal mutated a source or persisted a candidate",
+            case.name,
+        );
+        panic!("{} {operation:?} did not commit: {outcome:?}", case.name)
+    };
+    assert_eq!(created.bodies().len(), 1, "{} {operation:?}", case.name);
+    assert_eq!(created.reports().len(), 1, "{} {operation:?}", case.name);
+    assert_eq!(
+        created.reports()[0].report().outcome(),
+        CheckOutcome::Valid,
+        "{} {operation:?}",
+        case.name,
+    );
+
+    let result = created.bodies()[0].clone();
+    let part = fixture.session.part(fixture.part_id.clone()).unwrap();
+    assert_eq!(
+        body_topology(&part, result.clone()),
+        expected_topology,
+        "{} {operation:?}",
+        case.name,
+    );
+    let full = part
+        .check_body(CheckBodyRequest::new(result.clone(), CheckLevel::Full))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(
+        full.outcome(),
+        CheckOutcome::Valid,
+        "{} {operation:?}: {full:?}",
+        case.name,
+    );
+    let mesh = part
+        .tessellate_body(TessellateBodyRequest::new(
+            result.clone(),
+            TessOptions {
+                chord_tol: 1.0e-3,
+                max_edge_len: None,
+            },
+        ))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    let actual_volume = mesh_volume(mesh.positions(), mesh.triangles());
+    assert!(
+        (actual_volume - expected_volume).abs() <= expected_volume * MESH_RELATIVE_VOLUME_TOLERANCE,
+        "{} {operation:?}: expected volume {expected_volume:.17e}, got {actual_volume:.17e}",
+        case.name,
+    );
+    let bytes = part
+        .export_xt(ExportXtRequest::new(result))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .bytes()
+        .to_vec();
+    assert!(!bytes.is_empty(), "{} {operation:?}", case.name);
+    drop(part);
+
+    let after = source_signature(
+        &fixture.session,
+        &fixture.part_id,
+        &fixture.prism,
+        &fixture.cylinder,
+    );
+    assert_eq!(after.0, fixture.before.0, "{} {operation:?}", case.name);
+    assert_eq!(after.1, fixture.before.1, "{} {operation:?}", case.name);
+    assert_eq!(after.2, fixture.before.2 + 1, "{} {operation:?}", case.name);
+
+    let repeated = fixture
+        .session
+        .edit_part(fixture.part_id.clone())
+        .unwrap()
+        .boolean_bodies(BooleanBodiesRequest::new(
+            operation,
+            bodies[0].clone(),
+            bodies[1].clone(),
+        ))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    let BooleanOutcome::Success(BooleanResult::Created(repeated)) = repeated else {
+        panic!("{} {operation:?}: repeated operation refused", case.name)
+    };
+    let repeated_bytes = fixture
+        .session
+        .part(fixture.part_id.clone())
+        .unwrap()
+        .export_xt(ExportXtRequest::new(repeated.bodies()[0].clone()))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .bytes()
+        .to_vec();
+    assert_eq!(repeated_bytes, bytes, "{} {operation:?}", case.name);
+    let repeated_sources = source_signature(
+        &fixture.session,
+        &fixture.part_id,
+        &fixture.prism,
+        &fixture.cylinder,
+    );
+    assert_eq!(
+        repeated_sources.0, fixture.before.0,
+        "{} {operation:?}",
+        case.name
+    );
+    assert_eq!(
+        repeated_sources.1, fixture.before.1,
+        "{} {operation:?}",
+        case.name
+    );
+    assert_eq!(
+        repeated_sources.2,
+        fixture.before.2 + 2,
+        "{} {operation:?}",
+        case.name
+    );
+
+    let imported_part = fixture.session.create_part();
+    let imported = fixture
+        .session
+        .edit_part(imported_part.clone())
+        .unwrap()
+        .import_xt(ImportXtRequest::new(&bytes))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(imported.bodies().len(), 1, "{} {operation:?}", case.name);
+    let fast = fixture
+        .session
+        .part(imported_part)
+        .unwrap()
+        .check_body(CheckBodyRequest::new(
+            imported.bodies()[0].clone(),
+            CheckLevel::Fast,
+        ))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(
+        fast.outcome(),
+        CheckOutcome::Valid,
+        "{} {operation:?}",
+        case.name
+    );
+}
+
+#[test]
+fn cap_crossing_union_full_commits_in_rigid_frame_and_order_matrix() {
+    let intersection_volume = cap_crossing_segment_volume();
+    let block_volume = (OUTER_X - OFFSET_X) * BLOCK_Y * BLOCK_Z;
+    let cylinder_volume = core::f64::consts::PI * RADIUS * RADIUS * CYLINDER_HEIGHT;
     for case in CASES {
-        let mut fixture = cap_crossing_fixture(case);
-        let bodies = if case.swapped {
-            [fixture.cylinder.clone(), fixture.prism.clone()]
-        } else {
-            [fixture.prism.clone(), fixture.cylinder.clone()]
-        };
-        let outcome = fixture
-            .session
-            .edit_part(fixture.part_id.clone())
-            .unwrap()
-            .boolean_bodies(BooleanBodiesRequest::new(
-                BooleanOperation::Intersect,
-                bodies[0].clone(),
-                bodies[1].clone(),
-            ))
-            .unwrap()
-            .into_result()
-            .unwrap();
-        let BooleanOutcome::Success(BooleanResult::Created(created)) = outcome else {
-            panic!(
-                "{}: cap-crossing intersection did not commit: {outcome:?}",
-                case.name
-            )
-        };
-        assert_eq!(created.bodies().len(), 1, "{}", case.name);
-        assert_eq!(created.reports().len(), 1, "{}", case.name);
-        assert_eq!(
-            created.reports()[0].report().outcome(),
-            CheckOutcome::Valid,
-            "{}",
-            case.name
+        assert_cap_crossing_operation(
+            BooleanOperation::Unite,
+            case,
+            [9, 18, 12],
+            block_volume + cylinder_volume - intersection_volume,
         );
+    }
+}
 
-        let result = created.bodies()[0].clone();
-        let part = fixture.session.part(fixture.part_id.clone()).unwrap();
-        assert_eq!(
-            body_topology(&part, result.clone()),
+#[test]
+fn cap_crossing_prism_minus_cylinder_full_commits_in_rigid_frame_matrix() {
+    let intersection_volume = cap_crossing_segment_volume();
+    let block_volume = (OUTER_X - OFFSET_X) * BLOCK_Y * BLOCK_Z;
+    for case in CASES.into_iter().filter(|case| !case.swapped) {
+        assert_cap_crossing_operation(
+            BooleanOperation::Subtract,
+            case,
+            [9, 18, 12],
+            block_volume - intersection_volume,
+        );
+    }
+}
+
+#[test]
+fn cap_crossing_cylinder_minus_prism_full_commits_in_rigid_frame_matrix() {
+    let intersection_volume = cap_crossing_segment_volume();
+    let cylinder_volume = core::f64::consts::PI * RADIUS * RADIUS * CYLINDER_HEIGHT;
+    for case in CASES.into_iter().filter(|case| case.swapped) {
+        assert_cap_crossing_operation(
+            BooleanOperation::Subtract,
+            case,
             [4, 6, 4],
-            "{}",
-            case.name
+            cylinder_volume - intersection_volume,
         );
-        let full = part
-            .check_body(CheckBodyRequest::new(result.clone(), CheckLevel::Full))
-            .unwrap()
-            .into_result()
-            .unwrap();
-        assert_eq!(
-            full.outcome(),
-            CheckOutcome::Valid,
-            "{}: {full:?}",
-            case.name
-        );
-        let mesh = part
-            .tessellate_body(TessellateBodyRequest::new(
-                result.clone(),
-                TessOptions {
-                    chord_tol: 1.0e-3,
-                    max_edge_len: None,
-                },
-            ))
-            .unwrap()
-            .into_result()
-            .unwrap();
-        let actual_volume = mesh_volume(mesh.positions(), mesh.triangles());
-        assert!(
-            (actual_volume - expected_volume).abs() <= 5.0e-3,
-            "{}: expected volume {expected_volume}, got {actual_volume}",
-            case.name
-        );
-        let bytes = part
-            .export_xt(ExportXtRequest::new(result))
-            .unwrap()
-            .into_result()
-            .unwrap()
-            .bytes()
-            .to_vec();
+    }
+}
 
-        let after = source_signature(
-            &fixture.session,
-            &fixture.part_id,
-            &fixture.prism,
-            &fixture.cylinder,
+#[test]
+fn cap_crossing_intersection_full_commits_the_circular_segment_prism() {
+    let expected_volume = cap_crossing_segment_volume();
+    for case in CASES {
+        assert_cap_crossing_operation(
+            BooleanOperation::Intersect,
+            case,
+            [4, 6, 4],
+            expected_volume,
         );
-        assert_eq!(after.0, fixture.before.0, "{}", case.name);
-        assert_eq!(after.1, fixture.before.1, "{}", case.name);
-        assert_eq!(after.2, fixture.before.2 + 1, "{}", case.name);
-
-        let repeated = fixture
-            .session
-            .edit_part(fixture.part_id.clone())
-            .unwrap()
-            .boolean_bodies(BooleanBodiesRequest::new(
-                BooleanOperation::Intersect,
-                bodies[0].clone(),
-                bodies[1].clone(),
-            ))
-            .unwrap()
-            .into_result()
-            .unwrap();
-        let BooleanOutcome::Success(BooleanResult::Created(repeated)) = repeated else {
-            panic!("{}: repeated cap-crossing intersection refused", case.name)
-        };
-        let repeated_bytes = fixture
-            .session
-            .part(fixture.part_id.clone())
-            .unwrap()
-            .export_xt(ExportXtRequest::new(repeated.bodies()[0].clone()))
-            .unwrap()
-            .into_result()
-            .unwrap()
-            .bytes()
-            .to_vec();
-        assert_eq!(repeated_bytes, bytes, "{}", case.name);
-        let repeated_sources = source_signature(
-            &fixture.session,
-            &fixture.part_id,
-            &fixture.prism,
-            &fixture.cylinder,
-        );
-        assert_eq!(repeated_sources.0, fixture.before.0, "{}", case.name);
-        assert_eq!(repeated_sources.1, fixture.before.1, "{}", case.name);
-        assert_eq!(repeated_sources.2, fixture.before.2 + 2, "{}", case.name);
-
-        let imported_part = fixture.session.create_part();
-        let imported = fixture
-            .session
-            .edit_part(imported_part.clone())
-            .unwrap()
-            .import_xt(ImportXtRequest::new(&bytes))
-            .unwrap()
-            .into_result()
-            .unwrap();
-        assert_eq!(imported.bodies().len(), 1, "{}", case.name);
-        let fast = fixture
-            .session
-            .part(imported_part)
-            .unwrap()
-            .check_body(CheckBodyRequest::new(
-                imported.bodies()[0].clone(),
-                CheckLevel::Fast,
-            ))
-            .unwrap()
-            .into_result()
-            .unwrap();
-        assert_eq!(fast.outcome(), CheckOutcome::Valid, "{}", case.name);
     }
 }

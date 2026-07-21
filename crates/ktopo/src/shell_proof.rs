@@ -31,6 +31,8 @@ use kgeom::frame::Frame;
 use kgeom::surface::Cylinder;
 use kgeom::vec::{Point2, Point3, Vec3};
 
+#[path = "chord_portal_shell_proof.rs"]
+mod chord_portal_shell_proof;
 #[path = "convex_cylindrical_shell_proof.rs"]
 mod convex_cylindrical_shell_proof;
 #[path = "cylindrical_host_proof.rs"]
@@ -39,6 +41,8 @@ mod cylindrical_host_proof;
 mod mixed_profile_prism_proof;
 #[path = "portal_cylinder_shell_proof.rs"]
 mod portal_cylinder_shell_proof;
+#[cfg(test)]
+pub(crate) use chord_portal_shell_proof::CHORD_PORTAL_SHELL_WORK;
 #[cfg(test)]
 pub(crate) use convex_cylindrical_shell_proof::CONVEX_CYLINDRICAL_SHELL_WORK;
 #[cfg(test)]
@@ -68,6 +72,7 @@ pub(crate) fn shell_proof_budget() -> BudgetPlan {
         .overlaid(&cylindrical_host_proof::cylindrical_host_proof_budget())
         .overlaid(&portal_cylinder_shell_proof::portal_cylinder_proof_budget())
         .overlaid(&mixed_profile_prism_proof::mixed_profile_prism_proof_budget())
+        .overlaid(&chord_portal_shell_proof::chord_portal_shell_proof_budget())
         .overlaid(&convex_cylindrical_shell_proof::convex_cylindrical_shell_proof_budget())
 }
 
@@ -184,6 +189,11 @@ fn certify_shell_impl(
         shell_id,
         scope.as_deref_mut(),
     )? {
+        return Ok(certification);
+    }
+    if let Some(certification) =
+        chord_portal_shell_proof::certify_chord_portal_shell(store, shell_id, scope.as_deref_mut())?
+    {
         return Ok(certification);
     }
     if let Some(certification) = convex_cylindrical_shell_proof::certify_convex_cylindrical_shell(
@@ -1073,7 +1083,7 @@ fn certify_convex_planar_shell(
     certify_convex_planar_facets(store, facets, scope)
 }
 
-fn certify_convex_planar_facets(
+pub(super) fn certify_convex_planar_facets(
     store: &Store,
     facets: Vec<(FaceId, Vec<VertexId>)>,
     scope: Option<&mut OperationScope<'_, '_>>,

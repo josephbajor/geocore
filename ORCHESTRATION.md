@@ -78,13 +78,20 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    star/cylinder Intersect reaches general mixed planning and Full-commits at
    17F/45E/30V with literal-derived volume, deterministic X_T, and Fast
    self-import; pure planar BSP and convex curved shortcuts still require that
-   certificate. The deterministic fifteen-payload Boolean bundle imports and
-   compares 15/15 in Onshape at writer `fedf1ab`. Proof-keyed disk-cap chords
+   certificate. The historical fifteen-payload Boolean identity imports and
+   compares 15/15 in Onshape at writer `fedf1ab`; its rows remain byte-identical
+   in the stale sixteen-payload bundle pending one cap-crossing host replay.
+   Proof-keyed disk-cap chords
    now feed count-independent exact disk arrangements with source-arc lineage
    and period-lifted realization. Certified maximal transverse annulus traces
    and exact nested line-cycle planar cells now lower through shared finite
-   source arcs. Cap-crossing Intersect Full-commits at 4F/6E/4V across both
-   rigid frames/orders with deterministic X_T and Fast self-import. Next: extend the same cells through Unite/Subtract and queue the oracle payload.)*
+   source arcs. A count-independent chord-portal theorem now Full-certifies
+   cap-crossing Unite and both ordered Subtract meanings alongside Intersect:
+   the 4F/6E/4V and 9F/18E/12V results commit across both rigid frames/orders
+   with analytic volume, deterministic X_T, and Fast self-import. Next: expose
+   deterministic certified body volume and centroid for Full-valid blocks,
+   finite cylinders, and supported Plane/Cylinder Boolean results; area,
+   inertia, distance, clash, and new surface-pair booleans remain queued.)*
 
 Work that does not advance the queue head needs an explicit justification
 linking it to a rung ("rung 2 needs curve/curve overlap dedup because …").

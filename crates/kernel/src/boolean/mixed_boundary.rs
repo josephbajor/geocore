@@ -748,8 +748,9 @@ mod tests {
     use super::super::extract::extract_planar_source_body;
     use super::super::mixed_shell_plan::{
         MixedShellCellKind, MixedShellEdgeKey, MixedShellVertexKey,
+        components::partition_prepared_mixed_shell_components,
         materialize::{
-            MixedShellScalarInputs, materialize_mixed_shell_input,
+            MixedShellScalarInputs, materialize_mixed_shell_component_inputs,
             prepare_mixed_shell_materialization,
         },
         plan_mixed_shell,
@@ -1034,7 +1035,7 @@ mod tests {
     }
 
     #[test]
-    fn cap_crossing_selection_preflights_one_mixed_shell_in_both_orders() {
+    fn cap_crossing_selection_preflights_all_operations_in_both_orders() {
         let mut session = Kernel::new().create_session();
         let part_id = session.create_part();
         let (block, cylinder) = {
@@ -1090,40 +1091,52 @@ mod tests {
                     CylinderSourceOutcome::Ready(source) => source,
                     other => panic!("unexpected cylinder extraction: {other:?}"),
                 };
-            let prepared = prepare_mixed_bounded_arc_boundary(
-                &part,
-                &graph,
-                &bodies,
-                &planar,
-                &cylinder_source,
-                planar_operand,
-                cylinder_operand,
+            for operation in [
                 RegularizedBooleanOperation::Intersect,
-                context.tolerances().linear(),
-                &mut scope,
-            )
-            .unwrap();
-            let selected = select_boundary_fragments(
-                RegularizedBooleanOperation::Intersect,
-                prepared.classified(),
-            )
-            .unwrap();
-            let plan =
-                plan_mixed_shell(&part.state.store, &graph, prepared.bindings(), selected).unwrap();
-            assert!(
-                plan.materialization_gaps().is_empty(),
-                "{:?}",
-                plan.materialization_gaps()
-            );
-            let blueprint = prepare_mixed_shell_materialization(&plan, &part.state.store).unwrap();
-            assert_eq!(blueprint.edges().len(), 6);
-            materialize_mixed_shell_input(
-                &plan,
-                &part.state.store,
-                &MixedShellScalarInputs::empty(),
-                context.tolerances().linear(),
-            )
-            .unwrap();
+                RegularizedBooleanOperation::Unite,
+                RegularizedBooleanOperation::Subtract,
+            ] {
+                let prepared = prepare_mixed_bounded_arc_boundary(
+                    &part,
+                    &graph,
+                    &bodies,
+                    &planar,
+                    &cylinder_source,
+                    planar_operand,
+                    cylinder_operand,
+                    operation,
+                    context.tolerances().linear(),
+                    &mut scope,
+                )
+                .unwrap();
+                let selected = select_boundary_fragments(operation, prepared.classified()).unwrap();
+                let plan =
+                    plan_mixed_shell(&part.state.store, &graph, prepared.bindings(), selected)
+                        .unwrap();
+                assert!(
+                    plan.materialization_gaps().is_empty(),
+                    "{operation:?}: {:?}",
+                    plan.materialization_gaps()
+                );
+                let blueprint =
+                    prepare_mixed_shell_materialization(&plan, &part.state.store).unwrap();
+                if operation == RegularizedBooleanOperation::Intersect {
+                    assert_eq!(blueprint.edges().len(), 6);
+                }
+                let components =
+                    partition_prepared_mixed_shell_components(&plan, &blueprint).unwrap();
+                assert_eq!(components.len(), 1, "{operation:?}");
+                let inputs = materialize_mixed_shell_component_inputs(
+                    &plan,
+                    &blueprint,
+                    &components,
+                    &part.state.store,
+                    &MixedShellScalarInputs::empty(),
+                    context.tolerances().linear(),
+                )
+                .unwrap();
+                assert_eq!(inputs.len(), 1, "{operation:?}");
+            }
         }
     }
 }

@@ -350,7 +350,7 @@ cylinder-left Subtract across all four frames with 10/32/20 topology, literal-de
 Exact planar-shell admission is now separate from its optional typed convex certificate: complete non-convex ten-support star/cylinder Intersect
 uses general mixed planning and Full-commits at 17F/45E/30V with literal-derived volume and deterministic X_T/Fast self-import; pure planar BSP and convex shortcuts still require the certificate.
 Proof-keyed disk-cap chords now feed count-independent exact disk arrangements with dual classification, source-arc lineage, and period-lifted realization.
-Certified transverse annulus traces, exact nested line-cycle planar cells, and disk cells now share finite source-arc planning/materialization; cap-crossing Intersect Full-commits at 4F/6E/4V across both rigid frames/orders with literal-derived volume, deterministic X_T, and Fast self-import. Next is cap-crossing Unite/Subtract plus the next licensed-host payload.
+Certified transverse annulus traces, exact nested line-cycle planar cells, and disk cells now share finite source-arc planning/materialization; a count-independent chord-portal theorem Full-certifies cap-crossing Unite and block-minus-cylinder at 9F/18E/12V, while Intersect and cylinder-minus-block commit at 4F/6E/4V across both rigid frames/orders with literal-derived volume, deterministic X_T, and Fast self-import. The sixteen-payload bundle is stale pending one licensed-host replay. Next is deterministic certified public body volume and centroid for Full-valid blocks, cylinders, and supported Plane/Cylinder Boolean results.
 
 Evidence: `ordered_planar_minus_cylinder_commits_every_disconnected_profile_component`,
 `disconnected_subtract_batch_denies_n_minus_one_before_any_component_allocates`,

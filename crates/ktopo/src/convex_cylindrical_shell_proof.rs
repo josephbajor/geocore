@@ -905,7 +905,7 @@ fn cylinder_patches_affine_range(
     Some(range)
 }
 
-fn circle_affine_range(
+pub(super) fn circle_affine_range(
     circle: kgeom::curve::Circle,
     lo: f64,
     hi: f64,
