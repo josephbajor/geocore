@@ -1,4 +1,4 @@
-//! Certified volume, centroid, and surface-area interrogation for analytic solid B-reps.
+//! Certified analytic mass-property interrogation for solid B-reps.
 //!
 //! This module integrates the committed, oriented boundary representation; it
 //! never promotes a tessellated approximation into geometric authority.  The
@@ -7,7 +7,10 @@
 //! are exact `Line2d`/`Circle2d` pcurves (circles are currently planar only).
 //! Every returned bound is an outward [`Interval`](kcore::interval::Interval)
 //! enclosure. Unsupported valid representations fail closed as typed
-//! refusals.
+//! refusals. The record is atomic: failure to certify any advertised field
+//! refuses the complete query rather than publishing partial properties.
+
+mod inertia;
 
 use crate::check::{
     CheckBudgetProfile, CheckLevel, CheckOutcome, CheckReport, check_body_report_in_scope,
@@ -37,10 +40,12 @@ pub const BODY_PROPERTIES_ANALYTIC_WORK: StageId =
     known_stage("ktopo.interrogate.body-properties-analytic-work");
 
 const DEFAULT_ANALYTIC_WORK: u64 = 1_048_576;
-const PLANE_LINE_WORK: u64 = 80;
-const PLANE_CIRCLE_WORK: u64 = 240;
-const CYLINDER_LINE_WORK: u64 = 640;
-const CYLINDER_CIRCLE_WORK: u64 = 640;
+// Eleven fixed forms per span: area, volume, three first moments, and six
+// symmetric second moments. Multipliers reflect polynomial/harmonic algebra.
+const PLANE_LINE_WORK: u64 = 176;
+const PLANE_CIRCLE_WORK: u64 = 528;
+const CYLINDER_LINE_WORK: u64 = 1_408;
+const CYLINDER_CIRCLE_WORK: u64 = 1_408;
 
 /// Aggregate v1 policy for Full validation followed by analytic properties.
 #[derive(Debug, Clone, Copy, Default)]
@@ -140,12 +145,65 @@ impl Point3Enclosure {
     }
 }
 
-/// Certified volume, centroid, and boundary area of one solid body.
+/// Certified enclosure of one symmetric model-space tensor.
+///
+/// Components are stored in `(xx, yy, zz, xy, xz, yz)` order. Mirrored
+/// matrix entries share the same enclosure exactly.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SymmetricTensor3Enclosure {
+    components: [ScalarEnclosure; 6],
+}
+
+impl SymmetricTensor3Enclosure {
+    fn from_intervals(values: [Interval; 6]) -> Option<Self> {
+        Some(Self {
+            components: [
+                ScalarEnclosure::from_interval(values[0])?,
+                ScalarEnclosure::from_interval(values[1])?,
+                ScalarEnclosure::from_interval(values[2])?,
+                ScalarEnclosure::from_interval(values[3])?,
+                ScalarEnclosure::from_interval(values[4])?,
+                ScalarEnclosure::from_interval(values[5])?,
+            ],
+        })
+    }
+
+    /// Certified components in `(xx, yy, zz, xy, xz, yz)` order.
+    pub const fn components(self) -> [ScalarEnclosure; 6] {
+        self.components
+    }
+
+    /// Certified symmetric matrix with bit-identical mirrored entries.
+    pub const fn matrix(self) -> [[ScalarEnclosure; 3]; 3] {
+        let [xx, yy, zz, xy, xz, yz] = self.components;
+        [[xx, xy, xz], [xy, yy, yz], [xz, yz, zz]]
+    }
+
+    /// Deterministic midpoint representative matrix.
+    pub fn midpoint(self) -> [[f64; 3]; 3] {
+        self.matrix().map(|row| row.map(ScalarEnclosure::midpoint))
+    }
+
+    /// Frobenius radius containing the six-component interval box.
+    pub fn error_bound(self) -> f64 {
+        let mut squared_radius = 0.0_f64;
+        for (index, component) in self.components.into_iter().enumerate() {
+            let radius = component.error_bound();
+            let multiplicity = if index < 3 { 1.0 } else { 2.0 };
+            let term = (multiplicity * radius * radius).next_up();
+            squared_radius = (squared_radius + term).next_up();
+        }
+        squared_radius.sqrt().next_up()
+    }
+}
+
+/// Certified volume, centroid, boundary area, and centroidal inertia.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CertifiedBodyProperties {
     volume: ScalarEnclosure,
     centroid: Point3Enclosure,
     surface_area: ScalarEnclosure,
+    centroidal_inertia: SymmetricTensor3Enclosure,
 }
 
 impl CertifiedBodyProperties {
@@ -162,6 +220,15 @@ impl CertifiedBodyProperties {
     /// Certified positive area of the complete material boundary.
     pub const fn surface_area(self) -> ScalarEnclosure {
         self.surface_area
+    }
+
+    /// Certified unit-density inertia tensor about the true centroid.
+    ///
+    /// With `c` the true centroid, this is
+    /// `integral (|r-c|^2 I - (r-c)(r-c)^T) dV` and therefore has units of
+    /// model length to the fifth power.
+    pub const fn centroidal_inertia(self) -> SymmetricTensor3Enclosure {
+        self.centroidal_inertia
     }
 }
 
@@ -193,6 +260,8 @@ pub enum BodyPropertiesRefusal {
     NonPositiveVolumeEnclosure,
     /// Oriented face-domain integration did not prove positive boundary area.
     NonPositiveSurfaceAreaEnclosure,
+    /// Outward arithmetic did not produce a finite centroidal inertia tensor.
+    InertiaEnclosureIndeterminate,
 }
 
 /// Full-check evidence paired with either certified properties or a refusal.
@@ -279,7 +348,7 @@ pub fn body_properties_analytic_work(store: &Store, body: BodyId) -> Result<u64>
         })
 }
 
-/// Full-validate and certify volume, centroid, and surface area in one caller-owned scope.
+/// Full-validate and certify analytic mass properties in one caller-owned scope.
 pub fn certify_body_properties_in_scope(
     store: &Store,
     body: BodyId,
@@ -319,6 +388,7 @@ pub fn certify_body_properties_in_scope(
 struct Flux {
     volume: Interval,
     moment: [Interval; 3],
+    second_moment: [Interval; 6],
 }
 
 impl Flux {
@@ -326,6 +396,7 @@ impl Flux {
         Self {
             volume: Interval::point(0.0),
             moment: [Interval::point(0.0); 3],
+            second_moment: [Interval::point(0.0); 6],
         }
     }
 
@@ -337,11 +408,16 @@ impl Flux {
                 self.moment[1] + other.moment[1],
                 self.moment[2] + other.moment[2],
             ],
+            second_moment: core::array::from_fn(|index| {
+                self.second_moment[index] + other.second_moment[index]
+            }),
         }
     }
 
     fn finite(self) -> bool {
-        finite_interval(self.volume) && self.moment.into_iter().all(finite_interval)
+        finite_interval(self.volume)
+            && self.moment.into_iter().all(finite_interval)
+            && self.second_moment.into_iter().all(finite_interval)
     }
 }
 
@@ -462,10 +538,15 @@ fn integrate_body(
     let Some(surface_area) = ScalarEnclosure::from_interval(surface_area) else {
         return Err(BodyPropertiesRefusal::NonPositiveSurfaceAreaEnclosure);
     };
+    let centroidal_inertia =
+        inertia::centroidal_inertia(total.volume, total.moment, total.second_moment)
+            .and_then(SymmetricTensor3Enclosure::from_intervals)
+            .ok_or(BodyPropertiesRefusal::InertiaEnclosureIndeterminate)?;
     Ok(CertifiedBodyProperties {
         volume,
         centroid,
         surface_area,
+        centroidal_inertia,
     })
 }
 
@@ -698,11 +779,25 @@ fn integrate_plane_span(
                     .scale(-(h * interval_ratio(1.0, 4.0)) * du);
                 moment[coordinate] = primitive.integrate(span.start(), span.end())?;
             }
+            let second_primitives = inertia::plane_poly_primitives(
+                u,
+                v,
+                relative_coordinates,
+                x_coordinates,
+                y_coordinates,
+            );
+            let mut second_moment = [Interval::point(0.0); 6];
+            for component in 0..6 {
+                second_moment[component] = second_primitives[component]
+                    .scale(-(h * interval_ratio(1.0, 5.0)) * du)
+                    .integrate(span.start(), span.end())?;
+            }
             let integral = SpanIntegral {
                 signed_parameter_area: signed_area,
                 flux: Flux {
                     volume: volume_poly.integrate(span.start(), span.end())?,
                     moment,
+                    second_moment,
                 },
             };
             integral.finite().then_some(integral)
@@ -740,11 +835,26 @@ fn integrate_plane_span(
                     .mul(du);
                 moment[coordinate] = primitive.integrate(span.start(), span.end())?;
             }
+            let second_primitives = inertia::plane_laurent_primitives(
+                u,
+                v,
+                relative_coordinates,
+                x_coordinates,
+                y_coordinates,
+            );
+            let mut second_moment = [Interval::point(0.0); 6];
+            for component in 0..6 {
+                second_moment[component] = second_primitives[component]
+                    .scale_interval(-(h * interval_ratio(1.0, 5.0)))
+                    .mul(du)
+                    .integrate(span.start(), span.end())?;
+            }
             let integral = SpanIntegral {
                 signed_parameter_area: signed_area,
                 flux: Flux {
                     volume: volume_form.integrate(span.start(), span.end())?,
                     moment,
+                    second_moment,
                 },
             };
             integral.finite().then_some(integral)
@@ -779,11 +889,14 @@ fn integrate_cylinder_span(
     for coordinate in 0..3 {
         h = h.add(radial[coordinate].scale_interval(relative_coordinates[coordinate]));
     }
+    let mut base = [Laurent::zero(); 3];
     let mut h_position = [Laurent::zero(); 3];
     for coordinate in 0..3 {
-        h_position[coordinate] =
-            h.mul(Laurent::constant(relative_coordinates[coordinate]).add(radial[coordinate]));
+        base[coordinate] =
+            Laurent::constant(relative_coordinates[coordinate]).add(radial[coordinate]);
+        h_position[coordinate] = h.mul(base[coordinate]);
     }
+    let second_terms = inertia::cylinder_second_terms(h, base, z_coordinates);
 
     let u_origin = Interval::point(line.origin().x) + Interval::point(span.chart_offset().x);
     let u_direction = line.dir().x;
@@ -795,11 +908,13 @@ fn integrate_cylinder_span(
         Interval::point(line.dir().y),
     );
     let v2 = v.mul(v);
+    let v3 = v2.mul(v);
     let signed_area = v
         .scale(Interval::point(-u_direction))
         .integrate(span.start(), span.end())?;
     let mut volume = ComplexInterval::zero();
     let mut moment = [ComplexInterval::zero(); 3];
+    let mut second_moment = [ComplexInterval::zero(); 6];
     for power in -LAURENT_ORDER..=LAURENT_ORDER {
         let h_coefficient = h.coefficient(power);
         let volume_poly =
@@ -828,8 +943,26 @@ fn integrate_cylinder_span(
                 span.end(),
             )?);
         }
+        for component in 0..6 {
+            let terms = second_terms[component];
+            let form = ComplexPoly::from_real(v)
+                .scale(terms.linear.coefficient(power))
+                .add(ComplexPoly::from_real(v2).scale(terms.quadratic.coefficient(power)))
+                .add(ComplexPoly::from_real(v3).scale(terms.cubic.coefficient(power)))
+                .scale_real(interval_ratio(-u_direction, 5.0));
+            second_moment[component] = second_moment[component].add(form.integrate_exponential(
+                power,
+                u_origin,
+                u_direction,
+                span.start(),
+                span.end(),
+            )?);
+        }
     }
-    if !volume.im.contains_zero() || moment.iter().any(|value| !value.im.contains_zero()) {
+    if !volume.im.contains_zero()
+        || moment.iter().any(|value| !value.im.contains_zero())
+        || second_moment.iter().any(|value| !value.im.contains_zero())
+    {
         return None;
     }
     let integral = SpanIntegral {
@@ -837,6 +970,7 @@ fn integrate_cylinder_span(
         flux: Flux {
             volume: volume.re,
             moment: [moment[0].re, moment[1].re, moment[2].re],
+            second_moment: core::array::from_fn(|component| second_moment[component].re),
         },
     };
     integral.finite().then_some(integral)

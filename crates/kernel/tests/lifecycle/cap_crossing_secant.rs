@@ -559,6 +559,132 @@ fn expected_surface_area(operation: BooleanOperation, case: CapCrossingCase) -> 
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct AnalyticMass {
+    volume: f64,
+    first: [f64; 3],
+    second: [[f64; 3]; 3],
+}
+
+impl AnalyticMass {
+    fn combine(self, other: Self, sign: f64) -> Self {
+        Self {
+            volume: self.volume + sign * other.volume,
+            first: core::array::from_fn(|index| self.first[index] + sign * other.first[index]),
+            second: core::array::from_fn(|row| {
+                core::array::from_fn(|column| {
+                    self.second[row][column] + sign * other.second[row][column]
+                })
+            }),
+        }
+    }
+
+    fn centroidal_inertia(self) -> [[f64; 3]; 3] {
+        let covariance: [[f64; 3]; 3] = core::array::from_fn(|row| {
+            core::array::from_fn(|column| {
+                self.second[row][column] - self.first[row] * self.first[column] / self.volume
+            })
+        });
+        let trace = covariance[0][0] + covariance[1][1] + covariance[2][2];
+        core::array::from_fn(|row| {
+            core::array::from_fn(|column| {
+                if row == column {
+                    trace - covariance[row][column]
+                } else {
+                    -covariance[row][column]
+                }
+            })
+        })
+    }
+}
+
+fn cap_crossing_mass(operation: BooleanOperation, case: CapCrossingCase) -> AnalyticMass {
+    let theta = (OFFSET_X / RADIUS).acos();
+    let segment_area = RADIUS * RADIUS * theta - OFFSET_X * ROOT_Y;
+    let segment_first_x = 4.0 * ROOT_Y / 3.0;
+    let segment_second_x = 81.0 * theta / 64.0 + 7.0 * ROOT_Y / 32.0;
+    let segment_second_y = 81.0 * theta / 64.0 - 43.0 * ROOT_Y / 96.0;
+    let block = AnalyticMass {
+        volume: 48.0,
+        first: [72.0, 0.0, 48.0],
+        second: [[124.0, 0.0, 72.0], [0.0, 144.0, 0.0], [72.0, 0.0, 112.0]],
+    };
+    let cylinder = AnalyticMass {
+        volume: 9.0 * core::f64::consts::PI / 2.0,
+        first: [0.0, 0.0, 9.0 * core::f64::consts::PI / 2.0],
+        second: [
+            [81.0 * core::f64::consts::PI / 32.0, 0.0, 0.0],
+            [0.0, 81.0 * core::f64::consts::PI / 32.0, 0.0],
+            [0.0, 0.0, 6.0 * core::f64::consts::PI],
+        ],
+    };
+    let intersection = AnalyticMass {
+        volume: 2.0 * segment_area,
+        first: [2.0 * segment_first_x, 0.0, 2.0 * segment_area],
+        second: [
+            [2.0 * segment_second_x, 0.0, 2.0 * segment_first_x],
+            [0.0, 2.0 * segment_second_y, 0.0],
+            [2.0 * segment_first_x, 0.0, 8.0 * segment_area / 3.0],
+        ],
+    };
+    match operation {
+        BooleanOperation::Intersect => intersection,
+        BooleanOperation::Unite => block.combine(cylinder, 1.0).combine(intersection, -1.0),
+        BooleanOperation::Subtract if case.swapped => cylinder.combine(intersection, -1.0),
+        BooleanOperation::Subtract => block.combine(intersection, -1.0),
+        _ => panic!("unsupported test operation {operation:?}"),
+    }
+}
+
+fn rotate_tensor(frame: Frame, local: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let axes = [frame.x(), frame.y(), frame.z()].map(|axis| [axis.x, axis.y, axis.z]);
+    core::array::from_fn(|row| {
+        core::array::from_fn(|column| {
+            (0..3)
+                .flat_map(|left| (0..3).map(move |right| (left, right)))
+                .map(|(left, right)| axes[left][row] * local[left][right] * axes[right][column])
+                .sum()
+        })
+    })
+}
+
+fn inertia_about(properties: &kernel::BodyProperties, origin: Point3) -> [[f64; 3]; 3] {
+    let centroid = properties.centroid().value();
+    let displacement = [
+        centroid.x - origin.x,
+        centroid.y - origin.y,
+        centroid.z - origin.z,
+    ];
+    let squared_norm = displacement
+        .into_iter()
+        .map(|value| value * value)
+        .sum::<f64>();
+    let centroidal = properties.centroidal_inertia().value();
+    let volume = properties.volume().value();
+    core::array::from_fn(|row| {
+        core::array::from_fn(|column| {
+            centroidal[row][column]
+                + volume
+                    * (if row == column { squared_norm } else { 0.0 }
+                        - displacement[row] * displacement[column])
+        })
+    })
+}
+
+fn tensor_identity_error(terms: &[([[f64; 3]; 3], f64)]) -> f64 {
+    let mut squared = 0.0;
+    for row in 0..3 {
+        for column in 0..3 {
+            let residual = terms
+                .iter()
+                .map(|(tensor, scale)| scale * tensor[row][column])
+                .sum::<f64>();
+            squared += residual * residual;
+        }
+    }
+    squared.sqrt()
+}
+
 fn expected_centroid_x(operation: BooleanOperation, case: CapCrossingCase) -> f64 {
     let intersection_volume = cap_crossing_segment_volume();
     let intersection_first_moment = 8.0 * 2.0_f64.sqrt() / 3.0;
@@ -753,6 +879,22 @@ fn assert_cap_crossing_operation(
         "{} {operation:?}: loose area enclosure {:?}",
         case.name,
         properties.surface_area(),
+    );
+    let expected_inertia = rotate_tensor(
+        fixture.frame,
+        cap_crossing_mass(operation, case).centroidal_inertia(),
+    );
+    assert!(
+        properties.centroidal_inertia().contains(expected_inertia),
+        "{} {operation:?}: expected inertia {expected_inertia:?}, enclosure {:?}",
+        case.name,
+        properties.centroidal_inertia(),
+    );
+    assert!(
+        properties.centroidal_inertia().error_bound() <= 1.0e-8,
+        "{} {operation:?}: loose inertia enclosure {:?}",
+        case.name,
+        properties.centroidal_inertia(),
     );
     let mesh = part
         .tessellate_body(TessellateBodyRequest::new(
@@ -968,6 +1110,13 @@ fn certified_properties_obey_cap_crossing_boolean_additivity() {
         let local = fixture.frame.to_local(properties.centroid().value());
         local * volume(properties)
     };
+    let origin = fixture.frame.origin();
+    let block_inertia = inertia_about(&block, origin);
+    let cylinder_inertia = inertia_about(&cylinder, origin);
+    let intersection_inertia = inertia_about(&intersection, origin);
+    let union_inertia = inertia_about(&union, origin);
+    let block_minus_inertia = inertia_about(&block_minus_cylinder, origin);
+    let cylinder_minus_inertia = inertia_about(&cylinder_minus_block, origin);
     let volume_tolerance = 1.0e-9;
     let moment_tolerance = 1.0e-8;
     assert!(
@@ -999,5 +1148,28 @@ fn certified_properties_obey_cap_crossing_boolean_additivity() {
             - first_moment(&cylinder))
         .norm()
             <= moment_tolerance
+    );
+    let inertia_tolerance = 1.0e-7;
+    assert!(
+        tensor_identity_error(&[
+            (union_inertia, 1.0),
+            (intersection_inertia, 1.0),
+            (block_inertia, -1.0),
+            (cylinder_inertia, -1.0),
+        ]) <= inertia_tolerance
+    );
+    assert!(
+        tensor_identity_error(&[
+            (block_minus_inertia, 1.0),
+            (intersection_inertia, 1.0),
+            (block_inertia, -1.0),
+        ]) <= inertia_tolerance
+    );
+    assert!(
+        tensor_identity_error(&[
+            (cylinder_minus_inertia, 1.0),
+            (intersection_inertia, 1.0),
+            (cylinder_inertia, -1.0),
+        ]) <= inertia_tolerance
     );
 }

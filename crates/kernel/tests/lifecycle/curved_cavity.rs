@@ -15,6 +15,16 @@ fn contained_cylinder_fixture() -> BooleanFixture {
     )
 }
 
+fn offset_cylinder_fixture() -> BooleanFixture {
+    block_cylinder_boolean_fixture(
+        Frame::world(),
+        [6.0, 6.0, 6.0],
+        Frame::world().with_origin(Point3::new(1.0, 0.5, -1.0)),
+        0.75,
+        2.0,
+    )
+}
+
 #[test]
 fn public_contained_cylinder_subtraction_commits_an_exact_two_shell_cavity() {
     let mut fixture = contained_cylinder_fixture();
@@ -70,6 +80,14 @@ fn public_contained_cylinder_subtraction_commits_an_exact_two_shell_cavity() {
             .surface_area()
             .contains(216.0 + 2.0 * core::f64::consts::PI * 0.75 * (0.75 + 2.0))
     );
+    let cavity_volume = core::f64::consts::PI * 0.75 * 0.75 * 2.0;
+    let cavity_transverse_inertia = cavity_volume * (3.0 * 0.75 * 0.75 + 2.0 * 2.0) / 12.0;
+    let cavity_axial_inertia = 0.5 * cavity_volume * 0.75 * 0.75;
+    assert!(properties.centroidal_inertia().contains([
+        [1296.0 - cavity_transverse_inertia, 0.0, 0.0],
+        [0.0, 1296.0 - cavity_transverse_inertia, 0.0],
+        [0.0, 0.0, 1296.0 - cavity_axial_inertia],
+    ]));
     let body_view = part.body(body.clone()).unwrap();
     let regions = body_view.regions().collect::<Vec<_>>();
     assert_eq!(regions.len(), 3);
@@ -261,6 +279,84 @@ fn public_contained_cylinder_subtraction_commits_an_exact_two_shell_cavity() {
     ));
     assert_eq!(boolean_topology_counts(&reversed), before);
     assert_boolean_sources_retained(&reversed, 2);
+}
+
+#[test]
+fn offset_cavity_properties_obey_parallel_axis_subtraction() {
+    let mut fixture = offset_cylinder_fixture();
+    let result = boolean_success(run_boolean(
+        &mut fixture,
+        BooleanOperation::Subtract,
+        OperationSettings::new(),
+    ));
+    let BooleanResult::Created(created) = result else {
+        panic!("block minus its offset contained cylinder must create a cavity")
+    };
+    assert_boolean_created_full_valid(&created);
+    let part = fixture.session.part(fixture.part.clone()).unwrap();
+    let kernel::BodyPropertiesOutcome::Certified {
+        properties,
+        full_check,
+    } = part
+        .body_properties(kernel::BodyPropertiesRequest::new(
+            created.bodies()[0].clone(),
+        ))
+        .unwrap()
+        .into_result()
+        .unwrap()
+    else {
+        panic!("offset cavity properties were refused")
+    };
+    assert_eq!(full_check.outcome(), CheckOutcome::Valid);
+
+    let cavity_mass = core::f64::consts::PI * 0.75 * 0.75 * 2.0;
+    let remaining_volume = 216.0 - cavity_mass;
+    let cavity_center = [1.0, 0.5, 0.0];
+    let remaining_center = cavity_center.map(|value| -cavity_mass * value / remaining_volume);
+    assert!(properties.volume().contains(remaining_volume));
+    assert!(properties.centroid().contains(Point3::new(
+        remaining_center[0],
+        remaining_center[1],
+        remaining_center[2],
+    )));
+    assert!(
+        properties
+            .surface_area()
+            .contains(216.0 + 2.0 * core::f64::consts::PI * 0.75 * (0.75 + 2.0))
+    );
+
+    let parallel_axis = |mass: f64, displacement: [f64; 3]| -> [[f64; 3]; 3] {
+        let squared = displacement
+            .into_iter()
+            .map(|value| value * value)
+            .sum::<f64>();
+        core::array::from_fn(|row| {
+            core::array::from_fn(|column| {
+                mass * (if row == column { squared } else { 0.0 }
+                    - displacement[row] * displacement[column])
+            })
+        })
+    };
+    let cavity_transverse = cavity_mass * (3.0 * 0.75 * 0.75 + 4.0) / 12.0;
+    let cavity_axial = 0.5 * cavity_mass * 0.75 * 0.75;
+    let cavity_centroidal = [
+        [cavity_transverse, 0.0, 0.0],
+        [0.0, cavity_transverse, 0.0],
+        [0.0, 0.0, cavity_axial],
+    ];
+    let cavity_shift = parallel_axis(cavity_mass, cavity_center);
+    let result_shift = parallel_axis(remaining_volume, remaining_center);
+    let expected_inertia: [[f64; 3]; 3] = core::array::from_fn(|row| {
+        core::array::from_fn(|column| {
+            (if row == column { 1296.0 } else { 0.0 })
+                - cavity_centroidal[row][column]
+                - cavity_shift[row][column]
+                - result_shift[row][column]
+        })
+    });
+    assert!(expected_inertia[0][1].abs() > 0.0);
+    assert!(properties.centroidal_inertia().contains(expected_inertia));
+    assert!(properties.centroidal_inertia().error_bound() <= 1.0e-7);
 }
 
 #[test]

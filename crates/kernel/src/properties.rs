@@ -7,7 +7,7 @@ use crate::operation::{OperationOutcome, OperationSettings, adapt_check_report};
 use crate::session::Part;
 use crate::{BodyId, CapabilityId, CheckReport, FaceId, PartId, Point3};
 
-/// Typed request for certified solid-body volume, centroid, and surface area.
+/// Typed request for certified solid-body volume, centroid, area, and inertia.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BodyPropertiesRequest {
     body: BodyId,
@@ -132,6 +132,65 @@ impl Point3Enclosure {
     }
 }
 
+/// Certified enclosure of one symmetric model-space tensor.
+///
+/// Components use `(xx, yy, zz, xy, xz, yz)` order. Mirrored matrix entries
+/// share exactly the same scalar enclosure.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SymmetricTensor3Enclosure {
+    components: [ScalarEnclosure; 6],
+}
+
+impl SymmetricTensor3Enclosure {
+    fn from_lower(value: ktopo::body_properties::SymmetricTensor3Enclosure) -> Self {
+        let components = value.components();
+        Self {
+            components: [
+                ScalarEnclosure::from_lower(components[0]),
+                ScalarEnclosure::from_lower(components[1]),
+                ScalarEnclosure::from_lower(components[2]),
+                ScalarEnclosure::from_lower(components[3]),
+                ScalarEnclosure::from_lower(components[4]),
+                ScalarEnclosure::from_lower(components[5]),
+            ],
+        }
+    }
+
+    /// Certified components in `(xx, yy, zz, xy, xz, yz)` order.
+    pub const fn components(self) -> [ScalarEnclosure; 6] {
+        self.components
+    }
+
+    /// Certified symmetric matrix with bit-identical mirrored entries.
+    pub const fn matrix(self) -> [[ScalarEnclosure; 3]; 3] {
+        let [xx, yy, zz, xy, xz, yz] = self.components;
+        [[xx, xy, xz], [xy, yy, yz], [xz, yz, zz]]
+    }
+
+    /// Deterministic midpoint representative matrix.
+    pub fn value(self) -> [[f64; 3]; 3] {
+        self.matrix().map(|row| row.map(ScalarEnclosure::value))
+    }
+
+    /// Frobenius radius containing the six-component interval box.
+    pub fn error_bound(self) -> f64 {
+        let mut squared_radius = 0.0_f64;
+        for (index, component) in self.components.into_iter().enumerate() {
+            let radius = component.error_bound();
+            let multiplicity = if index < 3 { 1.0 } else { 2.0 };
+            let term = (multiplicity * radius * radius).next_up();
+            squared_radius = (squared_radius + term).next_up();
+        }
+        squared_radius.sqrt().next_up()
+    }
+
+    /// Whether every supplied matrix entry lies in its certified enclosure.
+    pub fn contains(self, value: [[f64; 3]; 3]) -> bool {
+        let matrix = self.matrix();
+        (0..3).all(|row| (0..3).all(|column| matrix[row][column].contains(value[row][column])))
+    }
+}
+
 /// Certified properties of one opaque facade body.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BodyProperties {
@@ -139,6 +198,7 @@ pub struct BodyProperties {
     volume: ScalarEnclosure,
     centroid: Point3Enclosure,
     surface_area: ScalarEnclosure,
+    centroidal_inertia: SymmetricTensor3Enclosure,
 }
 
 impl BodyProperties {
@@ -160,6 +220,15 @@ impl BodyProperties {
     /// Certified positive area of the complete material boundary.
     pub const fn surface_area(&self) -> ScalarEnclosure {
         self.surface_area
+    }
+
+    /// Certified unit-density inertia tensor about the true centroid.
+    ///
+    /// With `c` the true centroid, this is
+    /// `integral (|r-c|^2 I - (r-c)(r-c)^T) dV`; off-diagonals use the
+    /// standard negative-product convention and the units are length^5.
+    pub const fn centroidal_inertia(&self) -> SymmetricTensor3Enclosure {
+        self.centroidal_inertia
     }
 }
 
@@ -192,6 +261,8 @@ pub enum BodyPropertiesRefusal {
     NonPositiveVolumeEnclosure,
     /// Oriented face-domain integration did not prove positive boundary area.
     NonPositiveSurfaceAreaEnclosure,
+    /// Outward arithmetic did not produce a finite centroidal inertia tensor.
+    InertiaEnclosureIndeterminate,
 }
 
 impl BodyPropertiesRefusal {
@@ -207,7 +278,8 @@ impl BodyPropertiesRefusal {
             Self::NonSolidBody
             | Self::BodyNotFullValid
             | Self::NonPositiveVolumeEnclosure
-            | Self::NonPositiveSurfaceAreaEnclosure => None,
+            | Self::NonPositiveSurfaceAreaEnclosure
+            | Self::InertiaEnclosureIndeterminate => None,
         }
     }
 }
@@ -257,11 +329,12 @@ impl BodyPropertiesOutcome {
 }
 
 impl Part<'_> {
-    /// Certify one body's volume, centroid, and surface area in one scope.
+    /// Certify one body's volume, centroid, area, and inertia in one scope.
     ///
     /// Wrong-part and stale identities plus invalid or incomplete policy
     /// configuration are rejected before the scope starts. The Full checker
-    /// and boundary integrator then share the returned accounting report.
+    /// and boundary integrator then share the returned accounting report. The
+    /// advertised property record is atomic; no partial record is returned.
     pub fn body_properties(
         &self,
         request: BodyPropertiesRequest,
@@ -306,6 +379,9 @@ fn adapt_outcome(
                 volume: ScalarEnclosure::from_lower(properties.volume()),
                 centroid: Point3Enclosure::from_lower(properties.centroid()),
                 surface_area: ScalarEnclosure::from_lower(properties.surface_area()),
+                centroidal_inertia: SymmetricTensor3Enclosure::from_lower(
+                    properties.centroidal_inertia(),
+                ),
             },
             full_check: adapt_check_report(part, store, full_check)?,
         },
@@ -353,6 +429,9 @@ fn adapt_refusal(
         ktopo::body_properties::BodyPropertiesRefusal::NonPositiveSurfaceAreaEnclosure => {
             BodyPropertiesRefusal::NonPositiveSurfaceAreaEnclosure
         }
+        ktopo::body_properties::BodyPropertiesRefusal::InertiaEnclosureIndeterminate => {
+            BodyPropertiesRefusal::InertiaEnclosureIndeterminate
+        }
     }
 }
 
@@ -375,6 +454,26 @@ mod tests {
             }
             BodyPropertiesOutcome::Refused { reason, .. } => panic!("refused: {reason:?}"),
         }
+    }
+
+    fn rotated_diagonal(frame: Frame, diagonal: [f64; 3]) -> [[f64; 3]; 3] {
+        let axes = [frame.x(), frame.y(), frame.z()];
+        let coordinate = |axis: crate::Vec3, index| match index {
+            0 => axis.x,
+            1 => axis.y,
+            _ => axis.z,
+        };
+        core::array::from_fn(|row| {
+            core::array::from_fn(|column| {
+                (0..3)
+                    .map(|axis| {
+                        diagonal[axis]
+                            * coordinate(axes[axis], row)
+                            * coordinate(axes[axis], column)
+                    })
+                    .sum()
+            })
+        })
     }
 
     #[test]
@@ -419,6 +518,15 @@ mod tests {
         );
         assert!(block.volume().contains(24.0));
         assert!(block.surface_area().contains(52.0));
+        assert!(block.centroidal_inertia().contains([
+            [50.0, 0.0, 0.0],
+            [0.0, 40.0, 0.0],
+            [0.0, 0.0, 26.0],
+        ]));
+        let block_inertia_matrix = block.centroidal_inertia().matrix();
+        assert_eq!(block_inertia_matrix[0][1], block_inertia_matrix[1][0]);
+        assert_eq!(block_inertia_matrix[0][2], block_inertia_matrix[2][0]);
+        assert_eq!(block_inertia_matrix[1][2], block_inertia_matrix[2][1]);
         assert!(
             block.centroid().contains(Point3::new(0.0, 0.0, 0.0)),
             "{:?}",
@@ -441,6 +549,11 @@ mod tests {
                 .surface_area()
                 .contains(2.0 * core::f64::consts::PI * 1.5 * (1.5 + 2.0))
         );
+        assert!(cylinder.centroidal_inertia().contains([
+            [129.0 * core::f64::consts::PI / 32.0, 0.0, 0.0],
+            [0.0, 129.0 * core::f64::consts::PI / 32.0, 0.0],
+            [0.0, 0.0, 81.0 * core::f64::consts::PI / 16.0],
+        ]));
         assert!(
             cylinder.centroid().contains(Point3::new(0.0, 0.0, 1.0)),
             "{:?}",
@@ -458,36 +571,36 @@ mod tests {
         assert!(translated.centroid().contains(translated_frame.origin()));
         assert!(translated.centroid().error_bound() <= 1.0e-10);
         assert!(translated.surface_area().error_bound() <= 1.0e-10);
+        let expected_inertia = rotated_diagonal(translated_frame, [50.0, 40.0, 26.0]);
+        assert!(
+            translated.centroidal_inertia().contains(expected_inertia),
+            "expected {expected_inertia:?}, enclosure {:?}",
+            translated.centroidal_inertia(),
+        );
+        assert!(translated.centroidal_inertia().error_bound() <= 1.0e-8);
     }
 
     #[test]
     fn analytic_work_budget_accepts_exactly_n_and_rejects_n_minus_one() {
         let mut session = Kernel::new().create_session();
         let part_id = session.create_part();
-        let body = session
-            .edit_part(part_id.clone())
-            .unwrap()
-            .create_block(BlockRequest::new(Frame::world(), [2.0, 3.0, 4.0]))
-            .unwrap()
-            .into_result()
-            .unwrap()
-            .body();
+        let bodies = {
+            let mut part = session.edit_part(part_id.clone()).unwrap();
+            let block = part
+                .create_block(BlockRequest::new(Frame::world(), [2.0, 3.0, 4.0]))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            let cylinder = part
+                .create_cylinder(CylinderRequest::new(Frame::world(), 1.5, 2.0))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            [block, cylinder]
+        };
         let part = session.part(part_id).unwrap();
-        let baseline = part
-            .body_properties(BodyPropertiesRequest::new(body.clone()))
-            .unwrap();
-        let consumed = baseline
-            .report()
-            .usage()
-            .iter()
-            .find(|usage| {
-                usage.stage == crate::BODY_PROPERTIES_ANALYTIC_WORK
-                    && usage.resource == ResourceKind::Work
-            })
-            .expect("analytic stage was not charged")
-            .consumed;
-        assert!(consumed > 0);
-
         let settings = |allowed| {
             OperationSettings::new().with_budget_overrides(
                 BudgetPlan::new([LimitSpec::new(
@@ -499,20 +612,42 @@ mod tests {
                 .unwrap(),
             )
         };
-        let exact = part
-            .body_properties(
-                BodyPropertiesRequest::new(body.clone()).with_settings(settings(consumed)),
-            )
-            .unwrap();
-        assert!(exact.result().is_ok());
-        let refused = part
-            .body_properties(BodyPropertiesRequest::new(body).with_settings(settings(consumed - 1)))
-            .unwrap();
-        let error = refused.result().unwrap_err();
-        assert_eq!(error.class(), ErrorClass::ResourceLimit);
-        let limit = error.limit().expect("resource failure lost its limit");
-        assert_eq!(limit.stage, crate::BODY_PROPERTIES_ANALYTIC_WORK);
-        assert_eq!(limit.consumed, consumed);
-        assert_eq!(limit.allowed, consumed - 1);
+        let mut consumptions = [0_u64; 2];
+        for (index, body) in bodies.into_iter().enumerate() {
+            let baseline = part
+                .body_properties(BodyPropertiesRequest::new(body.clone()))
+                .unwrap();
+            let consumed = baseline
+                .report()
+                .usage()
+                .iter()
+                .find(|usage| {
+                    usage.stage == crate::BODY_PROPERTIES_ANALYTIC_WORK
+                        && usage.resource == ResourceKind::Work
+                })
+                .expect("analytic stage was not charged")
+                .consumed;
+            assert!(consumed > 0);
+            consumptions[index] = consumed;
+
+            let exact = part
+                .body_properties(
+                    BodyPropertiesRequest::new(body.clone()).with_settings(settings(consumed)),
+                )
+                .unwrap();
+            assert!(exact.result().is_ok());
+            let refused = part
+                .body_properties(
+                    BodyPropertiesRequest::new(body).with_settings(settings(consumed - 1)),
+                )
+                .unwrap();
+            let error = refused.result().unwrap_err();
+            assert_eq!(error.class(), ErrorClass::ResourceLimit);
+            let limit = error.limit().expect("resource failure lost its limit");
+            assert_eq!(limit.stage, crate::BODY_PROPERTIES_ANALYTIC_WORK);
+            assert_eq!(limit.consumed, consumed);
+            assert_eq!(limit.allowed, consumed - 1);
+        }
+        assert_ne!(consumptions[0], consumptions[1]);
     }
 }

@@ -327,7 +327,7 @@ pub use operation::{
 pub use primitive::CylinderRequest;
 pub use properties::{
     BodyProperties, BodyPropertiesOutcome, BodyPropertiesRefusal, BodyPropertiesRequest,
-    Point3Enclosure, ScalarEnclosure,
+    Point3Enclosure, ScalarEnclosure, SymmetricTensor3Enclosure,
 };
 pub use section::{
     BodySectionBudgetProfile, BodySectionGraph, CertifiedSectionPeriodicFaceEmbedding,
