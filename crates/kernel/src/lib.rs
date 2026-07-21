@@ -10,8 +10,8 @@
 //! through-hole, two-ring two-sided connected-union, inverse-containment
 //! convex-planar cavity, support-separated exact-contact empty intersections,
 //! certified flush axial cap-contact connected union, typed X_T import/export,
-//! public Plane/Cylinder rings, bounded section arcs, finite exact-family
-//! transverse ruling carriers, and graph-owned bounded curve intersection
+//! public Plane/Cylinder rings, bounded section arcs, topology-clipped
+//! transverse ruling fragments, and graph-owned bounded curve intersection
 //! with F2 reports and delegated classified errors. Rigid copies own disjoint
 //! topology and geometry closures and retain exact `DerivedFrom` lineage. Committed
 //! mutation, lineage, tolerance-growth, and descriptive face-tolerance
@@ -326,12 +326,13 @@ pub use primitive::CylinderRequest;
 pub use section::{
     BodySectionBudgetProfile, BodySectionGraph, SECTION_FACE_PAIRS, SECTION_WORK,
     SectionBodiesRequest, SectionBranch, SectionBranchEvidence, SectionBranchTopology,
-    SectionCarrier, SectionCompletion, SectionCurveComponent, SectionCurveEndpoint,
-    SectionCurveEndpointTopology, SectionCurveFragment, SectionCurveFragmentEnd,
-    SectionCurveFragmentSpan, SectionCurveTrimProvenance, SectionEdge,
+    SectionCarrier, SectionCarrierParameterInterval, SectionCompletion, SectionCurveComponent,
+    SectionCurveEndpoint, SectionCurveEndpointTopology, SectionCurveFragment,
+    SectionCurveFragmentEnd, SectionCurveFragmentSpan, SectionCurveTrimProvenance, SectionEdge,
     SectionEdgeParameterInterval, SectionFragmentSite, SectionGap, SectionLoop,
-    SectionProjectiveParameterInterval, SectionRing, SectionSite, SectionSourceParameterKey,
-    SectionUvCircle, SectionUvCurve, SectionUvLine, SectionVertex,
+    SectionProjectiveParameterInterval, SectionRing, SectionRulingFragmentEnd,
+    SectionRulingTrimProvenance, SectionSite, SectionSourceParameterKey, SectionUvCircle,
+    SectionUvCurve, SectionUvLine, SectionVertex,
 };
 pub use session::{Kernel, Part, PartEdit, Session};
 pub use tessellation::{BodyMesh, EdgePolyline, FaceTriangleRange, TessellateBodyRequest};

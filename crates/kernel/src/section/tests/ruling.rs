@@ -79,25 +79,26 @@ fn assert_ruling_contract(
     assert!(graph.vertices().is_empty());
     assert!(graph.loops().is_empty());
     assert!(graph.rings().is_empty());
-    assert!(graph.curve_endpoints().is_empty());
-    assert!(graph.curve_fragments().is_empty());
+    assert_eq!(graph.curve_endpoints().len(), 8, "ruling graph: {graph:#?}");
+    assert_eq!(graph.curve_fragments().len(), 4);
     assert!(graph.curve_components().is_empty());
     assert_eq!(graph.branches().len(), 4);
     assert_eq!(
         graph
             .gaps()
             .iter()
-            .filter(|gap| gap.reason() == GAP_RULING_TRIM_UNRESOLVED)
+            .filter(|gap| gap.reason() == GAP_MIXED_FRAGMENT_STITCH)
             .count(),
         graph.branches().len(),
-        "each retained open carrier must own one stable trim gap"
+        "each retained bounded ruling must own one mixed-stitch gap"
     );
     assert!(
         graph
             .gaps()
             .iter()
-            .all(|gap| gap.reason() != GAP_CURVED_TRIM_UNRESOLVED),
-        "rulings must not reuse the retired cyclic-trim reason"
+            .all(|gap| gap.reason() != GAP_CURVED_TRIM_UNRESOLVED
+                && gap.reason() != GAP_RULING_TRIM_UNRESOLVED),
+        "topology-clipped rulings must not retain either retired trim reason"
     );
     assert_stable_gap_reasons(graph);
 
@@ -111,6 +112,50 @@ fn assert_ruling_contract(
         let (origin, direction) = line_carrier(branch);
         assert!((direction.norm() - 1.0).abs() <= RULING_TOL);
         assert!(direction.cross(expected_axis).norm() <= RULING_TOL);
+
+        let fragment = graph
+            .curve_fragments()
+            .iter()
+            .find(|fragment| fragment.branch() == branch_index)
+            .expect("every ruling branch must publish one topology-owned fragment");
+        assert_eq!(fragment.source_ordinal(), 0);
+        let SectionCurveFragmentSpan::LineSegment { endpoints } = fragment.span() else {
+            panic!("ruling branch must publish an affine line segment")
+        };
+        for end in endpoints.iter() {
+            assert!(end.endpoint() < graph.curve_endpoints().len());
+            assert_point_close(
+                end.point(),
+                origin + direction * end.carrier_parameter(),
+                "ruling fragment representative",
+            );
+            let trims = end.trims();
+            assert_eq!(trims.iter().filter(|trim| trim.is_some()).count(), 1);
+            let trim = trims.iter().flatten().next().unwrap();
+            assert_eq!(trim.face(), branch.faces()[trim.operand()]);
+            assert!(trim.edge_parameter().lo() < trim.edge_parameter().hi());
+            assert!(trim.carrier_parameter().lo() < trim.carrier_parameter().hi());
+            let endpoint = &graph.curve_endpoints()[end.endpoint()];
+            let SectionCurveEndpointTopology::Trim {
+                sites,
+                source_parameters,
+            } = endpoint.topology()
+            else {
+                panic!("physical ruling trim must not become a parameter seam")
+            };
+            assert_eq!(
+                sites[trim.operand()],
+                SectionSite::EdgeInterior(trim.source_parameter().edge())
+            );
+            assert_eq!(
+                source_parameters[trim.operand()].as_ref(),
+                Some(trim.source_parameter())
+            );
+            assert_eq!(
+                endpoint.edge_parameters()[trim.operand()],
+                Some(trim.edge_parameter())
+            );
+        }
 
         let pcurves = [uv_line(branch.pcurves()[0]), uv_line(branch.pcurves()[1])];
         assert!(pcurves.iter().all(|line| {
@@ -180,6 +225,11 @@ fn matching_branch<'a>(branches: &'a [SectionBranch], target: &SectionBranch) ->
 fn world_rulings_expose_exact_open_carriers_pcurves_sites_and_residuals() {
     let (session, part_id, block, cylinder) = world_ruling_scene();
     let graph = section_graph(&session, &part_id, &block, &cylinder);
+    let repeated = section_graph(&session, &part_id, &block, &cylinder);
+    assert_eq!(
+        repeated, graph,
+        "serial section reruns must reproduce the complete published ruling payload"
+    );
     assert_ruling_contract(&session, &part_id, &graph, Frame::world().z());
 }
 

@@ -13,8 +13,8 @@ The current facade supports:
 - operation-accounted conforming solid and sheet tessellation;
 - bounded, operation-accounted surface evaluation;
 - certified body section graphs exposing Plane/Cylinder rings, exact bounded
-  arcs, and finite exact-family transverse ruling carriers while unresolved
-  ruling trims remain typed graph gaps;
+  arcs, and topology-clipped transverse ruling fragments with operation-shared
+  source-edge root identity; mixed-family cycle assembly remains a typed gap;
 - failure-atomic block/block unite/intersect/subtract plus axial
   convex-planar/finite-cylinder intersection, finite-cylinder-minus-planar
   remainder bands, zero-cut truth-selected whole-source union/subtraction
