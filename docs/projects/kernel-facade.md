@@ -279,7 +279,7 @@ signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handle
 - Broader semantic edit families beyond the landed MVFS/KVFS, MEV/KEV, MEF/KEF, KFMRH/MFKRH,
   split/merge, bridge/ring, and rigid copy; nested edit transactions pending a journal-composition +
   partition-history contract; tolerance-propagation policies beyond MEF inheritance / KEF ordered max.
-- Certify transverse annulus traces, adopt the landed proof-keyed disk cells and period-lifted source arcs in mixed-shell planning, then Full-commit the public planar-solid/finite-cylinder Boolean slice; pure planar BSP and convex curved shortcuts retain the typed convex certificate gate.
+- Adopt the landed proof-keyed disk cells, certified transverse annulus traces, and period-lifted source arcs in mixed-shell planning, then Full-commit the public planar-solid/finite-cylinder Boolean slice; pure planar BSP and convex curved shortcuts retain the typed convex certificate gate.
 - Rigid-copy preflight gaps: altered/witness-mismatched higher-order charts, graph-valid shared-basis
   or periodic-source/carrier proofs, other-sample dual offsets, nested five-/seven-sample roots, and
   Offset(Plane)-peer transmitted proofs; graph trace representation/binding beyond four-descriptor
@@ -289,7 +289,7 @@ signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handle
 - F5 exposes body section graphs, verified Plane/Cylinder circle and finite exact-family transverse ruling
   branches, and exact endpoint-free `SectionRing` components when topology-owned trims retain the
   whole period. `SectionCurveFragment` exposes exact bounded arcs and topology-clipped line segments
-  with operation-shared source-root endpoint identity and topology provenance; proof-keyed disk-cap chords join rulings in deterministic closed components and feed count-independent exact disk arrangements with dual classification and period-lifted source-arc lineage, while semantic Plane supports certify rounded-frame source incidence. Exact planar-circle and periodic-cylinder face-region
+  with operation-shared source-root endpoint identity and topology provenance; proof-keyed disk-cap chords join rulings in deterministic closed components and feed count-independent exact disk arrangements with dual classification and period-lifted source-arc lineage. Certified maximal transverse annulus traces retain exact source-loop roots, canonical/lifted UV, integer chart shifts, and count-independent universal-cover noncrossing proof, while semantic Plane supports certify rounded-frame source incidence. Exact planar-circle and periodic-cylinder face-region
   partitions now propagate open-cell occupancy over their proof-bearing dual graph. Exact retained source/carrier scalars, semantic sloped-support recovery, and harmonic support bounds materialize selected convex multi-chart bounded-arc cells through five supports; ordered planar-minus-cylinder atomically Full-commits every disconnected rectangular/three-sided component across four frames. Endpoint-free cap truth/planning/incidence/materialization and count-independent portal-shell proof Full-commit rectangular/five-support cap-retaining Unite and cylinder-left Subtract across those frames with deterministic X_T, exact topology/volume, and N/N-1 shell-work evidence. There is no general surface/surface entry point; future adapters must preserve the
   lower `kops` completion boundary/evidence, not duplicate or widen it.
 - Encapsulation follow-on (separate announced low-level break): make entity fields crate-private and

@@ -1750,3 +1750,90 @@ fn oblique_triangular_prism_cylinder_section_keeps_all_bounded_rulings() {
         );
     }
 }
+
+#[test]
+fn cap_crossing_section_certifies_complete_transverse_annulus_traces() {
+    let oblique = Frame::new(
+        Point3::new(3.0, -2.0, 1.25),
+        Vec3::new(0.48, 0.64, 0.6),
+        Vec3::new(0.8, -0.6, 0.0),
+    )
+    .unwrap();
+    for frame in [Frame::world(), oblique] {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let (block, cylinder) = {
+            let mut edit = session.edit_part(part_id.clone()).unwrap();
+            let block = edit
+                .create_block(BlockRequest::new(
+                    frame.with_origin(frame.point_at(1.5, 0.0, 1.0)),
+                    [2.0, 6.0, 4.0],
+                ))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            let cylinder = edit
+                .create_cylinder(CylinderRequest::new(frame, 1.5, 2.0))
+                .unwrap()
+                .into_result()
+                .unwrap()
+                .body();
+            (block, cylinder)
+        };
+
+        for (first, second, cylinder_operand) in [
+            (block.clone(), cylinder.clone(), 1),
+            (cylinder.clone(), block.clone(), 0),
+        ] {
+            let graph = section_graph(&session, &part_id, &first, &second);
+            let [SectionPeriodicFaceEmbeddingEvidence::Certified(evidence)] =
+                graph.periodic_face_embeddings()
+            else {
+                panic!(
+                    "cap-crossing side traces were not certified: {:?}",
+                    graph.periodic_face_embeddings()
+                )
+            };
+            assert_eq!(evidence.operand(), cylinder_operand);
+            assert_eq!(evidence.source_loop_windings(), &[1, -1]);
+            assert!(evidence.components().is_empty());
+            assert_eq!(evidence.boundary_traces().len(), 2);
+            assert_eq!(
+                evidence
+                    .source_loop_roots()
+                    .each_ref()
+                    .map(|roots| roots.len()),
+                [2, 2]
+            );
+            for roots in evidence.source_loop_roots() {
+                assert_eq!(
+                    roots
+                        .iter()
+                        .map(SectionPeriodicBoundaryRootEmbedding::cyclic_order)
+                        .collect::<Vec<_>>(),
+                    vec![0, 1]
+                );
+                let mut intrinsic = roots
+                    .iter()
+                    .map(|root| root.source_parameter().root_ordinal())
+                    .collect::<Vec<_>>();
+                intrinsic.sort_unstable();
+                assert_eq!(intrinsic, vec![0, 1]);
+            }
+            let mut covered = Vec::new();
+            for trace in evidence.boundary_traces() {
+                assert_eq!(trace.fragments().len(), trace.component_ordinals().len());
+                assert!(!trace.fragments().is_empty());
+                assert_ne!(
+                    trace.terminals()[0].source_loop_ordinal(),
+                    trace.terminals()[1].source_loop_ordinal()
+                );
+                covered.extend(trace.fragments().iter().map(|fragment| fragment.fragment()));
+            }
+            covered.sort_unstable();
+            covered.dedup();
+            assert_eq!(covered.len(), 2);
+        }
+    }
+}

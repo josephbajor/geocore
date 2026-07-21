@@ -7,14 +7,16 @@
 use kcore::interval::Interval;
 use kcore::math;
 use kcore::operation::OperationScope;
+use ktopo::entity::{EdgeId as RawEdgeId, FinPcurve};
 use ktopo::geom::{Curve2dGeom, CurveGeom, SurfaceGeom};
 use ktopo::incidence_authority::{WholeFinIncidence, certify_whole_fin_incidence};
 use ktopo::store::Store;
 
 use super::{
     SECTION_WORK, SectionBranch, SectionCarrier, SectionCarrierParameterInterval,
-    SectionCurveComponent, SectionCurveFragment, SectionCurveFragmentSpan, SectionUvCurve,
-    SectionUvLine, curve_publish::carrier_point,
+    SectionCurveComponent, SectionCurveEndpoint, SectionCurveEndpointTopology,
+    SectionCurveFragment, SectionCurveFragmentSpan, SectionSite, SectionSourceParameterKey,
+    SectionUvCurve, SectionUvLine, curve_publish::carrier_point,
 };
 use crate::error::{Error, Result as KernelResult};
 use crate::{FaceId, LoopId, PartId, Point3};
@@ -140,6 +142,97 @@ pub struct SectionPeriodicComponentEmbedding {
     parent: Option<usize>,
 }
 
+/// One exact cap-ring root terminating a maximal cylinder-side trace.
+///
+/// `source_parameter` is the join and query-local intrinsic root-order
+/// authority. The separate `cyclic_order` is the root's strict combined order
+/// in increasing canonical cylinder longitude and may repeat query ordinals.
+/// `cylinder_chart_shift` proves how many whole periods relate that canonical
+/// longitude to this trace's continuous lifted chart.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionPeriodicBoundaryRootEmbedding {
+    endpoint: usize,
+    source_loop_ordinal: usize,
+    cyclic_order: usize,
+    source_parameter: SectionSourceParameterKey,
+    source_uv: [SectionUvParameterInterval; 2],
+    lifted_uv: [SectionUvParameterInterval; 2],
+    cylinder_chart_shift: i64,
+}
+
+impl SectionPeriodicBoundaryRootEmbedding {
+    /// Index into `BodySectionGraph::curve_endpoints`.
+    pub const fn endpoint(&self) -> usize {
+        self.endpoint
+    }
+
+    /// Position of the owning cap ring in [`CertifiedSectionPeriodicFaceEmbedding::source_loops`].
+    pub const fn source_loop_ordinal(&self) -> usize {
+        self.source_loop_ordinal
+    }
+
+    /// Strict cyclic order in increasing canonical cylinder longitude.
+    pub const fn cyclic_order(&self) -> usize {
+        self.cyclic_order
+    }
+
+    /// Exact source edge/root identity and its canonical scalar evidence.
+    pub const fn source_parameter(&self) -> &SectionSourceParameterKey {
+        &self.source_parameter
+    }
+
+    /// Canonical cylinder `[u, v]` enclosure, with `u` uniquely in `[0, 2π)`.
+    pub const fn source_uv(&self) -> &[SectionUvParameterInterval; 2] {
+        &self.source_uv
+    }
+
+    /// The same root in the incident trace's continuous lifted chart.
+    pub const fn lifted_uv(&self) -> &[SectionUvParameterInterval; 2] {
+        &self.lifted_uv
+    }
+
+    /// Whole periods added to canonical `u` to reach [`Self::lifted_uv`].
+    pub const fn cylinder_chart_shift(&self) -> i64 {
+        self.cylinder_chart_shift
+    }
+}
+
+/// One maximal directed, simple boundary-to-boundary trace on a cylinder side.
+///
+/// Component ordinals explicitly retain which global-cycle occurrences the
+/// trace covers. They are allowed to wrap the component vector; every carried
+/// occurrence is nevertheless certified exactly once across all traces and
+/// fully carried components.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionPeriodicBoundaryTraceEmbedding {
+    component: usize,
+    component_ordinals: Vec<usize>,
+    fragments: Vec<SectionPeriodicFragmentEmbedding>,
+    terminals: [SectionPeriodicBoundaryRootEmbedding; 2],
+}
+
+impl SectionPeriodicBoundaryTraceEmbedding {
+    /// Index into `BodySectionGraph::curve_components`.
+    pub const fn component(&self) -> usize {
+        self.component
+    }
+
+    /// Global component-fragment ordinals covered in directed trace order.
+    pub fn component_ordinals(&self) -> &[usize] {
+        &self.component_ordinals
+    }
+
+    /// Lifted side-local fragments in directed trace order.
+    pub fn fragments(&self) -> &[SectionPeriodicFragmentEmbedding] {
+        &self.fragments
+    }
+
+    /// Directed start/end roots on the topology-owned cap rings.
+    pub const fn terminals(&self) -> &[SectionPeriodicBoundaryRootEmbedding; 2] {
+        &self.terminals
+    }
+}
+
 impl SectionPeriodicComponentEmbedding {
     /// Index into `BodySectionGraph::curve_components`.
     pub const fn component(&self) -> usize {
@@ -168,14 +261,16 @@ impl SectionPeriodicComponentEmbedding {
     }
 }
 
-/// Complete nonnested contractible-component evidence for one cylinder face.
+/// Complete contractible-cycle and transverse-trace evidence for one cylinder face.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CertifiedSectionPeriodicFaceEmbedding {
     operand: usize,
     face: FaceId,
     source_loops: [LoopId; 2],
     source_loop_windings: [i32; 2],
+    source_loop_roots: [Vec<SectionPeriodicBoundaryRootEmbedding>; 2],
     components: Vec<SectionPeriodicComponentEmbedding>,
+    boundary_traces: Vec<SectionPeriodicBoundaryTraceEmbedding>,
 }
 
 impl CertifiedSectionPeriodicFaceEmbedding {
@@ -203,9 +298,22 @@ impl CertifiedSectionPeriodicFaceEmbedding {
         &self.source_loop_windings
     }
 
+    /// Complete cap-ring root sets in strict canonical cylinder order.
+    ///
+    /// Every root appears exactly once as a boundary-trace terminal. Empty
+    /// vectors retain the prior fully carried contractible-cycle contract.
+    pub const fn source_loop_roots(&self) -> &[Vec<SectionPeriodicBoundaryRootEmbedding>; 2] {
+        &self.source_loop_roots
+    }
+
     /// Nonnested contractible component embeddings on this face.
     pub fn components(&self) -> &[SectionPeriodicComponentEmbedding] {
         &self.components
+    }
+
+    /// Maximal simple traces whose parent global component leaves this face.
+    pub fn boundary_traces(&self) -> &[SectionPeriodicBoundaryTraceEmbedding] {
+        &self.boundary_traces
     }
 }
 
@@ -220,6 +328,66 @@ pub enum SectionPeriodicEmbeddingGap {
         /// Graph component index.
         component: usize,
     },
+    /// A partially carried global component was not a closed exact cycle.
+    OpenGlobalComponent {
+        /// Graph component index.
+        component: usize,
+    },
+    /// A maximal trace endpoint did not retain exact provenance on a source ring.
+    BoundaryTerminalUnavailable {
+        /// Graph component index.
+        component: usize,
+        /// Graph fragment index at the terminal.
+        fragment: usize,
+        /// Directed terminal endpoint index (`0` start, `1` end).
+        end: usize,
+    },
+    /// A maximal trace did not connect the two distinct annulus boundaries.
+    BoundaryTraceNotTransverse {
+        /// Graph component index.
+        component: usize,
+        /// Deterministic maximal-trace ordinal within that component.
+        trace: usize,
+    },
+    /// Trace terminals did not cover every graph root on one source ring once.
+    BoundaryRootCoverageMismatch {
+        /// Source-loop topology ordinal.
+        source_loop: usize,
+    },
+    /// Cap-ring roots could not be certified in strict canonical cyclic order.
+    BoundaryRootOrderIndeterminate {
+        /// Source-loop topology ordinal.
+        source_loop: usize,
+    },
+    /// A source-ring root and trace terminal did not select one cylinder chart.
+    BoundaryRootChartMismatch {
+        /// Source-loop topology ordinal.
+        source_loop: usize,
+        /// Section endpoint index.
+        endpoint: usize,
+    },
+    /// Lifted traces could not be conservatively separated.
+    BoundaryTraceIntersectionProofRequired {
+        /// First trace's graph component.
+        first_component: usize,
+        /// First component-local trace ordinal.
+        first_trace: usize,
+        /// Second trace's graph component.
+        second_component: usize,
+        /// Second component-local trace ordinal.
+        second_trace: usize,
+    },
+    /// A transverse trace could not be separated from a carried closed cycle.
+    ComponentTraceIntersectionProofRequired {
+        /// Fully carried component index.
+        component: usize,
+        /// Trace-owning component index.
+        trace_component: usize,
+        /// Component-local trace ordinal.
+        trace: usize,
+    },
+    /// The universal-cover terminal order did not prove a noncrossing matching.
+    BoundaryLoopMatchingProofRequired,
     /// An endpoint lacks an outward carrier-parameter enclosure.
     CarrierIntervalUnavailable {
         /// Graph fragment index.
@@ -358,11 +526,40 @@ struct Bounds2 {
     v: Interval,
 }
 
+#[derive(Clone)]
+struct SourceRing {
+    loop_id: LoopId,
+    edge: RawEdgeId,
+    pcurve: SectionUvLine,
+    use_: FinPcurve,
+    winding: i32,
+}
+
+#[derive(Clone)]
+struct PendingBoundaryRoot {
+    endpoint: usize,
+    source_loop_ordinal: usize,
+    source_parameter: SectionSourceParameterKey,
+    source_uv: [Interval; 2],
+    lifted_uv: [Interval; 2],
+    cylinder_chart_shift: i64,
+}
+
+#[derive(Clone)]
+struct PendingBoundaryTrace {
+    component: usize,
+    trace: usize,
+    component_ordinals: Vec<usize>,
+    fragments: Vec<SectionPeriodicFragmentEmbedding>,
+    terminals: [PendingBoundaryRoot; 2],
+}
+
 #[derive(Clone, Copy)]
 struct PeriodicCertificationInput<'a> {
     store: &'a Store,
     part: &'a PartId,
     branches: &'a [SectionBranch],
+    endpoints: &'a [SectionCurveEndpoint],
     fragments: &'a [SectionCurveFragment],
     components: &'a [SectionCurveComponent],
     linear: f64,
@@ -372,6 +569,7 @@ pub(super) fn certify_periodic_faces(
     store: &Store,
     part: &PartId,
     branches: &[SectionBranch],
+    endpoints: &[SectionCurveEndpoint],
     fragments: &[SectionCurveFragment],
     components: &[SectionCurveComponent],
     linear: f64,
@@ -414,6 +612,7 @@ pub(super) fn certify_periodic_faces(
         store,
         part,
         branches,
+        endpoints,
         fragments,
         components,
         linear,
@@ -489,17 +688,43 @@ fn certify_face(
         store,
         part,
         branches,
+        endpoints,
         fragments,
         components,
         linear,
     } = input;
+    let rings = certify_source_rings(store, part, &face, linear)?;
+    let (certified, pending_traces) =
+        certify_face_paths(branches, fragments, components, operand, &face, &rings)?;
+    certify_component_separation(&certified)?;
+    certify_trace_separation(&pending_traces)?;
+    certify_trace_component_separation(&certified, &pending_traces)?;
+    let (source_loop_roots, boundary_traces) =
+        finish_boundary_traces(endpoints, operand, &rings, pending_traces)?;
+    Ok(CertifiedSectionPeriodicFaceEmbedding {
+        operand,
+        face,
+        source_loops: [rings[0].loop_id.clone(), rings[1].loop_id.clone()],
+        source_loop_windings: [rings[0].winding, rings[1].winding],
+        source_loop_roots,
+        components: certified,
+        boundary_traces,
+    })
+}
+
+fn certify_source_rings(
+    store: &Store,
+    part: &PartId,
+    face: &FaceId,
+    linear: f64,
+) -> Result<[SourceRing; 2], SectionPeriodicEmbeddingGap> {
     let raw = store
         .get(face.raw())
         .map_err(|_| SectionPeriodicEmbeddingGap::SourceFaceTopology)?;
     let [lower, upper] = raw.loops() else {
         return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
     };
-    let mut ring_windings = Vec::new();
+    let mut rings = Vec::new();
     let mut ring_heights = Vec::new();
     for loop_id in [*lower, *upper] {
         let loop_ = store
@@ -538,65 +763,135 @@ fn certify_face(
         let Some(winding) = use_.closure_winding() else {
             return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
         };
-        if winding[0] == 0 || winding[1] != 0 {
+        if !matches!(winding, [1 | -1, 0]) {
             return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
         }
         let Ok(Curve2dGeom::Line(boundary)) = store.get(use_.curve()) else {
             return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
         };
-        if boundary.dir().x == 0.0 || boundary.dir().y != 0.0 {
+        let active = use_.range();
+        let map = use_.edge_to_pcurve();
+        let edge_parameters = [map.inverse(active.lo), map.inverse(active.hi)];
+        let rate = boundary.dir().x * map.scale();
+        if boundary.dir().x == 0.0
+            || boundary.dir().y != 0.0
+            || boundary.dir().x.abs() * active.width() != PERIOD
+            || edge_parameters.into_iter().any(|value| !value.is_finite())
+            || edge_parameters[0].min(edge_parameters[1]) != 0.0
+            || edge_parameters[0].max(edge_parameters[1]) != PERIOD
+            || !(winding[0] == 1 && rate > 0.0 || winding[0] == -1 && rate < 0.0)
+        {
             return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
         }
-        ring_windings.push(if fin_data.sense().is_forward() {
+        let topology_winding = if fin_data.sense().is_forward() {
             winding[0]
         } else {
             -winding[0]
+        };
+        rings.push(SourceRing {
+            loop_id: LoopId::new(part.clone(), loop_id),
+            edge: fin_data.edge(),
+            pcurve: SectionUvLine {
+                origin: boundary.origin(),
+                direction: boundary.dir(),
+            },
+            use_: use_,
+            winding: topology_winding,
         });
         ring_heights.push(boundary.origin().y);
     }
-    if ring_windings[0].signum() == ring_windings[1].signum()
+    if rings[0].winding.signum() == rings[1].winding.signum()
         || !ring_heights.iter().all(|height| height.is_finite())
         || ring_heights[0] == ring_heights[1]
     {
         return Err(SectionPeriodicEmbeddingGap::SourceFaceTopology);
     }
+    let Ok([first, second]) = <Vec<SourceRing> as TryInto<[SourceRing; 2]>>::try_into(rings) else {
+        unreachable!("the source face supplied exactly two rings")
+    };
+    Ok([first, second])
+}
 
+fn certify_face_paths(
+    branches: &[SectionBranch],
+    fragments: &[SectionCurveFragment],
+    components: &[SectionCurveComponent],
+    operand: usize,
+    face: &FaceId,
+    rings: &[SourceRing; 2],
+) -> Result<
+    (
+        Vec<SectionPeriodicComponentEmbedding>,
+        Vec<PendingBoundaryTrace>,
+    ),
+    SectionPeriodicEmbeddingGap,
+> {
     let mut certified = Vec::new();
+    let mut pending_traces = Vec::new();
     for (component_index, component) in components.iter().enumerate() {
-        let carried = component.fragments().iter().filter(|&&fragment| {
-            fragments
-                .get(fragment)
-                .and_then(|fragment| branches.get(fragment.branch()))
-                .is_some_and(|branch| branch.faces()[operand] == face)
-        });
-        let carried_count = carried.count();
+        let carried = component
+            .fragments()
+            .iter()
+            .map(|&fragment| {
+                fragments
+                    .get(fragment)
+                    .and_then(|fragment| branches.get(fragment.branch()))
+                    .is_some_and(|branch| branch.faces()[operand] == *face)
+            })
+            .collect::<Vec<_>>();
+        let carried_count = carried.iter().filter(|&&value| value).count();
         if carried_count == 0 {
             continue;
         }
-        if carried_count != component.fragments().len() {
+        if carried_count == component.fragments().len() {
+            certified.push(certify_component(
+                branches,
+                fragments,
+                component_index,
+                component,
+                operand,
+            )?);
+            continue;
+        }
+        if !component.closed() {
+            return Err(SectionPeriodicEmbeddingGap::OpenGlobalComponent {
+                component: component_index,
+            });
+        }
+        let runs = maximal_cyclic_runs(&carried);
+        let mut covered = vec![false; carried.len()];
+        for run in &runs {
+            for &ordinal in run {
+                if !carried[ordinal] || core::mem::replace(&mut covered[ordinal], true) {
+                    return Err(SectionPeriodicEmbeddingGap::ComponentLeavesFace {
+                        component: component_index,
+                    });
+                }
+            }
+        }
+        if carried
+            .iter()
+            .zip(&covered)
+            .any(|(&is_carried, &is_covered)| is_carried != is_covered)
+        {
             return Err(SectionPeriodicEmbeddingGap::ComponentLeavesFace {
                 component: component_index,
             });
         }
-        certified.push(certify_component(
-            branches,
-            fragments,
-            component_index,
-            component,
-            operand,
-        )?);
+        for (trace, ordinals) in runs.into_iter().enumerate() {
+            pending_traces.push(certify_boundary_trace(
+                branches,
+                fragments,
+                component_index,
+                trace,
+                component,
+                ordinals,
+                operand,
+                rings,
+            )?);
+        }
     }
-    certify_component_separation(&certified)?;
-    Ok(CertifiedSectionPeriodicFaceEmbedding {
-        operand,
-        face,
-        source_loops: [
-            LoopId::new(part.clone(), *lower),
-            LoopId::new(part.clone(), *upper),
-        ],
-        source_loop_windings: [ring_windings[0], ring_windings[1]],
-        components: certified,
-    })
+    Ok((certified, pending_traces))
 }
 
 fn certify_component(
@@ -606,8 +901,248 @@ fn certify_component(
     component: &SectionCurveComponent,
     operand: usize,
 ) -> Result<SectionPeriodicComponentEmbedding, SectionPeriodicEmbeddingGap> {
+    let mut lifted = lift_fragment_path(
+        branches,
+        fragments,
+        component.fragments().iter().copied(),
+        component_index,
+        operand,
+    )?;
+    align_fragment_path(component_index, &mut lifted)?;
+    let first = lifted[0].endpoints[0];
+    let last = lifted[lifted.len() - 1].endpoints[1];
+    if first.endpoint != last.endpoint || !first.uv[1].intersects(last.uv[1]) {
+        return Err(SectionPeriodicEmbeddingGap::EndpointChartMismatch {
+            component: component_index,
+        });
+    }
+    let winding = unique_period_shift(last.uv[0], first.uv[0]).ok_or(
+        SectionPeriodicEmbeddingGap::EndpointChartMismatch {
+            component: component_index,
+        },
+    )?;
+    if winding != 0 {
+        return Err(SectionPeriodicEmbeddingGap::NonContractible {
+            component: component_index,
+            winding,
+        });
+    }
+    certify_simple_cycle(component_index, &lifted)?;
+    let orientation = cycle_orientation(component_index, &lifted)?;
+    let public_fragments = publish_lifted_fragments(&lifted)?;
+    Ok(SectionPeriodicComponentEmbedding {
+        component: component_index,
+        fragments: public_fragments,
+        winding,
+        orientation,
+        parent: None,
+    })
+}
+
+fn maximal_cyclic_runs(carried: &[bool]) -> Vec<Vec<usize>> {
+    if carried.is_empty() || carried.iter().all(|value| !value) {
+        return Vec::new();
+    }
+    if carried.iter().all(|value| *value) {
+        return vec![(0..carried.len()).collect()];
+    }
+    let mut runs = Vec::new();
+    for start in 0..carried.len() {
+        let previous = (start + carried.len() - 1) % carried.len();
+        if !carried[start] || carried[previous] {
+            continue;
+        }
+        let mut run = Vec::new();
+        let mut at = start;
+        while carried[at] {
+            run.push(at);
+            at = (at + 1) % carried.len();
+        }
+        runs.push(run);
+    }
+    runs
+}
+
+fn certify_boundary_trace(
+    branches: &[SectionBranch],
+    fragments: &[SectionCurveFragment],
+    component_index: usize,
+    trace: usize,
+    component: &SectionCurveComponent,
+    component_ordinals: Vec<usize>,
+    operand: usize,
+    rings: &[SourceRing],
+) -> Result<PendingBoundaryTrace, SectionPeriodicEmbeddingGap> {
+    let fragment_indices = component_ordinals
+        .iter()
+        .map(|&ordinal| component.fragments()[ordinal])
+        .collect::<Vec<_>>();
+    let mut lifted = lift_fragment_path(
+        branches,
+        fragments,
+        fragment_indices.iter().copied(),
+        component_index,
+        operand,
+    )?;
+    align_fragment_path(component_index, &mut lifted)?;
+    certify_simple_path(component_index, &lifted)?;
+    let public_fragments = publish_lifted_fragments(&lifted)?;
+    let first_fragment = *fragment_indices
+        .first()
+        .expect("certified trace is nonempty");
+    let last_fragment = *fragment_indices
+        .last()
+        .expect("certified trace is nonempty");
+    let terminal_specs = [(first_fragment, 0), (last_fragment, 1)];
+    let mut terminals = Vec::with_capacity(2);
+    for (terminal_ordinal, (fragment_index, end)) in terminal_specs.into_iter().enumerate() {
+        let fragment = &fragments[fragment_index];
+        let (endpoint, loop_id, source_parameter) = fragment_terminal(fragment, end, operand)
+            .ok_or(SectionPeriodicEmbeddingGap::BoundaryTerminalUnavailable {
+                component: component_index,
+                fragment: fragment_index,
+                end: terminal_ordinal,
+            })?;
+        let scalar = if end == 0 {
+            &public_fragments[0].trim_scalars[0]
+        } else {
+            &public_fragments[public_fragments.len() - 1].trim_scalars[1]
+        };
+        if scalar.endpoint != endpoint {
+            return Err(SectionPeriodicEmbeddingGap::BoundaryTerminalUnavailable {
+                component: component_index,
+                fragment: fragment_index,
+                end: terminal_ordinal,
+            });
+        }
+        let ring_ordinal = rings
+            .iter()
+            .position(|ring| ring.loop_id == loop_id && ring.edge == source_parameter.edge().raw())
+            .ok_or(SectionPeriodicEmbeddingGap::BoundaryTerminalUnavailable {
+                component: component_index,
+                fragment: fragment_index,
+                end: terminal_ordinal,
+            })?;
+        terminals.push(map_boundary_root(
+            endpoint,
+            ring_ordinal,
+            source_parameter,
+            scalar.lifted_uv.map(public_uv_interval),
+            &rings[ring_ordinal],
+        )?);
+    }
+    let Ok([start, end]) =
+        <Vec<PendingBoundaryRoot> as TryInto<[PendingBoundaryRoot; 2]>>::try_into(terminals)
+    else {
+        unreachable!("two directed trace terminals were constructed")
+    };
+    if start.source_loop_ordinal == end.source_loop_ordinal {
+        return Err(SectionPeriodicEmbeddingGap::BoundaryTraceNotTransverse {
+            component: component_index,
+            trace,
+        });
+    }
+    Ok(PendingBoundaryTrace {
+        component: component_index,
+        trace,
+        component_ordinals,
+        fragments: public_fragments,
+        terminals: [start, end],
+    })
+}
+
+fn fragment_terminal(
+    fragment: &SectionCurveFragment,
+    end: usize,
+    operand: usize,
+) -> Option<(usize, LoopId, &SectionSourceParameterKey)> {
+    match fragment.span() {
+        SectionCurveFragmentSpan::Whole => None,
+        SectionCurveFragmentSpan::Arc { endpoints, .. } => {
+            let endpoint = endpoints.get(end)?;
+            let trim = endpoint.trim();
+            (trim.operand() == operand)
+                .then(|| (endpoint.endpoint(), trim.loop_id(), trim.source_parameter()))
+        }
+        SectionCurveFragmentSpan::LineSegment { endpoints } => {
+            let endpoint = endpoints.get(end)?;
+            let trim = endpoint.trims().get(operand)?.as_ref()?;
+            Some((endpoint.endpoint(), trim.loop_id(), trim.source_parameter()))
+        }
+    }
+}
+
+fn map_boundary_root(
+    endpoint: usize,
+    source_loop_ordinal: usize,
+    source_parameter: &SectionSourceParameterKey,
+    lifted_uv: [Interval; 2],
+    ring: &SourceRing,
+) -> Result<PendingBoundaryRoot, SectionPeriodicEmbeddingGap> {
+    let edge_parameter = public_edge_interval(source_parameter.root_parameter_enclosure());
+    let map = ring.use_.edge_to_pcurve();
+    let pcurve_parameter =
+        Interval::point(map.scale()) * edge_parameter + Interval::point(map.offset());
+    let mut source_uv = map_line_interval(ring.pcurve, pcurve_parameter);
+    source_uv[0] = source_uv[0]
+        + Interval::point(f64::from(ring.use_.chart().period_shifts()[0]))
+            * Interval::point(PERIOD);
+    source_uv[0] = canonical_period_interval(source_uv[0]).ok_or(
+        SectionPeriodicEmbeddingGap::BoundaryRootOrderIndeterminate {
+            source_loop: source_loop_ordinal,
+        },
+    )?;
+    // Exact endpoint/root/loop provenance owns the nonperiodic boundary
+    // incidence. Paired surface residual evidence may place independently
+    // evaluated `v` representatives a few ulps apart in a rigid frame, so it
+    // is retained on both sides rather than promoted into a join predicate.
+    // Only `u` needs a unique integer-chart proof.
+    let cylinder_chart_shift = unique_period_shift(lifted_uv[0], source_uv[0]).ok_or(
+        SectionPeriodicEmbeddingGap::BoundaryRootChartMismatch {
+            source_loop: source_loop_ordinal,
+            endpoint,
+        },
+    )?;
+    Ok(PendingBoundaryRoot {
+        endpoint,
+        source_loop_ordinal,
+        source_parameter: source_parameter.clone(),
+        source_uv,
+        lifted_uv,
+        cylinder_chart_shift,
+    })
+}
+
+fn canonical_period_interval(value: Interval) -> Option<Interval> {
+    let candidates = value.checked_div(Interval::point(PERIOD))?;
+    let period_index = candidates.lo().floor();
+    if !period_index.is_finite()
+        || period_index.abs() > (1_u64 << 53) as f64
+        || candidates.hi().floor() != period_index
+    {
+        return None;
+    }
+    let canonical = value - Interval::point(period_index) * Interval::point(PERIOD);
+    (canonical.lo() > 0.0 && canonical.hi() < PERIOD).then_some(canonical)
+}
+
+fn public_uv_interval(value: SectionUvParameterInterval) -> Interval {
+    Interval::new(value.lo(), value.hi())
+}
+
+fn public_edge_interval(value: super::SectionEdgeParameterInterval) -> Interval {
+    Interval::new(value.lo(), value.hi())
+}
+
+fn lift_fragment_path(
+    branches: &[SectionBranch],
+    fragments: &[SectionCurveFragment],
+    fragment_indices: impl IntoIterator<Item = usize>,
+    component_index: usize,
+    operand: usize,
+) -> Result<Vec<LiftedFragment>, SectionPeriodicEmbeddingGap> {
     let mut lifted = Vec::new();
-    for &fragment_index in component.fragments() {
+    for fragment_index in fragment_indices {
         let fragment = fragments.get(fragment_index).ok_or(
             SectionPeriodicEmbeddingGap::CarrierIntervalUnavailable {
                 fragment: fragment_index,
@@ -658,6 +1193,13 @@ fn certify_component(
             component: component_index,
         });
     }
+    Ok(lifted)
+}
+
+fn align_fragment_path(
+    component_index: usize,
+    lifted: &mut [LiftedFragment],
+) -> Result<(), SectionPeriodicEmbeddingGap> {
     for index in 1..lifted.len() {
         let previous = lifted[index - 1].endpoints[1];
         let current = lifted[index].endpoints[0];
@@ -673,28 +1215,14 @@ fn certify_component(
         )?;
         shift_fragment(&mut lifted[index], shift);
     }
-    let first = lifted[0].endpoints[0];
-    let last = lifted[lifted.len() - 1].endpoints[1];
-    if first.endpoint != last.endpoint || !first.uv[1].intersects(last.uv[1]) {
-        return Err(SectionPeriodicEmbeddingGap::EndpointChartMismatch {
-            component: component_index,
-        });
-    }
-    let winding = unique_period_shift(last.uv[0], first.uv[0]).ok_or(
-        SectionPeriodicEmbeddingGap::EndpointChartMismatch {
-            component: component_index,
-        },
-    )?;
-    if winding != 0 {
-        return Err(SectionPeriodicEmbeddingGap::NonContractible {
-            component: component_index,
-            winding,
-        });
-    }
-    certify_simple_cycle(component_index, &lifted)?;
-    let orientation = cycle_orientation(component_index, &lifted)?;
+    Ok(())
+}
+
+fn publish_lifted_fragments(
+    lifted: &[LiftedFragment],
+) -> Result<Vec<SectionPeriodicFragmentEmbedding>, SectionPeriodicEmbeddingGap> {
     let mut public_fragments = Vec::with_capacity(lifted.len());
-    for fragment in &lifted {
+    for fragment in lifted {
         public_fragments.push(SectionPeriodicFragmentEmbedding {
             fragment: fragment.fragment,
             endpoints: fragment
@@ -704,13 +1232,7 @@ fn certify_component(
             trim_scalars: certify_fragment_trim_scalars(fragment)?,
         });
     }
-    Ok(SectionPeriodicComponentEmbedding {
-        component: component_index,
-        fragments: public_fragments,
-        winding,
-        orientation,
-        parent: None,
-    })
+    Ok(public_fragments)
 }
 
 fn fragment_endpoint_representatives(fragment: &SectionCurveFragment) -> Option<[f64; 2]> {
@@ -762,12 +1284,24 @@ fn certify_trim_scalar(
                 endpoint,
             },
         )?;
-    if !(0..2).all(|axis| contains_interval(fragment.endpoints[end].uv[axis], lifted_uv[axis])) {
-        return Err(
-            SectionPeriodicEmbeddingGap::CarrierTrimScalarPcurveMismatch {
-                fragment: fragment.fragment,
-                endpoint,
-            },
+    for (axis, lifted) in lifted_uv.iter_mut().enumerate() {
+        let endpoint_uv = fragment.endpoints[end].uv[axis];
+        if !endpoint_uv.intersects(*lifted) {
+            return Err(
+                SectionPeriodicEmbeddingGap::CarrierTrimScalarPcurveMismatch {
+                    fragment: fragment.fragment,
+                    endpoint,
+                },
+            );
+        }
+        // Both outward intervals enclose the same exact affine pcurve image:
+        // one comes from the proof-owned carrier interval, the other from the
+        // retained scalar that lies inside it. Their intersection is therefore
+        // a sound tighter witness and avoids demanding nesting between two
+        // independently rounded evaluations of that same expression.
+        *lifted = Interval::new(
+            endpoint_uv.lo().max(lifted.lo()),
+            endpoint_uv.hi().min(lifted.hi()),
         );
     }
     Ok(SectionCarrierTrimScalarEvidence {
@@ -796,10 +1330,6 @@ fn select_trim_scalar(representative: f64, enclosure: Interval, periodic: bool) 
     let shift = lower as i64;
     let parameter = representative + shift as f64 * PERIOD;
     (parameter.is_finite() && enclosure.contains(parameter)).then_some(parameter)
-}
-
-fn contains_interval(outer: Interval, inner: Interval) -> bool {
-    outer.lo() <= inner.lo() && inner.hi() <= outer.hi()
 }
 
 fn fragment_endpoint_ids(fragment: &SectionCurveFragment) -> Option<[usize; 2]> {
@@ -1020,6 +1550,45 @@ fn certify_simple_cycle(
     Ok(())
 }
 
+fn certify_simple_path(
+    component: usize,
+    fragments: &[LiftedFragment],
+) -> Result<(), SectionPeriodicEmbeddingGap> {
+    let mut bounds = fragment_bounds(&fragments[0]);
+    for fragment in &fragments[1..] {
+        let next = fragment_bounds(fragment);
+        bounds.u = hull(bounds.u, next.u);
+        bounds.v = hull(bounds.v, next.v);
+    }
+    if bounds.u.width() >= PERIOD {
+        return Err(SectionPeriodicEmbeddingGap::SelfIntersectionProofRequired { component });
+    }
+    for first in 0..fragments.len() {
+        for second in (first + 1)..fragments.len() {
+            if second == first + 1 {
+                if !carriers_cross_at_shared_endpoint(
+                    &fragments[first],
+                    &fragments[second],
+                    fragments[first].endpoints[1],
+                    fragments[second].endpoints[0],
+                ) {
+                    return Err(SectionPeriodicEmbeddingGap::SelfIntersectionProofRequired {
+                        component,
+                    });
+                }
+            } else if !strictly_disjoint(
+                fragment_bounds(&fragments[first]),
+                fragment_bounds(&fragments[second]),
+            ) {
+                return Err(SectionPeriodicEmbeddingGap::SelfIntersectionProofRequired {
+                    component,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 fn carriers_cross_at_shared_endpoint(
     first: &LiftedFragment,
     second: &LiftedFragment,
@@ -1152,6 +1721,302 @@ fn certify_component_separation(
                 },
             );
         }
+    }
+    Ok(())
+}
+
+fn public_path_bounds(fragments: &[SectionPeriodicFragmentEmbedding]) -> Bounds2 {
+    let mut iter = fragments.iter();
+    let first = iter.next().expect("certified path is nonempty");
+    let mut bounds = public_fragment_bounds(first);
+    for fragment in iter {
+        let next = public_fragment_bounds(fragment);
+        bounds.u = hull(bounds.u, next.u);
+        bounds.v = hull(bounds.v, next.v);
+    }
+    bounds
+}
+
+fn public_paths_periodically_disjoint(
+    first: &[SectionPeriodicFragmentEmbedding],
+    second: &[SectionPeriodicFragmentEmbedding],
+) -> bool {
+    if periodically_strictly_disjoint(public_path_bounds(first), public_path_bounds(second)) {
+        return true;
+    }
+    first.iter().all(|left| {
+        second.iter().all(|right| {
+            periodically_strictly_disjoint(
+                public_fragment_bounds(left),
+                public_fragment_bounds(right),
+            )
+        })
+    })
+}
+
+fn periodically_strictly_disjoint(first: Bounds2, second: Bounds2) -> bool {
+    if first.v.hi() < second.v.lo() || second.v.hi() < first.v.lo() {
+        return true;
+    }
+    let Some(possible_shifts) = (first.u - second.u).checked_div(Interval::point(PERIOD)) else {
+        return false;
+    };
+    let first_integer = possible_shifts.lo().ceil();
+    let last_integer = possible_shifts.hi().floor();
+    first_integer.is_finite() && last_integer.is_finite() && first_integer > last_integer
+}
+
+fn certify_trace_separation(
+    traces: &[PendingBoundaryTrace],
+) -> Result<(), SectionPeriodicEmbeddingGap> {
+    for first in 0..traces.len() {
+        for second in (first + 1)..traces.len() {
+            if !public_paths_periodically_disjoint(
+                &traces[first].fragments,
+                &traces[second].fragments,
+            ) {
+                return Err(
+                    SectionPeriodicEmbeddingGap::BoundaryTraceIntersectionProofRequired {
+                        first_component: traces[first].component,
+                        first_trace: traces[first].trace,
+                        second_component: traces[second].component,
+                        second_trace: traces[second].trace,
+                    },
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn certify_trace_component_separation(
+    components: &[SectionPeriodicComponentEmbedding],
+    traces: &[PendingBoundaryTrace],
+) -> Result<(), SectionPeriodicEmbeddingGap> {
+    for component in components {
+        for trace in traces {
+            if !public_paths_periodically_disjoint(&component.fragments, &trace.fragments) {
+                return Err(
+                    SectionPeriodicEmbeddingGap::ComponentTraceIntersectionProofRequired {
+                        component: component.component,
+                        trace_component: trace.component,
+                        trace: trace.trace,
+                    },
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn finish_boundary_traces(
+    endpoints: &[SectionCurveEndpoint],
+    operand: usize,
+    rings: &[SourceRing],
+    traces: Vec<PendingBoundaryTrace>,
+) -> Result<
+    (
+        [Vec<SectionPeriodicBoundaryRootEmbedding>; 2],
+        Vec<SectionPeriodicBoundaryTraceEmbedding>,
+    ),
+    SectionPeriodicEmbeddingGap,
+> {
+    let mut ordered_pending: [Vec<PendingBoundaryRoot>; 2] = core::array::from_fn(|_| Vec::new());
+    for trace in &traces {
+        for terminal in &trace.terminals {
+            ordered_pending[terminal.source_loop_ordinal].push(terminal.clone());
+        }
+    }
+    for (loop_ordinal, ring) in rings.iter().enumerate() {
+        let mut expected = Vec::new();
+        for (endpoint, evidence) in endpoints.iter().enumerate() {
+            if endpoint_source_root(evidence, operand, ring)
+                .is_some_and(|source| source.edge().raw() == ring.edge)
+            {
+                expected.push(endpoint);
+            }
+        }
+        let mut actual = ordered_pending[loop_ordinal]
+            .iter()
+            .map(|root| root.endpoint)
+            .collect::<Vec<_>>();
+        expected.sort_unstable();
+        actual.sort_unstable();
+        if expected != actual || actual.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(SectionPeriodicEmbeddingGap::BoundaryRootCoverageMismatch {
+                source_loop: loop_ordinal,
+            });
+        }
+        for root in &ordered_pending[loop_ordinal] {
+            let Some(source) = endpoints
+                .get(root.endpoint)
+                .and_then(|endpoint| endpoint_source_root(endpoint, operand, ring))
+            else {
+                return Err(SectionPeriodicEmbeddingGap::BoundaryRootCoverageMismatch {
+                    source_loop: loop_ordinal,
+                });
+            };
+            if source != &root.source_parameter
+                || !source.has_same_materialization(&root.source_parameter)
+            {
+                return Err(SectionPeriodicEmbeddingGap::BoundaryRootCoverageMismatch {
+                    source_loop: loop_ordinal,
+                });
+            }
+        }
+        let lineage_and_uv = ordered_pending[loop_ordinal]
+            .iter()
+            .map(|root| (root.source_parameter.root_ordinal(), root.source_uv[0]))
+            .collect::<Vec<_>>();
+        let order = strict_canonical_root_order(&lineage_and_uv).ok_or(
+            SectionPeriodicEmbeddingGap::BoundaryRootOrderIndeterminate {
+                source_loop: loop_ordinal,
+            },
+        )?;
+        ordered_pending[loop_ordinal] = order
+            .into_iter()
+            .map(|index| ordered_pending[loop_ordinal][index].clone())
+            .collect();
+    }
+
+    let source_loop_roots = core::array::from_fn(|loop_ordinal| {
+        ordered_pending[loop_ordinal]
+            .iter()
+            .enumerate()
+            .map(|(cyclic_order, root)| public_boundary_root(root, cyclic_order))
+            .collect::<Vec<_>>()
+    });
+    let mut boundary_traces = Vec::with_capacity(traces.len());
+    for trace in traces {
+        let terminals = trace.terminals.each_ref().map(|terminal| {
+            source_loop_roots[terminal.source_loop_ordinal]
+                .iter()
+                .find(|root| root.endpoint == terminal.endpoint)
+                .expect("complete boundary-root coverage retained the terminal")
+                .clone()
+        });
+        boundary_traces.push(SectionPeriodicBoundaryTraceEmbedding {
+            component: trace.component,
+            component_ordinals: trace.component_ordinals,
+            fragments: trace.fragments,
+            terminals,
+        });
+    }
+    certify_noncrossing_loop_matching(&boundary_traces)?;
+    Ok((source_loop_roots, boundary_traces))
+}
+
+fn endpoint_source_root<'a>(
+    endpoint: &'a SectionCurveEndpoint,
+    operand: usize,
+    ring: &SourceRing,
+) -> Option<&'a SectionSourceParameterKey> {
+    let SectionCurveEndpointTopology::Trim {
+        sites,
+        source_parameters,
+    } = endpoint.topology()
+    else {
+        return None;
+    };
+    match sites.get(operand)? {
+        SectionSite::EdgeInterior(edge) if edge.raw() == ring.edge => {
+            source_parameters.get(operand)?.as_ref()
+        }
+        _ => None,
+    }
+}
+
+fn strict_canonical_root_order(lineage_and_uv: &[(usize, Interval)]) -> Option<Vec<usize>> {
+    // Root ordinals are query-local to `(source edge, opposing face)`, so
+    // distinct cutters may legitimately repeat them. Keep those ordinals as
+    // lineage, while deriving the combined ring order solely from canonical
+    // cylinder-UV root enclosures.
+    let mut order = lineage_and_uv
+        .iter()
+        .enumerate()
+        .map(|(index, (_, uv))| (index, *uv))
+        .collect::<Vec<_>>();
+    order.sort_by(|(_, first), (_, second)| {
+        first
+            .lo()
+            .total_cmp(&second.lo())
+            .then(first.hi().total_cmp(&second.hi()))
+    });
+    if order
+        .windows(2)
+        .any(|pair| pair[0].1.hi() >= pair[1].1.lo())
+    {
+        return None;
+    }
+    Some(order.into_iter().map(|(index, _)| index).collect())
+}
+
+fn public_boundary_root(
+    root: &PendingBoundaryRoot,
+    cyclic_order: usize,
+) -> SectionPeriodicBoundaryRootEmbedding {
+    SectionPeriodicBoundaryRootEmbedding {
+        endpoint: root.endpoint,
+        source_loop_ordinal: root.source_loop_ordinal,
+        cyclic_order,
+        source_parameter: root.source_parameter.clone(),
+        source_uv: root
+            .source_uv
+            .map(SectionUvParameterInterval::from_interval),
+        lifted_uv: root
+            .lifted_uv
+            .map(SectionUvParameterInterval::from_interval),
+        cylinder_chart_shift: root.cylinder_chart_shift,
+    }
+}
+
+fn certify_noncrossing_loop_matching(
+    traces: &[SectionPeriodicBoundaryTraceEmbedding],
+) -> Result<(), SectionPeriodicEmbeddingGap> {
+    let mut matching = Vec::with_capacity(traces.len());
+    for trace in traces {
+        let first = trace
+            .terminals
+            .iter()
+            .find(|root| root.source_loop_ordinal == 0);
+        let second = trace
+            .terminals
+            .iter()
+            .find(|root| root.source_loop_ordinal == 1);
+        let (Some(first), Some(second)) = (first, second) else {
+            return Err(SectionPeriodicEmbeddingGap::BoundaryLoopMatchingProofRequired);
+        };
+        let start = public_uv_interval(first.source_uv[0]);
+        let shift = second
+            .cylinder_chart_shift
+            .checked_sub(first.cylinder_chart_shift)
+            .and_then(integer_period_interval)
+            .ok_or(SectionPeriodicEmbeddingGap::BoundaryLoopMatchingProofRequired)?;
+        let destination = public_uv_interval(second.source_uv[0]) + shift;
+        matching.push((start, destination));
+    }
+    certify_universal_cover_matching(matching)
+}
+
+fn certify_universal_cover_matching(
+    mut matching: Vec<(Interval, Interval)>,
+) -> Result<(), SectionPeriodicEmbeddingGap> {
+    matching.sort_by(|left, right| {
+        left.0
+            .lo()
+            .total_cmp(&right.0.lo())
+            .then(left.0.hi().total_cmp(&right.0.hi()))
+    });
+    if matching
+        .windows(2)
+        .any(|pair| pair[0].0.hi() >= pair[1].0.lo() || pair[0].1.hi() >= pair[1].1.lo())
+    {
+        return Err(SectionPeriodicEmbeddingGap::BoundaryLoopMatchingProofRequired);
+    }
+    if let (Some(first), Some(last)) = (matching.first(), matching.last())
+        && last.1.hi() >= first.1.lo() + PERIOD
+    {
+        return Err(SectionPeriodicEmbeddingGap::BoundaryLoopMatchingProofRequired);
     }
     Ok(())
 }
@@ -1536,5 +2401,81 @@ mod tests {
                 }
             )
         );
+    }
+
+    #[test]
+    fn maximal_cyclic_runs_cover_each_carried_occurrence_once() {
+        let carried = [true, true, false, true, false, true, true];
+        let runs = maximal_cyclic_runs(&carried);
+        assert_eq!(runs, vec![vec![3], vec![5, 6, 0, 1]]);
+        let mut coverage = runs.into_iter().flatten().collect::<Vec<_>>();
+        coverage.sort_unstable();
+        assert_eq!(coverage, vec![0, 1, 3, 5, 6]);
+        assert_eq!(maximal_cyclic_runs(&[true; 5]), vec![vec![0, 1, 2, 3, 4]]);
+        assert!(maximal_cyclic_runs(&[false; 5]).is_empty());
+    }
+
+    #[test]
+    fn periodic_trace_separation_compares_seam_equivalent_copies() {
+        let bounds = |u: [f64; 2], v: [f64; 2]| Bounds2 {
+            u: Interval::new(u[0], u[1]),
+            v: Interval::new(v[0], v[1]),
+        };
+        let first = bounds([0.2, 0.4], [0.0, 1.0]);
+        let shifted_copy = bounds([PERIOD + 0.3, PERIOD + 0.5], [0.25, 0.75]);
+        assert!(!periodically_strictly_disjoint(first, shifted_copy));
+        assert!(periodically_strictly_disjoint(
+            first,
+            bounds([PERIOD + 1.0, PERIOD + 1.2], [0.25, 0.75])
+        ));
+        assert!(periodically_strictly_disjoint(
+            first,
+            bounds([PERIOD + 0.3, PERIOD + 0.5], [2.0, 3.0])
+        ));
+    }
+
+    #[test]
+    fn universal_cover_matching_is_count_independent_and_order_preserving() {
+        let point_pair =
+            |start: f64, destination: f64| (Interval::point(start), Interval::point(destination));
+        let ordered = (0..7)
+            .map(|ordinal| {
+                let start = 0.3 + ordinal as f64 * 0.7;
+                point_pair(start, start + PERIOD)
+            })
+            .collect();
+        assert_eq!(certify_universal_cover_matching(ordered), Ok(()));
+
+        let crossing = vec![
+            point_pair(0.2, 0.2),
+            point_pair(1.0, 2.0),
+            point_pair(2.0, 1.0),
+        ];
+        assert_eq!(
+            certify_universal_cover_matching(crossing),
+            Err(SectionPeriodicEmbeddingGap::BoundaryLoopMatchingProofRequired)
+        );
+
+        let inconsistent_winding = vec![point_pair(0.2, 0.2), point_pair(1.0, PERIOD + 1.0)];
+        assert_eq!(
+            certify_universal_cover_matching(inconsistent_winding),
+            Err(SectionPeriodicEmbeddingGap::BoundaryLoopMatchingProofRequired)
+        );
+    }
+
+    #[test]
+    fn combined_ring_order_accepts_repeated_query_local_root_ordinals() {
+        let lineage_and_uv = vec![
+            (0, Interval::new(3.9, 4.0)),
+            (0, Interval::new(0.4, 0.5)),
+            (1, Interval::new(5.2, 5.3)),
+            (1, Interval::new(1.7, 1.8)),
+        ];
+        assert_eq!(
+            strict_canonical_root_order(&lineage_and_uv),
+            Some(vec![1, 3, 0, 2])
+        );
+        let overlapping = vec![(0, Interval::new(0.4, 0.6)), (0, Interval::new(0.5, 0.7))];
+        assert_eq!(strict_canonical_root_order(&overlapping), None);
     }
 }

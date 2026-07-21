@@ -56,6 +56,7 @@ mod stitch;
 
 pub use periodic_embedding::{
     CertifiedSectionPeriodicFaceEmbedding, SectionCarrierTrimScalarEvidence,
+    SectionPeriodicBoundaryRootEmbedding, SectionPeriodicBoundaryTraceEmbedding,
     SectionPeriodicComponentEmbedding, SectionPeriodicCycleOrientation,
     SectionPeriodicEmbeddingGap, SectionPeriodicFaceEmbeddingEvidence,
     SectionPeriodicFragmentEmbedding, SectionUvParameterInterval,
@@ -2292,6 +2293,7 @@ fn assemble_graph(
         store,
         part_id,
         &branches,
+        &curve_endpoints,
         &curve_fragments,
         &curve_components,
         linear,

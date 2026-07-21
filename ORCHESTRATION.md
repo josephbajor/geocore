@@ -81,7 +81,9 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    certificate. The deterministic fifteen-payload Boolean bundle imports and
    compares 15/15 in Onshape at writer `fedf1ab`. Proof-keyed disk-cap chords
    now feed count-independent exact disk arrangements with source-arc lineage
-   and period-lifted realization. Next: certify transverse annulus traces and materialize the selected cap-crossing cells.)*
+   and period-lifted realization. Certified maximal transverse annulus traces
+   now retain exact source-loop roots, lifted charts, and count-independent
+   noncrossing proof. Next: adopt the selected disk and periodic cells in mixed-shell planning/materialization and Full-commit the public slice.)*
 
 Work that does not advance the queue head needs an explicit justification
 linking it to a rung ("rung 2 needs curve/curve overlap dedup because …").

@@ -331,6 +331,7 @@ pub use section::{
     SectionCurveEndpoint, SectionCurveEndpointTopology, SectionCurveFragment,
     SectionCurveFragmentEnd, SectionCurveFragmentSpan, SectionCurveTrimProvenance, SectionEdge,
     SectionEdgeParameterInterval, SectionFragmentSite, SectionGap, SectionLoop,
+    SectionPeriodicBoundaryRootEmbedding, SectionPeriodicBoundaryTraceEmbedding,
     SectionPeriodicComponentEmbedding, SectionPeriodicCycleOrientation,
     SectionPeriodicEmbeddingGap, SectionPeriodicFaceEmbeddingEvidence,
     SectionPeriodicFragmentEmbedding, SectionProjectiveParameterInterval, SectionRing,
