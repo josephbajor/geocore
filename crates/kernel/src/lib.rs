@@ -9,9 +9,9 @@
 //! contained-cylinder cavity, one-ring connected-union/blind-pocket, two-port
 //! through-hole, two-ring two-sided connected-union, inverse-containment
 //! convex-planar cavity, support-separated exact-contact empty intersections,
-//! certified flush axial cap-contact connected union, and typed X_T
-//! import/export plus
-//! graph-owned bounded curve intersection
+//! certified flush axial cap-contact connected union, typed X_T import/export,
+//! public Plane/Cylinder rings, bounded section arcs, finite exact-family
+//! transverse ruling carriers, and graph-owned bounded curve intersection
 //! with F2 reports and delegated classified errors. Rigid copies own disjoint
 //! topology and geometry closures and retain exact `DerivedFrom` lineage. Committed
 //! mutation, lineage, tolerance-growth, and descriptive face-tolerance

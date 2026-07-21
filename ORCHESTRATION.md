@@ -38,7 +38,8 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    *(active queue head — public cylinder construction, certified finite-cylinder
    classification, topology-owned conic/ring trim proofs, deterministic closed
    fragment stitching, exact Plane/Cylinder rings and bounded-arc endpoint
-   topology, payload-agnostic exact boundary truth selection, and finite-cylinder
+   topology, finite exact-family transverse ruling carriers with paired
+   whole-range residual proof, payload-agnostic exact boundary truth selection, and finite-cylinder
    Full proof landed; proof-bearing curved face partition/classification and the
    first Full-checked axial intersection, cylinder-minus-block remainder bands,
    zero-cut truth-selected whole-source union/subtraction copies, one-ring
@@ -48,8 +49,8 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    support-separated axial exact-contact empty intersections, inverse-
    containment mixed-shell cavities, and certified flush axial cap-contact
    connected unions now land through the public facade with deterministic X_T
-   emission and Fast self-import; bounded-arc contacts/layouts and curved
-   licensed-host evidence remain)*
+   emission and Fast self-import; topology-owned ruling trims, mixed arc/ruling
+   cycles, bounded-arc contacts/layouts, and curved licensed-host evidence remain)*
 
 Work that does not advance the queue head needs an explicit justification
 linking it to a rung ("rung 2 needs curve/curve overlap dedup because …").

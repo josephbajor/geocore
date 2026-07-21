@@ -286,10 +286,10 @@ signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handle
   two-sample/quadratic/cubic chains; broader transmitted-proof reissuance.
 - Non-rigid transform families and attribute-carrying copy (needs an authorable storage contract)
   remain follow-on.
-- F5 exposes body section graphs, verified Plane/Cylinder branches, and exact endpoint-free
-  `SectionRing` components when topology-owned trims retain the whole period. `SectionCurveFragment`
-  now exposes exact bounded arcs with source-root endpoint identity and topology provenance; cyclic
-  bounded/bounded trim intersection remains. Exact planar-circle and periodic-cylinder face-region
+- F5 exposes body section graphs, verified Plane/Cylinder circle and finite exact-family transverse ruling
+  branches, and exact endpoint-free `SectionRing` components when topology-owned trims retain the
+  whole period. `SectionCurveFragment` exposes exact bounded arcs with source-root endpoint identity
+  and topology provenance; topology-owned ruling trims and mixed arc/ruling cycles remain. Exact planar-circle and periodic-cylinder face-region
   partitions now propagate open-cell occupancy over their proof-bearing dual graph for the axial
   Boolean slice. There is no general surface/surface entry point; future adapters must preserve the
   lower `kops` completion boundary/evidence, not duplicate or widen it.

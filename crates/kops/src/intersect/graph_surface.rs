@@ -1,30 +1,15 @@
 //! Graph-aware, verified surface-intersection adapter.
 //!
-//! Direct planes/spheres and safe constant-offset chains terminating at those
-//! leaves form exact analytic field families. Genuinely non-planar direct NURBS
-//! surfaces additionally support scoped exact-plane-field/NURBS, exact
-//! sphere-field/NURBS, compatible direct NURBS/NURBS marching, and a narrow
-//! constant-normal Offset(NURBS)/NURBS family capped at four offset
-//! descriptors. One exact rational quarter-cylinder family additionally
-//! supports a varying-normal Offset(NURBS) root against a canonical
-//! direct planar NURBS, analytic Plane, or safe Offset(Plane) peer normal to
-//! the global X, Y, or Z axis; up to four regular offset descriptors are
-//! admitted against the direct analytic Plane peer.
-//! Pairs of compatible planar constant-normal Offset(NURBS) roots capped at
-//! four descriptors additionally march strict interior crossings in a shared
-//! physical chart, while strictly separated vertical-chart pairs retain their
-//! graph-level complete-empty proof. The adapter
-//! promotes discovered branches only after
-//! constructing both pcurves and proving their paired whole-interval residual
-//! contracts. Common-axis circles retain their longitude/latitude fast path;
-//! other finite secants use a certified nonlinear spherical pcurve and fail
-//! closed at chart singularities or outside windows.
-//! Direct Plane/Cylinder pairs additionally promote complete-period circle
-//! branches with an explicit closed topology and one canonical seam vertex;
-//! open arcs, rulings, and ellipses remain unsupported by this adapter.
+//! Supported analytic and scoped NURBS families are promoted only after both
+//! pcurves receive whole-range residual proofs. Direct Plane/Cylinder pairs
+//! include complete-period circles and finite exact-family transverse rulings;
+//! open circle arcs, ellipses, tangencies, and near-parallel rulings fail closed.
 
 use super::error::IntersectionError;
-use super::graph_plane_cylinder::build_verified_plane_cylinder_circle_branch;
+use super::graph_plane_cylinder::{
+    build_verified_plane_cylinder_circle_branch, build_verified_plane_cylinder_ruling_branch,
+    canonical_line, plane_pcurve,
+};
 use super::nurbs_nurbs_surface::{
     intersect_bounded_dual_offset_nurbs_surfaces_with_traces_in_scope,
     intersect_bounded_nurbs_nurbs_surfaces_with_traces_in_scope,
@@ -60,7 +45,7 @@ use kcore::operation::{
     SessionPolicy, StageId,
 };
 use kcore::tolerance::Tolerances;
-use kgeom::curve::{Circle, Curve, Line};
+use kgeom::curve::{Circle, Curve};
 use kgeom::curve2d::{Circle2d, Line2d};
 use kgeom::nurbs::NurbsSurface;
 use kgeom::param::ParamRange;
@@ -70,9 +55,10 @@ use kgraph::{
     AffineParamMap1d, Curve2dDescriptor, Curve2dHandle, CurveDescriptor, CurveHandle,
     EvalBudgetProfile, EvalContext, EvalError, EvalLimits, EvalUsage, ExactSurfaceField,
     GeometryGraph, GeometryGraphError, GeometryRef, IntersectionCertificateError,
-    NurbsIntersectionTrace, PairedPlaneCylinderCircleResidualCertificate, PairedTrace,
-    PlaneCircleTrace, PlaneSphereCircleTrace, SphereLatitudeTrace, SurfaceDescriptor,
-    SurfaceHandle, TransmittedOffsetPlaneTrace, VerifiedIntersectionCertificate,
+    NurbsIntersectionTrace, PairedPlaneCylinderCircleResidualCertificate,
+    PairedPlaneCylinderRulingResidualCertificate, PairedTrace, PlaneCircleTrace,
+    PlaneSphereCircleTrace, SphereLatitudeTrace, SurfaceDescriptor, SurfaceHandle,
+    TransmittedOffsetPlaneTrace, VerifiedIntersectionCertificate,
     VerifiedNurbsIntersectionCertificate, certify_paired_plane_line_residuals,
     certify_paired_plane_sphere_circle_residuals,
     certify_paired_plane_sphere_oblique_circle_residuals,
@@ -417,6 +403,8 @@ pub enum IntersectionBranchCertificate {
     Analytic(Box<VerifiedIntersectionCertificate>),
     /// Whole-period Plane/Cylinder circle proof.
     PlaneCylinderCircle(Box<PairedPlaneCylinderCircleResidualCertificate>),
+    /// Finite exact-family Plane/Cylinder ruling proof.
+    PlaneCylinderRuling(Box<PairedPlaneCylinderRulingResidualCertificate>),
     /// Operation-generated degree-1 analytic/NURBS trace proof.
     Nurbs(Box<VerifiedNurbsIntersectionCertificate>),
 }
@@ -427,6 +415,7 @@ impl IntersectionBranchCertificate {
         match self {
             Self::Analytic(certificate) => certificate.residual_bounds(),
             Self::PlaneCylinderCircle(certificate) => certificate.residual_bounds(),
+            Self::PlaneCylinderRuling(certificate) => certificate.residual_bounds(),
             Self::Nurbs(certificate) => certificate.residual_bounds(),
         }
     }
@@ -436,6 +425,7 @@ impl IntersectionBranchCertificate {
         match self {
             Self::Analytic(certificate) => certificate.tolerance(),
             Self::PlaneCylinderCircle(certificate) => certificate.tolerance(),
+            Self::PlaneCylinderRuling(certificate) => certificate.tolerance(),
             Self::Nurbs(certificate) => certificate.tolerance(),
         }
     }
@@ -444,7 +434,7 @@ impl IntersectionBranchCertificate {
     pub fn as_plane_line(&self) -> Option<kgraph::PairedPlaneLineResidualCertificate> {
         match self {
             Self::Analytic(certificate) => certificate.as_plane_line(),
-            Self::PlaneCylinderCircle(_) | Self::Nurbs(_) => None,
+            Self::PlaneCylinderCircle(_) | Self::PlaneCylinderRuling(_) | Self::Nurbs(_) => None,
         }
     }
 
@@ -454,7 +444,7 @@ impl IntersectionBranchCertificate {
     ) -> Option<kgraph::PairedPlaneSphereCircleResidualCertificate> {
         match self {
             Self::Analytic(certificate) => certificate.as_plane_sphere_circle(),
-            Self::PlaneCylinderCircle(_) | Self::Nurbs(_) => None,
+            Self::PlaneCylinderCircle(_) | Self::PlaneCylinderRuling(_) | Self::Nurbs(_) => None,
         }
     }
 
@@ -462,14 +452,22 @@ impl IntersectionBranchCertificate {
     pub fn as_plane_cylinder_circle(&self) -> Option<PairedPlaneCylinderCircleResidualCertificate> {
         match self {
             Self::PlaneCylinderCircle(certificate) => Some(**certificate),
-            Self::Analytic(_) | Self::Nurbs(_) => None,
+            Self::Analytic(_) | Self::PlaneCylinderRuling(_) | Self::Nurbs(_) => None,
+        }
+    }
+
+    /// Borrow the finite Plane/Cylinder ruling proof when it matches.
+    pub fn as_plane_cylinder_ruling(&self) -> Option<PairedPlaneCylinderRulingResidualCertificate> {
+        match self {
+            Self::PlaneCylinderRuling(certificate) => Some(**certificate),
+            Self::Analytic(_) | Self::PlaneCylinderCircle(_) | Self::Nurbs(_) => None,
         }
     }
 
     /// Borrow the operation-generated analytic/NURBS proof when it matches.
     pub fn as_nurbs(&self) -> Option<&VerifiedNurbsIntersectionCertificate> {
         match self {
-            Self::Analytic(_) | Self::PlaneCylinderCircle(_) => None,
+            Self::Analytic(_) | Self::PlaneCylinderCircle(_) | Self::PlaneCylinderRuling(_) => None,
             Self::Nurbs(certificate) => Some(certificate.as_ref()),
         }
     }
@@ -1353,10 +1351,11 @@ fn persist_verified_graph_surface_intersections_impl(
                         *certificate,
                     )?,
             },
-            IntersectionBranchCertificate::PlaneCylinderCircle(_) => {
+            IntersectionBranchCertificate::PlaneCylinderCircle(_)
+            | IntersectionBranchCertificate::PlaneCylinderRuling(_) => {
                 return Err(GraphSurfaceIntersectionError::BranchCertificate(
                     IntersectionCertificateError::UnsupportedCarrierParameterization {
-                        reason: "persistent Plane/Cylinder periodic branches require a closed-curve descriptor contract",
+                        reason: "persistent Plane/Cylinder branches require a dedicated descriptor contract",
                     },
                 ));
             }
@@ -2041,6 +2040,24 @@ fn build_verified_branch_graph(
                     )),
                 }
             }
+            (
+                SurfaceIntersectionCurve::Line(raw_line),
+                [
+                    ResolvedGraphSurfaceField::Plane { surface: plane, .. },
+                    ResolvedGraphSurfaceField::Cylinder { surface: cylinder },
+                ],
+            ) => build_verified_plane_cylinder_ruling_branch(
+                *raw_line, branch, plane, cylinder, true, tolerance,
+            )?,
+            (
+                SurfaceIntersectionCurve::Line(raw_line),
+                [
+                    ResolvedGraphSurfaceField::Cylinder { surface: cylinder },
+                    ResolvedGraphSurfaceField::Plane { surface: plane, .. },
+                ],
+            ) => build_verified_plane_cylinder_ruling_branch(
+                *raw_line, branch, plane, cylinder, false, tolerance,
+            )?,
             (
                 SurfaceIntersectionCurve::Circle(raw_circle),
                 [
@@ -2882,37 +2899,6 @@ fn on_window_boundary(uv: Vec2, ranges: [ParamRange; 2], tolerance: f64) -> bool
         || (uv.x - ranges[0].hi).abs() <= tolerance
         || (uv.y - ranges[1].lo).abs() <= tolerance
         || (uv.y - ranges[1].hi).abs() <= tolerance
-}
-
-fn canonical_line(line: Line, range: ParamRange) -> kcore::error::Result<(Line, ParamRange)> {
-    let direction = line.dir();
-    let reversed = direction.x < 0.0
-        || (direction.x == 0.0 && direction.y < 0.0)
-        || (direction.x == 0.0 && direction.y == 0.0 && direction.z < 0.0);
-    if reversed {
-        Ok((
-            Line::new(line.origin(), -direction)?,
-            ParamRange::new(-range.hi, -range.lo),
-        ))
-    } else {
-        Ok((line, range))
-    }
-}
-
-fn plane_pcurve(
-    carrier: Line,
-    surface: Plane,
-) -> GraphSurfaceIntersectionResult<(Line2d, AffineParamMap1d)> {
-    let frame = surface.frame();
-    let local_origin = frame.to_local(carrier.origin());
-    let uv_direction = Vec2::new(carrier.dir().dot(frame.x()), carrier.dir().dot(frame.y()));
-    let scale = uv_direction.norm();
-    let pcurve = Line2d::new(Vec2::new(local_origin.x, local_origin.y), uv_direction)
-        .map_err(IntersectionError::from)
-        .map_err(GraphSurfaceIntersectionError::Intersection)?;
-    let map = AffineParamMap1d::new(scale, 0.0)
-        .map_err(GraphSurfaceIntersectionError::BranchCertificate)?;
-    Ok((pcurve, map))
 }
 
 #[cfg(test)]

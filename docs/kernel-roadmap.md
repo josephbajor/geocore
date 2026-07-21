@@ -303,8 +303,9 @@ Deterministic operation outputs passed the supplemental Onshape oracle 6/6 on
 import and 6/6 there-and-back (`docs/oracle-boolean-certification.json`). The
 active queue head is rung 4 block/cylinder. Public finite-cylinder construction,
 manifold finite-cylinder classification, topology-owned conic/ring trim proofs,
-deterministic closed-fragment stitching, exact Plane/Cylinder rings and
-bounded-arc endpoint topology, payload-agnostic exact boundary truth selection,
+deterministic closed-fragment stitching, exact Plane/Cylinder rings,
+bounded-arc endpoint topology, finite exact-family transverse ruling carriers
+with paired whole-range residual proof, payload-agnostic exact boundary truth selection,
 finite-cylinder Full proof, proof-bearing planar-circle/periodic-band partitions,
 and exact dual-cell classification now feed the public intersection facade. It
 atomically assembles and Full-checks strict axial slab-through-cylinder intersection
@@ -318,8 +319,9 @@ intersections empty, assembles zero-cut finite-cylinder outers with negative
 convex-planar cavity shells, and refuses unsupported curved truth/topology
 classes before allocation. The results export deterministically and self-import
 Fast-valid. Certified flush axial cap-contact unions also remove their full-disk
-interface and Full-commit one connected boss. Bounded-arc contacts/layouts and
-the curved licensed-host evidence gate remain.
+interface and Full-commit one connected boss. Topology-owned ruling trims,
+mixed arc/ruling cycles, bounded-arc contacts/layouts, and the curved licensed-host
+evidence gate remain.
 
 Do not wait for an exhaustive analytic pair table before testing the end-to-end
 boolean architecture. Begin with a deliberately narrow vertical slice as soon as the

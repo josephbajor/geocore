@@ -26,6 +26,8 @@ mod curved_constructive_contact;
 mod curved_inverse_cavity;
 #[path = "lifecycle/curved_one_port_budget.rs"]
 mod curved_one_port_budget;
+#[path = "lifecycle/curved_plane_cylinder_rulings.rs"]
+mod curved_plane_cylinder_rulings;
 #[path = "lifecycle/curved_support_contact.rs"]
 mod curved_support_contact;
 #[path = "lifecycle/curved_two_port.rs"]

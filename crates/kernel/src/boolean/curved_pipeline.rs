@@ -274,7 +274,9 @@ fn certify_section_rings(
         if !matches!(fragment.span(), SectionCurveFragmentSpan::Whole) {
             return refused(CurvedBooleanPipelineRefusal::SectionIncomplete);
         }
-        let SectionCarrier::Circle { center, radius, .. } = branch.carrier();
+        let SectionCarrier::Circle { center, radius, .. } = branch.carrier() else {
+            return refused(CurvedBooleanPipelineRefusal::SectionIncomplete);
+        };
         if radius != cylinder.cylinder().radius()
             || axis_order(axis, center, boundaries[0].center()) != Some(Orientation::Positive)
             || axis_order(axis, center, boundaries[1].center()) != Some(Orientation::Negative)

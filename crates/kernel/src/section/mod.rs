@@ -4,11 +4,13 @@
 //! curves where the two operand boundaries meet, stitched into a coherent
 //! edge graph whose vertices sit on the operands' own edges and vertices.
 //! This module computes that graph for the planar slice — every face on a
-//! plane, every edge a bounded straight line. It also clips complete-period
-//! Plane/Cylinder circle carriers against topology-owned polygon/ring trims
-//! and retains both intact carriers and certified bounded arcs as exact
-//! curved fragments. Their endpoint joins use source edge/root identities;
-//! carrier points are diagnostic representatives only.
+//! plane, every edge a bounded straight line. It also exposes verified
+//! Plane/Cylinder circle and ruling-line carriers. Complete-period circles are
+//! clipped against topology-owned polygon/ring trims and retained as intact
+//! carriers or certified bounded arcs. Ruling lines retain their verified
+//! finite source-window interval while topology-owned open-interval trimming
+//! remains an explicit structured gap. Curved endpoint joins use source
+//! edge/root identities; carrier points are diagnostic representatives only.
 //!
 //! The algorithm is general over topology (any number of faces, loops,
 //! holes, non-convex boundaries). Per candidate face pair it takes the
@@ -300,6 +302,13 @@ pub enum SectionBranchTopology {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum SectionCarrier {
+    /// Straight-line carrier over a finite branch range.
+    Line {
+        /// Point at carrier parameter zero.
+        origin: Point3,
+        /// Unit displacement per unit carrier parameter.
+        direction: Vec3,
+    },
     /// Circular carrier.
     Circle {
         /// Circle center.
@@ -405,13 +414,14 @@ impl SectionFragmentSite {
     }
 }
 
-/// One certified Plane/Cylinder circle carrier.
+/// One certified Plane/Cylinder circle or ruling-line carrier.
 ///
 /// These branches are deliberately kept separate from [`SectionEdge`], whose
 /// endpoints and sites carry bounded trimmed-face topology. A matching
-/// [`SectionRing`] proves that exact trimming retained this complete-period
-/// carrier; a branch without a ring remains verified intersection evidence,
-/// with unresolved trim/fragment work represented by graph gaps.
+/// [`SectionRing`] proves that exact trimming retained a complete-period
+/// circle carrier. A ruling-line branch retains two distinct finite-range
+/// source-window endpoint sites while open trim/fragment work remains a
+/// structured graph gap.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectionBranch {
     faces: [FaceId; 2],
@@ -872,6 +882,8 @@ pub(crate) const GAP_INCOMPATIBLE_EDGE_PARAMETERS: &str =
     "stitched source-edge parameter enclosures are incompatible";
 pub(crate) const GAP_CURVED_TRIM_UNRESOLVED: &str =
     "two independently bounded curved trims cannot yet be intersected in cyclic parameter space";
+pub(crate) const GAP_RULING_TRIM_UNRESOLVED: &str =
+    "Plane/Cylinder ruling-line branches await topology-owned open-interval trimming";
 pub(crate) const GAP_CLOSED_STITCH: &str =
     "closed curved section fragments could not be stitched into manifold rings";
 
@@ -1348,7 +1360,7 @@ fn append_closed_fragments(
 /// the decision. Operand order and both face senses then contribute only
 /// exact sign flips. Parallel-but-indeterminate and perpendicular inputs are
 /// refused rather than oriented from a rounded dot product.
-fn canonical_plane_cylinder_flip(
+fn canonical_plane_cylinder_circle_flip(
     surface_a: &SurfaceGeom,
     sense_a: Sense,
     surface_b: &SurfaceGeom,
@@ -1396,8 +1408,63 @@ fn canonical_plane_cylinder_flip(
     Some(sign < 0)
 }
 
-/// Collect proof-bearing Plane/Cylinder circle carriers independently of the
-/// planar trim/stitch admission path.
+/// Decide whether a graph-canonical Plane/Cylinder ruling line must be
+/// reversed to follow Section's canonical `n_A × n_B` orientation.
+///
+/// The cylinder normal is the radial vector at the line origin. Offset,
+/// axial projection, radial subtraction, cross product, and final dot product
+/// all remain outward-rounded intervals; no rounded derived radial is ever
+/// promoted to exact orientation evidence. Its length is immaterial to the
+/// sign test, so normalization is deliberately avoided.
+fn canonical_plane_cylinder_ruling_flip(
+    surface_a: &SurfaceGeom,
+    sense_a: Sense,
+    surface_b: &SurfaceGeom,
+    sense_b: Sense,
+    origin: Point3,
+    direction: Vec3,
+) -> Option<bool> {
+    let (plane, plane_sense, cylinder, cylinder_sense, plane_is_a) = match (surface_a, surface_b) {
+        (SurfaceGeom::Plane(plane), SurfaceGeom::Cylinder(cylinder)) => {
+            (plane, sense_a, cylinder, sense_b, true)
+        }
+        (SurfaceGeom::Cylinder(cylinder), SurfaceGeom::Plane(plane)) => {
+            (plane, sense_b, cylinder, sense_a, false)
+        }
+        _ => return None,
+    };
+    let axis = cylinder.frame().z().to_array().map(Interval::point);
+    let axis_origin = cylinder.frame().origin().to_array();
+    let point = origin.to_array();
+    let offset: [Interval; 3] = core::array::from_fn(|index| {
+        Interval::point(point[index]) - Interval::point(axis_origin[index])
+    });
+    let axial = (0..3).fold(Interval::point(0.0), |sum, index| {
+        sum + offset[index] * axis[index]
+    });
+    let cylinder_sign = Interval::point(if cylinder_sense.is_forward() {
+        1.0
+    } else {
+        -1.0
+    });
+    let cylinder_normal =
+        core::array::from_fn(|index| cylinder_sign * (offset[index] - axis[index] * axial));
+    let plane_normal = outward_normal(plane.frame(), plane_sense).map(Interval::point);
+    let (normal_a, normal_b) = if plane_is_a {
+        (plane_normal, cylinder_normal)
+    } else {
+        (cylinder_normal, plane_normal)
+    };
+    certified_carrier_sign_intervals(
+        direction.to_array().map(Interval::point),
+        normal_a,
+        normal_b,
+    )
+    .map(|positive| !positive)
+}
+
+/// Collect proof-bearing Plane/Cylinder circle and ruling-line carriers
+/// independently of the planar trim/stitch admission path.
 ///
 /// Face domains are conservative source-owned surface windows used only for
 /// analytic branch discovery and paired trace proof. Exact membership is
@@ -1442,15 +1509,6 @@ fn collect_plane_cylinder_branches(
                 FaceId::new(part_id.clone(), raw_a),
                 FaceId::new(part_id.clone(), raw_b),
             ];
-            let Some(flipped) =
-                canonical_plane_cylinder_flip(surface_a, face_a.sense, surface_b, face_b.sense)
-            else {
-                acc.gaps.push(SectionGap {
-                    reason: GAP_CARRIER_ORIENTATION,
-                    faces: facades.to_vec(),
-                });
-                continue;
-            };
             let (Some(domain_a), Some(domain_b)) = (face_a.domain(), face_b.domain()) else {
                 acc.gaps.push(SectionGap {
                     reason: GAP_PAIR_UNRESOLVED,
@@ -1489,89 +1547,178 @@ fn collect_plane_cylinder_branches(
                 continue;
             }
             for edge in &intersections.branch_graph.edges {
-                let Some(branch) = adapt_plane_cylinder_branch(
+                append_plane_cylinder_branch(
+                    store,
+                    [raw_a, raw_b],
                     &facades,
                     edge,
                     &intersections.branch_graph.vertices,
-                    flipped,
-                ) else {
-                    acc.gaps.push(SectionGap {
-                        reason: GAP_PAIR_UNRESOLVED,
-                        faces: facades.to_vec(),
-                    });
-                    continue;
-                };
-                let clipped = [
-                    curved_clip::clip_closed_conic_to_face(
-                        store,
-                        raw_a,
-                        branch.pcurves[0],
-                        branch.range,
-                        scope,
-                    )?,
-                    curved_clip::clip_closed_conic_to_face(
-                        store,
-                        raw_b,
-                        branch.pcurves[1],
-                        branch.range,
-                        scope,
-                    )?,
-                ];
-                let trim = merge_closed_trim_outcomes(&clipped[0], &clipped[1]);
-                let branch_index = acc.branches.len();
-                acc.branches.push(branch);
-                match trim {
-                    ClosedTrimMerge::Empty => {}
-                    ClosedTrimMerge::Fragments(fragments) => {
-                        if !append_closed_fragments(branch_index, &fragments, acc) {
-                            acc.gaps.push(SectionGap {
-                                reason: GAP_CLOSED_STITCH,
-                                faces: facades.to_vec(),
-                            });
-                        }
-                    }
-                    ClosedTrimMerge::UnsupportedIntersection => acc.gaps.push(SectionGap {
-                        reason: GAP_CURVED_TRIM_UNRESOLVED,
-                        faces: facades.to_vec(),
-                    }),
-                    ClosedTrimMerge::Gap(reason) => acc.gaps.push(SectionGap {
-                        reason,
-                        faces: facades.to_vec(),
-                    }),
-                }
+                    [surface_a, surface_b],
+                    [face_a.sense, face_b.sense],
+                    scope,
+                    acc,
+                )?;
             }
         }
     }
     Ok(())
 }
 
-/// Adapt one whole-period graph branch without turning its chart seam into
-/// two physical endpoints.
+/// Adapt and topology-clip one graph-certified Plane/Cylinder branch.
+#[allow(clippy::too_many_arguments)]
+fn append_plane_cylinder_branch(
+    store: &Store,
+    raw_faces: [RawFaceId; 2],
+    facades: &[FaceId; 2],
+    edge: &IntersectionBranchEdge,
+    vertices: &[kops::intersect::IntersectionBranchVertex],
+    surfaces: [&SurfaceGeom; 2],
+    senses: [Sense; 2],
+    scope: &mut OperationScope<'_, '_>,
+    acc: &mut SectionAccumulator,
+) -> Result<()> {
+    let branch = match adapt_plane_cylinder_branch(
+        facades,
+        edge,
+        vertices,
+        surfaces[0],
+        senses[0],
+        surfaces[1],
+        senses[1],
+    ) {
+        PlaneCylinderBranchAdaptation::Adapted(branch) => *branch,
+        PlaneCylinderBranchAdaptation::OrientationIndeterminate => {
+            acc.gaps.push(SectionGap {
+                reason: GAP_CARRIER_ORIENTATION,
+                faces: facades.to_vec(),
+            });
+            return Ok(());
+        }
+        PlaneCylinderBranchAdaptation::Unsupported => {
+            acc.gaps.push(SectionGap {
+                reason: GAP_PAIR_UNRESOLVED,
+                faces: facades.to_vec(),
+            });
+            return Ok(());
+        }
+    };
+    if matches!(branch.carrier, SectionCarrier::Line { .. }) {
+        acc.branches.push(branch);
+        acc.gaps.push(SectionGap {
+            reason: GAP_RULING_TRIM_UNRESOLVED,
+            faces: facades.to_vec(),
+        });
+        return Ok(());
+    }
+    let clipped = [
+        curved_clip::clip_closed_conic_to_face(
+            store,
+            raw_faces[0],
+            branch.pcurves[0],
+            branch.range,
+            scope,
+        )?,
+        curved_clip::clip_closed_conic_to_face(
+            store,
+            raw_faces[1],
+            branch.pcurves[1],
+            branch.range,
+            scope,
+        )?,
+    ];
+    let trim = merge_closed_trim_outcomes(&clipped[0], &clipped[1]);
+    let branch_index = acc.branches.len();
+    acc.branches.push(branch);
+    match trim {
+        ClosedTrimMerge::Empty => {}
+        ClosedTrimMerge::Fragments(fragments) => {
+            if !append_closed_fragments(branch_index, &fragments, acc) {
+                acc.gaps.push(SectionGap {
+                    reason: GAP_CLOSED_STITCH,
+                    faces: facades.to_vec(),
+                });
+            }
+        }
+        ClosedTrimMerge::UnsupportedIntersection => acc.gaps.push(SectionGap {
+            reason: GAP_CURVED_TRIM_UNRESOLVED,
+            faces: facades.to_vec(),
+        }),
+        ClosedTrimMerge::Gap(reason) => acc.gaps.push(SectionGap {
+            reason,
+            faces: facades.to_vec(),
+        }),
+    }
+    Ok(())
+}
+
+enum PlaneCylinderBranchAdaptation {
+    Adapted(Box<SectionBranch>),
+    OrientationIndeterminate,
+    Unsupported,
+}
+
+/// Adapt one verified graph branch into facade-owned carrier values.
 fn adapt_plane_cylinder_branch(
     faces: &[FaceId; 2],
     edge: &IntersectionBranchEdge,
     vertices: &[kops::intersect::IntersectionBranchVertex],
-    flipped: bool,
-) -> Option<SectionBranch> {
+    surface_a: &SurfaceGeom,
+    sense_a: Sense,
+    surface_b: &SurfaceGeom,
+    sense_b: Sense,
+) -> PlaneCylinderBranchAdaptation {
+    if edge.kind != ContactKind::Transverse {
+        return PlaneCylinderBranchAdaptation::Unsupported;
+    }
+    if edge.certificate.as_plane_cylinder_circle().is_some() {
+        return adapt_plane_cylinder_circle_branch(
+            faces, edge, vertices, surface_a, sense_a, surface_b, sense_b,
+        );
+    }
+    if edge.certificate.as_plane_cylinder_ruling().is_some() {
+        return adapt_plane_cylinder_ruling_branch(
+            faces, edge, vertices, surface_a, sense_a, surface_b, sense_b,
+        );
+    }
+    PlaneCylinderBranchAdaptation::Unsupported
+}
+
+#[allow(clippy::too_many_arguments)]
+fn adapt_plane_cylinder_circle_branch(
+    faces: &[FaceId; 2],
+    edge: &IntersectionBranchEdge,
+    vertices: &[kops::intersect::IntersectionBranchVertex],
+    surface_a: &SurfaceGeom,
+    sense_a: Sense,
+    surface_b: &SurfaceGeom,
+    sense_b: Sense,
+) -> PlaneCylinderBranchAdaptation {
+    let Some(certificate) = edge.certificate.as_plane_cylinder_circle() else {
+        return PlaneCylinderBranchAdaptation::Unsupported;
+    };
+    let CurveDescriptor::Circle(carrier) = edge.carrier else {
+        return PlaneCylinderBranchAdaptation::Unsupported;
+    };
     if edge.topology != IntersectionBranchTopology::Closed
         || edge.endpoint_vertices[0] != edge.endpoint_vertices[1]
-        || edge.kind != ContactKind::Transverse
     {
-        return None;
+        return PlaneCylinderBranchAdaptation::Unsupported;
     }
-    let CurveDescriptor::Circle(carrier) = edge.carrier else {
-        return None;
+    let Some(flipped) =
+        canonical_plane_cylinder_circle_flip(surface_a, sense_a, surface_b, sense_b)
+    else {
+        return PlaneCylinderBranchAdaptation::OrientationIndeterminate;
     };
-    let certificate = edge.certificate.as_plane_cylinder_circle()?;
-    let pcurves = [
-        adapt_branch_pcurve(&edge.pcurves[0], edge.parameter_maps[0], flipped)?,
-        adapt_branch_pcurve(&edge.pcurves[1], edge.parameter_maps[1], flipped)?,
-    ];
-    let vertex = *vertices.get(edge.endpoint_vertices[0])?;
+    let Some(pcurves) = adapt_branch_pcurves(edge, flipped) else {
+        return PlaneCylinderBranchAdaptation::Unsupported;
+    };
+    let Some(vertex) = vertices.get(edge.endpoint_vertices[0]).copied() else {
+        return PlaneCylinderBranchAdaptation::Unsupported;
+    };
     let IntersectionBranchVertexEvent::PeriodSeam { surfaces } = vertex.event else {
-        return None;
+        return PlaneCylinderBranchAdaptation::Unsupported;
     };
-    Some(SectionBranch {
+    PlaneCylinderBranchAdaptation::Adapted(Box::new(SectionBranch {
         faces: faces.clone(),
         carrier: SectionCarrier::Circle {
             center: carrier.frame().origin(),
@@ -1596,7 +1743,117 @@ fn adapt_plane_cylinder_branch(
             residual_bounds: certificate.residual_bounds(),
             tolerance: certificate.tolerance(),
         },
-    })
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn adapt_plane_cylinder_ruling_branch(
+    faces: &[FaceId; 2],
+    edge: &IntersectionBranchEdge,
+    vertices: &[kops::intersect::IntersectionBranchVertex],
+    surface_a: &SurfaceGeom,
+    sense_a: Sense,
+    surface_b: &SurfaceGeom,
+    sense_b: Sense,
+) -> PlaneCylinderBranchAdaptation {
+    let Some(certificate) = edge.certificate.as_plane_cylinder_ruling() else {
+        return PlaneCylinderBranchAdaptation::Unsupported;
+    };
+    let CurveDescriptor::Line(carrier) = edge.carrier else {
+        return PlaneCylinderBranchAdaptation::Unsupported;
+    };
+    if edge.topology != IntersectionBranchTopology::Open
+        || edge.endpoint_vertices[0] == edge.endpoint_vertices[1]
+    {
+        return PlaneCylinderBranchAdaptation::Unsupported;
+    }
+    let Some(flipped) = canonical_plane_cylinder_ruling_flip(
+        surface_a,
+        sense_a,
+        surface_b,
+        sense_b,
+        carrier.origin(),
+        carrier.dir(),
+    ) else {
+        return PlaneCylinderBranchAdaptation::OrientationIndeterminate;
+    };
+    let Some(pcurves) = adapt_branch_pcurves(edge, flipped) else {
+        return PlaneCylinderBranchAdaptation::Unsupported;
+    };
+    let Some(low_vertex) = vertices
+        .get(edge.endpoint_vertices[usize::from(flipped)])
+        .copied()
+    else {
+        return PlaneCylinderBranchAdaptation::Unsupported;
+    };
+    let Some(high_vertex) = vertices
+        .get(edge.endpoint_vertices[usize::from(!flipped)])
+        .copied()
+    else {
+        return PlaneCylinderBranchAdaptation::Unsupported;
+    };
+    let IntersectionBranchVertexEvent::BoundaryEndpoint {
+        surfaces: low_surfaces,
+    } = low_vertex.event
+    else {
+        return PlaneCylinderBranchAdaptation::Unsupported;
+    };
+    let IntersectionBranchVertexEvent::BoundaryEndpoint {
+        surfaces: high_surfaces,
+    } = high_vertex.event
+    else {
+        return PlaneCylinderBranchAdaptation::Unsupported;
+    };
+    let range = if flipped {
+        ParamRange {
+            lo: -edge.carrier_range.hi,
+            hi: -edge.carrier_range.lo,
+        }
+    } else {
+        edge.carrier_range
+    };
+    PlaneCylinderBranchAdaptation::Adapted(Box::new(SectionBranch {
+        faces: faces.clone(),
+        carrier: SectionCarrier::Line {
+            origin: carrier.origin(),
+            direction: if flipped {
+                -carrier.dir()
+            } else {
+                carrier.dir()
+            },
+        },
+        range,
+        topology: SectionBranchTopology::Open,
+        pcurves,
+        fragment_sites: vec![
+            SectionFragmentSite {
+                point: low_vertex.point,
+                surface_parameters: low_vertex.surface_parameters,
+                surface_window_boundaries: low_surfaces,
+            },
+            SectionFragmentSite {
+                point: high_vertex.point,
+                surface_parameters: high_vertex.surface_parameters,
+                surface_window_boundaries: high_surfaces,
+            },
+        ],
+        endpoint_sites: [0, 1],
+        evidence: SectionBranchEvidence {
+            residual_bounds: certificate.residual_bounds(),
+            tolerance: certificate.tolerance(),
+        },
+    }))
+}
+
+fn adapt_branch_pcurves(
+    edge: &IntersectionBranchEdge,
+    flipped: bool,
+) -> Option<[SectionUvCurve; 2]> {
+    let pcurves = [
+        adapt_branch_pcurve(&edge.pcurves[0], edge.parameter_maps[0], flipped)?,
+        adapt_branch_pcurve(&edge.pcurves[1], edge.parameter_maps[1], flipped)?,
+    ];
+    Some(pcurves)
 }
 
 /// Compose graph-owned pcurve geometry with its carrier map into facade-owned
@@ -1734,16 +1991,26 @@ fn certified_carrier_sign(
     normal_a: [f64; 3],
     normal_b: [f64; 3],
 ) -> Option<bool> {
-    let a = normal_a.map(Interval::point);
-    let b = normal_b.map(Interval::point);
+    certified_carrier_sign_intervals(
+        direction.map(Interval::point),
+        normal_a.map(Interval::point),
+        normal_b.map(Interval::point),
+    )
+}
+
+fn certified_carrier_sign_intervals(
+    direction: [Interval; 3],
+    normal_a: [Interval; 3],
+    normal_b: [Interval; 3],
+) -> Option<bool> {
     let cross = [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
+        normal_a[1] * normal_b[2] - normal_a[2] * normal_b[1],
+        normal_a[2] * normal_b[0] - normal_a[0] * normal_b[2],
+        normal_a[0] * normal_b[1] - normal_a[1] * normal_b[0],
     ];
     let mut dot = Interval::point(0.0);
     for axis in 0..3 {
-        dot = dot + Interval::point(direction[axis]) * cross[axis];
+        dot = dot + direction[axis] * cross[axis];
     }
     if dot.lo() > 0.0 {
         Some(true)
@@ -2005,7 +2272,10 @@ fn curved_carrier_point(branch: &SectionBranch, parameter: f64) -> Option<Point3
         normal,
         x_direction,
         radius,
-    } = branch.carrier;
+    } = branch.carrier
+    else {
+        return None;
+    };
     let (sin, cos) = kcore::math::sincos(parameter);
     let point = center + x_direction * (radius * cos) + normal.cross(x_direction) * (radius * sin);
     [point.x, point.y, point.z]
@@ -2521,43 +2791,43 @@ mod unit_tests {
     }
 
     #[test]
-    fn plane_cylinder_orientation_accounts_for_operand_order_and_face_senses() {
+    fn plane_cylinder_circle_orientation_accounts_for_operand_order_and_face_senses() {
         let plane = SurfaceGeom::Plane(Plane::new(Frame::world()));
         let cylinder = SurfaceGeom::Cylinder(Cylinder::new(Frame::world(), 1.0).unwrap());
         let f = Sense::Forward;
         let r = Sense::Reversed;
 
         assert_eq!(
-            canonical_plane_cylinder_flip(&plane, f, &cylinder, f),
+            canonical_plane_cylinder_circle_flip(&plane, f, &cylinder, f),
             Some(false)
         );
         assert_eq!(
-            canonical_plane_cylinder_flip(&plane, r, &cylinder, f),
+            canonical_plane_cylinder_circle_flip(&plane, r, &cylinder, f),
             Some(true)
         );
         assert_eq!(
-            canonical_plane_cylinder_flip(&plane, f, &cylinder, r),
+            canonical_plane_cylinder_circle_flip(&plane, f, &cylinder, r),
             Some(true)
         );
         assert_eq!(
-            canonical_plane_cylinder_flip(&plane, r, &cylinder, r),
+            canonical_plane_cylinder_circle_flip(&plane, r, &cylinder, r),
             Some(false)
         );
 
         assert_eq!(
-            canonical_plane_cylinder_flip(&cylinder, f, &plane, f),
+            canonical_plane_cylinder_circle_flip(&cylinder, f, &plane, f),
             Some(true)
         );
         assert_eq!(
-            canonical_plane_cylinder_flip(&cylinder, r, &plane, f),
+            canonical_plane_cylinder_circle_flip(&cylinder, r, &plane, f),
             Some(false)
         );
         assert_eq!(
-            canonical_plane_cylinder_flip(&cylinder, f, &plane, r),
+            canonical_plane_cylinder_circle_flip(&cylinder, f, &plane, r),
             Some(false)
         );
         assert_eq!(
-            canonical_plane_cylinder_flip(&cylinder, r, &plane, r),
+            canonical_plane_cylinder_circle_flip(&cylinder, r, &plane, r),
             Some(true)
         );
 
@@ -2569,7 +2839,7 @@ mod unit_tests {
             .unwrap(),
         );
         assert_eq!(
-            canonical_plane_cylinder_flip(&plane, f, &perpendicular, f),
+            canonical_plane_cylinder_circle_flip(&plane, f, &perpendicular, f),
             None
         );
     }

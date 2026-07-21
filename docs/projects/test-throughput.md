@@ -65,7 +65,7 @@ It intentionally omits broad doc/tooling stages and the remaining integration
 binaries so ordinary edit/commit feedback stays bounded, while retaining its
 own lane-classification/command contract suite as a final stage.
 
-The `standard` lane adds every one of the 75 current non-corpus integration
+The `standard` lane adds every one of the 76 current non-corpus integration
 targets and the Python tooling contracts, but not documentation tests. It
 retains all seven current lightweight `kxt` integration binaries:
 
@@ -103,7 +103,7 @@ reconstruction work. All 14 remain mandatory in `full`. Cargo metadata is the
 authority for integration-target names and source paths; nonstandard explicit
 targets therefore cannot silently fall outside `standard`. The runner also
 validates workspace/package identity, smoke membership, direct fixture
-references, and the exact 89/75/14 total/standard/corpus counts before every
+references, and the exact 90/76/14 total/standard/corpus counts before every
 listing or run. Drift fails closed until the reviewed inventory is updated.
 The July 15 foundation tranche added four ordinary, non-corpus binaries—checked
 rigid body copy plus varying-normal Offset(NURBS) against NURBS, Plane, and
@@ -116,6 +116,8 @@ inventory to 100/86 while leaving the same 14 production-corpus ratchets.
 Collapsing the template-stamped magnitude-`three`..`fourteen` spatial-algebraic
 family (12 binaries) into one table-driven target then reduced the reviewed
 inventory to 89/75, still leaving the same 14 production-corpus ratchets.
+The Plane/Cylinder ruling checkpoint added one ordinary non-corpus graph
+promotion target, advancing the current reviewed inventory to 90/76.
 
 The `docs` lane runs `cargo test --workspace --doc` explicitly. Its executable
 and `no_run` examples check documented use, while its compile-fail examples

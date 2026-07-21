@@ -10,6 +10,8 @@ mod error;
 mod eval;
 mod graph;
 mod intersection;
+#[path = "intersection/plane_cylinder_ruling.rs"]
+mod plane_cylinder_ruling;
 
 pub use class::{Curve2dClass, CurveClass, GeometryClassKey, SurfaceClass};
 pub use descriptor::{
@@ -72,4 +74,8 @@ pub use intersection::{
     verified_offset_nurbs_plane_intersection_certificate_cost,
     verified_plane_nurbs_intersection_certificate_work,
     verified_sphere_nurbs_intersection_certificate_cost,
+};
+pub use plane_cylinder_ruling::{
+    CylinderRulingTrace, PairedPlaneCylinderRulingResidualCertificate, PlaneCylinderRulingTrace,
+    PlaneRulingTrace, certify_paired_plane_cylinder_ruling_residuals,
 };

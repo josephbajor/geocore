@@ -30,9 +30,11 @@ use crate::classify::{ClassifyPointInBodyRequest, PointBodyVerdict};
 use crate::operation::{BlockRequest, ExtrudeProfileRequest};
 use crate::{CylinderRequest, Kernel, PartEdit, PartId, Session};
 
+mod ruling;
+
 /// Every stable gap-reason constant the section slice may report. Any other
 /// string is a contract violation.
-const STABLE_GAP_REASONS: [&str; 21] = [
+const STABLE_GAP_REASONS: [&str; 22] = [
     GAP_PLANAR_ONLY,
     GAP_LINE_EDGES_ONLY,
     GAP_BOUNDED_EDGES_ONLY,
@@ -47,6 +49,7 @@ const STABLE_GAP_REASONS: [&str; 21] = [
     GAP_PAIR_UNRESOLVED,
     GAP_INCOMPATIBLE_EDGE_PARAMETERS,
     GAP_CURVED_TRIM_UNRESOLVED,
+    GAP_RULING_TRIM_UNRESOLVED,
     GAP_CLOSED_STITCH,
     curved_clip::ClosedConicClipGap::UnsupportedTrim.reason(),
     curved_clip::ClosedConicClipGap::MalformedTrim.reason(),
@@ -1138,6 +1141,7 @@ fn block_slab_through_cylinder_exposes_two_exact_closed_rings() {
                 x_direction,
                 radius,
             } => (center, normal, x_direction, radius),
+            SectionCarrier::Line { .. } => panic!("closed branch must retain a circle carrier"),
         };
         heights.push(center.z);
         assert_eq!(radius, 0.75);
@@ -1199,7 +1203,21 @@ fn clipped_plane_cylinder_circles_retain_exact_public_arc_endpoints() {
     };
     let graph = section_graph(&session, &part_id, &block, &cylinder);
 
-    assert_eq!(graph.branches().len(), 2, "bounded graph: {graph:#?}");
+    let circle_branches = graph
+        .branches()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, branch)| {
+            matches!(branch.carrier(), SectionCarrier::Circle { .. }).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let ruling_branches = graph
+        .branches()
+        .iter()
+        .filter(|branch| matches!(branch.carrier(), SectionCarrier::Line { .. }))
+        .count();
+    assert_eq!(circle_branches.len(), 2, "bounded graph: {graph:#?}");
+    assert_eq!(ruling_branches, 4, "bounded graph: {graph:#?}");
     assert_eq!(graph.curve_fragments().len(), 4);
     assert_eq!(graph.curve_endpoints().len(), 8);
     assert_eq!(graph.curve_components().len(), 4);
@@ -1218,6 +1236,14 @@ fn clipped_plane_cylinder_circles_retain_exact_public_arc_endpoints() {
             .all(|gap| gap.reason() != GAP_CURVED_TRIM_UNRESOLVED),
         "public endpoint adaptation must not report the retired facade gap: {:?}",
         graph.gaps()
+    );
+    assert_eq!(
+        graph
+            .gaps()
+            .iter()
+            .filter(|gap| gap.reason() == GAP_RULING_TRIM_UNRESOLVED)
+            .count(),
+        ruling_branches
     );
 
     let part = session.part(part_id.clone()).unwrap();
@@ -1272,7 +1298,13 @@ fn clipped_plane_cylinder_circles_retain_exact_public_arc_endpoints() {
             );
         }
     }
-    assert!(branch_ordinals.iter().all(|ordinals| ordinals == &[0, 1]));
+    for (branch, ordinals) in branch_ordinals.iter().enumerate() {
+        if circle_branches.contains(&branch) {
+            assert_eq!(ordinals, &[0, 1]);
+        } else {
+            assert!(ordinals.is_empty());
+        }
+    }
     assert_stable_gap_reasons(&graph);
 
     let swapped = section_graph(&session, &part_id, &cylinder, &block);
@@ -1308,6 +1340,7 @@ fn closed_ring_operand_swap_reverses_the_canonical_carriers() {
                 x_direction,
                 ..
             } => (center, normal, x_direction),
+            SectionCarrier::Line { .. } => panic!("closed ring must retain a circle carrier"),
         };
         let swapped_branch = swapped
             .branches()
@@ -1316,6 +1349,7 @@ fn closed_ring_operand_swap_reverses_the_canonical_carriers() {
                 SectionCarrier::Circle {
                     center: candidate, ..
                 } => candidate.dist(center) <= POINT_MATCH_TOL,
+                SectionCarrier::Line { .. } => false,
             })
             .expect("swapped graph must retain the same geometric ring");
         let (swapped_normal, swapped_x) = match swapped_branch.carrier() {
@@ -1324,6 +1358,7 @@ fn closed_ring_operand_swap_reverses_the_canonical_carriers() {
                 x_direction,
                 ..
             } => (normal, x_direction),
+            SectionCarrier::Line { .. } => panic!("closed ring must retain a circle carrier"),
         };
         assert!((normal + swapped_normal).norm() <= POINT_MATCH_TOL);
         assert!((x_direction - swapped_x).norm() <= POINT_MATCH_TOL);
@@ -1388,6 +1423,7 @@ fn rigidly_oriented_slab_through_cylinder_keeps_two_exact_rings() {
         .iter()
         .map(|ring| match graph.branches()[ring.branch()].carrier() {
             SectionCarrier::Circle { center, .. } => (center - base).dot(cylinder_frame.z()),
+            SectionCarrier::Line { .. } => panic!("closed ring must retain a circle carrier"),
         })
         .collect::<Vec<_>>();
     axial_parameters.sort_by(f64::total_cmp);
