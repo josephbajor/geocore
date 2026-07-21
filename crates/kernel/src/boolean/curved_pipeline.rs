@@ -38,8 +38,8 @@ use super::curved_support_separation::{
     certify_convex_host_cylinder_support_relation, certify_strict_axial_cap_contact,
 };
 use super::extract::{
-    ExtractedPlanarSourceBody, PlanarSourceExtractionError, PlanarSourceGap,
-    PlanarSourceProofFailure, extract_planar_source_body,
+    CertifiedConvexPlanarSource, ExtractedPlanarSourceBody, PlanarSourceExtractionError,
+    PlanarSourceGap, PlanarSourceProofFailure, extract_planar_source_body,
 };
 use super::face_partition::{
     AxialBoundary, CertifiedAxialRingCut, CertifiedPlanarCircleCut, FaceCellClassificationError,
@@ -410,10 +410,14 @@ fn execute_stages(
         (planar, cylinder)
     };
 
-    if operation == PlanarBooleanOperation::Intersect {
+    let planar_certificate = planar_source.convex_certificate().ok();
+
+    if operation == PlanarBooleanOperation::Intersect
+        && let Some(planar_certificate) = planar_certificate
+    {
         let relation = certify_convex_host_cylinder_support_relation(
             &edit.state.store,
-            &planar_source,
+            planar_certificate,
             &cylinder_source,
             scope,
         )?;
@@ -423,16 +427,39 @@ fn execute_stages(
     }
 
     let mut contact = None;
-    let cuts = if certify_zero_cut_mixed_containment(
-        &edit.state.store,
-        &planar_source,
-        &cylinder_source,
-        scope,
-    )? {
+    let zero_cut_containment = match planar_certificate {
+        Some(planar_certificate) => certify_zero_cut_mixed_containment(
+            &edit.state.store,
+            planar_certificate,
+            &cylinder_source,
+            scope,
+        )?,
+        None => false,
+    };
+    let cuts = if zero_cut_containment {
         Vec::new()
     } else {
         let graph =
             section_bodies_in_scope(&edit.as_part(), &bodies[0], &bodies[1], linear, scope)?;
+        if planar_certificate.is_none() {
+            if graph.completion() == SectionCompletion::Complete && graph.gaps().is_empty() {
+                return execute_mixed_bounded_arc(
+                    edit,
+                    operation,
+                    &graph,
+                    &bodies,
+                    &planar_source,
+                    &cylinder_source,
+                    planar_operand,
+                    cylinder_operand,
+                    linear,
+                    scope,
+                );
+            }
+            return refused(CurvedBooleanPipelineRefusal::SectionIncomplete);
+        }
+        let planar_certificate = planar_certificate
+            .ok_or_else(|| refused_error(CurvedBooleanPipelineRefusal::SectionIncomplete))?;
         match certify_section_rings(&graph, planar_operand, cylinder_operand, &cylinder_source) {
             Ok(cuts) => cuts,
             Err(PipelineFailure::Refused(CurvedBooleanPipelineRefusal::SectionIncomplete))
@@ -456,7 +483,7 @@ fn execute_stages(
             ) if operation == PlanarBooleanOperation::Unite => {
                 let relation = certify_convex_host_cylinder_support_relation(
                     &edit.state.store,
-                    &planar_source,
+                    planar_certificate,
                     &cylinder_source,
                     scope,
                 )?;
@@ -468,7 +495,7 @@ fn execute_stages(
                 };
                 let Some(certified) = certify_strict_axial_cap_contact(
                     &edit.state.store,
-                    &planar_source,
+                    planar_certificate,
                     &cylinder_source,
                     relation,
                     scope,
@@ -482,17 +509,19 @@ fn execute_stages(
             Err(failure) => return Err(failure),
         }
     };
+    let planar_certificate = planar_certificate
+        .ok_or_else(|| refused_error(CurvedBooleanPipelineRefusal::SectionIncomplete))?;
     let interfaces = cuts
         .len()
         .checked_add(usize::from(contact.is_some()))
         .ok_or_else(work_overflow)?;
-    precharge_curved_partition(planar_source.faces().len(), interfaces, scope)?;
+    precharge_curved_partition(planar_certificate.faces().len(), interfaces, scope)?;
     let classified = build_classified_fragments(
         edit,
         &bodies,
         planar_operand,
         cylinder_operand,
-        &planar_source,
+        planar_certificate,
         &cylinder_source,
         &cuts,
         contact.as_ref(),
@@ -517,7 +546,7 @@ fn execute_stages(
         CurvedRealizationRequest::new(
             &bodies,
             &source_boundary_keys,
-            &planar_source,
+            planar_certificate,
             &cylinder_source,
             &cuts,
             contact.as_ref(),
@@ -615,7 +644,7 @@ fn realize_mixed_shell(
 /// remain execution failures.
 fn certify_zero_cut_mixed_containment(
     store: &ktopo::store::Store,
-    planar: &ExtractedPlanarSourceBody,
+    planar: &CertifiedConvexPlanarSource,
     cylinder: &CertifiedCylinderSource,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<bool> {
@@ -733,7 +762,7 @@ fn build_classified_fragments(
     bodies: &[BodyId; 2],
     planar_operand: usize,
     cylinder_operand: usize,
-    planar: &ExtractedPlanarSourceBody,
+    planar: &CertifiedConvexPlanarSource,
     cylinder: &CertifiedCylinderSource,
     cuts: &[CertifiedRingCut],
     contact: Option<&CertifiedAxialCapContact>,
@@ -771,7 +800,7 @@ fn append_planar_fragments(
     edit: &PartEdit<'_>,
     cylinder_body: &BodyId,
     operand: u8,
-    source: &ExtractedPlanarSourceBody,
+    source: &CertifiedConvexPlanarSource,
     cuts: &[CertifiedRingCut],
     contact: Option<&CertifiedAxialCapContact>,
     linear: f64,

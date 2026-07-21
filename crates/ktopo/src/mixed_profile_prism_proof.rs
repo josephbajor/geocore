@@ -24,9 +24,10 @@ pub(crate) const MIXED_PROFILE_PRISM_WORK: StageId =
         Err(_) => panic!("valid mixed profile-prism work stage"),
     };
 
-// The next power of two above the 1,145,760-work cap-retaining extrusion
-// fixture, leaving deterministic headroom without changing the work formula.
-const DEFAULT_MIXED_PROFILE_PRISM_WORK: u64 = 2_097_152;
+// The next power of two above the 2,851,200-work ten-support non-convex
+// extrusion fixture, leaving deterministic headroom without changing the
+// input-size-exact work formula.
+const DEFAULT_MIXED_PROFILE_PRISM_WORK: u64 = 4_194_304;
 
 pub(super) fn mixed_profile_prism_proof_budget() -> BudgetPlan {
     BudgetPlan::new([LimitSpec::new(

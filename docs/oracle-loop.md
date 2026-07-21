@@ -63,13 +63,13 @@ bodies, and a two-shell finite-void cavity. Evidence: `docs/oracle-results.tsv`.
 Finite-cylinder Full proof changed the regenerated base manifest's checker
 evidence after writer `b596027`; its 15 payload hashes are unchanged, but the
 base bundle needs licensed-host re-certification. The six-payload Boolean record
-retains historical 2026-07-20 evidence, but the generator now adds eight queued
+retains historical 2026-07-20 evidence, but the generator now adds nine queued
 Plane/Cylinder payloads: bounded-arc intersection, both ordered
 planar-minus-cylinder bodies, rectangular cap-retaining Unite/cylinder-left
 Subtract, five-portal variants of both operations, and seam-crossing five-portal
-cylinder-left Subtract.
-The complete regenerated fourteen-payload bundle has deterministic offline identity
-`6a869c653b5864fd17b96f631610119f981395f20818effd84a03d4389a42936`
+cylinder-left Subtract, plus nonconvex star/cylinder Intersect.
+The complete regenerated fifteen-payload bundle has deterministic offline identity
+`61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7`
 and awaits a fresh licensed-host run; this queued identity is not host
 certification.
 
@@ -117,25 +117,26 @@ python3 scripts/oracle_loop.py certification-check \
   --record docs/oracle-boolean-certification.json
 ```
 
-Its fourteen payloads cover connected block/block unite/subtract/intersect, both
+Its fifteen payloads cover connected block/block unite/subtract/intersect, both
 bodies of a disjoint union, contained subtraction with one finite void, one
 bounded-arc block/cylinder intersection, and both public-result-order bodies of
 the bounded-arc planar-minus-cylinder subtraction, plus rectangular and
-five-portal cap-retaining Unite/cylinder-left Subtract plus the seam-crossing
-five-portal cylinder-left Subtract. Generation requires
-Full-valid committed results, independent volumes, local X_T import,
-byte-stable replay, and an empty output directory. The eight queued files are
+five-portal cap-retaining Unite/cylinder-left Subtract, the seam-crossing
+five-portal cylinder-left Subtract, and nonconvex star/cylinder Intersect.
+Generation requires Full-valid committed results, independent volumes, local X_T import,
+byte-stable replay, and an empty output directory. The nine queued files are
 `bounded_arc_plane_cylinder_intersect.x_t`,
 `bounded_arc_plane_cylinder_subtract_body_0.x_t`,
 `bounded_arc_plane_cylinder_subtract_body_1.x_t`,
 `cap_retaining_plane_cylinder_unite.x_t`,
 `cap_retaining_cylinder_minus_plane.x_t`,
-`five_portal_plane_cylinder_unite.x_t`, and
-`five_portal_cylinder_minus_plane.x_t`, and
-`seam_crossing_five_portal_cylinder_minus_plane.x_t`; this batch is not yet
+`five_portal_plane_cylinder_unite.x_t`,
+`five_portal_cylinder_minus_plane.x_t`,
+`seam_crossing_five_portal_cylinder_minus_plane.x_t`, and
+`nonconvex_star_plane_cylinder_intersection.x_t`; this batch is not yet
 licensed-host certification. After the final queued changes settle, regenerate
 the bundle, record `identity` output, and manually dispatch the full
-fourteen-payload Boolean suite with that exact `bundle_sha256`; keep the record
+fifteen-payload Boolean suite with that exact `bundle_sha256`; keep the record
 stale until every final payload has completed import/re-export comparison.
 
 ## 2. Manual catch-up entry points

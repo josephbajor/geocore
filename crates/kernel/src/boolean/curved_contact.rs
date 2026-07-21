@@ -17,7 +17,7 @@ use super::curved_host::{prepare_curved_host, source_operand, source_plane_for_f
 use super::curved_pipeline::{CurvedFragment, CurvedFragmentKey};
 use super::curved_source::CertifiedCylinderSource;
 use super::curved_support_separation::CertifiedAxialCapContact;
-use super::extract::ExtractedPlanarSourceBody;
+use super::extract::CertifiedConvexPlanarSource;
 use super::face_partition::{AxialBoundary, FaceRegionKey};
 
 type SelectedCurvedFragment = SelectedBoundaryFragment<CurvedFragmentKey, CurvedFragment>;
@@ -63,7 +63,7 @@ impl PreparedSupportContact {
 
 /// Recognize the certified selected truth and compute realization work without scratch.
 pub(super) fn admit_support_contact(
-    planar: &ExtractedPlanarSourceBody,
+    planar: &CertifiedConvexPlanarSource,
     cylinder: &CertifiedCylinderSource,
     contact: CertifiedAxialCapContact,
     selected: &[SelectedCurvedFragment],
@@ -182,7 +182,7 @@ pub(super) fn admit_support_contact(
 /// Build the semantic host input after work admission and verify dimensions.
 pub(super) fn prepare_admitted_support_contact(
     admission: SupportContactAdmission,
-    planar: &ExtractedPlanarSourceBody,
+    planar: &CertifiedConvexPlanarSource,
     cylinder: &CertifiedCylinderSource,
     contact: CertifiedAxialCapContact,
 ) -> Result<PreparedSupportContact, &'static str> {

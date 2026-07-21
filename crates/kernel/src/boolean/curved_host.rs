@@ -12,10 +12,10 @@ use ktopo::planar::{
     PlanarFacePlaneBinding, PlanarSolidFace, PlanarSolidInput, PlanarSolidVertex, PlanarVertexKey,
 };
 
-use super::extract::ExtractedPlanarSourceBody;
+use super::extract::CertifiedConvexPlanarSource;
 use super::planar_bsp::{PlaneTripleVertexKey, SourcePlane, SourcePlaneRef};
 
-pub(super) fn source_operand(source: &ExtractedPlanarSourceBody) -> Result<u8, &'static str> {
+pub(super) fn source_operand(source: &CertifiedConvexPlanarSource) -> Result<u8, &'static str> {
     let Some(first) = source.planes().first().map(|plane| plane.id().operand()) else {
         return Err("curved result host has no source planes");
     };
@@ -31,7 +31,7 @@ pub(super) fn source_operand(source: &ExtractedPlanarSourceBody) -> Result<u8, &
 }
 
 pub(super) fn source_plane_for_face(
-    source: &ExtractedPlanarSourceBody,
+    source: &CertifiedConvexPlanarSource,
     face: RawFaceId,
 ) -> Result<SourcePlane, &'static str> {
     let source_face = source
@@ -48,7 +48,7 @@ pub(super) fn source_plane_for_face(
 }
 
 pub(super) fn prepare_curved_host(
-    source: &ExtractedPlanarSourceBody,
+    source: &CertifiedConvexPlanarSource,
     port_sources: &[RawFaceId],
 ) -> Result<(PlanarSolidInput, Vec<usize>), &'static str> {
     let mut expected_ports = Vec::with_capacity(port_sources.len());
@@ -134,7 +134,7 @@ pub(super) fn prepare_curved_host(
 }
 
 fn unique_fragment(
-    source: &ExtractedPlanarSourceBody,
+    source: &CertifiedConvexPlanarSource,
     face: SourcePlaneRef,
 ) -> Result<&super::planar_bsp::ConvexPlanarFragment, &'static str> {
     let mut matches = source

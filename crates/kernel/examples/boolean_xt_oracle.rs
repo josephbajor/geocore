@@ -31,7 +31,9 @@ const FIVE_PORTAL_UNITE: &str = "five_portal_plane_cylinder_unite.x_t";
 const FIVE_PORTAL_CYLINDER_SUBTRACT: &str = "five_portal_cylinder_minus_plane.x_t";
 const SEAM_CROSSING_FIVE_PORTAL_CYLINDER_SUBTRACT: &str =
     "seam_crossing_five_portal_cylinder_minus_plane.x_t";
-const EXPECTED_FILES: [&str; 14] = [
+const NONCONVEX_STAR_PLANE_CYLINDER_INTERSECTION: &str =
+    "nonconvex_star_plane_cylinder_intersection.x_t";
+const EXPECTED_FILES: [&str; 15] = [
     CONNECTED_UNITE,
     CONNECTED_SUBTRACT,
     CONNECTED_INTERSECT,
@@ -46,6 +48,7 @@ const EXPECTED_FILES: [&str; 14] = [
     FIVE_PORTAL_UNITE,
     FIVE_PORTAL_CYLINDER_SUBTRACT,
     SEAM_CROSSING_FIVE_PORTAL_CYLINDER_SUBTRACT,
+    NONCONVEX_STAR_PLANE_CYLINDER_INTERSECTION,
 ];
 
 const BOUNDED_ARC_RADIUS: f64 = 1.5;
@@ -69,6 +72,8 @@ const FIVE_PORTAL_RELATIVE_VOLUME_TOLERANCE: f64 = 1.0e-3;
 /// For each edge, `d = cross(p_i, p_j) / |p_j - p_i|` and the removed cap is
 /// `R^2 acos(d/R) - d sqrt(R^2 - d^2)`; the overlap height is exactly one.
 const SEAM_CROSSING_FIVE_PORTAL_CYLINDER_SUBTRACT_VOLUME: f64 = 7.570_496_318_579_939;
+/// Literal line/circle boundary integration for the ten-point star below.
+const NONCONVEX_STAR_PLANE_CYLINDER_INTERSECTION_VOLUME: f64 = 5.559_104_559_775_048;
 
 const SIN_047: f64 = 0.452_886_285_379_068_3;
 const COS_047: f64 = 0.891_568_288_195_329;
@@ -244,6 +249,15 @@ const FIVE_PORTAL_CYLINDER_SUBTRACT_COUNTS: TopologyCounts = TopologyCounts {
     fins: 64,
     edges: 32,
     vertices: 20,
+};
+const NONCONVEX_STAR_PLANE_CYLINDER_INTERSECTION_COUNTS: TopologyCounts = TopologyCounts {
+    regions: 2,
+    shells: 1,
+    faces: 17,
+    loops: 17,
+    fins: 90,
+    edges: 45,
+    vertices: 30,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -435,6 +449,7 @@ fn build_bundle() -> OracleResult<Vec<Artifact>> {
         FIVE_PORTAL_CYLINDER_SUBTRACT_COUNTS,
     )?);
     artifacts.push(build_seam_crossing_five_portal_subtract()?);
+    artifacts.push(build_nonconvex_star_plane_cylinder_intersection()?);
     Ok(artifacts)
 }
 
@@ -611,6 +626,37 @@ fn build_seam_crossing_five_portal_subtract() -> OracleResult<Artifact> {
     )
 }
 
+fn build_nonconvex_star_plane_cylinder_intersection() -> OracleResult<Artifact> {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (star, cylinder) = create_nonconvex_star_plane_cylinder_operands(&mut session, &part)?;
+    let bodies = run_boolean(
+        &mut session,
+        &part,
+        star.clone(),
+        cylinder.clone(),
+        BooleanOperation::Intersect,
+    )?;
+    require(
+        bodies.len() == 1,
+        format!(
+            "{NONCONVEX_STAR_PLANE_CYLINDER_INTERSECTION} expected one result body, got {}",
+            bodies.len()
+        ),
+    )?;
+    assert_sources_retained(&session, &part, &star, &cylinder, 3)?;
+    make_artifact_with_volume_tolerance(
+        &mut session,
+        &part,
+        bodies[0].clone(),
+        NONCONVEX_STAR_PLANE_CYLINDER_INTERSECTION,
+        NONCONVEX_STAR_PLANE_CYLINDER_INTERSECTION_VOLUME,
+        NONCONVEX_STAR_PLANE_CYLINDER_INTERSECTION_COUNTS,
+        FIVE_PORTAL_RELATIVE_VOLUME_TOLERANCE,
+        CAP_RETAINING_CHORD_TOLERANCE,
+    )
+}
+
 fn create_bounded_arc_operands(
     session: &mut Session,
     part: &PartId,
@@ -715,7 +761,7 @@ fn create_seam_crossing_five_portal_operands(
                 ProfilePoint2::new(-1.616_796_077_701_761, 0.525_328_890_437_410_6),
                 ProfilePoint2::new(-0.999_234_928_897_204_3, -1.375_328_890_437_410_5),
                 ProfilePoint2::new(0.999_234_928_897_203_8, -1.375_328_890_437_411),
-                ProfilePoint2::new(1.616_796_077_701_761, 0.525_328_890_437_410_1),
+                ProfilePoint2::new(1.616_796_077_701_761, 0.525_328_890_437_41),
             ],
             Vec::new(),
             BOUNDED_ARC_SLAB_HI - BOUNDED_ARC_SLAB_LO,
@@ -731,6 +777,43 @@ fn create_seam_crossing_five_portal_operands(
         .into_result()?
         .body();
     Ok((block, cylinder))
+}
+
+fn create_nonconvex_star_plane_cylinder_operands(
+    session: &mut Session,
+    part: &PartId,
+) -> OracleResult<(BodyId, BodyId)> {
+    let frame = Frame::world();
+    let mut edit = session.edit_part(part.clone())?;
+    let star = edit
+        .extrude_profile(ExtrudeProfileRequest::new(
+            frame.with_origin(frame.point_at(0.0, 0.0, BOUNDED_ARC_SLAB_LO)),
+            vec![
+                ProfilePoint2::new(0.0, 2.5),
+                ProfilePoint2::new(-0.587_785_252_292_473, 0.809_016_994_374_947_5),
+                ProfilePoint2::new(-2.377_641_290_737_884, 0.772_542_485_937_368_6),
+                ProfilePoint2::new(-0.951_056_516_295_153_6, -0.309_016_994_374_947_3),
+                ProfilePoint2::new(-1.469_463_130_731_183_2, -2.022_542_485_937_368),
+                ProfilePoint2::new(0.0, -1.0),
+                ProfilePoint2::new(1.469_463_130_731_182_5, -2.022_542_485_937_369),
+                ProfilePoint2::new(0.951_056_516_295_153_5, -0.309_016_994_374_947_6),
+                ProfilePoint2::new(2.377_641_290_737_884, 0.772_542_485_937_368_5),
+                ProfilePoint2::new(0.587_785_252_292_473_1, 0.809_016_994_374_947_5),
+            ],
+            Vec::new(),
+            BOUNDED_ARC_SLAB_HI - BOUNDED_ARC_SLAB_LO,
+        ))?
+        .into_result()?
+        .body();
+    let cylinder = edit
+        .create_cylinder(CylinderRequest::new(
+            frame,
+            BOUNDED_ARC_RADIUS,
+            BOUNDED_ARC_CYLINDER_HEIGHT,
+        ))?
+        .into_result()?
+        .body();
+    Ok((star, cylinder))
 }
 
 fn bounded_arc_disk_strip_volume() -> f64 {

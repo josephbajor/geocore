@@ -166,7 +166,7 @@ pub(crate) fn prepare_mixed_bounded_arc_boundary(
     let mut prepared_planar = Vec::with_capacity(planar.faces().len());
     let mut classified = Vec::new();
     for source_face in planar.faces() {
-        let face = source_face.face();
+        let face = source_face.clone();
         let output =
             arrange_mixed_planar_face_with_lineage(store, graph, face.clone(), planar_operand)
                 .map_err(MixedBoundaryError::PlanarArrangement)?;

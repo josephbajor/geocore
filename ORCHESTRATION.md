@@ -73,9 +73,13 @@ slice. The active slice is the **first boolean ladder** (roadmap tranche 3):
    16,777,216 default. Cycle-wide certified integer-period lifting now admits
    the seam-crossing radius-1.7 cylinder-left Subtract across all four frames
    with 10/32/20 topology, literal-derived volume, deterministic X_T, and Fast
-   self-import; the fourteen-file offline bundle is queued/stale, not host-certified.
-   Next: separate exact planar-shell topology/incidence extraction from optional
-   convex half-space proof so non-convex profile prisms can enter mixed planning.)*
+   self-import. Exact planar-shell admission is now independent of the optional
+   typed convex half-space certificate, so a complete non-convex ten-support
+   star/cylinder Intersect reaches general mixed planning and Full-commits at
+   17F/45E/30V with literal-derived volume, deterministic X_T, and Fast
+   self-import; pure planar BSP and convex curved shortcuts still require that
+   certificate. Next: replay the queued deterministic fifteen-payload Boolean
+   bundle in the licensed host.)*
 
 Work that does not advance the queue head needs an explicit justification
 linking it to a rung ("rung 2 needs curve/curve overlap dedup because …").

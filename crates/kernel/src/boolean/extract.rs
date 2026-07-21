@@ -93,6 +93,18 @@ pub(crate) enum PlanarSourceExtractionError {
     Uncertified(PlanarSourceProofFailure),
 }
 
+/// Exact reason that the admitted planar shell could not be strengthened to
+/// the narrower convex half-space source class.
+///
+/// Only policy misses that are irrelevant to general Section-driven planning
+/// are represented here. Malformed topology, exhausted budgets, and failed
+/// geometric incidence remain hard [`PlanarSourceExtractionError`]s.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlanarSourceConvexityFailure {
+    Unsupported(PlanarSourceGap),
+    Uncertified(PlanarSourceProofFailure),
+}
+
 /// Original topological face corresponding to one symbolic plane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExtractedSourceFace {
@@ -154,9 +166,40 @@ impl ExtractedSourceVertex {
     }
 }
 
-/// Deterministic semantic input for one operand of the exact planar BSP.
+/// General planar-shell source admitted for Section-driven Boolean planning.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ExtractedPlanarSourceBody {
+    faces: Vec<FaceId>,
+    convex_certificate: Result<CertifiedConvexPlanarSource, PlanarSourceConvexityFailure>,
+}
+
+impl ExtractedPlanarSourceBody {
+    /// Ordered source faces in material-shell traversal order.
+    pub(crate) fn faces(&self) -> &[FaceId] {
+        &self.faces
+    }
+
+    /// Optional strengthening required by convex BSP and curved-host
+    /// specialization consumers.
+    pub(crate) fn convex_certificate(
+        &self,
+    ) -> Result<&CertifiedConvexPlanarSource, PlanarSourceConvexityFailure> {
+        self.convex_certificate.as_ref().map_err(|failure| *failure)
+    }
+
+    /// Consume the general shell when a caller's entire algorithm requires
+    /// the narrower convex certificate.
+    pub(crate) fn into_convex_certificate(
+        self,
+    ) -> Result<CertifiedConvexPlanarSource, PlanarSourceConvexityFailure> {
+        self.convex_certificate
+    }
+}
+
+/// Deterministic semantic input for one operand of the exact convex planar
+/// BSP.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CertifiedConvexPlanarSource {
     interior_sample: Point3,
     planes: Vec<SourcePlane>,
     faces: Vec<ExtractedSourceFace>,
@@ -165,7 +208,7 @@ pub(crate) struct ExtractedPlanarSourceBody {
     fragments: Vec<ConvexPlanarFragment>,
 }
 
-impl ExtractedPlanarSourceBody {
+impl CertifiedConvexPlanarSource {
     /// Strict material-side witness shared by cross-operand support proofs.
     pub(crate) const fn interior_sample(&self) -> Point3 {
         self.interior_sample
@@ -207,9 +250,10 @@ struct FaceSeed {
 }
 
 type EdgePlaneLookup = Vec<((SourcePlaneRef, RawEdgeId), SourcePlaneRef)>;
-type ExtractedEdges = (Vec<ExtractedSourceEdge>, EdgePlaneLookup);
+type ExtractedEdges = (Option<Vec<ExtractedSourceEdge>>, EdgePlaneLookup);
 
-/// Extract a certified convex planar body without allocating or mutating.
+/// Extract a general planar shell and optionally certify its convex BSP view
+/// without allocating or mutating topology.
 ///
 /// The caller supplies the operation scope so Fast checking shares the
 /// enclosing Boolean's accounting. The scope must include the checker-v2 Fast
@@ -252,16 +296,63 @@ pub(crate) fn extract_planar_source_body(
     if seeds.len() < 4 || body_vertices.len() < 4 {
         return unsupported(PlanarSourceGap::ShellLayout);
     }
-    let interior_sample = strict_interior_sample(store, &body_vertices)?;
     charge_exact_work(scope, &seeds, body_vertices.len())?;
-    let planes = build_source_planes(&seeds, interior_sample)?;
-    certify_unique_planes(&planes)?;
-    let incidence = collect_vertex_plane_incidence(&seeds)?;
-    let vertices = extract_vertices(part, store, &incidence)?;
     let linear_tolerance = scope.context().session().precision().linear_resolution();
     let (edges, edge_planes) = extract_edge_planes(part, store, &seeds, linear_tolerance)?;
-    certify_source_plane_complex(&seeds, &body_vertices, &incidence, &edge_planes, &planes)?;
-    let fragments = build_fragments(&seeds, &incidence, &edge_planes)?;
+    let faces = seeds
+        .iter()
+        .map(|seed| FaceId::new(part.id.clone(), seed.raw))
+        .collect();
+    let convex_certificate =
+        match strict_interior_sample(store, &body_vertices).and_then(|interior_sample| {
+            certify_convex_planar_source(
+                part,
+                store,
+                &seeds,
+                &body_vertices,
+                edges,
+                &edge_planes,
+                interior_sample,
+            )
+        }) {
+            Ok(source) => Ok(source),
+            Err(PlanarSourceExtractionError::Unsupported(
+                gap @ (PlanarSourceGap::CoplanarFacetPartition | PlanarSourceGap::NonSimpleVertex),
+            )) => Err(PlanarSourceConvexityFailure::Unsupported(gap)),
+            Err(PlanarSourceExtractionError::Uncertified(
+                failure @ (PlanarSourceProofFailure::NonFiniteInteriorSample
+                | PlanarSourceProofFailure::DegenerateSupportingPlane
+                | PlanarSourceProofFailure::NonConvexFace
+                | PlanarSourceProofFailure::NonConvexBody),
+            )) => Err(PlanarSourceConvexityFailure::Uncertified(failure)),
+            Err(error) => return Err(error),
+        };
+
+    Ok(ExtractedPlanarSourceBody {
+        faces,
+        convex_certificate,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn certify_convex_planar_source(
+    part: &Part<'_>,
+    store: &Store,
+    seeds: &[FaceSeed],
+    body_vertices: &[RawVertexId],
+    edges: Option<Vec<ExtractedSourceEdge>>,
+    edge_planes: &EdgePlaneLookup,
+    interior_sample: Point3,
+) -> Result<CertifiedConvexPlanarSource, PlanarSourceExtractionError> {
+    let planes = build_source_planes(seeds, interior_sample)?;
+    certify_unique_planes(&planes)?;
+    let incidence = collect_vertex_plane_incidence(seeds)?;
+    let vertices = extract_vertices(part, store, &incidence)?;
+    let edges = edges.ok_or(PlanarSourceExtractionError::Unsupported(
+        PlanarSourceGap::NonSimpleVertex,
+    ))?;
+    certify_source_plane_complex(seeds, body_vertices, &incidence, edge_planes, &planes)?;
+    let fragments = build_fragments(seeds, &incidence, edge_planes)?;
     let faces = seeds
         .iter()
         .map(|seed| ExtractedSourceFace {
@@ -271,7 +362,7 @@ pub(crate) fn extract_planar_source_body(
         })
         .collect();
 
-    Ok(ExtractedPlanarSourceBody {
+    Ok(CertifiedConvexPlanarSource {
         interior_sample,
         planes,
         faces,
@@ -700,6 +791,7 @@ fn extract_edge_planes(
         .collect::<Vec<_>>();
     let mut adjacency = Vec::new();
     let mut source_edges: BTreeMap<[SourcePlaneRef; 2], RawEdgeId> = BTreeMap::new();
+    let mut simple_plane_pairs = true;
     let mut certified_edges = Vec::new();
     for seed in seeds {
         for &edge_id in &seed.edges {
@@ -730,21 +822,24 @@ fn extract_edge_planes(
             } else {
                 [other_plane, seed.id]
             };
-            match source_edges.insert(planes, edge_id) {
-                Some(previous) if previous != edge_id => {
-                    return unsupported(PlanarSourceGap::NonSimpleVertex);
+            match source_edges.get(&planes) {
+                Some(previous) if *previous != edge_id => simple_plane_pairs = false,
+                Some(_) => {}
+                None => {
+                    source_edges.insert(planes, edge_id);
                 }
-                _ => {}
             }
         }
     }
-    let edges = source_edges
-        .into_iter()
-        .map(|(planes, raw)| ExtractedSourceEdge {
-            planes,
-            edge: EdgeId::new(part.id.clone(), raw),
-        })
-        .collect();
+    let edges = simple_plane_pairs.then(|| {
+        source_edges
+            .into_iter()
+            .map(|(planes, raw)| ExtractedSourceEdge {
+                planes,
+                edge: EdgeId::new(part.id.clone(), raw),
+            })
+            .collect()
+    });
     Ok((edges, adjacency))
 }
 
@@ -1085,6 +1180,8 @@ mod tests {
         let first = extract(&session, &part_id, body.clone(), 0).unwrap();
         let second = extract(&session, &part_id, body, 0).unwrap();
         assert_eq!(first, second);
+        assert_eq!(first.faces().len(), 6);
+        let first = first.convex_certificate().unwrap();
         assert_eq!(first.planes().len(), 6);
         assert_eq!(first.faces().len(), 6);
         assert_eq!(first.edges().len(), 12);
@@ -1176,6 +1273,8 @@ mod tests {
         let first = extract(&session, &part_id, body.clone(), 0).unwrap();
         let second = extract(&session, &part_id, body, 0).unwrap();
         assert_eq!(first, second);
+        assert_eq!(first.faces().len(), 6);
+        let first = first.convex_certificate().unwrap();
         assert_eq!(first.planes().len(), 6);
         assert_eq!(first.faces().len(), 6);
         assert_eq!(first.edges().len(), 12);
@@ -1286,6 +1385,8 @@ mod tests {
             assemble_input(store, &input)
         });
         let extracted = extract(&session, &part_id, body, 1).unwrap();
+        assert_eq!(extracted.faces().len(), 4);
+        let extracted = extracted.convex_certificate().unwrap();
 
         assert_eq!(extracted.planes().len(), 4);
         assert_eq!(extracted.fragments().len(), 4);
@@ -1324,7 +1425,41 @@ mod tests {
     }
 
     #[test]
-    fn full_valid_coplanar_facet_partition_is_honestly_unsupported() {
+    fn nonconvex_profile_prism_retains_general_faces_without_a_convex_certificate() {
+        let mut session = Kernel::new().create_session();
+        let part_id = session.create_part();
+        let profile = PlanarProfile::from_polygon(
+            Frame::world(),
+            &[
+                Point2::new(0.0, 2.5),
+                Point2::new(-0.587_785_252_292_473, 0.809_016_994_374_947_5),
+                Point2::new(-2.377_641_290_737_884, 0.772_542_485_937_368_6),
+                Point2::new(-0.951_056_516_295_153_6, -0.309_016_994_374_947_3),
+                Point2::new(-1.469_463_130_731_183_2, -2.022_542_485_937_368),
+                Point2::new(0.0, -1.0),
+                Point2::new(1.469_463_130_731_182_5, -2.022_542_485_937_369),
+                Point2::new(0.951_056_516_295_153_5, -0.309_016_994_374_947_6),
+                Point2::new(2.377_641_290_737_884, 0.772_542_485_937_368_5),
+                Point2::new(0.587_785_252_292_473_1, 0.809_016_994_374_947_5),
+            ],
+        )
+        .unwrap();
+        let body = add_body(&mut session, &part_id, |store| {
+            ktopo::make::extrude_profile(store, &profile, 2.0).unwrap()
+        });
+
+        let extracted = extract(&session, &part_id, body, 0).unwrap();
+        assert_eq!(extracted.faces().len(), 12);
+        assert_eq!(
+            extracted.convex_certificate(),
+            Err(PlanarSourceConvexityFailure::Uncertified(
+                PlanarSourceProofFailure::NonConvexBody
+            ))
+        );
+    }
+
+    #[test]
+    fn full_valid_coplanar_facet_partition_is_general_but_not_convex_certified() {
         let points = [
             Point3::new(-1.0, -1.0, -1.0),
             Point3::new(0.0, -1.0, -1.0),
@@ -1371,9 +1506,11 @@ mod tests {
             assemble_input(store, &input)
         });
 
+        let extracted = extract(&session, &part_id, body, 0).unwrap();
+        assert_eq!(extracted.faces().len(), 10);
         assert_eq!(
-            extract(&session, &part_id, body, 0),
-            Err(PlanarSourceExtractionError::Unsupported(
+            extracted.convex_certificate(),
+            Err(PlanarSourceConvexityFailure::Unsupported(
                 PlanarSourceGap::CoplanarFacetPartition
             ))
         );

@@ -31,7 +31,9 @@ The current facade supports:
   planar-minus-cylinder subtraction that Full-commits every disconnected
   rectangular or three-sided component and rectangular/five-support
   cap-retaining mixed Unite and cylinder-left Subtract across world, translated, permuted, and oblique
-  frames, typed empty/created/refused outcomes, and Full validation;
+  frames, plus complete nonconvex ten-support star/cylinder Intersect through
+  convex-certificate-independent mixed planning, typed empty/created/refused
+  outcomes, and Full validation;
 - atomic typed X_T import and deterministic X_T export; and
 - deterministic facade-ID mutation, lineage, and tolerance journal iteration;
   and
@@ -49,6 +51,9 @@ The five-portal cap-retaining slice verifies exact face/edge/vertex signatures
 (23/47/30 for Unite; 10/32/20 for cylinder-left Subtract), independent analytic
 mesh volumes, deterministic X_T, Fast self-import, and exact N/N-1 shell-work atomicity.
 Proof-local period lifting also admits a radius-1.7 five-support subtraction across authored `u=0` without mutating pcurves.
+Exact planar-shell admission is separate from its optional typed convex certificate:
+the nonconvex star result is 17F/45E/30V with literal-derived volume and deterministic
+X_T/Fast self-import, while pure planar BSP and convex shortcuts remain certificate-gated.
 
 ## Application boundary
 

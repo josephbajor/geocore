@@ -30,7 +30,7 @@ use super::curved_pipeline::{
 };
 use super::curved_source::CertifiedCylinderSource;
 use super::curved_support_separation::CertifiedAxialCapContact;
-use super::extract::ExtractedPlanarSourceBody;
+use super::extract::CertifiedConvexPlanarSource;
 use super::face_partition::{AxialBoundary, FaceRegionKey};
 use super::pipeline::{PLANAR_BOOLEAN_REALIZATION_WORK, PLANAR_BOOLEAN_REALIZED_VERTICES};
 use crate::BodyId;
@@ -65,7 +65,7 @@ impl PreparedCurvedResult {
 pub(super) struct CurvedRealizationRequest<'a> {
     bodies: &'a [BodyId; 2],
     source_boundary_keys: &'a BTreeMap<OperandSide, BTreeSet<CurvedFragmentKey>>,
-    planar: &'a ExtractedPlanarSourceBody,
+    planar: &'a CertifiedConvexPlanarSource,
     cylinder: &'a CertifiedCylinderSource,
     cuts: &'a [CertifiedRingCut],
     contact: Option<&'a CertifiedAxialCapContact>,
@@ -76,7 +76,7 @@ impl<'a> CurvedRealizationRequest<'a> {
     pub(super) fn new(
         bodies: &'a [BodyId; 2],
         source_boundary_keys: &'a BTreeMap<OperandSide, BTreeSet<CurvedFragmentKey>>,
-        planar: &'a ExtractedPlanarSourceBody,
+        planar: &'a CertifiedConvexPlanarSource,
         cylinder: &'a CertifiedCylinderSource,
         cuts: &'a [CertifiedRingCut],
         contact: Option<&'a CertifiedAxialCapContact>,

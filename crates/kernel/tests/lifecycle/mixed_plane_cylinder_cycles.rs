@@ -3,6 +3,7 @@
 //! Wall-time budget: less than 60 seconds for the table-driven matrix.
 
 use super::*;
+use kcore::math::atan2;
 use kernel::{
     ClassifyPointOnFaceRequest, EdgeId, FaceId, PointFaceVerdict, SectionBranch,
     SectionBranchTopology, SectionCarrier, SectionCurveComponent, SectionCurveEndpointTopology,
@@ -374,7 +375,7 @@ fn seam_crossing_five_patch_fixture(placement: Placement) -> MixedCycleFixture {
                     Point2::new(-1.616_796_077_701_761, 0.525_328_890_437_410_6),
                     Point2::new(-0.999_234_928_897_204_3, -1.375_328_890_437_410_5),
                     Point2::new(0.999_234_928_897_203_8, -1.375_328_890_437_411),
-                    Point2::new(1.616_796_077_701_761, 0.525_328_890_437_410_1),
+                    Point2::new(1.616_796_077_701_761, 0.525_328_890_437_41),
                 ],
                 Vec::new(),
                 SLAB_HI - SLAB_LO,
@@ -395,6 +396,115 @@ fn seam_crossing_five_patch_fixture(placement: Placement) -> MixedCycleFixture {
     assert_eq!(before.block.faces.len(), 7);
     assert_eq!(before.block.edges.len(), 15);
     assert_eq!(before.block.vertices.len(), 10);
+    assert_eq!(before.cylinder.faces.len(), 3);
+    assert_eq!(before.cylinder.edges.len(), 2);
+    assert!(before.cylinder.vertices.is_empty());
+    MixedCycleFixture {
+        session,
+        part_id,
+        block,
+        cylinder,
+        frame,
+        before,
+    }
+}
+
+fn nonconvex_star_profile() -> Vec<Point2> {
+    vec![
+        Point2::new(0.0, 2.5),
+        Point2::new(-0.587_785_252_292_473, 0.809_016_994_374_947_5),
+        Point2::new(-2.377_641_290_737_884, 0.772_542_485_937_368_6),
+        Point2::new(-0.951_056_516_295_153_6, -0.309_016_994_374_947_3),
+        Point2::new(-1.469_463_130_731_183_2, -2.022_542_485_937_368),
+        Point2::new(0.0, -1.0),
+        Point2::new(1.469_463_130_731_182_5, -2.022_542_485_937_369),
+        Point2::new(0.951_056_516_295_153_5, -0.309_016_994_374_947_6),
+        Point2::new(2.377_641_290_737_884, 0.772_542_485_937_368_5),
+        Point2::new(0.587_785_252_292_473_1, 0.809_016_994_374_947_5),
+    ]
+}
+
+fn literal_segment_circle_root(start: Point2, end: Point2, radius: f64) -> Point2 {
+    let direction = end - start;
+    let a = direction.dot(direction);
+    let b = 2.0 * start.dot(direction);
+    let c = start.dot(start) - radius * radius;
+    let discriminant = b * b - 4.0 * a * c;
+    assert!(discriminant > 0.0);
+    let denominator = 2.0 * a;
+    let first = (-b - discriminant.sqrt()) / denominator;
+    let second = (-b + discriminant.sqrt()) / denominator;
+    let first_on_edge = (0.0..=1.0).contains(&first);
+    let second_on_edge = (0.0..=1.0).contains(&second);
+    assert_ne!(first_on_edge, second_on_edge);
+    start + direction * if first_on_edge { first } else { second }
+}
+
+fn literal_star_disk_intersection_area(profile: &[Point2], radius: f64) -> f64 {
+    assert_eq!(profile.len(), 10);
+    let radius_squared = radius * radius;
+    let mut line_area = 0.0;
+    let mut arc_area = 0.0;
+    for index in 0..profile.len() {
+        let start = profile[index];
+        let end = profile[(index + 1) % profile.len()];
+        let start_inside = start.dot(start) < radius_squared;
+        let end_inside = end.dot(end) < radius_squared;
+        assert_ne!(start_inside, end_inside);
+        let root = literal_segment_circle_root(start, end, radius);
+        if start_inside {
+            // Green's theorem contributes cross(p, q) / 2 on each retained
+            // literal line span. The following edge enters the disk after the
+            // intervening outer star vertex, so its two roots bound the
+            // retained counter-clockwise circle arc.
+            line_area += start.cross(root) * 0.5;
+            let after_outer = profile[(index + 2) % profile.len()];
+            let entry = literal_segment_circle_root(end, after_outer, radius);
+            let exit_angle = atan2(root.y, root.x);
+            let entry_angle = atan2(entry.y, entry.x);
+            let arc_angle = (entry_angle - exit_angle).rem_euclid(std::f64::consts::TAU);
+            assert!(arc_angle < std::f64::consts::PI);
+            arc_area += radius_squared * arc_angle * 0.5;
+        } else {
+            line_area += root.cross(end) * 0.5;
+        }
+    }
+    line_area + arc_area
+}
+
+fn nonconvex_star_five_patch_fixture(placement: Placement) -> MixedCycleFixture {
+    let frame = mixed_frame(placement);
+    let mut session = Kernel::new().create_session();
+    let part_id = session.create_part();
+    let (block, cylinder) = {
+        let mut edit = session.edit_part(part_id.clone()).unwrap();
+        // A simple ten-vertex star alternates exact authored outer and inner
+        // radii 5/2 and 1. Every edge therefore crosses the radius-3/2 disk
+        // exactly once, producing five bounded mixed components without a
+        // convex planar-source certificate.
+        let block = edit
+            .extrude_profile(ExtrudeProfileRequest::new(
+                frame.with_origin(frame.point_at(0.0, 0.0, SLAB_LO)),
+                nonconvex_star_profile(),
+                Vec::new(),
+                SLAB_HI - SLAB_LO,
+            ))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        let cylinder = edit
+            .create_cylinder(CylinderRequest::new(frame, RADIUS, CYLINDER_HEIGHT))
+            .unwrap()
+            .into_result()
+            .unwrap()
+            .body();
+        (block, cylinder)
+    };
+    let before = source_signature(&session, &part_id, &block, &cylinder);
+    assert_eq!(before.block.faces.len(), 12);
+    assert_eq!(before.block.edges.len(), 30);
+    assert_eq!(before.block.vertices.len(), 20);
     assert_eq!(before.cylinder.faces.len(), 3);
     assert_eq!(before.cylinder.edges.len(), 2);
     assert!(before.cylinder.vertices.is_empty());
@@ -1892,6 +2002,175 @@ fn seam_crossing_five_patch_cylinder_subtract_is_full_valid_in_all_frames() {
         );
         assert_eq!(after.body_count, before.body_count + 1);
     }
+}
+
+fn assert_nonconvex_star_intersection_target_once(
+    expected_volume: f64,
+) -> ([usize; 3], [usize; 3], Vec<u8>) {
+    let MixedCycleFixture {
+        mut session,
+        part_id,
+        block,
+        cylinder,
+        frame: _,
+        before,
+    } = nonconvex_star_five_patch_fixture(Placement::World);
+    let request = || {
+        session
+            .part(part_id.clone())
+            .unwrap()
+            .section_bodies(SectionBodiesRequest::new(block.clone(), cylinder.clone()))
+            .unwrap()
+            .into_result()
+            .unwrap()
+    };
+    let graph = request();
+    assert_eq!(request(), graph, "repeated star section changed payload");
+    assert_eq!(
+        graph.completion(),
+        SectionCompletion::Complete,
+        "{graph:#?}"
+    );
+    assert!(graph.gaps().is_empty(), "{graph:#?}");
+    assert_eq!(graph.branches().len(), 12);
+    assert_eq!(graph.curve_fragments().len(), 20);
+    assert_eq!(graph.curve_endpoints().len(), 20);
+    assert_eq!(graph.curve_components().len(), 5);
+    assert_eq!(
+        graph
+            .curve_fragments()
+            .iter()
+            .filter(|fragment| fragment_kind(fragment) == FragmentKind::Arc)
+            .count(),
+        10,
+    );
+    assert_eq!(
+        graph
+            .curve_fragments()
+            .iter()
+            .filter(|fragment| fragment_kind(fragment) == FragmentKind::Line)
+            .count(),
+        10,
+    );
+    assert!(
+        graph
+            .curve_components()
+            .iter()
+            .all(|component| component.closed() && component.fragments().len() == 4)
+    );
+    assert_eq!(
+        source_signature(&session, &part_id, &block, &cylinder),
+        before,
+        "read-only star section mutated a source",
+    );
+
+    let operation_outcome = session
+        .edit_part(part_id.clone())
+        .unwrap()
+        .boolean_bodies(BooleanBodiesRequest::new(
+            BooleanOperation::Intersect,
+            block.clone(),
+            cylinder.clone(),
+        ))
+        .unwrap();
+    let mixed_profile_stage = kernel::StageId::new("ktopo.check.mixed-profile-prism-work").unwrap();
+    assert!(
+        operation_outcome
+            .report()
+            .usage()
+            .contains(&kernel::LimitSnapshot {
+                stage: mixed_profile_stage,
+                resource: ResourceKind::Work,
+                consumed: 2_851_200,
+                allowed: 4_194_304,
+            })
+    );
+    let outcome = operation_outcome.into_result().unwrap();
+    let BooleanOutcome::Success(BooleanResult::Created(created)) = outcome else {
+        panic!("non-convex star intersection did not commit: {outcome:?}")
+    };
+    assert_eq!(created.bodies().len(), 1);
+    assert_eq!(created.reports().len(), 1);
+    assert_eq!(created.reports()[0].report().level(), CheckLevel::Full);
+    assert_eq!(
+        created.reports()[0].report().outcome(),
+        CheckOutcome::Valid,
+        "{:?}",
+        created.reports()[0],
+    );
+    let result = created.bodies()[0].clone();
+    let topology = body_signature(&session.part(part_id.clone()).unwrap(), result.clone());
+    assert_eq!(
+        (
+            topology.faces.len(),
+            topology.edges.len(),
+            topology.vertices.len(),
+        ),
+        (17, 45, 30),
+    );
+    let full = session
+        .part(part_id.clone())
+        .unwrap()
+        .check_body(CheckBodyRequest::new(result.clone(), CheckLevel::Full))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    assert_eq!(full.outcome(), CheckOutcome::Valid, "{full:?}");
+    let mesh = session
+        .part(part_id.clone())
+        .unwrap()
+        .tessellate_body(TessellateBodyRequest::new(
+            result.clone(),
+            TessOptions {
+                chord_tol: 1.0e-3,
+                max_edge_len: None,
+            },
+        ))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    let actual_volume = mesh_volume(mesh.positions(), mesh.triangles());
+    assert!(
+        (actual_volume - expected_volume).abs() <= expected_volume * 1.0e-3,
+        "mesh volume {actual_volume:.17e} differs from literal-derived value {expected_volume:.17e}",
+    );
+    let xt = assert_mixed_deterministic_xt_and_fast_self_import(&mut session, &part_id, &result);
+    let after = source_signature(&session, &part_id, &block, &cylinder);
+    assert_eq!(
+        after.block, before.block,
+        "committed intersection mutated the source star prism",
+    );
+    assert_eq!(
+        after.cylinder, before.cylinder,
+        "committed intersection mutated the source cylinder",
+    );
+    assert_eq!(after.body_count, before.body_count + 1);
+    (
+        [
+            topology.faces.len(),
+            topology.edges.len(),
+            topology.vertices.len(),
+        ],
+        after.geometry_counts,
+        xt,
+    )
+}
+
+#[test]
+fn nonconvex_star_section_and_intersection_commit_full_valid_deterministically() {
+    const EXPECTED_VOLUME: f64 = 5.559_104_559_775_048;
+    let literal_volume = literal_star_disk_intersection_area(&nonconvex_star_profile(), RADIUS)
+        * (SLAB_HI - SLAB_LO);
+    assert!(
+        (literal_volume - EXPECTED_VOLUME).abs() <= 1.0e-12,
+        "literal line/circle integration produced {literal_volume:.17e}",
+    );
+
+    let first = assert_nonconvex_star_intersection_target_once(literal_volume);
+    let second = assert_nonconvex_star_intersection_target_once(literal_volume);
+    assert_eq!(first.0, second.0, "rebuilt result topology counts changed");
+    assert_eq!(first.1, second.1, "rebuilt result geometry counts changed");
+    assert_eq!(first.2, second.2, "rebuilt result X_T changed");
 }
 
 #[test]

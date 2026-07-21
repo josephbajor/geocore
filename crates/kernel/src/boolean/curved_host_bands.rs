@@ -21,7 +21,7 @@ use super::boundary_select::{OperandSide, SelectedBoundaryFragment, SelectedOrie
 use super::curved_host::{prepare_curved_host, source_operand, source_plane_for_face};
 use super::curved_pipeline::{CertifiedRingCut, CurvedFragment, CurvedFragmentKey};
 use super::curved_source::CertifiedCylinderSource;
-use super::extract::ExtractedPlanarSourceBody;
+use super::extract::CertifiedConvexPlanarSource;
 use super::face_partition::{AxialBoundary, FaceRegionKey};
 use super::planar_bsp::SourcePlane;
 
@@ -91,7 +91,7 @@ struct AxialCutEvidence {
 /// `Ok(None)` means the selected truth belongs to another topology class.
 /// `Err` reports inconsistency in already-certified source evidence.
 pub(super) fn prepare_cylindrical_host_bands(
-    planar: &ExtractedPlanarSourceBody,
+    planar: &CertifiedConvexPlanarSource,
     cylinder: &CertifiedCylinderSource,
     cuts: &[CertifiedRingCut],
     selected: &[SelectedCurvedFragment],
@@ -355,7 +355,7 @@ fn prepare_incidence_graph(
 }
 
 fn validate_band_orientation(
-    planar: &ExtractedPlanarSourceBody,
+    planar: &CertifiedConvexPlanarSource,
     cylinder: &CertifiedCylinderSource,
     cuts: &[CertifiedRingCut],
     band: &PreparedBand,

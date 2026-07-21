@@ -271,14 +271,15 @@ signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handle
 - Public Boolean facade + external operation evidence: `crates/kernel/src/boolean/`,
   `crates/kernel/tests/lifecycle.rs`, `crates/kernel/examples/boolean_xt_oracle.rs`,
   `docs/oracle-boolean-certification.json`.
+- Exact planar-shell admission is independent of its optional typed convex certificate; the complete
+  non-convex ten-support star/cylinder Intersect Full-commits at 17F/45E/30V with literal-derived volume and deterministic X_T/Fast self-import.
 
 ## Open items
 
 - Broader semantic edit families beyond the landed MVFS/KVFS, MEV/KEV, MEF/KEF, KFMRH/MFKRH,
   split/merge, bridge/ring, and rigid copy; nested edit transactions pending a journal-composition +
   partition-history contract; tolerance-propagation policies beyond MEF inheritance / KEF ordered max.
-- Separate exact planar-shell topology/incidence extraction from optional convex half-space proof so non-convex profile prisms can enter the landed deterministic-X_T axial, disconnected planar-minus-cylinder, multi-portal cap-retaining, zero-cut/cavity, host-feature, support-contact, and seam-crossing bounded-arc pipeline without exposing lower-layer
-  symbolic fragments, graph descriptors, or raw candidate topology.
+- Replay the queued deterministic fifteen-payload Boolean bundle in the licensed host; pure planar BSP and convex curved shortcuts continue to require the typed convex certificate.
 - Rigid-copy preflight gaps: altered/witness-mismatched higher-order charts, graph-valid shared-basis
   or periodic-source/carrier proofs, other-sample dual offsets, nested five-/seven-sample roots, and
   Offset(Plane)-peer transmitted proofs; graph trace representation/binding beyond four-descriptor

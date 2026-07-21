@@ -13,7 +13,7 @@ use super::boundary_select::{OperandSide, SelectedBoundaryFragment, SelectedOrie
 use super::curved_host::{prepare_curved_host, source_operand};
 use super::curved_pipeline::{CertifiedRingCut, CurvedFragment, CurvedFragmentKey};
 use super::curved_source::CertifiedCylinderSource;
-use super::extract::ExtractedPlanarSourceBody;
+use super::extract::CertifiedConvexPlanarSource;
 use super::face_partition::{AxialBoundary, FaceRegionKey};
 
 type SelectedCurvedFragment = SelectedBoundaryFragment<CurvedFragmentKey, CurvedFragment>;
@@ -50,7 +50,7 @@ impl PreparedCylindricalCavity {
 /// `Ok(None)` means another result topology owns the selected truth. `Err`
 /// reports inconsistency in already-certified source evidence.
 pub(super) fn prepare_cylindrical_cavity(
-    planar: &ExtractedPlanarSourceBody,
+    planar: &CertifiedConvexPlanarSource,
     cylinder: &CertifiedCylinderSource,
     cuts: &[CertifiedRingCut],
     selected: &[SelectedCurvedFragment],
