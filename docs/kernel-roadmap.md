@@ -300,9 +300,8 @@ point classification; `kernel::section` produces certified planar section
 graphs; the public typed block/block Boolean facade applies all three CSG truth
 tables and atomically Full-commits connected, proven-empty, multi-body, and
 one-cavity results while exact contact and incomplete proof fail closed.
-Six historical operation outputs passed the supplemental Onshape oracle 6/6
-on import and 6/6 there-and-back; that record is stale while the deterministic
-fifteen-payload offline bundle awaits licensed-host replay
+The deterministic fifteen-payload supplemental Boolean bundle passes Onshape
+15/15 on import and 15/15 there-and-back at writer `fedf1ab`
 (`docs/oracle-boolean-certification.json`). The
 active queue head is rung 4 block/cylinder. Public finite-cylinder construction,
 manifold finite-cylinder classification, topology-owned conic/ring trim proofs,
@@ -350,8 +349,8 @@ Cycle-wide certified integer-period lifting admits the seam-crossing radius-1.7 
 cylinder-left Subtract across all four frames with 10/32/20 topology, literal-derived volume, deterministic X_T, and Fast self-import.
 Exact planar-shell admission is now separate from its optional typed convex certificate: complete non-convex ten-support star/cylinder Intersect
 uses general mixed planning and Full-commits at 17F/45E/30V with literal-derived volume and deterministic X_T/Fast self-import; pure planar BSP and convex shortcuts still require the certificate.
-Next is licensed-host replay of the queued deterministic fifteen-payload Boolean bundle; only the
-preserved six-file host record is currently certified.
+Next is general cap-crossing planar-solid/finite-cylinder intersection through
+proof-keyed disk-cap chords and unified mixed chord/arc/ruling incidence.
 
 Evidence: `ordered_planar_minus_cylinder_commits_every_disconnected_profile_component`,
 `disconnected_subtract_batch_denies_n_minus_one_before_any_component_allocates`,

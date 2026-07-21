@@ -2082,7 +2082,7 @@ fn assert_nonconvex_star_intersection_target_once(
                 stage: mixed_profile_stage,
                 resource: ResourceKind::Work,
                 consumed: 2_851_200,
-                allowed: 4_194_304,
+                allowed: 16_777_216,
             })
     );
     let outcome = operation_outcome.into_result().unwrap();
@@ -2263,6 +2263,74 @@ fn five_portal_shell_work_accepts_exact_n_and_refuses_n_minus_one_atomically() {
             "{operation:?} N-1 refusal mutated a source or allocated a result",
         );
     }
+}
+
+#[test]
+fn five_portal_union_xt_reimport_full_check_uses_general_checker_budget() {
+    let MixedCycleFixture {
+        mut session,
+        part_id,
+        block,
+        cylinder,
+        frame: _,
+        before: _,
+    } = convex_five_patch_fixture(Placement::World);
+    let outcome = session
+        .edit_part(part_id.clone())
+        .unwrap()
+        .boolean_bodies(BooleanBodiesRequest::new(
+            BooleanOperation::Unite,
+            block,
+            cylinder,
+        ))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    let BooleanOutcome::Success(BooleanResult::Created(created)) = outcome else {
+        panic!("five-portal union did not commit: {outcome:?}")
+    };
+    let bytes = session
+        .part(part_id)
+        .unwrap()
+        .export_xt(ExportXtRequest::new(created.bodies()[0].clone()))
+        .unwrap()
+        .into_result()
+        .unwrap()
+        .bytes()
+        .to_vec();
+
+    let imported_part = session.create_part();
+    let imported = session
+        .edit_part(imported_part.clone())
+        .unwrap()
+        .import_xt(ImportXtRequest::new(&bytes))
+        .unwrap()
+        .into_result()
+        .unwrap();
+    let checked = session
+        .part(imported_part)
+        .unwrap()
+        .check_body(CheckBodyRequest::new(
+            imported.bodies()[0].clone(),
+            CheckLevel::Full,
+        ))
+        .unwrap();
+    let mixed_profile_stage = kernel::StageId::new("ktopo.check.mixed-profile-prism-work").unwrap();
+    assert!(
+        checked.report().usage().contains(&kernel::LimitSnapshot {
+            stage: mixed_profile_stage,
+            resource: ResourceKind::Work,
+            consumed: 12_418_560,
+            allowed: 16_777_216,
+        }),
+        "unexpected imported Full-check accounting: {:?}",
+        checked.report(),
+    );
+    assert!(checked.report().limit_events().is_empty());
+    assert_ne!(
+        checked.into_result().unwrap().outcome(),
+        CheckOutcome::Invalid
+    );
 }
 
 #[test]

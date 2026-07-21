@@ -2333,7 +2333,7 @@ mod tests {
             stage: crate::shell_proof::MIXED_PROFILE_PRISM_WORK,
             resource: ResourceKind::Work,
             consumed,
-            allowed: 4_194_304,
+            allowed: 16_777_216,
         };
         let portal_cylinder_snapshot = |consumed| LimitSnapshot {
             stage: kcore::operation::StageId::new("ktopo.check.portal-cylinder-shell-work")

@@ -24,10 +24,15 @@ pub(crate) const MIXED_PROFILE_PRISM_WORK: StageId =
         Err(_) => panic!("valid mixed profile-prism work stage"),
     };
 
-// The next power of two above the 2,851,200-work ten-support non-convex
-// extrusion fixture, leaving deterministic headroom without changing the
-// input-size-exact work formula.
-const DEFAULT_MIXED_PROFILE_PRISM_WORK: u64 = 4_194_304;
+// X_T reconstruction intentionally retains representation rather than
+// operation provenance. A reconstructed multi-portal result can therefore
+// reach this general product-shell theorem instead of the more specialized
+// portal-surgery theorem used during its original checked commit. The first
+// such public five-support result charges 12_418_560 exact work units here,
+// so keep the shared v1 checker default at the smallest power-of-two ceiling
+// that admits both representation paths without changing the size-derived
+// work formula or weakening caller overrides.
+const DEFAULT_MIXED_PROFILE_PRISM_WORK: u64 = 16_777_216;
 
 pub(super) fn mixed_profile_prism_proof_budget() -> BudgetPlan {
     BudgetPlan::new([LimitSpec::new(

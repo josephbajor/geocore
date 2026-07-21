@@ -51,27 +51,21 @@ same allowance. Size the queued fixture batch before dispatch, keep requests
 serial, and stop rather than exceed the cap or retry a rate-limited session.
 Partial sessions remain stale and resume in a later manually dispatched batch.
 
-**Last licensed-host run (2026-07-20, writer=b596027):** the declared base
+**Licensed-host evidence:** the 2026-07-20 base run at writer `b596027`
 matrix imported 12/15 and compared 7/12 clean. Wire/acorn parse rejection,
 analytic NURBS canonicalization, cone/tolerant-edge reader gaps, and the offset
 sheet's missing re-export remain open. The curved B-surface is accepted and
-compares clean. The supplemental public Boolean matrix imported 6/6 and
-compared 6/6 clean, including fragmented shared-surface solids, disjoint union
-bodies, and a two-shell finite-void cavity. Evidence: `docs/oracle-results.tsv`.
+compares clean. The 2026-07-21 supplemental Boolean run at writer `fedf1ab`
+imported and compared 15/15 clean, including the curved Plane/Cylinder payloads.
+Evidence: `docs/oracle-results.tsv`.
 
-**Current certification state (2026-07-21): base stale, Boolean stale.**
+**Current certification state (2026-07-21): base stale, Boolean current.**
 Finite-cylinder Full proof changed the regenerated base manifest's checker
 evidence after writer `b596027`; its 15 payload hashes are unchanged, but the
-base bundle needs licensed-host re-certification. The six-payload Boolean record
-retains historical 2026-07-20 evidence, but the generator now adds nine queued
-Plane/Cylinder payloads: bounded-arc intersection, both ordered
-planar-minus-cylinder bodies, rectangular cap-retaining Unite/cylinder-left
-Subtract, five-portal variants of both operations, and seam-crossing five-portal
-cylinder-left Subtract, plus nonconvex star/cylinder Intersect.
-The complete regenerated fifteen-payload bundle has deterministic offline identity
+base bundle needs licensed-host re-certification. The complete fifteen-payload
+Boolean bundle at identity
 `61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7`
-and awaits a fresh licensed-host run; this queued identity is not host
-certification.
+is certified by the 2026-07-21 Onshape rows.
 
 ## 1. Generate the bundle
 
@@ -124,20 +118,9 @@ the bounded-arc planar-minus-cylinder subtraction, plus rectangular and
 five-portal cap-retaining Unite/cylinder-left Subtract, the seam-crossing
 five-portal cylinder-left Subtract, and nonconvex star/cylinder Intersect.
 Generation requires Full-valid committed results, independent volumes, local X_T import,
-byte-stable replay, and an empty output directory. The nine queued files are
-`bounded_arc_plane_cylinder_intersect.x_t`,
-`bounded_arc_plane_cylinder_subtract_body_0.x_t`,
-`bounded_arc_plane_cylinder_subtract_body_1.x_t`,
-`cap_retaining_plane_cylinder_unite.x_t`,
-`cap_retaining_cylinder_minus_plane.x_t`,
-`five_portal_plane_cylinder_unite.x_t`,
-`five_portal_cylinder_minus_plane.x_t`,
-`seam_crossing_five_portal_cylinder_minus_plane.x_t`, and
-`nonconvex_star_plane_cylinder_intersection.x_t`; this batch is not yet
-licensed-host certification. After the final queued changes settle, regenerate
-the bundle, record `identity` output, and manually dispatch the full
-fifteen-payload Boolean suite with that exact `bundle_sha256`; keep the record
-stale until every final payload has completed import/re-export comparison.
+byte-stable replay, and an empty output directory. The current fifteen-payload
+identity is certified 15/15 by Onshape; later writer-byte changes must mark the
+record stale and queue a final-byte replay under the invalidation rule above.
 
 ## 2. Manual catch-up entry points
 

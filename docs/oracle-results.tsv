@@ -84,3 +84,18 @@ date	host	host_version	fixture	import_ok	host_checker	host_volume_m3	reexport_ok
 2026-07-20	onshape	cloud-2026-07-20	wire_polyline_closed.x_t	no	-	-	-	-	writer=b596027; Invalid or corrupt input file [parse-level]; bundle=5a6ce1a9f296829ce76a557812f6b99c70912d69271c642aeb23902cd95eeccd
 2026-07-20	onshape	cloud-2026-07-20	acorn_point.x_t	no	-	-	-	-	writer=b596027; Invalid or corrupt input file [parse-level]; bundle=5a6ce1a9f296829ce76a557812f6b99c70912d69271c642aeb23902cd95eeccd
 2026-07-20	onshape	cloud-2026-07-20	offset_plane.x_t	yes	none	-	error	-	writer=b596027; accepted; bundle=5a6ce1a9f296829ce76a557812f6b99c70912d69271c642aeb23902cd95eeccd
+2026-07-21	onshape	cloud-2026-07-21	connected_unite.x_t	yes	none	-	yes	yes	writer=fedf1ab; accepted; bundle=61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7
+2026-07-21	onshape	cloud-2026-07-21	connected_subtract.x_t	yes	none	-	yes	yes	writer=fedf1ab; accepted; bundle=61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7
+2026-07-21	onshape	cloud-2026-07-21	connected_intersect.x_t	yes	none	-	yes	yes	writer=fedf1ab; accepted; bundle=61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7
+2026-07-21	onshape	cloud-2026-07-21	disjoint_unite_body_0.x_t	yes	none	-	yes	yes	writer=fedf1ab; accepted; bundle=61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7
+2026-07-21	onshape	cloud-2026-07-21	disjoint_unite_body_1.x_t	yes	none	-	yes	yes	writer=fedf1ab; accepted; bundle=61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7
+2026-07-21	onshape	cloud-2026-07-21	contained_subtract_cavity.x_t	yes	none	-	yes	yes	writer=fedf1ab; accepted; bundle=61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7
+2026-07-21	onshape	cloud-2026-07-21	bounded_arc_plane_cylinder_intersect.x_t	yes	none	-	yes	yes	writer=fedf1ab; accepted; bundle=61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7
+2026-07-21	onshape	cloud-2026-07-21	bounded_arc_plane_cylinder_subtract_body_0.x_t	yes	none	-	yes	yes	writer=fedf1ab; accepted; bundle=61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7
+2026-07-21	onshape	cloud-2026-07-21	bounded_arc_plane_cylinder_subtract_body_1.x_t	yes	none	-	yes	yes	writer=fedf1ab; accepted; bundle=61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7
+2026-07-21	onshape	cloud-2026-07-21	cap_retaining_plane_cylinder_unite.x_t	yes	none	-	yes	yes	writer=fedf1ab; accepted; bundle=61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7
+2026-07-21	onshape	cloud-2026-07-21	cap_retaining_cylinder_minus_plane.x_t	yes	none	-	yes	yes	writer=fedf1ab; accepted; bundle=61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7
+2026-07-21	onshape	cloud-2026-07-21	five_portal_plane_cylinder_unite.x_t	yes	none	-	yes	yes	writer=fedf1ab; accepted; initial local comparison exceeded the Full-check work cap; clean retry against the preserved host re-export; bundle=61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7
+2026-07-21	onshape	cloud-2026-07-21	five_portal_cylinder_minus_plane.x_t	yes	none	-	yes	yes	writer=fedf1ab; accepted; bundle=61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7
+2026-07-21	onshape	cloud-2026-07-21	seam_crossing_five_portal_cylinder_minus_plane.x_t	yes	none	-	yes	yes	writer=fedf1ab; accepted; bundle=61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7
+2026-07-21	onshape	cloud-2026-07-21	nonconvex_star_plane_cylinder_intersection.x_t	yes	none	-	yes	yes	writer=fedf1ab; accepted; bundle=61c1d46733f981bd3cd8c99b8af9800d9f947c18fe7bf21624e9125c16cddda7

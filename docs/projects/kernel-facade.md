@@ -279,7 +279,7 @@ signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handle
 - Broader semantic edit families beyond the landed MVFS/KVFS, MEV/KEV, MEF/KEF, KFMRH/MFKRH,
   split/merge, bridge/ring, and rigid copy; nested edit transactions pending a journal-composition +
   partition-history contract; tolerance-propagation policies beyond MEF inheritance / KEF ordered max.
-- Replay the queued deterministic fifteen-payload Boolean bundle in the licensed host; pure planar BSP and convex curved shortcuts continue to require the typed convex certificate.
+- Extend the certified Boolean slice to general cap-crossing planar-solid/finite-cylinder intersection; pure planar BSP and convex curved shortcuts continue to require the typed convex certificate.
 - Rigid-copy preflight gaps: altered/witness-mismatched higher-order charts, graph-valid shared-basis
   or periodic-source/carrier proofs, other-sample dual offsets, nested five-/seven-sample roots, and
   Offset(Plane)-peer transmitted proofs; graph trace representation/binding beyond four-descriptor
