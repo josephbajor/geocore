@@ -241,12 +241,13 @@ persistent journal serialization/versioning; nested modeling-transaction composi
   non-shrinking stage manifest (`crates/kxt/tests/fixtures/manifest.tsv`) recording
   parse/reconstruct/check/tessellate outcomes and expected Full-checker gap
   baselines per fixture.
-- **M3b (in progress):** Tier 1 authoring and external certification through the
-  automated licensed-host loop ([oracle-loop.md](oracle-loop.md)). Writer-byte
-  changes stale the certification record
-  ([oracle-certification.json](oracle-certification.json)); CI enforces freshness
-  bookkeeping. Remaining: 15-fixture re-certification, wire/acorn acceptance,
-  re-export/compare closure, curved-fixture class preservation.
+- **M3b (in progress):** Tier 1 authoring and external certification through
+  manually dispatched, API-assisted licensed-host catch-up batches
+  ([oracle-loop.md](oracle-loop.md)). Writer-byte changes stale and queue the
+  affected evidence ([oracle-certification.json](oracle-certification.json)); CI
+  only regenerates bundles and checks committed identities offline. Remaining:
+  15-fixture re-certification, wire/acorn acceptance, re-export/compare closure,
+  curved-fixture class preservation.
 - **M3c (through M6/M8):** Tier 2/3 fidelity — procedural surfaces, periodic
   geometry, broader SP/intersection-curve chart classes, assemblies, and general
   bodies. Current landed slices cover bounded transmitted intersection charts over

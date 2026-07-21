@@ -116,6 +116,12 @@ def compare_files(outbox_file, inbox_file):
     return "error"
 
 
+def request_budget_exhausted(error):
+    """Whether an operational error requires the catch-up session to stop."""
+    message = str(error)
+    return "request limit exhausted" in message or "HTTP 429" in message
+
+
 def command_check(_args):
     """Verify API-key credentials against the live host."""
     info = session_info(ApiKeyTransport.from_environment())
@@ -138,52 +144,82 @@ def command_init(_args):
 
 def run_paths(args, paths, bundle_identity=None):
     """Upload each path, optionally re-export/compare, and report."""
+    if args.compare and not args.reexport:
+        raise OracleError("--compare requires --reexport")
+    results_file = Path(args.results_file) if args.results_file else None
+    request_count_file = (
+        Path(args.request_count_file) if args.request_count_file else None
+    )
+    completion_file = Path(args.completion_file) if args.completion_file else None
+    for output_file in (results_file, request_count_file, completion_file):
+        if output_file is not None:
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text("", encoding="utf-8")
     transport = ApiKeyTransport.from_environment()
     config = load_config(ROOT / CONFIG_PATH)
     date = time.strftime("%Y-%m-%d")
     revision = writer_identity()
     rows = []
-    failures = 0
+    findings = 0
+    errors = 0
     imports_accepted = 0
     compares_clean = 0
-    for path in paths:
-        result = run_fixture(transport, config, path)
-        reexport_ok = "-"
-        compare_ok = "-"
-        if result.accepted and args.reexport:
-            # Must run before the next upload: each translation rewrites the
-            # document's single derived part studio.
-            try:
-                element_id = (
-                    result.result_element_ids[0]
-                    if result.result_element_ids
-                    else find_translated_part_studio(transport, config)
+    try:
+        for path in paths:
+            result = run_fixture(transport, config, path)
+            reexport_ok = "-"
+            compare_ok = "-"
+            stop_error = None
+            if result.accepted and args.reexport:
+                # Must run before the next upload: each translation rewrites the
+                # document's single derived part studio.
+                try:
+                    element_id = (
+                        result.result_element_ids[0]
+                        if result.result_element_ids
+                        else find_translated_part_studio(transport, config)
+                    )
+                    inbox = Path(args.inbox)
+                    inbox.mkdir(parents=True, exist_ok=True)
+                    inbox_file = inbox / result.name
+                    inbox_file.write_bytes(reexport_element(transport, config, element_id))
+                    reexport_ok = "yes"
+                    if args.compare:
+                        compare_ok = compare_files(path, inbox_file)
+                except OracleError as error:
+                    print("  re-export of {} failed: {}".format(result.name, error))
+                    reexport_ok = "error"
+                    if request_budget_exhausted(error):
+                        stop_error = error
+            print(verdict_line(result))
+            rows.append(
+                results_row(
+                    result,
+                    date,
+                    revision,
+                    reexport_ok,
+                    compare_ok,
+                    bundle_identity=bundle_identity,
                 )
-                inbox = Path(args.inbox)
-                inbox.mkdir(parents=True, exist_ok=True)
-                inbox_file = inbox / result.name
-                inbox_file.write_bytes(reexport_element(transport, config, element_id))
-                reexport_ok = "yes"
-                if args.compare:
-                    compare_ok = compare_files(path, inbox_file)
-            except OracleError as error:
-                print("  re-export of {} failed: {}".format(result.name, error))
-                reexport_ok = "error"
-        print(verdict_line(result))
-        rows.append(
-            results_row(
-                result,
-                date,
-                revision,
-                reexport_ok,
-                compare_ok,
-                bundle_identity=bundle_identity,
             )
-        )
-        imports_accepted += int(result.accepted)
-        compares_clean += int(compare_ok == "yes")
-        if not result.accepted or compare_ok == "no":
-            failures += 1
+            if results_file is not None:
+                results_file.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            imports_accepted += int(result.accepted)
+            compares_clean += int(compare_ok == "yes")
+            if not result.accepted or (args.compare and compare_ok == "no"):
+                findings += 1
+            if args.reexport and result.accepted and reexport_ok != "yes":
+                errors += 1
+            if args.compare and result.accepted and compare_ok == "error":
+                errors += 1
+            if stop_error is not None:
+                raise stop_error
+    finally:
+        limit = transport.request_limit if transport.request_limit is not None else "unbounded"
+        print("\nOnshape API requests: {} / {}".format(transport.request_count, limit))
+        if request_count_file is not None:
+            request_count_file.parent.mkdir(parents=True, exist_ok=True)
+            request_count_file.write_text(str(transport.request_count) + "\n", encoding="utf-8")
     if args.results_rows:
         print("\nappend to docs/oracle-results.tsv:")
         for row in rows:
@@ -191,7 +227,11 @@ def run_paths(args, paths, bundle_identity=None):
     print("\nimports: {}/{} accepted".format(imports_accepted, len(paths)))
     if args.reexport and args.compare:
         print("there-and-back: {}/{} compared clean".format(compares_clean, imports_accepted))
-    return 1 if failures else 0
+    exit_code = 2 if errors else (1 if findings else 0)
+    if completion_file is not None:
+        completion_file.parent.mkdir(parents=True, exist_ok=True)
+        completion_file.write_text(str(exit_code) + "\n", encoding="utf-8")
+    return exit_code
 
 
 def command_run(args):
@@ -199,8 +239,8 @@ def command_run(args):
     return run_paths(args, [Path(p) for p in args.files])
 
 
-def bundle_paths(outbox):
-    """Return the exact manifest-declared bundle or fail on transport residue."""
+def bundle_paths(outbox, selected_names=None):
+    """Return exact manifest paths, optionally filtered by validated names."""
     outbox = Path(outbox)
     manifest_path = outbox / "manifest.tsv"
     try:
@@ -229,14 +269,26 @@ def bundle_paths(outbox):
                 sorted(expected), sorted(actual)
             )
         )
+    if selected_names:
+        if len(selected_names) != len(set(selected_names)):
+            raise OracleError("selected bundle fixtures must not be duplicated")
+        unknown = sorted(set(selected_names) - expected)
+        if unknown:
+            raise OracleError(
+                "selected fixtures are not in the bundle manifest: {}".format(
+                    ", ".join(unknown)
+                )
+            )
+        selected = set(selected_names)
+        paths = [path for path in paths if path.name in selected]
     return paths
 
 
 def command_bundle(args):
-    """Upload every fixture in the generated outbox bundle."""
+    """Upload the full generated bundle or its manifest-bound selection."""
     from .certification import observed_identity
 
-    paths = bundle_paths(args.outbox)
+    paths = bundle_paths(args.outbox, args.fixtures)
     identity = observed_identity(args.outbox)["bundle_sha256"]
     return run_paths(args, paths, bundle_identity=identity)
 
@@ -250,6 +302,14 @@ def command_certification_check(args):
         record_path=args.record,
         require_current=args.require_current,
     )
+    return 0
+
+
+def command_identity(args):
+    """Print the exact offline writer and bundle identity as JSON."""
+    from .certification import observed_identity
+
+    print(json.dumps(observed_identity(args.outbox), indent=2))
     return 0
 
 
@@ -276,6 +336,18 @@ def build_parser():
             action="store_true",
             help="print docs/oracle-results.tsv rows for the run",
         )
+        sub.add_argument(
+            "--results-file",
+            help="write completed docs/oracle-results.tsv rows, including partial runs",
+        )
+        sub.add_argument(
+            "--request-count-file",
+            help="write the number of attempted host requests for budget accounting",
+        )
+        sub.add_argument(
+            "--completion-file",
+            help="write the final CLI status only after the fixture loop completes",
+        )
 
     run = commands.add_parser("run", help="upload named .x_t files")
     run.add_argument("files", nargs="+")
@@ -284,6 +356,11 @@ def build_parser():
 
     bundle = commands.add_parser("bundle", help="upload the generated outbox bundle")
     bundle.add_argument("--outbox", default=str(DEFAULT_OUTBOX))
+    bundle.add_argument(
+        "--fixtures",
+        nargs="+",
+        help="upload only these exact manifest fixture names, in manifest order",
+    )
     add_loop_arguments(bundle)
     bundle.set_defaults(func=command_bundle)
 
@@ -297,6 +374,12 @@ def build_parser():
     )
     certification.add_argument("--require-current", action="store_true")
     certification.set_defaults(func=command_certification_check)
+
+    identity = commands.add_parser(
+        "identity", help="print the offline identity of a generated oracle bundle"
+    )
+    identity.add_argument("--outbox", default=str(DEFAULT_OUTBOX))
+    identity.set_defaults(func=command_identity)
 
     return parser
 

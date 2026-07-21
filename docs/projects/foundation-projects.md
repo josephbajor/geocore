@@ -47,10 +47,10 @@ enforcement over new parallel surface area. Read the queue literally.
    now publish bounded line fragments and closed mixed arc/ruling cycles for the certified bounded fixture, while broader rigid placements, bounded-arc contacts/layouts, and curved licensed-host evidence remain.
    Broader intersection/NURBS families, revolve, and curved profiles remain milestone backlog.
 
-**External-evidence lane.** Current Onshape records pin the 15-file writer bundle and the six-file
-public Boolean bundle. Fingerprints: `docs/oracle-certification.json` and
+**External-evidence lane.** Onshape records pin exact historical bytes: the 15-file base record is
+stale and the six-file Boolean record is current. Fingerprints: `docs/oracle-certification.json` and
 `docs/oracle-boolean-certification.json`; findings: `docs/oracle-results.tsv` (ORCHESTRATION R5).
-Wire/acorn rejection and the recorded base-reader gaps remain open.
+CI checks those identities offline; manual catch-up batches own host evidence. Wire/acorn and base-reader gaps remain open.
 
 ## F0 — Completion-preserving result symmetry
 
@@ -244,9 +244,9 @@ Design: `quality-harness.md`, [`test-throughput.md`](test-throughput.md).
 **Contract**
 - Benchmarks have named fixtures and recorded baselines; fuzz targets run locally and in bounded CI
   smoke jobs; toolchain/MSRV changes are explicit; no benchmark depends on wall-clock ordering for
-  correctness. CI enforces Python/oracle freshness, compiles and smoke-runs the excluded
+  correctness. CI runs offline Python/oracle-record checks, compiles and smoke-runs the excluded
   benchmark/fuzz/tooling package (protective only when its contracts run in CI), and runs the pinned
-  fuzz targets within fixed limits.
+  fuzz targets within fixed limits; it never performs licensed-host validation.
 - Any graph-index/traversal representation change requires a recorded stable-host before/after
   comparison; counters measure invocation boundaries/cardinalities, not elapsed work. New integration
   test targets state a wall-time budget (ORCHESTRATION R7).

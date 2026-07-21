@@ -1,0 +1,288 @@
+name: Licensed-host oracle catch-up
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Exact generated bundle to validate
+        required: true
+        default: base
+        type: choice
+        options:
+          - base
+          - boolean
+      request_limit:
+        description: Total Onshape API request ceiling for this session (1-400)
+        required: true
+        default: "200"
+        type: string
+      confirm_request_spend:
+        description: I intend to spend the shared annual Onshape request budget
+        required: true
+        default: false
+        type: boolean
+      fixtures:
+        description: Optional comma-separated manifest names (one suite only)
+        required: false
+        default: ""
+        type: string
+      expected_bundle_sha256:
+        description: Required exact bundle identity for selected fixtures
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: onshape-oracle-catchup
+  cancel-in-progress: false
+
+jobs:
+  catch-up:
+    name: ${{ inputs.suite }} catch-up at ${{ github.sha }}
+    if: ${{ inputs.confirm_request_spend }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: onshape-oracle
+    steps:
+      - name: Validate dispatch and request budget
+        id: budget
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REQUEST_LIMIT: ${{ inputs.request_limit }}
+          SUITE: ${{ inputs.suite }}
+          FIXTURES: ${{ inputs.fixtures }}
+          EXPECTED_BUNDLE_SHA256: ${{ inputs.expected_bundle_sha256 }}
+        run: |
+          if [[ "$GITHUB_REF_NAME" != "$DEFAULT_BRANCH" ]]; then
+            echo "Dispatch this credentialed workflow from the protected default branch."
+            exit 1
+          fi
+          if [[ ! "$REQUEST_LIMIT" =~ ^([1-9]|[1-9][0-9]|[1-3][0-9][0-9]|400)$ ]]; then
+            echo "request_limit must be an integer from 1 through 400."
+            exit 1
+          fi
+          case "$SUITE" in
+            base|boolean) ;;
+            *) echo "Unknown suite: $SUITE"; exit 1 ;;
+          esac
+          if [[ -n "$EXPECTED_BUNDLE_SHA256" && ! "$EXPECTED_BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "expected_bundle_sha256 must be an exact lowercase SHA-256 digest."
+            exit 1
+          fi
+          if [[ -n "$FIXTURES" ]]; then
+            if [[ -z "$EXPECTED_BUNDLE_SHA256" ]]; then
+              echo "Selected-fixture batches require expected_bundle_sha256."
+              exit 1
+            fi
+            IFS=',' read -ra names <<< "$FIXTURES"
+            for name in "${names[@]}"; do
+              if [[ ! "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.x_t$ ]]; then
+                echo "Invalid fixture name: $name"
+                exit 1
+              fi
+            done
+          fi
+          echo "request_limit=$REQUEST_LIMIT" >> "$GITHUB_OUTPUT"
+          echo "### Licensed-host catch-up" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Commit: \`$GITHUB_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Suite: \`$SUITE\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Total request ceiling: \`$REQUEST_LIMIT\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.93.0
+
+      - name: Validate offline oracle contracts
+        run: python3 -m unittest scripts.tests.test_oracle_onshape scripts.tests.test_oracle_certification scripts.tests.test_oracle_workflows -v
+
+      - name: Configure the dedicated Onshape document
+        shell: bash
+        env:
+          ONSHAPE_DOCUMENT_ID: ${{ secrets.ONSHAPE_DOCUMENT_ID }}
+          ONSHAPE_WORKSPACE_ID: ${{ secrets.ONSHAPE_WORKSPACE_ID }}
+          ONSHAPE_ELEMENT_ID: ${{ secrets.ONSHAPE_ELEMENT_ID }}
+        run: |
+          for id in "$ONSHAPE_DOCUMENT_ID" "$ONSHAPE_WORKSPACE_ID" "$ONSHAPE_ELEMENT_ID"; do
+            if [[ ! "$id" =~ ^[0-9a-f]{24}$ ]]; then
+              echo "The protected Onshape document coordinates must each be 24 lowercase hex characters."
+              exit 1
+            fi
+          done
+          mkdir -p oracle
+          mkdir -p "$RUNNER_TEMP/oracle-evidence"
+          jq -n \
+            --arg document_id "$ONSHAPE_DOCUMENT_ID" \
+            --arg workspace_id "$ONSHAPE_WORKSPACE_ID" \
+            --arg element_id "$ONSHAPE_ELEMENT_ID" \
+            '{document_id: $document_id, workspace_id: $workspace_id, element_id: $element_id}' \
+            > oracle/config.json
+          jq -n \
+            --arg commit "$GITHUB_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg suite "${{ inputs.suite }}" \
+            --arg fixtures "${{ inputs.fixtures }}" \
+            --arg expected_bundle_sha256 "${{ inputs.expected_bundle_sha256 }}" \
+            --argjson request_limit '${{ steps.budget.outputs.request_limit }}' \
+            '{commit: $commit, run_id: $run_id, run_attempt: $run_attempt, suite: $suite, fixtures: $fixtures, expected_bundle_sha256: $expected_bundle_sha256, request_limit: $request_limit}' \
+            > "$RUNNER_TEMP/oracle-evidence/run-metadata.json"
+
+      - name: Generate base bundle
+        if: ${{ inputs.suite == 'base' }}
+        env:
+          EXPECTED_BUNDLE_SHA256: ${{ inputs.expected_bundle_sha256 }}
+        run: |
+          cargo run --locked --release -p kxt --bin xt_oracle -- export "$RUNNER_TEMP/oracle-evidence/base-outbox"
+          python3 scripts/oracle_loop.py identity \
+            --outbox "$RUNNER_TEMP/oracle-evidence/base-outbox" \
+            > "$RUNNER_TEMP/oracle-evidence/base-identity.json"
+          observed=$(jq -r .bundle_sha256 "$RUNNER_TEMP/oracle-evidence/base-identity.json")
+          if [[ -n "$EXPECTED_BUNDLE_SHA256" && "$observed" != "$EXPECTED_BUNDLE_SHA256" ]]; then
+            echo "Generated base bundle does not match expected_bundle_sha256."
+            exit 1
+          fi
+
+      - name: Run base licensed-host catch-up
+        id: base
+        if: ${{ inputs.suite == 'base' }}
+        shell: bash
+        env:
+          ONSHAPE_ACCESS_KEY: ${{ secrets.ONSHAPE_ACCESS_KEY }}
+          ONSHAPE_SECRET_KEY: ${{ secrets.ONSHAPE_SECRET_KEY }}
+          ONSHAPE_DOCUMENT_ID: ${{ secrets.ONSHAPE_DOCUMENT_ID }}
+          ONSHAPE_WORKSPACE_ID: ${{ secrets.ONSHAPE_WORKSPACE_ID }}
+          ONSHAPE_ELEMENT_ID: ${{ secrets.ONSHAPE_ELEMENT_ID }}
+          ONSHAPE_REQUEST_LIMIT: ${{ steps.budget.outputs.request_limit }}
+          FIXTURES: ${{ inputs.fixtures }}
+        run: |
+          command=(python3 scripts/oracle_loop.py bundle
+            --outbox "$RUNNER_TEMP/oracle-evidence/base-outbox")
+          if [[ -n "$FIXTURES" ]]; then
+            IFS=',' read -ra names <<< "$FIXTURES"
+            command+=(--fixtures "${names[@]}")
+          fi
+          command+=(
+            --inbox "$RUNNER_TEMP/oracle-evidence/base-inbox"
+            --reexport --compare --results-rows
+            --results-file "$RUNNER_TEMP/oracle-evidence/base-results.tsv"
+            --request-count-file "$RUNNER_TEMP/oracle-evidence/base-requests.txt"
+            --completion-file "$RUNNER_TEMP/oracle-evidence/base-complete.txt")
+          set +e
+          "${command[@]}" 2>&1 \
+            | sed -e "s/$ONSHAPE_DOCUMENT_ID/[redacted]/g" \
+                  -e "s/$ONSHAPE_WORKSPACE_ID/[redacted]/g" \
+                  -e "s/$ONSHAPE_ELEMENT_ID/[redacted]/g" \
+            | tee "$RUNNER_TEMP/oracle-evidence/base.log"
+          statuses=("${PIPESTATUS[@]}")
+          set -e
+          code=${statuses[0]}
+          if [[ "${statuses[1]}" -ne 0 || "${statuses[2]}" -ne 0 ]]; then
+            code=2
+          fi
+          used=$(cat "$RUNNER_TEMP/oracle-evidence/base-requests.txt" 2>/dev/null || true)
+          complete=$(cat "$RUNNER_TEMP/oracle-evidence/base-complete.txt" 2>/dev/null || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "requests_used=$used" >> "$GITHUB_OUTPUT"
+          echo "completion_code=$complete" >> "$GITHUB_OUTPUT"
+          echo "- Base CLI exit: \`$code\`; requests: \`${used:-unknown}\` (1 means completed with findings)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate Boolean bundle
+        if: ${{ inputs.suite == 'boolean' }}
+        env:
+          EXPECTED_BUNDLE_SHA256: ${{ inputs.expected_bundle_sha256 }}
+        run: |
+          cargo run --locked --release -p kernel --example boolean_xt_oracle -- "$RUNNER_TEMP/oracle-evidence/boolean-outbox"
+          python3 scripts/oracle_loop.py identity \
+            --outbox "$RUNNER_TEMP/oracle-evidence/boolean-outbox" \
+            > "$RUNNER_TEMP/oracle-evidence/boolean-identity.json"
+          observed=$(jq -r .bundle_sha256 "$RUNNER_TEMP/oracle-evidence/boolean-identity.json")
+          if [[ -n "$EXPECTED_BUNDLE_SHA256" && "$observed" != "$EXPECTED_BUNDLE_SHA256" ]]; then
+            echo "Generated Boolean bundle does not match expected_bundle_sha256."
+            exit 1
+          fi
+
+      - name: Run Boolean licensed-host catch-up
+        id: boolean
+        if: ${{ inputs.suite == 'boolean' }}
+        shell: bash
+        env:
+          ONSHAPE_ACCESS_KEY: ${{ secrets.ONSHAPE_ACCESS_KEY }}
+          ONSHAPE_SECRET_KEY: ${{ secrets.ONSHAPE_SECRET_KEY }}
+          ONSHAPE_DOCUMENT_ID: ${{ secrets.ONSHAPE_DOCUMENT_ID }}
+          ONSHAPE_WORKSPACE_ID: ${{ secrets.ONSHAPE_WORKSPACE_ID }}
+          ONSHAPE_ELEMENT_ID: ${{ secrets.ONSHAPE_ELEMENT_ID }}
+          ONSHAPE_REQUEST_LIMIT: ${{ steps.budget.outputs.request_limit }}
+          FIXTURES: ${{ inputs.fixtures }}
+        run: |
+          command=(python3 scripts/oracle_loop.py bundle
+            --outbox "$RUNNER_TEMP/oracle-evidence/boolean-outbox")
+          if [[ -n "$FIXTURES" ]]; then
+            IFS=',' read -ra names <<< "$FIXTURES"
+            command+=(--fixtures "${names[@]}")
+          fi
+          command+=(
+            --inbox "$RUNNER_TEMP/oracle-evidence/boolean-inbox"
+            --reexport --compare --results-rows
+            --results-file "$RUNNER_TEMP/oracle-evidence/boolean-results.tsv"
+            --request-count-file "$RUNNER_TEMP/oracle-evidence/boolean-requests.txt"
+            --completion-file "$RUNNER_TEMP/oracle-evidence/boolean-complete.txt")
+          set +e
+          "${command[@]}" 2>&1 \
+            | sed -e "s/$ONSHAPE_DOCUMENT_ID/[redacted]/g" \
+                  -e "s/$ONSHAPE_WORKSPACE_ID/[redacted]/g" \
+                  -e "s/$ONSHAPE_ELEMENT_ID/[redacted]/g" \
+            | tee "$RUNNER_TEMP/oracle-evidence/boolean.log"
+          statuses=("${PIPESTATUS[@]}")
+          set -e
+          code=${statuses[0]}
+          if [[ "${statuses[1]}" -ne 0 || "${statuses[2]}" -ne 0 ]]; then
+            code=2
+          fi
+          used=$(cat "$RUNNER_TEMP/oracle-evidence/boolean-requests.txt" 2>/dev/null || true)
+          complete=$(cat "$RUNNER_TEMP/oracle-evidence/boolean-complete.txt" 2>/dev/null || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "completion_code=$complete" >> "$GITHUB_OUTPUT"
+          echo "- Boolean CLI exit: \`$code\`; requests: \`${used:-unknown}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exact catch-up evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: onshape-oracle-${{ inputs.suite }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/oracle-evidence/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enforce catch-up outcome
+        if: always()
+        shell: bash
+        env:
+          SUITE: ${{ inputs.suite }}
+          BASE_EXIT: ${{ steps.base.outputs.exit_code }}
+          BASE_COMPLETION: ${{ steps.base.outputs.completion_code }}
+          BOOLEAN_EXIT: ${{ steps.boolean.outputs.exit_code }}
+          BOOLEAN_COMPLETION: ${{ steps.boolean.outputs.completion_code }}
+        run: |
+          if [[ "$SUITE" == base ]]; then
+            if [[ -z "$BASE_EXIT" || "$BASE_COMPLETION" != "$BASE_EXIT" || "$BASE_EXIT" -ge 2 ]]; then
+              echo "Base catch-up did not complete with only recorded host findings."
+              exit 1
+            fi
+          fi
+          if [[ "$SUITE" == boolean ]]; then
+            if [[ -z "$BOOLEAN_EXIT" || "$BOOLEAN_COMPLETION" != "$BOOLEAN_EXIT" || "$BOOLEAN_EXIT" -ne 0 ]]; then
+              echo "Boolean catch-up did not complete the selected fixture batch cleanly."
+              exit 1
+            fi
+          fi
+          echo "Review the artifact; no certification record was changed automatically."

@@ -91,10 +91,12 @@ history lives in git; evidence lives in test names. Budgets (enforced by
   accomplishment summary into a doc, delete it and improve the commit
   message instead.
 
-**R5 — External validation on cadence.** The oracle loop
-(`docs/oracle-loop.md`) is automated; run it whenever writer bytes change,
-and treat a `stale` certification older than 3 days of active interchange
-work as queue-blocking. Self-round-trip is never certification.
+**R5 — External validation on cadence.** Licensed-host runs are manually
+dispatched, API-assisted catch-up batches; CI checks bundle/record identity
+offline only. Mark affected evidence stale and queue it whenever writer bytes
+change; certify the final batch, not superseded revisions, only after material
+changes accumulate or before a release/conformance claim. Age alone does not
+spend the host request budget. Self-round-trip is never certification.
 
 **R6 — Preserve the non-negotiables.** Bit-exact cross-platform determinism
 (kernel-owned math, no fast-math, golden hashes); exact predicates or
@@ -127,9 +129,9 @@ new integration test target must state its wall-time budget; anything over
 - **Primary:** boolean-ladder rung count; new externally-validated modeling
   capabilities per week (ledger rows moving to `implemented_slice` or
   `conformant` with oracle evidence).
-- **Health:** CI green streak on `main`; oracle certification freshness;
-  `full` lane wall time (budget: 30 min, do not grow it); doc budget
-  compliance.
+- **Health:** CI green streak on `main`; offline oracle-record freshness,
+  queued recertification debt, and annual host request budget; `full` lane wall
+  time (budget: 30 min, do not grow it); doc budget compliance.
 - **Anti-metrics (high values are a warning, not progress):** commits/day,
   lines/day, count of `Certify`/`Document`/`Reconcile` commits between
   capability commits. Three consecutive days without a primary-metric change

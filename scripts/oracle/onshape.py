@@ -25,6 +25,8 @@ DEFAULT_BASE_URL = "https://cad.onshape.com"
 ACCESS_KEY_ENV = "ONSHAPE_ACCESS_KEY"
 SECRET_KEY_ENV = "ONSHAPE_SECRET_KEY"
 BASE_URL_ENV = "ONSHAPE_BASE_URL"
+REQUEST_LIMIT_ENV = "ONSHAPE_REQUEST_LIMIT"
+MAX_REQUEST_LIMIT = 400
 
 CONFIG_PATH = Path("oracle/config.json")
 CONFIG_KEYS = ("document_id", "workspace_id", "element_id")
@@ -97,7 +99,14 @@ def encode_multipart(field_name, filename, payload, boundary=None):
 class ApiKeyTransport:
     """Basic-auth HTTP transport bound to one Onshape deployment."""
 
-    def __init__(self, access_key, secret_key, base_url=DEFAULT_BASE_URL, timeout=60.0):
+    def __init__(
+        self,
+        access_key,
+        secret_key,
+        base_url=DEFAULT_BASE_URL,
+        timeout=60.0,
+        request_limit=None,
+    ):
         if not access_key or not secret_key:
             raise OracleError(
                 "missing Onshape API key pair: set {} and {} "
@@ -106,20 +115,51 @@ class ApiKeyTransport:
                 )
             )
         credentials = "{}:{}".format(access_key, secret_key).encode("utf-8")
+        if request_limit is not None and not 1 <= request_limit <= MAX_REQUEST_LIMIT:
+            raise OracleError(
+                "Onshape API request limit must be an integer from 1 through {}".format(
+                    MAX_REQUEST_LIMIT
+                )
+            )
         self._authorization = "Basic " + base64.b64encode(credentials).decode("ascii")
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
+        self._request_limit = request_limit
+        self._request_count = 0
 
     @classmethod
     def from_environment(cls):
+        raw_limit = os.environ.get(REQUEST_LIMIT_ENV, "").strip()
+        try:
+            request_limit = int(raw_limit) if raw_limit else None
+        except ValueError:
+            raise OracleError("{} must be a positive integer".format(REQUEST_LIMIT_ENV))
         return cls(
             os.environ.get(ACCESS_KEY_ENV, ""),
             os.environ.get(SECRET_KEY_ENV, ""),
             os.environ.get(BASE_URL_ENV, DEFAULT_BASE_URL),
+            request_limit=request_limit,
         )
+
+    @property
+    def request_count(self):
+        """Number of host requests attempted by this transport."""
+        return self._request_count
+
+    @property
+    def request_limit(self):
+        """Configured host-request ceiling, or `None` for local manual use."""
+        return self._request_limit
 
     def request(self, method, path, body=None, content_type=None):
         """Issue one request; returns `(status, response_bytes)`."""
+        if self._request_limit is not None and self._request_count >= self._request_limit:
+            raise OracleError(
+                "Onshape API request limit exhausted ({}/{}) before {} request".format(
+                    self._request_count, self._request_limit, method
+                )
+            )
+        self._request_count += 1
         request = urllib.request.Request(self._base_url + path, data=body, method=method)
         request.add_header("Authorization", self._authorization)
         request.add_header("Accept", "application/json;charset=UTF-8; qs=0.09")
@@ -131,7 +171,7 @@ class ApiKeyTransport:
         except urllib.error.HTTPError as error:
             return error.code, error.read()
         except urllib.error.URLError as error:
-            raise OracleError("transport failure for {} {}: {}".format(method, path, error))
+            raise OracleError("transport failure during {} request: {}".format(method, error))
 
 
 def decode_json(status, body, action):

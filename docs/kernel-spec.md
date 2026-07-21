@@ -250,10 +250,11 @@ Kernels fail on tolerances and intersections, not on data structures. Policy:
    balanced AABB hierarchies, tolerance padding rounds outward, and a candidate is
    excluded only by control-hull, interval, or exact-predicate evidence covering its
    complete domain. A clean sample is never a proven miss.
-4. Differential testing: every modeling op runs against oracles — Open CASCADE (open
-   source) and actual Parasolid via Solid Edge Community Edition batch import/export —
-   over a growing corpus of real XT files. Disagreements are triaged into bugs or
-   documented semantic differences.
+4. Differential testing: local/open oracles may run automatically in CI; outputs for
+   actual Parasolid are queued for manually dispatched, API-assisted licensed-host
+   catch-up batches over a growing corpus of real XT files. A release or conformance
+   claim requires current exact-byte host evidence; disagreements are triaged into bugs
+   or documented semantic differences.
 5. Property-based testing and fuzzing: Euler invariants after every Euler-op sequence;
    volume conservation across boolean partitions (vol(A) = vol(A∩B) + vol(A−B) within
    certified bounds); checker-clean outputs; XT fuzzing on the parser.

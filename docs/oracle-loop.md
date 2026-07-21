@@ -5,8 +5,8 @@ reader and writer — the provisional v-fastest B-surface pole ordering is the s
 example — round-trips cleanly and stays invisible. The M3b exit gate therefore requires
 every declared Tier 1 authoring capability to import into a licensed Parasolid host with
 zero checker errors and survive a there-and-back comparison. This document is the
-operating procedure for that loop. It requires a human with host access; nothing else in
-the roadmap waits on it, so run it early and re-run it whenever writer capabilities grow.
+operating procedure for that loop. It requires an explicitly dispatched operator or agent
+with host access; repository CI never contacts the licensed host.
 
 ## Certification invalidation rule
 
@@ -19,18 +19,37 @@ a standing re-test trigger even when local round-trip and checker tests pass.
 
 After such a change:
 
-1. regenerate the deterministic bundle and retain its manifest hashes;
+1. mark the affected certification record `stale` and queue the change;
 2. identify every fixture whose bytes changed, conservatively treating an
    unclear impact as the full bundle;
-3. re-run those bytes in a licensed Parasolid host before making a current
-   writer-conformance claim; and
-4. append results with the writer Git revision and bundle identity in the
+3. batch queued writer changes until the next catch-up checkpoint—do not spend
+   host requests certifying a superseded intermediate revision;
+4. regenerate the final deterministic bundle and retain its manifest hashes;
+5. re-run the affected final bytes in a licensed Parasolid host before making a
+   current writer-conformance claim; and
+6. append results with the writer Git revision and bundle identity in the
    notes field of `docs/oracle-results.tsv` until those fields receive a
    versioned schema of their own.
 
 CI does not replace the licensed host. Its deterministic freshness checks
 compare regenerated writer/bundle identities with the last committed licensed
 evidence. A stale record blocks a conformance claim, not unrelated development.
+
+`current` means only that the regenerated identities match the exact bytes cited
+by the committed host record. It does not mean CI contacted the host, every
+fixture passed, or the writer is generally Parasolid-conformant. `stale` retains
+historical evidence but cannot support a current-byte claim. A partial catch-up
+may append result rows, but the record stays stale until the final queued batch
+and its exact identity are fully recorded.
+
+## Catch-up cadence and request budget
+
+Onshape allows 2,500 API requests per year. The workflow's default dispatched
+session cap is 200 requests and its hard maximum is 400. Uploads, translation
+polls, element lookup, re-export attempts, and credential checks all consume the
+same allowance. Size the queued fixture batch before dispatch, keep requests
+serial, and stop rather than exceed the cap or retry a rate-limited session.
+Partial sessions remain stale and resume in a later manually dispatched batch.
 
 **Last licensed-host run (2026-07-20, writer=b596027):** the declared base
 matrix imported 12/15 and compared 7/12 clean. Wire/acorn parse rejection,
@@ -64,14 +83,15 @@ The bundle retains the host-canonicalized exactly planar
 `solid_block_nurbs_face.x_t` and the host-preserved
 `solid_block_curved_nurbs_face.x_t`. The curved fixture preserves exact linear
 block boundaries while displacing the sole interior biquadratic control point;
-it therefore cannot be canonicalized to a plane. **Every host run must include
-both B-surface fixtures.**
+it therefore cannot be canonicalized to a plane. **Every base-matrix
+certification session must include both B-surface fixtures.**
 
 The exporter rejects stale or unexpected outbox entries, and the API CLI reads
 the manifest order rather than globbing transport residue. After generation,
-the offline freshness gate is:
+inspect the exact identity and run the offline freshness gate with:
 
 ```sh
+python3 scripts/oracle_loop.py identity --outbox oracle/outbox
 python3 scripts/oracle_loop.py certification-check --outbox oracle/outbox
 ```
 
@@ -94,18 +114,33 @@ disjoint union, and contained subtraction with one finite void. Generation
 requires Full-valid committed results, independent volumes, local X_T import,
 byte-stable replay, and an empty output directory.
 
-## 2. Run the loop (Onshape API CLI — primary)
+## 2. Manual catch-up entry points
 
 `scripts/oracle_loop.py` drives the entire loop through Onshape's REST API
 using a developer API key pair — no browser, no cookie session, no manual
-uploads — so any human, agent, or bounded CI job with the two environment
-variables can certify a bundle. One-time setup:
+uploads. An authorized human or agent starts each catch-up session explicitly;
+repository CI has no host credentials and never invokes `bundle`.
+
+The shared path is the manual **Licensed-host oracle catch-up** GitHub Action
+(`.github/workflows/oracle-catchup.yml`), dispatched from the default branch.
+Protect its `onshape-oracle` environment and configure `ONSHAPE_ACCESS_KEY`,
+`ONSHAPE_SECRET_KEY`, `ONSHAPE_DOCUMENT_ID`, `ONSHAPE_WORKSPACE_ID`, and
+`ONSHAPE_ELEMENT_ID` as secrets. Choose `base` or `boolean`, optionally select
+exact manifest fixture names with the locally generated bundle SHA-256, confirm
+the spend, and set the request ceiling.
+The action serializes runs and archives exact identities, outboxes, host re-exports,
+logs, metadata, and partial result rows; it never changes a certification record
+automatically. To continue a capped partial run, dispatch the remaining manifest
+names with the prior artifact's `bundle_sha256`; a changed bundle fails before any
+host request rather than combining evidence from different bytes.
+
+For a local session, one-time setup is:
 
 1. Create an API key pair at <https://dev-portal.onshape.com> (available on
    free plans) and export it in the environment:
 
    ```sh
-   export ONSHAPE_ACCESS_KEY=... ONSHAPE_SECRET_KEY=...
+   export ONSHAPE_ACCESS_KEY=... ONSHAPE_SECRET_KEY=... ONSHAPE_REQUEST_LIMIT=200
    ```
 
    Keys are secrets: never committed. Either export them in the environment
@@ -124,12 +159,16 @@ variables can certify a bundle. One-time setup:
    python3 scripts/oracle_loop.py check  # verifies the credentials
    ```
 
-Each certification run is then:
+After the queued changes settle and the final batch fits the session request
+cap, dispatch a certification run:
 
 ```sh
 cargo run --release -p kxt --bin xt_oracle -- export oracle/outbox
 python3 scripts/oracle_loop.py bundle --reexport --compare --results-rows
 ```
+
+Use `--fixtures NAME.x_t ...` to run only queued or remaining names from that
+bundle's manifest; unknown and duplicate names fail before credentials load.
 
 For the supplemental Boolean matrix:
 
@@ -140,19 +179,19 @@ python3 scripts/oracle_loop.py bundle \
   --reexport --compare --results-rows
 ```
 
-`bundle` uploads every outbox fixture, waits for each translation verdict,
+`bundle` uploads every manifest fixture by default, or only the manifest-bound
+`--fixtures` selection, then waits for each translation verdict,
 classifies any `failureReason` against the taxonomy in the appendix,
 downloads the host's Parasolid re-export into `oracle/inbox/onshape/`, runs
 `xt_oracle compare` on each outbox/inbox pair, and prints ready-to-append
-`docs/oracle-results.tsv` rows stamped with the writer git revision. A
-nonzero exit means at least one rejection or compare mismatch.
+`docs/oracle-results.tsv` rows stamped with the writer git revision. Exit 1
+means completed host findings; exit 2 means incomplete operational evidence.
+`--results-file PATH` retains completed rows even if a later request hits the cap.
 `run FILE... --results-rows` does the same for individual files when
 bisecting a single writer defect.
 
-The upload/poll endpoints are host-proven from the original loop. The
-export-back pair (`partstudios .../translations` + `externaldata` download)
-follows Onshape's published API but predates any live run here: confirm it on
-first use and correct this document if the response shapes differ.
+The upload/poll endpoints and synchronous Part Studio Parasolid re-export with
+`includeSurfaces=true` are live-host proven by the committed 2026-07-20 rows.
 
 ## 3. Manual host import (alternative hosts)
 

@@ -199,11 +199,12 @@ and a four-point certified imported-cylinder ladder at `1e-2`, `3e-3`,
 assembly. The legacy NURBS fixture is an
 exact benchmark-owned copy of `solid_block_nurbs_face.x_t`; setup asserts its
 6,488-byte identity, portable digest, one B-surface, and absence of pcurves.
-The tolerant fixture references the current certified oracle outbox and asserts
-its 7,172-byte identity, portable digest, one curve-less tolerant edge, two
-NURBS pcurve uses, and four intentionally skipped geometric-owner records. The
-Python contract checks all three imported SHA-256 values against
-`docs/oracle-certification.json`. One immutable fixture and one Serial
+The tolerant fixture references a historically host-tested oracle payload and
+asserts its 7,172-byte identity, portable digest, one curve-less tolerant edge,
+two NURBS pcurve uses, and four intentionally skipped geometric-owner records.
+The Python contract checks all three imported SHA-256 values against the
+currently stale `docs/oracle-certification.json`; that pins bytes, not current
+host conformance. One immutable fixture and one Serial
 compatibility-v1 operation context are prepared per case. Import, context
 construction, outcome unpacking, finite/range, exact directed incidence,
 topological-boundary, face-sense orientation, measure, and exact mesh/report
