@@ -44,7 +44,7 @@ enforcement over new parallel surface area. Read the queue literally.
    exact-contact empty intersections plus inverse-containment convex-planar cavities now run through
    the public facade and export deterministically; certified flush axial cap-contact connected
    unions also land; topology-owned ruling trims with operation-shared source-edge root identity
-   now publish bounded line fragments, while mixed arc/ruling cycles, bounded-arc contacts, broader layouts, and curved licensed-host evidence remain.
+   now publish bounded line fragments and closed mixed arc/ruling cycles for the certified bounded fixture, while broader rigid placements, bounded-arc contacts/layouts, and curved licensed-host evidence remain.
    Broader intersection/NURBS families, revolve, and curved profiles remain milestone backlog.
 
 **External-evidence lane.** Current Onshape records pin the 15-file writer bundle and the six-file

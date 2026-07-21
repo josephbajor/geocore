@@ -306,7 +306,8 @@ manifold finite-cylinder classification, topology-owned conic/ring trim proofs,
 deterministic closed-fragment stitching, exact Plane/Cylinder rings,
 bounded-arc endpoint topology, finite exact-family transverse ruling carriers
 with paired whole-range residual proof, topology-owned ruling trims with operation-shared
-source-edge root identity, payload-agnostic exact boundary truth selection,
+source-edge root identity, deterministic closed mixed arc/ruling cycles for the
+certified bounded fixture, payload-agnostic exact boundary truth selection,
 finite-cylinder Full proof, proof-bearing planar-circle/periodic-band partitions,
 and exact dual-cell classification now feed the public intersection facade. It
 atomically assembles and Full-checks strict axial slab-through-cylinder intersection
@@ -320,9 +321,9 @@ intersections empty, assembles zero-cut finite-cylinder outers with negative
 convex-planar cavity shells, and refuses unsupported curved truth/topology
 classes before allocation. The results export deterministically and self-import
 Fast-valid. Certified flush axial cap-contact unions also remove their full-disk
-interface and Full-commit one connected boss. Mixed arc/ruling cycles,
-bounded-arc contacts/layouts, and the curved licensed-host
-evidence gate remain.
+interface and Full-commit one connected boss. Broader rigid mixed-cycle
+placements, bounded-arc contacts/layouts, and the curved licensed-host evidence
+gate remain.
 
 Do not wait for an exhaustive analytic pair table before testing the end-to-end
 boolean architecture. Begin with a deliberately narrow vertical slice as soon as the

@@ -1184,8 +1184,7 @@ fn block_slab_through_cylinder_exposes_two_exact_closed_rings() {
     assert_stable_gap_reasons(&graph);
 }
 
-#[test]
-fn clipped_plane_cylinder_circles_retain_exact_public_arc_endpoints() {
+fn mixed_slab_and_cylinder() -> (Session, PartId, BodyId, BodyId) {
     let mut session = Kernel::new().create_session();
     let part_id = session.create_part();
     let (block, cylinder) = {
@@ -1219,176 +1218,310 @@ fn clipped_plane_cylinder_circles_retain_exact_public_arc_endpoints() {
             .body();
         (block, cylinder)
     };
-    let graph = section_graph(&session, &part_id, &block, &cylinder);
+    (session, part_id, block, cylinder)
+}
 
-    let circle_branches = graph
-        .branches()
-        .iter()
-        .enumerate()
-        .filter_map(|(index, branch)| {
-            matches!(branch.carrier(), SectionCarrier::Circle { .. }).then_some(index)
-        })
-        .collect::<Vec<_>>();
-    let ruling_branches = graph
-        .branches()
-        .iter()
-        .filter(|branch| matches!(branch.carrier(), SectionCarrier::Line { .. }))
-        .count();
-    assert_eq!(circle_branches.len(), 2, "bounded graph: {graph:#?}");
-    assert_eq!(ruling_branches, 4, "bounded graph: {graph:#?}");
-    assert_eq!(graph.curve_fragments().len(), 8);
-    assert_eq!(graph.curve_endpoints().len(), 8);
-    assert_eq!(graph.curve_components().len(), 4);
-    assert!(graph.rings().is_empty());
-    assert_eq!(graph.completion(), SectionCompletion::Indeterminate);
-    assert!(
-        graph
-            .curve_components()
-            .iter()
-            .all(|component| !component.closed())
-    );
-    assert!(
-        graph
-            .gaps()
-            .iter()
-            .all(|gap| gap.reason() != GAP_CURVED_TRIM_UNRESOLVED),
-        "public endpoint adaptation must not report the retired facade gap: {:?}",
-        graph.gaps()
-    );
-    assert_eq!(
-        graph
-            .gaps()
-            .iter()
-            .filter(|gap| gap.reason() == GAP_MIXED_FRAGMENT_STITCH)
-            .count(),
-        ruling_branches
-    );
-    assert!(
-        graph
-            .gaps()
-            .iter()
-            .all(|gap| gap.reason() != GAP_RULING_TRIM_UNRESOLVED)
-    );
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MixedFragmentFamily {
+    Arc,
+    Line,
+}
 
+#[derive(Debug, Clone)]
+struct MixedEndpointOccurrence {
+    family: MixedFragmentFamily,
+    operand: usize,
+    source_parameter: SectionSourceParameterKey,
+    edge_parameter: SectionEdgeParameterInterval,
+}
+
+fn mixed_fragment_family(fragment: &SectionCurveFragment) -> MixedFragmentFamily {
+    match fragment.span() {
+        SectionCurveFragmentSpan::Arc { .. } => MixedFragmentFamily::Arc,
+        SectionCurveFragmentSpan::LineSegment { .. } => MixedFragmentFamily::Line,
+        SectionCurveFragmentSpan::Whole => {
+            panic!("mixed slab fixture must not publish a whole branch")
+        }
+    }
+}
+
+fn fragment_endpoint_indices(fragment: &SectionCurveFragment) -> [usize; 2] {
+    match fragment.span() {
+        SectionCurveFragmentSpan::Arc { endpoints, .. } => {
+            [endpoints[0].endpoint(), endpoints[1].endpoint()]
+        }
+        SectionCurveFragmentSpan::LineSegment { endpoints } => {
+            [endpoints[0].endpoint(), endpoints[1].endpoint()]
+        }
+        SectionCurveFragmentSpan::Whole => {
+            panic!("mixed slab fixture must not publish a whole branch")
+        }
+    }
+}
+
+fn assert_mixed_cycle_components(graph: &BodySectionGraph) {
+    assert_eq!(graph.curve_components().len(), 2, "mixed graph: {graph:#?}");
+    let mut fragment_uses = vec![0usize; graph.curve_fragments().len()];
+    for (component_index, component) in graph.curve_components().iter().enumerate() {
+        assert!(
+            component.closed(),
+            "mixed component {component_index} is open"
+        );
+        assert_eq!(component.fragments().len(), 4);
+        let mut endpoint_degree = vec![0usize; graph.curve_endpoints().len()];
+        let mut family_counts = [0usize; 2];
+        for &fragment_index in component.fragments() {
+            let fragment = graph
+                .curve_fragments()
+                .get(fragment_index)
+                .unwrap_or_else(|| {
+                    panic!("component references missing fragment {fragment_index}")
+                });
+            fragment_uses[fragment_index] += 1;
+            family_counts
+                [usize::from(mixed_fragment_family(fragment) == MixedFragmentFamily::Line)] += 1;
+            for endpoint in fragment_endpoint_indices(fragment) {
+                assert!(endpoint < endpoint_degree.len());
+                endpoint_degree[endpoint] += 1;
+            }
+        }
+        assert_eq!(family_counts, [2, 2]);
+        let used_degrees = endpoint_degree
+            .into_iter()
+            .filter(|&degree| degree != 0)
+            .collect::<Vec<_>>();
+        assert_eq!(used_degrees, vec![2; 4]);
+        for offset in 0..component.fragments().len() {
+            let current = &graph.curve_fragments()[component.fragments()[offset]];
+            let next = &graph.curve_fragments()
+                [component.fragments()[(offset + 1) % component.fragments().len()]];
+            assert_ne!(mixed_fragment_family(current), mixed_fragment_family(next));
+            assert_eq!(
+                fragment_endpoint_indices(current)[1],
+                fragment_endpoint_indices(next)[0],
+                "component {component_index} is not a directed exact-endpoint cycle"
+            );
+        }
+    }
+    assert_eq!(fragment_uses, vec![1; graph.curve_fragments().len()]);
+}
+
+fn assert_occurrence_provenance(
+    part: &Part<'_>,
+    branch: &SectionBranch,
+    operand: usize,
+    face: FaceId,
+    loop_id: LoopId,
+    fin: FinId,
+    source: &SectionSourceParameterKey,
+) {
+    assert_eq!(face, branch.faces()[operand]);
+    assert_eq!(part.loop_(loop_id.clone()).unwrap().face(), face);
+    assert_eq!(part.fin(fin.clone()).unwrap().loop_(), loop_id);
+    assert_eq!(part.fin(fin).unwrap().edge(), source.edge());
+}
+
+fn collect_mixed_endpoint_occurrences(
+    session: &Session,
+    part_id: &PartId,
+    graph: &BodySectionGraph,
+) -> Vec<Vec<MixedEndpointOccurrence>> {
     let part = session.part(part_id.clone()).unwrap();
-    let mut branch_ordinals = vec![Vec::new(); graph.branches().len()];
-    let mut arc_endpoint_indices = Vec::new();
-    let mut ruling_endpoint_indices = Vec::new();
+    let mut occurrences = vec![Vec::new(); graph.curve_endpoints().len()];
     for fragment in graph.curve_fragments() {
-        branch_ordinals[fragment.branch()].push(fragment.source_ordinal());
         let branch = &graph.branches()[fragment.branch()];
         match fragment.span() {
             SectionCurveFragmentSpan::Arc { endpoints, .. } => {
                 for end in endpoints.iter() {
-                    arc_endpoint_indices.push(end.endpoint());
-                    assert!(end.endpoint() < graph.curve_endpoints().len());
                     assert_boundary_on_both(
-                        &session,
-                        &part_id,
+                        session,
+                        part_id,
                         graph.bodies(),
                         end.point(),
-                        "certified curved fragment endpoint",
+                        "mixed arc endpoint",
                     );
                     assert!(branch.range().contains(end.carrier_parameter()));
-
                     let trim = end.trim();
-                    assert_eq!(trim.face(), branch.faces()[trim.operand()]);
                     assert!(trim.edge_parameter().lo() < trim.edge_parameter().hi());
                     assert!(trim.pcurve_half_angle().lo() < trim.pcurve_half_angle().hi());
-                    assert_eq!(part.loop_(trim.loop_id()).unwrap().face(), trim.face());
-                    assert_eq!(part.fin(trim.fin()).unwrap().loop_(), trim.loop_id());
-                    assert_eq!(
-                        part.fin(trim.fin()).unwrap().edge(),
-                        trim.source_parameter().edge()
+                    assert_occurrence_provenance(
+                        &part,
+                        branch,
+                        trim.operand(),
+                        trim.face(),
+                        trim.loop_id(),
+                        trim.fin(),
+                        trim.source_parameter(),
                     );
-
-                    let endpoint = &graph.curve_endpoints()[end.endpoint()];
-                    let SectionCurveEndpointTopology::Trim {
-                        sites,
-                        source_parameters,
-                    } = endpoint.topology()
-                    else {
-                        panic!("physical curved trim event must not become a chart seam")
-                    };
-                    assert_eq!(
-                        sites[trim.operand()],
-                        SectionSite::EdgeInterior(trim.source_parameter().edge())
-                    );
-                    assert_eq!(
-                        source_parameters[trim.operand()].as_ref(),
-                        Some(trim.source_parameter())
-                    );
-                    let merged = endpoint.edge_parameters()[trim.operand()]
-                        .expect("shared endpoint must retain edge evidence");
-                    assert!(merged.lo() >= trim.edge_parameter().lo());
-                    assert!(merged.hi() <= trim.edge_parameter().hi());
+                    occurrences[end.endpoint()].push(MixedEndpointOccurrence {
+                        family: MixedFragmentFamily::Arc,
+                        operand: trim.operand(),
+                        source_parameter: trim.source_parameter().clone(),
+                        edge_parameter: trim.edge_parameter(),
+                    });
                 }
             }
             SectionCurveFragmentSpan::LineSegment { endpoints } => {
                 for end in endpoints.iter() {
-                    ruling_endpoint_indices.push(end.endpoint());
                     assert_boundary_on_both(
-                        &session,
-                        &part_id,
+                        session,
+                        part_id,
                         graph.bodies(),
                         end.point(),
-                        "certified ruling fragment endpoint",
+                        "mixed ruling endpoint",
                     );
-                    let trim = end
-                        .trims()
-                        .iter()
-                        .flatten()
-                        .next()
-                        .expect("slab ruling endpoint must retain a planar trim");
-                    assert_eq!(trim.face(), branch.faces()[trim.operand()]);
-                    assert_eq!(
-                        part.fin(trim.fin()).unwrap().edge(),
-                        trim.source_parameter().edge()
+                    assert!(branch.range().contains(end.carrier_parameter()));
+                    let trims = end.trims().iter().flatten().collect::<Vec<_>>();
+                    assert_eq!(trims.len(), 1);
+                    let trim = trims[0];
+                    assert!(trim.edge_parameter().lo() < trim.edge_parameter().hi());
+                    assert!(trim.carrier_parameter().lo() < trim.carrier_parameter().hi());
+                    assert_occurrence_provenance(
+                        &part,
+                        branch,
+                        trim.operand(),
+                        trim.face(),
+                        trim.loop_id(),
+                        trim.fin(),
+                        trim.source_parameter(),
                     );
+                    occurrences[end.endpoint()].push(MixedEndpointOccurrence {
+                        family: MixedFragmentFamily::Line,
+                        operand: trim.operand(),
+                        source_parameter: trim.source_parameter().clone(),
+                        edge_parameter: trim.edge_parameter(),
+                    });
                 }
             }
             SectionCurveFragmentSpan::Whole => {
-                panic!("bounded fixture must not publish a whole branch")
+                panic!("mixed slab fixture must not publish a whole branch")
             }
         }
     }
-    for (branch, ordinals) in branch_ordinals.iter().enumerate() {
-        if circle_branches.contains(&branch) {
-            assert_eq!(ordinals, &[0, 1]);
+    occurrences
+}
+
+fn assert_shared_mixed_endpoint_identity(
+    graph: &BodySectionGraph,
+    occurrences: &[Vec<MixedEndpointOccurrence>],
+    block_operand: usize,
+) -> Vec<SectionSourceParameterKey> {
+    assert_eq!(occurrences.len(), graph.curve_endpoints().len());
+    let mut keys = Vec::with_capacity(occurrences.len());
+    for (endpoint_index, endpoint_occurrences) in occurrences.iter().enumerate() {
+        assert_eq!(endpoint_occurrences.len(), 2);
+        assert_ne!(
+            endpoint_occurrences[0].family,
+            endpoint_occurrences[1].family
+        );
+        assert_eq!(endpoint_occurrences[0].operand, block_operand);
+        assert_eq!(endpoint_occurrences[1].operand, block_operand);
+        assert_eq!(
+            endpoint_occurrences[0].source_parameter,
+            endpoint_occurrences[1].source_parameter
+        );
+        let key = endpoint_occurrences[0].source_parameter.clone();
+        assert!(
+            !keys.contains(&key),
+            "two physical endpoints reused {key:?}"
+        );
+
+        let SectionCurveEndpointTopology::Trim {
+            sites,
+            source_parameters,
+        } = graph.curve_endpoints()[endpoint_index].topology()
+        else {
+            panic!("physical mixed endpoint became a parameter seam")
+        };
+        assert_eq!(sites[block_operand], SectionSite::EdgeInterior(key.edge()));
+        assert_eq!(source_parameters[block_operand].as_ref(), Some(&key));
+        assert!(source_parameters[1 - block_operand].is_none());
+        let common = graph.curve_endpoints()[endpoint_index].edge_parameters()[block_operand]
+            .expect("mixed endpoint must retain common source-edge evidence");
+        assert!(common.lo().is_finite() && common.hi().is_finite() && common.lo() <= common.hi());
+        for occurrence in endpoint_occurrences {
+            assert!(common.lo() >= occurrence.edge_parameter.lo());
+            assert!(common.hi() <= occurrence.edge_parameter.hi());
+        }
+        keys.push(key);
+    }
+    keys
+}
+
+fn assert_mixed_slab_contract(
+    session: &Session,
+    part_id: &PartId,
+    graph: &BodySectionGraph,
+    block_operand: usize,
+) -> Vec<SectionSourceParameterKey> {
+    assert_eq!(
+        graph.completion(),
+        SectionCompletion::Complete,
+        "{:#?}",
+        graph.gaps()
+    );
+    assert!(graph.gaps().is_empty());
+    assert!(graph.edges().is_empty());
+    assert!(graph.vertices().is_empty());
+    assert!(graph.loops().is_empty());
+    assert!(graph.rings().is_empty());
+    assert_eq!(graph.branches().len(), 6);
+    assert_eq!(graph.curve_fragments().len(), 8);
+    assert_eq!(graph.curve_endpoints().len(), 8);
+    let mut branch_ordinals = vec![Vec::new(); graph.branches().len()];
+    let family_counts = graph
+        .curve_fragments()
+        .iter()
+        .fold([0usize; 2], |mut counts, fragment| {
+            branch_ordinals[fragment.branch()].push(fragment.source_ordinal());
+            counts[usize::from(mixed_fragment_family(fragment) == MixedFragmentFamily::Line)] += 1;
+            counts
+        });
+    assert_eq!(family_counts, [4, 4]);
+    let mut carrier_counts = [0usize; 2];
+    for (branch, ordinals) in graph.branches().iter().zip(branch_ordinals) {
+        let slot = usize::from(matches!(branch.carrier(), SectionCarrier::Line { .. }));
+        carrier_counts[slot] += 1;
+        if slot == 0 {
+            assert_eq!(ordinals, vec![0, 1]);
         } else {
-            assert_eq!(ordinals, &[0]);
+            assert_eq!(ordinals, vec![0]);
         }
     }
-    arc_endpoint_indices.sort_unstable();
-    arc_endpoint_indices.dedup();
-    ruling_endpoint_indices.sort_unstable();
-    ruling_endpoint_indices.dedup();
-    assert_eq!(arc_endpoint_indices, ruling_endpoint_indices);
-    assert_eq!(arc_endpoint_indices.len(), graph.curve_endpoints().len());
-    assert_stable_gap_reasons(&graph);
+    assert_eq!(carrier_counts, [2, 4]);
+    assert!(
+        !graph
+            .gaps()
+            .iter()
+            .any(|gap| gap.reason() == GAP_MIXED_FRAGMENT_STITCH)
+    );
+    assert_mixed_cycle_components(graph);
+    let occurrences = collect_mixed_endpoint_occurrences(session, part_id, graph);
+    let keys = assert_shared_mixed_endpoint_identity(graph, &occurrences, block_operand);
+    assert_stable_gap_reasons(graph);
+    keys
+}
+
+#[test]
+fn slab_cylinder_mixed_arc_line_cycles_are_complete_and_operand_symmetric() {
+    let (session, part_id, block, cylinder) = mixed_slab_and_cylinder();
+    let graph = section_graph(&session, &part_id, &block, &cylinder);
+    let repeated = section_graph(&session, &part_id, &block, &cylinder);
+    assert_eq!(
+        repeated, graph,
+        "mixed cycle assembly must be deterministic"
+    );
+    let forward_keys = assert_mixed_slab_contract(&session, &part_id, &graph, 0);
 
     let swapped = section_graph(&session, &part_id, &cylinder, &block);
-    assert_eq!(swapped.curve_fragments().len(), 8);
-    assert_eq!(swapped.curve_endpoints().len(), 8);
-    assert!(
-        swapped
-            .curve_fragments()
-            .iter()
-            .all(|fragment| match fragment.span() {
-                SectionCurveFragmentSpan::Arc { endpoints, .. } => endpoints.iter().all(|end| {
-                    end.trim().operand() == 1
-                        && end.trim().face() == swapped.branches()[fragment.branch()].faces()[1]
-                }),
-                SectionCurveFragmentSpan::LineSegment { endpoints } =>
-                    endpoints.iter().all(|end| {
-                        end.trims()[1].as_ref().is_some_and(|trim| {
-                            trim.face() == swapped.branches()[fragment.branch()].faces()[1]
-                        })
-                    }),
-                SectionCurveFragmentSpan::Whole => false,
-            })
+    let swapped_repeated = section_graph(&session, &part_id, &cylinder, &block);
+    assert_eq!(
+        swapped_repeated, swapped,
+        "swapped mixed cycle assembly must be deterministic"
     );
-    assert_stable_gap_reasons(&swapped);
+    let swapped_keys = assert_mixed_slab_contract(&session, &part_id, &swapped, 1);
+    assert_eq!(forward_keys.len(), swapped_keys.len());
+    assert!(forward_keys.iter().all(|key| swapped_keys.contains(key)));
 }
 
 #[test]

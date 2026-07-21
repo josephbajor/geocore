@@ -37,6 +37,7 @@ mod broad_phase;
 mod clip;
 mod closed_stitch;
 mod curved_clip;
+mod mixed_stitch;
 mod root_identity;
 mod ruling_clip;
 mod ruling_public;
@@ -566,7 +567,7 @@ impl SectionSourceParameterKey {
     }
 }
 
-/// Exact combinatorial identity of one stitched curved-fragment endpoint.
+/// Exact combinatorial identity of one stitched analytic-fragment endpoint.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum SectionCurveEndpointTopology {
@@ -590,8 +591,9 @@ pub enum SectionCurveEndpointTopology {
 ///
 /// Equality and joins are owned by [`SectionCurveEndpointTopology`], never
 /// by a metric point comparison. Every occurrence interval encloses the same
-/// certified analytic source root; their common evidence is intersected only
-/// after those exact identities match.
+/// certified analytic source root, whether the incident carriers are lines,
+/// arcs, or a mix of analytic families. Their common evidence is intersected
+/// only after those exact identities match.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectionCurveEndpoint {
     topology: SectionCurveEndpointTopology,
@@ -659,7 +661,7 @@ impl SectionCurveTrimProvenance {
     }
 }
 
-/// One directed occurrence of a stitched curved-fragment endpoint.
+/// One directed occurrence of a stitched analytic-fragment endpoint.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectionCurveFragmentEnd {
     endpoint: usize,
@@ -739,7 +741,10 @@ impl SectionCurveFragment {
     }
 }
 
-/// One maximal directed component of exact curved fragments.
+/// One certified closed component of exact analytic fragments.
+///
+/// A component may contain line fragments, arc fragments, or a deterministic
+/// mix of analytic carrier families joined by shared endpoint identities.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SectionCurveComponent {
     fragments: Vec<usize>,
@@ -752,7 +757,8 @@ impl SectionCurveComponent {
         &self.fragments
     }
 
-    /// Whether exact endpoint incidence closes this component.
+    /// Whether exact endpoint incidence closes this component. The current
+    /// publisher omits open or ambiguous walks and reports them as gaps.
     pub const fn closed(&self) -> bool {
         self.closed
     }
@@ -841,17 +847,19 @@ impl BodySectionGraph {
         &self.branches
     }
 
-    /// Proof-keyed endpoints shared by bounded branch fragments.
+    /// Proof-keyed endpoints shared by bounded analytic branch fragments.
     pub fn curve_endpoints(&self) -> &[SectionCurveEndpoint] {
         &self.curve_endpoints
     }
 
-    /// Exact branch fragments in deterministic clipper order.
+    /// Exact analytic branch fragments in deterministic clipper order.
     pub fn curve_fragments(&self) -> &[SectionCurveFragment] {
         &self.curve_fragments
     }
 
-    /// Maximal directed periodic-carrier components in discovery order.
+    /// Certified closed analytic-fragment components in discovery order.
+    /// Open or ambiguous fragments remain visible through [`Self::curve_fragments`]
+    /// alongside an [`SectionCompletion::Indeterminate`] gap.
     pub fn curve_components(&self) -> &[SectionCurveComponent] {
         &self.curve_components
     }
@@ -878,7 +886,7 @@ impl BodySectionGraph {
 }
 
 pub(crate) const GAP_PLANAR_ONLY: &str =
-    "body sectioning is certified only for faces on planar surfaces in this slice";
+    "body sectioning supports planar face pairs and certified Plane/Cylinder pairs in this slice";
 pub(crate) const GAP_LINE_EDGES_ONLY: &str =
     "body sectioning is certified only for faces bounded by straight line edges";
 pub(crate) const GAP_BOUNDED_EDGES_ONLY: &str =
@@ -916,9 +924,9 @@ impl Part<'_> {
     /// The graph is read-only interrogation evidence: no topology is
     /// created or modified. Wrong-part, stale, and identical operand
     /// identities are rejected before the scope starts. Faces outside the
-    /// certified planar slice, coincident or tangent face pairs, and any
-    /// metric ordering the conservative intervals cannot certify yield
-    /// [`SectionCompletion::Indeterminate`] with structured
+    /// certified planar and Plane/Cylinder pair slices, coincident or tangent
+    /// face pairs, and any ordering that conservative intervals cannot certify
+    /// yield [`SectionCompletion::Indeterminate`] with structured
     /// [`SectionGap`] reasons instead of a guessed graph.
     pub fn section_bodies(
         &self,
@@ -2642,16 +2650,14 @@ fn assemble_graph(
         curve_endpoints = published_endpoints;
         curve_fragments = published_fragments;
     }
-    let curve_components = closed_stitched
-        .chains
+    let mixed_stitched =
+        mixed_stitch::stitch_curve_fragments(&curve_fragments, curve_endpoints.len())?;
+    let curve_components = mixed_stitched
+        .components
         .iter()
-        .map(|chain| SectionCurveComponent {
-            fragments: chain
-                .fragments
-                .iter()
-                .map(|fragment| fragment.input_fragment)
-                .collect(),
-            closed: chain.closed,
+        .map(|component| SectionCurveComponent {
+            fragments: component.fragments.clone(),
+            closed: component.closed,
         })
         .collect::<Vec<_>>();
     let mut rings = Vec::new();
@@ -2679,16 +2685,22 @@ fn assemble_graph(
         });
     }
     for defect in &closed_stitched.defects {
+        if matches!(
+            defect,
+            closed_stitch::ClosedStitchDefect::IncomingDegree { .. }
+                | closed_stitch::ClosedStitchDefect::OutgoingDegree { .. }
+                | closed_stitch::ClosedStitchDefect::OpenChain(_)
+        ) {
+            continue;
+        }
         gaps.push(SectionGap {
             reason: closed_stitch_defect_reason(*defect),
             faces: Vec::new(),
         });
     }
-    if closed_stitched.completion == closed_stitch::ClosedStitchCompletion::Indeterminate
-        && closed_stitched.defects.is_empty()
-    {
+    if !mixed_stitched.defects.is_empty() {
         gaps.push(SectionGap {
-            reason: GAP_CLOSED_STITCH,
+            reason: GAP_MIXED_FRAGMENT_STITCH,
             faces: Vec::new(),
         });
     }

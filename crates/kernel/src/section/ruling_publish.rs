@@ -101,10 +101,6 @@ pub(super) fn append_branch(
                 acc.branches[branch_index].range = certificate.range;
                 acc.branches[branch_index].evidence.residual_bounds = certificate.residual_bounds;
                 acc.ruling_fragments.extend(fragments);
-                acc.gaps.push(SectionGap {
-                    reason: super::GAP_MIXED_FRAGMENT_STITCH,
-                    faces: facades.to_vec(),
-                });
             }
         }
         RulingCertificationOutcome::Indeterminate(reason) => acc.gaps.push(SectionGap {

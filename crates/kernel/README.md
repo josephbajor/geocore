@@ -14,7 +14,8 @@ The current facade supports:
 - bounded, operation-accounted surface evaluation;
 - certified body section graphs exposing Plane/Cylinder rings, exact bounded
   arcs, and topology-clipped transverse ruling fragments with operation-shared
-  source-edge root identity; mixed-family cycle assembly remains a typed gap;
+  source-edge root identity plus deterministic closed mixed-family cycles for
+  the certified bounded fixture; broader rigid placements remain fail-closed;
 - failure-atomic block/block unite/intersect/subtract plus axial
   convex-planar/finite-cylinder intersection, finite-cylinder-minus-planar
   remainder bands, zero-cut truth-selected whole-source union/subtraction

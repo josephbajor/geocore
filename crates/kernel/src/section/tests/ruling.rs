@@ -89,8 +89,8 @@ fn assert_ruling_contract(
             .iter()
             .filter(|gap| gap.reason() == GAP_MIXED_FRAGMENT_STITCH)
             .count(),
-        graph.branches().len(),
-        "each retained bounded ruling must own one mixed-stitch gap"
+        1,
+        "all disconnected rulings must share one graph-global mixed-stitch gap"
     );
     assert!(
         graph

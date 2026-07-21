@@ -289,7 +289,7 @@ signatures naming `Store`, `AssemblyStore`, `Entity`, raw entities, graph handle
 - F5 exposes body section graphs, verified Plane/Cylinder circle and finite exact-family transverse ruling
   branches, and exact endpoint-free `SectionRing` components when topology-owned trims retain the
   whole period. `SectionCurveFragment` exposes exact bounded arcs and topology-clipped line segments
-  with operation-shared source-root endpoint identity and topology provenance; mixed arc/ruling cycles remain. Exact planar-circle and periodic-cylinder face-region
+  with operation-shared source-root endpoint identity and topology provenance; `SectionCurveComponent` exposes deterministic closed mixed arc/ruling cycles for the certified bounded fixture, while broader rigid placements remain fail-closed. Exact planar-circle and periodic-cylinder face-region
   partitions now propagate open-cell occupancy over their proof-bearing dual graph for the axial
   Boolean slice. There is no general surface/surface entry point; future adapters must preserve the
   lower `kops` completion boundary/evidence, not duplicate or widen it.

@@ -237,10 +237,10 @@ fn assert_graph_shape(
             .iter()
             .filter(|gap| {
                 gap.reason() == "bounded section fragments await mixed-family stitching"
-                    && gap.faces().len() == 2
+                    && gap.faces().is_empty()
             })
             .count(),
-        EXPECTED_ROOTS.len(),
+        1,
         "{}",
         case.name
     );
