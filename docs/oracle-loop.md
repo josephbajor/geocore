@@ -111,16 +111,19 @@ python3 scripts/oracle_loop.py certification-check \
   --record docs/oracle-boolean-certification.json
 ```
 
-Its fifteen payloads cover connected block/block unite/subtract/intersect, both
+Its sixteen payloads cover connected block/block unite/subtract/intersect, both
 bodies of a disjoint union, contained subtraction with one finite void, one
 bounded-arc block/cylinder intersection, and both public-result-order bodies of
 the bounded-arc planar-minus-cylinder subtraction, plus rectangular and
 five-portal cap-retaining Unite/cylinder-left Subtract, the seam-crossing
-five-portal cylinder-left Subtract, and nonconvex star/cylinder Intersect.
+five-portal cylinder-left Subtract, nonconvex star/cylinder Intersect, and the
+cap-crossing circular-segment plane/cylinder Intersect.
 Generation requires Full-valid committed results, independent volumes, local X_T import,
-byte-stable replay, and an empty output directory. The current fifteen-payload
-identity is certified 15/15 by Onshape; later writer-byte changes must mark the
-record stale and queue a final-byte replay under the invalidation rule above.
+byte-stable replay, and an empty output directory. The prior fifteen-payload
+identity is certified 15/15 by Onshape; the record is stale only because the
+new sixteenth payload has not yet received licensed-host evidence. Later writer-byte
+changes must also mark the record stale and queue a final-byte replay under the
+invalidation rule above.
 
 ## 2. Manual catch-up entry points
 

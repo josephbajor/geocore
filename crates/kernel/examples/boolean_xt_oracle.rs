@@ -33,7 +33,8 @@ const SEAM_CROSSING_FIVE_PORTAL_CYLINDER_SUBTRACT: &str =
     "seam_crossing_five_portal_cylinder_minus_plane.x_t";
 const NONCONVEX_STAR_PLANE_CYLINDER_INTERSECTION: &str =
     "nonconvex_star_plane_cylinder_intersection.x_t";
-const EXPECTED_FILES: [&str; 15] = [
+const CAP_CROSSING_PLANE_CYLINDER_INTERSECT: &str = "cap_crossing_plane_cylinder_intersect.x_t";
+const EXPECTED_FILES: [&str; 16] = [
     CONNECTED_UNITE,
     CONNECTED_SUBTRACT,
     CONNECTED_INTERSECT,
@@ -49,6 +50,7 @@ const EXPECTED_FILES: [&str; 15] = [
     FIVE_PORTAL_CYLINDER_SUBTRACT,
     SEAM_CROSSING_FIVE_PORTAL_CYLINDER_SUBTRACT,
     NONCONVEX_STAR_PLANE_CYLINDER_INTERSECTION,
+    CAP_CROSSING_PLANE_CYLINDER_INTERSECT,
 ];
 
 const BOUNDED_ARC_RADIUS: f64 = 1.5;
@@ -74,6 +76,11 @@ const FIVE_PORTAL_RELATIVE_VOLUME_TOLERANCE: f64 = 1.0e-3;
 const SEAM_CROSSING_FIVE_PORTAL_CYLINDER_SUBTRACT_VOLUME: f64 = 7.570_496_318_579_939;
 /// Literal line/circle boundary integration for the ten-point star below.
 const NONCONVEX_STAR_PLANE_CYLINDER_INTERSECTION_VOLUME: f64 = 5.559_104_559_775_048;
+const CAP_CROSSING_OFFSET_X: f64 = 0.5;
+const CAP_CROSSING_OUTER_X: f64 = 2.5;
+const CAP_CROSSING_BLOCK_Y: f64 = 6.0;
+const CAP_CROSSING_BLOCK_Z: f64 = 4.0;
+const CAP_CROSSING_RELATIVE_VOLUME_TOLERANCE: f64 = 1.0e-3;
 
 const SIN_047: f64 = 0.452_886_285_379_068_3;
 const COS_047: f64 = 0.891_568_288_195_329;
@@ -258,6 +265,15 @@ const NONCONVEX_STAR_PLANE_CYLINDER_INTERSECTION_COUNTS: TopologyCounts = Topolo
     fins: 90,
     edges: 45,
     vertices: 30,
+};
+const CAP_CROSSING_PLANE_CYLINDER_INTERSECT_COUNTS: TopologyCounts = TopologyCounts {
+    regions: 2,
+    shells: 1,
+    faces: 4,
+    loops: 4,
+    fins: 12,
+    edges: 6,
+    vertices: 4,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -450,6 +466,7 @@ fn build_bundle() -> OracleResult<Vec<Artifact>> {
     )?);
     artifacts.push(build_seam_crossing_five_portal_subtract()?);
     artifacts.push(build_nonconvex_star_plane_cylinder_intersection()?);
+    artifacts.push(build_cap_crossing_plane_cylinder_intersection()?);
     Ok(artifacts)
 }
 
@@ -657,6 +674,37 @@ fn build_nonconvex_star_plane_cylinder_intersection() -> OracleResult<Artifact> 
     )
 }
 
+fn build_cap_crossing_plane_cylinder_intersection() -> OracleResult<Artifact> {
+    let mut session = Kernel::new().create_session();
+    let part = session.create_part();
+    let (block, cylinder) = create_cap_crossing_operands(&mut session, &part)?;
+    let bodies = run_boolean(
+        &mut session,
+        &part,
+        block.clone(),
+        cylinder.clone(),
+        BooleanOperation::Intersect,
+    )?;
+    require(
+        bodies.len() == 1,
+        format!(
+            "{CAP_CROSSING_PLANE_CYLINDER_INTERSECT} expected one result body, got {}",
+            bodies.len()
+        ),
+    )?;
+    assert_sources_retained(&session, &part, &block, &cylinder, 3)?;
+    make_artifact_with_volume_tolerance(
+        &mut session,
+        &part,
+        bodies[0].clone(),
+        CAP_CROSSING_PLANE_CYLINDER_INTERSECT,
+        cap_crossing_circular_segment_volume(),
+        CAP_CROSSING_PLANE_CYLINDER_INTERSECT_COUNTS,
+        CAP_CROSSING_RELATIVE_VOLUME_TOLERANCE,
+        CAP_RETAINING_CHORD_TOLERANCE,
+    )
+}
+
 fn create_bounded_arc_operands(
     session: &mut Session,
     part: &PartId,
@@ -816,6 +864,38 @@ fn create_nonconvex_star_plane_cylinder_operands(
     Ok((star, cylinder))
 }
 
+fn create_cap_crossing_operands(
+    session: &mut Session,
+    part: &PartId,
+) -> OracleResult<(BodyId, BodyId)> {
+    let frame = Frame::world();
+    let mut edit = session.edit_part(part.clone())?;
+    let block = edit
+        .create_block(BlockRequest::new(
+            frame.with_origin(frame.point_at(
+                0.5 * (CAP_CROSSING_OFFSET_X + CAP_CROSSING_OUTER_X),
+                0.0,
+                0.5 * BOUNDED_ARC_CYLINDER_HEIGHT,
+            )),
+            [
+                CAP_CROSSING_OUTER_X - CAP_CROSSING_OFFSET_X,
+                CAP_CROSSING_BLOCK_Y,
+                CAP_CROSSING_BLOCK_Z,
+            ],
+        ))?
+        .into_result()?
+        .body();
+    let cylinder = edit
+        .create_cylinder(CylinderRequest::new(
+            frame,
+            BOUNDED_ARC_RADIUS,
+            BOUNDED_ARC_CYLINDER_HEIGHT,
+        ))?
+        .into_result()?
+        .body();
+    Ok((block, cylinder))
+}
+
 fn bounded_arc_disk_strip_volume() -> f64 {
     let half_width = BOUNDED_ARC_HALF_STRIP_WIDTH;
     let radius = BOUNDED_ARC_RADIUS;
@@ -838,6 +918,14 @@ fn cap_retaining_block_volume() -> f64 {
 
 fn cap_retaining_cylinder_volume() -> f64 {
     core::f64::consts::PI * BOUNDED_ARC_RADIUS * BOUNDED_ARC_RADIUS * BOUNDED_ARC_CYLINDER_HEIGHT
+}
+
+fn cap_crossing_circular_segment_volume() -> f64 {
+    let radius = BOUNDED_ARC_RADIUS;
+    let offset = CAP_CROSSING_OFFSET_X;
+    let area = radius * radius * (offset / radius).acos()
+        - offset * (radius * radius - offset * offset).sqrt();
+    area * BOUNDED_ARC_CYLINDER_HEIGHT
 }
 
 fn build_single_result(

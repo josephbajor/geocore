@@ -1,6 +1,7 @@
 {
   "schema_version": "kernel-oracle-certification.v1",
-  "status": "current",
+  "status": "stale",
+  "reason": "the cap-crossing circular-segment Intersect payload extends the generated Boolean manifest beyond this preserved 15-payload host-certified identity; licensed-host replay of the new 16-payload bundle is pending",
   "certified_at": "2026-07-21",
   "host": "onshape",
   "host_version": "cloud-2026-07-21",
