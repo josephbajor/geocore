@@ -7,6 +7,8 @@ use kernel::{
     Point3Enclosure, ScalarEnclosure,
 };
 
+#[path = "parallel_cylinder_boolean/axial_contact_unite.rs"]
+mod axial_contact_unite;
 #[path = "parallel_cylinder_boolean/coincident_cap_setops.rs"]
 mod coincident_cap_setops;
 #[path = "parallel_cylinder_boolean/coincident_caps.rs"]

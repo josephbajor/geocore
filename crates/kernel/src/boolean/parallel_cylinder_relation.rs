@@ -372,14 +372,11 @@ fn exterior_radial_gap_clears_support_envelopes(
     }
     let first = cylinders[0].cylinder();
     let second = cylinders[1].cylinder();
-    let axis = interval_vec3(first.frame().z());
-    let displacement = interval_sub(
-        interval_vec3(second.frame().origin()),
-        interval_vec3(first.frame().origin()),
-    );
-    let distance_squared = match interval_norm_squared(interval_cross(displacement, axis))
-        .checked_div(interval_norm_squared(axis))
-    {
+    let distance_squared = match interval_axis_distance_squared(
+        second.frame().origin(),
+        first.frame().origin(),
+        first.frame().z(),
+    ) {
         Some(distance) => distance,
         None => return false,
     };
@@ -847,17 +844,12 @@ fn certify_strict_radial_secancy(
 ) -> core::result::Result<(), ParallelCylinderRelationGap> {
     let first = cylinders[0].cylinder();
     let second = cylinders[1].cylinder();
-    let axis = interval_vec3(first.frame().z());
-    let displacement = interval_sub(
-        interval_vec3(second.frame().origin()),
-        interval_vec3(first.frame().origin()),
-    );
-    let cross = interval_cross(displacement, axis);
-    let numerator = interval_norm_squared(cross);
-    let denominator = interval_norm_squared(axis);
-    let distance_squared = numerator
-        .checked_div(denominator)
-        .ok_or(ParallelCylinderRelationGap::ArithmeticGuard)?;
+    let distance_squared = interval_axis_distance_squared(
+        second.frame().origin(),
+        first.frame().origin(),
+        first.frame().z(),
+    )
+    .ok_or(ParallelCylinderRelationGap::ArithmeticGuard)?;
     let radius_a = Interval::point(first.radius());
     let radius_b = Interval::point(second.radius());
     let radius_difference_squared = (radius_a - radius_b).square();
@@ -1670,6 +1662,19 @@ fn interval_cross(first: IntervalVec3, second: IntervalVec3) -> IntervalVec3 {
 
 fn interval_norm_squared(value: IntervalVec3) -> Interval {
     value.x.square() + value.y.square() + value.z.square()
+}
+
+/// Outward enclosure of squared Euclidean distance from `point` to the
+/// infinite line through `origin` in direction `axis`.
+pub(super) fn interval_axis_distance_squared(
+    point: Point3,
+    origin: Point3,
+    axis: Vec3,
+) -> Option<Interval> {
+    let axis = interval_vec3(axis);
+    let displacement = interval_sub(interval_vec3(point), interval_vec3(origin));
+    interval_norm_squared(interval_cross(displacement, axis))
+        .checked_div(interval_norm_squared(axis))
 }
 
 fn finite_interval(value: Interval) -> bool {

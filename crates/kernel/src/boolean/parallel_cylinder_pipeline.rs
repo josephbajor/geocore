@@ -18,10 +18,11 @@ use super::mixed_shell_plan::{
 use super::parallel_cylinder_boundary::{
     prepare_parallel_cylinder_boundary, prepare_parallel_cylinder_coincident_boundary,
 };
+use super::parallel_cylinder_contact::execute_parallel_cylinder_contact_unite;
 use super::parallel_cylinder_relation::{
-    CertifiedParallelCylinderCoincidentCapRelation, CertifiedParallelCylinderLensRelation,
-    ParallelCylinderRelationOutcome, ParallelCylinderSourceRootWitness,
-    certify_parallel_cylinder_relation,
+    CertifiedParallelCylinderAxialContact, CertifiedParallelCylinderCoincidentCapRelation,
+    CertifiedParallelCylinderLensRelation, ParallelCylinderRelationOutcome,
+    ParallelCylinderSourceRootWitness, certify_parallel_cylinder_relation,
 };
 use super::select::PlanarBooleanOperation;
 use crate::section::section_bodies_in_scope;
@@ -58,8 +59,16 @@ pub(super) fn execute_parallel_cylinder_boolean(
         | ParallelCylinderRelationOutcome::CertifiedAxialSeparation(_) => {
             execute_disjoint_source_boolean(edit, operation, &bodies, [&first, &second], scope)
         }
-        ParallelCylinderRelationOutcome::CertifiedAxialContact(_) => {
-            execute_axial_contact_boolean(edit, operation, &bodies, [&first, &second], scope)
+        ParallelCylinderRelationOutcome::CertifiedAxialContact(contact) => {
+            execute_axial_contact_boolean(
+                edit,
+                operation,
+                &bodies,
+                [&first, &second],
+                &contact,
+                linear,
+                scope,
+            )
         }
         ParallelCylinderRelationOutcome::Certified(relation) => execute_complete_relation(
             edit,
@@ -117,19 +126,22 @@ fn execute_disjoint_source_boolean(
 /// Consume exact cap contact under regularized-solid semantics.
 ///
 /// Contact has no three-dimensional intersection interior, and subtracting a
-/// boundary-only contact leaves the minuend unchanged. Unite still requires
-/// proof-owned removal of the shared cap interface and therefore fails closed.
+/// boundary-only contact leaves the minuend unchanged. Unite delegates to the
+/// exact shared-cap arrangement and contact-shell theorem.
+#[allow(clippy::too_many_arguments)]
 fn execute_axial_contact_boolean(
     edit: &mut PartEdit<'_>,
     operation: PlanarBooleanOperation,
     bodies: &[BodyId; 2],
     cylinders: [&CertifiedCylinderSource; 2],
+    contact: &CertifiedParallelCylinderAxialContact,
+    linear: f64,
     scope: &mut OperationScope<'_, '_>,
 ) -> StageResult<CurvedBooleanPipelineOutcome> {
     match operation {
         PlanarBooleanOperation::Intersect => Ok(CurvedBooleanPipelineOutcome::ProvenEmpty),
         PlanarBooleanOperation::Unite => {
-            refused(CurvedBooleanPipelineRefusal::ClassificationBoundaryContact)
+            execute_parallel_cylinder_contact_unite(edit, bodies, cylinders, contact, linear, scope)
         }
         PlanarBooleanOperation::Subtract => realize_certified_cylinder_source_copies(
             edit,

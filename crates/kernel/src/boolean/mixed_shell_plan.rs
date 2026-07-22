@@ -2033,13 +2033,22 @@ fn collect_section_edges(
 
 #[cfg(test)]
 mod tests {
+    use kcore::{
+        operation::{OperationContext, OperationScope},
+        tolerance::Tolerances,
+    };
+
     use super::super::boundary_select::{
         BoundaryFragmentClassification, ClassifiedBoundaryFragment, RegularizedBooleanOperation,
         select_boundary_fragments,
     };
+    use super::super::curved_source::{CylinderSourceOutcome, extract_cylinder_source};
     use super::super::mixed_face_arrangement::arrange_mixed_planar_face_with_lineage;
     use super::super::mixed_periodic_arrangement::{
-        arrange_mixed_periodic_face, arrange_mixed_periodic_face_from_certified_embedding,
+        arrange_mixed_periodic_face, arrange_mixed_periodic_face_from_embedding,
+    };
+    use super::super::parallel_cylinder_relation::{
+        ParallelCylinderRelationOutcome, certify_parallel_cylinder_relation,
     };
     use super::*;
     use crate::{BlockRequest, CylinderRequest, Kernel, SectionBodiesRequest};
@@ -2090,7 +2099,7 @@ mod tests {
     }
 
     #[test]
-    fn face_local_path_ordinals_bind_multiple_runs_under_one_trace_group() {
+    fn operation_local_path_ordinals_bind_lineage_without_global_promotion() {
         let frame = Frame::world();
         let mut session = Kernel::new().create_session();
         let part_id = session.create_part();
@@ -2118,28 +2127,74 @@ mod tests {
                 .body();
             (first, second)
         };
-        let part = session.part(part_id).unwrap();
+        let part = session.part(part_id.clone()).unwrap();
         let graph = part
-            .section_bodies(SectionBodiesRequest::new(first, second))
+            .section_bodies(SectionBodiesRequest::new(first.clone(), second.clone()))
             .unwrap()
             .into_result()
             .unwrap();
-        let mut saw_split_group = false;
-        for evidence in graph.periodic_face_embeddings() {
-            let SectionPeriodicFaceEmbeddingEvidence::Certified(evidence) = evidence else {
-                panic!("fixture lost certified periodic evidence")
-            };
-            let mut groups = BTreeMap::new();
-            for trace in evidence.boundary_traces() {
-                *groups.entry(trace.component()).or_insert(0_usize) += 1;
-            }
-            saw_split_group |= groups.values().any(|count| *count > 1);
-            let arrangement = arrange_mixed_periodic_face_from_certified_embedding(
+        assert!(graph.periodic_face_embeddings().iter().all(|evidence| {
+            matches!(
+                evidence,
+                SectionPeriodicFaceEmbeddingEvidence::Indeterminate {
+                    gap: crate::SectionPeriodicEmbeddingGap::UnstitchedFragmentPath { .. },
+                    ..
+                }
+            )
+        }));
+        let tolerances = Tolerances::default();
+        let context = OperationContext::new(part.policy(), tolerances)
+            .unwrap()
+            .with_family_budget_defaults(super::super::BooleanBudgetProfile::v1_defaults());
+        let mut scope = OperationScope::new(&context);
+        let mut extract = |body: &crate::BodyId| match extract_cylinder_source(
+            &part.state.store,
+            body.raw(),
+            &mut scope,
+        )
+        .unwrap()
+        {
+            CylinderSourceOutcome::Ready(source) => source,
+            other => panic!("fixture lost certified cylinder source: {other:?}"),
+        };
+        let sources = [extract(&first), extract(&second)];
+        let relation = match certify_parallel_cylinder_relation(
+            &part.state.store,
+            &graph,
+            [&sources[0], &sources[1]],
+            &mut scope,
+        )
+        .unwrap()
+        {
+            ParallelCylinderRelationOutcome::CertifiedCoincidentCaps(relation) => relation,
+            other => panic!("fixture lost certified coincident-cap relation: {other:?}"),
+        };
+        let mut saw_face_local_trace = false;
+        for operand in 0..2 {
+            let face = FaceId::new(part_id.clone(), sources[operand].side_face());
+            let evidence = crate::section::certify_periodic_face_fragment_subset(
+                &part.state.store,
+                face.clone().part(),
                 &graph,
-                evidence.face(),
-                evidence.operand(),
+                operand,
+                face,
+                &relation.periodic_fragment_subset(operand),
+                tolerances.linear(),
             )
             .unwrap();
+            let mut occurrences = BTreeSet::new();
+            for trace in evidence.boundary_traces() {
+                assert_eq!(trace.source_component(), None);
+                assert_eq!(trace.component_ordinals().len(), trace.fragments().len());
+                for (&ordinal, fragment) in trace.component_ordinals().iter().zip(trace.fragments())
+                {
+                    assert!(occurrences.insert((trace.component(), ordinal, fragment.fragment(),)));
+                }
+            }
+            saw_face_local_trace |= !occurrences.is_empty();
+            let arrangement =
+                arrange_mixed_periodic_face_from_embedding(&graph, &evidence).unwrap();
+            assert_eq!(occurrences.len(), arrangement.cut_fragments().len());
             let source = source_face_key(
                 &part.state.store,
                 &graph,
@@ -2152,13 +2207,21 @@ mod tests {
                 &evidence.face(),
                 evidence.operand(),
                 &arrangement,
-                None,
+                Some(&evidence),
                 source,
             )
             .unwrap();
             assert_eq!(lineage.len(), arrangement.cut_fragments().len());
+            for cut in arrangement.cut_fragments() {
+                let retained = lineage.get(cut.key()).unwrap();
+                assert_eq!(retained.fragment, cut.key().fragment());
+                assert_eq!(
+                    retained.cylinder_period_shift,
+                    cut.key().cylinder_period_shift()
+                );
+            }
         }
-        assert!(saw_split_group);
+        assert!(saw_face_local_trace);
     }
 
     fn with_fixture(

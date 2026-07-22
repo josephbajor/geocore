@@ -202,6 +202,12 @@ const AXIAL_CONTACT: [CylinderRelationCase; 4] = [
     },
 ];
 
+// Strict internal and coincident positive-area Unite are covered by the
+// dedicated axial-contact realization suite. Strict secancy remains
+// fail-closed until Boolean consumes Section's published dual-root arcs into
+// the shared-cap arrangement; tangency has no positive-area shared cap cell.
+const AXIAL_CONTACT_REFUSALS: [CylinderRelationCase; 2] = [AXIAL_CONTACT[0], AXIAL_CONTACT[2]];
+
 const DISJOINT_CASES: [CylinderRelationCase; 5] = [
     RADIAL_DISJOINT,
     AXIAL_DISJOINT[0],
@@ -929,7 +935,7 @@ fn certified_radial_and_axial_disjointness_realize_the_same_deterministic_set_co
 #[test]
 fn exact_axial_contact_has_deterministic_operation_specific_facade_semantics() {
     let mut executions = 0;
-    for case in AXIAL_CONTACT {
+    for case in AXIAL_CONTACT_REFUSALS {
         for placement in [Placement::World, Placement::Oblique] {
             for antiparallel in [false, true] {
                 executions +=
@@ -937,7 +943,7 @@ fn exact_axial_contact_has_deterministic_operation_specific_facade_semantics() {
             }
         }
     }
-    assert_eq!(executions, 192);
+    assert_eq!(executions, 96);
 }
 
 fn axial_boundary_case(name: &'static str, second_lower: f64) -> CylinderRelationCase {
@@ -948,27 +954,22 @@ fn axial_boundary_case(name: &'static str, second_lower: f64) -> CylinderRelatio
     } else {
         AxialRelationWitness::AxialOverlap
     };
-    let second_radial_center = if matches!(witness, AxialRelationWitness::AxialContact) {
-        [0.25, 0.0]
-    } else {
-        [0.3, 0.4]
-    };
     CylinderRelationCase {
         name,
         cylinders: [
             CylinderSpec {
-                radius: 2.0,
+                radius: 1.0,
                 radial_center: [0.0, 0.0],
                 axial: [0.0, 1.0],
             },
             CylinderSpec {
-                radius: 0.5,
-                radial_center: second_radial_center,
+                radius: 1.0,
+                radial_center: [2.0, 0.0],
                 axial: [second_lower, 1.5],
             },
         ],
         witness,
-        radial_relation: RadialRelation::StrictInternal,
+        radial_relation: RadialRelation::Tangent,
     }
 }
 

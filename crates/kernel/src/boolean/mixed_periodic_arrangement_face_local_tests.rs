@@ -1,11 +1,32 @@
 use std::collections::BTreeSet;
 
+use kcore::{
+    operation::{OperationContext, OperationScope},
+    tolerance::Tolerances,
+};
 use kgeom::{frame::Frame, vec::Point3};
 
+use super::super::{
+    BooleanBudgetProfile,
+    curved_source::{CylinderSourceOutcome, extract_cylinder_source},
+    parallel_cylinder_relation::{
+        ParallelCylinderRelationOutcome, certify_parallel_cylinder_relation,
+    },
+};
 use super::*;
-use crate::{CylinderRequest, Kernel, SectionBodiesRequest};
+use crate::{
+    BodyId, CylinderRequest, Kernel, PartId, SectionBodiesRequest, Session,
+    section::certify_periodic_face_fragment_subset,
+};
 
-fn parallel_cylinder_graph(first_height: f64, second_height: f64) -> BodySectionGraph {
+struct ParallelCylinderFixture {
+    session: Session,
+    part: PartId,
+    bodies: [BodyId; 2],
+    graph: BodySectionGraph,
+}
+
+fn parallel_cylinder_fixture(first_height: f64, second_height: f64) -> ParallelCylinderFixture {
     let mut session = Kernel::new().create_session();
     let part = session.create_part();
     let (first, second) = {
@@ -32,46 +53,102 @@ fn parallel_cylinder_graph(first_height: f64, second_height: f64) -> BodySection
             .body();
         (first, second)
     };
-    session
-        .part(part)
+    let graph = session
+        .part(part.clone())
         .unwrap()
-        .section_bodies(SectionBodiesRequest::new(first, second))
+        .section_bodies(SectionBodiesRequest::new(first.clone(), second.clone()))
         .unwrap()
         .into_result()
+        .unwrap();
+    ParallelCylinderFixture {
+        session,
+        part,
+        bodies: [first, second],
+        graph,
+    }
+}
+
+fn operation_local_embeddings(
+    fixture: &ParallelCylinderFixture,
+) -> Vec<crate::CertifiedSectionPeriodicFaceEmbedding> {
+    let part = fixture.session.part(fixture.part.clone()).unwrap();
+    let tolerances = Tolerances::default();
+    let context = OperationContext::new(part.policy(), tolerances)
         .unwrap()
+        .with_family_budget_defaults(BooleanBudgetProfile::v1_defaults());
+    let mut scope = OperationScope::new(&context);
+    let sources = fixture.bodies.each_ref().map(|body| {
+        match extract_cylinder_source(&part.state.store, body.raw(), &mut scope).unwrap() {
+            CylinderSourceOutcome::Ready(source) => source,
+            other => panic!("fixture lost certified cylinder source: {other:?}"),
+        }
+    });
+    let relation = match certify_parallel_cylinder_relation(
+        &part.state.store,
+        &fixture.graph,
+        [&sources[0], &sources[1]],
+        &mut scope,
+    )
+    .unwrap()
+    {
+        ParallelCylinderRelationOutcome::CertifiedCoincidentCaps(relation) => relation,
+        other => panic!("fixture lost certified coincident-cap relation: {other:?}"),
+    };
+    (0..2)
+        .map(|operand| {
+            let face = FaceId::new(fixture.part.clone(), sources[operand].side_face());
+            certify_periodic_face_fragment_subset(
+                &part.state.store,
+                face.clone().part(),
+                &fixture.graph,
+                operand,
+                face,
+                &relation.periodic_fragment_subset(operand),
+                tolerances.linear(),
+            )
+            .unwrap()
+        })
+        .collect()
 }
 
 type ArrangementShape = (usize, usize, usize, usize, usize, usize);
 
-fn face_local_shapes(graph: &BodySectionGraph) -> Vec<ArrangementShape> {
+fn face_local_shapes(fixture: &ParallelCylinderFixture) -> Vec<ArrangementShape> {
+    let graph = &fixture.graph;
     assert_eq!(graph.completion(), SectionCompletion::Indeterminate);
     assert_eq!(graph.curve_components().len(), 0);
+    assert!(graph.periodic_face_embeddings().iter().all(|evidence| {
+        matches!(
+            evidence,
+            SectionPeriodicFaceEmbeddingEvidence::Indeterminate {
+                gap: SectionPeriodicEmbeddingGap::UnstitchedFragmentPath { .. },
+                ..
+            }
+        )
+    }));
     let mut shapes = Vec::new();
-    for evidence in graph.periodic_face_embeddings() {
-        let SectionPeriodicFaceEmbeddingEvidence::Certified(evidence) = evidence else {
-            panic!("fixture lost certified periodic evidence: {evidence:#?}")
-        };
+    for evidence in operation_local_embeddings(fixture) {
         assert!(
             evidence
                 .boundary_traces()
                 .iter()
                 .all(|trace| trace.source_component().is_none())
         );
-        let arrangement = arrange_mixed_periodic_face_from_certified_embedding(
-            graph,
-            evidence.face(),
-            evidence.operand(),
-        )
-        .unwrap();
+        let arrangement = arrange_mixed_periodic_face_from_embedding(graph, &evidence).unwrap();
         assert_eq!(
+            arrange_mixed_periodic_face_from_embedding(graph, &evidence).unwrap(),
+            arrangement
+        );
+        assert!(matches!(
             arrange_mixed_periodic_face_from_certified_embedding(
                 graph,
                 evidence.face(),
                 evidence.operand(),
-            )
-            .unwrap(),
-            arrangement
-        );
+            ),
+            Err(MixedPeriodicArrangementError::EmbeddingIndeterminate(
+                SectionPeriodicEmbeddingGap::UnstitchedFragmentPath { .. }
+            ))
+        ));
         assert_eq!(
             arrange_mixed_periodic_face(graph, evidence.face(), evidence.operand()),
             Err(MixedPeriodicArrangementError::IncompleteSectionGraph)
@@ -141,42 +218,46 @@ fn face_local_shapes(graph: &BodySectionGraph) -> Vec<ArrangementShape> {
 
 #[test]
 fn certified_face_local_paths_feed_equal_and_shared_end_arrangements() {
+    let equal = parallel_cylinder_fixture(2.0, 2.0);
     assert_eq!(
-        face_local_shapes(&parallel_cylinder_graph(2.0, 2.0)),
+        face_local_shapes(&equal),
         vec![(4, 2, 2, 2, 0, 2), (4, 2, 2, 2, 0, 2)]
     );
+    let shared_end = parallel_cylinder_fixture(3.0, 2.0);
     assert_eq!(
-        face_local_shapes(&parallel_cylinder_graph(3.0, 2.0)),
+        face_local_shapes(&shared_end),
         vec![(3, 3, 2, 3, 1, 1), (4, 2, 2, 2, 0, 2)]
     );
 }
 
 #[test]
-fn altered_face_local_path_coverage_fails_closed() {
-    let graph = parallel_cylinder_graph(2.0, 2.0);
-    let SectionPeriodicFaceEmbeddingEvidence::Certified(evidence) =
-        &graph.periodic_face_embeddings()[0]
-    else {
-        panic!("fixture lost certified periodic evidence")
-    };
-    let operand = evidence.operand();
-    let face = evidence.face();
+fn operation_local_embedding_rejects_missing_selected_fragment_and_ignores_unrelated_additions() {
+    let fixture = parallel_cylinder_fixture(2.0, 2.0);
+    let graph = &fixture.graph;
+    let evidence = operation_local_embeddings(&fixture).remove(0);
+    let baseline = arrange_mixed_periodic_face_from_embedding(graph, &evidence).unwrap();
+    let selected_fragment = evidence
+        .boundary_traces()
+        .iter()
+        .flat_map(|trace| trace.fragments())
+        .map(|fragment| fragment.fragment())
+        .max()
+        .unwrap();
 
     let mut truncated = graph.clone();
-    truncated.curve_fragments.pop();
+    truncated.curve_fragments.truncate(selected_fragment);
     assert!(matches!(
-        arrange_mixed_periodic_face_from_certified_embedding(&truncated, face.clone(), operand,),
-        Err(MixedPeriodicArrangementError::UnexpectedComponentEvidence(
-            _
-        ))
+        arrange_mixed_periodic_face_from_embedding(&truncated, &evidence),
+        Err(MixedPeriodicArrangementError::UnknownFragment { fragment, .. })
+            if fragment == selected_fragment
     ));
 
-    let mut duplicated = graph;
+    let mut duplicated = graph.clone();
     duplicated
         .curve_fragments
-        .push(duplicated.curve_fragments[0].clone());
-    assert!(matches!(
-        arrange_mixed_periodic_face_from_certified_embedding(&duplicated, face, operand),
-        Err(MixedPeriodicArrangementError::FaceLocalPathUnavailable(_))
-    ));
+        .push(duplicated.curve_fragments[selected_fragment].clone());
+    assert_eq!(
+        arrange_mixed_periodic_face_from_embedding(&duplicated, &evidence).unwrap(),
+        baseline
+    );
 }
